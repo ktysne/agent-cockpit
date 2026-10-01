@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Cockpit</title>
+<style>
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f8f9fb;
+  --border: #dfe2e8;
+  --text: #1d2129;
+  --text-2: #5b6372;
+  --accent: #3b5bdb;
+  --accent-soft: #e7ecff;
+  --warn: #b35c00;
+  --warn-soft: #fff1df;
+  --danger: #c92a2a;
+  --danger-soft: #ffe8e8;
+  --ok: #2b8a3e;
+  --ok-soft: #e3f6e8;
+  --hold: #6741d9;
+  --hold-soft: #efe9ff;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171c; --surface: #1e2128; --surface-2: #252932; --border: #343a46;
+    --text: #e6e8ec; --text-2: #a3abb9; --accent: #8ea2ff; --accent-soft: #263055;
+    --warn: #ffb15c; --warn-soft: #3b2a14; --danger: #ff8a8a; --danger-soft: #3d1d1d;
+    --ok: #74d68a; --ok-soft: #173322; --hold: #b49cff; --hold-soft: #2c2348;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15171c; --surface: #1e2128; --surface-2: #252932; --border: #343a46;
+  --text: #e6e8ec; --text-2: #a3abb9; --accent: #8ea2ff; --accent-soft: #263055;
+  --warn: #ffb15c; --warn-soft: #3b2a14; --danger: #ff8a8a; --danger-soft: #3d1d1d;
+  --ok: #74d68a; --ok-soft: #173322; --hold: #b49cff; --hold-soft: #2c2348;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.6 "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+}
+button, textarea, input { font: inherit; color: inherit; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+
+header.top {
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.top-inner { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.top h1 { font-size: 16px; margin: 0; }
+.summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.chip strong { color: var(--text); font-size: 13px; }
+.chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
+.chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+button.chip { cursor: pointer; font: inherit; font-size: 12px; min-height: 28px; }
+button.chip[aria-pressed="false"] { background: transparent; border: 1px dashed var(--border); color: var(--text-2); text-decoration: line-through; opacity: .7; }
+button.chip[aria-pressed="false"] strong { color: var(--text-2); }
+.filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
+.filter-note[hidden] { display: none; }
+.link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
+.spacer { flex: 1; }
+
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; padding: 6px 12px; cursor: pointer; color: var(--text-2); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+.section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; }
+.section > .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.section > .head h2 { font-size: 15px; margin: 0; }
+.section > .body { padding: 6px 14px 14px; }
+.section.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.meta { color: var(--text-2); font-size: 12px; }
+
+.order { display: inline-flex; gap: 4px; margin-left: auto; }
+.icon-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; min-width: 32px; height: 32px; padding: 0 8px; cursor: pointer; color: var(--text-2); }
+.icon-btn:hover { color: var(--text); border-color: var(--text-2); }
+.icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.icon-btn:disabled { opacity: .35; cursor: default; }
+
+h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; display: flex; align-items: center; gap: 6px; }
+h3.sub .count { font-weight: normal; }
+
+.now { display: grid; gap: 6px; }
+.now-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.now-row .who { font-size: 12px; color: var(--text-2); }
+.now-row .who .prod-tag { display: table; margin: 2px 0; }
+.now-row .who b { color: var(--text); font-weight: 600; display: block; font-size: 13px; }
+.now-row .since { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--text-2); }
+.dot.busy { background: var(--ok); animation: pulse 1.6s infinite; }
+.dot.wait { background: var(--warn); }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
+
+.models { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
+.model { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; }
+.model i { font-style: normal; color: var(--text-2); font-size: 11px; }
+.model.claude { background: var(--warn-soft); border-color: transparent; }
+.model.gpt { background: var(--ok-soft); border-color: transparent; }
+.model.off { color: var(--text-2); white-space: normal; }
+.arrow { color: var(--text-2); font-size: 12px; }
+.tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.task { padding: 6px 10px; border-radius: 8px; }
+.task:hover { background: var(--surface-2); }
+.task .line { display: flex; gap: 8px; align-items: baseline; }
+.state { font-size: 11px; padding: 0 8px; border-radius: 999px; white-space: nowrap; }
+.state.done { background: var(--ok-soft); color: var(--ok); }
+.state.doing { background: var(--accent-soft); color: var(--accent); }
+.state.todo { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.task.done .title { color: var(--text-2); }
+.criteria { margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; color: var(--text-2); }
+.criteria li.met { color: var(--ok); }
+.criteria li.met::marker { content: "✓ "; }
+.criteria li::marker { content: "・"; }
+
+.decision { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 10px; background: var(--surface); }
+.decision.blocking { border-left: 4px solid var(--danger); }
+.decision.provisional { border-left: 4px solid var(--warn); }
+.decision.state-ok { border-left: 4px solid var(--ok); }
+.decision.state-hold { border-left: 4px solid var(--hold); }
+.decision .dhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.decision .dtitle { font-weight: 600; }
+.decision .ctx { font-size: 13px; color: var(--text-2); margin: 4px 0 8px; }
+.options { list-style: none; padding: 0; margin: 0 0 10px; display: grid; gap: 4px; }
+.options li { padding: 6px 10px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
+.options li.rec { background: var(--accent-soft); }
+.options li .tag { font-size: 11px; color: var(--accent); font-weight: 600; margin-right: 6px; }
+.options li .why { display: block; color: var(--text-2); font-size: 12px; }
+.answer { display: grid; gap: 8px; }
+.checks { display: flex; gap: 8px; flex-wrap: wrap; }
+.check { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; min-height: 40px; }
+.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.check.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.check.hold:has(input:checked) { background: var(--hold-soft); border-color: var(--hold); color: var(--hold); }
+.check.hold input { accent-color: var(--hold); }
+.check.ok input { accent-color: var(--ok); }
+textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
+.primary:disabled { opacity: .4; cursor: default; }
+.sent { font-size: 12px; color: var(--text-2); }
+
+.review { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.stat { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
+.stat .k { font-size: 12px; color: var(--text-2); }
+.stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rounds { display: flex; gap: 4px; margin-top: 4px; }
+.rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
+.rounds span.used { background: var(--accent); }
+
+.prod-tag { font-size: 11px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
+.note { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
+
+@media (max-width: 640px) {
+  .now-row { grid-template-columns: 1fr; gap: 2px; }
+  .order { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <h1>Agent Cockpit</h1>
+    <div class="summary" id="summary"></div>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="表示モード">
+      <button type="button" data-mode="product" aria-pressed="true">プロダクト別</button>
+      <button type="button" data-mode="kind" aria-pressed="false">種類別</button>
+    </div>
+  </div>
+</header>
+<main class="wrap">
+  <p class="note">モック: 表示内容はすべて架空のデータです。表示順とチェックの状態はこのブラウザにだけ保存されます。</p>
+  <div class="filter-note" id="filter-note" hidden></div>
+  <div id="root"></div>
+</main>
+
+<script>
+const DATA = {
+  products: [
+    {
+      id: 'rec-studio', name: 'rec-studio', branch: 'feat/session-score-import', status: 'busy',
+      main: { text: 'Session Score の読み込み処理にテストを追加している', tool: 'Bash: npm test -- score-import', since: '2 分前' },
+      subagents: [
+        { type: 'impl-standard', text: '.ssp の拍子変更の解釈を実装中', since: '6 分前', state: 'busy',
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'high' },
+          gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } },
+        { type: 'codex-review', text: 'PR の差分をレビュー中(2 往復目)', since: '1 分前', state: 'busy',
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' },
+          gpt: { name: 'gpt-6-astra', effort: 'high', home: '~/.codex' } },
+      ],
+      tasks: [
+        { title: '.ssp ファイルの読み込み', state: 'done', criteria: [{ t: '既存のサンプル 12 件を読み込める', met: true }, { t: '不正なファイルでエラー表示する', met: true }] },
+        { title: '拍子変更の解釈', state: 'doing', criteria: [{ t: '4/4 → 3/4 の切り替えが小節線に反映される', met: true }, { t: 'テンポ変更と同時の拍子変更を扱える', met: false }] },
+        { title: '読み込み結果のプレビュー表示', state: 'todo', criteria: [{ t: 'トラック名と小節数が一覧で見える', met: false }] },
+      ],
+      decisions: [
+        {
+          id: 'rs-1', title: 'テンポ変更と拍子変更が同じ位置にあるときの優先順', kind: 'provisional',
+          ctx: '仕様書に記載がなく、サンプル 2 件で挙動が分かれる。',
+          options: [
+            { t: '拍子変更を先に適用する', why: '小節線の位置が DAW の表示と一致する', rec: true },
+            { t: 'ファイル内の出現順に適用する', why: '実装は単純だが、表示がずれる例がある' },
+          ],
+        },
+        {
+          id: 'rs-2', title: 'main への push 前に手元の録音データで動作確認するか', kind: 'blocking',
+          ctx: 'PR のマージ前の確認。止めて待っている。',
+          options: [
+            { t: '手元の録音データ 3 件で確認してからマージする', why: '実データでしか出ない拍子の揺れを拾える', rec: true },
+            { t: 'テストが通ればマージする', why: '速いが、実データでの確認が残る' },
+          ],
+        },
+      ],
+      review: { pr: '#142', round: 2, max: 3, state: 'Codex がレビュー中', open: 2, fixed: 5, dismissed: 1 },
+    },
+    {
+      id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', status: 'wait',
+      main: { text: '判断待ちで止まっている(worktree の削除条件)', tool: '—', since: '18 分前' },
+      subagents: [],
+      tasks: [
+        { title: 'ロックされた worktree の検出', state: 'done', criteria: [{ t: 'locked の worktree を一覧で区別する', met: true }] },
+        { title: '削除前の確認ダイアログ', state: 'doing', criteria: [{ t: '未コミットの変更がある worktree を警告する', met: false }, { t: 'まとめて削除する件数を表示する', met: false }] },
+      ],
+      decisions: [
+        {
+          id: 'gc-1', title: 'リモートに push 済みのブランチだけを持つ worktree を自動で削除対象にするか', kind: 'blocking',
+          ctx: '削除は取り消せない。既定値の決定が必要。',
+          options: [
+            { t: '既定では対象にせず、一覧で選ばせる', why: '誤削除を避けられる', rec: true },
+            { t: '既定で対象にする', why: '整理は速いが、作業中のものを消すおそれがある' },
+          ],
+        },
+      ],
+      review: { pr: '—', round: 0, max: 3, state: '未着手', open: 0, fixed: 0, dismissed: 0 },
+    },
+    {
+      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'poc/feasibility', status: 'busy',
+      main: { text: 'ダッシュボードのモックを作成している', tool: 'Write: mock/index.html', since: 'たった今' },
+      subagents: [
+        { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
+          model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' } },
+        { type: 'impl-light', text: 'モックの文言を修正', since: '3 分前', state: 'busy',
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' },
+          gpt: { unavailable: '利用上限(14:00 解除)のため Claude 側で実装' } },
+      ],
+      tasks: [
+        { title: 'PoC: 実現性の確認', state: 'done', criteria: [{ t: 'MCP からセッションを判別できる', met: true }, { t: 'サブエージェントのツール呼び出しを見分けられる', met: true }, { t: '内部ブラウザでパス付き URL を開ける', met: true }] },
+        { title: 'GUI のモック', state: 'doing', criteria: [{ t: '表示モードを 2 方向で切り替えられる', met: true }, { t: 'プロダクトの表示順を変えられる', met: true }] },
+        { title: '常駐サーバーと hooks の実装', state: 'todo', criteria: [{ t: '全セッションの作業中の内容が更新される', met: false }] },
+      ],
+      decisions: [],
+      review: { pr: '—', round: 0, max: 3, state: 'PoC のためレビュー省略', open: 0, fixed: 0, dismissed: 0 },
+    },
+  ],
+};
+
+const STORE_KEY = 'agent-cockpit-mock';
+const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
+const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {} }, load());
+for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const byId = id => DATA.products.find(p => p.id === id);
+
+function orderedProducts() {
+  const pinned = ui.order.filter(id => ui.pinned.includes(id));
+  const rest = ui.order.filter(id => !ui.pinned.includes(id));
+  return [...pinned, ...rest].map(byId).filter(Boolean);
+}
+
+function answerOf(id) { return ui.answers[id] || { choice: null, note: '', sent: null }; }
+
+function pendingDecisions(p) {
+  return p.decisions.filter(d => { const a = answerOf(d.id); return !a.sent || a.sent.choice === 'hold'; });
+}
+
+const FILTERS = [
+  { key: 'blocking', label: '止めて待っている', cls: 'danger' },
+  { key: 'provisional', label: '仮に推奨案で進行中', cls: 'warn' },
+  { key: 'held', label: '保留中', cls: 'hold' },
+  { key: 'agents', label: '稼働中のサブエージェント', cls: 'accent' },
+];
+
+function decisionCategory(d) {
+  const a = answerOf(d.id);
+  if (!a.sent) return d.kind;
+  return a.sent.choice === 'hold' ? 'held' : 'answered';
+}
+const isShown = key => !ui.hidden.includes(key);
+const visibleDecisions = p => p.decisions.filter(d => isShown(decisionCategory(d)));
+const visibleSubagents = p => p.subagents.filter(s => s.state !== 'busy' || isShown('agents'));
+
+function countHidden() {
+  return DATA.products.reduce((n, p) => n + (p.decisions.length - visibleDecisions(p).length) + (p.subagents.length - visibleSubagents(p).length), 0);
+}
+
+function renderSummary() {
+  const all = DATA.products.flatMap(p => p.decisions.map(d => ({ d, a: answerOf(d.id) })));
+  const blocking = all.filter(x => x.d.kind === 'blocking' && !x.a.sent).length;
+  const provisional = all.filter(x => x.d.kind === 'provisional' && !x.a.sent).length;
+  const held = all.filter(x => x.a.sent && x.a.sent.choice === 'hold').length;
+  const agents = DATA.products.flatMap(p => p.subagents).filter(s => s.state === 'busy').length;
+  const counts = { blocking, provisional, held, agents };
+  document.getElementById('summary').innerHTML = FILTERS.map(x =>
+    `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
+  const hiddenCount = countHidden();
+  const note = document.getElementById('filter-note');
+  note.hidden = ui.hidden.length === 0;
+  note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')}(${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>すべて表示する</button>`;
+}
+
+function modelLine(s) {
+  if (!s.model) return '';
+  const claude = `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>`;
+  let gpt = '';
+  if (s.gpt && s.gpt.unavailable) gpt = `<span class="arrow">→</span><span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `<span class="arrow">→</span><span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  return `<div class="models">${claude}${gpt}</div>`;
+}
+
+function nowRows(p, withTag) {
+  const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
+  const main = `<div class="now-row">
+      <div class="who"><span class="dot ${p.status}"></span>メイン${tag}<b>${p.status === 'wait' ? '待機中' : '作業中'}</b></div>
+      <div>${esc(p.main.text)}<div class="meta">${esc(p.main.tool)}</div></div>
+      <div class="since">${esc(p.main.since)}</div></div>`;
+  const subs = visibleSubagents(p).map(s => `<div class="now-row">
+      <div class="who"><span class="dot ${s.state}"></span>サブエージェント${tag}<b>${esc(s.type)}</b></div>
+      <div>${esc(s.text)}${modelLine(s)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
+  return main + subs;
+}
+
+function taskItem(p, t, withTag) {
+  const label = { done: '完了', doing: '作業中', todo: '未着手' }[t.state];
+  const met = t.criteria.filter(c => c.met).length;
+  return `<li class="task ${t.state}">
+    <div class="line"><span class="state ${t.state}">${label}</span>${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}
+      <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}</span></div>
+    <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
+}
+
+function decisionCard(p, d, withTag) {
+  const a = answerOf(d.id);
+  const stateClass = a.sent ? (a.sent.choice === 'hold' ? 'state-hold' : 'state-ok') : d.kind;
+  const kindChip = d.kind === 'blocking'
+    ? '<span class="chip danger">作業を止めて待っている</span>'
+    : '<span class="chip warn">推奨案を仮に適用して進行中</span>';
+  const sentLine = a.sent
+    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}</span>`
+    : '<span class="sent">未送信</span>';
+  const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
+  return `<article class="decision ${stateClass}" data-id="${d.id}">
+    <div class="dhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}<span class="dtitle">${esc(d.title)}</span>${kindChip}</div>
+    <div class="ctx">${esc(d.ctx)}</div>
+    <ul class="options">${d.options.map(o => `<li class="${o.rec ? 'rec' : ''}">${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span></li>`).join('')}</ul>
+    <div class="answer">
+      <div class="checks">
+        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''}>推奨案で OK</label>
+        <label class="check hold"><input type="checkbox" data-choice="hold" ${a.choice === 'hold' ? 'checked' : ''}>判断を保留する</label>
+      </div>
+      <textarea data-note placeholder="指示があれば書く(例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
+      <div class="answer-foot">
+        <button type="button" class="primary" data-send ${(!a.choice && !a.note.trim()) || !dirty ? 'disabled' : ''}>回答を送る</button>
+        ${sentLine}
+      </div>
+    </div></article>`;
+}
+
+function reviewBlock(p, withTag) {
+  const r = p.review;
+  const rounds = Array.from({ length: r.max }, (_, i) => `<span class="${i < r.round ? 'used' : ''}"></span>`).join('');
+  return `<div class="review">
+    <div class="stat"><div class="k">${withTag ? `<span class="prod-tag">${esc(p.name)}</span> ` : ''}PR ${esc(r.pr)}</div><div class="v">${esc(r.state)}</div></div>
+    <div class="stat"><div class="k">往復(上限 ${r.max})</div><div class="v">${r.round} / ${r.max}</div><div class="rounds">${rounds}</div></div>
+    <div class="stat"><div class="k">指摘: 未対応 / 対応済み / 非対応</div><div class="v">${r.open} / ${r.fixed} / ${r.dismissed}</div></div>
+  </div>`;
+}
+
+function orderControls(p, idx, total) {
+  const pinned = ui.pinned.includes(p.id);
+  const collapsed = ui.collapsed.includes(p.id);
+  return `<div class="order">
+    <button type="button" class="icon-btn" data-collapse="${p.id}" aria-expanded="${!collapsed}">${collapsed ? '開く' : '畳む'}</button>
+    <button type="button" class="icon-btn" data-pin="${p.id}" aria-pressed="${pinned}" title="最上部に固定">${pinned ? '固定中' : '固定'}</button>
+    <button type="button" class="icon-btn" data-move="${p.id}" data-dir="-1" ${idx === 0 ? 'disabled' : ''} aria-label="${esc(p.name)} を上へ">↑</button>
+    <button type="button" class="icon-btn" data-move="${p.id}" data-dir="1" ${idx === total - 1 ? 'disabled' : ''} aria-label="${esc(p.name)} を下へ">↓</button>
+  </div>`;
+}
+
+function renderProductMode() {
+  const ps = orderedProducts();
+  return ps.map((p, i) => {
+    const pend = pendingDecisions(p);
+    return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
+      <div class="head">
+        <h2>${esc(p.name)}</h2><span class="meta">${esc(p.branch)}</span>
+        ${pend.length ? `<span class="chip danger">判断待ち ${pend.length}</span>` : ''}
+        ${orderControls(p, i, ps.length)}
+      </div>
+      <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
+        <h3 class="sub">あなたの判断が必要なこと <span class="count">${visibleDecisions(p).length}</span></h3>
+        ${visibleDecisions(p).length ? visibleDecisions(p).map(d => decisionCard(p, d, false)).join('') : '<div class="empty">ありません</div>'}
+        <h3 class="sub">今やっていること</h3>
+        <div class="now">${nowRows(p, false)}</div>
+        <h3 class="sub">タスクと完了条件</h3>
+        <ul class="tasks">${p.tasks.map(t => taskItem(p, t, false)).join('')}</ul>
+        <h3 class="sub">レビュー</h3>
+        ${reviewBlock(p, false)}
+      </div></section>`;
+  }).join('');
+}
+
+function renderKindMode() {
+  const ps = orderedProducts();
+  const section = (title, body, extra = '') => `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`;
+  const decisions = ps.flatMap(p => visibleDecisions(p).map(d => decisionCard(p, d, true))).join('') || '<div class="empty">ありません</div>';
+  const now = `<div class="now">${ps.map(p => nowRows(p, true)).join('')}</div>`;
+  const tasks = `<ul class="tasks">${ps.flatMap(p => p.tasks.map(t => taskItem(p, t, true))).join('')}</ul>`;
+  const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
+  const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
+  return section('あなたの判断が必要なこと', decisions, orderBar)
+    + section('今やっていること', now)
+    + section('タスクと完了条件', tasks)
+    + section('レビュー', reviews);
+}
+
+function render() {
+  document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
+  renderSummary();
+  document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('button');
+  if (!t) return;
+  if (t.dataset.mode) { ui.mode = t.dataset.mode; }
+  else if (t.dataset.filter) {
+    const k = t.dataset.filter;
+    ui.hidden = ui.hidden.includes(k) ? ui.hidden.filter(x => x !== k) : [...ui.hidden, k];
+  }
+  else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
+  else if (t.dataset.collapse) {
+    const id = t.dataset.collapse;
+    ui.collapsed = ui.collapsed.includes(id) ? ui.collapsed.filter(x => x !== id) : [...ui.collapsed, id];
+  }
+  else if (t.dataset.pin) {
+    const id = t.dataset.pin;
+    ui.pinned = ui.pinned.includes(id) ? ui.pinned.filter(x => x !== id) : [...ui.pinned, id];
+  } else if (t.dataset.move) {
+    const vis = orderedProducts().map(p => p.id);
+    const i = vis.indexOf(t.dataset.move), j = i + Number(t.dataset.dir);
+    if (j < 0 || j >= vis.length) return;
+    [vis[i], vis[j]] = [vis[j], vis[i]];
+    ui.order = vis;
+    const pi = ui.pinned.includes(vis[i]), pj = ui.pinned.includes(vis[j]);
+    if (pi !== pj) ui.pinned = pj ? [...ui.pinned.filter(x => x !== vis[j]), vis[i]] : [...ui.pinned.filter(x => x !== vis[i]), vis[j]];
+  } else if (t.hasAttribute('data-send')) {
+    const id = t.closest('.decision').dataset.id;
+    const a = answerOf(id);
+    const now = new Date();
+    a.sent = { choice: a.choice, note: a.note, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
+    ui.answers[id] = a;
+  } else return;
+  save(); render();
+});
+
+document.addEventListener('change', e => {
+  const cb = e.target.closest('input[data-choice]');
+  if (!cb) return;
+  const id = cb.closest('.decision').dataset.id;
+  const a = answerOf(id);
+  a.choice = cb.checked ? cb.dataset.choice : null;
+  ui.answers[id] = a;
+  save(); render();
+});
+
+document.addEventListener('input', e => {
+  if (!e.target.matches('textarea[data-note]')) return;
+  const card = e.target.closest('.decision');
+  const a = answerOf(card.dataset.id);
+  a.note = e.target.value;
+  ui.answers[card.dataset.id] = a;
+  save();
+  const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
+  card.querySelector('[data-send]').disabled = (!a.choice && !a.note.trim()) || !dirty;
+});
+
+render();
+</script>
+</body>
+</html>
