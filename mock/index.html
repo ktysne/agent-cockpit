@@ -160,6 +160,57 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .note { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
 
+.prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.stack { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
+.stack-base { font-size: 12px; color: var(--text-2); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
+.pr { padding: 8px 0 4px; }
+.pr .pline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.pr .num { font-weight: 600; }
+.pr .pos { font-size: 11px; color: var(--text-2); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.pr .branch { color: var(--text-2); font-size: 12px; }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; align-items: center; }
+.badge { font-size: 11px; padding: 0 8px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.danger { background: var(--danger-soft); color: var(--danger); }
+.badge.mute { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
+.badge.accent { background: var(--accent-soft); color: var(--accent); }
+.pr .why-not { font-size: 12px; color: var(--text-2); }
+.pr.can-merge { background: var(--ok-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.merge-btn { background: var(--ok); color: #fff; border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
+.merge-confirm { margin-top: 8px; border: 1px solid var(--ok); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 8px; font-size: 13px; }
+.merge-confirm .methods { display: flex; gap: 6px; flex-wrap: wrap; }
+.merge-confirm .opt { justify-self: start; }
+.merge-confirm .methods label, .merge-confirm .opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; min-height: 32px; }
+.merge-confirm .effects { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
+.merge-confirm .effects li.warn { color: var(--warn); }
+.merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ghost { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer; min-height: 40px; }
+.merge-go { background: var(--ok); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
+.merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+.merged-list .badge { margin-right: 4px; }
+
+.routing { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: grid; gap: 8px; }
+.routing .rrow { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
+.routing .rlabel { font-size: 13px; font-weight: 600; min-width: 108px; }
+.routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
+.route-tag { font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.route-tag.stale { border-style: dashed; color: var(--warn); }
+.wait { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.wait.stale { color: var(--danger); font-weight: 600; }
+.decision.long-wait { background: var(--danger-soft); }
+.perm code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--surface-2); padding: 2px 6px; border-radius: 4px; }
+.news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
+.news .nhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent); }
+.news ul { margin: 4px 0 0; padding-left: 20px; }
+.new-mark { font-size: 10px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 4px; padding: 0 5px; }
+.auto-btn { background: none; color: var(--ok); border: 1px solid var(--ok); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
+.pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.merge-confirm.auto { border-color: var(--accent); }
+.merge-confirm.auto .merge-go { background: var(--accent); }
+
 @media (max-width: 640px) {
   .now-row { grid-template-columns: 1fr; gap: 2px; }
   .order { margin-left: 0; }
@@ -179,7 +230,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   </div>
 </header>
 <main class="wrap">
-  <p class="note">モック: 表示内容はすべて架空のデータです。表示順とチェックの状態はこのブラウザにだけ保存されます。</p>
+  <p class="note">モック: 表示内容はすべて架空のデータです。表示順、チェック、マージ、経路の設定はこのブラウザにだけ保存されます。マージは実際には行いません。</p>
+  <div class="routing" id="routing"></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div id="root"></div>
 </main>
@@ -190,12 +242,18 @@ const DATA = {
     {
       id: 'rec-studio', name: 'rec-studio', branch: 'feat/session-score-import', status: 'busy',
       main: { text: 'Session Score の読み込み処理にテストを追加している', tool: 'Bash: npm test -- score-import', since: '2 分前' },
+      perms: [],
+      news: [
+        { t: 'タスク「.ssp ファイルの読み込み」が完了した' },
+        { t: 'PR #143(読み込み結果のプレビュー表示)を作成した' },
+        { t: '判断「テンポ変更と拍子変更が同じ位置にあるときの優先順」を推奨案で仮に進めた' },
+      ],
       subagents: [
         { type: 'impl-standard', text: '.ssp の拍子変更の解釈を実装中', since: '6 分前', state: 'busy',
-          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'high' },
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'high' }, route: 'default',
           gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } },
         { type: 'codex-review', text: 'PR の差分をレビュー中(2 往復目)', since: '1 分前', state: 'busy',
-          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' },
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { name: 'gpt-6-astra', effort: 'high', home: '~/.codex' } },
       ],
       tasks: [
@@ -205,7 +263,7 @@ const DATA = {
       ],
       decisions: [
         {
-          id: 'rs-1', title: 'テンポ変更と拍子変更が同じ位置にあるときの優先順', kind: 'provisional',
+          id: 'rs-1', waitMin: 4, isNew: true, title: 'テンポ変更と拍子変更が同じ位置にあるときの優先順', kind: 'provisional',
           ctx: '仕様書に記載がなく、サンプル 2 件で挙動が分かれる。',
           options: [
             { t: '拍子変更を先に適用する', why: '小節線の位置が DAW の表示と一致する', rec: true },
@@ -213,7 +271,7 @@ const DATA = {
           ],
         },
         {
-          id: 'rs-2', title: 'main への push 前に手元の録音データで動作確認するか', kind: 'blocking',
+          id: 'rs-2', waitMin: 23, title: 'main への push 前に手元の録音データで動作確認するか', kind: 'blocking',
           ctx: 'PR のマージ前の確認。止めて待っている。',
           options: [
             { t: '手元の録音データ 3 件で確認してからマージする', why: '実データでしか出ない拍子の揺れを拾える', rec: true },
@@ -222,10 +280,18 @@ const DATA = {
         },
       ],
       review: { pr: '#142', round: 2, max: 3, state: 'Codex がレビュー中', open: 2, fixed: 5, dismissed: 1 },
+      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前' },
+      prs: [
+        { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false },
+        { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false },
+        { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true },
+      ],
     },
     {
       id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', status: 'wait',
       main: { text: '判断待ちで止まっている(worktree の削除条件)', tool: '—', since: '18 分前' },
+      perms: [],
+      news: [{ t: 'PR #57 の CI が失敗した(test: worktree-scan)' }],
       subagents: [],
       tasks: [
         { title: 'ロックされた worktree の検出', state: 'done', criteria: [{ t: 'locked の worktree を一覧で区別する', met: true }] },
@@ -233,7 +299,7 @@ const DATA = {
       ],
       decisions: [
         {
-          id: 'gc-1', title: 'リモートに push 済みのブランチだけを持つ worktree を自動で削除対象にするか', kind: 'blocking',
+          id: 'gc-1', waitMin: 18, title: 'リモートに push 済みのブランチだけを持つ worktree を自動で削除対象にするか', kind: 'blocking',
           ctx: '削除は取り消せない。既定値の決定が必要。',
           options: [
             { t: '既定では対象にせず、一覧で選ばせる', why: '誤削除を避けられる', rec: true },
@@ -242,15 +308,23 @@ const DATA = {
         },
       ],
       review: { pr: '—', round: 0, max: 3, state: '未着手', open: 0, fixed: 0, dismissed: 0 },
+      repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
+      prs: [
+        { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'required', conflict: false, draft: false },
+        { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'required', conflict: true, draft: false },
+        { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
+      ],
     },
     {
-      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'poc/feasibility', status: 'busy',
-      main: { text: 'ダッシュボードのモックを作成している', tool: 'Write: mock/index.html', since: 'たった今' },
+      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', status: 'wait',
+      main: { text: 'ツールの実行許可を待っている', tool: 'Bash: git push -u origin plan/pr-stack-view', since: '6 分前' },
+      perms: [{ id: 'ac-p1', who: 'メイン', tool: 'Bash', detail: 'git push -u origin plan/pr-stack-view', waitMin: 6 }],
+      news: [],
       subagents: [
         { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
-          model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' } },
+          model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' }, route: 'default' },
         { type: 'impl-light', text: 'モックの文言を修正', since: '3 分前', state: 'busy',
-          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' },
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { unavailable: '利用上限(14:00 解除)のため Claude 側で実装' } },
       ],
       tasks: [
@@ -260,6 +334,8 @@ const DATA = {
       ],
       decisions: [],
       review: { pr: '—', round: 0, max: 3, state: 'PoC のためレビュー省略', open: 0, fixed: 0, dismissed: 0 },
+      repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
+      prs: [],
     },
   ],
 };
@@ -267,8 +343,9 @@ const DATA = {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' } }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
+ui.confirm = null;
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const byId = id => DATA.products.find(p => p.id === id);
@@ -286,10 +363,12 @@ function pendingDecisions(p) {
 }
 
 const FILTERS = [
+  { key: 'permission', label: '許可待ち', cls: 'danger' },
   { key: 'blocking', label: '止めて待っている', cls: 'danger' },
   { key: 'provisional', label: '仮に推奨案で進行中', cls: 'warn' },
   { key: 'held', label: '保留中', cls: 'hold' },
   { key: 'agents', label: '稼働中のサブエージェント', cls: 'accent' },
+  { key: 'prs', label: 'マージできる PR', cls: 'ok' },
 ];
 
 function decisionCategory(d) {
@@ -302,7 +381,9 @@ const visibleDecisions = p => p.decisions.filter(d => isShown(decisionCategory(d
 const visibleSubagents = p => p.subagents.filter(s => s.state !== 'busy' || isShown('agents'));
 
 function countHidden() {
-  return DATA.products.reduce((n, p) => n + (p.decisions.length - visibleDecisions(p).length) + (p.subagents.length - visibleSubagents(p).length), 0);
+  return DATA.products.reduce((n, p) => n + (p.decisions.length - visibleDecisions(p).length) + (p.subagents.length - visibleSubagents(p).length)
+    + (isShown('permission') ? 0 : p.perms.length)
+    + (isShown('prs') ? 0 : openPrs(p).length), 0);
 }
 
 function renderSummary() {
@@ -311,7 +392,12 @@ function renderSummary() {
   const provisional = all.filter(x => x.d.kind === 'provisional' && !x.a.sent).length;
   const held = all.filter(x => x.a.sent && x.a.sent.choice === 'hold').length;
   const agents = DATA.products.flatMap(p => p.subagents).filter(s => s.state === 'busy').length;
-  const counts = { blocking, provisional, held, agents };
+  const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => !mergeBlocker(p, pr)).length, 0);
+  const permission = DATA.products.reduce((n, p) => n + p.perms.length, 0);
+  const counts = { permission, blocking, provisional, held, agents, prs };
+  // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
+  const need = permission + blocking;
+  document.title = need ? `(${need}) Agent Cockpit` : 'Agent Cockpit';
   document.getElementById('summary').innerHTML = FILTERS.map(x =>
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
   const hiddenCount = countHidden();
@@ -329,6 +415,43 @@ function modelLine(s) {
   return `<div class="models">${claude}${gpt}</div>`;
 }
 
+const ROUTE = {
+  agents: {
+    label: 'サブエージェント',
+    opts: [
+      { v: 'default', t: '既定' },
+      { v: 'codex', t: 'Codex' },
+      { v: 'claude', t: 'Claude' },
+    ],
+  },
+  review: {
+    label: 'クロスレビュー',
+    opts: [
+      { v: 'default', t: '既定' },
+      { v: 'codex', t: 'Codex' },
+      { v: 'claude', t: 'Claude' },
+    ],
+  },
+};
+const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
+
+function routeTag(s) {
+  if (!s.route || s.state !== 'busy') return '';
+  const stale = s.route !== ui.routing.agents;
+  return `<div class="models"><span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span></div>`;
+}
+
+function renderRouting() {
+  const row = k => {
+    return `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
+      <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路">${ROUTE[k].opts.map(o =>
+        `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
+      </div>`;
+  };
+  document.getElementById('routing').innerHTML = `<div class="rrow"><strong>経路の設定</strong></div>
+    ${row('agents')}${row('review')}`;
+}
+
 function nowRows(p, withTag) {
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
   const main = `<div class="now-row">
@@ -337,7 +460,7 @@ function nowRows(p, withTag) {
       <div class="since">${esc(p.main.since)}</div></div>`;
   const subs = visibleSubagents(p).map(s => `<div class="now-row">
       <div class="who"><span class="dot ${s.state}"></span>サブエージェント${tag}<b>${esc(s.type)}</b></div>
-      <div>${esc(s.text)}${modelLine(s)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
+      <div>${esc(s.text)}${modelLine(s)}${routeTag(s)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
   return main + subs;
 }
 
@@ -350,6 +473,31 @@ function taskItem(p, t, withTag) {
     <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
 }
 
+// 一定時間を超えて放置された待ちは強調する。閾値は判断待ち(計画書)
+const LONG_WAIT_MIN = 15;
+const waitLabel = m => `<span class="wait ${m >= LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中${m >= LONG_WAIT_MIN ? '(長い)' : ''}</span>`;
+const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
+
+// 許可待ち: Notification フックで受ける。許可そのものはデスクトップアプリで出す
+function permCard(p, x, withTag) {
+  const long = x.waitMin >= LONG_WAIT_MIN;
+  return `<article class="decision blocking perm ${long ? 'long-wait' : ''}">
+    <div class="dhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
+      <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
+    <div class="ctx">${esc(x.tool)}: <code>${esc(x.detail)}</code></div>
+    <div class="meta">許可はデスクトップアプリの ${esc(p.name)} のセッションで出す。ダッシュボードからは出せない。</div>
+  </article>`;
+}
+const visiblePerms = p => isShown('permission') ? p.perms : [];
+
+// 前回見てからの変化。常駐サーバーが項目ごとの更新時刻を持ち、画面は最後に見た時刻と比べる想定
+function newsBox(p, withTag) {
+  if (!p.news.length || ui.seen.includes(p.id)) return '';
+  return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから ${p.news.length} 件
+    <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
+    <ul>${p.news.map(n => `<li>${esc(n.t)}</li>`).join('')}</ul></div>`;
+}
+
 function decisionCard(p, d, withTag) {
   const a = answerOf(d.id);
   const stateClass = a.sent ? (a.sent.choice === 'hold' ? 'state-hold' : 'state-ok') : d.kind;
@@ -360,8 +508,10 @@ function decisionCard(p, d, withTag) {
     ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}</span>`
     : '<span class="sent">未送信</span>';
   const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
-  return `<article class="decision ${stateClass}" data-id="${d.id}">
-    <div class="dhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}<span class="dtitle">${esc(d.title)}</span>${kindChip}</div>
+  const long = !a.sent && d.waitMin >= LONG_WAIT_MIN;
+  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">
+    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}<span class="dtitle">${esc(d.title)}</span>${kindChip}
+      ${a.sent ? '' : waitLabel(d.waitMin)}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     <ul class="options">${d.options.map(o => `<li class="${o.rec ? 'rec' : ''}">${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span></li>`).join('')}</ul>
     <div class="answer">
@@ -384,7 +534,151 @@ function reviewBlock(p, withTag) {
     <div class="stat"><div class="k">${withTag ? `<span class="prod-tag">${esc(p.name)}</span> ` : ''}PR ${esc(r.pr)}</div><div class="v">${esc(r.state)}</div></div>
     <div class="stat"><div class="k">往復(上限 ${r.max})</div><div class="v">${r.round} / ${r.max}</div><div class="rounds">${rounds}</div></div>
     <div class="stat"><div class="k">指摘: 未対応 / 対応済み / 非対応</div><div class="v">${r.open} / ${r.fixed} / ${r.dismissed}</div></div>
+    <div class="stat"><div class="k">次の往復の経路</div><div class="v">${esc(routeName('review', ui.routing.review))}</div></div>
   </div>`;
+}
+
+
+// ---- プルリクエスト(スタック) ----
+// 常駐サーバーは gh pr list --json で取得し、base と head の対応からスタックを組み立てる想定。
+const prKey = (p, n) => `${p.id}#${n}`;
+const isMerged = (p, pr) => !!ui.merged[prKey(p, pr.number)];
+const openPrs = p => p.prs.filter(pr => !isMerged(p, pr));
+const prByHead = (p, head) => p.prs.find(pr => pr.head === head);
+
+// マージ済みの PR を base にしていたものは、その PR の base へ付け替わったとみなす。
+// squash で入った PR の上に積んでいたものは、積み直すまで下の PR のコミットが差分に残る。
+function effective(p, pr) {
+  let base = pr.base, retargetedFrom = null, squashedUnder = null;
+  for (let m = prByHead(p, base); m && isMerged(p, m); m = prByHead(p, base)) {
+    retargetedFrom = retargetedFrom || m;
+    if (ui.merged[prKey(p, m.number)].method === 'squash') squashedUnder = squashedUnder || m;
+    base = m.base;
+  }
+  const needsRestack = !!squashedUnder && !ui.restacked[prKey(p, pr.number)];
+  return { base, retargetedFrom, squashedUnder, needsRestack };
+}
+
+function parentPr(p, pr) {
+  const b = effective(p, pr).base;
+  return openPrs(p).find(x => x.head === b) || null;
+}
+const childPrs = (p, pr) => openPrs(p).filter(x => parentPr(p, x) === pr);
+
+// 下から数えた位置と、スタック全体の段数
+function stackPos(p, pr) {
+  let depth = 1; for (let x = parentPr(p, pr); x; x = parentPr(p, x)) depth++;
+  let root = pr; while (parentPr(p, root)) root = parentPr(p, root);
+  const height = (x) => 1 + Math.max(0, ...childPrs(p, x).map(height));
+  return { depth, total: height(root) };
+}
+
+function mergeBlocker(p, pr) {
+  const e = effective(p, pr);
+  const parent = parentPr(p, pr);
+  if (parent) return `下の #${parent.number} のマージ待ち`;
+  if (e.base !== p.repo.defaultBranch) return `base の ${e.base} に対応する PR が見つからない`;
+  if (pr.draft) return 'ドラフト';
+  if (e.needsRestack) return `積み直し待ち(squash で入った #${e.squashedUnder.number} のコミットが差分に残っている)`;
+  if (pr.conflict) return 'コンフリクトあり';
+  if (pr.ci === 'fail') return 'CI が失敗';
+  if (pr.ci === 'pending') return 'CI 実行中';
+  if (pr.review === 'changes') return '変更を求められている';
+  if (pr.review === 'required') return 'レビューの承認待ち';
+  return null;
+}
+
+const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
+function mergeOpts(p, pr) {
+  const k = prKey(p, pr.number);
+  return ui.mergeOpts[k] || { method: p.repo.methods[0], del: true };
+}
+
+function prBadges(p, pr) {
+  const e = effective(p, pr);
+  const ci = { pass: ['ok', 'CI 成功'], pending: ['warn', 'CI 実行中'], fail: ['danger', 'CI 失敗'] }[pr.ci];
+  const rv = { approved: ['ok', '承認済み'], required: ['mute', '承認待ち'], changes: ['danger', '変更要求'] }[pr.review];
+  return [
+    pr.draft ? '<span class="badge mute">ドラフト</span>' : '',
+    `<span class="badge ${ci[0]}">${ci[1]}</span>`,
+    `<span class="badge ${rv[0]}">${rv[1]}</span>`,
+    pr.conflict ? '<span class="badge danger">コンフリクト</span>' : '',
+    e.retargetedFrom ? `<span class="badge accent">base を ${esc(e.base)} に付け替え済み</span>` : '',
+    e.needsRestack ? '<span class="badge warn">積み直しが必要</span>' : '',
+  ].join('');
+}
+
+// CI 実行中だけが理由のときは「CI が通ったらマージ」を予約できる(gh pr merge --auto)
+const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中';
+
+function mergeConfirm(p, pr, auto) {
+  const o = mergeOpts(p, pr);
+  const kids = childPrs(p, pr);
+  const kidNames = kids.map(k => `#${k.number}`).join('、');
+  const effects = [
+    `head が ${esc(pr.sha)} のときだけマージする(画面を見たあとに push されていたら中止する)`,
+    kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
+    o.del ? `リモートのブランチ ${esc(pr.head)} を削除する(手元の worktree には触れない)` : '',
+    kids.length && o.method === 'squash' ? `<span>スカッシュのため ${kidNames} には #${pr.number} のコミットが残る。セッションに積み直しを依頼する</span>` : '',
+    `結果を ${esc(p.name)} のセッションに知らせる`,
+    auto ? `予約のあとに push されたら、予約を取り消して知らせる` : '',
+  ].filter(Boolean);
+  return `<div class="merge-confirm ${auto ? 'auto' : ''}" data-pr="${prKey(p, pr.number)}">
+    <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へ${auto ? '、CI が通ったら自動で' : ''}マージする</div>
+    <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
+      `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
+      ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
+    <label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>
+    <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
+    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージする'}</button>
+      <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
+  </div>`;
+}
+
+function prItem(p, pr) {
+  const k = prKey(p, pr.number);
+  const blocker = mergeBlocker(p, pr);
+  const pos = stackPos(p, pr);
+  const e = effective(p, pr);
+  const rsv = ui.reserved[k];
+  const reservable = !rsv && canReserve(p, pr);
+  return `<div class="pr ${blocker ? (rsv ? 'reserved' : '') : 'can-merge'}">
+    <div class="pline">
+      ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
+      <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
+      ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージ…</button>`}
+      ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ…</button>` : ''}
+    </div>
+    <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
+    <div class="badges">${prBadges(p, pr)}</div>
+    ${rsv ? `<div class="badges"><span class="badge accent">マージ予約中(${METHOD_LABEL[rsv.method]}、${esc(rsv.at)} に予約、head ${esc(pr.sha)})</span>
+      <button type="button" class="link-btn" data-unreserve="${k}">予約を取り消す</button>
+      <button type="button" class="link-btn" data-ci-pass="${k}">モック: CI の成功を再現する</button></div>` : ''}
+    ${blocker && !rsv ? `<div class="why-not">マージできない理由: ${esc(blocker)}
+      ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
+    ${ui.confirm === k && !blocker ? mergeConfirm(p, pr, false) : ''}
+    ${ui.confirm === k && reservable ? mergeConfirm(p, pr, true) : ''}
+  </div>`;
+}
+
+function prTree(p, pr) {
+  const kids = childPrs(p, pr);
+  return prItem(p, pr) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k)).join('')}</div>` : '');
+}
+
+function prBlock(p, withTag) {
+  const roots = openPrs(p).filter(pr => !parentPr(p, pr));
+  const merged = p.prs.filter(pr => isMerged(p, pr));
+  const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
+  const head = `<div class="prs-head meta">${tag}<span>${esc(p.repo.name)}</span><span>GitHub から ${esc(p.repo.fetched)}に取得</span></div>`;
+  const stacks = roots.map(r => `<div class="stack">
+      <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${childPrs(p, r).length ? `<span>スタック ${stackPos(p, r).total} 段</span>` : ''}</div>
+      <div class="stack-level">${prTree(p, r)}</div></div>`).join('');
+  const mergedLine = merged.length ? `<div class="merged-list">マージ済み: ${merged.map(pr => {
+      const m = ui.merged[prKey(p, pr.number)];
+      return `<span class="badge mute">#${pr.number}(${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`; }).join('')}</div>` : '';
+  if (!roots.length && !merged.length) return head + '<div class="empty">このセッションが作った PR はありません</div>';
+  return head + (stacks || '<div class="empty">オープンの PR はありません</div>') + mergedLine;
 }
 
 function orderControls(p, idx, total) {
@@ -405,16 +699,21 @@ function renderProductMode() {
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
         <h2>${esc(p.name)}</h2><span class="meta">${esc(p.branch)}</span>
+        ${p.perms.length ? `<span class="chip danger">許可待ち ${p.perms.length}</span>` : ''}
         ${pend.length ? `<span class="chip danger">判断待ち ${pend.length}</span>` : ''}
+        ${(n => n ? `<span class="chip ok">マージできる PR ${n}</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
         ${orderControls(p, i, ps.length)}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
-        <h3 class="sub">あなたの判断が必要なこと <span class="count">${visibleDecisions(p).length}</span></h3>
-        ${visibleDecisions(p).length ? visibleDecisions(p).map(d => decisionCard(p, d, false)).join('') : '<div class="empty">ありません</div>'}
+        ${newsBox(p, false)}
+        <h3 class="sub">あなたの判断が必要なこと <span class="count">${visibleDecisions(p).length + visiblePerms(p).length}</span></h3>
+        ${visiblePerms(p).map(x => permCard(p, x, false)).join('')}
+        ${visibleDecisions(p).length || visiblePerms(p).length ? visibleDecisions(p).map(d => decisionCard(p, d, false)).join('') : '<div class="empty">ありません</div>'}
         <h3 class="sub">今やっていること</h3>
         <div class="now">${nowRows(p, false)}</div>
         <h3 class="sub">タスクと完了条件</h3>
         <ul class="tasks">${p.tasks.map(t => taskItem(p, t, false)).join('')}</ul>
+        ${isShown('prs') ? `<h3 class="sub">プルリクエスト <span class="count">${openPrs(p).length}</span></h3>${prBlock(p, false)}` : ''}
         <h3 class="sub">レビュー</h3>
         ${reviewBlock(p, false)}
       </div></section>`;
@@ -424,20 +723,30 @@ function renderProductMode() {
 function renderKindMode() {
   const ps = orderedProducts();
   const section = (title, body, extra = '') => `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`;
-  const decisions = ps.flatMap(p => visibleDecisions(p).map(d => decisionCard(p, d, true))).join('') || '<div class="empty">ありません</div>';
+  // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
+  const waits = ps.flatMap(p => [
+    ...visiblePerms(p).map(x => ({ w: x.waitMin, html: permCard(p, x, true) })),
+    ...visibleDecisions(p).map(d => ({ w: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, d, true) })),
+  ]).sort((a, b) => b.w - a.w);
+  const decisions = waits.map(x => x.html).join('') || '<div class="empty">ありません</div>';
+  const news = ps.map(p => newsBox(p, true)).join('');
   const now = `<div class="now">${ps.map(p => nowRows(p, true)).join('')}</div>`;
   const tasks = `<ul class="tasks">${ps.flatMap(p => p.tasks.map(t => taskItem(p, t, true))).join('')}</ul>`;
   const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
+  const prs = ps.map(p => prBlock(p, true)).join('<div style="height:12px"></div>');
   const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
-  return section('あなたの判断が必要なこと', decisions, orderBar)
+  return (news ? section('前回見てから', news) : '')
+    + section('あなたの判断が必要なこと(待ちの長い順)', decisions, orderBar)
     + section('今やっていること', now)
     + section('タスクと完了条件', tasks)
+    + (isShown('prs') ? section('プルリクエスト', prs) : '')
     + section('レビュー', reviews);
 }
 
 function render() {
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
+  renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
 }
 
@@ -465,6 +774,39 @@ document.addEventListener('click', e => {
     ui.order = vis;
     const pi = ui.pinned.includes(vis[i]), pj = ui.pinned.includes(vis[j]);
     if (pi !== pj) ui.pinned = pj ? [...ui.pinned.filter(x => x !== vis[j]), vis[i]] : [...ui.pinned.filter(x => x !== vis[i]), vis[j]];
+  } else if (t.dataset.merge) {
+    ui.confirm = t.dataset.merge;
+  } else if (t.hasAttribute('data-merge-cancel')) {
+    ui.confirm = null;
+  } else if (t.dataset.mergeGo) {
+    const k = t.dataset.mergeGo;
+    const [pid, n] = k.split('#');
+    const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
+    const o = mergeOpts(p, pr);
+    const now = new Date();
+    ui.merged[k] = { method: o.method, del: o.del, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
+    ui.confirm = null;
+  } else if (t.dataset.reserveGo) {
+    const k = t.dataset.reserveGo;
+    const [pid, n] = k.split('#');
+    const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
+    const o = mergeOpts(p, pr);
+    const now = new Date();
+    ui.reserved[k] = { method: o.method, del: o.del, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
+    ui.confirm = null;
+  } else if (t.dataset.unreserve) {
+    delete ui.reserved[t.dataset.unreserve];
+  } else if (t.dataset.ciPass) {
+    const k = t.dataset.ciPass;
+    const now = new Date();
+    ui.merged[k] = { ...ui.reserved[k], auto: true, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
+    delete ui.reserved[k];
+  } else if (t.dataset.seen) {
+    ui.seen = [...new Set([...ui.seen, t.dataset.seen])];
+  } else if (t.dataset.route) {
+    ui.routing = { ...ui.routing, [t.dataset.route]: t.dataset.v };
+  } else if (t.dataset.restack) {
+    ui.restacked[t.dataset.restack] = true;
   } else if (t.hasAttribute('data-send')) {
     const id = t.closest('.decision').dataset.id;
     const a = answerOf(id);
@@ -476,6 +818,18 @@ document.addEventListener('click', e => {
 });
 
 document.addEventListener('change', e => {
+  const mc = e.target.closest('.merge-confirm');
+  if (mc) {
+    const k = mc.dataset.pr;
+    const [pid, n] = k.split('#');
+    const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
+    const o = mergeOpts(p, pr);
+    if (e.target.dataset.method) o.method = e.target.dataset.method;
+    if (e.target.hasAttribute('data-del')) o.del = e.target.checked;
+    ui.mergeOpts[k] = o;
+    save(); render();
+    return;
+  }
   const cb = e.target.closest('input[data-choice]');
   if (!cb) return;
   const id = cb.closest('.decision').dataset.id;
