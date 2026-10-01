@@ -83,8 +83,9 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; display: fle
 h3.sub .count { font-weight: normal; }
 
 .now { display: grid; gap: 6px; }
-.now-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.now-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .now-row .who { font-size: 12px; color: var(--text-2); }
+.now-row .who .prod-tag { display: table; margin: 2px 0; }
 .now-row .who b { color: var(--text); font-weight: 600; display: block; font-size: 13px; }
 .now-row .since { font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--text-2); }
@@ -93,6 +94,13 @@ h3.sub .count { font-weight: normal; }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 
+.models { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
+.model { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border); white-space: nowrap; }
+.model i { font-style: normal; color: var(--text-2); font-size: 11px; }
+.model.claude { background: var(--warn-soft); border-color: transparent; }
+.model.gpt { background: var(--ok-soft); border-color: transparent; }
+.model.off { color: var(--text-2); white-space: normal; }
+.arrow { color: var(--text-2); font-size: 12px; }
 .tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .task { padding: 6px 10px; border-radius: 8px; }
 .task:hover { background: var(--surface-2); }
@@ -176,8 +184,12 @@ const DATA = {
       id: 'rec-studio', name: 'rec-studio', branch: 'feat/session-score-import', status: 'busy',
       main: { text: 'Session Score の読み込み処理にテストを追加している', tool: 'Bash: npm test -- score-import', since: '2 分前' },
       subagents: [
-        { type: 'impl-standard', text: '.ssp の拍子変更の解釈を実装中', since: '6 分前', state: 'busy' },
-        { type: 'codex-review', text: 'PR の差分をレビュー中(2 往復目)', since: '1 分前', state: 'busy' },
+        { type: 'impl-standard', text: '.ssp の拍子変更の解釈を実装中', since: '6 分前', state: 'busy',
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'high' },
+          gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } },
+        { type: 'codex-review', text: 'PR の差分をレビュー中(2 往復目)', since: '1 分前', state: 'busy',
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' },
+          gpt: { name: 'gpt-6-astra', effort: 'high', home: '~/.codex' } },
       ],
       tasks: [
         { title: '.ssp ファイルの読み込み', state: 'done', criteria: [{ t: '既存のサンプル 12 件を読み込める', met: true }, { t: '不正なファイルでエラー表示する', met: true }] },
@@ -228,7 +240,11 @@ const DATA = {
       id: 'session-board', name: 'session-board', branch: 'poc/feasibility', status: 'busy',
       main: { text: 'ダッシュボードのモックを作成している', tool: 'Write: mock/index.html', since: 'たった今' },
       subagents: [
-        { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done' },
+        { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
+          model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' } },
+        { type: 'impl-light', text: 'モックの文言を修正', since: '3 分前', state: 'busy',
+          model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' },
+          gpt: { unavailable: '利用上限(14:00 解除)のため Claude 側で実装' } },
       ],
       tasks: [
         { title: 'PoC: 実現性の確認', state: 'done', criteria: [{ t: 'MCP からセッションを判別できる', met: true }, { t: 'サブエージェントのツール呼び出しを見分けられる', met: true }, { t: '内部ブラウザでパス付き URL を開ける', met: true }] },
@@ -275,15 +291,24 @@ function renderSummary() {
     <span class="chip accent">稼働中のサブエージェント <strong>${agents}</strong></span>`;
 }
 
+function modelLine(s) {
+  if (!s.model) return '';
+  const claude = `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>`;
+  let gpt = '';
+  if (s.gpt && s.gpt.unavailable) gpt = `<span class="arrow">→</span><span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `<span class="arrow">→</span><span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  return `<div class="models">${claude}${gpt}</div>`;
+}
+
 function nowRows(p, withTag) {
-  const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span> ` : '';
+  const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
   const main = `<div class="now-row">
-      <div class="who"><span class="dot ${p.status}"></span>メイン<b>${tag}${p.status === 'wait' ? '待機中' : '作業中'}</b></div>
+      <div class="who"><span class="dot ${p.status}"></span>メイン${tag}<b>${p.status === 'wait' ? '待機中' : '作業中'}</b></div>
       <div>${esc(p.main.text)}<div class="meta">${esc(p.main.tool)}</div></div>
       <div class="since">${esc(p.main.since)}</div></div>`;
   const subs = p.subagents.map(s => `<div class="now-row">
-      <div class="who"><span class="dot ${s.state}"></span>サブエージェント<b>${tag}${esc(s.type)}</b></div>
-      <div>${esc(s.text)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
+      <div class="who"><span class="dot ${s.state}"></span>サブエージェント${tag}<b>${esc(s.type)}</b></div>
+      <div>${esc(s.text)}${modelLine(s)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
   return main + subs;
 }
 
