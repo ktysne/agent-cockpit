@@ -1,0 +1,95 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "D:/Program Files/nodejs/node.exe",
+            "args": [
+              "D:/Desktop/Develop/session-board/poc/hook-logger.js"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
