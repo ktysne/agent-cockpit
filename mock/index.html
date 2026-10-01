@@ -196,7 +196,6 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .routing .rrow { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; min-width: 108px; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
-.routing .rnote { font-size: 12px; color: var(--warn); }
 .route-tag { font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .route-tag.stale { border-style: dashed; color: var(--warn); }
 .wait { font-size: 12px; color: var(--text-2); white-space: nowrap; }
@@ -443,16 +442,14 @@ function routeTag(s) {
 }
 
 function renderRouting() {
-  const busy = DATA.products.flatMap(p => p.subagents).filter(s => s.state === 'busy' && s.route && s.route !== ui.routing.agents).length;
   const row = k => {
     return `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
       <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路">${ROUTE[k].opts.map(o =>
         `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
       </div>`;
   };
-  document.getElementById('routing').innerHTML = `<div class="rrow"><strong>経路の設定</strong><span class="meta">全セッション共通。次に起動するサブエージェント、次のクロスレビューから効く</span></div>
-    ${row('agents')}${row('review')}
-    ${busy ? `<div class="rnote">稼働中のサブエージェント ${busy} 件は変更前の設定のまま動いている</div>` : ''}`;
+  document.getElementById('routing').innerHTML = `<div class="rrow"><strong>経路の設定</strong></div>
+    ${row('agents')}${row('review')}`;
 }
 
 function nowRows(p, withTag) {
