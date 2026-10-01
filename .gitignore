@@ -1,0 +1,18 @@
+# CodeGraph (local index, not committed)
+.codegraph/
+
+node_modules/
+
+# Claude Code local state
+.claude/worktrees/
+.claude/settings.local.json
+
+*.log
+*.tmp
+
+# PoC の実行結果(セッションのトークンやパスを含むため共有しない)
+poc/out/
+
+# ai-cross-review のローカル状態と生成物 (往復回数、レビュー出力、PR コメント本文)
+.cross-review-state.json
+.cross-review/

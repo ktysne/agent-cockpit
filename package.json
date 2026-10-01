@@ -1,0 +1,13 @@
+{
+  "name": "session-board",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Claude Code デスクトップアプリのセッション状態(タスク、完了条件、作業中の内容、サブエージェント、判断待ち)を内部ブラウザに表示するローカルのダッシュボード。",
+  "scripts": {
+    "review:codex": "node tools/cross-review.js codex",
+    "review:codex:fix": "node tools/cross-review.js codex --fix",
+    "review:claude": "node tools/cross-review.js claude",
+    "sync:cross-review": "node tools/cross-review.sync.js",
+    "sync:cross-review:check": "node tools/cross-review.sync.js --check"
+  }
+}
