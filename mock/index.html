@@ -438,7 +438,7 @@ const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
 function routeTag(s) {
   if (!s.route || s.state !== 'busy') return '';
   const stale = s.route !== ui.routing.agents;
-  return `<div class="models"><span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">起動時の設定: ${esc(routeName('agents', s.route))}${stale ? '(変更前の設定のまま稼働中)' : ''}</span></div>`;
+  return `<div class="models"><span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span></div>`;
 }
 
 function renderRouting() {
