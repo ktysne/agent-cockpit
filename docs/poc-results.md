@@ -9,6 +9,7 @@ Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
 |---|---|---|
 | MCP サーバーが呼び出し元のセッションを判別できるか | できる | MCP サーバーの環境に `CLAUDE_CODE_SESSION_ID`、`CLAUDE_CODE_MESSAGING_SOCKET`、`CLAUDE_CODE_MESSAGING_TOKEN` が渡る(`poc/mcp-whoami.js`) |
 | サブエージェントの中のツール呼び出しを見分けられるか | できる | `PreToolUse`/`PostToolUse` に `agent_id` と `agent_type` が付く。`SubagentStop` には `last_assistant_message` と `agent_transcript_path` が付く(`poc/hook-logger.js`) |
+| サブエージェントのモデル名と effort を取れるか | できる | Agent ツールの `PostToolUse` の `tool_response.resolvedModel` に実際のモデルが入る。effort は定義ファイル(`~/.claude/agents/<名前>.md`)の `effort` から引く。GPT 側は `codex-agent.sh` の監査行 `codex-agent: agent=... model=... effort=...` から取る |
 | 内部ブラウザでパス付きの URL を開けるか | できる | `preview_start {url}` でも `navigate` でも、パスとクエリがそのまま渡る。ただしサーバーが先に起動している必要がある |
 | 受付ソケットからセッションへメッセージを届けられるか | 未確認 | 送信手順は分かったが、試験送信が auto mode の安全判定で拒否された |
 

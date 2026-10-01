@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Session Board</title>
+<title>Agent Cockpit</title>
 <style>
 :root {
   --bg: #f4f5f7;
@@ -163,7 +163,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 <body>
 <header class="top">
   <div class="top-inner">
-    <h1>Session Board</h1>
+    <h1>Agent Cockpit</h1>
     <div class="summary" id="summary"></div>
     <div class="spacer"></div>
     <div class="seg" role="group" aria-label="表示モード">
@@ -237,7 +237,7 @@ const DATA = {
       review: { pr: '—', round: 0, max: 3, state: '未着手', open: 0, fixed: 0, dismissed: 0 },
     },
     {
-      id: 'session-board', name: 'session-board', branch: 'poc/feasibility', status: 'busy',
+      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'poc/feasibility', status: 'busy',
       main: { text: 'ダッシュボードのモックを作成している', tool: 'Write: mock/index.html', since: 'たった今' },
       subagents: [
         { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
@@ -257,7 +257,7 @@ const DATA = {
   ],
 };
 
-const STORE_KEY = 'session-board-mock';
+const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
 const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], answers: {} }, load());

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agent-cockpit-mock",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "47810", "--bind", "127.0.0.1", "--directory", "mock"],
+      "port": 47810
+    }
+  ]
+}
