@@ -60,6 +60,12 @@ header.top {
 .chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
 .chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+button.chip { cursor: pointer; font: inherit; font-size: 12px; min-height: 28px; }
+button.chip[aria-pressed="false"] { background: transparent; border: 1px dashed var(--border); color: var(--text-2); text-decoration: line-through; opacity: .7; }
+button.chip[aria-pressed="false"] strong { color: var(--text-2); }
+.filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
+.filter-note[hidden] { display: none; }
+.link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
 .spacer { flex: 1; }
 
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
@@ -174,6 +180,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 </header>
 <main class="wrap">
   <p class="note">モック: 表示内容はすべて架空のデータです。表示順とチェックの状態はこのブラウザにだけ保存されます。</p>
+  <div class="filter-note" id="filter-note" hidden></div>
   <div id="root"></div>
 </main>
 
@@ -260,7 +267,7 @@ const DATA = {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], answers: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -278,17 +285,39 @@ function pendingDecisions(p) {
   return p.decisions.filter(d => { const a = answerOf(d.id); return !a.sent || a.sent.choice === 'hold'; });
 }
 
+const FILTERS = [
+  { key: 'blocking', label: '止めて待っている', cls: 'danger' },
+  { key: 'provisional', label: '仮に推奨案で進行中', cls: 'warn' },
+  { key: 'held', label: '保留中', cls: 'hold' },
+  { key: 'agents', label: '稼働中のサブエージェント', cls: 'accent' },
+];
+
+function decisionCategory(d) {
+  const a = answerOf(d.id);
+  if (!a.sent) return d.kind;
+  return a.sent.choice === 'hold' ? 'held' : 'answered';
+}
+const isShown = key => !ui.hidden.includes(key);
+const visibleDecisions = p => p.decisions.filter(d => isShown(decisionCategory(d)));
+const visibleSubagents = p => p.subagents.filter(s => s.state !== 'busy' || isShown('agents'));
+
+function countHidden() {
+  return DATA.products.reduce((n, p) => n + (p.decisions.length - visibleDecisions(p).length) + (p.subagents.length - visibleSubagents(p).length), 0);
+}
+
 function renderSummary() {
   const all = DATA.products.flatMap(p => p.decisions.map(d => ({ d, a: answerOf(d.id) })));
   const blocking = all.filter(x => x.d.kind === 'blocking' && !x.a.sent).length;
   const provisional = all.filter(x => x.d.kind === 'provisional' && !x.a.sent).length;
   const held = all.filter(x => x.a.sent && x.a.sent.choice === 'hold').length;
   const agents = DATA.products.flatMap(p => p.subagents).filter(s => s.state === 'busy').length;
-  document.getElementById('summary').innerHTML = `
-    <span class="chip danger">止めて待っている <strong>${blocking}</strong></span>
-    <span class="chip warn">仮に推奨案で進行中 <strong>${provisional}</strong></span>
-    <span class="chip hold">保留中 <strong>${held}</strong></span>
-    <span class="chip accent">稼働中のサブエージェント <strong>${agents}</strong></span>`;
+  const counts = { blocking, provisional, held, agents };
+  document.getElementById('summary').innerHTML = FILTERS.map(x =>
+    `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
+  const hiddenCount = countHidden();
+  const note = document.getElementById('filter-note');
+  note.hidden = ui.hidden.length === 0;
+  note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')}(${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>すべて表示する</button>`;
 }
 
 function modelLine(s) {
@@ -306,7 +335,7 @@ function nowRows(p, withTag) {
       <div class="who"><span class="dot ${p.status}"></span>メイン${tag}<b>${p.status === 'wait' ? '待機中' : '作業中'}</b></div>
       <div>${esc(p.main.text)}<div class="meta">${esc(p.main.tool)}</div></div>
       <div class="since">${esc(p.main.since)}</div></div>`;
-  const subs = p.subagents.map(s => `<div class="now-row">
+  const subs = visibleSubagents(p).map(s => `<div class="now-row">
       <div class="who"><span class="dot ${s.state}"></span>サブエージェント${tag}<b>${esc(s.type)}</b></div>
       <div>${esc(s.text)}${modelLine(s)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
   return main + subs;
@@ -380,8 +409,8 @@ function renderProductMode() {
         ${orderControls(p, i, ps.length)}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
-        <h3 class="sub">あなたの判断が必要なこと <span class="count">${p.decisions.length}</span></h3>
-        ${p.decisions.length ? p.decisions.map(d => decisionCard(p, d, false)).join('') : '<div class="empty">ありません</div>'}
+        <h3 class="sub">あなたの判断が必要なこと <span class="count">${visibleDecisions(p).length}</span></h3>
+        ${visibleDecisions(p).length ? visibleDecisions(p).map(d => decisionCard(p, d, false)).join('') : '<div class="empty">ありません</div>'}
         <h3 class="sub">今やっていること</h3>
         <div class="now">${nowRows(p, false)}</div>
         <h3 class="sub">タスクと完了条件</h3>
@@ -395,7 +424,7 @@ function renderProductMode() {
 function renderKindMode() {
   const ps = orderedProducts();
   const section = (title, body, extra = '') => `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`;
-  const decisions = ps.flatMap(p => p.decisions.map(d => decisionCard(p, d, true))).join('') || '<div class="empty">ありません</div>';
+  const decisions = ps.flatMap(p => visibleDecisions(p).map(d => decisionCard(p, d, true))).join('') || '<div class="empty">ありません</div>';
   const now = `<div class="now">${ps.map(p => nowRows(p, true)).join('')}</div>`;
   const tasks = `<ul class="tasks">${ps.flatMap(p => p.tasks.map(t => taskItem(p, t, true))).join('')}</ul>`;
   const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
@@ -416,6 +445,11 @@ document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
   if (t.dataset.mode) { ui.mode = t.dataset.mode; }
+  else if (t.dataset.filter) {
+    const k = t.dataset.filter;
+    ui.hidden = ui.hidden.includes(k) ? ui.hidden.filter(x => x !== k) : [...ui.hidden, k];
+  }
+  else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
   else if (t.dataset.collapse) {
     const id = t.dataset.collapse;
     ui.collapsed = ui.collapsed.includes(id) ? ui.collapsed.filter(x => x !== id) : [...ui.collapsed, id];
