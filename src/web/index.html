@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Agent Cockpit</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f8f9fb;
+  --border: #dfe2e8;
+  --text: #1d2129;
+  --text-2: #5b6372;
+  --accent: #3b5bdb;
+  --accent-soft: #e7ecff;
+  --warn: #b35c00;
+  --warn-soft: #fff1df;
+  --danger: #c92a2a;
+  --danger-soft: #ffe8e8;
+  --ok: #2b8a3e;
+  --ok-soft: #e3f6e8;
+  --hold: #6741d9;
+  --hold-soft: #efe9ff;
+  --on-accent: #ffffff;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
+    --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
+    --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
+    --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
+  --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
+  --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
+  --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
+.top { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--border); }
+.top-inner { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+h1 { font-size: 16px; margin: 0; }
+.summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.chip strong { color: var(--text); font-size: 13px; margin-left: 4px; }
+.chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.meta { color: var(--text-2); font-size: 12px; }
+.spacer { flex: 1; }
+.connection { color: var(--text-2); font-size: 12px; }
+.connection[data-state="error"] { color: var(--danger); }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.intro { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
+.section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
+.section-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.section-head h2 { font-size: 15px; margin: 0; }
+.section-body { padding: 10px 14px 14px; }
+.product-key { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+.badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); }
+.badge.busy { background: var(--accent-soft); color: var(--accent); }
+.badge.wait { background: var(--warn-soft); color: var(--warn); }
+.badge.permission { background: var(--danger-soft); color: var(--danger); }
+.badge.done { background: var(--ok-soft); color: var(--ok); }
+h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
+.now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
+.now-row, .agent-row { display: grid; grid-template-columns: minmax(130px, 180px) minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.who { color: var(--text-2); font-size: 12px; }
+.who strong { color: var(--text); display: block; font-size: 13px; font-weight: 600; }
+.detail { overflow-wrap: anywhere; }
+.since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.agent-extra { display: flex; gap: 5px 8px; flex-wrap: wrap; margin-top: 3px; }
+.model { display: inline-flex; gap: 5px; align-items: baseline; padding: 1px 8px; border-radius: 6px; background: var(--ok-soft); font-size: 12px; }
+.model i { color: var(--text-2); font-size: 11px; font-style: normal; }
+.permission { border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); }
+.permission.long-wait { background: var(--danger-soft); }
+.permission-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.permission-head strong { font-weight: 600; }
+.empty { color: var(--text-2); font-size: 13px; padding: 10px; }
+.error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 650px) {
+  .top-inner { gap: 8px; }
+  main { padding: 12px; }
+  .now-row, .agent-row { grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .now-row .detail, .agent-row .detail { grid-column: 1 / -1; grid-row: 2; }
+  .now-row .since, .agent-row .since { grid-column: 2; grid-row: 1; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <h1>Agent Cockpit</h1>
+    <div class="summary" id="summary" aria-label="セッションの概要"></div>
+    <span class="spacer"></span>
+    <span class="connection" id="connection" role="status" aria-live="polite" data-state="loading">状態を読み込み中</span>
+  </div>
+</header>
+<main>
+  <p class="intro">Claude Code のセッション、実行中のツール、サブエージェント、許可待ちを表示します。</p>
+  <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
+</main>
+<script>
+'use strict';
+
+const POLL_INTERVAL_MS = 2000;
+const WAIT_REFRESH_INTERVAL_MS = 60_000;
+const LONG_WAIT_MS = 15 * 60_000;
+const summary = document.getElementById('summary');
+const root = document.getElementById('root');
+const connection = document.getElementById('connection');
+const liveStatus = document.getElementById('live-status');
+let lastVersion = null;
+let lastState = null;
+let hasRenderedState = false;
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function badge(text, className = '') {
+  return element('span', `badge ${className}`.trim(), text);
+}
+
+function durationLabel(startedAt, now = Date.now()) {
+  const start = Date.parse(startedAt);
+  if (!Number.isFinite(start)) return '時刻不明';
+  const minutes = Math.max(0, Math.floor((now - start) / 60_000));
+  if (minutes < 1) return '1 分未満';
+  if (minutes < 60) return `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} 時間 ${remainder} 分` : `${hours} 時間`;
+}
+
+function toolDetail(toolName, summary) {
+  if (!summary || summary === toolName) return toolName || summary;
+  return toolName ? `${toolName}: ${summary}` : summary;
+}
+
+function updateTitle(sessions) {
+  const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  document.title = permissionCount ? `(${permissionCount}) Agent Cockpit` : 'Agent Cockpit';
+}
+
+function renderSummary(sessions) {
+  const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  const activeCount = sessions.filter((session) => session.status === '作業中').length;
+  const waitingCount = sessions.filter((session) => session.status.startsWith('待機中')).length;
+  const items = [
+    ['セッション', sessions.length, ''],
+    ['作業中', activeCount, 'ok'],
+    ['待機中', waitingCount, 'warn'],
+    ['許可待ち', permissionCount, 'danger'],
+  ];
+  summary.replaceChildren(...items.map(([label, count, color]) => {
+    const chip = element('span', `chip ${color}`.trim());
+    chip.append(document.createTextNode(`${label} `), element('strong', '', String(count)));
+    return chip;
+  }));
+}
+
+function makeSessionHeader(session) {
+  const header = element('div', 'section-head');
+  const productName = session.product?.name || 'プロダクト不明';
+  header.append(element('h2', '', productName));
+  if (session.product?.key) header.append(element('code', 'meta product-key', session.product.key));
+  const statusTone = { '許可待ち': 'permission', '作業中': 'busy', '不明': 'done' }[session.status] || 'wait';
+  header.append(badge(session.status === '不明' ? '状態不明' : session.status, statusTone));
+  return header;
+}
+
+function appendTools(body, session) {
+  const heading = element('h3', 'sub', '今やっていること');
+  body.append(heading);
+  if (!session.tools.length) {
+    body.append(element('div', 'empty', '実行中のツールはありません。'));
+    return;
+  }
+  const list = element('div', 'now-list');
+  for (const tool of session.tools) {
+    const row = element('div', 'now-row');
+    const who = element('div', 'who');
+    who.append(element('strong', '', tool.agent_id ? `サブエージェント ${tool.agent_id}` : 'メインセッション'));
+    row.append(who, element('div', 'detail', toolDetail(tool.tool_name, tool.summary)), element('time', 'since', durationLabel(tool.startedAt)));
+    list.append(row);
+  }
+  body.append(list);
+}
+
+function appendAgents(body, session) {
+  body.append(element('h3', 'sub', 'サブエージェント'));
+  if (!session.agents.length) {
+    body.append(element('div', 'empty', 'サブエージェントはありません。'));
+    return;
+  }
+  const list = element('div', 'agent-list');
+  for (const agent of session.agents) {
+    const row = element('div', 'agent-row');
+    const who = element('div', 'who');
+    who.append(element('strong', '', agent.agent_type || agent.agent_id));
+    const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+    who.append(badge(agentState[0], agentState[1]));
+    const detail = element('div', 'detail', agent.lastTool ? toolDetail(agent.lastTool.tool_name, agent.lastTool.summary) : 'ツール実行情報はありません。');
+    const extra = element('div', 'agent-extra');
+    if (agent.model) {
+      const model = element('span', 'model');
+      model.append(document.createTextNode(agent.model));
+      if (agent.effort) model.append(element('i', '', agent.effort));
+      extra.append(model);
+    }
+    if (agent.source) extra.append(element('span', 'meta', `取得元: ${agent.source}`));
+    detail.append(extra);
+    row.append(who, detail, element('time', 'since', agent.startedAt ? durationLabel(agent.startedAt) : ''));
+    list.append(row);
+  }
+  body.append(list);
+}
+
+function appendPermissionWaits(body, session) {
+  body.append(element('h3', 'sub', `許可待ち ${session.permissionWaits.length}`));
+  if (!session.permissionWaits.length) {
+    body.append(element('div', 'empty', '許可待ちはありません。'));
+    return;
+  }
+  const list = element('div', 'permission-list');
+  for (const wait of session.permissionWaits) {
+    const age = Date.now() - Date.parse(wait.startedAt);
+    const card = element('article', `permission ${age > LONG_WAIT_MS ? 'long-wait' : ''}`.trim());
+    const header = element('div', 'permission-head');
+    header.append(element('strong', '', wait.agent_id ? `${wait.agent_id} が許可を待っています` : 'メインセッションが許可を待っています'));
+    header.append(badge('許可待ち', 'permission'));
+    header.append(element('time', 'since', durationLabel(wait.startedAt)));
+    card.append(header);
+    if (wait.tool_name || wait.summary) card.append(element('div', 'detail', toolDetail(wait.tool_name, wait.summary)));
+    if (wait.message) card.append(element('div', 'meta', wait.message));
+    list.append(card);
+  }
+  body.append(list);
+}
+
+function render(state) {
+  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  renderSummary(sessions);
+  updateTitle(sessions);
+  if (!sessions.length) {
+    root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
+    return;
+  }
+
+  const cards = sessions.map((session) => {
+    const card = element('section', 'section');
+    card.append(makeSessionHeader(session));
+    const body = element('div', 'section-body');
+    body.append(element('div', 'meta', session.title || session.session_id));
+    appendPermissionWaits(body, session);
+    appendTools(body, session);
+    appendAgents(body, session);
+    card.append(body);
+    return card;
+  });
+  root.replaceChildren(...cards);
+}
+
+async function refresh() {
+  try {
+    const response = await fetch('/api/state', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const state = await response.json();
+    lastState = state;
+    if (state.version !== lastVersion) {
+      render(state);
+      lastVersion = state.version;
+      hasRenderedState = true;
+      const permissions = state.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+      liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件。`;
+    }
+    if (connection.textContent !== '接続中') connection.textContent = '接続中';
+    connection.dataset.state = 'ready';
+  } catch {
+    if (connection.textContent !== 'サーバーに接続できません') connection.textContent = 'サーバーに接続できません';
+    connection.dataset.state = 'error';
+    if (!hasRenderedState) root.replaceChildren(element('div', 'error-box', '状態を取得できません。常駐サーバーが起動しているか確認してください。'));
+  }
+}
+
+refresh();
+setInterval(refresh, POLL_INTERVAL_MS);
+setInterval(() => { if (lastState) render(lastState); }, WAIT_REFRESH_INTERVAL_MS);
+</script>
+</body>
+</html>
