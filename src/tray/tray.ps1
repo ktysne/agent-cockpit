@@ -336,7 +336,13 @@ function Get-EdgePath {
 }
 
 function Show-TrayNotice([string]$Message, [System.Windows.Forms.ToolTipIcon]$Icon = [System.Windows.Forms.ToolTipIcon]::Info, [switch]$OpensDashboard) {
-  if (-not $script:notifyIcon) { return }
+  # 常駐中のトレイへ開く操作を頼みに来た 2 つ目の起動には通知の領域が無いので、失敗をダイアログで知らせる。
+  if (-not $script:notifyIcon) {
+    if ($Icon -ne [System.Windows.Forms.ToolTipIcon]::Info) {
+      [void][System.Windows.Forms.MessageBox]::Show($Message, 'Agent Cockpit', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    }
+    return
+  }
   $script:balloonOpensDashboard = [bool]$OpensDashboard
   $script:notifyIcon.BalloonTipTitle = 'Agent Cockpit'
   $script:notifyIcon.BalloonTipText = $Message

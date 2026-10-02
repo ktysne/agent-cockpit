@@ -32,10 +32,8 @@ if ($destinations.Count -eq 0) {
 $shortcutName = 'Agent Cockpit.lnk'
 $trayScript = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'tray.ps1'))
 $pathSeparators = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-$startupPath = $null
-if ($Startup) {
-  $startupPath = [System.IO.Path]::GetFullPath([Environment]::GetFolderPath('Startup')).TrimEnd($pathSeparators)
-}
+# -Directory でスタートアップを指した場合も、ログオンのたびにダッシュボードを開かないよう同じ扱いにする。
+$startupPath = [System.IO.Path]::GetFullPath([Environment]::GetFolderPath('Startup')).TrimEnd($pathSeparators)
 
 if ($Remove) {
   $shell = New-Object -ComObject WScript.Shell
@@ -95,15 +93,17 @@ try {
     $shortcut = $shell.CreateShortcut($shortcutPath)
     try {
       $arguments = $baseArguments
-      if (-not $startupPath -or -not [string]::Equals([System.IO.Path]::GetFullPath($destination).TrimEnd($pathSeparators), $startupPath, [StringComparison]::OrdinalIgnoreCase)) {
+      $description = 'Agent Cockpit のタスクトレイを起動する'
+      if (-not [string]::Equals([System.IO.Path]::GetFullPath($destination).TrimEnd($pathSeparators), $startupPath, [StringComparison]::OrdinalIgnoreCase)) {
         $arguments += ' -OpenDashboard'
+        $description = 'Agent Cockpit のタスクトレイを起動してダッシュボードを開く'
       }
       $shortcut.TargetPath = $targetPath
       $shortcut.Arguments = $arguments
       $shortcut.WindowStyle = 7
       $shortcut.WorkingDirectory = $cockpitHome
       $shortcut.IconLocation = $iconPath
-      $shortcut.Description = 'Agent Cockpit のタスクトレイを起動する'
+      $shortcut.Description = $description
       $shortcut.Save()
       Write-Output "作成: $shortcutPath"
     } finally {
