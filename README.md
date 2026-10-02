@@ -25,7 +25,7 @@ npm start -- --port 48377 --dev
 
 ## タスクトレイ
 
-Windows では、リポジトリ直下の `start-tray.cmd` をダブルクリックすると、すぐにタスクトレイを起動できます。
+Windows では、リポジトリ直下の `start-tray.cmd` をダブルクリックすると、タスクトレイを起動してダッシュボードを開きます。
 起動の瞬間に黒いウィンドウが一瞬表示されます。
 どの起動方法も、PowerShell の実行ポリシーが `RemoteSigned` 以上であることを前提にしています(`Get-ExecutionPolicy` で確かめられます)。
 既定の `Restricted` のままでは、ウィンドウを出さずに起動が失敗します。
@@ -38,15 +38,20 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1"
 ```
 
 このスクリプトを実行すると、デスクトップとスタートメニューに「Agent Cockpit」のショートカットができます。
-以後はショートカットをダブルクリックすると起動し、黒いウィンドウは表示されません。
+ショートカットを作り直すと、起動引数も更新されます。
+これらのショートカットをダブルクリックすると、タスクトレイを起動してダッシュボードを開きます。
+黒いウィンドウは表示されません。
 
-ログオン時に自動起動するには、`-Startup` を付けて実行します。
+ログオン時にタスクトレイだけを自動起動するには、`-Startup` を付けて実行します。
 自動起動をやめるときは、同じ場所の指定に `-Remove` を付けます。
 
 ```powershell
 powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup
 powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Startup
 ```
+
+ダッシュボードを閉じてもタスクトレイは動き続けます。
+タスクトレイのメニューで「終了」を選ぶと、ダッシュボードとタスクトレイを終了します。
 
 アプリアイコンの元画像は `assets/agent-cockpit_icon.png` にあります。64×64 の画面用画像は次のコマンドで作り直せます。ショートカット用 ICO はインストール時に元画像から生成されます。
 
