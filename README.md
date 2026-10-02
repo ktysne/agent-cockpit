@@ -23,6 +23,24 @@ npm start -- --port 48377 --dev
 
 サーバーを終了するときは、起動した端末で `Ctrl+C` を押します。
 
+## タスクトレイ
+
+Windows では、次のコマンドでタスクトレイを起動できます。
+`D:\path\to\agent-cockpit` をこのリポジトリの絶対パスに置き換えてください。
+
+```powershell
+powershell.exe -NoProfile -STA -WindowStyle Hidden -File "D:\path\to\agent-cockpit\src\tray\tray.ps1"
+```
+
+ログオン時に起動するには、`Win + R` で `shell:startup` を開き、ショートカットを作成します。
+ショートカットのリンク先を `powershell.exe` にし、引数に次の文字列を設定してください。
+
+```text
+-NoProfile -STA -WindowStyle Hidden -File "D:\path\to\agent-cockpit\src\tray\tray.ps1"
+```
+
+この手順はショートカットを作成する方法だけを案内します。
+
 ## フックの登録
 
 `~/.claude/settings.json` は自動では変更しません。
@@ -77,7 +95,9 @@ npm start -- --port 48377 --dev
 npm test
 ```
 
-各テストは一時ディレクトリを `AGENT_COCKPIT_HOME` に設定し、サーバーをポート `0` で起動します。
+テストは `AGENT_COCKPIT_HOME` を一時ディレクトリに設定します。
+サーバーの単体テストはポート `0` で起動します。
+`ensure-server.js` のテストは空きポートを `AGENT_COCKPIT_PORT` に設定し、ポート `47821` を使いません。
 開発機の `~/.agent-cockpit` と通常ポートには接続しません。
 
 ## イベント再生
