@@ -67,6 +67,15 @@ test('状態の推定結果はイベント到着後に消える', async (t) => {
   assert.equal(state.snapshot().sessions[0].estimate, undefined);
 });
 
+test('推定の読み取り中に状態が分かったセッションには推定を保存しない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'estimated-race', cwd: 'C:\\project', name: '作業中' }]);
+  state.addEvent({ session_id: 'estimated-race', hook_event_name: 'SessionStart', hookAt: 100 });
+  assert.equal(state.saveEstimate('estimated-race', { recordedAt: '2026-10-02T01:02:03.000Z', lastTool: 'Read', state: 'input' }), null);
+  assert.equal(state.snapshot().sessions[0].estimate, undefined);
+});
+
 test('状態不明ではないセッションは一覧から外せない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

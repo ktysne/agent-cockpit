@@ -112,6 +112,25 @@ test('知らない種類の要素を含む行も推定に使う', async (t) => {
   assert.equal((await estimateTranscript(fixture.claudeHome, fixture.cwd, fixture.sessionId))?.state, 'model');
 });
 
+test('中断の行で終わる場合は入力待ちとする', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const interrupted = transcriptRecord('user', { stopReason: null, content: [{ type: 'text', text: '[Request interrupted by user]' }] });
+  await fs.writeFile(fixture.filePath, `${transcriptRecord('assistant', { stopReason: 'tool_use', content: [{ type: 'tool_use', name: 'Bash' }] })}\n${interrupted}\n`);
+  assert.equal((await estimateTranscript(fixture.claudeHome, fixture.cwd, fixture.sessionId))?.state, 'input');
+});
+
+test('isMeta の user の行は推定に使わない', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const meta = JSON.stringify({
+    type: 'user', timestamp: '2026-10-02T01:02:09.000Z', isSidechain: false, isMeta: true,
+    message: { role: 'user', content: 'コマンドの出力' },
+  });
+  await fs.writeFile(fixture.filePath, `${transcriptRecord('assistant')}\n${meta}\n`);
+  assert.deepEqual(await estimateTranscript(fixture.claudeHome, fixture.cwd, fixture.sessionId), {
+    recordedAt: '2026-10-02T01:02:03.000Z', lastTool: null, state: 'input',
+  });
+});
+
 test('不正な session_id を使わない', async (t) => {
   const fixture = await transcriptFixture(t);
   assert.equal(await estimateTranscript(fixture.claudeHome, fixture.cwd, '../session'), null);

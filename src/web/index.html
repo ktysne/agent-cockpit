@@ -857,6 +857,12 @@ function appendTasks(body, session, product, withTags = false, multipleSessions 
   if (done.length) appendPlanToggle(body, 'tasks', session.session_id, expanded, done.length, '完了したタスク', expandedDoneTasks);
 }
 
+// 状態不明のセッションは古い記録を持つことが多いので、今日でなければ日付も出す。
+function estimateTimeLabel(date) {
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return date.toDateString() === new Date().toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()} ${time}`;
+}
+
 function appendUnknownSessionControls(body, session) {
   if (session.status !== '不明') return;
   const actions = element('div', 'session-actions');
@@ -875,9 +881,7 @@ function appendUnknownSessionControls(body, session) {
     panel.textContent = '推定できませんでした';
   } else {
     const timestamp = Date.parse(session.estimate.recordedAt);
-    const recordedAt = Number.isFinite(timestamp)
-      ? new Date(timestamp).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
-      : '時刻不明';
+    const recordedAt = Number.isFinite(timestamp) ? estimateTimeLabel(new Date(timestamp)) : '時刻不明';
     panel.append(element('p', '', `最後の記録: ${recordedAt}、最後のツール: ${session.estimate.lastTool ?? 'なし'}`));
     const waiting = session.estimate.state === 'input'
       ? 'はい'
@@ -1141,6 +1145,11 @@ async function runUnknownSessionAction(button, url, body, errorMessage, focusExc
   button.disabled = true;
   try {
     const response = await postUiAction(url, body);
+    // 押した直後にイベントが届いて状態が分かった場合は、失敗と出さずに表示を取り直す。
+    if (response.status === 404 || response.status === 409) {
+      await refresh();
+      return;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await refresh();
     if (focusExcludedNote) document.querySelector('[data-clear-hidden-sessions]')?.focus({ preventScroll: true });
