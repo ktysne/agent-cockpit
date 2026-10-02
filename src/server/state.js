@@ -44,8 +44,8 @@ class AwayState {
   }
 
   // 画面とトレイから同時に切り替えても、保存の順と this.value の順が食い違わないよう直列にする。
-  setEnabled(enabled, now = Date.now()) {
-    const run = this.pending.then(() => this.applyEnabled(enabled, now));
+  setEnabled(enabled, now) {
+    const run = this.pending.then(() => this.applyEnabled(enabled, now ?? Date.now()));
     this.pending = run.catch(() => {});
     return run;
   }

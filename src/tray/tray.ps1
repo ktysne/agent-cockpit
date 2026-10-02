@@ -180,7 +180,7 @@ function Get-ServerInfo {
     $info = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop
     $port = 0
     if (-not [int]::TryParse([string]$info.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { return $null }
-    if ([string]::IsNullOrWhiteSpace([string]$info.uiSecret)) { return $null }
+    # 状態の取得に秘密値は要らないので、uiSecret を書かない常駐サーバーでも接続として扱う。
     return [pscustomobject]@{ Port = $port; Secret = [string]$info.uiSecret }
   } catch {
     return $null
@@ -256,7 +256,7 @@ function Show-TrayNotice([string]$Message, [System.Windows.Forms.ToolTipIcon]$Ic
 
 function Set-AwayStatus([bool]$Enabled) {
   $serverInfo = Get-ServerInfo
-  if ($null -eq $serverInfo) {
+  if ($null -eq $serverInfo -or [string]::IsNullOrWhiteSpace($serverInfo.Secret)) {
     Show-TrayNotice '離席中を切り替えられませんでした。常駐サーバーの状態を確認してください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
     Update-TrayState
     return

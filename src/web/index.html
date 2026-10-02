@@ -220,24 +220,37 @@ function applyAwayState(away) {
   header.dataset.away = String(enabled);
 }
 
+function postAway(enabled) {
+  return fetch('/api/away', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Cockpit-Secret': document.querySelector('meta[name="cockpit-secret"]').content,
+    },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+async function refreshUiSecret() {
+  const response = await fetch('/', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const secret = page.querySelector('meta[name="cockpit-secret"]')?.content;
+  if (!secret) throw new Error('secret unavailable');
+  document.querySelector('meta[name="cockpit-secret"]').content = secret;
+}
+
 awayToggle.addEventListener('change', async () => {
   const requested = awayToggle.checked;
   const previous = lastState?.away?.enabled === true;
   awayToggle.disabled = true;
   try {
-    const response = await fetch('/api/away', {
-      method: 'POST',
-      cache: 'no-store',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Cockpit-Secret': document.querySelector('meta[name="cockpit-secret"]').content,
-      },
-      body: JSON.stringify({ enabled: requested }),
-    });
-    // 常駐サーバーが再起動すると秘密値が変わるので、読み込み直して新しい値を受け取る。
+    let response = await postAway(requested);
+    // 常駐サーバーが再起動すると秘密値が変わるので、画面を取り直して新しい値で 1 回だけ送り直す。
     if (response.status === 401) {
-      location.reload();
-      return;
+      await refreshUiSecret();
+      response = await postAway(requested);
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const away = await response.json();
