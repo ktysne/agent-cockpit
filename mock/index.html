@@ -153,7 +153,8 @@ h3.sub .count { font-weight: normal; }
 .tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .task { padding: 6px 10px; border-radius: 8px; }
 .task:hover { background: var(--surface-2); }
-.task .line { display: flex; gap: 8px; align-items: baseline; }
+.task .line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; }
+.task .line .title { min-width: 0; overflow-wrap: anywhere; }
 .state { font-size: 11px; padding: 0 8px; border-radius: 999px; white-space: nowrap; }
 .state.done { background: var(--ok-soft); color: var(--ok); }
 .state.doing { background: var(--accent-soft); color: var(--accent); }
