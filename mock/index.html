@@ -60,8 +60,9 @@ header.top {
   border-bottom: 1px solid var(--border);
 }
 .top[data-away="true"] { background: var(--warn-soft); border-bottom-color: var(--warn); }
-.top-inner { position: relative; max-width: 1100px; margin: 0 auto; padding: 10px 64px 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
-.top h1 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; }
+.top-inner { position: relative; max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+/* 設定のボタンは右上に重ねて置くので、その分の余白はタイトルの行だけに取り、2 行目からは全幅を使う。 */
+.top h1 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; flex: 1 1 100%; min-height: 40px; padding-right: 48px; }
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
 .settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
 .settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
