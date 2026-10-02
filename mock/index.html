@@ -453,7 +453,7 @@ const DATA = {
           id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown', branch: 'plan/pr-stack-view',
           main: { tool: 'Read: mock/index.html', since: '記録時刻不明' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [],
-          estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', inputWaiting: true },
+          estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', state: 'input' },
         },
       ],
     },
@@ -948,11 +948,14 @@ function taskSessionBlock(p, session, withTag) {
   return `<h3 class="sub">タスクと完了条件 <span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
+// 会話の記録の最後の行から推定する。tool はツールの呼び出しで止まっている、model はユーザーの行で終わっている状態。
+const ESTIMATE_WAITING = { input: 'はい', tool: 'いいえ(許可待ちかツールの実行中)', model: 'いいえ(応答の生成中)' };
+
 function unknownSessionControls(session) {
   if (session.status !== 'unknown') return '';
   const estimate = ui.estimatedSessions.includes(session.id)
     ? session.estimate?.canEstimate
-      ? `<div class="estimate"><p>最後の記録: ${esc(session.estimate.recordedAt)}、最後のツール: ${esc(session.estimate.tool)}</p><p>入力待ちらしい: ${session.estimate.inputWaiting ? 'はい' : 'いいえ'}</p></div>`
+      ? `<div class="estimate"><p>最後の記録: ${esc(session.estimate.recordedAt)}、最後のツール: ${esc(session.estimate.tool)}</p><p>入力待ちらしい: ${ESTIMATE_WAITING[session.estimate.state]}</p></div>`
       : '<div class="estimate">推定できませんでした</div>'
     : '';
   return `<div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}`;
@@ -1104,7 +1107,7 @@ document.addEventListener('click', e => {
     ui.expandedDoneTasks = ui.expandedDoneTasks.includes(id) ? ui.expandedDoneTasks.filter(x => x !== id) : [...ui.expandedDoneTasks, id];
   } else if (t.dataset.estimate) {
     const id = t.dataset.estimate;
-    ui.estimatedSessions = ui.estimatedSessions.includes(id) ? ui.estimatedSessions.filter(x => x !== id) : [...ui.estimatedSessions, id];
+    if (!ui.estimatedSessions.includes(id)) ui.estimatedSessions.push(id);
   } else if (t.dataset.hideSession) {
     const id = t.dataset.hideSession;
     if (!ui.hiddenSessions.includes(id)) ui.hiddenSessions.push(id);

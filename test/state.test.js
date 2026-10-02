@@ -28,6 +28,63 @@ test('worktree の cwd からプロダクトの鍵と表示名を求める', asy
   );
 });
 
+test('状態不明のセッションを外し、すべて表示する操作で戻す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'hidden-unknown', cwd: 'C:\\project', name: '作業中' }]);
+
+  const originalVersion = state.version;
+  assert.equal(state.hideUnknownSession('hidden-unknown'), true);
+  assert.equal(state.version, originalVersion + 1);
+  assert.equal(state.snapshot().sessions[0].hidden, true);
+  const hiddenVersion = state.version;
+  assert.equal(state.clearHiddenSessions(), 1);
+  assert.equal(state.version, hiddenVersion + 1);
+  assert.equal(state.snapshot().sessions[0].hidden, undefined);
+});
+
+test('外したセッションはイベント到着後に一覧へ戻る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'hidden-event', cwd: 'C:\\project', name: '作業中' }]);
+  state.hideUnknownSession('hidden-event');
+
+  state.addEvent({ session_id: 'hidden-event', hook_event_name: 'SessionStart', hookAt: 100 });
+  assert.equal(state.snapshot().sessions[0].hidden, undefined);
+  assert.notEqual(state.snapshot().sessions[0].status, '不明');
+});
+
+test('状態の推定結果はイベント到着後に消える', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'estimated-event', cwd: 'C:\\project', name: '作業中' }]);
+  const originalVersion = state.version;
+  state.saveEstimate('estimated-event', { recordedAt: '2026-10-02T01:02:03.000Z', lastTool: 'Read', state: 'input' });
+  assert.equal(state.version, originalVersion + 1);
+  assert.equal(state.snapshot().sessions[0].estimate.canEstimate, true);
+
+  state.addEvent({ session_id: 'estimated-event', hook_event_name: 'SessionStart', hookAt: 100 });
+  assert.equal(state.snapshot().sessions[0].estimate, undefined);
+});
+
+test('状態不明ではないセッションは一覧から外せない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'known-session', hook_event_name: 'SessionStart', hookAt: 100 });
+  assert.equal(state.hideUnknownSession('known-session'), false);
+  assert.equal(state.hideUnknownSession('missing-session'), null);
+});
+
+test('終了して一覧から消えたセッションを外した集合からも除く', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'hidden-ended', cwd: 'C:\\project', name: '作業中' }]);
+  state.hideUnknownSession('hidden-ended');
+  state.syncSessionFiles([]);
+  assert.deepEqual(state.snapshot().sessions, []);
+  assert.equal(state.hiddenSessions.size, 0);
+});
+
 test('hookAt の順に再構成し、後から届いた古い PreToolUse を完了済みの PostToolUse より前に置く', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
