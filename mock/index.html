@@ -990,9 +990,9 @@ function sessionBlock(p, session) {
       <h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
       ${decisionSessionBlock(p, session, false)}
+      ${taskSessionBlock(p, session, false)}
       <h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
       <h3 class="sub">サブエージェント</h3>${agentSection(p, session, false)}
-      ${taskSessionBlock(p, session, false)}
       ${unknownSessionControls(session)}
     </div>
   </div>`;
@@ -1086,8 +1086,8 @@ function renderKindMode() {
   const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
   return (news ? section('前回見てから', news) : '')
     + section('あなたの判断が必要なこと(待ちの長い順)', decisions + endedDecisions, orderBar)
-    + section('今やっていること', now)
     + section('タスクと完了条件', tasks)
+    + section('今やっていること', now)
     + (isShown('prs') ? section('プルリクエスト', prs) : '')
     + section('レビュー', reviews);
 }
