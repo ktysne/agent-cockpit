@@ -10,6 +10,7 @@ const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { PullRequestTracker } = require('./pull-requests');
+const { PullRequestMergeManager } = require('./pull-request-merge');
 const { parsePullRequestUrl, isGithubCreatePullRequestTool } = require('./pull-request-utils');
 
 const APP_NAME = 'agent-cockpit';
@@ -223,6 +224,7 @@ function createRequestHandler(options) {
     markRequest,
     findSessionIdByPid = (pid) => findLiveSessionIdByPid(pid, claudeHome),
     pullRequestTracker,
+    pullRequestMergeManager,
   } = options;
   const webPath = path.join(__dirname, '..', 'web', 'index.html');
 
@@ -376,6 +378,44 @@ function createRequestHandler(options) {
       }
       await state.waitForPersistence();
       jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
+      return;
+    }
+    const pullRequestMergePath = requestUrl.pathname.match(/^\/api\/pull-requests\/(merge|reserve|cancel-reservation)$/);
+    if (request.method === 'POST' && pullRequestMergePath) {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      const action = pullRequestMergePath[1];
+      const expectedFields = action === 'cancel-reservation'
+        ? ['number', 'registration_key']
+        : ['deleteBranch', 'headRefOid', 'method', 'number', 'registration_key'];
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).sort().join(',') !== expectedFields.join(',') ||
+        !Number.isSafeInteger(body.number) || body.number < 1 || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
+        (action !== 'cancel-reservation' && (typeof body.headRefOid !== 'string' || body.headRefOid.length > 64 ||
+          typeof body.method !== 'string' || typeof body.deleteBranch !== 'boolean'))) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const result = action === 'merge'
+        ? await pullRequestMergeManager.merge(body)
+        : action === 'reserve'
+          ? await pullRequestMergeManager.reserve(body)
+          : await pullRequestMergeManager.cancelReservation(body);
+      await state.waitForPersistence();
+      jsonResponse(response, result.ok ? 200 : result.status, result.ok ? result : { error: result.error });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/') {
@@ -838,6 +878,14 @@ async function startServer(options = {}) {
     ...(options.answerDeliveryOptions || {}),
   });
   const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, ...(options.pullRequestOptions || {}) });
+  const pullRequestMergeManager = options.pullRequestMergeManager || new PullRequestMergeManager({
+    state,
+    tracker: pullRequestTracker,
+    answerDelivery,
+    ...(options.pullRequestMergeOptions || {}),
+  });
+  pullRequestTracker.onMerged = (event) => pullRequestMergeManager.handleDetectedMerge?.(event);
+  pullRequestTracker.onClosed = (event) => pullRequestMergeManager.handleDetectedClose?.(event);
   let info = null;
   let closing = null;
   let lastRequestAt = Date.now();
@@ -855,6 +903,7 @@ async function startServer(options = {}) {
     away,
     answerDelivery,
     pullRequestTracker,
+    pullRequestMergeManager,
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
@@ -880,6 +929,7 @@ async function startServer(options = {}) {
 
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
   pullRequestTracker.start();
+  pullRequestMergeManager.start?.();
   async function refreshSessionFiles() {
     const files = await listLiveSessionFiles(claudeHome);
     if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
@@ -903,6 +953,7 @@ async function startServer(options = {}) {
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
       answerDelivery.close();
+      pullRequestMergeManager.close?.();
       pullRequestTracker.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.()].filter(Boolean));
@@ -912,7 +963,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, answerDelivery, pullRequestTracker, info, homeDir, close };
+  return { server, state, away, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
 }
 
 function parseArguments(argv) {

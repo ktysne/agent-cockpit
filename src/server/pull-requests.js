@@ -426,6 +426,8 @@ class PullRequestTracker {
     this.repositories = new Map();
     this.inFlight = new Map();
     this.timer = null;
+    this.onMerged = options.onMerged || null;
+    this.onClosed = options.onClosed || null;
   }
 
   start() {
@@ -457,6 +459,43 @@ class PullRequestTracker {
       .finally(() => this.inFlight.delete(key));
     this.inFlight.set(key, operation);
     return operation;
+  }
+
+  async refreshRepoFresh(owner, repo) {
+    const key = repoKey(owner, repo);
+    await this.inFlight.get(key)?.catch(() => {});
+    return this.refreshRepo(owner, repo);
+  }
+
+  mergeCandidate(registration) {
+    const key = repoKey(registration.owner, registration.repo);
+    const repository = this.repositories.get(key);
+    if (!repository) return null;
+    const productKey = registration.product?.key || `repo:${key}`;
+    const registrations = this.state.pullRequestRegistrationsForRepo(registration.owner, registration.repo)
+      .filter((record) => (record.product?.key || `repo:${key}`) === productKey);
+    const assembled = assemblePullRequestStacks({
+      defaultBranch: repository.defaultBranch,
+      openPullRequests: repository.openPullRequests,
+      registrations,
+      relatedPullRequests: this.state.relatedPullRequestRegistrationsForRepo(registration.owner, registration.repo),
+      retargetedPrs: this.state.pullRequestRetargetsForRepo(registration.owner, registration.repo),
+      restackResults: repository.restackResults,
+    });
+    const find = (items) => {
+      for (const item of items) {
+        if (item.number === registration.number) return item;
+        const nested = find(item.children);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return {
+      registration,
+      repository,
+      registrations,
+      pullRequest: find(assembled.trees),
+    };
   }
 
   async execute(args) {
@@ -566,6 +605,30 @@ class PullRequestTracker {
             state: closedState,
             mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
           });
+        }
+        if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
+          const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+          const pullRequest = normalizeOpenPullRequest(value);
+          const stackedPullRequests = new Map((reservation?.stackedPullRequests || []).map((item) => [item.number, item]));
+          if (pullRequest) {
+            for (const child of openPullRequests
+              .filter((candidate) => candidate.baseRefName === pullRequest.headRefName)
+              .map((candidate) => ({ number: candidate.number, baseRefName: pullRequest.headRefName }))) {
+              stackedPullRequests.set(child.number, child);
+            }
+          }
+          await this.onMerged?.({
+            owner,
+            repo,
+            pullRequest,
+            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : new Date(this.now()).toISOString(),
+            reservation,
+            registrations: result.tracked.registrations,
+            stackedPullRequests: [...stackedPullRequests.values()],
+          });
+        } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
+          const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+          if (reservation) await this.onClosed?.({ owner, repo, number: result.number, reservation, registrations: result.tracked.registrations });
         }
       }
     }
@@ -718,8 +781,11 @@ class PullRequestTracker {
         registeredCount: group.registrations.length,
         openCount: assembled.openCount,
         mergeableCount: assembled.mergeableCount,
-        trees: assembled.trees,
+        trees: assembled.trees.map((tree) => attachMergeState(tree, group.registrations, owner, repo, this.state)),
         merged: assembled.merged,
+        mergeHistory: this.state.mergedPullRequestHistoryForRepo(owner, repo, this.now()),
+        reservations: this.state.pullRequestMergeReservationsForRepo(owner, repo),
+        lastMethod: this.state.lastPullRequestMethod(owner, repo),
         reviews,
       });
     }
@@ -730,11 +796,25 @@ class PullRequestTracker {
       ...group,
       product: { ...group.product },
       mergeMethods: [...group.mergeMethods],
-      trees: structuredClone(group.trees),
+      trees: group.trees.map((tree) => attachMergeState(tree, [], group.owner, group.repo, this.state)),
       merged: structuredClone(group.merged),
+      mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
+      reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
+      lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
       reviews: group.reviews.map((review) => ({ ...review })),
     }));
   }
+}
+
+function attachMergeState(pullRequest, registrations, owner, repo, state) {
+  const registration = registrations.find((record) => record.number === pullRequest.number);
+  return {
+    ...pullRequest,
+    mergeSessionId: registration?.session_id || pullRequest.mergeSessionId || null,
+    mergeRecordKey: registration ? state.pullRequestRegistrationKey(registration) : pullRequest.mergeRecordKey || null,
+    reservation: state.pullRequestMergeReservation(owner, repo, pullRequest.number),
+    children: pullRequest.children.map((child) => attachMergeState(child, registrations, owner, repo, state)),
+  };
 }
 
 module.exports = {
@@ -742,6 +822,8 @@ module.exports = {
   assemblePullRequestStacks,
   ghEnvironment,
   ghErrorMessage,
+  repoKey,
+  safeRepo,
   normalizeOpenPullRequest,
   parsePullRequestList,
   parseRepositoryConfig,

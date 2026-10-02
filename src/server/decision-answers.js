@@ -127,6 +127,7 @@ class DecisionAnswerDelivery {
     this.lastLifecycleAt = new Map();
     this.endedSessions = new Set();
     this.waiters = new Map();
+    this.sessionNotifications = new Map();
     this.closed = false;
   }
 
@@ -300,8 +301,27 @@ class DecisionAnswerDelivery {
   }
 
   deliverPostToolBatch(sessionId) {
-    const context = [this.deliverPending(sessionId), this.taskNudges.reminderFor(sessionId)].filter(Boolean);
+    const context = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId), this.taskNudges.reminderFor(sessionId)].filter(Boolean);
     return context.length ? context.join('\n') : null;
+  }
+
+  notifySessions(sessionIds, message) {
+    if (!Array.isArray(sessionIds) || typeof message !== 'string' || !message.trim()) return false;
+    for (const sessionId of new Set(sessionIds)) {
+      if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) continue;
+      const pending = this.sessionNotifications.get(sessionId) || [];
+      pending.push(message.slice(0, 8000));
+      this.sessionNotifications.set(sessionId, pending.slice(-20));
+      this.signal(sessionId);
+    }
+    return true;
+  }
+
+  deliverSessionNotifications(sessionId) {
+    const pending = this.sessionNotifications.get(sessionId);
+    if (!pending?.length) return null;
+    this.sessionNotifications.delete(sessionId);
+    return pending.join('\n');
   }
 
   deliverPrompt(sessionId, eventId, hookAt = this.now()) {
@@ -310,8 +330,7 @@ class DecisionAnswerDelivery {
     const pending = this.state.decisionsFor(sessionId).filter((decision) => (
       decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state)
     ));
-    if (!pending.length) return null;
-    const messages = pending.map((decision) => decisionAnswerText(decision));
+    const messages = [this.deliverSessionNotifications(sessionId), ...pending.map((decision) => decisionAnswerText(decision))].filter(Boolean);
     for (const decision of pending) {
       this.state.setDecisionLifecycle(sessionId, decision.id, {
         answer: {
@@ -321,7 +340,7 @@ class DecisionAnswerDelivery {
         },
       }, this.now());
     }
-    return messages.join('\n');
+    return messages.length ? messages.join('\n') : null;
   }
 
   startStop(sessionId, eventId, hookAt = this.now()) {
@@ -335,11 +354,11 @@ class DecisionAnswerDelivery {
 
   async waitForStopAnswer(sessionId, generation, parentAlive = true) {
     if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
-    const text = this.deliverPending(sessionId);
+    const text = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     if (text) return { stderrText: text, done: true };
     await this.waitForSignal(sessionId, this.maxLongPollMs);
     if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
-    const nextText = this.deliverPending(sessionId);
+    const nextText = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     return nextText ? { stderrText: nextText, done: true } : { stderrText: null, done: false };
   }
 

@@ -121,6 +121,59 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   assert.equal(away.headers['access-control-allow-origin'], undefined);
 });
 
+test('PR マージ口は画面秘密値と Origin 必須照合を行い、owner/repo を要求本文から拒む', async (t) => {
+  const runtime = await runningServer(t);
+  const path = '/api/pull-requests/merge';
+  const payload = {
+    number: 41, registration_key: 'b'.repeat(64),
+    headRefOid: 'a'.repeat(40), method: 'squash', deleteBranch: true,
+  };
+  const body = JSON.stringify(payload);
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', origin },
+  });
+  assert.equal(missingSecret.status, 401);
+
+  const hookSecret = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin },
+  });
+  assert.equal(hookSecret.status, 401);
+
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+
+  const missingOrigin = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  });
+  assert.equal(missingOrigin.status, 403);
+
+  const missingRegistrationKey = await request(runtime.info.port, {
+    method: 'POST', path, body: JSON.stringify({ ...payload, registration_key: undefined }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin },
+  });
+  assert.equal(missingRegistrationKey.status, 400);
+
+  const suppliedRepository = await request(runtime.info.port, {
+    method: 'POST', path, body: JSON.stringify({ ...payload, owner: 'example', repo: 'project' }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin },
+  });
+  assert.equal(suppliedRepository.status, 400);
+
+  const recordedKeyOnly = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin },
+  });
+  assert.equal(recordedKeyOnly.status, 404);
+});
+
 test('状態推定 API は画面の認証とセッション状態を照合し、結果を保存する', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();
