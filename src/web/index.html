@@ -58,8 +58,19 @@ h1 { font-size: 16px; margin: 0; }
 .spacer { flex: 1; }
 .connection { color: var(--text-2); font-size: 12px; }
 .connection[data-state="error"] { color: var(--danger); }
-.theme-control { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; }
-.theme-control select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.settings-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer; }
+.settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-dialog { width: min(480px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.settings-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.settings-dialog h2 { margin: 0; font-size: 18px; }
+.settings-dialog section { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.settings-dialog h3 { margin: 0 0 10px; font-size: 14px; }
+.settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.settings-theme-row label { color: var(--text-2); }
+.settings-dialog select { max-width: 100%; padding: 4px 8px; }
+.settings-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.settings-dialog button { padding: 4px 12px; cursor: pointer; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .intro { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
@@ -106,16 +117,25 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
     <h1>Agent Cockpit</h1>
     <div class="summary" id="summary" aria-label="セッションの概要"></div>
     <span class="spacer"></span>
-    <label class="theme-control" for="theme-select">配色
-      <select id="theme-select" name="theme">
+    <span class="connection" id="connection" role="status" aria-live="polite" data-state="loading">状態を読み込み中</span>
+    <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog"><span aria-hidden="true">⚙</span><span>設定</span></button>
+  </div>
+</header>
+<dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <h2 id="settings-title">設定</h2>
+  <section aria-labelledby="settings-display-title">
+    <h3 id="settings-display-title">表示</h3>
+    <div class="settings-theme-row">
+      <label for="settings-theme-select">配色</label>
+      <select id="settings-theme-select" name="theme">
         <option value="light">ライト</option>
         <option value="dark">ダーク</option>
         <option value="system">OS に従う</option>
       </select>
-    </label>
-    <span class="connection" id="connection" role="status" aria-live="polite" data-state="loading">状態を読み込み中</span>
-  </div>
-</header>
+    </div>
+  </section>
+  <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
+</dialog>
 <main>
   <p class="intro">Claude Code のセッション、実行中のツール、サブエージェント、許可待ちを表示します。</p>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -131,7 +151,10 @@ const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const connection = document.getElementById('connection');
 const liveStatus = document.getElementById('live-status');
-const themeSelect = document.getElementById('theme-select');
+const themeSelect = document.getElementById('settings-theme-select');
+const settingsButton = document.getElementById('settings-button');
+const settingsDialog = document.getElementById('settings-dialog');
+const settingsClose = document.getElementById('settings-close');
 const THEME_STORAGE_KEY = 'agent-cockpit.theme';
 let lastVersion = null;
 let lastState = null;
@@ -162,6 +185,16 @@ themeSelect.addEventListener('change', () => {
   } catch {
   }
 });
+
+settingsButton.addEventListener('click', () => settingsDialog.showModal());
+settingsClose.addEventListener('click', () => settingsDialog.close());
+settingsDialog.addEventListener('click', (event) => {
+  // 内側の余白を押しても target はダイアログ自身になるので、位置で背景かを判定する。
+  const box = settingsDialog.getBoundingClientRect();
+  const isOutside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+  if (event.target === settingsDialog && isOutside) settingsDialog.close();
+});
+settingsDialog.addEventListener('close', () => settingsButton.focus());
 
 function element(tag, className, text) {
   const node = document.createElement(tag);

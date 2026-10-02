@@ -1,5 +1,6 @@
 ﻿param(
-  [switch]$Check
+  [switch]$Check,
+  [string]$ExportIcon
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,26 +65,33 @@ namespace AgentCockpitTray {
       SetForegroundWindow(window);
     }
 
-    public static Icon CreateTrayIcon(bool connected, bool pending) {
-      using (Bitmap bitmap = new Bitmap(32, 32))
+    public static Bitmap DrawTrayBitmap(int size, bool connected, bool pending) {
+      float scale = size / 32f;
+      Bitmap bitmap = new Bitmap(size, size);
       using (Graphics graphics = Graphics.FromImage(bitmap)) {
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.Clear(Color.Transparent);
         Color background = connected ? Color.FromArgb(217, 119, 87) : Color.FromArgb(128, 128, 128);
         using (SolidBrush backgroundBrush = new SolidBrush(background)) {
-          graphics.FillEllipse(backgroundBrush, 1, 1, 30, 30);
+          graphics.FillEllipse(backgroundBrush, scale, scale, 30 * scale, 30 * scale);
         }
-        using (Font font = new Font("Segoe UI", 19, FontStyle.Bold, GraphicsUnit.Pixel)) {
-          graphics.DrawString("C", font, Brushes.White, new PointF(6, 3));
+        using (Font font = new Font("Segoe UI", 19 * scale, FontStyle.Bold, GraphicsUnit.Pixel)) {
+          graphics.DrawString("C", font, Brushes.White, new PointF(6 * scale, 3 * scale));
         }
         if (pending) {
           using (SolidBrush mark = new SolidBrush(Color.FromArgb(245, 166, 35))) {
-            graphics.FillEllipse(mark, 21, 1, 10, 10);
+            graphics.FillEllipse(mark, 21 * scale, scale, 10 * scale, 10 * scale);
           }
-          using (Pen outline = new Pen(Color.White, 1.5f)) {
-            graphics.DrawEllipse(outline, 21, 1, 10, 10);
+          using (Pen outline = new Pen(Color.White, 1.5f * scale)) {
+            graphics.DrawEllipse(outline, 21 * scale, scale, 10 * scale, 10 * scale);
           }
         }
+      }
+      return bitmap;
+    }
+
+    public static Icon CreateTrayIcon(bool connected, bool pending) {
+      using (Bitmap bitmap = DrawTrayBitmap(32, connected, pending)) {
         IntPtr handle = bitmap.GetHicon();
         try {
           using (Icon shared = Icon.FromHandle(handle)) {
@@ -105,6 +113,53 @@ function Get-CockpitHome {
     return [System.IO.Path]::GetFullPath($env:AGENT_COCKPIT_HOME)
   }
   return Join-Path ([Environment]::GetFolderPath('UserProfile')) '.agent-cockpit'
+}
+
+function Export-TrayIcon([string]$Path) {
+  $sizes = @(16, 32, 48, 256)
+  $images = @(
+    foreach ($size in $sizes) {
+      $bitmap = [AgentCockpitTray.NativeMethods]::DrawTrayBitmap($size, $true, $false)
+      $stream = New-Object System.IO.MemoryStream
+      try {
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        [pscustomobject]@{ Size = $size; Bytes = $stream.ToArray() }
+      } finally {
+        $stream.Dispose()
+        $bitmap.Dispose()
+      }
+    }
+  )
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  $parent = [System.IO.Path]::GetDirectoryName($fullPath)
+  if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+  }
+  $file = [System.IO.File]::Open($fullPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+  $writer = New-Object System.IO.BinaryWriter($file)
+  try {
+    $writer.Write([UInt16]0)
+    $writer.Write([UInt16]1)
+    $writer.Write([UInt16]$images.Count)
+    $offset = [UInt32](6 + 16 * $images.Count)
+    foreach ($image in $images) {
+      $dimension = if ($image.Size -eq 256) { [byte]0 } else { [byte]$image.Size }
+      $writer.Write([byte]$dimension)
+      $writer.Write([byte]$dimension)
+      $writer.Write([byte]0)
+      $writer.Write([byte]0)
+      $writer.Write([UInt16]1)
+      $writer.Write([UInt16]32)
+      $writer.Write([UInt32]$image.Bytes.Length)
+      $writer.Write([UInt32]$offset)
+      $offset += [UInt32]$image.Bytes.Length
+    }
+    foreach ($image in $images) {
+      $writer.Write([byte[]]$image.Bytes)
+    }
+  } finally {
+    $writer.Dispose()
+  }
 }
 
 function Get-ServerPort {
@@ -285,6 +340,11 @@ if ($Check) {
     Port = $port
     PermissionCount = $state.PermissionCount
   } | ConvertTo-Json -Compress
+  exit 0
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExportIcon)) {
+  Export-TrayIcon $ExportIcon
   exit 0
 }
 
