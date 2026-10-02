@@ -115,6 +115,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .session-body { padding-bottom: 6px; }
 
 .order { display: inline-flex; gap: 4px; margin-left: auto; }
+.product-order { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.kind-order { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.product-order-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.product-order-item .prod-tag { min-width: 0; max-width: calc(100% - 34px); overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; min-width: 32px; height: 32px; padding: 0 8px; cursor: pointer; color: var(--text-2); }
 .icon-btn:hover { color: var(--text); border-color: var(--text-2); }
 .icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
@@ -196,7 +200,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
 .rounds span.used { background: var(--accent); }
 
-.prod-tag { font-size: 11px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.prod-tag { display: inline-flex; align-items: center; min-height: 20px; font-size: 11px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .note { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
 
@@ -323,10 +327,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <button type="button" data-mode="kind" aria-pressed="false">種類別</button>
     </div>
   </div>
-  <div class="filter-note" id="filter-note" hidden></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root"></div>
+  <div class="filter-note" id="filter-note" hidden></div>
+  <div class="excluded-note" id="excluded-note" hidden></div>
 </main>
 
 <script>
@@ -558,6 +562,8 @@ const isShown = key => !ui.hidden.includes(key);
 const visibleDecisions = s => s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && isShown(decisionCategory(d)));
 const visibleSubagents = s => s.subagents.filter(agent => agent.state !== 'busy' || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms : [];
+const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
+  || s.decisions.some(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d)));
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
@@ -714,8 +720,11 @@ function agentSection(p, session, withTag) {
     .sort((a, b) => ageMinutes(a) - ageMinutes(b));
   const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
   const hasEnded = session.subagents.some(agent => isEndedAgent(session, agent));
+  const toggle = endedAgentToggle(session);
+  if (!isShown('agents') && !rows && !toggle) return '';
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
-  return `${rows ? `<div class="agent-list">${rows}</div>` : `<div class="empty">${empty}</div>`}${endedAgentToggle(session)}`;
+  const hiddenRunning = session.subagents.some(agent => agent.state === 'busy' && !isShown('agents'));
+  return `<h3 class="sub">サブエージェント</h3>${rows ? `<div class="agent-list">${rows}</div>` : hiddenRunning ? '' : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
 // 画面で完了にしたタスクは常駐サーバーが覚え、セッションがそのタスクの状態を変えるまで完了として出す。
@@ -966,7 +975,7 @@ function decisionSessionBlock(p, session, withTag) {
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
   // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
-  const showEmpty = !cards && !visiblePerms(session).length;
+  const showEmpty = !cards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
   return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
@@ -1001,15 +1010,18 @@ function sessionBlock(p, session) {
   const status = session.status === 'busy' ? ['作業中', 'busy'] : session.status === 'wait' ? ['待機中', 'wait'] : ['状態不明', 'unknown'];
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
+  const showJudgment = decisions + permissions > 0
+    || session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)))
+    || !hasHiddenJudgmentItems(session);
   return `<div class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}<span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
     <div class="session-body">
-      <h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
+      ${showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
-      ${decisionSessionBlock(p, session, false)}
+      ${decisionSessionBlock(p, session, false)}` : ''}
       ${taskSessionBlock(p, session, false)}
       <h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
-      <h3 class="sub">サブエージェント</h3>${agentSection(p, session, false)}
+      ${agentSection(p, session, false)}
       ${unknownSessionControls(session)}
     </div>
   </div>`;
@@ -1077,7 +1089,8 @@ function renderKindMode() {
     ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
     ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
   ]).sort((a, b) => b.age - a.age);
-  const decisions = waits.map(x => x.html).join('') || '<div class="empty">ありません</div>';
+  const visibleDecisionItems = waits.map(x => x.html).join('');
+  const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
   const endedDecisions = sessions.map(({ p, session }) => {
     const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
     if (!ended.length) return '';
@@ -1085,6 +1098,9 @@ function renderKindMode() {
     const cards = expanded ? ended.map(d => decisionCard(p, session, d, true)).join('') : '';
     return `${endedDecisionToggle(session)}${cards}`;
   }).join('');
+  const decisionItems = visibleDecisionItems + endedDecisions;
+  const decisions = decisionItems || (hiddenJudgmentItems ? '' : '<div class="empty">ありません</div>');
+  const showJudgment = Boolean(decisionItems) || !hiddenJudgmentItems;
   const news = ps.map(p => newsBox(p, true)).join('');
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const expanded = ui.expandedEndedAgents.includes(session.id);
@@ -1098,12 +1114,14 @@ function renderKindMode() {
   const unknownActions = sessions.filter(({ session }) => session.status === 'unknown')
     .map(({ p, session }) => `<div class="kind-unknown"><div class="meta">${sessionTag(p, session, true)}</div>${unknownSessionControls(session)}</div>`).join('');
   const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${agentToggles}${unknownActions}`;
-  const tasks = sessions.map(({ p, session }) => `<div class="kind-session-tasks"><div class="meta">${sessionTag(p, session, true)}</div>${taskSessionBlock(p, session, true)}</div>`).join('');
+  const taskSessions = sessions.filter(({ session }) => session.tasks.length > 0);
+  const tasks = taskSessions.map(({ p, session }) => `<div class="kind-session-tasks"><div class="meta">${sessionTag(p, session, true)}</div>${taskSessionBlock(p, session, true)}</div>`).join('') || '<div class="empty">ありません</div>';
   const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
   const prs = ps.map(p => prBlock(p, true)).join('<div style="height:12px"></div>');
-  const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
-  return (news ? section('前回見てから', news) : '')
-    + section('あなたの判断が必要なこと(待ちの長い順)', decisions + endedDecisions, orderBar)
+  const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag">${i + 1}. ${esc(p.name)}</span><button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトを閉じる" aria-describedby="kind-product-order-${i}" title="このプロダクトを閉じる">×</button></span>`).join(' ')}</div>`;
+  return orderBar
+    + (news ? section('前回見てから', news) : '')
+    + (showJudgment ? section('あなたの判断が必要なこと(待ちの長い順)', decisions) : '')
     + section('タスクと完了条件', tasks)
     + section('今やっていること', now)
     + (isShown('prs') ? section('プルリクエスト', prs) : '')

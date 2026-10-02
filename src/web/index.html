@@ -190,6 +190,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .section.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .branch { overflow-wrap: anywhere; }
 .order { display: inline-flex; gap: 4px; margin-left: auto; }
+.product-order { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.kind-order { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.product-order-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.product-order-item .prod-tag { min-width: 0; max-width: calc(100% - 34px); overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { min-width: 32px; min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); cursor: pointer; }
 .icon-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
 .icon-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
@@ -280,10 +284,10 @@ h3.sub .count { font-weight: normal; }
     </div>
   </div>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
-  <div class="filter-note" id="filter-note" hidden></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
+  <div class="filter-note" id="filter-note" hidden></div>
+  <div class="excluded-note" id="excluded-note" hidden></div>
 </main>
 <script>
 'use strict';
@@ -630,6 +634,13 @@ function shownActiveDecisions(session) {
   });
 }
 
+function hasHiddenJudgmentItems(session) {
+  return (!isFilterShown('permission') && session.permissionWaits.length > 0)
+    || session.decisions.some((decision) => (
+      ['waiting', 'provisional'].includes(decision.state) && !shownActiveDecisions(session).includes(decision)
+    ));
+}
+
 function productGroups(sessions) {
   const groups = new Map();
   for (const session of sessions) {
@@ -716,8 +727,9 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
 }
 
 function appendAgents(body, session, product, withTags = false, multipleSessions = false) {
-  body.append(element('h3', 'sub', 'サブエージェント'));
   if (!session.agents.length) {
+    if (!isFilterShown('agents')) return;
+    body.append(element('h3', 'sub', 'サブエージェント'));
     body.append(element('div', 'empty', 'サブエージェントはありません。'));
     return;
   }
@@ -726,7 +738,10 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
   const endedAgents = agents.filter(isEndedAgent);
   const showEnded = expandedEndedSessions.has(session.session_id);
   const visibleAgents = showEnded ? [...runningAgents, ...endedAgents] : runningAgents;
-  if (!visibleAgents.length) body.append(element('div', 'empty', '稼働中のサブエージェントはありません。'));
+  const hiddenRunningAgents = agents.some((agent) => agent.active && !isFilterShown('agents'));
+  if (!visibleAgents.length && !endedAgents.length && !isFilterShown('agents')) return;
+  body.append(element('h3', 'sub', 'サブエージェント'));
+  if (!visibleAgents.length && !hiddenRunningAgents) body.append(element('div', 'empty', '稼働中のサブエージェントはありません。'));
   const list = element('div', 'agent-list');
   for (const agent of visibleAgents) {
     const row = element('div', 'agent-row');
@@ -1001,7 +1016,7 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     const list = element('div', 'decision-list');
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
-  } else if (!shownPermissions(session).length) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
+  } else if (!shownPermissions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, expanded, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
@@ -1109,11 +1124,15 @@ function sessionBlock(product, session, multipleSessions) {
 
   const body = element('div', 'session-body');
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
-  const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
-  judgmentHeading.append(element('span', 'count', String(judgmentCount)));
-  body.append(judgmentHeading);
-  appendPermissionWaits(body, session, product);
-  appendDecisions(body, session, product);
+  const hasEndedDecisions = session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
+  if (showJudgment) {
+    const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
+    judgmentHeading.append(element('span', 'count', String(judgmentCount)));
+    body.append(judgmentHeading);
+    appendPermissionWaits(body, session, product);
+    appendDecisions(body, session, product);
+  }
   appendTasks(body, session, product);
   body.append(element('h3', 'sub', '今やっていること'));
   const now = element('div', 'now');
@@ -1155,15 +1174,20 @@ function productControls(product, index, total, pinnedCount, headingId) {
   moveDown.dataset.direction = '1';
   moveDown.disabled = pinned ? index === pinnedCount - 1 : index === total - 1;
   moveDown.setAttribute('aria-label', `${product.name}を下へ`);
+  const close = productCloseButton(product, headingId);
+  controls.append(collapse, pin, moveUp, moveDown, close);
+  return controls;
+}
+
+function productCloseButton(product, describedById) {
   const close = element('button', 'icon-btn', '×');
   close.type = 'button';
   close.dataset.productAction = 'close';
   close.dataset.productKey = product.key;
   close.setAttribute('aria-label', 'このプロダクトを閉じる');
-  close.setAttribute('aria-describedby', headingId);
+  if (describedById) close.setAttribute('aria-describedby', describedById);
   close.title = 'このプロダクトを閉じる';
-  controls.append(collapse, pin, moveUp, moveDown, close);
-  return controls;
+  return close;
 }
 
 // セッションが全部同じブランチならプロダクトの見出しに出し、分かれていればセッションの頭に出す。
@@ -1214,10 +1238,23 @@ function sessionReferences(products) {
   })));
 }
 
+function kindProductOrder(products) {
+  const productOrder = element('div', 'order product-order kind-order');
+  products.forEach((product, index) => {
+    const item = element('div', 'product-order-item');
+    const tag = element('span', 'prod-tag', `${index + 1}. ${product.name}`);
+    tag.id = `kind-product-order-${index}`;
+    item.append(tag, productCloseButton(product, tag.id));
+    productOrder.append(item);
+  });
+  return productOrder;
+}
+
 function renderKindSections(products) {
   const references = sessionReferences(products);
   const waitingItems = [];
   const endedDecisions = element('div', 'kind-ended');
+  let hasEndedDecisions = false;
   for (const { product, session, multipleSessions } of references) {
     for (const wait of shownPermissions(session)) {
       const holder = element('div');
@@ -1236,6 +1273,7 @@ function renderKindSections(products) {
 
     const ended = session.decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
     if (ended.length) {
+      hasEndedDecisions = true;
       appendPlanToggle(endedDecisions, 'decisions', session.session_id, expandedEndedDecisions.has(session.session_id), ended.length, '解決済みと取り下げ', expandedEndedDecisions);
       if (expandedEndedDecisions.has(session.session_id)) {
         const list = element('div', 'decision-list');
@@ -1247,10 +1285,10 @@ function renderKindSections(products) {
   waitingItems.sort((left, right) => right.age - left.age);
   const judgment = element('div', 'body');
   for (const item of waitingItems) if (item.card) judgment.append(item.card);
-  if (!waitingItems.length) judgment.append(element('div', 'empty', 'ありません'));
-  judgment.append(endedDecisions);
-  const productOrder = element('div', 'order product-order');
-  products.forEach((product, index) => productOrder.append(element('span', 'prod-tag', `${index + 1}. ${product.name}`)));
+  const hasHiddenJudgments = references.some(({ session }) => hasHiddenJudgmentItems(session));
+  if (!waitingItems.length && !hasEndedDecisions && !hasHiddenJudgments) judgment.append(element('div', 'empty', 'ありません'));
+  if (hasEndedDecisions) judgment.append(endedDecisions);
+  const productOrder = kindProductOrder(products);
 
   const activityItems = [];
   const agentToggles = element('div', 'kind-toggles');
@@ -1277,6 +1315,7 @@ function renderKindSections(products) {
 
   const tasks = element('div', 'body');
   for (const { product, session, multipleSessions } of references) {
+    if (!session.tasks.length) continue;
     const sessionTasks = element('div', 'kind-session-tasks');
     const tags = element('div', 'meta');
     appendContextTags(tags, product, session, true, true);
@@ -1284,12 +1323,17 @@ function renderKindSections(products) {
     appendTasks(sessionTasks, session, product, true, multipleSessions);
     tasks.append(sessionTasks);
   }
+  if (!tasks.children.length) tasks.append(element('div', 'empty', 'ありません'));
 
-  return [
-    kindSection('あなたの判断が必要なこと(待ちの長い順)', judgment, productOrder),
+  const sections = [productOrder];
+  if (waitingItems.length || hasEndedDecisions || !hasHiddenJudgments) {
+    sections.push(kindSection('あなたの判断が必要なこと(待ちの長い順)', judgment));
+  }
+  sections.push(
     kindSection('タスクと完了条件', tasks),
     kindSection('今やっていること', activity),
-  ];
+  );
+  return sections;
 }
 
 function render(state) {
