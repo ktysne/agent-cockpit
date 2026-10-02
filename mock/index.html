@@ -228,15 +228,14 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .merged-list .badge { margin-right: 4px; }
 
-.routing { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: grid; gap: 8px; container-type: inline-size; }
+.routing { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: grid; gap: 8px; }
 .routing .rgroup { display: grid; grid-template-columns: max-content max-content; gap: 8px 10px; align-items: center; }
 .routing .rgroup .rrow { display: contents; }
-@container (min-width: 560px) {
-  .routing .rgroup { grid-template-columns: repeat(4, max-content); }
-  .routing .rgroup .rrow + .rrow .rlabel { margin-left: 22px; }
-}
+/* 横に並べるかは、ラベルと 3 択の実際の幅が収まるかを layoutRouting で測って決める。 */
+.routing .rgroup.side-by-side { grid-template-columns: repeat(4, max-content); }
+.routing .rgroup.side-by-side .rrow + .rrow .rlabel { margin-left: 22px; }
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
-.routing .rlabel { font-size: 13px; font-weight: 600; }
+.routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
 .top-inner .routing { flex: 1 1 100%; max-width: 100%; margin: 0; padding: 6px 10px; }
 .top-inner .routing .rtitle { font-size: 12px; }
@@ -620,7 +619,20 @@ function renderRouting() {
       </div>`;
   };
   document.getElementById('routing').innerHTML = `<strong class="rtitle">経路</strong><div class="rgroup">${row('agents')}${row('review')}</div>`;
+  layoutRouting();
 }
+
+const ROUTING_PAIR_GAP_PX = 22;
+function layoutRouting() {
+  const group = document.querySelector('#routing .rgroup');
+  if (!group) return;
+  const style = getComputedStyle(group);
+  const columnGap = parseFloat(style.columnGap) || 0;
+  const widths = [...group.querySelectorAll('.rlabel, .seg')].map(node => node.getBoundingClientRect().width);
+  const needed = widths.reduce((sum, width) => sum + width, 0) + columnGap * (widths.length - 1) + ROUTING_PAIR_GAP_PX;
+  group.classList.toggle('side-by-side', needed <= group.clientWidth);
+}
+if ('ResizeObserver' in window) new ResizeObserver(layoutRouting).observe(document.getElementById('routing'));
 
 function ageMinutes(item) {
   if (Number.isFinite(item.sinceMin)) return item.sinceMin;
