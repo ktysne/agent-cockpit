@@ -57,15 +57,22 @@ async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = pro
     } catch {
       continue;
     }
-    const sessionId = value && (value.sessionId || value.session_id);
+    const sessionId = value && (value.sessionId || value.session_id || value.id);
     if (typeof sessionId !== 'string' || !Number.isInteger(value.pid) || !isAlive(value.pid)) continue;
     sessions.push({
       session_id: sessionId,
+      pid: value.pid,
       cwd: typeof value.cwd === 'string' ? value.cwd : '',
       name: typeof value.name === 'string' ? value.name.slice(0, 200) : null,
     });
   }
   return sessions;
+}
+
+async function findLiveSessionIdByPid(pid, claudeHome) {
+  if (!Number.isInteger(pid) || pid < 1) return null;
+  const sessions = await listLiveSessionFiles(claudeHome);
+  return sessions?.find((session) => session.pid === pid)?.session_id || null;
 }
 
 async function readAgentDefinition(filePath, fileSystem = fs) {
@@ -118,6 +125,7 @@ async function codexAgentDefinition(agentName, claudeHome) {
 module.exports = {
   readSessionName,
   listLiveSessionFiles,
+  findLiveSessionIdByPid,
   readAgentDefinition,
   claudeAgentDefinition,
   codexAgentDefinition,

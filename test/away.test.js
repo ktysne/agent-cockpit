@@ -26,7 +26,7 @@ function awayResponse(enabled = true, since = Date.parse('2026-10-02T01:02:03.00
 
 test('離席中の AskUserQuestion を拒否する', async (t) => {
   const homeDir = await temporaryHome(t);
-  const result = await runAwayHook({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' }, {
+  const result = await runAwayHook({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-42' }, {
     homeDir,
     fetchImpl: async () => awayResponse(),
   });
@@ -34,7 +34,7 @@ test('離席中の AskUserQuestion を拒否する', async (t) => {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: DENY_REASON,
+      permissionDecisionReason: DENY_REASON.replace('{id}', 'ask-42'),
     },
   });
 });
@@ -81,6 +81,48 @@ test('server.json が無ければ常駐サーバーへ接続せず出力しな�
   });
   assert.equal(result, null);
   assert.equal(fetchCount, 0);
+});
+
+test('compact の SessionStart は離席中でなくてもタスクと未解決判断の要約を返す', async (t) => {
+  const homeDir = await temporaryHome(t);
+  let requestedUrl = '';
+  const result = await runAwayHook({
+    session_id: 'compact-session', hook_event_name: 'SessionStart', source: 'compact',
+  }, {
+    homeDir,
+    fetchImpl: async (url) => {
+      requestedUrl = url;
+      return new Response(JSON.stringify({
+        enabled: false,
+        since: null,
+        tasks: [{ title: '画面を更新する', state: 'doing' }],
+        decisions: [{ id: 'ask-42', title: '配色を選ぶ', state: 'waiting' }],
+      }), { status: 200 });
+    },
+  });
+  assert.equal(requestedUrl, 'http://127.0.0.1:49123/api/sessions/compact-session/context');
+  assert.match(result.hookSpecificOutput.additionalContext, /画面を更新する \(doing\)/);
+  assert.match(result.hookSpecificOutput.additionalContext, /ask-42 配色を選ぶ \(waiting\)/);
+});
+
+test('resume の引き継ぎ要約と離席中の文脈を一つにまとめる', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const result = await runAwayHook({
+    session_id: 'resume-session', hook_event_name: 'SessionStart', source: 'resume',
+  }, {
+    homeDir,
+    fetchImpl: async () => new Response(JSON.stringify({
+      enabled: true,
+      since: Date.parse('2026-10-02T01:02:03.000Z'),
+      tasks: [],
+      decisions: [],
+    }), { status: 200 }),
+  });
+  const context = result.hookSpecificOutput.additionalContext;
+  assert.match(context, /タスク: なし/);
+  assert.match(context, /未解決の判断事項: なし/);
+  assert.match(context, /開発者は離席中です/);
+  assert.equal((context.match(/Agent Cockpit:/g) || []).length, 2);
 });
 
 test('常駐サーバーの応答が 1 秒以内に届かなければ出力しない', async (t) => {

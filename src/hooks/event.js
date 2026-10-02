@@ -3,6 +3,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { cockpitHomeFromOptions } = require('../server/identity');
+const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
 
 const SERVER_SCRIPT = path.join(__dirname, '..', 'server', 'server.js');
 const SERVER_PORT = Number(process.env.AGENT_COCKPIT_PORT || 47821);
@@ -30,6 +31,52 @@ function responseText(value) {
     if (typeof value[key] === 'string') return value[key];
   }
   return '';
+}
+
+function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
+  if (depth > 6 || output.length >= 6) return;
+  if (typeof value === 'string') {
+    const answer = value.trim().slice(0, 2000);
+    if (answer) output.push(answer);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectAnswerValues(item, output, depth + 1, false);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+
+  const answerKeys = ['answer', 'choice', 'chosen', 'selected', 'selectedOption', 'selected_option'];
+  let foundAnswer = false;
+  for (const key of answerKeys) {
+    if (Object.hasOwn(value, key)) {
+      foundAnswer = true;
+      collectAnswerValues(value[key], output, depth + 1, false);
+    }
+  }
+  if (foundAnswer) return;
+
+  for (const key of ['answers', 'responses', 'questions']) {
+    if (Object.hasOwn(value, key)) {
+      collectAnswerValues(value[key], output, depth + 1, true);
+      return;
+    }
+  }
+  if (allowObjectValues) {
+    for (const item of Object.values(value)) collectAnswerValues(item, output, depth + 1, false);
+  }
+}
+
+function extractAskUserQuestionResolution(toolResponse) {
+  const chosen = [];
+  collectAnswerValues(toolResponse, chosen);
+  const resolution = sanitizeDecisionResolution({
+    chosen,
+    note: toolResponse && typeof toolResponse === 'object' && !Array.isArray(toolResponse)
+      ? toolResponse.note
+      : '',
+  });
+  return resolution || { chosen: [], note: '' };
 }
 
 function codexAuditLine(value) {
@@ -61,9 +108,15 @@ function makeHookEvent(input, now = Date.now()) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     event.summary = inputSummary(event.tool_name, input.tool_input);
+    if (event.tool_name === 'AskUserQuestion' && !input.agent_id) {
+      event.questions = sanitizeQuestions(input.tool_input?.questions);
+    }
   } else if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
+    if (eventName === 'PostToolUse' && event.tool_name === 'AskUserQuestion' && !input.agent_id) {
+      event.decisionResolution = extractAskUserQuestionResolution(input.tool_response);
+    }
     if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
       const response = input.tool_response;
       if (response && typeof response === 'object' && typeof response.resolvedModel === 'string') {
@@ -333,6 +386,7 @@ module.exports = {
   HOOK_TIMEOUT_MS,
   inputSummary,
   codexAuditLine,
+  extractAskUserQuestionResolution,
   makeHookEvent,
   readServerInfo,
   childEnvironment,

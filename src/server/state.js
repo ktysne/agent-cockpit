@@ -93,6 +93,8 @@ function newSession(event) {
     completedToolIds: new Set(),
     agents: [],
     permissionWaits: [],
+    decisions: [],
+    decisionBindings: Object.create(null),
     stopped: false,
     ended: false,
     pendingCodex: Object.create(null),
@@ -110,6 +112,11 @@ function unboundAgentCallsOf(session) {
 
 function sameAgent(left, right) {
   return (left || null) === (right || null);
+}
+
+function sameQuestionSet(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  return left.every((question, index) => question.question === right[index]?.question);
 }
 
 // 背景で動いた codex-agent.sh は終了がフックに届かない。呼び出し元が終わった後は、稼働中とも終了とも言えないので終了未確認にする。
@@ -189,6 +196,32 @@ function deriveSessions(entries) {
         else session.agents.push(agent);
         session.pendingCodex[toolUseId] = agentIdForCall;
       }
+      if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
+        const existing = session.decisions.find((decision) => (
+          ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
+        ));
+        if (existing) {
+          session.decisionBindings[toolUseId] = existing.id;
+        } else {
+          const createdAt = isoTime(event.hookAt);
+          const decision = {
+            id: toolUseId,
+            session_id: event.session_id,
+            source: 'ask',
+            state: 'waiting',
+            title: event.questions[0].question,
+            context: '',
+            questions: event.questions,
+            createdAt,
+            updatedAt: createdAt,
+            resolvedAt: null,
+            answer: null,
+            resolution: null,
+          };
+          session.decisions.push(decision);
+          session.decisionBindings[toolUseId] = decision.id;
+        }
+      }
       if (!agentId) session.stopped = false;
     }
 
@@ -256,6 +289,18 @@ function deriveSessions(entries) {
       session.permissionWaits = session.permissionWaits.filter((wait) => !(
         sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
       ));
+      if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
+        const decisionId = session.decisionBindings[toolUseId];
+        const decision = session.decisions.find((item) => item.id === decisionId);
+        if (decision && ['waiting', 'provisional'].includes(decision.state)) {
+          decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
+          decision.updatedAt = isoTime(event.hookAt);
+          decision.resolvedAt = decision.updatedAt;
+          decision.resolution = eventName === 'PostToolUse'
+            ? event.decisionResolution || { chosen: [], note: '' }
+            : null;
+        }
+      }
       if (!agentId) session.stopped = false;
     }
 
@@ -310,6 +355,7 @@ function deriveSessions(entries) {
         tools,
         agents,
         permissionWaits,
+        decisions: session.decisions.map(cloneDecision),
       };
     });
 }
@@ -325,6 +371,8 @@ class DashboardState {
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
+    this.plans = new Map();
+    this.decisionOverrides = new Map();
   }
 
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
@@ -363,6 +411,8 @@ class DashboardState {
     if (endedAt !== undefined) {
       this.endedAt.delete(event.session_id);
       this.entries.delete(event.session_id);
+      this.plans.delete(event.session_id);
+      this.decisionOverrides.delete(event.session_id);
     }
 
     const before = JSON.stringify([...this.sessions.values()]);
@@ -376,6 +426,8 @@ class DashboardState {
     if (event.hook_event_name === 'SessionEnd') {
       this.entries.delete(event.session_id);
       this.endedAt.set(event.session_id, event.hookAt);
+      this.plans.delete(event.session_id);
+      this.decisionOverrides.delete(event.session_id);
     }
 
     if (JSON.stringify([...this.sessions.values()]) !== before) {
@@ -383,6 +435,109 @@ class DashboardState {
       this.generatedAt = new Date().toISOString();
     }
     return true;
+  }
+
+  setTasks(sessionId, tasks, now = Date.now()) {
+    const plan = this.planFor(sessionId);
+    plan.tasks = tasks.map((task) => ({
+      title: task.title,
+      state: task.state,
+      criteria: task.criteria.map((criterion) => ({ text: criterion.text, met: criterion.met })),
+    }));
+    plan.tasksUpdatedAt = isoTime(now);
+    this.touch();
+    return { tasks: plan.tasks.map((task) => ({ ...task, criteria: task.criteria.map((item) => ({ ...item })) })), updatedAt: plan.tasksUpdatedAt };
+  }
+
+  addDecision(sessionId, input, now = Date.now()) {
+    const plan = this.planFor(sessionId);
+    const timestamp = isoTime(now);
+    const decision = {
+      id: crypto.randomUUID(),
+      session_id: sessionId,
+      source: 'mcp',
+      state: input.state,
+      title: input.title,
+      context: input.context,
+      questions: [{
+        question: input.title,
+        header: '',
+        multiSelect: false,
+        options: input.options.map((option) => ({ ...option })),
+      }],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      resolvedAt: null,
+      answer: null,
+      resolution: null,
+    };
+    plan.decisions.push(decision);
+    this.touch();
+    return cloneDecision(decision);
+  }
+
+  updateDecision(sessionId, id, state, chosen, note, now = Date.now()) {
+    const decision = this.decisionsFor(sessionId).find((item) => item.id === id);
+    if (!decision || decision.state === 'resolved') return null;
+    const timestamp = isoTime(now);
+    const updated = {
+      ...decision,
+      state,
+      updatedAt: timestamp,
+      resolvedAt: state === 'resolved' ? timestamp : null,
+      resolution: { chosen, note },
+    };
+    const plan = this.plans.get(sessionId);
+    const stored = plan?.decisions.find((item) => item.id === id);
+    if (stored) Object.assign(stored, updated);
+    else {
+      const overrides = this.decisionOverrides.get(sessionId) || new Map();
+      overrides.set(id, {
+        state: updated.state,
+        updatedAt: updated.updatedAt,
+        resolvedAt: updated.resolvedAt,
+        resolution: cloneResolution(updated.resolution),
+      });
+      this.decisionOverrides.set(sessionId, overrides);
+    }
+    this.touch();
+    return cloneDecision(updated);
+  }
+
+  planSummary(sessionId) {
+    const plan = this.plans.get(sessionId);
+    return {
+      tasks: (plan?.tasks || []).map(({ title, state }) => ({ title, state })),
+      decisions: this.decisionsFor(sessionId)
+        .filter((decision) => ['waiting', 'provisional'].includes(decision.state))
+        .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+        .map(({ id, title, state }) => ({ id, title, state })),
+    };
+  }
+
+  planFor(sessionId) {
+    let plan = this.plans.get(sessionId);
+    if (!plan) {
+      plan = { tasks: [], tasksUpdatedAt: null, decisions: [] };
+      this.plans.set(sessionId, plan);
+    }
+    return plan;
+  }
+
+  decisionsFor(sessionId) {
+    const eventDecisions = this.sessions.get(sessionId)?.decisions || [];
+    const planDecisions = this.plans.get(sessionId)?.decisions || [];
+    const overrides = this.decisionOverrides.get(sessionId);
+    return [...eventDecisions, ...planDecisions].map((decision) => {
+      const override = overrides?.get(decision.id);
+      if (!override || Date.parse(override.updatedAt) < Date.parse(decision.updatedAt)) return cloneDecision(decision);
+      return cloneDecision({ ...decision, ...override });
+    });
+  }
+
+  touch() {
+    this.version += 1;
+    this.generatedAt = new Date().toISOString();
   }
 
   snapshot() {
@@ -396,18 +551,43 @@ class DashboardState {
         tools: [],
         agents: [],
         permissionWaits: [],
+        decisions: [],
       }));
+    const sessionIds = new Set([
+      ...this.sessions.keys(),
+      ...fileOnlySessions.map((session) => session.session_id),
+      ...[...this.plans.keys()].filter((sessionId) => !this.endedAt.has(sessionId)),
+    ]);
+    const currentSessions = [...sessionIds].map((sessionId) => {
+      const session = this.sessions.get(sessionId);
+      const file = this.sessionFiles.get(sessionId);
+      const plan = this.plans.get(sessionId);
+      const base = session || {
+        session_id: sessionId,
+        product: file?.product || null,
+        title: file?.name || null,
+        status: '不明',
+        tools: [],
+        agents: [],
+        permissionWaits: [],
+        decisions: [],
+      };
+      return {
+        ...base,
+        title: this.sessionNameFor(sessionId) || base.title,
+        product: base.product ? { ...base.product } : null,
+        tools: base.tools.map((tool) => ({ ...tool })),
+        agents: base.agents.map((agent) => ({ ...agent, lastTool: agent.lastTool && { ...agent.lastTool } })),
+        permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
+        decisions: this.decisionsFor(sessionId),
+        tasks: (plan?.tasks || []).map((task) => ({ ...task, criteria: task.criteria.map((criterion) => ({ ...criterion })) })),
+        tasksUpdatedAt: plan?.tasksUpdatedAt || null,
+      };
+    });
     return {
       version: this.version,
       generatedAt: this.generatedAt,
-      sessions: [...this.sessions.values(), ...fileOnlySessions].map((session) => ({
-        ...session,
-        title: this.sessionNameFor(session.session_id) || session.title,
-        product: session.product ? { ...session.product } : null,
-        tools: session.tools.map((tool) => ({ ...tool })),
-        agents: session.agents.map((agent) => ({ ...agent, lastTool: agent.lastTool && { ...agent.lastTool } })),
-        permissionWaits: session.permissionWaits.map((wait) => ({ ...wait })),
-      })),
+      sessions: currentSessions,
     };
   }
 
@@ -417,6 +597,26 @@ class DashboardState {
       notificationTypes: [...this.notificationTypes].sort(),
     };
   }
+}
+
+function cloneResolution(resolution) {
+  if (!resolution) return null;
+  return {
+    chosen: Array.isArray(resolution.chosen) ? [...resolution.chosen] : resolution.chosen,
+    note: resolution.note,
+  };
+}
+
+function cloneDecision(decision) {
+  return {
+    ...decision,
+    questions: decision.questions.map((question) => ({
+      ...question,
+      options: question.options.map((option) => ({ ...option })),
+    })),
+    answer: decision.answer ? { ...decision.answer } : null,
+    resolution: cloneResolution(decision.resolution),
+  };
 }
 
 module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions };
