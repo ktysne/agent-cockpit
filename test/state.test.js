@@ -176,3 +176,55 @@ test('同じ定義の Codex の実行が 2 回あっても、監査行はそれ�
   const models = Object.fromEntries(state.snapshot().sessions[0].agents.map((agent) => [agent.agent_id, agent.model]));
   assert.deepEqual(models, { 'codex:bash-a': 'gpt-a', 'codex:bash-b': 'gpt-b' });
 });
+
+test('完了した tool_use_id は、遅れて処理された PreToolUse で実行中に戻らない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'late', hook_event_name: 'PostToolUse', hookAt: 100, tool_name: 'Read', tool_use_id: 'read-1' });
+  state.addEvent({ session_id: 'late', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Read', tool_use_id: 'read-1', summary: 'a.md' });
+  assert.deepEqual(state.snapshot().sessions[0].tools, []);
+});
+
+test('背景の Codex は、呼び出し元が終わっても終了ではなく終了未確認になる', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchCodex(state, 'unconfirmed', 'bash-1', 1, null);
+  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'Stop', hookAt: 3 });
+  const codex = state.snapshot().sessions[0].agents.find((agent) => agent.agent_id === 'codex:bash-1');
+  assert.deepEqual([codex.active, codex.unconfirmed], [false, true]);
+});
+
+test('メインの Stop の後のサブエージェントの活動では、メインを作業中に戻さない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const status = () => state.snapshot().sessions[0].status;
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'Stop', hookAt: 2 });
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'PreToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Read', tool_use_id: 'r-1' });
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1', tool_name: 'Read', tool_use_id: 'r-1' });
+  assert.equal(status(), '待機中(サブエージェント稼働中)');
+  state.addEvent({ session_id: 'bg-agent', hook_event_name: 'SubagentStop', hookAt: 5, agent_id: 'sub-1' });
+  assert.equal(status(), '待機中');
+});
+
+test('並列の Agent 呼び出しで対応が決まらないときは、resolvedModel を別のサブエージェントに付けない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'parallel', hook_event_name: 'PreToolUse', hookAt: 1, tool_name: 'Agent', tool_use_id: 'call-a' });
+  state.addEvent({ session_id: 'parallel', hook_event_name: 'PreToolUse', hookAt: 2, tool_name: 'Agent', tool_use_id: 'call-b' });
+  state.addEvent({ session_id: 'parallel', hook_event_name: 'SubagentStart', hookAt: 3, agent_id: 'agent-a', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'parallel', hook_event_name: 'SubagentStart', hookAt: 4, agent_id: 'agent-b', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'parallel', hook_event_name: 'PostToolUse', hookAt: 5, tool_name: 'Agent', tool_use_id: 'call-a', resolvedModel: 'model-a' });
+  const models = state.snapshot().sessions[0].agents.map((agent) => agent.model);
+  assert.ok(!models.includes('model-a'));
+});
+
+test('セッションファイルの題名が変わったら、一覧の題名も変わる', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'renamed', hook_event_name: 'SessionStart', hookAt: 1 });
+  state.syncSessionFiles([{ session_id: 'renamed', cwd: '', name: '最初の名前' }]);
+  state.syncSessionFiles([{ session_id: 'renamed', cwd: '', name: '変えた名前' }]);
+  assert.equal(state.snapshot().sessions[0].title, '変えた名前');
+});

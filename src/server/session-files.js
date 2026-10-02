@@ -30,6 +30,44 @@ async function readSessionName(sessionId, claudeHome, fileSystem = fs) {
   return null;
 }
 
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+// ~/.claude/sessions は公開仕様ではないので、読めない項目やファイルは黙って飛ばす。
+async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = processIsAlive } = {}) {
+  const directory = path.join(claudeHome, 'sessions');
+  let entries;
+  try {
+    entries = await fileSystem.readdir(directory, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const sessions = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.json') continue;
+    let value;
+    try {
+      value = JSON.parse(await fileSystem.readFile(path.join(directory, entry.name), 'utf8'));
+    } catch {
+      continue;
+    }
+    const sessionId = value && (value.sessionId || value.session_id);
+    if (typeof sessionId !== 'string' || !Number.isInteger(value.pid) || !isAlive(value.pid)) continue;
+    sessions.push({
+      session_id: sessionId,
+      cwd: typeof value.cwd === 'string' ? value.cwd : '',
+      name: typeof value.name === 'string' ? value.name.slice(0, 200) : null,
+    });
+  }
+  return sessions;
+}
+
 async function readAgentDefinition(filePath, fileSystem = fs) {
   let content;
   try {
@@ -79,6 +117,7 @@ async function codexAgentDefinition(agentName, claudeHome) {
 
 module.exports = {
   readSessionName,
+  listLiveSessionFiles,
   readAgentDefinition,
   claudeAgentDefinition,
   codexAgentDefinition,

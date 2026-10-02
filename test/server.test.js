@@ -167,7 +167,7 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
   const sessionId = 'session-title';
   const sessionDirectory = path.join(claudeHome, 'sessions');
   await fs.mkdir(sessionDirectory, { recursive: true });
-  await fs.writeFile(path.join(sessionDirectory, `${sessionId}.json`), JSON.stringify({ name: '段階 1 の実装' }));
+  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, name: '段階 1 の実装' }));
   await fs.writeFile(path.join(sessionDirectory, `${sessionId}.key`), 'not a session record');
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
@@ -183,4 +183,20 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.equal(state.sessions[0].title, '段階 1 の実装');
   assert.deepEqual(state.sessions[0].product, { key: 'd:\\desktop\\develop\\agent-cockpit', name: 'agent-cockpit' });
+});
+
+test('起動時に、フックがまだ届いていない生きているセッションを一覧に出す', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const sessionDirectory = path.join(claudeHome, 'sessions');
+  await fs.mkdir(sessionDirectory, { recursive: true });
+  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({
+    pid: process.pid, sessionId: 'waiting-session', name: '待機しているセッション', cwd: 'D:\\work\\repo',
+  }));
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.deepEqual(
+    state.sessions.map((session) => [session.session_id, session.title, session.status, session.product.name]),
+    [['waiting-session', '待機しているセッション', '不明', 'repo']],
+  );
 });

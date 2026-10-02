@@ -179,7 +179,8 @@ function makeSessionHeader(session) {
   const productName = session.product?.name || 'プロダクト不明';
   header.append(element('h2', '', productName));
   if (session.product?.key) header.append(element('code', 'meta product-key', session.product.key));
-  header.append(badge(session.status, session.status === '許可待ち' ? 'permission' : session.status.startsWith('待機中') ? 'wait' : 'busy'));
+  const statusTone = { '許可待ち': 'permission', '作業中': 'busy', '不明': 'done' }[session.status] || 'wait';
+  header.append(badge(session.status === '不明' ? '状態不明' : session.status, statusTone));
   return header;
 }
 
@@ -212,7 +213,8 @@ function appendAgents(body, session) {
     const row = element('div', 'agent-row');
     const who = element('div', 'who');
     who.append(element('strong', '', agent.agent_type || agent.agent_id));
-    who.append(badge(agent.active ? '稼働中' : '終了', agent.active ? 'busy' : 'done'));
+    const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+    who.append(badge(agentState[0], agentState[1]));
     const detail = element('div', 'detail', agent.lastTool ? toolDetail(agent.lastTool.tool_name, agent.lastTool.summary) : 'ツール実行情報はありません。');
     const extra = element('div', 'agent-extra');
     if (agent.model) {

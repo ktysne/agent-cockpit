@@ -5,12 +5,13 @@ const path = require('node:path');
 const { DashboardState } = require('./state');
 const { sanitizeEvent } = require('./events');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
-const { readSessionName, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
+const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
 const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const SESSION_SCAN_INTERVAL_MS = 10_000;
 
 function jsonResponse(response, status, value) {
   response.writeHead(status, {
@@ -103,14 +104,6 @@ function createRequestHandler(options) {
     markRequest,
   } = options;
   const webPath = path.join(__dirname, '..', 'web', 'index.html');
-  const sessionNameCache = new Map();
-
-  async function getSessionName(sessionId) {
-    if (!sessionNameCache.has(sessionId)) {
-      sessionNameCache.set(sessionId, await readSessionName(sessionId, claudeHome));
-    }
-    return sessionNameCache.get(sessionId);
-  }
 
   return async (request, response) => {
     const info = getServerInfo();
@@ -168,7 +161,7 @@ function createRequestHandler(options) {
       const product = productFromCwd(body.cwd);
       const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
       const eventName = body.hook_event_name;
-      let sessionName = sessionId ? await getSessionName(sessionId) : null;
+      const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
       let agentDefinition = null;
 
       if (eventName === 'SubagentStart' && body.agent_type) {
@@ -269,6 +262,14 @@ async function startServer(options = {}) {
   }
 
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
+  async function refreshSessionFiles() {
+    const files = await listLiveSessionFiles(claudeHome);
+    if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
+  }
+  await refreshSessionFiles().catch(() => {});
+  const sessionScanTimer = setInterval(() => { refreshSessionFiles().catch(() => {}); }, SESSION_SCAN_INTERVAL_MS);
+  sessionScanTimer.unref();
+
   const idleTimer = setInterval(async () => {
     if (Date.now() - lastRequestAt < IDLE_TIMEOUT_MS) return;
     if (state.snapshot().sessions.length > 0) return;
@@ -282,6 +283,7 @@ async function startServer(options = {}) {
     if (closing) return closing;
     closing = (async () => {
       clearInterval(idleTimer);
+      clearInterval(sessionScanTimer);
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');

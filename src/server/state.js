@@ -29,6 +29,7 @@ function newSession(event) {
     title: event.sessionName,
     status: '作業中',
     tools: [],
+    completedToolIds: new Set(),
     agents: [],
     permissionWaits: [],
     stopped: false,
@@ -42,10 +43,13 @@ function sameAgent(left, right) {
   return (left || null) === (right || null);
 }
 
-// 背景で動いた codex-agent.sh は終了がフックに届かないので、呼び出し元の終了を終了とみなす。
+// 背景で動いた codex-agent.sh は終了がフックに届かない。呼び出し元が終わった後は、稼働中とも終了とも言えないので終了未確認にする。
 function deactivateBackgroundedCodex(session, parentAgentId) {
   for (const agent of session.agents) {
-    if (agent.backgrounded && sameAgent(agent.parent_agent_id, parentAgentId)) agent.active = false;
+    if (agent.backgrounded && agent.active && sameAgent(agent.parent_agent_id, parentAgentId)) {
+      agent.active = false;
+      agent.unconfirmed = true;
+    }
   }
 }
 
@@ -77,7 +81,7 @@ function deriveSessions(entries) {
     const toolUseId = event.tool_use_id || null;
 
     if (eventName === 'PreToolUse') {
-      if (toolUseId) {
+      if (toolUseId && !session.completedToolIds.has(toolUseId)) {
         session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
         session.tools.push({
           tool_use_id: toolUseId,
@@ -113,7 +117,7 @@ function deriveSessions(entries) {
         else session.agents.push(agent);
         session.pendingCodex[toolUseId] = agentIdForCall;
       }
-      session.stopped = false;
+      if (!agentId) session.stopped = false;
     }
 
     if (eventName === 'SubagentStart' && agentId) {
@@ -128,9 +132,10 @@ function deriveSessions(entries) {
         agent.startedAt = isoTime(event.hookAt);
         session.agents.push(agent);
       }
-      const pendingAgentCall = session.tools.find((tool) => tool.tool_name === 'Agent' && !tool.agent_id);
-      if (pendingAgentCall) session.agentToolBindings[pendingAgentCall.tool_use_id] = agentId;
-      session.stopped = false;
+      const unboundAgentCalls = session.tools.filter((tool) => (
+        tool.tool_name === 'Agent' && !tool.agent_id && session.agentToolBindings[tool.tool_use_id] === null
+      ));
+      if (unboundAgentCalls.length === 1) session.agentToolBindings[unboundAgentCalls[0].tool_use_id] = agentId;
     }
 
     if (eventName === 'SubagentStop' && agentId) {
@@ -142,11 +147,12 @@ function deriveSessions(entries) {
     if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
       if (toolUseId) {
         session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
+        session.completedToolIds.add(toolUseId);
       }
 
       if (eventName === 'PostToolUse' && event.tool_name === 'Agent' && event.resolvedModel) {
         const boundAgentId = session.agentToolBindings[toolUseId];
-        const targetAgent = agentFor(session, boundAgentId) || [...session.agents].reverse().find((item) => item.active);
+        const targetAgent = agentFor(session, boundAgentId);
         if (targetAgent) {
           targetAgent.model = event.resolvedModel;
           targetAgent.source = 'Agent tool response';
@@ -180,7 +186,7 @@ function deriveSessions(entries) {
       session.permissionWaits = session.permissionWaits.filter((wait) => !(
         sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
       ));
-      session.stopped = false;
+      if (!agentId) session.stopped = false;
     }
 
     if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
@@ -248,6 +254,21 @@ class DashboardState {
     this.endedAt = new Map();
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
+    this.sessionFiles = new Map();
+  }
+
+  // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
+  syncSessionFiles(files) {
+    const next = new Map(files.map((file) => [file.session_id, file]));
+    const before = JSON.stringify([...this.sessionFiles.entries()]);
+    if (JSON.stringify([...next.entries()]) === before) return;
+    this.sessionFiles = next;
+    this.version += 1;
+    this.generatedAt = new Date().toISOString();
+  }
+
+  sessionNameFor(sessionId) {
+    return this.sessionFiles.get(sessionId)?.name || null;
   }
 
   captureFieldNames(input) {
@@ -295,11 +316,23 @@ class DashboardState {
   }
 
   snapshot() {
+    const fileOnlySessions = [...this.sessionFiles.values()]
+      .filter((file) => !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id))
+      .map((file) => ({
+        session_id: file.session_id,
+        product: file.product || null,
+        title: file.name,
+        status: '不明',
+        tools: [],
+        agents: [],
+        permissionWaits: [],
+      }));
     return {
       version: this.version,
       generatedAt: this.generatedAt,
-      sessions: [...this.sessions.values()].map((session) => ({
+      sessions: [...this.sessions.values(), ...fileOnlySessions].map((session) => ({
         ...session,
+        title: this.sessionNameFor(session.session_id) || session.title,
         product: session.product ? { ...session.product } : null,
         tools: session.tools.map((tool) => ({ ...tool })),
         agents: session.agents.map((agent) => ({ ...agent, lastTool: agent.lastTool && { ...agent.lastTool } })),
