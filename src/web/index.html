@@ -101,6 +101,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-row, .agent-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .who { color: var(--text-2); font-size: 12px; }
 .who strong { color: var(--text); display: block; font-size: 13px; font-weight: 600; }
+.agent-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .detail { overflow-wrap: anywhere; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tool-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
@@ -689,8 +690,9 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
     who.append(element('span', `dot ${agent.unconfirmed ? 'wait' : agentState[1]}`));
     appendContextTags(who, product, session, withTags, multipleSessions);
-    who.append(element('strong', '', agent.agent_type || agent.agent_id));
-    who.append(badge(agentState[0], agentState[1]));
+    const name = element('span', 'agent-name');
+    name.append(badge(agentState[0], agentState[1]), element('strong', '', agent.agent_type || agent.agent_id));
+    who.append(name);
     const detail = element('div', 'detail');
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
@@ -748,7 +750,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
     const who = wait.agent_id ? (agent?.agent_type || 'サブエージェント') : 'メイン';
     header.append(element('strong', '', `${who}がツールの実行許可を待っている`));
     header.append(badge('許可待ち', 'permission-chip'));
-    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), minutes === null ? '時刻不明' : `${minutes} 分待機中${isLong ? '(長い)' : ''}`));
+    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), minutes === null ? '時刻不明' : `${minutes} 分待機中`));
     card.append(header);
     if (wait.tool_name || wait.summary) {
       const context = element('div', 'decision-context permission-tool');

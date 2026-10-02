@@ -256,6 +256,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .agent-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .agent-row .who { font-size: 12px; color: var(--text-2); }
 .agent-row .who b { color: var(--text); font-weight: 600; display: block; font-size: 13px; }
+.agent-row .agent-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .agent-row .since { font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .ended-toggle:hover { color: var(--text); }
@@ -592,14 +593,14 @@ function renderSummary() {
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
-function modelLine(s) {
-  if (!s.model && !s.gpt) return '';
+function modelLine(s, lead = '') {
+  if (!s.model && !s.gpt && !lead) return '';
   const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
   const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
   if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
   else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
-  return `<div class="models">${claude}${gpt}</div>`;
+  return `<div class="models">${lead}${claude}${gpt}</div>`;
 }
 
 const ROUTE = {
@@ -625,7 +626,7 @@ const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
 function routeTag(s) {
   if (!s.route || s.state !== 'busy') return '';
   const stale = s.route !== ui.routing.agents;
-  return `<div class="models"><span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span></div>`;
+  return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span>`;
 }
 
 function renderRouting() {
@@ -688,8 +689,8 @@ function agentRow(p, session, agent, withTag) {
   const state = agent.state === 'busy' ? ['稼働中', 'busy'] : unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
   const close = unconfirmed ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   return `<div class="agent-row">
-    <div class="who"><span class="dot ${unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span>${close}</div>
-    <div>${esc(agent.text)}${modelLine(agent)}${routeTag(agent)}</div><div class="since">${esc(agent.since)}</div></div>`;
+    <div class="who"><span class="dot ${unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge ${state[1]}">${state[0]}</span><b>${esc(agent.type)}</b></span>${close}</div>
+    <div>${esc(agent.text)}${modelLine(agent, routeTag(agent))}</div><div class="since">${esc(agent.since)}</div></div>`;
 }
 
 function endedAgentToggle(session) {
@@ -728,7 +729,7 @@ function taskItem(p, session, t, withTag) {
 
 // 一定時間を超えて放置された待ちは強調する。閾値は判断待ち(計画書)
 const LONG_WAIT_MIN = 15;
-const waitLabel = m => `<span class="wait ${m > LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中${m > LONG_WAIT_MIN ? '(長い)' : ''}</span>`;
+const waitLabel = m => `<span class="wait ${m > LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中</span>`;
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
 // 許可待ち: Notification フックで受ける。許可そのものはデスクトップアプリで出す
@@ -887,7 +888,7 @@ function mergeConfirm(p, pr, auto) {
       ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
     <label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージする'}</button>
+    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
 }
@@ -903,8 +904,8 @@ function prItem(p, pr) {
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
-      ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージ…</button>`}
-      ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ…</button>` : ''}
+      ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>`}
+      ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
