@@ -35,6 +35,9 @@ namespace AgentCockpitTray {
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr window);
 
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr icon);
 
@@ -56,7 +59,8 @@ namespace AgentCockpitTray {
     }
 
     public static void RestoreAndFocus(IntPtr window) {
-      ShowWindow(window, 9);
+      // SW_RESTORE は最大化も解くので、最小化されているときだけ使う。
+      if (IsIconic(window)) ShowWindow(window, 9);
       SetForegroundWindow(window);
     }
 
@@ -107,7 +111,9 @@ function Get-ServerPort {
   $serverInfoPath = Join-Path $script:cockpitHome 'server.json'
   $reader = $null
   try {
-    $reader = New-Object System.IO.StreamReader($serverInfoPath)
+    # 常駐サーバーが server.json を名前の変更で置くので、Delete の共有を許して開く。
+    $stream = New-Object System.IO.FileStream($serverInfoPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+    $reader = New-Object System.IO.StreamReader($stream)
     while ($null -ne ($line = $reader.ReadLine())) {
       $match = [regex]::Match($line, '^\s*"port"\s*:\s*(\d+)\s*,?\s*$')
       if (-not $match.Success) { continue }
@@ -126,17 +132,19 @@ function Get-ServerPort {
 
 function Get-DashboardState([object]$Port) {
   if ($null -eq $Port) {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0 }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @() }
   }
   try {
     $state = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
-    $permissionCount = 0
+    $keys = @()
     foreach ($session in @($state.sessions)) {
-      $permissionCount += @($session.permissionWaits).Count
+      foreach ($wait in @($session.permissionWaits)) {
+        if ($null -ne $wait) { $keys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
+      }
     }
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $permissionCount }
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys }
   } catch {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0 }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @() }
   }
 }
 
@@ -178,8 +186,9 @@ function Get-EdgePath {
   return Resolve-ApplicationPath 'msedge.exe' $knownPaths
 }
 
-function Show-TrayNotice([string]$Message, [System.Windows.Forms.ToolTipIcon]$Icon = [System.Windows.Forms.ToolTipIcon]::Info) {
+function Show-TrayNotice([string]$Message, [System.Windows.Forms.ToolTipIcon]$Icon = [System.Windows.Forms.ToolTipIcon]::Info, [switch]$OpensDashboard) {
   if (-not $script:notifyIcon) { return }
+  $script:balloonOpensDashboard = [bool]$OpensDashboard
   $script:notifyIcon.BalloonTipTitle = 'Agent Cockpit'
   $script:notifyIcon.BalloonTipText = $Message
   $script:notifyIcon.BalloonTipIcon = $Icon
@@ -196,7 +205,10 @@ function Open-Dashboard {
     $script:cockpitHome = Get-CockpitHome
     $env:AGENT_COCKPIT_HOME = $script:cockpitHome
     $ensureScript = Join-Path $PSScriptRoot 'ensure-server.js'
-    $output = @(& $nodePath $ensureScript 2>$null)
+    # Windows PowerShell 5.1 は Stop のまま stderr を捨てると、node の警告 1 行で例外にする。
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $output = @(& $nodePath $ensureScript 2>$null) } finally { $ErrorActionPreference = $previousPreference }
     if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
       Show-TrayNotice '常駐サーバーを起動できませんでした。' ([System.Windows.Forms.ToolTipIcon]::Warning)
       return
@@ -224,7 +236,7 @@ function Open-Dashboard {
     $url = "http://127.0.0.1:$($server.port)/"
     $appArgument = "--app=$url"
     $profileArgument = '--user-data-dir="{0}"' -f $browserProfile
-    Start-Process -FilePath $edgePath -ArgumentList @($appArgument, $profileArgument) -WindowStyle Normal
+    Start-Process -FilePath $edgePath -ArgumentList @($appArgument, $profileArgument, '--no-first-run') -WindowStyle Normal
   } catch {
     Show-TrayNotice 'ダッシュボードを開けませんでした。' ([System.Windows.Forms.ToolTipIcon]::Warning)
   }
@@ -240,16 +252,23 @@ function Update-TrayState {
   } else {
     "Agent Cockpit: 許可待ち $($state.PermissionCount) 件"
   }
-  $nextIcon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($state.Connected, ($state.PermissionCount -gt 0))
-  $oldIcon = $script:notifyIcon.Icon
-  $script:notifyIcon.Icon = $nextIcon
-  if ($oldIcon) { $oldIcon.Dispose() }
+  $iconState = '{0}|{1}' -f $state.Connected, ($state.PermissionCount -gt 0)
+  if ($iconState -ne $script:lastIconState) {
+    $nextIcon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($state.Connected, ($state.PermissionCount -gt 0))
+    $oldIcon = $script:notifyIcon.Icon
+    $script:notifyIcon.Icon = $nextIcon
+    if ($oldIcon) { $oldIcon.Dispose() }
+    $script:lastIconState = $iconState
+  }
 
   if ($state.Connected) {
-    if ($null -ne $script:lastPermissionCount -and $state.PermissionCount -gt $script:lastPermissionCount) {
-      Show-TrayNotice "許可待ちが $($state.PermissionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning)
+    # 件数で比べると、1 件が解消して別の 1 件が増えたときに知らせ損なう。
+    $newWaits = @($state.PermissionKeys | Where-Object { $script:lastPermissionKeys -notcontains $_ })
+    if ($script:permissionKeysKnown -and $newWaits.Count -gt 0) {
+      Show-TrayNotice "許可待ちが $($state.PermissionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
     }
-    $script:lastPermissionCount = $state.PermissionCount
+    $script:lastPermissionKeys = @($state.PermissionKeys)
+    $script:permissionKeysKnown = $true
   }
 }
 
@@ -278,7 +297,10 @@ if (-not $createdNew) {
 
 $script:notifyIcon = $null
 $script:timer = $null
-$script:lastPermissionCount = $null
+$script:lastPermissionKeys = @()
+$script:permissionKeysKnown = $false
+$script:lastIconState = $null
+$script:balloonOpensDashboard = $false
 try {
   [System.Windows.Forms.Application]::EnableVisualStyles()
   $script:notifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -291,13 +313,14 @@ try {
   $exitItem.add_Click({ [System.Windows.Forms.Application]::ExitThread() })
   $script:notifyIcon.ContextMenuStrip = $menu
   $script:notifyIcon.add_DoubleClick({ Open-Dashboard })
-  $script:notifyIcon.add_BalloonTipClicked({ Open-Dashboard })
+  $script:notifyIcon.add_BalloonTipClicked({ if ($script:balloonOpensDashboard) { Open-Dashboard } })
   $script:notifyIcon.Visible = $true
 
-  Update-TrayState
+  try { Update-TrayState } catch { }
   $script:timer = New-Object System.Windows.Forms.Timer
   $script:timer.Interval = 5000
-  $script:timer.add_Tick({ Update-TrayState })
+  # 非表示のプロセスなので、例外を Application.Run まで届かせるとダイアログが出るか落ちる。
+  $script:timer.add_Tick({ try { Update-TrayState } catch { } })
   $script:timer.Start()
   [System.Windows.Forms.Application]::Run()
 } finally {
