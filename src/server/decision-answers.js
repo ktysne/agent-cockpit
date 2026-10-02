@@ -167,7 +167,9 @@ class DecisionAnswerDelivery {
     const decision = this.state.decisionFor(record.sessionId, record.decisionId);
     const answer = decision?.answer;
     if (answer?.sentAt && Date.parse(answer.sentAt) <= record.deadline) {
-      if (answer.choice === 'hold' && recommendedOptions(decision).some((option) => !option)) return 'timeout';
+      if (answer.choice === 'hold' && recommendedOptions(decision).some((option) => !option)) {
+        return this.away.snapshot().enabled === true ? 'timeout' : 'released';
+      }
       return answer.choice === 'hold' ? 'hold' : 'answered';
     }
     if (this.away.snapshot().enabled !== true) return 'released';
@@ -188,12 +190,15 @@ class DecisionAnswerDelivery {
       return { outcome: 'released', hookOutput: null };
     }
     if (record.result) return record.result;
-    const currentOutcome = outcome === 'server-lost' ? 'server-lost' : this.askOutcome(record);
+    const askOutcome = this.askOutcome(record);
+    const currentOutcome = outcome === 'server-lost' && askOutcome !== 'answered' && askOutcome !== 'hold'
+      ? (this.away.snapshot().enabled === true ? 'server-lost' : 'released')
+      : askOutcome;
     if (currentOutcome === 'waiting') return { outcome: 'waiting', hookOutput: null };
     const decision = this.state.decisionFor(sessionId, record.decisionId);
     const at = new Date(this.now()).toISOString();
     if (currentOutcome === 'released') {
-      this.state.setDecisionLifecycle(sessionId, record.decisionId, { awaitingAnswerUntil: null, state: null }, this.now());
+      this.state.setDecisionLifecycle(sessionId, record.decisionId, { answer: null, awaitingAnswerUntil: null, state: null }, this.now());
       this.clearAskWait(record);
       record.result = { outcome: 'released', hookOutput: null };
       return record.result;
@@ -355,6 +360,11 @@ class DecisionAnswerDelivery {
         ...(decision.state === 'provisional' ? {} : { state: null }),
         awaitingAnswerUntil: null,
       }, this.now());
+      const record = this.askWaits.get(keyFor(sessionId, toolUseId));
+      if (record) {
+        record.result = { outcome: 'released', hookOutput: null };
+        this.clearAskWait(record);
+      }
       this.signal(sessionId);
       return;
     }
@@ -499,6 +509,7 @@ class DecisionAnswerDelivery {
     const decision = this.state.decisionFor(record.sessionId, record.decisionId);
     if (decision) {
       this.state.setDecisionLifecycle(record.sessionId, record.decisionId, {
+        answer: null,
         ...(decision.state === 'provisional' ? {} : { state: null }),
         awaitingAnswerUntil: null,
       }, this.now());

@@ -17,6 +17,7 @@ const {
   denyAnswerOutput,
 } = require('../src/server/decision-answers');
 const { runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
+const { makeHookEvent } = require('../src/hooks/event');
 const { startServer } = require('../src/server/server');
 
 const NOW = Date.UTC(2026, 9, 2, 1, 2, 3);
@@ -248,6 +249,24 @@ test('推奨が無い質問の OK は送れず、保留は締切として処理�
   assert.equal(state.decisionFor(sessionId, registration.decisionId).answer.reflectedAt, null);
 });
 
+test('推奨の無い質問で保留を送った後に離席中を解除するとダイアログへ戻す', async () => {
+  const fixture = makeFixture({ questions: [{
+    question: 'どの形式にしますか。', header: '', multiSelect: false,
+    options: [{ label: 'JSON', description: '' }],
+  }] });
+  const { delivery, away, state, sessionId, toolUseId, registration } = fixture;
+
+  delivery.submitAnswer(sessionId, registration.decisionId, 'hold', 'あとで決める。');
+  away.enabled = false;
+
+  const { outcome } = await delivery.waitForAsk({ sessionId, toolUseId });
+  assert.equal(outcome, 'released');
+  assert.deepEqual(delivery.finishAsk({ sessionId, toolUseId, outcome }), { outcome: 'released', hookOutput: null });
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'waiting');
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).answer, null);
+  assert.equal(delivery.deliverPending(sessionId), null);
+});
+
 test('同じ質問文が重複する判断事項はダッシュボードから回答できない', () => {
   const question = sanitizeQuestions(QUESTIONS)[0];
   assert.equal(canAnswerDecision({
@@ -382,12 +401,15 @@ test('締切前の回答は同時に起きた離席中の解除より優先す�
 test('long-poll が 30 秒届かない回答待ちは解除する', async () => {
   const fixture = makeFixture({ maxAskPollGapMs: 30_000 });
   const { clock, delivery, state, sessionId, toolUseId, registration } = fixture;
+  delivery.submitAnswer(sessionId, registration.decisionId, 'ok', 'ダイアログへ戻した後は使わない。');
 
   clock.advance(30_000);
 
   assert.deepEqual(await delivery.waitForAsk({ sessionId, toolUseId }), { outcome: 'released' });
   assert.equal(state.decisionFor(sessionId, registration.decisionId).awaitingAnswerUntil, undefined);
   assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'waiting');
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).answer, null);
+  assert.equal(delivery.deliverPending(sessionId), null);
 });
 
 test('常駐サーバーの終了時に質問待ちのタイマーをすべて解除する', () => {
@@ -398,8 +420,9 @@ test('常駐サーバーの終了時に質問待ちのタイマーをすべて�
   assert.equal(fixture.clock.timers.size, 0);
 });
 
-test('PostToolUseFailure は待機中の lifecycle を消し、provisional は維持する', () => {
+test('PostToolUseFailure は待機中の lifecycle とタイマーを解除し、provisional は維持する', async () => {
   const waiting = makeFixture();
+  const askPending = waiting.delivery.waitForAsk({ sessionId: waiting.sessionId, toolUseId: waiting.toolUseId });
   const waitingEvent = {
     session_id: waiting.sessionId,
     hook_event_name: 'PostToolUseFailure',
@@ -409,27 +432,31 @@ test('PostToolUseFailure は待機中の lifecycle を消し、provisional は�
   };
   waiting.state.addEvent(waitingEvent);
   waiting.delivery.afterEvent(sanitizeEvent(waitingEvent));
+  assert.deepEqual(await askPending, { outcome: 'released' });
+  assert.deepEqual(waiting.delivery.askWaits.get(`${waiting.sessionId}\0${waiting.toolUseId}`).result, {
+    outcome: 'released', hookOutput: null,
+  });
+  assert.equal(waiting.clock.timers.size, 0);
   const withdrawn = waiting.state.decisionFor(waiting.sessionId, waiting.registration.decisionId);
   assert.equal(withdrawn.state, 'withdrawn');
   assert.equal(withdrawn.awaitingAnswerUntil, undefined);
 
   const held = makeFixture();
   held.delivery.submitAnswer(held.sessionId, held.registration.decisionId, 'hold', 'あとで見る。');
-  return held.delivery.waitForAsk({ sessionId: held.sessionId, toolUseId: held.toolUseId }).then((result) => {
-    held.delivery.finishAsk({ ...result, sessionId: held.sessionId, toolUseId: held.toolUseId });
-    const failedEvent = {
-      session_id: held.sessionId,
-      hook_event_name: 'PostToolUseFailure',
-      hookAt: held.clock.now() + 1,
-      tool_name: 'AskUserQuestion',
-      tool_use_id: held.toolUseId,
-    };
-    held.state.addEvent(failedEvent);
-    held.delivery.afterEvent(sanitizeEvent(failedEvent));
-    const provisional = held.state.decisionFor(held.sessionId, held.registration.decisionId);
-    assert.equal(provisional.state, 'provisional');
-    assert.equal(provisional.awaitingAnswerUntil, undefined);
-  });
+  const result = await held.delivery.waitForAsk({ sessionId: held.sessionId, toolUseId: held.toolUseId });
+  held.delivery.finishAsk({ ...result, sessionId: held.sessionId, toolUseId: held.toolUseId });
+  const failedEvent = {
+    session_id: held.sessionId,
+    hook_event_name: 'PostToolUseFailure',
+    hookAt: held.clock.now() + 1,
+    tool_name: 'AskUserQuestion',
+    tool_use_id: held.toolUseId,
+  };
+  held.state.addEvent(failedEvent);
+  held.delivery.afterEvent(sanitizeEvent(failedEvent));
+  const provisional = held.state.decisionFor(held.sessionId, held.registration.decisionId);
+  assert.equal(provisional.state, 'provisional');
+  assert.equal(provisional.awaitingAnswerUntil, undefined);
 });
 
 test('保留の回答は PostToolUse 後も provisional に残し、通常の回答は resolved にする', async () => {
@@ -584,15 +611,17 @@ test('SessionStart の compact は lifecycle 時刻を保ち startup、resume、
   const delivery = new DecisionAnswerDelivery({
     state: new DashboardState(), away: { snapshot: () => ({ enabled: false }) }, now: () => NOW,
   });
-  delivery.handleLifecycleEvent('session-source', 'Stop', 'stop-1', NOW + 1);
-  delivery.afterEvent(sanitizeEvent({ session_id: 'session-source', hook_event_name: 'SessionStart', source: 'compact', hookAt: NOW + 2 }));
-  assert.equal(delivery.lastLifecycleAt.get('session-source'), NOW + 1);
-
-  for (const source of ['startup', 'resume', 'clear']) {
-    delivery.handleLifecycleEvent('session-source', 'Stop', `stop-${source}`, NOW + 3);
-    delivery.afterEvent(sanitizeEvent({ session_id: 'session-source', hook_event_name: 'SessionStart', source, hookAt: NOW + 4 }));
-    assert.equal(delivery.lastLifecycleAt.has('session-source'), false);
-    delivery.handleLifecycleEvent('session-source', 'Stop', `stop-${source}-next`, NOW + 5);
+  let hookAt = NOW + 1;
+  for (const source of ['compact', 'startup', 'resume', 'clear']) {
+    delivery.handleLifecycleEvent('session-source', 'Stop', `stop-${source}`, hookAt);
+    const hookEvent = makeHookEvent({
+      session_id: 'session-source', hook_event_name: 'SessionStart', source,
+    }, hookAt + 1);
+    assert.equal(hookEvent.source, source);
+    delivery.afterEvent(sanitizeEvent(hookEvent));
+    if (source === 'compact') assert.equal(delivery.lastLifecycleAt.get('session-source'), hookAt);
+    else assert.equal(delivery.lastLifecycleAt.has('session-source'), false);
+    hookAt += 2;
   }
 });
 
@@ -676,16 +705,96 @@ test('server-lost の finish が出力を返さなくても登録時の fallback
     homeDir,
     fetchImpl: async (_url, init) => {
       const body = JSON.parse(init.body);
+      if (body.action === 'ask-finish') throw new Error('server unavailable');
       const responses = {
         'ask-register': { awaiting: true, decisionId: 'ask-lost-finish', fallbackOutput: denyAnswerOutput('ask-lost-finish') },
         'ask-poll': { outcome: 'server-lost' },
-        'ask-finish': { outcome: 'server-lost', hookOutput: null },
       };
       return { ok: true, json: async () => responses[body.action] };
     },
   });
 
   assert.deepEqual(output, denyAnswerOutput('ask-lost-finish'));
+});
+
+test('server-lost の後で released が返ったらダイアログへ戻す', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47824, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const output = await runAskQuestion({
+    session_id: 'session-released-finish', tool_use_id: 'ask-released-finish', tool_name: 'AskUserQuestion',
+    tool_input: { questions: QUESTIONS },
+  }, {
+    homeDir,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      const responses = {
+        'ask-register': { awaiting: true, decisionId: 'ask-released-finish' },
+        'ask-poll': { outcome: 'server-lost' },
+        'ask-finish': { outcome: 'released', hookOutput: null },
+      };
+      return { ok: true, json: async () => responses[body.action] };
+    },
+  });
+
+  assert.equal(output, null);
+});
+
+test('回答後に離席を解除しても server-lost finish は回答を返す', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47826, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const fixture = makeFixture({ sessionId: 'session-lost-answer', toolUseId: 'ask-lost-answer' });
+  const toolInput = { questions: QUESTIONS, extension: { preserved: true } };
+  const output = await runAskQuestion({
+    session_id: fixture.sessionId, tool_use_id: fixture.toolUseId, tool_name: 'AskUserQuestion', tool_input: toolInput,
+  }, {
+    homeDir,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.action === 'ask-poll') {
+        fixture.delivery.submitAnswer(fixture.sessionId, fixture.registration.decisionId, 'ok', '締切前の回答');
+        fixture.away.enabled = false;
+        return { ok: true, json: async () => ({ outcome: 'server-lost' }) };
+      }
+      if (body.action === 'ask-finish') {
+        const result = fixture.delivery.finishAsk({
+          sessionId: fixture.sessionId,
+          toolUseId: fixture.toolUseId,
+          decisionId: fixture.registration.decisionId,
+          outcome: 'server-lost',
+        });
+        return { ok: true, json: async () => result };
+      }
+      return { ok: true, json: async () => ({ awaiting: true, decisionId: fixture.registration.decisionId }) };
+    },
+  });
+
+  assert.deepEqual(output.hookSpecificOutput.updatedInput, {
+    ...toolInput,
+    answers: { 'どの形式にしますか。': 'JSON (推奨)' },
+  });
+  assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).state, 'waiting');
+});
+
+test('poll 応答が途絶えた後で finish の released が返ったらダイアログへ戻す', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47825, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const output = await runAskQuestion({
+    session_id: 'session-released-poll', tool_use_id: 'ask-released-poll', tool_name: 'AskUserQuestion',
+    tool_input: { questions: QUESTIONS },
+  }, {
+    homeDir,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.action === 'ask-poll') throw new Error('poll response unavailable');
+      const responses = {
+        'ask-register': { awaiting: true, decisionId: 'ask-released-poll' },
+        'ask-finish': { outcome: 'released', hookOutput: null },
+      };
+      return { ok: true, json: async () => responses[body.action] };
+    },
+  });
+
+  assert.equal(output, null);
 });
 
 test('PreToolUse の回答は元の tool_input を保って answers を加える', async (t) => {
@@ -730,6 +839,20 @@ test('server-lost の結末は判断事項を provisional にする', () => {
 
   assert.deepEqual(result.hookOutput, denyAnswerOutput(fixture.registration.decisionId));
   assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).state, 'provisional');
+});
+
+test('待ちの記録がある server-lost でも離席解除後は released で質問を戻す', () => {
+  const fixture = makeFixture();
+  fixture.away.enabled = false;
+  const result = fixture.delivery.finishAsk({
+    sessionId: fixture.sessionId,
+    toolUseId: fixture.toolUseId,
+    decisionId: fixture.registration.decisionId,
+    outcome: 'server-lost',
+  });
+
+  assert.deepEqual(result, { outcome: 'released', hookOutput: null });
+  assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).awaitingAnswerUntil, undefined);
 });
 
 test('record がなくても離席中の server-lost は deny で進める', () => {
@@ -840,9 +963,12 @@ test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を�
     title: '期限をどうしますか。', context: '', state: 'provisional', options: [],
   }, NOW);
   runtime.answerDelivery.submitAnswer('session-delivery', batchDecision.id, null, '期限を 1 日にする。');
+  state.addEvent({ session_id: 'session-delivery', hook_event_name: 'PreToolUse', hookAt: NOW, tool_name: 'Bash', tool_use_id: 'blocked-main-tool' });
+  state.addEvent({ session_id: 'session-delivery', hook_event_name: 'PreToolUse', hookAt: NOW, agent_id: 'agent-1', tool_name: 'Read', tool_use_id: 'agent-tool' });
   const batch = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-delivery' }, { homeDir });
   assert.match(batch.output.hookSpecificOutput.additionalContext, /期限を 1 日にする。/);
   assert.ok(state.decisionFor('session-delivery', batchDecision.id).answer.deliveredAt);
+  assert.deepEqual(state.snapshot().sessions.find((session) => session.session_id === 'session-delivery').tools.map((tool) => tool.tool_use_id), ['agent-tool']);
 
   const stopDecision = state.addDecision('session-stop', {
     title: '削除方法を決める。', context: '', state: 'provisional', options: [],

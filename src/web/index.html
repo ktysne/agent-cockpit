@@ -100,14 +100,15 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
 .permission-list { gap: 0; }
 .now-row, .agent-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.now-row > .detail, .agent-row > .detail { min-width: 0; }
 .who { color: var(--text-2); font-size: 12px; }
 .who strong { color: var(--text); display: block; font-size: 13px; font-weight: 600; }
 .agent-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .detail { overflow-wrap: anywhere; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.tool-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
-.tool-name { min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
-.tool-content { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
+.tool-name { flex: none; min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
+.tool-content { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .model { display: inline-flex; gap: 6px; align-items: baseline; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; white-space: nowrap; }
 .model i { color: var(--text-2); font-size: 11px; font-style: normal; }
 .model.claude { background: var(--warn-soft); border-color: transparent; }
@@ -1293,7 +1294,7 @@ function renderKindSections(products) {
 }
 
 function render(state) {
-  if (answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) {
+  if (answerNoteComposing) {
     deferredRenderPending = true;
     return;
   }
@@ -1301,12 +1302,13 @@ function render(state) {
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
   const active = document.activeElement;
+  const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
-          : active?.dataset?.answerNote ? { kind: 'answer-note', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, start: active.selectionStart, end: active.selectionEnd }
+          : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
             : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' } : null;
@@ -1338,6 +1340,19 @@ function render(state) {
         (focusData.kind !== 'answer-note' || item.hasAttribute('data-answer-note')) &&
         (focusData.kind !== 'answer-submit' || item.hasAttribute('data-send-answer'))
       ));
+      if (focusData.kind === 'answer-note' && activeAnswerNote && control instanceof HTMLTextAreaElement) {
+        control.replaceWith(activeAnswerNote);
+        const answerDraftKeyValue = answerDraftKey(focusData.sessionId, focusData.decisionId);
+        const decision = findDecision(focusData.sessionId, focusData.decisionId);
+        const answerDraft = answerDraftFor(decision, { session_id: focusData.sessionId });
+        if (answerDraft.note !== activeAnswerNote.value) {
+          answerDrafts.set(answerDraftKeyValue, { ...answerDraft, note: activeAnswerNote.value });
+        }
+        updateAnswerSubmit(activeAnswerNote.closest('.decision-answer'));
+        activeAnswerNote.focus({ preventScroll: true });
+        activeAnswerNote.setSelectionRange(focusData.start, focusData.end, focusData.direction);
+        return;
+      }
       control?.focus({ preventScroll: true });
       if (focusData.kind === 'answer-note' && control instanceof HTMLTextAreaElement) {
         control.setSelectionRange(focusData.start, focusData.end);
@@ -1362,7 +1377,7 @@ function render(state) {
 }
 
 function renderDeferredState() {
-  if (!deferredRenderPending || answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) return;
+  if (!deferredRenderPending || answerNoteComposing) return;
   deferredRenderPending = false;
   if (lastState) render(lastState);
 }
@@ -1465,18 +1480,6 @@ document.addEventListener('compositionend', (event) => {
   if (!event.target.matches?.('[data-answer-note]')) return;
   answerNoteComposing = false;
   renderDeferredState();
-}, true);
-
-document.addEventListener('focusout', (event) => {
-  if (!event.target.matches?.('[data-answer-note]')) return;
-  const nextTarget = event.relatedTarget;
-  if (nextTarget instanceof HTMLElement) {
-    const flushAfterInteraction = () => queueMicrotask(renderDeferredState);
-    nextTarget.addEventListener('click', flushAfterInteraction, { once: true });
-    nextTarget.addEventListener('blur', flushAfterInteraction, { once: true });
-    return;
-  }
-  queueMicrotask(renderDeferredState);
 }, true);
 
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {

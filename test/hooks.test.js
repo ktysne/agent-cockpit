@@ -67,7 +67,9 @@ test('Agent の説明は 200 文字までフックイベントに含める', asy
 test('入力要約は切り詰めた場合にだけ80文字以内で省略記号を付ける', async (t) => {
   await temporaryHome(t);
   const cases = [
-    ['複数行の入力', 'git status\n2行目', 'git status…'],
+    ['複数行の入力は改行と続く空白を空白にする', 'git status\r\n  2行目\n\t3行目', 'git status 2行目 3行目'],
+    ['複数行でも80文字以内なら省略記号を付けない', `git status\n${'x'.repeat(69)}`, `git status ${'x'.repeat(69)}`],
+    ['複数行を正規化した全体が80文字を超えたら省略する', `${'x'.repeat(70)}\n${'y'.repeat(11)}`, `${'x'.repeat(70)} ${'y'.repeat(8)}…`],
     ['末尾の改行だけの入力には付けない', 'git status\n', 'git status'],
     ['80文字を超える入力', 'x'.repeat(81), `${'x'.repeat(79)}…`],
     ['80文字ちょうどの入力', 'x'.repeat(80), 'x'.repeat(80)],

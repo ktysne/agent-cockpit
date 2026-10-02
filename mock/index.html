@@ -124,7 +124,11 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; display: fle
 h3.sub .count { font-weight: normal; }
 
 .now { display: grid; gap: 6px; }
-.now-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.now-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.now-row > :nth-child(2) { min-width: 0; }
+.tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
+.tool-name { flex: none; min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
+.tool-content { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .now-row .who { font-size: 12px; color: var(--text-2); }
 .now-row .who .prod-tag { display: table; margin: 2px 0; }
 .now-row .who b { color: var(--text); font-weight: 600; display: block; font-size: 13px; }
@@ -682,8 +686,15 @@ function mainRow(p, session, withTag) {
   const tool = session.main.tool || '—';
   return `<div class="now-row">
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<b>${status}</b></div>
-      <div>${taskTitle ? esc(taskTitle) : ''}<div class="meta">${esc(tool)}</div></div>
+      <div>${taskTitle ? esc(taskTitle) : ''}${renderToolLine(tool)}</div>
       <div class="since">${esc(session.main.since || '')}</div></div>`;
+}
+
+function renderToolLine(tool) {
+  const separator = tool.indexOf(': ');
+  const name = separator < 0 ? '' : tool.slice(0, separator);
+  const content = separator < 0 ? tool : tool.slice(separator + 2);
+  return '<div class="tool-line">' + (name ? '<span class="tool-name">' + esc(name) + '</span>' : '') + '<span class="tool-content">' + esc(content) + '</span></div>';
 }
 
 // 画面で終了にした終了未確認は常駐サーバーが覚え、そのサブエージェントのイベントがまた届くまで終了として出す。
