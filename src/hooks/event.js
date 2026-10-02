@@ -130,8 +130,8 @@ function makeHookEvent(input, now = Date.now()) {
       }
     }
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。
-    const codexOutput = codexOutputLines(input.tool_response) || codexOutputLines(input.error);
-    if (codexOutput) event.codexOutput = codexOutput;
+    const codexOutput = { ...codexOutputLines(input.error), ...codexOutputLines(input.tool_response) };
+    if (Object.keys(codexOutput).length) event.codexOutput = codexOutput;
   } else if (eventName === 'Notification') {
     event.notification_type = pickString(input.notification_type).slice(0, 100);
     event.message = pickString(input.message).slice(0, 200);

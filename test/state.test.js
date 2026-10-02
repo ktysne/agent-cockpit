@@ -496,6 +496,24 @@ test('結果行が届かないまま親が終わったら、親の行を終了�
   assert.deepEqual([agent.active, agent.unconfirmed], [false, true]);
 });
 
+test('再開した親が取り出した結果行で、終了未確認になった Codex を終了にする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'resumed', 'bash-1', 2, 'sub-1');
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'sub-1' });
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  state.addEvent({
+    session_id: 'resumed', hook_event_name: 'PostToolUse', hookAt: 6, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-6-luna', 'max'),
+  });
+  state.addEvent({ session_id: 'resumed', hook_event_name: 'SubagentStop', hookAt: 7, agent_id: 'sub-1' });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.unconfirmed === true, agent.gpt.active, agent.gpt.unconfirmed], [false, false, false]);
+});
+
 test('Agent の結果に写った結果行では、背景の Codex を終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

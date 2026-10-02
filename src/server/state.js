@@ -144,9 +144,10 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
   }
 }
 
+// 親が一度止まって終了未確認になった Codex も、再開した親が取り出した結果行で終了にする。
 function oldestBackgroundedCodex(session, parentAgentId) {
   return session.agents
-    .filter((agent) => agent.isCodex && agent.backgrounded && agent.active && sameAgent(agent.parent_agent_id, parentAgentId))
+    .filter((agent) => agent.isCodex && agent.backgrounded && (agent.active || agent.unconfirmed) && sameAgent(agent.parent_agent_id, parentAgentId))
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
 }
 
@@ -340,7 +341,7 @@ function deriveSessions(entries) {
       // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
       if (event.codexResult && !completedCodexAgent && event.tool_name !== 'Agent') {
         const targetAgent = oldestBackgroundedCodex(session, agentId);
-        if (targetAgent?.active) completeCodexAgent(targetAgent, event);
+        if (targetAgent) completeCodexAgent(targetAgent, event);
       }
 
       session.permissionWaits = session.permissionWaits.filter((wait) => !(
