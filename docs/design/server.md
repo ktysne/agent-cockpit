@@ -168,7 +168,7 @@ PostToolUse の出力全文は送らない。
 回答の `choice` は `ok`、`hold`、`null` のいずれかにし、`note` に指示を持つ。
 `deliveredAt` と `reflectedAt` は常駐サーバーが記録する。
 AskUserQuestion は `tool_use_id` を id にし、1 回の呼び出しを質問配列付きの 1 件として記録する。
-推奨は単一選択の質問で、label または description に「推奨」か「recommended」を含む選択肢が 1 つだけのときに付ける。
+推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使わない。
 同じセッションに未解決の同じ質問がある場合は、その id に後続の tool_use_id を結び付ける。
 PostToolUse は `resolved`、PostToolUseFailure は `withdrawn` にし、どちらも `resolvedAt` を記録する。
 サブエージェントの `agent_id` があるイベントは判断事項にしない。
@@ -227,7 +227,7 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 回答欄には「推奨案で OK」と「判断を保留する」の選択、指示の入力欄、「回答を送る」を置く。
 
-選択肢の label または description に「推奨」か「recommended」が含まれ、単一選択で該当選択肢が 1 つだけの場合、その選択肢を推奨にする。
+推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使わない。
 
 複数選択の質問では推奨を決めない。
 
@@ -253,9 +253,10 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 締切は登録時刻から 5 分後とし、常駐サーバーが持つ。
 
-long-poll は 1 回につき最大 25 秒とし、`away.js` は `PreToolUse` の `timeout` を 330 秒にする。
+long-poll は 1 回につき最大 25 秒とし、30 秒間 poll が届かない場合は回答待ちを解除する。
+`away.js` は `PreToolUse` の `timeout` を 330 秒にする。
 
-回答があれば常駐サーバーが `PreToolUse` の出力を組み立て、フックはその JSON を標準出力へ書く。
+回答があれば常駐サーバーが回答内容を返し、フックが元の `tool_input` に `answers` を加えて `PreToolUse` の出力を組み立てる。
 
 「推奨案で OK」は推奨の label を `updatedInput.answers` に入れ、「指示のみ」は指示文を入れる。
 
@@ -267,6 +268,10 @@ long-poll は 1 回につき最大 25 秒とし、`away.js` は `PreToolUse` の
 推奨のない質問への保留は配信済みや反映済みとして数えない。
 
 離席中が解除されたときは待機期限を消し、質問のダイアログを出す。
+回答が締切までに届いていれば、離席中の解除より回答を優先する。
+
+回答待ちの判断事項は `awaitingAnswerUntil` がある間、`PostToolBatch`、`UserPromptSubmit`、`Stop` の配信対象から外す。
+`PostToolUseFailure` では待機期限と lifecycle の上書き状態を消すが、保留や締切で `provisional` にした状態は保つ。
 
 回答で質問に答えた判断事項は `PostToolUse` で `resolved` にする。
 
@@ -277,7 +282,13 @@ long-poll は 1 回につき最大 25 秒とし、`away.js` は `PreToolUse` の
 停止中は `Stop` の `asyncRewake` フックが 1 回最大 25 秒の long-poll を繰り返す。
 回答が届いたら標準エラーへ書いて終了コード 2 でセッションを起こす。
 
-停止フックは後続の `Stop`、`UserPromptSubmit`、`SessionEnd`、親プロセスの終了で何もせず終わる。
+メインの `PreToolUse`、`PostToolUse`、`PostToolUseFailure` が最後の lifecycle 時刻より新しければ、停止フックの待機を終える。
+
+最後の lifecycle 時刻より古い `Stop` は世代を更新せず、待機せずに終わる。
+
+停止フックは後続の `Stop`、`UserPromptSubmit`、`SessionEnd`、親プロセスの終了でも何もせず終わる。
+
+`SessionStart` は `startup`、`resume`、`clear` のときだけ最後の lifecycle 時刻を消す。
 
 `PostToolBatch` と `Stop` は `agent_id` のあるサブエージェント内では何もしない。
 

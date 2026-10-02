@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "D:/Program Files/nodejs/node.exe",
-            "args": ["D:/Desktop/Develop/agent-cockpit/.claude/worktrees/pr-display-merge-399a2d/poc/answer-proto.js", "ask"],
+            "command": "node",
+            "args": ["D:/path/to/agent-cockpit/poc/answer-proto.js", "ask"],
             "timeout": 120
           }
         ]
@@ -18,8 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "D:/Program Files/nodejs/node.exe",
-            "args": ["D:/Desktop/Develop/agent-cockpit/.claude/worktrees/pr-display-merge-399a2d/poc/answer-proto.js", "batch"],
+            "command": "node",
+            "args": ["D:/path/to/agent-cockpit/poc/answer-proto.js", "batch"],
             "timeout": 10
           }
         ]
@@ -30,8 +30,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "D:/Program Files/nodejs/node.exe",
-            "args": ["D:/Desktop/Develop/agent-cockpit/.claude/worktrees/pr-display-merge-399a2d/poc/answer-proto.js", "rewake"],
+            "command": "node",
+            "args": ["D:/path/to/agent-cockpit/poc/answer-proto.js", "rewake"],
             "asyncRewake": true,
             "timeout": 300
           }

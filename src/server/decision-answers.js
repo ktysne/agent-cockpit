@@ -2,6 +2,7 @@ const { sanitizeQuestions } = require('./events');
 
 const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
+const MAX_ASK_POLL_GAP_MS = 30_000;
 const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作、PR のマージ、main への push は行わず、判断待ちとして残してください。';
 const HOLD_CONTEXT = '開発者が判断を保留した。推奨のまま進め、あとで見直せるよう最後の報告に書いてください。';
 
@@ -76,7 +77,7 @@ function decisionAnswerText(decision) {
 }
 
 class DecisionAnswerDelivery {
-  constructor({ state, away, now = Date.now, setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout, maxLongPollMs = MAX_LONG_POLL_MS, answerWaitMs = ANSWER_WAIT_MS } = {}) {
+  constructor({ state, away, now = Date.now, setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout, maxLongPollMs = MAX_LONG_POLL_MS, answerWaitMs = ANSWER_WAIT_MS, maxAskPollGapMs = MAX_ASK_POLL_GAP_MS } = {}) {
     this.state = state;
     this.away = away;
     this.now = now;
@@ -84,6 +85,7 @@ class DecisionAnswerDelivery {
     this.clearTimeout = clearTimeoutImpl;
     this.maxLongPollMs = maxLongPollMs;
     this.answerWaitMs = answerWaitMs;
+    this.maxAskPollGapMs = maxAskPollGapMs;
     this.askWaits = new Map();
     this.stopGenerations = new Map();
     this.lastLifecycleAt = new Map();
@@ -112,23 +114,29 @@ class DecisionAnswerDelivery {
     if (!event.questions.length || !this.state.addEvent(event)) return { awaiting: false, hookOutput: null };
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
     if (!decisionId) return { awaiting: false, hookOutput: null };
+    this.state.setDecisionLifecycle(sessionId, decisionId, {
+      answer: null,
+      state: null,
+      awaitingAnswerUntil: null,
+    }, createdAt);
     if (hasDuplicateQuestions({ questions: event.questions })) {
       this.releaseAskWaitsForDecision(sessionId, decisionId);
       this.state.setDecisionLifecycle(sessionId, decisionId, {
         answer: null,
         awaitingAnswerUntil: null,
-        state: 'waiting',
+        state: null,
       }, createdAt);
       return { awaiting: false, hookOutput: null };
     }
     const deadline = createdAt + this.answerWaitMs;
-    const record = { sessionId, toolUseId, decisionId, deadline, timer: null };
+    const record = { sessionId, toolUseId, decisionId, deadline, timer: null, pollTimer: null, lastPollAt: createdAt };
     this.askWaits.set(key, record);
     record.timer = this.setTimeout(() => this.expireAsk(record), this.answerWaitMs);
+    this.scheduleAskPollTimeout(record);
     this.state.setDecisionLifecycle(sessionId, decisionId, {
       answer: null,
       awaitingAnswerUntil: new Date(deadline).toISOString(),
-      state: 'waiting',
+      state: null,
     }, createdAt);
     return { awaiting: true, decisionId, deadline, fallbackOutput: denyAnswerOutput(decisionId) };
   }
@@ -138,6 +146,12 @@ class DecisionAnswerDelivery {
     if (!record) return { outcome: 'server-lost' };
     if (record.result) return { outcome: record.result.outcome };
     if (this.closed) return { outcome: 'server-lost' };
+    if (this.now() - record.lastPollAt >= this.maxAskPollGapMs) {
+      this.releaseStaleAsk(record);
+      if (record.result) return { outcome: record.result.outcome };
+    }
+    record.lastPollAt = this.now();
+    this.scheduleAskPollTimeout(record);
     const outcome = this.askOutcome(record);
     if (outcome !== 'waiting') return { outcome };
     const remaining = record.deadline - this.now();
@@ -148,15 +162,15 @@ class DecisionAnswerDelivery {
 
   askOutcome(record) {
     if (record.result) return record.result.outcome;
-    if (this.away.snapshot().enabled !== true) return 'released';
-    if (this.endedSessions.has(record.sessionId)) return 'released';
     const decision = this.state.decisionFor(record.sessionId, record.decisionId);
-    if (!decision) return 'released';
-    const answer = decision.answer;
+    const answer = decision?.answer;
     if (answer?.sentAt && Date.parse(answer.sentAt) <= record.deadline) {
       if (answer.choice === 'hold' && recommendedOptions(decision).some((option) => !option)) return 'timeout';
       return answer.choice === 'hold' ? 'hold' : 'answered';
     }
+    if (this.away.snapshot().enabled !== true) return 'released';
+    if (this.endedSessions.has(record.sessionId)) return 'released';
+    if (!decision) return 'released';
     if (this.now() >= record.deadline) return 'timeout';
     return 'waiting';
   }
@@ -165,8 +179,8 @@ class DecisionAnswerDelivery {
     const record = this.askWaits.get(keyFor(sessionId, toolUseId));
     if (!record) {
       const decision = decisionId && this.state.decisionFor(sessionId, decisionId);
-      if (outcome === 'server-lost' && decision) {
-        this.state.setDecisionLifecycle(sessionId, decisionId, { state: 'provisional', awaitingAnswerUntil: null }, this.now());
+      if (outcome === 'server-lost' && this.away.snapshot().enabled === true) {
+        if (decision) this.state.setDecisionLifecycle(sessionId, decisionId, { state: 'provisional', awaitingAnswerUntil: null }, this.now());
         return { outcome: 'server-lost', hookOutput: denyAnswerOutput(decisionId) };
       }
       return { outcome: 'released', hookOutput: null };
@@ -222,7 +236,7 @@ class DecisionAnswerDelivery {
 
   deliverPending(sessionId) {
     const pending = this.state.decisionsFor(sessionId).filter((decision) => (
-      decision.answer?.sentAt && !decision.answer.deliveredAt && !decision.answer.ignoredAt && ['waiting', 'provisional'].includes(decision.state)
+      decision.answer?.sentAt && !decision.answer.deliveredAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && ['waiting', 'provisional'].includes(decision.state)
     ));
     if (!pending.length) return null;
     const at = new Date(this.now()).toISOString();
@@ -238,7 +252,7 @@ class DecisionAnswerDelivery {
   deliverPrompt(sessionId, eventId, hookAt = this.now()) {
     this.handleLifecycleEvent(sessionId, 'UserPromptSubmit', eventId, hookAt);
     const pending = this.state.decisionsFor(sessionId).filter((decision) => (
-      decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state)
+      decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state)
     ));
     if (!pending.length) return null;
     const messages = pending.map((decision) => decisionAnswerText(decision));
@@ -255,6 +269,7 @@ class DecisionAnswerDelivery {
   }
 
   startStop(sessionId, eventId, hookAt = this.now()) {
+    if (hookAt < (this.lastLifecycleAt.get(sessionId) ?? -1)) return null;
     this.handleLifecycleEvent(sessionId, 'Stop', eventId, hookAt);
     const generation = (this.stopGenerations.get(sessionId) || 0) + 1;
     this.stopGenerations.set(sessionId, generation);
@@ -279,7 +294,7 @@ class DecisionAnswerDelivery {
   handleLifecycleEvent(sessionId, eventName, eventId, hookAt = this.now()) {
     if (eventName !== 'Stop' && eventName !== 'UserPromptSubmit' && eventName !== 'SessionEnd') return;
     const key = sessionId;
-    const previous = this.lastLifecycleAt.get(key) || -1;
+    const previous = this.lastLifecycleAt.get(key) ?? -1;
     if (hookAt < previous) return;
     this.lastLifecycleAt.set(key, hookAt);
     if (eventName === 'UserPromptSubmit') {
@@ -296,16 +311,44 @@ class DecisionAnswerDelivery {
     if (eventName === 'SessionStart') {
       if (this.endedSessions.has(sessionId)) this.clearSessionAskWaits(sessionId);
       this.endedSessions.delete(sessionId);
-      this.lastLifecycleAt.delete(sessionId);
+      if (['startup', 'resume', 'clear'].includes(event.source)) this.lastLifecycleAt.delete(sessionId);
+    }
+    if (
+      !event.agent_id && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(eventName) &&
+      event.hookAt > (this.lastLifecycleAt.get(sessionId) ?? -1)
+    ) {
+      this.lastLifecycleAt.set(sessionId, event.hookAt);
+      this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
+      this.signal(sessionId);
     }
     if (eventName === 'SessionEnd' || eventName === 'UserPromptSubmit') {
       this.handleLifecycleEvent(sessionId, eventName, `${eventName}:${event.hookAt}`, event.hookAt);
     }
     if (eventName === 'SessionEnd') this.clearSessionAskWaits(sessionId);
-    if (eventName !== 'PostToolUse' || event.tool_name !== 'AskUserQuestion' || !toolUseId || event.agent_id) return;
+    if (eventName === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && toolUseId && !event.agent_id) {
+      const key = keyFor(sessionId, toolUseId);
+      const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
+      if (decisionId && !this.askWaits.has(key)) {
+        this.state.setDecisionLifecycle(sessionId, decisionId, {
+          answer: null,
+          state: null,
+          awaitingAnswerUntil: null,
+        }, this.now());
+      }
+      return;
+    }
+    if (!['PostToolUse', 'PostToolUseFailure'].includes(eventName) || event.tool_name !== 'AskUserQuestion' || !toolUseId || event.agent_id) return;
     const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);
     const decision = decisionId && this.state.decisionFor(sessionId, decisionId);
     if (!decision) return;
+    if (eventName === 'PostToolUseFailure') {
+      this.state.setDecisionLifecycle(sessionId, decisionId, {
+        ...(decision.state === 'provisional' ? {} : { state: null }),
+        awaitingAnswerUntil: null,
+      }, this.now());
+      this.signal(sessionId);
+      return;
+    }
     if (decision.answer?.ignoredAt) {
       this.state.setDecisionLifecycle(sessionId, decisionId, {
         state: 'provisional',
@@ -379,7 +422,7 @@ class DecisionAnswerDelivery {
 
   close() {
     this.closed = true;
-    for (const record of this.askWaits.values()) this.clearTimeout(record.timer);
+    for (const record of this.askWaits.values()) this.clearAskWait(record);
     this.signalAll();
   }
 
@@ -425,12 +468,38 @@ class DecisionAnswerDelivery {
 
   clearAskWait(record) {
     this.clearTimeout(record.timer);
+    this.clearTimeout(record.pollTimer);
+  }
+
+  scheduleAskPollTimeout(record) {
+    this.clearTimeout(record.pollTimer);
+    record.pollTimer = this.setTimeout(() => this.releaseStaleAsk(record), this.maxAskPollGapMs);
+  }
+
+  releaseStaleAsk(record) {
+    if (this.askWaits.get(keyFor(record.sessionId, record.toolUseId)) !== record || record.result) return;
+    const elapsed = this.now() - record.lastPollAt;
+    if (elapsed < this.maxAskPollGapMs) {
+      this.scheduleAskPollTimeout(record);
+      return;
+    }
+    const decision = this.state.decisionFor(record.sessionId, record.decisionId);
+    if (decision) {
+      this.state.setDecisionLifecycle(record.sessionId, record.decisionId, {
+        ...(decision.state === 'provisional' ? {} : { state: null }),
+        awaitingAnswerUntil: null,
+      }, this.now());
+    }
+    record.result = { outcome: 'released', hookOutput: null };
+    this.clearAskWait(record);
+    this.signal(record.sessionId);
   }
 }
 
 module.exports = {
   ANSWER_WAIT_MS,
   MAX_LONG_POLL_MS,
+  MAX_ASK_POLL_GAP_MS,
   DecisionAnswerDelivery,
   hasDuplicateQuestions,
   recommendedOptions,

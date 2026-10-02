@@ -572,7 +572,7 @@ function renderSummary() {
   const all = sessions.flatMap(s => s.decisions.map(d => ({ d, a: answerOf(d.id) })));
   const blocking = all.filter(x => effectiveDecisionState(x.d) === 'waiting' && !x.a.sent).length;
   const provisional = all.filter(x => effectiveDecisionState(x.d) === 'provisional' && !x.a.sent).length;
-  const held = all.filter(x => x.a.sent && x.a.sent.choice === 'hold').length;
+  const held = all.filter(x => ['waiting', 'provisional'].includes(effectiveDecisionState(x.d)) && x.a.sent && x.a.sent.choice === 'hold').length;
   const agents = sessions.flatMap(s => s.subagents).filter(agent => agent.state === 'busy').length;
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => !mergeBlocker(p, pr)).length, 0);
   const permission = sessions.reduce((n, s) => n + s.perms.length, 0);

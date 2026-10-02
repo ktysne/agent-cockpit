@@ -20,6 +20,19 @@ function isParentAlive(pid, processApi = process) {
   }
 }
 
+function useOriginalToolInput(output, toolInput) {
+  const hookSpecificOutput = output?.hookSpecificOutput;
+  const answers = hookSpecificOutput?.updatedInput?.answers;
+  if (!answers || !toolInput || typeof toolInput !== 'object' || Array.isArray(toolInput)) return output;
+  return {
+    ...output,
+    hookSpecificOutput: {
+      ...hookSpecificOutput,
+      updatedInput: { ...toolInput, answers },
+    },
+  };
+}
+
 async function postHookRequest(body, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const fetchImpl = options.fetchImpl || fetch;
@@ -83,7 +96,8 @@ async function runAskQuestion(input, options) {
     const finished = await postHookRequest({
       action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome: result.outcome,
     }, { ...options, timeoutMs: 1_000 });
-    return finished?.hookOutput || null;
+    const hookOutput = finished?.hookOutput || (result.outcome === 'server-lost' ? fallbackOutput : null);
+    return useOriginalToolInput(hookOutput, input.tool_input);
   }
   const timeout = await postHookRequest({
     action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome: 'timeout',
@@ -171,6 +185,7 @@ module.exports = {
   POST_TOOL_BATCH_TIMEOUT_MS,
   isParentAlive,
   postHookRequest,
+  useOriginalToolInput,
   runAskQuestion,
   runPostToolBatch,
   runUserPromptSubmit,

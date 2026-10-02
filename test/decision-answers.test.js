@@ -1,19 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { recommendedOptionFor, sanitizeQuestions, sanitizeEvent } = require('../src/server/events');
 const { DashboardState } = require('../src/server/state');
 const {
   ANSWER_WAIT_MS,
+  MAX_ASK_POLL_GAP_MS,
   DecisionAnswerDelivery,
   askAnswerOutput,
   canAnswerDecision,
   denyAnswerOutput,
 } = require('../src/server/decision-answers');
-const { runAnswerHook, runAskQuestion } = require('../src/hooks/answer');
+const { runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
 const { startServer } = require('../src/server/server');
 
 const NOW = Date.UTC(2026, 9, 2, 1, 2, 3);
@@ -22,7 +25,7 @@ const QUESTIONS = [{
   header: '形式',
   multiSelect: false,
   options: [
-    { label: 'JSON', description: 'recommended: 既存 API と一致する。' },
+    { label: 'JSON (推奨)', description: '既存 API と一致する。' },
     { label: 'CSV', description: '表計算で開ける。' },
   ],
 }];
@@ -84,6 +87,7 @@ function makeFixture(options = {}) {
     clearTimeoutImpl: (id) => clock.clearTimeout(id),
     answerWaitMs: options.answerWaitMs || ANSWER_WAIT_MS,
     maxLongPollMs: options.maxLongPollMs || 25_000,
+    maxAskPollGapMs: options.maxAskPollGapMs || MAX_ASK_POLL_GAP_MS,
   });
   const registration = delivery.registerAsk({ sessionId, toolUseId, questions });
   return { clock, state, away, delivery, registration, sessionId, toolUseId };
@@ -124,22 +128,55 @@ function responseJson(response) {
   return JSON.parse(response.body);
 }
 
-test('推奨は label と description の日本語・英語を見て単一選択の一つだけに決める', () => {
-  const fromLabel = recommendedOptionFor({ multiSelect: false, options: [{ label: '推奨: JSON', description: '' }] });
+test('推奨は label の括弧付き指定か MCP の明示指定だけを単一選択から決める', () => {
+  const fromLabel = recommendedOptionFor({ multiSelect: false, options: [{ label: 'JSON (推奨)', description: '' }] });
+  const fromFullWidthJapaneseLabel = recommendedOptionFor({ multiSelect: false, options: [{ label: '（推奨）JSON', description: '' }] });
+  const fromFullWidthLabel = recommendedOptionFor({ multiSelect: false, options: [{ label: '（Recommended）REST', description: '' }] });
   const fromDescription = recommendedOptionFor({ multiSelect: false, options: [{ label: 'CSV', description: 'recommended for spreadsheets' }] });
+  const falseJapaneseMatch = recommendedOptionFor({ multiSelect: false, options: [{ label: '非推奨: JSON', description: '' }] });
+  const falseEnglishMatch = recommendedOptionFor({ multiSelect: false, options: [{ label: 'not recommended', description: '' }] });
   const fromFlag = recommendedOptionFor({ multiSelect: false, options: [{ label: 'REST', description: '', recommended: true }] });
   const twoMatches = recommendedOptionFor({
     multiSelect: false,
-    options: [{ label: '推奨 JSON', description: '' }, { label: 'CSV', description: 'recommended' }],
+    options: [{ label: 'JSON (推奨)', description: '' }, { label: '(Recommended) CSV', description: '' }],
   });
   const multiple = recommendedOptionFor({ multiSelect: true, options: [{ label: '推奨 JSON', description: '' }] });
 
-  assert.equal(fromLabel.label, '推奨: JSON');
-  assert.equal(fromDescription.label, 'CSV');
+  assert.equal(fromLabel.label, 'JSON (推奨)');
+  assert.equal(fromFullWidthJapaneseLabel.label, '（推奨）JSON');
+  assert.equal(fromFullWidthLabel.label, '（Recommended）REST');
+  assert.equal(fromDescription, null);
+  assert.equal(falseJapaneseMatch, null);
+  assert.equal(falseEnglishMatch, null);
   assert.equal(fromFlag.label, 'REST');
   assert.equal(twoMatches, null);
   assert.equal(multiple, null);
   assert.equal(sanitizeQuestions(QUESTIONS)[0].options[0].recommended, true);
+});
+
+test('「保留中」の件数は未解決判断事項だけを数える', () => {
+  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helper = html.match(/function isHeldDecision\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(helper);
+  const isHeldDecision = vm.runInNewContext(`(${helper})`);
+
+  assert.equal(isHeldDecision({ state: 'waiting', answer: { choice: 'hold' } }), true);
+  assert.equal(isHeldDecision({ state: 'provisional', answer: { choice: 'hold' } }), true);
+  assert.equal(isHeldDecision({ state: 'resolved', answer: { choice: 'hold' } }), false);
+  assert.equal(isHeldDecision({ state: 'withdrawn', answer: { choice: 'hold' } }), false);
+});
+
+test('タイトル、外したセッション、読み上げは回答前の waiting だけを数える', () => {
+  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helper = html.match(/function isPendingDecision\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(helper);
+  const isPendingDecision = vm.runInNewContext(`(${helper})`, {
+    hasEffectiveAnswer: (decision) => Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt),
+  });
+
+  assert.equal(isPendingDecision({ state: 'waiting', answer: null }), true);
+  assert.equal(isPendingDecision({ state: 'waiting', answer: { sentAt: new Date(NOW).toISOString() } }), false);
+  assert.equal(isPendingDecision({ state: 'provisional', answer: null }), false);
 });
 
 test('推奨案で OK は推奨 label を使い、指示と保留の文脈を添える', () => {
@@ -149,14 +186,14 @@ test('推奨案で OK は推奨 label を使い、指示と保留の文脈を添
   const hold = askAnswerOutput(decision, { choice: 'hold', note: '' });
 
   assert.equal(ok.hookSpecificOutput.permissionDecision, 'allow');
-  assert.deepEqual(ok.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON' });
+  assert.deepEqual(ok.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
   assert.deepEqual(ok.hookSpecificOutput.updatedInput.questions[0].options, [
-    { label: 'JSON', description: 'recommended: 既存 API と一致する。' },
+    { label: 'JSON (推奨)', description: '既存 API と一致する。' },
     { label: 'CSV', description: '表計算で開ける。' },
   ]);
   assert.match(okWithNote.hookSpecificOutput.additionalContext, /開発者の指示: 理由を記録する。/);
   assert.match(hold.hookSpecificOutput.additionalContext, /開発者が判断を保留した。推奨のまま進め/);
-  assert.deepEqual(hold.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON' });
+  assert.deepEqual(hold.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
 });
 
 test('指示だけの回答は指示文を answers に入れる', () => {
@@ -176,6 +213,20 @@ test('推奨がない質問の OK と保留は拒否結末と同じ出力にな�
 
   assert.deepEqual(askAnswerOutput(decision, { choice: 'ok', note: '' }), denyAnswerOutput(decision.id));
   assert.deepEqual(askAnswerOutput(decision, { choice: 'hold', note: '' }), denyAnswerOutput(decision.id));
+});
+
+test('MCP の recommended true は label の文言にかかわらず推奨として扱う', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'session-mcp-recommended', hook_event_name: 'SessionStart', hookAt: NOW });
+  const decision = state.addDecision('session-mcp-recommended', {
+    title: 'どの形式にしますか。', context: '', state: 'provisional',
+    options: [{ label: 'JSON', description: '互換性がある。', recommended: true }],
+  }, NOW);
+
+  assert.equal(decision.questions[0].options[0].recommended, true);
+  assert.deepEqual(askAnswerOutput(decision, { choice: 'ok', note: '' }).hookSpecificOutput.updatedInput.answers, {
+    'どの形式にしますか。': 'JSON',
+  });
 });
 
 test('推奨が無い質問の OK は送れず、保留は締切として処理して後から再配信しない', async () => {
@@ -234,6 +285,7 @@ test('同じ tool_use_id の登録は冪等で、束ね直した質問では前�
   const fixture = makeFixture();
   const { delivery, state, clock, sessionId, toolUseId, registration } = fixture;
   const version = state.version;
+  assert.equal(state.decisionLifecycles.get(sessionId).get(registration.decisionId).state, null);
   const repeated = delivery.registerAsk({ sessionId, toolUseId, questions: QUESTIONS });
   assert.equal(repeated.decisionId, registration.decisionId);
   assert.equal(repeated.deadline, registration.deadline);
@@ -256,15 +308,21 @@ test('同じ tool_use_id の登録は冪等で、束ね直した質問では前�
   clock.advance(1_000);
   const revisedQuestions = [{
     ...QUESTIONS[0],
-    options: [{ label: 'TOML', description: 'recommended for configuration' }, { label: 'CSV', description: '' }],
+    options: [{ label: 'TOML（Recommended）', description: 'configuration' }, { label: 'CSV', description: '' }],
   }];
+  state.setDecisionLifecycle(sessionId, registration.decisionId, {
+    answer: { choice: 'hold', note: '前の質問への回答', sentAt: new Date(clock.now()).toISOString() },
+    state: 'provisional',
+    awaitingAnswerUntil: new Date(clock.now() + 10_000).toISOString(),
+  }, clock.now());
   const bundled = delivery.registerAsk({ sessionId, toolUseId: 'ask-2', questions: revisedQuestions });
 
   assert.equal(bundled.decisionId, registration.decisionId);
   assert.equal(state.decisionIdForToolUse(sessionId, 'ask-2'), registration.decisionId);
   assert.equal(state.decisionsFor(sessionId).length, 1);
   assert.equal(state.decisionFor(sessionId, registration.decisionId).answer, null);
-  assert.equal(state.decisionFor(sessionId, registration.decisionId).questions[0].options[0].label, 'TOML');
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'waiting');
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).questions[0].options[0].label, 'TOML（Recommended）');
   assert.equal(state.decisionFor(sessionId, registration.decisionId).questions[0].options[0].recommended, true);
   assert.equal(state.decisionFor(sessionId, registration.decisionId).awaitingAnswerUntil, new Date(clock.now() + ANSWER_WAIT_MS).toISOString());
 });
@@ -310,6 +368,68 @@ test('離席中の解除は待機中の質問をダイアログへ戻す', async
   assert.deepEqual(delivery.finishAsk({ sessionId, toolUseId, outcome: 'released' }), { outcome: 'released', hookOutput: null });
   assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'waiting');
   assert.equal(state.decisionFor(sessionId, registration.decisionId).awaitingAnswerUntil, undefined);
+});
+
+test('締切前の回答は同時に起きた離席中の解除より優先する', async () => {
+  const fixture = makeFixture();
+  const { delivery, away, sessionId, toolUseId, registration } = fixture;
+  delivery.submitAnswer(sessionId, registration.decisionId, 'ok', '締切前に送った回答');
+  away.enabled = false;
+
+  assert.deepEqual(await delivery.waitForAsk({ sessionId, toolUseId }), { outcome: 'answered' });
+});
+
+test('long-poll が 30 秒届かない回答待ちは解除する', async () => {
+  const fixture = makeFixture({ maxAskPollGapMs: 30_000 });
+  const { clock, delivery, state, sessionId, toolUseId, registration } = fixture;
+
+  clock.advance(30_000);
+
+  assert.deepEqual(await delivery.waitForAsk({ sessionId, toolUseId }), { outcome: 'released' });
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).awaitingAnswerUntil, undefined);
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'waiting');
+});
+
+test('常駐サーバーの終了時に質問待ちのタイマーをすべて解除する', () => {
+  const fixture = makeFixture();
+
+  assert.equal(fixture.clock.timers.size, 2);
+  fixture.delivery.close();
+  assert.equal(fixture.clock.timers.size, 0);
+});
+
+test('PostToolUseFailure は待機中の lifecycle を消し、provisional は維持する', () => {
+  const waiting = makeFixture();
+  const waitingEvent = {
+    session_id: waiting.sessionId,
+    hook_event_name: 'PostToolUseFailure',
+    hookAt: waiting.clock.now() + 1,
+    tool_name: 'AskUserQuestion',
+    tool_use_id: waiting.toolUseId,
+  };
+  waiting.state.addEvent(waitingEvent);
+  waiting.delivery.afterEvent(sanitizeEvent(waitingEvent));
+  const withdrawn = waiting.state.decisionFor(waiting.sessionId, waiting.registration.decisionId);
+  assert.equal(withdrawn.state, 'withdrawn');
+  assert.equal(withdrawn.awaitingAnswerUntil, undefined);
+
+  const held = makeFixture();
+  held.delivery.submitAnswer(held.sessionId, held.registration.decisionId, 'hold', 'あとで見る。');
+  return held.delivery.waitForAsk({ sessionId: held.sessionId, toolUseId: held.toolUseId }).then((result) => {
+    held.delivery.finishAsk({ ...result, sessionId: held.sessionId, toolUseId: held.toolUseId });
+    const failedEvent = {
+      session_id: held.sessionId,
+      hook_event_name: 'PostToolUseFailure',
+      hookAt: held.clock.now() + 1,
+      tool_name: 'AskUserQuestion',
+      tool_use_id: held.toolUseId,
+    };
+    held.state.addEvent(failedEvent);
+    held.delivery.afterEvent(sanitizeEvent(failedEvent));
+    const provisional = held.state.decisionFor(held.sessionId, held.registration.decisionId);
+    assert.equal(provisional.state, 'provisional');
+    assert.equal(provisional.awaitingAnswerUntil, undefined);
+  });
 });
 
 test('保留の回答は PostToolUse 後も provisional に残し、通常の回答は resolved にする', async () => {
@@ -406,6 +526,76 @@ test('後続の Stop、UserPromptSubmit、SessionEnd、親の終了で Stop の�
   assert.deepEqual(await delivery.waitForStopAnswer('session-parent', 0, false), { stderrText: null, done: true });
 });
 
+test('作業イベントは古い Stop を終え、回答待ちの質問を Stop から配信しない', async () => {
+  const state = new DashboardState();
+  const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: false }) }, now: () => NOW });
+  const generation = delivery.startStop('session-stop-work', 'stop-1', NOW);
+  const waiting = delivery.waitForStopAnswer('session-stop-work', generation);
+  delivery.afterEvent(sanitizeEvent({
+    session_id: 'session-stop-work', hook_event_name: 'PreToolUse', hookAt: NOW + 1,
+    tool_name: 'Read', tool_use_id: 'read-1',
+  }));
+  assert.deepEqual(await waiting, { stderrText: null, done: true });
+
+  const fixture = makeFixture();
+  const stopGeneration = fixture.delivery.startStop(fixture.sessionId, 'stop-answer', NOW);
+  const stopWaiting = fixture.delivery.waitForStopAnswer(fixture.sessionId, stopGeneration);
+  fixture.delivery.submitAnswer(fixture.sessionId, fixture.registration.decisionId, 'ok', 'PreToolUse に渡す回答');
+  assert.equal(fixture.delivery.deliverPending(fixture.sessionId), null);
+  assert.deepEqual(await stopWaiting, { stderrText: null, done: false });
+  assert.equal(fixture.delivery.deliverPrompt(fixture.sessionId, 'prompt-answer', NOW + 2), null);
+});
+
+test('古い Stop は世代を進めずに開始を拒否する', () => {
+  const delivery = new DecisionAnswerDelivery({
+    state: new DashboardState(), away: { snapshot: () => ({ enabled: false }) }, now: () => NOW,
+  });
+  delivery.afterEvent(sanitizeEvent({
+    session_id: 'session-stale-stop', hook_event_name: 'PostToolUse', hookAt: NOW + 10,
+    tool_name: 'Read', tool_use_id: 'read-1',
+  }));
+
+  assert.equal(delivery.startStop('session-stale-stop', 'stop-old', NOW), null);
+  assert.equal(delivery.stopGenerations.get('session-stale-stop'), 1);
+  assert.equal(delivery.startStop('session-stale-stop', 'stop-new', NOW + 11), 2);
+});
+
+test('古い Stop のフックはサーバーへ再接続せずに終了する', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47824, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const actions = [];
+  const result = await runStop({ hook_event_name: 'Stop', session_id: 'session-stale-hook' }, {
+    homeDir,
+    now: () => NOW,
+    parentPid: 1,
+    isParentAlive: () => true,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      actions.push(body.action);
+      return { ok: true, json: async () => ({ generation: null }) };
+    },
+  });
+
+  assert.deepEqual(result, { exitCode: 0, stderrText: null });
+  assert.deepEqual(actions, ['stop-start']);
+});
+
+test('SessionStart の compact は lifecycle 時刻を保ち startup、resume、clear は消す', () => {
+  const delivery = new DecisionAnswerDelivery({
+    state: new DashboardState(), away: { snapshot: () => ({ enabled: false }) }, now: () => NOW,
+  });
+  delivery.handleLifecycleEvent('session-source', 'Stop', 'stop-1', NOW + 1);
+  delivery.afterEvent(sanitizeEvent({ session_id: 'session-source', hook_event_name: 'SessionStart', source: 'compact', hookAt: NOW + 2 }));
+  assert.equal(delivery.lastLifecycleAt.get('session-source'), NOW + 1);
+
+  for (const source of ['startup', 'resume', 'clear']) {
+    delivery.handleLifecycleEvent('session-source', 'Stop', `stop-${source}`, NOW + 3);
+    delivery.afterEvent(sanitizeEvent({ session_id: 'session-source', hook_event_name: 'SessionStart', source, hookAt: NOW + 4 }));
+    assert.equal(delivery.lastLifecycleAt.has('session-source'), false);
+    delivery.handleLifecycleEvent('session-source', 'Stop', `stop-${source}-next`, NOW + 5);
+  }
+});
+
 test('Stop の long-poll は 25 秒で再待機できる状態を返す', async () => {
   const clock = new FakeClock();
   const delivery = new DecisionAnswerDelivery({
@@ -476,8 +666,75 @@ test('回答待ち中の再接続失敗は server-lost の deny 出力を返す'
   assert.equal(requests[0].url, 'http://127.0.0.1:47821/api/hooks/answers');
 });
 
+test('server-lost の finish が出力を返さなくても登録時の fallback を使う', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47822, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const output = await runAskQuestion({
+    session_id: 'session-lost-finish', tool_use_id: 'ask-lost-finish', tool_name: 'AskUserQuestion',
+    tool_input: { questions: QUESTIONS },
+  }, {
+    homeDir,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      const responses = {
+        'ask-register': { awaiting: true, decisionId: 'ask-lost-finish', fallbackOutput: denyAnswerOutput('ask-lost-finish') },
+        'ask-poll': { outcome: 'server-lost' },
+        'ask-finish': { outcome: 'server-lost', hookOutput: null },
+      };
+      return { ok: true, json: async () => responses[body.action] };
+    },
+  });
+
+  assert.deepEqual(output, denyAnswerOutput('ask-lost-finish'));
+});
+
+test('PreToolUse の回答は元の tool_input を保って answers を加える', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47823, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const toolInput = { questions: QUESTIONS, extension: { preserved: true } };
+  const output = await runAskQuestion({
+    session_id: 'session-original-input', tool_use_id: 'ask-original-input', tool_name: 'AskUserQuestion', tool_input: toolInput,
+  }, {
+    homeDir,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      const responses = {
+        'ask-register': { awaiting: true, decisionId: 'ask-original-input' },
+        'ask-poll': { outcome: 'answered' },
+        'ask-finish': { hookOutput: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            updatedInput: { questions: [{ question: 'server copy' }], answers: { 'どの形式にしますか。': 'JSON (推奨)' } },
+          },
+        } },
+      };
+      return { ok: true, json: async () => responses[body.action] };
+    },
+  });
+
+  assert.deepEqual(output.hookSpecificOutput.updatedInput, {
+    ...toolInput,
+    answers: { 'どの形式にしますか。': 'JSON (推奨)' },
+  });
+});
+
 test('server-lost の結末は判断事項を provisional にする', () => {
   const fixture = makeFixture();
+  const result = fixture.delivery.finishAsk({
+    sessionId: fixture.sessionId,
+    toolUseId: fixture.toolUseId,
+    decisionId: fixture.registration.decisionId,
+    outcome: 'server-lost',
+  });
+
+  assert.deepEqual(result.hookOutput, denyAnswerOutput(fixture.registration.decisionId));
+  assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).state, 'provisional');
+});
+
+test('record がなくても離席中の server-lost は deny で進める', () => {
+  const fixture = makeFixture();
+  fixture.delivery.askWaits.delete(`${fixture.sessionId}\0${fixture.toolUseId}`);
   const result = fixture.delivery.finishAsk({
     sessionId: fixture.sessionId,
     toolUseId: fixture.toolUseId,
@@ -537,7 +794,7 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
     session_id: 'session-ui', tool_use_id: 'ask-ui', hook_event_name: 'PreToolUse',
     tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS },
   }, { homeDir });
-  assert.deepEqual(askOutput.output.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON' });
+  assert.deepEqual(askOutput.output.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
 
   const hookWithUiSecret = await request(runtime.info.port, {
     method: 'POST', path: '/api/hooks/answers', body: JSON.stringify({

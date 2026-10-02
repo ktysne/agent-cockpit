@@ -22,7 +22,7 @@ function boundedString(value, limit) {
 function recommendedOptionFor(question) {
   if (!question || question.multiSelect || !Array.isArray(question.options)) return null;
   const matches = question.options.filter((option) => (
-    option.recommended === true || /推奨|recommended/i.test(`${option.label} ${option.description}`)
+    option.recommended === true || /(?:\(推奨\)|（推奨）|\(recommended\)|（recommended）)/i.test(option.label)
   ));
   return matches.length === 1 ? matches[0] : null;
 }
@@ -107,6 +107,8 @@ function sanitizeEvent(input, metadata = {}) {
     product: metadata.product || null,
     sessionName: shortString(metadata.sessionName, 200) || null,
   };
+
+  if (eventName === 'SessionStart') event.source = shortString(input.source, 100) || '';
 
   const agentId = shortString(input.agent_id, 256);
   const agentType = shortString(input.agent_type, 200);

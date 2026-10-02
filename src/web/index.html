@@ -313,6 +313,8 @@ const FILTERS = [
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
+let answerNoteComposing = false;
+let deferredRenderPending = false;
 let connectionLost = false;
 let lastStateAt = new Date();
 let writeErrorUntil = 0;
@@ -532,19 +534,25 @@ function appendModelLine(target, agent) {
 
 function updateTitle(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => (
-    decision.state === 'waiting' && !hasEffectiveAnswer(decision)
-  )).length, 0);
+  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
   const pendingCount = permissionCount + decisionCount;
   document.title = pendingCount ? `(${pendingCount}) Agent Cockpit` : 'Agent Cockpit';
+}
+
+function isPendingDecision(decision) {
+  return decision.state === 'waiting' && !hasEffectiveAnswer(decision);
+}
+
+function isHeldDecision(decision) {
+  return ['waiting', 'provisional'].includes(decision.state) && decision.answer?.choice === 'hold' && !decision.answer.ignoredAt;
 }
 
 function renderSummary(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
   const decisions = sessions.flatMap((session) => session.decisions);
-  const blockingCount = decisions.filter((decision) => decision.state === 'waiting' && !hasEffectiveAnswer(decision)).length;
+  const blockingCount = decisions.filter(isPendingDecision).length;
   const provisionalCount = decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length;
-  const heldCount = decisions.filter((decision) => decision.answer?.choice === 'hold' && !decision.answer.ignoredAt).length;
+  const heldCount = decisions.filter(isHeldDecision).length;
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
   const counts = { permission: permissionCount, blocking: blockingCount, provisional: provisionalCount, held: heldCount, agents: agentCount };
   summary.replaceChildren(...FILTERS.map(({ key, label, color }) => {
@@ -592,7 +600,7 @@ function renderExcludedNote(sessions) {
   showAll.type = 'button';
   showAll.dataset.clearHiddenSessions = 'true';
   const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
   const pendingCounts = [
     permissionCount ? `許可待ち ${permissionCount} 件` : '',
     decisionCount ? `止めて待っている ${decisionCount} 件` : '',
@@ -819,6 +827,10 @@ function answerDraftFor(decision, session) {
   return saved || { choice: decision.answer?.choice ?? null, note: decision.answer?.note || '' };
 }
 
+function displayRecommendedLabel(label) {
+  return label.replace(/(?:\(推奨\)|（推奨）|\(recommended\)|（recommended）)/ig, '').replace(/\s+/g, ' ').trim();
+}
+
 function answerTimeLabel(value) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
@@ -882,7 +894,7 @@ function appendDecisionAnswer(card, decision, product, session) {
     choices.append(control);
   }
   answerBox.append(choices);
-  const optionNames = recommendations.map((option) => option?.label.replace(/^\(推奨\)\s*/, '')).filter(Boolean);
+  const optionNames = recommendations.map((option) => option && displayRecommendedLabel(option.label)).filter(Boolean);
   answerBox.append(element('div', 'meta', canUseRecommendation
     ? `OK で送る答え: ${optionNames.join('、')}`
     : '推奨の無い質問があるので、指示の欄に答えを書く'));
@@ -942,7 +954,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
       const options = element('ul', 'decision-options');
       for (const option of question.options) {
         const row = element('li', `decision-option ${option.recommended ? 'recommended' : ''}`.trim());
-        const label = option.recommended ? option.label.replace(/^\(推奨\)\s*/, '') : option.label;
+        const label = option.recommended ? displayRecommendedLabel(option.label) : option.label;
         row.append(element('span', '', label));
         if (option.recommended) row.append(badge('推奨', 'busy'));
         if (option.description) row.append(element('span', 'decision-option-description', option.description));
@@ -1281,6 +1293,11 @@ function renderKindSections(products) {
 }
 
 function render(state) {
+  if (answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) {
+    deferredRenderPending = true;
+    return;
+  }
+  deferredRenderPending = false;
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
   const active = document.activeElement;
@@ -1344,6 +1361,12 @@ function render(state) {
   }
 }
 
+function renderDeferredState() {
+  if (!deferredRenderPending || answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) return;
+  deferredRenderPending = false;
+  if (lastState) render(lastState);
+}
+
 function findDecision(sessionId, decisionId) {
   const session = lastState?.sessions.find((item) => item.session_id === sessionId);
   return session?.decisions.find((item) => item.id === decisionId) || null;
@@ -1396,8 +1419,8 @@ async function sendDecisionAnswer(button) {
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     answerDrafts.delete(answerDraftKey(sessionId, decisionId));
-    liveStatus.textContent = '回答を送信しました。';
     await refresh();
+    liveStatus.textContent = '回答を送信しました。';
   } catch {
     showAnswerError(sessionId, decisionId, '回答を送信できませんでした。');
     showWriteError('回答を送信できませんでした');
@@ -1433,6 +1456,28 @@ document.addEventListener('input', (event) => {
   card.querySelector('.answer-error').textContent = '';
   updateAnswerSubmit(card);
 });
+
+document.addEventListener('compositionstart', (event) => {
+  if (event.target.matches?.('[data-answer-note]')) answerNoteComposing = true;
+}, true);
+
+document.addEventListener('compositionend', (event) => {
+  if (!event.target.matches?.('[data-answer-note]')) return;
+  answerNoteComposing = false;
+  renderDeferredState();
+}, true);
+
+document.addEventListener('focusout', (event) => {
+  if (!event.target.matches?.('[data-answer-note]')) return;
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof HTMLElement) {
+    const flushAfterInteraction = () => queueMicrotask(renderDeferredState);
+    nextTarget.addEventListener('click', flushAfterInteraction, { once: true });
+    nextTarget.addEventListener('blur', flushAfterInteraction, { once: true });
+    return;
+  }
+  queueMicrotask(renderDeferredState);
+}, true);
 
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
   button.disabled = true;
@@ -1574,7 +1619,7 @@ async function refresh() {
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
       const permissions = visibleSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
       liveStatus.textContent = `状態を更新しました。セッション ${visibleSessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
     }
   } catch {

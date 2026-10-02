@@ -128,8 +128,11 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 
 離席中は画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
 有効な間、`AskUserQuestion` はダッシュボードの回答を最大 5 分待ちます。回答が無い場合や常駐サーバーへ再接続できない場合は従来どおり質問を止め、推奨で作業を続けるようフックが伝えます。
+回答待ちのフックから 30 秒間 long-poll が届かない場合は待ちを解除し、回答待ちの表示を終えます。
 ダッシュボードでは「推奨案で OK」「判断を保留する」「指示」を送れます。保留の回答は推奨のまま進め、最後の報告に記載するよう伝えます。
+回答待ちの質問への回答は `PreToolUse` の `updatedInput` で渡し、元の `tool_input` を保ったまま `answers` を加えます。
 作業中は `PostToolBatch` から回答を差し込み、停止中は `Stop` の `asyncRewake` フックが回答を待ってセッションを起こします。
+`awaitingAnswerUntil` がある質問の回答は、`PostToolBatch`、`UserPromptSubmit`、`Stop` からは渡しません。
 回答本文は常駐サーバーのメモリーとフックの出力にだけ置きます。
 許可のダイアログには答えず、破壊的な操作、PR のマージ、`main` への push は判断待ちに残します。
 `claude -p` では `AskUserQuestion` が無効なため、この制御は対話セッションでだけ働きます。
@@ -143,7 +146,7 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 タスクの状態や完了条件が変わったときは、一覧全体を置き換えます。
 
 `AskUserQuestion` の質問はフックが自動で判断事項にします。
-単一選択の質問では、推奨する選択肢の label または description に「推奨」か「recommended」を含めてください。
+推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使いません。
 複数の選択肢に含まれる場合や、質問が複数選択の場合は推奨なしとして扱います。
 質問せずに推奨を適用する判断は `cockpit_add_decision` または `cockpit_update_decision` で記録します。
 
