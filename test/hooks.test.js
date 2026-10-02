@@ -89,8 +89,38 @@ test('常駐サーバーへ渡す環境から CLAUDE_CODE_ 変数を除く', asy
   await temporaryHome(t);
   assert.deepEqual(childEnvironment({
     PATH: 'path-value', CLAUDE_CODE_SESSION_ID: 'session-value',
-    CLAUDE_CODE_MESSAGING_TOKEN: 'secret-value', OTHER: 'kept',
+    CLAUDE_CODE_MESSAGING_TOKEN: 'secret-value', GH_TOKEN: 'gh-secret',
+    GITHUB_TOKEN: 'github-secret', GH_ENTERPRISE_TOKEN: 'enterprise-secret', OTHER: 'kept',
   }), { PATH: 'path-value', OTHER: 'kept' });
+});
+
+test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', async () => {
+  const bash = makeHookEvent({
+    session_id: 'pr-hook', hook_event_name: 'PostToolUse', cwd: 'D:\\repo',
+    tool_name: 'Bash', tool_use_id: 'bash-pr', tool_input: { command: 'gh pr create --fill' },
+    tool_response: { stdout: 'private output\nhttps://github.com/example/project/pull/42\nmore private output' },
+  });
+  assert.deepEqual(bash.pullRequest, {
+    owner: 'example', repo: 'project', number: 42, url: 'https://github.com/example/project/pull/42',
+  });
+  assert.equal(bash.ghPrCreateCommand, true);
+  assert.ok(!JSON.stringify(bash).includes('private output'));
+
+  const github = makeHookEvent({
+    session_id: 'pr-mcp', hook_event_name: 'PostToolUse',
+    tool_name: 'mcp__github__create_pull_request', tool_use_id: 'github-pr',
+    tool_response: { content: [{ type: 'text', text: 'Created #43 https://github.com/example/project/pull/43' }] },
+  });
+  assert.deepEqual(github.pullRequest, {
+    owner: 'example', repo: 'project', number: 43, url: 'https://github.com/example/project/pull/43',
+  });
+  assert.ok(!JSON.stringify(github).includes('Created #43'));
+
+  const noUrl = makeHookEvent({
+    session_id: 'pr-missing', hook_event_name: 'PostToolUse', tool_name: 'Bash',
+    tool_input: { command: 'gh pr create' }, tool_response: 'Pull request created successfully',
+  });
+  assert.equal(Object.hasOwn(noUrl, 'pullRequest'), false);
 });
 
 test('常駐サーバーに接続できなくても 1 秒程度で終了コード 0 を返す', async (t) => {

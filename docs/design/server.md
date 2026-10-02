@@ -20,14 +20,14 @@
 | `away.json` | `{enabled, since}` | 1c |
 | `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない | 1 |
 | `start.lock` | 再起動の排他。10 秒で失効する | 1 |
-| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション | 4 |
+| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、PR の記録 | 4、5 |
 | `routing.json` | 経路の設定 | 7 |
 
 ## 起動と寿命
 
 - SessionStart フックが常駐サーバーの生存を確かめ、動いていなければ起動する。生存は `GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で、`server.json` と一致することで判定する。Windows は pid の再利用が速いので、pid だけで判定しない。
 - 起動は `detached`、`windowsHide: true`、`stdio` は `server.log` の fd、`unref()` で行う。`cwd` は常駐サーバーの置き場にする。worktree を `cwd` にすると Windows がそのディレクトリをロックし、worktree を消せなくなるためである。
-- 起動するときの環境から `CLAUDE_CODE_` で始まる変数をすべて除く。受付トークンを常駐サーバーのプロセスに残さないためである。
+- 起動するときの環境から `CLAUDE_CODE_` で始まる変数と `GH_TOKEN`、`GITHUB_TOKEN`、`GH_ENTERPRISE_TOKEN` を除く。受付トークンと GitHub の環境変数トークンを常駐サーバーへ渡さないためである。
 - `server.json` は待ち受けに成功した後にだけ書き、一時ファイルへ書いてから名前を変えて置く。同時に起動して `EADDRINUSE` で負けた側は、このファイルに触れずに終わる。終了時は、ファイルの pid が自分のときだけ消す。
 - SessionStart 以外のフックで接続が拒否され、`server.json` の常駐サーバーが生きていないときは、`start.lock` を排他作成できた 1 本だけが起動し直す。
 - 終了するのは、生きているセッションがその時点で 0 件で、かつ直近 30 分に要求(フック、画面、`/health`)が 1 つも無いときだけにする。`~/.claude/sessions` を読めないときは終了しない。画面を開いている間はポーリングが要求になるので終了しない。
@@ -93,7 +93,7 @@ PostToolUse の出力全文は送らない。
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、回答の記録、完了タスク、外したセッション、表示設定は `store.json` に保存する。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。テーマはブラウザーごとの `localStorage` に残す。離席中は `{enabled, since}` を `away.json` に保存し、起動時に読む。壊れているときは離席中ではない状態として扱う。
-- `GET /api/state` は `{version, generatedAt, display, sessions, away}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存
@@ -114,6 +114,13 @@ PostToolUse の出力全文は送らない。
   `codex:<tool_use_id>` の Codex 行はこの復元の対象外とする。
 - タスク: `tasks` の全項目と、最後に書いた時刻 `tasksUpdatedAt`。
 - 判断事項: AskUserQuestion の記録と MCP から登録した項目を `decisions` に持つ。
+
+## PR の表示
+
+PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
+常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとと `git push` または `gh pr` の後にリポジトリの状態を取得する。
+base と head の対応から関連するオープン PR を積み上げ、クロスレビューの往復数と非対応の指摘数も表示する。
+取得と判定の詳細は [計画書](../handover/2026-10-02.md) の「段階 5、6 の設計(PR の表示とマージ)」を正本とする。
 
 ## サブエージェントのモデルと effort
 

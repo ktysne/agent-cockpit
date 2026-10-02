@@ -232,6 +232,33 @@ h3.sub .count { font-weight: normal; }
 .badge.unknown, .task-state.unknown { border: 1px dashed var(--border); background: var(--surface-2); color: var(--text-2); }
 .badge.done { background: var(--ok-soft); color: var(--ok); }
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.danger { background: var(--danger-soft); color: var(--danger); }
+.badge.mute { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.stack { margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.stack-base { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--text-2); font-size: 12px; }
+.stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
+.pr { padding: 8px 0 4px; }
+.pr .pline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.pr .num { font-weight: 600; }
+.pr .pos { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-2); font-size: 11px; }
+.pr .branch { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.pr .why-not { color: var(--text-2); font-size: 12px; }
+.pr.can-merge { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--ok-soft); }
+.merged-list { margin-top: 6px; color: var(--text-2); font-size: 12px; }
+.merged-list .badge { margin-right: 4px; }
+.review { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.stat { padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.stat .k { color: var(--text-2); font-size: 12px; }
+.stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rounds { display: flex; gap: 4px; margin-top: 4px; }
+.rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
+.rounds span.used { background: var(--accent); }
 .decision-card { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
 .decision-card.provisional { border-left-color: var(--warn); }
 .decision-card.resolved { border-left-color: var(--ok); }
@@ -734,7 +761,129 @@ function hasHiddenJudgmentItems(session) {
     ));
 }
 
-function productGroups(sessions) {
+function pullRequestOpenCount(groups) {
+  return groups.reduce((total, group) => total + (group.openCount || 0), 0);
+}
+
+function pullRequestMergeableCount(groups) {
+  return groups.reduce((total, group) => total + (group.mergeableCount || 0), 0);
+}
+
+function pullRequestTimeLabel(value) {
+  const time = Date.parse(value || '');
+  return Number.isFinite(time) ? new Date(time).toLocaleString('ja-JP') : '未取得';
+}
+
+function appendPullRequestBadges(target, pullRequest) {
+  const ci = {
+    pass: ['ok', 'CI 成功'],
+    pending: ['warn', 'CI 実行中'],
+    fail: ['danger', 'CI 失敗'],
+  }[pullRequest.ci] || ['mute', 'CI 状態不明'];
+  const review = {
+    approved: ['ok', '承認済み'],
+    required: ['mute', '承認待ち'],
+    none: ['mute', '承認は任意'],
+    changes: ['danger', '変更要求'],
+  }[pullRequest.review] || ['mute', 'レビュー状態不明'];
+  if (pullRequest.draft) target.append(badge('ドラフト', 'mute'));
+  target.append(badge(ci[1], ci[0]), badge(review[1], review[0]));
+  if (pullRequest.conflict) target.append(badge('コンフリクト', 'danger'));
+  if (pullRequest.retargetedFrom) target.append(badge(`base を ${pullRequest.effectiveBase} に付け替え済み`, 'accent'));
+  if (pullRequest.needsRestack) target.append(badge('積み直しが必要', 'warn'));
+}
+
+function appendPullRequestTree(target, pullRequest) {
+  const item = element('div', `pr ${pullRequest.canMerge ? 'can-merge' : ''}`.trim());
+  const line = element('div', 'pline');
+  if (pullRequest.stackPosition?.total > 1) {
+    const position = element('span', 'pos', `${pullRequest.stackPosition.depth}/${pullRequest.stackPosition.total}`);
+    position.title = '下から数えた位置';
+    line.append(position);
+  }
+  const link = element('a', 'num', `#${pullRequest.number}`);
+  link.href = pullRequest.url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
+  line.append(link, element('span', '', pullRequest.title));
+  if (pullRequest.canMerge) line.append(badge('マージできます', 'ok'));
+  item.append(line);
+  const branch = element('div', 'branch');
+  branch.append(element('code', '', pullRequest.headRefName), document.createTextNode(' → '), element('code', '', pullRequest.effectiveBase));
+  item.append(branch);
+  const badges = element('div', 'badges');
+  appendPullRequestBadges(badges, pullRequest);
+  item.append(badges);
+  if (pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
+  if (pullRequest.children.length) {
+    const children = element('div', 'stack-level');
+    for (const child of pullRequest.children) appendPullRequestTree(children, child);
+    item.append(children);
+  }
+  target.append(item);
+}
+
+function appendPullRequestBlock(target, group, withTag = false) {
+  if (!group) {
+    target.append(element('div', 'empty', 'このセッションが作った PR はありません'));
+    return;
+  }
+  const head = element('div', 'prs-head meta');
+  if (withTag) head.append(element('span', 'prod-tag', group.product.name));
+  head.append(
+    element('span', '', `${group.owner}/${group.repo}`),
+    element('span', '', `GitHub から ${pullRequestTimeLabel(group.fetchedAt || group.checkedAt)} に取得`),
+  );
+  target.append(head);
+  if (group.error) target.append(element('div', 'error-box', group.error));
+  for (const tree of group.trees) {
+    const stack = element('div', 'stack');
+    const base = element('div', 'stack-base');
+    base.append(element('code', '', tree.effectiveBase));
+    if (tree.children.length) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
+    const level = element('div', 'stack-level');
+    appendPullRequestTree(level, tree);
+    stack.append(base, level);
+    target.append(stack);
+  }
+  if (group.merged.length) {
+    const merged = element('div', 'merged-list');
+    merged.append(document.createTextNode('終了した PR: '));
+    for (const pullRequest of group.merged) {
+      const link = element('a', 'badge mute', `#${pullRequest.number}`);
+      link.href = pullRequest.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.title = pullRequest.title;
+      merged.append(link, badge(pullRequest.state === 'merged' ? 'マージ済み' : 'クローズ', 'mute'));
+    }
+    target.append(merged);
+  }
+  if (!group.trees.length && !group.merged.length && !group.error) {
+    target.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
+  }
+}
+
+function reviewBlock(review, productName = null) {
+  const block = element('div', 'review');
+  const pr = element('div', 'stat');
+  const prLabel = element('div', 'k');
+  if (productName) prLabel.append(element('span', 'prod-tag', productName), document.createTextNode(' '));
+  prLabel.append(document.createTextNode(`PR #${review.number}`));
+  pr.append(prLabel, element('div', 'v', review.branch));
+  const rounds = element('div', 'stat');
+  rounds.append(element('div', 'k', `往復 (上限 ${review.max})`), element('div', 'v', `${review.round} / ${review.max}`));
+  const markers = element('div', 'rounds');
+  for (let index = 0; index < review.max; index += 1) markers.append(element('span', index < review.round ? 'used' : ''));
+  rounds.append(markers);
+  const dismissed = element('div', 'stat');
+  dismissed.append(element('div', 'k', '非対応'), element('div', 'v', String(review.dismissed)));
+  block.append(pr, rounds, dismissed);
+  return block;
+}
+
+function productGroups(sessions, pullRequestGroups = []) {
   const groups = new Map();
   for (const session of sessions) {
     const product = session.product || {};
@@ -746,6 +895,17 @@ function productGroups(sessions) {
     }
     if (product.branch) group.branches.add(product.branch);
     group.sessions.push(session);
+  }
+  for (const pullRequestGroup of pullRequestGroups) {
+    const product = pullRequestGroup.product || {};
+    const key = product.key || `repo:${pullRequestGroup.owner}/${pullRequestGroup.repo}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, name: product.name || `${pullRequestGroup.owner}/${pullRequestGroup.repo}`, branches: new Set(), sessions: [], pullRequestGroups: [] };
+      groups.set(key, group);
+    }
+    group.pullRequestGroups ||= [];
+    group.pullRequestGroups.push(pullRequestGroup);
   }
   return [...groups.values()];
 }
@@ -759,8 +919,8 @@ function sessionActivityTime(session) {
   return Math.max(mainTool, Number.isFinite(lastActivity) ? lastActivity : -Infinity);
 }
 
-function orderedProducts(sessions) {
-  const products = productGroups(sessions);
+function orderedProducts(sessions, pullRequestGroups = []) {
+  const products = productGroups(sessions, pullRequestGroups);
   const ids = products.map((product) => product.key);
   const visibleKeys = new Set(ids);
   const nextOrder = [...displayPreferences.order];
@@ -785,6 +945,7 @@ function orderedProducts(sessions) {
     .map((product) => ({
       ...product,
       sessions: [...product.sessions].sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left)),
+      pullRequestGroups: product.pullRequestGroups || [],
     }))
     .sort((left, right) => {
       const leftPinned = displayPreferences.pinned.includes(left.key);
@@ -1446,8 +1607,11 @@ function productSection(product, index, products, pinnedCount) {
 
   const permissionCount = product.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
   const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state)).length, 0);
+  const pullRequestGroups = product.pullRequestGroups || [];
   if (permissionCount) head.append(element('span', 'chip danger', `許可待ち (${permissionCount} 件)`));
   if (decisionCount) head.append(element('span', 'chip danger', `判断待ち (${decisionCount} 件)`));
+  const mergeableCount = pullRequestMergeableCount(pullRequestGroups);
+  if (mergeableCount) head.append(element('span', 'chip ok', `マージできる PR (${mergeableCount} 件)`));
   head.append(productControls(product, index, products.length, pinnedCount, heading.id));
   section.append(head);
 
@@ -1455,6 +1619,20 @@ function productSection(product, index, products, pinnedCount) {
   body.hidden = displayPreferences.collapsed.includes(product.key);
   const multipleSessions = product.sessions.length > 1;
   for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
+  const openCount = pullRequestOpenCount(pullRequestGroups);
+  const prsHeading = element('h3', 'sub', 'プルリクエスト');
+  prsHeading.append(element('span', 'count', `(${openCount} 件)`));
+  body.append(prsHeading);
+  if (pullRequestGroups.length) {
+    for (const group of pullRequestGroups) appendPullRequestBlock(body, group);
+  } else {
+    appendPullRequestBlock(body, null);
+  }
+  const reviews = pullRequestGroups.flatMap((group) => group.reviews.map((review) => ({ group, review })));
+  if (reviews.length) {
+    body.append(element('h3', 'sub', 'レビュー'));
+    for (const { group, review } of reviews) body.append(reviewBlock(review));
+  }
   section.append(body);
   return section;
 }
@@ -1586,6 +1764,17 @@ function renderKindSections(products) {
     kindSection('タスクと完了条件', tasks),
     kindSection('今やっていること', activity),
   );
+  const pullRequestGroups = products.flatMap((product) => product.pullRequestGroups.map((group) => ({ product, group })));
+  const pullRequests = element('div', 'body');
+  for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
+  if (!pullRequestGroups.length) pullRequests.append(element('div', 'empty', 'ありません'));
+  sections.push(kindSection('プルリクエスト', pullRequests));
+  const reviews = pullRequestGroups.flatMap(({ product, group }) => group.reviews.map((review) => ({ product, review })));
+  if (reviews.length) {
+    const reviewContent = element('div', 'body');
+    for (const { product, review } of reviews) reviewContent.append(reviewBlock(review, product.name));
+    sections.push(kindSection('レビュー', reviewContent));
+  }
   return sections;
 }
 
@@ -1597,6 +1786,7 @@ function render(state) {
   deferredRenderPending = false;
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
+  const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
@@ -1609,18 +1799,18 @@ function render(state) {
               : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' } : null;
-  renderSummary(sessions);
+  renderSummary(sessions, pullRequestGroups);
   renderExcludedNote(allSessions);
   updateTitle(sessions);
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
   });
-  if (!sessions.length) {
+  if (!sessions.length && !pullRequestGroups.length) {
     root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
     return;
   }
 
-  const products = orderedProducts(sessions);
+  const products = orderedProducts(sessions, pullRequestGroups);
   if (displayPreferences.mode === 'product') {
     const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
     root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount)));

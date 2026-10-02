@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
+const { parsePullRequestUrl, validRepositoryPart } = require('./pull-request-utils');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
 const DEFAULT_DISPLAY = Object.freeze({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] });
@@ -78,6 +79,58 @@ function validStoredPlan(plan) {
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt));
 }
 
+function pullRequestRecordKey(owner, repo, number) {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+}
+
+function validPullRequestRecord(record) {
+  if (!isRecord(record) || !validStoredSessionId(record.session_id) ||
+    !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo) ||
+    !Number.isSafeInteger(record.number) || record.number < 1 ||
+    !validTimestamp(record.addedAt) ||
+    (record.cwd !== null && (typeof record.cwd !== 'string' || record.cwd.length > 4096)) ||
+    (record.product !== null && (!isRecord(record.product) || typeof record.product.key !== 'string' ||
+      record.product.key.length > 500 || typeof record.product.name !== 'string' || record.product.name.length > 200)) ||
+    ![null, 'unknown', 'open', 'merged', 'closed'].includes(record.state) ||
+    (record.mergedAt !== null && !validTimestamp(record.mergedAt))) return false;
+  const parsedUrl = parsePullRequestUrl(record.url);
+  if (!parsedUrl || parsedUrl.owner !== record.owner || parsedUrl.repo !== record.repo || parsedUrl.number !== record.number) return false;
+  if (record.lastOpen !== null && (!isRecord(record.lastOpen) ||
+    ['title', 'url', 'headRefName', 'baseRefName'].some((key) => typeof record.lastOpen[key] !== 'string') ||
+    ['title', 'headRefName', 'baseRefName'].some((key) => record.lastOpen[key].length > 500) ||
+    (record.lastOpen.headRefOid !== '' && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.lastOpen.headRefOid)))) return false;
+  return true;
+}
+
+function normalizePullRequestRecord(record) {
+  return {
+    session_id: record.session_id,
+    owner: record.owner,
+    repo: record.repo,
+    number: record.number,
+    url: record.url,
+    addedAt: record.addedAt,
+    cwd: record.cwd || null,
+    product: record.product ? { key: record.product.key, name: record.product.name } : null,
+    state: record.state || 'unknown',
+    mergedAt: record.mergedAt || null,
+    lastOpen: record.lastOpen ? { ...record.lastOpen } : null,
+  };
+}
+
+function validPullRequestRetarget(record) {
+  return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
+    Number.isSafeInteger(record.number) && record.number > 0 && typeof record.base === 'string' && record.base.length <= 500 &&
+    (record.fromNumber === null || record.fromNumber === undefined || (Number.isSafeInteger(record.fromNumber) && record.fromNumber > 0));
+}
+
+function validMergedPullRequestHead(record) {
+  return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
+    Number.isSafeInteger(record.number) && record.number > 0 &&
+    typeof record.headRefOid === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid) &&
+    (record.method === null || ['merge', 'squash', 'rebase'].includes(record.method)) && validTimestamp(record.mergedAt);
+}
+
 function normalizeStore(value) {
   if (!isRecord(value) || !Number.isInteger(value.version)) throw new Error('Invalid store version');
   if (value.version > 1) throw Object.assign(new Error('Store version is newer'), { newerVersion: true });
@@ -134,7 +187,24 @@ function normalizeStore(value) {
     }
     hiddenSessions.push({ session_id: record.session_id, updatedAt: record.updatedAt });
   }
-  return { display, plans, decisionLifecycles, closedTasks, hiddenSessions };
+  const prs = value.prs === undefined ? [] : value.prs;
+  const retargetedPrs = value.retargetedPrs === undefined ? [] : value.retargetedPrs;
+  const mergedPrHeads = value.mergedPrHeads === undefined ? [] : value.mergedPrHeads;
+  if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
+    !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
+    !Array.isArray(mergedPrHeads) || !mergedPrHeads.every(validMergedPullRequestHead)) {
+    throw new Error('Invalid pull request records');
+  }
+  return {
+    display,
+    plans,
+    decisionLifecycles,
+    closedTasks,
+    hiddenSessions,
+    prs: prs.map(normalizePullRequestRecord),
+    retargetedPrs: retargetedPrs.map((record) => ({ ...record })),
+    mergedPrHeads: mergedPrHeads.map((record) => ({ ...record })),
+  };
 }
 
 async function atomicWriteAwayState(homeDir, value, fileSystem = fs, writer = null) {
@@ -641,6 +711,9 @@ class DashboardState {
     this.hiddenSessions = new Set();
     this.hiddenSessionUpdatedAt = new Map();
     this.closedTasks = new Map();
+    this.pullRequests = new Map();
+    this.pullRequestRetargets = [];
+    this.mergedPullRequestHeads = [];
     this.closedAgents = new Map();
     this.display = null;
     this.storeWriteTimer = null;
@@ -701,13 +774,23 @@ class DashboardState {
       this.hiddenSessions.add(record.session_id);
       this.hiddenSessionUpdatedAt.set(record.session_id, record.updatedAt);
     }
+    for (const record of store.prs) {
+      let records = this.pullRequests.get(record.session_id);
+      if (!records) {
+        records = new Map();
+        this.pullRequests.set(record.session_id, records);
+      }
+      records.set(pullRequestRecordKey(record.owner, record.repo, record.number), record);
+    }
+    this.pullRequestRetargets = store.retargetedPrs;
+    this.mergedPullRequestHeads = store.mergedPrHeads;
     this.pruneExpiredStoreRecords(now);
   }
 
   pruneExpiredStoreRecords(now) {
     const sessionIds = new Set([
       ...this.plans.keys(), ...this.decisionLifecycles.keys(), ...this.hiddenSessions,
-      ...this.closedTasks.keys(),
+      ...this.closedTasks.keys(), ...this.pullRequests.keys(),
     ]);
     for (const sessionId of sessionIds) {
       const updatedAt = this.lastStoredUpdateAt(sessionId);
@@ -728,6 +811,7 @@ class DashboardState {
     }
     const hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
     if (hiddenAt) timestamps.push(Date.parse(hiddenAt));
+    for (const record of this.pullRequests.get(sessionId)?.values() || []) timestamps.push(Date.parse(record.addedAt));
     const finite = timestamps.filter(Number.isFinite);
     return finite.length ? Math.max(...finite) : NaN;
   }
@@ -738,6 +822,7 @@ class DashboardState {
     this.hiddenSessions.delete(sessionId);
     this.hiddenSessionUpdatedAt.delete(sessionId);
     this.closedTasks.delete(sessionId);
+    this.pullRequests.delete(sessionId);
   }
 
   serializeStore() {
@@ -773,7 +858,114 @@ class DashboardState {
       decisionLifecycles,
       closedTasks,
       hiddenSessions,
+      prs: this.pullRequestRegistrations(),
+      retargetedPrs: this.pullRequestRetargets.map((record) => ({ ...record })),
+      mergedPrHeads: this.mergedPullRequestHeads.map((record) => ({ ...record })),
     };
+  }
+
+  pullRequestRegistrations() {
+    return [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
+  }
+
+  pullRequestRegistrationsForRepo(owner, repo) {
+    return this.pullRequestRegistrations().filter((record) => (
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase()
+    ));
+  }
+
+  registerPullRequest(sessionId, input, context = {}, now = Date.now()) {
+    if (!validStoredSessionId(sessionId)) return null;
+    const parsedUrl = parsePullRequestUrl(input?.url);
+    if (!parsedUrl || (input.owner && input.owner !== parsedUrl.owner) || (input.repo && input.repo !== parsedUrl.repo) ||
+      (input.number && input.number !== parsedUrl.number)) return null;
+    let records = this.pullRequests.get(sessionId);
+    if (!records) {
+      records = new Map();
+      this.pullRequests.set(sessionId, records);
+    }
+    const key = pullRequestRecordKey(parsedUrl.owner, parsedUrl.repo, parsedUrl.number);
+    const previous = records.get(key);
+    const product = context.product && typeof context.product.key === 'string' && typeof context.product.name === 'string'
+      ? { key: context.product.key.slice(0, 500), name: context.product.name.slice(0, 200) }
+      : previous?.product || null;
+    const next = {
+      session_id: sessionId,
+      ...parsedUrl,
+      addedAt: previous?.addedAt || isoTime(now),
+      cwd: typeof context.cwd === 'string' && context.cwd.length <= 4096 ? context.cwd : previous?.cwd || null,
+      product,
+      state: previous?.state || 'unknown',
+      mergedAt: previous?.mergedAt || null,
+      lastOpen: previous?.lastOpen ? { ...previous.lastOpen } : null,
+    };
+    if (previous && stableStringify(previous) === stableStringify(next)) return normalizePullRequestRecord(previous);
+    records.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return normalizePullRequestRecord(next);
+  }
+
+  updatePullRequest(sessionId, owner, repo, number, changes) {
+    const records = this.pullRequests.get(sessionId);
+    const key = pullRequestRecordKey(owner, repo, number);
+    const current = records?.get(key);
+    if (!current) return false;
+    const next = { ...current, ...changes };
+    if (changes.lastOpen) next.lastOpen = { ...changes.lastOpen };
+    if (stableStringify(current) === stableStringify(next)) return false;
+    records.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  recordPullRequestRetarget(record) {
+    if (!validPullRequestRetarget(record)) return false;
+    const index = this.pullRequestRetargets.findIndex((item) => item.owner === record.owner && item.repo === record.repo && item.number === record.number);
+    const next = { owner: record.owner, repo: record.repo, number: record.number, base: record.base, fromNumber: record.fromNumber ?? null };
+    if (index >= 0 && stableStringify(this.pullRequestRetargets[index]) === stableStringify(next)) return false;
+    if (index >= 0) this.pullRequestRetargets[index] = next;
+    else this.pullRequestRetargets.push(next);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  pullRequestRetargetsForRepo(owner, repo) {
+    return this.pullRequestRetargets.filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase());
+  }
+
+  recordMergedPullRequestHead(record) {
+    if (!validMergedPullRequestHead(record)) return false;
+    const index = this.mergedPullRequestHeads.findIndex((item) => item.owner === record.owner && item.repo === record.repo && item.number === record.number);
+    const next = { ...record };
+    if (index >= 0 && stableStringify(this.mergedPullRequestHeads[index]) === stableStringify(next)) return false;
+    if (index >= 0) this.mergedPullRequestHeads[index] = next;
+    else this.mergedPullRequestHeads.push(next);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  mergedPullRequestHeadsForRepo(owner, repo) {
+    return this.mergedPullRequestHeads.filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase());
+  }
+
+  wasPullRequestCreate(sessionId, toolUseId) {
+    if (!toolUseId) return false;
+    return (this.entries.get(sessionId) || []).some(({ event }) => (
+      event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash' &&
+      event.tool_use_id === toolUseId && event.ghPrCreateCommand === true
+    ));
+  }
+
+  wasPullRequestRefreshCommand(sessionId, toolUseId) {
+    if (!toolUseId) return false;
+    return (this.entries.get(sessionId) || []).some(({ event }) => (
+      event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash' &&
+      event.tool_use_id === toolUseId && event.refreshPullRequestsCommand === true
+    ));
   }
 
   attachWriter(writer) {

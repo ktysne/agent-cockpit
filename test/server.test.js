@@ -473,6 +473,92 @@ test('/plan は秘密値と Origin を照合し、session ID と入力上限を�
   assert.equal(tooManyTasks.status, 400);
 });
 
+test('/prs は秘密値と Origin を照合し、MCP とフックから PR を登録する', async (t) => {
+  const calls = { repos: [], all: 0 };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshRepo(owner, repo) { calls.repos.push(`${owner}/${repo}`); return Promise.resolve(); },
+    refreshAll() { calls.all += 1; return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, {
+    pullRequestTracker,
+    findSessionIdByPid: async () => null,
+  });
+  const body = JSON.stringify({
+    kind: 'add_pr', url: 'https://github.com/example/project/pull/46',
+    ppid: 123, claudeCodeSessionId: 'pr-session', cwd: process.cwd(),
+  });
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    headers: { 'content-type': 'application/json' },
+  });
+  assert.equal(missingSecret.status, 401);
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+  const added = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(added.status, 200);
+  assert.deepEqual(jsonBody(added), {
+    owner: 'example', repo: 'project', number: 46,
+    url: 'https://github.com/example/project/pull/46',
+  });
+  assert.equal(runtime.state.pullRequestRegistrations()[0].number, 46);
+
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers,
+    body: JSON.stringify({
+      session_id: 'pr-session', hook_event_name: 'PreToolUse', hookAt: Date.now(),
+      tool_name: 'Bash', tool_use_id: 'create-47', ghPrCreateCommand: true,
+    }),
+  });
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers,
+    body: JSON.stringify({
+      session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      tool_name: 'Bash', tool_use_id: 'create-47',
+      pullRequest: { owner: 'example', repo: 'project', number: 47, url: 'https://github.com/example/project/pull/47' },
+    }),
+  });
+  assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 47));
+
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers,
+    body: JSON.stringify({
+      session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      tool_name: 'Bash', tool_use_id: 'unrelated',
+      pullRequest: { owner: 'example', repo: 'project', number: 48, url: 'https://github.com/example/project/pull/48' },
+    }),
+  });
+  assert.ok(!runtime.state.pullRequestRegistrations().some((record) => record.number === 48));
+
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers,
+    body: JSON.stringify({
+      session_id: 'pr-session', hook_event_name: 'PreToolUse', hookAt: Date.now(),
+      tool_name: 'Bash', tool_use_id: 'push-1', refreshPullRequestsCommand: true,
+    }),
+  });
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers,
+    body: JSON.stringify({
+      session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
+      tool_name: 'Bash', tool_use_id: 'push-1',
+    }),
+  });
+  assert.equal(calls.all, 1);
+  assert.ok(calls.repos.includes('example/project'));
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.deepEqual(snapshot.pullRequests, []);
+});
+
 test('/plan はタスクと判断事項を記録し、読み取り用の要約を返す', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/sessions/plan-session/plan';

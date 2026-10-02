@@ -136,6 +136,18 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.match(mock, /\.now-row\s*>\s*:nth-child\(2\)\s*\{[^}]*min-width:\s*0/);
 });
 
+test('PR のスタックとレビューを表示し、マージ操作は表示しない', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  assert.match(source, /function appendPullRequestBlock/);
+  assert.match(source, /function appendPullRequestTree/);
+  assert.match(source, /function reviewBlock/);
+  assert.match(source, /プルリクエスト/);
+  assert.match(source, /マージできる PR/);
+  assert.match(source, /マージできない理由/);
+  assert.doesNotMatch(source, /data-merge(?:-go)?=/);
+  assert.doesNotMatch(source, /data-reserve-go=/);
+});
+
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
   const harness = renderHarness();
   harness.context.render(harness.context.lastState);
