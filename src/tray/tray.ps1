@@ -277,7 +277,7 @@ function Get-ServerInfo {
 
 function Get-DashboardState([object]$ServerInfo) {
   if ($null -eq $ServerInfo) {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); AskDecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
   try {
     $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
@@ -294,7 +294,8 @@ function Get-DashboardState([object]$ServerInfo) {
         if ($decision -and $decision.state -eq 'waiting' -and -not $hasEffectiveAnswer) { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
       }
     }
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
+    $askDecisionCount = @($state.sessions | ForEach-Object { @($_.decisions) } | Where-Object { $_.source -eq 'ask' }).Count
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; AskDecisionCount = $askDecisionCount; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
   } catch {
     return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
@@ -376,9 +377,9 @@ function Restart-ResidentServer {
   try {
     $previousServer = Get-ServerInfo
     $state = Get-DashboardState $previousServer
-    $confirmationText = '常駐サーバーを再起動します。表示中のセッションの状態はいったん消え、次のイベントから組み立て直されます。'
-    if ($state.Connected -and ($state.PermissionCount -gt 0 -or $state.DecisionCount -gt 0)) {
-      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件と止めて待っている質問 $($state.DecisionCount) 件の表示も消えます。"
+    $confirmationText = '常駐サーバーを再起動します。MCP で登録したタスクと判断事項、回答の記録、表示設定、一覧から外したセッション、離席中は保存されています。イベントから組み立てるセッション状態とサブエージェント、AskUserQuestion の判断事項、画面で終了にしたサブエージェントは再起動で消えます。'
+    if ($state.Connected -and ($state.PermissionCount -gt 0 -or $state.AskDecisionCount -gt 0)) {
+      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件と AskUserQuestion の判断事項 $($state.AskDecisionCount) 件は再起動後に表示されません。MCP の判断事項に送信済みの未配信回答は、次の UserPromptSubmit または PostToolBatch まで配信されません。"
     }
     $confirmation = [System.Windows.Forms.MessageBox]::Show(
       $confirmationText,
