@@ -308,16 +308,17 @@ test('/plan は ppid に一致するセッションファイルの ID を優先�
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
   const response = await request(runtime.info.port, {
-    method: 'POST', path: '/api/sessions/pending/plan',
+    method: 'POST', path: '/api/sessions/fallback-session/plan',
     body: JSON.stringify({
       kind: 'tasks', tasks: [{ title: 'PID のセッションに保存', state: 'todo', criteria: [] }],
-      ppid: process.pid, claudeCodeSessionId: 'fallback_session',
+      ppid: process.pid, claudeCodeSessionId: 'fallback-session',
     }),
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
   });
   assert.equal(response.status, 200);
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
-  assert.ok(state.sessions.some((session) => session.session_id === 'pid-session'));
+  const pidSession = state.sessions.find((session) => session.session_id === 'pid-session');
+  assert.deepEqual(pidSession.tasks.map(({ title }) => title), ['PID のセッションに保存']);
   assert.ok(!state.sessions.some((session) => session.session_id === 'fallback-session'));
 });
 

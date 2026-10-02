@@ -69,7 +69,7 @@ function collectAnswerValues(value, output, depth = 0, allowObjectValues = false
 
 function extractAskUserQuestionResolution(toolResponse) {
   const chosen = [];
-  collectAnswerValues(toolResponse, chosen);
+  if (typeof toolResponse !== 'string') collectAnswerValues(toolResponse, chosen);
   const resolution = sanitizeDecisionResolution({
     chosen,
     note: toolResponse && typeof toolResponse === 'object' && !Array.isArray(toolResponse)

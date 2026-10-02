@@ -11,11 +11,14 @@ function decisionIdForReason(value) {
 function sessionSummary(snapshot) {
   const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
   const decisions = Array.isArray(snapshot.decisions) ? snapshot.decisions : [];
+  const summarize = (items, format) => {
+    const visible = items.slice(0, 10).map(format);
+    if (items.length > 10) visible.push(`ほか ${items.length - 10} 件`);
+    return visible.length ? visible.join('、') : 'なし';
+  };
   const lines = ['Agent Cockpit: 現在の状態'];
-  lines.push(`タスク: ${tasks.length ? tasks.map((task) => `${task.title} (${task.state})`).join('、') : 'なし'}`);
-  lines.push(`未解決の判断事項: ${decisions.length
-    ? decisions.map((decision) => `${decision.id} ${decision.title} (${decision.state})`).join('、')
-    : 'なし'}`);
+  lines.push(`タスク: ${summarize(tasks, (task) => `${task.title} (${task.state})`)}`);
+  lines.push(`未解決の判断事項: ${summarize(decisions, (decision) => `${decision.id} ${decision.title} (${decision.state})`)}`);
   return lines.join('\n');
 }
 

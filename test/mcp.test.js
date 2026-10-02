@@ -52,8 +52,28 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
     ['tasks', 321, 'mcp-session'],
   );
   assert.ok(!JSON.stringify(sent).includes('must-not-be-sent'));
-  assert.ok(!JSON.stringify(sent).includes('PRIVATE_ENV_VALUE'));
+  assert.ok(!JSON.stringify(sent).includes('also-must-not-be-sent'));
+  assert.ok(!JSON.stringify(responses).includes('also-must-not-be-sent'));
   assert.ok(!JSON.stringify(responses).includes('test-secret'));
+});
+
+test('400 と 404 は理由を示す固定文を isError で返す', async () => {
+  for (const [status, message] of [
+    [400, '入力が正しくないか、上限を超えています'],
+    [404, '判断事項が見つからないか、解決済みです'],
+  ]) {
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: status, method: 'tools/call',
+      params: { name: 'cockpit_update_decision', arguments: { id: 'decision-1', state: 'resolved', chosen: [], note: '' } },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async () => new Response('{}', { status }),
+    });
+    assert.equal(responses[0].result.isError, true);
+    assert.equal(responses[0].result.content[0].text, message);
+  }
 });
 
 test('常駐サーバーに届かない tools/call は isError で継続可能と伝える', async () => {

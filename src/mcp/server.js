@@ -8,6 +8,10 @@ const PROTOCOL_VERSION = '2025-06-18';
 const MCP_TIMEOUT_MS = 5000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
 const MAX_RESULT_ITEMS = 10;
+const PLAN_ERROR_MESSAGES = new Map([
+  [400, '入力が正しくないか、上限を超えています'],
+  [404, '判断事項が見つからないか、解決済みです'],
+]);
 
 const TOOL_DEFINITIONS = [
   {
@@ -194,6 +198,8 @@ async function postPlan(toolName, args, options = {}) {
         info = await readInfo(homeDir);
         continue;
       }
+      const errorMessage = PLAN_ERROR_MESSAGES.get(response.status);
+      if (errorMessage) return { errorMessage };
       return null;
     } catch {
       if (attempt > 0) return null;
@@ -213,6 +219,7 @@ async function callTool(name, args, options = {}) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
   const saved = await postPlan(name, args, options);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
+  if (saved.errorMessage) return toolResult(saved.errorMessage, true);
   return toolResult(shortSavedList(name, saved));
 }
 

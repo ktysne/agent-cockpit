@@ -149,8 +149,6 @@ Copy-Item .\skills\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md')
 
 ## テスト
 
-## テスト
-
 ```powershell
 npm test
 ```

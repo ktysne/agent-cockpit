@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
-const { DENY_REASON, runAwayHook } = require('../src/hooks/away');
+const { DENY_REASON, runAwayHook, sessionSummary } = require('../src/hooks/away');
 
 async function temporaryHome(testContext, withServerInfo = true) {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-away-test-'));
@@ -103,6 +103,19 @@ test('compact の SessionStart は離席中でなくてもタスクと未解決�
   assert.equal(requestedUrl, 'http://127.0.0.1:49123/api/sessions/compact-session/context');
   assert.match(result.hookSpecificOutput.additionalContext, /画面を更新する \(doing\)/);
   assert.match(result.hookSpecificOutput.additionalContext, /ask-42 配色を選ぶ \(waiting\)/);
+});
+
+test('引き継ぎ要約はタスクと判断事項を各 10 件まで表示する', () => {
+  const summary = sessionSummary({
+    tasks: Array.from({ length: 12 }, (_, index) => ({ title: `task-${index + 1}`, state: 'todo' })),
+    decisions: Array.from({ length: 13 }, (_, index) => ({
+      id: `decision-${index + 1}`, title: `question-${index + 1}`, state: 'waiting',
+    })),
+  });
+  assert.match(summary, /task-10 \(todo\)、ほか 2 件/);
+  assert.doesNotMatch(summary, /task-11/);
+  assert.match(summary, /decision-10 question-10 \(waiting\)、ほか 3 件/);
+  assert.doesNotMatch(summary, /decision-11/);
 });
 
 test('resume の引き継ぎ要約と離席中の文脈を一つにまとめる', async (t) => {

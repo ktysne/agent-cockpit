@@ -201,6 +201,10 @@ function deriveSessions(entries) {
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
         if (existing) {
+          existing.state = 'waiting';
+          existing.updatedAt = isoTime(event.hookAt);
+          existing.resolvedAt = null;
+          existing.resolution = null;
           session.decisionBindings[toolUseId] = existing.id;
         } else {
           const createdAt = isoTime(event.hookAt);
@@ -209,7 +213,7 @@ function deriveSessions(entries) {
             session_id: event.session_id,
             source: 'ask',
             state: 'waiting',
-            title: event.questions[0].question,
+            title: event.questions[0].question.slice(0, 200),
             context: '',
             questions: event.questions,
             createdAt,
@@ -356,6 +360,7 @@ function deriveSessions(entries) {
         agents,
         permissionWaits,
         decisions: session.decisions.map(cloneDecision),
+        decisionBindings: { ...session.decisionBindings },
       };
     });
 }
@@ -477,7 +482,10 @@ class DashboardState {
   }
 
   updateDecision(sessionId, id, state, chosen, note, now = Date.now()) {
-    const decision = this.decisionsFor(sessionId).find((item) => item.id === id);
+    const decisions = this.decisionsFor(sessionId);
+    const decision = decisions.find((item) => item.id === id) || decisions.find((item) => (
+      item.id === this.sessions.get(sessionId)?.decisionBindings?.[id]
+    ));
     if (!decision || decision.state === 'resolved') return null;
     const timestamp = isoTime(now);
     const updated = {
@@ -488,11 +496,11 @@ class DashboardState {
       resolution: { chosen, note },
     };
     const plan = this.plans.get(sessionId);
-    const stored = plan?.decisions.find((item) => item.id === id);
+    const stored = plan?.decisions.find((item) => item.id === decision.id);
     if (stored) Object.assign(stored, updated);
     else {
       const overrides = this.decisionOverrides.get(sessionId) || new Map();
-      overrides.set(id, {
+      overrides.set(decision.id, {
         state: updated.state,
         updatedAt: updated.updatedAt,
         resolvedAt: updated.resolvedAt,
@@ -572,8 +580,9 @@ class DashboardState {
         permissionWaits: [],
         decisions: [],
       };
+      const { decisionBindings: _decisionBindings, ...visible } = base;
       return {
-        ...base,
+        ...visible,
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
         tools: base.tools.map((tool) => ({ ...tool })),

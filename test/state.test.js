@@ -100,6 +100,17 @@ test('AskUserQuestion の失敗は判断事項を取り下げる', async (t) => 
   assert.equal(state.snapshot().sessions[0].decisions[0].state, 'withdrawn');
 });
 
+test('AskUserQuestion の題は 200 文字まで記録する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: 'ask-long-title', hook_event_name: 'PreToolUse', hookAt: 100,
+    tool_name: 'AskUserQuestion', tool_use_id: 'ask-long',
+    questions: [{ question: 'あ'.repeat(250), header: '', multiSelect: false, options: [] }],
+  });
+  assert.equal(state.snapshot().sessions[0].decisions[0].title.length, 200);
+});
+
 test('サブエージェントの AskUserQuestion は判断事項に記録しない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
@@ -111,7 +122,7 @@ test('サブエージェントの AskUserQuestion は判断事項に記録しな
   assert.deepEqual(state.snapshot().sessions[0].decisions, []);
 });
 
-test('同じ未解決質問は既存の ID に寄せ、後続の回答で解決する', async (t) => {
+test('同じ未解決質問は既存の ID に寄せ、別名から更新して後続の回答で解決する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const addQuestion = (toolUseId, hookAt) => state.addEvent({
@@ -123,6 +134,11 @@ test('同じ未解決質問は既存の ID に寄せ、後続の回答で解決�
   addQuestion('ask-repeat', 200);
   assert.equal(state.snapshot().sessions[0].decisions.length, 1);
   assert.equal(state.snapshot().sessions[0].decisions[0].id, 'ask-original');
+  const updated = state.updateDecision('ask-duplicate', 'ask-repeat', 'provisional', ['JSON'], '推奨で進めた。', 250);
+  assert.deepEqual([updated.id, updated.state], ['ask-original', 'provisional']);
+  assert.deepEqual(state.snapshot().sessions[0].decisions[0].resolution, {
+    chosen: ['JSON'], note: '推奨で進めた。',
+  });
   state.addEvent({
     session_id: 'ask-duplicate', hook_event_name: 'PostToolUse', hookAt: 300,
     tool_name: 'AskUserQuestion', tool_use_id: 'ask-repeat',
@@ -132,6 +148,27 @@ test('同じ未解決質問は既存の ID に寄せ、後続の回答で解決�
     [state.snapshot().sessions[0].decisions[0].id, state.snapshot().sessions[0].decisions[0].state],
     ['ask-original', 'resolved'],
   );
+});
+
+test('同じ質問の再表示は後から来た PreToolUse を採用して待ちに戻す', async (t) => {
+  await temporaryHome(t);
+  for (const priorState of ['provisional', 'resolved']) {
+    const state = new DashboardState();
+    const sessionId = `ask-repeat-${priorState}`;
+    const addQuestion = (toolUseId, hookAt) => state.addEvent({
+      session_id: sessionId, hook_event_name: 'PreToolUse', hookAt,
+      tool_name: 'AskUserQuestion', tool_use_id: toolUseId,
+      questions: [{ question: 'どの形式にしますか。', header: '形式', multiSelect: false, options: [] }],
+    });
+    addQuestion('ask-original', 100);
+    state.updateDecision(sessionId, 'ask-original', priorState, ['JSON'], 'MCP の更新。', 150);
+    addQuestion('ask-again', 200);
+    const decision = state.snapshot().sessions[0].decisions[0];
+    assert.deepEqual(
+      [decision.id, decision.state, decision.updatedAt, decision.resolvedAt, decision.resolution],
+      ['ask-original', 'waiting', new Date(200).toISOString(), null, null],
+    );
+  }
 });
 
 test('Stop 時にサブエージェントが稼働中なら待機中として区別する', async (t) => {

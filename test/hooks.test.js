@@ -102,7 +102,7 @@ test('AskUserQuestion の質問だけを上限付きでフックイベントに�
 
 test('AskUserQuestion の回答抽出は異なる応答形を扱い、不明な形では選択を空にする', () => {
   const cases = [
-    ['JSON', ['JSON']],
+    ['JSON', []],
     [{ answer: 'YAML' }, ['YAML']],
     [{ answers: [{ question: '形式', answer: 'JSON' }, { answer: '二つ目' }] }, ['JSON', '二つ目']],
     [{ answers: { 形式: 'YAML' } }, ['YAML']],
