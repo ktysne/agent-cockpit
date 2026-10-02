@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="ja" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -58,6 +58,8 @@ h1 { font-size: 16px; margin: 0; }
 .spacer { flex: 1; }
 .connection { color: var(--text-2); font-size: 12px; }
 .connection[data-state="error"] { color: var(--danger); }
+.theme-control { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; }
+.theme-control select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .intro { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
@@ -103,6 +105,13 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
     <h1>Agent Cockpit</h1>
     <div class="summary" id="summary" aria-label="セッションの概要"></div>
     <span class="spacer"></span>
+    <label class="theme-control" for="theme-select">配色
+      <select id="theme-select" name="theme">
+        <option value="light">ライト</option>
+        <option value="dark">ダーク</option>
+        <option value="system">OS に従う</option>
+      </select>
+    </label>
     <span class="connection" id="connection" role="status" aria-live="polite" data-state="loading">状態を読み込み中</span>
   </div>
 </header>
@@ -121,9 +130,37 @@ const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const connection = document.getElementById('connection');
 const liveStatus = document.getElementById('live-status');
+const themeSelect = document.getElementById('theme-select');
+const THEME_STORAGE_KEY = 'agent-cockpit.theme';
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
+
+function applyTheme(theme) {
+  const selectedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'dark';
+  if (selectedTheme === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = selectedTheme;
+  themeSelect.value = selectedTheme;
+  return selectedTheme;
+}
+
+function storedTheme() {
+  try {
+    const theme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (['light', 'dark', 'system'].includes(theme)) return theme;
+  } catch {
+  }
+  return 'dark';
+}
+
+applyTheme(storedTheme());
+themeSelect.addEventListener('change', () => {
+  const theme = applyTheme(themeSelect.value);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+  }
+});
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
