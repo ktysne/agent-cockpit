@@ -50,14 +50,15 @@ async function main(input) {
       log({ step: 'timeout' });
       return;
     }
-    // answer.json の形: {"answers": {"質問の文": "選んだ選択肢の label"}}
-    const { answers } = JSON.parse(text);
-    log({ step: 'answered', answers });
+    // answer.json の形: {"answers": {"質問の文": "選んだ選択肢の label"}, "additionalContext": "添える指示(任意)"}
+    const { answers, additionalContext } = JSON.parse(text);
+    log({ step: 'answered', answers, additionalContext });
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
         updatedInput: { ...input.tool_input, answers },
+        ...(additionalContext ? { additionalContext } : {}),
       },
     }));
     return;
