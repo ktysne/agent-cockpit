@@ -172,6 +172,7 @@ claude mcp add --scope user agent-cockpit -- $nodePath $serverPath
 
 この登録方法と `--` による実行コマンドの指定は [Claude Code の MCP ガイド](https://docs.anthropic.com/en/docs/claude-code/mcp) に記載されています。
 登録後、実際のセッションで MCP 環境の `CLAUDE_CODE_SESSION_ID` とフックの `session_id` が同じ値であることを確かめてください。
+MCP ツール `cockpit_add_pr` に PR の URL を渡すと、そのセッションへ登録して読み取り専用のスタック表示に追加できます。
 
 スキルは `~/.claude/skills/agent-cockpit/` にコピーします。
 PowerShell では次のように実行します。

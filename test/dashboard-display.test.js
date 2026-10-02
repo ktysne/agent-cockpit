@@ -168,6 +168,65 @@ test('許可待ちと判断事項のフィルターは非表示の行を検出�
   }
 });
 
+test('PRフィルターの札はマージできる件数を表示する', () => {
+  const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  const renderSummary = functionSource(web, 'renderSummary');
+  const summary = { children: [], replaceChildren(...children) { this.children = children; } };
+  const filterNote = { replaceChildren() {} };
+  const element = (tag, className, textContent = '') => ({
+    tag, className, textContent, children: [], dataset: {}, attributes: {},
+    append(...items) { this.children.push(...items); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener() {},
+  });
+  const context = vm.createContext({
+    summary,
+    displayPreferences: { hidden: [] },
+    pullRequestMergeableCount: (groups) => groups.reduce((count, group) => count + group.mergeableCount, 0),
+    isPendingDecision: () => false,
+    isHeldDecision: () => false,
+    hasEffectiveAnswer: () => false,
+    element,
+    document: {
+      createTextNode: (textContent) => ({ textContent }),
+      getElementById: () => filterNote,
+    },
+  });
+  vm.runInContext(`${filters}\n${renderSummary}\nthis.renderSummary = renderSummary;`, context);
+  context.renderSummary([], [{ mergeableCount: 2 }, { mergeableCount: 1 }]);
+
+  const chip = summary.children.find((item) => item.dataset.filter === 'prs');
+  assert.ok(chip);
+  assert.equal(chip.children.find((item) => item.tag === 'strong').textContent, '(3 件)');
+});
+
+test('PRフィルターの切り替えは保存し、両表示モードのPR欄を隠す', () => {
+  const toggleFilter = functionSource(web, 'toggleFilter');
+  const productSection = functionSource(web, 'productSection');
+  const kindSections = functionSource(web, 'renderKindSections');
+  const patches = [];
+  let renders = 0;
+  const context = vm.createContext({
+    displayPreferences: { hidden: [] },
+    lastState: { sessions: [], pullRequests: [] },
+    isFilterShown: (key) => !context.displayPreferences.hidden.includes(key),
+    saveDisplayPreferences: (patch) => {
+      patches.push(patch);
+      Object.assign(context.displayPreferences, patch);
+    },
+    render: () => { renders += 1; },
+  });
+  vm.runInContext(`${toggleFilter}\nthis.toggleFilter = toggleFilter;`, context);
+  context.toggleFilter('prs');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.hidden)), ['prs']);
+  context.toggleFilter('prs');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.hidden)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(patches.map((patch) => patch.hidden))), [['prs'], []]);
+  assert.equal(renders, 2);
+  assert.match(productSection, /if \(isFilterShown\('prs'\)\)/);
+  assert.match(kindSections, /if \(isFilterShown\('prs'\)\)/);
+});
+
 test('サブエージェントを隠したときに空の案内を出さない', () => {
   const mockAgentSection = functionSource(mock, 'agentSection');
   const mockContext = {

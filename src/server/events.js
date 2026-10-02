@@ -1,3 +1,5 @@
+const { parsePullRequestUrl } = require('./pull-request-utils');
+
 const EVENT_NAMES = new Set([
   'SessionStart',
   'PreToolUse',
@@ -127,6 +129,8 @@ function sanitizeEvent(input, metadata = {}) {
     event.codexDefinition = parseCodexLaunch(event.summary);
     if (metadata.codexAgentDefinition) event.codexAgentDefinition = metadata.codexAgentDefinition;
     if (event.tool_name === 'Agent') event.description = shortString(input.description, 200) || '';
+    if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
+    if (input.refreshPullRequestsCommand === true) event.refreshPullRequestsCommand = true;
     if (event.tool_name === 'AskUserQuestion' && !agentId) {
       event.questions = sanitizeQuestions(input.questions);
     }
@@ -139,6 +143,16 @@ function sanitizeEvent(input, metadata = {}) {
     if (event.tool_name === 'Agent') {
       event.resolvedModel = shortString(input.resolvedModel, 160) || '';
     }
+  }
+
+  if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
+    if (input.refreshPullRequests === true) event.refreshPullRequests = true;
+  }
+  if (eventName === 'PostToolUse') {
+    const pullRequest = parsePullRequestUrl(input.pullRequest?.url);
+    if (pullRequest && input.pullRequest.owner === pullRequest.owner && input.pullRequest.repo === pullRequest.repo &&
+      input.pullRequest.number === pullRequest.number) event.pullRequest = pullRequest;
   }
 
   if ((eventName === 'PostToolUse' || eventName === 'PostToolUseFailure')

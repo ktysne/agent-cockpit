@@ -4,6 +4,12 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
+const {
+  firstPullRequestUrl,
+  isGhPrCreateCommand,
+  isGithubCreatePullRequestTool,
+  shouldRefreshPullRequests,
+} = require('../server/pull-request-utils');
 
 const SERVER_SCRIPT = path.join(__dirname, '..', 'server', 'server.js');
 const SERVER_PORT = Number(process.env.AGENT_COCKPIT_PORT || 47821);
@@ -117,6 +123,11 @@ function makeHookEvent(input, now = Date.now()) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     event.summary = inputSummary(event.tool_name, input.tool_input);
+    if (event.tool_name === 'Bash') {
+      const command = pickString(input.tool_input?.command);
+      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
+    }
     if (event.tool_name === 'Agent') event.description = pickString(input.tool_input?.description).slice(0, 200);
     if (event.tool_name === 'AskUserQuestion' && !input.agent_id) {
       event.questions = sanitizeQuestions(input.tool_input?.questions);
@@ -124,6 +135,16 @@ function makeHookEvent(input, now = Date.now()) {
   } else if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
+    if (event.tool_name === 'Bash') {
+      const command = pickString(input.tool_input?.command);
+      if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
+      if (shouldRefreshPullRequests(command)) event.refreshPullRequests = true;
+      const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
+      if (pullRequest) event.pullRequest = pullRequest;
+    } else if (eventName === 'PostToolUse' && isGithubCreatePullRequestTool(event.tool_name)) {
+      const pullRequest = firstPullRequestUrl(input.tool_response);
+      if (pullRequest) event.pullRequest = pullRequest;
+    }
     if (eventName === 'PostToolUse' && event.tool_name === 'AskUserQuestion' && !input.agent_id) {
       event.decisionResolution = extractAskUserQuestionResolution(input.tool_response);
     }
@@ -163,7 +184,8 @@ async function readServerInfo(homeDir, fileSystem = fsp) {
 }
 
 function childEnvironment(environment) {
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.startsWith('CLAUDE_CODE_')));
+  const excluded = new Set(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN']);
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.startsWith('CLAUDE_CODE_') && !excluded.has(key)));
 }
 
 async function launchServer({ homeDir, environment = process.env, spawnProcess = spawn }) {

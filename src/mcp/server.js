@@ -1,6 +1,7 @@
 const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { ensureServerRunning, readServerInfo } = require('../hooks/event');
+const { parsePullRequestUrl } = require('../server/pull-request-utils');
 
 const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
@@ -12,6 +13,7 @@ const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
   [404, '判断事項が見つからないか、解決済みです'],
 ]);
+const PR_ERROR_MESSAGES = new Map([[400, 'PR の URL が正しくありません']]);
 
 const TOOL_DEFINITIONS = [
   {
@@ -88,6 +90,16 @@ const TOOL_DEFINITIONS = [
         note: { type: 'string', maxLength: 2000 },
       },
       required: ['id', 'state', 'chosen', 'note'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cockpit_add_pr',
+    description: 'このセッションが作成した GitHub のプルリクエストをダッシュボードに登録します。',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string', maxLength: 2000 } },
+      required: ['url'],
       additionalProperties: false,
     },
   },
@@ -213,10 +225,83 @@ async function postPlan(toolName, args, options = {}) {
   return null;
 }
 
+async function postPullRequest(args, options = {}) {
+  const pullRequest = parsePullRequestUrl(args.url);
+  if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
+  const homeDir = options.homeDir || cockpitHomeFromOptions(options);
+  const environment = options.environment || process.env;
+  const fetchImpl = options.fetchImpl || fetch;
+  const ensure = options.ensureServerRunning || ensureServerRunning;
+  const readInfo = options.readServerInfo || readServerInfo;
+  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
+    ? environment.CLAUDE_CODE_SESSION_ID
+    : '';
+  const routeSessionId = /^[A-Za-z0-9-]{1,128}$/.test(sessionId) ? sessionId : 'pending';
+  const infoOptions = {
+    homeDir,
+    fetchImpl,
+    environment,
+    deadline,
+    startServer: options.startServer,
+  };
+  let info;
+  try {
+    info = await ensure(infoOptions);
+  } catch {
+    return null;
+  }
+  const body = {
+    kind: 'add_pr',
+    url: pullRequest.url,
+    ppid: options.ppid === undefined ? process.ppid : options.ppid,
+    claudeCodeSessionId: sessionId || null,
+    cwd: options.cwd === undefined ? process.cwd() : options.cwd,
+  };
+  for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt += 1) {
+    if (!info) return null;
+    try {
+      const response = await fetchWithDeadline(
+        fetchImpl,
+        `http://127.0.0.1:${info.port}/api/sessions/${encodeURIComponent(routeSessionId)}/prs`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-cockpit-secret': info.secret,
+          },
+          body: JSON.stringify(body),
+        },
+        deadline,
+      );
+      if (response.ok) return await response.json();
+      if (response.status === 401 && attempt === 0) {
+        info = await readInfo(homeDir);
+        continue;
+      }
+      return { errorMessage: PR_ERROR_MESSAGES.get(response.status) || null };
+    } catch {
+      if (attempt > 0) return null;
+      try {
+        info = await ensure(infoOptions);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
+  if (name === 'cockpit_add_pr') {
+    const saved = await postPullRequest(args, options);
+    if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
+    if (saved.errorMessage) return toolResult(saved.errorMessage, true);
+    return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
+  }
   const saved = await postPlan(name, args, options);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
   if (saved.errorMessage) return toolResult(saved.errorMessage, true);
@@ -296,9 +381,11 @@ module.exports = {
   MCP_TIMEOUT_MS,
   UNREACHABLE_MESSAGE,
   TOOL_DEFINITIONS,
+  PR_ERROR_MESSAGES,
   shortSavedList,
   planArguments,
   postPlan,
+  postPullRequest,
   callTool,
   handleRequest,
   startMcpServer,

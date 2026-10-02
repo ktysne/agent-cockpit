@@ -9,6 +9,8 @@ const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
+const { PullRequestTracker } = require('./pull-requests');
+const { parsePullRequestUrl, isGithubCreatePullRequestTool } = require('./pull-request-utils');
 
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
@@ -164,7 +166,7 @@ function validDisplayPatch(value) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
       value[key].some((item) => typeof item !== 'string' || item.length > 500) || new Set(value[key]).size !== value[key].length)) return false;
   }
-  const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents']);
+  const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
   if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
     value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
   return true;
@@ -220,6 +222,7 @@ function createRequestHandler(options) {
     getServerInfo,
     markRequest,
     findSessionIdByPid = (pid) => findLiveSessionIdByPid(pid, claudeHome),
+    pullRequestTracker,
   } = options;
   const webPath = path.join(__dirname, '..', 'web', 'index.html');
 
@@ -237,7 +240,7 @@ function createRequestHandler(options) {
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/state') {
-      jsonResponse(response, 200, { ...state.snapshot(), away: away.snapshot() });
+      jsonResponse(response, 200, { ...state.snapshot(), pullRequests: pullRequestTracker?.snapshot() || [], away: away.snapshot() });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -634,6 +637,16 @@ function createRequestHandler(options) {
       const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
       state.addEvent(body, eventMetadata);
       const event = sanitizeEvent(body, eventMetadata);
+      if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
+        (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
+        isGithubCreatePullRequestTool(event.tool_name)
+      )) {
+        const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: body.cwd, product }, event.hookAt);
+        if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
+      }
+      if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
+        event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
+      )) void pullRequestTracker?.refreshAll().catch(() => {});
       if (event) answerDelivery.afterEvent(event);
       await state.waitForPersistence();
       jsonResponse(response, 202, { accepted: true });
@@ -717,6 +730,53 @@ function createRequestHandler(options) {
       return;
     }
 
+    const prsPath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/prs$/);
+    if (request.method === 'POST' && prsPath) {
+      if (request.headers['x-cockpit-secret'] !== info.secret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validOriginForWrite(request)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      const routeSessionId = prsPath[1];
+      if (!validSessionId(routeSessionId)) {
+        jsonResponse(response, 400, { error: 'Invalid session id' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      const pullRequest = body?.kind === 'add_pr' ? parsePullRequestUrl(body.url) : null;
+      if (!pullRequest || !Number.isInteger(body.ppid) || body.ppid < 1 ||
+        (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
+        (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const mappedSessionId = await findSessionIdByPid(body.ppid);
+      const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeSessionId;
+      const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
+      if (!validSessionId(sessionId) || (!validSessionId(mappedSessionId) && routeSessionId !== 'pending' && fallbackSessionId !== routeSessionId)) {
+        jsonResponse(response, 400, { error: 'Session id unavailable' });
+        return;
+      }
+      const product = productFromCwd(body.cwd);
+      const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product });
+      if (!registered) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
+      jsonResponse(response, 200, { owner: registered.owner, repo: registered.repo, number: registered.number, url: registered.url });
+      return;
+    }
+
     if (requestUrl.pathname.startsWith('/api/')) {
       textResponse(response, 405, 'Method Not Allowed');
       return;
@@ -756,6 +816,7 @@ async function hasSessionJsonFiles(claudeHome) {
 }
 
 async function startServer(options = {}) {
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN']) delete process.env[key];
   const homeDir = cockpitHomeFromOptions(options);
   const claudeHome = claudeHomeFromOptions(options);
   const port = options.port === undefined ? DEFAULT_PORT : Number(options.port);
@@ -776,6 +837,7 @@ async function startServer(options = {}) {
     away,
     ...(options.answerDeliveryOptions || {}),
   });
+  const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, ...(options.pullRequestOptions || {}) });
   let info = null;
   let closing = null;
   let lastRequestAt = Date.now();
@@ -792,6 +854,7 @@ async function startServer(options = {}) {
     state,
     away,
     answerDelivery,
+    pullRequestTracker,
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
@@ -816,6 +879,7 @@ async function startServer(options = {}) {
   }
 
   logLine(homeDir, `started on 127.0.0.1:${info.port}`);
+  pullRequestTracker.start();
   async function refreshSessionFiles() {
     const files = await listLiveSessionFiles(claudeHome);
     if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
@@ -839,6 +903,7 @@ async function startServer(options = {}) {
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
       answerDelivery.close();
+      pullRequestTracker.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
@@ -847,7 +912,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, answerDelivery, info, homeDir, close };
+  return { server, state, away, answerDelivery, pullRequestTracker, info, homeDir, close };
 }
 
 function parseArguments(argv) {
