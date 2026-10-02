@@ -263,9 +263,11 @@ function Get-ServerInfo {
     $reader = New-Object System.IO.StreamReader($stream)
     $info = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop
     $port = 0
+    $processId = 0
     if (-not [int]::TryParse([string]$info.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { return $null }
+    if (-not [int]::TryParse([string]$info.pid, [ref]$processId) -or $processId -lt 1) { return $null }
     # 状態の取得に秘密値は要らないので、uiSecret を書かない常駐サーバーでも接続として扱う。
-    return [pscustomobject]@{ Port = $port; Secret = [string]$info.uiSecret }
+    return [pscustomobject]@{ ProcessId = $processId; Port = $port; Secret = [string]$info.uiSecret }
   } catch {
     return $null
   } finally {
@@ -365,6 +367,59 @@ function Set-AwayStatus([bool]$Enabled) {
     Show-TrayNotice '離席中を切り替えられませんでした。常駐サーバーの状態を確認してください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
   }
   Update-TrayState
+}
+
+function Restart-ResidentServer {
+  try {
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+      '常駐サーバーを再起動します。表示中のセッションの状態はいったん消え、次のイベントから組み立て直されます。',
+      'Agent Cockpit',
+      [System.Windows.Forms.MessageBoxButtons]::OKCancel,
+      [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+    if ($confirmation -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
+    $previousServer = Get-ServerInfo
+    if (-not $previousServer) { throw 'server.json から常駐サーバーの PID を取得できません。' }
+
+    $process = Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue
+    if ($process) {
+      if ($process.ProcessName -ne 'node') { throw 'server.json の PID は Node.js のプロセスではありません。' }
+      try { Stop-Process -Id $previousServer.ProcessId -Force -ErrorAction Stop } catch {
+        if (Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue) { throw }
+      }
+      for ($attempt = 0; $attempt -lt 5; $attempt += 1) {
+        if (-not (Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 100
+      }
+    }
+
+    $nodePath = Get-NodePath
+    if (-not $nodePath) { throw 'Node.js が見つかりません。' }
+    $script:cockpitHome = Get-CockpitHome
+    $env:AGENT_COCKPIT_HOME = $script:cockpitHome
+    $ensureScript = Join-Path $PSScriptRoot 'ensure-server.js'
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $output = @(& $nodePath $ensureScript 2>$null) } finally { $ErrorActionPreference = $previousPreference }
+    if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) { throw 'ensure-server.js を実行できません。' }
+
+    $server = $null
+    try { $server = $output[0] | ConvertFrom-Json } catch { }
+    if (-not $server -or $server.port -lt 1 -or $server.port -gt 65535) { throw '常駐サーバーから有効なポートを取得できません。' }
+
+    $currentServer = $null
+    for ($attempt = 0; $attempt -lt 5; $attempt += 1) {
+      $currentServer = Get-ServerInfo
+      if ($currentServer -and $currentServer.ProcessId -ne $previousServer.ProcessId) { break }
+      Start-Sleep -Milliseconds 100
+    }
+    if (-not $currentServer -or $currentServer.ProcessId -eq $previousServer.ProcessId) { throw '常駐サーバーの PID が切り替わりませんでした。' }
+
+    Show-TrayNotice '常駐サーバーを再起動しました'
+  } catch {
+    Show-TrayNotice '常駐サーバーを再起動できませんでした' ([System.Windows.Forms.ToolTipIcon]::Warning)
+  }
 }
 
 function Open-Dashboard {
@@ -517,6 +572,8 @@ try {
   $script:awayMenuItem.CheckOnClick = $true
   $script:awayMenuItem.add_Click({ param($sender, $eventArgs) Set-AwayStatus ([bool]$sender.Checked) })
   $menu.Items.Add($script:awayMenuItem) | Out-Null
+  $restartItem = $menu.Items.Add('常駐サーバーを再起動')
+  $restartItem.add_Click({ Restart-ResidentServer })
   $exitItem = $menu.Items.Add('終了')
   $exitItem.add_Click({
     try { [void][AgentCockpitTray.NativeMethods]::CloseDashboardWindow('Agent Cockpit') } catch { }
