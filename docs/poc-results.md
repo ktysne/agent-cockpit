@@ -12,6 +12,10 @@ Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
 | サブエージェントのモデル名と effort を取れるか | できる | Agent ツールの `PostToolUse` の `tool_response.resolvedModel` に実際のモデルが入る。effort は定義ファイル(`~/.claude/agents/<名前>.md`)の `effort` から引く。GPT 側は `codex-agent.sh` の監査行 `codex-agent: agent=... model=... effort=...` から取る |
 | 内部ブラウザでパス付きの URL を開けるか | できる | `preview_start {url}` でも `navigate` でも、パスとクエリがそのまま渡る。ただしサーバーが先に起動している必要がある |
 | 受付ソケットからセッションへメッセージを届けられるか | 未確認 | 送信手順は分かったが、試験送信が auto mode の安全判定で拒否された |
+| ダイアログで待つ `AskUserQuestion` に外から答えられるか | できる | `PreToolUse` フックが `permissionDecision: "allow"` と、元の `questions` に `answers`(質問の文から選んだ label への対応)を足した `updatedInput` を返すと、ダイアログを出さずにその回答で進む。フックが待っているあいだはダイアログが出ない(`poc/answer-proto.js` の `ask`、2.1.287) |
+| 待機中のセッションを起こせるか | できる | `Stop` フックに `asyncRewake: true` を付けると背景で動き、終了コード 2 で終わると入力待ちのセッションがすぐ起きる。stderr の文がモデルに届く(同 `rewake`) |
+| 作業中のセッションに文を差し込めるか | できる | `PostToolBatch` フックの `hookSpecificOutput.additionalContext` が、次のモデルの呼び出しに届く(同 `batch`) |
+| 終了コードが 0 以外の Bash の出力をフックで読めるか | できる | `PostToolUseFailure` の `error` に、1 行目の `Exit code N` に続いて出力が入る(公式の文書) |
 
 ## 分かった制約
 
@@ -21,6 +25,11 @@ Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
 ## 回答をセッションへ届ける経路
 
 受付ソケットは送信形式が非公開で、試験送信も安全判定で止まるため使わない。公式に文書化されたフックだけで組む。
+3 つの経路は、どれも実機で届くことを確かめた(上の表)。
+
+- ダイアログで待つ質問への回答は、`AskUserQuestion` の `PreToolUse` フックが回答を待ち、`allow` と `updatedInput` で返す。待っているあいだはデスクトップアプリにダイアログが出ないので、待たせる条件を決めて使う。
+- `asyncRewake` のフックはターンの終わりのたびに 1 つずつ起動し、前のものは待ち続ける。開発者がチャットで先へ進んだときに、前のものを終わらせる仕組みが要る。
+- 新しいフォルダーで試したとき、`.claude/settings.json` では信頼の確認が出ず、`settings.local.json` にすると出た。
 
 - 作業中の回答は `PostToolBatch` フックの `additionalContext` で差し込む。
 - 待機中のセッションを起こすには、`asyncRewake` を付けた非同期フックが終了コード 2 で終わる仕組みを使う。この非同期フックは、ダッシュボードの回答が来るまで待つ。
