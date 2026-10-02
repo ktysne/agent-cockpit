@@ -151,6 +151,8 @@ h3.sub .count { font-weight: normal; }
 .state.doing { background: var(--accent-soft); color: var(--accent); }
 .state.todo { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 .task.done .title { color: var(--text-2); }
+.task .line .link-btn { margin-left: auto; flex: none; color: var(--text-2); font-size: 12px; }
+.task .line .link-btn:hover { color: var(--text); }
 .criteria { margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; color: var(--text-2); }
 .criteria li.met { color: var(--ok); }
 .criteria li.met::marker { content: "✓ "; }
@@ -475,7 +477,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], closedTasks: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -662,7 +664,7 @@ function sessionTag(p, session, withTag) {
 }
 
 function mainRow(p, session, withTag) {
-  const taskTitle = session.tasks.find(task => task.state === 'doing')?.title || '';
+  const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : '状態不明';
   const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
   const tool = session.main.tool || '—';
@@ -697,12 +699,19 @@ function agentSection(p, session, withTag) {
   return `${rows ? `<div class="agent-list">${rows}</div>` : `<div class="empty">${empty}</div>`}${endedAgentToggle(session)}`;
 }
 
+// 画面で完了にしたタスクは常駐サーバーが覚え、セッションがそのタスクの状態を変えるまで完了として出す。
+const closedTaskKey = (session, t) => `${session.id}::${t.title}`;
+const taskState = (session, t) => ui.closedTasks.includes(closedTaskKey(session, t)) ? 'done' : t.state;
+
 function taskItem(p, session, t, withTag) {
-  const label = { done: '完了', doing: '作業中', todo: '未着手' }[t.state];
+  const state = taskState(session, t);
+  const label = { done: '完了', doing: '作業中', todo: '未着手' }[state];
   const met = t.criteria.filter(c => c.met).length;
-  return `<li class="task ${t.state}">
-    <div class="line"><span class="state ${t.state}">${label}</span>${sessionTag(p, session, withTag)}
-      <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}</span></div>
+  const closedHere = state === 'done' && t.state !== 'done';
+  const close = state === 'done' ? '' : `<button type="button" class="link-btn" data-close-task="${esc(closedTaskKey(session, t))}">完了にする</button>`;
+  return `<li class="task ${state}">
+    <div class="line"><span class="state ${state}">${label}</span>${sessionTag(p, session, withTag)}
+      <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}${closedHere ? '、画面で完了にした' : ''}</span>${close}</div>
     <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
 }
 
@@ -936,9 +945,9 @@ function decisionSessionBlock(p, session, withTag) {
 }
 
 function taskSessionBlock(p, session, withTag) {
-  const done = session.tasks.filter(task => task.state === 'done');
+  const done = session.tasks.filter(task => taskState(session, task) === 'done');
   const expanded = ui.expandedDoneTasks.includes(session.id);
-  const visible = expanded ? session.tasks : session.tasks.filter(task => task.state !== 'done');
+  const visible = expanded ? session.tasks : session.tasks.filter(task => taskState(session, task) !== 'done');
   const updated = `最終更新 ${session.tasksUpdatedMin} 分前`;
   const items = visible.map(task => taskItem(p, session, task, withTag)).join('');
   const toggle = done.length
@@ -1105,6 +1114,8 @@ document.addEventListener('click', e => {
   } else if (t.dataset.doneTasks) {
     const id = t.dataset.doneTasks;
     ui.expandedDoneTasks = ui.expandedDoneTasks.includes(id) ? ui.expandedDoneTasks.filter(x => x !== id) : [...ui.expandedDoneTasks, id];
+  } else if (t.dataset.closeTask) {
+    if (!ui.closedTasks.includes(t.dataset.closeTask)) ui.closedTasks.push(t.dataset.closeTask);
   } else if (t.dataset.estimate) {
     const id = t.dataset.estimate;
     if (!ui.estimatedSessions.includes(id)) ui.estimatedSessions.push(id);
