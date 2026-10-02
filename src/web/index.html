@@ -196,7 +196,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .product-order { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 .kind-order { display: flex; justify-content: flex-end; margin-bottom: 14px; }
 .product-order-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
-.product-order-item .prod-tag { min-width: 0; max-width: calc(100% - 34px); overflow: hidden; text-overflow: ellipsis; }
+.product-order-item .prod-tag { display: inline-block; min-width: 0; max-width: calc(100% - 34px); line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { min-width: 32px; min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); cursor: pointer; }
 .icon-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
 .icon-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
@@ -784,12 +784,13 @@ function isEndedAgent(agent) {
   return !agent.active && !agent.unconfirmed;
 }
 
+function itemTimestamp(item) {
+  const timestamp = Date.parse(item.createdAt || item.startedAt || item.updatedAt);
+  return Number.isFinite(timestamp) ? timestamp : -Infinity;
+}
+
 function newestFirst(items) {
-  const timestampOf = (item) => {
-    const time = Date.parse(item.createdAt || item.startedAt || item.updatedAt);
-    return Number.isFinite(time) ? time : -Infinity;
-  };
-  return [...items].sort((a, b) => timestampOf(b) - timestampOf(a));
+  return [...items].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
 }
 
 function appendContextTags(target, product, session, withTags, multipleSessions) {
@@ -1291,6 +1292,7 @@ function kindProductOrder(products) {
     const item = element('div', 'product-order-item');
     const tag = element('span', 'prod-tag', `${index + 1}. ${product.name}`);
     tag.id = `kind-product-order-${index}`;
+    tag.title = product.name;
     item.append(tag, productCloseButton(product, tag.id));
     productOrder.append(item);
   });
@@ -1301,22 +1303,11 @@ function kindEndedDecisionEntries(references) {
   const entries = references.flatMap((reference) => reference.session.decisions
     .filter((decision) => ['resolved', 'withdrawn'].includes(decision.state))
     .map((decision) => ({ ...reference, decision })));
-  const timestampOf = (decision) => {
-    const timestamp = Date.parse(decision.createdAt || decision.startedAt || decision.updatedAt);
-    return Number.isFinite(timestamp) ? timestamp : -Infinity;
-  };
-  return entries.sort((left, right) => timestampOf(right.decision) - timestampOf(left.decision));
+  return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
 
-function kindEndedAgentEntries(references) {
-  const entries = references.flatMap((reference) => reference.session.agents
-    .filter(isEndedAgent)
-    .map((agent) => ({ ...reference, agent })));
-  const timestampOf = (agent) => {
-    const timestamp = Date.parse(agent.createdAt || agent.startedAt || agent.updatedAt);
-    return Number.isFinite(timestamp) ? timestamp : -Infinity;
-  };
-  return entries.sort((left, right) => timestampOf(right.agent) - timestampOf(left.agent));
+function kindEndedAgentCount(references) {
+  return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
 
 function renderKindSections(products) {
@@ -1362,7 +1353,7 @@ function renderKindSections(products) {
 
   const activityItems = [];
   const showEndedAgents = expandedKindSections.has('agents');
-  const endedAgentItems = kindEndedAgentEntries(references);
+  const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
     const holder = element('div');
@@ -1382,8 +1373,8 @@ function renderKindSections(products) {
     const controls = unknownSessionControls(session, product, multipleSessions);
     if (controls) activity.append(controls);
   }
-  if (endedAgentItems.length) {
-    appendKindToggle(activity, 'agents', showEndedAgents, endedAgentItems.length, '終了済み');
+  if (endedAgentCount) {
+    appendKindToggle(activity, 'agents', showEndedAgents, endedAgentCount, '終了済み');
   }
 
   const tasks = element('div', 'body');

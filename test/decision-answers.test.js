@@ -206,6 +206,7 @@ test('種類別の並び順の札にプロダクトを閉じるボタンを表�
 
   assert.equal(rendered.className, 'order product-order kind-order');
   assert.equal(tag.textContent, '1. agent-cockpit');
+  assert.equal(tag.title, 'agent-cockpit');
   assert.equal(close.textContent, '×');
   assert.equal(close.type, 'button');
   assert.equal(close.dataset.productAction, 'close');
@@ -213,6 +214,15 @@ test('種類別の並び順の札にプロダクトを閉じるボタンを表�
   assert.equal(close.attributes['aria-label'], 'このプロダクトを閉じる');
   assert.equal(close.attributes['aria-describedby'], tag.id);
   assert.equal(close.title, 'このプロダクトを閉じる');
+});
+
+test('種類別の並び順の札は省略表示し、モックでは title にエスケープした名前を入れる', () => {
+  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const mock = fsSync.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
+  const mockOrder = mock.match(/const orderBar = `[^\n]*`;/)?.[0];
+  assert.match(html, /\.product-order-item \.prod-tag \{ display: inline-block;[^}]*line-height: 20px;[^}]*text-overflow: ellipsis;/);
+  assert.match(mock, /\.product-order-item \.prod-tag \{ display: inline-block;[^}]*line-height: 20px;[^}]*text-overflow: ellipsis;/);
+  assert.match(mockOrder, /title="\$\{esc\(p\.name\)\}"/);
 });
 
 test('推奨案で OK は推奨 label を使い、指示と保留の文脈を添える', () => {

@@ -117,17 +117,19 @@ test('種類別の混在セクションは残し、隠した判断事項だけ�
   assert.match(webKind, /activityItems\.push\(\{ age: sessionActivityTime\(session\), row: mainRow/);
 });
 
-test('種類別の終了項目は全セッションから新しい順に集約する', () => {
+test('種類別の終了判断は新しい順に集約し、終了済みエージェントは件数を数える', () => {
   const webHelpers = [
+    functionSource(web, 'itemTimestamp'),
     functionSource(web, 'kindEndedDecisionEntries'),
-    functionSource(web, 'kindEndedAgentEntries'),
+    functionSource(web, 'kindEndedAgentCount'),
     functionSource(web, 'kindTaskVisibility'),
     functionSource(web, 'kindDoneTaskCount'),
   ];
   const webContext = vm.createContext({ isEndedAgent: (agent) => !agent.active && !agent.unconfirmed });
   vm.runInContext(`${webHelpers.join('\n')}\nthis.collect = (references) => JSON.stringify({
     decisions: kindEndedDecisionEntries(references).map(({ decision }) => decision.id),
-    agents: kindEndedAgentEntries(references).map(({ agent }) => agent.id),
+    endedAgentCount: kindEndedAgentCount(references),
+    fallbackTimestamp: itemTimestamp({ startedAt: '2026-10-02T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }),
     doneCount: kindDoneTaskCount(references),
     collapsed: kindTaskVisibility(references[0].session, false).visible.map((task) => task.id),
     expanded: kindTaskVisibility(references[0].session, true).visible.map((task) => task.id),
@@ -156,7 +158,8 @@ test('種類別の終了項目は全セッションから新しい順に集約�
   const webResult = JSON.parse(webContext.collect(webReferences));
   assert.deepEqual(webResult, {
     decisions: ['new', 'old'],
-    agents: ['agent-new', 'agent-old'],
+    endedAgentCount: 2,
+    fallbackTimestamp: Date.parse('2026-10-02T00:00:00Z'),
     doneCount: 2,
     collapsed: ['open'],
     expanded: ['open', 'done-a'],
@@ -164,7 +167,7 @@ test('種類別の終了項目は全セッションから新しい順に集約�
 
   const mockHelpers = [
     functionSource(mock, 'kindEndedDecisionEntries'),
-    functionSource(mock, 'kindEndedAgentEntries'),
+    functionSource(mock, 'kindEndedAgentCount'),
     functionSource(mock, 'kindTaskVisibility'),
     functionSource(mock, 'kindDoneTaskCount'),
   ];
@@ -176,7 +179,7 @@ test('種類別の終了項目は全セッションから新しい順に集約�
   });
   vm.runInContext(`${mockHelpers.join('\n')}\nthis.collect = (sessions) => JSON.stringify({
     decisions: kindEndedDecisionEntries(sessions).map(({ decision }) => decision.id),
-    agents: kindEndedAgentEntries(sessions).map(({ agent }) => agent.id),
+    endedAgentCount: kindEndedAgentCount(sessions),
     doneCount: kindDoneTaskCount(sessions),
     collapsed: kindTaskVisibility(sessions[0].session, false).visible.map((task) => task.id),
     expanded: kindTaskVisibility(sessions[0].session, true).visible.map((task) => task.id),
@@ -196,7 +199,7 @@ test('種類別の終了項目は全セッションから新しい順に集約�
   mockSessions[1].session.closed = ['closed-here'];
   assert.deepEqual(JSON.parse(mockContext.collect(mockSessions)), {
     decisions: ['new', 'old'],
-    agents: ['agent-new', 'agent-old'],
+    endedAgentCount: 2,
     doneCount: 2,
     collapsed: ['open'],
     expanded: ['open', 'done-a'],
@@ -276,7 +279,7 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
   const webKind = functionSource(web, 'renderKindSections');
 
   assert.match(mockKind, /kindToggle\('decisions', '解決済みと取り下げ', endedDecisionEntries\.length/);
-  assert.match(mockKind, /kindToggle\('agents', '終了済み', endedAgentEntries\.length/);
+  assert.match(mockKind, /kindToggle\('agents', '終了済み', endedAgentCount/);
   assert.match(mockKind, /kindToggle\('tasks', '完了したタスク', doneTaskCount/);
   assert.doesNotMatch(mockKind, /endedDecisionToggle\(session\)|endedAgentToggle\(session\)|taskSessionBlock\(p, session, true\)/);
   assert.match(webKind, /appendKindToggle\(endedDecisions, 'decisions'/);
