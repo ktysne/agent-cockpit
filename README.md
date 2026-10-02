@@ -110,6 +110,43 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Start
 フックの登録後に開いたセッションから離席中の制御が有効になります。
 すでに実行中のセッションは、後から追加したフックを読み込みません。
 
+## タスクと判断事項
+
+メインセッションは計画を立てた後に MCP ツール `cockpit_set_tasks` を呼び、タスクと完了条件を登録します。
+タスクの状態や完了条件が変わったときは、一覧全体を置き換えます。
+
+`AskUserQuestion` の質問はフックが自動で判断事項にします。
+推奨する選択肢の label を「(推奨)」で始め、理由を description に書いてください。
+質問せずに推奨を適用する判断は `cockpit_add_decision` または `cockpit_update_decision` で記録します。
+
+画面は判断事項の状態、待ち時間、背景、質問、選択肢を表示します。
+解決済みと取り下げの判断事項、および完了したタスクは折りたたまれます。
+段階 2 ではダッシュボードから判断事項に回答できません。
+メインセッションでの MCP ツールの使い方は [agent-cockpit スキル](skills/agent-cockpit/SKILL.md) にあります。
+
+## MCP サーバーとスキルの登録
+
+MCP サーバーは、Node.js の実行ファイルとこのリポジトリの `src/mcp/server.js` をユーザースコープで登録します。
+作業ツリーのルートで次を実行してください。
+
+```powershell
+$nodePath = (Get-Command node).Source
+$serverPath = (Resolve-Path .\src\mcp\server.js).Path
+claude mcp add --scope user agent-cockpit -- $nodePath $serverPath
+```
+
+この登録方法と `--` による実行コマンドの指定は [Claude Code の MCP ガイド](https://docs.anthropic.com/en/docs/claude-code/mcp) に記載されています。
+登録後、実際のセッションで MCP 環境の `CLAUDE_CODE_SESSION_ID` とフックの `session_id` が同じ値であることを確かめてください。
+
+スキルは `~/.claude/skills/agent-cockpit/` にコピーします。
+PowerShell では次のように実行します。
+
+```powershell
+$skillDirectory = Join-Path $env:USERPROFILE '.claude\skills\agent-cockpit'
+New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
+Copy-Item .\skills\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
+```
+
 ## テスト
 
 ```powershell

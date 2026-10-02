@@ -11,6 +11,50 @@ const EVENT_NAMES = new Set([
   'UserPromptSubmit',
 ]);
 
+const MAX_ASK_QUESTIONS = 4;
+const MAX_ASK_OPTIONS = 6;
+const QUESTION_TEXT_LIMIT = 2000;
+
+function boundedString(value, limit) {
+  return typeof value === 'string' ? value.slice(0, limit) : '';
+}
+
+function sanitizeQuestions(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, MAX_ASK_QUESTIONS).flatMap((question) => {
+    if (!question || typeof question !== 'object' || Array.isArray(question)) return [];
+    const options = Array.isArray(question.options) ? question.options.slice(0, MAX_ASK_OPTIONS).flatMap((option) => {
+      if (!option || typeof option !== 'object' || Array.isArray(option)) return [];
+      const label = boundedString(option.label, 200);
+      if (!label) return [];
+      return [{
+        label,
+        description: boundedString(option.description, QUESTION_TEXT_LIMIT),
+        recommended: label.startsWith('(推奨)'),
+      }];
+    }) : [];
+    const text = boundedString(question.question, QUESTION_TEXT_LIMIT);
+    if (!text) return [];
+    return [{
+      question: text,
+      header: boundedString(question.header, 200),
+      multiSelect: question.multiSelect === true,
+      options,
+    }];
+  });
+}
+
+function sanitizeDecisionResolution(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const chosen = Array.isArray(value.chosen)
+    ? value.chosen.slice(0, MAX_ASK_OPTIONS).map((item) => boundedString(item, QUESTION_TEXT_LIMIT)).filter(Boolean)
+    : boundedString(value.chosen, QUESTION_TEXT_LIMIT);
+  return {
+    chosen,
+    note: boundedString(value.note, QUESTION_TEXT_LIMIT),
+  };
+}
+
 function shortString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : undefined;
 }
@@ -50,9 +94,15 @@ function sanitizeEvent(input, metadata = {}) {
     event.summary = shortString(input.summary, 80) || event.tool_name;
     event.codexDefinition = parseCodexLaunch(event.summary);
     if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
+    if (event.tool_name === 'AskUserQuestion' && !agentId) {
+      event.questions = sanitizeQuestions(input.questions);
+    }
   }
 
   if (eventName === 'PostToolUse') {
+    if (event.tool_name === 'AskUserQuestion' && !agentId) {
+      event.decisionResolution = sanitizeDecisionResolution(input.decisionResolution) || { chosen: [], note: '' };
+    }
     if (event.tool_name === 'Agent') {
       event.resolvedModel = shortString(input.resolvedModel, 160) || '';
     }
@@ -80,4 +130,13 @@ function sanitizeEvent(input, metadata = {}) {
   return event;
 }
 
-module.exports = { EVENT_NAMES, parseCodexLaunch, sanitizeEvent };
+module.exports = {
+  EVENT_NAMES,
+  MAX_ASK_QUESTIONS,
+  MAX_ASK_OPTIONS,
+  QUESTION_TEXT_LIMIT,
+  parseCodexLaunch,
+  sanitizeQuestions,
+  sanitizeDecisionResolution,
+  sanitizeEvent,
+};

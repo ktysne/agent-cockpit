@@ -109,6 +109,34 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .permission.long-wait { background: var(--danger-soft); }
 .permission-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
 .permission-head strong { font-weight: 600; }
+.decision-list, .task-list { display: grid; gap: 8px; min-width: 0; }
+.decision-card { min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); }
+.decision-card.provisional { border-left-color: var(--warn); }
+.decision-card.resolved { border-left-color: var(--ok); }
+.decision-card.withdrawn { border-left-color: var(--border); }
+.decision-card.long-wait { background: var(--danger-soft); }
+.decision-head, .decision-meta { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
+.decision-title { min-width: 0; font-weight: 600; }
+.decision-context { margin: 4px 0 8px; color: var(--text-2); }
+.decision-question { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); min-width: 0; overflow-wrap: anywhere; }
+.decision-question-title { font-weight: 600; }
+.decision-options { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.decision-option { min-width: 0; padding: 6px 8px; border-radius: 6px; overflow-wrap: anywhere; }
+.decision-option.recommended { background: var(--accent-soft); }
+.decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
+.task-list { list-style: none; margin: 0; padding: 0; }
+.task-item { min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.task-item.done .task-title { color: var(--text-2); }
+.task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
+.task-title { min-width: 0; font-weight: 600; }
+.task-state { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface); color: var(--text-2); }
+.task-state.doing { background: var(--accent-soft); color: var(--accent); }
+.task-state.done { background: var(--ok-soft); color: var(--ok); }
+.criteria-list { margin: 4px 0 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
+.criteria-list li.met { color: var(--ok); }
+.criteria-list li.met::marker { content: "✓ "; }
+.criteria-list li:not(.met)::marker { content: "○ "; }
+.task-updated { margin-top: 6px; }
 .empty { color: var(--text-2); font-size: 13px; padding: 10px; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -149,7 +177,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <main>
-  <p class="intro">Claude Code のセッション、実行中のツール、サブエージェント、許可待ちを表示します。</p>
+  <p class="intro">Claude Code のセッション、判断事項、作業中の内容、タスク、サブエージェントを表示します。</p>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
 </main>
@@ -177,6 +205,8 @@ let hasRenderedState = false;
 const AWAY_ERROR_DISPLAY_MS = 10000;
 let awayErrorUntil = 0;
 const expandedEndedSessions = new Set();
+const expandedEndedDecisions = new Set();
+const expandedDoneTasks = new Set();
 
 function applyTheme(theme) {
   const selectedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'dark';
@@ -298,11 +328,14 @@ function toolDetail(toolName, summary) {
 
 function updateTitle(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  document.title = permissionCount ? `(${permissionCount}) Agent Cockpit` : 'Agent Cockpit';
+  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const pendingCount = permissionCount + decisionCount;
+  document.title = pendingCount ? `(${pendingCount}) Agent Cockpit` : 'Agent Cockpit';
 }
 
 function renderSummary(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
   const activeCount = sessions.filter((session) => session.status === '作業中').length;
   const waitingCount = sessions.filter((session) => session.status.startsWith('待機中')).length;
   const items = [
@@ -310,6 +343,7 @@ function renderSummary(sessions) {
     ['作業中', activeCount, 'ok'],
     ['待機中', waitingCount, 'warn'],
     ['許可待ち', permissionCount, 'danger'],
+    ['判断待ち', decisionCount, 'danger'],
   ];
   summary.replaceChildren(...items.map(([label, count, color]) => {
     const chip = element('span', `chip ${color}`.trim());
@@ -400,11 +434,11 @@ function isEndedAgent(agent) {
 }
 
 function newestFirst(items) {
-  const startedAtOf = (item) => {
-    const time = Date.parse(item.startedAt);
+  const timestampOf = (item) => {
+    const time = Date.parse(item.createdAt || item.startedAt || item.updatedAt);
     return Number.isFinite(time) ? time : -Infinity;
   };
-  return [...items].sort((a, b) => startedAtOf(b) - startedAtOf(a));
+  return [...items].sort((a, b) => timestampOf(b) - timestampOf(a));
 }
 
 function appendPermissionWaits(body, session) {
@@ -429,6 +463,138 @@ function appendPermissionWaits(body, session) {
   body.append(list);
 }
 
+function decisionStateLabel(state) {
+  return {
+    waiting: '止めて待っている',
+    provisional: '推奨で仮に進行中',
+    resolved: '解決済み',
+    withdrawn: '取り下げ',
+  }[state] || state;
+}
+
+function appendDecisionCard(list, decision) {
+  const age = Date.now() - Date.parse(decision.createdAt);
+  const longWait = decision.state === 'waiting' && age > LONG_WAIT_MS;
+  const card = element('article', `decision-card ${decision.state} ${longWait ? 'long-wait' : ''}`.trim());
+  const header = element('div', 'decision-head');
+  header.append(
+    element('span', 'decision-title', decision.title),
+    badge(decisionStateLabel(decision.state), decision.state === 'waiting' ? 'permission' : decision.state === 'provisional' ? 'wait' : decision.state === 'resolved' ? 'done' : ''),
+  );
+  const elapsed = decision.state === 'waiting'
+    ? `待ち時間 ${durationLabel(decision.createdAt)}`
+    : decision.state === 'provisional'
+      ? `仮適用から ${durationLabel(decision.updatedAt)}`
+      : `更新 ${durationLabel(decision.updatedAt)}`;
+  header.append(element('time', 'since', elapsed));
+  // id はモデルが cockpit_update_decision で使う値なので、本文に出さずマウスを重ねたときだけ出す。
+  card.title = `id: ${decision.id}`;
+  card.append(header);
+  if (decision.context) card.append(element('p', 'decision-context', decision.context));
+
+  for (const question of decision.questions || []) {
+    const questionBox = element('section', 'decision-question');
+    if (question.header) questionBox.append(element('div', 'meta', question.header));
+    if (question.question !== decision.title) questionBox.append(element('div', 'decision-question-title', question.question));
+    if (question.multiSelect) questionBox.append(element('div', 'meta', '複数選択できます。'));
+    if (question.options?.length) {
+      const options = element('ul', 'decision-options');
+      for (const option of question.options) {
+        const row = element('li', `decision-option ${option.recommended ? 'recommended' : ''}`.trim());
+        const label = option.recommended ? option.label.replace(/^\(推奨\)\s*/, '') : option.label;
+        row.append(element('span', '', label));
+        if (option.recommended) row.append(badge('推奨', 'busy'));
+        if (option.description) row.append(element('span', 'decision-option-description', option.description));
+        options.append(row);
+      }
+      questionBox.append(options);
+    }
+    card.append(questionBox);
+  }
+
+  if (decision.resolution) {
+    const choices = Array.isArray(decision.resolution.chosen)
+      ? decision.resolution.chosen.join('、')
+      : decision.resolution.chosen;
+    if (choices) card.append(element('div', 'meta', `選択: ${choices}`));
+    if (decision.resolution.note) card.append(element('div', 'meta', decision.resolution.note));
+  }
+  list.append(card);
+}
+
+function appendPlanToggle(body, kind, sessionId, expanded, count, label, expandedSet) {
+  const key = `${kind}:${sessionId}`;
+  const toggle = element('button', 'ended-toggle', `${expanded ? `${label}を隠す` : `${label}を表示`}(${count} 件)`);
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.dataset.planToggle = key;
+  toggle.addEventListener('click', () => {
+    if (expanded) expandedSet.delete(sessionId);
+    else expandedSet.add(sessionId);
+    if (lastState) render(lastState);
+    [...root.querySelectorAll('[data-plan-toggle]')].find((button) => button.dataset.planToggle === key)?.focus();
+  });
+  body.append(toggle);
+}
+
+function appendDecisions(body, session) {
+  const decisions = newestFirst(session.decisions);
+  const active = decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state));
+  const ended = decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const expanded = expandedEndedDecisions.has(session.session_id);
+  body.append(element('h3', 'sub', `判断事項 ${active.length}`));
+  const visible = expanded ? decisions : active;
+  if (!visible.length) {
+    body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : '判断事項はありません。'));
+  } else {
+    const list = element('div', 'decision-list');
+    for (const decision of visible) appendDecisionCard(list, decision);
+    body.append(list);
+  }
+  if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, expanded, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
+}
+
+function appendTaskItem(list, task) {
+  const labels = { todo: '未着手', doing: '作業中', done: '完了' };
+  const item = element('li', `task-item ${task.state}`);
+  const header = element('div', 'task-head');
+  header.append(element('span', 'task-title', task.title), badge(labels[task.state] || task.state, task.state === 'done' ? 'done' : task.state === 'doing' ? 'busy' : ''));
+  const met = task.criteria.filter((criterion) => criterion.met).length;
+  header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
+  item.append(header);
+  if (task.criteria.length) {
+    const criteria = element('ul', 'criteria-list');
+    for (const criterion of task.criteria) {
+      const row = element('li', criterion.met ? 'met' : '', criterion.text);
+      criteria.append(row);
+    }
+    item.append(criteria);
+  }
+  list.append(item);
+}
+
+function appendTasks(body, session) {
+  const tasks = session.tasks;
+  body.append(element('h3', 'sub', `タスク ${tasks.length}`));
+  if (!tasks.length) {
+    body.append(element('div', 'empty', 'タスクはありません。'));
+    return;
+  }
+  if (session.tasksUpdatedAt) {
+    body.append(element('div', 'meta task-updated', `最終更新 ${durationLabel(session.tasksUpdatedAt)}前`));
+  }
+  const done = tasks.filter((task) => task.state === 'done');
+  const expanded = expandedDoneTasks.has(session.session_id);
+  const visible = expanded ? tasks : tasks.filter((task) => task.state !== 'done');
+  if (!visible.length) body.append(element('div', 'empty', '未完了のタスクはありません。'));
+  else {
+    const list = element('ul', 'task-list');
+    for (const task of visible) appendTaskItem(list, task);
+    body.append(list);
+  }
+  if (done.length) appendPlanToggle(body, 'tasks', session.session_id, expanded, done.length, '完了したタスク', expandedDoneTasks);
+}
+
 function render(state) {
   const sessions = Array.isArray(state.sessions) ? state.sessions : [];
   renderSummary(sessions);
@@ -444,7 +610,9 @@ function render(state) {
     const body = element('div', 'section-body');
     body.append(element('div', 'meta', session.title || session.session_id));
     appendPermissionWaits(body, session);
+    appendDecisions(body, session);
     appendTools(body, session);
+    appendTasks(body, session);
     appendAgents(body, session);
     card.append(body);
     return card;
@@ -464,7 +632,8 @@ async function refresh() {
       lastVersion = state.version;
       hasRenderedState = true;
       const permissions = state.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-      liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件。`;
+      const decisions = state.sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+      liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
     }
     if (Date.now() >= awayErrorUntil) {
       if (connection.textContent !== '接続中') connection.textContent = '接続中';

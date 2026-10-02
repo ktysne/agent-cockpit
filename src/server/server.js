@@ -5,13 +5,15 @@ const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { sanitizeEvent } = require('./events');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
-const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
+const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
 const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
+const MAX_SESSION_ID_LENGTH = 128;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 
 // 画面を別のページの iframe に埋めて操作させる経路と、別のオリジンからの読み取りを塞ぐ。
 const SECURITY_HEADERS = Object.freeze({
@@ -117,6 +119,64 @@ function escapeHtmlAttribute(value) {
   })[character]);
 }
 
+function validSessionId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SESSION_ID_LENGTH && SESSION_ID_PATTERN.test(value);
+}
+
+function validText(value, maxLength, allowEmpty = false) {
+  return typeof value === 'string' && value.length <= maxLength && (allowEmpty || value.trim().length > 0);
+}
+
+function validTasks(value) {
+  return Array.isArray(value) && value.length <= 50 && value.every((task) => (
+    task && typeof task === 'object' && !Array.isArray(task) &&
+    validText(task.title, 200) && ['todo', 'doing', 'done'].includes(task.state) &&
+    Array.isArray(task.criteria) && task.criteria.length <= 20 && task.criteria.every((criterion) => (
+      criterion && typeof criterion === 'object' && !Array.isArray(criterion) &&
+      validText(criterion.text, 2000) && typeof criterion.met === 'boolean'
+    ))
+  ));
+}
+
+function validDecisionOptions(value) {
+  if (!Array.isArray(value) || value.length > 6) return false;
+  let recommendedCount = 0;
+  for (const option of value) {
+    if (
+      !option || typeof option !== 'object' || Array.isArray(option) ||
+      !validText(option.label, 200) || !validText(option.description, 2000, true) ||
+      (option.recommended !== undefined && typeof option.recommended !== 'boolean')
+    ) return false;
+    if (option.recommended) recommendedCount += 1;
+  }
+  return recommendedCount <= 1;
+}
+
+function validChosen(value) {
+  if (typeof value === 'string') return value.length <= 2000;
+  return Array.isArray(value) && value.length <= 6 && value.every((item) => validText(item, 2000, true));
+}
+
+function validPlanInput(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  if (body.kind === 'tasks') return validTasks(body.tasks);
+  if (body.kind === 'add_decision') {
+    return validText(body.title, 200) && validText(body.context, 2000, true) &&
+      ['waiting', 'provisional'].includes(body.state) && validDecisionOptions(body.options);
+  }
+  if (body.kind === 'update_decision') {
+    return validText(body.id, 256) && ['provisional', 'resolved'].includes(body.state) &&
+      validChosen(body.chosen) && validText(body.note, 2000, true);
+  }
+  return false;
+}
+
+function decisionSummaries(state, sessionId) {
+  return state.decisionsFor(sessionId)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .map(({ id, title, state: decisionState }) => ({ id, title, state: decisionState }));
+}
+
 function createRequestHandler(options) {
   const {
     homeDir,
@@ -126,6 +186,7 @@ function createRequestHandler(options) {
     dev,
     getServerInfo,
     markRequest,
+    findSessionIdByPid = (pid) => findLiveSessionIdByPid(pid, claudeHome),
   } = options;
   const webPath = path.join(__dirname, '..', 'web', 'index.html');
 
@@ -148,6 +209,16 @@ function createRequestHandler(options) {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
       jsonResponse(response, 200, away.snapshot());
+      return;
+    }
+    const contextPath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/context$/);
+    if (request.method === 'GET' && contextPath) {
+      const sessionId = contextPath[1];
+      if (!validSessionId(sessionId)) {
+        jsonResponse(response, 400, { error: 'Invalid session id' });
+        return;
+      }
+      jsonResponse(response, 200, { ...away.snapshot(), ...state.planSummary(sessionId) });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/dev/fields') {
@@ -235,6 +306,80 @@ function createRequestHandler(options) {
 
       state.addEvent(body, { product, sessionName, agentDefinition });
       jsonResponse(response, 202, { accepted: true });
+      return;
+    }
+
+    const planPath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/plan$/);
+    if (request.method === 'POST' && planPath) {
+      if (request.headers['x-cockpit-secret'] !== info.secret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validOriginForWrite(request)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      const routeSessionId = planPath[1];
+      if (!validSessionId(routeSessionId)) {
+        jsonResponse(response, 400, { error: 'Invalid session id' });
+        return;
+      }
+
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!validPlanInput(body) || (body.ppid !== undefined && (!Number.isInteger(body.ppid) || body.ppid < 1))) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      if (Object.hasOwn(body, 'claudeCodeSessionId') && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string') {
+        jsonResponse(response, 400, { error: 'Invalid session id' });
+        return;
+      }
+
+      const mappedSessionId = Number.isInteger(body.ppid) ? await findSessionIdByPid(body.ppid) : null;
+      const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeSessionId;
+      const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
+      if (!validSessionId(sessionId)) {
+        jsonResponse(response, 400, { error: 'Session id unavailable' });
+        return;
+      }
+      if (!validSessionId(mappedSessionId) && typeof fallbackSessionId === 'string' && routeSessionId !== 'pending' && fallbackSessionId !== routeSessionId) {
+        jsonResponse(response, 400, { error: 'Invalid session id' });
+        return;
+      }
+
+      if (body.kind === 'tasks') {
+        const saved = state.setTasks(sessionId, body.tasks);
+        jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
+        return;
+      }
+      if (body.kind === 'add_decision') {
+        const decision = state.addDecision(sessionId, {
+          title: body.title,
+          context: body.context,
+          state: body.state,
+          options: body.options.map((option) => ({
+            label: option.label,
+            description: option.description,
+            recommended: option.recommended === true,
+          })),
+        });
+        const decisions = decisionSummaries(state, sessionId);
+        jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
+        return;
+      }
+      const decision = state.updateDecision(sessionId, body.id, body.state, body.chosen, body.note);
+      if (!decision) {
+        jsonResponse(response, 404, { error: 'Decision not found or already resolved' });
+        return;
+      }
+      const decisions = decisionSummaries(state, sessionId);
+      jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
       return;
     }
 
@@ -387,6 +532,10 @@ module.exports = {
   MAX_BODY_BYTES,
   requestHostIsLocal,
   validAwayOrigin,
+  validSessionId,
+  validTasks,
+  validDecisionOptions,
+  validPlanInput,
   escapeHtmlAttribute,
   atomicWriteServerInfo,
   removeServerInfoIfOwned,

@@ -37,6 +37,8 @@
 - 待ち受けるのは 127.0.0.1 だけにする。案内する URL も `http://127.0.0.1:<port>/` に統一する。
 - すべての要求で、`Host` が `127.0.0.1:<port>` か `localhost:<port>` であることを確かめる。DNS リバインディングで別のページから読まれないようにするためである。
 - 読み取りは `GET`、書き込みは `POST` にする。書き込みはすべて `X-Cockpit-Secret` の一致を求める。
+- 段階 2 の `POST /api/sessions/<session_id>/plan` も、`/api/events` と同じ `secret` と Origin 不在を求める。`session_id` は英数字と `-` だけを使い、128 文字までにする。
+- `GET /api/sessions/<session_id>/context` は Host を照合し、離席状態、タスクの題と状態、未解決判断事項の id、題、状態を返す。秘密値は求めない。
 - フックからの書き込みは、`Origin` ヘッダーが無いことを求める。ブラウザは `POST` に必ず `Origin` を付けるので、別のページからの書き込みをこれで弾ける。`/api/away` を除く画面からの書き込み(段階 3 以降)は、`Origin` が自分の origin で、`Sec-Fetch-Site` が無いか `same-origin` であることを求める。
 - 秘密値は起動ごとに 2 つ作り、`server.json` に書く。`secret` はフックと MCP サーバー用で、`/api/events` だけが受け付ける。`uiSecret` は画面とトレイ用で、`/api/away` などの画面からの操作だけが受け付ける。画面には `uiSecret` だけを埋めるので、画面を読めてもイベントは偽造できない。
 - `POST /api/away` は `uiSecret` を先に照合し、`Origin` が無いか、待ち受けポートに対する `http://127.0.0.1:<port>` または `http://localhost:<port>` であることを確かめる。画面は同一オリジンのページだけが読めるよう、`uiSecret` を HTML の meta 属性へ埋め込み、CORS ヘッダーは返さない。DNS リバインディングは全要求の Host 照合で防ぐ。
@@ -51,6 +53,7 @@
 
 - すべてのイベントを 1 本のスクリプトで受ける。SessionStart 以外は非同期フック(`async: true`)として登録し、セッションの処理を待たせない。
 - フックは標準入力の JSON から必要な項目だけを抜き出して送る。`tool_response` の全文や、ツールの入力の全文は送らない。
+- `AskUserQuestion` では判断事項の表示と解決に要る項目だけを送る。回答の形を判別できないときは、回答を空にして解決済みにする。
 - フックは、受け取った時刻(`hookAt`、ミリ秒)を付けて送る。非同期のため到着の順は入れ替わるので、常駐サーバーはこの時刻で並べる。
 - 送信のタイムアウトは 1 秒で、失敗しても終了コード 0 ですぐ終わる。セッションを止めない。
 - SessionStart フックは、`additionalContext` でダッシュボードの URL を 1 行返す。メインセッションが `preview_start {url}` で開く契機にする。
@@ -60,8 +63,8 @@
 | イベント | 送る項目 |
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
-| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで) |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。Bash では出力の中の `codex-agent: agent=` の行 |
+| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。Bash では出力の中の `codex-agent: agent=` の行。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
@@ -81,6 +84,8 @@
 - 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionEnd を受けたら一覧から外す。
 - 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。
 - サブエージェント: `agent_id` ごとに、`agent_type`、開始時刻、最後のツール、モデル、effort、取得元。
+- タスク: `tasks` の全項目と、最後に書いた時刻 `tasksUpdatedAt`。
+- 判断事項: AskUserQuestion の記録と MCP から登録した項目を `decisions` に持つ。
 
 ## サブエージェントのモデルと effort
 
@@ -94,20 +99,75 @@
 - 解消するのは、同じ対象の PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop を受けたときである。
 - 通知の種類の値と、`PermissionRequest` フックが使えるかは確かめていない。開発用の口 `/api/dev/fields` で、フックが受け取った項目の名前と通知の種類の値(値はこれだけ)を見られるようにし、実機で確かめてから判定を決める。
 
+## タスクと判断事項
+
+判断事項は次の形で保持する。
+
+```json
+{
+  "id": "tool_use_id または MCP が作る ID",
+  "session_id": "session ID",
+  "source": "ask または mcp",
+  "state": "waiting、provisional、resolved、withdrawn のいずれか",
+  "title": "題",
+  "context": "背景",
+  "questions": [{
+    "question": "質問",
+    "header": "見出し",
+    "multiSelect": false,
+    "options": [{ "label": "選択肢", "description": "説明", "recommended": false }]
+  }],
+  "createdAt": "作成時刻",
+  "updatedAt": "更新時刻",
+  "resolvedAt": null,
+  "answer": null,
+  "resolution": null
+}
+```
+
+`answer` は段階 2 では常に `null` にする。
+AskUserQuestion は `tool_use_id` を id にし、1 回の呼び出しを質問配列付きの 1 件として記録する。
+推奨は label が「(推奨)」で始まるかで判定する。
+同じセッションに未解決の同じ質問がある場合は、その id に後続の tool_use_id を結び付ける。
+PostToolUse は `resolved`、PostToolUseFailure は `withdrawn` にし、どちらも `resolvedAt` を記録する。
+サブエージェントの `agent_id` があるイベントは判断事項にしない。
+
+タスクは `[{title, state, criteria: [{text, met}]}]` の配列で持つ。
+`state` は `todo`、`doing`、`done` のいずれかにする。
+MCP の `cockpit_set_tasks` は配列全体を置き換え、成功時に `tasksUpdatedAt` を更新する。
+題は 200 文字、本文は 2,000 文字、タスクは 50 件、完了条件は 20 件、選択肢は 6 件までに制限する。
+
+段階 2 の MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
+ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision` の 3 つにする。
+各ツール呼び出しは `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。
+送信する環境由来の値は `CLAUDE_CODE_SESSION_ID` だけとし、MCP の `ppid` から `~/.claude/sessions/*.json` の `pid` が一致する session ID を引けたときは、その ID を優先する。
+PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちらも無ければ書き込みを拒否する。
+他の環境変数値や `CLAUDE_CODE_MESSAGING_TOKEN` は MCP の結果、ログ、常駐サーバーへの要求に含めない。
+`cockpit_add_decision` は質問を 1 つ持つ判断事項を作り、`cockpit_update_decision` は `provisional` または `resolved` と `resolution` を記録する。
+成功時の MCP 応答は、保存した後の一覧を短く示す。
+
+`SessionStart` の source が `compact` または `resume` のとき、`away.js` は `/context` からタスクと未解決判断事項の要約を読む。
+離席中の文脈も必要な場合は、同じ `additionalContext` にまとめる。
+
 ## 秘匿
 
 - `~/.claude/sessions/` は `*.json` だけを読む。`*.key` は読まない。
 - `CLAUDE_CODE_MESSAGING_TOKEN` は、フック、常駐サーバー、ログのどこにも記録しない。
-- ツールの入力は要約だけを持つ。全文は常駐サーバーのメモリーにも置かない。
+- 通常のツール入力は要約だけを持つ。`AskUserQuestion` は判断事項の表示に必要な質問項目だけを持ち、ツール入力の全文は常駐サーバーのメモリーにも置かない。
 
 ## 画面
 
 - 2 秒ごとに `GET /api/state` を読む。
 - 待ち時間は 1 分ごとに表示を更新し、15 分を超えたものを強調する。
-- タブのタイトルは、許可待ちの件数を出して `(件数) Agent Cockpit` にする。0 件なら `Agent Cockpit` のままにする。判断事項の件数は段階 2 で加える。
+- セッションカードの順序は、許可待ち、判断事項、今やっていること、タスク、サブエージェントにする。
+- 判断事項は状態、待ち時間、背景、質問と選択肢を表示し、15 分を超えて止めて待つ項目を強調する。解決済みと取り下げは折りたたむ。
+- タスクは状態、完了条件の達成数と一覧、最終更新からの時間を表示する。完了したタスクは折りたたむ。
+- 上部の件数とタブのタイトルには、`waiting` の判断事項を許可待ちとともに含める。
+- 画面から判断事項に回答する入力欄は段階 2 では作らない。
 
 ## 登録
 
 フックの登録先の `~/.claude/settings.json` はリポジトリの外にあるので、自動では書き換えない。
 追記する内容は README に書き、開発者の確認を取ってから登録する。
 登録は exec 形式(`command` と `args` を分ける)で書く。Windows ではフックのコマンドが PowerShell で解釈され、引用符付きの実行ファイルのパスが失敗するためである。
+MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~/.claude/skills/agent-cockpit/` にコピーする。手順は README に記載し、自動登録やコピーはしない。

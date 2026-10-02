@@ -219,6 +219,109 @@ test('Host、秘密値、Origin を照合して書き込みを制限する', asy
   assert.equal(devDisabled.status, 404);
 });
 
+test('/plan は秘密値と Origin を照合し、session ID と入力上限を検査する', async (t) => {
+  const runtime = await runningServer(t);
+  const path = '/api/sessions/plan-session/plan';
+  const body = JSON.stringify({ kind: 'tasks', tasks: [] });
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json' },
+  });
+  assert.equal(missingSecret.status, 401);
+
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: {
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      origin: `http://127.0.0.1:${runtime.info.port}`,
+    },
+  });
+  assert.equal(foreignOrigin.status, 403);
+
+  const invalidSession = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/bad_session/plan', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(invalidSession.status, 400);
+
+  const tooManyTasks = await request(runtime.info.port, {
+    method: 'POST', path, body: JSON.stringify({ kind: 'tasks', tasks: Array.from({ length: 51 }, (_, index) => ({ title: `task ${index}`, state: 'todo', criteria: [] })) }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(tooManyTasks.status, 400);
+});
+
+test('/plan はタスクと判断事項を記録し、読み取り用の要約を返す', async (t) => {
+  const runtime = await runningServer(t);
+  const path = '/api/sessions/plan-session/plan';
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const tasksResponse = await request(runtime.info.port, {
+    method: 'POST', path,
+    body: JSON.stringify({
+      kind: 'tasks',
+      tasks: [{ title: 'API を追加する', state: 'doing', criteria: [{ text: '一覧に出る', met: true }] }],
+    }),
+    headers,
+  });
+  assert.equal(tasksResponse.status, 200);
+  assert.deepEqual(jsonBody(tasksResponse).tasks, [{ title: 'API を追加する', state: 'doing' }]);
+
+  const added = await request(runtime.info.port, {
+    method: 'POST', path,
+    body: JSON.stringify({
+      kind: 'add_decision', title: '状態を選ぶ', context: '運用上の理由を記録する。', state: 'waiting',
+      options: [{ label: '(推奨) waiting', description: '利用者の確認を待つ。', recommended: true }],
+    }),
+    headers,
+  });
+  assert.equal(added.status, 200);
+  const decision = jsonBody(added).decision;
+  assert.ok(decision.id);
+  assert.deepEqual([decision.title, decision.state], ['状態を選ぶ', 'waiting']);
+
+  const updated = await request(runtime.info.port, {
+    method: 'POST', path,
+    body: JSON.stringify({ kind: 'update_decision', id: decision.id, state: 'provisional', chosen: 'waiting', note: '確認後に進める。' }),
+    headers,
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(jsonBody(updated).decision.state, 'provisional');
+
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const session = state.sessions.find((item) => item.session_id === 'plan-session');
+  assert.deepEqual(session.tasks, [{ title: 'API を追加する', state: 'doing', criteria: [{ text: '一覧に出る', met: true }] }]);
+  assert.deepEqual(session.decisions[0].resolution, { chosen: 'waiting', note: '確認後に進める。' });
+  assert.equal(session.decisions[0].answer, null);
+
+  const context = jsonBody(await request(runtime.info.port, { path: '/api/sessions/plan-session/context' }));
+  assert.deepEqual(context.tasks, [{ title: 'API を追加する', state: 'doing' }]);
+  assert.deepEqual(context.decisions, [{ id: decision.id, title: '状態を選ぶ', state: 'provisional' }]);
+});
+
+test('/plan は ppid に一致するセッションファイルの ID を優先する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const sessionDirectory = path.join(claudeHome, 'sessions');
+  await fs.mkdir(sessionDirectory, { recursive: true });
+  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({
+    pid: process.pid, sessionId: 'pid-session', name: 'PID から解決したセッション',
+  }));
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/fallback-session/plan',
+    body: JSON.stringify({
+      kind: 'tasks', tasks: [{ title: 'PID のセッションに保存', state: 'todo', criteria: [] }],
+      ppid: process.pid, claudeCodeSessionId: 'fallback-session',
+    }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(response.status, 200);
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const pidSession = state.sessions.find((session) => session.session_id === 'pid-session');
+  assert.deepEqual(pidSession.tasks.map(({ title }) => title), ['PID のセッションに保存']);
+  assert.ok(!state.sessions.some((session) => session.session_id === 'fallback-session'));
+});
+
 test('64 KB を超える本文を拒否する', async (t) => {
   const runtime = await runningServer(t);
   const response = await request(runtime.info.port, {

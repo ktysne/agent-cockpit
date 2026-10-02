@@ -6,6 +6,7 @@ const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 const {
   childEnvironment,
+  extractAskUserQuestionResolution,
   makeHookEvent,
   runHook,
 } = require('../src/hooks/event');
@@ -67,4 +68,63 @@ test('常駐サーバーに接続できなくても 1 秒程度で終了コー�
   assert.equal(result.exitCode, 0);
   assert.ok(connectionAttempts > 0);
   assert.ok(performance.now() - startedAt < 1000);
+});
+
+test('AskUserQuestion の質問だけを上限付きでフックイベントに含める', async (t) => {
+  await temporaryHome(t);
+  const event = makeHookEvent({
+    session_id: 'ask-session', hook_event_name: 'PreToolUse', cwd: 'D:\\repo',
+    tool_name: 'AskUserQuestion', tool_use_id: 'ask-1',
+    tool_input: {
+      questions: [{
+        question: 'どの形式にしますか。',
+        header: '形式',
+        multiSelect: false,
+        options: [
+          { label: '(推奨) JSON', description: '既存 API で使えます。', secret: 'discarded' },
+          { label: 'YAML', description: '設定ファイル向けです。' },
+        ],
+      }],
+      private: 'discarded',
+    },
+  });
+  assert.deepEqual(event.questions, [{
+    question: 'どの形式にしますか。',
+    header: '形式',
+    multiSelect: false,
+    options: [
+      { label: '(推奨) JSON', description: '既存 API で使えます。', recommended: true },
+      { label: 'YAML', description: '設定ファイル向けです。', recommended: false },
+    ],
+  }]);
+  assert.ok(!JSON.stringify(event).includes('discarded'));
+});
+
+test('AskUserQuestion の回答抽出は異なる応答形を扱い、不明な形では選択を空にする', () => {
+  const cases = [
+    ['JSON', []],
+    [{ answer: 'YAML' }, ['YAML']],
+    [{ answers: [{ question: '形式', answer: 'JSON' }, { answer: '二つ目' }] }, ['JSON', '二つ目']],
+    [{ answers: { 形式: 'YAML' } }, ['YAML']],
+    [{ text: '説明文で、選択肢とは限らない' }, []],
+  ];
+  for (const [response, chosen] of cases) {
+    assert.deepEqual(extractAskUserQuestionResolution(response), { chosen, note: '' });
+  }
+});
+
+test('AskUserQuestion の回答を本文の全文なしで PostToolUse に載せる', async (t) => {
+  await temporaryHome(t);
+  const event = makeHookEvent({
+    session_id: 'ask-session', hook_event_name: 'PostToolUse',
+    tool_name: 'AskUserQuestion', tool_use_id: 'ask-1',
+    tool_response: { answers: [{ answer: 'JSON' }], private: 'discarded' },
+  });
+  assert.deepEqual(event.decisionResolution, { chosen: ['JSON'], note: '' });
+  assert.ok(!JSON.stringify(event).includes('discarded'));
+  const agentEvent = makeHookEvent({
+    session_id: 'ask-session', hook_event_name: 'PostToolUse', agent_id: 'agent-1',
+    tool_name: 'AskUserQuestion', tool_use_id: 'ask-1', tool_response: { answer: 'JSON' },
+  });
+  assert.equal(Object.hasOwn(agentEvent, 'decisionResolution'), false);
 });

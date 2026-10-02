@@ -191,7 +191,7 @@ function Get-ServerInfo {
 
 function Get-DashboardState([object]$ServerInfo) {
   if ($null -eq $ServerInfo) {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
   try {
     $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
@@ -201,9 +201,15 @@ function Get-DashboardState([object]$ServerInfo) {
         if ($null -ne $wait) { $keys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
       }
     }
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; AwayEnabled = ($state.away.enabled -eq $true) }
+    $decisionKeys = @()
+    foreach ($session in @($state.sessions)) {
+      foreach ($decision in @($session.decisions)) {
+        if ($decision -and $decision.state -eq 'waiting') { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
+      }
+    }
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
   } catch {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
 }
 
@@ -323,18 +329,17 @@ function Update-TrayState {
   $state = Get-DashboardState $serverInfo
   $tooltip = if (-not $state.Connected) {
     'Agent Cockpit: サーバーに未接続'
-  } elseif ($state.PermissionCount -eq 1) {
-    'Agent Cockpit: 許可待ち 1 件'
   } else {
-    "Agent Cockpit: 許可待ち $($state.PermissionCount) 件"
+    "Agent Cockpit: 許可待ち $($state.PermissionCount) 件、判断待ち $($state.DecisionCount) 件"
   }
   if ($state.AwayEnabled) { $tooltip += ' (離席中)' }
   if ($tooltip.Length -gt 63) { $tooltip = $tooltip.Substring(0, 63) }
   $script:notifyIcon.Text = $tooltip
   if ($script:awayMenuItem) { $script:awayMenuItem.Checked = $state.AwayEnabled }
-  $iconState = '{0}|{1}|{2}' -f $state.Connected, ($state.PermissionCount -gt 0), $state.AwayEnabled
+  $hasPending = $state.PermissionCount -gt 0 -or $state.DecisionCount -gt 0
+  $iconState = '{0}|{1}|{2}' -f $state.Connected, $hasPending, $state.AwayEnabled
   if ($iconState -ne $script:lastIconState) {
-    $nextIcon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($state.Connected, ($state.PermissionCount -gt 0), $state.AwayEnabled)
+    $nextIcon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($state.Connected, $hasPending, $state.AwayEnabled)
     $oldIcon = $script:notifyIcon.Icon
     $script:notifyIcon.Icon = $nextIcon
     if ($oldIcon) { $oldIcon.Dispose() }
@@ -344,11 +349,20 @@ function Update-TrayState {
   if ($state.Connected) {
     # 件数で比べると、1 件が解消して別の 1 件が増えたときに知らせ損なう。
     $newWaits = @($state.PermissionKeys | Where-Object { $script:lastPermissionKeys -notcontains $_ })
-    if ($script:permissionKeysKnown -and $newWaits.Count -gt 0) {
+    $newDecisions = @($state.DecisionKeys | Where-Object { $script:lastDecisionKeys -notcontains $_ })
+    $hasKnownWaits = $script:permissionKeysKnown -and $newWaits.Count -gt 0
+    $hasKnownDecisions = $script:decisionKeysKnown -and $newDecisions.Count -gt 0
+    if ($hasKnownWaits -and $hasKnownDecisions) {
+      Show-TrayNotice "許可待ちが $($state.PermissionCount) 件、判断待ちが $($state.DecisionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
+    } elseif ($hasKnownWaits) {
       Show-TrayNotice "許可待ちが $($state.PermissionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
+    } elseif ($hasKnownDecisions) {
+      Show-TrayNotice "判断待ちが $($state.DecisionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
     }
     $script:lastPermissionKeys = @($state.PermissionKeys)
+    $script:lastDecisionKeys = @($state.DecisionKeys)
     $script:permissionKeysKnown = $true
+    $script:decisionKeysKnown = $true
   }
 }
 
@@ -364,6 +378,7 @@ if ($Check) {
     Connected = $state.Connected
     Port = if ($serverInfo) { $serverInfo.Port } else { $null }
     PermissionCount = $state.PermissionCount
+    DecisionCount = $state.DecisionCount
   } | ConvertTo-Json -Compress
   exit 0
 }
@@ -383,7 +398,9 @@ if (-not $createdNew) {
 $script:notifyIcon = $null
 $script:timer = $null
 $script:lastPermissionKeys = @()
+$script:lastDecisionKeys = @()
 $script:permissionKeysKnown = $false
+$script:decisionKeysKnown = $false
 $script:lastIconState = $null
 $script:balloonOpensDashboard = $false
 $script:awayMenuItem = $null
