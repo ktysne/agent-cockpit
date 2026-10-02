@@ -328,7 +328,7 @@ test('スカッシュした親のコミットはbaseをmainに変えても残り
   assert.equal(state.relatedPullRequestRegistrationsForRepo('example', 'project')[0].state, 'merged');
   const mergedListCall = calls.find((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged');
   assert.deepEqual(mergedListCall, [
-    'pr', 'list', '-R', 'example/project', '--state', 'merged', '--limit', '100', '--json', 'number,headRefOid,mergedAt',
+    'pr', 'list', '-R', 'example/project', '--state', 'merged', '--limit', '1000', '--json', 'number,headRefOid,mergedAt',
   ]);
 });
 
@@ -440,7 +440,7 @@ test('31件目以降の登録済みOPEN PRをgh pr viewから一覧へ補う', a
     'pr', 'list', '-R', 'example/project', '--state', 'open', '--limit', '500',
   ]);
   const viewCall = calls.find((args) => args[0] === 'pr' && args[1] === 'view');
-  assert.ok(viewCall.includes('number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,state,mergedAt'));
+  assert.ok(viewCall.includes('number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt,state,mergedAt'));
   assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged').length, 1);
   assert.equal(calls.filter((args) => args[0] === 'api' && args[1].includes('/compare/')).length, 1);
   assert.equal(group.trees[0].number, 31);
@@ -513,7 +513,7 @@ test('オープン一覧から消えた PR の状態を gh pr view で確認す�
 
   const viewCall = calls.find((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '52');
   assert.ok(viewCall);
-  assert.equal(viewCall.at(-1), `${'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup'},state,mergedAt`);
+  assert.equal(viewCall.at(-1), `${'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt'},state,mergedAt`);
   assert.equal(Object.hasOwn(state.serializeStore(), 'mergedPrHeads'), false);
   const [group] = tracker.snapshot();
   assert.equal(group.defaultBranch, 'main');
@@ -581,4 +581,42 @@ test('クロスレビュー状態は PR head ブランチの round と非対応�
   const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
   assert.deepEqual(value, { number: 55, branch: 'feat/pr', round: 2, max: 3, dismissed: 2 });
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'missing' }), null);
+});
+
+test('マージ済みの一覧を最古のオープン PR の作成日以降に絞り、上限で切れたら積み直しを確かめられないとする', async (t) => {
+  const { github, calls, tracker } = await trackerFixture(t);
+  const childSha = 'b'.repeat(40);
+  github.openPullRequests = [{ ...ghPullRequest(31, 'feat/child', 'main', childSha), createdAt: '2026-10-01T10:00:00.000Z' }];
+  // 上限ちょうどの件数を返し、親が一覧の外にあり得る状態にする。
+  github.mergedPullRequests = Array.from({ length: 1000 }, (_, index) => (
+    mergedPullRequest(1000 + index, (index + 1).toString(16).padStart(40, 'f'))
+  ));
+  github.comparisons.set(childSha, compareResult([childSha]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const mergedListCall = calls.find((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged');
+  assert.equal(mergedListCall[mergedListCall.indexOf('--search') + 1], 'merged:>=2026-09-30');
+  const [group] = tracker.snapshot();
+  assert.equal(group.trees[0].blocker, '積み直しが必要か確かめられない');
+  assert.equal(group.mergeableCount, 0);
+});
+
+test('親だけを登録したスタックで、親がマージされ子の base が main に付け替わっても子を表示し続ける', () => {
+  const parentSha = 'a'.repeat(40);
+  const child = pullRequest(31, 'feat/child', 'main');
+  const parent = registration(30, 'merged', {
+    title: 'PR 30', url: 'https://github.com/example/project/pull/30',
+    headRefName: 'feat/parent', baseRefName: 'main', headRefOid: parentSha,
+  });
+  const result = assemblePullRequestStacks({
+    defaultBranch: 'main',
+    openPullRequests: [child],
+    registrations: [parent],
+    restackResults: new Map([[31, { checked: true, parent: { number: 30, headRefOid: parentSha, mergedAt: '2026-10-03T11:00:00.000Z' } }]]),
+  });
+
+  assert.equal(result.openCount, 1);
+  assert.equal(result.trees[0].number, 31);
+  assert.equal(result.trees[0].needsRestack, true);
 });

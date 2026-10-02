@@ -5,7 +5,9 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { validRepositoryPart } = require('./pull-request-utils');
 
-const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup';
+const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
+const MERGED_PULL_REQUEST_LIMIT = 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 const SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
@@ -49,6 +51,7 @@ function normalizeOpenPullRequest(value) {
     headRefName: asText(value.headRefName, 500),
     baseRefName: asText(value.baseRefName, 500),
     headRefOid: SHA_PATTERN.test(value.headRefOid || '') ? value.headRefOid : '',
+    createdAt: typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt)) ? value.createdAt : '',
     draft: value.isDraft === true,
     mergeable: asText(value.mergeable, 40).toUpperCase(),
     mergeStateStatus: asText(value.mergeStateStatus, 40).toUpperCase(),
@@ -163,12 +166,19 @@ function parseCompareResult(stdout) {
   return new Set(value.commits.map((commit) => commit.sha.toLowerCase()));
 }
 
-function restackResult(commits, mergedPullRequests) {
+// 親が見つからなくても、マージ済みの一覧が上限で切れていれば見逃しを否定できないので確かめられない扱いにする。
+function restackResult(commits, mergedPullRequests, mergedListComplete = true) {
   if (!commits) return { checked: false, parent: null };
-  return {
-    checked: true,
-    parent: mergedPullRequests.find((parent) => commits.has(parent.headRefOid)) || null,
-  };
+  const parent = mergedPullRequests.find((candidate) => commits.has(candidate.headRefOid)) || null;
+  return { checked: Boolean(parent) || mergedListComplete, parent };
+}
+
+// 積まれた子の親は子が作られた後にマージされるので、オープンの PR の最も古い作成日より後のマージだけを取る。
+// gh の検索は日付の単位なので、1 日前から取る。
+function mergedSearchSince(openPullRequests) {
+  const created = openPullRequests.map((pr) => Date.parse(pr.createdAt)).filter(Number.isFinite);
+  if (!created.length) return null;
+  return new Date(Math.min(...created) - DAY_MS).toISOString().slice(0, 10);
 }
 
 function assemblePullRequestStacks({
@@ -230,6 +240,13 @@ function assemblePullRequestStacks({
     }
   }
   for (const [child, parent] of parentByNumber) {
+    edges.get(child)?.add(parent);
+    edges.get(parent)?.add(child);
+  }
+  // base を付け替えた後はブランチ名でつながらないので、積み直しの判定で見つけた親子でもつなぐ。
+  for (const [child, check] of restackResults) {
+    const parent = check?.parent?.number;
+    if (!parent || !nodeByNumber.has(child) || !nodeByNumber.has(parent)) continue;
     edges.get(child)?.add(parent);
     edges.get(parent)?.add(child);
   }
@@ -454,10 +471,9 @@ class PullRequestTracker {
     };
     const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
-    const [listResult, configResult, mergedListResult] = await Promise.allSettled([
+    const [listResult, configResult] = await Promise.allSettled([
       this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--limit', '500', '--json', PULL_REQUEST_FIELDS]),
       this.execute(['api', `repos/${repository}`]),
-      this.execute(['pr', 'list', '-R', repository, '--state', 'merged', '--limit', '100', '--json', 'number,headRefOid,mergedAt']),
     ]);
     const errors = [];
     let openPullRequests = current.openPullRequests;
@@ -466,6 +482,7 @@ class PullRequestTracker {
     let fetchedAt = current.fetchedAt;
     let listAvailable = false;
     let mergedPullRequests = null;
+    let mergedListComplete = false;
 
     if (listResult.status === 'fulfilled') {
       try {
@@ -491,15 +508,6 @@ class PullRequestTracker {
       errors.push(`リポジトリ設定を取得できません。${ghErrorMessage(configResult.reason)}`);
     }
 
-    if (mergedListResult.status === 'fulfilled') {
-      try {
-        mergedPullRequests = parseMergedPullRequestList(mergedListResult.value);
-      } catch {
-        errors.push('マージ済み PR の一覧を読み取れませんでした');
-      }
-    } else {
-      errors.push(`マージ済み PR の一覧を取得できません。${ghErrorMessage(mergedListResult.reason)}`);
-    }
 
     if (listAvailable) {
       const trackedByNumber = new Map();
@@ -606,6 +614,23 @@ class PullRequestTracker {
       }
     }
 
+    // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
+    if (listAvailable && !openPullRequests.length) {
+      mergedPullRequests = [];
+      mergedListComplete = true;
+    } else if (listAvailable) {
+      const since = mergedSearchSince(openPullRequests);
+      try {
+        mergedPullRequests = parseMergedPullRequestList(await this.execute([
+          'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
+          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,mergedAt',
+        ]));
+        mergedListComplete = mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT;
+      } catch (error) {
+        errors.push(`マージ済み PR の一覧を取得できません。${ghErrorMessage(error)}`);
+      }
+    }
+
     const restackResults = new Map();
     const comparisons = listAvailable && defaultBranch
       ? await Promise.all(openPullRequests.map(async (pr) => {
@@ -616,7 +641,7 @@ class PullRequestTracker {
             `repos/${repository}/compare/${encodeURIComponent(defaultBranch)}...${pr.headRefOid}`,
           ]);
           const commits = parseCompareResult(output);
-          const result = mergedPullRequests ? restackResult(commits, mergedPullRequests) : { checked: false, parent: null };
+          const result = mergedPullRequests ? restackResult(commits, mergedPullRequests, mergedListComplete) : { checked: false, parent: null };
           if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
           return [pr.number, result];
         } catch (error) {
