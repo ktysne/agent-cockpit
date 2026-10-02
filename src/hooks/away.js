@@ -1,12 +1,8 @@
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { HOOK_TIMEOUT_MS, readServerInfo } = require('./event');
+const { runAskQuestion } = require('./answer');
 
-const DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作、PR のマージ、main への push は行わず、判断待ちとして残してください。';
 const AWAY_CONTEXT = 'Agent Cockpit: 開発者は離席中です({since}から)。開発者に尋ねずに、推奨を適用して作業を続けてください。破壊的な操作、PR のマージ、main への push は行わず、判断待ちとして最後の報告に書いてください。';
-
-function decisionIdForReason(value) {
-  return typeof value === 'string' && value.length > 0 ? value.slice(0, 256).replace(/[\r\n]/g, '') : '不明';
-}
 
 function sessionSummary(snapshot) {
   const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
@@ -24,16 +20,7 @@ function sessionSummary(snapshot) {
 
 function outputForAway(input, away, snapshot = null) {
   const hookEventName = input.hook_event_name;
-  if (hookEventName === 'PreToolUse') {
-    if (input.tool_name !== 'AskUserQuestion' || away.enabled !== true) return null;
-    return {
-      hookSpecificOutput: {
-        hookEventName,
-        permissionDecision: 'deny',
-        permissionDecisionReason: DENY_REASON.replace('{id}', decisionIdForReason(input.tool_use_id)),
-      },
-    };
-  }
+  if (hookEventName === 'PreToolUse') return null;
   const context = [];
   if (snapshot && hookEventName === 'SessionStart' && ['compact', 'resume'].includes(input.source)) {
     context.push(sessionSummary(snapshot));
@@ -55,6 +42,7 @@ async function runAwayHook(input, options = {}) {
   const hookEventName = input.hook_event_name;
   if (!['PreToolUse', 'UserPromptSubmit', 'SessionStart'].includes(hookEventName)) return null;
   if (hookEventName === 'PreToolUse' && input.tool_name !== 'AskUserQuestion') return null;
+  if (hookEventName === 'PreToolUse') return runAskQuestion(input, options);
 
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const info = await readServerInfo(homeDir);
@@ -114,4 +102,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { DENY_REASON, AWAY_CONTEXT, decisionIdForReason, sessionSummary, runAwayHook };
+module.exports = { AWAY_CONTEXT, sessionSummary, runAwayHook };

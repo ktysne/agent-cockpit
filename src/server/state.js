@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { sanitizeEvent } = require('./events');
+const { recommendedOptionFor, sanitizeEvent } = require('./events');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
 
@@ -257,6 +257,8 @@ function deriveSessions(entries) {
           existing.updatedAt = isoTime(event.hookAt);
           existing.resolvedAt = null;
           existing.resolution = null;
+          existing.title = event.questions[0].question.slice(0, 200);
+          existing.questions = event.questions;
           session.decisionBindings[toolUseId] = existing.id;
         } else {
           const createdAt = isoTime(event.hookAt);
@@ -458,6 +460,7 @@ class DashboardState {
     this.sessionFiles = new Map();
     this.plans = new Map();
     this.decisionOverrides = new Map();
+    this.decisionLifecycles = new Map();
     this.estimates = new Map();
     this.hiddenSessions = new Set();
   }
@@ -512,6 +515,7 @@ class DashboardState {
       this.entries.delete(event.session_id);
       this.plans.delete(event.session_id);
       this.decisionOverrides.delete(event.session_id);
+      this.decisionLifecycles.delete(event.session_id);
     }
 
     const before = JSON.stringify([...this.sessions.values()]);
@@ -527,6 +531,7 @@ class DashboardState {
       this.endedAt.set(event.session_id, event.hookAt);
       this.plans.delete(event.session_id);
       this.decisionOverrides.delete(event.session_id);
+      this.decisionLifecycles.delete(event.session_id);
     }
 
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden) this.touch();
@@ -591,7 +596,7 @@ class DashboardState {
         question: input.title,
         header: '',
         multiSelect: false,
-        options: input.options.map((option) => ({ ...option })),
+        options: input.options.map((option) => ({ ...option, recommended: option.recommended === true })),
       }],
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -599,6 +604,8 @@ class DashboardState {
       answer: null,
       resolution: null,
     };
+    const recommended = recommendedOptionFor(decision.questions[0]);
+    if (recommended) recommended.recommended = true;
     plan.decisions.push(decision);
     this.touch();
     return cloneDecision(decision);
@@ -631,6 +638,11 @@ class DashboardState {
       });
       this.decisionOverrides.set(sessionId, overrides);
     }
+    const lifecycle = this.decisionLifecycles.get(sessionId)?.get(decision.id);
+    if (lifecycle) {
+      lifecycle.state = null;
+      lifecycle.updatedAt = null;
+    }
     this.touch();
     return cloneDecision(updated);
   }
@@ -659,11 +671,45 @@ class DashboardState {
     const eventDecisions = this.sessions.get(sessionId)?.decisions || [];
     const planDecisions = this.plans.get(sessionId)?.decisions || [];
     const overrides = this.decisionOverrides.get(sessionId);
+    const lifecycles = this.decisionLifecycles.get(sessionId);
     return [...eventDecisions, ...planDecisions].map((decision) => {
       const override = overrides?.get(decision.id);
-      if (!override || Date.parse(override.updatedAt) < Date.parse(decision.updatedAt)) return cloneDecision(decision);
-      return cloneDecision({ ...decision, ...override });
+      const withOverride = override && Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt)
+        ? { ...decision, ...override }
+        : decision;
+      const lifecycle = lifecycles?.get(decision.id);
+      if (!lifecycle) return cloneDecision(withOverride);
+      return cloneDecision({
+        ...withOverride,
+        ...(lifecycle.state ? { state: lifecycle.state } : {}),
+        ...(lifecycle.updatedAt ? { updatedAt: lifecycle.updatedAt } : {}),
+        answer: lifecycle.answer,
+        ...(lifecycle.awaitingAnswerUntil ? { awaitingAnswerUntil: lifecycle.awaitingAnswerUntil } : {}),
+      });
     });
+  }
+
+  decisionFor(sessionId, decisionId) {
+    return this.decisionsFor(sessionId).find((decision) => decision.id === decisionId) || null;
+  }
+
+  decisionIdForToolUse(sessionId, toolUseId) {
+    return this.sessions.get(sessionId)?.decisionBindings?.[toolUseId] || null;
+  }
+
+  setDecisionLifecycle(sessionId, decisionId, updates, now = Date.now()) {
+    if (!this.decisionFor(sessionId, decisionId)) return null;
+    let lifecycles = this.decisionLifecycles.get(sessionId);
+    if (!lifecycles) {
+      lifecycles = new Map();
+      this.decisionLifecycles.set(sessionId, lifecycles);
+    }
+    const current = lifecycles.get(decisionId) || { answer: null, awaitingAnswerUntil: null, state: null, updatedAt: null };
+    const next = { ...current, ...updates };
+    if (Object.hasOwn(updates, 'state')) next.updatedAt = isoTime(now);
+    lifecycles.set(decisionId, next);
+    this.touch();
+    return this.decisionFor(sessionId, decisionId);
   }
 
   touch() {

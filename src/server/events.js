@@ -19,6 +19,14 @@ function boundedString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : '';
 }
 
+function recommendedOptionFor(question) {
+  if (!question || question.multiSelect || !Array.isArray(question.options)) return null;
+  const matches = question.options.filter((option) => (
+    option.recommended === true || /推奨|recommended/i.test(`${option.label} ${option.description}`)
+  ));
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function sanitizeQuestions(value) {
   if (!Array.isArray(value)) return [];
   return value.slice(0, MAX_ASK_QUESTIONS).flatMap((question) => {
@@ -30,17 +38,20 @@ function sanitizeQuestions(value) {
       return [{
         label,
         description: boundedString(option.description, QUESTION_TEXT_LIMIT),
-        recommended: label.startsWith('(推奨)'),
+        recommended: false,
       }];
     }) : [];
     const text = boundedString(question.question, QUESTION_TEXT_LIMIT);
     if (!text) return [];
-    return [{
+    const sanitized = {
       question: text,
       header: boundedString(question.header, 200),
       multiSelect: question.multiSelect === true,
       options,
-    }];
+    };
+    const recommended = recommendedOptionFor(sanitized);
+    if (recommended) recommended.recommended = true;
+    return [sanitized];
   });
 }
 
@@ -149,6 +160,7 @@ function sanitizeEvent(input, metadata = {}) {
 module.exports = {
   EVENT_NAMES,
   MAX_ASK_QUESTIONS,
+  recommendedOptionFor,
   MAX_ASK_OPTIONS,
   QUESTION_TEXT_LIMIT,
   parseCodexLaunch,
