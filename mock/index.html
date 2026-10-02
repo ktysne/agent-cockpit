@@ -280,7 +280,7 @@ const DATA = {
         },
       ],
       review: { pr: '#142', round: 2, max: 3, state: 'Codex がレビュー中', open: 2, fixed: 5, dismissed: 1 },
-      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前' },
+      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], requiresApproval: true, fetched: '20 秒前' },
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false },
         { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false },
@@ -308,7 +308,7 @@ const DATA = {
         },
       ],
       review: { pr: '—', round: 0, max: 3, state: '未着手', open: 0, fixed: 0, dismissed: 0 },
-      repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
+      repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], requiresApproval: false, fetched: '1 分前' },
       prs: [
         { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'required', conflict: false, draft: false },
         { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'required', conflict: true, draft: false },
@@ -334,7 +334,7 @@ const DATA = {
       ],
       decisions: [],
       review: { pr: '—', round: 0, max: 3, state: 'PoC のためレビュー省略', open: 0, fixed: 0, dismissed: 0 },
-      repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
+      repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], requiresApproval: false, fetched: '5 秒前' },
       prs: [],
     },
   ],
@@ -343,7 +343,7 @@ const DATA = {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' } }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 
@@ -584,20 +584,22 @@ function mergeBlocker(p, pr) {
   if (pr.ci === 'fail') return 'CI が失敗';
   if (pr.ci === 'pending') return 'CI 実行中';
   if (pr.review === 'changes') return '変更を求められている';
-  if (pr.review === 'required') return 'レビューの承認待ち';
+  if (pr.review === 'required' && p.repo.requiresApproval) return 'レビューの承認待ち';
   return null;
 }
 
 const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 function mergeOpts(p, pr) {
   const k = prKey(p, pr.number);
-  return ui.mergeOpts[k] || { method: p.repo.methods[0], del: true };
+  const last = ui.lastMethod[p.repo.name];
+  const method = p.repo.methods.includes(last) ? last : p.repo.methods[0];
+  return ui.mergeOpts[k] || { method, del: true };
 }
 
 function prBadges(p, pr) {
   const e = effective(p, pr);
   const ci = { pass: ['ok', 'CI 成功'], pending: ['warn', 'CI 実行中'], fail: ['danger', 'CI 失敗'] }[pr.ci];
-  const rv = { approved: ['ok', '承認済み'], required: ['mute', '承認待ち'], changes: ['danger', '変更要求'] }[pr.review];
+  const rv = { approved: ['ok', '承認済み'], required: ['mute', p.repo.requiresApproval ? '承認待ち' : '承認は任意'], changes: ['danger', '変更要求'] }[pr.review];
   return [
     pr.draft ? '<span class="badge mute">ドラフト</span>' : '',
     `<span class="badge ${ci[0]}">${ci[1]}</span>`,
@@ -824,7 +826,7 @@ document.addEventListener('change', e => {
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
-    if (e.target.dataset.method) o.method = e.target.dataset.method;
+    if (e.target.dataset.method) o.method = ui.lastMethod[p.repo.name] = e.target.dataset.method;
     if (e.target.hasAttribute('data-del')) o.del = e.target.checked;
     ui.mergeOpts[k] = o;
     save(); render();
