@@ -511,13 +511,120 @@ test('/plan はタスクと判断事項を記録し、読み取り用の要約�
 
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   const session = state.sessions.find((item) => item.session_id === 'plan-session');
-  assert.deepEqual(session.tasks, [{ title: 'API を追加する', state: 'doing', criteria: [{ text: '一覧に出る', met: true }] }]);
-  assert.deepEqual(session.decisions[0].resolution, { chosen: 'waiting', note: '確認後に進める。' });
-  assert.equal(session.decisions[0].answer, null);
+  runtime.state.syncSessionFiles([{ session_id: 'plan-session', cwd: 'C:\\project', name: '計画中' }]);
+  const stateWithSessionFile = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const visibleSession = stateWithSessionFile.sessions.find((item) => item.session_id === 'plan-session');
+  assert.equal(session, undefined);
+  assert.deepEqual(visibleSession.tasks, [{ title: 'API を追加する', state: 'doing', criteria: [{ text: '一覧に出る', met: true }] }]);
+  assert.deepEqual(visibleSession.decisions[0].resolution, { chosen: 'waiting', note: '確認後に進める。' });
+  assert.equal(visibleSession.decisions[0].answer, null);
 
   const context = jsonBody(await request(runtime.info.port, { path: '/api/sessions/plan-session/context' }));
   assert.deepEqual(context.tasks, [{ title: 'API を追加する', state: 'doing' }]);
   assert.deepEqual(context.decisions, [{ id: decision.id, title: '状態を選ぶ', state: 'provisional' }]);
+});
+
+test('/plan は同じ題を持つタスク一覧を拒む', async (t) => {
+  const runtime = await runningServer(t);
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/duplicate-tasks/plan',
+    body: JSON.stringify({
+      kind: 'tasks',
+      tasks: [taskForRequest('同じ題'), taskForRequest('同じ題', 'todo')],
+    }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(response.status, 400);
+});
+
+function taskForRequest(title, state = 'doing') {
+  return { title, state, criteria: [] };
+}
+
+test('表示設定 API は照合し、変更した項目だけを既存値へ合わせる', async (t) => {
+  const runtime = await runningServer(t);
+  const endpoint = '/api/display';
+  const body = JSON.stringify({ mode: 'kind' });
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const validHeaders = {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.uiSecret,
+    origin,
+  };
+
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, null);
+  const unauthorized = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', origin } });
+  assert.equal(unauthorized.status, 401);
+  const forbidden = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { ...validHeaders, origin: 'https://other.example' },
+  });
+  assert.equal(forbidden.status, 403);
+  const missingOrigin = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  });
+  assert.equal(missingOrigin.status, 403);
+  const invalid = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ mode: 'kind', display: { hidden: [] } }), headers: validHeaders,
+  });
+  assert.equal(invalid.status, 400);
+
+  const mode = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders });
+  assert.equal(mode.status, 200);
+  const hidden = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents'] }), headers: validHeaders,
+  });
+  assert.equal(hidden.status, 200);
+  const pinned = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ pinned: ['C:\\project'] }), headers: validHeaders,
+  });
+  assert.equal(pinned.status, 200);
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
+    mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents'],
+  });
+});
+
+test('画面からタスクを完了にし、終了未確認エージェントを終了にできる', async (t) => {
+  const state = new DashboardState();
+  const runtime = await runningServer(t, { state });
+  const sessionId = 'close-actions';
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '閉じる操作' }]);
+  state.setTasks(sessionId, [{ title: '完了にする', state: 'doing', criteria: [] }]);
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'agent-1', agent_type: 'impl-hard' });
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: 2, agent_id: 'agent-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
+  });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'agent-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'agent-1' });
+
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+  const taskBody = JSON.stringify({ session_id: sessionId, title: '完了にする' });
+  const missingOrigin = await request(runtime.info.port, {
+    method: 'POST', path: '/api/closed-tasks', body: taskBody,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  });
+  assert.equal(missingOrigin.status, 403);
+  const missingSecret = await request(runtime.info.port, { method: 'POST', path: '/api/closed-tasks', body: taskBody, headers: { 'content-type': 'application/json', origin } });
+  assert.equal(missingSecret.status, 401);
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path: '/api/closed-tasks', body: taskBody, headers: { ...headers, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+  const closedTask = await request(runtime.info.port, { method: 'POST', path: '/api/closed-tasks', body: taskBody, headers });
+  assert.equal(closedTask.status, 200);
+  assert.equal(state.snapshot().sessions[0].tasks[0].state, 'done');
+  assert.equal(state.snapshot().sessions[0].tasks[0].closedByUser, true);
+
+  const closeAgent = await request(runtime.info.port, {
+    method: 'POST', path: '/api/closed-agents',
+    body: JSON.stringify({ session_id: sessionId, agent_id: 'agent-1' }), headers,
+  });
+  assert.equal(closeAgent.status, 200);
+  assert.equal(state.snapshot().sessions[0].agents[0].unconfirmed, false);
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'agent-1', agent_type: 'impl-hard' });
+  assert.equal(state.closedAgents.has(sessionId), false);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
 });
 
 test('/plan は ppid に一致するセッションファイルの ID を優先する', async (t) => {

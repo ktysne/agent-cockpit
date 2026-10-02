@@ -194,6 +194,9 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
 .filter-note[hidden], .body[hidden] { display: none; }
 .link-btn { min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
+.task-item .close-task { margin-left: auto; flex: none; color: var(--text-2); }
+.task-item .close-task:hover, .close-agent:hover { color: var(--text); }
+.close-agent { margin-left: auto; color: var(--text-2); font-size: 12px; }
 .section { overflow: visible; }
 .section > .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .section > .head h2 { margin: 0; font-size: 15px; }
@@ -344,31 +347,110 @@ const answerDrafts = new Map();
 function readDisplayPreferences() {
   try {
     const value = JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}');
+    const uniqueStrings = (items) => [...new Set(Array.isArray(items) ? items.filter((item) => typeof item === 'string').slice(0, 200) : [])];
     return {
       mode: value.mode === 'kind' ? 'kind' : 'product',
-      order: Array.isArray(value.order) ? value.order.filter((item) => typeof item === 'string') : [],
-      pinned: Array.isArray(value.pinned) ? value.pinned.filter((item) => typeof item === 'string') : [],
-      collapsed: Array.isArray(value.collapsed) ? value.collapsed.filter((item) => typeof item === 'string') : [],
-      hidden: Array.isArray(value.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [],
+      order: uniqueStrings(value.order),
+      pinned: uniqueStrings(value.pinned),
+      collapsed: uniqueStrings(value.collapsed),
+      hidden: [...new Set(Array.isArray(value.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
     };
   } catch {
     return { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
   }
 }
 
-let displayPreferences = readDisplayPreferences();
+function normalizeDisplayPreferences(value) {
+  const uniqueStrings = (items) => [...new Set(Array.isArray(items) ? items.filter((item) => typeof item === 'string').slice(0, 200) : [])];
+  return {
+    mode: value?.mode === 'kind' ? 'kind' : 'product',
+    order: uniqueStrings(value?.order),
+    pinned: uniqueStrings(value?.pinned),
+    collapsed: uniqueStrings(value?.collapsed),
+    hidden: [...new Set(Array.isArray(value?.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
+  };
+}
 
-function saveDisplayPreferences() {
+let displayPreferences = normalizeDisplayPreferences(null);
+let displayPreferencesReady = false;
+let displayMigrationPending = false;
+let displayMigrationData = null;
+let pendingDisplayChanges = {};
+let pendingDisplayRequests = 0;
+let displayWriteTail = Promise.resolve();
+
+async function sendDisplayPatch(changes) {
   try {
-    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify(displayPreferences));
+    const response = await postUiAction('/api/display', changes);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return true;
   } catch {
+    showWriteError('表示の設定を保存できませんでした');
+    return false;
+  }
+}
+
+function enqueueDisplayPatch(changes) {
+  pendingDisplayRequests += 1;
+  const run = displayWriteTail.then(() => sendDisplayPatch(changes)).finally(() => { pendingDisplayRequests -= 1; });
+  displayWriteTail = run.catch(() => false);
+  return run;
+}
+
+function saveDisplayPreferences(changes) {
+  Object.assign(displayPreferences, changes);
+  if (!displayPreferencesReady) {
+    Object.assign(pendingDisplayChanges, changes);
+    return;
+  }
+  void enqueueDisplayPatch(changes);
+}
+
+function clearLegacyDisplayPreferences() {
+  try {
+    localStorage.removeItem(DISPLAY_STORAGE_KEY);
+  } catch {
+  }
+}
+
+async function syncDisplayPreferences(serverDisplay) {
+  if (!displayPreferencesReady) {
+    const current = serverDisplay === null
+      ? readDisplayPreferences()
+      : normalizeDisplayPreferences(serverDisplay);
+    displayPreferences = { ...current, ...pendingDisplayChanges };
+    displayPreferencesReady = true;
+    const patch = serverDisplay === null ? displayPreferences : pendingDisplayChanges;
+    pendingDisplayChanges = {};
+    if (Object.keys(patch).length) {
+      const saved = await enqueueDisplayPatch(patch);
+      if (serverDisplay === null) {
+        displayMigrationPending = !saved;
+        displayMigrationData = displayPreferences;
+        if (saved) clearLegacyDisplayPreferences();
+      }
+    } else if (serverDisplay !== null) {
+      clearLegacyDisplayPreferences();
+    }
+    return;
+  }
+  if (serverDisplay === null && displayMigrationPending) {
+    const saved = await enqueueDisplayPatch(displayMigrationData);
+    displayMigrationPending = !saved;
+    if (saved) clearLegacyDisplayPreferences();
+    return;
+  }
+  if (serverDisplay !== null && pendingDisplayRequests === 0) {
+    displayPreferences = normalizeDisplayPreferences(serverDisplay);
+    displayMigrationPending = false;
+    displayMigrationData = null;
+    clearLegacyDisplayPreferences();
   }
 }
 
 document.querySelectorAll('[data-action="mode"]').forEach((button) => {
   button.addEventListener('click', () => {
-    displayPreferences.mode = button.dataset.mode;
-    saveDisplayPreferences();
+    saveDisplayPreferences({ mode: button.dataset.mode });
     if (lastState) render(lastState);
   });
 });
@@ -590,8 +672,7 @@ function renderSummary(sessions) {
     showAll.type = 'button';
     showAll.dataset.showAll = 'true';
     showAll.addEventListener('click', () => {
-      displayPreferences.hidden = [];
-      saveDisplayPreferences();
+      saveDisplayPreferences({ hidden: [] });
       render(lastState);
     });
     note.replaceChildren(
@@ -697,8 +778,7 @@ function orderedProducts(sessions) {
     for (const key of retained) nextOrder.push(key);
   }
   if (nextOrder.length !== displayPreferences.order.length || nextOrder.some((key, index) => key !== displayPreferences.order[index])) {
-    displayPreferences.order = nextOrder;
-    saveDisplayPreferences();
+    saveDisplayPreferences({ order: nextOrder });
   }
   const orderIndex = new Map(nextOrder.map((key, index) => [key, index]));
   return products
@@ -763,7 +843,14 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     appendContextTags(who, product, session, withTags, multipleSessions);
     const name = element('span', 'agent-name');
     name.append(badge(agentState[0], agentState[1]), element('strong', '', agent.agent_type || agent.agent_id));
-    who.append(name);
+    if (agent.unconfirmed && !agent.active) {
+      const close = element('button', 'link-btn close-agent', '終了にする');
+      close.type = 'button';
+      close.dataset.closeAgent = `${session.session_id}::${agent.agent_id}`;
+      who.append(name, close);
+    } else {
+      who.append(name);
+    }
     const detail = element('div', 'detail');
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
@@ -1147,6 +1234,13 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   header.append(element('span', 'task-title', task.title), badge(labels[task.state] || task.state, task.state === 'done' ? 'done' : task.state === 'doing' ? 'busy' : ''));
   const met = task.criteria.filter((criterion) => criterion.met).length;
   header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
+  if (task.closedByUser) header.append(element('span', 'meta', '画面で完了にした'));
+  if (task.state !== 'done') {
+    const close = element('button', 'link-btn close-task', '完了にする');
+    close.type = 'button';
+    close.dataset.closeTask = `${session.session_id}::${task.title}`;
+    header.append(close);
+  }
   item.append(header);
   if (task.criteria.length) {
     const criteria = element('ul', 'criteria-list');
@@ -1721,6 +1815,45 @@ document.addEventListener('compositionend', (event) => {
   renderDeferredState();
 }, true);
 
+async function runCloseAction(button, url, body, errorMessage) {
+  button.disabled = true;
+  try {
+    const response = await postUiAction(url, body);
+    if (response.status === 404 || response.status === 409) {
+      await refresh();
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await refresh();
+    liveStatus.textContent = '状態を更新しました。';
+  } catch {
+    liveStatus.textContent = errorMessage;
+    showWriteError(errorMessage);
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+function closeTaskButton(button) {
+  const key = button.dataset.closeTask || '';
+  const separator = key.indexOf('::');
+  if (separator < 1) return;
+  void runCloseAction(button, '/api/closed-tasks', {
+    session_id: key.slice(0, separator),
+    title: key.slice(separator + 2),
+  }, 'タスクを完了にできませんでした');
+}
+
+function closeAgentButton(button) {
+  const key = button.dataset.closeAgent || '';
+  const separator = key.indexOf('::');
+  if (separator < 1) return;
+  void runCloseAction(button, '/api/closed-agents', {
+    session_id: key.slice(0, separator),
+    agent_id: key.slice(separator + 2),
+  }, 'サブエージェントを終了にできませんでした');
+}
+
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
   button.disabled = true;
   try {
@@ -1758,6 +1891,14 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.closeTask) {
+    closeTaskButton(button);
+    return;
+  }
+  if (button.dataset.closeAgent) {
+    closeAgentButton(button);
+    return;
+  }
   if (button.dataset.sendAnswer) {
     void sendDecisionAnswer(button);
     return;
@@ -1792,10 +1933,10 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.filter) {
     const key = button.dataset.filter;
-    displayPreferences.hidden = isFilterShown(key)
+    const hidden = isFilterShown(key)
       ? [...displayPreferences.hidden, key]
       : displayPreferences.hidden.filter((hidden) => hidden !== key);
-    saveDisplayPreferences();
+    saveDisplayPreferences({ hidden });
     if (lastState) render(lastState);
     return;
   }
@@ -1814,14 +1955,17 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.productAction) {
     const key = button.dataset.productKey;
+    let changedKey;
     if (button.dataset.productAction === 'collapse') {
       displayPreferences.collapsed = displayPreferences.collapsed.includes(key)
         ? displayPreferences.collapsed.filter((item) => item !== key)
         : [...displayPreferences.collapsed, key];
+      changedKey = 'collapsed';
     } else if (button.dataset.productAction === 'pin') {
       displayPreferences.pinned = displayPreferences.pinned.includes(key)
         ? displayPreferences.pinned.filter((item) => item !== key)
         : [...displayPreferences.pinned, key];
+      changedKey = 'pinned';
     } else {
       const products = orderedProducts(lastState.sessions);
       const index = products.findIndex((product) => product.key === key);
@@ -1839,8 +1983,9 @@ document.addEventListener('click', (event) => {
       const targetOrderIndex = displayPreferences.order.indexOf(targetKey);
       [displayPreferences.order[currentOrderIndex], displayPreferences.order[targetOrderIndex]] =
         [displayPreferences.order[targetOrderIndex], displayPreferences.order[currentOrderIndex]];
+      changedKey = 'order';
     }
-    saveDisplayPreferences();
+    saveDisplayPreferences({ [changedKey]: displayPreferences[changedKey] });
     if (lastState) render(lastState);
   }
 });
@@ -1850,6 +1995,7 @@ async function refresh() {
     const response = await fetch('/api/state', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
+    await syncDisplayPreferences(state.display);
     lastStateAt = new Date();
     connectionLost = false;
     updateConnectionNote();

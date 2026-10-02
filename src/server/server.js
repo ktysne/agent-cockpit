@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
+const { AtomicJsonWriter } = require('./json-storage');
 const { DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
@@ -138,14 +139,35 @@ function validText(value, maxLength, allowEmpty = false) {
 }
 
 function validTasks(value) {
-  return Array.isArray(value) && value.length <= 50 && value.every((task) => (
-    task && typeof task === 'object' && !Array.isArray(task) &&
-    validText(task.title, 200) && ['todo', 'doing', 'done'].includes(task.state) &&
-    Array.isArray(task.criteria) && task.criteria.length <= 20 && task.criteria.every((criterion) => (
-      criterion && typeof criterion === 'object' && !Array.isArray(criterion) &&
-      validText(criterion.text, 2000) && typeof criterion.met === 'boolean'
-    ))
-  ));
+  if (!Array.isArray(value) || value.length > 50) return false;
+  const titles = new Set();
+  for (const task of value) {
+    if (
+      !task || typeof task !== 'object' || Array.isArray(task) ||
+      !validText(task.title, 200) || titles.has(task.title) || !['todo', 'doing', 'done'].includes(task.state) ||
+      !Array.isArray(task.criteria) || task.criteria.length > 20 || !task.criteria.every((criterion) => (
+        criterion && typeof criterion === 'object' && !Array.isArray(criterion) &&
+        validText(criterion.text, 2000) && typeof criterion.met === 'boolean'
+      ))
+    ) return false;
+    titles.add(task.title);
+  }
+  return true;
+}
+
+function validDisplayPatch(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden'].includes(key))) return false;
+  if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
+  for (const key of ['order', 'pinned', 'collapsed']) {
+    if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
+      value[key].some((item) => typeof item !== 'string' || item.length > 500) || new Set(value[key]).size !== value[key].length)) return false;
+  }
+  const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents']);
+  if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
+    value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
+  return true;
 }
 
 function validDecisionOptions(value) {
@@ -287,6 +309,7 @@ function createRequestHandler(options) {
           jsonResponse(response, 400, { error: 'Invalid request' });
           return;
         }
+        await state.waitForPersistence();
         jsonResponse(response, 200, result);
       } catch {
         jsonResponse(response, 500, { error: 'Internal Server Error' });
@@ -348,6 +371,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 409, { error: 'Decision cannot be answered now' });
         return;
       }
+      await state.waitForPersistence();
       jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
       return;
     }
@@ -445,6 +469,99 @@ function createRequestHandler(options) {
       jsonResponse(response, 200, { hidden: isSingleHide ? true : hiddenCount });
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/display') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!validDisplayPatch(body)) {
+        jsonResponse(response, 400, { error: 'Invalid display preferences' });
+        return;
+      }
+      jsonResponse(response, 200, { display: state.patchDisplayPreferences(body) });
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/closed-tasks') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).sort().join(',') !== 'session_id,title' || !validSessionId(body.session_id) || !validText(body.title, 200)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      if (!state.snapshot().sessions.some((session) => session.session_id === body.session_id)) {
+        jsonResponse(response, 404, { error: 'Session not found' });
+        return;
+      }
+      const closed = state.closeTask(body.session_id, body.title);
+      if (closed === null) {
+        jsonResponse(response, 404, { error: 'Task not found' });
+        return;
+      }
+      if (!closed) {
+        jsonResponse(response, 409, { error: 'Task is already complete' });
+        return;
+      }
+      jsonResponse(response, 200, { closed: true });
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/closed-agents') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).sort().join(',') !== 'agent_id,session_id' || !validSessionId(body.session_id) || !validText(body.agent_id, 256)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const closed = state.closeAgent(body.session_id, body.agent_id);
+      if (closed === null) {
+        jsonResponse(response, 404, { error: 'Unconfirmed agent not found' });
+        return;
+      }
+      if (!closed) {
+        jsonResponse(response, 409, { error: 'Agent state changed' });
+        return;
+      }
+      jsonResponse(response, 200, { closed: true });
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/away') {
       if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -518,6 +635,7 @@ function createRequestHandler(options) {
       state.addEvent(body, eventMetadata);
       const event = sanitizeEvent(body, eventMetadata);
       if (event) answerDelivery.afterEvent(event);
+      await state.waitForPersistence();
       jsonResponse(response, 202, { accepted: true });
       return;
     }
@@ -593,6 +711,7 @@ function createRequestHandler(options) {
         return;
       }
       answerDelivery.afterDecisionUpdate(sessionId, decision.id);
+      await state.waitForPersistence();
       const decisions = decisionSummaries(state, sessionId);
       jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
       return;
@@ -645,8 +764,13 @@ async function startServer(options = {}) {
   await fs.mkdir(homeDir, { recursive: true });
   if (options.truncateLog !== false) await fs.writeFile(path.join(homeDir, 'server.log'), '', { mode: 0o600 });
 
-  const state = options.state || new DashboardState();
-  const away = options.away || await AwayState.load(homeDir);
+  const storageWriter = new AtomicJsonWriter(homeDir, {
+    onFailure: (fileName) => logLine(homeDir, `${fileName} write failed`),
+  });
+  const state = options.state || await DashboardState.load(homeDir, { writer: storageWriter });
+  state.attachWriter?.(storageWriter);
+  const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
+  away.attachWriter?.(storageWriter);
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
@@ -716,6 +840,7 @@ async function startServer(options = {}) {
       clearInterval(sessionScanTimer);
       answerDelivery.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
+      await Promise.all([state.flushPersistence?.(), away.flushPersistence?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');
     })();

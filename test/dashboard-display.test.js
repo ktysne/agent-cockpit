@@ -32,6 +32,99 @@ test('モックと実装の画面スクリプトを構文解析できる', () =>
   }
 });
 
+test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン用の識別子を送る', () => {
+  const closeTaskButton = functionSource(web, 'closeTaskButton');
+  assert.ok(closeTaskButton);
+  const calls = [];
+  const context = vm.createContext({
+    runCloseAction: (...args) => { calls.push(args); },
+  });
+  vm.runInContext(`${closeTaskButton}\nthis.closeTaskButton = closeTaskButton;`, context);
+  context.closeTaskButton({ dataset: { closeTask: 'session-a::タスクの題' } });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1], '/api/closed-tasks');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), {
+    session_id: 'session-a', title: 'タスクの題',
+  });
+  assert.match(web, /if \(button\.dataset\.closeTask\) \{\s*closeTaskButton\(button\);/);
+  assert.match(web, /'完了にする'/);
+  assert.match(web, /close\.dataset\.closeTask = `\$\{session\.session_id\}::\$\{task\.title\}`/);
+});
+
+test('終了未確認のサブエージェント行に終了 API を呼ぶボタンを置く', () => {
+  const closeAgentButton = functionSource(web, 'closeAgentButton');
+  const calls = [];
+  const context = vm.createContext({
+    runCloseAction: (...args) => { calls.push(args); },
+  });
+  vm.runInContext(`${closeAgentButton}\nthis.closeAgentButton = closeAgentButton;`, context);
+  context.closeAgentButton({ dataset: { closeAgent: 'session-a::agent-1' } });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][1], '/api/closed-agents');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), {
+    session_id: 'session-a', agent_id: 'agent-1',
+  });
+  assert.match(web, /if \(button\.dataset\.closeAgent\) \{\s*closeAgentButton\(button\);/);
+  assert.match(web, /close\.dataset\.closeAgent = `\$\{session\.session_id\}::\$\{agent\.agent_id\}`/);
+});
+
+test('表示設定はサーバーの null のときだけ旧 localStorage から移し、通常変更は差分で送る', async () => {
+  const sync = `async ${functionSource(web, 'syncDisplayPreferences')}`;
+  const syncCalls = [];
+  let legacyReads = 0;
+  const context = vm.createContext({
+    displayPreferences: {},
+    displayPreferencesReady: false,
+    displayMigrationPending: false,
+    displayMigrationData: null,
+    pendingDisplayChanges: {},
+    pendingDisplayRequests: 0,
+    readDisplayPreferences: () => {
+      legacyReads += 1;
+      return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [] };
+    },
+    normalizeDisplayPreferences: (value) => value,
+    enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
+    clearLegacyDisplayPreferences() {},
+  });
+  vm.runInContext(`${sync}\nthis.syncDisplayPreferences = syncDisplayPreferences;`, context);
+  await context.syncDisplayPreferences(null);
+  assert.equal(legacyReads, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(syncCalls[0])), {
+    mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [],
+  });
+
+  const readyContext = vm.createContext({
+    displayPreferences: {},
+    displayPreferencesReady: false,
+    displayMigrationPending: false,
+    displayMigrationData: null,
+    pendingDisplayChanges: {},
+    pendingDisplayRequests: 0,
+    readDisplayPreferences: () => { throw new Error('旧設定は読み込まない'); },
+    normalizeDisplayPreferences: (value) => value,
+    enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
+    clearLegacyDisplayPreferences() {},
+  });
+  vm.runInContext(`${sync}\nthis.syncDisplayPreferences = syncDisplayPreferences;`, readyContext);
+  await readyContext.syncDisplayPreferences({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] });
+
+  const save = functionSource(web, 'saveDisplayPreferences');
+  const saveContext = vm.createContext({
+    displayPreferences: { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] },
+    displayPreferencesReady: true,
+    pendingDisplayChanges: {},
+    enqueueDisplayPatch: (patch) => { syncCalls.push(patch); },
+  });
+  vm.runInContext(`${save}\nthis.saveDisplayPreferences = saveDisplayPreferences;`, saveContext);
+  saveContext.saveDisplayPreferences({ mode: 'kind' });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(syncCalls[1])), { mode: 'kind' });
+  assert.equal(syncCalls.length, 2);
+});
+
 test('種類別の並び順は最初のセクションより前に置く', () => {
   const mockKind = functionSource(mock, 'renderKindMode');
   const webKind = functionSource(web, 'renderKindSections');

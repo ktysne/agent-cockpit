@@ -277,7 +277,7 @@ function Get-ServerInfo {
 
 function Get-DashboardState([object]$ServerInfo) {
   if ($null -eq $ServerInfo) {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; AskDecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
   try {
     $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
@@ -294,9 +294,10 @@ function Get-DashboardState([object]$ServerInfo) {
         if ($decision -and $decision.state -eq 'waiting' -and -not $hasEffectiveAnswer) { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
       }
     }
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
+    $askDecisionCount = @($state.sessions | ForEach-Object { @($_.decisions) } | Where-Object { $_.source -eq 'ask' -and $_.state -in @('waiting', 'provisional') }).Count
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; AskDecisionCount = $askDecisionCount; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
   } catch {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; AskDecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
 }
 
@@ -376,9 +377,9 @@ function Restart-ResidentServer {
   try {
     $previousServer = Get-ServerInfo
     $state = Get-DashboardState $previousServer
-    $confirmationText = '常駐サーバーを再起動します。表示中のセッションの状態はいったん消え、次のイベントから組み立て直されます。'
-    if ($state.Connected -and ($state.PermissionCount -gt 0 -or $state.DecisionCount -gt 0)) {
-      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件と止めて待っている質問 $($state.DecisionCount) 件の表示も消えます。"
+    $confirmationText = '常駐サーバーを再起動します。タスク、判断事項、回答の記録、表示の設定、一覧から外したセッション、離席中の切り替えは残ります。実行中のツール、サブエージェントの行、離席中の質問から作った判断事項は消え、次のイベントから組み立て直されます。'
+    if ($state.Connected -and ($state.PermissionCount -gt 0 -or $state.AskDecisionCount -gt 0)) {
+      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件と、離席中の質問から作った未解決の判断事項 $($state.AskDecisionCount) 件は、再起動後に表示されません。"
     }
     $confirmation = [System.Windows.Forms.MessageBox]::Show(
       $confirmationText,

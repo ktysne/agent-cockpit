@@ -20,7 +20,7 @@
 | `away.json` | `{enabled, since}` | 1c |
 | `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない | 1 |
 | `start.lock` | 再起動の排他。10 秒で失効する | 1 |
-| `state.json` | 表示順、保留、既読の時刻 | 4 |
+| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション | 4 |
 | `routing.json` | 経路の設定 | 7 |
 
 ## 起動と寿命
@@ -92,9 +92,13 @@ PostToolUse の出力全文は送らない。
 ## 状態
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
-- セッション表示の状態はメモリーだけに持つ。表示モード、プロダクト順、固定、折りたたみ、非表示にする種類は段階 2a では画面の `localStorage` に保存し、段階 4 でサーバーへ移す。離席中は `{enabled, since}` を `away.json` に保存し、起動時に読む。壊れているときは離席中ではない状態として扱う。
-- `GET /api/state` は `{version, generatedAt, sessions, away}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
+- イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、回答の記録、完了タスク、外したセッション、表示設定は `store.json` に保存する。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。テーマはブラウザーごとの `localStorage` に残す。離席中は `{enabled, since}` を `away.json` に保存し、起動時に読む。壊れているときは離席中ではない状態として扱う。
+- `GET /api/state` は `{version, generatedAt, display, sessions, away}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
+
+## 保存
+
+保存対象、書き込みの直列化と再試行、起動時の復元と期限切れの扱いは、計画書の「段階 4 の設計(保存と閉じる操作)」を正本とする。
 
 セッションごとに次を持つ。
 

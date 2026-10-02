@@ -1063,10 +1063,13 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
   const delivered = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-other' }, { homeDir });
   assert.match(delivered.output.hookSpecificOutput.additionalContext, /他セッションだけに渡す本文/);
   assert.doesNotMatch(delivered.output.hookSpecificOutput.additionalContext, /UI からの回答本文/);
-  const persistedText = (await Promise.all((await fs.readdir(homeDir)).map((name) => (
-    fs.readFile(path.join(homeDir, name), 'utf8')
-  )))).join('\n');
+  const persistedText = (await Promise.all((await fs.readdir(homeDir))
+    .filter((name) => name !== 'store.json')
+    .map((name) => fs.readFile(path.join(homeDir, name), 'utf8')))).join('\n');
   assert.doesNotMatch(persistedText, /UI からの回答本文|他セッションだけに渡す本文/);
+  const stored = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.equal(stored.decisionLifecycles['session-ui'], undefined);
+  assert.equal(stored.decisionLifecycles['session-other'][privateDecision.id].answer.note, '他セッションだけに渡す本文');
 });
 
 test('選択肢の回答 API は label と質問ごとの選択数を検査して回答を渡す', async (t) => {
