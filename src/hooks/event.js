@@ -24,15 +24,6 @@ function inputSummary(toolName, toolInput) {
   return value.trim().split(/\r?\n/, 1)[0].slice(0, 80);
 }
 
-function responseText(value) {
-  if (typeof value === 'string') return value;
-  if (!value || typeof value !== 'object') return '';
-  for (const key of ['stdout', 'output', 'text']) {
-    if (typeof value[key] === 'string') return value[key];
-  }
-  return '';
-}
-
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
   if (depth > 6 || output.length >= 6) return;
   if (typeof value === 'string') {
@@ -79,13 +70,27 @@ function extractAskUserQuestionResolution(toolResponse) {
   return resolution || { chosen: [], note: '' };
 }
 
-function codexAuditLine(value) {
-  const text = responseText(value);
-  const line = text.split(/\r?\n/).find((item) => item.includes('codex-agent: agent='));
-  if (!line) return null;
-  const match = line.match(/codex-agent:\s*agent=([^\s]+)\s+model=([^\s]+)\s+effort=([^\s]+)/);
-  if (!match) return null;
-  return { agent_id: match[1], model: match[2], effort: match[3] };
+function codexOutputLines(value) {
+  const lines = {};
+  const visit = (item, depth = 0) => {
+    if (depth > 6 || (lines.auditLine && lines.resultLine)) return;
+    if (typeof item === 'string') {
+      for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=)[^\r\n]*/gm) || []) {
+        const normalized = line.trimStart();
+        if (!lines.auditLine && normalized.startsWith('codex-agent: agent=')) lines.auditLine = normalized.slice(0, 1024);
+        if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
+      }
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item) visit(child, depth + 1);
+      return;
+    }
+    if (!item || typeof item !== 'object') return;
+    for (const key of ['stdout', 'output', 'text', 'content']) visit(item[key], depth + 1);
+  };
+  visit(value);
+  return Object.keys(lines).length ? lines : null;
 }
 
 function makeHookEvent(input, now = Date.now()) {
@@ -108,6 +113,7 @@ function makeHookEvent(input, now = Date.now()) {
     event.tool_name = pickString(input.tool_name);
     event.tool_use_id = pickString(input.tool_use_id);
     event.summary = inputSummary(event.tool_name, input.tool_input);
+    if (event.tool_name === 'Agent') event.description = pickString(input.tool_input?.description).slice(0, 200);
     if (event.tool_name === 'AskUserQuestion' && !input.agent_id) {
       event.questions = sanitizeQuestions(input.tool_input?.questions);
     }
@@ -123,9 +129,9 @@ function makeHookEvent(input, now = Date.now()) {
         event.resolvedModel = response.resolvedModel.slice(0, 160);
       }
     }
-    if (eventName === 'PostToolUse' && event.tool_name === 'Bash') {
-      const audit = codexAuditLine(input.tool_response);
-      if (audit) event.codexAudit = audit;
+    if (eventName === 'PostToolUse') {
+      const codexOutput = codexOutputLines(input.tool_response);
+      if (codexOutput) event.codexOutput = codexOutput;
     }
   } else if (eventName === 'Notification') {
     event.notification_type = pickString(input.notification_type).slice(0, 100);
@@ -385,7 +391,7 @@ if (require.main === module) main();
 module.exports = {
   HOOK_TIMEOUT_MS,
   inputSummary,
-  codexAuditLine,
+  codexOutputLines,
   extractAskUserQuestionResolution,
   makeHookEvent,
   readServerInfo,

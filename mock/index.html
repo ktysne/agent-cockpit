@@ -950,7 +950,9 @@ function decisionSessionBlock(p, session, withTag) {
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
-  return `${cards || `<div class="empty">${empty}</div>`}${endedDecisionToggle(session)}`;
+  // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
+  const showEmpty = !cards && !visiblePerms(session).length;
+  return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
 function taskSessionBlock(p, session, withTag) {

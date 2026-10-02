@@ -23,22 +23,35 @@ async function temporaryHome(testContext) {
   return { homeDir, claudeHome: path.join(homeDir, '.claude') };
 }
 
-test('フックは入力全文を送らず、Bash の監査行だけを抽出する', async (t) => {
+test('フックは入力全文を送らず、任意のツール出力から Codex の行だけを抽出する', async (t) => {
   await temporaryHome(t);
   const event = makeHookEvent({
-    session_id: 'hook-1', hook_event_name: 'PostToolUse', cwd: 'D:\\repo',
-    tool_name: 'Bash', tool_use_id: 'bash-1',
-    tool_input: { command: 'secret command' },
-    tool_response: 'private output\ncodex-agent: agent=agent-7 model=gpt-5.5-codex effort=high\nmore private output',
+    session_id: 'hook-1', hook_event_name: 'PostToolUse', cwd: 'D:\\repo', agent_id: 'parent-1',
+    tool_name: 'Read', tool_use_id: 'read-1',
+    tool_input: { file_path: 'README.md' },
+    tool_response: { content: [{ type: 'text', text: 'private output\ncodex-agent: agent=agent-7 model=gpt-5.5-codex effort=high sandbox=read-only codex_home=C:\\Users\\User Data\\.codex workdir=D:\\repo\ncodex-agent: result=ok\nmore private output' }] },
   }, 1234);
   assert.deepEqual(event, {
-    session_id: 'hook-1', hook_event_name: 'PostToolUse', cwd: 'D:\\repo', hookAt: 1234,
-    input_fields: ['session_id', 'hook_event_name', 'cwd', 'tool_name', 'tool_use_id', 'tool_input', 'tool_response'],
-    tool_name: 'Bash', tool_use_id: 'bash-1',
-    codexAudit: { agent_id: 'agent-7', model: 'gpt-5.5-codex', effort: 'high' },
+    session_id: 'hook-1', hook_event_name: 'PostToolUse', cwd: 'D:\\repo', hookAt: 1234, agent_id: 'parent-1',
+    input_fields: ['session_id', 'hook_event_name', 'cwd', 'agent_id', 'tool_name', 'tool_use_id', 'tool_input', 'tool_response'],
+    tool_name: 'Read', tool_use_id: 'read-1',
+    codexOutput: {
+      auditLine: 'codex-agent: agent=agent-7 model=gpt-5.5-codex effort=high sandbox=read-only codex_home=C:\\Users\\User Data\\.codex workdir=D:\\repo',
+      resultLine: 'codex-agent: result=ok',
+    },
   });
   assert.ok(!JSON.stringify(event).includes('private output'));
-  assert.ok(!JSON.stringify(event).includes('secret command'));
+});
+
+test('Agent の説明は 200 文字までフックイベントに含める', async (t) => {
+  await temporaryHome(t);
+  const event = makeHookEvent({
+    session_id: 'agent-description', hook_event_name: 'PreToolUse',
+    tool_name: 'Agent', tool_use_id: 'agent-1',
+    tool_input: { description: '説明'.repeat(120), prompt: '送信しない本文' },
+  });
+  assert.equal(event.description, '説明'.repeat(100));
+  assert.ok(!JSON.stringify(event).includes('送信しない本文'));
 });
 
 test('常駐サーバーへ渡す環境から CLAUDE_CODE_ 変数を除く', async (t) => {

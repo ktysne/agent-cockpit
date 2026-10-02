@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { DashboardState } = require('../src/server/state');
+const { DashboardState, claudeModelName } = require('../src/server/state');
 const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 
@@ -262,6 +262,31 @@ test('Agent ツールの resolvedModel でサブエージェントの仮モデ�
   assert.equal(agent.source, 'Agent tool response');
 });
 
+test('Agent ツールの説明を対応するサブエージェントへ結び付け、200 文字で制限する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: 'agent-description', hook_event_name: 'PreToolUse', hookAt: 100,
+    tool_name: 'Agent', tool_use_id: 'agent-tool', description: '作業の説明'.repeat(50),
+  });
+  state.addEvent({
+    session_id: 'agent-description', hook_event_name: 'SubagentStart', hookAt: 200,
+    agent_id: 'agent-1', agent_type: 'Explore',
+  });
+
+  assert.equal(state.snapshot().sessions[0].agents[0].description, '作業の説明'.repeat(40));
+});
+
+test('Claude のモデル ID を読みやすい名前に変換する', () => {
+  const cases = [
+    ['claude-sonnet-5-5', 'Sonnet 5.5'],
+    ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
+    ['claude-opus-5-5', 'Opus 5.5'],
+    ['claude-3-5-sonnet-20241022', 'Sonnet 3.5'],
+  ];
+  for (const [modelId, expected] of cases) assert.equal(claudeModelName(modelId), expected);
+});
+
 test('SessionEnd はセッションを一覧から外す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
@@ -316,25 +341,80 @@ test('SessionEnd より後に遅れて届いたイベントで終了済みセッ
   assert.deepEqual(state.snapshot().sessions, []);
 });
 
-function launchCodex(state, sessionId, toolUseId, hookAt, agentId) {
+function launchCodex(state, sessionId, toolUseId, hookAt, agentId, agentDefinition = null) {
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PreToolUse', hookAt, agent_id: agentId,
     tool_name: 'Bash', tool_use_id: toolUseId, summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
-  });
+  }, agentDefinition ? { agentDefinition } : undefined);
 }
 
-test('背景で動いた Codex の実行は、呼び出したサブエージェントの終了で稼働中から外れる', async (t) => {
+function codexOutput(model, effort, result = 'ok', codexHome = 'C:\\Users\\mss02968\\.codex') {
+  return {
+    auditLine: `codex-agent: agent=impl-hard model=${model} effort=${effort} sandbox=read-only codex_home=${codexHome} workdir=D:\\repo`,
+    resultLine: `codex-agent: result=${result}${result === 'rate-limited' || result === 'unavailable' ? ' exit=75' : ''}`,
+  };
+}
+
+test('背景で起動した Codex は後続の Read 出力にある結果行で終了し、親の GPT 情報にまとまる', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
-  state.addEvent({ session_id: 'bg', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
-  launchCodex(state, 'bg', 'bash-1', 2, 'sub-1');
+  state.addEvent({ session_id: 'bg', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' }, {
+    agentDefinition: { model: 'claude-sonnet-5-5', effort: 'high' },
+  });
+  launchCodex(state, 'bg', 'bash-1', 2, 'sub-1', { model: 'gpt-draft', effort: 'low' });
   state.addEvent({ session_id: 'bg', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
-  const codexActive = () => state.snapshot().sessions[0].agents.find((agent) => agent.agent_id === 'codex:bash-1').active;
-  assert.equal(codexActive(), true);
-  state.addEvent({ session_id: 'bg', hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'sub-1' });
-  assert.equal(codexActive(), false);
-  state.addEvent({ session_id: 'bg', hook_event_name: 'Stop', hookAt: 5 });
-  assert.equal(state.snapshot().sessions[0].status, '待機中');
+  state.addEvent({
+    session_id: 'bg', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1',
+    tool_name: 'Read', tool_use_id: 'read-1',
+    codexOutput: codexOutput('gpt-5.5-codex', 'xhigh', 'ok', 'C:\\Users\\User Data\\.codex'),
+  });
+
+  const agents = state.snapshot().sessions[0].agents;
+  assert.deepEqual(agents.map((agent) => agent.agent_id), ['sub-1']);
+  assert.equal(agents[0].modelName, 'Sonnet 5.5');
+  assert.deepEqual(agents[0].gpt, {
+    model: 'gpt-5.5-codex', effort: 'xhigh', codex_home: 'C:\\Users\\User Data\\.codex',
+    unavailable: '', active: false, unconfirmed: false,
+  });
+});
+
+test('背景で起動した Codex は、--wait で取り出した結果で終了し、--wait を別の Codex として数えない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'bg-wait', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'bg-wait', 'bash-1', 2, 'sub-1');
+  state.addEvent({ session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({
+    session_id: 'bg-wait', hook_event_name: 'PreToolUse', hookAt: 4, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', summary: 'bash ~/.claude/tools/codex-agent.sh --wait 20261002-abc',
+  });
+  state.addEvent({
+    session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-6-luna', 'xhigh'),
+  });
+  state.addEvent({ session_id: 'bg-wait', hook_event_name: 'SubagentStop', hookAt: 6, agent_id: 'sub-1' });
+
+  const session = state.snapshot().sessions[0];
+  assert.deepEqual(session.agents.map((agent) => agent.agent_id), ['sub-1']);
+  assert.deepEqual([session.agents[0].gpt.model, session.agents[0].gpt.active, session.agents[0].gpt.unconfirmed], ['gpt-6-luna', false, false]);
+});
+
+test('同じ親の背景 Codex が複数あるときは、結果行を最も古い呼び出しへ結び付ける', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'bg-oldest', 'bash-old', 2, 'sub-1', { model: 'gpt-old', effort: 'low' });
+  state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-old' });
+  launchCodex(state, 'bg-oldest', 'bash-new', 4, 'sub-1', { model: 'gpt-new', effort: 'high' });
+  state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-new' });
+  state.addEvent({
+    session_id: 'bg-oldest', hook_event_name: 'PostToolUse', hookAt: 6, agent_id: 'sub-1',
+    tool_name: 'Read', tool_use_id: 'read-1', codexOutput: { resultLine: 'codex-agent: result=ok' },
+  });
+  state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'SubagentStop', hookAt: 7, agent_id: 'sub-1' });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.unconfirmed], ['gpt-new', true]);
 });
 
 test('同じ定義の Codex の実行が 2 回あっても、監査行はそれぞれの実行に付く', async (t) => {
@@ -344,11 +424,11 @@ test('同じ定義の Codex の実行が 2 回あっても、監査行はそれ�
   launchCodex(state, 'twice', 'bash-b', 2, null);
   state.addEvent({
     session_id: 'twice', hook_event_name: 'PostToolUse', hookAt: 3, tool_name: 'Bash', tool_use_id: 'bash-b',
-    codexAudit: { agent_id: 'impl-hard', model: 'gpt-b', effort: 'high' },
+    codexOutput: codexOutput('gpt-b', 'high'),
   });
   state.addEvent({
     session_id: 'twice', hook_event_name: 'PostToolUse', hookAt: 4, tool_name: 'Bash', tool_use_id: 'bash-a',
-    codexAudit: { agent_id: 'impl-hard', model: 'gpt-a', effort: 'max' },
+    codexOutput: codexOutput('gpt-a', 'max'),
   });
   const models = Object.fromEntries(state.snapshot().sessions[0].agents.map((agent) => [agent.agent_id, agent.model]));
   assert.deepEqual(models, { 'codex:bash-a': 'gpt-a', 'codex:bash-b': 'gpt-b' });
@@ -362,14 +442,31 @@ test('完了した tool_use_id は、遅れて処理された PreToolUse で実�
   assert.deepEqual(state.snapshot().sessions[0].tools, []);
 });
 
-test('背景の Codex は、呼び出し元が終わっても終了ではなく終了未確認になる', async (t) => {
+test('結果行が無いまま親が終わった背景 Codex は終了未確認になる', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
-  launchCodex(state, 'unconfirmed', 'bash-1', 1, null);
-  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-1' });
-  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'Stop', hookAt: 3 });
-  const codex = state.snapshot().sessions[0].agents.find((agent) => agent.agent_id === 'codex:bash-1');
-  assert.deepEqual([codex.active, codex.unconfirmed], [false, true]);
+  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'unconfirmed', 'bash-1', 2, 'sub-1', { model: 'gpt-draft', effort: 'low' });
+  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'sub-1' });
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.active, agent.gpt.unconfirmed], [false, true]);
+});
+
+test('rate-limited の結果行は親の GPT 情報を利用上限にする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'rate-limited', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'rate-limited', 'bash-1', 2, 'sub-1', { model: 'gpt-draft', effort: 'low' });
+  state.addEvent({
+    session_id: 'rate-limited', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1',
+    codexOutput: { resultLine: 'codex-agent: result=rate-limited retry=14:00 exit=75' },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.gpt.unavailable, '利用上限');
+  assert.equal(agent.gpt.active, false);
 });
 
 test('メインの Stop の後のサブエージェントの活動では、メインを作業中に戻さない', async (t) => {
