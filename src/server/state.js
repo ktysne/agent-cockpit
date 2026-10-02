@@ -895,7 +895,10 @@ function cloneDecision(decision) {
       ...question,
       options: question.options.map((option) => ({ ...option })),
     })),
-    answer: decision.answer ? { ...decision.answer } : null,
+    answer: decision.answer ? {
+      ...decision.answer,
+      ...(Array.isArray(decision.answer.picks) ? { picks: decision.answer.picks.map((labels) => [...labels]) } : {}),
+    } : null,
     resolution: cloneResolution(decision.resolution),
   };
 }
