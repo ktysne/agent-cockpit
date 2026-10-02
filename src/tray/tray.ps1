@@ -13,12 +13,15 @@ if (-not ('AgentCockpitTray.NativeMethods' -as [type])) {
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
 namespace AgentCockpitTray {
   public static class NativeMethods {
+    private static Bitmap sourceImage;
+
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr state);
 
     [DllImport("user32.dll")]
@@ -41,6 +44,37 @@ namespace AgentCockpitTray {
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr icon);
+
+    // 描く最大の大きさ(ICO の 256px)に一度だけ縮めて持ち、常駐中のメモリーと描画の時間を抑える。
+    public static bool LoadSourceImage(string path) {
+      DisposeSourceImage();
+      try {
+        using (Image image = Image.FromFile(path)) {
+          float scale = Math.Min(1f, 256f / Math.Max(image.Width, image.Height));
+          int width = Math.Max(1, (int)Math.Round(image.Width * scale));
+          int height = Math.Max(1, (int)Math.Round(image.Height * scale));
+          Bitmap reduced = new Bitmap(width, height);
+          using (Graphics graphics = Graphics.FromImage(reduced)) {
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.Clear(Color.Transparent);
+            graphics.DrawImage(image, 0, 0, width, height);
+          }
+          sourceImage = reduced;
+        }
+        return true;
+      } catch {
+        sourceImage = null;
+        return false;
+      }
+    }
+
+    public static void DisposeSourceImage() {
+      if (sourceImage != null) {
+        sourceImage.Dispose();
+        sourceImage = null;
+      }
+    }
 
     public static IntPtr FindDashboardWindow(string titleSuffix) {
       IntPtr found = IntPtr.Zero;
@@ -71,12 +105,34 @@ namespace AgentCockpitTray {
       using (Graphics graphics = Graphics.FromImage(bitmap)) {
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.Clear(Color.Transparent);
-        Color background = connected ? Color.FromArgb(217, 119, 87) : Color.FromArgb(128, 128, 128);
-        using (SolidBrush backgroundBrush = new SolidBrush(background)) {
-          graphics.FillEllipse(backgroundBrush, scale, scale, 30 * scale, 30 * scale);
-        }
-        using (Font font = new Font("Segoe UI", 19 * scale, FontStyle.Bold, GraphicsUnit.Pixel)) {
-          graphics.DrawString("C", font, Brushes.White, new PointF(6 * scale, 3 * scale));
+        if (sourceImage != null) {
+          float imageScale = Math.Min(size / (float)sourceImage.Width, size / (float)sourceImage.Height);
+          int imageWidth = (int)Math.Round(sourceImage.Width * imageScale);
+          int imageHeight = (int)Math.Round(sourceImage.Height * imageScale);
+          Rectangle destination = new Rectangle((size - imageWidth) / 2, (size - imageHeight) / 2, imageWidth, imageHeight);
+          graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+          graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+          using (ImageAttributes attributes = new ImageAttributes()) {
+            if (!connected) {
+              ColorMatrix grayscale = new ColorMatrix(new float[][] {
+                new float[] { 0.299f, 0.299f, 0.299f, 0, 0 },
+                new float[] { 0.587f, 0.587f, 0.587f, 0, 0 },
+                new float[] { 0.114f, 0.114f, 0.114f, 0, 0 },
+                new float[] { 0, 0, 0, 1, 0 },
+                new float[] { 0, 0, 0, 0, 1 }
+              });
+              attributes.SetColorMatrix(grayscale, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+            }
+            graphics.DrawImage(sourceImage, destination, 0, 0, sourceImage.Width, sourceImage.Height, GraphicsUnit.Pixel, attributes);
+          }
+        } else {
+          Color background = connected ? Color.FromArgb(217, 119, 87) : Color.FromArgb(128, 128, 128);
+          using (SolidBrush backgroundBrush = new SolidBrush(background)) {
+            graphics.FillEllipse(backgroundBrush, scale, scale, 30 * scale, 30 * scale);
+          }
+          using (Font font = new Font("Segoe UI", 19 * scale, FontStyle.Bold, GraphicsUnit.Pixel)) {
+            graphics.DrawString("C", font, Brushes.White, new PointF(6 * scale, 3 * scale));
+          }
         }
         if (pending) {
           using (SolidBrush mark = new SolidBrush(Color.FromArgb(245, 166, 35))) {
@@ -384,7 +440,15 @@ if ($Check) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ExportIcon)) {
-  Export-TrayIcon $ExportIcon
+  $iconPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\assets\agent-cockpit_icon.png'))
+  if (-not [AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)) {
+    Write-Warning "アイコンの元の画像を読めないので、代わりの絵で書き出します: $iconPath"
+  }
+  try {
+    Export-TrayIcon $ExportIcon
+  } finally {
+    [AgentCockpitTray.NativeMethods]::DisposeSourceImage()
+  }
   exit 0
 }
 
@@ -404,6 +468,8 @@ $script:decisionKeysKnown = $false
 $script:lastIconState = $null
 $script:balloonOpensDashboard = $false
 $script:awayMenuItem = $null
+$iconPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\assets\agent-cockpit_icon.png'))
+[void][AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)
 try {
   [System.Windows.Forms.Application]::EnableVisualStyles()
   $script:notifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -441,6 +507,7 @@ try {
     $script:notifyIcon.Dispose()
   }
   if ($menu) { $menu.Dispose() }
+  [AgentCockpitTray.NativeMethods]::DisposeSourceImage()
   $mutex.ReleaseMutex()
   $mutex.Dispose()
 }
