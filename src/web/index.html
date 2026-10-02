@@ -72,6 +72,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .badge.wait { background: var(--warn-soft); color: var(--warn); }
 .badge.permission { background: var(--danger-soft); color: var(--danger); }
 .badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
 h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
 .now-row, .agent-row { display: grid; grid-template-columns: minmax(130px, 180px) minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
@@ -216,7 +217,7 @@ function makeSessionHeader(session) {
   const productName = session.product?.name || 'プロダクト不明';
   header.append(element('h2', '', productName));
   if (session.product?.key) header.append(element('code', 'meta product-key', session.product.key));
-  const statusTone = { '許可待ち': 'permission', '作業中': 'busy', '不明': 'done' }[session.status] || 'wait';
+  const statusTone = { '許可待ち': 'permission', '作業中': 'busy', '不明': 'unknown' }[session.status] || 'wait';
   header.append(badge(session.status === '不明' ? '状態不明' : session.status, statusTone));
   return header;
 }
