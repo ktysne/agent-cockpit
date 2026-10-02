@@ -1,6 +1,7 @@
 ﻿param(
   [switch]$Check,
-  [string]$ExportIcon
+  [string]$ExportIcon,
+  [switch]$OpenDashboard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +15,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -21,6 +23,7 @@ using System.Text.RegularExpressions;
 namespace AgentCockpitTray {
   public static class NativeMethods {
     private static Bitmap sourceImage;
+    private const uint WM_CLOSE = 0x0010;
 
     private delegate bool EnumWindowsCallback(IntPtr window, IntPtr state);
 
@@ -42,8 +45,31 @@ namespace AgentCockpitTray {
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr window);
 
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr icon);
+
+    private static bool IsDashboardWindow(IntPtr window, string titleSuffix) {
+      if (!IsWindowVisible(window)) return false;
+      StringBuilder title = new StringBuilder(512);
+      GetWindowText(window, title, title.Capacity);
+      if (!Regex.IsMatch(title.ToString(), "^(\\(\\d+\\) )?" + Regex.Escape(titleSuffix) + "$")) return false;
+      uint processId;
+      GetWindowThreadProcessId(window, out processId);
+      if (processId == 0) return false;
+      try {
+        using (Process process = Process.GetProcessById((int)processId)) {
+          return String.Equals(process.ProcessName, "msedge", StringComparison.OrdinalIgnoreCase);
+        }
+      } catch {
+        return false;
+      }
+    }
 
     // 描く最大の大きさ(ICO の 256px)に一度だけ縮めて持ち、常駐中のメモリーと描画の時間を抑える。
     public static bool LoadSourceImage(string path) {
@@ -79,10 +105,7 @@ namespace AgentCockpitTray {
     public static IntPtr FindDashboardWindow(string titleSuffix) {
       IntPtr found = IntPtr.Zero;
       EnumWindowsCallback callback = delegate(IntPtr window, IntPtr state) {
-        if (!IsWindowVisible(window)) return true;
-        StringBuilder title = new StringBuilder(512);
-        GetWindowText(window, title, title.Capacity);
-        if (Regex.IsMatch(title.ToString(), "^(\\(\\d+\\) )?" + Regex.Escape(titleSuffix) + "$")) {
+        if (IsDashboardWindow(window, titleSuffix)) {
           found = window;
           return false;
         }
@@ -91,6 +114,11 @@ namespace AgentCockpitTray {
       EnumWindows(callback, IntPtr.Zero);
       GC.KeepAlive(callback);
       return found;
+    }
+
+    public static bool CloseDashboardWindow(string titleSuffix) {
+      IntPtr window = FindDashboardWindow(titleSuffix);
+      return window != IntPtr.Zero && PostMessage(window, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
     }
 
     public static void RestoreAndFocus(IntPtr window) {
@@ -308,7 +336,13 @@ function Get-EdgePath {
 }
 
 function Show-TrayNotice([string]$Message, [System.Windows.Forms.ToolTipIcon]$Icon = [System.Windows.Forms.ToolTipIcon]::Info, [switch]$OpensDashboard) {
-  if (-not $script:notifyIcon) { return }
+  # 常駐中のトレイへ開く操作を頼みに来た 2 つ目の起動には通知の領域が無いので、失敗をダイアログで知らせる。
+  if (-not $script:notifyIcon) {
+    if ($Icon -ne [System.Windows.Forms.ToolTipIcon]::Info) {
+      [void][System.Windows.Forms.MessageBox]::Show($Message, 'Agent Cockpit', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    }
+    return
+  }
   $script:balloonOpensDashboard = [bool]$OpensDashboard
   $script:notifyIcon.BalloonTipTitle = 'Agent Cockpit'
   $script:notifyIcon.BalloonTipText = $Message
@@ -456,6 +490,7 @@ $createdNew = $false
 $mutex = New-Object System.Threading.Mutex($true, 'Local\AgentCockpitTray', [ref]$createdNew)
 if (-not $createdNew) {
   $mutex.Dispose()
+  if ($OpenDashboard) { Open-Dashboard }
   exit 0
 }
 
@@ -483,7 +518,10 @@ try {
   $script:awayMenuItem.add_Click({ param($sender, $eventArgs) Set-AwayStatus ([bool]$sender.Checked) })
   $menu.Items.Add($script:awayMenuItem) | Out-Null
   $exitItem = $menu.Items.Add('終了')
-  $exitItem.add_Click({ [System.Windows.Forms.Application]::ExitThread() })
+  $exitItem.add_Click({
+    try { [void][AgentCockpitTray.NativeMethods]::CloseDashboardWindow('Agent Cockpit') } catch { }
+    [System.Windows.Forms.Application]::ExitThread()
+  })
   $script:notifyIcon.ContextMenuStrip = $menu
   $script:notifyIcon.add_DoubleClick({ Open-Dashboard })
   $script:notifyIcon.add_BalloonTipClicked({ if ($script:balloonOpensDashboard) { Open-Dashboard } })
@@ -495,6 +533,7 @@ try {
   # 非表示のプロセスなので、例外を Application.Run まで届かせるとダイアログが出るか落ちる。
   $script:timer.add_Tick({ try { Update-TrayState } catch { } })
   $script:timer.Start()
+  if ($OpenDashboard) { Open-Dashboard }
   [System.Windows.Forms.Application]::Run()
 } finally {
   if ($script:timer) {
