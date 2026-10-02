@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
-const { DashboardState } = require('./state');
+const { AwayState, DashboardState } = require('./state');
 const { sanitizeEvent } = require('./events');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
@@ -13,11 +13,20 @@ const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 
+// 画面を別のページの iframe に埋めて操作させる経路と、別のオリジンからの読み取りを塞ぐ。
+const SECURITY_HEADERS = Object.freeze({
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "frame-ancestors 'none'",
+  'cross-origin-resource-policy': 'same-origin',
+  'cross-origin-opener-policy': 'same-origin',
+});
+
 function jsonResponse(response, status, value) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
+    ...SECURITY_HEADERS,
   });
   response.end(JSON.stringify(value));
 }
@@ -25,8 +34,7 @@ function jsonResponse(response, status, value) {
 function textResponse(response, status, value, contentType = 'text/plain; charset=utf-8') {
   response.writeHead(status, {
     'content-type': contentType,
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
+    ...SECURITY_HEADERS,
   });
   response.end(value);
 }
@@ -94,11 +102,27 @@ function validOriginForWrite(request) {
   return request.headers.origin === undefined;
 }
 
+function validAwayOrigin(request, port) {
+  const origin = request.headers.origin;
+  return origin === undefined || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+}
+
+function escapeHtmlAttribute(value) {
+  return String(value).replace(/[&"'<>]/g, (character) => ({
+    '&': '&amp;',
+    '"': '&quot;',
+    "'": '&#39;',
+    '<': '&lt;',
+    '>': '&gt;',
+  })[character]);
+}
+
 function createRequestHandler(options) {
   const {
     homeDir,
     claudeHome,
     state,
+    away,
     dev,
     getServerInfo,
     markRequest,
@@ -119,7 +143,11 @@ function createRequestHandler(options) {
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/state') {
-      jsonResponse(response, 200, state.snapshot());
+      jsonResponse(response, 200, { ...state.snapshot(), away: away.snapshot() });
+      return;
+    }
+    if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
+      jsonResponse(response, 200, away.snapshot());
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/dev/fields') {
@@ -132,10 +160,42 @@ function createRequestHandler(options) {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/') {
       try {
-        const html = await fs.readFile(webPath, 'utf8');
+        const template = await fs.readFile(webPath, 'utf8');
+        const html = template.replace(
+          '<meta name="cockpit-secret" content="">',
+          `<meta name="cockpit-secret" content="${escapeHtmlAttribute(info.uiSecret)}">`,
+        );
         textResponse(response, 200, html, 'text/html; charset=utf-8');
       } catch {
         textResponse(response, 500, 'Dashboard unavailable');
+      }
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/away') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validAwayOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean') {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      try {
+        jsonResponse(response, 200, await away.setEnabled(body.enabled));
+      } catch {
+        jsonResponse(response, 500, { error: 'Internal Server Error' });
       }
       return;
     }
@@ -226,6 +286,7 @@ async function startServer(options = {}) {
   if (options.truncateLog !== false) await fs.writeFile(path.join(homeDir, 'server.log'), '', { mode: 0o600 });
 
   const state = options.state || new DashboardState();
+  const away = options.away || await AwayState.load(homeDir);
   let info = null;
   let closing = null;
   let lastRequestAt = Date.now();
@@ -240,6 +301,7 @@ async function startServer(options = {}) {
     homeDir,
     claudeHome,
     state,
+    away,
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
@@ -253,6 +315,8 @@ async function startServer(options = {}) {
       pid: process.pid,
       port: address.port,
       secret: crypto.randomBytes(32).toString('base64url'),
+      // 画面に埋める値。フック用の secret と分け、画面から読めても /api/events は偽造できないようにする。
+      uiSecret: crypto.randomBytes(32).toString('base64url'),
       startedAt: new Date().toISOString(),
     };
     await atomicWriteServerInfo(homeDir, info);
@@ -291,7 +355,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, info, homeDir, close };
+  return { server, state, away, info, homeDir, close };
 }
 
 function parseArguments(argv) {
@@ -322,6 +386,8 @@ module.exports = {
   DEFAULT_PORT,
   MAX_BODY_BYTES,
   requestHostIsLocal,
+  validAwayOrigin,
+  escapeHtmlAttribute,
   atomicWriteServerInfo,
   removeServerInfoIfOwned,
   createRequestHandler,

@@ -54,17 +54,19 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Start
 
 `~/.claude/settings.json` は自動では変更しません。
 次の `hooks` の内容を既存設定へ統合し、スクリプトのパスをこのリポジトリの絶対パスに置き換えてください。
-`SessionStart` は同期フックとして登録し、それ以外は `async: true` を付けます。
+`event.js` の `SessionStart` は同期フックとして登録し、それ以外には `async: true` を付けます。
 実行ファイルと引数を分ける exec 形式で登録します。
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"] }] }
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"] }] },
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
     ],
     "PostToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
@@ -88,7 +90,8 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Start
       { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
     ]
   }
 }
@@ -97,6 +100,15 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Start
 同期の `SessionStart` はサーバーの起動を確認し、起動 URL を `additionalContext` で返します。
 フックが送るツール入力は要約だけです。
 許可待ちは表示だけで、画面から許可を出す機能はありません。
+`away.js` は `PreToolUse`(matcher `AskUserQuestion`)、`UserPromptSubmit`、`SessionStart` に同期フックとして登録し、timeout を 5 秒にします。
+
+離席中は画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
+有効な間は `AskUserQuestion` を止め、推奨を適用して作業を続けるようフックが伝えます。
+許可のダイアログには答えず、破壊的な操作、PR のマージ、`main` への push は判断待ちに残します。
+`claude -p` では `AskUserQuestion` が無効なため、この制御は対話セッションでだけ働きます。
+
+フックの登録後に開いたセッションから離席中の制御が有効になります。
+すでに実行中のセッションは、後から追加したフックを読み込みません。
 
 ## テスト
 

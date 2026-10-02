@@ -1,4 +1,65 @@
+const crypto = require('node:crypto');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const { sanitizeEvent } = require('./events');
+
+const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
+
+async function atomicWriteAwayState(homeDir, value, fileSystem = fs) {
+  const target = path.join(homeDir, 'away.json');
+  const temporary = path.join(homeDir, `.away.${process.pid}.${crypto.randomUUID()}.tmp`);
+  await fileSystem.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  try {
+    await fileSystem.rename(temporary, target);
+  } catch (error) {
+    await fileSystem.rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+class AwayState {
+  constructor(homeDir, value = DEFAULT_AWAY_STATE, fileSystem = fs) {
+    this.homeDir = homeDir;
+    this.value = { ...value };
+    this.fileSystem = fileSystem;
+    this.pending = Promise.resolve();
+  }
+
+  static async load(homeDir, fileSystem = fs) {
+    try {
+      const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'));
+      if (
+        value && typeof value === 'object' && !Array.isArray(value) &&
+        typeof value.enabled === 'boolean' &&
+        ((value.enabled && Number.isFinite(value.since) && value.since >= 0) || (!value.enabled && value.since === null)) &&
+        Number.isFinite(new Date(value.since).getTime())
+      ) return new AwayState(homeDir, { enabled: value.enabled, since: value.since }, fileSystem);
+    } catch {
+    }
+    return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem);
+  }
+
+  snapshot() {
+    return { ...this.value };
+  }
+
+  // 画面とトレイから同時に切り替えても、保存の順と this.value の順が食い違わないよう直列にする。
+  setEnabled(enabled, now) {
+    const run = this.pending.then(() => this.applyEnabled(enabled, now ?? Date.now()));
+    this.pending = run.catch(() => {});
+    return run;
+  }
+
+  async applyEnabled(enabled, now) {
+    const next = {
+      enabled,
+      since: enabled ? (this.value.enabled ? this.value.since : now) : null,
+    };
+    await atomicWriteAwayState(this.homeDir, next, this.fileSystem);
+    this.value = next;
+    return this.snapshot();
+  }
+}
 
 function isoTime(milliseconds) {
   return new Date(milliseconds).toISOString();
@@ -358,4 +419,4 @@ class DashboardState {
   }
 }
 
-module.exports = { DashboardState, deriveSessions };
+module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions };

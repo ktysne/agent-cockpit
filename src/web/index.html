@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
+<meta name="cockpit-secret" content="">
 <title>Agent Cockpit</title>
 <style>
 :root {
@@ -46,6 +47,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
 .top { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--border); }
+.top[data-away="true"] { background: var(--warn-soft); border-bottom-color: var(--warn); }
 .top-inner { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
 h1 { font-size: 16px; margin: 0; }
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -59,7 +61,16 @@ h1 { font-size: 16px; margin: 0; }
 .connection { color: var(--text-2); font-size: 12px; }
 .connection[data-state="error"] { color: var(--danger); }
 .settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
-.settings-button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer; }
+/* 上部のバーが折り返しても右上の端に留めるため、バーの右の余白に置く。 */
+.top-inner { position: relative; padding-right: 64px; }
+.settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
+.settings-button:hover { color: var(--text); }
+.ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.ended-toggle:hover { color: var(--text); }
+.ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; white-space: nowrap; }
+.away-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
+.away-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-dialog { width: min(480px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
 .settings-dialog::backdrop { background: rgb(0 0 0 / 55%); }
@@ -118,7 +129,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
     <div class="summary" id="summary" aria-label="セッションの概要"></div>
     <span class="spacer"></span>
     <span class="connection" id="connection" role="status" aria-live="polite" data-state="loading">状態を読み込み中</span>
-    <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog"><span aria-hidden="true">⚙</span><span>設定</span></button>
+    <label class="away-toggle" for="away-toggle"><input id="away-toggle" type="checkbox">離席中</label>
+    <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
 </header>
 <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
@@ -153,12 +165,18 @@ const connection = document.getElementById('connection');
 const liveStatus = document.getElementById('live-status');
 const themeSelect = document.getElementById('settings-theme-select');
 const settingsButton = document.getElementById('settings-button');
+const awayToggle = document.getElementById('away-toggle');
+const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
 const THEME_STORAGE_KEY = 'agent-cockpit.theme';
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
+// 切り替えの失敗は、この時間だけ接続の表示に残してから通常の表示へ戻す。
+const AWAY_ERROR_DISPLAY_MS = 10000;
+let awayErrorUntil = 0;
+const expandedEndedSessions = new Set();
 
 function applyTheme(theme) {
   const selectedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'dark';
@@ -195,6 +213,61 @@ settingsDialog.addEventListener('click', (event) => {
   if (event.target === settingsDialog && isOutside) settingsDialog.close();
 });
 settingsDialog.addEventListener('close', () => settingsButton.focus());
+
+function applyAwayState(away) {
+  const enabled = away?.enabled === true;
+  if (!awayToggle.disabled) awayToggle.checked = enabled;
+  header.dataset.away = String(enabled);
+}
+
+function postAway(enabled) {
+  return fetch('/api/away', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Cockpit-Secret': document.querySelector('meta[name="cockpit-secret"]').content,
+    },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+async function refreshUiSecret() {
+  const response = await fetch('/', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const secret = page.querySelector('meta[name="cockpit-secret"]')?.content;
+  if (!secret) throw new Error('secret unavailable');
+  document.querySelector('meta[name="cockpit-secret"]').content = secret;
+}
+
+awayToggle.addEventListener('change', async () => {
+  const requested = awayToggle.checked;
+  const previous = lastState?.away?.enabled === true;
+  awayToggle.disabled = true;
+  try {
+    let response = await postAway(requested);
+    // 常駐サーバーが再起動すると秘密値が変わるので、画面を取り直して新しい値で 1 回だけ送り直す。
+    if (response.status === 401) {
+      await refreshUiSecret();
+      response = await postAway(requested);
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const away = await response.json();
+    applyAwayState(away);
+    awayErrorUntil = 0;
+    connection.textContent = '接続中';
+    connection.dataset.state = 'ready';
+  } catch {
+    awayToggle.checked = previous;
+    applyAwayState({ enabled: previous });
+    awayErrorUntil = Date.now() + AWAY_ERROR_DISPLAY_MS;
+    connection.textContent = '離席中を切り替えられませんでした';
+    connection.dataset.state = 'error';
+  } finally {
+    awayToggle.disabled = false;
+  }
+});
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -263,7 +336,7 @@ function appendTools(body, session) {
     return;
   }
   const list = element('div', 'now-list');
-  for (const tool of session.tools) {
+  for (const tool of newestFirst(session.tools)) {
     const row = element('div', 'now-row');
     const who = element('div', 'who');
     who.append(element('strong', '', tool.agent_id ? `サブエージェント ${tool.agent_id}` : 'メインセッション'));
@@ -279,8 +352,14 @@ function appendAgents(body, session) {
     body.append(element('div', 'empty', 'サブエージェントはありません。'));
     return;
   }
+  const agents = newestFirst(session.agents);
+  const runningAgents = agents.filter((agent) => !isEndedAgent(agent));
+  const endedAgents = agents.filter(isEndedAgent);
+  const showEnded = expandedEndedSessions.has(session.session_id);
+  const visibleAgents = showEnded ? [...runningAgents, ...endedAgents] : runningAgents;
+  if (!visibleAgents.length) body.append(element('div', 'empty', '稼働中のサブエージェントはありません。'));
   const list = element('div', 'agent-list');
-  for (const agent of session.agents) {
+  for (const agent of visibleAgents) {
     const row = element('div', 'agent-row');
     const who = element('div', 'who');
     who.append(element('strong', '', agent.agent_type || agent.agent_id));
@@ -299,7 +378,33 @@ function appendAgents(body, session) {
     row.append(who, detail, element('time', 'since', agent.startedAt ? durationLabel(agent.startedAt) : ''));
     list.append(row);
   }
-  body.append(list);
+  if (visibleAgents.length) body.append(list);
+  if (endedAgents.length) {
+    const toggle = element('button', 'ended-toggle', showEnded ? `終了済みを隠す(${endedAgents.length} 件)` : `終了済みを表示(${endedAgents.length} 件)`);
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(showEnded));
+    toggle.addEventListener('click', () => {
+      if (showEnded) expandedEndedSessions.delete(session.session_id);
+      else expandedEndedSessions.add(session.session_id);
+      if (lastState) render(lastState);
+      root.querySelector(`[data-ended-toggle="${CSS.escape(session.session_id)}"]`)?.focus();
+    });
+    toggle.dataset.endedToggle = session.session_id;
+    body.append(toggle);
+  }
+}
+
+// 「終了未確認」はまだ動いている可能性があるので、終了済みに含めない。
+function isEndedAgent(agent) {
+  return !agent.active && !agent.unconfirmed;
+}
+
+function newestFirst(items) {
+  const startedAtOf = (item) => {
+    const time = Date.parse(item.startedAt);
+    return Number.isFinite(time) ? time : -Infinity;
+  };
+  return [...items].sort((a, b) => startedAtOf(b) - startedAtOf(a));
 }
 
 function appendPermissionWaits(body, session) {
@@ -309,7 +414,7 @@ function appendPermissionWaits(body, session) {
     return;
   }
   const list = element('div', 'permission-list');
-  for (const wait of session.permissionWaits) {
+  for (const wait of newestFirst(session.permissionWaits)) {
     const age = Date.now() - Date.parse(wait.startedAt);
     const card = element('article', `permission ${age > LONG_WAIT_MS ? 'long-wait' : ''}`.trim());
     const header = element('div', 'permission-head');
@@ -353,6 +458,7 @@ async function refresh() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
     lastState = state;
+    applyAwayState(state.away);
     if (state.version !== lastVersion) {
       render(state);
       lastVersion = state.version;
@@ -360,11 +466,15 @@ async function refresh() {
       const permissions = state.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
       liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件。`;
     }
-    if (connection.textContent !== '接続中') connection.textContent = '接続中';
-    connection.dataset.state = 'ready';
+    if (Date.now() >= awayErrorUntil) {
+      if (connection.textContent !== '接続中') connection.textContent = '接続中';
+      connection.dataset.state = 'ready';
+    }
   } catch {
-    if (connection.textContent !== 'サーバーに接続できません') connection.textContent = 'サーバーに接続できません';
-    connection.dataset.state = 'error';
+    if (Date.now() >= awayErrorUntil) {
+      if (connection.textContent !== 'サーバーに接続できません') connection.textContent = 'サーバーに接続できません';
+      connection.dataset.state = 'error';
+    }
     if (!hasRenderedState) root.replaceChildren(element('div', 'error-box', '状態を取得できません。常駐サーバーが起動しているか確認してください。'));
   }
 }
