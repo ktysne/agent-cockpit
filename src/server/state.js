@@ -93,17 +93,16 @@ function validPullRequestLastOpen(value) {
     ['title', 'url', 'headRefName', 'baseRefName'].some((key) => typeof value[key] !== 'string') ||
     ['title', 'headRefName', 'baseRefName'].some((key) => value[key].length > 500) ||
     (value.headRefOid !== '' && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value.headRefOid))) return false;
-  const hasBaseParent = value.basePullRequestNumber !== undefined && value.basePullRequestNumber !== null;
-  if ((hasBaseParent && (!Number.isSafeInteger(value.basePullRequestNumber) || value.basePullRequestNumber < 1)) ||
-    (value.basePullRequestHeadRefOid !== undefined && value.basePullRequestHeadRefOid !== null &&
-      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value.basePullRequestHeadRefOid)) ||
-    (hasBaseParent !== (typeof value.basePullRequestHeadRefOid === 'string'))) return false;
-  const restackParents = value.restackParents === undefined ? [] : value.restackParents;
-  return Array.isArray(restackParents) && restackParents.length <= 500 && restackParents.every((parent) => (
-    isRecord(parent) && Number.isSafeInteger(parent.number) && parent.number > 0 &&
-    typeof parent.headRefOid === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(parent.headRefOid) &&
-    (parent.method === null || ['merge', 'squash', 'rebase'].includes(parent.method))
-  ));
+  return true;
+}
+
+function normalizePullRequestLastOpen(value) {
+  if (!value) return null;
+  const normalized = { ...value };
+  delete normalized.basePullRequestNumber;
+  delete normalized.basePullRequestHeadRefOid;
+  delete normalized.restackParents;
+  return normalized;
 }
 
 function validPullRequestRecord(record) {
@@ -134,12 +133,7 @@ function normalizePullRequestRecord(record) {
     product: record.product ? { key: record.product.key, name: record.product.name } : null,
     state: record.state || 'unknown',
     mergedAt: record.mergedAt || null,
-    lastOpen: record.lastOpen ? {
-      ...record.lastOpen,
-      ...(Array.isArray(record.lastOpen.restackParents)
-        ? { restackParents: record.lastOpen.restackParents.map((parent) => ({ ...parent })) }
-        : {}),
-    } : null,
+    lastOpen: normalizePullRequestLastOpen(record.lastOpen),
   };
 }
 
@@ -162,12 +156,7 @@ function normalizeRelatedPullRequestRecord(record) {
     addedAt: record.addedAt,
     state: record.state || 'unknown',
     mergedAt: record.mergedAt || null,
-    lastOpen: record.lastOpen ? {
-      ...record.lastOpen,
-      ...(Array.isArray(record.lastOpen.restackParents)
-        ? { restackParents: record.lastOpen.restackParents.map((parent) => ({ ...parent })) }
-        : {}),
-    } : null,
+    lastOpen: normalizePullRequestLastOpen(record.lastOpen),
   };
 }
 
@@ -175,13 +164,6 @@ function validPullRequestRetarget(record) {
   return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Number.isSafeInteger(record.number) && record.number > 0 && typeof record.base === 'string' && record.base.length <= 500 &&
     (record.fromNumber === null || record.fromNumber === undefined || (Number.isSafeInteger(record.fromNumber) && record.fromNumber > 0));
-}
-
-function validMergedPullRequestHead(record) {
-  return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
-    Number.isSafeInteger(record.number) && record.number > 0 &&
-    typeof record.headRefOid === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid) &&
-    (record.method === null || ['merge', 'squash', 'rebase'].includes(record.method)) && validTimestamp(record.mergedAt);
 }
 
 function normalizeStore(value) {
@@ -243,11 +225,9 @@ function normalizeStore(value) {
   const prs = value.prs === undefined ? [] : value.prs;
   const relatedPrs = value.relatedPrs === undefined ? [] : value.relatedPrs;
   const retargetedPrs = value.retargetedPrs === undefined ? [] : value.retargetedPrs;
-  const mergedPrHeads = value.mergedPrHeads === undefined ? [] : value.mergedPrHeads;
   if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
     !Array.isArray(relatedPrs) || !relatedPrs.every(validRelatedPullRequestRecord) ||
-    !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
-    !Array.isArray(mergedPrHeads) || !mergedPrHeads.every(validMergedPullRequestHead)) {
+    !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget)) {
     throw new Error('Invalid pull request records');
   }
   return {
@@ -259,7 +239,6 @@ function normalizeStore(value) {
     prs: prs.map(normalizePullRequestRecord),
     relatedPrs: relatedPrs.map(normalizeRelatedPullRequestRecord),
     retargetedPrs: retargetedPrs.map((record) => ({ ...record })),
-    mergedPrHeads: mergedPrHeads.map((record) => ({ ...record })),
   };
 }
 
@@ -770,7 +749,6 @@ class DashboardState {
     this.pullRequests = new Map();
     this.relatedPullRequests = new Map();
     this.pullRequestRetargets = [];
-    this.mergedPullRequestHeads = [];
     this.closedAgents = new Map();
     this.display = null;
     this.storeWriteTimer = null;
@@ -843,7 +821,6 @@ class DashboardState {
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
     this.pullRequestRetargets = store.retargetedPrs;
-    this.mergedPullRequestHeads = store.mergedPrHeads;
     this.pruneExpiredStoreRecords(now);
   }
 
@@ -926,7 +903,6 @@ class DashboardState {
       prs: this.pullRequestRegistrations(),
       relatedPrs: [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord),
       retargetedPrs: this.pullRequestRetargets.map((record) => ({ ...record })),
-      mergedPrHeads: this.mergedPullRequestHeads.map((record) => ({ ...record })),
     };
   }
 
@@ -1053,22 +1029,6 @@ class DashboardState {
 
   pullRequestRetargetsForRepo(owner, repo) {
     return this.pullRequestRetargets.filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase());
-  }
-
-  recordMergedPullRequestHead(record) {
-    if (!validMergedPullRequestHead(record)) return false;
-    const index = this.mergedPullRequestHeads.findIndex((item) => item.owner === record.owner && item.repo === record.repo && item.number === record.number);
-    const next = { ...record };
-    if (index >= 0 && stableStringify(this.mergedPullRequestHeads[index]) === stableStringify(next)) return false;
-    if (index >= 0) this.mergedPullRequestHeads[index] = next;
-    else this.mergedPullRequestHeads.push(next);
-    this.touch();
-    this.requestStoreWrite();
-    return true;
-  }
-
-  mergedPullRequestHeadsForRepo(owner, repo) {
-    return this.mergedPullRequestHeads.filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase());
   }
 
   wasPullRequestCreate(sessionId, toolUseId) {

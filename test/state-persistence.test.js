@@ -68,6 +68,59 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   assert.deepEqual(snapshot.display, display);
 });
 
+test('積み直し用の項目を含む旧 store を退避せず読み、次の保存から項目を除く', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const lastOpen = {
+    title: 'Legacy PR',
+    url: 'https://github.com/example/project/pull/41',
+    headRefName: 'feat/legacy',
+    baseRefName: 'main',
+    headRefOid: 'a'.repeat(40),
+    basePullRequestNumber: 40,
+    basePullRequestHeadRefOid: 'b'.repeat(40),
+    restackParents: [{ number: 40, headRefOid: 'b'.repeat(40), method: 'squash' }],
+  };
+  await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
+    version: 1,
+    display: null,
+    plans: {},
+    decisionLifecycles: {},
+    closedTasks: [],
+    hiddenSessions: [],
+    prs: [{
+      session_id: 'legacy-session', owner: 'example', repo: 'project', number: 41,
+      url: 'https://github.com/example/project/pull/41', addedAt: '2026-10-03T00:00:00.000Z',
+      cwd: null, product: null, state: 'open', mergedAt: null, lastOpen,
+    }],
+    relatedPrs: [{
+      owner: 'example', repo: 'project', number: 42,
+      url: 'https://github.com/example/project/pull/42', addedAt: '2026-10-03T00:00:00.000Z',
+      state: 'open', mergedAt: null,
+      lastOpen: { ...lastOpen, url: 'https://github.com/example/project/pull/42', title: 'Related legacy PR' },
+    }],
+    retargetedPrs: [],
+    mergedPrHeads: [{
+      owner: 'example', repo: 'project', number: 40, headRefOid: 'b'.repeat(40),
+      method: 'squash', mergedAt: '2026-10-02T00:00:00.000Z',
+    }],
+  }));
+
+  const restored = await DashboardState.load(homeDir, { now: Date.parse('2026-10-03T00:00:00.000Z') });
+  assert.equal(restored.pullRequestRegistrations().length, 1);
+  assert.equal(restored.relatedPullRequestRegistrations().length, 1);
+  assert.equal(Object.hasOwn(restored.pullRequestRegistrations()[0].lastOpen, 'restackParents'), false);
+  assert.equal(Object.hasOwn(restored.relatedPullRequestRegistrations()[0].lastOpen, 'basePullRequestHeadRefOid'), false);
+  assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false);
+
+  await restored.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.equal(saved.prs.length, 1);
+  assert.equal(saved.relatedPrs.length, 1);
+  assert.equal(Object.hasOwn(saved.prs[0].lastOpen, 'basePullRequestNumber'), false);
+  assert.equal(Object.hasOwn(saved.relatedPrs[0].lastOpen, 'restackParents'), false);
+  assert.equal(Object.hasOwn(saved, 'mergedPrHeads'), false);
+});
+
 test('復元時に orphan の回答記録と14日を過ぎたセッションの記録を捨てる', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-03T00:00:00.000Z');

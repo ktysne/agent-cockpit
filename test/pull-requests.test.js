@@ -6,7 +6,6 @@ const path = require('node:path');
 const {
   PullRequestTracker,
   assemblePullRequestStacks,
-  comparisonRequests,
   parsePullRequestList,
   readCrossReviewState,
   runGh,
@@ -79,6 +78,71 @@ function ghPullRequest(number, headRefName, baseRefName, sha) {
   };
 }
 
+function mergedPullRequest(number, headRefOid, mergedAt = '2026-10-03T11:00:00.000Z') {
+  return { number, headRefOid, mergedAt };
+}
+
+function compareResult(commits = [], aheadBy = commits.length) {
+  return { ahead_by: aheadBy, commits: commits.map((sha) => ({ sha })) };
+}
+
+function checkedRestackResults(pullRequests, parent = null) {
+  return new Map(pullRequests.map((pr) => [pr.number, { checked: true, parent }]));
+}
+
+async function trackerFixture(testContext, registeredNumbers = [31]) {
+  const homeDir = await temporaryDirectory(testContext);
+  const state = new DashboardState({ homeDir });
+  for (const number of registeredNumbers) {
+    state.registerPullRequest(`session-${number}`, { url: `https://github.com/example/project/pull/${number}` }, {
+      cwd: process.cwd(), product: { key: 'project', name: 'project' },
+    });
+  }
+  const github = {
+    openPullRequests: [],
+    mergedPullRequests: [],
+    comparisons: new Map(),
+    compareErrors: new Set(),
+    views: new Map(),
+  };
+  const calls = [];
+  const unexpectedCalls = [];
+  const tracker = new PullRequestTracker({
+    state,
+    now: () => Date.parse('2026-10-03T12:00:00.000Z'),
+    execFileImpl: (_file, args, _options, callback) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'list') {
+        const stateOption = args.indexOf('--state');
+        const values = args[stateOption + 1] === 'open' ? github.openPullRequests : github.mergedPullRequests;
+        callback(null, JSON.stringify(values));
+      } else if (args[0] === 'api' && args[1] === 'repos/example/project') {
+        callback(null, JSON.stringify({
+          default_branch: 'main', allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true,
+        }));
+      } else if (args[0] === 'api' && args[1].includes('/compare/')) {
+        const headSha = args[1].split('...').at(-1);
+        if (github.compareErrors.has(headSha)) {
+          callback(Object.assign(new Error('compare failed'), { code: 'EIO' }));
+        } else {
+          callback(null, JSON.stringify(github.comparisons.get(headSha) || compareResult()));
+        }
+      } else if (args[0] === 'pr' && args[1] === 'view') {
+        const value = github.views.get(Number(args[2]));
+        if (value) callback(null, JSON.stringify(value));
+        else {
+          unexpectedCalls.push([...args]);
+          callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
+        }
+      } else {
+        unexpectedCalls.push([...args]);
+        callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
+      }
+    },
+  });
+  return { state, github, calls, unexpectedCalls, tracker };
+}
+
 test('PR URL の抽出は出力中の GitHub URL を限定して返す', () => {
   assert.deepEqual(findPullRequestUrl('Created pull request: https://github.com/Example/repo-name/pull/42'), {
     owner: 'Example', repo: 'repo-name', number: 42, url: 'https://github.com/Example/repo-name/pull/42',
@@ -137,6 +201,7 @@ test('gh の一覧 JSON から記録した PR の親と分岐した子を含め�
     defaultBranch: 'main',
     openPullRequests,
     registrations: [registration(11)],
+    restackResults: checkedRestackResults(openPullRequests),
   });
   assert.equal(result.openCount, 3);
   assert.equal(result.trees.length, 1);
@@ -148,7 +213,7 @@ test('gh の一覧 JSON から記録した PR の親と分岐した子を含め�
   assert.equal(result.mergeableCount, 1);
 });
 
-test('effective base の追跡と常駐サーバーによる付け替え記録を区別する', () => {
+test('merged parent の base をたどり、常駐サーバーの付け替え記録を維持する', () => {
   const child = pullRequest(33, 'feat/child', 'feat/merged');
   const merged = registration(32, 'merged', {
     title: 'merged', url: 'https://github.com/example/project/pull/32',
@@ -156,27 +221,25 @@ test('effective base の追跡と常駐サーバーによる付け替え記録�
     isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '',
     ci: 'pass', review: 'none', conflict: false,
   });
-  const mergedHeadRecords = [{
-    owner: 'example', repo: 'project', number: 32, headRefOid: 'a'.repeat(40), method: null,
-    mergedAt: '2026-10-03T00:00:00.000Z',
-  }];
   const withoutRetarget = assemblePullRequestStacks({
-    defaultBranch: 'main', openPullRequests: [child], registrations: [registration(33), merged], mergedHeadRecords,
+    defaultBranch: 'main', openPullRequests: [child], registrations: [registration(33), merged],
+    restackResults: checkedRestackResults([child]),
   }).trees[0];
   assert.equal(withoutRetarget.effectiveBase, 'main');
   assert.equal(withoutRetarget.retargetedFrom, null);
   assert.equal(withoutRetarget.blocker, 'base を main に付け替える必要がある');
 
   const withRetarget = assemblePullRequestStacks({
-    defaultBranch: 'main', openPullRequests: [child], registrations: [registration(33), merged], mergedHeadRecords,
+    defaultBranch: 'main', openPullRequests: [child], registrations: [registration(33), merged],
     retargetedPrs: [{ owner: 'example', repo: 'project', number: 33, base: 'main', fromNumber: 32 }],
+    restackResults: checkedRestackResults([child]),
   }).trees[0];
   assert.equal(withRetarget.effectiveBase, 'main');
   assert.equal(withRetarget.retargetedFrom, 32);
   assert.equal(withRetarget.blocker, 'base を main に付け替える必要がある');
 });
 
-test('マージできない理由は仕様の順でひとつだけ返す', () => {
+test('マージできない理由は base、スタック、ドラフト、積み直し、CI、レビューの順にひとつ返す', () => {
   const cases = [
     {
       pullRequests: [pullRequest(20, 'child', 'missing/base', { draft: true, conflict: true, ci: 'fail', review: 'changes' })],
@@ -188,8 +251,17 @@ test('マージできない理由は仕様の順でひとつだけ返す', () =>
       number: 22,
       expected: '下の #21 のマージ待ち',
     },
+    {
+      pullRequests: [pullRequest(32, 'retarget', 'old-base', { draft: true })],
+      number: 32,
+      retargetedPrs: [{ owner: 'example', repo: 'project', number: 32, base: 'main', fromNumber: 30 }],
+      expected: 'base を main に付け替える必要がある',
+    },
     { pullRequests: [pullRequest(23, 'draft', 'main', { draft: true, conflict: true })], number: 23, expected: 'ドラフト' },
-    { pullRequests: [pullRequest(29, 'restack', 'main', { conflict: true, ci: 'fail', review: 'changes' })], number: 29, expected: '積み直し待ち (squash で入った #30 のコミットが差分に残っている)' },
+    { pullRequests: [pullRequest(34, 'draft-restack', 'main', { draft: true })], number: 34, restackParent: 30, expected: 'ドラフト' },
+    { pullRequests: [pullRequest(35, 'draft-unknown', 'main', { draft: true })], number: 35, unknown: true, expected: 'ドラフト' },
+    { pullRequests: [pullRequest(29, 'restack', 'main', { conflict: true, ci: 'fail', review: 'changes' })], number: 29, restackParent: 30, expected: '積み直し待ち (#30 が main に入った後も、そのコミットが差分に残っている)' },
+    { pullRequests: [pullRequest(33, 'unknown', 'main', { conflict: true, ci: 'fail' })], number: 33, unknown: true, expected: '積み直しが必要か確かめられない' },
     { pullRequests: [pullRequest(24, 'conflict', 'main', { conflict: true, ci: 'fail' })], number: 24, expected: 'コンフリクトあり' },
     { pullRequests: [pullRequest(25, 'failed', 'main', { ci: 'fail', review: 'changes' })], number: 25, expected: 'CI が失敗' },
     { pullRequests: [pullRequest(26, 'running', 'main', { ci: 'pending', review: 'changes' })], number: 26, expected: 'CI 実行中' },
@@ -197,134 +269,33 @@ test('マージできない理由は仕様の順でひとつだけ返す', () =>
     { pullRequests: [pullRequest(28, 'required', 'main', { review: 'required' })], number: 28, expected: 'レビューの承認待ち' },
   ];
   for (const item of cases) {
-    const mergedRegistration = item.number === 29 ? registration(30, 'merged', {
-      title: 'merged', url: 'https://github.com/example/project/pull/30',
-      headRefName: 'feat/merged', baseRefName: 'main', headRefOid: 'a'.repeat(40),
-      isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '',
-      ci: 'pass', review: 'none', conflict: false,
-    }) : null;
-    const childRegistration = item.number === 29 ? registration(29, 'open', {
-      title: 'child', url: 'https://github.com/example/project/pull/29',
-      headRefName: 'restack', baseRefName: 'main', headRefOid: '1'.repeat(40),
-      isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '',
-      ci: 'pass', review: 'none', conflict: false,
-      basePullRequestNumber: null, basePullRequestHeadRefOid: null,
-      restackParents: [{ number: 30, headRefOid: 'a'.repeat(40), method: 'squash' }],
-    }) : registration(item.number);
+    const restackResults = checkedRestackResults(item.pullRequests);
+    if (item.restackParent) restackResults.set(item.number, {
+      checked: true, parent: mergedPullRequest(item.restackParent, 'a'.repeat(40)),
+    });
+    if (item.unknown) restackResults.set(item.number, { checked: false, parent: null });
     const result = assemblePullRequestStacks({
       defaultBranch: 'main',
       openPullRequests: item.pullRequests,
-      registrations: [childRegistration, ...(mergedRegistration ? [mergedRegistration] : [])],
-      mergedHeadRecords: mergedRegistration ? [{
-        owner: 'example', repo: 'project', number: 30, headRefOid: 'a'.repeat(40), method: null,
-        mergedAt: '2026-10-03T00:00:00.000Z',
-      }] : [],
-      comparisonStatuses: mergedRegistration ? new Map([['29:30', 'ahead']]) : new Map(),
+      registrations: [registration(item.number), ...(item.number === 22 ? [registration(21)] : [])],
+      retargetedPrs: item.retargetedPrs || [],
+      restackResults,
     });
     const find = (tree) => tree.number === item.number ? tree : tree.children.map(find).find(Boolean);
     assert.equal(find(result.trees[0]).blocker, item.expected);
   }
 });
 
-test('積み直しの compare は保存済みの旧 head SHA がある場合だけ組み立てる', () => {
-  const open = [pullRequest(31, 'child', 'feat/merged')];
-  const mergedRegistration = registration(30, 'merged', {
-    title: 'merged', url: 'https://github.com/example/project/pull/30',
-    headRefName: 'feat/merged', baseRefName: 'main', headRefOid: 'a'.repeat(40),
-    isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '',
-    ci: 'pass', review: 'none', conflict: false,
-  });
-  assert.deepEqual(comparisonRequests(open, [mergedRegistration], []), []);
-  const requests = comparisonRequests(open, [mergedRegistration], [{
-    owner: 'example', repo: 'project', number: 30, headRefOid: 'a'.repeat(40), method: 'squash', mergedAt: '2026-10-03T00:00:00.000Z',
-  }]);
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].oldHeadSha, 'a'.repeat(40));
-  assert.equal(requests[0].headSha, '0000000000000000000000000000000000000031');
-});
-
-test('通常の merge commit は積み直し待ちにせず squash は積み直し待ちにする', () => {
-  const child = pullRequest(31, 'child', 'main');
-  const childRegistration = registration(31, 'open', {
-    title: 'child', url: child.url, headRefName: child.headRefName, baseRefName: child.baseRefName,
-    headRefOid: child.headRefOid, isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
-    reviewDecision: '', ci: 'pass', review: 'none', conflict: false,
-    basePullRequestNumber: null, basePullRequestHeadRefOid: null,
-    restackParents: [{ number: 30, headRefOid: 'a'.repeat(40), method: null }],
-  });
-  const merged = registration(30, 'merged', {
-    title: 'parent', url: 'https://github.com/example/project/pull/30',
-    headRefName: 'feat/parent', baseRefName: 'main', headRefOid: 'a'.repeat(40),
-    isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '',
-    ci: 'pass', review: 'none', conflict: false,
-  });
-  const evaluate = (method) => assemblePullRequestStacks({
-    defaultBranch: 'main', openPullRequests: [child], registrations: [childRegistration, merged],
-    mergedHeadRecords: [{ owner: 'example', repo: 'project', number: 30, headRefOid: 'a'.repeat(40), method, mergedAt: '2026-10-03T00:00:00.000Z' }],
-    comparisonStatuses: new Map([['31:30', 'ahead']]),
-  }).trees[0];
-
-  assert.equal(evaluate('merge').canMerge, true);
-  assert.equal(evaluate('merge').needsRestack, false);
-  assert.equal(evaluate('squash').blocker, '積み直し待ち (squash で入った #30 のコミットが差分に残っている)');
-});
-
-test('マージ方式不明の親でもdefault branchに旧headが含まれれば積み直し待ちにしない', () => {
-  const child = pullRequest(31, 'child', 'main');
-  const childRegistration = registration(31, 'open', {
-    title: 'child', url: child.url, headRefName: child.headRefName, baseRefName: child.baseRefName,
-    headRefOid: child.headRefOid, isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
-    reviewDecision: '', ci: 'pass', review: 'none', conflict: false,
-    basePullRequestNumber: null, basePullRequestHeadRefOid: null,
-    restackParents: [{ number: 30, headRefOid: 'a'.repeat(40), method: null }],
-  });
-  const result = assemblePullRequestStacks({
-    defaultBranch: 'main', openPullRequests: [child], registrations: [childRegistration],
-    comparisonStatuses: new Map([['31:30', 'ahead'], ['31:30:default', 'ahead']]),
-  });
-  assert.equal(result.trees[0].needsRestack, false);
-  assert.equal(result.trees[0].canMerge, true);
-});
-
-test('関連PRを保存し、baseをmainに変えただけでは積み直し待ちを維持してpush後に解消する', async (t) => {
-  const homeDir = await temporaryDirectory(t);
-  const state = new DashboardState({ homeDir });
-  state.registerPullRequest('session-stack', { url: 'https://github.com/example/project/pull/31' }, {
-    cwd: process.cwd(), product: { key: 'project', name: 'project' },
-  });
+test('スカッシュした親のコミットはbaseをmainに変えても残り、pushで消える', async (t) => {
+  const { github, calls, unexpectedCalls, tracker, state } = await trackerFixture(t);
   const parentSha = 'a'.repeat(40);
   const originalChildSha = 'b'.repeat(40);
   const pushedChildSha = 'c'.repeat(40);
-  let refresh = 0;
-  const calls = [];
-  const tracker = new PullRequestTracker({
-    state,
-    now: () => Date.parse('2026-10-03T12:00:00.000Z') + refresh,
-    execFileImpl: (_file, args, _options, callback) => {
-      calls.push([...args]);
-      if (args[0] === 'pr' && args[1] === 'list') {
-        const childBase = refresh === 0 ? 'feat/parent' : 'main';
-        const childSha = refresh < 2 ? originalChildSha : pushedChildSha;
-        callback(null, JSON.stringify([
-          ghPullRequest(31, 'feat/child', childBase, childSha),
-          ...(refresh === 0 ? [ghPullRequest(30, 'feat/parent', 'main', parentSha)] : []),
-        ]));
-      } else if (args[0] === 'api' && args[1] === 'repos/example/project') {
-        callback(null, JSON.stringify({ default_branch: 'main', allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true }));
-      } else if (args[0] === 'pr' && args[1] === 'view' && args[2] === '30') {
-        callback(null, JSON.stringify({
-          state: 'MERGED', mergedAt: '2026-10-03T11:59:00Z', mergeCommit: { parents: [{}] }, headRefOid: parentSha,
-        }));
-      } else if (args[0] === 'api' && args[1].includes('/compare/')) {
-        const compare = args[1].split('/compare/')[1];
-        const childCompare = `${parentSha}...${refresh < 2 ? originalChildSha : pushedChildSha}`;
-        callback(null, JSON.stringify({ status: compare === childCompare ? (refresh < 2 ? 'ahead' : 'diverged') : 'behind' }));
-      } else {
-        callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
-      }
-    },
-  });
-
+  github.openPullRequests = [
+    ghPullRequest(31, 'feat/child', 'feat/parent', originalChildSha),
+    ghPullRequest(30, 'feat/parent', 'main', parentSha),
+  ];
+  github.comparisons.set(originalChildSha, compareResult([parentSha, originalChildSha]));
   await tracker.refreshRepo('example', 'project');
   const [related] = state.relatedPullRequestRegistrationsForRepo('example', 'project');
   assert.equal(related.number, 30);
@@ -334,20 +305,110 @@ test('関連PRを保存し、baseをmainに変えただけでは積み直し待�
   const [firstGroup] = tracker.snapshot();
   assert.equal(firstGroup.registeredCount, 1);
   assert.equal(firstGroup.openCount, 2);
-  refresh = 1;
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', originalChildSha)];
+  github.mergedPullRequests = [mergedPullRequest(30, parentSha)];
+  github.comparisons.set(originalChildSha, compareResult([parentSha, originalChildSha]));
+  github.views.set(30, { state: 'MERGED', mergedAt: '2026-10-03T11:59:00Z', headRefOid: parentSha });
   await tracker.refreshRepo('example', 'project');
   let [group] = tracker.snapshot();
   assert.equal(group.trees[0].baseRefName, 'main');
   assert.equal(group.trees[0].needsRestack, true);
-  assert.match(group.trees[0].blocker, /^積み直し待ち/);
+  assert.equal(group.trees[0].blocker, '積み直し待ち (#30 が main に入った後も、そのコミットが差分に残っている)');
 
-  refresh = 2;
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', pushedChildSha)];
+  github.comparisons.set(pushedChildSha, compareResult([pushedChildSha]));
   await tracker.refreshRepo('example', 'project');
   [group] = tracker.snapshot();
   assert.equal(group.trees[0].needsRestack, false);
   assert.equal(group.trees[0].blocker, null);
+  assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged').length, 3);
+  assert.equal(calls.filter((args) => args[0] === 'api' && args[1].includes('/compare/')).length, 4);
   assert.ok(calls.some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '30'));
+  assert.deepEqual(unexpectedCalls, []);
   assert.equal(state.relatedPullRequestRegistrationsForRepo('example', 'project')[0].state, 'merged');
+  const mergedListCall = calls.find((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged');
+  assert.deepEqual(mergedListCall, [
+    'pr', 'list', '-R', 'example/project', '--state', 'merged', '--limit', '100', '--json', 'number,headRefOid,mergedAt',
+  ]);
+});
+
+test('常駐サーバーが見ていない親でも merged 一覧と compare から積み直し待ちを判定する', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const childSha = 'b'.repeat(40);
+  const oldestParentSha = 'a'.repeat(40);
+  const newerParentSha = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', childSha)];
+  github.mergedPullRequests = [
+    mergedPullRequest(29, newerParentSha, '2026-10-03T11:30:00.000Z'),
+    mergedPullRequest(30, oldestParentSha, '2026-10-03T11:00:00.000Z'),
+  ];
+  github.comparisons.set(childSha, compareResult([oldestParentSha, newerParentSha, childSha]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const [group] = tracker.snapshot();
+  assert.equal(group.trees[0].needsRestack, true);
+  assert.equal(group.trees[0].restackPr, 30);
+  assert.equal(group.trees[0].blocker, '積み直し待ち (#30 が main に入った後も、そのコミットが差分に残っている)');
+});
+
+test('merge commit の親コミットが差分に残らなければ積み直し待ちにならない', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const childSha = 'b'.repeat(40);
+  const parentSha = 'a'.repeat(40);
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', childSha)];
+  github.mergedPullRequests = [mergedPullRequest(30, parentSha)];
+  github.comparisons.set(childSha, compareResult([childSha]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const [group] = tracker.snapshot();
+  assert.equal(group.trees[0].needsRestack, false);
+  assert.equal(group.trees[0].canMerge, true);
+  assert.equal(group.trees[0].blocker, null);
+});
+
+test('閉じられた親のコミットは compare に残っていても積み直し待ちにしない', async (t) => {
+  const { github, tracker } = await trackerFixture(t, [31, 30]);
+  const childSha = 'b'.repeat(40);
+  const parentSha = 'a'.repeat(40);
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', childSha)];
+  github.comparisons.set(childSha, compareResult([parentSha, childSha]));
+  github.views.set(30, { state: 'CLOSED', mergedAt: null, headRefOid: parentSha });
+
+  await tracker.refreshRepo('example', 'project');
+
+  const [group] = tracker.snapshot();
+  assert.equal(stateRecord(tracker, 30).state, 'closed');
+  assert.equal(group.trees[0].needsRestack, false);
+  assert.equal(group.trees[0].canMerge, true);
+});
+
+function stateRecord(tracker, number) {
+  return tracker.state.pullRequestRegistrations().find((record) => record.number === number);
+}
+
+test('compare の失敗と250件超では積み直しが必要か確かめられない', async (t) => {
+  for (const condition of ['failure', 'truncated']) {
+    const { github, tracker } = await trackerFixture(t);
+    const childSha = 'b'.repeat(40);
+    const parentSha = 'a'.repeat(40);
+    github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', childSha)];
+    github.mergedPullRequests = [mergedPullRequest(30, parentSha)];
+    if (condition === 'failure') {
+      github.compareErrors.add(childSha);
+    } else {
+      const commits = [parentSha, ...Array.from({ length: 249 }, (_, index) => (index + 1).toString(16).padStart(40, '0'))];
+      github.comparisons.set(childSha, compareResult(commits, 251));
+    }
+
+    await tracker.refreshRepo('example', 'project');
+
+    const [group] = tracker.snapshot();
+    assert.equal(group.trees[0].restackCheckUnknown, true, condition);
+    assert.equal(group.trees[0].blocker, '積み直しが必要か確かめられない', condition);
+    assert.equal(group.trees[0].canMerge, false, condition);
+  }
 });
 
 test('31件目以降の登録済みOPEN PRをgh pr viewから一覧へ補う', async (t) => {
@@ -366,17 +427,22 @@ test('31件目以降の登録済みOPEN PRをgh pr viewから一覧へ補う', a
         callback(null, JSON.stringify({ default_branch: 'main', allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: false }));
       } else if (args[0] === 'pr' && args[1] === 'view' && args[2] === '31') {
         callback(null, JSON.stringify({ ...ghPullRequest(31, 'feat/31', 'main', '1'.repeat(40)), state: 'OPEN' }));
+      } else if (args[0] === 'api' && args[1].includes('/compare/')) {
+        callback(null, JSON.stringify(compareResult()));
       } else callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
     },
   });
 
   await tracker.refreshRepo('example', 'project');
   const [group] = tracker.snapshot();
-  assert.deepEqual(calls.find((args) => args[0] === 'pr' && args[1] === 'list').slice(0, 8), [
+  const openListCall = calls.find((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'open');
+  assert.deepEqual(openListCall.slice(0, 8), [
     'pr', 'list', '-R', 'example/project', '--state', 'open', '--limit', '500',
   ]);
   const viewCall = calls.find((args) => args[0] === 'pr' && args[1] === 'view');
-  assert.ok(viewCall.includes('number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,state,mergedAt,mergeCommit'));
+  assert.ok(viewCall.includes('number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,state,mergedAt'));
+  assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged').length, 1);
+  assert.equal(calls.filter((args) => args[0] === 'api' && args[1].includes('/compare/')).length, 1);
   assert.equal(group.trees[0].number, 31);
   assert.equal(group.openCount, 1);
 });
@@ -414,22 +480,26 @@ test('オープン一覧から消えた PR の状態を gh pr view で確認す�
     now: () => Date.parse('2026-10-03T12:00:00.000Z'),
     execFileImpl: (_file, args, _options, callback) => {
       calls.push([...args]);
-      if (args[0] === 'pr' && args[1] === 'list') {
+      if (args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'open') {
         callback(null, JSON.stringify(includeOpenPullRequest ? [{
           number: 52, title: 'PR 52', url: 'https://github.com/example/project/pull/52',
           headRefName: 'feat/closed', baseRefName: 'main', headRefOid: '5'.repeat(40),
           isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN',
           reviewDecision: '', statusCheckRollup: [{ state: 'SUCCESS', conclusion: 'SUCCESS' }],
         }] : []));
+      } else if (args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged') {
+        callback(null, '[]');
       } else if (args[0] === 'api' && args[1] === 'repos/example/project') {
         callback(null, JSON.stringify({
           default_branch: 'main', allow_merge_commit: true,
           allow_squash_merge: false, allow_rebase_merge: true,
         }));
+      } else if (args[0] === 'api' && args[1].includes('/compare/')) {
+        callback(null, JSON.stringify(compareResult()));
       } else if (args[0] === 'pr' && args[1] === 'view') {
         callback(null, JSON.stringify({
           state: 'MERGED', mergedAt: '2026-10-03T11:59:00Z',
-          mergeCommit: { oid: 'b'.repeat(40) }, headRefOid: '5'.repeat(40),
+          headRefOid: '5'.repeat(40),
         }));
       } else {
         callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
@@ -443,8 +513,8 @@ test('オープン一覧から消えた PR の状態を gh pr view で確認す�
 
   const viewCall = calls.find((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '52');
   assert.ok(viewCall);
-  assert.equal(viewCall.at(-1), `${'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup'},state,mergedAt,mergeCommit`);
-  assert.deepEqual(state.mergedPullRequestHeadsForRepo('example', 'project').map((record) => record.headRefOid), ['5'.repeat(40)]);
+  assert.equal(viewCall.at(-1), `${'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup'},state,mergedAt`);
+  assert.equal(Object.hasOwn(state.serializeStore(), 'mergedPrHeads'), false);
   const [group] = tracker.snapshot();
   assert.equal(group.defaultBranch, 'main');
   assert.deepEqual(group.mergeMethods, ['merge', 'rebase']);
@@ -463,7 +533,6 @@ test('store.json は PR を version 1 で保存し、PR 項目のない旧形式
     lastOpen: {
       title: 'PR 45', url: 'https://github.com/example/project/pull/45',
       headRefName: 'feat/manual', baseRefName: 'main', headRefOid: '5'.repeat(40),
-      basePullRequestNumber: null, basePullRequestHeadRefOid: null, restackParents: [],
     },
   });
   await state.flushPersistence();
@@ -471,6 +540,7 @@ test('store.json は PR を version 1 で保存し、PR 項目のない旧形式
   assert.equal(persisted.version, 1);
   assert.equal(persisted.prs[0].number, 44);
   assert.equal(persisted.relatedPrs[0].number, 45);
+  assert.equal(Object.hasOwn(persisted, 'mergedPrHeads'), false);
   const restored = await DashboardState.load(homeDir);
   assert.equal(restored.pullRequestRegistrations()[0].url, 'https://github.com/example/project/pull/44');
   assert.equal(restored.relatedPullRequestRegistrations()[0].lastOpen.headRefOid, '5'.repeat(40));
@@ -494,7 +564,6 @@ test('関連PRの保存記録は14日を過ぎると復元時に削除する', a
     lastOpen: {
       title: 'PR 46', url: 'https://github.com/example/project/pull/46',
       headRefName: 'feat/manual', baseRefName: 'main', headRefOid: '6'.repeat(40),
-      basePullRequestNumber: null, basePullRequestHeadRefOid: null, restackParents: [],
     },
   }, now - 14 * 24 * 60 * 60 * 1000 - 1);
   await state.flushPersistence();
