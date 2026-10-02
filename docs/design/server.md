@@ -74,13 +74,17 @@
 | イベント | 送る項目 |
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
-| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。Bash では出力の中の `codex-agent: agent=` の行。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
+| PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。Codex を終了と判定するのは結果行を受けたときだけで、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
 
 入力の要約は、Bash ならコマンドの先頭、Read、Edit、Write ならファイルのパス、それ以外はツール名だけにする。
+
+PostToolUse の出力全文は送らない。
+`event.js` は `tool_response` から `codex-agent: agent=` と `codex-agent: result=` の行だけを抽出する。
+常駐サーバーは監査行からモデル、effort、`codex_home` を読み、結果行から実行結果を読む。
 
 ## 状態
 
@@ -95,15 +99,24 @@
 - 題名: `~/.claude/sessions/*.json` の `name`。
 - 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionEnd を受けたら一覧から外す。
 - 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。
-- サブエージェント: `agent_id` ごとに、`agent_type`、開始時刻、最後のツール、モデル、effort、取得元。
+- サブエージェント: `agent_id` ごとに、`agent_type`、作業の説明、開始時刻、最後のツール、モデル、effort。
 - タスク: `tasks` の全項目と、最後に書いた時刻 `tasksUpdatedAt`。
 - 判断事項: AskUserQuestion の記録と MCP から登録した項目を `decisions` に持つ。
 
 ## サブエージェントのモデルと effort
 
+- Agent ツールの PreToolUse で受けた説明は、`tool_use_id` と `agent_id` の結び付けから対象のサブエージェントへ持たせる。
 - SubagentStart では、`~/.claude/agents/<agent_type>.md` の frontmatter の `model` と `effort` を仮の値として出す。
 - Agent ツールの PostToolUse の `resolvedModel` が来たら、モデルを置き換える。
-- GPT 側は、Bash の PreToolUse でコマンドに `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として出す。PostToolUse の出力に `codex-agent: agent=` の行があれば、その値で置き換える。Bash を背景で動かした場合、この行は PostToolUse に載らないので、仮の値のままになる。
+- Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
+- Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
+- Codex 呼び出しを開始したイベントに親の `agent_id` がある場合は、GPT のモデル、effort、`codex_home` を親の行へまとめる。
+- 親が特定できないメインセッションからの呼び出しは、独立した行にする。
+- 監査行が届いたらモデル、effort、`codex_home` を実際の値に置き換える。
+- 結果行が `rate-limited` なら「GPT 不使用(利用上限)」、`unavailable` なら「GPT 不使用(使用不能)」を表示する。
+- GPT 側の情報を取得できない場合は、モデルの札を表示しない。
+- 背景で起動した Codex は、同じ親の後続ツールの PostToolUse 出力に結果行が現れたとき、最も古い稼働中の呼び出しを終了にする。
+- 結果行が現れないまま親が終わったときは、終了未確認にする。
 
 ## 許可待ち
 
@@ -171,8 +184,12 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 - 2 秒ごとに `GET /api/state` を読む。
 - プロダクト別では `product.key` ごとにまとめ、プロダクト名、取得できたブランチ名、0 件を除く許可待ちと判断待ちの件数を見出しに出す。1 プロダクトに複数セッションがあるときだけ、各まとまりにセッション名と状態を出す。
-- セッション内は許可待ちと判断事項、メインの作業行、サブエージェント、タスクと完了条件の順に表示する。メイン行は状態、doing タスク、実行中ツール、最終イベントからの経過を示し、作業中の点は `prefers-reduced-motion` のとき点滅を止める。
-- 種類別では許可待ちと判断事項を待ち時間の長い順、今やっていること、タスクと完了条件に分ける。各項目にプロダクト名を付け、同じプロダクトに複数セッションがあるときはセッション名も付ける。
+- セッション内は許可待ちと判断事項、タスクと完了条件、メインの作業行、サブエージェントの順に表示する。メイン行は状態、doing タスク、実行中ツール、最終イベントからの経過を示し、作業中の点は `prefers-reduced-motion` のとき点滅を止める。
+- ツール名は札にし、コマンドやファイルのパスは別に表示する。
+- サブエージェントの行には Agent ツールの説明を表示し、Claude と GPT のモデルを暖色と緑の札で矢印につなぐ。
+- GPT の札にマウスを重ねると `codex_home` を表示する。
+- 許可待ちのカードには待ち時間と「許可はデスクトップアプリの <プロダクト名> のセッションで出す。ダッシュボードからは出せない。」を表示する。
+- 種類別では、許可待ちと判断事項を待ち時間の長い順に並べ、その後にタスクと完了条件、今やっていることを表示する。各項目にプロダクト名を付け、同じプロダクトに複数セッションがあるときはセッション名も付ける。
 - 上部の件数タグは許可待ち、止めて待っている判断事項、推奨案を仮適用した判断事項、稼働中のサブエージェントとする。タグで該当種類を隠せ、非表示の種類と件数を確認してすべて再表示できる。保留中と PR は各データが加わる段階まで出さない。
 - プロダクト別では上下移動、最上部への固定、畳む・開くを使える。固定と通常の境界を越える移動はできない。表示操作の設定はブラウザーの `localStorage` に保存し、利用できない場合も画面操作は使える。
 - 待ち時間は 1 分ごとに表示を更新し、15 分を超えたものを強調する。解決済みと取り下げの判断事項、終了済みサブエージェント、完了タスクは折りたためる。

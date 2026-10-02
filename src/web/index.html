@@ -92,22 +92,30 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); }
 .badge.busy { background: var(--accent-soft); color: var(--accent); }
 .badge.wait { background: var(--warn-soft); color: var(--warn); }
-.badge.permission { background: var(--danger-soft); color: var(--danger); }
+.badge.permission-chip { background: var(--danger-soft); color: var(--danger); }
 .badge.done { background: var(--ok-soft); color: var(--ok); }
 .badge.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
 h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
-.now-row, .agent-row { display: grid; grid-template-columns: minmax(130px, 180px) minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.permission-list { gap: 0; }
+.now-row, .agent-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .who { color: var(--text-2); font-size: 12px; }
 .who strong { color: var(--text); display: block; font-size: 13px; font-weight: 600; }
 .detail { overflow-wrap: anywhere; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.agent-extra { display: flex; gap: 5px 8px; flex-wrap: wrap; margin-top: 3px; }
-.model { display: inline-flex; gap: 5px; align-items: baseline; padding: 1px 8px; border-radius: 6px; background: var(--ok-soft); font-size: 12px; }
+.tool-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
+.tool-name { min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
+.tool-content { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.model { display: inline-flex; gap: 6px; align-items: baseline; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; white-space: nowrap; }
 .model i { color: var(--text-2); font-size: 11px; font-style: normal; }
-.permission { border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); }
+.model.claude { background: var(--warn-soft); border-color: transparent; }
+.model.gpt { background: var(--ok-soft); border-color: transparent; }
+.model.off { color: var(--text-2); white-space: normal; }
+.models { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
+.arrow { color: var(--text-2); font-size: 12px; }
+.permission { margin-bottom: 10px; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 12px; background: var(--surface); }
 .permission.long-wait { background: var(--danger-soft); }
-.permission-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.permission-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
 .permission-head strong { font-weight: 600; }
 .decision-list, .task-list { display: grid; gap: 8px; min-width: 0; }
 .decision-card { min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); }
@@ -137,7 +145,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .criteria-list li.met::marker { content: "✓ "; }
 .criteria-list li:not(.met)::marker { content: "○ "; }
 .task-updated { margin-top: 6px; }
-.empty { color: var(--text-2); font-size: 13px; padding: 10px; }
+.empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 640px) {
@@ -184,7 +192,6 @@ h3.sub .count { font-weight: normal; }
 .dot.wait { background: var(--warn); }
 .dot.unknown { border: 1px dashed var(--text-2); background: transparent; }
 .activity-title { font-weight: 600; }
-.tool-detail { margin-top: 2px; color: var(--text-2); font-size: 12px; }
 @keyframes pulse { 50% { opacity: .35; } }
 .badge.unknown, .task-state.unknown { border: 1px dashed var(--border); background: var(--surface-2); color: var(--text-2); }
 .badge.done { background: var(--ok-soft); color: var(--ok); }
@@ -206,9 +213,6 @@ h3.sub .count { font-weight: normal; }
 .wait { color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .wait.stale { color: var(--danger); font-weight: 600; }
 .perm code { padding: 2px 6px; border-radius: 4px; background: var(--surface-2); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-.model.claude { background: var(--warn-soft); }
-.model i { color: var(--text-2); font-size: 11px; font-style: normal; }
-.models { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
 .ended-toggle { min-height: 32px; margin-top: 6px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 12px; }
 .ended-toggle:hover { color: var(--text); }
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -473,9 +477,37 @@ function durationAgoLabel(startedAt, now = Date.now()) {
   return ['時刻不明', '1 分以内'].includes(label) ? label : `${label}前`;
 }
 
-function toolDetail(toolName, summary) {
-  if (!summary || summary === toolName) return toolName || summary;
-  return toolName ? `${toolName}: ${summary}` : summary;
+function appendToolLine(target, tool) {
+  if (!tool) return;
+  const line = element('div', 'tool-line');
+  if (tool.tool_name) line.append(badge(tool.tool_name, 'tool-name'));
+  if (tool.summary && tool.summary !== tool.tool_name) line.append(element('span', 'tool-content', tool.summary));
+  target.append(line);
+}
+
+function appendModelLine(target, agent) {
+  const claudeModel = !agent.isCodex && agent.model ? (agent.modelName || agent.model) : '';
+  const gpt = agent.isCodex
+    ? { model: agent.model, effort: agent.effort, codex_home: agent.codex_home, unavailable: agent.unavailable }
+    : agent.gpt;
+  if (!claudeModel && !(gpt?.model || gpt?.unavailable)) return;
+
+  const models = element('div', 'models');
+  if (claudeModel) {
+    const claude = element('span', 'model claude', `Claude ${claudeModel}`);
+    if (agent.effort) claude.append(element('i', '', `effort ${agent.effort}`));
+    models.append(claude);
+  }
+  if (gpt?.model || gpt?.unavailable) {
+    if (claudeModel) models.append(element('span', 'arrow', '→'));
+    const gptLabel = gpt.unavailable ? 'GPT 不使用' : `GPT ${gpt.model}`;
+    const gptBadge = element('span', `model ${gpt.unavailable ? 'off' : 'gpt'}`, gptLabel);
+    if (gpt.unavailable) gptBadge.append(element('i', '', gpt.unavailable));
+    else if (gpt.effort) gptBadge.append(element('i', '', `effort ${gpt.effort}`));
+    if (gpt.codex_home) gptBadge.title = gpt.codex_home;
+    models.append(gptBadge);
+  }
+  target.append(models);
 }
 
 function updateTitle(sessions) {
@@ -630,7 +662,7 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   who.append(element('strong', '', status.label));
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
-  if (mainTool) detail.append(element('div', 'tool-detail', toolDetail(mainTool.tool_name, mainTool.summary)));
+  if (mainTool) appendToolLine(detail, mainTool);
   const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
   const elapsed = element('time', 'since', durationAgoLabel(elapsedAt));
   row.append(who, detail, elapsed);
@@ -659,16 +691,10 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     appendContextTags(who, product, session, withTags, multipleSessions);
     who.append(element('strong', '', agent.agent_type || agent.agent_id));
     who.append(badge(agentState[0], agentState[1]));
-    const detail = element('div', 'detail', agent.lastTool ? toolDetail(agent.lastTool.tool_name, agent.lastTool.summary) : 'ツール実行情報はありません。');
-    const extra = element('div', 'agent-extra');
-    if (agent.model) {
-      const model = element('span', 'model');
-      model.append(document.createTextNode(agent.model));
-      if (agent.effort) model.append(element('i', '', agent.effort));
-      extra.append(model);
-    }
-    if (agent.source) extra.append(element('span', 'meta', `取得元: ${agent.source}`));
-    detail.append(extra);
+    const detail = element('div', 'detail');
+    if (agent.description) detail.append(element('div', 'agent-description', agent.description));
+    else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
+    appendModelLine(detail, agent);
     row.append(who, detail, element('time', 'since', agent.startedAt ? durationLabel(agent.startedAt) : ''));
     list.append(row);
   }
@@ -713,15 +739,27 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
   const list = element('div', 'permission-list');
   for (const wait of newestFirst(waits)) {
     const age = Date.now() - Date.parse(wait.startedAt);
+    const minutes = Number.isFinite(age) ? Math.max(0, Math.floor(age / 60_000)) : null;
+    const isLong = Number.isFinite(age) && age > LONG_WAIT_MS;
     const card = element('article', `permission ${age > LONG_WAIT_MS ? 'long-wait' : ''}`.trim());
     const header = element('div', 'permission-head');
     appendContextTags(header, product, session, withTags, multipleSessions);
-    header.append(element('strong', '', wait.agent_id ? `${wait.agent_id} が許可を待っています` : 'メインセッションが許可を待っています'));
-    header.append(badge('許可待ち', 'permission'));
-    header.append(element('time', 'since', durationLabel(wait.startedAt)));
+    const agent = session.agents.find((item) => item.agent_id === wait.agent_id);
+    const who = wait.agent_id ? (agent?.agent_type || 'サブエージェント') : 'メイン';
+    header.append(element('strong', '', `${who}がツールの実行許可を待っている`));
+    header.append(badge('許可待ち', 'permission-chip'));
+    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), minutes === null ? '時刻不明' : `${minutes} 分待機中${isLong ? '(長い)' : ''}`));
     card.append(header);
-    if (wait.tool_name || wait.summary) card.append(element('div', 'detail', toolDetail(wait.tool_name, wait.summary)));
-    if (wait.message) card.append(element('div', 'meta', wait.message));
+    if (wait.tool_name || wait.summary) {
+      const context = element('div', 'decision-context permission-tool');
+      if (wait.tool_name) context.append(document.createTextNode(wait.tool_name));
+      if (wait.summary && wait.summary !== wait.tool_name) {
+        context.append(document.createTextNode(wait.tool_name ? ': ' : ''));
+        context.append(element('code', '', wait.summary));
+      }
+      card.append(context);
+    }
+    card.append(element('div', 'meta', `許可はデスクトップアプリの ${product.name} のセッションで出す。ダッシュボードからは出せない。`));
     list.append(card);
   }
   body.append(list);
@@ -812,7 +850,7 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     const list = element('div', 'decision-list');
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
-  }
+  } else if (!shownPermissions(session).length) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, expanded, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
@@ -925,12 +963,12 @@ function sessionBlock(product, session, multipleSessions) {
   body.append(judgmentHeading);
   appendPermissionWaits(body, session, product);
   appendDecisions(body, session, product);
+  appendTasks(body, session, product);
   body.append(element('h3', 'sub', '今やっていること'));
   const now = element('div', 'now');
   now.append(mainRow(session, product));
   body.append(now);
   appendAgents(body, session, product);
-  appendTasks(body, session, product);
   appendUnknownSessionControls(body, session);
   block.append(body);
   return block;
@@ -1049,8 +1087,8 @@ function renderKindSections(products) {
   waitingItems.sort((left, right) => right.age - left.age);
   const judgment = element('div', 'body');
   for (const item of waitingItems) if (item.card) judgment.append(item.card);
+  if (!waitingItems.length) judgment.append(element('div', 'empty', 'ありません'));
   judgment.append(endedDecisions);
-  if (!waitingItems.length && !endedDecisions.childElementCount) judgment.append(element('div', 'empty', 'ありません'));
   const productOrder = element('div', 'order product-order');
   products.forEach((product, index) => productOrder.append(element('span', 'prod-tag', `${index + 1}. ${product.name}`)));
 
@@ -1089,8 +1127,8 @@ function renderKindSections(products) {
 
   return [
     kindSection('あなたの判断が必要なこと(待ちの長い順)', judgment, productOrder),
-    kindSection('今やっていること', activity),
     kindSection('タスクと完了条件', tasks),
+    kindSection('今やっていること', activity),
   ];
 }
 

@@ -70,11 +70,27 @@ function agentFor(session, agentId) {
   return session.agents.find((agent) => agent.agent_id === agentId) || null;
 }
 
+function claudeModelName(modelId) {
+  if (typeof modelId !== 'string' || !modelId) return '';
+  const id = modelId.replace(/\[[^\]]*\]$/, '');
+  const modern = id.match(/^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/i);
+  const legacy = id.match(/^claude-(\d+)-(\d+)-([a-z]+)(?:-\d{8})?$/i);
+  const match = modern
+    ? { family: modern[1], major: modern[2], minor: modern[3] }
+    : legacy
+      ? { family: legacy[3], major: legacy[1], minor: legacy[2] }
+      : null;
+  if (match) return `${match.family[0].toUpperCase()}${match.family.slice(1)} ${match.major}.${match.minor}`;
+  const readable = id.replace(/^claude-/i, '').replace(/[-_]+/g, ' ').trim();
+  return readable ? `${readable[0].toUpperCase()}${readable.slice(1)}` : modelId;
+}
+
 function agentModelFromDefinition(agentType, definition) {
   return {
     agent_id: agentType,
     agent_type: agentType || 'サブエージェント',
     startedAt: null,
+    description: '',
     lastTool: null,
     model: definition?.model || '',
     effort: definition?.effort || '',
@@ -119,7 +135,6 @@ function sameQuestionSet(left, right) {
   return left.every((question, index) => question.question === right[index]?.question);
 }
 
-// 背景で動いた codex-agent.sh は終了がフックに届かない。呼び出し元が終わった後は、稼働中とも終了とも言えないので終了未確認にする。
 function deactivateBackgroundedCodex(session, parentAgentId) {
   for (const agent of session.agents) {
     if (agent.backgrounded && agent.active && sameAgent(agent.parent_agent_id, parentAgentId)) {
@@ -127,6 +142,38 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
       agent.unconfirmed = true;
     }
   }
+}
+
+// 親が一度止まって終了未確認になった Codex も、再開した親が取り出した結果行で終了にする。
+function oldestBackgroundedCodex(session, parentAgentId) {
+  return session.agents
+    .filter((agent) => agent.isCodex && agent.backgrounded && (agent.active || agent.unconfirmed) && sameAgent(agent.parent_agent_id, parentAgentId))
+    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
+}
+
+function applyCodexAudit(agent, event) {
+  if (!event.codexAudit) return;
+  agent.model = event.codexAudit.model || agent.model;
+  agent.effort = event.codexAudit.effort || agent.effort;
+  agent.codex_home = event.codexAudit.codex_home || agent.codex_home || '';
+}
+
+// 監査行は Codex の起動前に出るので、終わったと判定するのは結果行を受けたときだけにする。
+function completeCodexAgent(agent, event) {
+  applyCodexAudit(agent, event);
+  const result = event.codexResult;
+  if (result?.status === 'rate-limited') agent.unavailable = '利用上限';
+  // exit=3 は GPT 側が未導入か無効で、Codex を起動していない。
+  if (result?.status === 'unavailable' || (result?.status === 'failed' && result.exitCode === 3)) agent.unavailable = '使用不能';
+  agent.active = false;
+  agent.unconfirmed = false;
+}
+
+function latestCodexForParent(agents, parentAgentId) {
+  return agents
+    .filter((agent) => agent.isCodex && sameAgent(agent.parent_agent_id, parentAgentId))
+    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
+    .at(-1);
 }
 
 function deriveSessions(entries) {
@@ -164,6 +211,7 @@ function deriveSessions(entries) {
           tool_use_id: toolUseId,
           tool_name: event.tool_name,
           summary: event.summary,
+          description: event.description || '',
           agent_id: agentId,
           startedAt: isoTime(event.hookAt),
         });
@@ -188,7 +236,10 @@ function deriveSessions(entries) {
         Object.assign(agent, {
           agent_id: agentIdForCall,
           agent_type: event.codexDefinition,
+          isCodex: true,
           parent_agent_id: agentId,
+          codex_home: '',
+          unavailable: '',
           startedAt: isoTime(event.hookAt),
           lastTool: { tool_name: 'Bash', summary: event.summary },
         });
@@ -231,19 +282,23 @@ function deriveSessions(entries) {
     }
 
     if (eventName === 'SubagentStart' && agentId) {
-      const existing = agentFor(session, agentId);
+      let agent = agentFor(session, agentId);
       const definition = event.agentDefinition || {};
-      if (existing) {
-        existing.active = true;
-        existing.agent_type = event.agent_type || existing.agent_type;
+      if (agent) {
+        agent.active = true;
+        agent.agent_type = event.agent_type || agent.agent_type;
       } else {
-        const agent = agentModelFromDefinition(event.agent_type, definition);
+        agent = agentModelFromDefinition(event.agent_type, definition);
         agent.agent_id = agentId;
         agent.startedAt = isoTime(event.hookAt);
         session.agents.push(agent);
       }
       const unboundAgentCalls = unboundAgentCallsOf(session);
-      if (unboundAgentCalls.length === 1) session.agentToolBindings[unboundAgentCalls[0].tool_use_id] = agentId;
+      if (unboundAgentCalls.length === 1) {
+        const tool = unboundAgentCalls[0];
+        session.agentToolBindings[tool.tool_use_id] = agentId;
+        agent.description = tool.description || agent.description;
+      }
     }
 
     if (eventName === 'SubagentStop' && agentId) {
@@ -253,6 +308,7 @@ function deriveSessions(entries) {
     }
 
     if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+      let completedCodexAgent = null;
       if (toolUseId) {
         session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
         session.completedToolIds.add(toolUseId);
@@ -267,28 +323,25 @@ function deriveSessions(entries) {
         }
       }
 
-      if (eventName === 'PostToolUse' && event.tool_name === 'Bash' && !event.codexAudit && toolUseId) {
+      if (event.tool_name === 'Bash' && toolUseId) {
         const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-        if (placeholder) placeholder.backgrounded = true;
-        delete session.pendingCodex[toolUseId];
-      }
-
-      if (eventName === 'PostToolUse' && event.tool_name === 'Bash' && event.codexAudit && toolUseId) {
-        const placeholderId = session.pendingCodex[toolUseId];
-        const targetAgent = agentFor(session, placeholderId);
-        if (targetAgent) {
-          targetAgent.model = event.codexAudit.model || targetAgent.model;
-          targetAgent.effort = event.codexAudit.effort || targetAgent.effort;
-          targetAgent.source = 'codex-agent audit';
-          targetAgent.active = false;
+        if (placeholder && event.codexResult) {
+          completeCodexAgent(placeholder, event);
+          completedCodexAgent = placeholder;
+        } else if (placeholder && eventName === 'PostToolUseFailure') {
+          applyCodexAudit(placeholder, event);
+          placeholder.active = false;
+        } else if (placeholder) {
+          applyCodexAudit(placeholder, event);
+          placeholder.backgrounded = true;
         }
         delete session.pendingCodex[toolUseId];
       }
 
-      if (eventName === 'PostToolUseFailure' && event.tool_name === 'Bash' && toolUseId) {
-        const candidate = agentFor(session, session.pendingCodex[toolUseId]);
-        if (candidate) candidate.active = false;
-        delete session.pendingCodex[toolUseId];
+      // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
+      if (event.codexResult && !completedCodexAgent && event.tool_name !== 'Agent') {
+        const targetAgent = oldestBackgroundedCodex(session, agentId);
+        if (targetAgent) completeCodexAgent(targetAgent, event);
       }
 
       session.permissionWaits = session.permissionWaits.filter((wait) => !(
@@ -310,8 +363,9 @@ function deriveSessions(entries) {
     }
 
     if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
+      // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
       const oldestTool = session.tools
-        .filter((tool) => sameAgent(tool.agent_id, agentId))
+        .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
         .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
       const wait = {
         agent_id: agentId,
@@ -342,11 +396,35 @@ function deriveSessions(entries) {
     .filter((session) => !session.ended)
     .map((session) => {
       const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
-      const agents = session.agents.map((agent) => ({ ...agent }));
+      const agents = session.agents
+        .filter((agent) => !(
+          agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
+        ))
+        .map((agent) => {
+          const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
+          const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
+            child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
+          ));
+          return {
+            ...agent,
+            ...(childUnconfirmed ? { unconfirmed: true } : {}),
+            modelName: agent.isCodex ? '' : claudeModelName(agent.model),
+            ...(gptAgent ? {
+              gpt: {
+                model: gptAgent.model,
+                effort: gptAgent.effort,
+                codex_home: gptAgent.codex_home,
+                unavailable: gptAgent.unavailable,
+                active: gptAgent.active,
+                unconfirmed: gptAgent.unconfirmed === true,
+              },
+            } : {}),
+          };
+        });
       const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
       const status = permissionWaits.length
         ? '許可待ち'
-        : session.stopped && agents.some((agent) => agent.active)
+        : session.stopped && session.agents.some((agent) => agent.active)
           ? '待機中(サブエージェント稼働中)'
           : session.stopped
             ? '待機中'
@@ -677,4 +755,4 @@ function cloneDecision(decision) {
   };
 }
 
-module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions };
+module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName };

@@ -151,6 +151,10 @@ h3.sub .count { font-weight: normal; }
 .state.doing { background: var(--accent-soft); color: var(--accent); }
 .state.todo { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 .task.done .title { color: var(--text-2); }
+.task .line .link-btn { margin-left: auto; flex: none; color: var(--text-2); font-size: 12px; }
+.task .line .link-btn:hover { color: var(--text); }
+.close-agent { margin-left: auto; color: var(--text-2); font-size: 12px; }
+.close-agent:hover { color: var(--text); }
 .criteria { margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; color: var(--text-2); }
 .criteria li.met { color: var(--ok); }
 .criteria li.met::marker { content: "✓ "; }
@@ -475,7 +479,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -587,12 +591,14 @@ function renderSummary() {
   excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
 }
 
+// Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
 function modelLine(s) {
-  if (!s.model) return '';
-  const claude = `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>`;
+  if (!s.model && !s.gpt) return '';
+  const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
+  const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
-  if (s.gpt && s.gpt.unavailable) gpt = `<span class="arrow">→</span><span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
-  else if (s.gpt) gpt = `<span class="arrow">→</span><span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
   return `<div class="models">${claude}${gpt}</div>`;
 }
 
@@ -662,7 +668,7 @@ function sessionTag(p, session, withTag) {
 }
 
 function mainRow(p, session, withTag) {
-  const taskTitle = session.tasks.find(task => task.state === 'doing')?.title || '';
+  const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : '状態不明';
   const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
   const tool = session.main.tool || '—';
@@ -672,15 +678,22 @@ function mainRow(p, session, withTag) {
       <div class="since">${esc(session.main.since || '')}</div></div>`;
 }
 
+// 画面で終了にした終了未確認は常駐サーバーが覚え、そのサブエージェントのイベントがまた届くまで終了として出す。
+const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.type}`;
+const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !ui.closedAgents.includes(closedAgentKey(session, agent));
+const isEndedAgent = (session, agent) => agent.state === 'done' && !isUnconfirmed(session, agent);
+
 function agentRow(p, session, agent, withTag) {
-  const state = agent.state === 'busy' ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  const unconfirmed = isUnconfirmed(session, agent);
+  const state = agent.state === 'busy' ? ['稼働中', 'busy'] : unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  const close = unconfirmed ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   return `<div class="agent-row">
-    <div class="who"><span class="dot ${agent.unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span></div>
+    <div class="who"><span class="dot ${unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span>${close}</div>
     <div>${esc(agent.text)}${modelLine(agent)}${routeTag(agent)}</div><div class="since">${esc(agent.since)}</div></div>`;
 }
 
 function endedAgentToggle(session) {
-  const ended = session.subagents.filter(agent => agent.state === 'done' && !agent.unconfirmed);
+  const ended = session.subagents.filter(agent => isEndedAgent(session, agent));
   if (!ended.length) return '';
   const expanded = ui.expandedEndedAgents.includes(session.id);
   const label = expanded ? '終了済みを隠す' : '終了済みを表示';
@@ -689,20 +702,27 @@ function endedAgentToggle(session) {
 
 function agentSection(p, session, withTag) {
   const expanded = ui.expandedEndedAgents.includes(session.id);
-  const agents = visibleSubagents(session).filter(agent => agent.state !== 'done' || agent.unconfirmed || expanded)
+  const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded)
     .sort((a, b) => ageMinutes(a) - ageMinutes(b));
   const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
-  const hasEnded = session.subagents.some(agent => agent.state === 'done' && !agent.unconfirmed);
+  const hasEnded = session.subagents.some(agent => isEndedAgent(session, agent));
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
   return `${rows ? `<div class="agent-list">${rows}</div>` : `<div class="empty">${empty}</div>`}${endedAgentToggle(session)}`;
 }
 
+// 画面で完了にしたタスクは常駐サーバーが覚え、セッションがそのタスクの状態を変えるまで完了として出す。
+const closedTaskKey = (session, t) => `${session.id}::${t.title}`;
+const taskState = (session, t) => ui.closedTasks.includes(closedTaskKey(session, t)) ? 'done' : t.state;
+
 function taskItem(p, session, t, withTag) {
-  const label = { done: '完了', doing: '作業中', todo: '未着手' }[t.state];
+  const state = taskState(session, t);
+  const label = { done: '完了', doing: '作業中', todo: '未着手' }[state];
   const met = t.criteria.filter(c => c.met).length;
-  return `<li class="task ${t.state}">
-    <div class="line"><span class="state ${t.state}">${label}</span>${sessionTag(p, session, withTag)}
-      <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}</span></div>
+  const closedHere = state === 'done' && t.state !== 'done';
+  const close = state === 'done' ? '' : `<button type="button" class="link-btn" data-close-task="${esc(closedTaskKey(session, t))}">完了にする</button>`;
+  return `<li class="task ${state}">
+    <div class="line"><span class="state ${state}">${label}</span>${sessionTag(p, session, withTag)}
+      <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}${closedHere ? '、画面で完了にした' : ''}</span>${close}</div>
     <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
 }
 
@@ -932,13 +952,15 @@ function decisionSessionBlock(p, session, withTag) {
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
-  return `${cards || `<div class="empty">${empty}</div>`}${endedDecisionToggle(session)}`;
+  // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
+  const showEmpty = !cards && !visiblePerms(session).length;
+  return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
 function taskSessionBlock(p, session, withTag) {
-  const done = session.tasks.filter(task => task.state === 'done');
+  const done = session.tasks.filter(task => taskState(session, task) === 'done');
   const expanded = ui.expandedDoneTasks.includes(session.id);
-  const visible = expanded ? session.tasks : session.tasks.filter(task => task.state !== 'done');
+  const visible = expanded ? session.tasks : session.tasks.filter(task => taskState(session, task) !== 'done');
   const updated = `最終更新 ${session.tasksUpdatedMin} 分前`;
   const items = visible.map(task => taskItem(p, session, task, withTag)).join('');
   const toggle = done.length
@@ -972,9 +994,9 @@ function sessionBlock(p, session) {
       <h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
       ${decisionSessionBlock(p, session, false)}
+      ${taskSessionBlock(p, session, false)}
       <h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
       <h3 class="sub">サブエージェント</h3>${agentSection(p, session, false)}
-      ${taskSessionBlock(p, session, false)}
       ${unknownSessionControls(session)}
     </div>
   </div>`;
@@ -1052,7 +1074,7 @@ function renderKindMode() {
   const news = ps.map(p => newsBox(p, true)).join('');
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const expanded = ui.expandedEndedAgents.includes(session.id);
-    const agents = visibleSubagents(session).filter(agent => agent.state !== 'done' || agent.unconfirmed || expanded);
+    const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded);
     return [
       { age: ageMinutes(session.main), html: mainRow(p, session, true) },
       ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true) })),
@@ -1068,8 +1090,8 @@ function renderKindMode() {
   const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
   return (news ? section('前回見てから', news) : '')
     + section('あなたの判断が必要なこと(待ちの長い順)', decisions + endedDecisions, orderBar)
-    + section('今やっていること', now)
     + section('タスクと完了条件', tasks)
+    + section('今やっていること', now)
     + (isShown('prs') ? section('プルリクエスト', prs) : '')
     + section('レビュー', reviews);
 }
@@ -1105,6 +1127,10 @@ document.addEventListener('click', e => {
   } else if (t.dataset.doneTasks) {
     const id = t.dataset.doneTasks;
     ui.expandedDoneTasks = ui.expandedDoneTasks.includes(id) ? ui.expandedDoneTasks.filter(x => x !== id) : [...ui.expandedDoneTasks, id];
+  } else if (t.dataset.closeAgent) {
+    if (!ui.closedAgents.includes(t.dataset.closeAgent)) ui.closedAgents.push(t.dataset.closeAgent);
+  } else if (t.dataset.closeTask) {
+    if (!ui.closedTasks.includes(t.dataset.closeTask)) ui.closedTasks.push(t.dataset.closeTask);
   } else if (t.dataset.estimate) {
     const id = t.dataset.estimate;
     if (!ui.estimatedSessions.includes(id)) ui.estimatedSessions.push(id);

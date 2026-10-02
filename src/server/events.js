@@ -59,9 +59,26 @@ function shortString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : undefined;
 }
 
+function parseCodexAuditLine(value) {
+  if (typeof value !== 'string') return null;
+  const line = value.slice(0, 1024).trim();
+  const match = line.match(/^codex-agent:\s*agent=[^\s]+\s+model=([^\s]+)\s+effort=([^\s]+)(?:\s|$)/);
+  if (!match) return null;
+  const codexHome = line.match(/(?:^|\s)codex_home=(.*?)(?=\s+workdir=|$)/)?.[1]?.trim() || '';
+  return { model: match[1].slice(0, 160), effort: match[2].slice(0, 80), codex_home: codexHome.slice(0, 512) };
+}
+
+function parseCodexResultLine(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.slice(0, 1024).trim().match(/^codex-agent:\s*result=(ok|rate-limited|unavailable|failed)(?:\s+exit=(\d+))?(?:\s|$)/);
+  if (!match) return null;
+  return { status: match[1], exitCode: match[2] ? Number(match[2]) : null };
+}
+
+// 定義の名前は英数字か _ で始まる。--wait などのオプションは起動ではなく、背景の実行の結果を取り出す呼び出しである。
 function parseCodexLaunch(summary) {
   if (typeof summary !== 'string') return null;
-  const match = summary.match(/(?:^|[\\/\s])codex-agent(?:\.sh|\.cmd|\.ps1)?\s+['"]?([A-Za-z0-9_.-]+)/i);
+  const match = summary.match(/(?:^|[\\/\s])codex-agent(?:\.sh|\.cmd|\.ps1)?\s+['"]?([A-Za-z0-9_][A-Za-z0-9_.-]*)/i);
   return match ? match[1] : null;
 }
 
@@ -94,6 +111,7 @@ function sanitizeEvent(input, metadata = {}) {
     event.summary = shortString(input.summary, 80) || event.tool_name;
     event.codexDefinition = parseCodexLaunch(event.summary);
     if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
+    if (event.tool_name === 'Agent') event.description = shortString(input.description, 200) || '';
     if (event.tool_name === 'AskUserQuestion' && !agentId) {
       event.questions = sanitizeQuestions(input.questions);
     }
@@ -106,16 +124,14 @@ function sanitizeEvent(input, metadata = {}) {
     if (event.tool_name === 'Agent') {
       event.resolvedModel = shortString(input.resolvedModel, 160) || '';
     }
-    if (event.tool_name === 'Bash' && input.codexAudit && typeof input.codexAudit === 'object') {
-      const audit = input.codexAudit;
-      if (typeof audit.agent_id === 'string') {
-        event.codexAudit = {
-          agent_id: audit.agent_id.slice(0, 256),
-          model: shortString(audit.model, 160) || '',
-          effort: shortString(audit.effort, 80) || '',
-        };
-      }
-    }
+  }
+
+  if ((eventName === 'PostToolUse' || eventName === 'PostToolUseFailure')
+    && input.codexOutput && typeof input.codexOutput === 'object' && !Array.isArray(input.codexOutput)) {
+    const audit = parseCodexAuditLine(input.codexOutput.auditLine);
+    const result = parseCodexResultLine(input.codexOutput.resultLine);
+    if (audit) event.codexAudit = audit;
+    if (result) event.codexResult = result;
   }
 
   if (eventName === 'Notification') {
@@ -138,5 +154,7 @@ module.exports = {
   parseCodexLaunch,
   sanitizeQuestions,
   sanitizeDecisionResolution,
+  parseCodexAuditLine,
+  parseCodexResultLine,
   sanitizeEvent,
 };
