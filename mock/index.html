@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="ja">
+<html lang="ja" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Agent Cockpit</title>
 <style>
 :root {
+  color-scheme: light;
   --bg: #f4f5f7;
   --surface: #ffffff;
   --surface-2: #f8f9fb;
@@ -28,6 +30,7 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
@@ -36,6 +39,7 @@
   }
 }
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
@@ -54,9 +58,28 @@ header.top {
   position: sticky; top: 0; z-index: 5; background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-.top-inner { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.top[data-away="true"] { background: var(--warn-soft); border-bottom-color: var(--warn); }
+.top-inner { position: relative; max-width: 1100px; margin: 0 auto; padding: 10px 64px 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
 .top h1 { font-size: 16px; margin: 0; }
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
+.settings-button:hover { color: var(--text); }
+.settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); cursor: pointer; white-space: nowrap; }
+.away-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
+.away-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.route-indicator { color: var(--text-2); font-size: 12px; }
+.route-indicator[hidden] { display: none; }
+.settings-dialog { width: min(680px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.settings-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.settings-dialog h2 { margin: 0; font-size: 18px; }
+.settings-dialog section { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.settings-dialog h3 { margin: 0 0 10px; font-size: 14px; }
+.settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.settings-dialog select { max-width: 100%; padding: 4px 8px; }
+.settings-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.settings-dialog button { padding: 4px 12px; cursor: pointer; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .chip strong { color: var(--text); font-size: 13px; }
 .chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
@@ -82,6 +105,12 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .section > .body { padding: 6px 14px 14px; }
 .section.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .meta { color: var(--text-2); font-size: 12px; }
+.session-group { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+.session-group.single { border-top: 0; padding-top: 0; margin-top: 0; }
+.session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
+.session-head h3 { margin: 0; font-size: 14px; }
+.session-tag { font-size: 11px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.session-body { padding-bottom: 6px; }
 
 .order { display: inline-flex; gap: 4px; margin-left: auto; }
 .icon-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; min-width: 32px; height: 32px; padding: 0 8px; cursor: pointer; color: var(--text-2); }
@@ -130,6 +159,7 @@ h3.sub .count { font-weight: normal; }
 .decision.provisional { border-left: 4px solid var(--warn); }
 .decision.state-ok { border-left: 4px solid var(--ok); }
 .decision.state-hold { border-left: 4px solid var(--hold); }
+.decision.withdrawn { border-left: 4px solid var(--border); }
 .decision .dhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .decision .dtitle { font-weight: 600; }
 .decision .ctx { font-size: 13px; color: var(--text-2); margin: 4px 0 8px; }
@@ -181,6 +211,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
 .badge.mute { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
+.badge.busy { background: var(--accent-soft); color: var(--accent); }
+.badge.wait { background: var(--warn-soft); color: var(--warn); }
+.badge.done { background: var(--ok-soft); color: var(--ok); }
 .pr .why-not { font-size: 12px; color: var(--text-2); }
 .pr.can-merge { background: var(--ok-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-btn { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
@@ -208,6 +241,28 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
 .route-tag { font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .route-tag.stale { border-style: dashed; color: var(--warn); }
+.settings-dialog .routing { margin: 0; padding: 0; border: 0; background: transparent; }
+.settings-dialog .routing .rgroup { grid-template-columns: max-content max-content; }
+.settings-dialog .routing .rrow + .rrow .rlabel { margin-left: 0; }
+@container (min-width: 560px) {
+  .settings-dialog .routing .rgroup { grid-template-columns: repeat(4, max-content); }
+  .settings-dialog .routing .rrow + .rrow .rlabel { margin-left: 22px; }
+}
+.settings-dialog .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
+.badge.unknown, .state.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
+.agent-list { display: grid; gap: 6px; }
+.agent-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.agent-row .who { font-size: 12px; color: var(--text-2); }
+.agent-row .who b { color: var(--text); font-weight: 600; display: block; font-size: 13px; }
+.agent-row .since { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.ended-toggle:hover { color: var(--text); }
+.ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.estimate { display: grid; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.estimate p { margin: 0; }
+.session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
+.excluded-note[hidden] { display: none; }
 .wait { font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .wait.stale { color: var(--danger); font-weight: 600; }
 .decision.long-wait { background: var(--danger-soft); }
@@ -223,6 +278,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 
 @media (max-width: 640px) {
   .now-row { grid-template-columns: 1fr; gap: 2px; }
+  .agent-row { grid-template-columns: 1fr; gap: 2px; }
   .order { margin-left: 0; }
 }
 </style>
@@ -237,12 +293,34 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <button type="button" data-mode="product" aria-pressed="true">プロダクト別</button>
       <button type="button" data-mode="kind" aria-pressed="false">種類別</button>
     </div>
+    <span class="route-indicator" id="route-indicator" hidden></span>
+    <label class="away-toggle" for="away-toggle"><input id="away-toggle" type="checkbox">離席中</label>
+    <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
 </header>
+<dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <h2 id="settings-title">設定</h2>
+  <section aria-labelledby="settings-display-title">
+    <h3 id="settings-display-title">表示</h3>
+    <div class="settings-theme-row">
+      <label for="settings-theme-select">配色</label>
+      <select id="settings-theme-select" name="theme">
+        <option value="light">ライト</option>
+        <option value="dark">ダーク</option>
+        <option value="system">OS に従う</option>
+      </select>
+    </div>
+  </section>
+  <section aria-labelledby="settings-routing-title">
+    <h3 id="settings-routing-title">経路の設定</h3>
+    <div class="routing" id="routing"></div>
+  </section>
+  <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
+</dialog>
 <main class="wrap">
   <p class="note">モック: 表示内容はすべて架空のデータです。表示順、チェック、マージ、経路の設定はこのブラウザにだけ保存されます。マージは実際には行いません。</p>
-  <div class="routing" id="routing"></div>
   <div class="filter-note" id="filter-note" hidden></div>
+  <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root"></div>
 </main>
 
@@ -250,8 +328,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 const DATA = {
   products: [
     {
-      id: 'rec-studio', name: 'rec-studio', branch: 'feat/session-score-import', status: 'busy',
-      main: { text: 'Session Score の読み込み処理にテストを追加している', tool: 'Bash: npm test -- score-import', since: '2 分前' },
+      id: 'rec-studio', name: 'rec-studio', branch: 'feat/session-score-import', sessionTitle: 'Session Score の読み込み', status: 'busy',
+      main: { tool: 'Bash: npm test -- score-import', since: '2 分前' },
       perms: [],
       news: [
         { t: 'タスク「.ssp ファイルの読み込み」が完了した' },
@@ -281,25 +359,47 @@ const DATA = {
           ],
         },
         {
-          id: 'rs-2', waitMin: 23, title: 'main への push 前に手元の録音データで動作確認するか', kind: 'blocking',
+          id: 'rs-2', waitMin: 23, title: 'main への push 前に手元の録音データで動作確認するか', kind: 'waiting',
           ctx: 'PR のマージ前の確認。止めて待っている。',
           options: [
             { t: '手元の録音データ 3 件で確認してからマージする', why: '実データでしか出ない拍子の揺れを拾える', rec: true },
             { t: 'テストが通ればマージする', why: '速いが、実データでの確認が残る' },
           ],
         },
+        {
+          id: 'rs-3', waitMin: 0, title: 'インポート結果に小節数を表示する', kind: 'resolved',
+          ctx: '表示項目を決め、実装を完了した。', options: [],
+        },
+        {
+          id: 'rs-4', waitMin: 0, title: 'サンプル音源の一括変換を追加する', kind: 'withdrawn',
+          ctx: '対象外として取り下げた。', options: [],
+        },
       ],
-      review: { pr: '#142', round: 2, max: 3, state: 'Codex がレビュー中', open: 2, fixed: 5, dismissed: 1 },
+      review: { round: 2, max: 3, dismissed: 1 },
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前' },
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false },
         { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false },
         { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true },
       ],
+      extraSessions: [
+        {
+          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy',
+          main: { tool: 'Bash: npm test -- tempo-map', since: '1 分前' },
+          perms: [{ id: 'rs-p1', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
+          subagents: [{ type: 'test-writer', text: 'テンポ変換の境界値を確認', since: '2 分前', state: 'busy', sinceMin: 2,
+            model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
+            gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } }],
+          tasks: [{ title: 'テンポ変換のテスト', state: 'doing', updatedMin: 1, criteria: [{ t: '小数 BPM の丸めを確認する', met: false }] }],
+          tasksUpdatedMin: 1,
+          decisions: [{ id: 'rs-5', waitMin: 2, title: '負のオフセットを許可するか', kind: 'waiting',
+            ctx: '既存データとの互換性を確認している。', options: [{ t: '負の値も許可する', why: '先行するカウントを保持できる', rec: true }] }],
+        },
+      ],
     },
     {
-      id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', status: 'wait',
-      main: { text: '判断待ちで止まっている(worktree の削除条件)', tool: '—', since: '18 分前' },
+      id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', sessionTitle: 'worktree の削除条件', status: 'wait',
+      main: { tool: '—', since: '18 分前' },
       perms: [],
       news: [{ t: 'PR #57 の CI が失敗した(test: worktree-scan)' }],
       subagents: [],
@@ -309,7 +409,7 @@ const DATA = {
       ],
       decisions: [
         {
-          id: 'gc-1', waitMin: 18, title: 'リモートに push 済みのブランチだけを持つ worktree を自動で削除対象にするか', kind: 'blocking',
+          id: 'gc-1', waitMin: 18, title: 'リモートに push 済みのブランチだけを持つ worktree を自動で削除対象にするか', kind: 'waiting',
           ctx: '削除は取り消せない。既定値の決定が必要。',
           options: [
             { t: '既定では対象にせず、一覧で選ばせる', why: '誤削除を避けられる', rec: true },
@@ -317,7 +417,7 @@ const DATA = {
           ],
         },
       ],
-      review: { pr: '—', round: 0, max: 3, state: '未着手', open: 0, fixed: 0, dismissed: 0 },
+      review: { round: 0, max: 3, dismissed: 0 },
       repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
       prs: [
         { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false },
@@ -326,8 +426,8 @@ const DATA = {
       ],
     },
     {
-      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', status: 'wait',
-      main: { text: 'ツールの実行許可を待っている', tool: 'Bash: git push -u origin plan/pr-stack-view', since: '6 分前' },
+      id: 'agent-cockpit', name: 'agent-cockpit', branch: 'plan/pr-stack-view', sessionTitle: 'PR スタック表示', status: 'wait',
+      main: { tool: 'Bash: git push -u origin plan/pr-stack-view', since: '6 分前' },
       perms: [{ id: 'ac-p1', who: 'メイン', tool: 'Bash', detail: 'git push -u origin plan/pr-stack-view', waitMin: 6 }],
       news: [],
       subagents: [
@@ -336,6 +436,8 @@ const DATA = {
         { type: 'impl-light', text: 'モックの文言を修正', since: '3 分前', state: 'busy',
           model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { unavailable: '利用上限(14:00 解除)のため Claude 側で実装' } },
+        { type: 'browser-check', text: '設定画面のレイアウトを確認中', since: '4 分前', sinceMin: 4, state: 'done', unconfirmed: true,
+          model: { vendor: 'claude', name: 'Haiku 4.5', effort: 'low' }, route: 'default' },
       ],
       tasks: [
         { title: 'PoC: 実現性の確認', state: 'done', criteria: [{ t: 'MCP からセッションを判別できる', met: true }, { t: 'サブエージェントのツール呼び出しを見分けられる', met: true }, { t: '内部ブラウザでパス付き URL を開ける', met: true }] },
@@ -343,22 +445,76 @@ const DATA = {
         { title: '常駐サーバーと hooks の実装', state: 'todo', criteria: [{ t: '全セッションの作業中の内容が更新される', met: false }] },
       ],
       decisions: [],
-      review: { pr: '—', round: 0, max: 3, state: 'PoC のためレビュー省略', open: 0, fixed: 0, dismissed: 0 },
+      review: { round: 0, max: 3, dismissed: 0 },
       repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
       prs: [],
+      extraSessions: [
+        {
+          id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown',
+          main: { tool: 'Read: mock/index.html', since: '記録時刻不明' },
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [],
+          estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', inputWaiting: true },
+        },
+      ],
     },
   ],
 };
 
+for (const p of DATA.products) {
+  const mainSession = {
+    id: `${p.id}-main`, title: p.sessionTitle, status: p.status,
+    main: p.main, perms: p.perms, subagents: p.subagents,
+    tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
+    tasksUpdatedMin: 5, decisions: p.decisions,
+  };
+  p.sessions = [mainSession, ...(p.extraSessions || [])];
+  for (const key of ['sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions']) delete p[key];
+}
+
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
+ui.routing = { agents: 'default', review: 'default', ...ui.routing };
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const byId = id => DATA.products.find(p => p.id === id);
+
+const themeSelect = document.getElementById('settings-theme-select');
+const settingsButton = document.getElementById('settings-button');
+const settingsClose = document.getElementById('settings-close');
+const settingsDialog = document.getElementById('settings-dialog');
+const awayToggle = document.getElementById('away-toggle');
+const topBar = document.querySelector('header.top');
+
+function applyTheme(theme) {
+  const selected = ['light', 'dark', 'system'].includes(theme) ? theme : 'dark';
+  if (selected === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = selected;
+  themeSelect.value = selected;
+  ui.theme = selected;
+}
+
+function applyAway(away) {
+  ui.away = away === true;
+  awayToggle.checked = ui.away;
+  topBar.dataset.away = String(ui.away);
+}
+
+applyTheme(ui.theme);
+applyAway(ui.away);
+themeSelect.addEventListener('change', () => { applyTheme(themeSelect.value); save(); });
+awayToggle.addEventListener('change', () => { applyAway(awayToggle.checked); save(); });
+settingsButton.addEventListener('click', () => settingsDialog.showModal());
+settingsClose.addEventListener('click', () => settingsDialog.close());
+settingsDialog.addEventListener('click', event => {
+  const box = settingsDialog.getBoundingClientRect();
+  const isOutside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+  if (event.target === settingsDialog && isOutside) settingsDialog.close();
+});
+settingsDialog.addEventListener('close', () => settingsButton.focus());
 
 function orderedProducts() {
   const pinned = ui.order.filter(id => ui.pinned.includes(id));
@@ -368,9 +524,13 @@ function orderedProducts() {
 
 function answerOf(id) { return ui.answers[id] || { choice: null, note: '', sent: null }; }
 
-function pendingDecisions(p) {
-  return p.decisions.filter(d => { const a = answerOf(d.id); return !a.sent || a.sent.choice === 'hold'; });
-}
+const allSessions = () => DATA.products.flatMap(p => p.sessions);
+const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id));
+const effectiveDecisionState = d => answerOf(d.id).sent?.choice === 'ok' && ['waiting', 'provisional'].includes(d.kind) ? 'resolved' : d.kind;
+const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(d => {
+  const a = answerOf(d.id);
+  return ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && (!a.sent || a.sent.choice === 'hold');
+});
 
 const FILTERS = [
   { key: 'permission', label: '許可待ち', cls: 'danger' },
@@ -383,27 +543,33 @@ const FILTERS = [
 
 function decisionCategory(d) {
   const a = answerOf(d.id);
-  if (!a.sent) return d.kind;
+  const state = effectiveDecisionState(d);
+  if (state === 'resolved' || state === 'withdrawn') return state;
+  if (!a.sent) return state === 'waiting' ? 'blocking' : state;
   return a.sent.choice === 'hold' ? 'held' : 'answered';
 }
 const isShown = key => !ui.hidden.includes(key);
-const visibleDecisions = p => p.decisions.filter(d => isShown(decisionCategory(d)));
-const visibleSubagents = p => p.subagents.filter(s => s.state !== 'busy' || isShown('agents'));
+const visibleDecisions = s => s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && isShown(decisionCategory(d)));
+const visibleSubagents = s => s.subagents.filter(agent => agent.state !== 'busy' || isShown('agents'));
+const visiblePermissions = s => isShown('permission') ? s.perms : [];
 
 function countHidden() {
-  return DATA.products.reduce((n, p) => n + (p.decisions.length - visibleDecisions(p).length) + (p.subagents.length - visibleSubagents(p).length)
-    + (isShown('permission') ? 0 : p.perms.length)
-    + (isShown('prs') ? 0 : openPrs(p).length), 0);
+  const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
+    + s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d))).length
+    + s.subagents.filter(agent => agent.state === 'busy' && !isShown('agents')).length
+    + (isShown('permission') ? 0 : s.perms.length), 0);
+  return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }
 
 function renderSummary() {
-  const all = DATA.products.flatMap(p => p.decisions.map(d => ({ d, a: answerOf(d.id) })));
-  const blocking = all.filter(x => x.d.kind === 'blocking' && !x.a.sent).length;
-  const provisional = all.filter(x => x.d.kind === 'provisional' && !x.a.sent).length;
+  const sessions = allSessions().filter(s => !ui.hiddenSessions.includes(s.id));
+  const all = sessions.flatMap(s => s.decisions.map(d => ({ d, a: answerOf(d.id) })));
+  const blocking = all.filter(x => effectiveDecisionState(x.d) === 'waiting' && !x.a.sent).length;
+  const provisional = all.filter(x => effectiveDecisionState(x.d) === 'provisional' && !x.a.sent).length;
   const held = all.filter(x => x.a.sent && x.a.sent.choice === 'hold').length;
-  const agents = DATA.products.flatMap(p => p.subagents).filter(s => s.state === 'busy').length;
+  const agents = sessions.flatMap(s => s.subagents).filter(agent => agent.state === 'busy').length;
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => !mergeBlocker(p, pr)).length, 0);
-  const permission = DATA.products.reduce((n, p) => n + p.perms.length, 0);
+  const permission = sessions.reduce((n, s) => n + s.perms.length, 0);
   const counts = { permission, blocking, provisional, held, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
   const need = permission + blocking;
@@ -414,6 +580,10 @@ function renderSummary() {
   const note = document.getElementById('filter-note');
   note.hidden = ui.hidden.length === 0;
   note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')}(${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>すべて表示する</button>`;
+  const excluded = document.getElementById('excluded-note');
+  const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
+  excluded.hidden = hiddenSessions.length === 0;
+  excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
 }
 
 function modelLine(s) {
@@ -458,47 +628,90 @@ function renderRouting() {
         `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
       </div>`;
   };
-  document.getElementById('routing').innerHTML = `<div class="rrow"><strong>経路の設定</strong></div>
-    <div class="rgroup">${row('agents')}${row('review')}</div>`;
+  document.getElementById('routing').innerHTML = `<div class="rgroup">${row('agents')}${row('review')}</div>`;
+  const changed = Object.keys(ROUTE).filter(key => ui.routing[key] !== 'default');
+  const indicator = document.getElementById('route-indicator');
+  indicator.hidden = changed.length === 0;
+  indicator.textContent = changed.length ? `経路: ${changed.map(key => `${ROUTE[key].label} ${routeName(key, ui.routing[key])}`).join(' / ')}` : '';
 }
 
-function nowRows(p, withTag) {
-  const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
-  const main = `<div class="now-row">
-      <div class="who"><span class="dot ${p.status}"></span>メイン${tag}<b>${p.status === 'wait' ? '待機中' : '作業中'}</b></div>
-      <div>${esc(p.main.text)}<div class="meta">${esc(p.main.tool)}</div></div>
-      <div class="since">${esc(p.main.since)}</div></div>`;
-  const subs = visibleSubagents(p).map(s => `<div class="now-row">
-      <div class="who"><span class="dot ${s.state}"></span>サブエージェント${tag}<b>${esc(s.type)}</b></div>
-      <div>${esc(s.text)}${modelLine(s)}${routeTag(s)}</div><div class="since">${esc(s.since)}</div></div>`).join('');
-  return main + subs;
+function ageMinutes(item) {
+  if (Number.isFinite(item.sinceMin)) return item.sinceMin;
+  if (Number.isFinite(item.waitMin)) return item.waitMin;
+  const match = String(item.since || '').match(/(\d+)\s*分前/);
+  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
-function taskItem(p, t, withTag) {
+const sessionsByActivity = p => visibleSessions(p).sort((a, b) => ageMinutes(a.main) - ageMinutes(b.main));
+
+function sessionTag(p, session, withTag) {
+  if (!withTag) return '';
+  const product = `<span class="prod-tag">${esc(p.name)}</span>`;
+  const title = p.sessions.length > 1 ? `<span class="session-tag">${esc(session.title)}</span>` : '';
+  return `${product}${title}`;
+}
+
+function mainRow(p, session, withTag) {
+  const taskTitle = session.tasks.find(task => task.state === 'doing')?.title || '';
+  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : '状態不明';
+  const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
+  const tool = session.main.tool || '—';
+  return `<div class="now-row">
+      <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<b>${status}</b></div>
+      <div>${taskTitle ? esc(taskTitle) : ''}<div class="meta">${esc(tool)}</div></div>
+      <div class="since">${esc(session.main.since || '')}</div></div>`;
+}
+
+function agentRow(p, session, agent, withTag) {
+  const state = agent.state === 'busy' ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  return `<div class="agent-row">
+    <div class="who"><span class="dot ${agent.unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span></div>
+    <div>${esc(agent.text)}${modelLine(agent)}${routeTag(agent)}</div><div class="since">${esc(agent.since)}</div></div>`;
+}
+
+function endedAgentToggle(session) {
+  const ended = session.subagents.filter(agent => agent.state === 'done' && !agent.unconfirmed);
+  if (!ended.length) return '';
+  const expanded = ui.expandedEndedAgents.includes(session.id);
+  const label = expanded ? '終了済みを隠す' : '終了済みを表示';
+  return `<button type="button" class="ended-toggle" data-ended-agents="${esc(session.id)}" aria-expanded="${expanded}">${label}(${ended.length} 件)</button>`;
+}
+
+function agentSection(p, session, withTag) {
+  const expanded = ui.expandedEndedAgents.includes(session.id);
+  const agents = visibleSubagents(session).filter(agent => agent.state !== 'done' || agent.unconfirmed || expanded)
+    .sort((a, b) => ageMinutes(a) - ageMinutes(b));
+  const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
+  const hasEnded = session.subagents.some(agent => agent.state === 'done' && !agent.unconfirmed);
+  const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
+  return `${rows ? `<div class="agent-list">${rows}</div>` : `<div class="empty">${empty}</div>`}${endedAgentToggle(session)}`;
+}
+
+function taskItem(p, session, t, withTag) {
   const label = { done: '完了', doing: '作業中', todo: '未着手' }[t.state];
   const met = t.criteria.filter(c => c.met).length;
   return `<li class="task ${t.state}">
-    <div class="line"><span class="state ${t.state}">${label}</span>${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}
+    <div class="line"><span class="state ${t.state}">${label}</span>${sessionTag(p, session, withTag)}
       <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}</span></div>
     <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
 }
 
 // 一定時間を超えて放置された待ちは強調する。閾値は判断待ち(計画書)
 const LONG_WAIT_MIN = 15;
-const waitLabel = m => `<span class="wait ${m >= LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中${m >= LONG_WAIT_MIN ? '(長い)' : ''}</span>`;
+const waitLabel = m => `<span class="wait ${m > LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中${m > LONG_WAIT_MIN ? '(長い)' : ''}</span>`;
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
 // 許可待ち: Notification フックで受ける。許可そのものはデスクトップアプリで出す
-function permCard(p, x, withTag) {
-  const long = x.waitMin >= LONG_WAIT_MIN;
+function permCard(p, session, x, withTag) {
+  const long = x.waitMin > LONG_WAIT_MIN;
   return `<article class="decision blocking perm ${long ? 'long-wait' : ''}">
-    <div class="dhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
+    <div class="dhead">${sessionTag(p, session, withTag)}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
       <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
     <div class="ctx">${esc(x.tool)}: <code>${esc(x.detail)}</code></div>
     <div class="meta">許可はデスクトップアプリの ${esc(p.name)} のセッションで出す。ダッシュボードからは出せない。</div>
   </article>`;
 }
-const visiblePerms = p => isShown('permission') ? p.perms : [];
+const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
 
 // 前回見てからの変化。常駐サーバーが項目ごとの更新時刻を持ち、画面は最後に見た時刻と比べる想定
 function newsBox(p, withTag) {
@@ -508,23 +721,25 @@ function newsBox(p, withTag) {
     <ul>${p.news.map(n => `<li>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
 
-function decisionCard(p, d, withTag) {
+function decisionCard(p, session, d, withTag) {
   const a = answerOf(d.id);
-  const stateClass = a.sent ? (a.sent.choice === 'hold' ? 'state-hold' : 'state-ok') : d.kind;
-  const kindChip = d.kind === 'blocking'
-    ? '<span class="chip danger">作業を止めて待っている</span>'
-    : '<span class="chip warn">推奨案を仮に適用して進行中</span>';
+  const state = effectiveDecisionState(d);
+  const stateClass = { waiting: 'blocking', provisional: 'provisional', resolved: 'state-ok', withdrawn: 'withdrawn' }[state];
+  const stateLabel = { waiting: '止めて待っている', provisional: '推奨で仮に進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
+  const stateTone = { waiting: 'danger', provisional: 'warn', resolved: 'ok', withdrawn: 'mute' }[state];
+  const stateChip = `<span class="chip ${stateTone}">${stateLabel}</span>`;
   const sentLine = a.sent
     ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}</span>`
-    : '<span class="sent">未送信</span>';
+    : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
-  const long = !a.sent && d.waitMin >= LONG_WAIT_MIN;
+  const long = state === 'waiting' && !a.sent && d.waitMin > LONG_WAIT_MIN;
+  const active = state === 'waiting' || state === 'provisional';
+  const elapsed = state === 'waiting' ? waitLabel(d.waitMin) : state === 'provisional' ? `<span class="wait">仮適用から ${d.waitMin} 分</span>` : '';
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">
-    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}<span class="dtitle">${esc(d.title)}</span>${kindChip}
-      ${a.sent ? '' : waitLabel(d.waitMin)}</div>
+    <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     <ul class="options">${d.options.map(o => `<li class="${o.rec ? 'rec' : ''}">${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span></li>`).join('')}</ul>
-    <div class="answer">
+    ${active ? `<div class="answer">
       <div class="checks">
         <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''}>推奨案で OK</label>
         <label class="check hold"><input type="checkbox" data-choice="hold" ${a.choice === 'hold' ? 'checked' : ''}>判断を保留する</label>
@@ -534,17 +749,15 @@ function decisionCard(p, d, withTag) {
         <button type="button" class="primary" data-send ${(!a.choice && !a.note.trim()) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${sentLine}
       </div>
-    </div></article>`;
+    </div>` : sentLine ? `<div class="answer-foot">${sentLine}</div>` : ''}</article>`;
 }
 
 function reviewBlock(p, withTag) {
   const r = p.review;
   const rounds = Array.from({ length: r.max }, (_, i) => `<span class="${i < r.round ? 'used' : ''}"></span>`).join('');
   return `<div class="review">
-    <div class="stat"><div class="k">${withTag ? `<span class="prod-tag">${esc(p.name)}</span> ` : ''}PR ${esc(r.pr)}</div><div class="v">${esc(r.state)}</div></div>
-    <div class="stat"><div class="k">往復(上限 ${r.max})</div><div class="v">${r.round} / ${r.max}</div><div class="rounds">${rounds}</div></div>
-    <div class="stat"><div class="k">指摘: 未対応 / 対応済み / 非対応</div><div class="v">${r.open} / ${r.fixed} / ${r.dismissed}</div></div>
-    <div class="stat"><div class="k">次の往復の経路</div><div class="v">${esc(routeName('review', ui.routing.review))}</div></div>
+    <div class="stat"><div class="k">${withTag ? `<span class="prod-tag">${esc(p.name)}</span> ` : ''}往復(上限 ${r.max})</div><div class="v">${r.round} / ${r.max}</div><div class="rounds">${rounds}</div></div>
+    <div class="stat"><div class="k">非対応</div><div class="v">${r.dismissed}</div></div>
   </div>`;
 }
 
@@ -694,6 +907,65 @@ function prBlock(p, withTag) {
   return head + (stacks || '<div class="empty">オープンの PR はありません</div>') + mergedLine;
 }
 
+function endedDecisionToggle(session) {
+  const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
+  if (!ended.length) return '';
+  const expanded = ui.expandedEndedDecisions.includes(session.id);
+  return `<button type="button" class="ended-toggle" data-ended-decisions="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '解決済みと取り下げを隠す' : '解決済みと取り下げを表示'}(${ended.length} 件)</button>`;
+}
+
+function decisionSessionBlock(p, session, withTag) {
+  const active = visibleDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
+  const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
+  const expanded = ui.expandedEndedDecisions.includes(session.id);
+  const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
+  const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
+  const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
+  return `${cards || `<div class="empty">${empty}</div>`}${endedDecisionToggle(session)}`;
+}
+
+function taskSessionBlock(p, session, withTag) {
+  const done = session.tasks.filter(task => task.state === 'done');
+  const expanded = ui.expandedDoneTasks.includes(session.id);
+  const visible = expanded ? session.tasks : session.tasks.filter(task => task.state !== 'done');
+  const updated = `最終更新 ${session.tasksUpdatedMin} 分前`;
+  const items = visible.map(task => taskItem(p, session, task, withTag)).join('');
+  const toggle = done.length
+    ? `<button type="button" class="ended-toggle" data-done-tasks="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '完了したタスクを隠す' : '完了したタスクを表示'}(${done.length} 件)</button>`
+    : '';
+  const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
+  return `<h3 class="sub">タスクと完了条件 <span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}${toggle}`;
+}
+
+function unknownSessionControls(session) {
+  if (session.status !== 'unknown') return '';
+  const estimate = ui.estimatedSessions.includes(session.id)
+    ? session.estimate?.canEstimate
+      ? `<div class="estimate"><p>最後の記録: ${esc(session.estimate.recordedAt)}、最後のツール: ${esc(session.estimate.tool)}</p><p>入力待ちらしい: ${session.estimate.inputWaiting ? 'はい' : 'いいえ'}</p></div>`
+      : '<div class="estimate">推定できませんでした</div>'
+    : '';
+  return `<div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}`;
+}
+
+function sessionBlock(p, session) {
+  const multiple = p.sessions.length > 1;
+  const status = session.status === 'busy' ? ['作業中', 'busy'] : session.status === 'wait' ? ['待機中', 'wait'] : ['状態不明', 'unknown'];
+  const decisions = visibleDecisions(session).length;
+  const permissions = visiblePerms(session).length;
+  return `<div class="session-group ${multiple ? '' : 'single'}">
+    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3><span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
+    <div class="session-body">
+      <h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
+      ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
+      ${decisionSessionBlock(p, session, false)}
+      <h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
+      <h3 class="sub">サブエージェント</h3>${agentSection(p, session, false)}
+      ${taskSessionBlock(p, session, false)}
+      ${unknownSessionControls(session)}
+    </div>
+  </div>`;
+}
+
 function orderControls(p, idx, total) {
   const pinned = ui.pinned.includes(p.id);
   const collapsed = ui.collapsed.includes(p.id);
@@ -709,23 +981,19 @@ function renderProductMode() {
   const ps = orderedProducts();
   return ps.map((p, i) => {
     const pend = pendingDecisions(p);
+    const sessions = sessionsByActivity(p);
+    const permissionCount = sessions.reduce((total, session) => total + session.perms.length, 0);
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
         <h2>${esc(p.name)}</h2><span class="meta">${esc(p.branch)}</span>
-        ${p.perms.length ? `<span class="chip danger">許可待ち ${p.perms.length}</span>` : ''}
+        ${permissionCount ? `<span class="chip danger">許可待ち ${permissionCount}</span>` : ''}
         ${pend.length ? `<span class="chip danger">判断待ち ${pend.length}</span>` : ''}
         ${(n => n ? `<span class="chip ok">マージできる PR ${n}</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
         ${orderControls(p, i, ps.length)}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
         ${newsBox(p, false)}
-        <h3 class="sub">あなたの判断が必要なこと <span class="count">${visibleDecisions(p).length + visiblePerms(p).length}</span></h3>
-        ${visiblePerms(p).map(x => permCard(p, x, false)).join('')}
-        ${visibleDecisions(p).length || visiblePerms(p).length ? visibleDecisions(p).map(d => decisionCard(p, d, false)).join('') : '<div class="empty">ありません</div>'}
-        <h3 class="sub">今やっていること</h3>
-        <div class="now">${nowRows(p, false)}</div>
-        <h3 class="sub">タスクと完了条件</h3>
-        <ul class="tasks">${p.tasks.map(t => taskItem(p, t, false)).join('')}</ul>
+        ${sessions.map(session => sessionBlock(p, session)).join('')}
         ${isShown('prs') ? `<h3 class="sub">プルリクエスト <span class="count">${openPrs(p).length}</span></h3>${prBlock(p, false)}` : ''}
         <h3 class="sub">レビュー</h3>
         ${reviewBlock(p, false)}
@@ -735,21 +1003,40 @@ function renderProductMode() {
 
 function renderKindMode() {
   const ps = orderedProducts();
+  const sessions = ps.flatMap(p => sessionsByActivity(p).map(session => ({ p, session })));
   const section = (title, body, extra = '') => `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`;
   // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
-  const waits = ps.flatMap(p => [
-    ...visiblePerms(p).map(x => ({ w: x.waitMin, html: permCard(p, x, true) })),
-    ...visibleDecisions(p).map(d => ({ w: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, d, true) })),
-  ]).sort((a, b) => b.w - a.w);
+  const waits = sessions.flatMap(({ p, session }) => [
+    ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
+    ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
+  ]).sort((a, b) => b.age - a.age);
   const decisions = waits.map(x => x.html).join('') || '<div class="empty">ありません</div>';
+  const endedDecisions = sessions.map(({ p, session }) => {
+    const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
+    if (!ended.length) return '';
+    const expanded = ui.expandedEndedDecisions.includes(session.id);
+    const cards = expanded ? ended.map(d => decisionCard(p, session, d, true)).join('') : '';
+    return `${endedDecisionToggle(session)}${cards}`;
+  }).join('');
   const news = ps.map(p => newsBox(p, true)).join('');
-  const now = `<div class="now">${ps.map(p => nowRows(p, true)).join('')}</div>`;
-  const tasks = `<ul class="tasks">${ps.flatMap(p => p.tasks.map(t => taskItem(p, t, true))).join('')}</ul>`;
+  const nowRowsByAge = sessions.flatMap(({ p, session }) => {
+    const expanded = ui.expandedEndedAgents.includes(session.id);
+    const agents = visibleSubagents(session).filter(agent => agent.state !== 'done' || agent.unconfirmed || expanded);
+    return [
+      { age: ageMinutes(session.main), html: mainRow(p, session, true) },
+      ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true) })),
+    ];
+  }).sort((a, b) => a.age - b.age);
+  const agentToggles = sessions.map(({ session }) => endedAgentToggle(session)).join('');
+  const unknownActions = sessions.filter(({ session }) => session.status === 'unknown')
+    .map(({ p, session }) => `<div class="kind-unknown"><div class="meta">${sessionTag(p, session, true)}</div>${unknownSessionControls(session)}</div>`).join('');
+  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${agentToggles}${unknownActions}`;
+  const tasks = sessions.map(({ p, session }) => `<div class="kind-session-tasks"><div class="meta">${sessionTag(p, session, true)}</div>${taskSessionBlock(p, session, true)}</div>`).join('');
   const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
   const prs = ps.map(p => prBlock(p, true)).join('<div style="height:12px"></div>');
   const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
   return (news ? section('前回見てから', news) : '')
-    + section('あなたの判断が必要なこと(待ちの長い順)', decisions, orderBar)
+    + section('あなたの判断が必要なこと(待ちの長い順)', decisions + endedDecisions, orderBar)
     + section('今やっていること', now)
     + section('タスクと完了条件', tasks)
     + (isShown('prs') ? section('プルリクエスト', prs) : '')
@@ -757,10 +1044,14 @@ function renderKindMode() {
 }
 
 function render() {
+  const active = document.activeElement;
+  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks'].find(attribute => active?.hasAttribute(attribute));
+  const focusValue = focusAttribute ? active.getAttribute(focusAttribute) : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
+  if (focusAttribute) [...document.querySelectorAll(`[${focusAttribute}]`)].find(button => button.getAttribute(focusAttribute) === focusValue)?.focus({ preventScroll: true });
 }
 
 document.addEventListener('click', e => {
@@ -772,6 +1063,23 @@ document.addEventListener('click', e => {
     ui.hidden = ui.hidden.includes(k) ? ui.hidden.filter(x => x !== k) : [...ui.hidden, k];
   }
   else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
+  else if (t.hasAttribute('data-show-hidden-sessions')) { ui.hiddenSessions = []; }
+  else if (t.dataset.endedAgents) {
+    const id = t.dataset.endedAgents;
+    ui.expandedEndedAgents = ui.expandedEndedAgents.includes(id) ? ui.expandedEndedAgents.filter(x => x !== id) : [...ui.expandedEndedAgents, id];
+  } else if (t.dataset.endedDecisions) {
+    const id = t.dataset.endedDecisions;
+    ui.expandedEndedDecisions = ui.expandedEndedDecisions.includes(id) ? ui.expandedEndedDecisions.filter(x => x !== id) : [...ui.expandedEndedDecisions, id];
+  } else if (t.dataset.doneTasks) {
+    const id = t.dataset.doneTasks;
+    ui.expandedDoneTasks = ui.expandedDoneTasks.includes(id) ? ui.expandedDoneTasks.filter(x => x !== id) : [...ui.expandedDoneTasks, id];
+  } else if (t.dataset.estimate) {
+    const id = t.dataset.estimate;
+    ui.estimatedSessions = ui.estimatedSessions.includes(id) ? ui.estimatedSessions.filter(x => x !== id) : [...ui.estimatedSessions, id];
+  } else if (t.dataset.hideSession) {
+    const id = t.dataset.hideSession;
+    if (!ui.hiddenSessions.includes(id)) ui.hiddenSessions.push(id);
+  }
   else if (t.dataset.collapse) {
     const id = t.dataset.collapse;
     ui.collapsed = ui.collapsed.includes(id) ? ui.collapsed.filter(x => x !== id) : [...ui.collapsed, id];
