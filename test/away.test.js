@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
-const { runAwayHook, sessionSummary } = require('../src/hooks/away');
+const { AWAY_CONTEXT, TASK_CONTEXT, runAwayHook, sessionSummary } = require('../src/hooks/away');
 
 async function temporaryHome(testContext, withServerInfo = true) {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-away-test-'));
@@ -73,7 +73,7 @@ test('離席中でなければ出力しない', async (t) => {
   assert.equal(result, null);
 });
 
-test('UserPromptSubmit と SessionStart に ISO 8601 の追加文脈を返す', async (t) => {
+test('UserPromptSubmit と SessionStart にタスク登録の決まりと離席中の文脈を返す', async (t) => {
   const homeDir = await temporaryHome(t);
   const fetchImpl = async () => awayResponse();
   for (const hookEventName of ['UserPromptSubmit', 'SessionStart']) {
@@ -81,20 +81,29 @@ test('UserPromptSubmit と SessionStart に ISO 8601 の追加文脈を返す', 
     assert.equal(result.hookSpecificOutput.hookEventName, hookEventName);
     assert.equal(
       result.hookSpecificOutput.additionalContext,
-      'Agent Cockpit: 開発者は離席中です(2026-10-02T01:02:03.000Zから)。開発者に尋ねずに、推奨を適用して作業を続けてください。破壊的な操作、PR のマージ、main への push は行わず、判断待ちとして最後の報告に書いてください。',
+      `${TASK_CONTEXT}\n${AWAY_CONTEXT.replace('{since}', '2026-10-02T01:02:03.000Z')}`,
     );
   }
 });
 
-test('server.json が無ければ常駐サーバーへ接続せず出力しない', async (t) => {
+test('server.json が無くてもメインセッションへタスク登録の決まりを返す', async (t) => {
   const homeDir = await temporaryHome(t, false);
   let fetchCount = 0;
   const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit' }, {
     homeDir,
     fetchImpl: async () => { fetchCount += 1; return awayResponse(); },
   });
-  assert.equal(result, null);
+  assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
   assert.equal(fetchCount, 0);
+});
+
+test('サブエージェントの UserPromptSubmit にはタスク登録の決まりを足さない', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const result = await runAwayHook({ hook_event_name: 'UserPromptSubmit', agent_id: 'agent-1' }, {
+    homeDir,
+    fetchImpl: async () => awayResponse(false),
+  });
+  assert.equal(result, null);
 });
 
 test('compact の SessionStart は離席中でなくてもタスクと未解決判断の要約を返す', async (t) => {
@@ -149,10 +158,10 @@ test('resume の引き継ぎ要約と離席中の文脈を一つにまとめる'
   assert.match(context, /タスク: なし/);
   assert.match(context, /未解決の判断事項: なし/);
   assert.match(context, /開発者は離席中です/);
-  assert.equal((context.match(/Agent Cockpit:/g) || []).length, 2);
+  assert.equal((context.match(/Agent Cockpit:/g) || []).length, 3);
 });
 
-test('常駐サーバーの応答が 1 秒以内に届かなければ出力しない', async (t) => {
+test('常駐サーバーの応答が無くてもタスク登録の決まりは返す', async (t) => {
   const homeDir = await temporaryHome(t);
   const startedAt = performance.now();
   let aborted = false;
@@ -162,7 +171,7 @@ test('常駐サーバーの応答が 1 秒以内に届かなければ出力し�
       signal.addEventListener('abort', () => { aborted = true; }, { once: true });
     }),
   });
-  assert.equal(result, null);
+  assert.equal(result.hookSpecificOutput.additionalContext, TASK_CONTEXT);
   assert.equal(aborted, true);
   assert.ok(performance.now() - startedAt < 1300);
 });

@@ -1,4 +1,5 @@
 const { sanitizeQuestions } = require('./events');
+const { TaskNudges } = require('./task-nudges');
 
 const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
@@ -86,6 +87,7 @@ class DecisionAnswerDelivery {
     this.maxLongPollMs = maxLongPollMs;
     this.answerWaitMs = answerWaitMs;
     this.maxAskPollGapMs = maxAskPollGapMs;
+    this.taskNudges = new TaskNudges({ state, now });
     this.askWaits = new Map();
     this.stopGenerations = new Map();
     this.lastLifecycleAt = new Map();
@@ -249,7 +251,13 @@ class DecisionAnswerDelivery {
     return messages.join('\n');
   }
 
+  deliverPostToolBatch(sessionId) {
+    const context = [this.deliverPending(sessionId), this.taskNudges.reminderFor(sessionId)].filter(Boolean);
+    return context.length ? context.join('\n') : null;
+  }
+
   deliverPrompt(sessionId, eventId, hookAt = this.now()) {
+    this.taskNudges.afterEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt });
     this.handleLifecycleEvent(sessionId, 'UserPromptSubmit', eventId, hookAt);
     const pending = this.state.decisionsFor(sessionId).filter((decision) => (
       decision.answer?.sentAt && !decision.answer.reflectedAt && !decision.answer.ignoredAt && !decision.awaitingAnswerUntil && decision.answer.promptDeliveries < 3 && ['waiting', 'provisional'].includes(decision.state)
@@ -307,6 +315,7 @@ class DecisionAnswerDelivery {
   }
 
   afterEvent(event) {
+    this.taskNudges.afterEvent(event);
     const { session_id: sessionId, hook_event_name: eventName, tool_use_id: toolUseId } = event;
     if (eventName === 'SessionStart') {
       if (this.endedSessions.has(sessionId)) this.clearSessionAskWaits(sessionId);
@@ -424,6 +433,10 @@ class DecisionAnswerDelivery {
     this.closed = true;
     for (const record of this.askWaits.values()) this.clearAskWait(record);
     this.signalAll();
+  }
+
+  afterTasksWrite(sessionId, writtenAt) {
+    this.taskNudges.tasksWritten(sessionId, writtenAt);
   }
 
   clearSessionAskWaits(sessionId) {

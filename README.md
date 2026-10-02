@@ -126,6 +126,7 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 `PostToolBatch` の `answer.js` は同期フックとして登録し、timeout を 2 秒にします。
 `Stop` の `answer.js` は `asyncRewake: true` と timeout 3600 秒で登録します。
 `UserPromptSubmit` にも `answer.js` を同期フックとして登録し、渡した回答が反映されていない場合に、最大 3 回まで文脈へ差し込み直します。
+`away.js` は開始時と各ターンの入力時にタスク登録の決まりを知らせ、`PostToolBatch` の `answer.js` は条件に応じて作業中の登録を促します。
 
 離席中は画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
 有効な間、`AskUserQuestion` はダッシュボードの回答を最大 5 分待ちます。回答が無い場合や常駐サーバーへ再接続できない場合は従来どおり質問を止め、推奨で作業を続けるようフックが伝えます。
