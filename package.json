@@ -4,6 +4,8 @@
   "private": true,
   "description": "Claude Code デスクトップアプリのセッション状態(タスク、完了条件、作業中の内容、サブエージェント、判断待ち)を内部ブラウザに表示するローカルのダッシュボード。",
   "scripts": {
+    "start": "node src/server/server.js",
+    "test": "node --test",
     "review:codex": "node tools/cross-review.js codex",
     "review:codex:fix": "node tools/cross-review.js codex --fix",
     "review:claude": "node tools/cross-review.js claude",
