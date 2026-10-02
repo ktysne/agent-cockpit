@@ -274,7 +274,7 @@ function createRequestHandler(options) {
             hook_event_name: 'PostToolBatch',
             hookAt: Date.now(),
           });
-          const additionalContext = answerDelivery.deliverPending(body.session_id);
+          const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id);
           result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
         } else if (body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit') {
           const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
@@ -563,6 +563,7 @@ function createRequestHandler(options) {
 
       if (body.kind === 'tasks') {
         const saved = state.setTasks(sessionId, body.tasks);
+        answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
         jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
         return;
       }
