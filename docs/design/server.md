@@ -90,6 +90,7 @@ PostToolUse の出力全文は送らない。
 
 ## 状態
 
+- タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - セッション表示の状態はメモリーだけに持つ。表示モード、プロダクト順、固定、折りたたみ、非表示にする種類は段階 2a では画面の `localStorage` に保存し、段階 4 でサーバーへ移す。離席中は `{enabled, since}` を `away.json` に保存し、起動時に読む。壊れているときは離席中ではない状態として扱う。
 - `GET /api/state` は `{version, generatedAt, sessions, away}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
@@ -189,6 +190,7 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 `SessionStart` の source が `compact` または `resume` のとき、`away.js` は `/context` からタスクと未解決判断事項の要約を読む。
 離席中の文脈も必要な場合は、同じ `additionalContext` にまとめる。
+メインの `SessionStart` と `UserPromptSubmit` では、常駐サーバーに届かない場合もタスク登録の決まりを `additionalContext` に足す。
 
 ## 秘匿
 
@@ -277,7 +279,7 @@ long-poll は 1 回につき最大 25 秒とし、30 秒間 poll が届かない
 
 保留の回答では `PostToolUse` が届いても `provisional` を維持する。
 
-作業中は `PostToolBatch` が 1 秒以内に常駐サーバーへ尋ね、未配信の回答を `additionalContext` に入れて配信済みにする。
+作業中は `PostToolBatch` が 1 秒以内に常駐サーバーへ尋ね、未配信の回答を `additionalContext` に入れて配信済みにする。タスク催促の条件に当たる場合は、催促の文も同じ `additionalContext` に続けて入れる(条件は [docs/handover/2026-10-02.md「段階 3a の設計」](../handover/2026-10-02.md)を参照)。
 
 停止中は `Stop` の `asyncRewake` フックが 1 回最大 25 秒の long-poll を繰り返す。
 回答が届いたら標準エラーへ書いて終了コード 2 でセッションを起こす。

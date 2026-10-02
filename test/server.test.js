@@ -319,6 +319,39 @@ async function runningServer(t, options = {}) {
   return runtime;
 }
 
+test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク登録後は返さない', async (t) => {
+  const runtime = await runningServer(t);
+  const sessionId = 'task-nudge-integration';
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const eventResponse = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: Date.now(), tool_name: 'Agent',
+    }),
+    headers,
+  });
+  assert.equal(eventResponse.status, 202);
+
+  const postToolBatch = () => request(runtime.info.port, {
+    method: 'POST', path: '/api/hooks/answers',
+    body: JSON.stringify({
+      action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: sessionId, id: 'batch-1',
+    }),
+    headers,
+  });
+  const reminded = jsonBody(await postToolBatch());
+  assert.match(reminded.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
+
+  const planResponse = await request(runtime.info.port, {
+    method: 'POST', path: `/api/sessions/${sessionId}/plan`,
+    body: JSON.stringify({ kind: 'tasks', tasks: [{ title: '検証する', state: 'doing', criteria: [] }] }),
+    headers,
+  });
+  assert.equal(planResponse.status, 200);
+  const afterTaskWrite = jsonBody(await postToolBatch());
+  assert.equal(afterTaskWrite.hookOutput, null);
+});
+
 test('Host、秘密値、Origin を照合して書き込みを制限する', async (t) => {
   const runtime = await runningServer(t);
   const localhost = await request(runtime.info.port, { path: '/health', headers: { host: `localhost:${runtime.info.port}` } });
