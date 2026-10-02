@@ -21,7 +21,11 @@ function inputSummary(toolName, toolInput) {
     value = pickString(toolInput.file_path || toolInput.path || toolInput.notebook_path);
   }
   if (!value) return toolName || '';
-  return value.trim().split(/\r?\n/, 1)[0].slice(0, 80);
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return toolName || '';
+  const firstLine = trimmedValue.split(/\r?\n/, 1)[0];
+  const wasTruncated = firstLine.length > 80 || trimmedValue.includes('\n');
+  return wasTruncated ? `${firstLine.slice(0, 79)}…` : firstLine;
 }
 
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {

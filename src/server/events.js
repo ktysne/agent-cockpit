@@ -112,6 +112,7 @@ function sanitizeEvent(input, metadata = {}) {
   const agentType = shortString(input.agent_type, 200);
   if (agentId) event.agent_id = agentId;
   if (agentType) event.agent_type = agentType;
+  if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
 
   if (eventName === 'PreToolUse' || eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
     event.tool_name = shortString(input.tool_name, 100) || '';
@@ -121,7 +122,7 @@ function sanitizeEvent(input, metadata = {}) {
   if (eventName === 'PreToolUse') {
     event.summary = shortString(input.summary, 80) || event.tool_name;
     event.codexDefinition = parseCodexLaunch(event.summary);
-    if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
+    if (metadata.codexAgentDefinition) event.codexAgentDefinition = metadata.codexAgentDefinition;
     if (event.tool_name === 'Agent') event.description = shortString(input.description, 200) || '';
     if (event.tool_name === 'AskUserQuestion' && !agentId) {
       event.questions = sanitizeQuestions(input.questions);
@@ -148,10 +149,6 @@ function sanitizeEvent(input, metadata = {}) {
   if (eventName === 'Notification') {
     event.notification_type = shortString(input.notification_type, 100) || '';
     event.message = shortString(input.message, 200) || '';
-  }
-
-  if (eventName === 'SubagentStart' || eventName === 'SubagentStop') {
-    if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
   }
 
   return event;

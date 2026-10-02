@@ -34,7 +34,7 @@ test('状態不明のセッションを外し、すべて表示する操作で�
   state.syncSessionFiles([{ session_id: 'hidden-unknown', cwd: 'C:\\project', name: '作業中' }]);
 
   const originalVersion = state.version;
-  assert.equal(state.hideUnknownSession('hidden-unknown'), true);
+  assert.equal(state.hideSession('hidden-unknown'), true);
   assert.equal(state.version, originalVersion + 1);
   assert.equal(state.snapshot().sessions[0].hidden, true);
   const hiddenVersion = state.version;
@@ -47,7 +47,7 @@ test('外したセッションはイベント到着後に一覧へ戻る', async
   await temporaryHome(t);
   const state = new DashboardState();
   state.syncSessionFiles([{ session_id: 'hidden-event', cwd: 'C:\\project', name: '作業中' }]);
-  state.hideUnknownSession('hidden-event');
+  state.hideSession('hidden-event');
 
   state.addEvent({ session_id: 'hidden-event', hook_event_name: 'SessionStart', hookAt: 100 });
   assert.equal(state.snapshot().sessions[0].hidden, undefined);
@@ -67,6 +67,106 @@ test('状態の推定結果はイベント到着後に消える', async (t) => {
   assert.equal(state.snapshot().sessions[0].estimate, undefined);
 });
 
+test('セッションファイルから60秒間消えたイベントセッションを終了扱いにする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'ended-by-file', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'ended-by-file', hook_event_name: 'SessionStart', hookAt: 1_000 });
+
+  state.syncSessionFiles([], 60_999);
+  assert.equal(state.endedAt.has('ended-by-file'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+
+  state.syncSessionFiles([], 61_000);
+  assert.equal(state.endedByAbsence.get('ended-by-file'), 61_000);
+  assert.equal(state.sessionFileLastSeenAt.has('ended-by-file'), false);
+  assert.deepEqual(state.snapshot().sessions, []);
+});
+
+test('一覧から消えて終了扱いになったセッションは新しい SessionStart で戻る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'resume-by-start', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'resume-by-start', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+
+  state.addEvent({ session_id: 'resume-by-start', hook_event_name: 'SessionStart', hookAt: 62_000 });
+
+  assert.equal(state.endedByAbsence.has('resume-by-start'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('一覧から消えて終了扱いになったセッションは新しいイベントで戻る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'resume-by-event', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'resume-by-event', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+
+  state.addEvent({ session_id: 'resume-by-event', hook_event_name: 'UserPromptSubmit', hookAt: 62_000 });
+
+  assert.equal(state.endedByAbsence.has('resume-by-event'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('一覧に戻ったセッションファイルで不在終了の扱いを解除する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'resume-by-file', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'resume-by-file', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+
+  state.syncSessionFiles([{ session_id: 'resume-by-file', cwd: 'C:\\project', name: '作業中' }], 62_000);
+
+  assert.equal(state.endedByAbsence.has('resume-by-file'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('一覧にない状態不明セッションの最終確認時刻は Map から削除する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'file-only', cwd: 'C:\\project', name: '作業中' }], 1_000);
+
+  state.syncSessionFiles([], 2_000);
+
+  assert.equal(state.sessionFileLastSeenAt.has('file-only'), false);
+});
+
+test('セッションファイルから59秒しか消えていないイベントセッションを残す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'still-live', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'still-live', hook_event_name: 'SessionStart', hookAt: 1_000 });
+
+  state.syncSessionFiles([], 60_999);
+
+  assert.equal(state.endedAt.has('still-live'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('セッションファイルに載ったことがないイベントセッションを終了扱いにしない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'never-listed', hook_event_name: 'SessionStart', hookAt: 1_000 });
+
+  state.syncSessionFiles([], 100_000);
+
+  assert.equal(state.endedAt.has('never-listed'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('セッションファイル一覧を読めないときは終了判定をしない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'unreadable-list', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'unreadable-list', hook_event_name: 'SessionStart', hookAt: 1_000 });
+
+  state.syncSessionFiles(null, 100_000);
+
+  assert.equal(state.endedAt.has('unreadable-list'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
 test('推定の読み取り中に状態が分かったセッションには推定を保存しない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
@@ -76,19 +176,20 @@ test('推定の読み取り中に状態が分かったセッションには推�
   assert.equal(state.snapshot().sessions[0].estimate, undefined);
 });
 
-test('状態不明ではないセッションは一覧から外せない', async (t) => {
+test('状態にかかわらず一覧にあるセッションを外せる', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'known-session', hook_event_name: 'SessionStart', hookAt: 100 });
-  assert.equal(state.hideUnknownSession('known-session'), false);
-  assert.equal(state.hideUnknownSession('missing-session'), null);
+  assert.equal(state.hideSession('known-session'), true);
+  assert.equal(state.snapshot().sessions[0].hidden, true);
+  assert.equal(state.hideSession('missing-session'), null);
 });
 
 test('終了して一覧から消えたセッションを外した集合からも除く', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.syncSessionFiles([{ session_id: 'hidden-ended', cwd: 'C:\\project', name: '作業中' }]);
-  state.hideUnknownSession('hidden-ended');
+  state.hideSession('hidden-ended');
   state.syncSessionFiles([]);
   assert.deepEqual(state.snapshot().sessions, []);
   assert.equal(state.hiddenSessions.size, 0);
@@ -262,6 +363,84 @@ test('Agent ツールの resolvedModel でサブエージェントの仮モデ�
   assert.equal(agent.source, 'Agent tool response');
 });
 
+test('外したセッションが一覧不在で終了したら外した集合からも除く', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'hidden-absent', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'hidden-absent', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.hideSession('hidden-absent');
+
+  state.syncSessionFiles([], 61_000);
+
+  assert.equal(state.hiddenSessions.has('hidden-absent'), false);
+  assert.deepEqual(state.snapshot().sessions, []);
+});
+
+test('サブエージェント行の有無をセッションごとに調べる', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'agent-row', hook_event_name: 'SubagentStart', hookAt: 100, agent_id: 'agent-1', agent_type: 'Explore' });
+
+  assert.equal(state.hasAgentRow('agent-row', 'agent-1'), true);
+  assert.equal(state.hasAgentRow('agent-row', 'missing-agent'), false);
+  assert.equal(state.hasAgentRow('missing-session', 'agent-1'), false);
+});
+
+test('再起動後に agent_id 付きイベントからサブエージェントの行を復元する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: 'restored-agent', hook_event_name: 'PreToolUse', hookAt: 200,
+    agent_id: 'agent-1', agent_type: 'Explore', tool_name: 'Read', tool_use_id: 'read-1',
+  }, {
+    agentDefinition: { model: 'claude-sonnet-5-5', effort: 'high', source: 'claude-agent-definition' },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.agent_id, 'agent-1');
+  assert.equal(agent.agent_type, 'Explore');
+  assert.equal(agent.startedAt, new Date(200).toISOString());
+  assert.equal(agent.active, true);
+  assert.equal(agent.model, 'claude-sonnet-5-5');
+  assert.equal(agent.effort, 'high');
+});
+
+test('SubagentStop 後の遅延イベントではサブエージェントを復活させない', async (t) => {
+  await temporaryHome(t);
+  for (const hasStart of [true, false]) {
+    const state = new DashboardState();
+    if (hasStart) {
+      state.addEvent({
+        session_id: 'stopped-agent', hook_event_name: 'SubagentStart', hookAt: 100,
+        agent_id: 'agent-1', agent_type: 'Explore',
+      });
+    }
+    state.addEvent({
+      session_id: 'stopped-agent', hook_event_name: 'SubagentStop', hookAt: 200,
+      agent_id: 'agent-1',
+    });
+    state.addEvent({
+      session_id: 'stopped-agent', hook_event_name: 'PreToolUse', hookAt: 300,
+      agent_id: 'agent-1', agent_type: 'Explore', tool_name: 'Read', tool_use_id: 'read-1',
+    });
+
+    const agents = state.snapshot().sessions[0].agents;
+    if (hasStart) assert.equal(agents[0].active, false);
+    else assert.deepEqual(agents, []);
+  }
+});
+
+test('Codex の擬似 agent_id はサブエージェント行の復元対象にしない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: 'codex-pseudo', hook_event_name: 'PreToolUse', hookAt: 100,
+    agent_id: 'codex:tool-1', agent_type: 'impl-hard', tool_name: 'Read', tool_use_id: 'read-1',
+  });
+
+  assert.deepEqual(state.snapshot().sessions[0].agents, []);
+});
+
 test('Agent ツールの説明を対応するサブエージェントへ結び付け、200 文字で制限する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
@@ -347,7 +526,7 @@ function launchCodex(state, sessionId, toolUseId, hookAt, agentId, agentDefiniti
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PreToolUse', hookAt, agent_id: agentId,
     tool_name: 'Bash', tool_use_id: toolUseId, summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
-  }, agentDefinition ? { agentDefinition } : undefined);
+  }, agentDefinition ? { codexAgentDefinition: agentDefinition } : undefined);
 }
 
 function codexOutput(model, effort, result = 'ok', codexHome = 'C:\\Users\\mss02968\\.codex') {

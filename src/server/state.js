@@ -4,6 +4,7 @@ const path = require('node:path');
 const { recommendedOptionFor, sanitizeEvent } = require('./events');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
+const SESSION_FILE_ABSENCE_END_MS = 60_000;
 
 async function atomicWriteAwayState(homeDir, value, fileSystem = fs) {
   const target = path.join(homeDir, 'away.json');
@@ -178,6 +179,7 @@ function latestCodexForParent(agents, parentAgentId) {
 
 function deriveSessions(entries) {
   const sessions = new Map();
+  const stoppedAgentIdsBySession = new Map();
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
@@ -203,6 +205,25 @@ function deriveSessions(entries) {
     const eventName = event.hook_event_name;
     const agentId = event.agent_id || null;
     const toolUseId = event.tool_use_id || null;
+    const isCodexAgentId = agentId?.startsWith('codex:') === true;
+    let stoppedAgentIds = stoppedAgentIdsBySession.get(session);
+    if (!stoppedAgentIds) {
+      stoppedAgentIds = new Set();
+      stoppedAgentIdsBySession.set(session, stoppedAgentIds);
+    }
+
+    if (eventName === 'SubagentStop' && agentId) {
+      stoppedAgentIds.add(agentId);
+    } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
+      stoppedAgentIds.delete(agentId);
+    } else if (
+      agentId && !isCodexAgentId && !stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
+    ) {
+      const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
+      agent.agent_id = agentId;
+      agent.startedAt = isoTime(event.hookAt);
+      session.agents.push(agent);
+    }
 
     if (eventName === 'PreToolUse') {
       if (toolUseId && !session.completedToolIds.has(toolUseId)) {
@@ -232,7 +253,7 @@ function deriveSessions(entries) {
 
       if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
-        const agent = agentModelFromDefinition(event.codexDefinition, event.agentDefinition);
+        const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
         Object.assign(agent, {
           agent_id: agentIdForCall,
           agent_type: event.codexDefinition,
@@ -283,7 +304,7 @@ function deriveSessions(entries) {
       if (!agentId) session.stopped = false;
     }
 
-    if (eventName === 'SubagentStart' && agentId) {
+    if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
       let agent = agentFor(session, agentId);
       const definition = event.agentDefinition || {};
       if (agent) {
@@ -455,9 +476,11 @@ class DashboardState {
     this.generatedAt = new Date().toISOString();
     this.sessions = new Map();
     this.endedAt = new Map();
+    this.endedByAbsence = new Map();
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
+    this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
@@ -466,18 +489,73 @@ class DashboardState {
   }
 
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
-  syncSessionFiles(files) {
+  syncSessionFiles(files, now = Date.now()) {
+    if (!Array.isArray(files)) return;
     const next = new Map(files.map((file) => [file.session_id, file]));
-    const before = JSON.stringify([...this.sessionFiles.entries()]);
-    if (JSON.stringify([...next.entries()]) === before) return;
+    const previous = this.sessionFiles;
+    let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
     this.sessionFiles = next;
+
+    for (const sessionId of next.keys()) this.sessionFileLastSeenAt.set(sessionId, now);
+    for (const sessionId of this.endedByAbsence.keys()) {
+      if (next.has(sessionId)) {
+        this.reopenAbsentSession(sessionId);
+        changed = true;
+      }
+    }
     for (const sessionId of this.hiddenSessions) {
-      if (!next.has(sessionId)) this.hiddenSessions.delete(sessionId);
+      if (!next.has(sessionId) && previous.has(sessionId) && !this.sessions.has(sessionId)) {
+        this.hiddenSessions.delete(sessionId);
+        changed = true;
+      }
     }
     for (const sessionId of this.estimates.keys()) {
-      if (!next.has(sessionId)) this.estimates.delete(sessionId);
+      if (!next.has(sessionId)) {
+        this.estimates.delete(sessionId);
+        changed = true;
+      }
     }
-    this.touch();
+    for (const [sessionId, lastSeenAt] of this.sessionFileLastSeenAt) {
+      if (!next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId)) {
+        if (now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS) {
+          this.endSessionByAbsence(sessionId, now);
+          changed = true;
+        }
+      }
+      if (!next.has(sessionId) && !this.sessions.has(sessionId)) this.sessionFileLastSeenAt.delete(sessionId);
+    }
+    if (changed) this.touch();
+  }
+
+  endSession(sessionId, endedAt) {
+    this.entries.delete(sessionId);
+    this.sessions.delete(sessionId);
+    this.endedAt.set(sessionId, endedAt);
+    this.endedByAbsence.delete(sessionId);
+    this.plans.delete(sessionId);
+    this.decisionOverrides.delete(sessionId);
+    this.decisionLifecycles.delete(sessionId);
+    this.estimates.delete(sessionId);
+    this.hiddenSessions.delete(sessionId);
+    this.sessionFileLastSeenAt.delete(sessionId);
+  }
+
+  endSessionByAbsence(sessionId, endedAt) {
+    this.sessions.delete(sessionId);
+    this.endedByAbsence.set(sessionId, endedAt);
+    this.estimates.delete(sessionId);
+    this.hiddenSessions.delete(sessionId);
+  }
+
+  reopenAbsentSession(sessionId) {
+    this.endedByAbsence.delete(sessionId);
+    const entries = this.entries.get(sessionId) || [];
+    const [session] = deriveSessions(entries);
+    if (session) this.sessions.set(sessionId, session);
+  }
+
+  hasAgentRow(sessionId, agentId) {
+    return Boolean(agentId && this.sessions.get(sessionId)?.agents.some((agent) => agent.agent_id === agentId));
   }
 
   sessionNameFor(sessionId) {
@@ -508,6 +586,10 @@ class DashboardState {
     if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return true;
     if (endedAt !== undefined && event.hookAt <= endedAt) return true;
 
+    const endedByAbsenceAt = this.endedByAbsence.get(event.session_id);
+    if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return true;
+
+    const before = JSON.stringify([...this.sessions.values()]);
     const hadEstimate = this.estimates.delete(event.session_id);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (endedAt !== undefined) {
@@ -515,10 +597,14 @@ class DashboardState {
       this.entries.delete(event.session_id);
       this.plans.delete(event.session_id);
       this.decisionOverrides.delete(event.session_id);
+      this.sessionFileLastSeenAt.delete(event.session_id);
       this.decisionLifecycles.delete(event.session_id);
     }
+    if (endedByAbsenceAt !== undefined) {
+      this.reopenAbsentSession(event.session_id);
+      this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
+    }
 
-    const before = JSON.stringify([...this.sessions.values()]);
     const entries = this.entries.get(event.session_id) || [];
     entries.push({ event, sequence: this.sequence++ });
     this.entries.set(event.session_id, entries);
@@ -527,11 +613,7 @@ class DashboardState {
     else this.sessions.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd') {
-      this.entries.delete(event.session_id);
-      this.endedAt.set(event.session_id, event.hookAt);
-      this.plans.delete(event.session_id);
-      this.decisionOverrides.delete(event.session_id);
-      this.decisionLifecycles.delete(event.session_id);
+      this.endSession(event.session_id, event.hookAt);
     }
 
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden) this.touch();
@@ -550,10 +632,9 @@ class DashboardState {
     return { ...stored };
   }
 
-  hideUnknownSession(sessionId) {
+  hideSession(sessionId) {
     const session = this.snapshot().sessions.find((item) => item.session_id === sessionId);
     if (!session) return null;
-    if (session.status !== '不明') return false;
     if (!this.hiddenSessions.has(sessionId)) {
       this.hiddenSessions.add(sessionId);
       this.touch();
@@ -719,7 +800,9 @@ class DashboardState {
 
   snapshot() {
     const fileOnlySessions = [...this.sessionFiles.values()]
-      .filter((file) => !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id))
+      .filter((file) => (
+        !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id) && !this.endedByAbsence.has(file.session_id)
+      ))
       .map((file) => ({
         session_id: file.session_id,
         product: file.product || null,
@@ -733,7 +816,7 @@ class DashboardState {
     const sessionIds = new Set([
       ...this.sessions.keys(),
       ...fileOnlySessions.map((session) => session.session_id),
-      ...[...this.plans.keys()].filter((sessionId) => !this.endedAt.has(sessionId)),
+      ...[...this.plans.keys()].filter((sessionId) => !this.endedAt.has(sessionId) && !this.endedByAbsence.has(sessionId)),
     ]);
     const currentSessions = [...sessionIds].map((sessionId) => {
       const session = this.sessions.get(sessionId);

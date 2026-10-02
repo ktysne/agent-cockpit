@@ -173,7 +173,7 @@ test('状態推定 API は画面の認証とセッション状態を照合し、
   assert.equal(snapshot.version, state.version);
 });
 
-test('一覧から外す API は認証し、状態不明だけを外してすべて表示できる', async (t) => {
+test('一覧から外す API は認証し、複数の状態のセッションをまとめて外してすべて表示できる', async (t) => {
   const state = new DashboardState();
   state.syncSessionFiles([
     { session_id: 'hide_unknown', cwd: 'C:\\project', name: '不明なセッション' },
@@ -202,7 +202,8 @@ test('一覧から外す API は認証し、状態不明だけを外してすべ
   const conflict = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_id: 'hide_known' }), headers: validHeaders,
   });
-  assert.equal(conflict.status, 409);
+  assert.equal(conflict.status, 200);
+  assert.deepEqual(jsonBody(conflict), { hidden: true });
   const invalid = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ action: 'clear', session_id: 'extra' }), headers: validHeaders,
   });
@@ -214,13 +215,38 @@ test('一覧から外す API は認証し、状態不明だけを外してすべ
   assert.equal(state.version, versionBeforeHide + 1);
   assert.deepEqual(jsonBody(hidden), { hidden: true });
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, true);
+
+  const batchHidden = await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    body: JSON.stringify({ action: 'hide', session_ids: ['hide_unknown', 'hide_known', 'not_known'] }),
+    headers: validHeaders,
+  });
+  assert.equal(batchHidden.status, 200);
+  assert.deepEqual(jsonBody(batchHidden), { hidden: 2 });
+  const allHidden = jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions;
+  assert.equal(allHidden.find((session) => session.session_id === 'hide_unknown').hidden, true);
+  assert.equal(allHidden.find((session) => session.session_id === 'hide_known').hidden, true);
+
+  const batchMissing = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_ids: ['not_known'] }), headers: validHeaders,
+  });
+  assert.equal(batchMissing.status, 404);
+  const emptyBatch = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_ids: [] }), headers: validHeaders,
+  });
+  assert.equal(emptyBatch.status, 400);
+  const oversizedBatch = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_ids: Array.from({ length: 51 }, (_, index) => `session_${index}`) }), headers: validHeaders,
+  });
+  assert.equal(oversizedBatch.status, 400);
+
   const versionBeforeClear = state.version;
   const cleared = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ action: 'clear' }), headers: validHeaders,
   });
   assert.equal(cleared.status, 200);
   assert.equal(state.version, versionBeforeClear + 1);
-  assert.deepEqual(jsonBody(cleared), { cleared: 1 });
+  assert.deepEqual(jsonBody(cleared), { cleared: 2 });
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, undefined);
 });
 
@@ -321,6 +347,65 @@ test('Host、秘密値、Origin を照合して書き込みを制限する', asy
 
   const devDisabled = await request(runtime.info.port, { path: '/api/dev/fields' });
   assert.equal(devDisabled.status, 404);
+});
+
+test('SubagentStart のない agent_type 付きイベントから定義を読み込んで行を復元する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const agentsDirectory = path.join(claudeHome, 'agents');
+  await fs.mkdir(agentsDirectory, { recursive: true });
+  await fs.writeFile(path.join(agentsDirectory, 'Explore.md'), '---\nmodel: claude-sonnet-5-5\neffort: high\n---\n');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: 'restored-agent', hook_event_name: 'PreToolUse', hookAt: 200,
+      agent_id: 'agent-1', agent_type: 'Explore', tool_name: 'Read', tool_use_id: 'read-1', summary: 'README.md',
+    }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(response.status, 202);
+
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const [agent] = state.sessions.find((session) => session.session_id === 'restored-agent').agents;
+  assert.equal(agent.model, 'claude-sonnet-5-5');
+  assert.equal(agent.effort, 'high');
+});
+
+test('サブエージェント行があるイベントでは定義を読み直さず SubagentStart では読む', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const definitionPath = path.join(claudeHome, 'agents', 'Explore.md');
+  await fs.mkdir(path.dirname(definitionPath), { recursive: true });
+  await fs.writeFile(definitionPath, '---\nmodel: claude-sonnet-5-5\n---\n');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+
+  const originalReadFile = fs.readFile;
+  let definitionReads = 0;
+  fs.readFile = async function (filePath, ...args) {
+    if (path.resolve(filePath) === path.resolve(definitionPath)) definitionReads += 1;
+    return originalReadFile.call(fs, filePath, ...args);
+  };
+  try {
+    const postEvent = (hook_event_name, hookAt, tool_use_id) => request(runtime.info.port, {
+      method: 'POST', path: '/api/events',
+      body: JSON.stringify({
+        session_id: 'agent-definition-read', hook_event_name, hookAt,
+        agent_id: 'agent-1', agent_type: 'Explore', tool_name: 'Read', tool_use_id,
+      }),
+      headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    });
+
+    assert.equal((await postEvent('PreToolUse', 100, 'read-1')).status, 202);
+    assert.equal(definitionReads, 1);
+    assert.equal((await postEvent('PreToolUse', 200, 'read-2')).status, 202);
+    assert.equal(definitionReads, 1);
+    assert.equal((await postEvent('SubagentStart', 300, 'read-3')).status, 202);
+    assert.equal(definitionReads, 2);
+  } finally {
+    fs.readFile = originalReadFile;
+  }
 });
 
 test('/plan は秘密値と Origin を照合し、session ID と入力上限を検査する', async (t) => {
