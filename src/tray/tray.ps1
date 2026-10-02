@@ -180,8 +180,8 @@ function Get-ServerInfo {
     $info = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop
     $port = 0
     if (-not [int]::TryParse([string]$info.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { return $null }
-    if ([string]::IsNullOrWhiteSpace([string]$info.secret)) { return $null }
-    return [pscustomobject]@{ Port = $port; Secret = [string]$info.secret }
+    if ([string]::IsNullOrWhiteSpace([string]$info.uiSecret)) { return $null }
+    return [pscustomobject]@{ Port = $port; Secret = [string]$info.uiSecret }
   } catch {
     return $null
   } finally {

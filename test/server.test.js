@@ -58,15 +58,21 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   });
   assert.equal(missingSecret.status, 401);
 
+  const hookSecret = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(hookSecret.status, 401);
+
   const foreignOrigin = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin: 'https://other.example' },
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin: 'https://other.example' },
   });
   assert.equal(foreignOrigin.status, 403);
 
   const enabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
   });
   assert.equal(enabled.status, 200);
   assert.deepEqual(jsonBody(enabled).enabled, true);
@@ -75,7 +81,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const enabledLocalhost = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
     headers: {
-      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
       origin: `http://localhost:${runtime.info.port}`,
     },
   });
@@ -84,7 +90,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const enabledLoopback = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
     headers: {
-      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
       origin: `http://127.0.0.1:${runtime.info.port}`,
     },
   });
@@ -93,7 +99,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const disabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: false }),
     headers: {
-      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
       origin: `http://localhost:${runtime.info.port}`,
     },
   });
@@ -102,7 +108,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
 
   const invalidEnabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: 'true' }),
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
   });
   assert.equal(invalidEnabled.status, 400);
 
@@ -120,7 +126,7 @@ test('離席状態は同じ置き場でサーバーを再起動しても残る',
   t.after(() => first.close());
   const enabled = await request(first.info.port, {
     method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: true }),
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': first.info.secret },
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': first.info.uiSecret },
   });
   assert.equal(enabled.status, 200);
   const saved = jsonBody(enabled);
@@ -141,11 +147,14 @@ test('壊れた離席状態は離席中ではない状態として読む', async
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), { enabled: false, since: null });
 });
 
-test('画面の meta に秘密値を属性値として埋め、/api/events の Origin 拒否を保つ', async (t) => {
+test('画面には画面用の秘密値だけを埋め、iframe への埋め込みを拒み、/api/events は画面用の秘密値を受け付けない', async (t) => {
   const runtime = await runningServer(t);
   const page = await request(runtime.info.port, { path: '/' });
   assert.equal(page.status, 200);
-  assert.ok(page.body.includes(`<meta name="cockpit-secret" content="${runtime.info.secret}">`));
+  assert.ok(page.body.includes(`<meta name="cockpit-secret" content="${runtime.info.uiSecret}">`));
+  assert.ok(!page.body.includes(runtime.info.secret));
+  assert.equal(page.headers['x-frame-options'], 'DENY');
+  assert.equal(page.headers['content-security-policy'], "frame-ancestors 'none'");
   assert.equal(page.headers['access-control-allow-origin'], undefined);
 
   const event = await request(runtime.info.port, {
@@ -156,6 +165,12 @@ test('画面の meta に秘密値を属性値として埋め、/api/events の O
     },
   });
   assert.equal(event.status, 403);
+
+  const eventWithUiSecret = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', body: JSON.stringify({}),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  });
+  assert.equal(eventWithUiSecret.status, 401);
 });
 
 test('HTML 属性値のエスケープは一般の文字列に対応する', () => {
@@ -313,4 +328,14 @@ test('起動時に、フックがまだ届いていない生きているセッ�
     state.sessions.map((session) => [session.session_id, session.title, session.status, session.product.name]),
     [['waiting-session', '待機しているセッション', '不明', 'repo']],
   );
+});
+
+test('離席状態の切り替えを続けて呼ぶと、呼んだ順に保存される', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  const { AwayState } = require('../src/server/state');
+  const away = await AwayState.load(homeDir);
+  const results = await Promise.all([away.setEnabled(true), away.setEnabled(false), away.setEnabled(true)]);
+  assert.deepEqual(results.map((value) => value.enabled), [true, false, true]);
+  assert.equal(away.snapshot().enabled, true);
+  assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).enabled, true);
 });

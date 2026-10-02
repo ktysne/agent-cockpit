@@ -13,11 +13,20 @@ const MAX_BODY_BYTES = 64 * 1024;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 
+// 画面を別のページの iframe に埋めて操作させる経路と、別のオリジンからの読み取りを塞ぐ。
+const SECURITY_HEADERS = Object.freeze({
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "frame-ancestors 'none'",
+  'cross-origin-resource-policy': 'same-origin',
+  'cross-origin-opener-policy': 'same-origin',
+});
+
 function jsonResponse(response, status, value) {
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
+    ...SECURITY_HEADERS,
   });
   response.end(JSON.stringify(value));
 }
@@ -25,8 +34,7 @@ function jsonResponse(response, status, value) {
 function textResponse(response, status, value, contentType = 'text/plain; charset=utf-8') {
   response.writeHead(status, {
     'content-type': contentType,
-    'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff',
+    ...SECURITY_HEADERS,
   });
   response.end(value);
 }
@@ -155,7 +163,7 @@ function createRequestHandler(options) {
         const template = await fs.readFile(webPath, 'utf8');
         const html = template.replace(
           '<meta name="cockpit-secret" content="">',
-          `<meta name="cockpit-secret" content="${escapeHtmlAttribute(info.secret)}">`,
+          `<meta name="cockpit-secret" content="${escapeHtmlAttribute(info.uiSecret)}">`,
         );
         textResponse(response, 200, html, 'text/html; charset=utf-8');
       } catch {
@@ -164,7 +172,7 @@ function createRequestHandler(options) {
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/away') {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
         return;
       }
@@ -307,6 +315,8 @@ async function startServer(options = {}) {
       pid: process.pid,
       port: address.port,
       secret: crypto.randomBytes(32).toString('base64url'),
+      // 画面に埋める値。フック用の secret と分け、画面から読めても /api/events は偽造できないようにする。
+      uiSecret: crypto.randomBytes(32).toString('base64url'),
       startedAt: new Date().toISOString(),
     };
     await atomicWriteServerInfo(homeDir, info);

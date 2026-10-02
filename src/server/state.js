@@ -22,6 +22,7 @@ class AwayState {
     this.homeDir = homeDir;
     this.value = { ...value };
     this.fileSystem = fileSystem;
+    this.pending = Promise.resolve();
   }
 
   static async load(homeDir, fileSystem = fs) {
@@ -42,7 +43,14 @@ class AwayState {
     return { ...this.value };
   }
 
-  async setEnabled(enabled, now = Date.now()) {
+  // 画面とトレイから同時に切り替えても、保存の順と this.value の順が食い違わないよう直列にする。
+  setEnabled(enabled, now = Date.now()) {
+    const run = this.pending.then(() => this.applyEnabled(enabled, now));
+    this.pending = run.catch(() => {});
+    return run;
+  }
+
+  async applyEnabled(enabled, now) {
     const next = {
       enabled,
       since: enabled ? (this.value.enabled ? this.value.since : now) : null,

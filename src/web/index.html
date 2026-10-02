@@ -234,6 +234,11 @@ awayToggle.addEventListener('change', async () => {
       },
       body: JSON.stringify({ enabled: requested }),
     });
+    // 常駐サーバーが再起動すると秘密値が変わるので、読み込み直して新しい値を受け取る。
+    if (response.status === 401) {
+      location.reload();
+      return;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const away = await response.json();
     applyAwayState(away);
