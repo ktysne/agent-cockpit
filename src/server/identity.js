@@ -35,6 +35,7 @@ function gitDirectoryFromFile(gitFilePath, paths, fileSystem) {
     if (gitFile === null) return null;
     const match = gitFile.split(/\r?\n/, 1)[0].match(/^gitdir:\s*(.+?)\s*$/);
     if (!match) return null;
+    if (paths === path.win32 && match[1].startsWith('\\\\')) return null;
     return paths.resolve(paths.dirname(gitFilePath), match[1]);
   } catch {
     return null;
@@ -81,6 +82,7 @@ function branchFromCwd(cwd, options = {}) {
 
   const branch = findBranchFromCwd(absoluteCwd, paths, fileSystem);
   if (shouldCache) {
+    branchCache.delete(cacheKey);
     if (branchCache.size >= BRANCH_CACHE_MAX_ENTRIES) branchCache.delete(branchCache.keys().next().value);
     branchCache.set(cacheKey, { branch, expiresAt: now + BRANCH_CACHE_TTL_MS });
   }

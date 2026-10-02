@@ -60,8 +60,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .meta { color: var(--text-2); font-size: 12px; }
 .spacer { flex: 1; }
-.connection { color: var(--text-2); font-size: 12px; }
-.connection[data-state="error"] { color: var(--danger); }
+#connection-note { color: var(--danger); }
 .settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
 .settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
 .settings-button:hover { color: var(--text); }
@@ -252,6 +251,7 @@ h3.sub .count { font-weight: normal; }
   <p class="intro">Claude Code のセッション、判断事項、作業中の内容、タスク、サブエージェントを表示します。</p>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div class="filter-note" id="filter-note" hidden></div>
+  <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
 </main>
 <script>
@@ -266,6 +266,7 @@ const liveStatus = document.getElementById('live-status');
 const themeSelect = document.getElementById('settings-theme-select');
 const settingsButton = document.getElementById('settings-button');
 const awayToggle = document.getElementById('away-toggle');
+const connectionNote = document.getElementById('connection-note');
 const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
@@ -280,6 +281,10 @@ const FILTERS = [
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
+let connectionLost = false;
+let lastStateAt = new Date();
+let awayErrorUntil = 0;
+let awayErrorTimer = null;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
 const expandedDoneTasks = new Set();
@@ -358,6 +363,27 @@ function applyAwayState(away) {
   header.dataset.away = String(enabled);
 }
 
+function updateConnectionNote() {
+  if (connectionLost) {
+    const time = `${String(lastStateAt.getHours()).padStart(2, '0')}:${String(lastStateAt.getMinutes()).padStart(2, '0')}`;
+    connectionNote.textContent = `常駐サーバーに接続できません。表示は ${time} 時点のものです。`;
+    connectionNote.hidden = false;
+  } else if (Date.now() < awayErrorUntil) {
+    connectionNote.textContent = '離席中を切り替えられませんでした';
+    connectionNote.hidden = false;
+  } else {
+    connectionNote.textContent = '';
+    connectionNote.hidden = true;
+  }
+}
+
+function showAwayError() {
+  awayErrorUntil = Date.now() + 10_000;
+  clearTimeout(awayErrorTimer);
+  awayErrorTimer = setTimeout(updateConnectionNote, 10_000);
+  updateConnectionNote();
+}
+
 function postAway(enabled) {
   return fetch('/api/away', {
     method: 'POST',
@@ -397,7 +423,8 @@ awayToggle.addEventListener('change', async () => {
   } catch {
     awayToggle.checked = previous;
     applyAwayState({ enabled: previous });
-    liveStatus.textContent = '離席状態を切り替えられませんでした。';
+    liveStatus.textContent = '離席中を切り替えられませんでした';
+    showAwayError();
   } finally {
     awayToggle.disabled = false;
   }
@@ -418,11 +445,16 @@ function durationLabel(startedAt, now = Date.now()) {
   const start = Date.parse(startedAt);
   if (!Number.isFinite(start)) return '時刻不明';
   const minutes = Math.max(0, Math.floor((now - start) / 60_000));
-  if (minutes < 1) return '1 分未満';
+  if (minutes < 1) return '1 分以内';
   if (minutes < 60) return `${minutes} 分`;
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return remainder ? `${hours} 時間 ${remainder} 分` : `${hours} 時間`;
+}
+
+function durationAgoLabel(startedAt, now = Date.now()) {
+  const label = durationLabel(startedAt, now);
+  return ['時刻不明', '1 分以内'].includes(label) ? label : `${label}前`;
 }
 
 function toolDetail(toolName, summary) {
@@ -518,7 +550,21 @@ function sessionActivityTime(session) {
 function orderedProducts(sessions) {
   const products = productGroups(sessions);
   const ids = products.map((product) => product.key);
-  const nextOrder = [...displayPreferences.order.filter((key) => ids.includes(key)), ...ids.filter((key) => !displayPreferences.order.includes(key))];
+  const visibleKeys = new Set(ids);
+  const nextOrder = [...displayPreferences.order];
+  for (const key of ids) if (!nextOrder.includes(key)) nextOrder.push(key);
+  if (nextOrder.length > 200) {
+    let excess = nextOrder.length - 200;
+    const retained = nextOrder.filter((key) => {
+      if (excess > 0 && !visibleKeys.has(key)) {
+        excess -= 1;
+        return false;
+      }
+      return true;
+    });
+    nextOrder.length = 0;
+    for (const key of retained) nextOrder.push(key);
+  }
   if (nextOrder.length !== displayPreferences.order.length || nextOrder.some((key, index) => key !== displayPreferences.order[index])) {
     displayPreferences.order = nextOrder;
     saveDisplayPreferences();
@@ -556,8 +602,7 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) detail.append(element('div', 'tool-detail', toolDetail(mainTool.tool_name, mainTool.summary)));
   const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
-  const elapsedLabel = durationLabel(elapsedAt);
-  const elapsed = element('time', 'since', elapsedLabel === '時刻不明' ? elapsedLabel : `${elapsedLabel}前`);
+  const elapsed = element('time', 'since', durationAgoLabel(elapsedAt));
   row.append(who, detail, elapsed);
   return row;
 }
@@ -606,7 +651,7 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
       if (showEnded) expandedEndedSessions.delete(session.session_id);
       else expandedEndedSessions.add(session.session_id);
       if (lastState) render(lastState);
-      root.querySelector(`[data-ended-toggle="${CSS.escape(session.session_id)}"]`)?.focus();
+      root.querySelector(`[data-ended-toggle="${CSS.escape(session.session_id)}"]`)?.focus({ preventScroll: true });
     });
     toggle.dataset.endedToggle = session.session_id;
     body.append(toggle);
@@ -722,7 +767,7 @@ function appendPlanToggle(body, kind, sessionId, expanded, count, label, expande
     if (expanded) expandedSet.delete(sessionId);
     else expandedSet.add(sessionId);
     if (lastState) render(lastState);
-    [...root.querySelectorAll('[data-plan-toggle]')].find((button) => button.dataset.planToggle === key)?.focus();
+    [...root.querySelectorAll('[data-plan-toggle]')].find((button) => button.dataset.planToggle === key)?.focus({ preventScroll: true });
   });
   body.append(toggle);
 }
@@ -764,7 +809,7 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
 function appendTasks(body, session, product, withTags = false, multipleSessions = false) {
   const tasks = session.tasks;
   const heading = element('h3', 'sub', 'タスクと完了条件 ');
-  if (session.tasksUpdatedAt) heading.append(element('span', 'meta', `最終更新 ${durationLabel(session.tasksUpdatedAt)}前`));
+  if (session.tasksUpdatedAt) heading.append(element('span', 'meta', `最終更新 ${durationAgoLabel(session.tasksUpdatedAt)}`));
   body.append(heading);
   if (!tasks.length) {
     body.append(element('div', 'empty', 'タスクはありません。'));
@@ -791,7 +836,9 @@ function sessionBlock(product, session, multipleSessions) {
   const block = element('div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
   if (multipleSessions) {
     const head = element('div', 'session-head');
-    head.append(element('h3', '', session.title || session.session_id), productStatusBadge(session));
+    head.append(element('h3', '', session.title || session.session_id));
+    if (!sharedBranch(product) && session.product?.branch) head.append(element('span', 'meta branch', session.product.branch));
+    head.append(productStatusBadge(session));
     block.append(head);
   }
 
@@ -846,16 +893,21 @@ function productControls(product, index, total, pinnedCount) {
   return controls;
 }
 
+// セッションが全部同じブランチならプロダクトの見出しに出し、分かれていればセッションの頭に出す。
+function sharedBranch(product) {
+  return product.branches.size === 1 ? [...product.branches][0] : '';
+}
+
 function productSection(product, index, products, pinnedCount) {
   const pinned = displayPreferences.pinned.includes(product.key);
   const section = element('section', `section ${pinned ? 'pinned' : ''}`.trim());
   const head = element('div', 'head');
   head.append(element('h2', '', product.name));
-  const branches = [...product.branches];
-  if (branches.length) head.append(element('span', 'meta branch', branches.join('、')));
+  const branch = sharedBranch(product);
+  if (branch) head.append(element('span', 'meta branch', branch));
 
-  const permissionCount = product.sessions.reduce((total, session) => total + shownPermissions(session).length, 0);
-  const decisionCount = product.sessions.reduce((total, session) => total + shownActiveDecisions(session).length, 0);
+  const permissionCount = product.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state)).length, 0);
   if (permissionCount) head.append(element('span', 'chip danger', `許可待ち ${permissionCount}`));
   if (decisionCount) head.append(element('span', 'chip danger', `判断待ち ${decisionCount}`));
   head.append(productControls(product, index, products.length, pinnedCount));
@@ -964,9 +1016,11 @@ function renderKindSections(products) {
 function render(state) {
   const sessions = Array.isArray(state.sessions) ? state.sessions : [];
   const active = document.activeElement;
-  const focusData = active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
-    : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
-      : active?.hasAttribute('data-show-all') ? { kind: 'show-all' } : null;
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle'].find((attribute) => active?.hasAttribute(attribute));
+  const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
+    : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
+      : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
+        : active?.hasAttribute('data-show-all') ? { kind: 'show-all' } : null;
   renderSummary(sessions);
   updateTitle(sessions);
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
@@ -986,12 +1040,17 @@ function render(state) {
   }
 
   if (focusData) {
-    const button = [...document.querySelectorAll('button')].find((item) => {
+    const buttons = [...document.querySelectorAll('button')];
+    const button = buttons.find((item) => {
+      if (focusData.kind === 'toggle') return item.getAttribute(focusData.attribute) === focusData.value;
       if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
       if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
       return item.dataset.productAction === focusData.action && item.dataset.productKey === focusData.key && (item.dataset.direction || '') === focusData.direction;
     });
-    button?.focus({ preventScroll: true });
+    const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled
+      ? buttons.find((item) => item.dataset.productAction === 'move' && item.dataset.productKey === focusData.key && item.dataset.direction === String(-Number(focusData.direction)))
+      : button;
+    fallback?.focus({ preventScroll: true });
   }
 }
 
@@ -1045,6 +1104,9 @@ async function refresh() {
     const response = await fetch('/api/state', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
+    lastStateAt = new Date();
+    connectionLost = false;
+    updateConnectionNote();
     lastState = state;
     applyAwayState(state.away);
     if (state.version !== lastVersion) {
@@ -1056,6 +1118,8 @@ async function refresh() {
       liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
     }
   } catch {
+    connectionLost = true;
+    updateConnectionNote();
     liveStatus.textContent = '常駐サーバーに接続できません。';
     if (!hasRenderedState) root.replaceChildren(element('div', 'error-box', '状態を取得できません。常駐サーバーが起動しているか確認してください。'));
   }

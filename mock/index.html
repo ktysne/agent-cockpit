@@ -311,6 +311,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 <main class="wrap">
   <p class="note">モック: 表示内容はすべて架空のデータです。表示順、チェック、マージ、経路の設定はこのブラウザにだけ保存されます。マージは実際には行いません。</p>
   <div class="filter-note" id="filter-note" hidden></div>
+  <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root"></div>
 </main>
@@ -375,7 +376,7 @@ const DATA = {
       ],
       extraSessions: [
         {
-          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy',
+          id: 'rec-studio-converter', title: 'テンポ変換のテスト', status: 'busy', branch: 'feat/tempo-map-test',
           main: { tool: 'Bash: npm test -- tempo-map', since: '1 分前' },
           perms: [{ id: 'rs-p1', who: 'メイン', tool: 'Bash', detail: 'npm test -- tempo-map', waitMin: 1 }],
           subagents: [{ type: 'test-writer', text: 'テンポ変換の境界値を確認', since: '2 分前', state: 'busy', sinceMin: 2,
@@ -441,7 +442,7 @@ const DATA = {
       prs: [],
       extraSessions: [
         {
-          id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown',
+          id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown', branch: 'plan/pr-stack-view',
           main: { tool: 'Read: mock/index.html', since: '記録時刻不明' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [],
           estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', inputWaiting: true },
@@ -449,17 +450,18 @@ const DATA = {
       ],
     },
   ],
+  connection: { lost: false, lastAt: '14:32' },
 };
 
 for (const p of DATA.products) {
   const mainSession = {
-    id: `${p.id}-main`, title: p.sessionTitle, status: p.status,
+    id: `${p.id}-main`, title: p.sessionTitle, status: p.status, branch: p.branch,
     main: p.main, perms: p.perms, subagents: p.subagents,
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions,
   };
   p.sessions = [mainSession, ...(p.extraSessions || [])];
-  for (const key of ['sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions']) delete p[key];
+  for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions']) delete p[key];
 }
 
 const STORE_KEY = 'agent-cockpit-mock';
@@ -954,7 +956,7 @@ function sessionBlock(p, session) {
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   return `<div class="session-group ${multiple ? '' : 'single'}">
-    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3><span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
+    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}<span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
     <div class="session-body">
       <h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
@@ -967,30 +969,47 @@ function sessionBlock(p, session) {
   </div>`;
 }
 
-function orderControls(p, idx, total) {
+// セッションが全部同じブランチならプロダクトの見出しに出し、分かれていればセッションの頭に出す。
+function sharedBranch(p) {
+  const branches = new Set(p.sessions.map(session => session.branch).filter(Boolean));
+  return branches.size === 1 ? [...branches][0] : '';
+}
+
+function renderConnectionNote() {
+  const note = document.getElementById('connection-note');
+  note.hidden = !DATA.connection.lost;
+  note.textContent = DATA.connection.lost
+    ? `常駐サーバーに接続できません。表示は ${DATA.connection.lastAt} 時点のものです。`
+    : '';
+}
+
+function orderControls(p, idx, total, pinnedCount) {
   const pinned = ui.pinned.includes(p.id);
   const collapsed = ui.collapsed.includes(p.id);
+  const canMoveUp = pinned ? idx > 0 : idx > pinnedCount;
+  const canMoveDown = pinned ? idx < pinnedCount - 1 : idx < total - 1;
   return `<div class="order">
     <button type="button" class="icon-btn" data-collapse="${p.id}" aria-expanded="${!collapsed}">${collapsed ? '開く' : '畳む'}</button>
     <button type="button" class="icon-btn" data-pin="${p.id}" aria-pressed="${pinned}" title="最上部に固定">${pinned ? '固定中' : '固定'}</button>
-    <button type="button" class="icon-btn" data-move="${p.id}" data-dir="-1" ${idx === 0 ? 'disabled' : ''} aria-label="${esc(p.name)} を上へ">↑</button>
-    <button type="button" class="icon-btn" data-move="${p.id}" data-dir="1" ${idx === total - 1 ? 'disabled' : ''} aria-label="${esc(p.name)} を下へ">↓</button>
+    <button type="button" class="icon-btn" data-move="${p.id}" data-dir="-1" ${canMoveUp ? '' : 'disabled'} aria-label="${esc(p.name)} を上へ">↑</button>
+    <button type="button" class="icon-btn" data-move="${p.id}" data-dir="1" ${canMoveDown ? '' : 'disabled'} aria-label="${esc(p.name)} を下へ">↓</button>
   </div>`;
 }
 
 function renderProductMode() {
   const ps = orderedProducts();
+  const pinnedCount = ps.filter(p => ui.pinned.includes(p.id)).length;
   return ps.map((p, i) => {
     const pend = pendingDecisions(p);
     const sessions = sessionsByActivity(p);
     const permissionCount = sessions.reduce((total, session) => total + session.perms.length, 0);
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
-        <h2>${esc(p.name)}</h2><span class="meta">${esc(p.branch)}</span>
+        <h2>${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
         ${permissionCount ? `<span class="chip danger">許可待ち ${permissionCount}</span>` : ''}
         ${pend.length ? `<span class="chip danger">判断待ち ${pend.length}</span>` : ''}
         ${(n => n ? `<span class="chip ok">マージできる PR ${n}</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
-        ${orderControls(p, i, ps.length)}
+        ${orderControls(p, i, ps.length, pinnedCount)}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
         ${newsBox(p, false)}
@@ -1050,6 +1069,7 @@ function render() {
   const focusValue = focusAttribute ? active.getAttribute(focusAttribute) : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
+  renderConnectionNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
   if (focusAttribute) [...document.querySelectorAll(`[${focusAttribute}]`)].find(button => button.getAttribute(focusAttribute) === focusValue)?.focus({ preventScroll: true });
@@ -1091,11 +1111,14 @@ document.addEventListener('click', e => {
   } else if (t.dataset.move) {
     const vis = orderedProducts().map(p => p.id);
     const i = vis.indexOf(t.dataset.move), j = i + Number(t.dataset.dir);
-    if (j < 0 || j >= vis.length) return;
+    const pinnedCount = vis.filter(id => ui.pinned.includes(id)).length;
+    const pinned = ui.pinned.includes(t.dataset.move);
+    const canMove = pinned
+      ? j >= 0 && j < pinnedCount
+      : j >= pinnedCount && j < vis.length;
+    if (!canMove) return;
     [vis[i], vis[j]] = [vis[j], vis[i]];
     ui.order = vis;
-    const pi = ui.pinned.includes(vis[i]), pj = ui.pinned.includes(vis[j]);
-    if (pi !== pj) ui.pinned = pj ? [...ui.pinned.filter(x => x !== vis[j]), vis[i]] : [...ui.pinned.filter(x => x !== vis[i]), vis[j]];
   } else if (t.dataset.merge) {
     ui.confirm = t.dataset.merge;
   } else if (t.hasAttribute('data-merge-cancel')) {

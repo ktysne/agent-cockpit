@@ -65,3 +65,59 @@ test('HEAD を読めないときはブランチ名を null にする', async (t)
 
   assert.equal(branchFromCwd(cwd, { fileSystem }), null);
 });
+
+test('4 KB を超える HEAD は読まない', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const cwd = path.join(directory, 'project');
+  await fsp.mkdir(path.join(cwd, '.git'), { recursive: true });
+  await fsp.writeFile(path.join(cwd, '.git', 'HEAD'), 'x'.repeat(4097));
+
+  assert.equal(branchFromCwd(cwd), null);
+});
+
+test('4 KB を超える gitdir ポインターは読まない', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const cwd = path.join(directory, 'worktree');
+  await fsp.mkdir(cwd, { recursive: true });
+  await fsp.writeFile(path.join(cwd, '.git'), `gitdir: ${'x'.repeat(4096)}`);
+
+  assert.equal(branchFromCwd(cwd), null);
+});
+
+test('HEAD がディレクトリならブランチ名を null にする', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const cwd = path.join(directory, 'project');
+  await fsp.mkdir(path.join(cwd, '.git', 'HEAD'), { recursive: true });
+
+  assert.equal(branchFromCwd(cwd), null);
+});
+
+test('gitdir が存在しない場所を指すときはブランチ名を null にする', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const cwd = path.join(directory, 'worktree');
+  await fsp.mkdir(cwd, { recursive: true });
+  await fsp.writeFile(path.join(cwd, '.git'), 'gitdir: ../missing-gitdir\n');
+
+  assert.equal(branchFromCwd(cwd), null);
+});
+
+test('Windows の UNC gitdir ポインターは読まない', () => {
+  const gitFilePath = 'C:\\repo\\.git';
+  const touched = [];
+  const fileSystem = {
+    statSync(filePath) {
+      touched.push(filePath);
+      if (filePath === gitFilePath) return { isDirectory: () => false, isFile: () => true, size: 64 };
+      const error = new Error('not found');
+      error.code = 'ENOENT';
+      throw error;
+    },
+    readFileSync(filePath) {
+      if (filePath === gitFilePath) return 'gitdir: \\\\server\\share\\repo.git\n';
+      throw new Error('unexpected file read');
+    },
+  };
+
+  assert.equal(branchFromCwd('C:\\repo\\src', { fileSystem }), null);
+  assert.ok(!touched.some((filePath) => filePath.startsWith('\\\\')));
+});
