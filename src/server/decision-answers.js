@@ -24,6 +24,21 @@ function recommendedOptions(decision) {
   });
 }
 
+function validPicks(decision, picks, note) {
+  const questions = decision.questions || [];
+  if (!Array.isArray(picks) || picks.length !== questions.length || typeof note !== 'string') return false;
+  const recommendations = recommendedOptions(decision);
+  let selectedCount = 0;
+  for (const [index, question] of questions.entries()) {
+    const labels = picks[index];
+    if (!Array.isArray(labels) || (!question.multiSelect && labels.length > 1)) return false;
+    if (labels.some((label) => typeof label !== 'string' || !question.options.some((option) => option.label === label))) return false;
+    selectedCount += labels.length;
+    if (!labels.length && !recommendations[index] && !note.trim()) return false;
+  }
+  return selectedCount > 0;
+}
+
 function canAnswerDecision(decision) {
   return ['waiting', 'provisional'].includes(decision.state) && !hasDuplicateQuestions(decision) && decision.questions.length > 0;
 }
@@ -39,19 +54,24 @@ function denyAnswerOutput(decisionId) {
 }
 
 function askAnswerOutput(decision, answer) {
+  const recommendations = recommendedOptions(decision);
   const selected = answer.choice === 'ok' || answer.choice === 'hold'
-    ? recommendedOptions(decision)
+    ? recommendations
     : decision.questions.map(() => null);
-  if (selected.some((option) => !option) && answer.choice !== null) return denyAnswerOutput(decision.id);
+  if (answer.choice === 'pick' && !validPicks(decision, answer.picks, answer.note)) return denyAnswerOutput(decision.id);
+  if (selected.some((option) => !option) && answer.choice !== null && answer.choice !== 'pick') return denyAnswerOutput(decision.id);
 
   const answers = Object.fromEntries(decision.questions.map((question, index) => [
     question.question,
-    answer.choice === null ? answer.note : selected[index].label,
+    answer.choice === null
+      ? answer.note
+      : answer.choice === 'pick'
+        ? answer.picks[index].length ? answer.picks[index].join(', ') : recommendations[index]?.label || answer.note
+        : selected[index].label,
   ]));
   const additionalContext = [];
   if (answer.choice === 'hold') additionalContext.push(HOLD_CONTEXT);
-  if (answer.choice === 'ok' && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
-  if (answer.choice === 'hold' && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
+  if (['ok', 'hold', 'pick'].includes(answer.choice) && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -72,7 +92,16 @@ function askAnswerOutput(decision, answer) {
 
 function decisionAnswerText(decision) {
   const answer = decision.answer;
-  const answerKind = answer.choice === 'ok' ? '推奨案で OK' : answer.choice === 'hold' ? '判断を保留(推奨のまま進め、最後の報告に書く)' : '指示のみ';
+  const pickedQuestions = answer.choice === 'pick'
+    ? decision.questions.flatMap((question, index) => {
+      const labels = answer.picks?.[index] || [];
+      return labels.length ? [`「${question.question}」は「${labels.join(', ')}」`] : [];
+    }).join('、')
+    : '';
+  const answerKind = answer.choice === 'ok' ? '推奨案で OK'
+    : answer.choice === 'hold' ? '判断を保留(推奨のまま進め、最後の報告に書く)'
+      : answer.choice === 'pick' ? `選択肢を選んだ(${pickedQuestions})`
+        : '指示のみ';
   const instruction = answer.note || 'なし';
   return `開発者がダッシュボードから判断事項 ${decision.id}「${decision.title}」に回答した: ${answerKind}。指示: ${instruction}。回答に沿って作業を直し、cockpit_update_decision で状態を更新する。`;
 }
@@ -229,13 +258,22 @@ class DecisionAnswerDelivery {
     return record.result;
   }
 
-  submitAnswer(sessionId, decisionId, choice, note) {
+  submitAnswer(sessionId, decisionId, choice, note, picks = []) {
     const decision = this.state.decisionFor(sessionId, decisionId);
     if (!decision || !canAnswerDecision(decision)) return null;
     if (decision.state === 'waiting' && !decision.awaitingAnswerUntil && !decision.answer?.sentAt) return null;
     if (choice === null && !note.trim()) return false;
     if (choice === 'ok' && recommendedOptions(decision).some((option) => !option)) return false;
-    const answer = { choice, note, sentAt: new Date(this.now()).toISOString(), deliveredAt: null, reflectedAt: null, promptDeliveries: 0 };
+    if (choice === 'pick' && !validPicks(decision, picks, note)) return false;
+    const answer = {
+      choice,
+      note,
+      ...(choice === 'pick' ? { picks: picks.map((labels) => [...labels]) } : {}),
+      sentAt: new Date(this.now()).toISOString(),
+      deliveredAt: null,
+      reflectedAt: null,
+      promptDeliveries: 0,
+    };
     const updated = this.state.setDecisionLifecycle(sessionId, decisionId, { answer }, this.now());
     this.signal(sessionId);
     return updated;
@@ -527,6 +565,7 @@ module.exports = {
   DecisionAnswerDelivery,
   hasDuplicateQuestions,
   recommendedOptions,
+  validPicks,
   canAnswerDecision,
   denyAnswerOutput,
   askAnswerOutput,

@@ -165,6 +165,111 @@ test('指示欄と下書きの note が同じなら下書きを更新しない',
   assert.equal(harness.updatedAnswerCard, harness.answerCard);
 });
 
+test('選択肢にフォーカスがある描き直しでは同じ input に戻す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render);
+  let activeElement;
+  const pickData = {
+    answerPick: 'true', sessionId: 'session-ui', decisionId: 'decision-ui',
+    answerQuestion: '1', answerOption: '2',
+  };
+  const activePick = { dataset: pickData, hasAttribute: () => false };
+  const replacementPick = { dataset: { ...pickData }, focused: false, focus() { this.focused = true; activeElement = this; } };
+  activeElement = activePick;
+  const context = vm.createContext({
+    answerNoteComposing: false,
+    lastState: { sessions: [{ session_id: 'session-ui' }] },
+    HTMLTextAreaElement: class FakeTextArea {},
+    document: {
+      get activeElement() { return activeElement; },
+      querySelectorAll: () => [],
+    },
+    root: {
+      replaceChildren: () => { activeElement = null; },
+      querySelectorAll: () => [replacementPick],
+    },
+    displayPreferences: { mode: 'product', pinned: [] },
+    renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+    orderedProducts: () => [{ key: 'product-ui' }],
+    productSection: () => ({}),
+  });
+  vm.runInContext(render, context);
+  context.render(context.lastState);
+
+  assert.equal(replacementPick.focused, true);
+  assert.equal(activeElement, replacementPick);
+});
+
+test('選択肢を押すと送る答えが表示され、回答を送るが有効になる', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functionNames = [
+    'answerDraftKey', 'answerDraftFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
+    'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
+    'answerMetaText', 'canSendDecisionAnswer', 'updateAnswerSubmit',
+  ];
+  const functions = functionNames.map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(functions.every(Boolean));
+  assert.ok(changeHandler);
+
+  const decision = {
+    id: 'decision-ui',
+    state: 'provisional',
+    questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: null,
+  };
+  const key = 'session-ui\0decision-ui';
+  // 単一選択で選び直したときに、前の選択が残らないことも確かめるため、推奨を選んだ状態から始める。
+  const answerDrafts = new Map([[key, { choice: 'pick', picks: [['JSON (推奨)']], note: '' }]]);
+  const button = { disabled: true };
+  const meta = { textContent: '' };
+  const error = { textContent: '' };
+  const answerChoices = [{ checked: true }, { checked: true }];
+  const card = {
+    dataset: { sessionId: 'session-ui', decisionId: 'decision-ui' },
+    querySelector(selector) {
+      if (selector === '[data-send-answer]') return button;
+      if (selector === '[data-answer-meta]') return meta;
+      if (selector === '.answer-error') return error;
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === '[data-answer-choice]' ? answerChoices : [];
+    },
+  };
+  const pick = {
+    type: 'radio', checked: true,
+    dataset: {
+      sessionId: 'session-ui', decisionId: 'decision-ui', answerQuestion: '0', answerOption: '1',
+    },
+    closest(selector) {
+      if (selector === '[data-answer-choice]') return null;
+      if (selector === '[data-answer-pick]') return this;
+      if (selector === '.decision-card') return { querySelector: (inner) => (inner === '.decision-answer' ? card : null) };
+      return null;
+    },
+  };
+  let handleChange;
+  const context = vm.createContext({
+    answerDrafts,
+    findDecision: () => decision,
+    document: { addEventListener: (name, handler) => { if (name === 'change') handleChange = handler; } },
+  });
+  vm.runInContext(`${functions.join('\n')}\n${changeHandler}`, context);
+  handleChange({ target: pick });
+
+  assert.equal(answerDrafts.get(key).choice, 'pick');
+  assert.equal(JSON.stringify(answerDrafts.get(key).picks), '[["CSV"]]');
+  assert.equal(meta.textContent, '送る答え: CSV');
+  assert.equal(button.disabled, false);
+  assert.deepEqual(answerChoices.map((choice) => choice.checked), [false, false]);
+  assert.equal(error.textContent, '');
+});
+
 test('指示欄の変換中は描き直しを保留し、変換終了後に反映する', () => {
   const harness = renderHarness();
   harness.context.answerNoteComposing = true;

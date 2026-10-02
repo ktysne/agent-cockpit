@@ -134,6 +134,14 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .decision-options { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
 .decision-option { min-width: 0; padding: 6px 8px; border-radius: 6px; overflow-wrap: anywhere; }
 .decision-option.recommended { background: var(--accent-soft); }
+.decision-option.pickable { padding: 0; background: none; }
+.answer-pick { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); cursor: pointer; user-select: none; }
+.decision-option.recommended .answer-pick { background: var(--accent-soft); }
+.answer-pick:hover { border-color: var(--border); }
+.answer-pick input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+.answer-pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.answer-pick:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.answer-pick-body { min-width: 0; }
 .decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
 .decision-answer { display: grid; gap: 8px; margin-top: 10px; }
 .answer-choices { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -843,11 +851,82 @@ function decisionStateLabel(state) {
 function answerDraftFor(decision, session) {
   const key = `${session.session_id}\0${decision.id}`;
   const saved = answerDrafts.get(key);
-  return saved || { choice: decision.answer?.choice ?? null, note: decision.answer?.note || '' };
+  const answer = saved || decision.answer || {};
+  return {
+    choice: answer.choice ?? null,
+    picks: copyAnswerPicks(answer.picks, (decision.questions || []).length),
+    note: answer.note || '',
+  };
+}
+
+function emptyAnswerPicks(decision) {
+  return (decision.questions || []).map(() => []);
+}
+
+function copyAnswerPicks(picks, questionCount) {
+  return Array.from({ length: questionCount }, (_, index) => (
+    Array.isArray(picks?.[index]) ? [...picks[index]] : []
+  ));
+}
+
+function sameAnswerPicks(left, right) {
+  return left.length === right.length && left.every((labels, index) => (
+    labels.length === right[index].length && labels.every((label, labelIndex) => label === right[index][labelIndex])
+  ));
+}
+
+function decisionAnswerAvailability(decision) {
+  const questions = decision.questions || [];
+  const duplicateQuestions = new Set(questions.map((question) => question.question)).size !== questions.length;
+  const waitingForAnswer = decision.state === 'waiting' && Boolean(decision.awaitingAnswerUntil);
+  const hasSentAnswer = Boolean(decision.answer?.sentAt);
+  return {
+    active: !duplicateQuestions && (decision.state === 'provisional' || waitingForAnswer || (decision.state === 'waiting' && hasSentAnswer)),
+    viaDialog: duplicateQuestions || (decision.state === 'waiting' && !waitingForAnswer && !hasSentAnswer),
+  };
 }
 
 function displayRecommendedLabel(label) {
   return label.replace(/(?:\(推奨\)|（推奨）|\(recommended\)|（recommended）)/ig, '').replace(/\s+/g, ' ').trim();
+}
+
+function recommendedOptionsForQuestions(questions) {
+  return questions.map((question) => {
+    if (question.multiSelect) return null;
+    const options = question.options.filter((option) => option.recommended === true);
+    return options.length === 1 ? options[0] : null;
+  });
+}
+
+function selectedAnswerLabels(decision, picks) {
+  return (decision.questions || []).flatMap((question, index) => {
+    const selected = new Set(picks[index] || []);
+    return question.options
+      .filter((option) => selected.has(option.label))
+      .map((option) => displayRecommendedLabel(option.label));
+  });
+}
+
+function answerMetaText(decision, draft) {
+  const picked = selectedAnswerLabels(decision, draft.picks);
+  if (picked.length) return `送る答え: ${picked.join('、')}`;
+  const recommendations = recommendedOptionsForQuestions(decision.questions || []);
+  if (recommendations.length && recommendations.every(Boolean)) {
+    return `OK で送る答え: ${recommendations.map((option) => displayRecommendedLabel(option.label)).join('、')}。ほかの案は押して選べる`;
+  }
+  return '推奨が無いので、選択肢を押して選ぶか、指示の欄に答えを書く';
+}
+
+function canSendDecisionAnswer(decision, draft) {
+  if (draft.choice === 'pick') {
+    const hasPick = draft.picks.some((labels) => labels.length > 0);
+    if (!hasPick) return false;
+    const recommendations = recommendedOptionsForQuestions(decision.questions || []);
+    return draft.picks.every((labels, index) => labels.length > 0 || recommendations[index] || draft.note.trim());
+  }
+  if (draft.choice === 'ok') return recommendedOptionsForQuestions(decision.questions || []).every(Boolean);
+  if (draft.choice === 'hold') return true;
+  return Boolean(draft.note.trim());
 }
 
 function answerTimeLabel(value) {
@@ -856,9 +935,12 @@ function answerTimeLabel(value) {
   return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-function answerStatusText(answer) {
+function answerStatusText(answer, decision) {
   if (!answer?.sentAt) return '未送信';
-  const label = answer.choice === 'ok' ? '推奨案で OK' : answer.choice === 'hold' ? '判断を保留' : '指示のみ';
+  const label = answer.choice === 'ok' ? '推奨案で OK'
+    : answer.choice === 'hold' ? '判断を保留'
+      : answer.choice === 'pick' ? `${selectedAnswerLabels(decision, answer.picks || []).map((item) => `「${item}」`).join('')}を選択`
+        : '指示のみ';
   const status = [`${answerTimeLabel(answer.sentAt)} に送信済み: ${label}${answer.note ? ' (指示あり)' : ''}`];
   if (answer.deliveredAt) status.push(`${answerTimeLabel(answer.deliveredAt)} に渡した`);
   if (answer.reflectedAt) status.push(`${answerTimeLabel(answer.reflectedAt)} に反映された`);
@@ -867,17 +949,13 @@ function answerStatusText(answer) {
 
 function appendDecisionAnswer(card, decision, product, session) {
   const questions = decision.questions || [];
-  const duplicateQuestions = new Set(questions.map((question) => question.question)).size !== questions.length;
-  const waitingForAnswer = decision.state === 'waiting' && Boolean(decision.awaitingAnswerUntil);
-  const hasSentAnswer = Boolean(decision.answer?.sentAt);
-  const active = decision.state === 'provisional' || waitingForAnswer || (decision.state === 'waiting' && hasSentAnswer);
-  const viaDialog = duplicateQuestions || (decision.state === 'waiting' && !waitingForAnswer && !hasSentAnswer);
+  const { active, viaDialog } = decisionAnswerAvailability(decision);
   if (viaDialog) {
     card.append(element('div', 'meta dialog-note', `質問はデスクトップアプリの ${product.name} のセッションで答える。`));
     return;
   }
   if (!active) {
-    if (decision.answer?.sentAt) card.append(element('div', 'answer-status', answerStatusText(decision.answer)));
+    if (decision.answer?.sentAt) card.append(element('div', 'answer-status', answerStatusText(decision.answer, decision)));
     return;
   }
 
@@ -885,12 +963,8 @@ function appendDecisionAnswer(card, decision, product, session) {
   const draft = answerDraftFor(decision, session);
   const originalChoice = answer?.choice ?? null;
   const originalNote = answer?.note || '';
-  const dirty = !answer?.sentAt || draft.choice !== originalChoice || draft.note !== originalNote;
-  const recommendations = questions.map((question) => {
-    if (question.multiSelect) return null;
-    const options = question.options.filter((option) => option.recommended === true);
-    return options.length === 1 ? options[0] : null;
-  });
+  const dirty = !answer?.sentAt || draft.choice !== originalChoice || draft.note !== originalNote || !sameAnswerPicks(draft.picks, copyAnswerPicks(answer?.picks, questions.length));
+  const recommendations = recommendedOptionsForQuestions(questions);
   const canUseRecommendation = recommendations.length > 0 && recommendations.every(Boolean);
   const answerBox = element('div', 'decision-answer');
   answerBox.dataset.decisionId = decision.id;
@@ -913,10 +987,9 @@ function appendDecisionAnswer(card, decision, product, session) {
     choices.append(control);
   }
   answerBox.append(choices);
-  const optionNames = recommendations.map((option) => option && displayRecommendedLabel(option.label)).filter(Boolean);
-  answerBox.append(element('div', 'meta', canUseRecommendation
-    ? `OK で送る答え: ${optionNames.join('、')}`
-    : '推奨の無い質問があるので、指示の欄に答えを書く'));
+  const answerMeta = element('div', 'meta', answerMetaText(decision, draft));
+  answerMeta.dataset.answerMeta = 'true';
+  answerBox.append(answerMeta);
   const note = document.createElement('textarea');
   note.dataset.answerNote = 'true';
   note.dataset.sessionId = session.session_id;
@@ -931,8 +1004,8 @@ function appendDecisionAnswer(card, decision, product, session) {
   send.type = 'button';
   send.dataset.sendAnswer = decision.id;
   send.dataset.sessionId = session.session_id;
-  send.disabled = (!draft.choice && !draft.note.trim()) || !dirty;
-  foot.append(send, element('span', 'answer-status', answerStatusText(answer)));
+  send.disabled = !canSendDecisionAnswer(decision, draft) || !dirty;
+  foot.append(send, element('span', 'answer-status', answerStatusText(answer, decision)));
   const error = element('div', 'answer-error');
   error.setAttribute('role', 'alert');
   answerBox.append(foot, error);
@@ -943,6 +1016,8 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   const age = Date.now() - Date.parse(decision.createdAt);
   const longWait = decision.state === 'waiting' && age > LONG_WAIT_MS && !hasEffectiveAnswer(decision);
   const card = element('article', `decision-card ${decision.state} ${longWait ? 'long-wait' : ''}`.trim());
+  const answerActive = decisionAnswerAvailability(decision).active;
+  const optionDraft = answerActive ? answerDraftFor(decision, session) : null;
   const header = element('div', 'decision-head');
   appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(
@@ -964,19 +1039,41 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   card.append(header);
   if (decision.context) card.append(element('p', 'decision-context', decision.context));
 
-  for (const question of decision.questions || []) {
+  for (const [questionIndex, question] of (decision.questions || []).entries()) {
     const questionBox = element('section', 'decision-question');
     if (question.header) questionBox.append(element('div', 'meta', question.header));
     if (question.question !== decision.title) questionBox.append(element('div', 'decision-question-title', question.question));
     if (question.multiSelect) questionBox.append(element('div', 'meta', '複数選択できます。'));
     if (question.options?.length) {
       const options = element('ul', 'decision-options');
-      for (const option of question.options) {
+      for (const [optionIndex, option] of question.options.entries()) {
         const row = element('li', `decision-option ${option.recommended ? 'recommended' : ''}`.trim());
-        const label = option.recommended ? displayRecommendedLabel(option.label) : option.label;
-        row.append(element('span', '', label));
-        if (option.recommended) row.append(badge('推奨', 'busy'));
-        if (option.description) row.append(element('span', 'decision-option-description', option.description));
+        const displayLabel = option.recommended ? displayRecommendedLabel(option.label) : option.label;
+        const body = element('span', 'answer-pick-body');
+        body.append(element('span', '', displayLabel));
+        if (option.recommended) body.append(badge('推奨', 'busy'));
+        if (option.description) body.append(element('span', 'decision-option-description', option.description));
+        if (answerActive) {
+          row.classList.add('pickable');
+          const control = document.createElement('label');
+          control.className = 'answer-pick';
+          const input = document.createElement('input');
+          input.type = question.multiSelect ? 'checkbox' : 'radio';
+          input.name = `decision-answer:${encodeURIComponent(session.session_id)}:${encodeURIComponent(decision.id)}:${questionIndex}`;
+          input.value = option.label;
+          input.checked = optionDraft.picks[questionIndex].includes(option.label);
+          input.dataset.answerPick = 'true';
+          input.dataset.answerQuestion = String(questionIndex);
+          input.dataset.answerOption = String(optionIndex);
+          input.dataset.sessionId = session.session_id;
+          input.dataset.decisionId = decision.id;
+          input.setAttribute('aria-label', `${question.question}: ${displayLabel}${option.description ? `。${option.description}` : ''}`);
+          control.append(input, body);
+          row.append(control);
+        } else {
+          body.classList.remove('answer-pick-body');
+          row.append(body);
+        }
         options.append(row);
       }
       questionBox.append(options);
@@ -1412,9 +1509,10 @@ function render(state) {
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
-        : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
-          : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
-            : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
+        : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
+          : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
+            : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
+              : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' } : null;
   renderSummary(sessions);
@@ -1437,10 +1535,11 @@ function render(state) {
   }
 
   if (focusData) {
-    if (['answer-choice', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
-      const control = [...root.querySelectorAll('[data-answer-choice], [data-answer-note], [data-send-answer]')].find((item) => (
+    if (['answer-pick', 'answer-choice', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
+      const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-choice], [data-answer-note], [data-send-answer]')].find((item) => (
         item.dataset.sessionId === focusData.sessionId &&
         (item.dataset.decisionId || item.dataset.sendAnswer) === focusData.decisionId &&
+        (focusData.kind !== 'answer-pick' || (item.dataset.answerQuestion === focusData.questionIndex && item.dataset.answerOption === focusData.optionIndex)) &&
         (focusData.kind !== 'answer-choice' || item.dataset.answerChoice === focusData.choice) &&
         (focusData.kind !== 'answer-note' || item.hasAttribute('data-answer-note')) &&
         (focusData.kind !== 'answer-submit' || item.hasAttribute('data-send-answer'))
@@ -1503,8 +1602,11 @@ function updateAnswerSubmit(card) {
   const button = card.querySelector('[data-send-answer]');
   if (!decision || !button) return;
   const draft = answerDraftFor(decision, { session_id: sessionId });
-  const changed = !decision.answer?.sentAt || draft.choice !== (decision.answer?.choice ?? null) || draft.note !== (decision.answer?.note || '');
-  button.disabled = (!draft.choice && !draft.note.trim()) || !changed;
+  const answer = decision.answer;
+  const changed = !answer?.sentAt || draft.choice !== (answer?.choice ?? null) || draft.note !== (answer?.note || '') || !sameAnswerPicks(draft.picks, copyAnswerPicks(answer?.picks, (decision.questions || []).length));
+  const meta = card.querySelector('[data-answer-meta]');
+  if (meta) meta.textContent = answerMetaText(decision, draft);
+  button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
 }
 
 function showAnswerError(sessionId, decisionId, message) {
@@ -1527,6 +1629,7 @@ async function sendDecisionAnswer(button) {
       session_id: sessionId,
       choice: draft.choice,
       note: draft.note,
+      ...(draft.choice === 'pick' ? { picks: draft.picks } : {}),
     });
     if (response.status === 409 || response.status === 404) {
       await refresh();
@@ -1534,7 +1637,7 @@ async function sendDecisionAnswer(button) {
       return;
     }
     if (response.status === 400) {
-      showAnswerError(sessionId, decisionId, '推奨案が無い質問には「推奨案で OK」を送れません。');
+      showAnswerError(sessionId, decisionId, '回答の選択内容と指示を確認してください。');
       return;
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1551,16 +1654,47 @@ async function sendDecisionAnswer(button) {
 
 document.addEventListener('change', (event) => {
   const choice = event.target.closest('[data-answer-choice]');
-  if (!choice || choice.disabled) return;
-  const key = answerDraftKey(choice.dataset.sessionId, choice.dataset.decisionId);
-  const card = choice.closest('.decision-answer');
-  const decision = findDecision(choice.dataset.sessionId, choice.dataset.decisionId);
-  const current = decision ? answerDraftFor(decision, { session_id: choice.dataset.sessionId }) : { choice: null, note: '' };
-  const next = { ...current, choice: choice.checked ? choice.dataset.answerChoice : null };
-  answerDrafts.set(key, next);
-  for (const input of card.querySelectorAll('[data-answer-choice]')) {
-    input.checked = next.choice === input.dataset.answerChoice;
+  if (choice) {
+    if (choice.disabled) return;
+    const key = answerDraftKey(choice.dataset.sessionId, choice.dataset.decisionId);
+    const card = choice.closest('.decision-answer');
+    const decision = findDecision(choice.dataset.sessionId, choice.dataset.decisionId);
+    if (!decision) return;
+    const current = answerDraftFor(decision, { session_id: choice.dataset.sessionId });
+    const next = { ...current, choice: choice.checked ? choice.dataset.answerChoice : null, picks: emptyAnswerPicks(decision) };
+    answerDrafts.set(key, next);
+    for (const input of card.querySelectorAll('[data-answer-choice]')) {
+      input.checked = next.choice === input.dataset.answerChoice;
+    }
+    for (const input of choice.closest('.decision-card')?.querySelectorAll('[data-answer-pick]') || []) input.checked = false;
+    card.querySelector('.answer-error').textContent = '';
+    updateAnswerSubmit(card);
+    return;
   }
+
+  const pick = event.target.closest('[data-answer-pick]');
+  if (!pick) return;
+  const sessionId = pick.dataset.sessionId;
+  const decisionId = pick.dataset.decisionId;
+  const decision = findDecision(sessionId, decisionId);
+  if (!decision) return;
+  const questionIndex = Number(pick.dataset.answerQuestion);
+  const optionIndex = Number(pick.dataset.answerOption);
+  const question = decision.questions?.[questionIndex];
+  const option = question?.options?.[optionIndex];
+  if (!option) return;
+  const current = answerDraftFor(decision, { session_id: sessionId });
+  const picks = copyAnswerPicks(current.picks, (decision.questions || []).length);
+  const selectedLabels = new Set(question.multiSelect ? picks[questionIndex] : []);
+  if (pick.checked) selectedLabels.add(option.label);
+  else selectedLabels.delete(option.label);
+  picks[questionIndex] = [...new Set(question.options.map((item) => item.label).filter((label) => selectedLabels.has(label)))];
+  const choiceValue = picks.some((labels) => labels.length) ? 'pick' : null;
+  answerDrafts.set(answerDraftKey(sessionId, decisionId), { ...current, choice: choiceValue, picks });
+  // 選択肢は回答欄の外(質問の区画)にあるので、判断事項のカードから回答欄を引く。
+  const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
+  if (!card) return;
+  for (const input of card.querySelectorAll('[data-answer-choice]')) input.checked = false;
   card.querySelector('.answer-error').textContent = '';
   updateAnswerSubmit(card);
 });

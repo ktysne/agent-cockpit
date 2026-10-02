@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
-const { DecisionAnswerDelivery } = require('./decision-answers');
+const { DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
@@ -319,7 +319,8 @@ function createRequestHandler(options) {
       }
       if (
         !body || typeof body !== 'object' || Array.isArray(body) ||
-        !validSessionId(body.session_id) || body.choice !== null && !['ok', 'hold'].includes(body.choice) ||
+        !validSessionId(body.session_id) || body.choice !== null && !['ok', 'hold', 'pick'].includes(body.choice) ||
+        (body.choice === 'pick' ? !Array.isArray(body.picks) : Object.hasOwn(body, 'picks')) ||
         !validText(body.note, 2000, true)
       ) {
         jsonResponse(response, 400, { error: 'Invalid request' });
@@ -334,7 +335,11 @@ function createRequestHandler(options) {
         jsonResponse(response, 404, { error: 'Decision not found' });
         return;
       }
-      const answer = answerDelivery.submitAnswer(body.session_id, decisionId, body.choice, body.note);
+      if (body.choice === 'pick' && !validPicks(decision, body.picks, body.note)) {
+        jsonResponse(response, 400, { error: 'Invalid picks' });
+        return;
+      }
+      const answer = answerDelivery.submitAnswer(body.session_id, decisionId, body.choice, body.note, body.picks);
       if (answer === false) {
         jsonResponse(response, 400, { error: 'A recommended option is required for this choice' });
         return;

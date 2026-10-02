@@ -14,6 +14,7 @@ const {
   DecisionAnswerDelivery,
   askAnswerOutput,
   canAnswerDecision,
+  decisionAnswerText,
   denyAnswerOutput,
 } = require('../src/server/decision-answers');
 const { runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
@@ -240,6 +241,78 @@ test('推奨案で OK は推奨 label を使い、指示と保留の文脈を添
   assert.match(okWithNote.hookSpecificOutput.additionalContext, /開発者の指示: 理由を記録する。/);
   assert.match(hold.hookSpecificOutput.additionalContext, /開発者が判断を保留した。推奨のまま進め/);
   assert.deepEqual(hold.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
+});
+
+test('選択肢の回答は選択した label と未選択質問の推奨または指示を answers に入れる', () => {
+  const questions = sanitizeQuestions([
+    { question: '形式を決める', header: '', multiSelect: false, options: [
+      { label: 'JSON (推奨)', description: '' }, { label: 'CSV', description: '' },
+    ] },
+    { question: '追加する確認を選ぶ', header: '', multiSelect: true, options: [
+      { label: 'lint', description: '' }, { label: '型検査', description: '' },
+    ] },
+    { question: '出力形式を選ぶ', header: '', multiSelect: false, options: [
+      { label: 'JSON (Recommended)', description: '' }, { label: 'YAML', description: '' },
+    ] },
+    { question: '保存先を決める', header: '', multiSelect: false, options: [
+      { label: '専用領域', description: '' }, { label: '一時領域', description: '' },
+    ] },
+  ]);
+  const decision = { id: 'ask-pick', questions };
+  const answer = {
+    choice: 'pick',
+    picks: [['CSV'], ['lint', '型検査'], [], []],
+    note: '保存先は既定値を使う。',
+  };
+  const output = askAnswerOutput(decision, answer).hookSpecificOutput;
+
+  assert.deepEqual(output.updatedInput.answers, {
+    '形式を決める': 'CSV',
+    '追加する確認を選ぶ': 'lint, 型検査',
+    '出力形式を選ぶ': 'JSON (Recommended)',
+    '保存先を決める': '保存先は既定値を使う。',
+  });
+  assert.equal(output.additionalContext, '開発者の指示: 保存先は既定値を使う。');
+});
+
+test('選択肢の回答を届ける文には選んだ質問だけを指定書式で含める', () => {
+  const decision = {
+    id: 'ask-pick',
+    title: '形式を決める',
+    questions: sanitizeQuestions([
+      { question: '形式を決める', header: '', multiSelect: false, options: [
+        { label: 'JSON (推奨)', description: '' }, { label: 'CSV', description: '' },
+      ] },
+      { question: '追加する確認を選ぶ', header: '', multiSelect: true, options: [
+        { label: 'lint', description: '' }, { label: '型検査', description: '' },
+      ] },
+      { question: '後で決める項目', header: '', multiSelect: false, options: [
+        { label: '既定', description: '' }, { label: '変更', description: '' },
+      ] },
+    ]),
+    answer: { choice: 'pick', picks: [['CSV'], ['lint', '型検査'], []], note: '最後の項目は既定にする。' },
+  };
+
+  assert.match(decisionAnswerText(decision), /選択肢を選んだ\(「形式を決める」は「CSV」、「追加する確認を選ぶ」は「lint, 型検査」\)/);
+  assert.doesNotMatch(decisionAnswerText(decision), /後で決める項目/);
+});
+
+test('仮適用中に送った選択肢の回答を作業コンテキストへ届ける', () => {
+  const sessionId = 'session-provisional-pick';
+  const state = new DashboardState();
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: NOW });
+  const decision = state.addDecision(sessionId, {
+    title: '形式を決める', context: '', state: 'provisional',
+    options: [{ label: 'JSON', description: '' }, { label: 'CSV', description: '' }],
+  }, NOW);
+  const delivery = new DecisionAnswerDelivery({
+    state, away: { snapshot: () => ({ enabled: false }) }, now: () => NOW,
+  });
+
+  const submitted = delivery.submitAnswer(sessionId, decision.id, 'pick', '', [['CSV']]);
+
+  assert.deepEqual(submitted.answer.picks, [['CSV']]);
+  assert.match(delivery.deliverPending(sessionId), /選択肢を選んだ\(「形式を決める」は「CSV」\)/);
 });
 
 test('指示だけの回答は指示文を answers に入れる', () => {
@@ -992,6 +1065,72 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
     fs.readFile(path.join(homeDir, name), 'utf8')
   )))).join('\n');
   assert.doesNotMatch(persistedText, /UI からの回答本文|他セッションだけに渡す本文/);
+});
+
+test('選択肢の回答 API は label と質問ごとの選択数を検査して回答を渡す', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'session-pick', hook_event_name: 'SessionStart', hookAt: NOW });
+  const away = {
+    snapshot: () => ({ enabled: true, since: NOW }),
+    setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
+  };
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, away });
+  t.after(() => runtime.close());
+  const questions = [
+    { question: '形式を決める', header: '', multiSelect: false, options: [
+      { label: 'JSON (推奨)', description: '' }, { label: 'CSV', description: '' },
+    ] },
+    { question: '追加する確認を選ぶ', header: '', multiSelect: true, options: [
+      { label: 'lint', description: '' }, { label: '型検査', description: '' },
+    ] },
+    { question: '出力形式を選ぶ', header: '', multiSelect: false, options: [
+      { label: 'JSON (Recommended)', description: '' }, { label: 'YAML', description: '' },
+    ] },
+    { question: '保存先を決める', header: '', multiSelect: false, options: [
+      { label: '専用領域', description: '' }, { label: '一時領域', description: '' },
+    ] },
+  ];
+  const registration = runtime.answerDelivery.registerAsk({ sessionId: 'session-pick', toolUseId: 'ask-pick', questions });
+  const pathName = `/api/decisions/${encodeURIComponent(registration.decisionId)}/answer`;
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+  const post = (body) => request(runtime.info.port, {
+    method: 'POST', path: pathName, body: JSON.stringify(body), headers,
+  });
+  const base = { session_id: 'session-pick', choice: 'pick', note: '', picks: [[], [], [], []] };
+
+  assert.equal((await post({ ...base, picks: undefined })).status, 400);
+  assert.equal((await post({ ...base, choice: 'ok', picks: [] })).status, 400);
+  assert.equal((await post({ ...base, picks: [['未登録の label'], [], [], []] })).status, 400);
+  assert.equal((await post({ ...base, note: '未選択の質問はすべて補う。' })).status, 400);
+  assert.equal((await post({ ...base, note: '保存先を補う。', picks: [['CSV', 'JSON (推奨)'], [], [], []] })).status, 400);
+  assert.equal((await post({ ...base, picks: [['CSV'], ['lint'], [], []] })).status, 400);
+
+  const sent = await post({
+    ...base,
+    note: '保存先は既定値を使う。',
+    picks: [['CSV'], ['lint', '型検査'], [], []],
+  });
+  assert.equal(sent.status, 200);
+  const decision = state.decisionFor('session-pick', registration.decisionId);
+  assert.deepEqual(decision.answer.picks, [['CSV'], ['lint', '型検査'], [], []]);
+  const snapshotDecision = state.snapshot().sessions.find((session) => session.session_id === 'session-pick').decisions[0];
+  assert.deepEqual(snapshotDecision.answer.picks, decision.answer.picks);
+  snapshotDecision.answer.picks[0].push('snapshot-only');
+  assert.deepEqual(decision.answer.picks[0], ['CSV']);
+
+  const asked = await runAnswerHook({
+    session_id: 'session-pick', tool_use_id: 'ask-pick', hook_event_name: 'PreToolUse',
+    tool_name: 'AskUserQuestion', tool_input: { questions },
+  }, { homeDir });
+  assert.deepEqual(asked.output.hookSpecificOutput.updatedInput.answers, {
+    '形式を決める': 'CSV',
+    '追加する確認を選ぶ': 'lint, 型検査',
+    '出力形式を選ぶ': 'JSON (Recommended)',
+    '保存先を決める': '保存先は既定値を使う。',
+  });
+  assert.equal(asked.output.hookSpecificOutput.additionalContext, '開発者の指示: 保存先は既定値を使う。');
 });
 
 test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を付ける', async (t) => {

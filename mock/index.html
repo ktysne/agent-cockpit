@@ -185,6 +185,14 @@ h3.sub .count { font-weight: normal; }
 .options li.rec { background: var(--accent-soft); }
 .options li .tag { font-size: 11px; color: var(--accent); font-weight: 600; margin-right: 6px; }
 .options li .why { display: block; color: var(--text-2); font-size: 12px; }
+.options li.pickable { padding: 0; background: none; }
+.options .pick { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); cursor: pointer; }
+.options li.rec .pick { background: var(--accent-soft); }
+.options .pick:hover { border-color: var(--border); }
+.options .pick input { width: 16px; height: 16px; margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+.options .pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.options .pick:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.options .pick .body { min-width: 0; }
 .answer { display: grid; gap: 8px; }
 .checks { display: flex; gap: 8px; flex-wrap: wrap; }
 .check { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; min-height: 40px; }
@@ -432,6 +440,15 @@ const DATA = {
             { t: '既定で対象にする', why: '整理は速いが、作業中のものを消すおそれがある' },
           ],
         },
+        {
+          id: 'gc-2', waitMin: 6, awaitingMin: 3, title: '削除の前に確かめる項目', kind: 'waiting', multi: true,
+          ctx: '離席中に出た質問。複数を選べる。',
+          options: [
+            { t: '未 push のコミットが無い', why: '手元にしかない変更を消さない' },
+            { t: '未追跡のファイルが無い', why: '生成物以外のメモを消さない' },
+            { t: 'ロックされていない', why: '別のプロセスが使っている worktree を消さない' },
+          ],
+        },
       ],
       review: { pr: '—', round: 0, max: 3, state: '未着手', dismissed: 0 },
       repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
@@ -539,7 +556,10 @@ function orderedProducts() {
   return [...pinned, ...rest].map(byId).filter(Boolean);
 }
 
-function answerOf(id) { return ui.answers[id] || { choice: null, note: '', sent: null }; }
+function answerOf(id) { return ui.answers[id] || { choice: null, picks: [], note: '', sent: null }; }
+const picksOf = a => a.choice === 'pick' ? (a.picks || []) : [];
+const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) || !!a.note.trim();
+const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions);
 const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id));
@@ -793,26 +813,34 @@ function decisionCard(p, session, d, withTag) {
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
   const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
   const recommended = d.options.find(o => o.rec);
+  const picked = picksOf(a).map(i => d.options[i].t);
+  const sentKind = s => s.choice === 'ok' ? '推奨案で OK' : s.choice === 'hold' ? '判断を保留' : s.choice === 'pick' ? `「${picksOf(s).map(i => d.options[i].t).join('」「')}」を選択` : '指示のみ';
   const sentLine = a.sent
-    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
+    ? `<span class="sent">${a.sent.at} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
-  const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
+  const dirty = answerDirty(a);
   const long = state === 'waiting' && !a.sent && d.waitMin > LONG_WAIT_MIN;
   const active = (state === 'waiting' && !viaDialog) || state === 'provisional';
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${d.waitMin} 分</span>` : '';
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
-    <ul class="options">${d.options.map(o => `<li class="${o.rec ? 'rec' : ''}">${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span></li>`).join('')}</ul>
+    <ul class="options">${d.options.map((o, i) => {
+      const body = `${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span>`;
+      // 答えられるあいだは、選択肢そのものを押して答えに選べる。複数選択の質問だけ複数を選べる。
+      return active
+        ? `<li class="pickable ${o.rec ? 'rec' : ''}"><label class="pick"><input type="${d.multi ? 'checkbox' : 'radio'}" name="pick-${d.id}" data-pick="${i}" ${picksOf(a).includes(i) ? 'checked' : ''}><span class="body">${body}</span></label></li>`
+        : `<li class="${o.rec ? 'rec' : ''}">${body}</li>`;
+    }).join('')}</ul>
     ${active ? `<div class="answer">
       <div class="checks">
         <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''} ${recommended ? '' : 'disabled'}>推奨案で OK</label>
         <label class="check hold"><input type="checkbox" data-choice="hold" ${a.choice === 'hold' ? 'checked' : ''}>判断を保留する</label>
       </div>
-      <div class="meta">${recommended ? `OK で送る答え: ${esc(recommended.t)}` : '推奨の無い質問があるので、指示の欄に答えを書く'}</div>
+      <div class="meta">${picked.length ? `送る答え: ${esc(picked.join('、'))}` : recommended ? `OK で送る答え: ${esc(recommended.t)}。ほかの案は押して選べる` : '推奨が無いので、選択肢を押して選ぶか、指示の欄に答えを書く'}</div>
       <textarea data-note placeholder="指示があれば書く (例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
-        <button type="button" class="primary" data-send ${(!a.choice && !a.note.trim()) || !dirty ? 'disabled' : ''}>回答を送る</button>
+        <button type="button" class="primary" data-send ${!canSend(a) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${sentLine}
       </div>
     </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} のセッションで答える。</div>` : sentLine ? `<div class="answer-foot">${sentLine}</div>` : ''}</article>`;
@@ -1303,7 +1331,7 @@ document.addEventListener('click', e => {
     const now = new Date();
     const at = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     // 渡した時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ渡したものとして出す。
-    a.sent = { choice: a.choice, note: a.note, at, deliveredAt: at };
+    a.sent = { choice: a.choice, picks: picksOf(a), note: a.note, at, deliveredAt: at };
     ui.answers[id] = a;
   } else return;
   save(); render();
@@ -1322,11 +1350,24 @@ document.addEventListener('change', e => {
     save(); render();
     return;
   }
+  const pick = e.target.closest('input[data-pick]');
+  if (pick) {
+    const id = pick.closest('.decision').dataset.id;
+    const a = answerOf(id);
+    const i = Number(pick.dataset.pick);
+    const rest = picksOf(a).filter(x => x !== i);
+    a.picks = pick.type === 'radio' ? [i] : pick.checked ? [...rest, i].sort((x, y) => x - y) : rest;
+    a.choice = a.picks.length ? 'pick' : null;
+    ui.answers[id] = a;
+    save(); render();
+    return;
+  }
   const cb = e.target.closest('input[data-choice]');
   if (!cb) return;
   const id = cb.closest('.decision').dataset.id;
   const a = answerOf(id);
   a.choice = cb.checked ? cb.dataset.choice : null;
+  a.picks = [];
   ui.answers[id] = a;
   save(); render();
 });
@@ -1338,8 +1379,7 @@ document.addEventListener('input', e => {
   a.note = e.target.value;
   ui.answers[card.dataset.id] = a;
   save();
-  const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
-  card.querySelector('[data-send]').disabled = (!a.choice && !a.note.trim()) || !dirty;
+  card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a);
 });
 
 render();
