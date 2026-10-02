@@ -48,6 +48,12 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup
 powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Startup
 ```
 
+アプリアイコンの元画像は `assets/agent-cockpit_icon.png` にあります。64×64 の画面用画像は次のコマンドで作り直せます。ショートカット用 ICO はインストール時に元画像から生成されます。
+
+```powershell
+powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
+```
+
 「設定」の画面では「表示」から配色を変更できます。
 
 ## フックの登録
