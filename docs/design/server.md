@@ -75,7 +75,7 @@
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
 | PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。PostToolUse では出力に含まれる Codex の監査行と結果行だけを送る。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。Codex を終了と判定するのは結果行を受けたときだけで、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |

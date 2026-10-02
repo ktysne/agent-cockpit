@@ -283,6 +283,8 @@ test('Claude のモデル ID を読みやすい名前に変換する', () => {
     ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
     ['claude-opus-5-5', 'Opus 5.5'],
     ['claude-3-5-sonnet-20241022', 'Sonnet 3.5'],
+    ['claude-fable-5-1', 'Fable 5.1'],
+    ['claude-opus-5-5[1m]', 'Opus 5.5'],
   ];
   for (const [modelId, expected] of cases) assert.equal(claudeModelName(modelId), expected);
 });
@@ -451,6 +453,61 @@ test('結果行が無いまま親が終わった背景 Codex は終了未確認�
   state.addEvent({ session_id: 'unconfirmed', hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'sub-1' });
   const [agent] = state.snapshot().sessions[0].agents;
   assert.deepEqual([agent.gpt.active, agent.gpt.unconfirmed], [false, true]);
+});
+
+test('終了コードが 0 以外で PostToolUseFailure になった Codex も、結果行で GPT 不使用にする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'failure', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'failure', 'bash-1', 2, 'sub-1', { model: 'gpt-draft', effort: 'low' });
+  state.addEvent({
+    session_id: 'failure', hook_event_name: 'PostToolUseFailure', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1',
+    codexOutput: { resultLine: 'codex-agent: result=failed exit=3' },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.unavailable, agent.gpt.active], ['使用不能', false]);
+});
+
+test('監査行だけの出力では Codex を終了にせず、背景で動いているものとして扱う', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'audit-only', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'audit-only', 'bash-1', 2, 'sub-1');
+  state.addEvent({
+    session_id: 'audit-only', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1', codexOutput: { auditLine: codexOutput('gpt-6-luna', 'max').auditLine },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active], ['gpt-6-luna', true]);
+});
+
+test('結果行が届かないまま親が終わったら、親の行を終了未確認にする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'parent-unconfirmed', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'parent-unconfirmed', 'bash-1', 2, 'sub-1');
+  state.addEvent({ session_id: 'parent-unconfirmed', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: 'parent-unconfirmed', hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'sub-1' });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.active, agent.unconfirmed], [false, true]);
+});
+
+test('Agent の結果に写った結果行では、背景の Codex を終了にしない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchCodex(state, 'agent-report', 'bash-1', 1, null);
+  state.addEvent({ session_id: 'agent-report', hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({
+    session_id: 'agent-report', hook_event_name: 'PostToolUse', hookAt: 3, tool_name: 'Agent', tool_use_id: 'agent-1',
+    codexOutput: { resultLine: 'codex-agent: result=ok' },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.equal(agent.active, true);
 });
 
 test('rate-limited の結果行は親の GPT 情報を利用上限にする', async (t) => {

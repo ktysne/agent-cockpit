@@ -591,12 +591,14 @@ function renderSummary() {
   excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
 }
 
+// Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
 function modelLine(s) {
-  if (!s.model) return '';
-  const claude = `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>`;
+  if (!s.model && !s.gpt) return '';
+  const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
+  const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
-  if (s.gpt && s.gpt.unavailable) gpt = `<span class="arrow">→</span><span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
-  else if (s.gpt) gpt = `<span class="arrow">→</span><span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
+  if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
+  else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
   return `<div class="models">${claude}${gpt}</div>`;
 }
 

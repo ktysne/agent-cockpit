@@ -124,12 +124,14 @@ function sanitizeEvent(input, metadata = {}) {
     if (event.tool_name === 'Agent') {
       event.resolvedModel = shortString(input.resolvedModel, 160) || '';
     }
-    if (input.codexOutput && typeof input.codexOutput === 'object' && !Array.isArray(input.codexOutput)) {
-      const audit = parseCodexAuditLine(input.codexOutput.auditLine);
-      const result = parseCodexResultLine(input.codexOutput.resultLine);
-      if (audit) event.codexAudit = audit;
-      if (result) event.codexResult = result;
-    }
+  }
+
+  if ((eventName === 'PostToolUse' || eventName === 'PostToolUseFailure')
+    && input.codexOutput && typeof input.codexOutput === 'object' && !Array.isArray(input.codexOutput)) {
+    const audit = parseCodexAuditLine(input.codexOutput.auditLine);
+    const result = parseCodexResultLine(input.codexOutput.resultLine);
+    if (audit) event.codexAudit = audit;
+    if (result) event.codexResult = result;
   }
 
   if (eventName === 'Notification') {

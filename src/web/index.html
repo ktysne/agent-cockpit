@@ -500,9 +500,10 @@ function appendModelLine(target, agent) {
   }
   if (gpt?.model || gpt?.unavailable) {
     if (claudeModel) models.append(element('span', 'arrow', '→'));
-    const gptLabel = gpt.unavailable ? `GPT 不使用(${gpt.unavailable})` : `GPT ${gpt.model}`;
+    const gptLabel = gpt.unavailable ? 'GPT 不使用' : `GPT ${gpt.model}`;
     const gptBadge = element('span', `model ${gpt.unavailable ? 'off' : 'gpt'}`, gptLabel);
-    if (!gpt.unavailable && gpt.effort) gptBadge.append(element('i', '', `effort ${gpt.effort}`));
+    if (gpt.unavailable) gptBadge.append(element('i', '', gpt.unavailable));
+    else if (gpt.effort) gptBadge.append(element('i', '', `effort ${gpt.effort}`));
     if (gpt.codex_home) gptBadge.title = gpt.codex_home;
     models.append(gptBadge);
   }

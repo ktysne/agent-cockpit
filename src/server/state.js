@@ -72,15 +72,16 @@ function agentFor(session, agentId) {
 
 function claudeModelName(modelId) {
   if (typeof modelId !== 'string' || !modelId) return '';
-  const modern = modelId.match(/^claude-(sonnet|haiku|opus)-(\d+)-(\d+)(?:-\d{8})?$/i);
-  const legacy = modelId.match(/^claude-(\d+)-(\d+)-(sonnet|haiku|opus)(?:-\d{8})?$/i);
+  const id = modelId.replace(/\[[^\]]*\]$/, '');
+  const modern = id.match(/^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/i);
+  const legacy = id.match(/^claude-(\d+)-(\d+)-([a-z]+)(?:-\d{8})?$/i);
   const match = modern
     ? { family: modern[1], major: modern[2], minor: modern[3] }
     : legacy
       ? { family: legacy[3], major: legacy[1], minor: legacy[2] }
       : null;
   if (match) return `${match.family[0].toUpperCase()}${match.family.slice(1)} ${match.major}.${match.minor}`;
-  const readable = modelId.replace(/^claude-/i, '').replace(/[-_]+/g, ' ').trim();
+  const readable = id.replace(/^claude-/i, '').replace(/[-_]+/g, ' ').trim();
   return readable ? `${readable[0].toUpperCase()}${readable.slice(1)}` : modelId;
 }
 
@@ -149,14 +150,20 @@ function oldestBackgroundedCodex(session, parentAgentId) {
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
 }
 
+function applyCodexAudit(agent, event) {
+  if (!event.codexAudit) return;
+  agent.model = event.codexAudit.model || agent.model;
+  agent.effort = event.codexAudit.effort || agent.effort;
+  agent.codex_home = event.codexAudit.codex_home || agent.codex_home || '';
+}
+
+// 監査行は Codex の起動前に出るので、終わったと判定するのは結果行を受けたときだけにする。
 function completeCodexAgent(agent, event) {
-  if (event.codexAudit) {
-    agent.model = event.codexAudit.model || agent.model;
-    agent.effort = event.codexAudit.effort || agent.effort;
-    agent.codex_home = event.codexAudit.codex_home || agent.codex_home || '';
-  }
-  if (event.codexResult?.status === 'rate-limited') agent.unavailable = '利用上限';
-  if (event.codexResult?.status === 'unavailable') agent.unavailable = '使用不能';
+  applyCodexAudit(agent, event);
+  const result = event.codexResult;
+  if (result?.status === 'rate-limited') agent.unavailable = '利用上限';
+  // exit=3 は GPT 側が未導入か無効で、Codex を起動していない。
+  if (result?.status === 'unavailable' || (result?.status === 'failed' && result.exitCode === 3)) agent.unavailable = '使用不能';
   agent.active = false;
   agent.unconfirmed = false;
 }
@@ -315,25 +322,25 @@ function deriveSessions(entries) {
         }
       }
 
-      if (eventName === 'PostToolUse' && event.tool_name === 'Bash' && toolUseId) {
+      if (event.tool_name === 'Bash' && toolUseId) {
         const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-        if (placeholder && !event.codexAudit && !event.codexResult) placeholder.backgrounded = true;
-        else if (placeholder) {
+        if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
+        } else if (placeholder && eventName === 'PostToolUseFailure') {
+          applyCodexAudit(placeholder, event);
+          placeholder.active = false;
+        } else if (placeholder) {
+          applyCodexAudit(placeholder, event);
+          placeholder.backgrounded = true;
         }
         delete session.pendingCodex[toolUseId];
       }
 
-      if (eventName === 'PostToolUse' && event.codexResult && !completedCodexAgent) {
+      // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
+      if (event.codexResult && !completedCodexAgent && event.tool_name !== 'Agent') {
         const targetAgent = oldestBackgroundedCodex(session, agentId);
         if (targetAgent?.active) completeCodexAgent(targetAgent, event);
-      }
-
-      if (eventName === 'PostToolUseFailure' && event.tool_name === 'Bash' && toolUseId) {
-        const candidate = agentFor(session, session.pendingCodex[toolUseId]);
-        if (candidate) candidate.active = false;
-        delete session.pendingCodex[toolUseId];
       }
 
       session.permissionWaits = session.permissionWaits.filter((wait) => !(
@@ -394,8 +401,12 @@ function deriveSessions(entries) {
         ))
         .map((agent) => {
           const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
+          const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
+            child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
+          ));
           return {
             ...agent,
+            ...(childUnconfirmed ? { unconfirmed: true } : {}),
             modelName: agent.isCodex ? '' : claudeModelName(agent.model),
             ...(gptAgent ? {
               gpt: {

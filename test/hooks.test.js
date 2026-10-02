@@ -43,6 +43,16 @@ test('フックは入力全文を送らず、任意のツール出力から Code
   assert.ok(!JSON.stringify(event).includes('private output'));
 });
 
+test('PostToolUseFailure では error の文字列からも Codex の結果行を抽出する', async (t) => {
+  await temporaryHome(t);
+  const event = makeHookEvent({
+    session_id: 'hook-failure', hook_event_name: 'PostToolUseFailure', cwd: 'D:/repo', agent_id: 'parent-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1', error: 'Exit code 75\nprivate output\ncodex-agent: result=rate-limited retry=14:00',
+  }, 1234);
+  assert.deepEqual(event.codexOutput, { resultLine: 'codex-agent: result=rate-limited retry=14:00' });
+  assert.ok(!JSON.stringify(event).includes('private output'));
+});
+
 test('Agent の説明は 200 文字までフックイベントに含める', async (t) => {
   await temporaryHome(t);
   const event = makeHookEvent({
