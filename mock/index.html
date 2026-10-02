@@ -197,6 +197,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .merged-list .badge { margin-right: 4px; }
 
 .routing { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; display: grid; gap: 8px; }
+.routing .rgroup { display: flex; flex-wrap: wrap; gap: 8px 32px; }
 .routing .rrow { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; min-width: 108px; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
@@ -453,7 +454,7 @@ function renderRouting() {
       </div>`;
   };
   document.getElementById('routing').innerHTML = `<div class="rrow"><strong>経路の設定</strong></div>
-    ${row('agents')}${row('review')}`;
+    <div class="rgroup">${row('agents')}${row('review')}</div>`;
 }
 
 function nowRows(p, withTag) {
