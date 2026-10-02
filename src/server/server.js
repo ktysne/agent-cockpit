@@ -303,23 +303,25 @@ function createRequestHandler(options) {
         jsonResponse(response, 200, { cleared: state.clearHiddenSessions() });
         return;
       }
-      if (
-        body.action !== 'hide' || keys.length !== 2 || keys[0] !== 'action' || keys[1] !== 'session_id' ||
-        typeof body.session_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(body.session_id)
-      ) {
+      const validSessionId = (sessionId) => typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(sessionId);
+      const isSingleHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_id' && validSessionId(body.session_id);
+      const isBatchHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
+        Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
+        body.session_ids.every(validSessionId);
+      if (body.action !== 'hide' || (!isSingleHide && !isBatchHide)) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const hidden = state.hideUnknownSession(body.session_id);
-      if (hidden === null) {
+      const sessionIds = isSingleHide ? [body.session_id] : body.session_ids;
+      let hiddenCount = 0;
+      for (const sessionId of new Set(sessionIds)) {
+        if (state.hideSession(sessionId) !== null) hiddenCount += 1;
+      }
+      if (hiddenCount === 0) {
         jsonResponse(response, 404, { error: 'Session not found' });
         return;
       }
-      if (!hidden) {
-        jsonResponse(response, 409, { error: 'Session state is known' });
-        return;
-      }
-      jsonResponse(response, 200, { hidden: true });
+      jsonResponse(response, 200, { hidden: isSingleHide ? true : hiddenCount });
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/away') {
@@ -374,17 +376,19 @@ function createRequestHandler(options) {
       const eventName = body.hook_event_name;
       const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
       let agentDefinition = null;
+      let codexDefinitionMetadata = null;
 
-      if (eventName === 'SubagentStart' && body.agent_type) {
+      if (body.agent_id && body.agent_type && eventName !== 'SubagentStop') {
         agentDefinition = await claudeAgentDefinition(body.agent_type, claudeHome);
-      } else if (eventName === 'PreToolUse') {
+      }
+      if (eventName === 'PreToolUse') {
         const preliminary = sanitizeEvent(body, { product });
         if (preliminary?.codexDefinition) {
-          agentDefinition = await codexAgentDefinition(preliminary.codexDefinition, claudeHome);
+          codexDefinitionMetadata = await codexAgentDefinition(preliminary.codexDefinition, claudeHome);
         }
       }
 
-      state.addEvent(body, { product, sessionName, agentDefinition });
+      state.addEvent(body, { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata });
       jsonResponse(response, 202, { accepted: true });
       return;
     }

@@ -4,6 +4,7 @@ const path = require('node:path');
 const { sanitizeEvent } = require('./events');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
+const SESSION_FILE_ABSENCE_END_MS = 60_000;
 
 async function atomicWriteAwayState(homeDir, value, fileSystem = fs) {
   const target = path.join(homeDir, 'away.json');
@@ -178,6 +179,7 @@ function latestCodexForParent(agents, parentAgentId) {
 
 function deriveSessions(entries) {
   const sessions = new Map();
+  const stoppedAgentIdsBySession = new Map();
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
@@ -203,6 +205,25 @@ function deriveSessions(entries) {
     const eventName = event.hook_event_name;
     const agentId = event.agent_id || null;
     const toolUseId = event.tool_use_id || null;
+    const isCodexAgentId = agentId?.startsWith('codex:') === true;
+    let stoppedAgentIds = stoppedAgentIdsBySession.get(session);
+    if (!stoppedAgentIds) {
+      stoppedAgentIds = new Set();
+      stoppedAgentIdsBySession.set(session, stoppedAgentIds);
+    }
+
+    if (eventName === 'SubagentStop' && agentId) {
+      stoppedAgentIds.add(agentId);
+    } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
+      stoppedAgentIds.delete(agentId);
+    } else if (
+      agentId && !isCodexAgentId && !stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
+    ) {
+      const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
+      agent.agent_id = agentId;
+      agent.startedAt = isoTime(event.hookAt);
+      session.agents.push(agent);
+    }
 
     if (eventName === 'PreToolUse') {
       if (toolUseId && !session.completedToolIds.has(toolUseId)) {
@@ -232,7 +253,7 @@ function deriveSessions(entries) {
 
       if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
-        const agent = agentModelFromDefinition(event.codexDefinition, event.agentDefinition);
+        const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
         Object.assign(agent, {
           agent_id: agentIdForCall,
           agent_type: event.codexDefinition,
@@ -281,7 +302,7 @@ function deriveSessions(entries) {
       if (!agentId) session.stopped = false;
     }
 
-    if (eventName === 'SubagentStart' && agentId) {
+    if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
       let agent = agentFor(session, agentId);
       const definition = event.agentDefinition || {};
       if (agent) {
@@ -456,6 +477,7 @@ class DashboardState {
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
+    this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.decisionOverrides = new Map();
     this.estimates = new Map();
@@ -463,18 +485,47 @@ class DashboardState {
   }
 
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
-  syncSessionFiles(files) {
+  syncSessionFiles(files, now = Date.now()) {
+    if (!Array.isArray(files)) return;
     const next = new Map(files.map((file) => [file.session_id, file]));
-    const before = JSON.stringify([...this.sessionFiles.entries()]);
-    if (JSON.stringify([...next.entries()]) === before) return;
+    const previous = this.sessionFiles;
+    let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
     this.sessionFiles = next;
+
+    for (const sessionId of next.keys()) this.sessionFileLastSeenAt.set(sessionId, now);
     for (const sessionId of this.hiddenSessions) {
-      if (!next.has(sessionId)) this.hiddenSessions.delete(sessionId);
+      if (!next.has(sessionId) && previous.has(sessionId) && !this.sessions.has(sessionId)) {
+        this.hiddenSessions.delete(sessionId);
+        changed = true;
+      }
     }
     for (const sessionId of this.estimates.keys()) {
-      if (!next.has(sessionId)) this.estimates.delete(sessionId);
+      if (!next.has(sessionId)) {
+        this.estimates.delete(sessionId);
+        changed = true;
+      }
     }
-    this.touch();
+    for (const [sessionId, lastSeenAt] of this.sessionFileLastSeenAt) {
+      if (
+        !next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId) &&
+        now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS
+      ) {
+        this.endSession(sessionId, now);
+        changed = true;
+      }
+    }
+    if (changed) this.touch();
+  }
+
+  endSession(sessionId, endedAt) {
+    this.entries.delete(sessionId);
+    this.sessions.delete(sessionId);
+    this.endedAt.set(sessionId, endedAt);
+    this.plans.delete(sessionId);
+    this.decisionOverrides.delete(sessionId);
+    this.estimates.delete(sessionId);
+    this.hiddenSessions.delete(sessionId);
+    this.sessionFileLastSeenAt.delete(sessionId);
   }
 
   sessionNameFor(sessionId) {
@@ -512,6 +563,7 @@ class DashboardState {
       this.entries.delete(event.session_id);
       this.plans.delete(event.session_id);
       this.decisionOverrides.delete(event.session_id);
+      this.sessionFileLastSeenAt.delete(event.session_id);
     }
 
     const before = JSON.stringify([...this.sessions.values()]);
@@ -523,10 +575,7 @@ class DashboardState {
     else this.sessions.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd') {
-      this.entries.delete(event.session_id);
-      this.endedAt.set(event.session_id, event.hookAt);
-      this.plans.delete(event.session_id);
-      this.decisionOverrides.delete(event.session_id);
+      this.endSession(event.session_id, event.hookAt);
     }
 
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden) this.touch();
@@ -545,10 +594,9 @@ class DashboardState {
     return { ...stored };
   }
 
-  hideUnknownSession(sessionId) {
+  hideSession(sessionId) {
     const session = this.snapshot().sessions.find((item) => item.session_id === sessionId);
     if (!session) return null;
-    if (session.status !== '不明') return false;
     if (!this.hiddenSessions.has(sessionId)) {
       this.hiddenSessions.add(sessionId);
       this.touch();

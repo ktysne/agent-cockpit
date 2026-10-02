@@ -64,6 +64,24 @@ test('Agent の説明は 200 文字までフックイベントに含める', asy
   assert.ok(!JSON.stringify(event).includes('送信しない本文'));
 });
 
+test('入力要約は切り詰めた場合にだけ80文字以内で省略記号を付ける', async (t) => {
+  await temporaryHome(t);
+  const cases = [
+    ['複数行の入力', 'git status\n2行目', 'git status…'],
+    ['80文字を超える入力', 'x'.repeat(81), `${'x'.repeat(79)}…`],
+    ['80文字ちょうどの入力', 'x'.repeat(80), 'x'.repeat(80)],
+  ];
+
+  for (const [label, command, expected] of cases) {
+    const event = makeHookEvent({
+      session_id: 'summary', hook_event_name: 'PreToolUse',
+      tool_name: 'Bash', tool_input: { command },
+    });
+    assert.equal(event.summary, expected, label);
+    assert.ok(event.summary.length <= 80, label);
+  }
+});
+
 test('常駐サーバーへ渡す環境から CLAUDE_CODE_ 変数を除く', async (t) => {
   await temporaryHome(t);
   assert.deepEqual(childEnvironment({
