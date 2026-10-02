@@ -115,6 +115,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .session-body { padding-bottom: 6px; }
 
 .order { display: inline-flex; gap: 4px; margin-left: auto; }
+.product-order { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.kind-order { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.product-order-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.product-order-item .prod-tag { display: inline-block; min-width: 0; max-width: calc(100% - 34px); line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; min-width: 32px; height: 32px; padding: 0 8px; cursor: pointer; color: var(--text-2); }
 .icon-btn:hover { color: var(--text); border-color: var(--text-2); }
 .icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
@@ -147,9 +151,12 @@ h3.sub .count { font-weight: normal; }
 .model.off { color: var(--text-2); white-space: normal; }
 .arrow { color: var(--text-2); font-size: 12px; }
 .tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.kind-session-tasks + .kind-session-tasks { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.kind-task-head { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .task { padding: 6px 10px; border-radius: 8px; }
 .task:hover { background: var(--surface-2); }
-.task .line { display: flex; gap: 8px; align-items: baseline; }
+.task .line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; }
+.task .line .title { min-width: 0; overflow-wrap: anywhere; }
 .state { font-size: 11px; padding: 0 8px; border-radius: 999px; white-space: nowrap; }
 .state.done { background: var(--ok-soft); color: var(--ok); }
 .state.doing { background: var(--accent-soft); color: var(--accent); }
@@ -200,7 +207,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
 .rounds span.used { background: var(--accent); }
 
-.prod-tag { font-size: 11px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+.prod-tag { display: inline-flex; align-items: center; min-height: 20px; font-size: 11px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .note { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
 
@@ -327,10 +334,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <button type="button" data-mode="kind" aria-pressed="false">種類別</button>
     </div>
   </div>
-  <div class="filter-note" id="filter-note" hidden></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root"></div>
+  <div class="filter-note" id="filter-note" hidden></div>
+  <div class="excluded-note" id="excluded-note" hidden></div>
 </main>
 
 <script>
@@ -349,7 +356,7 @@ const DATA = {
         { type: 'impl-standard', text: '.ssp の拍子変更の解釈を実装中', since: '6 分前', state: 'busy',
           model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'high' }, route: 'default',
           gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } },
-        { type: 'codex-review', text: 'PR の差分をレビュー中(2 往復目)', since: '1 分前', state: 'busy',
+        { type: 'codex-review', text: 'PR の差分をレビュー中 (2 往復目)', since: '1 分前', state: 'busy',
           model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { name: 'gpt-6-astra', effort: 'high', home: '~/.codex' } },
       ],
@@ -384,7 +391,7 @@ const DATA = {
           ctx: '対象外として取り下げた。', options: [],
         },
       ],
-      review: { pr: '#142', round: 2, max: 3, state: 'Claude でレビュー中(Codex の利用上限のため切り替え、14:00 解除)', fallback: true, dismissed: 1 },
+      review: { pr: '#142', round: 2, max: 3, state: 'Claude でレビュー中 (Codex の利用上限のため切り替え、14:00 解除)', fallback: true, dismissed: 1 },
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前' },
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false },
@@ -410,7 +417,7 @@ const DATA = {
       id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', sessionTitle: 'worktree の削除条件', status: 'wait',
       main: { tool: '—', since: '18 分前' },
       perms: [],
-      news: [{ t: 'PR #57 の CI が失敗した(test: worktree-scan)' }],
+      news: [{ t: 'PR #57 の CI が失敗した (test: worktree-scan)' }],
       subagents: [],
       tasks: [
         { title: 'ロックされた worktree の検出', state: 'done', criteria: [{ t: 'locked の worktree を一覧で区別する', met: true }] },
@@ -484,7 +491,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -562,6 +569,8 @@ const isShown = key => !ui.hidden.includes(key);
 const visibleDecisions = s => s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && isShown(decisionCategory(d)));
 const visibleSubagents = s => s.subagents.filter(agent => agent.state !== 'busy' || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms : [];
+const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
+  || s.decisions.some(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d)));
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
@@ -589,7 +598,7 @@ function renderSummary() {
   const hiddenCount = countHidden();
   const note = document.getElementById('filter-note');
   note.hidden = ui.hidden.length === 0;
-  note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')}(${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>すべて表示する</button>`;
+  note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>すべて表示する</button>`;
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
   excluded.hidden = hiddenSessions.length === 0;
@@ -599,8 +608,8 @@ function renderSummary() {
     hiddenPermissionCount ? `許可待ち ${hiddenPermissionCount} 件` : '',
     hiddenDecisionCount ? `止めて待っている ${hiddenDecisionCount} 件` : '',
   ].filter(Boolean);
-  const countNote = pendingCounts.length ? `(うち${pendingCounts.join('、')})` : '';
-  excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
+  const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
+  excluded.innerHTML = `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
@@ -637,7 +646,7 @@ const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
 function routeTag(s) {
   if (!s.route || s.state !== 'busy') return '';
   const stale = s.route !== ui.routing.agents;
-  return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span>`;
+  return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? ' (変更前)' : ''}</span>`;
 }
 
 function renderRouting() {
@@ -672,10 +681,10 @@ function ageMinutes(item) {
 
 const sessionsByActivity = p => visibleSessions(p).sort((a, b) => ageMinutes(a.main) - ageMinutes(b.main));
 
-function sessionTag(p, session, withTag) {
+function sessionTag(p, session, withTag, includeSession = false) {
   if (!withTag) return '';
   const product = `<span class="prod-tag">${esc(p.name)}</span>`;
-  const title = p.sessions.length > 1 ? `<span class="session-tag">${esc(session.title)}</span>` : '';
+  const title = p.sessions.length > 1 || includeSession ? `<span class="session-tag">${esc(session.title || session.id)}</span>` : '';
   return `${product}${title}`;
 }
 
@@ -716,7 +725,7 @@ function endedAgentToggle(session) {
   if (!ended.length) return '';
   const expanded = ui.expandedEndedAgents.includes(session.id);
   const label = expanded ? '終了済みを隠す' : '終了済みを表示';
-  return `<button type="button" class="ended-toggle" data-ended-agents="${esc(session.id)}" aria-expanded="${expanded}">${label}(${ended.length} 件)</button>`;
+  return `<button type="button" class="ended-toggle" data-ended-agents="${esc(session.id)}" aria-expanded="${expanded}">${label} (${ended.length} 件)</button>`;
 }
 
 function agentSection(p, session, withTag) {
@@ -725,8 +734,11 @@ function agentSection(p, session, withTag) {
     .sort((a, b) => ageMinutes(a) - ageMinutes(b));
   const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
   const hasEnded = session.subagents.some(agent => isEndedAgent(session, agent));
+  const toggle = endedAgentToggle(session);
+  if (!isShown('agents') && !rows && !toggle) return '';
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
-  return `${rows ? `<div class="agent-list">${rows}</div>` : `<div class="empty">${empty}</div>`}${endedAgentToggle(session)}`;
+  const hiddenRunning = session.subagents.some(agent => agent.state === 'busy' && !isShown('agents'));
+  return `<h3 class="sub">サブエージェント</h3>${rows ? `<div class="agent-list">${rows}</div>` : hiddenRunning ? '' : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
 // 画面で完了にしたタスクは常駐サーバーが覚え、セッションがそのタスクの状態を変えるまで完了として出す。
@@ -765,7 +777,7 @@ const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => 
 // 前回見てからの変化。常駐サーバーが項目ごとの更新時刻を持ち、画面は最後に見た時刻と比べる想定
 function newsBox(p, withTag) {
   if (!p.news.length || ui.seen.includes(p.id)) return '';
-  return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから ${p.news.length} 件
+  return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
     <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
     <ul>${p.news.map(n => `<li>${esc(n.t)}</li>`).join('')}</ul></div>`;
 }
@@ -782,7 +794,7 @@ function decisionCard(p, session, d, withTag) {
   const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
   const recommended = d.options.find(o => o.rec);
   const sentLine = a.sent
-    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
+    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
   const long = state === 'waiting' && !a.sent && d.waitMin > LONG_WAIT_MIN;
@@ -798,7 +810,7 @@ function decisionCard(p, session, d, withTag) {
         <label class="check hold"><input type="checkbox" data-choice="hold" ${a.choice === 'hold' ? 'checked' : ''}>判断を保留する</label>
       </div>
       <div class="meta">${recommended ? `OK で送る答え: ${esc(recommended.t)}` : '推奨の無い質問があるので、指示の欄に答えを書く'}</div>
-      <textarea data-note placeholder="指示があれば書く(例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
+      <textarea data-note placeholder="指示があれば書く (例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
         <button type="button" class="primary" data-send ${(!a.choice && !a.note.trim()) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${sentLine}
@@ -857,7 +869,7 @@ function mergeBlocker(p, pr) {
   if (parent) return `下の #${parent.number} のマージ待ち`;
   if (e.base !== p.repo.defaultBranch) return `base の ${e.base} に対応する PR が見つからない`;
   if (pr.draft) return 'ドラフト';
-  if (e.needsRestack) return `積み直し待ち(squash で入った #${e.squashedUnder.number} のコミットが差分に残っている)`;
+  if (e.needsRestack) return `積み直し待ち (squash で入った #${e.squashedUnder.number} のコミットが差分に残っている)`;
   if (pr.conflict) return 'コンフリクトあり';
   if (pr.ci === 'fail') return 'CI が失敗';
   if (pr.ci === 'pending') return 'CI 実行中';
@@ -897,9 +909,9 @@ function mergeConfirm(p, pr, auto) {
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const effects = [
-    `head が ${esc(pr.sha)} のときだけマージする(画面を見たあとに push されていたら中止する)`,
+    `head が ${esc(pr.sha)} のときだけマージする (画面を見たあとに push されていたら中止する)`,
     kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
-    o.del ? `リモートのブランチ ${esc(pr.head)} を削除する(手元の worktree には触れない)` : '',
+    o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',
     kids.length && o.method === 'squash' ? `<span>スカッシュのため ${kidNames} には #${pr.number} のコミットが残る。セッションに積み直しを依頼する</span>` : '',
     `結果を ${esc(p.name)} のセッションに知らせる`,
     auto ? `予約のあとに push されたら、予約を取り消して知らせる` : '',
@@ -957,7 +969,7 @@ function prBlock(p, withTag) {
       <div class="stack-level">${prTree(p, r)}</div></div>`).join('');
   const mergedLine = merged.length ? `<div class="merged-list">マージ済み: ${merged.map(pr => {
       const m = ui.merged[prKey(p, pr.number)];
-      return `<span class="badge mute">#${pr.number}(${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`; }).join('')}</div>` : '';
+      return `<span class="badge mute">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`; }).join('')}</div>` : '';
   if (!roots.length && !merged.length) return head + '<div class="empty">このセッションが作った PR はありません</div>';
   return head + (stacks || '<div class="empty">オープンの PR はありません</div>') + mergedLine;
 }
@@ -966,7 +978,7 @@ function endedDecisionToggle(session) {
   const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
   if (!ended.length) return '';
   const expanded = ui.expandedEndedDecisions.includes(session.id);
-  return `<button type="button" class="ended-toggle" data-ended-decisions="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '解決済みと取り下げを隠す' : '解決済みと取り下げを表示'}(${ended.length} 件)</button>`;
+  return `<button type="button" class="ended-toggle" data-ended-decisions="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '解決済みと取り下げを隠す' : '解決済みと取り下げを表示'} (${ended.length} 件)</button>`;
 }
 
 function decisionSessionBlock(p, session, withTag) {
@@ -977,7 +989,7 @@ function decisionSessionBlock(p, session, withTag) {
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
   // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
-  const showEmpty = !cards && !visiblePerms(session).length;
+  const showEmpty = !cards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
   return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
@@ -988,14 +1000,53 @@ function taskSessionBlock(p, session, withTag) {
   const updated = `最終更新 ${session.tasksUpdatedMin} 分前`;
   const items = visible.map(task => taskItem(p, session, task, withTag)).join('');
   const toggle = done.length
-    ? `<button type="button" class="ended-toggle" data-done-tasks="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '完了したタスクを隠す' : '完了したタスクを表示'}(${done.length} 件)</button>`
+    ? `<button type="button" class="ended-toggle" data-done-tasks="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '完了したタスクを隠す' : '完了したタスクを表示'} (${done.length} 件)</button>`
     : '';
   const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
   return `<h3 class="sub">タスクと完了条件 <span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
+function kindTaskVisibility(session, expanded) {
+  const done = session.tasks.filter(task => taskState(session, task) === 'done');
+  return { doneCount: done.length, visible: expanded ? session.tasks : session.tasks.filter(task => taskState(session, task) !== 'done') };
+}
+
+function kindTaskSessionBlock(p, session, expanded) {
+  const { doneCount, visible } = kindTaskVisibility(session, expanded);
+  const updated = Number.isFinite(session.tasksUpdatedMin) ? `最終更新 ${session.tasksUpdatedMin} 分前` : '最終更新 時刻不明';
+  const items = visible.map(task => taskItem(p, session, task, false)).join('');
+  const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
+  return {
+    doneCount,
+    html: `<div class="kind-session-tasks"><div class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></div>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</div>`,
+  };
+}
+
+function kindToggleLabel(label, expanded, count) {
+  return expanded ? `${label}を畳む` : `${label}を表示 (${count} 件)`;
+}
+
+function kindToggle(key, label, count, expanded) {
+  return `<button type="button" class="ended-toggle" data-kind-toggle="${key}" aria-expanded="${expanded}">${kindToggleLabel(label, expanded, count)}</button>`;
+}
+
+function kindEndedDecisionEntries(sessions) {
+  return sessions.flatMap(({ p, session }) => session.decisions
+    .filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)))
+    .map(decision => ({ p, session, decision })))
+    .sort((a, b) => ageMinutes(a.decision) - ageMinutes(b.decision));
+}
+
+function kindEndedAgentCount(sessions) {
+  return sessions.reduce((count, { session }) => count + session.subagents.filter(agent => isEndedAgent(session, agent)).length, 0);
+}
+
+function kindDoneTaskCount(sessions) {
+  return sessions.reduce((count, { session }) => count + kindTaskVisibility(session, true).doneCount, 0);
+}
+
 // 会話の記録の最後の行から推定する。tool はツールの呼び出しで止まっている、model はユーザーの行で終わっている状態。
-const ESTIMATE_WAITING = { input: 'はい', tool: 'いいえ(許可待ちかツールの実行中)', model: 'いいえ(応答の生成中)' };
+const ESTIMATE_WAITING = { input: 'はい', tool: 'いいえ (許可待ちかツールの実行中)', model: 'いいえ (応答の生成中)' };
 
 function unknownSessionControls(session) {
   if (session.status !== 'unknown') return '';
@@ -1012,15 +1063,18 @@ function sessionBlock(p, session) {
   const status = session.status === 'busy' ? ['作業中', 'busy'] : session.status === 'wait' ? ['待機中', 'wait'] : ['状態不明', 'unknown'];
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
+  const showJudgment = decisions + permissions > 0
+    || session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)))
+    || !hasHiddenJudgmentItems(session);
   return `<div class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}<span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
     <div class="session-body">
-      <h3 class="sub">あなたの判断が必要なこと <span class="count">${decisions + permissions}</span></h3>
+      ${showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
-      ${decisionSessionBlock(p, session, false)}
+      ${decisionSessionBlock(p, session, false)}` : ''}
       ${taskSessionBlock(p, session, false)}
       <h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
-      <h3 class="sub">サブエージェント</h3>${agentSection(p, session, false)}
+      ${agentSection(p, session, false)}
       ${unknownSessionControls(session)}
     </div>
   </div>`;
@@ -1064,15 +1118,15 @@ function renderProductMode() {
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
         <h2 id="product-heading-${i}">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
-        ${permissionCount ? `<span class="chip danger">許可待ち ${permissionCount}</span>` : ''}
-        ${pend.length ? `<span class="chip danger">判断待ち ${pend.length}</span>` : ''}
-        ${(n => n ? `<span class="chip ok">マージできる PR ${n}</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
+        ${permissionCount ? `<span class="chip danger">許可待ち (${permissionCount} 件)</span>` : ''}
+        ${pend.length ? `<span class="chip danger">判断待ち (${pend.length} 件)</span>` : ''}
+        ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
         ${orderControls(p, i, ps.length, pinnedCount)}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
         ${newsBox(p, false)}
         ${sessions.map(session => sessionBlock(p, session)).join('')}
-        ${isShown('prs') ? `<h3 class="sub">プルリクエスト <span class="count">${openPrs(p).length}</span></h3>${prBlock(p, false)}` : ''}
+        ${isShown('prs') ? `<h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false)}` : ''}
         <h3 class="sub">レビュー</h3>
         ${reviewBlock(p, false)}
       </div></section>`;
@@ -1088,33 +1142,47 @@ function renderKindMode() {
     ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
     ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
   ]).sort((a, b) => b.age - a.age);
-  const decisions = waits.map(x => x.html).join('') || '<div class="empty">ありません</div>';
-  const endedDecisions = sessions.map(({ p, session }) => {
-    const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
-    if (!ended.length) return '';
-    const expanded = ui.expandedEndedDecisions.includes(session.id);
-    const cards = expanded ? ended.map(d => decisionCard(p, session, d, true)).join('') : '';
-    return `${endedDecisionToggle(session)}${cards}`;
-  }).join('');
+  const visibleDecisionItems = waits.map(x => x.html).join('');
+  const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
+  const endedDecisionEntries = kindEndedDecisionEntries(sessions);
+  const endedDecisionCards = ui.expandedKindDecisions
+    ? endedDecisionEntries.map(({ p, session, decision }) => decisionCard(p, session, decision, true)).join('')
+    : '';
+  const endedDecisionToggle = endedDecisionEntries.length
+    ? kindToggle('decisions', '解決済みと取り下げ', endedDecisionEntries.length, ui.expandedKindDecisions)
+    : '';
+  const decisionItems = visibleDecisionItems + endedDecisionCards + endedDecisionToggle;
+  const decisions = decisionItems || (hiddenJudgmentItems ? '' : '<div class="empty">ありません</div>');
+  const showJudgment = Boolean(decisionItems) || !hiddenJudgmentItems;
   const news = ps.map(p => newsBox(p, true)).join('');
+  const showEndedAgents = ui.expandedKindAgents;
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
-    const expanded = ui.expandedEndedAgents.includes(session.id);
-    const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded);
+    const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
     return [
       { age: ageMinutes(session.main), html: mainRow(p, session, true) },
       ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true) })),
     ];
   }).sort((a, b) => a.age - b.age);
-  const agentToggles = sessions.map(({ session }) => endedAgentToggle(session)).join('');
+  const endedAgentCount = kindEndedAgentCount(sessions);
   const unknownActions = sessions.filter(({ session }) => session.status === 'unknown')
     .map(({ p, session }) => `<div class="kind-unknown"><div class="meta">${sessionTag(p, session, true)}</div>${unknownSessionControls(session)}</div>`).join('');
-  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${agentToggles}${unknownActions}`;
-  const tasks = sessions.map(({ p, session }) => `<div class="kind-session-tasks"><div class="meta">${sessionTag(p, session, true)}</div>${taskSessionBlock(p, session, true)}</div>`).join('');
+  const endedAgentToggle = endedAgentCount
+    ? kindToggle('agents', '終了済み', endedAgentCount, showEndedAgents)
+    : '';
+  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${unknownActions}${endedAgentToggle}`;
+  const taskSessions = sessions.filter(({ session }) => session.tasks.length > 0);
+  const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks));
+  const doneTaskCount = kindDoneTaskCount(sessions);
+  const doneTaskToggle = doneTaskCount
+    ? kindToggle('tasks', '完了したタスク', doneTaskCount, ui.expandedKindTasks)
+    : '';
+  const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}${doneTaskToggle}`;
   const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
   const prs = ps.map(p => prBlock(p, true)).join('<div style="height:12px"></div>');
-  const orderBar = `<div class="order">${ps.map((p, i) => `<span class="prod-tag">${i + 1}. ${esc(p.name)}</span>`).join(' ')}</div>`;
-  return (news ? section('前回見てから', news) : '')
-    + section('あなたの判断が必要なこと(待ちの長い順)', decisions + endedDecisions, orderBar)
+  const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag" title="${esc(p.name)}">${i + 1}. ${esc(p.name)}</span><button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトを閉じる" aria-describedby="kind-product-order-${i}" title="このプロダクトを閉じる">×</button></span>`).join(' ')}</div>`;
+  return orderBar
+    + (news ? section('前回見てから', news) : '')
+    + (showJudgment ? section('あなたの判断が必要なこと', decisions) : '')
     + section('タスクと完了条件', tasks)
     + section('今やっていること', now)
     + (isShown('prs') ? section('プルリクエスト', prs) : '')
@@ -1123,7 +1191,7 @@ function renderKindMode() {
 
 function render() {
   const active = document.activeElement;
-  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks'].find(attribute => active?.hasAttribute(attribute));
+  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle'].find(attribute => active?.hasAttribute(attribute));
   const focusValue = focusAttribute ? active.getAttribute(focusAttribute) : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
@@ -1143,6 +1211,11 @@ document.addEventListener('click', e => {
   }
   else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
   else if (t.hasAttribute('data-show-hidden-sessions')) { ui.hiddenSessions = []; }
+  else if (t.dataset.kindToggle) {
+    const stateKey = { decisions: 'expandedKindDecisions', agents: 'expandedKindAgents', tasks: 'expandedKindTasks' }[t.dataset.kindToggle];
+    if (!stateKey) return;
+    ui[stateKey] = !ui[stateKey];
+  }
   else if (t.dataset.endedAgents) {
     const id = t.dataset.endedAgents;
     ui.expandedEndedAgents = ui.expandedEndedAgents.includes(id) ? ui.expandedEndedAgents.filter(x => x !== id) : [...ui.expandedEndedAgents, id];

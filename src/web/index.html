@@ -152,6 +152,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-error { color: var(--danger); font-size: 12px; }
 .dialog-note { margin-top: 8px; }
 .task-list { list-style: none; margin: 0; padding: 0; }
+.kind-session-tasks + .kind-session-tasks { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.kind-task-head { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .task-item { min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
 .task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
@@ -191,6 +193,10 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .section.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .branch { overflow-wrap: anywhere; }
 .order { display: inline-flex; gap: 4px; margin-left: auto; }
+.product-order { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.kind-order { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.product-order-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.product-order-item .prod-tag { display: inline-block; min-width: 0; max-width: calc(100% - 34px); line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { min-width: 32px; min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); cursor: pointer; }
 .icon-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
 .icon-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
@@ -281,10 +287,10 @@ h3.sub .count { font-weight: normal; }
     </div>
   </div>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
-  <div class="filter-note" id="filter-note" hidden></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
+  <div class="filter-note" id="filter-note" hidden></div>
+  <div class="excluded-note" id="excluded-note" hidden></div>
 </main>
 <script>
 'use strict';
@@ -324,6 +330,7 @@ let writeErrorTimer = null;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
 const expandedDoneTasks = new Set();
+const expandedKindSections = new Set();
 const answerDrafts = new Map();
 
 function readDisplayPreferences() {
@@ -580,7 +587,7 @@ function renderSummary(sessions) {
       render(lastState);
     });
     note.replaceChildren(
-      element('span', '', `非表示: ${hiddenKinds.map(({ label }) => label).join('、')}(${hiddenCount} 件)`),
+      element('span', '', `非表示: ${hiddenKinds.map(({ label }) => label).join('、')} (${hiddenCount} 件)`),
       showAll,
     );
   } else {
@@ -606,8 +613,8 @@ function renderExcludedNote(sessions) {
     permissionCount ? `許可待ち ${permissionCount} 件` : '',
     decisionCount ? `止めて待っている ${decisionCount} 件` : '',
   ].filter(Boolean);
-  const countNote = pendingCounts.length ? `(うち${pendingCounts.join('、')})` : '';
-  note.replaceChildren(element('span', '', `外したセッション ${hiddenCount} 件${countNote}`), showAll);
+  const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
+  note.replaceChildren(element('span', '', `外したセッション (${hiddenCount} 件)${countNote}`), showAll);
 }
 
 function isFilterShown(key) {
@@ -629,6 +636,13 @@ function shownActiveDecisions(session) {
     if (hasEffectiveAnswer(decision)) return true;
     return decision.state === 'waiting' ? isFilterShown('blocking') : isFilterShown('provisional');
   });
+}
+
+function hasHiddenJudgmentItems(session) {
+  return (!isFilterShown('permission') && session.permissionWaits.length > 0)
+    || session.decisions.some((decision) => (
+      ['waiting', 'provisional'].includes(decision.state) && !shownActiveDecisions(session).includes(decision)
+    ));
 }
 
 function productGroups(sessions) {
@@ -716,18 +730,21 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   return row;
 }
 
-function appendAgents(body, session, product, withTags = false, multipleSessions = false) {
-  body.append(element('h3', 'sub', 'サブエージェント'));
+function appendAgents(body, session, product, withTags = false, multipleSessions = false, showEnded = expandedEndedSessions.has(session.session_id), includeToggle = true) {
   if (!session.agents.length) {
+    if (!isFilterShown('agents')) return;
+    body.append(element('h3', 'sub', 'サブエージェント'));
     body.append(element('div', 'empty', 'サブエージェントはありません。'));
     return;
   }
   const agents = newestFirst(session.agents);
   const runningAgents = agents.filter((agent) => !isEndedAgent(agent) && (!agent.active || isFilterShown('agents')));
   const endedAgents = agents.filter(isEndedAgent);
-  const showEnded = expandedEndedSessions.has(session.session_id);
   const visibleAgents = showEnded ? [...runningAgents, ...endedAgents] : runningAgents;
-  if (!visibleAgents.length) body.append(element('div', 'empty', '稼働中のサブエージェントはありません。'));
+  const hiddenRunningAgents = agents.some((agent) => agent.active && !isFilterShown('agents'));
+  if (!visibleAgents.length && !endedAgents.length && !isFilterShown('agents')) return;
+  body.append(element('h3', 'sub', 'サブエージェント'));
+  if (!visibleAgents.length && !hiddenRunningAgents) body.append(element('div', 'empty', '稼働中のサブエージェントはありません。'));
   const list = element('div', 'agent-list');
   for (const agent of visibleAgents) {
     const row = element('div', 'agent-row');
@@ -747,8 +764,8 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     list.append(row);
   }
   if (visibleAgents.length) body.append(list);
-  if (endedAgents.length) {
-    const toggle = element('button', 'ended-toggle', showEnded ? `終了済みを隠す(${endedAgents.length} 件)` : `終了済みを表示(${endedAgents.length} 件)`);
+  if (endedAgents.length && includeToggle) {
+    const toggle = element('button', 'ended-toggle', showEnded ? `終了済みを隠す (${endedAgents.length} 件)` : `終了済みを表示 (${endedAgents.length} 件)`);
     toggle.type = 'button';
     toggle.setAttribute('aria-expanded', String(showEnded));
     toggle.addEventListener('click', () => {
@@ -767,12 +784,13 @@ function isEndedAgent(agent) {
   return !agent.active && !agent.unconfirmed;
 }
 
+function itemTimestamp(item) {
+  const timestamp = Date.parse(item.createdAt || item.startedAt || item.updatedAt);
+  return Number.isFinite(timestamp) ? timestamp : -Infinity;
+}
+
 function newestFirst(items) {
-  const timestampOf = (item) => {
-    const time = Date.parse(item.createdAt || item.startedAt || item.updatedAt);
-    return Number.isFinite(time) ? time : -Infinity;
-  };
-  return [...items].sort((a, b) => timestampOf(b) - timestampOf(a));
+  return [...items].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
 }
 
 function appendContextTags(target, product, session, withTags, multipleSessions) {
@@ -841,7 +859,7 @@ function answerTimeLabel(value) {
 function answerStatusText(answer) {
   if (!answer?.sentAt) return '未送信';
   const label = answer.choice === 'ok' ? '推奨案で OK' : answer.choice === 'hold' ? '判断を保留' : '指示のみ';
-  const status = [`${answerTimeLabel(answer.sentAt)} に送信済み: ${label}${answer.note ? '(指示あり)' : ''}`];
+  const status = [`${answerTimeLabel(answer.sentAt)} に送信済み: ${label}${answer.note ? ' (指示あり)' : ''}`];
   if (answer.deliveredAt) status.push(`${answerTimeLabel(answer.deliveredAt)} に渡した`);
   if (answer.reflectedAt) status.push(`${answerTimeLabel(answer.reflectedAt)} に反映された`);
   return status.join('、');
@@ -905,7 +923,7 @@ function appendDecisionAnswer(card, decision, product, session) {
   note.dataset.decisionId = decision.id;
   note.maxLength = 2000;
   note.setAttribute('aria-label', '指示');
-  note.placeholder = '指示があれば書く(例: 2 番目の案で。理由は…)';
+  note.placeholder = '指示があれば書く (例: 2 番目の案で。理由は…)';
   note.value = draft.note;
   answerBox.append(note);
   const foot = element('div', 'answer-foot');
@@ -979,7 +997,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
 
 function appendPlanToggle(body, kind, sessionId, expanded, count, label, expandedSet) {
   const key = `${kind}:${sessionId}`;
-  const toggle = element('button', 'ended-toggle', `${expanded ? `${label}を隠す` : `${label}を表示`}(${count} 件)`);
+  const toggle = element('button', 'ended-toggle', `${expanded ? `${label}を隠す` : `${label}を表示`} (${count} 件)`);
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', String(expanded));
   toggle.dataset.planToggle = key;
@@ -988,6 +1006,24 @@ function appendPlanToggle(body, kind, sessionId, expanded, count, label, expande
     else expandedSet.add(sessionId);
     if (lastState) render(lastState);
     [...root.querySelectorAll('[data-plan-toggle]')].find((button) => button.dataset.planToggle === key)?.focus({ preventScroll: true });
+  });
+  body.append(toggle);
+}
+
+function kindToggleLabel(label, expanded, count) {
+  return expanded ? `${label}を畳む` : `${label}を表示 (${count} 件)`;
+}
+
+function appendKindToggle(body, sectionKey, expanded, count, label) {
+  const toggle = element('button', 'ended-toggle', kindToggleLabel(label, expanded, count));
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.dataset.kindToggle = sectionKey;
+  toggle.addEventListener('click', () => {
+    if (expandedKindSections.has(sectionKey)) expandedKindSections.delete(sectionKey);
+    else expandedKindSections.add(sectionKey);
+    if (lastState) render(lastState);
+    [...root.querySelectorAll('[data-kind-toggle]')].find((button) => button.dataset.kindToggle === sectionKey)?.focus({ preventScroll: true });
   });
   body.append(toggle);
 }
@@ -1002,7 +1038,7 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     const list = element('div', 'decision-list');
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
-  } else if (!shownPermissions(session).length) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
+  } else if (!shownPermissions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, expanded, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
@@ -1047,6 +1083,32 @@ function appendTasks(body, session, product, withTags = false, multipleSessions 
   if (done.length) appendPlanToggle(body, 'tasks', session.session_id, expanded, done.length, '完了したタスク', expandedDoneTasks);
 }
 
+function kindTaskVisibility(session, expanded) {
+  const done = session.tasks.filter((task) => task.state === 'done');
+  return { doneCount: done.length, visible: expanded ? session.tasks : session.tasks.filter((task) => task.state !== 'done') };
+}
+
+function kindDoneTaskCount(references) {
+  return references.reduce((count, { session }) => count + kindTaskVisibility(session, true).doneCount, 0);
+}
+
+function appendKindTaskSession(body, reference, expanded) {
+  const { product, session, multipleSessions } = reference;
+  const { visible } = kindTaskVisibility(session, expanded);
+  const group = element('div', 'kind-session-tasks');
+  const heading = element('div', 'kind-task-head');
+  appendContextTags(heading, product, session, true, true);
+  heading.append(element('span', 'meta', `最終更新 ${session.tasksUpdatedAt ? durationAgoLabel(session.tasksUpdatedAt) : '時刻不明'}`));
+  group.append(heading);
+  if (!visible.length) group.append(element('div', 'empty', session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。'));
+  else {
+    const list = element('ul', 'task-list');
+    for (const task of visible) appendTaskItem(list, task, product, session, false, multipleSessions);
+    group.append(list);
+  }
+  body.append(group);
+}
+
 // 状態不明のセッションは古い記録を持つことが多いので、今日でなければ日付も出す。
 function estimateTimeLabel(date) {
   const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -1076,8 +1138,8 @@ function appendUnknownSessionControls(body, session) {
     const waiting = session.estimate.state === 'input'
       ? 'はい'
       : session.estimate.state === 'tool'
-        ? 'いいえ(許可待ちかツールの実行中)'
-        : 'いいえ(応答の生成中)';
+        ? 'いいえ (許可待ちかツールの実行中)'
+        : 'いいえ (応答の生成中)';
     panel.append(element('p', '', `入力待ちらしい: ${waiting}`));
   }
   body.append(panel);
@@ -1110,11 +1172,15 @@ function sessionBlock(product, session, multipleSessions) {
 
   const body = element('div', 'session-body');
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
-  const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
-  judgmentHeading.append(element('span', 'count', String(judgmentCount)));
-  body.append(judgmentHeading);
-  appendPermissionWaits(body, session, product);
-  appendDecisions(body, session, product);
+  const hasEndedDecisions = session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
+  if (showJudgment) {
+    const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
+    judgmentHeading.append(element('span', 'count', `(${judgmentCount} 件)`));
+    body.append(judgmentHeading);
+    appendPermissionWaits(body, session, product);
+    appendDecisions(body, session, product);
+  }
   appendTasks(body, session, product);
   body.append(element('h3', 'sub', '今やっていること'));
   const now = element('div', 'now');
@@ -1156,15 +1222,20 @@ function productControls(product, index, total, pinnedCount, headingId) {
   moveDown.dataset.direction = '1';
   moveDown.disabled = pinned ? index === pinnedCount - 1 : index === total - 1;
   moveDown.setAttribute('aria-label', `${product.name}を下へ`);
+  const close = productCloseButton(product, headingId);
+  controls.append(collapse, pin, moveUp, moveDown, close);
+  return controls;
+}
+
+function productCloseButton(product, describedById) {
   const close = element('button', 'icon-btn', '×');
   close.type = 'button';
   close.dataset.productAction = 'close';
   close.dataset.productKey = product.key;
   close.setAttribute('aria-label', 'このプロダクトを閉じる');
-  close.setAttribute('aria-describedby', headingId);
+  if (describedById) close.setAttribute('aria-describedby', describedById);
   close.title = 'このプロダクトを閉じる';
-  controls.append(collapse, pin, moveUp, moveDown, close);
-  return controls;
+  return close;
 }
 
 // セッションが全部同じブランチならプロダクトの見出しに出し、分かれていればセッションの頭に出す。
@@ -1184,8 +1255,8 @@ function productSection(product, index, products, pinnedCount) {
 
   const permissionCount = product.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
   const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state)).length, 0);
-  if (permissionCount) head.append(element('span', 'chip danger', `許可待ち ${permissionCount}`));
-  if (decisionCount) head.append(element('span', 'chip danger', `判断待ち ${decisionCount}`));
+  if (permissionCount) head.append(element('span', 'chip danger', `許可待ち (${permissionCount} 件)`));
+  if (decisionCount) head.append(element('span', 'chip danger', `判断待ち (${decisionCount} 件)`));
   head.append(productControls(product, index, products.length, pinnedCount, heading.id));
   section.append(head);
 
@@ -1215,6 +1286,30 @@ function sessionReferences(products) {
   })));
 }
 
+function kindProductOrder(products) {
+  const productOrder = element('div', 'order product-order kind-order');
+  products.forEach((product, index) => {
+    const item = element('div', 'product-order-item');
+    const tag = element('span', 'prod-tag', `${index + 1}. ${product.name}`);
+    tag.id = `kind-product-order-${index}`;
+    tag.title = product.name;
+    item.append(tag, productCloseButton(product, tag.id));
+    productOrder.append(item);
+  });
+  return productOrder;
+}
+
+function kindEndedDecisionEntries(references) {
+  const entries = references.flatMap((reference) => reference.session.decisions
+    .filter((decision) => ['resolved', 'withdrawn'].includes(decision.state))
+    .map((decision) => ({ ...reference, decision })));
+  return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
+}
+
+function kindEndedAgentCount(references) {
+  return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
+}
+
 function renderKindSections(products) {
   const references = sessionReferences(products);
   const waitingItems = [];
@@ -1235,62 +1330,72 @@ function renderKindSections(products) {
       });
     }
 
-    const ended = session.decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
-    if (ended.length) {
-      appendPlanToggle(endedDecisions, 'decisions', session.session_id, expandedEndedDecisions.has(session.session_id), ended.length, '解決済みと取り下げ', expandedEndedDecisions);
-      if (expandedEndedDecisions.has(session.session_id)) {
-        const list = element('div', 'decision-list');
-        for (const decision of newestFirst(ended)) appendDecisionCard(list, decision, product, session, true, multipleSessions);
-        endedDecisions.append(list);
-      }
+  }
+  const endedDecisionItems = kindEndedDecisionEntries(references);
+  const showEndedDecisions = expandedKindSections.has('decisions');
+  if (showEndedDecisions && endedDecisionItems.length) {
+    const list = element('div', 'decision-list');
+    for (const item of endedDecisionItems) {
+      appendDecisionCard(list, item.decision, item.product, item.session, true, item.multipleSessions);
     }
+    endedDecisions.append(list);
+  }
+  if (endedDecisionItems.length) {
+    appendKindToggle(endedDecisions, 'decisions', showEndedDecisions, endedDecisionItems.length, '解決済みと取り下げ');
   }
   waitingItems.sort((left, right) => right.age - left.age);
   const judgment = element('div', 'body');
   for (const item of waitingItems) if (item.card) judgment.append(item.card);
-  if (!waitingItems.length) judgment.append(element('div', 'empty', 'ありません'));
-  judgment.append(endedDecisions);
-  const productOrder = element('div', 'order product-order');
-  products.forEach((product, index) => productOrder.append(element('span', 'prod-tag', `${index + 1}. ${product.name}`)));
+  const hasHiddenJudgments = references.some(({ session }) => hasHiddenJudgmentItems(session));
+  if (!waitingItems.length && !endedDecisionItems.length && !hasHiddenJudgments) judgment.append(element('div', 'empty', 'ありません'));
+  if (endedDecisionItems.length) judgment.append(endedDecisions);
+  const productOrder = kindProductOrder(products);
 
   const activityItems = [];
-  const agentToggles = element('div', 'kind-toggles');
+  const showEndedAgents = expandedKindSections.has('agents');
+  const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
     const holder = element('div');
-    appendAgents(holder, session, product, true, multipleSessions);
+    appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false);
     const list = holder.querySelector('.agent-list');
     if (list) for (const row of [...list.children]) {
       const startedAt = Date.parse(row.dataset.startedAt);
       activityItems.push({ age: Number.isFinite(startedAt) ? startedAt : -Infinity, row });
     }
-    for (const toggle of holder.querySelectorAll('[data-ended-toggle]')) agentToggles.append(toggle);
   }
   activityItems.sort((left, right) => right.age - left.age);
   const activity = element('div', 'body');
   const activityList = element('div', 'now');
   for (const item of activityItems) activityList.append(item.row);
-  activity.append(activityList, agentToggles);
+  activity.append(activityList);
   for (const { product, session, multipleSessions } of references) {
     const controls = unknownSessionControls(session, product, multipleSessions);
     if (controls) activity.append(controls);
   }
-
-  const tasks = element('div', 'body');
-  for (const { product, session, multipleSessions } of references) {
-    const sessionTasks = element('div', 'kind-session-tasks');
-    const tags = element('div', 'meta');
-    appendContextTags(tags, product, session, true, true);
-    sessionTasks.append(tags);
-    appendTasks(sessionTasks, session, product, true, multipleSessions);
-    tasks.append(sessionTasks);
+  if (endedAgentCount) {
+    appendKindToggle(activity, 'agents', showEndedAgents, endedAgentCount, '終了済み');
   }
 
-  return [
-    kindSection('あなたの判断が必要なこと(待ちの長い順)', judgment, productOrder),
+  const tasks = element('div', 'body');
+  const showDoneTasks = expandedKindSections.has('tasks');
+  const doneTaskCount = kindDoneTaskCount(references);
+  for (const { product, session, multipleSessions } of references) {
+    if (!session.tasks.length) continue;
+    appendKindTaskSession(tasks, { product, session, multipleSessions }, showDoneTasks);
+  }
+  if (!tasks.children.length) tasks.append(element('div', 'empty', 'ありません'));
+  if (doneTaskCount) appendKindToggle(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク');
+
+  const sections = [productOrder];
+  if (waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments) {
+    sections.push(kindSection('あなたの判断が必要なこと', judgment));
+  }
+  sections.push(
     kindSection('タスクと完了条件', tasks),
     kindSection('今やっていること', activity),
-  ];
+  );
+  return sections;
 }
 
 function render(state) {
@@ -1303,7 +1408,7 @@ function render(state) {
   const sessions = allSessions.filter((session) => session.hidden !== true);
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
-  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
@@ -1623,7 +1728,7 @@ async function refresh() {
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
       const permissions = visibleSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
       const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
-      liveStatus.textContent = `状態を更新しました。セッション ${visibleSessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
+      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${permissions} 件)、判断待ち (${decisions} 件)。`;
     }
   } catch {
     connectionLost = true;
