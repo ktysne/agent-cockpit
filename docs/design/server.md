@@ -16,7 +16,7 @@
 
 | ファイル | 中身 | 書く段階 |
 |---|---|---|
-| `server.json` | `{pid, port, secret, startedAt}` | 1 |
+| `server.json` | `{pid, port, secret, uiSecret, startedAt}` | 1 |
 | `away.json` | `{enabled, since}` | 1c |
 | `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない | 1 |
 | `start.lock` | 再起動の排他。10 秒で失効する | 1 |
