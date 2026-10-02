@@ -21,8 +21,9 @@ async function temporaryHome(testContext) {
 
 test('worktree の cwd からプロダクトの鍵と表示名を求める', async (t) => {
   await temporaryHome(t);
+  const product = productFromCwd('D:\\Desktop\\Develop\\Agent-Cockpit\\.claude\\worktrees\\feature-x\\src');
   assert.deepEqual(
-    productFromCwd('D:\\Desktop\\Develop\\Agent-Cockpit\\.claude\\worktrees\\feature-x\\src'),
+    { key: product.key, name: product.name },
     { key: 'd:\\desktop\\develop\\agent-cockpit', name: 'Agent-Cockpit' },
   );
 });

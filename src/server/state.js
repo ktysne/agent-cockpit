@@ -151,6 +151,7 @@ function deriveSessions(entries) {
     if (session.ended) continue;
     if (event.product) session.product = event.product;
     if (event.sessionName) session.title = event.sessionName;
+    session.lastActivityAt = isoTime(event.hookAt);
 
     const eventName = event.hook_event_name;
     const agentId = event.agent_id || null;
@@ -355,6 +356,7 @@ function deriveSessions(entries) {
         session_id: session.session_id,
         product: session.product,
         title: session.title,
+        lastActivityAt: session.lastActivityAt,
         status,
         tools,
         agents,

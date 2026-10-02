@@ -49,8 +49,9 @@
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
 .top { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--border); }
 .top[data-away="true"] { background: var(--warn-soft); border-bottom-color: var(--warn); }
-.top-inner { max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
-h1 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; }
+.top-inner { position: relative; max-width: 1100px; margin: 0 auto; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+/* 設定のボタンは右上に重ねて置くので、その分の余白はタイトルの行だけに取り、2 行目からは全幅を使う。 */
+.top h1 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; flex: 1 1 100%; min-height: 40px; padding-right: 48px; }
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .chip strong { color: var(--text); font-size: 13px; margin-left: 4px; }
@@ -62,8 +63,6 @@ h1 { display: flex; align-items: center; gap: 8px; font-size: 16px; margin: 0; }
 .connection { color: var(--text-2); font-size: 12px; }
 .connection[data-state="error"] { color: var(--danger); }
 .settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
-/* 上部のバーが折り返しても右上の端に留めるため、バーの右の余白に置く。 */
-.top-inner { position: relative; padding-right: 64px; }
 .settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
 .settings-button:hover { color: var(--text); }
 .ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
@@ -141,24 +140,95 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .empty { color: var(--text-2); font-size: 13px; padding: 10px; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-@media (max-width: 650px) {
+@media (max-width: 640px) {
   .top-inner { gap: 8px; }
   main { padding: 12px; }
-  .now-row, .agent-row { grid-template-columns: 1fr auto; gap: 2px 10px; }
-  .now-row .detail, .agent-row .detail { grid-column: 1 / -1; grid-row: 2; }
-  .now-row .since, .agent-row .since { grid-column: 2; grid-row: 1; }
+  .now-row, .agent-row { grid-template-columns: 1fr; gap: 2px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
 .app-icon { width: 28px; height: 28px; flex: none; }
+.top-inner > .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.top-inner > .seg button { min-height: 36px; padding: 4px 12px; border: 0; background: none; color: var(--text-2); cursor: pointer; }
+.top-inner > .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+button.chip { min-height: 32px; cursor: pointer; font: inherit; font-size: 12px; }
+button.chip[aria-pressed="false"] { border: 1px dashed var(--border); background: transparent; color: var(--text-2); text-decoration: line-through; opacity: .75; }
+button.chip[aria-pressed="false"] strong { color: var(--text-2); }
+.filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
+.filter-note[hidden], .body[hidden] { display: none; }
+.link-btn { min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
+.section { overflow: visible; }
+.section > .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.section > .head h2 { margin: 0; font-size: 15px; }
+.section > .body { padding: 6px 14px 14px; }
+.section.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.branch { overflow-wrap: anywhere; }
+.order { display: inline-flex; gap: 4px; margin-left: auto; }
+.icon-btn { min-width: 32px; min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); cursor: pointer; }
+.icon-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
+.icon-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.icon-btn:disabled { opacity: .35; cursor: default; }
+.icon-btn:focus-visible, .link-btn:focus-visible, button.chip:focus-visible, .top-inner > .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-group { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.session-group.single { margin-top: 0; padding-top: 0; border-top: 0; }
+.session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
+.session-head h3 { margin: 0; font-size: 14px; }
+.session-tag, .prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.session-body { padding-bottom: 6px; }
+h3.sub { display: flex; align-items: center; gap: 6px; margin: 14px 0 6px; color: var(--text-2); font-size: 13px; }
+h3.sub .count { font-weight: normal; }
+.now, .agent-list { display: grid; gap: 6px; }
+.now-row .who .prod-tag { display: table; margin: 2px 0; }
+.dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--text-2); }
+.dot.busy { background: var(--ok); animation: pulse 1.6s infinite; }
+.dot.wait { background: var(--warn); }
+.dot.unknown { border: 1px dashed var(--text-2); background: transparent; }
+.activity-title { font-weight: 600; }
+.tool-detail { margin-top: 2px; color: var(--text-2); font-size: 12px; }
+@keyframes pulse { 50% { opacity: .35; } }
+.badge.unknown, .task-state.unknown { border: 1px dashed var(--border); background: var(--surface-2); color: var(--text-2); }
+.badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.accent { background: var(--accent-soft); color: var(--accent); }
+.decision-card { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
+.decision-card.provisional { border-left-color: var(--warn); }
+.decision-card.resolved { border-left-color: var(--ok); }
+.decision-card.withdrawn { border-left-color: var(--border); }
+.decision-card.long-wait, .permission.long-wait { background: var(--danger-soft); }
+.decision-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
+.decision-title { font-weight: 600; }
+.decision-context { margin: 4px 0 8px; color: var(--text-2); }
+.decision-question { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.decision-question-title { margin-top: 4px; font-weight: 600; }
+.decision-options { display: grid; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.decision-option { padding: 6px 8px; border-radius: 6px; overflow-wrap: anywhere; }
+.decision-option.recommended { background: var(--accent-soft); }
+.decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
+.wait { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.wait.stale { color: var(--danger); font-weight: 600; }
+.perm code { padding: 2px 6px; border-radius: 4px; background: var(--surface-2); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.model.claude { background: var(--warn-soft); }
+.model i { color: var(--text-2); font-size: 11px; font-style: normal; }
+.models { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 4px; }
+.ended-toggle { min-height: 32px; margin-top: 6px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 12px; }
+.ended-toggle:hover { color: var(--text); }
+.ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 640px) {
+  .order { margin-left: 0; }
+  .session-head { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 </style>
 </head>
 <body>
 <header class="top">
   <div class="top-inner">
     <h1><img class="app-icon" src="data:image/png;base64,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" alt="">Agent Cockpit</h1>
-    <div class="summary" id="summary" aria-label="セッションの概要"></div>
+    <div class="summary" id="summary" aria-label="状態の件数と表示絞り込み"></div>
     <span class="spacer"></span>
-    <span class="connection" id="connection" role="status" aria-live="polite" data-state="loading">状態を読み込み中</span>
+    <div class="seg" role="group" aria-label="表示モード">
+      <button type="button" data-action="mode" data-mode="product" aria-pressed="true">プロダクト別</button>
+      <button type="button" data-action="mode" data-mode="kind" aria-pressed="false">種類別</button>
+    </div>
     <label class="away-toggle" for="away-toggle"><input id="away-toggle" type="checkbox">離席中</label>
     <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
@@ -181,6 +251,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 <main>
   <p class="intro">Claude Code のセッション、判断事項、作業中の内容、タスク、サブエージェントを表示します。</p>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div class="filter-note" id="filter-note" hidden></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
 </main>
 <script>
@@ -191,7 +262,6 @@ const WAIT_REFRESH_INTERVAL_MS = 60_000;
 const LONG_WAIT_MS = 15 * 60_000;
 const summary = document.getElementById('summary');
 const root = document.getElementById('root');
-const connection = document.getElementById('connection');
 const liveStatus = document.getElementById('live-status');
 const themeSelect = document.getElementById('settings-theme-select');
 const settingsButton = document.getElementById('settings-button');
@@ -200,15 +270,51 @@ const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
 const THEME_STORAGE_KEY = 'agent-cockpit.theme';
+const DISPLAY_STORAGE_KEY = 'agent-cockpit.display';
+const FILTERS = [
+  { key: 'permission', label: '許可待ち', color: 'danger' },
+  { key: 'blocking', label: '止めて待っている', color: 'danger' },
+  { key: 'provisional', label: '仮に推奨案で進行中', color: 'warn' },
+  { key: 'agents', label: '稼働中のサブエージェント', color: 'accent' },
+];
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
-// 切り替えの失敗は、この時間だけ接続の表示に残してから通常の表示へ戻す。
-const AWAY_ERROR_DISPLAY_MS = 10000;
-let awayErrorUntil = 0;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
 const expandedDoneTasks = new Set();
+
+function readDisplayPreferences() {
+  try {
+    const value = JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}');
+    return {
+      mode: value.mode === 'kind' ? 'kind' : 'product',
+      order: Array.isArray(value.order) ? value.order.filter((item) => typeof item === 'string') : [],
+      pinned: Array.isArray(value.pinned) ? value.pinned.filter((item) => typeof item === 'string') : [],
+      collapsed: Array.isArray(value.collapsed) ? value.collapsed.filter((item) => typeof item === 'string') : [],
+      hidden: Array.isArray(value.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [],
+    };
+  } catch {
+    return { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
+  }
+}
+
+let displayPreferences = readDisplayPreferences();
+
+function saveDisplayPreferences() {
+  try {
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify(displayPreferences));
+  } catch {
+  }
+}
+
+document.querySelectorAll('[data-action="mode"]').forEach((button) => {
+  button.addEventListener('click', () => {
+    displayPreferences.mode = button.dataset.mode;
+    saveDisplayPreferences();
+    if (lastState) render(lastState);
+  });
+});
 
 function applyTheme(theme) {
   const selectedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'dark';
@@ -287,15 +393,11 @@ awayToggle.addEventListener('change', async () => {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const away = await response.json();
     applyAwayState(away);
-    awayErrorUntil = 0;
-    connection.textContent = '接続中';
-    connection.dataset.state = 'ready';
+    liveStatus.textContent = '離席状態を更新しました。';
   } catch {
     awayToggle.checked = previous;
     applyAwayState({ enabled: previous });
-    awayErrorUntil = Date.now() + AWAY_ERROR_DISPLAY_MS;
-    connection.textContent = '離席中を切り替えられませんでした';
-    connection.dataset.state = 'error';
+    liveStatus.textContent = '離席状態を切り替えられませんでした。';
   } finally {
     awayToggle.disabled = false;
   }
@@ -337,59 +439,137 @@ function updateTitle(sessions) {
 
 function renderSummary(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
-  const activeCount = sessions.filter((session) => session.status === '作業中').length;
-  const waitingCount = sessions.filter((session) => session.status.startsWith('待機中')).length;
-  const items = [
-    ['セッション', sessions.length, ''],
-    ['作業中', activeCount, 'ok'],
-    ['待機中', waitingCount, 'warn'],
-    ['許可待ち', permissionCount, 'danger'],
-    ['判断待ち', decisionCount, 'danger'],
-  ];
-  summary.replaceChildren(...items.map(([label, count, color]) => {
-    const chip = element('span', `chip ${color}`.trim());
-    chip.append(document.createTextNode(`${label} `), element('strong', '', String(count)));
-    return chip;
+  const blockingCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const provisionalCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'provisional').length, 0);
+  const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
+  const counts = { permission: permissionCount, blocking: blockingCount, provisional: provisionalCount, agents: agentCount };
+  summary.replaceChildren(...FILTERS.map(({ key, label, color }) => {
+    const button = element('button', `chip ${color}`.trim());
+    button.type = 'button';
+    button.dataset.filter = key;
+    button.setAttribute('aria-pressed', String(!displayPreferences.hidden.includes(key)));
+    button.title = displayPreferences.hidden.includes(key) ? '押すと表示に戻す' : '押すと非表示にする';
+    button.append(document.createTextNode(`${label} `), element('strong', '', String(counts[key])));
+    return button;
   }));
-}
 
-function makeSessionHeader(session) {
-  const header = element('div', 'section-head');
-  const productName = session.product?.name || 'プロダクト不明';
-  header.append(element('h2', '', productName));
-  if (session.product?.key) header.append(element('code', 'meta product-key', session.product.key));
-  const statusTone = { '許可待ち': 'permission', '作業中': 'busy', '不明': 'unknown' }[session.status] || 'wait';
-  header.append(badge(session.status === '不明' ? '状態不明' : session.status, statusTone));
-  return header;
-}
-
-function appendTools(body, session) {
-  const heading = element('h3', 'sub', '今やっていること');
-  body.append(heading);
-  if (!session.tools.length) {
-    body.append(element('div', 'empty', '実行中のツールはありません。'));
-    return;
+  const hiddenKinds = FILTERS.filter(({ key }) => displayPreferences.hidden.includes(key));
+  const hiddenCount = hiddenKinds.reduce((total, { key }) => total + counts[key], 0);
+  const note = document.getElementById('filter-note');
+  note.hidden = hiddenKinds.length === 0;
+  if (hiddenKinds.length) {
+    const showAll = element('button', 'link-btn', 'すべて表示する');
+    showAll.type = 'button';
+    showAll.dataset.showAll = 'true';
+    showAll.addEventListener('click', () => {
+      displayPreferences.hidden = [];
+      saveDisplayPreferences();
+      render(lastState);
+    });
+    note.replaceChildren(
+      element('span', '', `非表示: ${hiddenKinds.map(({ label }) => label).join('、')}(${hiddenCount} 件)`),
+      showAll,
+    );
+  } else {
+    note.replaceChildren();
   }
-  const list = element('div', 'now-list');
-  for (const tool of newestFirst(session.tools)) {
-    const row = element('div', 'now-row');
-    const who = element('div', 'who');
-    who.append(element('strong', '', tool.agent_id ? `サブエージェント ${tool.agent_id}` : 'メインセッション'));
-    row.append(who, element('div', 'detail', toolDetail(tool.tool_name, tool.summary)), element('time', 'since', durationLabel(tool.startedAt)));
-    list.append(row);
-  }
-  body.append(list);
 }
 
-function appendAgents(body, session) {
+function isFilterShown(key) {
+  return !displayPreferences.hidden.includes(key);
+}
+
+function shownPermissions(session) {
+  return isFilterShown('permission') ? session.permissionWaits : [];
+}
+
+function shownActiveDecisions(session) {
+  return session.decisions.filter((decision) =>
+    (decision.state === 'waiting' && isFilterShown('blocking')) ||
+    (decision.state === 'provisional' && isFilterShown('provisional')),
+  );
+}
+
+function productGroups(sessions) {
+  const groups = new Map();
+  for (const session of sessions) {
+    const product = session.product || {};
+    const key = product.key || product.name || 'product-unknown';
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, name: product.name || 'プロダクト不明', branches: new Set(), sessions: [] };
+      groups.set(key, group);
+    }
+    if (product.branch) group.branches.add(product.branch);
+    group.sessions.push(session);
+  }
+  return [...groups.values()];
+}
+
+function sessionActivityTime(session) {
+  const mainTool = session.tools.filter((tool) => !tool.agent_id).reduce((latest, tool) => {
+    const time = Date.parse(tool.startedAt);
+    return Number.isFinite(time) ? Math.max(latest, time) : latest;
+  }, -Infinity);
+  const lastActivity = Date.parse(session.lastActivityAt);
+  return Math.max(mainTool, Number.isFinite(lastActivity) ? lastActivity : -Infinity);
+}
+
+function orderedProducts(sessions) {
+  const products = productGroups(sessions);
+  const ids = products.map((product) => product.key);
+  const nextOrder = [...displayPreferences.order.filter((key) => ids.includes(key)), ...ids.filter((key) => !displayPreferences.order.includes(key))];
+  if (nextOrder.length !== displayPreferences.order.length || nextOrder.some((key, index) => key !== displayPreferences.order[index])) {
+    displayPreferences.order = nextOrder;
+    saveDisplayPreferences();
+  }
+  const orderIndex = new Map(nextOrder.map((key, index) => [key, index]));
+  return products
+    .map((product) => ({
+      ...product,
+      sessions: [...product.sessions].sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left)),
+    }))
+    .sort((left, right) => {
+      const leftPinned = displayPreferences.pinned.includes(left.key);
+      const rightPinned = displayPreferences.pinned.includes(right.key);
+      if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+      return orderIndex.get(left.key) - orderIndex.get(right.key);
+    });
+}
+
+function activityStatus(session) {
+  if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
+  if (session.status === '不明') return { label: '状態不明', tone: 'unknown' };
+  return { label: '待機中', tone: 'wait' };
+}
+
+function mainRow(session, product, withTags = false, multipleSessions = false) {
+  const status = activityStatus(session);
+  const mainTool = newestFirst(session.tools.filter((tool) => !tool.agent_id))[0];
+  const doingTask = session.tasks.find((task) => task.state === 'doing');
+  const row = element('div', 'now-row main-row');
+  const who = element('div', 'who');
+  who.append(element('span', `dot ${status.tone}`), document.createTextNode('メイン'));
+  appendContextTags(who, product, session, withTags, multipleSessions);
+  who.append(element('strong', '', status.label));
+  const detail = element('div', 'detail');
+  if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
+  if (mainTool) detail.append(element('div', 'tool-detail', toolDetail(mainTool.tool_name, mainTool.summary)));
+  const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
+  const elapsedLabel = durationLabel(elapsedAt);
+  const elapsed = element('time', 'since', elapsedLabel === '時刻不明' ? elapsedLabel : `${elapsedLabel}前`);
+  row.append(who, detail, elapsed);
+  return row;
+}
+
+function appendAgents(body, session, product, withTags = false, multipleSessions = false) {
   body.append(element('h3', 'sub', 'サブエージェント'));
   if (!session.agents.length) {
     body.append(element('div', 'empty', 'サブエージェントはありません。'));
     return;
   }
   const agents = newestFirst(session.agents);
-  const runningAgents = agents.filter((agent) => !isEndedAgent(agent));
+  const runningAgents = agents.filter((agent) => !isEndedAgent(agent) && (!agent.active || isFilterShown('agents')));
   const endedAgents = agents.filter(isEndedAgent);
   const showEnded = expandedEndedSessions.has(session.session_id);
   const visibleAgents = showEnded ? [...runningAgents, ...endedAgents] : runningAgents;
@@ -397,9 +577,12 @@ function appendAgents(body, session) {
   const list = element('div', 'agent-list');
   for (const agent of visibleAgents) {
     const row = element('div', 'agent-row');
+    row.dataset.startedAt = agent.startedAt || '';
     const who = element('div', 'who');
-    who.append(element('strong', '', agent.agent_type || agent.agent_id));
     const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+    who.append(element('span', `dot ${agent.unconfirmed ? 'wait' : agentState[1]}`));
+    appendContextTags(who, product, session, withTags, multipleSessions);
+    who.append(element('strong', '', agent.agent_type || agent.agent_id));
     who.append(badge(agentState[0], agentState[1]));
     const detail = element('div', 'detail', agent.lastTool ? toolDetail(agent.lastTool.tool_name, agent.lastTool.summary) : 'ツール実行情報はありません。');
     const extra = element('div', 'agent-extra');
@@ -443,17 +626,21 @@ function newestFirst(items) {
   return [...items].sort((a, b) => timestampOf(b) - timestampOf(a));
 }
 
-function appendPermissionWaits(body, session) {
-  body.append(element('h3', 'sub', `許可待ち ${session.permissionWaits.length}`));
-  if (!session.permissionWaits.length) {
-    body.append(element('div', 'empty', '許可待ちはありません。'));
-    return;
-  }
+function appendContextTags(target, product, session, withTags, multipleSessions) {
+  if (!withTags) return;
+  target.append(element('span', 'prod-tag', product.name));
+  if (multipleSessions) target.append(element('span', 'session-tag', session.title || session.session_id));
+}
+
+function appendPermissionWaits(body, session, product, withTags = false, multipleSessions = false) {
+  const waits = shownPermissions(session);
+  if (!waits.length) return;
   const list = element('div', 'permission-list');
-  for (const wait of newestFirst(session.permissionWaits)) {
+  for (const wait of newestFirst(waits)) {
     const age = Date.now() - Date.parse(wait.startedAt);
     const card = element('article', `permission ${age > LONG_WAIT_MS ? 'long-wait' : ''}`.trim());
     const header = element('div', 'permission-head');
+    appendContextTags(header, product, session, withTags, multipleSessions);
     header.append(element('strong', '', wait.agent_id ? `${wait.agent_id} が許可を待っています` : 'メインセッションが許可を待っています'));
     header.append(badge('許可待ち', 'permission'));
     header.append(element('time', 'since', durationLabel(wait.startedAt)));
@@ -474,11 +661,12 @@ function decisionStateLabel(state) {
   }[state] || state;
 }
 
-function appendDecisionCard(list, decision) {
+function appendDecisionCard(list, decision, product, session, withTags = false, multipleSessions = false) {
   const age = Date.now() - Date.parse(decision.createdAt);
   const longWait = decision.state === 'waiting' && age > LONG_WAIT_MS;
   const card = element('article', `decision-card ${decision.state} ${longWait ? 'long-wait' : ''}`.trim());
   const header = element('div', 'decision-head');
+  appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(
     element('span', 'decision-title', decision.title),
     badge(decisionStateLabel(decision.state), decision.state === 'waiting' ? 'permission' : decision.state === 'provisional' ? 'wait' : decision.state === 'resolved' ? 'done' : ''),
@@ -539,27 +727,25 @@ function appendPlanToggle(body, kind, sessionId, expanded, count, label, expande
   body.append(toggle);
 }
 
-function appendDecisions(body, session) {
+function appendDecisions(body, session, product, withTags = false, multipleSessions = false) {
   const decisions = newestFirst(session.decisions);
-  const active = decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state));
+  const active = newestFirst(shownActiveDecisions(session));
   const ended = decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
   const expanded = expandedEndedDecisions.has(session.session_id);
-  body.append(element('h3', 'sub', `判断事項 ${active.length}`));
-  const visible = expanded ? decisions : active;
-  if (!visible.length) {
-    body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : '判断事項はありません。'));
-  } else {
+  const visible = expanded ? newestFirst([...active, ...ended]) : active;
+  if (visible.length) {
     const list = element('div', 'decision-list');
-    for (const decision of visible) appendDecisionCard(list, decision);
+    for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
   }
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, expanded, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
-function appendTaskItem(list, task) {
+function appendTaskItem(list, task, product, session, withTags = false, multipleSessions = false) {
   const labels = { todo: '未着手', doing: '作業中', done: '完了' };
   const item = element('li', `task-item ${task.state}`);
   const header = element('div', 'task-head');
+  appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(element('span', 'task-title', task.title), badge(labels[task.state] || task.state, task.state === 'done' ? 'done' : task.state === 'doing' ? 'busy' : ''));
   const met = task.criteria.filter((criterion) => criterion.met).length;
   header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
@@ -575,15 +761,14 @@ function appendTaskItem(list, task) {
   list.append(item);
 }
 
-function appendTasks(body, session) {
+function appendTasks(body, session, product, withTags = false, multipleSessions = false) {
   const tasks = session.tasks;
-  body.append(element('h3', 'sub', `タスク ${tasks.length}`));
+  const heading = element('h3', 'sub', 'タスクと完了条件 ');
+  if (session.tasksUpdatedAt) heading.append(element('span', 'meta', `最終更新 ${durationLabel(session.tasksUpdatedAt)}前`));
+  body.append(heading);
   if (!tasks.length) {
     body.append(element('div', 'empty', 'タスクはありません。'));
     return;
-  }
-  if (session.tasksUpdatedAt) {
-    body.append(element('div', 'meta task-updated', `最終更新 ${durationLabel(session.tasksUpdatedAt)}前`));
   }
   const done = tasks.filter((task) => task.state === 'done');
   const expanded = expandedDoneTasks.has(session.session_id);
@@ -591,36 +776,269 @@ function appendTasks(body, session) {
   if (!visible.length) body.append(element('div', 'empty', '未完了のタスクはありません。'));
   else {
     const list = element('ul', 'task-list');
-    for (const task of visible) appendTaskItem(list, task);
+    for (const task of visible) appendTaskItem(list, task, product, session, withTags, multipleSessions);
     body.append(list);
   }
   if (done.length) appendPlanToggle(body, 'tasks', session.session_id, expanded, done.length, '完了したタスク', expandedDoneTasks);
 }
 
+function productStatusBadge(session) {
+  const status = activityStatus(session);
+  return badge(status.label, status.tone);
+}
+
+function sessionBlock(product, session, multipleSessions) {
+  const block = element('div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
+  if (multipleSessions) {
+    const head = element('div', 'session-head');
+    head.append(element('h3', '', session.title || session.session_id), productStatusBadge(session));
+    block.append(head);
+  }
+
+  const body = element('div', 'session-body');
+  const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
+  const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
+  judgmentHeading.append(element('span', 'count', String(judgmentCount)));
+  body.append(judgmentHeading);
+  appendPermissionWaits(body, session, product);
+  appendDecisions(body, session, product);
+  body.append(element('h3', 'sub', '今やっていること'));
+  const now = element('div', 'now');
+  now.append(mainRow(session, product));
+  body.append(now);
+  appendAgents(body, session, product);
+  appendTasks(body, session, product);
+  block.append(body);
+  return block;
+}
+
+function productControls(product, index, total, pinnedCount) {
+  const pinned = displayPreferences.pinned.includes(product.key);
+  const collapsed = displayPreferences.collapsed.includes(product.key);
+  const controls = element('div', 'order');
+  const collapse = element('button', 'icon-btn', collapsed ? '開く' : '畳む');
+  collapse.type = 'button';
+  collapse.dataset.productAction = 'collapse';
+  collapse.dataset.productKey = product.key;
+  collapse.setAttribute('aria-expanded', String(!collapsed));
+  collapse.setAttribute('aria-label', `${product.name}を${collapsed ? '開く' : '畳む'}`);
+  const pin = element('button', 'icon-btn', pinned ? '固定中' : '固定');
+  pin.type = 'button';
+  pin.dataset.productAction = 'pin';
+  pin.dataset.productKey = product.key;
+  pin.setAttribute('aria-pressed', String(pinned));
+  pin.title = pinned ? '固定を解除' : '最上部に固定';
+  const moveUp = element('button', 'icon-btn', '↑');
+  moveUp.type = 'button';
+  moveUp.dataset.productAction = 'move';
+  moveUp.dataset.productKey = product.key;
+  moveUp.dataset.direction = '-1';
+  moveUp.disabled = pinned ? index === 0 : index === pinnedCount;
+  moveUp.setAttribute('aria-label', `${product.name}を上へ`);
+  const moveDown = element('button', 'icon-btn', '↓');
+  moveDown.type = 'button';
+  moveDown.dataset.productAction = 'move';
+  moveDown.dataset.productKey = product.key;
+  moveDown.dataset.direction = '1';
+  moveDown.disabled = pinned ? index === pinnedCount - 1 : index === total - 1;
+  moveDown.setAttribute('aria-label', `${product.name}を下へ`);
+  controls.append(collapse, pin, moveUp, moveDown);
+  return controls;
+}
+
+function productSection(product, index, products, pinnedCount) {
+  const pinned = displayPreferences.pinned.includes(product.key);
+  const section = element('section', `section ${pinned ? 'pinned' : ''}`.trim());
+  const head = element('div', 'head');
+  head.append(element('h2', '', product.name));
+  const branches = [...product.branches];
+  if (branches.length) head.append(element('span', 'meta branch', branches.join('、')));
+
+  const permissionCount = product.sessions.reduce((total, session) => total + shownPermissions(session).length, 0);
+  const decisionCount = product.sessions.reduce((total, session) => total + shownActiveDecisions(session).length, 0);
+  if (permissionCount) head.append(element('span', 'chip danger', `許可待ち ${permissionCount}`));
+  if (decisionCount) head.append(element('span', 'chip danger', `判断待ち ${decisionCount}`));
+  head.append(productControls(product, index, products.length, pinnedCount));
+  section.append(head);
+
+  const body = element('div', 'body');
+  body.hidden = displayPreferences.collapsed.includes(product.key);
+  const multipleSessions = product.sessions.length > 1;
+  for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
+  section.append(body);
+  return section;
+}
+
+function kindSection(title, content, extra) {
+  const section = element('section', 'section kind-section');
+  const head = element('div', 'head');
+  head.append(element('h2', '', title));
+  if (extra) head.append(extra);
+  section.append(head, content);
+  content.classList.add('body');
+  return section;
+}
+
+function sessionReferences(products) {
+  return products.flatMap((product) => product.sessions.map((session) => ({
+    product,
+    session,
+    multipleSessions: product.sessions.length > 1,
+  })));
+}
+
+function renderKindSections(products) {
+  const references = sessionReferences(products);
+  const waitingItems = [];
+  const endedDecisions = element('div', 'kind-ended');
+  for (const { product, session, multipleSessions } of references) {
+    for (const wait of shownPermissions(session)) {
+      const holder = element('div');
+      appendPermissionWaits(holder, { ...session, permissionWaits: [wait] }, product, true, multipleSessions);
+      const card = holder.firstElementChild?.firstElementChild;
+      if (card) waitingItems.push({ age: Date.now() - Date.parse(wait.startedAt), card });
+    }
+    for (const decision of shownActiveDecisions(session)) {
+      const list = element('div', 'decision-list');
+      appendDecisionCard(list, decision, product, session, true, multipleSessions);
+      waitingItems.push({
+        age: Date.now() - Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt),
+        card: list.firstElementChild,
+      });
+    }
+
+    const ended = session.decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+    if (ended.length) {
+      appendPlanToggle(endedDecisions, 'decisions', session.session_id, expandedEndedDecisions.has(session.session_id), ended.length, '解決済みと取り下げ', expandedEndedDecisions);
+      if (expandedEndedDecisions.has(session.session_id)) {
+        const list = element('div', 'decision-list');
+        for (const decision of newestFirst(ended)) appendDecisionCard(list, decision, product, session, true, multipleSessions);
+        endedDecisions.append(list);
+      }
+    }
+  }
+  waitingItems.sort((left, right) => right.age - left.age);
+  const judgment = element('div', 'body');
+  for (const item of waitingItems) if (item.card) judgment.append(item.card);
+  judgment.append(endedDecisions);
+  if (!waitingItems.length && !endedDecisions.childElementCount) judgment.append(element('div', 'empty', 'ありません'));
+  const productOrder = element('div', 'order product-order');
+  products.forEach((product, index) => productOrder.append(element('span', 'prod-tag', `${index + 1}. ${product.name}`)));
+
+  const activityItems = [];
+  const agentToggles = element('div', 'kind-toggles');
+  for (const { product, session, multipleSessions } of references) {
+    activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
+    const holder = element('div');
+    appendAgents(holder, session, product, true, multipleSessions);
+    const list = holder.querySelector('.agent-list');
+    if (list) for (const row of [...list.children]) {
+      const startedAt = Date.parse(row.dataset.startedAt);
+      activityItems.push({ age: Number.isFinite(startedAt) ? startedAt : -Infinity, row });
+    }
+    for (const toggle of holder.querySelectorAll('[data-ended-toggle]')) agentToggles.append(toggle);
+  }
+  activityItems.sort((left, right) => right.age - left.age);
+  const activity = element('div', 'body');
+  const activityList = element('div', 'now');
+  for (const item of activityItems) activityList.append(item.row);
+  activity.append(activityList, agentToggles);
+
+  const tasks = element('div', 'body');
+  for (const { product, session, multipleSessions } of references) {
+    const sessionTasks = element('div', 'kind-session-tasks');
+    const tags = element('div', 'meta');
+    appendContextTags(tags, product, session, true, true);
+    sessionTasks.append(tags);
+    appendTasks(sessionTasks, session, product, true, multipleSessions);
+    tasks.append(sessionTasks);
+  }
+
+  return [
+    kindSection('あなたの判断が必要なこと(待ちの長い順)', judgment, productOrder),
+    kindSection('今やっていること', activity),
+    kindSection('タスクと完了条件', tasks),
+  ];
+}
+
 function render(state) {
   const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  const active = document.activeElement;
+  const focusData = active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
+    : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
+      : active?.hasAttribute('data-show-all') ? { kind: 'show-all' } : null;
   renderSummary(sessions);
   updateTitle(sessions);
+  document.querySelectorAll('[data-action="mode"]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
+  });
   if (!sessions.length) {
     root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
     return;
   }
 
-  const cards = sessions.map((session) => {
-    const card = element('section', 'section');
-    card.append(makeSessionHeader(session));
-    const body = element('div', 'section-body');
-    body.append(element('div', 'meta', session.title || session.session_id));
-    appendPermissionWaits(body, session);
-    appendDecisions(body, session);
-    appendTools(body, session);
-    appendTasks(body, session);
-    appendAgents(body, session);
-    card.append(body);
-    return card;
-  });
-  root.replaceChildren(...cards);
+  const products = orderedProducts(sessions);
+  if (displayPreferences.mode === 'product') {
+    const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
+    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount)));
+  } else {
+    root.replaceChildren(...renderKindSections(products));
+  }
+
+  if (focusData) {
+    const button = [...document.querySelectorAll('button')].find((item) => {
+      if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
+      if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
+      return item.dataset.productAction === focusData.action && item.dataset.productKey === focusData.key && (item.dataset.direction || '') === focusData.direction;
+    });
+    button?.focus({ preventScroll: true });
+  }
 }
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  if (button.dataset.filter) {
+    const key = button.dataset.filter;
+    displayPreferences.hidden = isFilterShown(key)
+      ? [...displayPreferences.hidden, key]
+      : displayPreferences.hidden.filter((hidden) => hidden !== key);
+    saveDisplayPreferences();
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.productAction) {
+    const key = button.dataset.productKey;
+    if (button.dataset.productAction === 'collapse') {
+      displayPreferences.collapsed = displayPreferences.collapsed.includes(key)
+        ? displayPreferences.collapsed.filter((item) => item !== key)
+        : [...displayPreferences.collapsed, key];
+    } else if (button.dataset.productAction === 'pin') {
+      displayPreferences.pinned = displayPreferences.pinned.includes(key)
+        ? displayPreferences.pinned.filter((item) => item !== key)
+        : [...displayPreferences.pinned, key];
+    } else {
+      const products = orderedProducts(lastState.sessions);
+      const index = products.findIndex((product) => product.key === key);
+      const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
+      const direction = Number(button.dataset.direction);
+      const targetIndex = index + direction;
+      const pinned = displayPreferences.pinned.includes(key);
+      const canMove = pinned
+        ? targetIndex >= 0 && targetIndex < pinnedCount
+        : targetIndex >= pinnedCount && targetIndex < products.length;
+      if (!canMove) return;
+      const currentKey = products[index].key;
+      const targetKey = products[targetIndex].key;
+      const currentOrderIndex = displayPreferences.order.indexOf(currentKey);
+      const targetOrderIndex = displayPreferences.order.indexOf(targetKey);
+      [displayPreferences.order[currentOrderIndex], displayPreferences.order[targetOrderIndex]] =
+        [displayPreferences.order[targetOrderIndex], displayPreferences.order[currentOrderIndex]];
+    }
+    saveDisplayPreferences();
+    if (lastState) render(lastState);
+  }
+});
 
 async function refresh() {
   try {
@@ -637,15 +1055,8 @@ async function refresh() {
       const decisions = state.sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
       liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
     }
-    if (Date.now() >= awayErrorUntil) {
-      if (connection.textContent !== '接続中') connection.textContent = '接続中';
-      connection.dataset.state = 'ready';
-    }
   } catch {
-    if (Date.now() >= awayErrorUntil) {
-      if (connection.textContent !== 'サーバーに接続できません') connection.textContent = 'サーバーに接続できません';
-      connection.dataset.state = 'error';
-    }
+    liveStatus.textContent = '常駐サーバーに接続できません。';
     if (!hasRenderedState) root.replaceChildren(element('div', 'error-box', '状態を取得できません。常駐サーバーが起動しているか確認してください。'));
   }
 }

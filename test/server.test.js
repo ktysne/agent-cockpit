@@ -414,7 +414,9 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
   assert.equal(result.additionalContext, `Agent Cockpit: http://127.0.0.1:${runtime.info.port}/`);
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.equal(state.sessions[0].title, '段階 1 の実装');
-  assert.deepEqual(state.sessions[0].product, { key: 'd:\\desktop\\develop\\agent-cockpit', name: 'agent-cockpit' });
+  // cwd が実在するリポジトリの下を指すので、ブランチ名は実行する場所で変わる。比べる対象から外す。
+  const { branch: _branch, ...product } = state.sessions[0].product;
+  assert.deepEqual(product, { key: 'd:\\desktop\\develop\\agent-cockpit', name: 'agent-cockpit' });
 });
 
 test('起動時に、フックがまだ届いていない生きているセッションを一覧に出す', async (t) => {
