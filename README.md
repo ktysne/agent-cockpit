@@ -54,6 +54,8 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Start
 powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 ```
 
+画面のアイコンは、`src/web/index.html` と `mock/index.html` にこの 64×64 の画像を data URI で埋め込んでいます(タブのアイコンとタイトルの左の 2 か所ずつ)。元画像を差し替えたら、作り直した画像の base64 でこの 4 か所も書き換えてください。
+
 「設定」の画面では「表示」から配色を変更できます。
 
 ## フックの登録

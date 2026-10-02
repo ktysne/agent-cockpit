@@ -45,14 +45,27 @@ namespace AgentCockpitTray {
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr icon);
 
-    public static void LoadSourceImage(string path) {
+    // 描く最大の大きさ(ICO の 256px)に一度だけ縮めて持ち、常駐中のメモリーと描画の時間を抑える。
+    public static bool LoadSourceImage(string path) {
       DisposeSourceImage();
       try {
         using (Image image = Image.FromFile(path)) {
-          sourceImage = new Bitmap(image);
+          float scale = Math.Min(1f, 256f / Math.Max(image.Width, image.Height));
+          int width = Math.Max(1, (int)Math.Round(image.Width * scale));
+          int height = Math.Max(1, (int)Math.Round(image.Height * scale));
+          Bitmap reduced = new Bitmap(width, height);
+          using (Graphics graphics = Graphics.FromImage(reduced)) {
+            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.Clear(Color.Transparent);
+            graphics.DrawImage(image, 0, 0, width, height);
+          }
+          sourceImage = reduced;
         }
+        return true;
       } catch {
         sourceImage = null;
+        return false;
       }
     }
 
@@ -428,7 +441,9 @@ if ($Check) {
 
 if (-not [string]::IsNullOrWhiteSpace($ExportIcon)) {
   $iconPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\assets\agent-cockpit_icon.png'))
-  [AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)
+  if (-not [AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)) {
+    Write-Warning "アイコンの元の画像を読めないので、代わりの絵で書き出します: $iconPath"
+  }
   try {
     Export-TrayIcon $ExportIcon
   } finally {
@@ -454,7 +469,7 @@ $script:lastIconState = $null
 $script:balloonOpensDashboard = $false
 $script:awayMenuItem = $null
 $iconPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\assets\agent-cockpit_icon.png'))
-[AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)
+[void][AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)
 try {
   [System.Windows.Forms.Application]::EnableVisualStyles()
   $script:notifyIcon = New-Object System.Windows.Forms.NotifyIcon
