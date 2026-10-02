@@ -611,8 +611,8 @@ function prBadges(p, pr) {
 }
 
 // CI 実行中だけが理由のときは「CI が通ったらマージ」を予約できる(gh pr merge --auto)
-// 承認待ちが残る PR は CI が通ってもマージされないので、予約を出さない。
-const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中' && pr.review !== 'required';
+// 承認待ちや変更要求が残る PR は CI が通ってもマージされないので、予約を出さない。
+const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中' && (pr.review === 'approved' || pr.review === 'none');
 
 function mergeConfirm(p, pr, auto) {
   const o = mergeOpts(p, pr);
