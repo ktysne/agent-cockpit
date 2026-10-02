@@ -805,6 +805,20 @@ test('server-lost の結末は判断事項を provisional にする', () => {
   assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).state, 'provisional');
 });
 
+test('待ちの記録がある server-lost でも離席解除後は released で質問を戻す', () => {
+  const fixture = makeFixture();
+  fixture.away.enabled = false;
+  const result = fixture.delivery.finishAsk({
+    sessionId: fixture.sessionId,
+    toolUseId: fixture.toolUseId,
+    decisionId: fixture.registration.decisionId,
+    outcome: 'server-lost',
+  });
+
+  assert.deepEqual(result, { outcome: 'released', hookOutput: null });
+  assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).awaitingAnswerUntil, undefined);
+});
+
 test('record がなくても離席中の server-lost は deny で進める', () => {
   const fixture = makeFixture();
   fixture.delivery.askWaits.delete(`${fixture.sessionId}\0${fixture.toolUseId}`);

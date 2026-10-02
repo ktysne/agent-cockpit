@@ -11,35 +11,68 @@ function renderHarness() {
   assert.ok(render);
   assert.ok(renderDeferredState);
 
-  class FakeTextArea {}
-  const note = new FakeTextArea();
-  note.dataset = { sessionId: 'session-ui', decisionId: 'decision-ui' };
-  note.hasAttribute = (attribute) => attribute === 'data-answer-note';
-  note.focused = false;
-  note.focus = () => { note.focused = true; };
-  note.selection = null;
-  note.setSelectionRange = (start, end) => { note.selection = [start, end]; };
+  let activeElement;
+  class FakeTextArea {
+    constructor() {
+      this.dataset = { sessionId: 'session-ui', decisionId: 'decision-ui' };
+      this.value = '';
+      this.scrollTop = 0;
+      this.style = { height: '' };
+      this.undoHistory = [];
+      this.selectionStart = 2;
+      this.selectionEnd = 5;
+      this.selectionDirection = 'backward';
+      this.selection = [2, 5, 'backward'];
+      this.focused = false;
+    }
 
-  const activeNote = {
-    dataset: { answerNote: 'true', sessionId: 'session-ui', decisionId: 'decision-ui' },
-    selectionStart: 2,
-    selectionEnd: 5,
-    hasAttribute: () => false,
+    hasAttribute(attribute) {
+      return attribute === 'data-answer-note';
+    }
+
+    focus() {
+      this.focused = true;
+      activeElement = this;
+    }
+
+    setSelectionRange(start, end, direction) {
+      this.selectionStart = start;
+      this.selectionEnd = end;
+      this.selectionDirection = direction;
+      this.selection = [start, end, direction];
+    }
+  }
+  const note = new FakeTextArea();
+  note.value = '入力中の指示';
+  note.scrollTop = 73;
+  note.style.height = '154px';
+  note.undoHistory = ['直前の入力'];
+  activeElement = note;
+  const placeholder = new FakeTextArea();
+  let currentNote = note;
+  let replacedNote = null;
+  placeholder.replaceWith = (replacement) => {
+    currentNote = replacement;
+    replacedNote = replacement;
   };
   let renderCount = 0;
   const context = vm.createContext({
     answerNoteComposing: false,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
-    activeNote,
     HTMLTextAreaElement: FakeTextArea,
     document: {
-      get activeElement() { return activeNote; },
+      get activeElement() { return activeElement; },
       querySelectorAll: () => [],
     },
     root: {
-      replaceChildren: () => { renderCount += 1; },
-      querySelectorAll: () => [note],
+      replaceChildren: () => {
+        renderCount += 1;
+        note.focused = false;
+        activeElement = null;
+        currentNote = placeholder;
+      },
+      querySelectorAll: () => [currentNote],
     },
     displayPreferences: { mode: 'product', pinned: [] },
     renderSummary() {},
@@ -53,6 +86,9 @@ function renderHarness() {
     context,
     get renderCount() { return renderCount; },
     note,
+    placeholder,
+    get currentNote() { return currentNote; },
+    get replacedNote() { return replacedNote; },
     html,
   };
 }
@@ -65,20 +101,36 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.match(source, /\.tool-content\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(source, /\.tool-content\s*\{[^}]*overflow:\s*hidden/);
   assert.match(source, /\.tool-content\s*\{[^}]*min-width:\s*0/);
-  assert.match(mock, /\.meta\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.match(mock, /\.meta\s*\{[^}]*white-space:\s*nowrap/);
-  assert.match(mock, /\.meta\s*\{[^}]*overflow:\s*hidden/);
+  assert.match(source, /\.now-row\s*>\s*\.detail,\s*\.agent-row\s*>\s*\.detail\s*\{[^}]*min-width:\s*0/);
+  assert.match(source, /\.tool-line\s*\{[^}]*flex-wrap:\s*nowrap/);
+  assert.match(source, /\.tool-name\s*\{[^}]*flex:\s*none/);
+  assert.match(mock, /\.tool-content\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(mock, /\.tool-content\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(mock, /\.tool-content\s*\{[^}]*overflow:\s*hidden/);
+  assert.match(mock, /\.tool-content\s*\{[^}]*min-width:\s*0/);
+  assert.match(mock, /\.tool-line\s*\{[^}]*flex-wrap:\s*nowrap/);
+  assert.match(mock, /\.tool-name\s*\{[^}]*flex:\s*none/);
+  assert.doesNotMatch(mock, /\.meta\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.doesNotMatch(mock, /\.meta\s*\{[^}]*white-space:\s*nowrap/);
+  assert.doesNotMatch(mock, /\.meta\s*\{[^}]*overflow:\s*hidden/);
   assert.match(mock, /\.now-row\s*\{[^}]*minmax\(0,\s*1fr\)/);
   assert.match(mock, /\.now-row\s*>\s*:nth-child\(2\)\s*\{[^}]*min-width:\s*0/);
 });
 
-test('指示欄にフォーカスがあっても変換中でなければ描き直して選択範囲を戻す', () => {
+test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
   const harness = renderHarness();
   harness.context.render(harness.context.lastState);
 
   assert.equal(harness.renderCount, 1);
+  assert.equal(harness.replacedNote, harness.note);
+  assert.equal(harness.currentNote, harness.note);
+  assert.notEqual(harness.currentNote, harness.placeholder);
   assert.equal(harness.note.focused, true);
-  assert.deepEqual(harness.note.selection, [2, 5]);
+  assert.deepEqual(harness.note.selection, [2, 5, 'backward']);
+  assert.equal(harness.note.value, '入力中の指示');
+  assert.equal(harness.note.scrollTop, 73);
+  assert.equal(harness.note.style.height, '154px');
+  assert.deepEqual(harness.note.undoHistory, ['直前の入力']);
   assert.doesNotMatch(harness.html, /addEventListener\(\s*['"]focusout['"]/);
 });
 
@@ -95,6 +147,7 @@ test('指示欄の変換中は描き直しを保留し、変換終了後に反�
   harness.context.renderDeferredState();
 
   assert.equal(harness.renderCount, 1);
+  assert.equal(harness.currentNote, harness.note);
   assert.equal(harness.note.focused, true);
-  assert.deepEqual(harness.note.selection, [2, 5]);
+  assert.deepEqual(harness.note.selection, [2, 5, 'backward']);
 });
