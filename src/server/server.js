@@ -166,7 +166,7 @@ function validDisplayPatch(value) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
       value[key].some((item) => typeof item !== 'string' || item.length > 500) || new Set(value[key]).size !== value[key].length)) return false;
   }
-  const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents']);
+  const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
   if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
     value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
   return true;

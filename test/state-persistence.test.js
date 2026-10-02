@@ -49,7 +49,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   assert.equal(state.hideSession('restored-session', now), true);
   const display = {
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
-    collapsed: ['C:\\project'], hidden: ['agents'],
+    collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
   };
   state.patchDisplayPreferences(display);
   await state.flushPersistence();

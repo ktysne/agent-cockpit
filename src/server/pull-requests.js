@@ -69,6 +69,38 @@ function parsePullRequestList(stdout) {
   return values.map(normalizeOpenPullRequest).filter(Boolean);
 }
 
+function lastOpenPullRequest(pr, openPullRequests, trackedPullRequests, previous = null) {
+  const parent = openPullRequests.find((candidate) => (
+    candidate.number !== pr.number && candidate.headRefName === pr.baseRefName && candidate.headRefOid
+  )) || trackedPullRequests.find((candidate) => (
+    candidate.number !== pr.number && ['merged', 'closed'].includes(candidate.state) && candidate.lastOpen?.headRefName === pr.baseRefName &&
+    candidate.lastOpen.headRefOid
+  )) || (previous?.baseRefName === pr.baseRefName
+    ? trackedPullRequests.find((candidate) => candidate.number === previous.basePullRequestNumber)
+    : null);
+  return {
+    title: pr.title,
+    url: pr.url,
+    headRefName: pr.headRefName,
+    baseRefName: pr.baseRefName,
+    headRefOid: pr.headRefOid,
+    isDraft: pr.draft,
+    mergeable: pr.mergeable,
+    mergeStateStatus: pr.mergeStateStatus,
+    reviewDecision: pr.reviewDecision,
+    ci: pr.ci,
+    review: pr.review,
+    conflict: pr.conflict,
+    basePullRequestNumber: parent?.number ?? null,
+    basePullRequestHeadRefOid: parent?.headRefOid || parent?.lastOpen?.headRefOid || null,
+    restackParents: Array.isArray(previous?.restackParents) ? previous.restackParents.map((item) => ({ ...item })) : [],
+  };
+}
+
+function mergeMethodFromView(value) {
+  return Array.isArray(value.mergeCommit?.parents) && value.mergeCommit.parents.length > 1 ? 'merge' : null;
+}
+
 function parseRepositoryConfig(stdout) {
   const value = JSON.parse(stdout);
   if (!value || typeof value !== 'object' || typeof value.default_branch !== 'string' || !value.default_branch) {
@@ -104,7 +136,20 @@ function storedPullRequest(registration) {
     conflict: known.conflict === true,
     state: registration.state || 'unknown',
     mergedAt: registration.mergedAt || null,
+    basePullRequestNumber: Number.isSafeInteger(known.basePullRequestNumber) ? known.basePullRequestNumber : null,
+    basePullRequestHeadRefOid: SHA_PATTERN.test(known.basePullRequestHeadRefOid || '') ? known.basePullRequestHeadRefOid : null,
+    restackParents: Array.isArray(known.restackParents) ? known.restackParents.map((parent) => ({ ...parent })) : [],
   };
+}
+
+function storedRelatedPullRequest(record) {
+  return storedPullRequest({
+    number: record.number,
+    url: record.url,
+    state: record.state,
+    mergedAt: record.mergedAt,
+    lastOpen: record.lastOpen,
+  });
 }
 
 function mapByNumber(values) {
@@ -119,10 +164,34 @@ function comparisonKey(number, mergedNumber) {
   return `${number}:${mergedNumber}`;
 }
 
-function comparisonRequests(openPullRequests, registrations, mergedHeadRecords) {
-  const historic = registrations.map(storedPullRequest).filter((pr) => pr && pr.state === 'merged');
+function comparisonDefaultKey(number, mergedNumber) {
+  return `${comparisonKey(number, mergedNumber)}:default`;
+}
+
+function comparisonRequests(openPullRequests, registrations, mergedHeadRecords, relatedPullRequests = [], defaultBranch = null) {
+  const trackingRecords = [...registrations, ...relatedPullRequests];
+  const trackedByNumber = new Map(trackingRecords.map((record) => [
+    record.number,
+    record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record),
+  ]));
+  const historic = trackingRecords
+    .map((record) => record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record))
+    .filter((pr) => pr && ['merged', 'closed'].includes(pr.state));
   const requests = new Map();
   for (const pr of openPullRequests) {
+    const tracked = trackedByNumber.get(pr.number);
+    for (const parent of tracked?.restackParents || []) {
+      const method = parent.method || mergeHeadFor(mergedHeadRecords, parent.number)?.method || null;
+      if (!pr.headRefOid || method === 'merge') continue;
+      requests.set(comparisonKey(pr.number, parent.number), {
+        number: pr.number,
+        mergedNumber: parent.number,
+        oldHeadSha: parent.headRefOid,
+        headSha: pr.headRefOid,
+        method,
+        checkDefaultBranch: method === null && Boolean(defaultBranch),
+      });
+    }
     let base = pr.baseRefName;
     const seen = new Set();
     while (!seen.has(base)) {
@@ -131,11 +200,14 @@ function comparisonRequests(openPullRequests, registrations, mergedHeadRecords) 
       if (!merged) break;
       const oldHead = mergeHeadFor(mergedHeadRecords, merged.number);
       if (oldHead && pr.headRefOid) {
-        requests.set(comparisonKey(pr.number, merged.number), {
+        const key = comparisonKey(pr.number, merged.number);
+        if (!requests.has(key)) requests.set(key, {
           number: pr.number,
           mergedNumber: merged.number,
           oldHeadSha: oldHead.headRefOid,
           headSha: pr.headRefOid,
+          method: oldHead.method,
+          checkDefaultBranch: oldHead.method === null && Boolean(defaultBranch),
         });
       }
       base = merged.baseRefName;
@@ -150,13 +222,21 @@ function assemblePullRequestStacks({
   registrations = [],
   retargetedPrs = [],
   mergedHeadRecords = [],
+  relatedPullRequests = [],
   comparisonStatuses = new Map(),
 }) {
-  const open = [...openPullRequests].sort((left, right) => left.number - right.number);
+  const trackingByNumber = new Map([...registrations, ...relatedPullRequests].map((record) => [
+    record.number,
+    record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record),
+  ]));
+  const open = openPullRequests.map((pr) => ({
+    ...pr,
+    restackParents: trackingByNumber.get(pr.number)?.restackParents || [],
+  })).sort((left, right) => left.number - right.number);
   const openByNumber = mapByNumber(open);
-  const historical = registrations
+  const historical = [...registrations, ...relatedPullRequests]
     .filter((record) => !openByNumber.has(record.number) && ['merged', 'closed'].includes(record.state))
-    .map(storedPullRequest)
+    .map((record) => record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record))
     .filter(Boolean)
     .map((pr) => ({ ...pr, method: mergeHeadFor(mergedHeadRecords, pr.number)?.method || null }));
   const nodes = [...open, ...historical];
@@ -172,12 +252,29 @@ function assemblePullRequestStacks({
     let retargetedFrom = explicit ? { number: explicit.fromNumber || null } : null;
     let needsRestack = false;
     let restackPr = null;
+    for (const candidate of pr.restackParents || []) {
+      const method = candidate.method || mergeHeadFor(mergedHeadRecords, candidate.number)?.method || null;
+      if (method === 'merge') continue;
+      const key = comparisonKey(pr.number, candidate.number);
+      const comparison = comparisonStatuses.get(key);
+      if (!['ahead', 'identical'].includes(comparison)) continue;
+      const defaultComparison = comparisonStatuses.get(comparisonDefaultKey(pr.number, candidate.number));
+      if (method === null && ['ahead', 'identical'].includes(defaultComparison)) continue;
+      needsRestack = true;
+      restackPr ||= {
+        ...(historical.find((parent) => parent.number === candidate.number) || { number: candidate.number }),
+        method,
+      };
+    }
     while (base) {
       const merged = nodes.find((candidate) => candidate.state === 'merged' && candidate.headRefName === base && candidate.number !== pr.number);
       if (!merged || nextVisiting.has(merged.number)) break;
       const comparison = comparisonStatuses.get(comparisonKey(pr.number, merged.number));
       const oldHead = mergeHeadFor(mergedHeadRecords, merged.number);
-      if (oldHead && ['ahead', 'identical'].includes(comparison)) {
+      const defaultComparison = comparisonStatuses.get(comparisonDefaultKey(pr.number, merged.number));
+      if (oldHead && merged.method !== 'merge' &&
+        !(merged.method === null && ['ahead', 'identical'].includes(defaultComparison)) &&
+        ['ahead', 'identical'].includes(comparison)) {
         needsRestack = true;
         restackPr ||= merged;
       }
@@ -211,6 +308,14 @@ function assemblePullRequestStacks({
       }
     }
   }
+  for (const child of open) {
+    for (const parent of child.restackParents || []) {
+      if (nodeByNumber.has(parent.number)) {
+        edges.get(child.number)?.add(parent.number);
+        edges.get(parent.number)?.add(child.number);
+      }
+    }
+  }
   for (const [child, parent] of parentByNumber) {
     edges.get(child)?.add(parent);
     edges.get(parent)?.add(child);
@@ -227,6 +332,7 @@ function assemblePullRequestStacks({
   }
   const visibleOpen = open.filter((pr) => visibleNumbers.has(pr.number));
   const visibleClosed = historical.filter((pr) => visibleNumbers.has(pr.number));
+  const registeredNumbers = new Set(registrations.map((record) => record.number));
   const visibleOpenNumbers = new Set(visibleOpen.map((pr) => pr.number));
   const roots = visibleOpen.filter((pr) => !visibleOpenNumbers.has(parentByNumber.get(pr.number)));
 
@@ -237,6 +343,7 @@ function assemblePullRequestStacks({
     if (value.base !== defaultBranch && !hasBasePullRequest) return `base の ${value.base} に対応する PR が見つからない`;
     const parent = visibleOpen.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
+    if (pr.baseRefName !== defaultBranch) return `base を ${defaultBranch} に付け替える必要がある`;
     if (pr.draft) return 'ドラフト';
     if (value.needsRestack) {
       const method = value.restackPr?.method;
@@ -291,10 +398,11 @@ function assemblePullRequestStacks({
   }
 
   return {
-    trees,
-    openCount: visibleOpen.length,
-    mergeableCount: visibleOpen.filter((pr) => blockerFor(pr) === null).length,
-    merged: visibleClosed,
+      trees,
+      openCount: visibleOpen.length,
+      mergeableCount: visibleOpen.filter((pr) => blockerFor(pr) === null).length,
+      relatedOpen: visibleOpen.filter((pr) => !registeredNumbers.has(pr.number)),
+      merged: visibleClosed,
     orphanedOpenNumbers: visibleOpen.filter((pr) => blockerFor(pr) && blockerFor(pr).startsWith('base の ')).map((pr) => pr.number),
   };
 }
@@ -405,7 +513,7 @@ class PullRequestTracker {
 
   refreshAll() {
     const repositories = new Map();
-    for (const record of this.state.pullRequestRegistrations()) {
+    for (const record of [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]) {
       const key = repoKey(record.owner, record.repo);
       repositories.set(key, { owner: record.owner, repo: record.repo });
     }
@@ -432,8 +540,14 @@ class PullRequestTracker {
     const current = this.repositories.get(key) || {
       owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], fetchedAt: null, checkedAt: null,
     };
+    const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const previousByNumber = new Map([...previousRegistrations, ...previousRelated].map((record) => [
+      record.number,
+      record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record),
+    ]));
     const [listResult, configResult] = await Promise.allSettled([
-      this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--json', PULL_REQUEST_FIELDS]),
+      this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--limit', '500', '--json', PULL_REQUEST_FIELDS]),
       this.execute(['api', `repos/${repository}`]),
     ]);
     const errors = [];
@@ -441,35 +555,13 @@ class PullRequestTracker {
     let defaultBranch = current.defaultBranch;
     let mergeMethods = current.mergeMethods;
     let fetchedAt = current.fetchedAt;
+    let listAvailable = false;
 
     if (listResult.status === 'fulfilled') {
       try {
         openPullRequests = parsePullRequestList(listResult.value);
         fetchedAt = checkedAt;
-        const openByNumber = mapByNumber(openPullRequests);
-        for (const record of this.state.pullRequestRegistrationsForRepo(owner, repo)) {
-          const openPullRequest = openByNumber.get(record.number);
-          if (openPullRequest) {
-            this.state.updatePullRequest(record.session_id, owner, repo, record.number, {
-              state: 'open',
-              mergedAt: null,
-              lastOpen: {
-                title: openPullRequest.title,
-                url: openPullRequest.url,
-                headRefName: openPullRequest.headRefName,
-                baseRefName: openPullRequest.baseRefName,
-                headRefOid: openPullRequest.headRefOid,
-                isDraft: openPullRequest.draft,
-                mergeable: openPullRequest.mergeable,
-                mergeStateStatus: openPullRequest.mergeStateStatus,
-                reviewDecision: openPullRequest.reviewDecision,
-                ci: openPullRequest.ci,
-                review: openPullRequest.review,
-                conflict: openPullRequest.conflict,
-              },
-            });
-          }
-        }
+        listAvailable = true;
       } catch {
         errors.push('PR の一覧を読み取れませんでした');
       }
@@ -489,45 +581,77 @@ class PullRequestTracker {
       errors.push(`リポジトリ設定を取得できません。${ghErrorMessage(configResult.reason)}`);
     }
 
-    if (listResult.status === 'fulfilled') {
+    if (listAvailable) {
+      const trackedByNumber = new Map();
+      for (const record of [...previousRegistrations, ...previousRelated]) {
+        let tracked = trackedByNumber.get(record.number);
+        if (!tracked) {
+          tracked = { registrations: [], related: null, record: null };
+          trackedByNumber.set(record.number, tracked);
+        }
+        if (record.session_id) tracked.registrations.push(record);
+        else tracked.related = record;
+        tracked.record ||= record;
+      }
       const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
-      const toInspect = this.state.pullRequestRegistrationsForRepo(owner, repo)
-        .filter((record) => !openNumbers.has(record.number) && !['merged', 'closed'].includes(record.state));
-      const inspected = await Promise.all(toInspect.map(async (record) => {
+      const toInspect = [...trackedByNumber.entries()]
+        .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state));
+      const viewFields = `${PULL_REQUEST_FIELDS},state,mergedAt,mergeCommit`;
+      const inspected = await Promise.all(toInspect.map(async ([number, tracked]) => {
         try {
-          const output = await this.execute(['pr', 'view', String(record.number), '-R', repository, '--json', 'state,mergedAt,mergeCommit,headRefOid']);
-          return { record, value: JSON.parse(output) };
+          const output = await this.execute(['pr', 'view', String(number), '-R', repository, '--json', viewFields]);
+          return { number, tracked, value: JSON.parse(output) };
         } catch (error) {
-          return { record, error };
+          return { number, tracked, error };
         }
       }));
       for (const result of inspected) {
         if (result.error) {
-          errors.push(`#${result.record.number} の状態を確認できません。${ghErrorMessage(result.error)}`);
+          errors.push(`#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}`);
           continue;
         }
         const value = result.value;
         const state = String(value.state || '').toUpperCase();
         if (!['OPEN', 'CLOSED', 'MERGED'].includes(state)) {
-          errors.push(`#${result.record.number} の状態を読み取れませんでした`);
+          errors.push(`#${result.number} の状態を読み取れませんでした`);
           continue;
         }
         const closedState = state === 'MERGED' || (state === 'CLOSED' && value.mergedAt) ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
-        this.state.updatePullRequest(result.record.session_id, owner, repo, result.record.number, {
-          state: closedState,
-          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-        });
+        if (closedState === 'open') {
+          const normalized = normalizeOpenPullRequest(value);
+          if (!normalized) {
+            errors.push(`#${result.number} の状態を読み取れませんでした`);
+            continue;
+          }
+          openPullRequests.push(normalized);
+          openNumbers.add(normalized.number);
+          continue;
+        }
+        for (const record of result.tracked.registrations) {
+          this.state.updatePullRequest(record.session_id, owner, repo, result.number, {
+            state: closedState,
+            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
+          });
+        }
+        if (result.tracked.related) {
+          this.state.updateRelatedPullRequest(owner, repo, result.number, {
+            state: closedState,
+            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
+          });
+        }
         if (closedState === 'merged') {
           const headRefOid = SHA_PATTERN.test(value.headRefOid || '')
             ? value.headRefOid
-            : result.record.lastOpen?.headRefOid;
+            : result.tracked.record.lastOpen?.headRefOid;
           if (headRefOid && SHA_PATTERN.test(headRefOid)) {
+            const existing = this.state.mergedPullRequestHeadsForRepo(owner, repo)
+              .find((record) => record.number === result.number);
             this.state.recordMergedPullRequestHead({
               owner,
               repo,
-              number: result.record.number,
+              number: result.number,
               headRefOid,
-              method: null,
+              method: existing?.method || mergeMethodFromView(value),
               mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : checkedAt,
             });
           }
@@ -536,9 +660,96 @@ class PullRequestTracker {
     }
 
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const trackedPullRequests = [...registrations, ...relatedPullRequests].map((record) => (
+      record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record)
+    )).filter(Boolean);
+    const terminalByNumber = new Map(trackedPullRequests
+      .filter((record) => ['merged', 'closed'].includes(record.state))
+      .map((record) => [record.number, record]));
+
+    if (listAvailable) {
+      for (const pr of openPullRequests) {
+        const previous = previousByNumber.get(pr.number);
+        const restackParents = previous?.restackParents || [];
+        const parentNumbers = new Set();
+        if (previous?.basePullRequestNumber) parentNumbers.add(previous.basePullRequestNumber);
+        for (const parent of trackedPullRequests) {
+          if (parent.number !== pr.number && ['merged', 'closed'].includes(parent.state) && parent.headRefName === pr.baseRefName) {
+            parentNumbers.add(parent.number);
+          }
+        }
+        const nextRestackParents = [...restackParents];
+        for (const parentNumber of parentNumbers) {
+          const parent = terminalByNumber.get(parentNumber);
+          const mergedHead = this.state.mergedPullRequestHeadsForRepo(owner, repo)
+            .find((record) => record.number === parentNumber);
+          const headRefOid = mergedHead?.headRefOid || parent?.headRefOid || parent?.lastOpen?.headRefOid;
+          if (!parent || !SHA_PATTERN.test(headRefOid || '') || nextRestackParents.some((item) => item.number === parentNumber)) continue;
+          nextRestackParents.push({
+            number: parentNumber,
+            headRefOid,
+            method: mergedHead?.method || null,
+          });
+        }
+        const lastOpen = lastOpenPullRequest(pr, openPullRequests, trackedPullRequests, {
+          ...previous,
+          restackParents: nextRestackParents,
+        });
+        for (const record of registrations.filter((candidate) => candidate.number === pr.number)) {
+          this.state.updatePullRequest(record.session_id, owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen });
+        }
+        if (relatedPullRequests.some((record) => record.number === pr.number)) {
+          this.state.updateRelatedPullRequest(owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen });
+        }
+      }
+
+      const registeredNumbers = new Set(registrations.map((record) => record.number));
+      const productGroups = new Map();
+      for (const registration of registrations) {
+        const productKey = registration.product?.key || `repo:${key}`;
+        let group = productGroups.get(productKey);
+        if (!group) {
+          group = { product: registration.product || { key: productKey, name: `${owner}/${repo}` }, registrations: [] };
+          productGroups.set(productKey, group);
+        }
+        group.registrations.push(registration);
+      }
+      for (const group of productGroups.values()) {
+        const assembled = assemblePullRequestStacks({
+          defaultBranch,
+          openPullRequests,
+          registrations: group.registrations,
+          relatedPullRequests,
+          retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
+          mergedHeadRecords: this.state.mergedPullRequestHeadsForRepo(owner, repo),
+        });
+        for (const pr of assembled.relatedOpen) {
+          if (registeredNumbers.has(pr.number)) continue;
+          const previous = trackedPullRequests.find((record) => record.number === pr.number);
+          const restackParents = [...(previous?.restackParents || [])];
+          for (const parent of trackedPullRequests) {
+            if (parent.number === pr.number || !['merged', 'closed'].includes(parent.state) || parent.headRefName !== pr.baseRefName) continue;
+            const mergedHead = this.state.mergedPullRequestHeadsForRepo(owner, repo)
+              .find((record) => record.number === parent.number);
+            const headRefOid = mergedHead?.headRefOid || parent.headRefOid || parent.lastOpen?.headRefOid;
+            if (!SHA_PATTERN.test(headRefOid || '') || restackParents.some((item) => item.number === parent.number)) continue;
+            restackParents.push({ number: parent.number, headRefOid, method: mergedHead?.method || null });
+          }
+          const lastOpen = lastOpenPullRequest(pr, openPullRequests, trackedPullRequests, {
+            ...previous,
+            restackParents,
+          });
+          this.state.rememberRelatedPullRequest({ owner, repo, number: pr.number, url: pr.url, lastOpen }, this.now());
+        }
+      }
+    }
+
+    const refreshedRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const refreshedRelatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
     const mergedHeads = this.state.mergedPullRequestHeadsForRepo(owner, repo);
-    const comparisons = listResult.status === 'fulfilled'
-      ? comparisonRequests(openPullRequests, registrations, mergedHeads)
+    const comparisons = listAvailable
+      ? comparisonRequests(openPullRequests, refreshedRegistrations, mergedHeads, refreshedRelatedPullRequests, defaultBranch)
       : [];
     const comparisonStatuses = new Map();
     for (const comparison of comparisons) {
@@ -549,8 +760,39 @@ class PullRequestTracker {
         ]);
         const value = JSON.parse(output);
         comparisonStatuses.set(comparisonKey(comparison.number, comparison.mergedNumber), String(value.status || '').toLowerCase());
+        if (comparison.checkDefaultBranch) {
+          const defaultOutput = await this.execute([
+            'api',
+            `repos/${repository}/compare/${comparison.oldHeadSha}...${encodeURIComponent(defaultBranch)}`,
+          ]);
+          const defaultValue = JSON.parse(defaultOutput);
+          comparisonStatuses.set(comparisonDefaultKey(comparison.number, comparison.mergedNumber), String(defaultValue.status || '').toLowerCase());
+        }
       } catch (error) {
         errors.push(`#${comparison.number} の積み直し状態を確認できません。${ghErrorMessage(error)}`);
+      }
+    }
+
+    for (const pr of openPullRequests) {
+      const tracked = refreshedRegistrations.find((record) => record.number === pr.number) ||
+        refreshedRelatedPullRequests.find((record) => record.number === pr.number);
+      const lastOpen = tracked?.lastOpen;
+      if (!lastOpen?.restackParents?.length) continue;
+      const restackParents = lastOpen.restackParents.filter((parent) => {
+        const method = parent.method || mergeHeadFor(mergedHeads, parent.number)?.method || null;
+        if (method === 'merge') return false;
+        const status = comparisonStatuses.get(comparisonKey(pr.number, parent.number));
+        if (status && !['ahead', 'identical'].includes(status)) return false;
+        const defaultStatus = comparisonStatuses.get(comparisonDefaultKey(pr.number, parent.number));
+        return !(method === null && ['ahead', 'identical'].includes(defaultStatus));
+      });
+      if (restackParents.length === lastOpen.restackParents.length) continue;
+      const updated = { ...lastOpen, restackParents };
+      for (const record of refreshedRegistrations.filter((candidate) => candidate.number === pr.number)) {
+        this.state.updatePullRequest(record.session_id, owner, repo, pr.number, { lastOpen: updated });
+      }
+      if (refreshedRelatedPullRequests.some((record) => record.number === pr.number)) {
+        this.state.updateRelatedPullRequest(owner, repo, pr.number, { lastOpen: updated });
       }
     }
 
@@ -575,6 +817,7 @@ class PullRequestTracker {
     const repositoryState = this.repositories.get(key);
     if (!repositoryState) return;
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
     const productGroups = new Map();
     for (const registration of registrations) {
       const productKey = registration.product?.key || `repo:${key}`;
@@ -590,6 +833,7 @@ class PullRequestTracker {
         defaultBranch: repositoryState.defaultBranch,
         openPullRequests: repositoryState.openPullRequests,
         registrations: group.registrations,
+        relatedPullRequests,
         retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
         mergedHeadRecords: this.state.mergedPullRequestHeadsForRepo(owner, repo),
         comparisonStatuses: repositoryState.comparisonStatuses,

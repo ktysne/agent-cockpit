@@ -657,7 +657,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   const mode = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders });
   assert.equal(mode.status, 200);
   const hidden = await request(runtime.info.port, {
-    method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents'] }), headers: validHeaders,
+    method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
   assert.equal(hidden.status, 200);
   const pinned = await request(runtime.info.port, {
@@ -665,7 +665,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
   assert.equal(pinned.status, 200);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
-    mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents'],
+    mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
   });
 });
 

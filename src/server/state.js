@@ -10,7 +10,7 @@ const DEFAULT_DISPLAY = Object.freeze({ mode: 'product', order: [], pinned: [], 
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
-const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'held', 'agents']);
+const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
 
 function cloneDisplay(display) {
   if (display === null) return null;
@@ -83,6 +83,29 @@ function pullRequestRecordKey(owner, repo, number) {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
 }
 
+function relatedPullRequestRecordKey(owner, repo, number) {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+}
+
+function validPullRequestLastOpen(value) {
+  if (value === null) return true;
+  if (!isRecord(value) ||
+    ['title', 'url', 'headRefName', 'baseRefName'].some((key) => typeof value[key] !== 'string') ||
+    ['title', 'headRefName', 'baseRefName'].some((key) => value[key].length > 500) ||
+    (value.headRefOid !== '' && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value.headRefOid))) return false;
+  const hasBaseParent = value.basePullRequestNumber !== undefined && value.basePullRequestNumber !== null;
+  if ((hasBaseParent && (!Number.isSafeInteger(value.basePullRequestNumber) || value.basePullRequestNumber < 1)) ||
+    (value.basePullRequestHeadRefOid !== undefined && value.basePullRequestHeadRefOid !== null &&
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value.basePullRequestHeadRefOid)) ||
+    (hasBaseParent !== (typeof value.basePullRequestHeadRefOid === 'string'))) return false;
+  const restackParents = value.restackParents === undefined ? [] : value.restackParents;
+  return Array.isArray(restackParents) && restackParents.length <= 500 && restackParents.every((parent) => (
+    isRecord(parent) && Number.isSafeInteger(parent.number) && parent.number > 0 &&
+    typeof parent.headRefOid === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(parent.headRefOid) &&
+    (parent.method === null || ['merge', 'squash', 'rebase'].includes(parent.method))
+  ));
+}
+
 function validPullRequestRecord(record) {
   if (!isRecord(record) || !validStoredSessionId(record.session_id) ||
     !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo) ||
@@ -95,10 +118,7 @@ function validPullRequestRecord(record) {
     (record.mergedAt !== null && !validTimestamp(record.mergedAt))) return false;
   const parsedUrl = parsePullRequestUrl(record.url);
   if (!parsedUrl || parsedUrl.owner !== record.owner || parsedUrl.repo !== record.repo || parsedUrl.number !== record.number) return false;
-  if (record.lastOpen !== null && (!isRecord(record.lastOpen) ||
-    ['title', 'url', 'headRefName', 'baseRefName'].some((key) => typeof record.lastOpen[key] !== 'string') ||
-    ['title', 'headRefName', 'baseRefName'].some((key) => record.lastOpen[key].length > 500) ||
-    (record.lastOpen.headRefOid !== '' && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.lastOpen.headRefOid)))) return false;
+  if (!validPullRequestLastOpen(record.lastOpen)) return false;
   return true;
 }
 
@@ -114,7 +134,40 @@ function normalizePullRequestRecord(record) {
     product: record.product ? { key: record.product.key, name: record.product.name } : null,
     state: record.state || 'unknown',
     mergedAt: record.mergedAt || null,
-    lastOpen: record.lastOpen ? { ...record.lastOpen } : null,
+    lastOpen: record.lastOpen ? {
+      ...record.lastOpen,
+      ...(Array.isArray(record.lastOpen.restackParents)
+        ? { restackParents: record.lastOpen.restackParents.map((parent) => ({ ...parent })) }
+        : {}),
+    } : null,
+  };
+}
+
+function validRelatedPullRequestRecord(record) {
+  if (!isRecord(record) || !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo) ||
+    !Number.isSafeInteger(record.number) || record.number < 1 || !validTimestamp(record.addedAt) ||
+    ![null, 'unknown', 'open', 'merged', 'closed'].includes(record.state) ||
+    (record.mergedAt !== null && !validTimestamp(record.mergedAt))) return false;
+  const parsedUrl = parsePullRequestUrl(record.url);
+  return Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo &&
+    parsedUrl.number === record.number && validPullRequestLastOpen(record.lastOpen));
+}
+
+function normalizeRelatedPullRequestRecord(record) {
+  return {
+    owner: record.owner,
+    repo: record.repo,
+    number: record.number,
+    url: record.url,
+    addedAt: record.addedAt,
+    state: record.state || 'unknown',
+    mergedAt: record.mergedAt || null,
+    lastOpen: record.lastOpen ? {
+      ...record.lastOpen,
+      ...(Array.isArray(record.lastOpen.restackParents)
+        ? { restackParents: record.lastOpen.restackParents.map((parent) => ({ ...parent })) }
+        : {}),
+    } : null,
   };
 }
 
@@ -188,9 +241,11 @@ function normalizeStore(value) {
     hiddenSessions.push({ session_id: record.session_id, updatedAt: record.updatedAt });
   }
   const prs = value.prs === undefined ? [] : value.prs;
+  const relatedPrs = value.relatedPrs === undefined ? [] : value.relatedPrs;
   const retargetedPrs = value.retargetedPrs === undefined ? [] : value.retargetedPrs;
   const mergedPrHeads = value.mergedPrHeads === undefined ? [] : value.mergedPrHeads;
   if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
+    !Array.isArray(relatedPrs) || !relatedPrs.every(validRelatedPullRequestRecord) ||
     !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
     !Array.isArray(mergedPrHeads) || !mergedPrHeads.every(validMergedPullRequestHead)) {
     throw new Error('Invalid pull request records');
@@ -202,6 +257,7 @@ function normalizeStore(value) {
     closedTasks,
     hiddenSessions,
     prs: prs.map(normalizePullRequestRecord),
+    relatedPrs: relatedPrs.map(normalizeRelatedPullRequestRecord),
     retargetedPrs: retargetedPrs.map((record) => ({ ...record })),
     mergedPrHeads: mergedPrHeads.map((record) => ({ ...record })),
   };
@@ -712,6 +768,7 @@ class DashboardState {
     this.hiddenSessionUpdatedAt = new Map();
     this.closedTasks = new Map();
     this.pullRequests = new Map();
+    this.relatedPullRequests = new Map();
     this.pullRequestRetargets = [];
     this.mergedPullRequestHeads = [];
     this.closedAgents = new Map();
@@ -782,6 +839,9 @@ class DashboardState {
       }
       records.set(pullRequestRecordKey(record.owner, record.repo, record.number), record);
     }
+    this.relatedPullRequests = new Map(store.relatedPrs.map((record) => [
+      relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
+    ]));
     this.pullRequestRetargets = store.retargetedPrs;
     this.mergedPullRequestHeads = store.mergedPrHeads;
     this.pruneExpiredStoreRecords(now);
@@ -795,6 +855,11 @@ class DashboardState {
     for (const sessionId of sessionIds) {
       const updatedAt = this.lastStoredUpdateAt(sessionId);
       if (!Number.isFinite(updatedAt) || now - updatedAt > STORE_RETENTION_MS) this.deleteStoredSession(sessionId);
+    }
+    for (const [key, record] of this.relatedPullRequests) {
+      if (!Number.isFinite(Date.parse(record.addedAt)) || now - Date.parse(record.addedAt) > STORE_RETENTION_MS) {
+        this.relatedPullRequests.delete(key);
+      }
     }
   }
 
@@ -859,6 +924,7 @@ class DashboardState {
       closedTasks,
       hiddenSessions,
       prs: this.pullRequestRegistrations(),
+      relatedPrs: [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord),
       retargetedPrs: this.pullRequestRetargets.map((record) => ({ ...record })),
       mergedPrHeads: this.mergedPullRequestHeads.map((record) => ({ ...record })),
     };
@@ -874,6 +940,50 @@ class DashboardState {
     ));
   }
 
+  relatedPullRequestRegistrations() {
+    return [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord);
+  }
+
+  relatedPullRequestRegistrationsForRepo(owner, repo) {
+    return this.relatedPullRequestRegistrations().filter((record) => (
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase()
+    ));
+  }
+
+  rememberRelatedPullRequest(record, now = Date.now()) {
+    if (!isRecord(record)) return false;
+    const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+    const previous = this.relatedPullRequests.get(key);
+    const next = normalizeRelatedPullRequestRecord({
+      owner: record.owner,
+      repo: record.repo,
+      number: record.number,
+      url: record.url,
+      addedAt: previous?.addedAt || isoTime(now),
+      state: 'open',
+      mergedAt: null,
+      lastOpen: record.lastOpen,
+    });
+    if (!validRelatedPullRequestRecord(next)) return false;
+    if (previous && stableStringify(previous) === stableStringify(next)) return false;
+    this.relatedPullRequests.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  updateRelatedPullRequest(owner, repo, number, changes) {
+    const key = relatedPullRequestRecordKey(owner, repo, number);
+    const current = this.relatedPullRequests.get(key);
+    if (!current) return false;
+    const next = normalizeRelatedPullRequestRecord({ ...current, ...changes });
+    if (!validRelatedPullRequestRecord(next) || stableStringify(current) === stableStringify(next)) return false;
+    this.relatedPullRequests.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
   registerPullRequest(sessionId, input, context = {}, now = Date.now()) {
     if (!validStoredSessionId(sessionId)) return null;
     const parsedUrl = parsePullRequestUrl(input?.url);
@@ -886,6 +996,8 @@ class DashboardState {
     }
     const key = pullRequestRecordKey(parsedUrl.owner, parsedUrl.repo, parsedUrl.number);
     const previous = records.get(key);
+    const relatedKey = relatedPullRequestRecordKey(parsedUrl.owner, parsedUrl.repo, parsedUrl.number);
+    const related = this.relatedPullRequests.get(relatedKey);
     const product = context.product && typeof context.product.key === 'string' && typeof context.product.name === 'string'
       ? { key: context.product.key.slice(0, 500), name: context.product.name.slice(0, 200) }
       : previous?.product || null;
@@ -895,12 +1007,19 @@ class DashboardState {
       addedAt: previous?.addedAt || isoTime(now),
       cwd: typeof context.cwd === 'string' && context.cwd.length <= 4096 ? context.cwd : previous?.cwd || null,
       product,
-      state: previous?.state || 'unknown',
-      mergedAt: previous?.mergedAt || null,
-      lastOpen: previous?.lastOpen ? { ...previous.lastOpen } : null,
+      state: previous?.state || related?.state || 'unknown',
+      mergedAt: previous?.mergedAt || related?.mergedAt || null,
+      lastOpen: previous?.lastOpen ? { ...previous.lastOpen } : related?.lastOpen ? { ...related.lastOpen } : null,
     };
-    if (previous && stableStringify(previous) === stableStringify(next)) return normalizePullRequestRecord(previous);
+    if (previous && stableStringify(previous) === stableStringify(next)) {
+      if (this.relatedPullRequests.delete(relatedKey)) {
+        this.touch();
+        this.requestStoreWrite();
+      }
+      return normalizePullRequestRecord(previous);
+    }
     records.set(key, next);
+    this.relatedPullRequests.delete(relatedKey);
     this.touch();
     this.requestStoreWrite();
     return normalizePullRequestRecord(next);

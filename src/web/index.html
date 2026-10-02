@@ -354,6 +354,7 @@ const FILTERS = [
   { key: 'provisional', label: '仮に推奨案で進行中', color: 'warn' },
   { key: 'held', label: '保留中', color: 'hold' },
   { key: 'agents', label: '稼働中のサブエージェント', color: 'accent' },
+  { key: 'prs', label: 'マージできる PR', color: 'ok' },
 ];
 let lastVersion = null;
 let lastState = null;
@@ -672,21 +673,29 @@ function isHeldDecision(decision) {
   return ['waiting', 'provisional'].includes(decision.state) && decision.answer?.choice === 'hold' && !decision.answer.ignoredAt;
 }
 
-function renderSummary(sessions) {
+function renderSummary(sessions, pullRequestGroups = []) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
   const decisions = sessions.flatMap((session) => session.decisions);
   const blockingCount = decisions.filter(isPendingDecision).length;
   const provisionalCount = decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length;
   const heldCount = decisions.filter(isHeldDecision).length;
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
-  const counts = { permission: permissionCount, blocking: blockingCount, provisional: provisionalCount, held: heldCount, agents: agentCount };
+  const counts = {
+    permission: permissionCount,
+    blocking: blockingCount,
+    provisional: provisionalCount,
+    held: heldCount,
+    agents: agentCount,
+    prs: pullRequestMergeableCount(pullRequestGroups),
+  };
   summary.replaceChildren(...FILTERS.map(({ key, label, color }) => {
     const button = element('button', `chip ${color}`.trim());
     button.type = 'button';
     button.dataset.filter = key;
     button.setAttribute('aria-pressed', String(!displayPreferences.hidden.includes(key)));
     button.title = displayPreferences.hidden.includes(key) ? '押すと表示に戻す' : '押すと非表示にする';
-    button.append(document.createTextNode(`${label} `), element('strong', '', String(counts[key])));
+    const count = key === 'prs' ? `(${counts[key]} 件)` : String(counts[key]);
+    button.append(document.createTextNode(`${label} `), element('strong', '', count));
     return button;
   }));
 
@@ -735,6 +744,14 @@ function renderExcludedNote(sessions) {
 
 function isFilterShown(key) {
   return !displayPreferences.hidden.includes(key);
+}
+
+function toggleFilter(key) {
+  const hidden = isFilterShown(key)
+    ? [...displayPreferences.hidden, key]
+    : displayPreferences.hidden.filter((item) => item !== key);
+  saveDisplayPreferences({ hidden });
+  if (lastState) render(lastState);
 }
 
 function hasEffectiveAnswer(decision) {
@@ -1619,14 +1636,16 @@ function productSection(product, index, products, pinnedCount) {
   body.hidden = displayPreferences.collapsed.includes(product.key);
   const multipleSessions = product.sessions.length > 1;
   for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
-  const openCount = pullRequestOpenCount(pullRequestGroups);
-  const prsHeading = element('h3', 'sub', 'プルリクエスト');
-  prsHeading.append(element('span', 'count', `(${openCount} 件)`));
-  body.append(prsHeading);
-  if (pullRequestGroups.length) {
-    for (const group of pullRequestGroups) appendPullRequestBlock(body, group);
-  } else {
-    appendPullRequestBlock(body, null);
+  if (isFilterShown('prs')) {
+    const openCount = pullRequestOpenCount(pullRequestGroups);
+    const prsHeading = element('h3', 'sub', 'プルリクエスト');
+    prsHeading.append(element('span', 'count', `(${openCount} 件)`));
+    body.append(prsHeading);
+    if (pullRequestGroups.length) {
+      for (const group of pullRequestGroups) appendPullRequestBlock(body, group);
+    } else {
+      appendPullRequestBlock(body, null);
+    }
   }
   const reviews = pullRequestGroups.flatMap((group) => group.reviews.map((review) => ({ group, review })));
   if (reviews.length) {
@@ -1765,10 +1784,12 @@ function renderKindSections(products) {
     kindSection('今やっていること', activity),
   );
   const pullRequestGroups = products.flatMap((product) => product.pullRequestGroups.map((group) => ({ product, group })));
-  const pullRequests = element('div', 'body');
-  for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
-  if (!pullRequestGroups.length) pullRequests.append(element('div', 'empty', 'ありません'));
-  sections.push(kindSection('プルリクエスト', pullRequests));
+  if (isFilterShown('prs')) {
+    const pullRequests = element('div', 'body');
+    for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
+    if (!pullRequestGroups.length) pullRequests.append(element('div', 'empty', 'ありません'));
+    sections.push(kindSection('プルリクエスト', pullRequests));
+  }
   const reviews = pullRequestGroups.flatMap(({ product, group }) => group.reviews.map((review) => ({ product, review })));
   if (reviews.length) {
     const reviewContent = element('div', 'body');
@@ -2122,12 +2143,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (button.dataset.filter) {
-    const key = button.dataset.filter;
-    const hidden = isFilterShown(key)
-      ? [...displayPreferences.hidden, key]
-      : displayPreferences.hidden.filter((hidden) => hidden !== key);
-    saveDisplayPreferences({ hidden });
-    if (lastState) render(lastState);
+    toggleFilter(button.dataset.filter);
     return;
   }
   if (button.dataset.productAction === 'close') {
