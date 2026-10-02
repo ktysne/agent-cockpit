@@ -119,6 +119,8 @@ function newSession(event) {
   };
 }
 
+const IDLE_START_SOURCES = new Set(['startup', 'resume', 'clear']);
+
 const AMBIGUOUS_AGENT_CALL = Symbol('ambiguous agent call');
 
 function unboundAgentCallsOf(session) {
@@ -414,6 +416,13 @@ function deriveSessions(entries) {
       if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
     }
 
+    // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
+    const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
+    if (startsIdle) {
+      session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
+      session.tools = session.tools.filter((tool) => tool.agent_id);
+      session.stopped = true;
+    }
     if (eventName === 'UserPromptSubmit') session.stopped = false;
     if (eventName === 'Stop') {
       session.stopped = true;

@@ -799,3 +799,30 @@ test('開始が重なった Agent 呼び出しは、片方が先に終わって�
   const models = state.snapshot().sessions[0].agents.map((agent) => agent.model);
   assert.ok(!models.includes('model-a') && !models.includes('model-b'));
 });
+
+for (const source of ['startup', 'resume', 'clear']) {
+  test(`SessionStart の ${source} を受けたセッションは待機中になり、メインの実行中のツールを外す`, async (t) => {
+    await temporaryHome(t);
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'idle-start', hook_event_name: 'UserPromptSubmit', hookAt: 100 });
+    state.addEvent({ session_id: 'idle-start', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Bash', tool_use_id: 'stale', summary: 'npm test' });
+    state.addEvent({ session_id: 'idle-start', hook_event_name: 'SessionStart', source, hookAt: 300 });
+
+    const session = state.snapshot().sessions[0];
+    assert.equal(session.status, '待機中');
+    assert.equal(session.tools.length, 0);
+  });
+}
+
+test('SessionStart の compact は直前の状態を保つ', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'compact-working', hook_event_name: 'UserPromptSubmit', hookAt: 100 });
+  state.addEvent({ session_id: 'compact-working', hook_event_name: 'SessionStart', source: 'compact', hookAt: 200 });
+  state.addEvent({ session_id: 'compact-idle', hook_event_name: 'Stop', hookAt: 100 });
+  state.addEvent({ session_id: 'compact-idle', hook_event_name: 'SessionStart', source: 'compact', hookAt: 200 });
+
+  const statusOf = (id) => state.snapshot().sessions.find((session) => session.session_id === id).status;
+  assert.equal(statusOf('compact-working'), '作業中');
+  assert.equal(statusOf('compact-idle'), '待機中');
+});
