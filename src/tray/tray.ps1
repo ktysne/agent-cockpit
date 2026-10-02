@@ -65,7 +65,7 @@ namespace AgentCockpitTray {
       SetForegroundWindow(window);
     }
 
-    public static Bitmap DrawTrayBitmap(int size, bool connected, bool pending) {
+    public static Bitmap DrawTrayBitmap(int size, bool connected, bool pending, bool away) {
       float scale = size / 32f;
       Bitmap bitmap = new Bitmap(size, size);
       using (Graphics graphics = Graphics.FromImage(bitmap)) {
@@ -86,12 +86,20 @@ namespace AgentCockpitTray {
             graphics.DrawEllipse(outline, 21 * scale, scale, 10 * scale, 10 * scale);
           }
         }
+        if (away) {
+          using (SolidBrush mark = new SolidBrush(Color.FromArgb(180, 165, 227))) {
+            graphics.FillEllipse(mark, scale, 21 * scale, 10 * scale, 10 * scale);
+          }
+          using (Pen outline = new Pen(Color.White, 1.5f * scale)) {
+            graphics.DrawEllipse(outline, scale, 21 * scale, 10 * scale, 10 * scale);
+          }
+        }
       }
       return bitmap;
     }
 
-    public static Icon CreateTrayIcon(bool connected, bool pending) {
-      using (Bitmap bitmap = DrawTrayBitmap(32, connected, pending)) {
+    public static Icon CreateTrayIcon(bool connected, bool pending, bool away) {
+      using (Bitmap bitmap = DrawTrayBitmap(32, connected, pending, away)) {
         IntPtr handle = bitmap.GetHicon();
         try {
           using (Icon shared = Icon.FromHandle(handle)) {
@@ -119,7 +127,7 @@ function Export-TrayIcon([string]$Path) {
   $sizes = @(16, 32, 48, 256)
   $images = @(
     foreach ($size in $sizes) {
-      $bitmap = [AgentCockpitTray.NativeMethods]::DrawTrayBitmap($size, $true, $false)
+      $bitmap = [AgentCockpitTray.NativeMethods]::DrawTrayBitmap($size, $true, $false, $false)
       $stream = New-Object System.IO.MemoryStream
       try {
         $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -162,22 +170,18 @@ function Export-TrayIcon([string]$Path) {
   }
 }
 
-function Get-ServerPort {
+function Get-ServerInfo {
   $serverInfoPath = Join-Path $script:cockpitHome 'server.json'
   $reader = $null
   try {
     # 常駐サーバーが server.json を名前の変更で置くので、Delete の共有を許して開く。
     $stream = New-Object System.IO.FileStream($serverInfoPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
     $reader = New-Object System.IO.StreamReader($stream)
-    while ($null -ne ($line = $reader.ReadLine())) {
-      $match = [regex]::Match($line, '^\s*"port"\s*:\s*(\d+)\s*,?\s*$')
-      if (-not $match.Success) { continue }
-      $port = 0
-      if (-not [int]::TryParse($match.Groups[1].Value, [ref]$port)) { return $null }
-      if ($port -lt 1 -or $port -gt 65535) { return $null }
-      return $port
-    }
-    return $null
+    $info = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop
+    $port = 0
+    if (-not [int]::TryParse([string]$info.port, [ref]$port) -or $port -lt 1 -or $port -gt 65535) { return $null }
+    if ([string]::IsNullOrWhiteSpace([string]$info.secret)) { return $null }
+    return [pscustomobject]@{ Port = $port; Secret = [string]$info.secret }
   } catch {
     return $null
   } finally {
@@ -185,21 +189,21 @@ function Get-ServerPort {
   }
 }
 
-function Get-DashboardState([object]$Port) {
-  if ($null -eq $Port) {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @() }
+function Get-DashboardState([object]$ServerInfo) {
+  if ($null -eq $ServerInfo) {
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); AwayEnabled = $false }
   }
   try {
-    $state = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
+    $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
     $keys = @()
     foreach ($session in @($state.sessions)) {
       foreach ($wait in @($session.permissionWaits)) {
         if ($null -ne $wait) { $keys += '{0}|{1}|{2}' -f $session.session_id, $wait.agent_id, $wait.startedAt }
       }
     }
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys }
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; AwayEnabled = ($state.away.enabled -eq $true) }
   } catch {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @() }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); AwayEnabled = $false }
   }
 }
 
@@ -250,6 +254,23 @@ function Show-TrayNotice([string]$Message, [System.Windows.Forms.ToolTipIcon]$Ic
   $script:notifyIcon.ShowBalloonTip(5000)
 }
 
+function Set-AwayStatus([bool]$Enabled) {
+  $serverInfo = Get-ServerInfo
+  if ($null -eq $serverInfo) {
+    Show-TrayNotice '離席中を切り替えられませんでした。常駐サーバーの状態を確認してください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
+    Update-TrayState
+    return
+  }
+  try {
+    $headers = @{ 'X-Cockpit-Secret' = $serverInfo.Secret }
+    $body = @{ enabled = $Enabled } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Uri "http://127.0.0.1:$($serverInfo.Port)/api/away" -Method Post -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 2 -UseBasicParsing | Out-Null
+  } catch {
+    Show-TrayNotice '離席中を切り替えられませんでした。常駐サーバーの状態を確認してください。' ([System.Windows.Forms.ToolTipIcon]::Warning)
+  }
+  Update-TrayState
+}
+
 function Open-Dashboard {
   try {
     $nodePath = Get-NodePath
@@ -298,18 +319,22 @@ function Open-Dashboard {
 }
 
 function Update-TrayState {
-  $port = Get-ServerPort
-  $state = Get-DashboardState $port
-  $script:notifyIcon.Text = if (-not $state.Connected) {
+  $serverInfo = Get-ServerInfo
+  $state = Get-DashboardState $serverInfo
+  $tooltip = if (-not $state.Connected) {
     'Agent Cockpit: サーバーに未接続'
   } elseif ($state.PermissionCount -eq 1) {
     'Agent Cockpit: 許可待ち 1 件'
   } else {
     "Agent Cockpit: 許可待ち $($state.PermissionCount) 件"
   }
-  $iconState = '{0}|{1}' -f $state.Connected, ($state.PermissionCount -gt 0)
+  if ($state.AwayEnabled) { $tooltip += ' (離席中)' }
+  if ($tooltip.Length -gt 63) { $tooltip = $tooltip.Substring(0, 63) }
+  $script:notifyIcon.Text = $tooltip
+  if ($script:awayMenuItem) { $script:awayMenuItem.Checked = $state.AwayEnabled }
+  $iconState = '{0}|{1}|{2}' -f $state.Connected, ($state.PermissionCount -gt 0), $state.AwayEnabled
   if ($iconState -ne $script:lastIconState) {
-    $nextIcon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($state.Connected, ($state.PermissionCount -gt 0))
+    $nextIcon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($state.Connected, ($state.PermissionCount -gt 0), $state.AwayEnabled)
     $oldIcon = $script:notifyIcon.Icon
     $script:notifyIcon.Icon = $nextIcon
     if ($oldIcon) { $oldIcon.Dispose() }
@@ -332,12 +357,12 @@ $env:AGENT_COCKPIT_HOME = $script:cockpitHome
 
 if ($Check) {
   $window = Find-DashboardWindow
-  $port = Get-ServerPort
-  $state = Get-DashboardState $port
+  $serverInfo = Get-ServerInfo
+  $state = Get-DashboardState $serverInfo
   [pscustomobject]@{
     WindowFound = ($window -ne [IntPtr]::Zero)
     Connected = $state.Connected
-    Port = $port
+    Port = if ($serverInfo) { $serverInfo.Port } else { $null }
     PermissionCount = $state.PermissionCount
   } | ConvertTo-Json -Compress
   exit 0
@@ -361,14 +386,19 @@ $script:lastPermissionKeys = @()
 $script:permissionKeysKnown = $false
 $script:lastIconState = $null
 $script:balloonOpensDashboard = $false
+$script:awayMenuItem = $null
 try {
   [System.Windows.Forms.Application]::EnableVisualStyles()
   $script:notifyIcon = New-Object System.Windows.Forms.NotifyIcon
   $script:notifyIcon.Text = 'Agent Cockpit: サーバーに未接続'
-  $script:notifyIcon.Icon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($false, $false)
+  $script:notifyIcon.Icon = [AgentCockpitTray.NativeMethods]::CreateTrayIcon($false, $false, $false)
   $menu = New-Object System.Windows.Forms.ContextMenuStrip
   $openItem = $menu.Items.Add('ダッシュボードを開く')
   $openItem.add_Click({ Open-Dashboard })
+  $script:awayMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem('離席中')
+  $script:awayMenuItem.CheckOnClick = $true
+  $script:awayMenuItem.add_Click({ param($sender, $eventArgs) Set-AwayStatus ([bool]$sender.Checked) })
+  $menu.Items.Add($script:awayMenuItem) | Out-Null
   $exitItem = $menu.Items.Add('終了')
   $exitItem.add_Click({ [System.Windows.Forms.Application]::ExitThread() })
   $script:notifyIcon.ContextMenuStrip = $menu

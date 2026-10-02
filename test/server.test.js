@@ -9,6 +9,7 @@ const { runHook } = require('../src/hooks/event');
 const {
   startServer,
   MAX_BODY_BYTES,
+  escapeHtmlAttribute,
 } = require('../src/server/server');
 
 async function temporaryHome(testContext) {
@@ -33,7 +34,7 @@ async function request(port, options = {}) {
     const client = http.request({ host: '127.0.0.1', port, path: options.path || '/', method, headers }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8'), headers: response.headers }));
     });
     client.once('error', reject);
     client.end(body);
@@ -47,6 +48,119 @@ function jsonBody(response) {
     assert.fail(`Expected JSON response, received: ${response.body}`);
   }
 }
+
+test('離席中の切り替えは秘密値と Origin を照合し、状態を軽い応答で返す', async (t) => {
+  const runtime = await runningServer(t);
+  const body = JSON.stringify({ enabled: true });
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body,
+    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${runtime.info.port}` },
+  });
+  assert.equal(missingSecret.status, 401);
+
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+
+  const enabled = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(enabled.status, 200);
+  assert.deepEqual(jsonBody(enabled).enabled, true);
+  assert.ok(Number.isFinite(jsonBody(enabled).since));
+
+  const enabledLocalhost = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body,
+    headers: {
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      origin: `http://localhost:${runtime.info.port}`,
+    },
+  });
+  assert.equal(enabledLocalhost.status, 200);
+
+  const enabledLoopback = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body,
+    headers: {
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      origin: `http://127.0.0.1:${runtime.info.port}`,
+    },
+  });
+  assert.equal(enabledLoopback.status, 200);
+
+  const disabled = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: false }),
+    headers: {
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      origin: `http://localhost:${runtime.info.port}`,
+    },
+  });
+  assert.equal(disabled.status, 200);
+  assert.deepEqual(jsonBody(disabled), { enabled: false, since: null });
+
+  const invalidEnabled = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: 'true' }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(invalidEnabled.status, 400);
+
+  const away = await request(runtime.info.port, { path: '/api/away' });
+  assert.deepEqual(Object.keys(jsonBody(away)).sort(), ['enabled', 'since']);
+  assert.deepEqual(jsonBody(away), { enabled: false, since: null });
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.deepEqual(state.away, { enabled: false, since: null });
+  assert.equal(away.headers['access-control-allow-origin'], undefined);
+});
+
+test('離席状態は同じ置き場でサーバーを再起動しても残る', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const first = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => first.close());
+  const enabled = await request(first.info.port, {
+    method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: true }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': first.info.secret },
+  });
+  assert.equal(enabled.status, 200);
+  const saved = jsonBody(enabled);
+  assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).since, saved.since);
+  await first.close();
+
+  const second = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => second.close());
+  assert.deepEqual(jsonBody(await request(second.info.port, { path: '/api/away' })), saved);
+  assert.deepEqual(jsonBody(await request(second.info.port, { path: '/api/state' })).away, saved);
+});
+
+test('壊れた離席状態は離席中ではない状態として読む', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'away.json'), '{invalid');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), { enabled: false, since: null });
+});
+
+test('画面の meta に秘密値を属性値として埋め、/api/events の Origin 拒否を保つ', async (t) => {
+  const runtime = await runningServer(t);
+  const page = await request(runtime.info.port, { path: '/' });
+  assert.equal(page.status, 200);
+  assert.ok(page.body.includes(`<meta name="cockpit-secret" content="${runtime.info.secret}">`));
+  assert.equal(page.headers['access-control-allow-origin'], undefined);
+
+  const event = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', body: JSON.stringify({}),
+    headers: {
+      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret,
+      origin: `http://127.0.0.1:${runtime.info.port}`,
+    },
+  });
+  assert.equal(event.status, 403);
+});
+
+test('HTML 属性値のエスケープは一般の文字列に対応する', () => {
+  assert.equal(escapeHtmlAttribute(`&"'<>`), '&amp;&quot;&#39;&lt;&gt;');
+});
 
 async function runningServer(t, options = {}) {
   const { homeDir, claudeHome } = await temporaryHome(t);
