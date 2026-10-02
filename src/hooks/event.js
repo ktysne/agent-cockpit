@@ -24,7 +24,7 @@ function inputSummary(toolName, toolInput) {
   const trimmedValue = value.trim();
   if (!trimmedValue) return toolName || '';
   const firstLine = trimmedValue.split(/\r?\n/, 1)[0];
-  const wasTruncated = firstLine.length > 80 || value.trimStart().includes('\n');
+  const wasTruncated = firstLine.length > 80 || trimmedValue.includes('\n');
   return wasTruncated ? `${firstLine.slice(0, 79)}…` : firstLine;
 }
 

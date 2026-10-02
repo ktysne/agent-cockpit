@@ -557,7 +557,8 @@ function renderSummary(sessions) {
 
 function renderExcludedNote(sessions) {
   const note = document.getElementById('excluded-note');
-  const hiddenCount = sessions.filter((session) => session.hidden === true).length;
+  const hiddenSessions = sessions.filter((session) => session.hidden === true);
+  const hiddenCount = hiddenSessions.length;
   note.hidden = hiddenCount === 0;
   if (!hiddenCount) {
     note.replaceChildren();
@@ -566,7 +567,14 @@ function renderExcludedNote(sessions) {
   const showAll = element('button', 'link-btn', 'すべて表示する');
   showAll.type = 'button';
   showAll.dataset.clearHiddenSessions = 'true';
-  note.replaceChildren(element('span', '', `外したセッション ${hiddenCount} 件`), showAll);
+  const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const pendingCounts = [
+    permissionCount ? `許可待ち ${permissionCount} 件` : '',
+    decisionCount ? `止めて待っている ${decisionCount} 件` : '',
+  ].filter(Boolean);
+  const countNote = pendingCounts.length ? `(うち${pendingCounts.join('、')})` : '';
+  note.replaceChildren(element('span', '', `外したセッション ${hiddenCount} 件${countNote}`), showAll);
 }
 
 function isFilterShown(key) {

@@ -474,6 +474,7 @@ class DashboardState {
     this.generatedAt = new Date().toISOString();
     this.sessions = new Map();
     this.endedAt = new Map();
+    this.endedByAbsence = new Map();
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
@@ -493,6 +494,12 @@ class DashboardState {
     this.sessionFiles = next;
 
     for (const sessionId of next.keys()) this.sessionFileLastSeenAt.set(sessionId, now);
+    for (const sessionId of this.endedByAbsence.keys()) {
+      if (next.has(sessionId)) {
+        this.reopenAbsentSession(sessionId);
+        changed = true;
+      }
+    }
     for (const sessionId of this.hiddenSessions) {
       if (!next.has(sessionId) && previous.has(sessionId) && !this.sessions.has(sessionId)) {
         this.hiddenSessions.delete(sessionId);
@@ -506,13 +513,13 @@ class DashboardState {
       }
     }
     for (const [sessionId, lastSeenAt] of this.sessionFileLastSeenAt) {
-      if (
-        !next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId) &&
-        now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS
-      ) {
-        this.endSession(sessionId, now);
-        changed = true;
+      if (!next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId)) {
+        if (now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS) {
+          this.endSessionByAbsence(sessionId, now);
+          changed = true;
+        }
       }
+      if (!next.has(sessionId) && !this.sessions.has(sessionId)) this.sessionFileLastSeenAt.delete(sessionId);
     }
     if (changed) this.touch();
   }
@@ -521,11 +528,30 @@ class DashboardState {
     this.entries.delete(sessionId);
     this.sessions.delete(sessionId);
     this.endedAt.set(sessionId, endedAt);
+    this.endedByAbsence.delete(sessionId);
     this.plans.delete(sessionId);
     this.decisionOverrides.delete(sessionId);
     this.estimates.delete(sessionId);
     this.hiddenSessions.delete(sessionId);
     this.sessionFileLastSeenAt.delete(sessionId);
+  }
+
+  endSessionByAbsence(sessionId, endedAt) {
+    this.sessions.delete(sessionId);
+    this.endedByAbsence.set(sessionId, endedAt);
+    this.estimates.delete(sessionId);
+    this.hiddenSessions.delete(sessionId);
+  }
+
+  reopenAbsentSession(sessionId) {
+    this.endedByAbsence.delete(sessionId);
+    const entries = this.entries.get(sessionId) || [];
+    const [session] = deriveSessions(entries);
+    if (session) this.sessions.set(sessionId, session);
+  }
+
+  hasAgentRow(sessionId, agentId) {
+    return Boolean(agentId && this.sessions.get(sessionId)?.agents.some((agent) => agent.agent_id === agentId));
   }
 
   sessionNameFor(sessionId) {
@@ -556,6 +582,10 @@ class DashboardState {
     if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return true;
     if (endedAt !== undefined && event.hookAt <= endedAt) return true;
 
+    const endedByAbsenceAt = this.endedByAbsence.get(event.session_id);
+    if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return true;
+
+    const before = JSON.stringify([...this.sessions.values()]);
     const hadEstimate = this.estimates.delete(event.session_id);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (endedAt !== undefined) {
@@ -565,8 +595,11 @@ class DashboardState {
       this.decisionOverrides.delete(event.session_id);
       this.sessionFileLastSeenAt.delete(event.session_id);
     }
+    if (endedByAbsenceAt !== undefined) {
+      this.reopenAbsentSession(event.session_id);
+      this.sessionFileLastSeenAt.set(event.session_id, event.hookAt);
+    }
 
-    const before = JSON.stringify([...this.sessions.values()]);
     const entries = this.entries.get(event.session_id) || [];
     entries.push({ event, sequence: this.sequence++ });
     this.entries.set(event.session_id, entries);
@@ -721,7 +754,9 @@ class DashboardState {
 
   snapshot() {
     const fileOnlySessions = [...this.sessionFiles.values()]
-      .filter((file) => !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id))
+      .filter((file) => (
+        !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id) && !this.endedByAbsence.has(file.session_id)
+      ))
       .map((file) => ({
         session_id: file.session_id,
         product: file.product || null,
@@ -735,7 +770,7 @@ class DashboardState {
     const sessionIds = new Set([
       ...this.sessions.keys(),
       ...fileOnlySessions.map((session) => session.session_id),
-      ...[...this.plans.keys()].filter((sessionId) => !this.endedAt.has(sessionId)),
+      ...[...this.plans.keys()].filter((sessionId) => !this.endedAt.has(sessionId) && !this.endedByAbsence.has(sessionId)),
     ]);
     const currentSessions = [...sessionIds].map((sessionId) => {
       const session = this.sessions.get(sessionId);

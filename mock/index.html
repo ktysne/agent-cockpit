@@ -588,7 +588,14 @@ function renderSummary() {
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
   excluded.hidden = hiddenSessions.length === 0;
-  excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
+  const hiddenPermissionCount = hiddenSessions.reduce((n, s) => n + s.perms.length, 0);
+  const hiddenDecisionCount = hiddenSessions.reduce((n, s) => n + s.decisions.filter(d => effectiveDecisionState(d) === 'waiting' && !answerOf(d.id).sent).length, 0);
+  const pendingCounts = [
+    hiddenPermissionCount ? `許可待ち ${hiddenPermissionCount} 件` : '',
+    hiddenDecisionCount ? `止めて待っている ${hiddenDecisionCount} 件` : '',
+  ].filter(Boolean);
+  const countNote = pendingCounts.length ? `(うち${pendingCounts.join('、')})` : '';
+  excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。

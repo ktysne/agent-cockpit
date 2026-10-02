@@ -373,6 +373,41 @@ test('SubagentStart のない agent_type 付きイベントから定義を読み
   assert.equal(agent.effort, 'high');
 });
 
+test('サブエージェント行があるイベントでは定義を読み直さず SubagentStart では読む', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const definitionPath = path.join(claudeHome, 'agents', 'Explore.md');
+  await fs.mkdir(path.dirname(definitionPath), { recursive: true });
+  await fs.writeFile(definitionPath, '---\nmodel: claude-sonnet-5-5\n---\n');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+
+  const originalReadFile = fs.readFile;
+  let definitionReads = 0;
+  fs.readFile = async function (filePath, ...args) {
+    if (path.resolve(filePath) === path.resolve(definitionPath)) definitionReads += 1;
+    return originalReadFile.call(fs, filePath, ...args);
+  };
+  try {
+    const postEvent = (hook_event_name, hookAt, tool_use_id) => request(runtime.info.port, {
+      method: 'POST', path: '/api/events',
+      body: JSON.stringify({
+        session_id: 'agent-definition-read', hook_event_name, hookAt,
+        agent_id: 'agent-1', agent_type: 'Explore', tool_name: 'Read', tool_use_id,
+      }),
+      headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    });
+
+    assert.equal((await postEvent('PreToolUse', 100, 'read-1')).status, 202);
+    assert.equal(definitionReads, 1);
+    assert.equal((await postEvent('PreToolUse', 200, 'read-2')).status, 202);
+    assert.equal(definitionReads, 1);
+    assert.equal((await postEvent('SubagentStart', 300, 'read-3')).status, 202);
+    assert.equal(definitionReads, 2);
+  } finally {
+    fs.readFile = originalReadFile;
+  }
+});
+
 test('/plan は秘密値と Origin を照合し、session ID と入力上限を検査する', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/sessions/plan-session/plan';

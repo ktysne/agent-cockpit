@@ -378,7 +378,10 @@ function createRequestHandler(options) {
       let agentDefinition = null;
       let codexDefinitionMetadata = null;
 
-      if (body.agent_id && body.agent_type && eventName !== 'SubagentStop') {
+      if (
+        body.agent_id && body.agent_type && eventName !== 'SubagentStop' &&
+        (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, body.agent_id))
+      ) {
         agentDefinition = await claudeAgentDefinition(body.agent_type, claudeHome);
       }
       if (eventName === 'PreToolUse') {

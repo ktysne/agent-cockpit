@@ -68,6 +68,7 @@ test('入力要約は切り詰めた場合にだけ80文字以内で省略記号
   await temporaryHome(t);
   const cases = [
     ['複数行の入力', 'git status\n2行目', 'git status…'],
+    ['末尾の改行だけの入力には付けない', 'git status\n', 'git status'],
     ['80文字を超える入力', 'x'.repeat(81), `${'x'.repeat(79)}…`],
     ['80文字ちょうどの入力', 'x'.repeat(80), 'x'.repeat(80)],
   ];

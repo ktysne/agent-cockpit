@@ -78,8 +78,58 @@ test('セッションファイルから60秒間消えたイベントセッショ
   assert.equal(state.snapshot().sessions.length, 1);
 
   state.syncSessionFiles([], 61_000);
-  assert.equal(state.endedAt.get('ended-by-file'), 61_000);
+  assert.equal(state.endedByAbsence.get('ended-by-file'), 61_000);
+  assert.equal(state.sessionFileLastSeenAt.has('ended-by-file'), false);
   assert.deepEqual(state.snapshot().sessions, []);
+});
+
+test('一覧から消えて終了扱いになったセッションは新しい SessionStart で戻る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'resume-by-start', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'resume-by-start', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+
+  state.addEvent({ session_id: 'resume-by-start', hook_event_name: 'SessionStart', hookAt: 62_000 });
+
+  assert.equal(state.endedByAbsence.has('resume-by-start'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('一覧から消えて終了扱いになったセッションは新しいイベントで戻る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'resume-by-event', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'resume-by-event', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+
+  state.addEvent({ session_id: 'resume-by-event', hook_event_name: 'UserPromptSubmit', hookAt: 62_000 });
+
+  assert.equal(state.endedByAbsence.has('resume-by-event'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('一覧に戻ったセッションファイルで不在終了の扱いを解除する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'resume-by-file', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'resume-by-file', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+
+  state.syncSessionFiles([{ session_id: 'resume-by-file', cwd: 'C:\\project', name: '作業中' }], 62_000);
+
+  assert.equal(state.endedByAbsence.has('resume-by-file'), false);
+  assert.equal(state.snapshot().sessions.length, 1);
+});
+
+test('一覧にない状態不明セッションの最終確認時刻は Map から削除する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'file-only', cwd: 'C:\\project', name: '作業中' }], 1_000);
+
+  state.syncSessionFiles([], 2_000);
+
+  assert.equal(state.sessionFileLastSeenAt.has('file-only'), false);
 });
 
 test('セッションファイルから59秒しか消えていないイベントセッションを残す', async (t) => {
@@ -311,6 +361,29 @@ test('Agent ツールの resolvedModel でサブエージェントの仮モデ�
   assert.equal(agent.model, 'claude-resolved');
   assert.equal(agent.effort, 'high');
   assert.equal(agent.source, 'Agent tool response');
+});
+
+test('外したセッションが一覧不在で終了したら外した集合からも除く', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'hidden-absent', cwd: 'C:\\project', name: '作業中' }], 1_000);
+  state.addEvent({ session_id: 'hidden-absent', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.hideSession('hidden-absent');
+
+  state.syncSessionFiles([], 61_000);
+
+  assert.equal(state.hiddenSessions.has('hidden-absent'), false);
+  assert.deepEqual(state.snapshot().sessions, []);
+});
+
+test('サブエージェント行の有無をセッションごとに調べる', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'agent-row', hook_event_name: 'SubagentStart', hookAt: 100, agent_id: 'agent-1', agent_type: 'Explore' });
+
+  assert.equal(state.hasAgentRow('agent-row', 'agent-1'), true);
+  assert.equal(state.hasAgentRow('agent-row', 'missing-agent'), false);
+  assert.equal(state.hasAgentRow('missing-session', 'agent-1'), false);
 });
 
 test('再起動後に agent_id 付きイベントからサブエージェントの行を復元する', async (t) => {
