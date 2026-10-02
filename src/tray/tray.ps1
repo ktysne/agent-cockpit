@@ -290,7 +290,8 @@ function Get-DashboardState([object]$ServerInfo) {
     $decisionKeys = @()
     foreach ($session in @($state.sessions)) {
       foreach ($decision in @($session.decisions)) {
-        if ($decision -and $decision.state -eq 'waiting') { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
+        $hasEffectiveAnswer = $decision.answer -and $decision.answer.sentAt -and -not $decision.answer.ignoredAt
+        if ($decision -and $decision.state -eq 'waiting' -and -not $hasEffectiveAnswer) { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
       }
     }
     return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }

@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
+const { DecisionAnswerDelivery } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
@@ -110,6 +111,14 @@ function validUiOrigin(request, port) {
   return origin === undefined || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
 }
 
+function validRequiredUiOrigin(request, port) {
+  const host = typeof request.headers.host === 'string' ? request.headers.host.toLowerCase() : '';
+  const origin = request.headers.origin;
+  const fetchSite = request.headers['sec-fetch-site'];
+  return [`127.0.0.1:${port}`, `localhost:${port}`].includes(host) && origin === `http://${host}` &&
+    (fetchSite === undefined || fetchSite === 'same-origin');
+}
+
 function escapeHtmlAttribute(value) {
   return String(value).replace(/[&"'<>]/g, (character) => ({
     '&': '&amp;',
@@ -184,6 +193,7 @@ function createRequestHandler(options) {
     claudeHome,
     state,
     away,
+    answerDelivery,
     dev,
     getServerInfo,
     markRequest,
@@ -228,6 +238,107 @@ function createRequestHandler(options) {
         return;
       }
       jsonResponse(response, 200, state.devFields());
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/hooks/answers') {
+      if (request.headers['x-cockpit-secret'] !== info.secret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validOriginForWrite(request)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      try {
+        let result;
+        if (body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions)) {
+          result = answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id });
+        } else if (body.action === 'ask-poll' && body.event_name === 'PreToolUse') {
+          result = await answerDelivery.waitForAsk({ sessionId: body.session_id, toolUseId: body.id });
+        } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'hold', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
+          result = answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome });
+        } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch') {
+          const additionalContext = answerDelivery.deliverPending(body.session_id);
+          result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
+        } else if (body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit') {
+          const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
+          result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
+        } else if (body.action === 'stop-start' && body.event_name === 'Stop') {
+          result = { generation: answerDelivery.startStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined) };
+        } else if (body.action === 'stop-poll' && body.event_name === 'Stop' && Number.isInteger(body.generation) && typeof body.parent_alive === 'boolean') {
+          result = await answerDelivery.waitForStopAnswer(body.session_id, body.generation, body.parent_alive);
+        } else {
+          jsonResponse(response, 400, { error: 'Invalid request' });
+          return;
+        }
+        jsonResponse(response, 200, result);
+      } catch {
+        jsonResponse(response, 500, { error: 'Internal Server Error' });
+      }
+      return;
+    }
+    const answerPath = requestUrl.pathname.match(/^\/api\/decisions\/([^/]+)\/answer$/);
+    if (request.method === 'POST' && answerPath) {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      let decisionId;
+      try {
+        decisionId = decodeURIComponent(answerPath[1]);
+      } catch {
+        jsonResponse(response, 400, { error: 'Invalid decision id' });
+        return;
+      }
+      if (
+        !body || typeof body !== 'object' || Array.isArray(body) ||
+        !validSessionId(body.session_id) || body.choice !== null && !['ok', 'hold'].includes(body.choice) ||
+        !validText(body.note, 2000, true)
+      ) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      if (body.choice === null && !body.note.trim()) {
+        jsonResponse(response, 400, { error: 'An answer is required' });
+        return;
+      }
+      const decision = state.decisionFor(body.session_id, decisionId);
+      if (!decision || decision.session_id !== body.session_id) {
+        jsonResponse(response, 404, { error: 'Decision not found' });
+        return;
+      }
+      const answer = answerDelivery.submitAnswer(body.session_id, decisionId, body.choice, body.note);
+      if (answer === false) {
+        jsonResponse(response, 400, { error: 'A recommended option is required for this choice' });
+        return;
+      }
+      if (!answer) {
+        jsonResponse(response, 409, { error: 'Decision cannot be answered now' });
+        return;
+      }
+      jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/') {
@@ -346,7 +457,9 @@ function createRequestHandler(options) {
         return;
       }
       try {
-        jsonResponse(response, 200, await away.setEnabled(body.enabled));
+        const snapshot = await away.setEnabled(body.enabled);
+        if (!snapshot.enabled) answerDelivery.signalAll();
+        jsonResponse(response, 200, snapshot);
       } catch {
         jsonResponse(response, 500, { error: 'Internal Server Error' });
       }
@@ -391,7 +504,10 @@ function createRequestHandler(options) {
         }
       }
 
-      state.addEvent(body, { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata });
+      const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
+      state.addEvent(body, eventMetadata);
+      const event = sanitizeEvent(body, eventMetadata);
+      if (event) answerDelivery.afterEvent(event);
       jsonResponse(response, 202, { accepted: true });
       return;
     }
@@ -465,6 +581,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 404, { error: 'Decision not found or already resolved' });
         return;
       }
+      answerDelivery.afterDecisionUpdate(sessionId, decision.id);
       const decisions = decisionSummaries(state, sessionId);
       jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
       return;
@@ -519,6 +636,11 @@ async function startServer(options = {}) {
 
   const state = options.state || new DashboardState();
   const away = options.away || await AwayState.load(homeDir);
+  const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
+    state,
+    away,
+    ...(options.answerDeliveryOptions || {}),
+  });
   let info = null;
   let closing = null;
   let lastRequestAt = Date.now();
@@ -534,6 +656,7 @@ async function startServer(options = {}) {
     claudeHome,
     state,
     away,
+    answerDelivery,
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
@@ -580,6 +703,7 @@ async function startServer(options = {}) {
     closing = (async () => {
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
+      answerDelivery.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');
@@ -587,7 +711,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, info, homeDir, close };
+  return { server, state, away, answerDelivery, info, homeDir, close };
 }
 
 function parseArguments(argv) {
@@ -619,6 +743,7 @@ module.exports = {
   MAX_BODY_BYTES,
   requestHostIsLocal,
   validUiOrigin,
+  validRequiredUiOrigin,
   validSessionId,
   validTasks,
   validDecisionOptions,

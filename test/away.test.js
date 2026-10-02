@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
-const { DENY_REASON, runAwayHook, sessionSummary } = require('../src/hooks/away');
+const { runAwayHook, sessionSummary } = require('../src/hooks/away');
 
 async function temporaryHome(testContext, withServerInfo = true) {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-away-test-'));
@@ -24,19 +24,33 @@ function awayResponse(enabled = true, since = Date.parse('2026-10-02T01:02:03.00
   return new Response(JSON.stringify({ enabled, since: enabled ? since : null }), { status: 200 });
 }
 
-test('離席中の AskUserQuestion を拒否する', async (t) => {
+test('離席中の AskUserQuestion は常駐サーバーの回答待ちに登録し、期限後の JSON を返す', async (t) => {
   const homeDir = await temporaryHome(t);
-  const result = await runAwayHook({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-42' }, {
-    homeDir,
-    fetchImpl: async () => awayResponse(),
-  });
-  assert.deepEqual(result, {
+  const fallbackOutput = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: DENY_REASON.replace('{id}', 'ask-42'),
+      permissionDecisionReason: '期限切れ',
+    },
+  };
+  const calls = [];
+  const result = await runAwayHook({
+    session_id: 'ask-session', hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-42',
+    tool_input: { questions: [{ question: 'どの形式にしますか。', options: [] }] },
+  }, {
+    homeDir,
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (body.action === 'ask-register') return new Response(JSON.stringify({ awaiting: true, decisionId: 'ask-42', fallbackOutput }));
+      if (body.action === 'ask-poll') return new Response(JSON.stringify({ outcome: 'timeout' }));
+      return new Response(JSON.stringify({ outcome: 'timeout', hookOutput: fallbackOutput }));
     },
   });
+  assert.deepEqual(result, fallbackOutput);
+  assert.deepEqual(calls.map((call) => call.action), ['ask-register', 'ask-poll', 'ask-finish']);
+  assert.equal(calls[0].event_name, 'PreToolUse');
+  assert.equal(calls[0].id, 'ask-42');
 });
 
 test('離席中でも AskUserQuestion 以外のツールには出力しない', async (t) => {

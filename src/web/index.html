@@ -60,6 +60,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .chip strong { color: var(--text); font-size: 13px; margin-left: 4px; }
 .chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
 .chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .meta { color: var(--text-2); font-size: 12px; }
 #connection-note { color: var(--danger); }
@@ -101,6 +102,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-row, .agent-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .who { color: var(--text-2); font-size: 12px; }
 .who strong { color: var(--text); display: block; font-size: 13px; font-weight: 600; }
+.agent-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .detail { overflow-wrap: anywhere; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tool-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
@@ -132,6 +134,22 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .decision-option { min-width: 0; padding: 6px 8px; border-radius: 6px; overflow-wrap: anywhere; }
 .decision-option.recommended { background: var(--accent-soft); }
 .decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
+.decision-answer { display: grid; gap: 8px; margin-top: 10px; }
+.answer-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.answer-choice { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; }
+.answer-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.answer-choice.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.answer-choice.hold:has(input:checked) { background: var(--hold-soft); border-color: var(--hold); color: var(--hold); }
+.answer-choice.ok input { accent-color: var(--ok); }
+.answer-choice.hold input { accent-color: var(--hold); }
+.decision-answer textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
+.decision-answer textarea:focus-visible, .answer-choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.answer-foot .primary { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; }
+.answer-foot .primary:disabled { opacity: .45; cursor: default; }
+.answer-status { color: var(--text-2); font-size: 12px; }
+.answer-error { color: var(--danger); font-size: 12px; }
+.dialog-note { margin-top: 8px; }
 .task-list { list-style: none; margin: 0; padding: 0; }
 .task-item { min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
@@ -289,11 +307,14 @@ const FILTERS = [
   { key: 'permission', label: '許可待ち', color: 'danger' },
   { key: 'blocking', label: '止めて待っている', color: 'danger' },
   { key: 'provisional', label: '仮に推奨案で進行中', color: 'warn' },
+  { key: 'held', label: '保留中', color: 'hold' },
   { key: 'agents', label: '稼働中のサブエージェント', color: 'accent' },
 ];
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
+let answerNoteComposing = false;
+let deferredRenderPending = false;
 let connectionLost = false;
 let lastStateAt = new Date();
 let writeErrorUntil = 0;
@@ -302,6 +323,7 @@ let writeErrorTimer = null;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
 const expandedDoneTasks = new Set();
+const answerDrafts = new Map();
 
 function readDisplayPreferences() {
   try {
@@ -512,17 +534,27 @@ function appendModelLine(target, agent) {
 
 function updateTitle(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
   const pendingCount = permissionCount + decisionCount;
   document.title = pendingCount ? `(${pendingCount}) Agent Cockpit` : 'Agent Cockpit';
 }
 
+function isPendingDecision(decision) {
+  return decision.state === 'waiting' && !hasEffectiveAnswer(decision);
+}
+
+function isHeldDecision(decision) {
+  return ['waiting', 'provisional'].includes(decision.state) && decision.answer?.choice === 'hold' && !decision.answer.ignoredAt;
+}
+
 function renderSummary(sessions) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const blockingCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
-  const provisionalCount = sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'provisional').length, 0);
+  const decisions = sessions.flatMap((session) => session.decisions);
+  const blockingCount = decisions.filter(isPendingDecision).length;
+  const provisionalCount = decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length;
+  const heldCount = decisions.filter(isHeldDecision).length;
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
-  const counts = { permission: permissionCount, blocking: blockingCount, provisional: provisionalCount, agents: agentCount };
+  const counts = { permission: permissionCount, blocking: blockingCount, provisional: provisionalCount, held: heldCount, agents: agentCount };
   summary.replaceChildren(...FILTERS.map(({ key, label, color }) => {
     const button = element('button', `chip ${color}`.trim());
     button.type = 'button';
@@ -568,7 +600,7 @@ function renderExcludedNote(sessions) {
   showAll.type = 'button';
   showAll.dataset.clearHiddenSessions = 'true';
   const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
   const pendingCounts = [
     permissionCount ? `許可待ち ${permissionCount} 件` : '',
     decisionCount ? `止めて待っている ${decisionCount} 件` : '',
@@ -581,15 +613,21 @@ function isFilterShown(key) {
   return !displayPreferences.hidden.includes(key);
 }
 
+function hasEffectiveAnswer(decision) {
+  return Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt);
+}
+
 function shownPermissions(session) {
   return isFilterShown('permission') ? session.permissionWaits : [];
 }
 
 function shownActiveDecisions(session) {
-  return session.decisions.filter((decision) =>
-    (decision.state === 'waiting' && isFilterShown('blocking')) ||
-    (decision.state === 'provisional' && isFilterShown('provisional')),
-  );
+  return session.decisions.filter((decision) => {
+    if (!['waiting', 'provisional'].includes(decision.state)) return false;
+    if (decision.answer?.choice === 'hold' && !decision.answer.ignoredAt) return isFilterShown('held');
+    if (hasEffectiveAnswer(decision)) return true;
+    return decision.state === 'waiting' ? isFilterShown('blocking') : isFilterShown('provisional');
+  });
 }
 
 function productGroups(sessions) {
@@ -697,8 +735,9 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
     who.append(element('span', `dot ${agent.unconfirmed ? 'wait' : agentState[1]}`));
     appendContextTags(who, product, session, withTags, multipleSessions);
-    who.append(element('strong', '', agent.agent_type || agent.agent_id));
-    who.append(badge(agentState[0], agentState[1]));
+    const name = element('span', 'agent-name');
+    name.append(badge(agentState[0], agentState[1]), element('strong', '', agent.agent_type || agent.agent_id));
+    who.append(name);
     const detail = element('div', 'detail');
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
@@ -756,7 +795,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
     const who = wait.agent_id ? (agent?.agent_type || 'サブエージェント') : 'メイン';
     header.append(element('strong', '', `${who}がツールの実行許可を待っている`));
     header.append(badge('許可待ち', 'permission-chip'));
-    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), minutes === null ? '時刻不明' : `${minutes} 分待機中${isLong ? '(長い)' : ''}`));
+    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), minutes === null ? '時刻不明' : `${minutes} 分待機中`));
     card.append(header);
     if (wait.tool_name || wait.summary) {
       const context = element('div', 'decision-context permission-tool');
@@ -782,9 +821,108 @@ function decisionStateLabel(state) {
   }[state] || state;
 }
 
+function answerDraftFor(decision, session) {
+  const key = `${session.session_id}\0${decision.id}`;
+  const saved = answerDrafts.get(key);
+  return saved || { choice: decision.answer?.choice ?? null, note: decision.answer?.note || '' };
+}
+
+function displayRecommendedLabel(label) {
+  return label.replace(/(?:\(推奨\)|（推奨）|\(recommended\)|（recommended）)/ig, '').replace(/\s+/g, ' ').trim();
+}
+
+function answerTimeLabel(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function answerStatusText(answer) {
+  if (!answer?.sentAt) return '未送信';
+  const label = answer.choice === 'ok' ? '推奨案で OK' : answer.choice === 'hold' ? '判断を保留' : '指示のみ';
+  const status = [`${answerTimeLabel(answer.sentAt)} に送信済み: ${label}${answer.note ? '(指示あり)' : ''}`];
+  if (answer.deliveredAt) status.push(`${answerTimeLabel(answer.deliveredAt)} に渡した`);
+  if (answer.reflectedAt) status.push(`${answerTimeLabel(answer.reflectedAt)} に反映された`);
+  return status.join('、');
+}
+
+function appendDecisionAnswer(card, decision, product, session) {
+  const questions = decision.questions || [];
+  const duplicateQuestions = new Set(questions.map((question) => question.question)).size !== questions.length;
+  const waitingForAnswer = decision.state === 'waiting' && Boolean(decision.awaitingAnswerUntil);
+  const hasSentAnswer = Boolean(decision.answer?.sentAt);
+  const active = decision.state === 'provisional' || waitingForAnswer || (decision.state === 'waiting' && hasSentAnswer);
+  const viaDialog = duplicateQuestions || (decision.state === 'waiting' && !waitingForAnswer && !hasSentAnswer);
+  if (viaDialog) {
+    card.append(element('div', 'meta dialog-note', `質問はデスクトップアプリの ${product.name} のセッションで答える。`));
+    return;
+  }
+  if (!active) {
+    if (decision.answer?.sentAt) card.append(element('div', 'answer-status', answerStatusText(decision.answer)));
+    return;
+  }
+
+  const answer = decision.answer;
+  const draft = answerDraftFor(decision, session);
+  const originalChoice = answer?.choice ?? null;
+  const originalNote = answer?.note || '';
+  const dirty = !answer?.sentAt || draft.choice !== originalChoice || draft.note !== originalNote;
+  const recommendations = questions.map((question) => {
+    if (question.multiSelect) return null;
+    const options = question.options.filter((option) => option.recommended === true);
+    return options.length === 1 ? options[0] : null;
+  });
+  const canUseRecommendation = recommendations.length > 0 && recommendations.every(Boolean);
+  const answerBox = element('div', 'decision-answer');
+  answerBox.dataset.decisionId = decision.id;
+  answerBox.dataset.sessionId = session.session_id;
+  const choices = element('div', 'answer-choices');
+  for (const [choice, label, disabled] of [
+    ['ok', '推奨案で OK', !canUseRecommendation],
+    ['hold', '判断を保留する', false],
+  ]) {
+    const control = document.createElement('label');
+    control.className = `answer-choice ${choice}`;
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.dataset.answerChoice = choice;
+    checkbox.dataset.sessionId = session.session_id;
+    checkbox.dataset.decisionId = decision.id;
+    checkbox.checked = draft.choice === choice;
+    checkbox.disabled = disabled;
+    control.append(checkbox, document.createTextNode(label));
+    choices.append(control);
+  }
+  answerBox.append(choices);
+  const optionNames = recommendations.map((option) => option && displayRecommendedLabel(option.label)).filter(Boolean);
+  answerBox.append(element('div', 'meta', canUseRecommendation
+    ? `OK で送る答え: ${optionNames.join('、')}`
+    : '推奨の無い質問があるので、指示の欄に答えを書く'));
+  const note = document.createElement('textarea');
+  note.dataset.answerNote = 'true';
+  note.dataset.sessionId = session.session_id;
+  note.dataset.decisionId = decision.id;
+  note.maxLength = 2000;
+  note.setAttribute('aria-label', '指示');
+  note.placeholder = '指示があれば書く(例: 2 番目の案で。理由は…)';
+  note.value = draft.note;
+  answerBox.append(note);
+  const foot = element('div', 'answer-foot');
+  const send = element('button', 'primary', '回答を送る');
+  send.type = 'button';
+  send.dataset.sendAnswer = decision.id;
+  send.dataset.sessionId = session.session_id;
+  send.disabled = (!draft.choice && !draft.note.trim()) || !dirty;
+  foot.append(send, element('span', 'answer-status', answerStatusText(answer)));
+  const error = element('div', 'answer-error');
+  error.setAttribute('role', 'alert');
+  answerBox.append(foot, error);
+  card.append(answerBox);
+}
+
 function appendDecisionCard(list, decision, product, session, withTags = false, multipleSessions = false) {
   const age = Date.now() - Date.parse(decision.createdAt);
-  const longWait = decision.state === 'waiting' && age > LONG_WAIT_MS;
+  const longWait = decision.state === 'waiting' && age > LONG_WAIT_MS && !hasEffectiveAnswer(decision);
   const card = element('article', `decision-card ${decision.state} ${longWait ? 'long-wait' : ''}`.trim());
   const header = element('div', 'decision-head');
   appendContextTags(header, product, session, withTags, multipleSessions);
@@ -798,6 +936,10 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
       ? `仮適用から ${durationLabel(decision.updatedAt)}`
       : `更新 ${durationLabel(decision.updatedAt)}`;
   header.append(element('time', 'since', elapsed));
+  if (decision.state === 'waiting' && decision.awaitingAnswerUntil) {
+    const remaining = Math.max(0, Math.ceil((Date.parse(decision.awaitingAnswerUntil) - Date.now()) / 60_000));
+    header.append(element('span', 'wait awaiting-min', `あと ${remaining} 分で推奨に進む`));
+  }
   // id はモデルが cockpit_update_decision で使う値なので、本文に出さずマウスを重ねたときだけ出す。
   card.title = `id: ${decision.id}`;
   card.append(header);
@@ -812,7 +954,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
       const options = element('ul', 'decision-options');
       for (const option of question.options) {
         const row = element('li', `decision-option ${option.recommended ? 'recommended' : ''}`.trim());
-        const label = option.recommended ? option.label.replace(/^\(推奨\)\s*/, '') : option.label;
+        const label = option.recommended ? displayRecommendedLabel(option.label) : option.label;
         row.append(element('span', '', label));
         if (option.recommended) row.append(badge('推奨', 'busy'));
         if (option.description) row.append(element('span', 'decision-option-description', option.description));
@@ -830,6 +972,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
     if (choices) card.append(element('div', 'meta', `選択: ${choices}`));
     if (decision.resolution.note) card.append(element('div', 'meta', decision.resolution.note));
   }
+  appendDecisionAnswer(card, decision, product, session);
   list.append(card);
 }
 
@@ -1150,6 +1293,11 @@ function renderKindSections(products) {
 }
 
 function render(state) {
+  if (answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) {
+    deferredRenderPending = true;
+    return;
+  }
+  deferredRenderPending = false;
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
   const active = document.activeElement;
@@ -1157,6 +1305,9 @@ function render(state) {
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
+        : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
+          : active?.dataset?.answerNote ? { kind: 'answer-note', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, start: active.selectionStart, end: active.selectionEnd }
+            : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' } : null;
   renderSummary(sessions);
@@ -1179,6 +1330,20 @@ function render(state) {
   }
 
   if (focusData) {
+    if (['answer-choice', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
+      const control = [...root.querySelectorAll('[data-answer-choice], [data-answer-note], [data-send-answer]')].find((item) => (
+        item.dataset.sessionId === focusData.sessionId &&
+        (item.dataset.decisionId || item.dataset.sendAnswer) === focusData.decisionId &&
+        (focusData.kind !== 'answer-choice' || item.dataset.answerChoice === focusData.choice) &&
+        (focusData.kind !== 'answer-note' || item.hasAttribute('data-answer-note')) &&
+        (focusData.kind !== 'answer-submit' || item.hasAttribute('data-send-answer'))
+      ));
+      control?.focus({ preventScroll: true });
+      if (focusData.kind === 'answer-note' && control instanceof HTMLTextAreaElement) {
+        control.setSelectionRange(focusData.start, focusData.end);
+      }
+      return;
+    }
     const buttons = [...document.querySelectorAll('button')];
     const button = buttons.find((item) => {
       if (focusData.kind === 'toggle') return item.getAttribute(focusData.attribute) === focusData.value;
@@ -1195,6 +1360,124 @@ function render(state) {
     fallback?.focus({ preventScroll: true });
   }
 }
+
+function renderDeferredState() {
+  if (!deferredRenderPending || answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) return;
+  deferredRenderPending = false;
+  if (lastState) render(lastState);
+}
+
+function findDecision(sessionId, decisionId) {
+  const session = lastState?.sessions.find((item) => item.session_id === sessionId);
+  return session?.decisions.find((item) => item.id === decisionId) || null;
+}
+
+function answerDraftKey(sessionId, decisionId) {
+  return `${sessionId}\0${decisionId}`;
+}
+
+function updateAnswerSubmit(card) {
+  const sessionId = card.dataset.sessionId;
+  const decisionId = card.dataset.decisionId;
+  const decision = findDecision(sessionId, decisionId);
+  const button = card.querySelector('[data-send-answer]');
+  if (!decision || !button) return;
+  const draft = answerDraftFor(decision, { session_id: sessionId });
+  const changed = !decision.answer?.sentAt || draft.choice !== (decision.answer?.choice ?? null) || draft.note !== (decision.answer?.note || '');
+  button.disabled = (!draft.choice && !draft.note.trim()) || !changed;
+}
+
+function showAnswerError(sessionId, decisionId, message) {
+  const card = [...root.querySelectorAll('.decision-answer')].find((item) => (
+    item.dataset.sessionId === sessionId && item.dataset.decisionId === decisionId
+  ));
+  const error = card?.querySelector('.answer-error');
+  if (error) error.textContent = message;
+}
+
+async function sendDecisionAnswer(button) {
+  const sessionId = button.dataset.sessionId;
+  const decisionId = button.dataset.sendAnswer;
+  const decision = findDecision(sessionId, decisionId);
+  if (!decision) return;
+  const draft = answerDraftFor(decision, { session_id: sessionId });
+  button.disabled = true;
+  try {
+    const response = await postUiAction(`/api/decisions/${encodeURIComponent(decisionId)}/answer`, {
+      session_id: sessionId,
+      choice: draft.choice,
+      note: draft.note,
+    });
+    if (response.status === 409 || response.status === 404) {
+      await refresh();
+      showAnswerError(sessionId, decisionId, '判断事項の状態が変わりました。表示を確認してください。');
+      return;
+    }
+    if (response.status === 400) {
+      showAnswerError(sessionId, decisionId, '推奨案が無い質問には「推奨案で OK」を送れません。');
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    answerDrafts.delete(answerDraftKey(sessionId, decisionId));
+    await refresh();
+    liveStatus.textContent = '回答を送信しました。';
+  } catch {
+    showAnswerError(sessionId, decisionId, '回答を送信できませんでした。');
+    showWriteError('回答を送信できませんでした');
+  } finally {
+    if (button.isConnected) updateAnswerSubmit(button.closest('.decision-answer'));
+  }
+}
+
+document.addEventListener('change', (event) => {
+  const choice = event.target.closest('[data-answer-choice]');
+  if (!choice || choice.disabled) return;
+  const key = answerDraftKey(choice.dataset.sessionId, choice.dataset.decisionId);
+  const card = choice.closest('.decision-answer');
+  const decision = findDecision(choice.dataset.sessionId, choice.dataset.decisionId);
+  const current = decision ? answerDraftFor(decision, { session_id: choice.dataset.sessionId }) : { choice: null, note: '' };
+  const next = { ...current, choice: choice.checked ? choice.dataset.answerChoice : null };
+  answerDrafts.set(key, next);
+  for (const input of card.querySelectorAll('[data-answer-choice]')) {
+    input.checked = next.choice === input.dataset.answerChoice;
+  }
+  card.querySelector('.answer-error').textContent = '';
+  updateAnswerSubmit(card);
+});
+
+document.addEventListener('input', (event) => {
+  const note = event.target.closest('[data-answer-note]');
+  if (!note) return;
+  const key = answerDraftKey(note.dataset.sessionId, note.dataset.decisionId);
+  const decision = findDecision(note.dataset.sessionId, note.dataset.decisionId);
+  const current = decision ? answerDraftFor(decision, { session_id: note.dataset.sessionId }) : { choice: null, note: '' };
+  answerDrafts.set(key, { ...current, note: note.value });
+  const card = note.closest('.decision-answer');
+  card.querySelector('.answer-error').textContent = '';
+  updateAnswerSubmit(card);
+});
+
+document.addEventListener('compositionstart', (event) => {
+  if (event.target.matches?.('[data-answer-note]')) answerNoteComposing = true;
+}, true);
+
+document.addEventListener('compositionend', (event) => {
+  if (!event.target.matches?.('[data-answer-note]')) return;
+  answerNoteComposing = false;
+  renderDeferredState();
+}, true);
+
+document.addEventListener('focusout', (event) => {
+  if (!event.target.matches?.('[data-answer-note]')) return;
+  const nextTarget = event.relatedTarget;
+  if (nextTarget instanceof HTMLElement) {
+    const flushAfterInteraction = () => queueMicrotask(renderDeferredState);
+    nextTarget.addEventListener('click', flushAfterInteraction, { once: true });
+    nextTarget.addEventListener('blur', flushAfterInteraction, { once: true });
+    return;
+  }
+  queueMicrotask(renderDeferredState);
+}, true);
 
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
   button.disabled = true;
@@ -1233,6 +1516,10 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.sendAnswer) {
+    void sendDecisionAnswer(button);
+    return;
+  }
   if (button.dataset.estimateSession) {
     void runSessionAction(
       button,
@@ -1332,7 +1619,7 @@ async function refresh() {
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
       const permissions = visibleSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
       liveStatus.textContent = `状態を更新しました。セッション ${visibleSessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
     }
   } catch {

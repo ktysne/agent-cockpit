@@ -82,13 +82,16 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
     ],
     "PreToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 330 }] }
     ],
     "PostToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "PostToolUseFailure": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+    ],
+    "PostToolBatch": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 2 }] }
     ],
     "Notification": [
       { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
@@ -100,14 +103,16 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
       { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "asyncRewake": true, "timeout": 3600 }] }
     ],
     "SessionEnd": [
       { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 5 }] }
     ]
   }
 }
@@ -116,10 +121,20 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 同期の `SessionStart` はサーバーの起動を確認し、起動 URL を `additionalContext` で返します。
 フックが送るツール入力は要約だけです。
 許可待ちは表示だけで、画面から許可を出す機能はありません。
-`away.js` は `PreToolUse`(matcher `AskUserQuestion`)、`UserPromptSubmit`、`SessionStart` に同期フックとして登録し、timeout を 5 秒にします。
+`away.js` は `PreToolUse`(matcher `AskUserQuestion`)に同期フックとして登録し、timeout を 330 秒にします。
+`UserPromptSubmit` と `SessionStart` の `away.js` は同期フックとして登録し、timeout を 5 秒にします。
+`PostToolBatch` の `answer.js` は同期フックとして登録し、timeout を 2 秒にします。
+`Stop` の `answer.js` は `asyncRewake: true` と timeout 3600 秒で登録します。
+`UserPromptSubmit` にも `answer.js` を同期フックとして登録し、渡した回答が反映されていない場合に、最大 3 回まで文脈へ差し込み直します。
 
 離席中は画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
-有効な間は `AskUserQuestion` を止め、推奨を適用して作業を続けるようフックが伝えます。
+有効な間、`AskUserQuestion` はダッシュボードの回答を最大 5 分待ちます。回答が無い場合や常駐サーバーへ再接続できない場合は従来どおり質問を止め、推奨で作業を続けるようフックが伝えます。
+回答待ちのフックから 30 秒間 long-poll が届かない場合は待ちを解除し、回答待ちの表示を終えます。
+ダッシュボードでは「推奨案で OK」「判断を保留する」「指示」を送れます。保留の回答は推奨のまま進め、最後の報告に記載するよう伝えます。
+回答待ちの質問への回答は `PreToolUse` の `updatedInput` で渡し、元の `tool_input` を保ったまま `answers` を加えます。
+作業中は `PostToolBatch` から回答を差し込み、停止中は `Stop` の `asyncRewake` フックが回答を待ってセッションを起こします。
+`awaitingAnswerUntil` がある質問の回答は、`PostToolBatch`、`UserPromptSubmit`、`Stop` からは渡しません。
+回答本文は常駐サーバーのメモリーとフックの出力にだけ置きます。
 許可のダイアログには答えず、破壊的な操作、PR のマージ、`main` への push は判断待ちに残します。
 `claude -p` では `AskUserQuestion` が無効なため、この制御は対話セッションでだけ働きます。
 
@@ -132,12 +147,13 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 タスクの状態や完了条件が変わったときは、一覧全体を置き換えます。
 
 `AskUserQuestion` の質問はフックが自動で判断事項にします。
-推奨する選択肢の label を「(推奨)」で始め、理由を description に書いてください。
+推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使いません。
+複数の選択肢に含まれる場合や、質問が複数選択の場合は推奨なしとして扱います。
 質問せずに推奨を適用する判断は `cockpit_add_decision` または `cockpit_update_decision` で記録します。
 
 画面は判断事項の状態、待ち時間、背景、質問、選択肢を表示します。
 解決済みと取り下げの判断事項、および完了したタスクは折りたたまれます。
-段階 2 ではダッシュボードから判断事項に回答できません。
+回答欄から推奨案で OK、判断の保留、または指示だけの回答を送れます。
 メインセッションでの MCP ツールの使い方は [agent-cockpit スキル](skills/agent-cockpit/SKILL.md) にあります。
 
 ## MCP サーバーとスキルの登録

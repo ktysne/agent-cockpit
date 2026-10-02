@@ -256,6 +256,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .agent-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .agent-row .who { font-size: 12px; color: var(--text-2); }
 .agent-row .who b { color: var(--text); font-weight: 600; display: block; font-size: 13px; }
+.agent-row .agent-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .agent-row .since { font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .ended-toggle:hover { color: var(--text); }
@@ -396,7 +397,7 @@ const DATA = {
             gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } }],
           tasks: [{ title: 'テンポ変換のテスト', state: 'doing', updatedMin: 1, criteria: [{ t: '小数 BPM の丸めを確認する', met: false }] }],
           tasksUpdatedMin: 1,
-          decisions: [{ id: 'rs-5', waitMin: 2, title: '負のオフセットを許可するか', kind: 'waiting',
+          decisions: [{ id: 'rs-5', waitMin: 2, awaitingMin: 3, title: '負のオフセットを許可するか', kind: 'waiting',
             ctx: '既存データとの互換性を確認している。', options: [{ t: '負の値も許可する', why: '先行するカウントを保持できる', rec: true }] }],
         },
       ],
@@ -571,7 +572,7 @@ function renderSummary() {
   const all = sessions.flatMap(s => s.decisions.map(d => ({ d, a: answerOf(d.id) })));
   const blocking = all.filter(x => effectiveDecisionState(x.d) === 'waiting' && !x.a.sent).length;
   const provisional = all.filter(x => effectiveDecisionState(x.d) === 'provisional' && !x.a.sent).length;
-  const held = all.filter(x => x.a.sent && x.a.sent.choice === 'hold').length;
+  const held = all.filter(x => ['waiting', 'provisional'].includes(effectiveDecisionState(x.d)) && x.a.sent && x.a.sent.choice === 'hold').length;
   const agents = sessions.flatMap(s => s.subagents).filter(agent => agent.state === 'busy').length;
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => !mergeBlocker(p, pr)).length, 0);
   const permission = sessions.reduce((n, s) => n + s.perms.length, 0);
@@ -599,14 +600,14 @@ function renderSummary() {
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
-function modelLine(s) {
-  if (!s.model && !s.gpt) return '';
+function modelLine(s, lead = '') {
+  if (!s.model && !s.gpt && !lead) return '';
   const claude = s.model ? `<span class="model claude">Claude ${esc(s.model.name)}<i>effort ${esc(s.model.effort)}</i></span>` : '';
   const arrow = s.model ? '<span class="arrow">→</span>' : '';
   let gpt = '';
   if (s.gpt && s.gpt.unavailable) gpt = `${arrow}<span class="model off">GPT 不使用<i>${esc(s.gpt.unavailable)}</i></span>`;
   else if (s.gpt) gpt = `${arrow}<span class="model gpt" title="${esc(s.gpt.home)}">GPT ${esc(s.gpt.name)}<i>effort ${esc(s.gpt.effort)}</i></span>`;
-  return `<div class="models">${claude}${gpt}</div>`;
+  return `<div class="models">${lead}${claude}${gpt}</div>`;
 }
 
 const ROUTE = {
@@ -632,7 +633,7 @@ const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
 function routeTag(s) {
   if (!s.route || s.state !== 'busy') return '';
   const stale = s.route !== ui.routing.agents;
-  return `<div class="models"><span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span></div>`;
+  return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? '(変更前)' : ''}</span>`;
 }
 
 function renderRouting() {
@@ -695,8 +696,8 @@ function agentRow(p, session, agent, withTag) {
   const state = agent.state === 'busy' ? ['稼働中', 'busy'] : unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
   const close = unconfirmed ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   return `<div class="agent-row">
-    <div class="who"><span class="dot ${unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span>${close}</div>
-    <div>${esc(agent.text)}${modelLine(agent)}${routeTag(agent)}</div><div class="since">${esc(agent.since)}</div></div>`;
+    <div class="who"><span class="dot ${unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge ${state[1]}">${state[0]}</span><b>${esc(agent.type)}</b></span>${close}</div>
+    <div>${esc(agent.text)}${modelLine(agent, routeTag(agent))}</div><div class="since">${esc(agent.since)}</div></div>`;
 }
 
 function endedAgentToggle(session) {
@@ -735,7 +736,7 @@ function taskItem(p, session, t, withTag) {
 
 // 一定時間を超えて放置された待ちは強調する。閾値は判断待ち(計画書)
 const LONG_WAIT_MIN = 15;
-const waitLabel = m => `<span class="wait ${m > LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中${m > LONG_WAIT_MIN ? '(長い)' : ''}</span>`;
+const waitLabel = m => `<span class="wait ${m > LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中</span>`;
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
 // 許可待ち: Notification フックで受ける。許可そのものはデスクトップアプリで出す
@@ -765,28 +766,33 @@ function decisionCard(p, session, d, withTag) {
   const stateLabel = { waiting: '止めて待っている', provisional: '推奨で仮に進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
   const stateTone = { waiting: 'danger', provisional: 'warn', resolved: 'ok', withdrawn: 'mute' }[state];
   const stateChip = `<span class="chip ${stateTone}">${stateLabel}</span>`;
+  // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
+  // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
+  const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
+  const recommended = d.options.find(o => o.rec);
   const sentLine = a.sent
-    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}</span>`
+    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
   const long = state === 'waiting' && !a.sent && d.waitMin > LONG_WAIT_MIN;
-  const active = state === 'waiting' || state === 'provisional';
-  const elapsed = state === 'waiting' ? waitLabel(d.waitMin) : state === 'provisional' ? `<span class="wait">仮適用から ${d.waitMin} 分</span>` : '';
+  const active = (state === 'waiting' && !viaDialog) || state === 'provisional';
+  const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${d.waitMin} 分</span>` : '';
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     <ul class="options">${d.options.map(o => `<li class="${o.rec ? 'rec' : ''}">${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span></li>`).join('')}</ul>
     ${active ? `<div class="answer">
       <div class="checks">
-        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''}>推奨案で OK</label>
+        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''} ${recommended ? '' : 'disabled'}>推奨案で OK</label>
         <label class="check hold"><input type="checkbox" data-choice="hold" ${a.choice === 'hold' ? 'checked' : ''}>判断を保留する</label>
       </div>
+      <div class="meta">${recommended ? `OK で送る答え: ${esc(recommended.t)}` : '推奨の無い質問があるので、指示の欄に答えを書く'}</div>
       <textarea data-note placeholder="指示があれば書く(例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
         <button type="button" class="primary" data-send ${(!a.choice && !a.note.trim()) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${sentLine}
       </div>
-    </div>` : sentLine ? `<div class="answer-foot">${sentLine}</div>` : ''}</article>`;
+    </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} のセッションで答える。</div>` : sentLine ? `<div class="answer-foot">${sentLine}</div>` : ''}</article>`;
 }
 
 function reviewBlock(p, withTag) {
@@ -894,7 +900,7 @@ function mergeConfirm(p, pr, auto) {
       ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
     <label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージする'}</button>
+    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
 }
@@ -910,8 +916,8 @@ function prItem(p, pr) {
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
-      ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージ…</button>`}
-      ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ…</button>` : ''}
+      ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>`}
+      ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
@@ -1211,7 +1217,9 @@ document.addEventListener('click', e => {
     const id = t.closest('.decision').dataset.id;
     const a = answerOf(id);
     const now = new Date();
-    a.sent = { choice: a.choice, note: a.note, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
+    const at = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    // 渡した時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ渡したものとして出す。
+    a.sent = { choice: a.choice, note: a.note, at, deliveredAt: at };
     ui.answers[id] = a;
   } else return;
   save(); render();

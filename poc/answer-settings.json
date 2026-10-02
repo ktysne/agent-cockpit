@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["D:/path/to/agent-cockpit/poc/answer-proto.js", "ask"],
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["D:/path/to/agent-cockpit/poc/answer-proto.js", "batch"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["D:/path/to/agent-cockpit/poc/answer-proto.js", "rewake"],
+            "asyncRewake": true,
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}
