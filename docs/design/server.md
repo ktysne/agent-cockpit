@@ -81,8 +81,9 @@
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
 
-入力の要約は、Bash ならコマンドの1行目、Read、Edit、Write ならファイルのパス、それ以外はツール名だけにする。
-1行目を切る場合、または2行目以降がある場合は「…」を付け、80文字以内に収める。
+`answer.js` から届く `PostToolBatch` は、常駐サーバーの受信時刻を使う状態イベントとして記録する。
+入力の要約は、Bash なら改行と続く空白を空白一つに置き換えたコマンド、Read、Edit、Write ならファイルのパス、それ以外はツール名だけにする。
+要約が80文字を超える場合だけ先頭79文字に「…」を付ける。画面幅による省略は CSS の `text-overflow: ellipsis` で行う。
 
 PostToolUse の出力全文は送らない。
 `event.js` は `tool_response` から `codex-agent: agent=` と `codex-agent: result=` の行だけを抽出する。
@@ -101,7 +102,7 @@ PostToolUse の出力全文は送らない。
 - 最終イベント時刻: `lastActivityAt` にセッションの最新フック時刻を ISO 形式で持ち、メイン行の経過表示に使う。
 - 題名: `~/.claude/sessions/*.json` の `name`。
 - 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
-- 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。
+- 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。メインの Stop と UserPromptSubmit ではメインのツールを消し、PostToolBatch ではその時刻より前に始まったメインのツールを消す。いずれもサブエージェントのツールは残す。
 - サブエージェント: `agent_id` ごとに、`agent_type`、作業の説明、開始時刻、最後のツール、モデル、effort。
 - `SubagentStart` が記録されていなくても、`SubagentStop` 以外のイベントで初めて届いた `agent_id` から行を作る。
   開始時刻はそのイベントの時刻とし、稼働中として扱う。
@@ -256,6 +257,7 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 締切は登録時刻から 5 分後とし、常駐サーバーが持つ。
 
 long-poll は 1 回につき最大 25 秒とし、30 秒間 poll が届かない場合は回答待ちを解除する。
+解除時は、その判断事項に届いていた回答も破棄し、後続の `PostToolBatch` などから配信しない。
 `away.js` は `PreToolUse` の `timeout` を 330 秒にする。
 
 回答があれば常駐サーバーが回答内容を返し、フックが元の `tool_input` に `answers` を加えて `PreToolUse` の出力を組み立てる。
@@ -266,14 +268,16 @@ long-poll は 1 回につき最大 25 秒とし、30 秒間 poll が届かない
 
 保留では推奨の label を入れ、推奨で進めて最後の報告に記載するよう `additionalContext` で伝える。
 
-推奨のない質問への保留、締切、常駐サーバーへの再接続失敗は、離席中の理由を付けて質問を拒否し、`provisional` にする。
+推奨のない質問への保留は、離席中なら締切と同じく質問を拒否して `provisional` にする。離席中が解除されていれば保留回答を破棄し、質問をデスクトップアプリのダイアログへ戻す。
+finish が常駐サーバーに届いた場合、回答済みまたは保留の結末を優先する。それ以外は離席状態を確認し、離席中なら質問を拒否して `provisional` にし、解除済みなら `released` としてダイアログへ戻す。
+finish も常駐サーバーに届かなかった場合、フックは離席状態を確認できないため、常に質問を拒否して推奨で進める。
 推奨のない質問への保留は配信済みや反映済みとして数えない。
 
 離席中が解除されたときは待機期限を消し、質問のダイアログを出す。
 回答が締切までに届いていれば、離席中の解除より回答を優先する。
 
 回答待ちの判断事項は `awaitingAnswerUntil` がある間、`PostToolBatch`、`UserPromptSubmit`、`Stop` の配信対象から外す。
-`PostToolUseFailure` では待機期限と lifecycle の上書き状態を消すが、保留や締切で `provisional` にした状態は保つ。
+`PostToolUseFailure` では待機期限を消し、該当する回答待ちを `released` にしてタイマーを解除する。lifecycle の上書き状態を消すが、保留や締切で `provisional` にした状態は保つ。
 
 回答で質問に答えた判断事項は `PostToolUse` で `resolved` にする。
 

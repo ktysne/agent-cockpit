@@ -90,13 +90,16 @@ async function runAskQuestion(input, options) {
         action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, outcome: 'server-lost',
         decision_id: register.decisionId,
       }, { ...options, timeoutMs: 1_000 });
-      return lost?.hookOutput || fallbackOutput;
+      const hookOutput = lost ? lost.hookOutput ?? null : fallbackOutput;
+      return useOriginalToolInput(hookOutput, input.tool_input);
     }
     if (result.outcome === 'waiting') continue;
     const finished = await postHookRequest({
       action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome: result.outcome,
     }, { ...options, timeoutMs: 1_000 });
-    const hookOutput = finished?.hookOutput || (result.outcome === 'server-lost' ? fallbackOutput : null);
+    const hookOutput = finished
+      ? finished.hookOutput ?? null
+      : result.outcome === 'server-lost' ? fallbackOutput : null;
     return useOriginalToolInput(hookOutput, input.tool_input);
   }
   const timeout = await postHookRequest({

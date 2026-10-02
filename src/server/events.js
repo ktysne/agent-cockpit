@@ -9,6 +9,7 @@ const EVENT_NAMES = new Set([
   'Stop',
   'SessionEnd',
   'UserPromptSubmit',
+  'PostToolBatch',
 ]);
 
 const MAX_ASK_QUESTIONS = 4;

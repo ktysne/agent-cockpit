@@ -23,9 +23,8 @@ function inputSummary(toolName, toolInput) {
   if (!value) return toolName || '';
   const trimmedValue = value.trim();
   if (!trimmedValue) return toolName || '';
-  const firstLine = trimmedValue.split(/\r?\n/, 1)[0];
-  const wasTruncated = firstLine.length > 80 || trimmedValue.includes('\n');
-  return wasTruncated ? `${firstLine.slice(0, 79)}…` : firstLine;
+  const normalizedValue = trimmedValue.replace(/\r?\n\s*/g, ' ');
+  return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
@@ -109,6 +108,7 @@ function makeHookEvent(input, now = Date.now()) {
     hookAt: now,
     input_fields: Object.keys(input).slice(0, 64),
   };
+  if (eventName === 'SessionStart') event.source = pickString(input.source).slice(0, 100);
   for (const key of ['agent_id', 'agent_type']) {
     if (typeof input[key] === 'string') event[key] = input[key];
   }
