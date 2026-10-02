@@ -57,6 +57,15 @@ test('タスクが無い状態で Agent ツールを起動すると登録を促�
   assert.equal(nudges.reminderFor('agent-launch'), NO_TASKS_REMINDER);
 });
 
+test('Agent の PreToolUse 後に届いた同じターンの UserPromptSubmit は催促状態を消さない', () => {
+  const { nudges } = makeNudges();
+  nudges.afterEvent(event('late-prompt', 'UserPromptSubmit', START));
+  nudges.afterEvent(event('late-prompt', 'PreToolUse', START + 2, { tool_name: 'Agent' }));
+  nudges.afterEvent(event('late-prompt', 'UserPromptSubmit', START + 1));
+
+  assert.equal(nudges.reminderFor('late-prompt'), NO_TASKS_REMINDER);
+});
+
 test('セッションが終わると催促の記録を消す', () => {
   const { nudges } = makeNudges();
   nudges.afterEvent(event('ended', 'UserPromptSubmit', START));
@@ -76,6 +85,23 @@ test('タスクがある場合はサブエージェント終了から 10 分後�
   assert.equal(nudges.reminderFor('agent-done'), null);
   setNow(START + TASK_REMINDER_INTERVAL_MS + 1);
   assert.equal(nudges.reminderFor('agent-done'), SUBAGENT_REMINDER);
+});
+
+test('サブエージェント終了ごとに 1 回だけ書き直しを促す', () => {
+  const state = new DashboardState();
+  state.setTasks('once-per-stop', [task()], START);
+  const { nudges, setNow } = makeNudges({ state });
+  nudges.tasksWritten('once-per-stop', START);
+  nudges.afterEvent(event('once-per-stop', 'SubagentStop', START + 1, { agent_id: 'agent-1' }));
+
+  setNow(START + TASK_REMINDER_INTERVAL_MS + 1);
+  assert.equal(nudges.reminderFor('once-per-stop'), SUBAGENT_REMINDER);
+  setNow(START + 2 * TASK_REMINDER_INTERVAL_MS + 1);
+  assert.equal(nudges.reminderFor('once-per-stop'), null);
+
+  nudges.afterEvent(event('once-per-stop', 'SubagentStop', START + TASK_REMINDER_INTERVAL_MS + 2, { agent_id: 'agent-2' }));
+  setNow(START + 2 * TASK_REMINDER_INTERVAL_MS + 2);
+  assert.equal(nudges.reminderFor('once-per-stop'), SUBAGENT_REMINDER);
 });
 
 test('タスクを書き直すと催促記録を消し、以後の終了時刻を追跡する', () => {

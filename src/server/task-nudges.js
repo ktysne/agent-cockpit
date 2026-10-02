@@ -17,8 +17,10 @@ class TaskNudges {
       session = {
         turnStartedAt: null,
         mainToolUseCount: 0,
+        lastMainToolUseAt: null,
         agentStartedWithoutTasks: false,
         lastSubagentStopAt: null,
+        nudgedSubagentStopAt: null,
         lastTaskWriteAt: null,
         lastNudgeAt: null,
       };
@@ -37,10 +39,12 @@ class TaskNudges {
     const eventAt = Number.isFinite(event.hookAt) ? event.hookAt : this.now();
 
     if (event.hook_event_name === 'UserPromptSubmit' && !event.agent_id) {
+      if (session.lastMainToolUseAt !== null && eventAt <= session.lastMainToolUseAt) return;
       if (session.turnStartedAt !== null && eventAt <= session.turnStartedAt) return;
       session.turnStartedAt = eventAt;
       session.mainToolUseCount = 0;
       session.agentStartedWithoutTasks = false;
+      session.lastMainToolUseAt = null;
       return;
     }
 
@@ -54,6 +58,9 @@ class TaskNudges {
     if (event.hook_event_name !== 'PreToolUse' || event.agent_id) return;
     if (session.turnStartedAt !== null && eventAt < session.turnStartedAt) return;
     session.mainToolUseCount += 1;
+    session.lastMainToolUseAt = session.lastMainToolUseAt === null
+      ? eventAt
+      : Math.max(session.lastMainToolUseAt, eventAt);
     if (event.tool_name === 'Agent' && !this.hasTasks(event.session_id)) {
       session.agentStartedWithoutTasks = true;
     }
@@ -73,6 +80,7 @@ class TaskNudges {
     const hasTasks = this.hasTasks(sessionId);
     const subagentReportIsStale = hasTasks && session.lastSubagentStopAt !== null &&
       session.lastSubagentStopAt > (session.lastTaskWriteAt ?? -1) &&
+      session.lastSubagentStopAt !== session.nudgedSubagentStopAt &&
       now - session.lastSubagentStopAt >= TASK_REMINDER_INTERVAL_MS;
     const noTasksReminderIsDue = !hasTasks && (
       session.mainToolUseCount >= TASK_REMINDER_TOOL_COUNT || session.agentStartedWithoutTasks
@@ -81,6 +89,7 @@ class TaskNudges {
     if (session.lastNudgeAt !== null && now - session.lastNudgeAt < TASK_REMINDER_INTERVAL_MS) return null;
 
     session.lastNudgeAt = now;
+    if (subagentReportIsStale) session.nudgedSubagentStopAt = session.lastSubagentStopAt;
     return subagentReportIsStale ? SUBAGENT_REMINDER : NO_TASKS_REMINDER;
   }
 
