@@ -323,3 +323,27 @@ test('保存したタスクがあってもイベントとセッションファ�
   state.setTasks('plan-only', [task('待機中')]);
   assert.deepEqual(state.snapshot().sessions, []);
 });
+
+test('締切を外して読み戻した回答記録を保存し直しても、次の読み込みで全体が残る', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  state.setTasks('round-trip', [task('残るタスク')], now);
+  const decision = state.addDecision('round-trip', decisionInput('残る判断'), now);
+  state.setDecisionLifecycle('round-trip', decision.id, {
+    answer: { choice: 'ok', note: '', sentAt: new Date(now).toISOString(), deliveredAt: null, reflectedAt: null, promptDeliveries: 0 },
+    state: 'waiting',
+    awaitingAnswerUntil: new Date(now + 60_000).toISOString(),
+  }, now);
+  await state.flushPersistence();
+
+  const second = await DashboardState.load(homeDir, { now: now + 1 });
+  second.setTasks('round-trip', [task('残るタスク'), task('足したタスク')], now + 2);
+  await second.flushPersistence();
+  const third = await DashboardState.load(homeDir, { now: now + 3 });
+
+  assert.deepEqual(third.plans.get('round-trip').tasks.map((item) => item.title), ['残るタスク', '足したタスク']);
+  assert.equal(third.decisionLifecycles.get('round-trip').get(decision.id).answer.choice, 'ok');
+  const files = await fs.readdir(homeDir);
+  assert.equal(files.some((name) => name.startsWith('store.json.broken-')), false);
+});

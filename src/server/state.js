@@ -108,7 +108,7 @@ function normalizeStore(value) {
     for (const [decisionId, lifecycle] of Object.entries(records)) {
       if (!isRecord(lifecycle) || (lifecycle.answer !== null && !isRecord(lifecycle.answer)) ||
         (lifecycle.state !== null && typeof lifecycle.state !== 'string') ||
-        (lifecycle.awaitingAnswerUntil !== null && !validTimestamp(lifecycle.awaitingAnswerUntil)) ||
+        (lifecycle.awaitingAnswerUntil != null && !validTimestamp(lifecycle.awaitingAnswerUntil)) ||
         (lifecycle.updatedAt !== undefined && lifecycle.updatedAt !== null && !validTimestamp(lifecycle.updatedAt))) {
         throw new Error('Invalid decision lifecycle');
       }
