@@ -762,8 +762,9 @@ function decisionCard(p, session, d, withTag) {
   // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
   const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
+  const recommended = d.options.find(o => o.rec);
   const sentLine = a.sent
-    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に届いた` : ''}</span>`
+    ? `<span class="sent">${a.sent.at} に送信済み: ${a.sent.choice === 'ok' ? '推奨案で OK' : a.sent.choice === 'hold' ? '判断を保留' : '指示のみ'}${a.sent.note ? '(指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note;
   const long = state === 'waiting' && !a.sent && d.waitMin > LONG_WAIT_MIN;
@@ -775,9 +776,10 @@ function decisionCard(p, session, d, withTag) {
     <ul class="options">${d.options.map(o => `<li class="${o.rec ? 'rec' : ''}">${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span></li>`).join('')}</ul>
     ${active ? `<div class="answer">
       <div class="checks">
-        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''}>推奨案で OK</label>
+        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''} ${recommended ? '' : 'disabled'}>推奨案で OK</label>
         <label class="check hold"><input type="checkbox" data-choice="hold" ${a.choice === 'hold' ? 'checked' : ''}>判断を保留する</label>
       </div>
+      <div class="meta">${recommended ? `OK で送る答え: ${esc(recommended.t)}` : '推奨の無い質問があるので、指示の欄に答えを書く'}</div>
       <textarea data-note placeholder="指示があれば書く(例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
         <button type="button" class="primary" data-send ${(!a.choice && !a.note.trim()) || !dirty ? 'disabled' : ''}>回答を送る</button>
@@ -1200,7 +1202,7 @@ document.addEventListener('click', e => {
     const a = answerOf(id);
     const now = new Date();
     const at = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    // 届いた時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ届いたものとして出す。
+    // 渡した時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ渡したものとして出す。
     a.sent = { choice: a.choice, note: a.note, at, deliveredAt: at };
     ui.answers[id] = a;
   } else return;
