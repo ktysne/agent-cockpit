@@ -22,21 +22,25 @@
   --ok-soft: #e3f6e8;
   --hold: #6741d9;
   --hold-soft: #efe9ff;
+  --on-accent: #ffffff;
+  --on-ok: #ffffff;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #15171c; --surface: #1e2128; --surface-2: #252932; --border: #343a46;
-    --text: #e6e8ec; --text-2: #a3abb9; --accent: #8ea2ff; --accent-soft: #263055;
-    --warn: #ffb15c; --warn-soft: #3b2a14; --danger: #ff8a8a; --danger-soft: #3d1d1d;
-    --ok: #74d68a; --ok-soft: #173322; --hold: #b49cff; --hold-soft: #2c2348;
+    --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
+    --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
+    --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
+    --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+  --on-accent: #ffffff; --on-ok: #1f1e1d;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #15171c; --surface: #1e2128; --surface-2: #252932; --border: #343a46;
-  --text: #e6e8ec; --text-2: #a3abb9; --accent: #8ea2ff; --accent-soft: #263055;
-  --warn: #ffb15c; --warn-soft: #3b2a14; --danger: #ff8a8a; --danger-soft: #3d1d1d;
-  --ok: #74d68a; --ok-soft: #173322; --hold: #b49cff; --hold-soft: #2c2348;
+  --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
+  --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
+  --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
+  --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+  --on-accent: #ffffff; --on-ok: #1f1e1d;
 }
 * { box-sizing: border-box; }
 body {
@@ -70,7 +74,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg button { border: 0; background: none; padding: 6px 12px; cursor: pointer; color: var(--text-2); }
-.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; }
 .section > .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -144,7 +148,7 @@ h3.sub .count { font-weight: normal; }
 .check.ok input { accent-color: var(--ok); }
 textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
+.primary { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .primary:disabled { opacity: .4; cursor: default; }
 .sent { font-size: 12px; color: var(--text-2); }
 
@@ -179,7 +183,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
 .pr .why-not { font-size: 12px; color: var(--text-2); }
 .pr.can-merge { background: var(--ok-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
-.merge-btn { background: var(--ok); color: #fff; border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
+.merge-btn { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .merge-confirm { margin-top: 8px; border: 1px solid var(--ok); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 8px; font-size: 13px; }
 .merge-confirm .methods { display: flex; gap: 6px; flex-wrap: wrap; }
 .merge-confirm .opt { justify-self: start; }
@@ -188,7 +192,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .merge-confirm .effects li.warn { color: var(--warn); }
 .merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .ghost { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer; min-height: 40px; }
-.merge-go { background: var(--ok); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
+.merge-go { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .merged-list .badge { margin-right: 4px; }
 
@@ -205,7 +209,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
 .news .nhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent); }
 .news ul { margin: 4px 0 0; padding-left: 20px; }
-.new-mark { font-size: 10px; font-weight: 700; color: #fff; background: var(--accent); border-radius: 4px; padding: 0 5px; }
+.new-mark { font-size: 10px; font-weight: 700; color: var(--on-accent); background: var(--accent); border-radius: 4px; padding: 0 5px; }
 .auto-btn { background: none; color: var(--ok); border: 1px solid var(--ok); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-confirm.auto { border-color: var(--accent); }
@@ -310,8 +314,8 @@ const DATA = {
       review: { pr: '—', round: 0, max: 3, state: '未着手', open: 0, fixed: 0, dismissed: 0 },
       repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
       prs: [
-        { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'required', conflict: false, draft: false },
-        { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'required', conflict: true, draft: false },
+        { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false },
+        { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false },
         { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
       ],
     },
@@ -343,7 +347,7 @@ const DATA = {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' } }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 
@@ -591,13 +595,15 @@ function mergeBlocker(p, pr) {
 const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 function mergeOpts(p, pr) {
   const k = prKey(p, pr.number);
-  return ui.mergeOpts[k] || { method: p.repo.methods[0], del: true };
+  const last = ui.lastMethod[p.repo.name];
+  const method = p.repo.methods.includes(last) ? last : p.repo.methods[0];
+  return ui.mergeOpts[k] || { method, del: true };
 }
 
 function prBadges(p, pr) {
   const e = effective(p, pr);
   const ci = { pass: ['ok', 'CI 成功'], pending: ['warn', 'CI 実行中'], fail: ['danger', 'CI 失敗'] }[pr.ci];
-  const rv = { approved: ['ok', '承認済み'], required: ['mute', '承認待ち'], changes: ['danger', '変更要求'] }[pr.review];
+  const rv = { approved: ['ok', '承認済み'], required: ['mute', '承認待ち'], none: ['mute', '承認は任意'], changes: ['danger', '変更要求'] }[pr.review];
   return [
     pr.draft ? '<span class="badge mute">ドラフト</span>' : '',
     `<span class="badge ${ci[0]}">${ci[1]}</span>`,
@@ -609,7 +615,8 @@ function prBadges(p, pr) {
 }
 
 // CI 実行中だけが理由のときは「CI が通ったらマージ」を予約できる(gh pr merge --auto)
-const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中';
+// 承認待ちや変更要求が残る PR は CI が通ってもマージされないので、予約を出さない。
+const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中' && (pr.review === 'approved' || pr.review === 'none');
 
 function mergeConfirm(p, pr, auto) {
   const o = mergeOpts(p, pr);
@@ -784,6 +791,7 @@ document.addEventListener('click', e => {
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
     const now = new Date();
+    ui.lastMethod[p.repo.name] = o.method;
     ui.merged[k] = { method: o.method, del: o.del, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
     ui.confirm = null;
   } else if (t.dataset.reserveGo) {
@@ -792,6 +800,7 @@ document.addEventListener('click', e => {
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
     const now = new Date();
+    ui.lastMethod[p.repo.name] = o.method;
     ui.reserved[k] = { method: o.method, del: o.del, at: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` };
     ui.confirm = null;
   } else if (t.dataset.unreserve) {
