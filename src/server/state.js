@@ -380,6 +380,8 @@ class DashboardState {
     this.sessionFiles = new Map();
     this.plans = new Map();
     this.decisionOverrides = new Map();
+    this.estimates = new Map();
+    this.hiddenSessions = new Set();
   }
 
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
@@ -388,12 +390,21 @@ class DashboardState {
     const before = JSON.stringify([...this.sessionFiles.entries()]);
     if (JSON.stringify([...next.entries()]) === before) return;
     this.sessionFiles = next;
-    this.version += 1;
-    this.generatedAt = new Date().toISOString();
+    for (const sessionId of this.hiddenSessions) {
+      if (!next.has(sessionId)) this.hiddenSessions.delete(sessionId);
+    }
+    for (const sessionId of this.estimates.keys()) {
+      if (!next.has(sessionId)) this.estimates.delete(sessionId);
+    }
+    this.touch();
   }
 
   sessionNameFor(sessionId) {
     return this.sessionFiles.get(sessionId)?.name || null;
+  }
+
+  sessionFileFor(sessionId) {
+    return this.sessionFiles.get(sessionId) || null;
   }
 
   captureFieldNames(input) {
@@ -415,6 +426,9 @@ class DashboardState {
     const endedAt = this.endedAt.get(event.session_id);
     if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return true;
     if (endedAt !== undefined && event.hookAt <= endedAt) return true;
+
+    const hadEstimate = this.estimates.delete(event.session_id);
+    const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (endedAt !== undefined) {
       this.endedAt.delete(event.session_id);
       this.entries.delete(event.session_id);
@@ -437,11 +451,40 @@ class DashboardState {
       this.decisionOverrides.delete(event.session_id);
     }
 
-    if (JSON.stringify([...this.sessions.values()]) !== before) {
-      this.version += 1;
-      this.generatedAt = new Date().toISOString();
+    if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden) this.touch();
+    return true;
+  }
+
+  // 推定の読み取り中にイベントが届いたセッションは状態が分かったので、古い推定を残さない。
+  saveEstimate(sessionId, estimate) {
+    const current = this.snapshot().sessions.find((item) => item.session_id === sessionId);
+    if (current?.status !== '不明') return null;
+    const stored = estimate
+      ? { canEstimate: true, recordedAt: estimate.recordedAt, lastTool: estimate.lastTool, state: estimate.state }
+      : { canEstimate: false, recordedAt: null, lastTool: null, state: null };
+    this.estimates.set(sessionId, stored);
+    this.touch();
+    return { ...stored };
+  }
+
+  hideUnknownSession(sessionId) {
+    const session = this.snapshot().sessions.find((item) => item.session_id === sessionId);
+    if (!session) return null;
+    if (session.status !== '不明') return false;
+    if (!this.hiddenSessions.has(sessionId)) {
+      this.hiddenSessions.add(sessionId);
+      this.touch();
     }
     return true;
+  }
+
+  clearHiddenSessions() {
+    const count = this.hiddenSessions.size;
+    if (count > 0) {
+      this.hiddenSessions.clear();
+      this.touch();
+    }
+    return count;
   }
 
   setTasks(sessionId, tasks, now = Date.now()) {
@@ -583,7 +626,7 @@ class DashboardState {
         decisions: [],
       };
       const { decisionBindings: _decisionBindings, ...visible } = base;
-      return {
+      const current = {
         ...visible,
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
@@ -594,6 +637,10 @@ class DashboardState {
         tasks: (plan?.tasks || []).map((task) => ({ ...task, criteria: task.criteria.map((criterion) => ({ ...criterion })) })),
         tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       };
+      const estimate = this.estimates.get(sessionId);
+      if (estimate) current.estimate = { ...estimate };
+      if (this.hiddenSessions.has(sessionId)) current.hidden = true;
+      return current;
     });
     return {
       version: this.version,

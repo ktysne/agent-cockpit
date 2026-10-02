@@ -212,6 +212,11 @@ h3.sub .count { font-weight: normal; }
 .ended-toggle { min-height: 32px; margin-top: 6px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 12px; }
 .ended-toggle:hover { color: var(--text); }
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.estimate { display: grid; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.estimate p { margin: 0; }
+.session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
+.excluded-note[hidden] { display: none; }
 @media (max-width: 640px) {
   .order { margin-left: 0; }
   .session-head { align-items: flex-start; }
@@ -255,6 +260,7 @@ h3.sub .count { font-weight: normal; }
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
+  <div class="excluded-note" id="excluded-note" hidden></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
 </main>
 <script>
@@ -286,8 +292,9 @@ let lastState = null;
 let hasRenderedState = false;
 let connectionLost = false;
 let lastStateAt = new Date();
-let awayErrorUntil = 0;
-let awayErrorTimer = null;
+let writeErrorUntil = 0;
+let writeErrorMessage = '';
+let writeErrorTimer = null;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
 const expandedDoneTasks = new Set();
@@ -371,8 +378,8 @@ function updateConnectionNote() {
     const time = `${String(lastStateAt.getHours()).padStart(2, '0')}:${String(lastStateAt.getMinutes()).padStart(2, '0')}`;
     connectionNote.textContent = `常駐サーバーに接続できません。表示は ${time} 時点のものです。`;
     connectionNote.hidden = false;
-  } else if (Date.now() < awayErrorUntil) {
-    connectionNote.textContent = '離席中を切り替えられませんでした';
+  } else if (Date.now() < writeErrorUntil) {
+    connectionNote.textContent = writeErrorMessage;
     connectionNote.hidden = false;
   } else {
     connectionNote.textContent = '';
@@ -380,23 +387,34 @@ function updateConnectionNote() {
   }
 }
 
-function showAwayError() {
-  awayErrorUntil = Date.now() + 10_000;
-  clearTimeout(awayErrorTimer);
-  awayErrorTimer = setTimeout(updateConnectionNote, 10_000);
+function showWriteError(message) {
+  writeErrorMessage = message;
+  writeErrorUntil = Date.now() + 10_000;
+  clearTimeout(writeErrorTimer);
+  writeErrorTimer = setTimeout(updateConnectionNote, 10_000);
   updateConnectionNote();
 }
 
-function postAway(enabled) {
-  return fetch('/api/away', {
+async function postUiAction(url, body) {
+  const send = () => fetch(url, {
     method: 'POST',
     cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
       'X-Cockpit-Secret': document.querySelector('meta[name="cockpit-secret"]').content,
     },
-    body: JSON.stringify({ enabled }),
+    body: JSON.stringify(body),
   });
+  let response = await send();
+  if (response.status === 401) {
+    await refreshUiSecret();
+    response = await send();
+  }
+  return response;
+}
+
+function postAway(enabled) {
+  return postUiAction('/api/away', { enabled });
 }
 
 async function refreshUiSecret() {
@@ -413,12 +431,7 @@ awayToggle.addEventListener('change', async () => {
   const previous = lastState?.away?.enabled === true;
   awayToggle.disabled = true;
   try {
-    let response = await postAway(requested);
-    // 常駐サーバーが再起動すると秘密値が変わるので、画面を取り直して新しい値で 1 回だけ送り直す。
-    if (response.status === 401) {
-      await refreshUiSecret();
-      response = await postAway(requested);
-    }
+    const response = await postAway(requested);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const away = await response.json();
     applyAwayState(away);
@@ -427,7 +440,7 @@ awayToggle.addEventListener('change', async () => {
     awayToggle.checked = previous;
     applyAwayState({ enabled: previous });
     liveStatus.textContent = '離席中を切り替えられませんでした';
-    showAwayError();
+    showWriteError('離席中を切り替えられませんでした');
   } finally {
     awayToggle.disabled = false;
   }
@@ -508,6 +521,20 @@ function renderSummary(sessions) {
   } else {
     note.replaceChildren();
   }
+}
+
+function renderExcludedNote(sessions) {
+  const note = document.getElementById('excluded-note');
+  const hiddenCount = sessions.filter((session) => session.hidden === true).length;
+  note.hidden = hiddenCount === 0;
+  if (!hiddenCount) {
+    note.replaceChildren();
+    return;
+  }
+  const showAll = element('button', 'link-btn', 'すべて表示する');
+  showAll.type = 'button';
+  showAll.dataset.clearHiddenSessions = 'true';
+  note.replaceChildren(element('span', '', `外したセッション ${hiddenCount} 件`), showAll);
 }
 
 function isFilterShown(key) {
@@ -830,6 +857,52 @@ function appendTasks(body, session, product, withTags = false, multipleSessions 
   if (done.length) appendPlanToggle(body, 'tasks', session.session_id, expanded, done.length, '完了したタスク', expandedDoneTasks);
 }
 
+// 状態不明のセッションは古い記録を持つことが多いので、今日でなければ日付も出す。
+function estimateTimeLabel(date) {
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return date.toDateString() === new Date().toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()} ${time}`;
+}
+
+function appendUnknownSessionControls(body, session) {
+  if (session.status !== '不明') return;
+  const actions = element('div', 'session-actions');
+  const estimateButton = element('button', 'ended-toggle', '状態を推定');
+  estimateButton.type = 'button';
+  estimateButton.dataset.estimateSession = session.session_id;
+  const hideButton = element('button', 'ended-toggle', '一覧から外す');
+  hideButton.type = 'button';
+  hideButton.dataset.hideSession = session.session_id;
+  actions.append(estimateButton, hideButton);
+  body.append(actions);
+
+  if (!session.estimate) return;
+  const panel = element('div', 'estimate');
+  if (!session.estimate.canEstimate) {
+    panel.textContent = '推定できませんでした';
+  } else {
+    const timestamp = Date.parse(session.estimate.recordedAt);
+    const recordedAt = Number.isFinite(timestamp) ? estimateTimeLabel(new Date(timestamp)) : '時刻不明';
+    panel.append(element('p', '', `最後の記録: ${recordedAt}、最後のツール: ${session.estimate.lastTool ?? 'なし'}`));
+    const waiting = session.estimate.state === 'input'
+      ? 'はい'
+      : session.estimate.state === 'tool'
+        ? 'いいえ(許可待ちかツールの実行中)'
+        : 'いいえ(応答の生成中)';
+    panel.append(element('p', '', `入力待ちらしい: ${waiting}`));
+  }
+  body.append(panel);
+}
+
+function unknownSessionControls(session, product, multipleSessions) {
+  if (session.status !== '不明') return null;
+  const block = element('div', 'kind-unknown');
+  const tags = element('div', 'meta');
+  appendContextTags(tags, product, session, true, multipleSessions);
+  block.append(tags);
+  appendUnknownSessionControls(block, session);
+  return block;
+}
+
 function productStatusBadge(session) {
   const status = activityStatus(session);
   return badge(status.label, status.tone);
@@ -858,6 +931,7 @@ function sessionBlock(product, session, multipleSessions) {
   body.append(now);
   appendAgents(body, session, product);
   appendTasks(body, session, product);
+  appendUnknownSessionControls(body, session);
   block.append(body);
   return block;
 }
@@ -998,6 +1072,10 @@ function renderKindSections(products) {
   const activityList = element('div', 'now');
   for (const item of activityItems) activityList.append(item.row);
   activity.append(activityList, agentToggles);
+  for (const { product, session, multipleSessions } of references) {
+    const controls = unknownSessionControls(session, product, multipleSessions);
+    if (controls) activity.append(controls);
+  }
 
   const tasks = element('div', 'body');
   for (const { product, session, multipleSessions } of references) {
@@ -1017,14 +1095,17 @@ function renderKindSections(products) {
 }
 
 function render(state) {
-  const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+  const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
+  const sessions = allSessions.filter((session) => session.hidden !== true);
   const active = document.activeElement;
-  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle'].find((attribute) => active?.hasAttribute(attribute));
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
-        : active?.hasAttribute('data-show-all') ? { kind: 'show-all' } : null;
+        : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
+          : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' } : null;
   renderSummary(sessions);
+  renderExcludedNote(allSessions);
   updateTitle(sessions);
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
@@ -1048,18 +1129,76 @@ function render(state) {
       if (focusData.kind === 'toggle') return item.getAttribute(focusData.attribute) === focusData.value;
       if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
       if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
+      if (focusData.kind === 'clear-hidden') return item.hasAttribute('data-clear-hidden-sessions');
       return item.dataset.productAction === focusData.action && item.dataset.productKey === focusData.key && (item.dataset.direction || '') === focusData.direction;
     });
     const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled
       ? buttons.find((item) => item.dataset.productAction === 'move' && item.dataset.productKey === focusData.key && item.dataset.direction === String(-Number(focusData.direction)))
+      : focusData.kind === 'toggle' && focusData.attribute === 'data-hide-session' && !button
+        ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
       : button;
     fallback?.focus({ preventScroll: true });
+  }
+}
+
+async function runUnknownSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
+  button.disabled = true;
+  try {
+    const response = await postUiAction(url, body);
+    // 押した直後にイベントが届いて状態が分かった場合は、失敗と出さずに表示を取り直す。
+    if (response.status === 404 || response.status === 409) {
+      await refresh();
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await refresh();
+    if (focusExcludedNote) document.querySelector('[data-clear-hidden-sessions]')?.focus({ preventScroll: true });
+    else if (button.dataset.estimateSession) {
+      [...document.querySelectorAll('[data-estimate-session]')]
+        .find((item) => item.dataset.estimateSession === button.dataset.estimateSession)
+        ?.focus({ preventScroll: true });
+    } else if (body.action === 'clear') {
+      (root.querySelector('[data-estimate-session]') || root.querySelector('button'))?.focus({ preventScroll: true });
+    }
+  } catch {
+    liveStatus.textContent = errorMessage;
+    showWriteError('セッションの操作に失敗しました');
+  } finally {
+    if (button.isConnected) button.disabled = false;
   }
 }
 
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.estimateSession) {
+    void runUnknownSessionAction(
+      button,
+      `/api/sessions/${encodeURIComponent(button.dataset.estimateSession)}/estimate`,
+      {},
+      '状態を推定できませんでした',
+    );
+    return;
+  }
+  if (button.dataset.hideSession) {
+    void runUnknownSessionAction(
+      button,
+      '/api/hidden-sessions',
+      { action: 'hide', session_id: button.dataset.hideSession },
+      'セッションを一覧から外せませんでした',
+      true,
+    );
+    return;
+  }
+  if (button.dataset.clearHiddenSessions) {
+    void runUnknownSessionAction(
+      button,
+      '/api/hidden-sessions',
+      { action: 'clear' },
+      '外したセッションを表示できませんでした',
+    );
+    return;
+  }
   if (button.dataset.filter) {
     const key = button.dataset.filter;
     displayPreferences.hidden = isFilterShown(key)
@@ -1116,9 +1255,10 @@ async function refresh() {
       render(state);
       lastVersion = state.version;
       hasRenderedState = true;
-      const permissions = state.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-      const decisions = state.sessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
-      liveStatus.textContent = `状態を更新しました。セッション ${state.sessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
+      const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
+      const permissions = visibleSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+      liveStatus.textContent = `状態を更新しました。セッション ${visibleSessions.length} 件、許可待ち ${permissions} 件、判断待ち ${decisions} 件。`;
     }
   } catch {
     connectionLost = true;

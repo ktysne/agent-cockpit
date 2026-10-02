@@ -6,6 +6,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { runHook } = require('../src/hooks/event');
+const { DashboardState } = require('../src/server/state');
 const {
   startServer,
   MAX_BODY_BYTES,
@@ -118,6 +119,109 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.deepEqual(state.away, { enabled: false, since: null });
   assert.equal(away.headers['access-control-allow-origin'], undefined);
+});
+
+test('状態推定 API は画面の認証とセッション状態を照合し、結果を保存する', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const state = new DashboardState();
+  const cwd = path.join(homeDir, 'workspace', 'project');
+  state.syncSessionFiles([
+    { session_id: 'estimate_unknown', cwd, name: '不明なセッション' },
+    { session_id: 'estimate_known', cwd, name: '既知のセッション' },
+  ]);
+  state.addEvent({ session_id: 'estimate_known', hook_event_name: 'SessionStart', hookAt: 100 });
+  const projectDirectory = path.join(claudeHome, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+  await fs.mkdir(projectDirectory, { recursive: true });
+  await fs.writeFile(path.join(projectDirectory, 'estimate_unknown.jsonl'), `${JSON.stringify({
+    type: 'assistant', timestamp: '2026-10-02T01:02:03.000Z', isSidechain: false,
+    message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: '本文は返さない' }] },
+  })}\n`);
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, state });
+  t.after(() => runtime.close());
+  const endpoint = '/api/sessions/estimate_unknown/estimate';
+  const validHeaders = {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.uiSecret,
+    origin: `http://127.0.0.1:${runtime.info.port}`,
+  };
+
+  const unauthorized = await request(runtime.info.port, { method: 'POST', path: endpoint });
+  assert.equal(unauthorized.status, 401);
+  const forbidden = await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    headers: { ...validHeaders, origin: 'https://other.example' },
+  });
+  assert.equal(forbidden.status, 403);
+  const missing = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/not_known/estimate', headers: validHeaders,
+  });
+  assert.equal(missing.status, 404);
+  const conflict = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/estimate_known/estimate', headers: validHeaders,
+  });
+  assert.equal(conflict.status, 409);
+
+  const versionBeforeEstimate = state.version;
+  const estimated = await request(runtime.info.port, { method: 'POST', path: endpoint, headers: validHeaders });
+  assert.equal(estimated.status, 200);
+  assert.equal(state.version, versionBeforeEstimate + 1);
+  assert.deepEqual(jsonBody(estimated), {
+    canEstimate: true, recordedAt: '2026-10-02T01:02:03.000Z', lastTool: null, state: 'input',
+  });
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.deepEqual(snapshot.sessions.find((session) => session.session_id === 'estimate_unknown').estimate, jsonBody(estimated));
+  assert.equal(snapshot.version, state.version);
+});
+
+test('一覧から外す API は認証し、状態不明だけを外してすべて表示できる', async (t) => {
+  const state = new DashboardState();
+  state.syncSessionFiles([
+    { session_id: 'hide_unknown', cwd: 'C:\\project', name: '不明なセッション' },
+    { session_id: 'hide_known', cwd: 'C:\\project', name: '既知のセッション' },
+  ]);
+  state.addEvent({ session_id: 'hide_known', hook_event_name: 'SessionStart', hookAt: 100 });
+  const runtime = await runningServer(t, { state });
+  const endpoint = '/api/hidden-sessions';
+  const body = JSON.stringify({ action: 'hide', session_id: 'hide_unknown' });
+  const validHeaders = {
+    'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
+    origin: `http://localhost:${runtime.info.port}`,
+  };
+
+  const unauthorized = await request(runtime.info.port, { method: 'POST', path: endpoint, body });
+  assert.equal(unauthorized.status, 401);
+  const forbidden = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body,
+    headers: { ...validHeaders, origin: 'https://other.example' },
+  });
+  assert.equal(forbidden.status, 403);
+  const missing = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_id: 'not_known' }), headers: validHeaders,
+  });
+  assert.equal(missing.status, 404);
+  const conflict = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_id: 'hide_known' }), headers: validHeaders,
+  });
+  assert.equal(conflict.status, 409);
+  const invalid = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'clear', session_id: 'extra' }), headers: validHeaders,
+  });
+  assert.equal(invalid.status, 400);
+
+  const versionBeforeHide = state.version;
+  const hidden = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders });
+  assert.equal(hidden.status, 200);
+  assert.equal(state.version, versionBeforeHide + 1);
+  assert.deepEqual(jsonBody(hidden), { hidden: true });
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, true);
+  const versionBeforeClear = state.version;
+  const cleared = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ action: 'clear' }), headers: validHeaders,
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(state.version, versionBeforeClear + 1);
+  assert.deepEqual(jsonBody(cleared), { cleared: 1 });
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, undefined);
 });
 
 test('離席状態は同じ置き場でサーバーを再起動しても残る', async (t) => {

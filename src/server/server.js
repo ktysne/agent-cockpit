@@ -4,6 +4,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { sanitizeEvent } = require('./events');
+const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 
@@ -104,7 +105,7 @@ function validOriginForWrite(request) {
   return request.headers.origin === undefined;
 }
 
-function validAwayOrigin(request, port) {
+function validUiOrigin(request, port) {
   const origin = request.headers.origin;
   return origin === undefined || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
 }
@@ -242,12 +243,91 @@ function createRequestHandler(options) {
       }
       return;
     }
+    const estimatePath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/estimate$/);
+    if (request.method === 'POST' && estimatePath) {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      const sessionId = estimatePath[1];
+      if (!/^[A-Za-z0-9_-]{1,100}$/.test(sessionId)) {
+        jsonResponse(response, 404, { error: 'Session not found' });
+        return;
+      }
+      const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
+      if (!session) {
+        jsonResponse(response, 404, { error: 'Session not found' });
+        return;
+      }
+      if (session.status !== '不明') {
+        jsonResponse(response, 409, { error: 'Session state is known' });
+        return;
+      }
+      const file = state.sessionFileFor(sessionId);
+      const estimate = await estimateTranscript(claudeHome, file?.cwd, sessionId);
+      const saved = state.saveEstimate(sessionId, estimate);
+      if (!saved) {
+        jsonResponse(response, 409, { error: 'Session state is known' });
+        return;
+      }
+      jsonResponse(response, 200, saved);
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/hidden-sessions') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const keys = Object.keys(body).sort();
+      if (body.action === 'clear' && keys.length === 1 && keys[0] === 'action') {
+        jsonResponse(response, 200, { cleared: state.clearHiddenSessions() });
+        return;
+      }
+      if (
+        body.action !== 'hide' || keys.length !== 2 || keys[0] !== 'action' || keys[1] !== 'session_id' ||
+        typeof body.session_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(body.session_id)
+      ) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const hidden = state.hideUnknownSession(body.session_id);
+      if (hidden === null) {
+        jsonResponse(response, 404, { error: 'Session not found' });
+        return;
+      }
+      if (!hidden) {
+        jsonResponse(response, 409, { error: 'Session state is known' });
+        return;
+      }
+      jsonResponse(response, 200, { hidden: true });
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/away') {
       if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
         return;
       }
-      if (!validAwayOrigin(request, info.port)) {
+      if (!validUiOrigin(request, info.port)) {
         jsonResponse(response, 403, { error: 'Forbidden' });
         return;
       }
@@ -531,7 +611,7 @@ module.exports = {
   DEFAULT_PORT,
   MAX_BODY_BYTES,
   requestHostIsLocal,
-  validAwayOrigin,
+  validUiOrigin,
   validSessionId,
   validTasks,
   validDecisionOptions,
