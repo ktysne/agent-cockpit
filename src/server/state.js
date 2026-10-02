@@ -385,6 +385,12 @@ function deriveSessions(entries) {
       if (!agentId) session.stopped = false;
     }
 
+    if (eventName === 'PostToolBatch' && !agentId) {
+      session.tools = session.tools.filter((tool) => (
+        tool.agent_id || Date.parse(tool.startedAt) >= event.hookAt
+      ));
+    }
+
     if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
       // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
       const oldestTool = session.tools
@@ -405,6 +411,7 @@ function deriveSessions(entries) {
 
     if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
       session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
+      if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
     }
 
     if (eventName === 'UserPromptSubmit') session.stopped = false;

@@ -269,6 +269,11 @@ function createRequestHandler(options) {
         } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'hold', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
           result = answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome });
         } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch') {
+          state.addEvent({
+            session_id: body.session_id,
+            hook_event_name: 'PostToolBatch',
+            hookAt: Date.now(),
+          });
           const additionalContext = answerDelivery.deliverPending(body.session_id);
           result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
         } else if (body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit') {

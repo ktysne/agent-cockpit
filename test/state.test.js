@@ -209,6 +209,35 @@ test('hookAt の順に再構成し、後から届いた古い PreToolUse を完�
   assert.deepEqual(state.snapshot().sessions[0].tools, []);
 });
 
+test('メインの Stop と UserPromptSubmit はメインのツールだけを消す', async (t) => {
+  await temporaryHome(t);
+  for (const hook_event_name of ['Stop', 'UserPromptSubmit']) {
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'SessionStart', hookAt: 100 });
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Bash', tool_use_id: 'main-tool' });
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name: 'PreToolUse', hookAt: 210, agent_id: 'agent-1', tool_name: 'Read', tool_use_id: 'agent-tool' });
+
+    state.addEvent({ session_id: 'tool-cleanup', hook_event_name, hookAt: 300 });
+
+    assert.deepEqual(state.snapshot().sessions[0].tools.map((tool) => tool.tool_use_id), ['agent-tool']);
+  }
+});
+
+test('PostToolBatch はその時刻より前に始まったメインツールだけを消す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'batch-cleanup', hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Bash', tool_use_id: 'old-main-tool' });
+  state.addEvent({ session_id: 'batch-cleanup', hook_event_name: 'PreToolUse', hookAt: 150, agent_id: 'agent-1', tool_name: 'Read', tool_use_id: 'agent-tool' });
+  state.addEvent({ session_id: 'batch-cleanup', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Read', tool_use_id: 'same-time-main-tool' });
+  state.addEvent({ session_id: 'batch-cleanup', hook_event_name: 'PreToolUse', hookAt: 250, tool_name: 'Read', tool_use_id: 'new-main-tool' });
+
+  state.addEvent({ session_id: 'batch-cleanup', hook_event_name: 'PostToolBatch', hookAt: 200 });
+
+  assert.deepEqual(state.snapshot().sessions[0].tools.map((tool) => tool.tool_use_id), [
+    'agent-tool', 'same-time-main-tool', 'new-main-tool',
+  ]);
+});
+
 test('許可待ちは同じ対象ツールの PostToolUse で解消する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

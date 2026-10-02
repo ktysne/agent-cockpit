@@ -107,7 +107,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tool-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
 .tool-name { min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
-.tool-content { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.tool-content { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .model { display: inline-flex; gap: 6px; align-items: baseline; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; white-space: nowrap; }
 .model i { color: var(--text-2); font-size: 11px; font-style: normal; }
 .model.claude { background: var(--warn-soft); border-color: transparent; }
@@ -1293,7 +1293,7 @@ function renderKindSections(products) {
 }
 
 function render(state) {
-  if (answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) {
+  if (answerNoteComposing) {
     deferredRenderPending = true;
     return;
   }
@@ -1362,7 +1362,7 @@ function render(state) {
 }
 
 function renderDeferredState() {
-  if (!deferredRenderPending || answerNoteComposing || document.activeElement?.matches('[data-answer-note]')) return;
+  if (!deferredRenderPending || answerNoteComposing) return;
   deferredRenderPending = false;
   if (lastState) render(lastState);
 }
@@ -1465,18 +1465,6 @@ document.addEventListener('compositionend', (event) => {
   if (!event.target.matches?.('[data-answer-note]')) return;
   answerNoteComposing = false;
   renderDeferredState();
-}, true);
-
-document.addEventListener('focusout', (event) => {
-  if (!event.target.matches?.('[data-answer-note]')) return;
-  const nextTarget = event.relatedTarget;
-  if (nextTarget instanceof HTMLElement) {
-    const flushAfterInteraction = () => queueMicrotask(renderDeferredState);
-    nextTarget.addEventListener('click', flushAfterInteraction, { once: true });
-    nextTarget.addEventListener('blur', flushAfterInteraction, { once: true });
-    return;
-  }
-  queueMicrotask(renderDeferredState);
 }, true);
 
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
