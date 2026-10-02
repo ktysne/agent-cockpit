@@ -153,6 +153,8 @@ h3.sub .count { font-weight: normal; }
 .task.done .title { color: var(--text-2); }
 .task .line .link-btn { margin-left: auto; flex: none; color: var(--text-2); font-size: 12px; }
 .task .line .link-btn:hover { color: var(--text); }
+.close-agent { margin-left: auto; color: var(--text-2); font-size: 12px; }
+.close-agent:hover { color: var(--text); }
 .criteria { margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; color: var(--text-2); }
 .criteria li.met { color: var(--ok); }
 .criteria li.met::marker { content: "✓ "; }
@@ -477,7 +479,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], closedTasks: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -674,15 +676,22 @@ function mainRow(p, session, withTag) {
       <div class="since">${esc(session.main.since || '')}</div></div>`;
 }
 
+// 画面で終了にした終了未確認は常駐サーバーが覚え、そのサブエージェントのイベントがまた届くまで終了として出す。
+const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.type}`;
+const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !ui.closedAgents.includes(closedAgentKey(session, agent));
+const isEndedAgent = (session, agent) => agent.state === 'done' && !isUnconfirmed(session, agent);
+
 function agentRow(p, session, agent, withTag) {
-  const state = agent.state === 'busy' ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  const unconfirmed = isUnconfirmed(session, agent);
+  const state = agent.state === 'busy' ? ['稼働中', 'busy'] : unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  const close = unconfirmed ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   return `<div class="agent-row">
-    <div class="who"><span class="dot ${agent.unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span></div>
+    <div class="who"><span class="dot ${unconfirmed ? 'wait' : agent.state}"></span>サブエージェント${sessionTag(p, session, withTag)}<b>${esc(agent.type)}</b><span class="badge ${state[1]}">${state[0]}</span>${close}</div>
     <div>${esc(agent.text)}${modelLine(agent)}${routeTag(agent)}</div><div class="since">${esc(agent.since)}</div></div>`;
 }
 
 function endedAgentToggle(session) {
-  const ended = session.subagents.filter(agent => agent.state === 'done' && !agent.unconfirmed);
+  const ended = session.subagents.filter(agent => isEndedAgent(session, agent));
   if (!ended.length) return '';
   const expanded = ui.expandedEndedAgents.includes(session.id);
   const label = expanded ? '終了済みを隠す' : '終了済みを表示';
@@ -691,10 +700,10 @@ function endedAgentToggle(session) {
 
 function agentSection(p, session, withTag) {
   const expanded = ui.expandedEndedAgents.includes(session.id);
-  const agents = visibleSubagents(session).filter(agent => agent.state !== 'done' || agent.unconfirmed || expanded)
+  const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded)
     .sort((a, b) => ageMinutes(a) - ageMinutes(b));
   const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
-  const hasEnded = session.subagents.some(agent => agent.state === 'done' && !agent.unconfirmed);
+  const hasEnded = session.subagents.some(agent => isEndedAgent(session, agent));
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
   return `${rows ? `<div class="agent-list">${rows}</div>` : `<div class="empty">${empty}</div>`}${endedAgentToggle(session)}`;
 }
@@ -1061,7 +1070,7 @@ function renderKindMode() {
   const news = ps.map(p => newsBox(p, true)).join('');
   const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const expanded = ui.expandedEndedAgents.includes(session.id);
-    const agents = visibleSubagents(session).filter(agent => agent.state !== 'done' || agent.unconfirmed || expanded);
+    const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded);
     return [
       { age: ageMinutes(session.main), html: mainRow(p, session, true) },
       ...agents.map(agent => ({ age: ageMinutes(agent), html: agentRow(p, session, agent, true) })),
@@ -1114,6 +1123,8 @@ document.addEventListener('click', e => {
   } else if (t.dataset.doneTasks) {
     const id = t.dataset.doneTasks;
     ui.expandedDoneTasks = ui.expandedDoneTasks.includes(id) ? ui.expandedDoneTasks.filter(x => x !== id) : [...ui.expandedDoneTasks, id];
+  } else if (t.dataset.closeAgent) {
+    if (!ui.closedAgents.includes(t.dataset.closeAgent)) ui.closedAgents.push(t.dataset.closeAgent);
   } else if (t.dataset.closeTask) {
     if (!ui.closedTasks.includes(t.dataset.closeTask)) ui.closedTasks.push(t.dataset.closeTask);
   } else if (t.dataset.estimate) {
