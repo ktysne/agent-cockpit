@@ -370,27 +370,41 @@ function Set-AwayStatus([bool]$Enabled) {
 }
 
 function Restart-ResidentServer {
+  if ($script:restartInProgress) { return }
+  $script:restartInProgress = $true
   try {
+    $previousServer = Get-ServerInfo
+    $state = Get-DashboardState $previousServer
+    $confirmationText = '常駐サーバーを再起動します。表示中のセッションの状態はいったん消え、次のイベントから組み立て直されます。'
+    if ($state.Connected -and ($state.PermissionCount -gt 0 -or $state.DecisionCount -gt 0)) {
+      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件と止めて待っている質問 $($state.DecisionCount) 件の表示も消えます。"
+    }
     $confirmation = [System.Windows.Forms.MessageBox]::Show(
-      '常駐サーバーを再起動します。表示中のセッションの状態はいったん消え、次のイベントから組み立て直されます。',
+      $confirmationText,
       'Agent Cockpit',
       [System.Windows.Forms.MessageBoxButtons]::OKCancel,
       [System.Windows.Forms.MessageBoxIcon]::Question
     )
     if ($confirmation -ne [System.Windows.Forms.DialogResult]::OK) { return }
 
-    $previousServer = Get-ServerInfo
-    if (-not $previousServer) { throw 'server.json から常駐サーバーの PID を取得できません。' }
+    if ($previousServer) {
+      $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$($previousServer.ProcessId)" -ErrorAction SilentlyContinue
+      $serverScriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\server\server.js'))
+      $commandLine = if ($processInfo) { [string]$processInfo.CommandLine } else { '' }
+      $normalizedCommandLine = $commandLine.Replace('/', '\')
+      $normalizedServerScriptPath = $serverScriptPath.Replace('/', '\')
+      $isResidentServer = $normalizedCommandLine.IndexOf($normalizedServerScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 
-    $process = Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue
-    if ($process) {
-      if ($process.ProcessName -ne 'node') { throw 'server.json の PID は Node.js のプロセスではありません。' }
-      try { Stop-Process -Id $previousServer.ProcessId -Force -ErrorAction Stop } catch {
-        if (Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue) { throw }
-      }
-      for ($attempt = 0; $attempt -lt 5; $attempt += 1) {
-        if (-not (Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue)) { break }
-        Start-Sleep -Milliseconds 100
+      if ($isResidentServer) {
+        $process = Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue
+        if ($process) {
+          try {
+            Stop-Process -Id $previousServer.ProcessId -Force -ErrorAction Stop
+            if (-not $process.WaitForExit(3000)) { throw '常駐サーバーの終了を 3 秒以内に確認できません。' }
+          } catch {
+            if (Get-Process -Id $previousServer.ProcessId -ErrorAction SilentlyContinue) { throw }
+          }
+        }
       }
     }
 
@@ -409,16 +423,27 @@ function Restart-ResidentServer {
     if (-not $server -or $server.port -lt 1 -or $server.port -gt 65535) { throw '常駐サーバーから有効なポートを取得できません。' }
 
     $currentServer = $null
+    $serverInfoUpdated = $false
     for ($attempt = 0; $attempt -lt 5; $attempt += 1) {
       $currentServer = Get-ServerInfo
-      if ($currentServer -and $currentServer.ProcessId -ne $previousServer.ProcessId) { break }
+      if ($previousServer) {
+        $serverInfoUpdated = $currentServer -and $currentServer.ProcessId -ne $previousServer.ProcessId
+      } else {
+        $serverInfoUpdated = $null -ne $currentServer
+      }
+      if ($serverInfoUpdated) { break }
       Start-Sleep -Milliseconds 100
     }
-    if (-not $currentServer -or $currentServer.ProcessId -eq $previousServer.ProcessId) { throw '常駐サーバーの PID が切り替わりませんでした。' }
+    if (-not $serverInfoUpdated) {
+      if ($previousServer) { throw '常駐サーバーの PID が切り替わりませんでした。' }
+      throw '起動後の server.json を読み取れません。'
+    }
 
     Show-TrayNotice '常駐サーバーを再起動しました'
   } catch {
-    Show-TrayNotice '常駐サーバーを再起動できませんでした' ([System.Windows.Forms.ToolTipIcon]::Warning)
+    Show-TrayNotice ("常駐サーバーを再起動できませんでした。{0}" -f $_.Exception.Message) ([System.Windows.Forms.ToolTipIcon]::Warning)
+  } finally {
+    $script:restartInProgress = $false
   }
 }
 
@@ -558,6 +583,7 @@ $script:decisionKeysKnown = $false
 $script:lastIconState = $null
 $script:balloonOpensDashboard = $false
 $script:awayMenuItem = $null
+$script:restartInProgress = $false
 $iconPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\assets\agent-cockpit_icon.png'))
 [void][AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)
 try {
