@@ -557,7 +557,8 @@ function renderSummary(sessions) {
 
 function renderExcludedNote(sessions) {
   const note = document.getElementById('excluded-note');
-  const hiddenCount = sessions.filter((session) => session.hidden === true).length;
+  const hiddenSessions = sessions.filter((session) => session.hidden === true);
+  const hiddenCount = hiddenSessions.length;
   note.hidden = hiddenCount === 0;
   if (!hiddenCount) {
     note.replaceChildren();
@@ -566,7 +567,14 @@ function renderExcludedNote(sessions) {
   const showAll = element('button', 'link-btn', 'すべて表示する');
   showAll.type = 'button';
   showAll.dataset.clearHiddenSessions = 'true';
-  note.replaceChildren(element('span', '', `外したセッション ${hiddenCount} 件`), showAll);
+  const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter((decision) => decision.state === 'waiting').length, 0);
+  const pendingCounts = [
+    permissionCount ? `許可待ち ${permissionCount} 件` : '',
+    decisionCount ? `止めて待っている ${decisionCount} 件` : '',
+  ].filter(Boolean);
+  const countNote = pendingCounts.length ? `(うち${pendingCounts.join('、')})` : '';
+  note.replaceChildren(element('span', '', `外したセッション ${hiddenCount} 件${countNote}`), showAll);
 }
 
 function isFilterShown(key) {
@@ -974,7 +982,7 @@ function sessionBlock(product, session, multipleSessions) {
   return block;
 }
 
-function productControls(product, index, total, pinnedCount) {
+function productControls(product, index, total, pinnedCount, headingId) {
   const pinned = displayPreferences.pinned.includes(product.key);
   const collapsed = displayPreferences.collapsed.includes(product.key);
   const controls = element('div', 'order');
@@ -1004,7 +1012,14 @@ function productControls(product, index, total, pinnedCount) {
   moveDown.dataset.direction = '1';
   moveDown.disabled = pinned ? index === pinnedCount - 1 : index === total - 1;
   moveDown.setAttribute('aria-label', `${product.name}を下へ`);
-  controls.append(collapse, pin, moveUp, moveDown);
+  const close = element('button', 'icon-btn', '×');
+  close.type = 'button';
+  close.dataset.productAction = 'close';
+  close.dataset.productKey = product.key;
+  close.setAttribute('aria-label', 'このプロダクトを閉じる');
+  close.setAttribute('aria-describedby', headingId);
+  close.title = 'このプロダクトを閉じる';
+  controls.append(collapse, pin, moveUp, moveDown, close);
   return controls;
 }
 
@@ -1017,7 +1032,9 @@ function productSection(product, index, products, pinnedCount) {
   const pinned = displayPreferences.pinned.includes(product.key);
   const section = element('section', `section ${pinned ? 'pinned' : ''}`.trim());
   const head = element('div', 'head');
-  head.append(element('h2', '', product.name));
+  const heading = element('h2', '', product.name);
+  heading.id = `product-heading-${index}`;
+  head.append(heading);
   const branch = sharedBranch(product);
   if (branch) head.append(element('span', 'meta branch', branch));
 
@@ -1025,7 +1042,7 @@ function productSection(product, index, products, pinnedCount) {
   const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state)).length, 0);
   if (permissionCount) head.append(element('span', 'chip danger', `許可待ち ${permissionCount}`));
   if (decisionCount) head.append(element('span', 'chip danger', `判断待ち ${decisionCount}`));
-  head.append(productControls(product, index, products.length, pinnedCount));
+  head.append(productControls(product, index, products.length, pinnedCount, heading.id));
   section.append(head);
 
   const body = element('div', 'body');
@@ -1179,17 +1196,24 @@ function render(state) {
   }
 }
 
-async function runUnknownSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
+async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
   button.disabled = true;
   try {
-    const response = await postUiAction(url, body);
-    // 押した直後にイベントが届いて状態が分かった場合は、失敗と出さずに表示を取り直す。
-    if (response.status === 404 || response.status === 409) {
-      await refresh();
-      return;
+    const requests = body.action === 'hide' && Array.isArray(body.session_ids)
+      ? Array.from({ length: Math.ceil(body.session_ids.length / 50) }, (_, index) => ({
+        action: 'hide', session_ids: body.session_ids.slice(index * 50, (index + 1) * 50),
+      }))
+      : [body];
+    let hiddenAny = false;
+    for (const requestBody of requests) {
+      const response = await postUiAction(url, requestBody);
+      // 押した直後にイベントが届いて状態が分かった場合は、失敗と出さずに表示を取り直す。
+      if (response.status === 404 || response.status === 409) continue;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      hiddenAny = true;
     }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await refresh();
+    if (!hiddenAny) return;
     if (focusExcludedNote) document.querySelector('[data-clear-hidden-sessions]')?.focus({ preventScroll: true });
     else if (button.dataset.estimateSession) {
       [...document.querySelectorAll('[data-estimate-session]')]
@@ -1210,7 +1234,7 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.estimateSession) {
-    void runUnknownSessionAction(
+    void runSessionAction(
       button,
       `/api/sessions/${encodeURIComponent(button.dataset.estimateSession)}/estimate`,
       {},
@@ -1219,7 +1243,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (button.dataset.hideSession) {
-    void runUnknownSessionAction(
+    void runSessionAction(
       button,
       '/api/hidden-sessions',
       { action: 'hide', session_id: button.dataset.hideSession },
@@ -1229,7 +1253,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (button.dataset.clearHiddenSessions) {
-    void runUnknownSessionAction(
+    void runSessionAction(
       button,
       '/api/hidden-sessions',
       { action: 'clear' },
@@ -1244,6 +1268,19 @@ document.addEventListener('click', (event) => {
       : displayPreferences.hidden.filter((hidden) => hidden !== key);
     saveDisplayPreferences();
     if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.productAction === 'close') {
+    const product = productGroups(lastState.sessions.filter((session) => session.hidden !== true))
+      .find((item) => item.key === button.dataset.productKey);
+    if (!product?.sessions.length) return;
+    void runSessionAction(
+      button,
+      '/api/hidden-sessions',
+      { action: 'hide', session_ids: product.sessions.map((session) => session.session_id) },
+      'プロダクトのセッションを一覧から外せませんでした',
+      true,
+    );
     return;
   }
   if (button.dataset.productAction) {

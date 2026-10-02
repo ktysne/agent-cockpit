@@ -588,7 +588,14 @@ function renderSummary() {
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
   excluded.hidden = hiddenSessions.length === 0;
-  excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
+  const hiddenPermissionCount = hiddenSessions.reduce((n, s) => n + s.perms.length, 0);
+  const hiddenDecisionCount = hiddenSessions.reduce((n, s) => n + s.decisions.filter(d => effectiveDecisionState(d) === 'waiting' && !answerOf(d.id).sent).length, 0);
+  const pendingCounts = [
+    hiddenPermissionCount ? `許可待ち ${hiddenPermissionCount} 件` : '',
+    hiddenDecisionCount ? `止めて待っている ${hiddenDecisionCount} 件` : '',
+  ].filter(Boolean);
+  const countNote = pendingCounts.length ? `(うち${pendingCounts.join('、')})` : '';
+  excluded.innerHTML = `<span>外したセッション ${hiddenSessions.length} 件${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>すべて表示する</button>`;
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
@@ -1026,6 +1033,7 @@ function orderControls(p, idx, total, pinnedCount) {
     <button type="button" class="icon-btn" data-pin="${p.id}" aria-pressed="${pinned}" title="最上部に固定">${pinned ? '固定中' : '固定'}</button>
     <button type="button" class="icon-btn" data-move="${p.id}" data-dir="-1" ${canMoveUp ? '' : 'disabled'} aria-label="${esc(p.name)} を上へ">↑</button>
     <button type="button" class="icon-btn" data-move="${p.id}" data-dir="1" ${canMoveDown ? '' : 'disabled'} aria-label="${esc(p.name)} を下へ">↓</button>
+    <button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトを閉じる" aria-describedby="product-heading-${idx}" title="このプロダクトを閉じる">×</button>
   </div>`;
 }
 
@@ -1038,7 +1046,7 @@ function renderProductMode() {
     const permissionCount = sessions.reduce((total, session) => total + session.perms.length, 0);
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
-        <h2>${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
+        <h2 id="product-heading-${i}">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
         ${permissionCount ? `<span class="chip danger">許可待ち ${permissionCount}</span>` : ''}
         ${pend.length ? `<span class="chip danger">判断待ち ${pend.length}</span>` : ''}
         ${(n => n ? `<span class="chip ok">マージできる PR ${n}</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
@@ -1137,6 +1145,14 @@ document.addEventListener('click', e => {
   } else if (t.dataset.hideSession) {
     const id = t.dataset.hideSession;
     if (!ui.hiddenSessions.includes(id)) ui.hiddenSessions.push(id);
+  } else if (t.dataset.closeProduct) {
+    const product = byId(t.dataset.closeProduct);
+    if (product) {
+      ui.hiddenSessions = [...new Set([
+        ...ui.hiddenSessions,
+        ...visibleSessions(product).map(session => session.id),
+      ])];
+    }
   }
   else if (t.dataset.collapse) {
     const id = t.dataset.collapse;
