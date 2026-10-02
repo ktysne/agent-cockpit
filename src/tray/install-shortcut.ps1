@@ -21,7 +21,7 @@ if ($Startup) {
   $destinations += [Environment]::GetFolderPath('Startup')
 }
 if (-not [string]::IsNullOrWhiteSpace($Directory)) {
-  $destinations += [System.IO.Path]::GetFullPath($Directory)
+  $destinations += $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Directory)
 }
 $destinations = @($destinations | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 
@@ -71,14 +71,14 @@ if (-not (Test-Path -LiteralPath $cockpitHome -PathType Container)) {
 }
 
 $iconPath = Join-Path $cockpitHome 'agent-cockpit.ico'
-$powershellPath = Join-Path $PSHOME 'powershell.exe'
+# PowerShell 7 から実行しても、ショートカットと同じ Windows PowerShell 5.1 で書き出す。
+$targetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $exportArguments = '-NoProfile -File "{0}" -ExportIcon "{1}"' -f $trayScript, $iconPath
-$exportProcess = Start-Process -FilePath $powershellPath -ArgumentList $exportArguments -WindowStyle Hidden -Wait -PassThru
+$exportProcess = Start-Process -FilePath $targetPath -ArgumentList $exportArguments -NoNewWindow -Wait -PassThru
 if ($exportProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
   throw 'タスクトレイのアイコンを書き出せませんでした。'
 }
 
-$targetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $arguments = '-NoProfile -STA -WindowStyle Hidden -File "{0}"' -f $trayScript
 $shell = New-Object -ComObject WScript.Shell
 try {

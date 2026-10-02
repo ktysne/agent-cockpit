@@ -27,6 +27,11 @@ npm start -- --port 48377 --dev
 
 Windows では、リポジトリ直下の `start-tray.cmd` をダブルクリックすると、すぐにタスクトレイを起動できます。
 起動の瞬間に黒いウィンドウが一瞬表示されます。
+どの起動方法も、PowerShell の実行ポリシーが `RemoteSigned` 以上であることを前提にしています(`Get-ExecutionPolicy` で確かめられます)。
+既定の `Restricted` のままでは、ウィンドウを出さずに起動が失敗します。
+
+ショートカットには、スクリプトを実行したチェックアウトの絶対パスが入ります。
+worktree を消すとリンクが切れるので、本体のチェックアウトから実行してください。
 
 ```powershell
 powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1"
