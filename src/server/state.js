@@ -39,6 +39,14 @@ function newSession(event) {
   };
 }
 
+const AMBIGUOUS_AGENT_CALL = Symbol('ambiguous agent call');
+
+function unboundAgentCallsOf(session) {
+  return session.tools.filter((tool) => (
+    tool.tool_name === 'Agent' && !tool.agent_id && session.agentToolBindings[tool.tool_use_id] === null
+  ));
+}
+
 function sameAgent(left, right) {
   return (left || null) === (right || null);
 }
@@ -91,7 +99,10 @@ function deriveSessions(entries) {
           startedAt: isoTime(event.hookAt),
         });
         if (event.tool_name === 'Agent' && !agentId) {
-          session.agentToolBindings[toolUseId] = null;
+          // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
+          const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
+          for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
+          session.agentToolBindings[toolUseId] = overlapping.length ? AMBIGUOUS_AGENT_CALL : null;
         }
       }
 
@@ -132,9 +143,7 @@ function deriveSessions(entries) {
         agent.startedAt = isoTime(event.hookAt);
         session.agents.push(agent);
       }
-      const unboundAgentCalls = session.tools.filter((tool) => (
-        tool.tool_name === 'Agent' && !tool.agent_id && session.agentToolBindings[tool.tool_use_id] === null
-      ));
+      const unboundAgentCalls = unboundAgentCallsOf(session);
       if (unboundAgentCalls.length === 1) session.agentToolBindings[unboundAgentCalls[0].tool_use_id] = agentId;
     }
 

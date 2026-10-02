@@ -228,3 +228,17 @@ test('セッションファイルの題名が変わったら、一覧の題名�
   state.syncSessionFiles([{ session_id: 'renamed', cwd: '', name: '変えた名前' }]);
   assert.equal(state.snapshot().sessions[0].title, '変えた名前');
 });
+
+test('開始が重なった Agent 呼び出しは、片方が先に終わっても後の SubagentStart に結び付けない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'overlap', ...event });
+  add({ hook_event_name: 'PreToolUse', hookAt: 1, tool_name: 'Agent', tool_use_id: 'call-a' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 2, tool_name: 'Agent', tool_use_id: 'call-b' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 3, tool_name: 'Agent', tool_use_id: 'call-a', resolvedModel: 'model-a' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 4, agent_id: 'agent-a', agent_type: 'Explore' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'agent-b', agent_type: 'Explore' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 6, tool_name: 'Agent', tool_use_id: 'call-b', resolvedModel: 'model-b' });
+  const models = state.snapshot().sessions[0].agents.map((agent) => agent.model);
+  assert.ok(!models.includes('model-a') && !models.includes('model-b'));
+});
