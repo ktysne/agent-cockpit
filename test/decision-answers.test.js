@@ -275,7 +275,7 @@ test('選択肢の回答は選択した label と未選択質問の推奨また�
   assert.equal(output.additionalContext, '開発者の指示: 保存先は既定値を使う。');
 });
 
-test('選択肢の回答を届ける文には選んだ質問だけを指定書式で含める', () => {
+test('選択肢の回答を届ける文には、選ばなかった質問も推奨か指示で埋めて全質問を含める', () => {
   const decision = {
     id: 'ask-pick',
     title: '形式を決める',
@@ -290,11 +290,13 @@ test('選択肢の回答を届ける文には選んだ質問だけを指定書�
         { label: '既定', description: '' }, { label: '変更', description: '' },
       ] },
     ]),
-    answer: { choice: 'pick', picks: [['CSV'], ['lint', '型検査'], []], note: '最後の項目は既定にする。' },
+    answer: { choice: 'pick', picks: [[], ['lint', '型検査'], []], note: '最後の項目は既定にする。' },
   };
 
-  assert.match(decisionAnswerText(decision), /選択肢を選んだ\(「形式を決める」は「CSV」、「追加する確認を選ぶ」は「lint, 型検査」\)/);
-  assert.doesNotMatch(decisionAnswerText(decision), /後で決める項目/);
+  assert.match(
+    decisionAnswerText(decision),
+    /選択肢を選んだ\(「形式を決める」は推奨の「JSON \(推奨\)」、「追加する確認を選ぶ」は「lint, 型検査」、「後で決める項目」は指示のとおり\)/,
+  );
 });
 
 test('仮適用中に送った選択肢の回答を作業コンテキストへ届ける', () => {

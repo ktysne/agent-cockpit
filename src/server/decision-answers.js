@@ -92,10 +92,15 @@ function askAnswerOutput(decision, answer) {
 
 function decisionAnswerText(decision) {
   const answer = decision.answer;
+  // 選ばなかった質問も askAnswerOutput と同じ規則で埋めて書く。省くと再送で前の答えが残るため。
+  const recommendations = recommendedOptions(decision);
   const pickedQuestions = answer.choice === 'pick'
-    ? decision.questions.flatMap((question, index) => {
+    ? decision.questions.map((question, index) => {
       const labels = answer.picks?.[index] || [];
-      return labels.length ? [`「${question.question}」は「${labels.join(', ')}」`] : [];
+      if (labels.length) return `「${question.question}」は「${labels.join(', ')}」`;
+      return recommendations[index]
+        ? `「${question.question}」は推奨の「${recommendations[index].label}」`
+        : `「${question.question}」は指示のとおり`;
     }).join('、')
     : '';
   const answerKind = answer.choice === 'ok' ? '推奨案で OK'
