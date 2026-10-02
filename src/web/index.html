@@ -1342,6 +1342,13 @@ function render(state) {
       ));
       if (focusData.kind === 'answer-note' && activeAnswerNote && control instanceof HTMLTextAreaElement) {
         control.replaceWith(activeAnswerNote);
+        const answerDraftKeyValue = answerDraftKey(focusData.sessionId, focusData.decisionId);
+        const decision = findDecision(focusData.sessionId, focusData.decisionId);
+        const answerDraft = answerDraftFor(decision, { session_id: focusData.sessionId });
+        if (answerDraft.note !== activeAnswerNote.value) {
+          answerDrafts.set(answerDraftKeyValue, { ...answerDraft, note: activeAnswerNote.value });
+        }
+        updateAnswerSubmit(activeAnswerNote.closest('.decision-answer'));
         activeAnswerNote.focus({ preventScroll: true });
         activeAnswerNote.setSelectionRange(focusData.start, focusData.end, focusData.direction);
         return;

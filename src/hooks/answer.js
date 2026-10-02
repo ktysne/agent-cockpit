@@ -90,7 +90,8 @@ async function runAskQuestion(input, options) {
         action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, outcome: 'server-lost',
         decision_id: register.decisionId,
       }, { ...options, timeoutMs: 1_000 });
-      return lost ? lost.hookOutput ?? null : fallbackOutput;
+      const hookOutput = lost ? lost.hookOutput ?? null : fallbackOutput;
+      return useOriginalToolInput(hookOutput, input.tool_input);
     }
     if (result.outcome === 'waiting') continue;
     const finished = await postHookRequest({

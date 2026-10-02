@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function renderHarness() {
+function renderHarness(initialDraftNote = '保存済みの下書き') {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
   const renderDeferredState = html.match(/function renderDeferredState\(\) \{[\s\S]*?\n\}/)?.[0];
@@ -49,6 +49,8 @@ function renderHarness() {
   note.undoHistory = ['直前の入力'];
   activeElement = note;
   const placeholder = new FakeTextArea();
+  const answerCard = {};
+  note.closest = (selector) => selector === '.decision-answer' ? answerCard : null;
   let currentNote = note;
   let replacedNote = null;
   placeholder.replaceWith = (replacement) => {
@@ -56,11 +58,24 @@ function renderHarness() {
     replacedNote = replacement;
   };
   let renderCount = 0;
+  const answerDrafts = new Map([['session-ui\0decision-ui', { choice: 'ok', note: initialDraftNote }]]);
+  let answerDraftWriteCount = 0;
+  const setDraft = answerDrafts.set.bind(answerDrafts);
+  answerDrafts.set = (...args) => {
+    answerDraftWriteCount += 1;
+    return setDraft(...args);
+  };
+  let updatedAnswerCard = null;
   const context = vm.createContext({
     answerNoteComposing: false,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     HTMLTextAreaElement: FakeTextArea,
+    answerDrafts,
+    answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
+    answerDraftFor: () => answerDrafts.get('session-ui\0decision-ui'),
+    findDecision: () => ({ id: 'decision-ui', answer: null }),
+    updateAnswerSubmit: (card) => { updatedAnswerCard = card; },
     document: {
       get activeElement() { return activeElement; },
       querySelectorAll: () => [],
@@ -89,6 +104,10 @@ function renderHarness() {
     placeholder,
     get currentNote() { return currentNote; },
     get replacedNote() { return replacedNote; },
+    get answerDraftWriteCount() { return answerDraftWriteCount; },
+    get answerDraft() { return answerDrafts.get('session-ui\0decision-ui'); },
+    get updatedAnswerCard() { return updatedAnswerCard; },
+    answerCard,
     html,
   };
 }
@@ -131,7 +150,19 @@ test('指示欄にフォーカスがある描き直しでは要素と選択範�
   assert.equal(harness.note.scrollTop, 73);
   assert.equal(harness.note.style.height, '154px');
   assert.deepEqual(harness.note.undoHistory, ['直前の入力']);
+  assert.equal(harness.answerDraft.choice, 'ok');
+  assert.equal(harness.answerDraft.note, '入力中の指示');
+  assert.equal(harness.answerDraftWriteCount, 1);
+  assert.equal(harness.updatedAnswerCard, harness.answerCard);
   assert.doesNotMatch(harness.html, /addEventListener\(\s*['"]focusout['"]/);
+});
+
+test('指示欄と下書きの note が同じなら下書きを更新しない', () => {
+  const harness = renderHarness('入力中の指示');
+  harness.context.render(harness.context.lastState);
+
+  assert.equal(harness.answerDraftWriteCount, 0);
+  assert.equal(harness.updatedAnswerCard, harness.answerCard);
 });
 
 test('指示欄の変換中は描き直しを保留し、変換終了後に反映する', () => {

@@ -190,9 +190,10 @@ class DecisionAnswerDelivery {
       return { outcome: 'released', hookOutput: null };
     }
     if (record.result) return record.result;
-    const currentOutcome = outcome === 'server-lost'
+    const askOutcome = this.askOutcome(record);
+    const currentOutcome = outcome === 'server-lost' && askOutcome !== 'answered' && askOutcome !== 'hold'
       ? (this.away.snapshot().enabled === true ? 'server-lost' : 'released')
-      : this.askOutcome(record);
+      : askOutcome;
     if (currentOutcome === 'waiting') return { outcome: 'waiting', hookOutput: null };
     const decision = this.state.decisionFor(sessionId, record.decisionId);
     const at = new Date(this.now()).toISOString();

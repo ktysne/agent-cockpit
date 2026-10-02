@@ -739,6 +739,42 @@ test('server-lost の後で released が返ったらダイアログへ戻す', a
   assert.equal(output, null);
 });
 
+test('回答後に離席を解除しても server-lost finish は回答を返す', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47826, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  const fixture = makeFixture({ sessionId: 'session-lost-answer', toolUseId: 'ask-lost-answer' });
+  const toolInput = { questions: QUESTIONS, extension: { preserved: true } };
+  const output = await runAskQuestion({
+    session_id: fixture.sessionId, tool_use_id: fixture.toolUseId, tool_name: 'AskUserQuestion', tool_input: toolInput,
+  }, {
+    homeDir,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.action === 'ask-poll') {
+        fixture.delivery.submitAnswer(fixture.sessionId, fixture.registration.decisionId, 'ok', '締切前の回答');
+        fixture.away.enabled = false;
+        return { ok: true, json: async () => ({ outcome: 'server-lost' }) };
+      }
+      if (body.action === 'ask-finish') {
+        const result = fixture.delivery.finishAsk({
+          sessionId: fixture.sessionId,
+          toolUseId: fixture.toolUseId,
+          decisionId: fixture.registration.decisionId,
+          outcome: 'server-lost',
+        });
+        return { ok: true, json: async () => result };
+      }
+      return { ok: true, json: async () => ({ awaiting: true, decisionId: fixture.registration.decisionId }) };
+    },
+  });
+
+  assert.deepEqual(output.hookSpecificOutput.updatedInput, {
+    ...toolInput,
+    answers: { 'どの形式にしますか。': 'JSON (推奨)' },
+  });
+  assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).state, 'waiting');
+});
+
 test('poll 応答が途絶えた後で finish の released が返ったらダイアログへ戻す', async (t) => {
   const { homeDir } = await temporaryHome(t);
   await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47825, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
