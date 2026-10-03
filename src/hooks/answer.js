@@ -6,6 +6,7 @@ const { readServerInfo } = require('./event');
 const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
+const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
 
 function validSessionId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(value);
@@ -101,12 +102,13 @@ async function runAskQuestion(input, options) {
       return useOriginalToolInput(hookOutput, input.tool_input);
     }
     if (result.outcome === 'waiting') continue;
+    const outcome = ASK_OUTCOMES.has(result.outcome) ? result.outcome : 'server-lost';
     const finished = await postHookRequest({
-      action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome: result.outcome,
+      action: 'ask-finish', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId, outcome,
     }, { ...options, timeoutMs: 1_000 });
     const hookOutput = finished
       ? finished.hookOutput ?? null
-      : result.outcome === 'server-lost' ? fallbackOutput : null;
+      : outcome === 'server-lost' ? fallbackOutput : null;
     return useOriginalToolInput(hookOutput, input.tool_input);
   }
   const timeout = await postHookRequest({

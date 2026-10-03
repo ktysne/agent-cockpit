@@ -604,6 +604,35 @@ test('保存したタスクがあってもイベントとセッションファ�
   assert.deepEqual(state.snapshot().sessions, []);
 });
 
+test('保存済みの旧回答は provisional として復元し、廃止済みの非表示キーは無視する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  const decision = state.addDecision('legacy-answer', decisionInput('推奨で仮に進める'), now);
+  state.setDecisionLifecycle('legacy-answer', decision.id, {
+    answer: { choice: 'hold', note: '後で確認する', sentAt: new Date(now).toISOString() },
+    state: 'waiting',
+    awaitingAnswerUntil: new Date(now + 60_000).toISOString(),
+  }, now);
+  await state.flushPersistence();
+  const storePath = path.join(homeDir, 'store.json');
+  const savedStore = JSON.parse(await fs.readFile(storePath, 'utf8'));
+  savedStore.display = {
+    mode: 'product', order: [], pinned: [], collapsed: [], hidden: ['held'],
+    sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true,
+  };
+  await fs.writeFile(storePath, JSON.stringify(savedStore));
+
+  const restored = await DashboardState.load(homeDir, { now: now + 1 });
+  const restoredDecision = restored.decisionFor('legacy-answer', decision.id);
+
+  assert.equal(restoredDecision.state, 'provisional');
+  assert.equal(restoredDecision.answer, null);
+  assert.deepEqual(restored.display.hidden, []);
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+});
+
 test('締切を外して読み戻した回答記録を保存し直しても、次の読み込みで全体が残る', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-03T00:00:00.000Z');

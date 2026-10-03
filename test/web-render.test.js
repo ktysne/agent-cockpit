@@ -439,7 +439,7 @@ const answerableState = (answer = null, state = 'provisional') => ({
 });
 
 test('新しい画面の版は書きかけがあれば知らせ、書きかけを消した後に読み込む', () => {
-  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '', picks: [] }]]);
+  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'ok', note: '', picks: [] }]]);
   assert.equal(harness.context.checkUiVersion(answerableState()), false);
   assert.equal(harness.reloadCount, 0);
   assert.equal(harness.reloadNote.hidden, false);
@@ -451,11 +451,11 @@ test('新しい画面の版は書きかけがあれば知らせ、書きかけ�
 });
 
 test('送った回答と同じ下書きは書きかけと数えない', () => {
-  const sent = { choice: 'hold', note: 'メモ', picks: [], sentAt: '2026-10-03T00:00:00.000Z' };
-  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: 'メモ', picks: [] }]]);
+  const sent = { choice: 'ok', note: 'メモ', picks: [], sentAt: '2026-10-03T00:00:00.000Z' };
+  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'ok', note: 'メモ', picks: [] }]]);
   assert.equal(harness.context.checkUiVersion(answerableState(sent)), true);
 
-  const changed = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '書き足し', picks: [] }]]);
+  const changed = reloadHarness('v1', [[DRAFT_KEY, { choice: 'ok', note: '書き足し', picks: [] }]]);
   assert.equal(changed.context.checkUiVersion(answerableState(sent)), false);
 
   const unchecked = reloadHarness('v1', [[DRAFT_KEY, { choice: null, note: 'メモ', picks: [] }]]);
@@ -463,7 +463,7 @@ test('送った回答と同じ下書きは書きかけと数えない', () => {
 });
 
 test('回答できなくなった判断事項と消えた判断事項の下書きは書きかけと数えない', () => {
-  const draft = [[DRAFT_KEY, { choice: 'hold', note: '書きかけ', picks: [] }]];
+  const draft = [[DRAFT_KEY, { choice: 'ok', note: '書きかけ', picks: [] }]];
   assert.equal(reloadHarness('v1', draft).context.checkUiVersion(answerableState(null, 'resolved')), true);
   assert.equal(reloadHarness('v1', draft).context.checkUiVersion({ uiVersion: 'v2', sessions: [] }), true);
 });
@@ -476,7 +476,7 @@ test('自分の画面の版が空なら読み込み直さない', () => {
 });
 
 test('今すぐ読み込み直す操作は下書きがあっても再読み込みする', () => {
-  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '書きかけ', picks: [] }]]);
+  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'ok', note: '書きかけ', picks: [] }]]);
   harness.context.reloadNow({ target: { closest: (selector) => selector === '[data-reload-now]' } });
   assert.equal(harness.reloadCount, 1);
 });
@@ -854,7 +854,6 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
     pullRequestMergeableCount: () => 4,
     pullRequestOpenCount: (groups) => groups.reduce((total, group) => total + group.openCount, 0),
     isPendingDecision: () => false,
-    isHeldDecision: () => false,
     hasEffectiveAnswer: () => false,
   });
   vm.runInContext(`${element}\n${renderSummary}`, context);
@@ -891,9 +890,9 @@ test('マージできる PR はマージボタンが出るものだけを、複�
   assert.equal(context.pullRequestMergeableCount(groups), 1);
 });
 
-test('見出しの判断待ちは回答を送ったものを数えず、保留を選んだものと無視された回答は数える', () => {
+test('見出しの判断待ちは有効な回答を数えず、無視された回答は数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['hasEffectiveAnswer', 'isHeldDecision', 'isAwaitingDecision'].map((name) => (
+  const functions = ['hasEffectiveAnswer', 'isAwaitingDecision'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -904,7 +903,6 @@ test('見出しの判断待ちは回答を送ったものを数えず、保留�
   assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: null }), true);
   assert.equal(context.isAwaitingDecision({ state: 'provisional', answer: null }), true);
   assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: { choice: 'pick', sentAt } }), false);
-  assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: { choice: 'hold', sentAt } }), true);
   assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: { choice: 'pick', sentAt, ignoredAt: sentAt } }), true);
   assert.equal(context.isAwaitingDecision({ state: 'resolved', answer: null }), false);
 });

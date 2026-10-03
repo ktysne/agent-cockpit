@@ -330,7 +330,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
-    FILTERS: ['permission', 'blocking', 'provisional', 'held', 'agents', 'prs'].map((key) => ({ key })),
+    FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
   const base = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
@@ -345,6 +345,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 5);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay({ ...base, hidden: ['held'] }).hidden)), []);
 });
 
 test('長い待ちの判定は設定値を使い、判断事項と許可待ちの表示へ反映する', () => {
@@ -611,7 +612,6 @@ test('許可待ちと判断事項のフィルターは非表示の行を検出�
     ['permission', { permissionWaits: [{}], decisions: [] }],
     ['blocking', { permissionWaits: [], decisions: [{ state: 'waiting', answer: null }] }],
     ['provisional', { permissionWaits: [], decisions: [{ state: 'provisional', answer: null }] }],
-    ['held', { permissionWaits: [], decisions: [{ state: 'waiting', answer: { choice: 'hold' } }] }],
   ];
 
   for (const [category, session] of categories) {
@@ -639,7 +639,6 @@ test('PRフィルターの札はマージできる件数を表示する', () => 
     pullRequestMergeableCount: (groups) => groups.reduce((count, group) => count + group.mergeableCount, 0),
     pullRequestOpenCount: () => 0,
     isPendingDecision: () => false,
-    isHeldDecision: () => false,
     hasEffectiveAnswer: () => false,
     element,
     document: {

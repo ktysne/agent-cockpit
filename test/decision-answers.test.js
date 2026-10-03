@@ -156,16 +156,17 @@ test('推奨は label の括弧付き指定か MCP の明示指定だけを単�
   assert.equal(sanitizeQuestions(QUESTIONS)[0].options[0].recommended, true);
 });
 
-test('「保留中」の件数は未解決判断事項だけを数える', () => {
+test('画面とモックの判断回答と件数札に保留の選択肢がない', () => {
   const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helper = html.match(/function isHeldDecision\(decision\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(helper);
-  const isHeldDecision = vm.runInNewContext(`(${helper})`);
-
-  assert.equal(isHeldDecision({ state: 'waiting', answer: { choice: 'hold' } }), true);
-  assert.equal(isHeldDecision({ state: 'provisional', answer: { choice: 'hold' } }), true);
-  assert.equal(isHeldDecision({ state: 'resolved', answer: { choice: 'hold' } }), false);
-  assert.equal(isHeldDecision({ state: 'withdrawn', answer: { choice: 'hold' } }), false);
+  const mock = fsSync.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
+  const webFilters = html.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  const mockFilters = mock.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  assert.ok(webFilters && mockFilters);
+  assert.equal(html.includes('判断を保留する'), false);
+  assert.equal(mock.includes('判断を保留する'), false);
+  assert.equal(webFilters.includes('保留中'), false);
+  assert.equal(mockFilters.includes('保留中'), false);
+  assert.match(mock, /ui\.hidden = Array\.isArray\(ui\.hidden\).*FILTERS\.some/);
 });
 
 test('タイトル、外したセッション、読み上げは回答前の waiting だけを数える', () => {
@@ -230,11 +231,10 @@ test('種類別の並び順の札は省略表示し、モックでは title に�
   assert.match(mockOrder, /title="\$\{esc\(p\.name\)\}"/);
 });
 
-test('推奨案で OK は推奨 label を使い、指示と保留の文脈を添える', () => {
+test('推奨案で OK は推奨 label を使い、指示を文脈に添える', () => {
   const decision = { id: 'ask-1', questions: sanitizeQuestions(QUESTIONS) };
   const ok = askAnswerOutput(decision, { choice: 'ok', note: '' });
   const okWithNote = askAnswerOutput(decision, { choice: 'ok', note: '理由を記録する。' });
-  const hold = askAnswerOutput(decision, { choice: 'hold', note: '' });
 
   assert.equal(ok.hookSpecificOutput.permissionDecision, 'allow');
   assert.deepEqual(ok.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
@@ -243,8 +243,6 @@ test('推奨案で OK は推奨 label を使い、指示と保留の文脈を添
     { label: 'CSV', description: '表計算で開ける。' },
   ]);
   assert.match(okWithNote.hookSpecificOutput.additionalContext, /開発者の指示: 理由を記録する。/);
-  assert.match(hold.hookSpecificOutput.additionalContext, /開発者が判断を保留した。推奨のまま進め/);
-  assert.deepEqual(hold.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
 });
 
 test('選択肢の回答は選択した label と未選択質問の推奨または指示を answers に入れる', () => {
@@ -330,14 +328,13 @@ test('指示だけの回答は指示文を answers に入れる', () => {
   assert.equal(output.hookSpecificOutput.additionalContext, undefined);
 });
 
-test('推奨がない質問の OK と保留は拒否結末と同じ出力になる', () => {
+test('推奨がない質問の OK は拒否結末と同じ出力になる', () => {
   const decision = {
     id: 'ask-no-recommendation',
     questions: sanitizeQuestions([{ ...QUESTIONS[0], options: [{ label: 'JSON', description: '' }] }]),
   };
 
   assert.deepEqual(askAnswerOutput(decision, { choice: 'ok', note: '' }), denyAnswerOutput(decision.id));
-  assert.deepEqual(askAnswerOutput(decision, { choice: 'hold', note: '' }), denyAnswerOutput(decision.id));
 });
 
 test('MCP の recommended true は label の文言にかかわらず推奨として扱う', () => {
@@ -352,43 +349,6 @@ test('MCP の recommended true は label の文言にかかわらず推奨とし
   assert.deepEqual(askAnswerOutput(decision, { choice: 'ok', note: '' }).hookSpecificOutput.updatedInput.answers, {
     'どの形式にしますか。': 'JSON',
   });
-});
-
-test('推奨が無い質問の OK は送れず、保留は締切として処理して後から再配信しない', async () => {
-  const fixture = makeFixture({ questions: [{
-    question: 'どの形式にしますか。', header: '', multiSelect: false,
-    options: [{ label: 'JSON', description: '' }],
-  }] });
-  const { delivery, state, sessionId, toolUseId, registration } = fixture;
-
-  assert.equal(delivery.submitAnswer(sessionId, registration.decisionId, 'ok', ''), false);
-  delivery.submitAnswer(sessionId, registration.decisionId, 'hold', 'あとで決める。');
-  const { outcome } = await delivery.waitForAsk({ sessionId, toolUseId });
-  assert.equal(outcome, 'timeout');
-  delivery.finishAsk({ sessionId, toolUseId, outcome });
-  assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'provisional');
-  assert.ok(state.decisionFor(sessionId, registration.decisionId).answer.ignoredAt);
-  assert.equal(delivery.deliverPending(sessionId), null);
-  delivery.afterDecisionUpdate(sessionId, registration.decisionId);
-  assert.equal(state.decisionFor(sessionId, registration.decisionId).answer.reflectedAt, null);
-});
-
-test('推奨の無い質問で保留を送った後に離席中を解除するとダイアログへ戻す', async () => {
-  const fixture = makeFixture({ questions: [{
-    question: 'どの形式にしますか。', header: '', multiSelect: false,
-    options: [{ label: 'JSON', description: '' }],
-  }] });
-  const { delivery, away, state, sessionId, toolUseId, registration } = fixture;
-
-  delivery.submitAnswer(sessionId, registration.decisionId, 'hold', 'あとで決める。');
-  away.enabled = false;
-
-  const { outcome } = await delivery.waitForAsk({ sessionId, toolUseId });
-  assert.equal(outcome, 'released');
-  assert.deepEqual(delivery.finishAsk({ sessionId, toolUseId, outcome }), { outcome: 'released', hookOutput: null });
-  assert.equal(state.decisionFor(sessionId, registration.decisionId).state, 'waiting');
-  assert.equal(state.decisionFor(sessionId, registration.decisionId).answer, null);
-  assert.equal(delivery.deliverPending(sessionId), null);
 });
 
 test('同じ質問文が重複する判断事項はダッシュボードから回答できない', () => {
@@ -514,7 +474,7 @@ test('同じ tool_use_id の登録は冪等で、束ね直した質問では前�
     options: [{ label: 'TOML（Recommended）', description: 'configuration' }, { label: 'CSV', description: '' }],
   }];
   state.setDecisionLifecycle(sessionId, registration.decisionId, {
-    answer: { choice: 'hold', note: '前の質問への回答', sentAt: new Date(clock.now()).toISOString() },
+    answer: { choice: 'ok', note: '前の質問への回答', sentAt: new Date(clock.now()).toISOString() },
     state: 'provisional',
     awaitingAnswerUntil: new Date(clock.now() + 10_000).toISOString(),
   }, clock.now());
@@ -625,44 +585,23 @@ test('PostToolUseFailure は待機中の lifecycle とタイマーを解除し�
   assert.equal(withdrawn.state, 'withdrawn');
   assert.equal(withdrawn.awaitingAnswerUntil, undefined);
 
-  const held = makeFixture();
-  held.delivery.submitAnswer(held.sessionId, held.registration.decisionId, 'hold', 'あとで見る。');
-  const result = await held.delivery.waitForAsk({ sessionId: held.sessionId, toolUseId: held.toolUseId });
-  held.delivery.finishAsk({ ...result, sessionId: held.sessionId, toolUseId: held.toolUseId });
+  const provisional = makeFixture();
+  provisional.state.setDecisionLifecycle(provisional.sessionId, provisional.registration.decisionId, { state: 'provisional' });
   const failedEvent = {
-    session_id: held.sessionId,
+    session_id: provisional.sessionId,
     hook_event_name: 'PostToolUseFailure',
-    hookAt: held.clock.now() + 1,
+    hookAt: provisional.clock.now() + 1,
     tool_name: 'AskUserQuestion',
-    tool_use_id: held.toolUseId,
+    tool_use_id: provisional.toolUseId,
   };
-  held.state.addEvent(failedEvent);
-  held.delivery.afterEvent(sanitizeEvent(failedEvent));
-  const provisional = held.state.decisionFor(held.sessionId, held.registration.decisionId);
-  assert.equal(provisional.state, 'provisional');
-  assert.equal(provisional.awaitingAnswerUntil, undefined);
+  provisional.state.addEvent(failedEvent);
+  provisional.delivery.afterEvent(sanitizeEvent(failedEvent));
+  const decision = provisional.state.decisionFor(provisional.sessionId, provisional.registration.decisionId);
+  assert.equal(decision.state, 'provisional');
+  assert.equal(decision.awaitingAnswerUntil, undefined);
 });
 
-test('保留の回答は PostToolUse 後も provisional に残し、通常の回答は resolved にする', async () => {
-  const held = makeFixture();
-  const heldId = held.registration.decisionId;
-  held.delivery.submitAnswer(held.sessionId, heldId, 'hold', 'あとで見直す。');
-  const holdOutcome = await held.delivery.waitForAsk({ sessionId: held.sessionId, toolUseId: held.toolUseId });
-  held.delivery.finishAsk({ ...holdOutcome, sessionId: held.sessionId, toolUseId: held.toolUseId });
-  held.state.addEvent({
-    session_id: held.sessionId, hook_event_name: 'PostToolUse', hookAt: held.clock.now() + 10,
-    tool_name: 'AskUserQuestion', tool_use_id: held.toolUseId,
-    decisionResolution: { chosen: ['JSON'], note: '' },
-  });
-  held.delivery.afterEvent(sanitizeEvent({
-    session_id: held.sessionId, hook_event_name: 'PostToolUse', hookAt: held.clock.now() + 10,
-    tool_name: 'AskUserQuestion', tool_use_id: held.toolUseId,
-  }));
-
-  const holdDecision = held.state.decisionFor(held.sessionId, heldId);
-  assert.equal(holdDecision.state, 'provisional');
-  assert.ok(holdDecision.answer.reflectedAt);
-
+test('回答を受け取った質問は PostToolUse 後に解決済みになる', async () => {
   const answered = makeFixture({ sessionId: 'session-b', toolUseId: 'ask-b' });
   const answeredId = answered.registration.decisionId;
   answered.delivery.submitAnswer(answered.sessionId, answeredId, 'ok', '');
@@ -1183,6 +1122,12 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
     headers: uiHeaders,
   });
   assert.equal(otherSession.status, 404);
+  const oldChoice = await request(runtime.info.port, {
+    method: 'POST', path: url,
+    body: JSON.stringify({ session_id: 'session-ui', choice: 'hold', note: '旧形式' }),
+    headers: uiHeaders,
+  });
+  assert.equal(oldChoice.status, 400);
 
   const sent = await request(runtime.info.port, { method: 'POST', path: url, body, headers: uiHeaders });
   assert.equal(sent.status, 200);

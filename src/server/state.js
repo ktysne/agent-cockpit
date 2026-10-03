@@ -20,7 +20,7 @@ const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
-const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
+const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'agents', 'prs']);
 
 function validProduct(value) {
   return isRecord(value) && typeof value.key === 'string' && value.key.trim().length > 0 && value.key.length <= 500 &&
@@ -98,19 +98,25 @@ function normalizeDisplay(value) {
   const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
-  for (const key of ['order', 'pinned', 'collapsed', 'hidden']) {
+  for (const key of ['order', 'pinned', 'collapsed']) {
     if (!Array.isArray(value[key]) || value[key].length > 200 || value[key].some((item) => typeof item !== 'string' || item.length > 500)) {
       throw new Error('Invalid display preferences');
     }
     if (new Set(value[key]).size !== value[key].length) throw new Error('Invalid display preferences');
   }
-  if (value.hidden.some((key) => !DISPLAY_FILTER_KEYS.has(key))) throw new Error('Invalid display preferences');
+  if (!Array.isArray(value.hidden) || value.hidden.length > 200 || value.hidden.some((key) => typeof key !== 'string' || key.length > 500)) {
+    throw new Error('Invalid display preferences');
+  }
+  const hidden = value.hidden.filter((key) => DISPLAY_FILTER_KEYS.has(key));
+  if (value.hidden.some((key) => !DISPLAY_FILTER_KEYS.has(key) && key !== 'held') || new Set(hidden).size !== hidden.length) {
+    throw new Error('Invalid display preferences');
+  }
   return {
     mode: value.mode,
     order: [...value.order],
     pinned: [...value.pinned],
     collapsed: [...value.collapsed],
-    hidden: [...value.hidden],
+    hidden,
     sectionOrder: normalizeSectionOrder(value.sectionOrder),
     longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
@@ -300,9 +306,12 @@ function normalizeStore(value) {
         (lifecycle.updatedAt !== undefined && lifecycle.updatedAt !== null && !validTimestamp(lifecycle.updatedAt))) {
         throw new Error('Invalid decision lifecycle');
       }
+      const legacyAnswer = lifecycle.answer?.choice === 'hold';
+      const storedDecisionState = plans.get(sessionId)?.decisions.find((decision) => decision.id === decisionId)?.state;
+      const legacyPendingDecision = legacyAnswer && ['waiting', 'provisional'].includes(lifecycle.state ?? storedDecisionState);
       lifecycles.set(decisionId, {
-        answer: lifecycle.answer ? { ...lifecycle.answer } : null,
-        state: lifecycle.state ?? null,
+        answer: lifecycle.answer && !legacyAnswer ? { ...lifecycle.answer } : null,
+        state: legacyPendingDecision ? 'provisional' : lifecycle.state ?? null,
         updatedAt: lifecycle.updatedAt ?? null,
         ...(validTimestamp(lifecycle.awaitingAnswerUntil) ? { awaitingAnswerUntil: lifecycle.awaitingAnswerUntil } : {}),
       });

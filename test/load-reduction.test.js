@@ -20,17 +20,15 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   const decisions = [
     { state: 'waiting', answer: null },
     { state: 'provisional', answer: null },
-    { state: 'waiting', answer: { choice: 'hold' } },
   ];
   const webContext = {
     isPendingDecision: (decision) => decision.state === 'waiting' && !decision.answer,
     hasEffectiveAnswer: (decision) => Boolean(decision.answer),
-    isHeldDecision: (decision) => decision.answer?.choice === 'hold',
   };
   vm.runInNewContext(`${functionSource(web, 'decisionCountTitle')}\nthis.title = decisionCountTitle;`, webContext);
-  assert.equal(webContext.title(decisions), '止めて待っている 1 件、仮に推奨案で進行中 1 件、保留中 1 件');
+  assert.equal(webContext.title(decisions), '止めて待っている 1 件、仮に推奨案で進行中 1 件');
 
-  const mockAnswers = { held: { sent: { choice: 'hold' } } };
+  const mockAnswers = {};
   const mockContext = {
     effectiveDecisionState: (decision) => decision.kind,
     answerOf: (id) => mockAnswers[id] || {},
@@ -39,8 +37,7 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   assert.equal(mockContext.title([
     { id: 'waiting', kind: 'waiting' },
     { id: 'provisional', kind: 'provisional' },
-    { id: 'held', kind: 'waiting' },
-  ]), '止めて待っている 1 件、仮に推奨案で進行中 1 件、保留中 1 件');
+  ]), '止めて待っている 1 件、仮に推奨案で進行中 1 件');
   assert.match(functionSource(web, 'productSection'), /decisionChip\.title = decisionCountTitle\(awaitingDecisions\)/);
   assert.match(functionSource(mock, 'renderProductMode'), /title="\$\{esc\(decisionCountTitle\(pend\)\)\}"/);
 });
