@@ -551,11 +551,20 @@ test('SessionEnd より後に遅れて届いたイベントで終了済みセッ
   assert.deepEqual(state.snapshot().sessions, []);
 });
 
-function launchCodex(state, sessionId, toolUseId, hookAt, agentId, agentDefinition = null) {
+function launchCodex(state, sessionId, toolUseId, hookAt, agentId, agentDefinition = null, definition = 'impl-hard') {
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PreToolUse', hookAt, agent_id: agentId,
-    tool_name: 'Bash', tool_use_id: toolUseId, summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
+    tool_name: 'Bash', tool_use_id: toolUseId, summary: `bash ~/.claude/tools/codex-agent.sh ${definition} < prompt.md`,
   }, agentDefinition ? { codexAgentDefinition: agentDefinition } : undefined);
+}
+
+function waitForCodex(state, sessionId, toolUseId, hookAt, agentId, runId, definitionMetadata = null) {
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'PreToolUse', hookAt, agent_id: agentId,
+    tool_name: 'Bash', tool_use_id: toolUseId,
+    summary: `bash ~/.claude/tools/codex-agent.sh --wait ${runId}`,
+    codexWaitRunId: runId,
+  }, definitionMetadata ? { codexAgentDefinition: definitionMetadata } : undefined);
 }
 
 function codexOutput(model, effort, result = 'ok', codexHome = 'C:\\Users\\mss02968\\.codex') {
@@ -588,25 +597,198 @@ test('背景で起動した Codex は後続の Read 出力にある結果行で�
   });
 });
 
-test('背景で起動した Codex は、--wait で取り出した結果で終了し、--wait を別の Codex として数えない', async (t) => {
+test('--wait は同じ親と同じ定義の背景 Codex を結果行で終了する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'bg-wait', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
-  launchCodex(state, 'bg-wait', 'bash-1', 2, 'sub-1');
-  state.addEvent({ session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  launchCodex(state, 'bg-wait', 'bash-other', 2, 'sub-1', { model: 'gpt-other', effort: 'low' }, 'impl-standard');
   state.addEvent({
-    session_id: 'bg-wait', hook_event_name: 'PreToolUse', hookAt: 4, agent_id: 'sub-1',
-    tool_name: 'Bash', tool_use_id: 'bash-wait', summary: 'bash ~/.claude/tools/codex-agent.sh --wait 20261002-abc',
+    session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-other', codexOutput: codexOutput('gpt-other', 'low'),
   });
+  launchCodex(state, 'bg-wait', 'bash-target', 4, 'sub-1', { model: 'gpt-target', effort: 'high' });
+  state.addEvent({ session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-target' });
+  waitForCodex(state, 'bg-wait', 'bash-wait', 8, 'sub-1', 'impl-hard-20261003-123456-7');
   state.addEvent({
-    session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1',
+    session_id: 'bg-wait', hook_event_name: 'PostToolUse', hookAt: 9, agent_id: 'sub-1',
     tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-6-luna', 'xhigh'),
   });
-  state.addEvent({ session_id: 'bg-wait', hook_event_name: 'SubagentStop', hookAt: 6, agent_id: 'sub-1' });
 
   const session = state.snapshot().sessions[0];
   assert.deepEqual(session.agents.map((agent) => agent.agent_id), ['sub-1']);
   assert.deepEqual([session.agents[0].gpt.model, session.agents[0].gpt.active, session.agents[0].gpt.unconfirmed], ['gpt-6-luna', false, false]);
+});
+
+test('--wait は別の親の結果未受領 Codex を再利用しない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'wait-parent', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  state.addEvent({ session_id: 'wait-parent', hook_event_name: 'SubagentStart', hookAt: 2, agent_id: 'sub-2', agent_type: 'impl-hard' });
+  launchCodex(state, 'wait-parent', 'bash-1', 3, 'sub-1', { model: 'gpt-parent-one', effort: 'low' });
+  state.addEvent({ session_id: 'wait-parent', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  waitForCodex(state, 'wait-parent', 'bash-wait', 5, 'sub-2', 'impl-hard-20261003-123456-7', {
+    model: 'gpt-parent-two', effort: 'xhigh',
+  });
+
+  const agents = state.snapshot().sessions[0].agents;
+  assert.equal(agents.length, 2);
+  assert.deepEqual(agents.map((agent) => [agent.agent_id, agent.gpt.model, agent.gpt.active]), [
+    ['sub-1', 'gpt-parent-one', true],
+    ['sub-2', 'gpt-parent-two', true],
+  ]);
+});
+
+test('--wait は新しい稼働中 Codex より背景へ移った同じ定義を優先する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'wait-background-priority', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'wait-background-priority', 'bash-background', 2, 'sub-1', { model: 'gpt-background', effort: 'low' });
+  state.addEvent({
+    session_id: 'wait-background-priority', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-background',
+  });
+  launchCodex(state, 'wait-background-priority', 'bash-running', 4, 'sub-1', { model: 'gpt-running', effort: 'high' });
+  waitForCodex(state, 'wait-background-priority', 'bash-wait', 5, 'sub-1', 'impl-hard-20261003-123456-7');
+  state.addEvent({
+    session_id: 'wait-background-priority', hook_event_name: 'PostToolUse', hookAt: 6, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-background-finished', 'xhigh'),
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active], ['gpt-running', true]);
+});
+
+test('結果行なしで失敗した起動は --wait で再開せず、新しい行を作る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'failed-wait', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'failed-wait', 'bash-1', 2, 'sub-1', { model: 'gpt-before-wait', effort: 'low' });
+  state.addEvent({
+    session_id: 'failed-wait', hook_event_name: 'PostToolUseFailure', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1',
+  });
+  waitForCodex(state, 'failed-wait', 'bash-wait', 4, 'sub-1', 'impl-hard-20261003-123456-7');
+
+  const [resumed] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([resumed.gpt.active, resumed.gpt.unconfirmed], [true, false]);
+  assert.notEqual(resumed.gpt.model, 'gpt-before-wait');
+
+  state.addEvent({
+    session_id: 'failed-wait', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-finished', 'xhigh'),
+  });
+  assert.equal(state.snapshot().sessions[0].agents[0].gpt.active, false);
+});
+
+test('上限までに終わらない --wait の後も Codex は稼働中で、親が止まれば終了未確認、次の --wait の結果行で終了する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'wait-timeout', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'wait-timeout', 'bash-1', 2, 'sub-1', { model: 'gpt-6-luna', effort: 'xhigh' });
+  state.addEvent({ session_id: 'wait-timeout', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  waitForCodex(state, 'wait-timeout', 'bash-wait-1', 4, 'sub-1', 'impl-hard-20261003-123456-7');
+  state.addEvent({ session_id: 'wait-timeout', hook_event_name: 'PostToolUseFailure', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-wait-1' });
+  assert.deepEqual([state.snapshot().sessions[0].agents[0].gpt.active, state.snapshot().sessions[0].agents[0].gpt.unconfirmed], [true, false]);
+
+  state.addEvent({ session_id: 'wait-timeout', hook_event_name: 'SubagentStop', hookAt: 6, agent_id: 'sub-1' });
+  assert.deepEqual([state.snapshot().sessions[0].agents[0].gpt.active, state.snapshot().sessions[0].agents[0].gpt.unconfirmed], [false, true]);
+
+  state.addEvent({ session_id: 'wait-timeout', hook_event_name: 'SubagentStart', hookAt: 7, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  waitForCodex(state, 'wait-timeout', 'bash-wait-2', 8, 'sub-1', 'impl-hard-20261003-123456-7');
+  assert.equal(state.snapshot().sessions[0].agents.length, 1);
+  assert.deepEqual([state.snapshot().sessions[0].agents[0].gpt.active, state.snapshot().sessions[0].agents[0].gpt.unconfirmed], [true, false]);
+  state.addEvent({
+    session_id: 'wait-timeout', hook_event_name: 'PostToolUse', hookAt: 9, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait-2', codexOutput: codexOutput('gpt-6-luna', 'xhigh'),
+  });
+  assert.deepEqual([state.snapshot().sessions[0].agents[0].gpt.active, state.snapshot().sessions[0].agents[0].gpt.unconfirmed], [false, false]);
+});
+
+for (const [status, expected, hookEventName] of [
+  ['vanished', [false, false], 'PostToolUseFailure'], ['not-found', [false, false], 'PostToolUseFailure'],
+  ['orphaned', [false, true], 'PostToolUseFailure'], ['unverified', [false, true], 'PostToolUseFailure'],
+  ['vanished', [false, false], 'PostToolUse'],
+]) {
+  test(`--wait が ${status} で抜けたら Codex の行を稼働中に残さない (${hookEventName})`, async (t) => {
+    await temporaryHome(t);
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'wait-status', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+    launchCodex(state, 'wait-status', 'bash-1', 2, 'sub-1', { model: 'gpt-old', effort: 'low' });
+    state.addEvent({ session_id: 'wait-status', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+    waitForCodex(state, 'wait-status', 'bash-wait', 4, 'sub-1', 'impl-hard-20261003-123456-7');
+    state.addEvent({
+      session_id: 'wait-status', hook_event_name: hookEventName, hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-wait',
+      codexOutput: { waitStatusLine: `codex-agent: ${status} run=impl-hard-20261003-123456-7` },
+    });
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.deepEqual([agent.gpt.active, agent.gpt.unconfirmed], expected);
+  });
+}
+
+test('--wait が vanished で抜けた後に起動し直した Codex が終われば、親は終了未確認にならない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'wait-relaunch', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'wait-relaunch', 'bash-1', 2, 'sub-1', { model: 'gpt-old', effort: 'low' });
+  state.addEvent({ session_id: 'wait-relaunch', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  waitForCodex(state, 'wait-relaunch', 'bash-wait', 4, 'sub-1', 'impl-hard-20261003-123456-7');
+  state.addEvent({
+    session_id: 'wait-relaunch', hook_event_name: 'PostToolUseFailure', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-wait',
+    codexOutput: { waitStatusLine: 'codex-agent: vanished run=impl-hard-20261003-123456-7' },
+  });
+  launchCodex(state, 'wait-relaunch', 'bash-2', 6, 'sub-1', { model: 'gpt-new', effort: 'high' });
+  state.addEvent({
+    session_id: 'wait-relaunch', hook_event_name: 'PostToolUse', hookAt: 7, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-2', codexOutput: codexOutput('gpt-new', 'high'),
+  });
+  state.addEvent({ session_id: 'wait-relaunch', hook_event_name: 'SubagentStop', hookAt: 8, agent_id: 'sub-1' });
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active, agent.gpt.unconfirmed], ['gpt-new', false, false]);
+});
+
+test('起動イベントが無い --wait は実行 ID の定義で Codex 行を作る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'wait-after-restart', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  waitForCodex(state, 'wait-after-restart', 'bash-wait', 2, 'sub-1', 'impl-hard-20261003-123456-7', {
+    model: 'gpt-from-definition', effort: 'xhigh', source: 'gpt-agent-definition',
+  });
+  const [running] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([running.gpt.model, running.gpt.active], ['gpt-from-definition', true]);
+
+  state.addEvent({
+    session_id: 'wait-after-restart', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-real', 'max'),
+  });
+  const session = state.snapshot().sessions[0];
+  assert.equal(session.agents.length, 1);
+  assert.deepEqual([session.agents[0].gpt.model, session.agents[0].gpt.active], ['gpt-real', false]);
+});
+
+test('結果行を受けた Codex は後続の --wait で再利用しない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'wait-after-result', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'wait-after-result', 'bash-1', 2, 'sub-1', { model: 'gpt-first', effort: 'low' });
+  state.addEvent({
+    session_id: 'wait-after-result', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1', codexOutput: codexOutput('gpt-finished', 'high'),
+  });
+  waitForCodex(state, 'wait-after-result', 'bash-wait', 4, 'sub-1', 'impl-hard-20261003-123456-8', {
+    model: 'gpt-new-run', effort: 'xhigh',
+  });
+
+  const [running] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([running.gpt.model, running.gpt.active], ['gpt-new-run', true]);
+});
+
+test('メインセッションの --wait は Codex 行を作らない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  waitForCodex(state, 'main-wait', 'bash-wait', 1, null, 'impl-hard-20261003-123456-7', {
+    model: 'gpt-should-not-appear', effort: 'high',
+  });
+  assert.deepEqual(state.snapshot().sessions[0].agents, []);
 });
 
 test('同じ親の背景 Codex が複数あるときは、結果行を最も古い呼び出しへ結び付ける', async (t) => {

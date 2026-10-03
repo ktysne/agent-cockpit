@@ -34,6 +34,13 @@ function inputSummary(toolName, toolInput) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
+// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前の、コマンドの位置にある呼び出しだけを見る。
+function extractCodexWaitRunId(command) {
+  const beforeHeredoc = pickString(command).split('<<')[0];
+  const match = beforeHeredoc.match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
+  return match ? match[1].slice(0, 256) : '';
+}
+
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
   if (depth > 6 || output.length >= 6) return;
   if (typeof value === 'string') {
@@ -83,12 +90,16 @@ function extractAskUserQuestionResolution(toolResponse) {
 function codexOutputLines(value) {
   const lines = {};
   const visit = (item, depth = 0) => {
-    if (depth > 6 || (lines.auditLine && lines.resultLine)) return;
+    if (depth > 6) return;
     if (typeof item === 'string') {
-      for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=)[^\r\n]*/gm) || []) {
+      for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=|(?:waiting|vanished|orphaned|unverified|not-found)[\t ]+run=)[^\r\n]*/gm) || []) {
         const normalized = line.trimStart();
         if (!lines.auditLine && normalized.startsWith('codex-agent: agent=')) lines.auditLine = normalized.slice(0, 1024);
-        if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
+        else if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
+        // codex-agent.sh は --wait の状態を最後の行で示すので、後の行で上書きする。
+        else if (!normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=')) {
+          lines.waitStatusLine = normalized.slice(0, 1024);
+        }
       }
       return;
     }
@@ -126,6 +137,8 @@ function makeHookEvent(input, now = Date.now()) {
     event.summary = inputSummary(event.tool_name, input.tool_input);
     if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
+      const codexWaitRunId = extractCodexWaitRunId(command);
+      if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
       if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
     }
@@ -418,6 +431,7 @@ if (require.main === module) main();
 module.exports = {
   HOOK_TIMEOUT_MS,
   inputSummary,
+  extractCodexWaitRunId,
   codexOutputLines,
   extractAskUserQuestionResolution,
   makeHookEvent,

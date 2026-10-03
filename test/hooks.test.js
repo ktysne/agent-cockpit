@@ -7,9 +7,11 @@ const { performance } = require('node:perf_hooks');
 const {
   childEnvironment,
   extractAskUserQuestionResolution,
+  extractCodexWaitRunId,
   makeHookEvent,
   runHook,
 } = require('../src/hooks/event');
+const { sanitizeEvent } = require('../src/server/events');
 
 async function temporaryHome(testContext) {
   const previous = process.env.AGENT_COCKPIT_HOME;
@@ -145,6 +147,63 @@ test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', a
     tool_input: { command: 'gh pr create' }, tool_response: 'Pull request created successfully',
   });
   assert.equal(Object.hasOwn(noUrl, 'pullRequest'), false);
+});
+
+test('Bash の要約が切れても全文から Codex の --wait 実行 ID を送る', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  const event = makeHookEvent({
+    session_id: 'codex-wait-hook', hook_event_name: 'PreToolUse', agent_id: 'agent-1',
+    tool_name: 'Bash', tool_use_id: 'wait-1',
+    tool_input: { command: `${'x'.repeat(100)} && bash ~/.claude/tools/codex-agent.sh --wait "${runId}"` },
+  });
+
+  assert.equal(event.summary.length, 80);
+  assert.equal(event.codexWaitRunId, runId);
+
+  const longRunId = `${'x'.repeat(300)}-20261003-123456-7`;
+  const bounded = makeHookEvent({
+    session_id: 'codex-wait-limit', hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    tool_input: { command: `bash ~/.claude/tools/codex-agent.sh --wait ${longRunId}` },
+  });
+  assert.equal(bounded.codexWaitRunId.length, 256);
+});
+
+test('Codex の --wait は実行 ID の形だけを受け、同じコマンドの起動より優先しない', () => {
+  const makeWaitEvent = (command) => makeHookEvent({
+    session_id: 'codex-wait-sanitize', hook_event_name: 'PreToolUse', agent_id: 'agent-1',
+    tool_name: 'Bash', tool_use_id: 'wait-1', tool_input: { command },
+  });
+  const invalid = sanitizeEvent(makeWaitEvent('bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>'));
+  assert.equal(Object.hasOwn(invalid, 'codexWaitRunId'), false);
+  assert.equal(Object.hasOwn(invalid, 'codexWaitDefinition'), false);
+
+  const runId = 'impl-hard-20261003-123456-7';
+  const launchAndWait = sanitizeEvent(makeWaitEvent(
+    `bash ~/.claude/tools/codex-agent.sh impl-hard --wait ${runId}`,
+  ));
+  assert.equal(launchAndWait.codexDefinition, 'impl-hard');
+  assert.equal(Object.hasOwn(launchAndWait, 'codexWaitRunId'), false);
+  assert.equal(Object.hasOwn(launchAndWait, 'codexWaitDefinition'), false);
+});
+
+test('文字列やヒアドキュメントに書かれた Codex の --wait は拾わない', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  assert.equal(extractCodexWaitRunId(`cat > notes.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh --wait ${runId}\nEOF`), '');
+  assert.equal(extractCodexWaitRunId(`echo "codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`git commit -m "bash codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`cd /tmp; codex-agent.sh --wait ${runId}`), runId);
+  assert.equal(extractCodexWaitRunId(`bash "C:/Users/me/.claude/tools/codex-agent.sh" --wait ${runId}`), runId);
+  assert.equal(extractCodexWaitRunId(`x=$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})`), runId);
+});
+
+test('Codex の --wait の状態の行を、監査行と結果行とは別に抜き出す', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  const event = makeHookEvent({
+    session_id: 's', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_use_id: 'b',
+    error: `codex-agent: agent=impl-hard model=gpt-6-luna effort=max\ncodex-agent: waiting run=${runId}\ncodex-agent: vanished run=${runId}\n`,
+  });
+  assert.equal(event.codexOutput.waitStatusLine, `codex-agent: vanished run=${runId}`);
+  assert.equal(event.codexOutput.resultLine, undefined);
 });
 
 test('常駐サーバーに接続できなくても 1 秒程度で終了コード 0 を返す', async (t) => {

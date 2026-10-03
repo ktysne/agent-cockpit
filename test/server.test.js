@@ -591,6 +591,43 @@ test('サブエージェント行があるイベントでは定義を読み直�
   }
 });
 
+test('再起動後の Codex --wait は実行 ID の定義からモデルと effort を読む', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const definitionPath = path.join(claudeHome, 'gpt-agents', 'impl-hard.md');
+  await fs.mkdir(path.dirname(definitionPath), { recursive: true });
+  await fs.writeFile(definitionPath, '---\ncodex_model: gpt-5.5-codex\ncodex_reasoning_effort: xhigh\n---\n');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const waitId = 'impl-hard-20261003-123456-7';
+  const waiting = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: 'wait-definition', hook_event_name: 'PreToolUse', hookAt: 100,
+      agent_id: 'agent-1', agent_type: 'impl-hard', tool_name: 'Bash', tool_use_id: 'wait-1',
+      summary: `bash ~/.claude/tools/codex-agent.sh --wait ${waitId}`, codexWaitRunId: waitId,
+    }),
+    headers,
+  });
+  assert.equal(waiting.status, 202);
+
+  const completed = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: 'wait-definition', hook_event_name: 'PostToolUse', hookAt: 200,
+      agent_id: 'agent-1', tool_name: 'Bash', tool_use_id: 'wait-1',
+      codexOutput: { resultLine: 'codex-agent: result=ok' },
+    }),
+    headers,
+  });
+  assert.equal(completed.status, 202);
+
+  const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const [agent] = state.sessions.find((session) => session.session_id === 'wait-definition').agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.effort, agent.gpt.active], ['gpt-5.5-codex', 'xhigh', false]);
+});
+
 test('/plan は秘密値と Origin を照合し、session ID と入力上限を検査する', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/sessions/plan-session/plan';

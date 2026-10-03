@@ -456,6 +456,7 @@ function newSession(event) {
     stopped: false,
     ended: false,
     pendingCodex: Object.create(null),
+    pendingCodexWait: Object.create(null),
     agentToolBindings: Object.create(null),
   };
 }
@@ -511,13 +512,27 @@ function completeCodexAgent(agent, event) {
   if (result?.status === 'unavailable' || (result?.status === 'failed' && result.exitCode === 3)) agent.unavailable = '使用不能';
   agent.active = false;
   agent.unconfirmed = false;
+  agent.resultReceived = true;
 }
 
+// --wait で続きに戻った古い行も札に出すため、稼働中の行を優先する。
 function latestCodexForParent(agents, parentAgentId) {
   return agents
     .filter((agent) => agent.isCodex && sameAgent(agent.parent_agent_id, parentAgentId))
-    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
+    .sort((left, right) => (
+      Number(left.active === true) - Number(right.active === true) || Date.parse(left.startedAt) - Date.parse(right.startedAt)
+    ))
     .at(-1);
+}
+
+// 結果無しで失敗した起動は続きが無いので、背景へ移った行(終了未確認を含む)だけを候補にする。
+function latestWaitableCodex(session, parentAgentId, definition) {
+  return session.agents
+    .filter((agent) => (
+      agent.isCodex && agent.agent_type === definition && agent.backgrounded === true && !agent.resultReceived &&
+      sameAgent(agent.parent_agent_id, parentAgentId)
+    ))
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
 function deriveSessions(entries) {
@@ -594,7 +609,32 @@ function deriveSessions(entries) {
         }
       }
 
-      if (event.codexDefinition && toolUseId) {
+      if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
+        const agent = latestWaitableCodex(session, agentId, event.codexWaitDefinition);
+        if (agent) {
+          agent.active = true;
+          agent.unconfirmed = false;
+          agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+          session.pendingCodex[toolUseId] = agent.agent_id;
+        } else {
+          const agentIdForCall = `codex:${toolUseId}`;
+          const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
+          Object.assign(waitAgent, {
+            agent_id: agentIdForCall,
+            agent_type: event.codexWaitDefinition,
+            isCodex: true,
+            parent_agent_id: agentId,
+            codex_home: '',
+            unavailable: '',
+            backgrounded: true,
+            startedAt: isoTime(event.hookAt),
+            lastTool: { tool_name: 'Bash', summary: event.summary },
+          });
+          session.agents.push(waitAgent);
+          session.pendingCodex[toolUseId] = agentIdForCall;
+        }
+        session.pendingCodexWait[toolUseId] = true;
+      } else if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
         const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
         Object.assign(agent, {
@@ -696,6 +736,14 @@ function deriveSessions(entries) {
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
+        } else if (placeholder && session.pendingCodexWait[toolUseId]) {
+          // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
+          applyCodexAudit(placeholder, event);
+          if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
+          if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
+            placeholder.active = false;
+            placeholder.unconfirmed = true;
+          }
         } else if (placeholder && eventName === 'PostToolUseFailure') {
           applyCodexAudit(placeholder, event);
           placeholder.active = false;
@@ -704,6 +752,7 @@ function deriveSessions(entries) {
           placeholder.backgrounded = true;
         }
         delete session.pendingCodex[toolUseId];
+        delete session.pendingCodexWait[toolUseId];
       }
 
       // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
