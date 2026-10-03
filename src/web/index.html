@@ -1472,8 +1472,9 @@ function productGroups(sessions, pullRequestGroups = []) {
 
 // セッションを外すか終えて PR もマージかクローズを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
 // オープンの PR を数えきれていない PR 群は、openCount が 0 でもオープンの PR が無いとは扱わない。
+// PR を非表示にしている間は、PR だけで残るカードの本文が空になるので、PR を理由に残さない。
 function hasProductContent(product, sinceSeen) {
-  const pullRequestGroups = product.pullRequestGroups || [];
+  const pullRequestGroups = isFilterShown('prs') ? product.pullRequestGroups || [] : [];
   return product.sessions.length > 0
     || pullRequestOpenCount(pullRequestGroups) > 0
     || pullRequestGroups.some((group) => group.openStateUnknown)
@@ -2161,12 +2162,15 @@ function productControls(product, index, total, pinnedCount, headingId) {
   moveDown.dataset.direction = '1';
   moveDown.disabled = pinned ? index === pinnedCount - 1 : index === total - 1;
   moveDown.setAttribute('aria-label', `${product.name}を下へ`);
+  controls.append(collapse, pin, moveUp, moveDown);
   const close = productCloseButton(product, headingId);
-  controls.append(collapse, pin, moveUp, moveDown, close);
+  if (close) controls.append(close);
   return controls;
 }
 
+// 「×」は外すセッションがあるときだけ出す。セッションの無いカードは、PR が閉じるか未読を既読にすれば消える。
 function productCloseButton(product, describedById) {
+  if (!product.sessions.length) return null;
   const close = element('button', 'icon-btn', '×');
   close.type = 'button';
   close.dataset.productAction = 'close';
@@ -2265,7 +2269,9 @@ function kindProductOrder(products) {
     const tag = element('span', 'prod-tag', `${index + 1}. ${product.name}`);
     tag.id = `kind-product-order-${index}`;
     tag.title = product.name;
-    item.append(tag, productCloseButton(product, tag.id));
+    item.append(tag);
+    const close = productCloseButton(product, tag.id);
+    if (close) item.append(close);
     productOrder.append(item);
   });
   return productOrder;

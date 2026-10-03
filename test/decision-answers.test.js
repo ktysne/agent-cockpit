@@ -181,7 +181,7 @@ test('タイトル、外したセッション、読み上げは回答前の wait
   assert.equal(isPendingDecision({ state: 'provisional', answer: null }), false);
 });
 
-test('種類別の並び順の札にプロダクトを閉じるボタンを表示する', () => {
+test('種類別の並び順の札には、外すセッションがあるプロダクトにだけ閉じるボタンを表示する', () => {
   const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const closeButton = html.match(/function productCloseButton\(product, describedById\) \{[\s\S]*?\n\}/)?.[0];
   const productOrder = html.match(/function kindProductOrder\(products\) \{[\s\S]*?\n\}/)?.[0];
@@ -200,10 +200,14 @@ test('種類別の並び順の札にプロダクトを閉じるボタンを表�
   const rendered = vm.runInNewContext(`(() => {
     ${closeButton}
     ${productOrder}
-    return kindProductOrder([{ key: 'product-key', name: 'agent-cockpit' }]);
+    return kindProductOrder([
+      { key: 'product-key', name: 'agent-cockpit', sessions: [{ session_id: 'session-1' }] },
+      { key: 'pull-request-only', name: 'PR のみ', sessions: [] },
+    ]);
   })()`, { element: createElement });
-  const [item] = rendered.children;
+  const [item, pullRequestOnlyItem] = rendered.children;
   const [tag, close] = item.children;
+  assert.equal(pullRequestOnlyItem.children.length, 1);
 
   assert.equal(rendered.className, 'order product-order kind-order');
   assert.equal(tag.textContent, '1. agent-cockpit');
