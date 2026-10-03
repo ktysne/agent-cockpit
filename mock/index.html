@@ -207,11 +207,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .primary:disabled { opacity: .4; cursor: default; }
 .sent { font-size: 12px; color: var(--text-2); }
 
-.review { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-.stat { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; }
-.stat .k { font-size: 12px; color: var(--text-2); }
-.stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.rounds { display: flex; gap: 4px; margin-top: 4px; }
+.pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.rounds { display: inline-flex; gap: 4px; }
 .rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
 .rounds span.used { background: var(--accent); }
 
@@ -401,11 +398,13 @@ const DATA = {
           ctx: '対象外として取り下げた。', options: [],
         },
       ],
-      review: { pr: '#142', round: 2, max: 3, state: 'Claude でレビュー中 (Codex の利用上限のため切り替え、14:00 解除)', fallback: true, dismissed: 1 },
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前' },
+      // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。記録が無い PR には付けない。
       prs: [
-        { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false },
-        { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false },
+        { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false,
+          xr: { round: 2, reviewedSha: 'a1c9e04', dismissed: 0 } },
+        { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false,
+          xr: { round: 2, reviewedSha: '5c8e1d0', dismissed: 1 } },
         { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true },
       ],
       extraSessions: [
@@ -452,10 +451,10 @@ const DATA = {
           ],
         },
       ],
-      review: { pr: '—', round: 0, max: 3, state: '未着手', dismissed: 0 },
       repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
       prs: [
-        { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false },
+        { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false,
+          xr: { round: 1, reviewedSha: '3b9e5d0', dismissed: 0 } },
         { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false },
         { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
       ],
@@ -480,7 +479,6 @@ const DATA = {
         { title: '常駐サーバーと hooks の実装', state: 'todo', criteria: [{ t: '全セッションの作業中の内容が更新される', met: false }] },
       ],
       decisions: [],
-      review: { pr: '—', round: 0, max: 3, state: 'PoC のためレビュー省略', dismissed: 0 },
       repo: { name: 'ktysne/agent-cockpit', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '5 秒前' },
       prs: [],
       extraSessions: [
@@ -850,14 +848,20 @@ function decisionCard(p, session, d, withTag) {
     </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} のセッションで答える。</div>` : sentLine ? `<div class="answer-foot">${sentLine}</div>` : ''}</article>`;
 }
 
-function reviewBlock(p, withTag) {
-  const r = p.review;
-  const rounds = Array.from({ length: r.max }, (_, i) => `<span class="${i < r.round ? 'used' : ''}"></span>`).join('');
-  return `<div class="review">
-    <div class="stat"><div class="k">${withTag ? `<span class="prod-tag">${esc(p.name)}</span> ` : ''}PR ${esc(r.pr)}</div><div class="v">${esc(r.state)}${r.fallback ? ' <span class="badge wait">経路切替</span>' : ''}</div></div>
-    <div class="stat"><div class="k">往復(上限 ${r.max})</div><div class="v">${r.round} / ${r.max}</div><div class="rounds">${rounds}</div></div>
-    <div class="stat"><div class="k">非対応</div><div class="v">${r.dismissed}</div></div>
-  </div>`;
+const CROSS_REVIEW_MAX_ROUNDS = 3;
+// 状態ファイルには指摘が残っているかが無いので、最後にレビューした head と今の head の一致だけで状態を示す。
+function crossReviewState(pr) {
+  if (!pr.xr) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
+  return { cls: 'ok', text: 'head をレビュー済み', warn: null };
+}
+
+function crossReviewLine(pr) {
+  const state = crossReviewState(pr);
+  if (!pr.xr) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span></div>`;
+  const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');
+  return `<div class="xr">クロスレビュー <span class="rounds" aria-hidden="true">${rounds}</span>
+    <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span></div>`;
 }
 
 
@@ -941,6 +945,7 @@ function mergeConfirm(p, pr, auto) {
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const effects = [
+    crossReviewState(pr).warn ? `<span>${esc(crossReviewState(pr).warn)}</span>` : '',
     `head が ${esc(pr.sha)} のときだけマージする (画面を見たあとに push されていたら中止する)`,
     kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
     o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',
@@ -976,6 +981,7 @@ function prItem(p, pr) {
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
+    ${crossReviewLine(pr)}
     ${rsv ? `<div class="badges"><span class="badge accent">マージ予約中(${METHOD_LABEL[rsv.method]}、${esc(rsv.at)} に予約、head ${esc(pr.sha)})</span>
       <button type="button" class="link-btn" data-unreserve="${k}">予約を取り消す</button>
       <button type="button" class="link-btn" data-ci-pass="${k}">モック: CI の成功を再現する</button></div>` : ''}
@@ -1159,8 +1165,6 @@ function renderProductMode() {
         ${newsBox(p, false)}
         ${sessions.map(session => sessionBlock(p, session)).join('')}
         ${isShown('prs') ? `<h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false)}` : ''}
-        <h3 class="sub">レビュー</h3>
-        ${reviewBlock(p, false)}
       </div></section>`;
   }).join('');
 }
@@ -1209,7 +1213,6 @@ function renderKindMode() {
     ? kindToggle('tasks', '完了したタスク', doneTaskCount, ui.expandedKindTasks)
     : '';
   const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}${doneTaskToggle}`;
-  const reviews = ps.map(p => reviewBlock(p, true)).join('<div style="height:8px"></div>');
   const prs = ps.map(p => prBlock(p, true)).join('<div style="height:12px"></div>');
   const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag" title="${esc(p.name)}">${i + 1}. ${esc(p.name)}</span><button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトを閉じる" aria-describedby="kind-product-order-${i}" title="このプロダクトを閉じる">×</button></span>`).join(' ')}</div>`;
   return orderBar
@@ -1217,8 +1220,7 @@ function renderKindMode() {
     + (showJudgment ? section('あなたの判断が必要なこと', decisions) : '')
     + section('タスクと完了条件', tasks)
     + section('今やっていること', now)
-    + (isShown('prs') ? section('プルリクエスト', prs) : '')
-    + section('レビュー', reviews);
+    + (isShown('prs') ? section('プルリクエスト', prs) : '');
 }
 
 function render() {
