@@ -399,7 +399,8 @@ const DATA = {
           ctx: '対象外として取り下げた。', options: [],
         },
       ],
-      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前' },
+      // autoDeleteBranch は GitHub の「マージ後に head ブランチを自動で削除する」設定。
+      repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前', autoDeleteBranch: true },
       // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。記録が無い PR には付けない。
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false,
@@ -922,7 +923,7 @@ function mergeOpts(p, pr) {
   const k = prKey(p, pr.number);
   const last = ui.lastMethod[p.repo.name];
   const method = p.repo.methods.includes(last) ? last : p.repo.methods[0];
-  return ui.mergeOpts[k] || { method, del: true };
+  return ui.mergeOpts[k] || { method, del: !p.repo.autoDeleteBranch };
 }
 
 function prBadges(p, pr) {
@@ -951,7 +952,8 @@ function mergeConfirm(p, pr, auto) {
     crossReviewState(pr).warn ? `<span>${esc(crossReviewState(pr).warn)}</span>` : esc(crossReviewState(pr).note || ''),
     `head が ${esc(pr.sha)} のときだけマージする (画面を見たあとに push されていたら中止する)`,
     kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
-    o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',
+    p.repo.autoDeleteBranch ? `リモートのブランチ ${esc(pr.head)} は GitHub が自動で削除する (リポジトリの設定)`
+      : o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',
     kids.length && o.method === 'squash' ? `<span>スカッシュのため ${kidNames} には #${pr.number} のコミットが残る。セッションに積み直しを依頼する</span>` : '',
     `結果を ${esc(p.name)} のセッションに知らせる`,
     auto ? `予約のあとに push されたら、予約を取り消して知らせる` : '',
@@ -961,7 +963,7 @@ function mergeConfirm(p, pr, auto) {
     <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
       `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
       ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
-    <label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>
+    ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
