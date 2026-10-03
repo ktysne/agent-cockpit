@@ -34,8 +34,8 @@ function inputSummary(toolName, toolInput) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
-// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前の、コマンドの位置にある呼び出しだけを見る。
-function extractCodexWaitRunId(command) {
+// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前のコマンド位置を残す。
+function commandPositionText(command) {
   const beforeHeredoc = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
   const characters = [...beforeHeredoc];
   const separator = /[;|&()\r\n]/;
@@ -72,8 +72,79 @@ function extractCodexWaitRunId(command) {
     else if (context === 'substitution' && character === '(') contexts.push('substitution');
     else if (context === 'substitution' && character === ')') contexts.pop();
   }
-  const match = characters.join('').match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
+  return characters.join('');
+}
+
+function extractCodexWaitRunId(command) {
+  const match = commandPositionText(command).match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
   return match ? match[1].slice(0, 256) : '';
+}
+
+// コマンドの区切りまでの引数を返す。`2>&1` や `> "out file"` のリダイレクトは出力先ごと除く。
+function shellArguments(value) {
+  const tokens = [];
+  let token = { text: '', quoted: false, started: false };
+  let quote = '';
+  const pushToken = () => {
+    if (token.started) tokens.push(token);
+    token = { text: '', quoted: false, started: false };
+  };
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      else token.text += character;
+    } else if (character === '\\') {
+      token.text += value[index + 1] || '';
+      index += 1;
+      token.started = true;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+      else token.text += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      token.quoted = true;
+      token.started = true;
+    } else if (/[\r\n]/.test(character)) break;
+    else if (/\s/.test(character)) pushToken();
+    else if (character === '&' && (token.text.endsWith('>') || value[index + 1] === '>')) {
+      token.text += character;
+      token.started = true;
+    } else if (/[;&|()\r\n]/.test(character)) break;
+    else {
+      token.text += character;
+      token.started = true;
+    }
+  }
+  pushToken();
+
+  const argumentsList = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const { text, quoted } = tokens[index];
+    if (!quoted && /^(?:\d*>&\d*-?|\d*[<>]>?|&>>?)$/.test(text)) {
+      if (!/&\d*-?$/.test(text) || /^&>/.test(text)) index += 1;
+      continue;
+    }
+    if (!quoted && /^(?:\d*[<>]>?|&>>?)./.test(text)) continue;
+    argumentsList.push(text);
+  }
+  return argumentsList;
+}
+
+function extractCodexReviewDefinition(command) {
+  const commandText = commandPositionText(command);
+  const pattern = /(?:^|&&|\|\||[;&|(\r\n])[ \t]*(npm[ \t]+run[ \t]+review:codex:fix|npm[ \t]+run[ \t]+review:codex|node[ \t]+(?:\.[\\/])?tools[\\/]cross-review\.js[ \t]+codex)(?=$|[\s;&|)])/gim;
+  for (const match of commandText.matchAll(pattern)) {
+    const commandStart = match.index + match[0].lastIndexOf(match[1]);
+    const argumentsList = shellArguments(commandText.slice(commandStart + match[1].length));
+    // ヘルプを出すだけの起動と、Codex のラッパーを通らない起動は、Codex を動かさない。
+    if (['--no-codex-agent', '--help', '-h'].some((option) => argumentsList.includes(option))) continue;
+
+    const fix = /review:codex:fix$/i.test(match[1]) || argumentsList.includes('--fix');
+    return fix ? 'codex-subagent' : 'codex-review';
+  }
+  return '';
 }
 
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
@@ -175,6 +246,8 @@ function makeHookEvent(input, now = Date.now()) {
       const command = pickString(input.tool_input?.command);
       const codexWaitRunId = extractCodexWaitRunId(command);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
+      const codexReviewDefinition = extractCodexReviewDefinition(command);
+      if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
       if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
     }

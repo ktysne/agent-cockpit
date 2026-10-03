@@ -18,6 +18,7 @@ const MAX_ASK_QUESTIONS = 4;
 const MAX_ASK_OPTIONS = 6;
 const QUESTION_TEXT_LIMIT = 2000;
 const CODEX_RUN_ID_PATTERN = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)-\d{8}-\d{6}-\d+$/;
+const CODEX_REVIEW_DEFINITIONS = new Set(['codex-review', 'codex-subagent']);
 
 function boundedString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : '';
@@ -135,6 +136,9 @@ function sanitizeEvent(input, metadata = {}) {
   if (eventName === 'PreToolUse') {
     event.summary = shortString(input.summary, 80) || event.tool_name;
     event.codexDefinition = parseCodexLaunch(event.summary);
+    if (event.tool_name === 'Bash' && !event.codexDefinition && CODEX_REVIEW_DEFINITIONS.has(input.codexReviewDefinition)) {
+      event.codexDefinition = input.codexReviewDefinition;
+    }
     const codexWaitRunId = shortString(input.codexWaitRunId, 256) || '';
     const codexWaitMatch = codexWaitRunId.match(CODEX_RUN_ID_PATTERN);
     if (event.tool_name === 'Bash' && !event.codexDefinition && codexWaitMatch) {

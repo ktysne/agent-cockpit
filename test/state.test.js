@@ -575,6 +575,15 @@ function launchCodex(state, sessionId, toolUseId, hookAt, agentId, agentDefiniti
   }, agentDefinition ? { codexAgentDefinition: agentDefinition } : undefined);
 }
 
+function launchCodexReview(state, sessionId, toolUseId, hookAt, definition, definitionMetadata) {
+  const script = definition === 'codex-subagent' ? 'npm run review:codex:fix' : 'npm run review:codex';
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'PreToolUse', hookAt,
+    tool_name: 'Bash', tool_use_id: toolUseId, summary: `cd "${'D:/worktree/'.repeat(12)}repo" && ${script}`,
+    codexReviewDefinition: definition,
+  }, { codexAgentDefinition: definitionMetadata });
+}
+
 function waitForCodex(state, sessionId, toolUseId, hookAt, agentId, runId, definitionMetadata = null) {
   state.addEvent({
     session_id: sessionId, hook_event_name: 'PreToolUse', hookAt, agent_id: agentId,
@@ -590,6 +599,57 @@ function codexOutput(model, effort, result = 'ok', codexHome = 'C:\\Users\\mss02
     resultLine: `codex-agent: result=${result}${result === 'rate-limited' || result === 'unavailable' ? ' exit=75' : ''}`,
   };
 }
+
+test('メインのクロスレビュー行は定義と監査行を反映し、後続の Bash の結果行で終了する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchCodexReview(state, 'main-review', 'review-call', 1, 'codex-review', {
+    model: 'gpt-review-definition', effort: 'low',
+  });
+  state.addEvent({
+    session_id: 'main-review', hook_event_name: 'PostToolUse', hookAt: 2,
+    tool_name: 'Bash', tool_use_id: 'review-call',
+    codexOutput: { auditLine: 'codex-agent: agent=codex-review model=gpt-review-actual effort=xhigh sandbox=read-only' },
+  });
+
+  launchCodexReview(state, 'main-review', 'fix-call', 3, 'codex-subagent', {
+    model: 'gpt-fix-definition', effort: 'high',
+  });
+  state.addEvent({
+    session_id: 'main-review', hook_event_name: 'PostToolUse', hookAt: 4,
+    tool_name: 'Bash', tool_use_id: 'fix-call',
+    codexOutput: {
+      auditLine: 'codex-agent: agent=codex-subagent model=gpt-fix-actual effort=max sandbox=workspace-write',
+      resultLine: 'codex-agent: result=ok',
+    },
+  });
+
+  state.addEvent({ session_id: 'main-review', hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'main-review', 'subagent-call', 6, 'sub-1', { model: 'gpt-subagent-definition', effort: 'low' });
+  state.addEvent({
+    session_id: 'main-review', hook_event_name: 'PostToolUse', hookAt: 7, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'subagent-call',
+    codexOutput: { auditLine: 'codex-agent: agent=impl-hard model=gpt-subagent-actual effort=high sandbox=read-only' },
+  });
+
+  state.addEvent({
+    session_id: 'main-review', hook_event_name: 'PostToolUse', hookAt: 8,
+    tool_name: 'Bash', tool_use_id: 'later-bash',
+    codexOutput: { resultLine: 'codex-agent: result=ok' },
+  });
+
+  const agents = state.snapshot().sessions[0].agents;
+  const byId = Object.fromEntries(agents.map((agent) => [agent.agent_id, agent]));
+  assert.deepEqual([byId['codex:review-call'].agent_type, byId['codex:review-call'].model, byId['codex:review-call'].active], [
+    'codex-review', 'gpt-review-actual', false,
+  ]);
+  assert.deepEqual([byId['codex:fix-call'].agent_type, byId['codex:fix-call'].model, byId['codex:fix-call'].active], [
+    'codex-subagent', 'gpt-fix-actual', false,
+  ]);
+  assert.deepEqual([byId['sub-1'].gpt.model, byId['sub-1'].gpt.active], [
+    'gpt-subagent-actual', true,
+  ]);
+});
 
 test('背景で起動した Codex は後続の Read 出力にある結果行で終了し、親の GPT 情報にまとまる', async (t) => {
   await temporaryHome(t);
