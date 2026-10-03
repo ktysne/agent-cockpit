@@ -193,6 +193,17 @@ test('文字列やヒアドキュメントに書かれた Codex の --wait は�
   assert.equal(extractCodexWaitRunId(`git commit -m "bash codex-agent.sh --wait ${runId}"`), '');
   assert.equal(extractCodexWaitRunId(`cd /tmp; codex-agent.sh --wait ${runId}`), runId);
   assert.equal(extractCodexWaitRunId(`bash "C:/Users/me/.claude/tools/codex-agent.sh" --wait ${runId}`), runId);
+  assert.equal(extractCodexWaitRunId(`x=$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})`), runId);
+});
+
+test('Codex の --wait の状態の行を、監査行と結果行とは別に抜き出す', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  const event = makeHookEvent({
+    session_id: 's', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_use_id: 'b',
+    error: `codex-agent: agent=impl-hard model=gpt-6-luna effort=max\ncodex-agent: waiting run=${runId}\n`,
+  });
+  assert.equal(event.codexOutput.waitStatusLine, `codex-agent: waiting run=${runId}`);
+  assert.equal(event.codexOutput.resultLine, undefined);
 });
 
 test('常駐サーバーに接続できなくても 1 秒程度で終了コード 0 を返す', async (t) => {

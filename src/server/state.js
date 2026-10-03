@@ -737,8 +737,13 @@ function deriveSessions(entries) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
         } else if (placeholder && eventName === 'PostToolUseFailure' && session.pendingCodexWait[toolUseId]) {
-          // --wait は上限までに終わらないと 0 以外で抜けるが、Codex は背景で動き続けている。
+          // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
           applyCodexAudit(placeholder, event);
+          if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
+          if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
+            placeholder.active = false;
+            placeholder.unconfirmed = true;
+          }
         } else if (placeholder && eventName === 'PostToolUseFailure') {
           applyCodexAudit(placeholder, event);
           placeholder.active = false;

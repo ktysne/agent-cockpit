@@ -169,6 +169,9 @@ function sanitizeEvent(input, metadata = {}) {
     const result = parseCodexResultLine(input.codexOutput.resultLine);
     if (audit) event.codexAudit = audit;
     if (result) event.codexResult = result;
+    const waitStatus = typeof input.codexOutput.waitStatusLine === 'string'
+      && input.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
+    if (waitStatus) event.codexWaitStatus = waitStatus[1];
   }
 
   if (eventName === 'Notification') {
