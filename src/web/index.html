@@ -59,6 +59,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
 .control-row { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .routing { display: grid; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.routing[hidden], .control-row:has(> .routing[hidden]) { display: none; }
 .routing .rgroup { display: grid; grid-template-columns: max-content max-content; gap: 8px 10px; align-items: center; }
 .routing .rgroup .rrow { display: contents; }
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }

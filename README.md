@@ -10,7 +10,7 @@ agent-cockpit は単独で使えます。次の道具があれば、表示が増
 | 道具 | あるときに増える表示 | 無いとき |
 |---|---|---|
 | [claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge)(`~/.claude/tools/codex-agent.sh`) | 経路の設定、サブエージェントの行の経路の札と Codex のモデル | 経路の設定と札を出さず、`route.js` は何も差し込まない |
-| [ai-cross-review](https://github.com/ktysne/ai-cross-review)(worktree の `.cross-review-state.json`) | PR のカードのクロスレビューの行と、マージの確認欄の注意 | その worktree の PR にはレビューの行も注意も出さない |
+| [ai-cross-review](https://github.com/ktysne/ai-cross-review)(worktree の `tools/cross-review.js`) | PR のカードのクロスレビューの行と、マージの確認欄の注意 | その worktree の PR にはレビューの行も注意も出さない |
 
 ## 起動
 

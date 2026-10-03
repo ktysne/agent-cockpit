@@ -634,9 +634,15 @@ test('関連PRの保存記録は14日を過ぎると復元時に削除する', a
   assert.deepEqual(restored.relatedPullRequestRegistrations(), []);
 });
 
+async function installCrossReview(root) {
+  await fs.mkdir(path.join(root, 'tools'), { recursive: true });
+  await fs.writeFile(path.join(root, 'tools', 'cross-review.js'), '');
+}
+
 test('クロスレビュー状態は PR head ブランチの往復数、非対応件数、レビュー済み SHA を読む', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
     branches: { 'feat/pr': { round: 2, dismissed: ['一件目', '二件目'], lastReviewedSha: 'A'.repeat(40) } },
   }));
@@ -647,16 +653,27 @@ test('クロスレビュー状態は PR head ブランチの往復数、非対�
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'missing' }), null);
 });
 
-test('クロスレビュー状態ファイルが無い worktree は undefined を返す', async (t) => {
+test('tools/cross-review.js が無い worktree は状態ファイルがあっても undefined を返す', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
+  }));
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), undefined);
   assert.equal(await readCrossReviewState({ number: 55, cwd: path.join(root, 'missing') }, { headRefName: 'feat/pr' }), undefined);
+});
+
+test('tools/cross-review.js はあるが状態ファイルがまだ無い worktree は null を返す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), null);
 });
 
 test('JSON として読めないクロスレビュー状態ファイルは null を返す', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), '{invalid');
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), null);
 });
@@ -664,6 +681,7 @@ test('JSON として読めないクロスレビュー状態ファイルは null 
 test('壊れた lastReviewedSha は null にする', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
     branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'not-a-commit-sha' } },
   }));
@@ -677,6 +695,7 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   await fs.mkdir(path.join(root, '.git'));
   const openSha = 'a'.repeat(40);
   const mergedSha = 'b'.repeat(40);
+  await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
     branches: {
       'feat/open': { round: 2, dismissed: ['指摘'], lastReviewedSha: openSha },
@@ -719,7 +738,7 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   assert.equal(Object.hasOwn(group, 'reviews'), false);
 });
 
-test('状態ファイルが無い登録だけの PR には crossReview キーを付けない', async (t) => {
+test('tools/cross-review.js が無い worktree の PR には crossReview キーを付けない', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
   const headSha = 'a'.repeat(40);
@@ -743,11 +762,13 @@ for (const [higher, lower] of [['valid', 'missing'], ['valid', 'null'], ['null',
         await fs.mkdir(path.join(roots[name], '.git'));
       }
       if ([higher, lower].includes('valid')) {
+        await installCrossReview(roots.valid);
         await fs.writeFile(path.join(roots.valid, '.cross-review-state.json'), JSON.stringify({
           branches: { 'feat/open': { round: 1, dismissed: [], lastReviewedSha: headSha } },
         }));
       }
       if ([higher, lower].includes('null')) {
+        await installCrossReview(roots.null);
         await fs.writeFile(path.join(roots.null, '.cross-review-state.json'), JSON.stringify({ branches: {} }));
       }
       const { github, tracker } = await trackerFixture(t, []);

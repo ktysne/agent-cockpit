@@ -406,11 +406,17 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   if (!registration.cwd) return undefined;
   const root = await findWorktreeRoot(registration.cwd, fileSystem);
   if (!root) return undefined;
+  // 状態ファイルは初めてのレビューで作られるので、使っているかは追跡される tools/cross-review.js の有無で見る。
+  try {
+    await fileSystem.stat(path.join(root, 'tools', 'cross-review.js'));
+  } catch {
+    return undefined;
+  }
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
-  } catch (error) {
-    return error.code === 'ENOENT' ? undefined : null;
+  } catch {
+    return null;
   }
   try {
     const parsed = JSON.parse(contents);
@@ -433,6 +439,7 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   }
 }
 
+// 記録のある worktree を優先し、同じ優先度なら今の head をレビューした記録を選ぶ。
 function shouldReplaceCrossReview(current, candidate, headSha) {
   const priority = (review) => review === undefined ? 0 : review === null ? 1 : 2;
   const currentPriority = priority(current);
