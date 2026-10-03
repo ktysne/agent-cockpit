@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
@@ -17,6 +18,7 @@ const { parsePullRequestUrl, isGithubCreatePullRequestTool } = require('./pull-r
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_EXTERNAL_URL_LENGTH = 2048;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 128;
@@ -133,6 +135,34 @@ function validRequiredUiOrigin(request, port) {
     (fetchSite === undefined || fetchSite === 'same-origin');
 }
 
+// 起動するプログラムには検査した値そのものを渡すため、正規化した href を返す。
+// rundll32 は引数を ShellExecute へそのまま渡すので、空白や引用符が残る値は受けない。
+function normalizeExternalUrl(value) {
+  if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.href.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(url.href)) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+// xdg-open のようにすぐ終わらない起動もあるので、終了は待たずに起動できたかだけを見る。
+function defaultOpenExternalUrl(url) {
+  const [command, args] = process.platform === 'win32'
+    ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
+    : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, shell: false, stdio: 'ignore', windowsHide: true });
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+    child.once('error', reject);
+  });
+}
+
 function escapeHtmlAttribute(value) {
   return String(value).replace(/[&"'<>]/g, (character) => ({
     '&': '&amp;',
@@ -245,6 +275,7 @@ function createRequestHandler(options) {
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists = defaultCodexAgentScriptExists,
+    openExternalUrl = defaultOpenExternalUrl,
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
   let cachedUiFileStamp = null;
@@ -757,6 +788,37 @@ function createRequestHandler(options) {
       }
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/open-url') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      const externalUrl = body && typeof body === 'object' && !Array.isArray(body) ? normalizeExternalUrl(body.url) : null;
+      if (!externalUrl) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      try {
+        await openExternalUrl(externalUrl);
+        response.writeHead(204, SECURITY_HEADERS);
+        response.end();
+      } catch {
+        jsonResponse(response, 500, { error: 'Internal Server Error' });
+      }
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/events') {
       if (request.headers['x-cockpit-secret'] !== info.secret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -1030,6 +1092,7 @@ async function startServer(options = {}) {
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists: options.codexAgentScriptExists,
+    openExternalUrl: options.openExternalUrl,
     webPath: options.webPath,
     dev,
     getServerInfo: () => info,

@@ -242,6 +242,14 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 経路の切り替えは claude-codex-bridge の `codex-agent.sh` があるときだけ意味を持つ。`GET /api/state` は Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)に `tools/codex-agent.sh` があるかを `integrations.codexAgent` で返し、画面は無ければ経路の欄と経路の札を出さない。`route.js` も同じ場所を確かめ、無ければ `SubagentStart` で何も差し込まない。
 
+## 外部リンク
+
+ダッシュボードの外部リンクは、画面が `POST /api/open-url` に `{url}` を送り、常駐サーバーが OS の既定のブラウザで開く。
+トレイが開くダッシュボードは専用のプロファイルのブラウザなので、利用者がログインしているブラウザで開くためである。
+書き込みの口と同じく画面用秘密値と `validRequiredUiOrigin` を照合する。URL は `https:` で、2048 字以内で、制御文字を含まないものだけを受ける。
+開くときはシェルを通さず、Windows では `rundll32.exe url.dll,FileProtocolHandler <url>`、macOS では `open`、それ以外では `xdg-open` を引数で渡して起動する。
+画面は、送れなかったときや失敗の応答のときは、今までどおりダッシュボードのウィンドウから開く。
+
 ## 秘匿
 
 - `~/.claude/sessions/` は `*.json` だけを読む。`*.key` は読まない。
