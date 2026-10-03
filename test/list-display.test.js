@@ -260,7 +260,8 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
 
 test('マージキュー中の PR は未マージ札だけで状態を示す', async () => {
   const webTree = functionSource(web, 'appendPullRequestTree');
-  assert.ok(webTree);
+  const webQueued = functionSource(web, 'queuedPullRequestMerge');
+  assert.ok(webTree && webQueued);
   const webContext = pageContext(web, {
     element: fakeElement,
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
@@ -272,7 +273,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     badge: (label, tone = '') => fakeElement('span', tone, label),
     appendPullRequestBadges() {},
   });
-  vm.runInContext(`${webTree}\nthis.renderPullRequest = appendPullRequestTree;`, webContext);
+  vm.runInContext(`${webQueued}\n${webTree}\nthis.renderPullRequest = appendPullRequestTree;`, webContext);
   const webTarget = fakeElement('div');
   webContext.renderPullRequest(webTarget, {}, {
     number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
@@ -283,14 +284,24 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.doesNotMatch(webText, /GitHub のマージキューに追加済みです/);
   assert.match(webText, /マージできない理由: CI 実行中/);
 
-  webContext.queuedPullRequestMerges.set('repo#1', { message: 'キューに入りました' });
+  webContext.queuedPullRequestMerges.set('repo#1', { headRefOid: 'abc' });
   const queuedTarget = fakeElement('div');
   webContext.renderPullRequest(queuedTarget, {}, {
     number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
-    mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, children: [],
+    mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'abc', children: [],
   });
   assert.equal((queuedTarget.textContent.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
   assert.doesNotMatch(queuedTarget.textContent, /マージする|マージできます/);
+  assert.match(queuedTarget.textContent, /キューから外れた/);
+
+  const pushedTarget = fakeElement('div');
+  webContext.renderPullRequest(pushedTarget, {}, {
+    number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'def', children: [],
+  });
+  assert.doesNotMatch(pushedTarget.textContent, /マージキューに追加済み/);
+  assert.match(pushedTarget.textContent, /マージする/);
+  assert.equal(webContext.queuedPullRequestMerges.has('repo#1'), false);
 
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);

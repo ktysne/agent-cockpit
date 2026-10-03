@@ -471,8 +471,20 @@ let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
-// 常駐サーバーはキューに入れた時点でマージの意図を消すので、キューに入れた PR は画面で覚えておく。
+// 常駐サーバーはキューに入れた時点でマージの意図を消し、キューの所属も取れないので、キューに入れた PR は画面で覚えておく。
+// GitHub でキューから外れても分からないため、head が変わったときと、利用者が外れたと知らせたときに忘れる。
 const queuedPullRequestMerges = new Map();
+
+function queuedPullRequestMerge(pullRequest) {
+  const key = pullRequestMergeKey(pullRequest);
+  const queued = queuedPullRequestMerges.get(key);
+  if (!queued) return null;
+  if (queued.headRefOid && pullRequest.headRefOid && queued.headRefOid !== pullRequest.headRefOid) {
+    queuedPullRequestMerges.delete(key);
+    return null;
+  }
+  return queued;
+}
 const pullRequestMergeInFlight = new Set();
 const pullRequestConflictConfirmations = new Set();
 const pullRequestConflictMessages = new Map();
@@ -1508,7 +1520,8 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
 
 function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
-  const mergeIntent = pullRequest.mergeIntent || queuedPullRequestMerges.get(pullRequestMergeKey(pullRequest)) || null;
+  const queued = queuedPullRequestMerge(pullRequest);
+  const mergeIntent = pullRequest.mergeIntent || queued || null;
   const item = element('div', `pr ${reservation ? 'reserved' : pullRequest.canMerge ? 'can-merge' : ''}`.trim());
   const line = element('div', 'pline');
   if (pullRequest.stackPosition?.total > 1) {
@@ -1535,6 +1548,13 @@ function appendPullRequestTree(target, group, pullRequest) {
     line.append(cancel);
   } else if (mergeKey && mergeIntent) {
     line.append(badge('マージキューに追加済み (未マージ)', 'accent'));
+    if (queued && !pullRequest.mergeIntent) {
+      const left = element('button', 'link-btn', 'キューから外れた');
+      left.type = 'button';
+      left.dataset.queueLeft = mergeKey;
+      left.title = 'GitHub でキューから外れたときに押すと、マージの操作に戻る';
+      line.append(left);
+    }
   } else if (mergeKey && pullRequest.canMerge) {
     const merge = element('button', 'merge-btn', 'マージする');
     merge.type = 'button';
@@ -3025,7 +3045,7 @@ async function runPullRequestMergeAction(button, action) {
     }
     pullRequestMergeConfirmations.delete(key);
     const queued = action === 'merge' && result.queued;
-    if (queued) queuedPullRequestMerges.set(key, { message: result.message || '' });
+    if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
     pullRequestMergeMessages.delete(key);
     await refresh();
     liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : action === 'merge' ? `PR #${number} をマージしました。`
@@ -3185,6 +3205,11 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.cancelReservation) {
     void runPullRequestMergeAction(button, 'cancel');
+    return;
+  }
+  if (button.dataset.queueLeft) {
+    queuedPullRequestMerges.delete(button.dataset.queueLeft);
+    if (lastState) render(lastState);
     return;
   }
   if (button.dataset.closeTask) {
