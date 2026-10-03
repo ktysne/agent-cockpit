@@ -1310,6 +1310,13 @@ function productGroups(sessions, pullRequestGroups = []) {
   return [...groups.values()];
 }
 
+// セッションを外すか終えて PR もマージかクローズを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
+function hasProductContent(product, sinceSeen) {
+  return product.sessions.length > 0
+    || pullRequestOpenCount(product.pullRequestGroups || []) > 0
+    || sinceSeen.some((entry) => entry.product?.key === product.key && entry.items?.length > 0);
+}
+
 function sessionActivityTime(session) {
   const mainTool = session.tools.filter((tool) => !tool.agent_id).reduce((latest, tool) => {
     const time = Date.parse(tool.startedAt);
@@ -1320,11 +1327,12 @@ function sessionActivityTime(session) {
 }
 
 function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
-  const products = productGroups(sessions, pullRequestGroups);
+  const grouped = productGroups(sessions, pullRequestGroups);
   for (const entry of sinceSeen) {
-    if (!entry.product?.key || products.some((product) => product.key === entry.product.key)) continue;
-    products.push({ key: entry.product.key, name: entry.product.name, branches: new Set(), sessions: [], pullRequestGroups: [] });
+    if (!entry.product?.key || grouped.some((product) => product.key === entry.product.key)) continue;
+    grouped.push({ key: entry.product.key, name: entry.product.name, branches: new Set(), sessions: [], pullRequestGroups: [] });
   }
+  const products = grouped.filter((product) => hasProductContent(product, sinceSeen));
   const ids = products.map((product) => product.key);
   const visibleKeys = new Set(ids);
   const nextOrder = [...displayPreferences.order];
@@ -2252,12 +2260,12 @@ function render(state) {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
   });
   const sinceSeen = Array.isArray(state.sinceSeen) ? state.sinceSeen : [];
-  if (!sessions.length && !pullRequestGroups.length && !sinceSeen.length) {
+  const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
+  if (!products.length) {
     root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
     return;
   }
 
-  const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
   if (displayPreferences.mode === 'product') {
     const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
     root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount)));
