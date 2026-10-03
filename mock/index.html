@@ -1207,7 +1207,7 @@ function prItem(p, pr) {
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
-      ${mergeIntent ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : ''}
+      ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
       ${!mergeIntent && !blocker ? `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>` : ''}
       ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
       ${conflictButton(p, pr)}
@@ -1605,6 +1605,10 @@ document.addEventListener('click', e => {
     ui.confirm = null;
   } else if (t.hasAttribute('data-merge-cancel')) {
     ui.confirm = null;
+  } else if (t.dataset.queueLeft) {
+    const [pid, n] = t.dataset.queueLeft.split('#');
+    const pr = byId(pid).prs.find(x => String(x.number) === n);
+    if (pr) pr.mergeIntent = false;
   } else if (t.dataset.mergeGo) {
     const k = t.dataset.mergeGo;
     const [pid, n] = k.split('#');

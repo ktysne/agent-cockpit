@@ -323,6 +323,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     number: 1, title: 'キュー中', mergeIntent: { at: '12:00' }, head: 'feature', sha: 'abc', conflict: false,
   });
   assert.equal((mockText.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
+  assert.match(mockText, /data-queue-left="repo#1"[^>]*>キューから外れた</);
   assert.doesNotMatch(mockText, /GitHub のマージキューに追加済みです/);
   assert.doesNotMatch(mockText, /マージできない理由/);
 
