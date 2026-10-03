@@ -9,13 +9,14 @@ const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 
 
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
   const elapsed = pageHtml.match(/function decisionElapsedLabel\(decision\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(elapsed);
+  const isLongWait = pageHtml.match(/function isLongWait\(ageMs\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(elapsed && isLongWait);
   const context = pageContext(pageHtml, {
-    LONG_WAIT_MS: 15 * 60_000,
+    displayPreferences: { longWaitMinutes: 15 },
     hasEffectiveAnswer: (decision) => Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt),
     durationLabel: () => '4 分',
   });
-  vm.runInContext(elapsed, context);
+  vm.runInContext(`${isLongWait}\n${elapsed}`, context);
 
   const old = new Date(Date.now() - 16 * 60_000 - 5_000).toISOString();
   const waiting = context.decisionElapsedLabel({ state: 'waiting', createdAt: old });

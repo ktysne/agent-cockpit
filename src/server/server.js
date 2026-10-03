@@ -6,7 +6,7 @@ const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState, isValidRouteUpdate } = require('./routing');
 const { AtomicJsonWriter } = require('./json-storage');
-const { DecisionAnswerDelivery, validPicks } = require('./decision-answers');
+const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
@@ -201,7 +201,7 @@ function validTasks(value) {
 function validDisplayPatch(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder'].includes(key))) return false;
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes'].includes(key))) return false;
   if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
   for (const key of ['order', 'pinned', 'collapsed']) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
@@ -214,6 +214,8 @@ function validDisplayPatch(value) {
   const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
   if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
     value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
+  if (Object.hasOwn(value, 'longWaitMinutes') && (!Number.isInteger(value.longWaitMinutes) || value.longWaitMinutes < 1 || value.longWaitMinutes > 120)) return false;
+  if (Object.hasOwn(value, 'awayAnswerWaitMinutes') && (!Number.isInteger(value.awayAnswerWaitMinutes) || value.awayAnswerWaitMinutes < 1 || value.awayAnswerWaitMinutes > 30)) return false;
   return true;
 }
 
@@ -1078,6 +1080,10 @@ async function startServer(options = {}) {
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
+    answerWaitMs: () => {
+      const minutes = state.getDisplayPreferences?.().awayAnswerWaitMinutes;
+      return Number.isInteger(minutes) ? minutes * 60_000 : ANSWER_WAIT_MS;
+    },
     ...(options.answerDeliveryOptions || {}),
   });
   state.onSessionEndedByAbsence = (sessionId, endedAt) => answerDelivery.sessionEnded?.(sessionId, endedAt);

@@ -8,8 +8,11 @@ const { parsePullRequestUrl, validBranchName, validRepositoryPart } = require('.
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
 const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
 const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
+const DEFAULT_LONG_WAIT_MINUTES = 15;
+const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_DISPLAY = Object.freeze({
   mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
+  longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
@@ -41,6 +44,8 @@ function cloneDisplay(display) {
     collapsed: [...display.collapsed],
     hidden: [...display.hidden],
     sectionOrder: [...display.sectionOrder],
+    longWaitMinutes: display.longWaitMinutes,
+    awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
   };
 }
 
@@ -48,7 +53,13 @@ function defaultDisplay() {
   return {
     mode: DEFAULT_DISPLAY.mode, order: [], pinned: [], collapsed: [], hidden: [],
     sectionOrder: [...DEFAULT_DISPLAY.sectionOrder],
+    longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
+    awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
   };
+}
+
+function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
+  return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
 
 function normalizeSectionOrder(order) {
@@ -82,7 +93,7 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed', 'hidden']) {
@@ -99,6 +110,8 @@ function normalizeDisplay(value) {
     collapsed: [...value.collapsed],
     hidden: [...value.hidden],
     sectionOrder: normalizeSectionOrder(value.sectionOrder),
+    longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
+    awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
   };
 }
 
@@ -1778,6 +1791,10 @@ class DashboardState {
     this.touch();
     this.requestStoreWrite();
     return cloneDisplay(this.display);
+  }
+
+  getDisplayPreferences() {
+    return cloneDisplay(this.display || defaultDisplay());
   }
 
   closeTask(sessionId, title, now = Date.now()) {

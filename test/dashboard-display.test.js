@@ -261,12 +261,15 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayMigrationData: null,
     pendingDisplayChanges: {},
     pendingDisplayRequests: 0,
+    pendingDisplaySettingSaves: new Map(),
     readDisplayPreferences: () => {
       legacyReads += 1;
       return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'] };
     },
     normalizeDisplayPreferences: (value) => value,
     renderSectionOrder() {},
+    renderDisplaySettings() {},
+    settleDisplaySettingSaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -284,9 +287,12 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayMigrationData: null,
     pendingDisplayChanges: {},
     pendingDisplayRequests: 0,
+    pendingDisplaySettingSaves: new Map(),
     readDisplayPreferences: () => { throw new Error('旧設定は読み込まない'); },
     normalizeDisplayPreferences: (value) => value,
     renderSectionOrder() {},
+    renderDisplaySettings() {},
+    settleDisplaySettingSaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -305,6 +311,98 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
 
   assert.deepEqual(JSON.parse(JSON.stringify(syncCalls[1])), { mode: 'kind' });
   assert.equal(syncCalls.length, 2);
+});
+
+test('画面は未設定や不正なサーバー値を表示時間の既定値で補う', () => {
+  const normalizeOrder = functionSource(web, 'normalizeSectionOrder');
+  const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
+  const normalizeDisplay = functionSource(web, 'normalizeDisplayPreferences');
+  const context = pageContext(web, {
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    DEFAULT_LONG_WAIT_MINUTES: 15,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    FILTERS: ['permission', 'blocking', 'provisional', 'held', 'agents', 'prs'].map((key) => ({ key })),
+  });
+  vm.runInContext(`${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
+  const base = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay(base))), {
+    ...base,
+    sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    longWaitMinutes: 15,
+    awayAnswerWaitMinutes: 5,
+  });
+  assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
+  assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 5);
+});
+
+test('長い待ちの判定は設定値を使い、判断事項と許可待ちの表示へ反映する', () => {
+  const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
+  const isLongWait = functionSource(web, 'isLongWait');
+  const elapsedLabel = functionSource(web, 'decisionElapsedLabel');
+  const context = pageContext(web, { displayPreferences: { longWaitMinutes: 2 }, hasEffectiveAnswer: () => false });
+  vm.runInContext(`${normalizeMinutes}\n${isLongWait}\n${elapsedLabel}\nthis.normalizeMinutes = normalizeDisplayMinutes; this.isLongWait = isLongWait; this.elapsedLabel = decisionElapsedLabel;`, context);
+
+  assert.equal(context.normalizeMinutes(120, 1, 120, 15), 120);
+  assert.equal(context.normalizeMinutes(1.5, 1, 120, 15), 15);
+  assert.equal(context.isLongWait(120_000), false);
+  assert.equal(context.isLongWait(120_001), true);
+  assert.equal(context.elapsedLabel({ state: 'waiting', createdAt: new Date(Date.now() - 121_000).toISOString() }).stale, true);
+  assert.match(functionSource(web, 'appendPermissionWaits'), /isLongWait\(age\)/);
+
+  const mockThreshold = functionSource(mock, 'isLongWait');
+  const mockContext = pageContext(mock, { ui: { longWaitMinutes: 3 } });
+  vm.runInContext(`${mockThreshold}\nthis.isLongWait = isLongWait;`, mockContext);
+  assert.equal(mockContext.isLongWait(3), false);
+  assert.equal(mockContext.isLongWait(4), true);
+  assert.match(functionSource(mock, 'permCard'), /isLongWait\(x\.waitMin\)/);
+  assert.match(functionSource(mock, 'decisionCard'), /isLongWait\(d\.waitMin\)/);
+  assert.match(web, /長く待たせているとみなす時間\(分\)/);
+  assert.match(web, /離席中に質問の回答を待つ時間\(分\)/);
+  assert.match(mock, /長く待たせているとみなす時間\(分\)/);
+  assert.match(mock, /離席中に質問の回答を待つ時間\(分\)/);
+});
+
+test('表示時間の保存に失敗した数値設定を元に戻す', async () => {
+  const change = functionSource(web, 'changeDisplaySetting');
+  const patches = [];
+  let saveCount = 0;
+  const context = pageContext(web, {
+    displayPreferences: { longWaitMinutes: 15 },
+    displayPreferencesReady: true,
+    pendingDisplaySettingSaves: new Map(),
+    pendingDisplayChanges: {},
+    lastState: null,
+    enqueueDisplayPatch: async (patch) => { patches.push(patch); saveCount += 1; return saveCount === 1; },
+  });
+  vm.runInContext(`${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  const savedInput = { valueAsNumber: 24, value: '24' };
+  const failedInput = { valueAsNumber: 30, value: '30' };
+
+  assert.equal(await context.changeDisplaySetting('longWaitMinutes', savedInput, 1, 120), true);
+  assert.equal(context.displayPreferences.longWaitMinutes, 24);
+  assert.equal(await context.changeDisplaySetting('longWaitMinutes', failedInput, 1, 120), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ longWaitMinutes: 24 }, { longWaitMinutes: 30 }]);
+  assert.equal(context.displayPreferences.longWaitMinutes, 24);
+  assert.equal(failedInput.value, '24');
+});
+
+test('モックの待ち時間設定を localStorage の UI 状態へ保存する', () => {
+  const change = functionSource(mock, 'changeDisplaySetting');
+  let saved = 0;
+  let rendered = 0;
+  const context = pageContext(mock, {
+    ui: { longWaitMinutes: 15 },
+    save: () => { saved += 1; },
+    render: () => { rendered += 1; },
+  });
+  vm.runInContext(`${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  const input = { valueAsNumber: 24, value: '24' };
+
+  assert.equal(context.changeDisplaySetting('longWaitMinutes', input, 1, 120), true);
+  assert.equal(context.ui.longWaitMinutes, 24);
+  assert.equal(saved, 1);
+  assert.equal(rendered, 1);
 });
 
 test('セクションの並び順を保存し、端のボタンを無効化してフォーカスを維持する', () => {

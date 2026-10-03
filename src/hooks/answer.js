@@ -3,7 +3,8 @@ const { cockpitHomeFromOptions } = require('../server/identity');
 const { MAX_LONG_POLL_MS, denyAnswerOutput } = require('../server/decision-answers');
 const { readServerInfo } = require('./event');
 
-const ANSWER_HOOK_TIMEOUT_MS = 330_000;
+const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
+const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
 
 function validSessionId(value) {
@@ -69,6 +70,7 @@ async function runAskQuestion(input, options) {
   const sessionId = input.session_id;
   const toolUseId = input.tool_use_id;
   if (!validSessionId(sessionId) || typeof toolUseId !== 'string' || !toolUseId) return null;
+  const hookStartedAt = (options.now || Date.now)();
   const register = await postHookRequest({
     action: 'ask-register',
     event_name: 'PreToolUse',
@@ -80,7 +82,12 @@ async function runAskQuestion(input, options) {
   if (!register) return null;
   if (!register.awaiting) return register.hookOutput || null;
   const fallbackOutput = register.fallbackOutput || denyAnswerOutput(register.decisionId);
-  const hookDeadline = (options.now || Date.now)() + (options.askHookWaitMs || ANSWER_HOOK_TIMEOUT_MS);
+  const serverDeadline = Number.isFinite(register.deadline)
+    ? register.deadline
+    : Date.parse(register.awaitingAnswerUntil || '');
+  const hookDeadline = Number.isFinite(serverDeadline)
+    ? Math.min(serverDeadline + ANSWER_HOOK_DEADLINE_GRACE_MS, hookStartedAt + ANSWER_HOOK_TIMEOUT_MS)
+    : hookStartedAt + (options.askHookWaitMs || ANSWER_HOOK_TIMEOUT_MS);
   while ((options.now || Date.now)() < hookDeadline) {
     const result = await postHookRequest({
       action: 'ask-poll', event_name: 'PreToolUse', session_id: sessionId, id: toolUseId, decision_id: register.decisionId,

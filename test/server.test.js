@@ -1156,6 +1156,8 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
 
   const mode = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders });
   assert.equal(mode.status, 200);
+  assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
+  assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
   const hidden = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
@@ -1174,14 +1176,35 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     });
     assert.equal(invalidOrder.status, 400);
   }
+  for (const [key, invalidValue] of [
+    ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
+    ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
+  ]) {
+    const invalidMinutes = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ [key]: invalidValue }), headers: validHeaders,
+    });
+    assert.equal(invalidMinutes.status, 400, `${key}: ${invalidValue}`);
+  }
   const sectionOrder = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ sectionOrder: ['tasks', 'now'] }), headers: validHeaders,
   });
   assert.equal(sectionOrder.status, 200);
   assert.deepEqual(jsonBody(sectionOrder).display.sectionOrder, ['tasks', 'now', 'sinceSeen', 'judgment', 'prs']);
+  const minimumWaitSettings = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ longWaitMinutes: 1, awayAnswerWaitMinutes: 1 }), headers: validHeaders,
+  });
+  assert.equal(minimumWaitSettings.status, 200);
+  const waitSettings = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ longWaitMinutes: 120, awayAnswerWaitMinutes: 30 }), headers: validHeaders,
+  });
+  assert.equal(waitSettings.status, 200);
+  assert.equal(jsonBody(waitSettings).display.longWaitMinutes, 120);
+  assert.equal(jsonBody(waitSettings).display.awayAnswerWaitMinutes, 30);
+  assert.equal(runtime.answerDelivery.answerWaitMs(), 30 * 60_000);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30,
   });
 });
 

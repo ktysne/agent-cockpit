@@ -167,10 +167,11 @@ class DecisionAnswerDelivery {
       }, createdAt);
       return { awaiting: false, hookOutput: null };
     }
-    const deadline = createdAt + this.answerWaitMs;
+    const answerWaitMs = typeof this.answerWaitMs === 'function' ? this.answerWaitMs() : this.answerWaitMs;
+    const deadline = createdAt + answerWaitMs;
     const record = { sessionId, toolUseId, decisionId, deadline, timer: null, pollTimer: null, lastPollAt: createdAt };
     this.askWaits.set(key, record);
-    record.timer = this.setTimeout(() => this.expireAsk(record), this.answerWaitMs);
+    record.timer = this.setTimeout(() => this.expireAsk(record), answerWaitMs);
     this.scheduleAskPollTimeout(record);
     this.state.setDecisionLifecycle(sessionId, decisionId, {
       answer: null,
