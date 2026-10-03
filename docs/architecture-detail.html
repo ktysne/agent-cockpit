@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Cockpit 詳細構成</title>
+<style>
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --panel-2: #f9fafc;
+  --text: #1d2330;
+  --muted: #5d6577;
+  --border: #c9cfdb;
+  --line: #6b7385;
+  --cc: #edf2fd;
+  --cc-border: #7d9be0;
+  --srv: #fff6ea;
+  --srv-border: #e0a250;
+  --gate: #fde9cf;
+  --web: #ebf7f0;
+  --web-border: #5cb185;
+  --ext: #f1f1f4;
+  --band: #f3f5f9;
+  --blue: #2f5bd3;
+  --green: #22875a;
+  --orange: #c4600f;
+  --purple: #7a45c2;
+  --gray: #6b7385;
+  --hl: #fff4b8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171d;
+    --panel: #1c2028;
+    --panel-2: #20252e;
+    --text: #e4e7ee;
+    --muted: #9aa2b3;
+    --border: #3a4150;
+    --line: #8b93a5;
+    --cc: #1b2540;
+    --cc-border: #5876c4;
+    --srv: #2e2418;
+    --srv-border: #b8823c;
+    --gate: #3d2e18;
+    --web: #172d22;
+    --web-border: #4a9a70;
+    --ext: #23262e;
+    --band: #1a1e26;
+    --blue: #86a6ff;
+    --green: #6fd09c;
+    --orange: #f0a050;
+    --purple: #c19bff;
+    --gray: #9aa2b3;
+    --hl: #4a4220;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171d;
+  --panel: #1c2028;
+  --panel-2: #20252e;
+  --text: #e4e7ee;
+  --muted: #9aa2b3;
+  --border: #3a4150;
+  --line: #8b93a5;
+  --cc: #1b2540;
+  --cc-border: #5876c4;
+  --srv: #2e2418;
+  --srv-border: #b8823c;
+  --gate: #3d2e18;
+  --web: #172d22;
+  --web-border: #4a9a70;
+  --ext: #23262e;
+  --band: #1a1e26;
+  --blue: #86a6ff;
+  --green: #6fd09c;
+  --orange: #f0a050;
+  --purple: #c19bff;
+  --gray: #9aa2b3;
+  --hl: #4a4220;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  line-height: 1.65;
+}
+main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.55rem; margin: 0 0 4px; }
+h2 { font-size: 1.2rem; margin: 40px 0 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+h3 { font-size: 1rem; margin: 20px 0 8px; }
+p { margin: 0 0 10px; }
+.lead { color: var(--muted); margin-bottom: 16px; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+nav.toc a {
+  color: var(--blue); text-decoration: none; border: 1px solid var(--border);
+  background: var(--panel); border-radius: 999px; padding: 2px 12px; font-size: .9rem;
+}
+.figure {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 8px 0 12px;
+}
+.figure svg { display: block; width: 100%; height: auto; }
+#fig1 svg { min-width: 1100px; }
+#fig2 svg, #fig3 svg { min-width: 820px; }
+.caption { color: var(--muted); font-size: .88rem; margin: 4px 0 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: .88rem; color: var(--muted); margin: 6px 0 0; }
+.legend span::before {
+  content: ""; display: inline-block; width: 22px; height: 0; vertical-align: middle;
+  margin-right: 6px; border-top: 2.5px solid var(--c);
+}
+.legend span.dash::before { border-top-style: dashed; }
+
+svg text { fill: var(--text); font-size: 12.5px; }
+svg .t { font-size: 14px; font-weight: 700; }
+svg .t2 { font-size: 13px; font-weight: 700; }
+svg .s { fill: var(--muted); font-size: 11.5px; }
+svg .m { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; }
+svg .ms { font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; fill: var(--muted); }
+.b-cc { fill: var(--cc); stroke: var(--cc-border); stroke-width: 1.5; }
+.b-srv { fill: var(--srv); stroke: var(--srv-border); stroke-width: 2; }
+.b-gate { fill: var(--gate); stroke: var(--srv-border); stroke-width: 1; stroke-dasharray: 4 3; }
+.b-web { fill: var(--web); stroke: var(--web-border); stroke-width: 1.5; }
+.b-in { fill: var(--panel); stroke: var(--border); stroke-width: 1; }
+.b-grp { fill: none; stroke: var(--cc-border); stroke-width: 1; stroke-dasharray: 5 4; }
+.b-ext { fill: var(--ext); stroke: var(--border); stroke-width: 1.2; }
+.b-opt { fill: var(--ext); stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.b-band { fill: var(--band); stroke: var(--border); stroke-width: 1; }
+.ln { fill: none; stroke-width: 2; }
+.c-blue { stroke: var(--blue); } .f-blue { fill: var(--blue); }
+.c-green { stroke: var(--green); } .f-green { fill: var(--green); }
+.c-orange { stroke: var(--orange); } .f-orange { fill: var(--orange); }
+.c-purple { stroke: var(--purple); } .f-purple { fill: var(--purple); }
+.c-gray { stroke: var(--gray); } .f-gray { fill: var(--gray); }
+.dash { stroke-dasharray: 6 4; }
+.mask { fill: var(--band); }
+.lifeline { stroke: var(--border); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.badge circle { stroke: var(--panel); stroke-width: 2; }
+.badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.badge { cursor: pointer; }
+
+.flow { transition: opacity .15s; }
+svg.focusing .flow { opacity: .18; }
+svg.focusing .flow.on { opacity: 1; }
+svg.focusing .flow.on .ln { stroke-width: 3.2; }
+
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-size: .92rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { background: var(--panel-2); font-weight: 600; white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+tr[data-flow] { cursor: default; }
+tr[data-flow].on td { background: var(--hl); }
+td.no { white-space: nowrap; font-weight: 700; }
+td.no .dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: .82rem;
+}
+.table-wrap { overflow-x: auto; }
+code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .88em; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+td code { white-space: nowrap; }
+ul.points { margin: 0; padding-left: 1.3em; }
+ul.points li { margin-bottom: 6px; }
+.tag {
+  display: inline-block; font-size: .78rem; font-weight: 700; border-radius: 4px; padding: 0 6px; margin-right: 4px;
+  color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+}
+.hint { font-size: .88rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent Cockpit の詳細構成</h1>
+  <p class="lead">構成要素、通信経路、保存先までを描いた版。図中の丸数字は、下の表と図 2・図 3 の番号に対応する。表の行か図の丸数字にマウスを重ねると、図の該当する経路だけが強調される。</p>
+  <nav class="toc">
+    <a href="#s1">図 1 全体の構成</a>
+    <a href="#s2">経路の一覧</a>
+    <a href="#s3">常駐サーバーの内部</a>
+    <a href="#s4">図 2 回答の届け方</a>
+    <a href="#s5">図 3 PR の流れ</a>
+    <a href="#s6">保存先</a>
+    <a href="#s7">信頼境界</a>
+    <a href="architecture.html">簡易版</a>
+  </nav>
+
+  <h2 id="s1">図 1　全体の構成</h2>
+  <div class="figure" id="fig1">
+    <svg viewBox="0 0 1560 1020" role="img" aria-labelledby="fig1-title">
+      <title id="fig1-title">Agent Cockpit の構成要素と通信経路</title>
+      <defs>
+        <marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="f-blue" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="f-green" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="f-orange" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="f-purple" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="f-gray" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+
+      <!-- Claude Code -->
+      <rect class="b-cc" x="20" y="20" width="420" height="690" rx="12"/>
+      <text class="t" x="40" y="48">Claude Code デスクトップアプリ</text>
+      <text class="s" x="40" y="66">セッションごとにフックと MCP サーバーが動く</text>
+
+      <rect class="b-in" x="40" y="80" width="380" height="64" rx="8"/>
+      <text class="t2" x="56" y="106">メインセッション / サブエージェント</text>
+      <text class="s" x="56" y="128">作業・AskUserQuestion・停止でフックが発火する</text>
+
+      <rect class="b-in" x="40" y="176" width="380" height="96" rx="8"/>
+      <text class="t2" x="56" y="200">MCP サーバー（src/mcp/server.js）</text>
+      <text class="s" x="56" y="220">stdio で起動。セッション ID で記録先を決める</text>
+      <text class="m" x="56" y="242">cockpit_set_tasks / cockpit_add_decision</text>
+      <text class="m" x="56" y="260">cockpit_update_decision / cockpit_add_pr</text>
+      <path class="ln c-gray" d="M120,144 L120,176" marker-end="url(#a-gray)"/>
+      <text class="s" x="128" y="164">ツール呼び出し</text>
+
+      <rect class="b-grp" x="40" y="300" width="380" height="396" rx="10"/>
+      <text class="t2" x="56" y="322">フック（src/hooks）</text>
+      <text class="s" x="56" y="340">stdin で JSON を受け、stdout で返す</text>
+
+      <rect class="b-in" x="56" y="352" width="348" height="84" rx="8"/>
+      <text class="t2" x="70" y="374">event.js</text>
+      <text class="s" x="70" y="394">全イベントを要約して送る（SessionStart は同期）</text>
+      <text class="s" x="70" y="412">PreToolUse・PostToolUse・Notification・</text>
+      <text class="s" x="70" y="428">SubagentStart/Stop・Stop・SessionEnd ほか</text>
+
+      <rect class="b-in" x="56" y="446" width="348" height="72" rx="8"/>
+      <text class="t2" x="70" y="468">away.js</text>
+      <text class="s" x="70" y="488">SessionStart・UserPromptSubmit: 文脈を差し込む</text>
+      <text class="s" x="70" y="506">PreToolUse(AskUserQuestion): 回答を待つ</text>
+
+      <rect class="b-in" x="56" y="528" width="348" height="72" rx="8"/>
+      <text class="t2" x="70" y="550">answer.js</text>
+      <text class="s" x="70" y="570">PostToolBatch・UserPromptSubmit: 回答を差し込む</text>
+      <text class="s" x="70" y="588">Stop(asyncRewake): 回答を待って起こす</text>
+
+      <rect class="b-in" x="56" y="610" width="348" height="72" rx="8"/>
+      <text class="t2" x="70" y="632">route.js</text>
+      <text class="s" x="70" y="652">SubagentStart: 経路の指定を文脈に足す</text>
+      <text class="s" x="70" y="670">PreToolUse(Bash): 経路に反する委譲を拒否</text>
+
+      <path class="ln c-gray" d="M40,112 L28,112 L28,480 L40,480" marker-end="url(#a-gray)"/>
+      <text class="s" transform="translate(24,300) rotate(-90)" text-anchor="middle">発火 / 出力を反映</text>
+
+      <!-- 常駐サーバー -->
+      <rect class="b-srv" x="540" y="20" width="600" height="690" rx="12"/>
+      <text class="t" x="560" y="48">常駐サーバー（src/server）</text>
+      <text class="s" x="560" y="66">Node.js・127.0.0.1:47821 だけで待ち受け、Host ヘッダーを照合する</text>
+
+      <rect class="b-gate" x="555" y="80" width="180" height="615" rx="8"/>
+      <text class="t2" x="567" y="102">フック・MCP 用の口</text>
+      <text class="s" x="567" y="120">secret ヘッダーが必須</text>
+      <text class="s" x="567" y="136">Origin が付いた要求は拒否</text>
+      <text class="m" x="567" y="220">POST /api/sessions/</text>
+      <text class="m" x="567" y="234">  :id/plan ・ :id/prs</text>
+      <text class="m" x="567" y="376">POST /api/events</text>
+      <text class="m" x="567" y="414">GET /health</text>
+      <text class="m" x="567" y="466">GET /api/away</text>
+      <text class="m" x="567" y="480">GET /api/sessions/</text>
+      <text class="m" x="567" y="494">  :id/context</text>
+      <text class="m" x="567" y="516">POST /api/hooks/answers</text>
+      <text class="ms" x="567" y="530">ask-register/poll/finish</text>
+      <text class="ms" x="567" y="562">post-tool-batch</text>
+      <text class="ms" x="567" y="576">user-prompt-submit</text>
+      <text class="ms" x="567" y="598">stop-start / stop-poll</text>
+
+      <rect class="b-in" x="750" y="80" width="215" height="56" rx="7"/>
+      <text class="t2" x="762" y="102">server.js</text>
+      <text class="s" x="762" y="122">振り分け・認証・起動と停止</text>
+      <rect class="b-in" x="750" y="144" width="215" height="56" rx="7"/>
+      <text class="t2" x="762" y="166">events.js</text>
+      <text class="s" x="762" y="186">イベントを検証し要約に絞る</text>
+      <rect class="b-in" x="750" y="208" width="215" height="72" rx="7"/>
+      <text class="t2" x="762" y="230">state.js</text>
+      <text class="s" x="762" y="250">セッション・サブエージェント・</text>
+      <text class="s" x="762" y="268">タスク・判断事項・PR の状態</text>
+      <rect class="b-in" x="750" y="288" width="215" height="72" rx="7"/>
+      <text class="t2" x="762" y="310">decision-answers.js</text>
+      <text class="s" x="762" y="330">回答と通知の配信待ち・long-poll</text>
+      <text class="s" x="762" y="348">task-nudges.js: 登録の促し</text>
+      <rect class="b-in" x="750" y="368" width="215" height="56" rx="7"/>
+      <text class="t2" x="762" y="390">pull-requests.js</text>
+      <text class="s" x="762" y="410">PR・CI の状態取得（60 秒ごと）</text>
+      <rect class="b-in" x="750" y="432" width="215" height="56" rx="7"/>
+      <text class="t2" x="762" y="454">pull-request-merge.js</text>
+      <text class="s" x="762" y="474">マージと自動マージの予約</text>
+      <rect class="b-in" x="750" y="496" width="215" height="48" rx="7"/>
+      <text class="t2" x="762" y="518">routing.js</text>
+      <text class="s" x="842" y="518">経路の設定</text>
+      <rect class="b-in" x="750" y="552" width="215" height="72" rx="7"/>
+      <text class="t2" x="762" y="572">session-files.js ほか</text>
+      <text class="s" x="762" y="592">稼働中セッションの検出（10 秒ごと）</text>
+      <text class="s" x="762" y="610">会話ログからの推定・プロダクト判定</text>
+      <rect class="b-in" x="750" y="632" width="215" height="56" rx="7"/>
+      <text class="t2" x="762" y="654">json-storage.js</text>
+      <text class="s" x="762" y="674">JSON を一時ファイル経由で保存</text>
+
+      <rect class="b-gate" x="978" y="80" width="154" height="615" rx="8"/>
+      <text class="t2" x="990" y="102">画面用の口</text>
+      <text class="s" x="990" y="120">uiSecret ヘッダーが必須</text>
+      <text class="s" x="990" y="136">Origin を照合</text>
+      <text class="m" x="990" y="236">GET /</text>
+      <text class="ms" x="990" y="252">uiSecret を埋め込む</text>
+      <text class="m" x="990" y="296">GET /api/state</text>
+      <text class="m" x="990" y="356">POST /api/</text>
+      <text class="ms" x="990" y="372">decisions/:id/answer</text>
+      <text class="ms" x="990" y="388">away ・ routing</text>
+      <text class="ms" x="990" y="404">display ・ seen</text>
+      <text class="ms" x="990" y="420">hidden-sessions</text>
+      <text class="ms" x="990" y="436">closed-tasks/agents</text>
+      <text class="ms" x="990" y="452">sessions/:id/estimate</text>
+      <text class="m" x="990" y="494">POST /api/</text>
+      <text class="ms" x="990" y="510">pull-requests/</text>
+      <text class="ms" x="990" y="526">merge ・ reserve ・</text>
+      <text class="ms" x="990" y="542">cancel-reservation</text>
+
+      <!-- タスクトレイとダッシュボード -->
+      <rect class="b-ext" x="1240" y="20" width="300" height="122" rx="10"/>
+      <text class="t" x="1256" y="46">タスクトレイ（src/tray）</text>
+      <text class="s" x="1256" y="66">tray.ps1（Windows の通知領域に常駐）</text>
+      <text class="s" x="1256" y="84">ensure-server.js で起動を確かめる</text>
+      <text class="s" x="1256" y="102">メニュー: 開く・離席中・再起動・終了</text>
+      <text class="s" x="1256" y="120">離席中の表示は /api/state から取得</text>
+
+      <rect class="b-web" x="1240" y="180" width="300" height="530" rx="12"/>
+      <text class="t" x="1256" y="206">ダッシュボード（src/web/index.html）</text>
+      <text class="s" x="1256" y="224">Edge の --app ウィンドウ、または内部ブラウザ</text>
+      <rect class="b-in" x="1256" y="238" width="268" height="44" rx="7"/>
+      <text x="1268" y="257">ヘッダー</text><text class="s" x="1268" y="274">離席中・経路の設定・件数タグ</text>
+      <rect class="b-in" x="1256" y="288" width="268" height="44" rx="7"/>
+      <text x="1268" y="307">セッション</text><text class="s" x="1268" y="324">作業中のツール・許可待ち・状態の推定</text>
+      <rect class="b-in" x="1256" y="338" width="268" height="44" rx="7"/>
+      <text x="1268" y="357">タスクと完了条件</text><text class="s" x="1268" y="374">MCP で登録された計画</text>
+      <rect class="b-in" x="1256" y="388" width="268" height="44" rx="7"/>
+      <text x="1268" y="407">サブエージェント</text><text class="s" x="1268" y="424">稼働状況・経路の札・Codex のモデル</text>
+      <rect class="b-in" x="1256" y="438" width="268" height="44" rx="7"/>
+      <text x="1268" y="457">判断事項と回答欄</text><text class="s" x="1268" y="474">推奨案で OK・保留・指示</text>
+      <rect class="b-in" x="1256" y="488" width="268" height="44" rx="7"/>
+      <text x="1268" y="507">PR スタック</text><text class="s" x="1268" y="524">CI・クロスレビュー・マージ確認</text>
+      <rect class="b-in" x="1256" y="538" width="268" height="44" rx="7"/>
+      <text x="1268" y="557">前回見てから</text><text class="s" x="1268" y="574">既読にした後の完了・マージなど</text>
+      <text class="s" x="1256" y="610">テーマはブラウザーの localStorage に保存</text>
+
+      <!-- 下段 -->
+      <rect class="b-ext" x="20" y="800" width="420" height="200" rx="10"/>
+      <text class="t" x="36" y="826">~/.agent-cockpit（AGENT_COCKPIT_HOME）</text>
+      <text class="m" x="36" y="852">server.json</text><text class="s" x="170" y="852">pid・port・secret・uiSecret</text>
+      <text class="m" x="36" y="876">store.json</text><text class="s" x="170" y="876">タスク・判断事項・表示設定など</text>
+      <text class="m" x="36" y="900">away.json</text><text class="s" x="170" y="900">離席中の状態</text>
+      <text class="m" x="36" y="924">routing.json</text><text class="s" x="170" y="924">経路の設定</text>
+      <text class="m" x="36" y="948">route-agents/</text><text class="s" x="170" y="948">サブエージェントごとの経路の記録</text>
+      <text class="m" x="36" y="972">server.log</text><text class="s" x="170" y="972">起動・停止・書き込みの失敗</text>
+
+      <rect class="b-ext" x="540" y="800" width="380" height="200" rx="10"/>
+      <text class="t" x="556" y="826">~/.claude（読み取りだけ）</text>
+      <text class="m" x="556" y="852">sessions/*.json</text><text class="s" x="720" y="852">稼働中のセッション</text>
+      <text class="m" x="556" y="876">projects/…/*.jsonl</text><text class="s" x="720" y="876">会話ログ（状態の推定）</text>
+      <text class="m" x="556" y="900">agents/*.md</text><text class="s" x="720" y="900">サブエージェントの定義</text>
+      <text class="m" x="556" y="924">gpt-agents/*.md</text><text class="s" x="720" y="924">Codex 側の定義</text>
+      <text class="m" x="556" y="948">tools/codex-agent.sh</text><text class="s" x="720" y="948">有無だけを確かめる</text>
+      <text class="s" x="556" y="980">sessions は公開仕様ではないため、読めなくても動く</text>
+
+      <rect class="b-opt" x="940" y="800" width="200" height="200" rx="10"/>
+      <text class="t" x="956" y="826">各 worktree</text>
+      <text class="m" x="956" y="852">tools/cross-review.js</text>
+      <text class="s" x="956" y="870">有無で導入を判断</text>
+      <text class="m" x="956" y="894">.cross-review-state.json</text>
+      <text class="s" x="956" y="912">PR ごとのレビュー状態</text>
+      <text class="s" x="956" y="980">ai-cross-review 導入時のみ</text>
+
+      <rect class="b-ext" x="1240" y="800" width="300" height="200" rx="10"/>
+      <text class="t" x="1256" y="826">GitHub（gh CLI）</text>
+      <text class="m" x="1256" y="852">gh pr view / gh api</text><text class="s" x="1400" y="852">60 秒ごと</text>
+      <text class="m" x="1256" y="876">gh pr merge</text><text class="s" x="1340" y="876">--match-head-commit</text>
+      <text class="s" x="1256" y="900">自動マージ予約の確認: 15 秒ごと</text>
+      <text class="s" x="1256" y="924">GH_TOKEN などの環境変数は消し、</text>
+      <text class="s" x="1256" y="942">gh 自身のログインを使う</text>
+
+      <!-- 経路 -->
+      <g class="flow" data-flow="8">
+        <path class="ln c-blue" d="M420,226 L555,226" marker-end="url(#a-blue)"/>
+        <g class="badge" transform="translate(487,226)"><circle r="11" class="f-blue"/><text>8</text></g>
+      </g>
+      <g class="flow" data-flow="1">
+        <path class="ln c-blue" d="M404,380 L555,380" marker-end="url(#a-blue)"/>
+        <g class="badge" transform="translate(487,380)"><circle r="11" class="f-blue"/><text>1</text></g>
+      </g>
+      <g class="flow" data-flow="2">
+        <path class="ln c-blue dash" d="M404,410 L555,410" marker-end="url(#a-blue)"/>
+        <g class="badge" transform="translate(487,410)"><circle r="11" class="f-blue"/><text>2</text></g>
+        <path class="ln c-blue dash" d="M150,696 L150,800" marker-end="url(#a-blue)"/>
+        <g class="badge" transform="translate(150,752)"><circle r="11" class="f-blue"/><text>2</text></g>
+        <text class="s" x="166" y="756">server.json を読む</text>
+      </g>
+      <g class="flow" data-flow="3">
+        <path class="ln c-green" d="M404,474 L555,474" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+        <g class="badge" transform="translate(487,474)"><circle r="11" class="f-green"/><text>3</text></g>
+      </g>
+      <g class="flow" data-flow="4">
+        <path class="ln c-green" d="M404,506 L555,506" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+        <g class="badge" transform="translate(487,506)"><circle r="11" class="f-green"/><text>4</text></g>
+      </g>
+      <g class="flow" data-flow="5">
+        <path class="ln c-green" d="M404,566 L555,566" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+        <g class="badge" transform="translate(487,566)"><circle r="11" class="f-green"/><text>5</text></g>
+      </g>
+      <g class="flow" data-flow="6">
+        <path class="ln c-green" d="M404,594 L555,594" marker-start="url(#a-green)" marker-end="url(#a-green)"/>
+        <g class="badge" transform="translate(487,594)"><circle r="11" class="f-green"/><text>6</text></g>
+      </g>
+      <g class="flow" data-flow="7">
+        <path class="ln c-gray" d="M330,682 L330,800" marker-start="url(#a-gray)" marker-end="url(#a-gray)"/>
+        <g class="badge" transform="translate(330,752)"><circle r="11" class="f-gray"/><text>7</text></g>
+        <text class="s" x="346" y="740">routing.json</text>
+        <text class="s" x="346" y="770">route-agents/</text>
+      </g>
+      <g class="flow" data-flow="9">
+        <path class="ln c-orange" d="M1240,242 L1132,242" marker-start="url(#a-orange)" marker-end="url(#a-orange)"/>
+        <g class="badge" transform="translate(1182,242)"><circle r="11" class="f-orange"/><text>9</text></g>
+      </g>
+      <g class="flow" data-flow="10">
+        <path class="ln c-orange" d="M1240,300 L1132,300" marker-start="url(#a-orange)" marker-end="url(#a-orange)"/>
+        <g class="badge" transform="translate(1182,300)"><circle r="11" class="f-orange"/><text>10</text></g>
+      </g>
+      <g class="flow" data-flow="11">
+        <path class="ln c-orange" d="M1240,404 L1132,404" marker-end="url(#a-orange)"/>
+        <g class="badge" transform="translate(1182,404)"><circle r="11" class="f-orange"/><text>11</text></g>
+      </g>
+      <g class="flow" data-flow="12">
+        <path class="ln c-orange" d="M1240,512 L1132,512" marker-end="url(#a-orange)"/>
+        <g class="badge" transform="translate(1182,512)"><circle r="11" class="f-orange"/><text>12</text></g>
+      </g>
+      <g class="flow" data-flow="13">
+        <path class="ln c-purple" d="M1100,710 L1100,770 L1390,770 L1390,800" marker-start="url(#a-purple)" marker-end="url(#a-purple)"/>
+        <g class="badge" transform="translate(1245,770)"><circle r="11" class="f-purple"/><text>13</text></g>
+      </g>
+      <g class="flow" data-flow="14">
+        <path class="ln c-gray" d="M730,800 L730,710" marker-end="url(#a-gray)"/>
+        <g class="badge" transform="translate(730,755)"><circle r="11" class="f-gray"/><text>14</text></g>
+      </g>
+      <g class="flow" data-flow="15">
+        <path class="ln c-gray" d="M600,710 L600,770 L400,770 L400,800" marker-start="url(#a-gray)" marker-end="url(#a-gray)"/>
+        <g class="badge" transform="translate(500,770)"><circle r="11" class="f-gray"/><text>15</text></g>
+      </g>
+      <g class="flow" data-flow="16">
+        <path class="ln c-gray dash" d="M1040,800 L1040,710" marker-end="url(#a-gray)"/>
+        <g class="badge" transform="translate(1040,755)"><circle r="11" class="f-gray"/><text>16</text></g>
+      </g>
+      <g class="flow" data-flow="17">
+        <path class="ln c-gray dash" d="M1240,60 L1140,60" marker-end="url(#a-gray)"/>
+        <g class="badge" transform="translate(1190,60)"><circle r="11" class="f-gray"/><text>17</text></g>
+      </g>
+      <g class="flow" data-flow="18">
+        <path class="ln c-gray dash" d="M1390,142 L1390,180" marker-end="url(#a-gray)"/>
+        <g class="badge" transform="translate(1416,161)"><circle r="11" class="f-gray"/><text>18</text></g>
+      </g>
+    </svg>
+  </div>
+  <div class="legend">
+    <span style="--c: var(--blue)">セッション側からの送信</span>
+    <span style="--c: var(--green)">回答・文脈がセッションへ戻る</span>
+    <span style="--c: var(--orange)">ダッシュボードとの通信</span>
+    <span style="--c: var(--purple)">GitHub との通信</span>
+    <span style="--c: var(--gray)">ファイルの読み書き</span>
+    <span class="dash" style="--c: var(--gray)">起動・確認など補助の経路</span>
+  </div>
+  <p class="caption">両端に矢印がある経路は、要求への応答で中身が戻ってくることを表す。破線の枠は導入されている場合だけ使う連携。</p>
+
+  <h2 id="s2">経路の一覧</h2>
+  <p class="hint">行にマウスを重ねると、図 1 の該当する経路が強調される。</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>番号</th><th>経路</th><th>方向</th><th>使う口・ファイル</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr data-flow="1"><td class="no"><span class="dot" style="background:var(--blue)">1</span></td><td>イベントの送信</td><td>event.js → サーバー</td><td><code>POST /api/events</code></td><td>ツールの実行前後、通知、サブエージェントの開始と終了、停止、セッションの終了などを送る。ツールの入力は要約だけを送る。サーバーはここからセッションの状態を組み立て、<code>gh pr create</code> の結果から PR を自動で登録する。</td></tr>
+      <tr data-flow="2"><td class="no"><span class="dot" style="background:var(--blue)">2</span></td><td>サーバーの起動確認</td><td>event.js・MCP → サーバー</td><td><code>server.json</code>、<code>GET /health</code></td><td><code>server.json</code> から port と secret を読み、<code>/health</code> で pid と起動時刻が一致するかを確かめる。応答が無ければロックを取ってサーバーを起動する。SessionStart では起動後のダッシュボードの URL を文脈に返す。</td></tr>
+      <tr data-flow="3"><td class="no"><span class="dot" style="background:var(--green)">3</span></td><td>文脈の差し込み</td><td>away.js ⇄ サーバー</td><td><code>GET /api/away</code>、<code>GET /api/sessions/:id/context</code></td><td>離席中であれば「推奨で進める」指示を、入力のたびにタスク登録の決まりを文脈に足す。compact や resume の直後は、登録済みのタスクと未解決の判断事項の要約を取得して足す。</td></tr>
+      <tr data-flow="4"><td class="no"><span class="dot" style="background:var(--green)">4</span></td><td>質問の回答待ち</td><td>away.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（ask-*）</td><td>離席中に限り、AskUserQuestion をダッシュボードで最大 5 分待つ。流れは <a href="#s4">図 2</a> の ④。</td></tr>
+      <tr data-flow="5"><td class="no"><span class="dot" style="background:var(--green)">5</span></td><td>作業中・入力時の回答配信</td><td>answer.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（post-tool-batch、user-prompt-submit）</td><td>ツール実行の区切りごとに、届いている回答、PR の通知、タスク登録の促しを文脈へ差し込む。流れは <a href="#s4">図 2</a> の ⑤。</td></tr>
+      <tr data-flow="6"><td class="no"><span class="dot" style="background:var(--green)">6</span></td><td>停止中の回答配信</td><td>answer.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（stop-*）</td><td>セッションが止まった後も回答を待ち続け、届いたらセッションを起こして渡す。流れは <a href="#s4">図 2</a> の ⑥。</td></tr>
+      <tr data-flow="7"><td class="no"><span class="dot" style="background:var(--gray)">7</span></td><td>経路の差し込み</td><td>route.js ⇄ ファイル</td><td><code>routing.json</code>、<code>route-agents/</code></td><td>サーバーを介さず設定ファイルを直接読む。サブエージェントの開始時に経路（既定・Codex・Claude）を記録して文脈に足し、終了までその経路を使う。Claude 指定中に <code>codex-agent.sh</code> を呼ぶ Bash は拒否する。</td></tr>
+      <tr data-flow="8"><td class="no"><span class="dot" style="background:var(--blue)">8</span></td><td>計画・PR の登録</td><td>MCP → サーバー</td><td><code>POST /api/sessions/:id/plan</code>、<code>/prs</code></td><td>タスクと完了条件の置き換え、判断事項の追加と更新、PR の URL の登録。セッションは環境変数 <code>CLAUDE_CODE_SESSION_ID</code>、無ければ親プロセスの pid と <code>~/.claude/sessions</code> の対応から決める。</td></tr>
+      <tr data-flow="9"><td class="no"><span class="dot" style="background:var(--orange)">9</span></td><td>画面の配信</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /</code></td><td><code>index.html</code> を返す。画面用の秘密値 uiSecret を meta 要素に埋め込み、画面からの書き込みはこの値を添えて送る。</td></tr>
+      <tr data-flow="10"><td class="no"><span class="dot" style="background:var(--orange)">10</span></td><td>状態の取得</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /api/state</code></td><td>2 秒ごとに全体の状態（セッション、タスク、判断事項、PR、離席中、経路の設定、連携の有無）を取得して描き直す。</td></tr>
+      <tr data-flow="11"><td class="no"><span class="dot" style="background:var(--orange)">11</span></td><td>画面からの操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/decisions/:id/answer</code> ほか</td><td>判断事項への回答、離席中、経路の設定、表示設定、既読、セッションを一覧から外す、タスクやサブエージェントを閉じる、会話ログからの状態の推定。回答はサーバーの配信待ちに置かれ、③〜⑥ の経路で届く。</td></tr>
+      <tr data-flow="12"><td class="no"><span class="dot" style="background:var(--orange)">12</span></td><td>PR のマージ操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/pull-requests/merge</code>・<code>reserve</code>・<code>cancel-reservation</code></td><td>開発者が確認したマージ、自動マージの予約と取り消し。画面で見た head の SHA を添える。流れは <a href="#s5">図 3</a>。</td></tr>
+      <tr data-flow="13"><td class="no"><span class="dot" style="background:var(--purple)">13</span></td><td>GitHub 連携</td><td>サーバー ⇄ GitHub</td><td><code>gh</code> CLI</td><td>登録された PR とその関連 PR、CI、レビューの状態を 60 秒ごとに取得する。マージは <code>gh pr merge --match-head-commit</code> で行う。</td></tr>
+      <tr data-flow="14"><td class="no"><span class="dot" style="background:var(--gray)">14</span></td><td>Claude Code の情報の読み取り</td><td>ファイル → サーバー</td><td><code>~/.claude/</code></td><td>10 秒ごとに稼働中のセッションを検出し、消えたセッションは 60 秒後に終了扱いにする。サブエージェントの定義からモデルを読み、依頼があれば会話ログの末尾から状態を推定する。</td></tr>
+      <tr data-flow="15"><td class="no"><span class="dot" style="background:var(--gray)">15</span></td><td>保存と復元</td><td>サーバー ⇄ ファイル</td><td><code>~/.agent-cockpit/</code></td><td>起動時に <code>store.json</code> などから復元し、変更は少し待ってまとめて書く。起動ごとに secret と uiSecret を作り <code>server.json</code> に書く。</td></tr>
+      <tr data-flow="16"><td class="no"><span class="dot" style="background:var(--gray)">16</span></td><td>クロスレビュー状態の読み取り</td><td>ファイル → サーバー</td><td>worktree の <code>.cross-review-state.json</code></td><td>PR を登録したセッションの worktree に ai-cross-review があれば、レビューの状態を読んで PR のカードに出す。無ければ何も出さない。</td></tr>
+      <tr data-flow="17"><td class="no"><span class="dot" style="background:var(--gray)">17</span></td><td>サーバーの起動・再起動</td><td>タスクトレイ → サーバー</td><td><code>ensure-server.js</code>、<code>/api/state</code>、<code>/api/away</code></td><td>起動時にサーバーを確かめて無ければ起動する。メニューの「再起動」は、<code>server.json</code> の pid がこのチェックアウトのサーバーである場合だけ止めて起動し直す。離席中の切り替えもここから送れる。</td></tr>
+      <tr data-flow="18"><td class="no"><span class="dot" style="background:var(--gray)">18</span></td><td>画面を開く</td><td>タスクトレイ → ダッシュボード</td><td>Edge の <code>--app</code></td><td>ダッシュボードを独立したウィンドウで開く。ウィンドウを閉じてもトレイとサーバーは動き続ける。</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="s3">常駐サーバーの内部</h2>
+  <p>図 1 の中央にあるモジュールの役割。名前は図の箱と同じ。</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>モジュール</th><th>役割</th><th>主に関わる経路</th></tr></thead>
+    <tbody>
+      <tr><td><code>server.js</code></td><td>HTTP の振り分けと認証。起動時に各部品を組み立て、30 分間要求が無く稼働中のセッションも無ければ自分で停止する。</td><td>すべて</td></tr>
+      <tr><td><code>events.js</code></td><td>フックからのイベントを検証し、表示に要る項目だけに絞る。</td><td>①</td></tr>
+      <tr><td><code>state.js</code></td><td>セッション、サブエージェント、タスク、判断事項、PR の登録、離席中の状態を持つ。AskUserQuestion から判断事項を作り、Codex の実行行も組み立てる。</td><td>① ⑧ ⑩ ⑭ ⑮</td></tr>
+      <tr><td><code>decision-answers.js</code><br><code>task-nudges.js</code></td><td>画面で書かれた回答と PR の通知をセッションごとに配信待ちに置き、フックの問い合わせ（long-poll を含む）に応じて渡す。作業中のタスク登録が古ければ促しの文を足す。</td><td>④ ⑤ ⑥ ⑪</td></tr>
+      <tr><td><code>pull-requests.js</code></td><td>登録された PR とスタックの関連 PR、CI、レビュー、クロスレビューの状態を集める。</td><td>⑬ ⑯</td></tr>
+      <tr><td><code>pull-request-merge.js</code></td><td>マージの実行と、自動マージの予約の監視。結果を作成元のセッションへ通知する。</td><td>⑫ ⑬</td></tr>
+      <tr><td><code>routing.js</code></td><td>経路の設定（サブエージェントとクロスレビュー）を保存する。</td><td>⑪ ⑮（読むのは ⑦ の route.js）</td></tr>
+      <tr><td><code>session-files.js</code><br><code>transcript.js</code><br><code>identity.js</code></td><td>稼働中セッションの検出、エージェント定義の読み取り、会話ログからの状態の推定、作業ディレクトリからのプロダクトの判定（worktree は本体のリポジトリにまとめる）。</td><td>⑭</td></tr>
+      <tr><td><code>json-storage.js</code></td><td>一時ファイルに書いてから置き換え、途中で止まっても壊れた JSON が残らないようにする。</td><td>⑮</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="s4">図 2　回答がセッションへ届くまで</h2>
+  <p>ダッシュボードで書いた回答は、サーバーが直接セッションへ送るのではなく、フックが問い合わせて受け取る。セッションの状態によって ④⑤⑥ の 3 通りの受け取り方がある。番号は図 1 と表の番号と同じ。</p>
+  <div class="figure" id="fig2">
+    <svg viewBox="0 0 1100 930" role="img" aria-labelledby="fig2-title">
+      <title id="fig2-title">回答の 3 つの届け方のシーケンス</title>
+      <defs>
+        <marker id="b-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="f-green" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="b-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="f-blue" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="b-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="f-orange" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="b-band" x="10" y="78" width="1080" height="326" rx="10"/>
+      <rect class="b-band" x="10" y="420" width="1080" height="226" rx="10"/>
+      <rect class="b-band" x="10" y="662" width="1080" height="252" rx="10"/>
+
+      <rect class="b-cc" x="60" y="16" width="160" height="40" rx="8"/><text class="t2" x="140" y="41" text-anchor="middle">セッション</text>
+      <rect class="b-cc" x="320" y="16" width="160" height="40" rx="8"/><text class="t2" x="400" y="41" text-anchor="middle">フック</text>
+      <rect class="b-srv" x="600" y="16" width="160" height="40" rx="8"/><text class="t2" x="680" y="41" text-anchor="middle">常駐サーバー</text>
+      <rect class="b-web" x="880" y="16" width="160" height="40" rx="8"/><text class="t2" x="960" y="41" text-anchor="middle">ダッシュボード</text>
+      <line class="lifeline" x1="140" y1="56" x2="140" y2="920"/>
+      <line class="lifeline" x1="400" y1="56" x2="400" y2="920"/>
+      <line class="lifeline" x1="680" y1="56" x2="680" y2="920"/>
+      <line class="lifeline" x1="960" y1="56" x2="960" y2="920"/>
+      <rect class="mask" x="22" y="88" width="380" height="28"/>
+      <rect class="mask" x="50" y="376" width="1030" height="22"/>
+      <rect class="mask" x="22" y="430" width="380" height="28"/>
+      <rect class="mask" x="50" y="620" width="1030" height="22"/>
+      <rect class="mask" x="22" y="672" width="400" height="28"/>
+      <rect class="mask" x="50" y="890" width="1030" height="22"/>
+
+      <!-- ④ -->
+      <g class="badge" transform="translate(36,102)"><circle r="12" class="f-green"/><text>4</text></g>
+      <text class="t2" x="56" y="107">質問の回答待ち（離席中だけ・away.js）</text>
+      <path class="ln c-blue" d="M140,134 L398,134" marker-end="url(#b-blue)"/><text x="150" y="128">PreToolUse（AskUserQuestion）</text>
+      <path class="ln c-blue" d="M400,166 L678,166" marker-end="url(#b-blue)"/><text x="410" y="160">ask-register（判断事項を作り締切 5 分）</text>
+      <path class="ln c-orange dash" d="M680,198 L958,198" marker-end="url(#b-orange)"/><text x="690" y="192">判断事項を表示（⑩）</text>
+      <path class="ln c-blue" d="M400,230 L678,230" marker-end="url(#b-blue)"/><text x="410" y="224">ask-poll（最長 25 秒の待ちを繰り返す）</text>
+      <path class="ln c-orange" d="M960,262 L682,262" marker-end="url(#b-orange)"/><text x="700" y="256">回答を送る（⑪）</text>
+      <path class="ln c-green" d="M680,294 L402,294" marker-end="url(#b-green)"/><text x="420" y="288">outcome: answered</text>
+      <path class="ln c-blue" d="M400,326 L678,326" marker-end="url(#b-blue)"/><text x="410" y="320">ask-finish（結末を確定）</text>
+      <path class="ln c-green" d="M400,358 L142,358" marker-end="url(#b-green)"/><text x="156" y="352">updatedInput に answers を加える</text>
+      <text class="s" x="56" y="390">締切や保留では質問を deny し、推奨で続けさせる。離席中が解除されていればデスクトップアプリのダイアログへ戻す。</text>
+
+      <!-- ⑤ -->
+      <g class="badge" transform="translate(36,444)"><circle r="12" class="f-green"/><text>5</text></g>
+      <text class="t2" x="56" y="449">作業中・入力時の回答配信（answer.js）</text>
+      <path class="ln c-orange" d="M960,476 L682,476" marker-end="url(#b-orange)"/><text x="700" y="470">回答を送る（⑪）→ 配信待ち</text>
+      <path class="ln c-blue" d="M140,508 L398,508" marker-end="url(#b-blue)"/><text x="150" y="502">PostToolBatch（ツールの区切り）</text>
+      <path class="ln c-blue" d="M400,540 L678,540" marker-end="url(#b-blue)"/><text x="410" y="534">post-tool-batch</text>
+      <path class="ln c-green" d="M680,572 L402,572" marker-end="url(#b-green)"/><text x="410" y="566">回答・PR の通知・登録の促し</text>
+      <path class="ln c-green" d="M400,604 L142,604" marker-end="url(#b-green)"/><text x="156" y="598">additionalContext として文脈へ</text>
+      <text class="s" x="56" y="634">反映されていない回答は、開発者の入力時（UserPromptSubmit）に最大 3 回まで差し込み直す。</text>
+
+      <!-- ⑥ -->
+      <g class="badge" transform="translate(36,686)"><circle r="12" class="f-green"/><text>6</text></g>
+      <text class="t2" x="56" y="691">停止中の回答配信（answer.js・asyncRewake）</text>
+      <path class="ln c-blue" d="M140,718 L398,718" marker-end="url(#b-blue)"/><text x="150" y="712">Stop（応答を終えて停止）</text>
+      <path class="ln c-blue" d="M400,750 L678,750" marker-end="url(#b-blue)"/><text x="410" y="744">stop-start</text>
+      <path class="ln c-blue" d="M400,782 L678,782" marker-end="url(#b-blue)"/><text x="410" y="776">stop-poll（回答が来るまで待つ）</text>
+      <path class="ln c-orange" d="M960,814 L682,814" marker-end="url(#b-orange)"/><text x="700" y="808">回答を送る（⑪）</text>
+      <path class="ln c-green" d="M680,846 L402,846" marker-end="url(#b-green)"/><text x="420" y="840">回答</text>
+      <path class="ln c-green" d="M400,878 L142,878" marker-end="url(#b-green)"/><text x="156" y="872">セッションを起こして回答を渡す</text>
+      <text class="s" x="56" y="904">フックの待ちは最長 1 時間。セッションの親プロセスが終われば待ちをやめる。</text>
+    </svg>
+  </div>
+  <p class="caption">回答の本文は常駐サーバーのメモリーとフックの出力にだけ置く。許可のダイアログ（パーミッション）には答えない。</p>
+
+  <h2 id="s5">図 3　PR の登録からマージまで</h2>
+  <p>P1〜P6 は処理の順番。括弧内の丸数字は、図 1 で使う経路。</p>
+  <div class="figure" id="fig3">
+    <svg viewBox="0 0 1100 330" role="img" aria-labelledby="fig3-title">
+      <title id="fig3-title">PR の登録からマージまでの流れ</title>
+      <defs>
+        <marker id="c-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path class="f-gray" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <g>
+        <rect class="b-cc" x="20" y="20" width="320" height="120" rx="10"/>
+        <text class="t2" x="36" y="46">P1　PR を登録する</text>
+        <text class="s" x="36" y="70">セッションの gh pr create を</text>
+        <text class="s" x="36" y="88">イベントから検出する（①）か、</text>
+        <text class="s" x="36" y="106">cockpit_add_pr で登録する（⑧）</text>
+      </g>
+      <g>
+        <rect class="b-srv" x="390" y="20" width="320" height="120" rx="10"/>
+        <text class="t2" x="406" y="46">P2　状態を追う</text>
+        <text class="s" x="406" y="70">pull-requests.js が 60 秒ごとに</text>
+        <text class="s" x="406" y="88">PR・スタック・CI・レビューを取得（⑬）</text>
+        <text class="s" x="406" y="106">クロスレビューの状態も読む（⑯）</text>
+      </g>
+      <g>
+        <rect class="b-web" x="760" y="20" width="320" height="120" rx="10"/>
+        <text class="t2" x="776" y="46">P3　画面に出す</text>
+        <text class="s" x="776" y="70">PR スタック、CI、レビューを表示（⑩）</text>
+        <text class="s" x="776" y="88">マージできるのは base が既定ブランチの</text>
+        <text class="s" x="776" y="106">一番下の PR だけ</text>
+      </g>
+      <g>
+        <rect class="b-web" x="760" y="190" width="320" height="120" rx="10"/>
+        <text class="t2" x="776" y="216">P4　開発者が確認する</text>
+        <text class="s" x="776" y="240">方式とリモートブランチの削除を選び、</text>
+        <text class="s" x="776" y="258">画面で見た head の SHA を添えて送る（⑫）</text>
+        <text class="s" x="776" y="276">CI 待ちだけなら自動マージを予約できる</text>
+      </g>
+      <g>
+        <rect class="b-srv" x="390" y="190" width="320" height="120" rx="10"/>
+        <text class="t2" x="406" y="216">P5　マージする</text>
+        <text class="s" x="406" y="240">gh pr merge --match-head-commit（⑬）</text>
+        <text class="s" x="406" y="258">予約中に head が変われば予約を取り消す</text>
+        <text class="s" x="406" y="276">（15 秒ごとに確認）</text>
+      </g>
+      <g>
+        <rect class="b-cc" x="20" y="190" width="320" height="120" rx="10"/>
+        <text class="t2" x="36" y="216">P6　結果を知らせる</text>
+        <text class="s" x="36" y="240">作成元のセッションへ通知を配信待ちに置き、</text>
+        <text class="s" x="36" y="258">⑤ ⑥ の経路で届ける。上に積んだ PR が</text>
+        <text class="s" x="36" y="276">あれば積み直しを依頼する</text>
+      </g>
+      <path class="ln c-gray" d="M340,80 L388,80" marker-end="url(#c-gray)"/>
+      <path class="ln c-gray" d="M710,80 L758,80" marker-end="url(#c-gray)"/>
+      <path class="ln c-gray" d="M920,140 L920,188" marker-end="url(#c-gray)"/>
+      <path class="ln c-gray" d="M760,250 L712,250" marker-end="url(#c-gray)"/>
+      <path class="ln c-gray" d="M390,250 L342,250" marker-end="url(#c-gray)"/>
+    </svg>
+  </div>
+  <p class="caption">モデルにマージを指示する経路は無い。マージは開発者が画面で確認したときだけ、常駐サーバーが gh で行う。</p>
+
+  <h2 id="s6">保存先</h2>
+  <p>図 1 の下段の左側。<code>AGENT_COCKPIT_HOME</code> で場所を変えられる。</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>ファイル</th><th>書く側</th><th>読む側</th><th>中身と扱い</th></tr></thead>
+    <tbody>
+      <tr><td><code>server.json</code></td><td>サーバー</td><td>フック、MCP、トレイ（②⑰）</td><td>pid、port、secret、uiSecret、起動時刻。起動ごとに作り直し、停止時に消す。</td></tr>
+      <tr><td><code>store.json</code></td><td>サーバー</td><td>サーバー（再起動時）</td><td>MCP で登録したタスクと判断事項、回答の記録、表示設定、一覧から外したセッション。14 日を過ぎたものは消す。</td></tr>
+      <tr><td><code>away.json</code></td><td>サーバー</td><td>サーバー（再起動時）</td><td>離席中かどうかと、その開始時刻。</td></tr>
+      <tr><td><code>routing.json</code></td><td>サーバー（⑪）</td><td>route.js（⑦）</td><td>サブエージェントとクロスレビューの経路。読めなければ両方を「既定」とする。</td></tr>
+      <tr><td><code>route-agents/</code></td><td>route.js（⑦）</td><td>route.js</td><td>サブエージェントごとに開始時の経路を記録する。24 時間使われない記録は消す。</td></tr>
+      <tr><td><code>server.log</code></td><td>サーバー</td><td>開発者</td><td>起動、停止、書き込みの失敗。起動ごとに空にする。</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="hint">イベントから組み立てるセッションの状態とサブエージェントは保存せず、再起動後のイベントで組み立て直す。</p>
+
+  <h2 id="s7">信頼境界</h2>
+  <p>図 1 の常駐サーバーの左右にある破線の帯が、要求を受け付ける 2 つの口。</p>
+  <ul class="points">
+    <li><span class="tag">全体</span>127.0.0.1 だけで待ち受け、Host ヘッダーが <code>127.0.0.1:port</code> か <code>localhost:port</code> の要求だけを受ける。応答には iframe への埋め込みと別オリジンからの読み取りを塞ぐヘッダーを付ける。</li>
+    <li><span class="tag">フック・MCP 用の口</span>起動ごとに作る secret をヘッダーで照合し、Origin ヘッダーが付いた要求は拒否する。ブラウザーからの要求には必ず Origin が付くため、別の Web ページからイベントや回答を偽造できない。</li>
+    <li><span class="tag">画面用の口</span>secret とは別の uiSecret を照合し、Origin がダッシュボード自身であることを確かめる。画面から uiSecret が読めても、フック用の口（イベントの送信）は偽造できない。</li>
+    <li><span class="tag">ファイル</span>secret と uiSecret は <code>server.json</code> にだけ置く。<code>~/.claude/sessions</code> は公開仕様ではないため、読めない項目は黙って飛ばす。</li>
+    <li><span class="tag">許可</span>許可待ちは表示だけで、ダッシュボードから許可を出す口は無い。</li>
+  </ul>
+</main>
+<script>
+(() => {
+  const svg = document.querySelector('#fig1 svg');
+  const flows = svg.querySelectorAll('.flow');
+  const rows = document.querySelectorAll('tr[data-flow]');
+
+  function focusFlow(id) {
+    svg.classList.add('focusing');
+    flows.forEach((el) => el.classList.toggle('on', el.dataset.flow === id));
+    rows.forEach((el) => el.classList.toggle('on', el.dataset.flow === id));
+  }
+  function clearFocus() {
+    svg.classList.remove('focusing');
+    flows.forEach((el) => el.classList.remove('on'));
+    rows.forEach((el) => el.classList.remove('on'));
+  }
+
+  rows.forEach((row) => {
+    row.tabIndex = 0;
+    row.addEventListener('mouseenter', () => focusFlow(row.dataset.flow));
+    row.addEventListener('focus', () => focusFlow(row.dataset.flow));
+    row.addEventListener('mouseleave', clearFocus);
+    row.addEventListener('blur', clearFocus);
+  });
+  flows.forEach((flow) => {
+    flow.addEventListener('mouseenter', () => focusFlow(flow.dataset.flow));
+    flow.addEventListener('mouseleave', clearFocus);
+    flow.querySelectorAll('.badge').forEach((badge) => {
+      badge.addEventListener('click', () => {
+        const row = document.querySelector(`tr[data-flow="${flow.dataset.flow}"]`);
+        if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
