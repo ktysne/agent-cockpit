@@ -401,11 +401,12 @@ const DATA = {
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前', autoDeleteBranch: true },
       // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。
       // worktree に tools/cross-review.js はあるがこのブランチの記録が無い PR は null、tools/cross-review.js が無い(ai-cross-review を使っていない)PR には付けない。
+      // triage は主セッションが記録した最後の結論(lastTriage)。記録が無ければ付けない。
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false,
-          xr: { round: 2, reviewedSha: 'a1c9e04', dismissed: 0 } },
+          xr: { round: 2, reviewedSha: 'a1c9e04', dismissed: 0, triage: { round: 2, sha: 'a1c9e04', outcome: 'converged' } } },
         { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false,
-          xr: { round: 2, reviewedSha: '5c8e1d0', dismissed: 1 } },
+          xr: { round: 2, reviewedSha: '5c8e1d0', dismissed: 1, triage: { round: 1, sha: '2f7a9c3', outcome: 'fixing' } } },
         { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true,
           xr: null },
       ],
@@ -456,7 +457,7 @@ const DATA = {
       repo: { name: 'ktysne/agent-gc', defaultBranch: 'main', methods: ['merge', 'squash', 'rebase'], fetched: '1 分前' },
       prs: [
         { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false,
-          xr: { round: 1, reviewedSha: '3b9e5d0', dismissed: 0 } },
+          xr: { round: 1, reviewedSha: '3b9e5d0', dismissed: 0, triage: { round: 1, sha: '3b9e5d0', outcome: 'fixing' } } },
         { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false,
           xr: null },
         { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
@@ -844,10 +845,19 @@ function decisionCard(p, session, d, withTag) {
 }
 
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-// 状態ファイルにはレビューが終わったかも指摘が残っているかも無いので、head が一致しても「済み」とは言わない。
+// 「レビュー済み」は、主セッションが記録した結論が converged で、その SHA が今の head のときだけ言う。
+// 結論の記録が無ければ、最後にレビューに回した head との比較だけを出す。
 function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
   if (!pr.xr) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  const t = pr.xr.triage;
+  if (t && pr.xr.round > t.round) return { cls: 'warn', text: `${pr.xr.round} 往復目の結論待ち`, warn: `クロスレビューの ${pr.xr.round} 往復目の結論がまだ出ていない` };
+  if (t && t.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${t.round} 往復目の指摘に対応している途中` };
+  if (t && t.outcome === 'halted') return { cls: 'warn', text: '開発者の判断待ち', warn: 'クロスレビューは開発者の判断を待って止まっている' };
+  if (t && t.outcome === 'converged') {
+    if (t.sha === pr.sha) return { cls: 'ok', text: 'レビュー済み', warn: null, note: `クロスレビューはこの head で収束した (${t.round} 往復目)` };
+    return { cls: 'warn', text: `収束の後に変更あり (収束 ${t.sha})`, warn: `head ${pr.sha} はクロスレビューの収束の後に変更されている (収束は ${t.sha})` };
+  }
   if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
   return { cls: 'mute', text: 'この head をレビューに回した', warn: null, note: 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる' };
 }
