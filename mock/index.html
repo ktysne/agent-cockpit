@@ -401,13 +401,15 @@ const DATA = {
       ],
       // autoDeleteBranch は GitHub の「マージ後に head ブランチを自動で削除する」設定。
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前', autoDeleteBranch: true },
-      // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。記録が無い PR には付けない。
+      // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。
+      // 状態ファイルはあるがこのブランチの記録が無い PR は null、状態ファイルが無い(ai-cross-review を使っていない)PR には付けない。
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false,
           xr: { round: 2, reviewedSha: 'a1c9e04', dismissed: 0 } },
         { number: 142, title: 'Session Score の読み込みと拍子変更', head: 'feat/session-score-import', base: 'feat/score-parser', sha: '7d2b311', ci: 'pending', review: 'required', conflict: false, draft: false,
           xr: { round: 2, reviewedSha: '5c8e1d0', dismissed: 1 } },
-        { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true },
+        { number: 143, title: '読み込み結果のプレビュー表示', head: 'feat/score-preview', base: 'feat/session-score-import', sha: 'e04f8aa', ci: 'pass', review: 'required', conflict: false, draft: true,
+          xr: null },
       ],
       extraSessions: [
         {
@@ -457,7 +459,8 @@ const DATA = {
       prs: [
         { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false,
           xr: { round: 1, reviewedSha: '3b9e5d0', dismissed: 0 } },
-        { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false },
+        { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false,
+          xr: null },
         { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
       ],
     },
@@ -496,6 +499,8 @@ const DATA = {
   connection: { lost: false, lastAt: '14:32' },
   // 画面のファイルが新しくなったが、書きかけの回答があるので読み込み直しを待っている状態。書きかけが無ければ知らせを出さずに読み込み直す。
   uiUpdatePending: false,
+  // codexAgent は claude-codex-bridge の ~/.claude/tools/codex-agent.sh があるか。無ければ経路の欄と経路の札を出さない。
+  integrations: { codexAgent: true },
 };
 
 for (const p of DATA.products) {
@@ -668,21 +673,21 @@ const ROUTE = {
 const routeName = (k, v) => ROUTE[k].opts.find(o => o.v === v).t;
 
 function routeTag(s) {
-  if (!s.route || s.state !== 'busy') return '';
+  if (!DATA.integrations.codexAgent || !s.route || s.state !== 'busy') return '';
   const stale = s.route !== ui.routing.agents;
   return `<span class="route-tag ${stale ? 'stale' : ''}" title="起動時に効いていた経路の設定">経路: ${esc(routeName('agents', s.route))}${stale ? ' (変更前)' : ''}</span>`;
 }
 
 function renderRouting() {
-  // クロスレビューの経路は ai-cross-review がレビューの時点で設定を引くまで効かないので、選べなくする。
-  const row = k => {
-    const unsupported = k === 'review';
-    return `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
-      <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路"${unsupported ? ' aria-describedby="route-review-status"' : ''}>${ROUTE[k].opts.map(o =>
-        `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}"${unsupported ? ' disabled' : ''}>${o.t}</button>`).join('')}${unsupported ? '<span id="route-review-status" class="rstatus">未対応</span>' : ''}</div>
+  // クロスレビューの経路は ai-cross-review がレビューの時点で設定を引くまで効かないので、段を出さない。
+  const routing = document.getElementById('routing');
+  routing.hidden = !DATA.integrations.codexAgent;
+  if (routing.hidden) { routing.innerHTML = ''; return; }
+  const row = k => `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
+      <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路">${ROUTE[k].opts.map(o =>
+        `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
       </div>`;
-  };
-  document.getElementById('routing').innerHTML = `<div class="rgroup">${row('agents')}${row('review')}</div>`;
+  routing.innerHTML = `<div class="rgroup">${row('agents')}</div>`;
   layoutRouting();
 }
 
@@ -855,12 +860,14 @@ function decisionCard(p, session, d, withTag) {
 const CROSS_REVIEW_MAX_ROUNDS = 3;
 // 状態ファイルにはレビューが終わったかも指摘が残っているかも無いので、head が一致しても「済み」とは言わない。
 function crossReviewState(pr) {
+  if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
   if (!pr.xr) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
   if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
   return { cls: 'mute', text: 'この head をレビューに回した', warn: null, note: 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる' };
 }
 
 function crossReviewLine(pr) {
+  if (pr.xr === undefined) return '';
   const state = crossReviewState(pr);
   if (!pr.xr) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span></div>`;
   const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');

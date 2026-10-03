@@ -120,7 +120,7 @@ PostToolUse の出力全文は送らない。
 
 PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
 常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとと `git push` または `gh pr` の後にリポジトリの状態を取得する。
-base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha` を設定する。セッションが登録したオープン PR で記録が無いものは `crossReview: null` とする。登録の無い関連 PR とマージ済み PR には設定せず、画面は行も確認欄の警告も出さない。状態ファイルは登録したセッションの worktree にしか無いためである。
+base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha` を設定する。セッションが登録したオープン PR で、worktree に状態ファイルはあるがそのブランチの記録が無いものは `crossReview: null` とする。状態ファイルが無い PR、登録の無い関連 PR、マージ済み PR には設定せず、画面は行も確認欄の警告も出さない。状態ファイルは ai-cross-review を使う worktree にしか無いためである。
 積み直し待ちは、GitHub のマージ済み PR の head SHA が各オープン PR の既定ブランチとの compare に残っているかで判定し、compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 取得と判定の詳細は [計画書](../handover/2026-10-02.md) の「段階 5、6 の設計(PR の表示とマージ)」を正本とする。
@@ -233,7 +233,9 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 `GET /api/state` は現在の経路を返す。`event.js` は `SubagentStart` の送信時に `agents` の値を `route` として記録し、画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
 同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。記録は読むたびに更新時刻を進め、開始時に 24 時間使われていない記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
-クロスレビューの画面操作は ai-cross-review 側の経路切替に対応するまで無効にし、「未対応」と表示する。`POST /api/routing` は `review` の値も引き続き受け付ける。
+クロスレビューの段は ai-cross-review 側の経路切替に対応するまで画面に出さない。`POST /api/routing` は `review` の値も引き続き受け付ける。
+
+経路の切り替えは claude-codex-bridge の `codex-agent.sh` があるときだけ意味を持つ。`GET /api/state` は Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)に `tools/codex-agent.sh` があるかを `integrations.codexAgent` で返し、画面は無ければ経路の欄と経路の札を出さない。`route.js` も同じ場所を確かめ、無ければ `SubagentStart` で何も差し込まない。
 
 ## 秘匿
 
