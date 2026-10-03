@@ -612,6 +612,31 @@ async function postUiAction(url, body) {
   return response;
 }
 
+async function openExternalLink(url) {
+  try {
+    const response = await postUiAction('/api/open-url', { url });
+    if (response.status === 204) return;
+  } catch {
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function handleExternalLink(event) {
+  const link = event.target.closest?.('a[target="_blank"]');
+  if (!link) return false;
+  let url;
+  try {
+    const parsed = new URL(link.href, window.location.href);
+    if (parsed.protocol !== 'https:' || parsed.origin === window.location.origin) return false;
+    url = parsed.href;
+  } catch {
+    return false;
+  }
+  event.preventDefault();
+  void openExternalLink(url);
+  return true;
+}
+
 function postAway(enabled) {
   return postUiAction('/api/away', { enabled });
 }
@@ -2564,6 +2589,7 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
 }
 
 document.addEventListener('click', (event) => {
+  if (event.button === 0 && handleExternalLink(event)) return;
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.route) {
@@ -2696,6 +2722,10 @@ document.addEventListener('click', (event) => {
     saveDisplayPreferences({ [changedKey]: displayPreferences[changedKey] });
     if (lastState) render(lastState);
   }
+});
+
+document.addEventListener('auxclick', (event) => {
+  if (event.button === 1) handleExternalLink(event);
 });
 
 document.addEventListener('change', (event) => {

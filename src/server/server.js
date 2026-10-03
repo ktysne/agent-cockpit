@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
@@ -17,6 +18,7 @@ const { parsePullRequestUrl, isGithubCreatePullRequestTool } = require('./pull-r
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_EXTERNAL_URL_LENGTH = 2048;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 128;
@@ -133,6 +135,28 @@ function validRequiredUiOrigin(request, port) {
     (fetchSite === undefined || fetchSite === 'same-origin');
 }
 
+function validExternalUrl(value) {
+  if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function defaultOpenExternalUrl(url) {
+  const [command, args] = process.platform === 'win32'
+    ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
+    : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  return new Promise((resolve, reject) => {
+    const child = execFile(command, args, { detached: true, shell: false, stdio: 'ignore', windowsHide: true }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+    child.unref();
+  });
+}
+
 function escapeHtmlAttribute(value) {
   return String(value).replace(/[&"'<>]/g, (character) => ({
     '&': '&amp;',
@@ -245,6 +269,7 @@ function createRequestHandler(options) {
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists = defaultCodexAgentScriptExists,
+    openExternalUrl = defaultOpenExternalUrl,
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
   let cachedUiFileStamp = null;
@@ -757,6 +782,36 @@ function createRequestHandler(options) {
       }
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/open-url') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) || !validExternalUrl(body.url)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      try {
+        await openExternalUrl(body.url);
+        response.writeHead(204, SECURITY_HEADERS);
+        response.end();
+      } catch {
+        jsonResponse(response, 500, { error: 'Internal Server Error' });
+      }
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/events') {
       if (request.headers['x-cockpit-secret'] !== info.secret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -1030,6 +1085,7 @@ async function startServer(options = {}) {
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists: options.codexAgentScriptExists,
+    openExternalUrl: options.openExternalUrl,
     webPath: options.webPath,
     dev,
     getServerInfo: () => info,

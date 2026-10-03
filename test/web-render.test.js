@@ -181,6 +181,97 @@ function taskRenderHarness() {
   return { context, render, descendants };
 }
 
+function externalLinkHarness(responseStatus) {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const postUiAction = html.match(/async function postUiAction\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
+  const openExternalLink = html.match(/async function openExternalLink\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
+  const handleExternalLink = html.match(/function handleExternalLink\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
+  const clickStart = html.indexOf("document.addEventListener('click', (event) => {", html.indexOf('function handleExternalLink'));
+  const clickEnd = html.indexOf('\n});', clickStart) + '\n});'.length;
+  const auxclickStart = html.indexOf("document.addEventListener('auxclick', (event) => {", clickEnd);
+  const auxclickEnd = html.indexOf('\n});', auxclickStart) + '\n});'.length;
+  assert.ok(postUiAction && openExternalLink && handleExternalLink);
+  assert.ok(clickStart >= 0 && clickEnd > clickStart);
+  assert.ok(auxclickStart >= 0 && auxclickEnd > auxclickStart);
+
+  const listeners = {};
+  const requests = [];
+  const openedWindows = [];
+  const context = vm.createContext({
+    URL,
+    document: {
+      addEventListener: (type, listener) => { listeners[type] = listener; },
+      querySelector: () => ({ content: 'ui-secret' }),
+    },
+    window: {
+      location: { href: 'http://127.0.0.1:47821/', origin: 'http://127.0.0.1:47821' },
+      open: (...args) => openedWindows.push(args),
+    },
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return { status: responseStatus };
+    },
+  });
+  vm.runInContext([
+    postUiAction,
+    openExternalLink,
+    handleExternalLink,
+    html.slice(clickStart, clickEnd),
+    html.slice(auxclickStart, auxclickEnd),
+  ].join('\n'), context);
+  return { listeners, requests, openedWindows };
+}
+
+test('外部 HTTPS リンクのクリックをサーバーへ送り、失敗時だけウィンドウで開く', async () => {
+  const harness = externalLinkHarness(500);
+  const link = {
+    href: 'https://github.com/acme/widget/pull/42',
+    closest: (selector) => selector === 'a[target="_blank"]' ? link : null,
+  };
+  let defaultPrevented = false;
+  harness.listeners.click({ target: link, button: 0, preventDefault: () => { defaultPrevented = true; } });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(defaultPrevented, true);
+  assert.equal(harness.requests[0].url, '/api/open-url');
+  assert.equal(harness.requests[0].options.method, 'POST');
+  assert.deepEqual(JSON.parse(harness.requests[0].options.body), { url: link.href });
+  assert.deepEqual(harness.openedWindows, [[link.href, '_blank', 'noopener,noreferrer']]);
+
+  const httpLink = {
+    href: 'http://example.com',
+    closest: (selector) => selector === 'a[target="_blank"]' ? httpLink : null,
+  };
+  let httpDefaultPrevented = false;
+  harness.listeners.click({ target: httpLink, button: 0, preventDefault: () => { httpDefaultPrevented = true; } });
+  assert.equal(httpDefaultPrevented, false);
+  assert.equal(harness.requests.length, 1);
+
+  const middleLink = { ...link };
+  let middleDefaultPrevented = false;
+  harness.listeners.auxclick({
+    target: middleLink,
+    button: 1,
+    preventDefault: () => { middleDefaultPrevented = true; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(middleDefaultPrevented, true);
+  assert.equal(harness.requests.length, 2);
+});
+
+test('外部 HTTPS リンクをサーバーが開けたときはフォールバックを使わない', async () => {
+  const harness = externalLinkHarness(204);
+  const link = {
+    href: 'https://github.com/acme/widget/actions',
+    closest: (selector) => selector === 'a[target="_blank"]' ? link : null,
+  };
+  harness.listeners.click({ target: link, button: 0, preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.requests.length, 1);
+  assert.deepEqual(harness.openedWindows, []);
+});
+
 test('同じ画面の版では読み込み直さない', () => {
   const harness = reloadHarness('v1');
   assert.equal(harness.context.checkUiVersion({ uiVersion: 'v1' }), false);
@@ -662,6 +753,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   const context = vm.createContext({
     displayPreferences,
     lastState: state,
+    handleExternalLink: () => false,
     document: { addEventListener: (_name, callback) => { handleClick = callback; } },
     saveDisplayPreferences: (patch) => {
       saved.push(patch);

@@ -356,6 +356,46 @@ test('経路設定 API は画面秘密値と必須 Origin を照合し、保存�
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).routing, jsonBody(saved));
 });
 
+test('外部リンク API は画面秘密値と Origin を照合し、安全な HTTPS URL だけを開く', async (t) => {
+  const openedUrls = [];
+  let failOpen = false;
+  const runtime = await runningServer(t, {
+    openExternalUrl: async (url) => {
+      openedUrls.push(url);
+      if (failOpen) throw new Error('open failed');
+    },
+  });
+  const endpoint = '/api/open-url';
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+  const send = (url, requestHeaders = headers) => request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ url }), headers: requestHeaders,
+  });
+
+  assert.equal((await send('https://github.com/acme/widget/pull/42', { 'content-type': 'application/json', origin })).status, 401);
+  assert.equal((await send('https://github.com/acme/widget/pull/42', { ...headers, origin: 'https://other.example' })).status, 403);
+
+  for (const url of [
+    'http://example.com',
+    'javascript:alert(1)',
+    'https://example.com/with\ncontrol',
+    `https://example.com/${'a'.repeat(2048)}`,
+  ]) {
+    assert.equal((await send(url)).status, 400, url.slice(0, 40));
+  }
+  assert.deepEqual(openedUrls, []);
+
+  const url = 'https://github.com/acme/widget/pull/42';
+  const opened = await send(url);
+  assert.equal(opened.status, 204);
+  assert.equal(opened.body, '');
+  assert.deepEqual(openedUrls, [url]);
+
+  failOpen = true;
+  assert.equal((await send(url)).status, 500);
+  assert.deepEqual(openedUrls, [url, url]);
+});
+
 test('壊れた離席状態は離席中ではない状態として読む', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   await fs.writeFile(path.join(homeDir, 'away.json'), '{invalid');
