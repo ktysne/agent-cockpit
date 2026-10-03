@@ -424,6 +424,14 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
     const branchState = parsed?.branches?.[branch];
     if (!branchState || !Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return null;
     const lastReviewedSha = branchState.lastReviewedSha;
+    const lastTriage = branchState.lastTriage;
+    const triageSha = lastTriage?.sha;
+    const triageOutcome = lastTriage?.outcome;
+    const triage = Number.isSafeInteger(lastTriage?.round) && lastTriage.round >= 1
+      && typeof triageSha === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(triageSha)
+      && ['fixing', 'converged', 'halted'].includes(triageOutcome)
+      ? { round: lastTriage.round, sha: triageSha.toLowerCase(), outcome: triageOutcome }
+      : null;
     return {
       number: registration.number,
       branch,
@@ -433,19 +441,23 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
       reviewedSha: typeof lastReviewedSha === 'string' && /^[0-9a-f]{40}$/i.test(lastReviewedSha)
         ? lastReviewedSha.toLowerCase()
         : null,
+      triage,
     };
   } catch {
     return null;
   }
 }
 
-// 記録のある worktree を優先し、同じ優先度なら今の head をレビューした記録を選ぶ。
+// 記録のある worktree を優先し、同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。
 function shouldReplaceCrossReview(current, candidate, headSha) {
   const priority = (review) => review === undefined ? 0 : review === null ? 1 : 2;
   const currentPriority = priority(current);
   const candidatePriority = priority(candidate);
   if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
   if (!current || !candidate) return false;
+  const head = String(headSha || '').toLowerCase();
+  const convergedAtHead = (review) => review.triage?.outcome === 'converged' && review.triage.sha === head;
+  if (convergedAtHead(current) !== convergedAtHead(candidate)) return convergedAtHead(candidate);
   return current.reviewedSha !== headSha;
 }
 
@@ -846,6 +858,7 @@ class PullRequestTracker {
         max: review.max,
         dismissed: review.dismissed,
         reviewedSha: review.reviewedSha,
+        triage: review.triage,
       });
     }
     for (const [productKey, group] of productGroups) {

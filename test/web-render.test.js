@@ -390,6 +390,75 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 この head をレビューに回した');
   assert.equal(reviewedBadge.className, 'badge mute');
 
+  const waitingForTriage = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } },
+  });
+  assert.equal(waitingForTriage.text, '3 往復目の結論待ち');
+  assert.equal(waitingForTriage.warn, 'クロスレビューの 3 往復目の結論がまだ出ていない');
+
+  const convergedButNextRound = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } },
+  });
+  assert.deepEqual([convergedButNextRound.text, convergedButNextRound.cls], ['3 往復目の結論待ち', 'warn']);
+
+  const triageAheadOfRound = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 1, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 3, sha: 'b'.repeat(40), outcome: 'fixing' } },
+  });
+  assert.equal(triageAheadOfRound.text, 'この head をレビューに回した');
+
+  const fixing = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } },
+  });
+  assert.equal(fixing.text, '指摘の対応中');
+  assert.equal(fixing.warn, 'クロスレビューの 2 往復目の指摘に対応している途中');
+
+  const halted = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'halted' } },
+  });
+  assert.equal(halted.text, '開発者の判断待ち');
+  assert.equal(halted.warn, 'クロスレビューは開発者の判断を待って止まっている');
+
+  const converged = line({
+    headRefOid: 'c'.repeat(64),
+    crossReview: {
+      round: 2, max: 3, dismissed: 1, reviewedSha: null,
+      triage: { round: 2, sha: 'c'.repeat(64).toUpperCase(), outcome: 'converged' },
+    },
+  });
+  const convergedBadge = allNodes(converged).find((node) => node.className?.startsWith('badge'));
+  assert.equal(convergedBadge.textContent, 'レビュー済み');
+  assert.equal(convergedBadge.className, 'badge ok');
+  assert.equal(context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: null, triage: { round: 2, sha: headSha, outcome: 'converged' } },
+  }).warn, null);
+
+  const changedAfterConvergence = context.crossReviewState({
+    headRefOid: 'c'.repeat(40),
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(64), outcome: 'converged' } },
+  });
+  assert.equal(changedAfterConvergence.text, '収束の後に変更あり (収束 bbbbbbb)');
+  assert.equal(changedAfterConvergence.warn, 'head ccccccc はクロスレビューの収束の後に変更されている (収束は bbbbbbb)');
+  const changedConvergenceLine = line({
+    headRefOid: 'c'.repeat(40),
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(64), outcome: 'converged' } },
+  });
+  const changedConvergenceBadge = allNodes(changedConvergenceLine).find((node) => node.className?.startsWith('badge'));
+  assert.equal(changedConvergenceBadge.textContent, '収束の後に変更あり (収束 bbbbbbb)');
+  assert.equal(changedConvergenceBadge.className, 'badge warn');
+
+  const unverifiableConvergence = context.crossReviewState({
+    headRefOid: 'short-sha',
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } },
+  });
+  assert.equal(unverifiableConvergence.text, 'head を確かめられない');
+  assert.equal(unverifiableConvergence.warn, 'head を確かめられない');
+
   const unverifiable = line({
     headRefOid: headSha,
     crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: null },
@@ -474,6 +543,29 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
   });
   assert.equal(unverifiableEffects[0].className, 'warn');
   assert.equal(unverifiableEffects[0].textContent, 'head を確かめられない');
+
+  const triageWarnings = [
+    [{ round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } }, 'クロスレビューの 3 往復目の結論がまだ出ていない'],
+    [{ round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } }, 'クロスレビューの 2 往復目の指摘に対応している途中'],
+    [{ round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'halted' } }, 'クロスレビューは開発者の判断を待って止まっている'],
+  ];
+  for (const [review, message] of triageWarnings) {
+    const effects = confirmation(false, review);
+    assert.equal(effects[0].className, 'warn');
+    assert.equal(effects[0].textContent, message);
+  }
+  const convergedEffects = confirmation(false, {
+    round: 2, max: 3, dismissed: 0, reviewedSha: null,
+    triage: { round: 2, sha: headSha, outcome: 'converged' },
+  });
+  assert.equal(convergedEffects[0].className, '');
+  assert.equal(convergedEffects[0].textContent, 'クロスレビューはこの head で収束した (2 往復目)');
+  const changedConvergenceEffects = confirmation(false, {
+    round: 2, max: 3, dismissed: 0, reviewedSha: headSha,
+    triage: { round: 2, sha: 'b'.repeat(40), outcome: 'converged' },
+  });
+  assert.equal(changedConvergenceEffects[0].className, 'warn');
+  assert.equal(changedConvergenceEffects[0].textContent, 'head aaaaaaa はクロスレビューの収束の後に変更されている (収束は bbbbbbb)');
 });
 
 test('マージできる PR の件数タグはほかの件数タグと同じ形式で表示する', () => {
