@@ -842,6 +842,34 @@ for (const [higher, lower] of [['valid', 'missing'], ['valid', 'null'], ['null',
   }
 }
 
+test('同じ PR のクロスレビュー登録は、今の head で収束した記録を今の head をレビューした記録より優先する', async (t) => {
+  const headSha = 'a'.repeat(40);
+  const roots = {};
+  const branches = {
+    reviewedAtHead: { round: 2, dismissed: [], lastReviewedSha: headSha },
+    convergedAtHead: { round: 2, dismissed: [], lastReviewedSha: 'b'.repeat(40), lastTriage: { round: 2, sha: headSha, outcome: 'converged' } },
+  };
+  for (const name of Object.keys(branches)) {
+    roots[name] = await temporaryDirectory(t);
+    await fs.mkdir(path.join(roots[name], '.git'));
+    await installCrossReview(roots[name]);
+    await fs.writeFile(path.join(roots[name], '.cross-review-state.json'), JSON.stringify({ branches: { 'feat/open': branches[name] } }));
+  }
+  const { github, tracker } = await trackerFixture(t, []);
+  for (const name of ['reviewedAtHead', 'convergedAtHead']) {
+    tracker.state.registerPullRequest(`session-${name}`, { url: 'https://github.com/example/project/pull/31' }, {
+      cwd: roots[name], product: { key: 'project', name: 'project' },
+    });
+  }
+  github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
+  github.comparisons.set(headSha, compareResult([headSha]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const [group] = tracker.snapshot();
+  assert.deepEqual(group.trees[0].crossReview.triage, { round: 2, sha: headSha, outcome: 'converged' });
+});
+
 test('マージ済みの一覧を最古のオープン PR の作成日以降に絞り、上限で切れたら積み直しを確かめられないとする', async (t) => {
   const { github, calls, tracker } = await trackerFixture(t);
   const childSha = 'b'.repeat(40);

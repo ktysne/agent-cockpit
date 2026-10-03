@@ -448,13 +448,16 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   }
 }
 
-// 記録のある worktree を優先し、同じ優先度なら今の head をレビューした記録を選ぶ。
+// 記録のある worktree を優先し、同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。
 function shouldReplaceCrossReview(current, candidate, headSha) {
   const priority = (review) => review === undefined ? 0 : review === null ? 1 : 2;
   const currentPriority = priority(current);
   const candidatePriority = priority(candidate);
   if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
   if (!current || !candidate) return false;
+  const head = String(headSha || '').toLowerCase();
+  const convergedAtHead = (review) => review.triage?.outcome === 'converged' && review.triage.sha === head;
+  if (convergedAtHead(current) !== convergedAtHead(candidate)) return convergedAtHead(candidate);
   return current.reviewedSha !== headSha;
 }
 

@@ -924,12 +924,12 @@ function isCompleteCommitSha(value) {
 }
 
 // 「レビュー済み」は、主セッションが記録した結論が converged で、その SHA が今の head のときだけ言う。
-// 結論の記録が無ければ、最後にレビューに回した head との比較だけを出す。
+// 結論の記録が無いか往復の数が合わなければ、最後にレビューに回した head との比較だけを出す。
 function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
   if (!review) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
-  const triage = review.triage;
+  const triage = review.triage && review.triage.round <= review.round ? review.triage : null;
   if (triage && review.round > triage.round) return { cls: 'warn', text: `${review.round} 往復目の結論待ち`, warn: `クロスレビューの ${review.round} 往復目の結論がまだ出ていない` };
   if (triage && triage.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${triage.round} 往復目の指摘に対応している途中` };
   if (triage && triage.outcome === 'halted') return { cls: 'warn', text: '開発者の判断待ち', warn: 'クロスレビューは開発者の判断を待って止まっている' };

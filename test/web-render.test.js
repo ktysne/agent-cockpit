@@ -397,6 +397,18 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(waitingForTriage.text, '3 往復目の結論待ち');
   assert.equal(waitingForTriage.warn, 'クロスレビューの 3 往復目の結論がまだ出ていない');
 
+  const convergedButNextRound = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 3, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } },
+  });
+  assert.deepEqual([convergedButNextRound.text, convergedButNextRound.cls], ['3 往復目の結論待ち', 'warn']);
+
+  const triageAheadOfRound = context.crossReviewState({
+    headRefOid: headSha,
+    crossReview: { round: 1, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 3, sha: 'b'.repeat(40), outcome: 'fixing' } },
+  });
+  assert.equal(triageAheadOfRound.text, 'この head をレビューに回した');
+
   const fixing = context.crossReviewState({
     headRefOid: headSha,
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } },
