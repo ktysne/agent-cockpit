@@ -4,6 +4,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+function reloadHarness(initialUiVersion, draftCount = 0) {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const renderReloadNote = html.match(/function renderReloadNote\(pending\) \{[\s\S]*?\n\}/)?.[0];
+  const checkUiVersion = html.match(/function checkUiVersion\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const reloadNow = html.match(/function reloadNow\(event\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(renderReloadNote);
+  assert.ok(checkUiVersion);
+  assert.ok(reloadNow);
+
+  let reloadCount = 0;
+  const reloadNote = { hidden: true, innerHTML: '' };
+  const context = vm.createContext({
+    initialUiVersion,
+    uiUpdatePending: false,
+    answerDrafts: new Map(Array.from({ length: draftCount }, (_, index) => [String(index), {}])),
+    reloadNote,
+    location: { reload: () => { reloadCount += 1; } },
+  });
+  vm.runInContext(`${renderReloadNote}\n${checkUiVersion}\n${reloadNow}`, context);
+  return {
+    context,
+    reloadNote,
+    get reloadCount() { return reloadCount; },
+  };
+}
+
 function renderHarness(initialDraftNote = '保存済みの下書き') {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
@@ -112,6 +138,51 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     html,
   };
 }
+
+test('同じ画面の版では読み込み直さない', () => {
+  const harness = reloadHarness('v1');
+  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v1' }), false);
+  assert.equal(harness.reloadCount, 0);
+  assert.equal(harness.reloadNote.hidden, true);
+});
+
+test('サーバーの画面の版が null なら読み込み直さない', () => {
+  const harness = reloadHarness('v1');
+  assert.equal(harness.context.checkUiVersion({ uiVersion: null }), false);
+  assert.equal(harness.reloadCount, 0);
+  assert.equal(harness.reloadNote.hidden, true);
+});
+
+test('新しい画面の版は下書きが無ければ読み込み直す', () => {
+  const harness = reloadHarness('v1');
+  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v2' }), true);
+  assert.equal(harness.reloadCount, 1);
+});
+
+test('新しい画面の版は下書きがあれば知らせ、下書きが消えた後に読み込む', () => {
+  const harness = reloadHarness('v1', 1);
+  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v2' }), false);
+  assert.equal(harness.reloadCount, 0);
+  assert.equal(harness.reloadNote.hidden, false);
+  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
+
+  harness.context.answerDrafts.clear();
+  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v2' }), true);
+  assert.equal(harness.reloadCount, 1);
+});
+
+test('自分の画面の版が空なら読み込み直さない', () => {
+  const harness = reloadHarness('');
+  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v2' }), false);
+  assert.equal(harness.reloadCount, 0);
+  assert.equal(harness.reloadNote.hidden, true);
+});
+
+test('今すぐ読み込み直す操作は下書きがあっても再読み込みする', () => {
+  const harness = reloadHarness('v1', 1);
+  harness.context.reloadNow({ target: { closest: (selector) => selector === '[data-reload-now]' } });
+  assert.equal(harness.reloadCount, 1);
+});
 
 test('作業中ツールは表示幅を超えた部分を CSS の省略記号で示す', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
