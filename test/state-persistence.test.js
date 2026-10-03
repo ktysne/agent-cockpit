@@ -598,6 +598,27 @@ test('関連PR登録だけが残るマージも前回見てからに表示する
   )));
 });
 
+test('関連PRのマージはそのPRをマージ済みとして載せるPR群のプロダクトに表示する', () => {
+  const state = new DashboardState();
+  const owner = 'example';
+  const repo = 'project';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  state.rememberRelatedPullRequest({
+    owner, repo, number: 13, url: `https://github.com/${owner}/${repo}/pull/13`,
+    lastOpen: { title: '親のPR', url: `https://github.com/${owner}/${repo}/pull/13`, headRefName: 'parent', baseRefName: 'main', headRefOid: '' },
+  }, Date.parse(mergedAt));
+  state.updateRelatedPullRequest(owner, repo, 13, { state: 'merged', mergedAt });
+  state.setProductSeen(product.key, now - 3 * DAY_MS);
+  const pullRequestGroups = [{ product, owner, repo, merged: [{ number: 13, state: 'merged' }] }];
+
+  const result = state.snapshotSinceSeen([], pullRequestGroups, now);
+
+  assert.deepEqual(result.sinceSeen.map((entry) => entry.product.key), [product.key]);
+  assert.ok(result.sinceSeen[0].items.some((item) => item.text === 'PR #13(親のPR)をマージした'));
+});
+
 test('20日前の既読時刻は参照記録が残る間維持して保持中の項目を未読にする', () => {
   const state = new DashboardState();
   const product = { key: 'C:\\project', name: 'project' };

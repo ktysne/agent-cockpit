@@ -2081,15 +2081,17 @@ class DashboardState {
         mergedAt: record.mergedAt,
       });
     }
+    // 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
     const productsForMergedPullRequest = (merged) => {
-      const sessionRegistrations = registrations.filter((record) => (
-        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
-      ));
-      if (!sessionRegistrations.length) return [repoProduct(merged.owner, merged.repo)];
-      return [...new Map(sessionRegistrations.map((record) => {
-        const product = cloneProduct(record.product) || repoProduct(merged.owner, merged.repo);
-        return [product.key, product];
-      })).values()];
+      const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
+      const found = [
+        ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
+          .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
+        ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
+          .map((group) => cloneProduct(group.product)).filter(Boolean),
+      ];
+      if (!found.length) return [repoProduct(merged.owner, merged.repo)];
+      return [...new Map(found.map((product) => [product.key, product])).values()];
     };
     for (const session of sessions) {
       const product = addProduct(session.product);
