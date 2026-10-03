@@ -121,7 +121,7 @@ test('積み直し用の項目を含む旧 store を退避せず読み、次の�
   assert.equal(Object.hasOwn(saved, 'mergedPrHeads'), false);
 });
 
-test('復元時に orphan の回答記録と14日を過ぎたセッションの記録を捨てる', async (t) => {
+test('復元直後はセッション記録を残し最初の同期で期限切れを捨てる', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-03T00:00:00.000Z');
   const expiredAt = now - 14 * DAY_MS - 1;
@@ -133,7 +133,7 @@ test('復元時に orphan の回答記録と14日を過ぎたセッションの�
   state.setTasks('expired-session', [task('古いタスク')], expiredAt);
   state.addDecision('expired-session', decisionInput('古い判断'), expiredAt);
   state.hideSession('expired-session', expiredAt);
-  state.closeTask('expired-session', '古いタスク');
+  state.closeTask('expired-session', '古いタスク', expiredAt);
   state.setTasks('current-session', [task('新しいタスク')], now - 1);
   const currentDecision = state.addDecision('current-session', decisionInput('新しい判断'), now - 1);
   state.setDecisionLifecycle('current-session', currentDecision.id, {
@@ -153,11 +153,16 @@ test('復元時に orphan の回答記録と14日を過ぎたセッションの�
   await fs.writeFile(storePath, JSON.stringify(persisted));
 
   const restored = await DashboardState.load(homeDir, { now });
+  assert.equal(restored.plans.has('expired-session'), true);
+  assert.equal(restored.hiddenSessions.has('expired-session'), true);
+  assert.equal(restored.closedTasks.has('expired-session'), true);
+  assert.deepEqual([...restored.decisionLifecycles.get('current-session').keys()], [currentDecision.id]);
+  assert.equal(restored.decisionFor('current-session', currentDecision.id).awaitingAnswerUntil, undefined);
+
+  restored.syncSessionFiles([], now);
   assert.equal(restored.plans.has('expired-session'), false);
   assert.equal(restored.hiddenSessions.has('expired-session'), false);
   assert.equal(restored.closedTasks.has('expired-session'), false);
-  assert.deepEqual([...restored.decisionLifecycles.get('current-session').keys()], [currentDecision.id]);
-  assert.equal(restored.decisionFor('current-session', currentDecision.id).awaitingAnswerUntil, undefined);
 });
 
 test('復元後の最初のセッションファイル同期でタスクもファイルも無い外し記録を捨てる', async (t) => {
@@ -178,6 +183,141 @@ test('復元後の最初のセッションファイル同期でタスクもフ�
 
   assert.equal(restored.hiddenSessions.has('hidden-without-task'), false);
   assert.equal(restored.hiddenSessions.has('hidden-with-task'), true);
+});
+
+test('一覧から外しただけで記録の無いセッションは prune 後も外れたままにする', () => {
+  const state = new DashboardState();
+  const sessionId = 'hidden-only';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: now });
+  state.hideSession(sessionId, now);
+
+  state.pruneExpiredStoreRecords(now + 15 * DAY_MS);
+
+  assert.equal(state.hiddenSessions.has(sessionId), true);
+  assert.equal(state.hiddenSessionUpdatedAt.get(sessionId), new Date(now).toISOString());
+  assert.equal(state.snapshot().sessions.find((session) => session.session_id === sessionId).hidden, true);
+});
+
+test('外した時刻が新しくても期限切れの plan は生存していないセッションから削除する', () => {
+  const state = new DashboardState();
+  const sessionId = 'hidden-expired-plan';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: now - 15 * DAY_MS });
+  state.setTasks(sessionId, [task('古いタスク')], now - 15 * DAY_MS);
+  state.hideSession(sessionId, now);
+  state.sessions.delete(sessionId);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), false);
+  assert.equal(state.hiddenSessions.has(sessionId), true);
+});
+
+test('hook session が生きていれば古い plan を保持する', () => {
+  const state = new DashboardState();
+  const sessionId = 'live-hook-session';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.sessions.set(sessionId, { session_id: sessionId });
+  state.setTasks(sessionId, [task('古いタスク')], now - 20 * DAY_MS);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), true);
+});
+
+test('session file にある生存中のセッションは古い plan を保持する', () => {
+  const state = new DashboardState();
+  const sessionId = 'live-file-session';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '稼働中' }], now);
+  state.setTasks(sessionId, [task('古いタスク')], now - 20 * DAY_MS);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), true);
+});
+
+test('最初の同期ではファイルの無い期限切れ記録だけを削除する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const old = now - 20 * DAY_MS;
+  const state = new DashboardState({ homeDir });
+  state.setTasks('expired-without-file', [task('期限切れ')], old);
+  state.setTasks('expired-with-file', [task('ファイルあり')], old);
+  state.setTasks('recent-without-file', [task('新しい記録')], now - DAY_MS);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now });
+  assert.equal(restored.plans.has('expired-without-file'), true);
+  assert.equal(restored.plans.has('expired-with-file'), true);
+  assert.equal(restored.plans.has('recent-without-file'), true);
+
+  restored.syncSessionFiles([{ session_id: 'expired-with-file', cwd: 'C:\\project', name: 'ファイルあり' }], now);
+
+  assert.equal(restored.plans.has('expired-without-file'), false);
+  assert.equal(restored.plans.has('expired-with-file'), true);
+  assert.equal(restored.plans.has('recent-without-file'), true);
+});
+
+test('セッションファイルの同期が来ないまま猶予を過ぎると、フックで届いたセッション以外の期限切れ記録を捨てる', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  state.setTasks('expired-session', [task('期限切れ')], now - 20 * DAY_MS);
+  state.setTasks('live-hook-session', [task('稼働中')], now - 20 * DAY_MS);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now });
+  restored.sessions.set('live-hook-session', { session_id: 'live-hook-session' });
+  restored.pruneExpiredStoreRecords(now + 5 * 60_000);
+  assert.equal(restored.plans.has('expired-session'), true);
+
+  restored.pruneExpiredStoreRecords(now + 11 * 60_000);
+  assert.equal(restored.plans.has('expired-session'), false);
+  assert.equal(restored.plans.has('live-hook-session'), true);
+});
+
+test('閉じた時刻と PR のマージ時刻をセッション保持期限の起点にする', () => {
+  const state = new DashboardState();
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const old = now - 20 * DAY_MS;
+  const recentlyClosed = now - DAY_MS;
+  const recentlyMerged = now - 2 * DAY_MS;
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const sessionIdForClosedTask = 'recently-closed-task';
+  const sessionIdForMergedPr = 'recently-merged-pr';
+  state.setTasks(sessionIdForClosedTask, [task('閉じたタスク')], old);
+  state.closeTask(sessionIdForClosedTask, '閉じたタスク', recentlyClosed);
+  state.setTasks(sessionIdForMergedPr, [task('古いタスク')], old);
+  state.registerPullRequest(sessionIdForMergedPr, {
+    url: `https://github.com/${owner}/${repo}/pull/101`,
+  }, { product }, old);
+  state.updatePullRequest(sessionIdForMergedPr, owner, repo, 101, {
+    state: 'merged', mergedAt: new Date(recentlyMerged).toISOString(),
+  }, recentlyMerged);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionIdForClosedTask), true);
+  assert.equal(state.closedTasks.get(sessionIdForClosedTask)?.has('閉じたタスク'), true);
+  assert.equal(state.plans.has(sessionIdForMergedPr), true);
+  assert.equal(state.pullRequests.get(sessionIdForMergedPr)?.size, 1);
+});
+
+test('実行中の prune でセッション記録を削除すると version を進める', () => {
+  const state = new DashboardState();
+  const sessionId = 'expired-prune-version';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.setTasks(sessionId, [task('古いタスク')], now - 15 * DAY_MS);
+  const previousVersion = state.version;
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), false);
+  assert.ok(state.version > previousVersion);
 });
 
 test('通常の保存は500msでまとめ、回答記録の変更は待たずに書く', async (t) => {
@@ -648,6 +788,7 @@ test('参照する記録がなくなったプロダクトの既読時刻をsnaps
   state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '期限切れ', product }], now);
   state.setTasks(sessionId, [task('期限切れタスク', 'done')], now);
   state.setProductSeen(product.key, now);
+  state.syncSessionFiles([], now + 15 * DAY_MS);
 
   state.pruneExpiredStoreRecords(now + 15 * DAY_MS);
   const versionBeforeSnapshot = state.version;
