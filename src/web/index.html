@@ -495,6 +495,7 @@ const expandedKindSections = new Set();
 const answerDrafts = new Map();
 const answerErrors = new Map();
 const pendingTaskCloseActions = new Map();
+const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
 let nextPullRequestMergeResultId = 0;
 let hiddenSessionsUndo = null;
@@ -656,12 +657,17 @@ function settleDisplaySettingSaves(saves, saved) {
 }
 
 function settleDisplayPreferenceSaves(saves, saved) {
+  let sectionOrderWasRestored = false;
   for (const { key, state, sequence, value } of saves) {
     if (saved) state.savedValue = value;
     if (state.sequence !== sequence) continue;
-    if (!saved) displayPreferences[key] = state.savedValue;
+    if (!saved) {
+      displayPreferences[key] = state.savedValue;
+      sectionOrderWasRestored ||= key === 'sectionOrder';
+    }
     displayPreferenceSaveStates.delete(key);
   }
+  if (sectionOrderWasRestored) renderSectionOrder();
 }
 
 async function sendDisplayPatch(changes) {
@@ -1388,7 +1394,7 @@ function hasPullRequestMergeResults(group) {
 function rememberPullRequestMergeResult(group, result) {
   const key = pullRequestRepositoryKey(group);
   const results = pullRequestMergeResults.get(key) || [];
-  results.push({ id: String(++nextPullRequestMergeResultId), ...result });
+  results.push({ id: String(++nextPullRequestMergeResultId), ...result, autoDeleteBranch: group.autoDeleteBranch === true });
   pullRequestMergeResults.set(key, results);
 }
 
@@ -1821,7 +1827,8 @@ function appendPullRequestTree(target, group, pullRequest) {
 function pullRequestMergeResultLine(result) {
   const parts = [
     `${MERGE_METHOD_LABELS[result.method] || result.method} でマージしました`,
-    result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません',
+    result.autoDeleteBranch ? 'ブランチは GitHub の設定で自動削除されます'
+      : result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません',
   ];
   if (result.retargetedBase) {
     const numbers = Array.isArray(result.retargetedNumbers) && result.retargetedNumbers.length
@@ -2522,10 +2529,12 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   if (task.state !== 'done') {
     const closeKey = `${session.session_id}::${task.title}`;
     const pending = pendingTaskCloseActions.has(closeKey);
-    const close = element('button', 'link-btn close-task', pending ? '取り消す' : '完了にする');
+    const sending = taskCloseActionsInFlight.has(closeKey);
+    const close = element('button', 'link-btn close-task', pending ? '取り消す' : sending ? '送信中…' : '完了にする');
     close.type = 'button';
+    close.disabled = sending;
     if (pending) close.dataset.cancelCloseTask = closeKey;
-    else close.dataset.closeTask = closeKey;
+    else if (!sending) close.dataset.closeTask = closeKey;
     header.append(close);
     if (pending) header.append(element('span', 'meta', '5 秒後に完了にします。'));
   }
@@ -3140,6 +3149,8 @@ function updateAnswerSubmit(card) {
   const changed = !answer?.sentAt || draft.choice !== (answer?.choice ?? null) || draft.note !== (answer?.note || '') || !sameAnswerPicks(draft.picks, copyAnswerPicks(answer?.picks, (decision.questions || []).length));
   const meta = card.querySelector('[data-answer-meta]');
   if (meta) meta.textContent = answerMetaText(decision, draft);
+  const status = card.querySelector('.answer-foot .answer-status');
+  if (status) status.textContent = answer?.sentAt && changed ? '変更は未送信' : answerStatusText(answer, decision);
   button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
 }
 
@@ -3260,7 +3271,7 @@ document.addEventListener('compositionend', (event) => {
   renderDeferredState();
 }, true);
 
-async function sendCloseAction(button, url, body, errorMessage) {
+async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = null) {
   button.disabled = true;
   try {
     const response = await postUiAction(url, body);
@@ -3275,6 +3286,10 @@ async function sendCloseAction(button, url, body, errorMessage) {
     liveStatus.textContent = errorMessage;
     showWriteError(errorMessage);
   } finally {
+    if (taskCloseKey) {
+      taskCloseActionsInFlight.delete(taskCloseKey);
+      if (lastState) render(lastState);
+    }
     if (button.isConnected) button.disabled = false;
   }
 }
@@ -3287,8 +3302,9 @@ async function runCloseAction(button, url, body, errorMessage) {
     pending.timeout = setTimeout(() => {
       if (pendingTaskCloseActions.get(key) !== pending) return;
       pendingTaskCloseActions.delete(key);
+      taskCloseActionsInFlight.add(key);
       if (lastState) render(lastState);
-      void sendCloseAction(button, url, body, errorMessage);
+      void sendCloseAction(button, url, body, errorMessage, key);
     }, 5_000);
     pendingTaskCloseActions.set(key, pending);
     if (lastState) render(lastState);

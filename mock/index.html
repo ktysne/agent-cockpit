@@ -818,9 +818,10 @@ function hasProductContent(p) {
 
 function answerOf(id) { return ui.answers[id] || { choice: null, picks: [], note: '', sent: null }; }
 const answerDraftKey = (sessionId, decisionId) => `${sessionId}::${decisionId}`;
-function clearAnswerErrorWhenDraftChanges(key, previous, next) {
+function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
   if (previous.choice === next.choice && previous.note === next.note && picksOf(previous).join() === picksOf(next).join()) return;
   answerErrors.delete(key);
+  card?.querySelector('.answer-error')?.remove();
 }
 const picksOf = a => a.choice === 'pick' ? (a.picks || []) : [];
 const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) || !!a.note.trim();
@@ -1299,7 +1300,7 @@ function mergeBlocker(p, pr) {
 const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 
 function pullRequestMergeResultLine(result) {
-  const parts = [`${METHOD_LABEL[result.method] || result.method} でマージしました`, result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません'];
+  const parts = [`${METHOD_LABEL[result.method] || result.method} でマージしました`, result.autoDeleteBranch ? 'ブランチは GitHub の設定で自動削除されます' : result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません'];
   if (result.retargetedBase) {
     const numbers = result.retargetedNumbers?.length ? `${result.retargetedNumbers.map(number => `#${number}`).join('、')} の ` : '';
     parts.push(`${numbers}base を ${result.retargetedBase} に付け替えました`);
@@ -1337,7 +1338,8 @@ function finishMockMerge(product, pullRequest, options, automatic = false) {
   rememberPullRequestMergeResult(product, {
     number: pullRequest.number,
     method: options.method,
-    branchDeleted: product.repo.autoDeleteBranch || options.del,
+    branchDeleted: options.del,
+    autoDeleteBranch: product.repo.autoDeleteBranch === true,
     ...(children.length ? { retargetedBase: product.repo.defaultBranch, retargetedNumbers: children } : {}),
     ...(pullRequest.headMismatch === true ? { warning: '予約時と異なる head SHA がマージされました' } : {}),
   });
@@ -1827,7 +1829,7 @@ document.addEventListener('click', e => {
     const previous = captureDisplayPreferences();
     ui.hideFinished = false;
     hideFinishedInput.checked = false;
-    saveDisplayPreferences(previous);
+    if (saveDisplayPreferences(previous)) render();
     return;
   }
   else if (t.dataset.filter) {
@@ -2019,7 +2021,7 @@ document.addEventListener('input', e => {
   const previous = { ...a, picks: [...picksOf(a)] };
   a.note = e.target.value;
   ui.answers[card.dataset.id] = a;
-  clearAnswerErrorWhenDraftChanges(key, previous, a);
+  clearAnswerErrorWhenDraftChanges(key, previous, a, card);
   save();
   card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a);
 });
