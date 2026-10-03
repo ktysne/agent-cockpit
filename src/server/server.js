@@ -549,7 +549,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
         return;
       }
-      if (!validUiOrigin(request, info.port)) {
+      if (!validRequiredUiOrigin(request, info.port)) {
         jsonResponse(response, 403, { error: 'Forbidden' });
         return;
       }
@@ -582,7 +582,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
         return;
       }
-      if (!validUiOrigin(request, info.port)) {
+      if (!validRequiredUiOrigin(request, info.port)) {
         jsonResponse(response, 403, { error: 'Forbidden' });
         return;
       }
