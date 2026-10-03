@@ -670,16 +670,6 @@ class PullRequestTracker {
     )).filter(Boolean);
 
     if (listAvailable) {
-      for (const pr of openPullRequests) {
-        const lastOpen = lastOpenPullRequest(pr);
-        for (const record of registrations.filter((candidate) => candidate.number === pr.number)) {
-          this.state.updatePullRequest(record.session_id, owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen });
-        }
-        if (relatedPullRequests.some((record) => record.number === pr.number)) {
-          this.state.updateRelatedPullRequest(owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen });
-        }
-      }
-
       const registeredNumbers = new Set(registrations.map((record) => record.number));
       const productGroups = new Map();
       for (const registration of registrations) {
@@ -691,6 +681,8 @@ class PullRequestTracker {
         }
         group.registrations.push(registration);
       }
+      const groupAssemblies = [];
+      const displayProductsByNumber = new Map();
       for (const group of productGroups.values()) {
         const assembled = assemblePullRequestStacks({
           defaultBranch,
@@ -699,6 +691,35 @@ class PullRequestTracker {
           relatedPullRequests,
           retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
         });
+        groupAssemblies.push({ group, assembled });
+        const visit = (pullRequest) => {
+          let products = displayProductsByNumber.get(pullRequest.number);
+          if (!products) {
+            products = new Map();
+            displayProductsByNumber.set(pullRequest.number, products);
+          }
+          products.set(group.product.key, group.product);
+          for (const child of pullRequest.children) visit(child);
+        };
+        for (const pullRequest of assembled.trees) visit(pullRequest);
+      }
+
+      for (const pr of openPullRequests) {
+        const lastOpen = lastOpenPullRequest(pr);
+        const displayProducts = [...(displayProductsByNumber.get(pr.number)?.values() || [])];
+        for (const record of registrations.filter((candidate) => candidate.number === pr.number)) {
+          this.state.updatePullRequest(
+            record.session_id, owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen }, this.now(), displayProducts,
+          );
+        }
+        if (relatedPullRequests.some((record) => record.number === pr.number)) {
+          this.state.updateRelatedPullRequest(
+            owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen }, this.now(), displayProducts,
+          );
+        }
+      }
+
+      for (const { assembled } of groupAssemblies) {
         for (const pr of assembled.relatedOpen) {
           if (registeredNumbers.has(pr.number)) continue;
           const lastOpen = lastOpenPullRequest(pr);

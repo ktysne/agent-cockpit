@@ -153,16 +153,71 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
   const productSection = source.match(/function productSection\(product,[\s\S]*?\n\}/)?.[0];
   const renderKindSections = source.match(/function renderKindSections\(products\) \{[\s\S]*?\n\}/)?.[0];
   const appendDecisionCard = source.match(/function appendDecisionCard\([\s\S]*?\n\}/)?.[0];
+  const markProductSeen = source.match(/async function markProductSeen\(button\) \{[\s\S]*?\n\}/)?.[0];
 
   assert.ok(productSection);
   assert.ok(renderKindSections);
   assert.ok(appendDecisionCard);
+  assert.ok(markProductSeen);
   assert.match(productSection, /sinceSeenBox\(product, false\)/);
   assert.match(renderKindSections, /sinceSeenBox\(product, true\)/);
   assert.match(source, /前回見てから \(\$\{entry\.items\.length\} 件\)/);
   assert.match(source, /seen\.dataset\.seen = product\.key/);
   assert.match(source, /postUiAction\('\/api\/seen'/);
+  assert.match(markProductSeen, /generatedAt: lastState\?\.generatedAt/);
   assert.match(appendDecisionCard, /if \(decision\.isNew\) header\.append\(badge\('新着', 'new-mark'\)\)/);
+});
+
+test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functions = ['productGroups', 'sessionActivityTime', 'orderedProducts'].map((name) => (
+    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+  ));
+  const clickListener = source.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(functions.every(Boolean));
+  assert.ok(clickListener);
+
+  const displayPreferences = {
+    order: ['active', 'hidden', 'history-only', 'pull-request-only'],
+    pinned: [], collapsed: [],
+  };
+  const state = {
+    sessions: [
+      { product: { key: 'active', name: '稼働中' }, hidden: false, tools: [], lastActivityAt: '2026-10-03T12:00:00.000Z' },
+      { product: { key: 'hidden', name: '非表示' }, hidden: true, tools: [], lastActivityAt: '2026-10-03T12:00:00.000Z' },
+    ],
+    pullRequests: [{ product: { key: 'pull-request-only', name: 'PR のみ' }, owner: 'example', repo: 'project' }],
+    sinceSeen: [{ product: { key: 'history-only', name: '履歴のみ' }, items: [{ text: '完了' }] }],
+  };
+  const saved = [];
+  let handleClick;
+  const context = vm.createContext({
+    displayPreferences,
+    lastState: state,
+    document: { addEventListener: (_name, callback) => { handleClick = callback; } },
+    saveDisplayPreferences: (patch) => {
+      saved.push(patch);
+      Object.assign(displayPreferences, patch);
+    },
+    render() {},
+  });
+  vm.runInContext(`${functions.join('\n')}\n${clickListener}`, context);
+
+  const button = {
+    dataset: { productAction: 'move', productKey: 'history-only', direction: '-1' },
+    closest: (selector) => selector === 'button' ? button : null,
+  };
+  handleClick({ target: button });
+
+  assert.deepEqual(displayPreferences.order, ['history-only', 'hidden', 'active', 'pull-request-only']);
+  assert.deepEqual(saved.map((patch) => ({ order: [...patch.order] })), [
+    { order: ['history-only', 'hidden', 'active', 'pull-request-only'] },
+  ]);
+
+  saved.length = 0;
+  button.dataset.productKey = 'missing';
+  assert.doesNotThrow(() => handleClick({ target: button }));
+  assert.deepEqual(saved, []);
 });
 
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {

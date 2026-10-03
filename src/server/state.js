@@ -1262,12 +1262,12 @@ class DashboardState {
     return true;
   }
 
-  updateRelatedPullRequest(owner, repo, number, changes, now = Date.now()) {
+  updateRelatedPullRequest(owner, repo, number, changes, now = Date.now(), displayProducts = []) {
     const key = relatedPullRequestRecordKey(owner, repo, number);
     const current = this.relatedPullRequests.get(key);
     if (!current) return false;
     if (changes.lastOpen && stableStringify(current.lastOpen) !== stableStringify(changes.lastOpen)) {
-      this.recordPullRequestCiFailure(owner, repo, number, changes.lastOpen, now);
+      this.recordPullRequestCiFailure(owner, repo, number, changes.lastOpen, now, displayProducts);
     }
     const next = normalizeRelatedPullRequestRecord({ ...current, ...changes });
     if (!validRelatedPullRequestRecord(next) || stableStringify(current) === stableStringify(next)) return false;
@@ -1277,7 +1277,7 @@ class DashboardState {
     return true;
   }
 
-  recordPullRequestCiFailure(owner, repo, number, nextLastOpen, now) {
+  recordPullRequestCiFailure(owner, repo, number, nextLastOpen, now, displayProducts = []) {
     if (nextLastOpen?.ci !== 'fail') return;
     const registrations = this.pullRequestRegistrations().filter((record) => (
       record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
@@ -1292,6 +1292,10 @@ class DashboardState {
     for (const registration of registrations) {
       const product = cloneProduct(registration.product) || repoProduct(owner, repo);
       products.set(product.key, product);
+    }
+    for (const value of displayProducts) {
+      const product = cloneProduct(value);
+      if (product) products.set(product.key, product);
     }
     if (!products.size) {
       const product = repoProduct(owner, repo);
@@ -1342,13 +1346,13 @@ class DashboardState {
     return normalizePullRequestRecord(next);
   }
 
-  updatePullRequest(sessionId, owner, repo, number, changes, now = Date.now()) {
+  updatePullRequest(sessionId, owner, repo, number, changes, now = Date.now(), displayProducts = []) {
     const records = this.pullRequests.get(sessionId);
     const key = pullRequestRecordKey(owner, repo, number);
     const current = records?.get(key);
     if (!current) return false;
     if (changes.lastOpen && stableStringify(current.lastOpen) !== stableStringify(changes.lastOpen)) {
-      this.recordPullRequestCiFailure(owner, repo, number, changes.lastOpen, now);
+      this.recordPullRequestCiFailure(owner, repo, number, changes.lastOpen, now, displayProducts);
     }
     const next = { ...current, ...changes };
     if (changes.lastOpen) next.lastOpen = { ...changes.lastOpen };
@@ -1754,7 +1758,7 @@ class DashboardState {
       ...decision,
       state,
       updatedAt: timestamp,
-      ...(state === 'provisional' ? { provisionalAt: timestamp } : decision.provisionalAt ? { provisionalAt: decision.provisionalAt } : {}),
+      ...(state === 'provisional' && decision.state !== 'provisional' ? { provisionalAt: timestamp } : decision.provisionalAt ? { provisionalAt: decision.provisionalAt } : {}),
       resolvedAt: state === 'resolved' ? timestamp : null,
       resolution: { chosen, note },
     };
@@ -1927,9 +1931,13 @@ class DashboardState {
     };
   }
 
-  setProductSeen(productKey, now = Date.now()) {
+  setProductSeen(productKey, at = Date.now()) {
     if (typeof productKey !== 'string' || productKey.trim().length === 0 || productKey.length > 500) return null;
-    const seenAt = isoTime(now);
+    const milliseconds = typeof at === 'number' ? at : Date.parse(at || '');
+    if (!Number.isFinite(milliseconds)) return null;
+    const current = this.seenAtByProduct.get(productKey);
+    if (current && Date.parse(current) >= milliseconds) return current;
+    const seenAt = isoTime(milliseconds);
     this.seenAtByProduct.set(productKey, seenAt);
     this.touch();
     this.requestStoreWrite();

@@ -735,13 +735,18 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   const runtime = await runningServer(t, { state });
   const endpoint = '/api/seen';
   const origin = `http://127.0.0.1:${runtime.info.port}`;
-  const body = JSON.stringify({ productKey: product.key });
   const validHeaders = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
 
   const firstView = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.deepEqual(firstView.sinceSeen, []);
   assert.equal(firstView.sessions[0].decisions[0].isNew, false);
   assert.equal(state.seenAtByProduct.has(product.key), true);
+  const afterView = Date.parse(firstView.generatedAt) + 1000;
+  state.setTasks(sessionId, [
+    { title: '表示前の完了', state: 'done', criteria: [] },
+    { title: '表示後・既読前の完了', state: 'done', criteria: [] },
+  ], afterView);
+  const body = JSON.stringify({ productKey: product.key, generatedAt: firstView.generatedAt });
 
   assert.equal((await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', origin } })).status, 401);
   assert.equal((await request(runtime.info.port, {
@@ -757,11 +762,22 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   assert.equal((await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ productKey: '' }), headers: validHeaders,
   })).status, 400);
-  assert.equal((await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders })).status, 200);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    body: JSON.stringify({ productKey: product.key, generatedAt: 'not-a-time' }), headers: validHeaders,
+  })).status, 400);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    body: JSON.stringify({ productKey: product.key, generatedAt: new Date(Date.now() + 1000).toISOString() }), headers: validHeaders,
+  })).status, 400);
+  const seen = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders });
+  assert.equal(seen.status, 200);
+  assert.equal(jsonBody(seen).seenAt, firstView.generatedAt);
 
-  const future = Date.now() + 1000;
+  const future = Math.max(Date.now(), afterView) + 1000;
   state.setTasks(sessionId, [
     { title: '表示前の完了', state: 'done', criteria: [] },
+    { title: '表示後・既読前の完了', state: 'done', criteria: [] },
     { title: '既読後の完了', state: 'done', criteria: [] },
   ], future);
   const decision = state.addDecision(sessionId, {
@@ -775,6 +791,7 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   assert.equal(visibleSession.decisions.find((item) => item.title === '表示前の判断').isNew, false);
   assert.deepEqual(nextView.sinceSeen[0].items.map((item) => item.text), [
     'タスク「既読後の完了」が完了した',
+    'タスク「表示後・既読前の完了」が完了した',
   ]);
 });
 

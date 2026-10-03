@@ -2293,7 +2293,7 @@ async function markProductSeen(button) {
   const productKey = button.dataset.seen;
   button.disabled = true;
   try {
-    const response = await postUiAction('/api/seen', { productKey });
+    const response = await postUiAction('/api/seen', { productKey, generatedAt: lastState?.generatedAt });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await refresh();
     liveStatus.textContent = '前回見てからの項目を既読にしました。';
@@ -2521,8 +2521,13 @@ document.addEventListener('click', (event) => {
         : [...displayPreferences.pinned, key];
       changedKey = 'pinned';
     } else {
-      const products = orderedProducts(lastState.sessions);
+      const state = lastState || {};
+      const sessions = (Array.isArray(state.sessions) ? state.sessions : []).filter((session) => session.hidden !== true);
+      const pullRequests = Array.isArray(state.pullRequests) ? state.pullRequests : [];
+      const sinceSeen = Array.isArray(state.sinceSeen) ? state.sinceSeen : [];
+      const products = orderedProducts(sessions, pullRequests, sinceSeen);
       const index = products.findIndex((product) => product.key === key);
+      if (index < 0) return;
       const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
       const direction = Number(button.dataset.direction);
       const targetIndex = index + direction;

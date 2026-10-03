@@ -174,9 +174,11 @@ function validDisplayPatch(value) {
 }
 
 function validSeenRequest(value) {
+  const generatedAt = Date.parse(value?.generatedAt || '');
   return value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).length === 1 && Object.hasOwn(value, 'productKey') &&
-    typeof value.productKey === 'string' && value.productKey.trim().length > 0 && value.productKey.length <= 500;
+    Object.keys(value).length === 2 && Object.hasOwn(value, 'productKey') && Object.hasOwn(value, 'generatedAt') &&
+    typeof value.productKey === 'string' && value.productKey.trim().length > 0 && value.productKey.length <= 500 &&
+    typeof value.generatedAt === 'string' && Number.isFinite(generatedAt) && generatedAt <= Date.now();
 }
 
 function validDecisionOptions(value) {
@@ -577,7 +579,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const seenAt = state.setProductSeen(body.productKey);
+      const seenAt = state.setProductSeen(body.productKey, body.generatedAt);
       jsonResponse(response, 200, { productKey: body.productKey, seenAt });
       return;
     }

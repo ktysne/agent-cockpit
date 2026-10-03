@@ -332,6 +332,37 @@ test('スカッシュした親のコミットはbaseをmainに変えても残り
   ]);
 });
 
+test('関連 PR の CI が pending から fail に変わると表示グループごとに履歴へ記録する', async (t) => {
+  const { state, github, tracker } = await trackerFixture(t, []);
+  const productA = { key: 'C:\\project-a', name: 'project-a' };
+  const productB = { key: 'C:\\project-b', name: 'project-b' };
+  state.registerPullRequest('session-a', { url: 'https://github.com/example/project/pull/31' }, { product: productA });
+  state.registerPullRequest('session-b', { url: 'https://github.com/example/project/pull/32' }, { product: productB });
+  const parent = (statusCheckRollup) => ({
+    ...ghPullRequest(30, 'feat/parent', 'main', 'a'.repeat(40)),
+    statusCheckRollup,
+  });
+  github.openPullRequests = [
+    ghPullRequest(31, 'feat/child-a', 'feat/parent', 'b'.repeat(40)),
+    ghPullRequest(32, 'feat/child-b', 'feat/parent', 'c'.repeat(40)),
+    parent([{ state: 'IN_PROGRESS', conclusion: '' }]),
+  ];
+
+  await tracker.refreshRepo('example', 'project');
+  assert.equal(state.relatedPullRequestRegistrationsForRepo('example', 'project')
+    .find((record) => record.number === 30).lastOpen.ci, 'pending');
+
+  github.openPullRequests = [
+    ghPullRequest(31, 'feat/child-a', 'feat/parent', 'b'.repeat(40)),
+    ghPullRequest(32, 'feat/child-b', 'feat/parent', 'c'.repeat(40)),
+    parent([{ state: 'COMPLETED', conclusion: 'FAILURE' }]),
+  ];
+  await tracker.refreshRepo('example', 'project');
+
+  assert.deepEqual(state.ciFailures.filter((failure) => failure.number === 30)
+    .map((failure) => failure.product.key).sort(), [productA.key, productB.key].sort());
+});
+
 test('常駐サーバーが見ていない親でも merged 一覧と compare から積み直し待ちを判定する', async (t) => {
   const { github, tracker } = await trackerFixture(t);
   const childSha = 'b'.repeat(40);

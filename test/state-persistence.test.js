@@ -447,6 +447,23 @@ test('初回表示は既存の完了を既読扱いにし、その後の完了�
   assert.deepEqual(next.sinceSeen[0].items.map((item) => item.text), ['タスク「新しい完了」が完了した']);
 });
 
+test('既読時刻は後退せず、既読後に同じ仮適用を更新しても新着に戻らない', () => {
+  const state = new DashboardState();
+  const sessionId = 'seen-provisional';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '仮適用', product }], now);
+  const decision = state.addDecision(sessionId, { ...decisionInput('仮適用の判断'), state: 'provisional' }, now);
+
+  const seenAt = state.setProductSeen(product.key, now + 10);
+  assert.equal(state.setProductSeen(product.key, now + 5), seenAt);
+  const updated = state.updateDecision(sessionId, decision.id, 'provisional', '案 B', '選択内容だけを変更', now + 20);
+
+  assert.equal(updated.provisionalAt, decision.provisionalAt);
+  const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 30);
+  assert.deepEqual(result.sinceSeen, []);
+});
+
 test('既読時刻より前後の完了、PR、仮適用、CI 失敗、マージを分けて新しい順に並べる', () => {
   const state = new DashboardState();
   const sessionId = 'since-seen-events';
