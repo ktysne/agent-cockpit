@@ -80,39 +80,54 @@ function extractCodexWaitRunId(command) {
   return match ? match[1].slice(0, 256) : '';
 }
 
+// コマンドの区切りまでの引数を返す。`2>&1` や `> "out file"` のリダイレクトは出力先ごと除く。
 function shellArguments(value) {
-  const argumentsList = [];
-  let argument = '';
+  const tokens = [];
+  let token = { text: '', quoted: false, started: false };
   let quote = '';
-  let started = false;
-  const pushArgument = () => {
-    if (started) argumentsList.push(argument);
-    argument = '';
-    started = false;
+  const pushToken = () => {
+    if (token.started) tokens.push(token);
+    token = { text: '', quoted: false, started: false };
   };
 
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
     if (quote === "'") {
       if (character === "'") quote = '';
-      else argument += character;
-    } else if (character === '\\' && quote !== "'") {
-      argument += value[index + 1] || '';
+      else token.text += character;
+    } else if (character === '\\') {
+      token.text += value[index + 1] || '';
       index += 1;
-      started = true;
+      token.started = true;
     } else if (quote === '"') {
       if (character === '"') quote = '';
-      else argument += character;
+      else token.text += character;
     } else if (character === '"' || character === "'") {
       quote = character;
-      started = true;
-    } else if (/\s/.test(character)) pushArgument();
+      token.quoted = true;
+      token.started = true;
+    } else if (/\s/.test(character)) pushToken();
+    else if (character === '&' && (token.text.endsWith('>') || value[index + 1] === '>')) {
+      token.text += character;
+      token.started = true;
+    } else if (/[;&|()\r\n]/.test(character)) break;
     else {
-      argument += character;
-      started = true;
+      token.text += character;
+      token.started = true;
     }
   }
-  pushArgument();
+  pushToken();
+
+  const argumentsList = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const { text, quoted } = tokens[index];
+    if (!quoted && /^(?:\d*>&\d*-?|\d*[<>]>?|&>>?)$/.test(text)) {
+      if (!/&\d*-?$/.test(text) || /^&>/.test(text)) index += 1;
+      continue;
+    }
+    if (!quoted && /^(?:\d*[<>]>?|&>>?)./.test(text)) continue;
+    argumentsList.push(text);
+  }
   return argumentsList;
 }
 
@@ -121,11 +136,7 @@ function extractCodexReviewDefinition(command) {
   const pattern = /(?:^|&&|\|\||[;&|(\r\n])[ \t]*(npm[ \t]+run[ \t]+review:codex:fix|npm[ \t]+run[ \t]+review:codex|node[ \t]+(?:\.[\\/])?tools[\\/]cross-review\.js[ \t]+codex)(?=$|[\s;&|)])/gim;
   for (const match of commandText.matchAll(pattern)) {
     const commandStart = match.index + match[0].lastIndexOf(match[1]);
-    // `2>&1` の `&` をコマンドの区切りと取り違えないため、リダイレクトを除いてから区切る。
-    const commandTail = commandText.slice(commandStart + match[1].length)
-      .replace(/\d*>&\d+|&>>?[ \t]*[^\s;&|()]+|\d*>>?[ \t]*[^\s;&|()]+/g, ' ')
-      .split(/[;&|()\r\n]/, 1)[0];
-    const argumentsList = shellArguments(commandTail);
+    const argumentsList = shellArguments(commandText.slice(commandStart + match[1].length));
     // ヘルプを出すだけの起動と、Codex のラッパーを通らない起動は、Codex を動かさない。
     if (['--no-codex-agent', '--help', '-h'].some((option) => argumentsList.includes(option))) continue;
 

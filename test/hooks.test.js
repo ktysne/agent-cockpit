@@ -244,6 +244,9 @@ test('クロスレビューの fix 起動と node 起動から定義名を選ぶ
     ['node tools/cross-review.js codex --no-codex-agent && npm run review:codex', 'codex-review'],
     ['node tools/cross-review.js codex 2>&1 --fix | tail -40', 'codex-subagent'],
     ['npm run review:codex > review.log 2>&1 -- --fix', 'codex-subagent'],
+    ['node tools/cross-review.js codex > "review output.log" --fix', 'codex-subagent'],
+    ['node tools/cross-review.js codex --instructions ">notes.md" --fix', 'codex-subagent'],
+    ['node tools/cross-review.js codex &> review.log --fix', 'codex-subagent'],
   ];
   for (const [command, definition] of commands) {
     const event = makeHookEvent({
@@ -265,6 +268,8 @@ test('文字列やヒアドキュメントのクロスレビュー手順と、--
     'node tools/cross-review.js codex 2>&1 --no-codex-agent',
     'node tools/cross-review.js codex --help',
     'npm run review:codex -- -h',
+    'node tools/cross-review.js codex > "review output.log" --help',
+    'node tools/cross-review.js codex > "review output.log" --no-codex-agent',
   ];
   for (const command of commands) {
     const event = makeHookEvent({
