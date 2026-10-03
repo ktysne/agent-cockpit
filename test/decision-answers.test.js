@@ -1298,3 +1298,8 @@ test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を�
   });
   assert.deepEqual(parentGone, { exitCode: 0, stderrText: null });
 });
+
+test('離席中に質問を止める理由は、チャットで任されたマージや push まで禁止しない', () => {
+  const reason = denyAnswerOutput('decision-1').hookSpecificOutput.permissionDecisionReason;
+  assert.match(reason, /PR のマージ、main への push は、開発者がチャットで任せていなければ行わず/);
+});
