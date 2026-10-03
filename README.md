@@ -164,15 +164,12 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
     ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
-    ],
-    "SubagentStop": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
     ]
   }
 }
 ```
 
-`route.js` は同期フックとして実行します。起動時の経路記録は `~/.agent-cockpit/route-agents/` に置き、サブエージェント停止時に削除します。24 時間を過ぎた記録は、新しいサブエージェントの開始時に削除します。
+`route.js` は同期フックとして実行します。起動時の経路の記録は `AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に置きます。同じサブエージェントが再開しても初回の経路を使い、24 時間を過ぎた記録は、新しいサブエージェントの開始時に削除します。
 エージェント定義や `~/.claude/CLAUDE.md` への追記、ai-cross-review の `route` コマンドへの対応は、この作業の範囲外です。
 
 ## タスクと判断事項

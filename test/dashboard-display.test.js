@@ -101,9 +101,11 @@ test('クロスレビューの経路は未対応と表示し、画面から保�
   assert.ok(agentButtons.every((button) => !/ disabled>/.test(button)));
   assert.match(root.innerHTML, /id="route-review-status" class="rstatus">未対応<\/span>/);
 
-  const updateContext = vm.createContext({});
+  const posts = [];
+  const updateContext = vm.createContext({ postUiAction: async (...args) => { posts.push(args); return { ok: true }; } });
   vm.runInContext(`async ${updateRouting}\nthis.updateRouting = updateRouting;`, updateContext);
   await updateContext.updateRouting({ dataset: { route: 'review', v: 'claude' } });
+  assert.deepEqual(posts, []);
 });
 
 test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン用の識別子を送る', () => {

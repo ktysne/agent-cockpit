@@ -15,16 +15,16 @@ async function temporaryHome(t, routing = { agents: 'default', review: 'default'
 
 test('SubagentStart は選択経路を差し込み、既定では出力しない', async (t) => {
   const homeDir = await temporaryHome(t);
-  const input = { hook_event_name: 'SubagentStart', session_id: 'session-1', agent_id: 'agent-1' };
-  assert.equal(outputForRoute(input, { homeDir }), null);
+  const start = (agentId) => ({ hook_event_name: 'SubagentStart', session_id: 'session-1', agent_id: agentId });
+  assert.equal(outputForRoute(start('agent-default'), { homeDir }), null);
 
   await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'default' }));
-  assert.deepEqual(outputForRoute(input, { homeDir }), {
+  assert.deepEqual(outputForRoute(start('agent-claude'), { homeDir }), {
     hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT },
   });
 
   await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'codex', review: 'default' }));
-  assert.deepEqual(outputForRoute(input, { homeDir }), {
+  assert.deepEqual(outputForRoute(start('agent-codex'), { homeDir }), {
     hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT },
   });
 });
@@ -84,17 +84,20 @@ test('開始時の記録がないサブエージェントは現在の経路設�
   assert.equal(outputForRoute(input, { homeDir }), null);
 });
 
-test('SubagentStop は経路記録を消す', async (t) => {
-  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' });
-  const start = { hook_event_name: 'SubagentStart', session_id: 'session-stop', agent_id: 'agent-stop' };
+test('同じサブエージェントの 2 回目の SubagentStart と SubagentStop の後も初回の経路を保つ', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'codex', review: 'default' });
+  const start = { hook_event_name: 'SubagentStart', session_id: 'session-resume', agent_id: 'agent-resume' };
   outputForRoute(start, { homeDir });
-  const input = {
-    ...start, hook_event_name: 'PreToolUse', tool_name: 'Bash',
-    tool_input: { command: 'bash ~/.claude/tools/codex-agent.sh impl-hard' },
-  };
-  assert.equal(outputForRoute(input, { homeDir })?.hookSpecificOutput?.permissionDecision, 'deny');
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'default' }));
 
   assert.equal(outputForRoute({ ...start, hook_event_name: 'SubagentStop' }, { homeDir }), null);
+  assert.deepEqual(outputForRoute(start, { homeDir }), {
+    hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT },
+  });
+  const input = {
+    ...start, hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    tool_input: { command: 'bash ~/.claude/tools/codex-agent.sh --wait run-123' },
+  };
   assert.equal(outputForRoute(input, { homeDir }), null);
 });
 

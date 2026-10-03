@@ -91,24 +91,14 @@ function readRouteRecord(recordPath, fileSystem) {
   }
 }
 
-function deleteRouteRecord(recordPath, fileSystem) {
-  if (!recordPath) return;
-  try { fileSystem.unlinkSync(recordPath); } catch {}
-}
-
 function outputForRoute(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const isStart = input.hook_event_name === 'SubagentStart';
-  const isStop = input.hook_event_name === 'SubagentStop';
   const isBashUse = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Bash';
-  if (!isStart && !isStop && !isBashUse) return null;
+  if (!isStart && !isBashUse) return null;
 
   const homeDir = options.homeDir || cockpitHome(options.environment);
   const fileSystem = options.fileSystem || fs;
-  if (isStop) {
-    deleteRouteRecord(routeRecordPath(input, homeDir), fileSystem);
-    return null;
-  }
   if (isStart) {
     const directory = path.join(homeDir, 'route-agents');
     try {
@@ -117,12 +107,17 @@ function outputForRoute(input, options = {}) {
     } catch {
       return null;
     }
-    const routing = readRouting(homeDir, fileSystem);
-    if (!routing) return null;
     const recordPath = routeRecordPath(input, homeDir);
-    if (!recordPath || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
-    if (routing.agents === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };
-    if (routing.agents === 'codex') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT } };
+    if (!recordPath) return null;
+    // 再開や SubagentStop の後の続きでも初回の経路を保つため、既にある記録は上書きせず、終了時にも消さない。
+    let route = readRouteRecord(recordPath, fileSystem);
+    if (!route) {
+      const routing = readRouting(homeDir, fileSystem);
+      if (!routing || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
+      route = routing.agents;
+    }
+    if (route === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };
+    if (route === 'codex') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT } };
     return null;
   }
   const route = readRouteRecord(routeRecordPath(input, homeDir), fileSystem);
