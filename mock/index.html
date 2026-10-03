@@ -262,6 +262,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .routing .rgroup.side-by-side .rrow + .rrow .rlabel { margin-left: 22px; }
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
+.routing .seg button:disabled { cursor: default; opacity: .55; }
+.routing .seg .rstatus { display: inline-flex; align-items: center; padding: 0 8px; border-left: 1px solid var(--border); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
 /* 上部のバーでは経路を枠で囲まず、離席中と同じ行の左に置く。 */
 .control-row { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
@@ -670,10 +672,12 @@ function routeTag(s) {
 }
 
 function renderRouting() {
+  // クロスレビューの経路は ai-cross-review がレビューの時点で設定を引くまで効かないので、選べなくする。
   const row = k => {
+    const unsupported = k === 'review';
     return `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
-      <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路">${ROUTE[k].opts.map(o =>
-        `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
+      <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路"${unsupported ? ' aria-describedby="route-review-status"' : ''}>${ROUTE[k].opts.map(o =>
+        `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}"${unsupported ? ' disabled' : ''}>${o.t}</button>`).join('')}${unsupported ? '<span id="route-review-status" class="rstatus">未対応</span>' : ''}</div>
       </div>`;
   };
   document.getElementById('routing').innerHTML = `<div class="rgroup">${row('agents')}${row('review')}</div>`;

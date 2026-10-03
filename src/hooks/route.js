@@ -1,8 +1,10 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
+const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CLAUDE_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Claude で行い、codex-agent.sh を呼ばない';
 const CODEX_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Codex(codex-agent.sh 経由の委譲)で行う';
 const CODEX_AGENT_SCRIPT = /(?:^|[\\/])?codex-agent\.sh$/i;
@@ -40,20 +42,92 @@ function commandInvokesCodexAgent(command) {
   });
 }
 
+function routeRecordPath(input, homeDir) {
+  const encodeIdentifier = (value) => typeof value === 'string' && value
+    ? Buffer.from(value, 'utf8').toString('hex')
+    : null;
+  const sessionId = encodeIdentifier(input.session_id);
+  const agentId = encodeIdentifier(input.agent_id);
+  if (!sessionId || !agentId) return null;
+  return path.join(homeDir, 'route-agents', sessionId + '.' + agentId + '.json');
+}
+
+function cleanupOldRouteRecords(directory, fileSystem, now = Date.now()) {
+  let entries;
+  try {
+    entries = fileSystem.readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const recordPath = path.join(directory, entry);
+    try {
+      if (now - fileSystem.statSync(recordPath).mtimeMs > ROUTE_RECORD_MAX_AGE_MS) {
+        fileSystem.unlinkSync(recordPath);
+      }
+    } catch {}
+  }
+}
+
+function writeRouteRecord(recordPath, route, fileSystem) {
+  const temporaryPath = recordPath + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+  try {
+    fileSystem.writeFileSync(temporaryPath, JSON.stringify({ route }), { flag: 'wx' });
+    fileSystem.renameSync(temporaryPath, recordPath);
+    return true;
+  } catch {
+    try { fileSystem.unlinkSync(temporaryPath); } catch {}
+    return false;
+  }
+}
+
+// 掃除の期限を最後に使ってからの時間にするため、読めた記録は更新時刻を進める。
+function readRouteRecord(recordPath, fileSystem) {
+  try {
+    const record = JSON.parse(fileSystem.readFileSync(recordPath, 'utf8'));
+    if (!record || !ROUTE_VALUES.has(record.route)) return null;
+    try {
+      const now = new Date();
+      fileSystem.utimesSync(recordPath, now, now);
+    } catch {}
+    return record.route;
+  } catch {
+    return null;
+  }
+}
+
 function outputForRoute(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const isStart = input.hook_event_name === 'SubagentStart';
   const isBashUse = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Bash';
   if (!isStart && !isBashUse) return null;
 
-  const routing = readRouting(options.homeDir || cockpitHome(options.environment), options.fileSystem || fs);
-  if (!routing) return null;
+  const homeDir = options.homeDir || cockpitHome(options.environment);
+  const fileSystem = options.fileSystem || fs;
   if (isStart) {
-    if (routing.agents === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };
-    if (routing.agents === 'codex') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT } };
+    const directory = path.join(homeDir, 'route-agents');
+    try {
+      fileSystem.mkdirSync(directory, { recursive: true });
+      cleanupOldRouteRecords(directory, fileSystem);
+    } catch {
+      return null;
+    }
+    const recordPath = routeRecordPath(input, homeDir);
+    if (!recordPath) return null;
+    // 再開や SubagentStop の後の続きでも初回の経路を保つため、既にある記録は上書きせず、終了時にも消さない。
+    let route = readRouteRecord(recordPath, fileSystem);
+    if (!route) {
+      const routing = readRouting(homeDir, fileSystem);
+      if (!routing || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
+      route = routing.agents;
+    }
+    if (route === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };
+    if (route === 'codex') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT } };
     return null;
   }
-  if (routing.agents !== 'claude' || typeof input.agent_id !== 'string' || !input.agent_id ||
+  const route = readRouteRecord(routeRecordPath(input, homeDir), fileSystem);
+  if (route !== 'claude' ||
     !commandInvokesCodexAgent(input.tool_input?.command)) return null;
   return {
     hookSpecificOutput: {
