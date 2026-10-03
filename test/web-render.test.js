@@ -1421,6 +1421,46 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
   }
 });
 
+test('古い PR の開閉ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render);
+
+  let activeElement;
+  const key = 'merged:acme/widget';
+  const attributes = { 'data-older-pr-line': key };
+  const activeButton = { dataset: { olderPrLine: key }, hasAttribute: (name) => name in attributes, getAttribute: (name) => attributes[name] };
+  const otherButton = {
+    dataset: { olderPrLine: 'closed:acme/widget' },
+    hasAttribute: (name) => name === 'data-older-pr-line',
+    getAttribute: () => 'closed:acme/widget',
+    focus() { activeElement = this; },
+  };
+  const replacementButton = {
+    ...activeButton,
+    focused: false,
+    focus() { this.focused = true; activeElement = this; },
+  };
+  activeElement = activeButton;
+  const context = vm.createContext({
+    answerNoteComposing: false,
+    lastState: { sessions: [{ session_id: 'session-ui' }] },
+    HTMLTextAreaElement: class FakeTextArea {},
+    document: { get activeElement() { return activeElement; }, querySelectorAll: (selector) => (selector === 'button' ? [otherButton, replacementButton] : []) },
+    root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [] },
+    displayPreferences: { mode: 'product', pinned: [] },
+    renderRouting() {},
+    renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+    orderedProducts: () => [{ key: 'product-ui' }],
+    productSection: () => ({}),
+  });
+  vm.runInContext(render, context);
+  context.render(context.lastState);
+
+  assert.equal(replacementButton.focused, true);
+  assert.equal(activeElement, replacementButton);
+});
+
 test('作業中のタスクがあるセッションでは未着手を畳み、ボタンで表示する', () => {
   const harness = taskRenderHarness();
   const session = {

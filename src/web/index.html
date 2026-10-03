@@ -2227,7 +2227,7 @@ function render(state) {
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
-  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }

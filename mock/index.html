@@ -523,6 +523,8 @@ const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
 const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+// 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
+ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -1297,7 +1299,7 @@ function renderKindMode() {
 
 function render() {
   const active = document.activeElement;
-  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle'].find(attribute => active?.hasAttribute(attribute));
+  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusValue = focusAttribute ? active.getAttribute(focusAttribute) : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
