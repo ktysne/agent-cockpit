@@ -699,6 +699,7 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
     }
     append(...nodes) { this.children.push(...nodes); }
     setAttribute() {}
+    addEventListener() {}
   }
   class FakeText {
     constructor(text) { this.textContent = text; }
@@ -717,6 +718,7 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
       getElementById: () => note,
     },
     pullRequestMergeableCount: () => 4,
+    uniqueOpenPullRequestCount: () => 7,
     isPendingDecision: () => false,
     isHeldDecision: () => false,
     hasEffectiveAnswer: () => false,
@@ -728,6 +730,49 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
   assert.equal(chip.children[0].textContent, 'マージできる PR ');
   assert.equal(chip.children[1].textContent, '4');
   assert.equal(chip.children.map((node) => node.textContent).join(''), 'マージできる PR 4');
+
+  context.displayPreferences.hidden = ['prs'];
+  context.renderSummary([], []);
+  assert.equal(note.children[0].textContent, '非表示: マージできる PR (7 件)');
+});
+
+test('マージできる PR はマージボタンが出るものだけを、複数の PR 群にまたがっても 1 件として数える', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functions = ['pullRequestKeys', 'pullRequestMergeableCount', 'uniqueOpenPullRequestCount'].map((name) => (
+    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+  ));
+  assert.ok(functions.every(Boolean));
+  const context = vm.createContext({});
+  vm.runInContext(functions.join('\n'), context);
+
+  const shared = { number: 1, canMerge: true, mergeSessionId: 'session-a', children: [
+    { number: 2, canMerge: true, mergeSessionId: null, children: [] },
+  ] };
+  const groups = [
+    { owner: 'Example', repo: 'Project', trees: [shared] },
+    { owner: 'example', repo: 'project', trees: [shared, { number: 3, canMerge: false, mergeSessionId: 'session-b', children: [] }] },
+  ];
+
+  assert.equal(context.pullRequestMergeableCount(groups), 1);
+  assert.equal(context.uniqueOpenPullRequestCount(groups), 3);
+});
+
+test('見出しの判断待ちは回答を送ったものを数えず、保留を選んだものと無視された回答は数える', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functions = ['hasEffectiveAnswer', 'isHeldDecision', 'isAwaitingDecision'].map((name) => (
+    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+  ));
+  assert.ok(functions.every(Boolean));
+  const context = vm.createContext({});
+  vm.runInContext(functions.join('\n'), context);
+  const sentAt = '2026-10-03T12:00:00.000Z';
+
+  assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: null }), true);
+  assert.equal(context.isAwaitingDecision({ state: 'provisional', answer: null }), true);
+  assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: { choice: 'pick', sentAt } }), false);
+  assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: { choice: 'hold', sentAt } }), true);
+  assert.equal(context.isAwaitingDecision({ state: 'waiting', answer: { choice: 'pick', sentAt, ignoredAt: sentAt } }), true);
+  assert.equal(context.isAwaitingDecision({ state: 'resolved', answer: null }), false);
 });
 
 test('プロダクト別と種類別に前回見てからを表示し、新しい判断に印を付ける', () => {

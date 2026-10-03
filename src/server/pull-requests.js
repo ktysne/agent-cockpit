@@ -468,8 +468,10 @@ function shouldReplaceCrossReview(current, candidate, headSha) {
   return current.reviewedSha !== headSha;
 }
 
+// マージボタンは登録したセッションがある PR にだけ出るので、件数もそれに合わせる。
 function mergeablePullRequestCount(trees) {
-  return trees.reduce((total, pullRequest) => total + Number(pullRequest.canMerge === true) + mergeablePullRequestCount(pullRequest.children || []), 0);
+  return trees.reduce((total, pullRequest) => total + Number(pullRequest.canMerge === true && Boolean(pullRequest.mergeSessionId))
+    + mergeablePullRequestCount(pullRequest.children || []), 0);
 }
 
 // 鍵の文字列はプロダクトの鍵次第で分解できないので、リポジトリは保存した owner と repo で比べる。

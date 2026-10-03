@@ -553,6 +553,24 @@ test('gh が失敗しても PR の取得理由を返し、登録状態を維持�
   assert.deepEqual(group.trees, []);
 });
 
+test('マージできる PR の件数は、登録したセッションがありマージボタンが出る PR だけを数える', () => {
+  const state = new DashboardState();
+  const tracker = new PullRequestTracker({ state });
+  const pullRequest = (number, mergeSessionId, children = []) => ({
+    number, title: `PR ${number}`, url: `https://github.com/example/project/pull/${number}`,
+    headRefName: `feat/${number}`, baseRefName: 'main', headRefOid: String(number).repeat(40).slice(0, 40),
+    canMerge: true, mergeSessionId, children,
+  });
+  tracker.productViews = new Map([['project', {
+    owner: 'example', repo: 'project', product: { key: 'project', name: 'Project' },
+    mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
+    registeredCount: 1, openCount: 2, mergeableCount: 0, trees: [pullRequest(1, 'session-1', [pullRequest(2, null)])], merged: [],
+    mergeHistory: [], reservations: [], lastMethod: null,
+  }]]);
+
+  assert.equal(tracker.snapshot()[0].mergeableCount, 1);
+});
+
 test('PR の衝突依頼スナップショットは登録セッションの稼働状態を示し、head 変更後は依頼済み表示を外す', () => {
   const state = new DashboardState();
   const url = 'https://github.com/example/project/pull/42';
