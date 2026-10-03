@@ -709,6 +709,38 @@ test('セッションファイル不在で終了すると質問待ち、通知�
   assert.equal(delivery.taskNudges.sessions.has(sessionId), false);
 });
 
+test('質問待ちのまま不在終了すると待ちの印を外し、再開後は届かない回答を受け付けない', async () => {
+  const clock = new FakeClock();
+  let delivery;
+  const state = new DashboardState({
+    onSessionEndedByAbsence: (sessionId, endedAt) => delivery.sessionEnded(sessionId, endedAt),
+    onSessionReopened: (sessionId) => delivery.sessionReopened(sessionId),
+  });
+  delivery = new DecisionAnswerDelivery({
+    state,
+    away: { snapshot: () => ({ enabled: true }) },
+    now: () => clock.now(),
+    setTimeoutImpl: (callback, milliseconds) => clock.setTimeout(callback, milliseconds),
+    clearTimeoutImpl: (id) => clock.clearTimeout(id),
+  });
+  const sessionId = 'session-absent-ask-reopened';
+  const toolUseId = 'ask-absent-reopened';
+  const file = { session_id: sessionId, cwd: 'C:\\project', name: '質問待ち' };
+  state.syncSessionFiles([file], clock.now());
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: clock.now() });
+  const registration = delivery.registerAsk({ sessionId, toolUseId, questions: QUESTIONS });
+  const waiting = delivery.waitForAsk({ sessionId, toolUseId });
+
+  state.syncSessionFiles([], clock.now() + 60_000);
+  assert.deepEqual(await waiting, { outcome: 'released' });
+  state.syncSessionFiles([file], clock.now() + 60_001);
+
+  // 質問を出したフックの待ちは解けたので、質問には Claude Code の画面で答える。
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).awaitingAnswerUntil ?? null, null);
+  assert.equal(delivery.submitAnswer(sessionId, registration.decisionId, 'pick', '', [['CSV']]), null);
+  assert.equal(delivery.deliverPending(sessionId), null);
+});
+
 test('不在終了したセッションが再び一覧に載ると配信側の終了印を外す', () => {
   let delivery;
   const state = new DashboardState({

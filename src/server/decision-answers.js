@@ -388,6 +388,8 @@ class DecisionAnswerDelivery {
     this.sessionNotifications.delete(sessionId);
     this.handleLifecycleEvent(sessionId, 'SessionEnd', `SessionEnd:${endedAt}`, endedAt);
     this.clearSessionAskWaits(sessionId);
+    // 待ちの印が残ると、再開後に送った回答が通常の配信経路から外れたままになる。
+    this.state.clearAwaitingAnswers?.(sessionId, endedAt);
   }
 
   sessionReopened(sessionId) {

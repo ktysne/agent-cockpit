@@ -1968,6 +1968,20 @@ class DashboardState {
     return this.sessions.get(sessionId)?.decisionBindings?.[toolUseId] || null;
   }
 
+  // 終了の片付けはセッションを一覧から消した後にも呼ばれるので、判断事項を引かずに記録だけを直す。
+  clearAwaitingAnswers(sessionId, now = Date.now()) {
+    let changed = false;
+    for (const lifecycle of this.decisionLifecycles.get(sessionId)?.values() || []) {
+      if (!lifecycle.awaitingAnswerUntil) continue;
+      lifecycle.awaitingAnswerUntil = null;
+      lifecycle.updatedAt = isoTime(now);
+      changed = true;
+    }
+    if (!changed) return;
+    this.touch();
+    this.requestStoreWrite(true);
+  }
+
   setDecisionLifecycle(sessionId, decisionId, updates, now = Date.now()) {
     if (!this.decisionFor(sessionId, decisionId)) return null;
     let lifecycles = this.decisionLifecycles.get(sessionId);
