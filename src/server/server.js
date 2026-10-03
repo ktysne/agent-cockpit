@@ -1076,6 +1076,8 @@ async function startServer(options = {}) {
     away,
     ...(options.answerDeliveryOptions || {}),
   });
+  state.onSessionEndedByAbsence = (sessionId, endedAt) => answerDelivery.sessionEnded?.(sessionId, endedAt);
+  state.onSessionReopened = (sessionId) => answerDelivery.sessionReopened?.(sessionId);
   const pullRequestTracker = options.pullRequestTracker || new PullRequestTracker({ state, ...(options.pullRequestOptions || {}) });
   const pullRequestMergeManager = options.pullRequestMergeManager || new PullRequestMergeManager({
     state,

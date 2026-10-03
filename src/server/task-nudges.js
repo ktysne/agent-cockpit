@@ -32,7 +32,7 @@ class TaskNudges {
   afterEvent(event) {
     if (!event || typeof event.session_id !== 'string') return;
     if (event.hook_event_name === 'SessionEnd' && !event.agent_id) {
-      this.sessions.delete(event.session_id);
+      this.sessionEnded(event.session_id);
       return;
     }
     const session = this.sessionFor(event.session_id);
@@ -64,6 +64,10 @@ class TaskNudges {
     if (event.tool_name === 'Agent' && !this.hasTasks(event.session_id)) {
       session.agentStartedWithoutTasks = true;
     }
+  }
+
+  sessionEnded(sessionId) {
+    this.sessions.delete(sessionId);
   }
 
   tasksWritten(sessionId, writtenAt = this.now()) {

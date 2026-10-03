@@ -937,6 +937,8 @@ class DashboardState {
     this.storeWriteTimer = null;
     this.storeWritePending = false;
     this.restoreSessionCleanupPending = false;
+    this.onSessionEndedByAbsence = options.onSessionEndedByAbsence || null;
+    this.onSessionReopened = options.onSessionReopened || null;
   }
 
   static async load(homeDir, options = {}) {
@@ -1573,7 +1575,7 @@ class DashboardState {
       this.restoreSessionCleanupPending = false;
       this.pruneExpiredStoreRecords(now);
       for (const sessionId of this.hiddenSessions) {
-        if (this.sessions.has(sessionId) || next.has(sessionId) || this.plans.get(sessionId)?.tasks.length) continue;
+        if (this.sessions.has(sessionId) || next.has(sessionId)) continue;
         this.hiddenSessions.delete(sessionId);
         this.hiddenSessionUpdatedAt.delete(sessionId);
         changed = true;
@@ -1637,6 +1639,7 @@ class DashboardState {
       this.hiddenSessionUpdatedAt.delete(sessionId);
       this.requestStoreWrite();
     }
+    this.onSessionEndedByAbsence?.(sessionId, endedAt);
   }
 
   reopenAbsentSession(sessionId) {
@@ -1644,6 +1647,7 @@ class DashboardState {
     const entries = this.entries.get(sessionId) || [];
     const [session] = deriveSessions(entries);
     if (session) this.sessions.set(sessionId, session);
+    this.onSessionReopened?.(sessionId);
   }
 
   hasAgentRow(sessionId, agentId) {
