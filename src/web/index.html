@@ -874,6 +874,11 @@ function isHeldDecision(decision) {
   return ['waiting', 'provisional'].includes(decision.state) && decision.answer?.choice === 'hold' && !decision.answer.ignoredAt;
 }
 
+// 回答を送ったものはセッションの反映を待つだけなので数えず、保留を選んだものは開発者の判断が残るので数える。
+function isAwaitingDecision(decision) {
+  return ['waiting', 'provisional'].includes(decision.state) && (!hasEffectiveAnswer(decision) || isHeldDecision(decision));
+}
+
 function renderSummary(sessions, pullRequestGroups = []) {
   const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
   const decisions = sessions.flatMap((session) => session.decisions);
@@ -901,7 +906,9 @@ function renderSummary(sessions, pullRequestGroups = []) {
   }));
 
   const hiddenKinds = FILTERS.filter(({ key }) => displayPreferences.hidden.includes(key));
-  const hiddenCount = hiddenKinds.reduce((total, { key }) => total + counts[key], 0);
+  // PR の種類を隠すとプロダクトごとの PR の欄が隠れるので、隠れる行の数(オープンの PR の数)で数える。
+  const hiddenRowCounts = { ...counts, prs: pullRequestOpenCount(pullRequestGroups) };
+  const hiddenCount = hiddenKinds.reduce((total, { key }) => total + hiddenRowCounts[key], 0);
   const note = document.getElementById('filter-note');
   note.hidden = hiddenKinds.length === 0;
   if (hiddenKinds.length) {
@@ -983,8 +990,19 @@ function pullRequestOpenCount(groups) {
   return groups.reduce((total, group) => total + (group.openCount || 0), 0);
 }
 
+// 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
+function pullRequestKeys(groups, includes) {
+  const keys = new Set();
+  const visit = (group, pullRequest) => {
+    if (includes(pullRequest)) keys.add(`${group.owner}/${group.repo}#${pullRequest.number}`.toLowerCase());
+    for (const child of pullRequest.children || []) visit(group, child);
+  };
+  for (const group of groups) for (const tree of group.trees || []) visit(group, tree);
+  return keys;
+}
+
 function pullRequestMergeableCount(groups) {
-  return groups.reduce((total, group) => total + (group.mergeableCount || 0), 0);
+  return pullRequestKeys(groups, (pullRequest) => pullRequest.canMerge === true && Boolean(pullRequest.mergeSessionId)).size;
 }
 
 function pullRequestTimeLabel(value) {
@@ -2175,7 +2193,7 @@ function productSection(product, index, products, pinnedCount) {
   if (branch) head.append(element('span', 'meta branch', branch));
 
   const permissionCount = product.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter((decision) => ['waiting', 'provisional'].includes(decision.state)).length, 0);
+  const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter(isAwaitingDecision).length, 0);
   const pullRequestGroups = product.pullRequestGroups || [];
   if (permissionCount) head.append(element('span', 'chip danger', `許可待ち (${permissionCount} 件)`));
   if (decisionCount) head.append(element('span', 'chip danger', `判断待ち (${decisionCount} 件)`));
@@ -3091,7 +3109,7 @@ async function refresh() {
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
       const permissions = visibleSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
+      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter(isAwaitingDecision).length, 0);
       liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${permissions} 件)、判断待ち (${decisions} 件)。`;
     }
   } catch {

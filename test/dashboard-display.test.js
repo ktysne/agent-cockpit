@@ -329,6 +329,7 @@ test('PRフィルターの札はマージできる件数を表示する', () => 
     summary,
     displayPreferences: { hidden: [] },
     pullRequestMergeableCount: (groups) => groups.reduce((count, group) => count + group.mergeableCount, 0),
+    pullRequestOpenCount: () => 0,
     isPendingDecision: () => false,
     isHeldDecision: () => false,
     hasEffectiveAnswer: () => false,
