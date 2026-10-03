@@ -906,8 +906,8 @@ function renderSummary(sessions, pullRequestGroups = []) {
   }));
 
   const hiddenKinds = FILTERS.filter(({ key }) => displayPreferences.hidden.includes(key));
-  // PR の種類を隠すと PR の欄ごと隠れるので、隠れる件数はオープンの PR の数で数える。
-  const hiddenRowCounts = { ...counts, prs: uniqueOpenPullRequestCount(pullRequestGroups) };
+  // PR の種類を隠すとプロダクトごとの PR の欄が隠れるので、隠れる行の数(オープンの PR の数)で数える。
+  const hiddenRowCounts = { ...counts, prs: pullRequestOpenCount(pullRequestGroups) };
   const hiddenCount = hiddenKinds.reduce((total, { key }) => total + hiddenRowCounts[key], 0);
   const note = document.getElementById('filter-note');
   note.hidden = hiddenKinds.length === 0;
@@ -1003,10 +1003,6 @@ function pullRequestKeys(groups, includes) {
 
 function pullRequestMergeableCount(groups) {
   return pullRequestKeys(groups, (pullRequest) => pullRequest.canMerge === true && Boolean(pullRequest.mergeSessionId)).size;
-}
-
-function uniqueOpenPullRequestCount(groups) {
-  return pullRequestKeys(groups, () => true).size;
 }
 
 function pullRequestTimeLabel(value) {

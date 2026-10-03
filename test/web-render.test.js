@@ -718,7 +718,7 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
       getElementById: () => note,
     },
     pullRequestMergeableCount: () => 4,
-    uniqueOpenPullRequestCount: () => 7,
+    pullRequestOpenCount: (groups) => groups.reduce((total, group) => total + group.openCount, 0),
     isPendingDecision: () => false,
     isHeldDecision: () => false,
     hasEffectiveAnswer: () => false,
@@ -731,14 +731,15 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
   assert.equal(chip.children[1].textContent, '4');
   assert.equal(chip.children.map((node) => node.textContent).join(''), 'マージできる PR 4');
 
+  // 同じ PR が 2 つのプロダクトの PR 群に載ると 2 行に出るので、隠れる行も 2 件と数える。
   context.displayPreferences.hidden = ['prs'];
-  context.renderSummary([], []);
-  assert.equal(note.children[0].textContent, '非表示: マージできる PR (7 件)');
+  context.renderSummary([], [{ openCount: 1 }, { openCount: 1 }]);
+  assert.equal(note.children[0].textContent, '非表示: マージできる PR (2 件)');
 });
 
 test('マージできる PR はマージボタンが出るものだけを、複数の PR 群にまたがっても 1 件として数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestKeys', 'pullRequestMergeableCount', 'uniqueOpenPullRequestCount'].map((name) => (
+  const functions = ['pullRequestKeys', 'pullRequestMergeableCount'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -754,7 +755,6 @@ test('マージできる PR はマージボタンが出るものだけを、複�
   ];
 
   assert.equal(context.pullRequestMergeableCount(groups), 1);
-  assert.equal(context.uniqueOpenPullRequestCount(groups), 3);
 });
 
 test('見出しの判断待ちは回答を送ったものを数えず、保留を選んだものと無視された回答は数える', () => {
