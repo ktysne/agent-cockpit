@@ -923,6 +923,7 @@ class DashboardState {
     this.closedTasks = new Map();
     this.pullRequests = new Map();
     this.relatedPullRequests = new Map();
+    this.pullRequestConflictRequests = new Map();
     this.pullRequestRetargets = [];
     this.mergedPullRequests = new Map();
     this.pullRequestMergeReservationRecords = new Map();
@@ -1180,6 +1181,36 @@ class DashboardState {
       return record ? normalizePullRequestRecord(record) : null;
     }
     return matches.length === 1 ? normalizePullRequestRecord(matches[0]) : null;
+  }
+
+  pullRequestRegistrationByKey(registrationKey) {
+    if (typeof registrationKey !== 'string' || !/^[a-f0-9]{64}$/i.test(registrationKey)) return null;
+    const record = this.pullRequestRegistrations().find((candidate) => pullRequestRegistrationKey(candidate) === registrationKey);
+    return record ? normalizePullRequestRecord(record) : null;
+  }
+
+  sessionHasEnded(sessionId) {
+    return this.endedAt.has(sessionId) || this.endedByAbsence.has(sessionId);
+  }
+
+  recordPullRequestConflictRequest(record) {
+    const key = pullRequestRecordKey(record.owner, record.repo, record.number);
+    const next = {
+      owner: record.owner,
+      repo: record.repo,
+      number: record.number,
+      headRefOid: record.headRefOid,
+      requestedAt: record.requestedAt,
+      sessionIds: [...record.sessionIds],
+    };
+    this.pullRequestConflictRequests.set(key, next);
+    this.touch();
+    return { ...next, sessionIds: [...next.sessionIds] };
+  }
+
+  pullRequestConflictRequest(owner, repo, number) {
+    const record = this.pullRequestConflictRequests.get(pullRequestRecordKey(owner, repo, number));
+    return record ? { ...record, sessionIds: [...record.sessionIds] } : null;
   }
 
   pullRequestRegistrationKey(record) {
