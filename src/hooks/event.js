@@ -121,9 +121,13 @@ function extractCodexReviewDefinition(command) {
   const pattern = /(?:^|&&|\|\||[;&|(\r\n])[ \t]*(npm[ \t]+run[ \t]+review:codex:fix|npm[ \t]+run[ \t]+review:codex|node[ \t]+(?:\.[\\/])?tools[\\/]cross-review\.js[ \t]+codex)(?=$|[\s;&|)])/gim;
   for (const match of commandText.matchAll(pattern)) {
     const commandStart = match.index + match[0].lastIndexOf(match[1]);
-    const commandTail = commandText.slice(commandStart + match[1].length).split(/[;&|()\r\n]/, 1)[0];
+    // `2>&1` の `&` をコマンドの区切りと取り違えないため、リダイレクトを除いてから区切る。
+    const commandTail = commandText.slice(commandStart + match[1].length)
+      .replace(/\d*>&\d+|&>>?[ \t]*[^\s;&|()]+|\d*>>?[ \t]*[^\s;&|()]+/g, ' ')
+      .split(/[;&|()\r\n]/, 1)[0];
     const argumentsList = shellArguments(commandTail);
-    if (argumentsList.includes('--no-codex-agent')) continue;
+    // ヘルプを出すだけの起動と、Codex のラッパーを通らない起動は、Codex を動かさない。
+    if (['--no-codex-agent', '--help', '-h'].some((option) => argumentsList.includes(option))) continue;
 
     const fix = /review:codex:fix$/i.test(match[1]) || argumentsList.includes('--fix');
     return fix ? 'codex-subagent' : 'codex-review';
