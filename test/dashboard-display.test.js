@@ -33,6 +33,39 @@ test('モックと実装の画面スクリプトを構文解析できる', () =>
   }
 });
 
+test('モックに合わせた配色、札、タスク行を表示する', () => {
+  assert.match(web, /--on-ok: #ffffff;/);
+  assert.equal((web.match(/--on-ok: #1f1e1d;/g) || []).length, 2);
+  assert.match(web, /\.merge-btn \{[^}]*color: var\(--on-ok\)/);
+  assert.match(web, /\.merge-confirm \.merge-go \{[^}]*color: var\(--on-ok\)/);
+  assert.match(web, /\.merge-confirm\.auto \.merge-go \{[^}]*color: var\(--on-ok\)/);
+  assert.match(web, /\.badge\.new-mark \{ background: var\(--accent\); color: var\(--on-accent\); \}/);
+  assert.match(web, /\.permission code \{/);
+  assert.match(web, /\.settings-dialog \{ width: min\(440px,/);
+  assert.match(web, /\.away-toggle \{[^}]*min-height: 40px/);
+  assert.match(web, /\.criteria-list li::marker \{ content: "・"; \}/);
+
+  const taskRowStyle = web.match(/\.task-item \{[^}]*\}/)?.[0];
+  const taskTitleStyle = web.match(/\.task-title \{[^}]*\}/)?.[0];
+  assert.ok(taskRowStyle && taskTitleStyle);
+  assert.doesNotMatch(taskRowStyle, /background:/);
+  assert.doesNotMatch(taskTitleStyle, /font-weight:/);
+  assert.match(web, /\.task-item:hover \{ background: var\(--surface-2\); \}/);
+
+  const appendTaskItem = functionSource(web, 'appendTaskItem');
+  const appendDecisionCard = functionSource(web, 'appendDecisionCard');
+  assert.ok(appendTaskItem && appendDecisionCard);
+  assert.ok(appendTaskItem.indexOf('header.append(badge(') < appendTaskItem.indexOf('appendContextTags(header'));
+  assert.ok(appendTaskItem.indexOf('appendContextTags(header') < appendTaskItem.indexOf("element('span', 'task-title'"));
+  assert.ok(appendDecisionCard.indexOf("badge('推奨', 'busy')") < appendDecisionCard.indexOf('body.append(element(\'span\', \'\', displayLabel))'));
+  assert.match(web, /agent\.startedAt \? durationAgoLabel\(agent\.startedAt\)/);
+  assert.match(web, /GitHub から \$\{durationAgoLabel\(group\.fetchedAt \|\| group\.checkedAt\)\}に取得/);
+  assert.match(mock, /class="badge permission">\$\{stateLabel\}/);
+  assert.match(mock, /マージ済み \(24 時間\)/);
+  assert.match(mock, /\['squash', 'rebase'\]\.includes\(o\.method\)/);
+  assert.match(mock, /PR #57 の CI が失敗した'/);
+});
+
 test('経路札は起動時の設定を表示し、現在と違う設定には変更前を付ける', () => {
   const route = web.match(/const ROUTE = \{[\s\S]*?\n\};/)?.[0];
   const routeValues = web.match(/const ROUTE_VALUES = new Set\([^\n]+/)?.[0];

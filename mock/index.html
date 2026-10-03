@@ -242,6 +242,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .badge.busy { background: var(--accent-soft); color: var(--accent); }
 .badge.wait { background: var(--warn-soft); color: var(--warn); }
 .badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.permission { margin-bottom: 10px; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 12px; background: var(--surface); }
 .pr .why-not { font-size: 12px; color: var(--text-2); }
 .pr.can-merge { background: var(--ok-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-btn { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
@@ -458,7 +459,7 @@ const DATA = {
       id: 'agent-gc', name: 'agent-gc', branch: 'fix/worktree-scan', sessionTitle: 'worktree の削除条件', status: 'wait',
       main: { tool: '—', since: '18 分前' },
       perms: [],
-      news: [{ t: 'PR #57 の CI が失敗した (test: worktree-scan)' }],
+      news: [{ t: 'PR #57 の CI が失敗した' }],
       subagents: [],
       tasks: [
         { title: 'ロックされた worktree の検出', state: 'done', criteria: [{ t: 'locked の worktree を一覧で区別する', met: true }] },
@@ -916,7 +917,9 @@ function decisionCard(p, session, d, withTag) {
   const stateClass = { waiting: 'blocking', provisional: 'provisional', resolved: 'state-ok', withdrawn: 'withdrawn' }[state];
   const stateLabel = { waiting: '止めて待っている', provisional: '推奨で仮に進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
   const stateTone = { waiting: 'danger', provisional: 'warn', resolved: 'ok', withdrawn: 'mute' }[state];
-  const stateChip = `<span class="chip ${stateTone}">${stateLabel}</span>`;
+  const stateChip = state === 'waiting'
+    ? `<span class="badge permission">${stateLabel}</span>`
+    : `<span class="chip ${stateTone}">${stateLabel}</span>`;
   // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
   const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
@@ -1067,8 +1070,8 @@ function mergeConfirm(p, pr, auto) {
     kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
     p.repo.autoDeleteBranch ? `リモートのブランチ ${esc(pr.head)} は GitHub が自動で削除する (リポジトリの設定)`
       : o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',
-    kids.length && o.method === 'squash' ? `<span>スカッシュのため ${kidNames} には #${pr.number} のコミットが残る。セッションに積み直しを依頼する</span>` : '',
-    `結果を ${esc(p.name)} のセッションに知らせる`,
+    kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する</span>` : '',
+    '結果を PR を作ったセッションへ知らせる',
     auto ? `予約のあとに push されたら、予約を取り消して知らせる` : '',
   ].filter(Boolean);
   return `<div class="merge-confirm ${auto ? 'auto' : ''}" data-pr="${prKey(p, pr.number)}">
@@ -1162,7 +1165,7 @@ function prBlock(p, withTag) {
       <div class="stack-level">${prTree(p, r)}</div></div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
-  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み', mergedNewestFirst.map(({ pr, m }) =>
+  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', mergedNewestFirst.map(({ pr, m }) =>
     `<span class="badge mute">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`));
   const closed = p.closedPrs || [];
   const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr => `<span class="badge mute" title="${esc(pr.title)}">#${pr.number}</span>`));

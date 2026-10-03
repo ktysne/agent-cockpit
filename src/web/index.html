@@ -28,6 +28,7 @@
   --hold: #6741d9;
   --hold-soft: #efe9ff;
   --on-accent: #ffffff;
+  --on-ok: #ffffff;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
@@ -37,6 +38,7 @@
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+    --on-accent: #ffffff; --on-ok: #1f1e1d;
   }
 }
 :root[data-theme="dark"] {
@@ -45,6 +47,7 @@
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+  --on-accent: #ffffff; --on-ok: #1f1e1d;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
@@ -85,11 +88,11 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .ended-toggle:hover { color: var(--text); }
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; white-space: nowrap; }
+.away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); cursor: pointer; white-space: nowrap; }
 .away-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
 .away-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.settings-dialog { width: min(480px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+.settings-dialog { width: min(440px, calc(100vw - 32px)); max-width: calc(100vw - 32px); padding: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
 .settings-dialog::backdrop { background: rgb(0 0 0 / 55%); }
 .settings-dialog h2 { margin: 0; font-size: 18px; }
 .settings-dialog section { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
@@ -183,17 +186,18 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-list { list-style: none; margin: 0; padding: 0; }
 .kind-session-tasks + .kind-session-tasks { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .kind-task-head { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin: 4px 0 8px; }
-.task-item { min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.task-item { min-width: 0; overflow-wrap: anywhere; padding: 6px 10px; border-radius: 8px; }
+.task-item:hover { background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
 .task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
-.task-title { min-width: 0; font-weight: 600; }
+.task-title { min-width: 0; }
 .task-state { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface); color: var(--text-2); }
 .task-state.doing { background: var(--accent-soft); color: var(--accent); }
 .task-state.done { background: var(--ok-soft); color: var(--ok); }
 .criteria-list { margin: 4px 0 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .criteria-list li.met { color: var(--ok); }
+.criteria-list li::marker { content: "・"; }
 .criteria-list li.met::marker { content: "✓ "; }
-.criteria-list li:not(.met)::marker { content: "○ "; }
 .task-updated { margin-top: 6px; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
@@ -257,7 +261,7 @@ h3.sub .count { font-weight: normal; }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
 .badge.mute { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
-.badge.new-mark { background: var(--accent-soft); color: var(--accent); }
+.badge.new-mark { background: var(--accent); color: var(--on-accent); }
 .news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
 .news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent); }
 .news ul { margin: 4px 0 0; padding-left: 20px; }
@@ -276,7 +280,7 @@ h3.sub .count { font-weight: normal; }
 .pr .branch { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
 .pr .why-not { color: var(--text-2); font-size: 12px; }
 .pr.can-merge { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--ok-soft); }
-.merge-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 0; border-radius: 8px; background: var(--ok); color: var(--text); cursor: pointer; }
+.merge-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
 .auto-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .merge-confirm { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 8px; background: var(--surface); font-size: 13px; }
 .merge-confirm.auto { border-color: var(--accent); }
@@ -289,8 +293,8 @@ h3.sub .count { font-weight: normal; }
 .merge-confirm .effects { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .merge-confirm .effects li.warn { color: var(--warn); }
 .merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.merge-confirm .merge-go { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--ok); color: var(--text); cursor: pointer; }
-.merge-confirm.auto .merge-go { background: var(--accent); color: var(--text); }
+.merge-confirm .merge-go { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
+.merge-confirm.auto .merge-go { background: var(--accent); color: var(--on-ok); }
 .merge-confirm .ghost { min-height: 40px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
 .merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .auto-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .merge-confirm button:disabled { cursor: wait; opacity: .65; }
@@ -317,7 +321,7 @@ h3.sub .count { font-weight: normal; }
 .decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
 .wait { color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .wait.stale { color: var(--danger); font-weight: 600; }
-.perm code { padding: 2px 6px; border-radius: 4px; background: var(--surface-2); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.permission code { padding: 2px 6px; border-radius: 4px; background: var(--surface-2); font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .ended-toggle { min-height: 32px; margin-top: 6px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 12px; }
 .ended-toggle:hover { color: var(--text); }
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1098,6 +1102,23 @@ function pullRequestTimeLabel(value) {
   return Number.isFinite(time) ? new Date(time).toLocaleString('ja-JP') : '未取得';
 }
 
+function decisionElapsedLabel(decision) {
+  if (decision.state === 'waiting') {
+    const age = Date.now() - Date.parse(decision.createdAt);
+    const minutes = Number.isFinite(age) ? Math.max(0, Math.floor(age / 60_000)) : null;
+    const stale = Number.isFinite(age) && age > LONG_WAIT_MS && !hasEffectiveAnswer(decision);
+    return {
+      className: `wait ${stale ? 'stale' : ''}`.trim(),
+      label: minutes === null ? '時刻不明' : `${minutes} 分待機中`,
+      stale,
+    };
+  }
+  if (decision.state === 'provisional') {
+    return { className: 'since', label: `仮適用から ${durationLabel(decision.updatedAt)}`, stale: false };
+  }
+  return null;
+}
+
 function appendPullRequestBadges(target, pullRequest) {
   const ci = {
     pass: ['ok', 'CI 成功'],
@@ -1312,7 +1333,7 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   const targetInstruction = element('li');
   targetInstruction.append(document.createTextNode(`${names.length ? `${names.join('、')} のセッション` : 'PR を登録したセッション'}に、base の `));
   targetInstruction.append(element('code', '', pullRequest.effectiveBase || pullRequest.baseRefName || group.defaultBranch || ''));
-  targetInstruction.append(document.createTextNode(' を取り込んで衝突を解消し、検証してから push するよう依頼する'));
+  targetInstruction.append(document.createTextNode(' を取り込んで衝突を解消し、push するよう依頼する'));
   effects.append(targetInstruction);
   effects.append(element('li', '', 'セッションにはマージしないよう伝える。解消した後に、このカードからマージする'));
   effects.append(element('li', '', `head が ${pullRequest.headRefOid} から変わると、依頼済みの表示を消す`));
@@ -1459,7 +1480,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
   if (withTag) head.append(element('span', 'prod-tag', group.product.name));
   head.append(
     element('span', '', `${group.owner}/${group.repo}`),
-    element('span', '', `GitHub から ${pullRequestTimeLabel(group.fetchedAt || group.checkedAt)} に取得`),
+    element('span', '', `GitHub から ${durationAgoLabel(group.fetchedAt || group.checkedAt)}に取得`),
   );
   target.append(head);
   if (group.error) target.append(element('div', 'error-box', group.error));
@@ -1526,8 +1547,12 @@ function appendPullRequestBlock(target, group, withTag = false) {
     link.title = pullRequest.title;
     line.append(link);
   });
-  if (!group.trees.length && !group.merged.length && !group.mergeHistory?.length && !group.error) {
-    target.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
+  if (!group.trees.length && !group.error) {
+    if (group.merged.length || group.mergeHistory?.length) {
+      target.append(element('div', 'empty', 'オープンの PR はありません'));
+    } else {
+      target.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
+    }
   }
 }
 
@@ -1680,7 +1705,7 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
     appendModelLine(detail, agent);
-    row.append(who, detail, element('time', 'since', agent.startedAt ? durationLabel(agent.startedAt) : ''));
+    row.append(who, detail, element('time', 'since', agent.startedAt ? durationAgoLabel(agent.startedAt) : ''));
     list.append(row);
   }
   if (visibleAgents.length) body.append(list);
@@ -1925,8 +1950,8 @@ function appendDecisionAnswer(card, decision, product, session) {
 }
 
 function appendDecisionCard(list, decision, product, session, withTags = false, multipleSessions = false) {
-  const age = Date.now() - Date.parse(decision.createdAt);
-  const longWait = decision.state === 'waiting' && age > LONG_WAIT_MS && !hasEffectiveAnswer(decision);
+  const elapsed = decisionElapsedLabel(decision);
+  const longWait = elapsed?.stale === true;
   const card = element('article', `decision-card ${decision.state} ${longWait ? 'long-wait' : ''}`.trim());
   const answerActive = decisionAnswerAvailability(decision).active;
   const optionDraft = answerActive ? answerDraftFor(decision, session) : null;
@@ -1937,12 +1962,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
     element('span', 'decision-title', decision.title),
     badge(decisionStateLabel(decision.state), decision.state === 'waiting' ? 'permission' : decision.state === 'provisional' ? 'wait' : decision.state === 'resolved' ? 'done' : ''),
   );
-  const elapsed = decision.state === 'waiting'
-    ? `待ち時間 ${durationLabel(decision.createdAt)}`
-    : decision.state === 'provisional'
-      ? `仮適用から ${durationLabel(decision.updatedAt)}`
-      : `更新 ${durationLabel(decision.updatedAt)}`;
-  header.append(element('time', 'since', elapsed));
+  if (elapsed) header.append(element('time', elapsed.className, elapsed.label));
   if (decision.state === 'waiting' && decision.awaitingAnswerUntil) {
     const remaining = Math.max(0, Math.ceil((Date.parse(decision.awaitingAnswerUntil) - Date.now()) / 60_000));
     header.append(element('span', 'wait awaiting-min', `あと ${remaining} 分で推奨に進む`));
@@ -1963,8 +1983,8 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
         const row = element('li', `decision-option ${option.recommended ? 'recommended' : ''}`.trim());
         const displayLabel = option.recommended ? displayRecommendedLabel(option.label) : option.label;
         const body = element('span', 'answer-pick-body');
-        body.append(element('span', '', displayLabel));
         if (option.recommended) body.append(badge('推奨', 'busy'));
+        body.append(element('span', '', displayLabel));
         if (option.description) body.append(element('span', 'decision-option-description', option.description));
         if (answerActive) {
           row.classList.add('pickable');
@@ -2056,8 +2076,9 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   const labels = { todo: '未着手', doing: '作業中', done: '完了' };
   const item = element('li', `task-item ${task.state}`);
   const header = element('div', 'task-head');
+  header.append(badge(labels[task.state] || task.state, task.state === 'done' ? 'done' : task.state === 'doing' ? 'busy' : ''));
   appendContextTags(header, product, session, withTags, multipleSessions);
-  header.append(element('span', 'task-title', task.title), badge(labels[task.state] || task.state, task.state === 'done' ? 'done' : task.state === 'doing' ? 'busy' : ''));
+  header.append(element('span', 'task-title', task.title));
   const met = task.criteria.filter((criterion) => criterion.met).length;
   header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
   if (task.closedByUser) header.append(element('span', 'meta', '画面で完了にした'));
@@ -2380,6 +2401,12 @@ function kindEndedDecisionEntries(references) {
   return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
 
+function kindDecisionWaitAge(decision) {
+  if (decision.answer?.sentAt) return -1;
+  const timestamp = Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
+  return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : 0;
+}
+
 function kindEndedAgentCount(references) {
   return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
@@ -2398,10 +2425,7 @@ function renderKindSections(products) {
     for (const decision of shownActiveDecisions(session)) {
       const list = element('div', 'decision-list');
       appendDecisionCard(list, decision, product, session, true, multipleSessions);
-      waitingItems.push({
-        age: Date.now() - Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt),
-        card: list.firstElementChild,
-      });
+      waitingItems.push({ age: kindDecisionWaitAge(decision), card: list.firstElementChild });
     }
 
   }
@@ -2442,6 +2466,7 @@ function renderKindSections(products) {
   const activity = element('div', 'body');
   const activityList = element('div', 'now');
   for (const item of activityItems) activityList.append(item.row);
+  if (!activityList.children.length) activityList.append(element('div', 'empty', 'ありません'));
   activity.append(activityList);
   for (const { product, session, multipleSessions } of references) {
     const controls = unknownSessionControls(session, product, multipleSessions);

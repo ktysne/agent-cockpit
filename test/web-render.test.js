@@ -7,6 +7,91 @@ const { pageContext } = require('./support/page-context');
 
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
 
+test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
+  const elapsed = pageHtml.match(/function decisionElapsedLabel\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(elapsed);
+  const context = pageContext(pageHtml, {
+    LONG_WAIT_MS: 15 * 60_000,
+    hasEffectiveAnswer: (decision) => Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt),
+    durationLabel: () => '4 分',
+  });
+  vm.runInContext(elapsed, context);
+
+  const old = new Date(Date.now() - 16 * 60_000 - 5_000).toISOString();
+  const waiting = context.decisionElapsedLabel({ state: 'waiting', createdAt: old });
+  const answered = context.decisionElapsedLabel({
+    state: 'waiting', createdAt: old, answer: { sentAt: new Date().toISOString() },
+  });
+  const provisional = context.decisionElapsedLabel({ state: 'provisional', updatedAt: new Date().toISOString() });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(waiting)), {
+    className: 'wait stale', label: '16 分待機中', stale: true,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(answered)), {
+    className: 'wait', label: '16 分待機中', stale: false,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(provisional)), {
+    className: 'since', label: '仮適用から 4 分', stale: false,
+  });
+  assert.equal(context.decisionElapsedLabel({ state: 'resolved', updatedAt: old }), null);
+  assert.equal(context.decisionElapsedLabel({ state: 'withdrawn', updatedAt: old }), null);
+});
+
+test('種類別の判断事項は送信済みの回答を後ろに並べる', () => {
+  const age = pageHtml.match(/function kindDecisionWaitAge\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(age);
+  const context = pageContext(pageHtml, {});
+  vm.runInContext(age, context);
+
+  const decisions = [
+    { id: 'sent', state: 'waiting', createdAt: new Date(Date.now() - 60 * 60_000).toISOString(), answer: { sentAt: new Date().toISOString() } },
+    { id: 'waiting', state: 'waiting', createdAt: new Date(Date.now() - 30 * 60_000).toISOString() },
+    { id: 'recent', state: 'waiting', createdAt: new Date(Date.now() - 60_000).toISOString() },
+  ];
+  const ordered = decisions.map((decision) => ({ decision, age: context.kindDecisionWaitAge(decision) }))
+    .sort((left, right) => right.age - left.age);
+
+  assert.deepEqual(ordered.map(({ decision }) => decision.id), ['waiting', 'recent', 'sent']);
+});
+
+test('種類別の今やっていることは行が無いときに空表示する', () => {
+  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const start = pageHtml.indexOf('function renderKindSections(products) {');
+  const end = pageHtml.indexOf('\nfunction ', start + 1);
+  assert.ok(element && start >= 0 && end > start);
+  const render = pageHtml.slice(start, end);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  const context = pageContext(pageHtml, {
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    expandedKindSections: new Set(),
+    sessionReferences: () => [],
+    kindEndedDecisionEntries: () => [],
+    kindEndedAgentCount: () => 0,
+    kindTodoTaskCount: () => 0,
+    kindDoneTaskCount: () => 0,
+    kindProductOrder: () => new FakeElement('div'),
+    kindSection: (title, body) => ({ title, body }),
+    orderedSectionKeys: (keys) => keys,
+    isFilterShown: () => false,
+  });
+  vm.runInContext(`${element}\n${render}`, context);
+
+  const now = context.renderKindSections([]).find((section) => section.title === '今やっていること');
+  assert.equal(now.body.children[0].className, 'now');
+  assert.equal(now.body.children[0].children[0].className, 'empty');
+  assert.equal(now.body.children[0].children[0].textContent, 'ありません');
+});
+
 function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
@@ -1212,6 +1297,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     pullRequestTimeLabel: () => '時刻不明',
+    durationAgoLabel: () => '時刻不明',
     postUiAction: async (url, body) => {
       sent.push({ url, body });
       return { ok: true, json: async () => ({}) };
@@ -1400,6 +1486,7 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     pullRequestTimeLabel: () => '時刻不明',
+    durationAgoLabel: () => '時刻不明',
     postUiAction: async (url, body) => {
       sent.push({ url, body });
       return { ok: true, json: async () => ({}) };
@@ -1451,6 +1538,54 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
   ]);
 });
 
+test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
+  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const start = pageHtml.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
+  const end = pageHtml.indexOf('\nfunction productGroups(', start);
+  assert.ok(element && start >= 0 && end > start);
+  const appendBlock = pageHtml.slice(start, end);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    addEventListener() {}
+    setAttribute() {}
+  }
+  const context = pageContext(pageHtml, {
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => ({ textContent: text }),
+    },
+    expandedPrLines: new Set(),
+    MERGED_VISIBLE_COUNT: 5,
+    durationAgoLabel: () => '1 分前',
+  });
+  vm.runInContext(`${element}\n${appendBlock}`, context);
+
+  for (const state of ['merged', 'closed']) {
+    const root = new FakeElement('div');
+    context.appendPullRequestBlock(root, {
+      owner: 'acme', repo: 'widget', trees: [], registeredCount: 1, mergeHistory: [],
+      merged: [{ number: 42, state, url: 'https://github.com/acme/widget/pull/42', title: 'Feature PR' }],
+    });
+    assert.ok(root.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'));
+  }
+
+  const unavailable = new FakeElement('div');
+  context.appendPullRequestBlock(unavailable, {
+    owner: 'acme', repo: 'widget', trees: [], registeredCount: 1,
+    error: 'GitHub から PR を取得できませんでした',
+    merged: [{ number: 42, state: 'merged', url: 'https://github.com/acme/widget/pull/42', title: 'Feature PR' }],
+  });
+  assert.equal(unavailable.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'), false);
+});
+
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
@@ -1473,6 +1608,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
       createTextNode: (text) => new FakeText(text),
     },
     pullRequestTimeLabel: () => '1 分前',
+    durationAgoLabel: () => '1 分前',
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     expandedPrLines: new Set(),
     MERGED_VISIBLE_COUNT: 5,
@@ -1542,6 +1678,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
     MERGED_VISIBLE_COUNT: 5,
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     pullRequestTimeLabel: (value) => value,
+    durationAgoLabel: () => '1 分前',
     lastState: state,
     root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
     render: () => {
@@ -1646,6 +1783,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
     MERGED_VISIBLE_COUNT: 5,
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     pullRequestTimeLabel: (value) => value,
+    durationAgoLabel: () => '1 分前',
     lastState: state,
     root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
     render: () => {
