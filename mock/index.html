@@ -255,6 +255,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .routing[hidden], .control-row:has(> .routing[hidden]) { display: none; }
 .routing .rgroup { display: grid; grid-template-columns: max-content max-content; gap: 8px 10px; align-items: center; }
 .routing .rgroup .rrow { display: contents; }
+/* 横に並べるかは、ラベルと 3 択の実際の幅が収まるかを layoutRouting で測って決める。 */
+.routing .rgroup.side-by-side { grid-template-columns: repeat(4, max-content); }
+.routing .rgroup.side-by-side .rrow + .rrow .rlabel { margin-left: 12px; }
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
 .routing .seg button:disabled { cursor: default; opacity: .55; }
@@ -498,8 +501,9 @@ const DATA = {
   connection: { lost: false, lastAt: '14:32' },
   // 画面のファイルが新しくなったが、書きかけの回答があるので読み込み直しを待っている状態。書きかけが無ければ知らせを出さずに読み込み直す。
   uiUpdatePending: false,
-  // codexAgent は claude-codex-bridge の ~/.claude/tools/codex-agent.sh があるか。無ければ経路の欄と経路の札を出さない。
-  integrations: { codexAgent: true },
+  // codexAgent は claude-codex-bridge の ~/.claude/tools/codex-agent.sh があるか。無ければサブエージェントの段と経路の札を出さない。
+  // crossReview は稼働中のセッションか PR を登録したセッションの worktree のどれかに ai-cross-review の tools/cross-review.js があるか。無ければクロスレビューの段を出さない。
+  integrations: { codexAgent: true, crossReview: true },
 };
 
 for (const p of DATA.products) {
@@ -678,16 +682,28 @@ function routeTag(s) {
 }
 
 function renderRouting() {
-  // クロスレビューの経路は ai-cross-review がレビューの時点で設定を引くまで効かないので、段を出さない。
   const routing = document.getElementById('routing');
-  routing.hidden = !DATA.integrations.codexAgent;
+  const keys = ['agents', 'review'].filter(k => k === 'agents' ? DATA.integrations.codexAgent : DATA.integrations.crossReview);
+  routing.hidden = keys.length === 0;
   if (routing.hidden) { routing.innerHTML = ''; return; }
   const row = k => `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
       <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路">${ROUTE[k].opts.map(o =>
         `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
       </div>`;
-  routing.innerHTML = `<div class="rgroup">${row('agents')}</div>`;
+  routing.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>`;
+  layoutRouting();
 }
+
+const ROUTING_PAIR_GAP_PX = 12;
+function layoutRouting() {
+  const group = document.querySelector('#routing .rgroup');
+  if (!group) return;
+  const columnGap = parseFloat(getComputedStyle(group).columnGap) || 0;
+  const widths = [...group.querySelectorAll('.rlabel, .seg')].map(node => node.getBoundingClientRect().width);
+  const needed = widths.reduce((sum, width) => sum + width, 0) + columnGap * (widths.length - 1) + ROUTING_PAIR_GAP_PX;
+  group.classList.toggle('side-by-side', widths.length > 2 && needed <= group.clientWidth);
+}
+if ('ResizeObserver' in window) new ResizeObserver(layoutRouting).observe(document.getElementById('routing'));
 
 
 function ageMinutes(item) {

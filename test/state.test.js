@@ -28,6 +28,23 @@ test('worktree の cwd からプロダクトの鍵と表示名を求める', asy
   );
 });
 
+test('既知の cwd は稼働中セッションと PR 登録から文字列だけを重複なく返す', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([
+    { session_id: 'live-one', cwd: 'C:\\worktree\\active' },
+    { session_id: 'live-two', cwd: 'C:\\worktree\\active' },
+    { session_id: 'live-no-cwd', cwd: 42 },
+  ]);
+  state.registerPullRequest('registered-one', {
+    url: 'https://github.com/example/project/pull/1',
+  }, { cwd: 'C:\\worktree\\active' });
+  state.registerPullRequest('registered-two', {
+    url: 'https://github.com/example/project/pull/2',
+  }, { cwd: 'D:\\worktree\\registered' });
+
+  assert.deepEqual(state.knownCwds(), ['C:\\worktree\\active', 'D:\\worktree\\registered']);
+});
+
 test('状態不明のセッションを外し、すべて表示する操作で戻す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

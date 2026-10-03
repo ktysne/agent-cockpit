@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   PullRequestTracker,
   assemblePullRequestStacks,
+  crossReviewToolExists,
   parsePullRequestList,
   readCrossReviewState,
   runGh,
@@ -638,6 +639,17 @@ async function installCrossReview(root) {
   await fs.mkdir(path.join(root, 'tools'), { recursive: true });
   await fs.writeFile(path.join(root, 'tools', 'cross-review.js'), '');
 }
+
+test('クロスレビューの道具は cwd から見つかる worktree のものだけを検出する', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  assert.equal(await crossReviewToolExists(path.join(root, 'src')), false);
+
+  await installCrossReview(root);
+  assert.equal(await crossReviewToolExists(path.join(root, 'src')), true);
+  assert.equal(await crossReviewToolExists(path.join(root, 'missing')), true);
+  assert.equal(await crossReviewToolExists(''), false);
+});
 
 test('クロスレビュー状態は PR head ブランチの往復数、非対応件数、レビュー済み SHA を読む', async (t) => {
   const root = await temporaryDirectory(t);

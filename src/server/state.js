@@ -1156,6 +1156,17 @@ class DashboardState {
     return [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
   }
 
+  knownCwds() {
+    const cwds = new Set();
+    for (const file of this.sessionFiles.values()) {
+      if (typeof file.cwd === 'string') cwds.add(file.cwd);
+    }
+    for (const record of this.pullRequestRegistrations()) {
+      if (typeof record.cwd === 'string') cwds.add(record.cwd);
+    }
+    return [...cwds];
+  }
+
   pullRequestRegistrationsForRepo(owner, repo) {
     return this.pullRequestRegistrations().filter((record) => (
       record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase()

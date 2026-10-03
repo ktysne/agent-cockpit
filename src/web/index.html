@@ -62,6 +62,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .routing[hidden], .control-row:has(> .routing[hidden]) { display: none; }
 .routing .rgroup { display: grid; grid-template-columns: max-content max-content; gap: 8px 10px; align-items: center; }
 .routing .rgroup .rrow { display: contents; }
+.routing .rgroup.side-by-side { grid-template-columns: repeat(4, max-content); }
+.routing .rgroup.side-by-side .rrow + .rrow .rlabel { margin-left: 12px; }
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
@@ -418,6 +420,7 @@ const pullRequestMergeMessages = new Map();
 const pullRequestMergeInFlight = new Set();
 let routing = { agents: 'default', review: 'default' };
 let codexAgentAvailable = false;
+let crossReviewAvailable = false;
 
 function readDisplayPreferences() {
   try {
@@ -645,38 +648,57 @@ function routeName(key, value) {
   return ROUTE[key].opts.find((option) => option.v === value)?.t || ROUTE[key].opts[0].t;
 }
 
+const ROUTING_PAIR_GAP_PX = 12;
+function layoutRouting() {
+  const group = document.querySelector('#routing .rgroup');
+  if (!group) return;
+  const columnGap = parseFloat(getComputedStyle(group).columnGap) || 0;
+  const widths = [...group.querySelectorAll('.rlabel, .seg')].map((node) => node.getBoundingClientRect().width);
+  const needed = widths.reduce((sum, width) => sum + width, 0) + columnGap * (widths.length - 1) + ROUTING_PAIR_GAP_PX;
+  group.classList.toggle('side-by-side', widths.length > 2 && needed <= group.clientWidth);
+}
+
 function renderRouting(settings = {}, integrations = {}) {
   routing = {
     agents: ROUTE_VALUES.has(settings.agents) ? settings.agents : 'default',
     review: ROUTE_VALUES.has(settings.review) ? settings.review : 'default',
   };
   codexAgentAvailable = integrations.codexAgent === true;
+  crossReviewAvailable = integrations.crossReview === true;
   const root = document.getElementById('routing');
-  root.hidden = !codexAgentAvailable;
+  const keys = [
+    ...(codexAgentAvailable ? ['agents'] : []),
+    ...(crossReviewAvailable ? ['review'] : []),
+  ];
+  root.hidden = keys.length === 0;
   if (root.hidden) {
     root.innerHTML = '';
+    root.dataset.routes = '';
     return;
   }
-  if (!root.querySelector('.rgroup')) {
+  const routeSignature = keys.join(',');
+  if (root.dataset.routes !== routeSignature) {
     const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div></div>`;
-    root.innerHTML = `<div class="rgroup">${row('agents')}</div>`;
+    root.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>`;
+    root.dataset.routes = routeSignature;
   }
   for (const button of root.querySelectorAll('[data-route]')) {
     button.setAttribute('aria-pressed', String(button.dataset.v === routing[button.dataset.route]));
   }
+  layoutRouting();
 }
 
+if ('ResizeObserver' in window) new ResizeObserver(layoutRouting).observe(document.getElementById('routing'));
 renderRouting(routing);
 
 async function updateRouting(button) {
   const { route: key, v: value } = button.dataset;
-  if (key === 'review') return;
   button.disabled = true;
   try {
     const response = await postUiAction('/api/routing', { key, value });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const updated = await response.json();
-    renderRouting(updated, { codexAgent: codexAgentAvailable });
+    renderRouting(updated, { codexAgent: codexAgentAvailable, crossReview: crossReviewAvailable });
     if (lastState) {
       lastState.routing = updated;
       render(lastState);

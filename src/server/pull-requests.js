@@ -401,17 +401,24 @@ async function findWorktreeRoot(cwd, fileSystem = fs) {
   }
 }
 
+async function crossReviewToolExists(cwd, fileSystem = fs) {
+  const root = await findWorktreeRoot(cwd, fileSystem);
+  if (!root) return false;
+  try {
+    await fileSystem.stat(path.join(root, 'tools', 'cross-review.js'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function readCrossReviewState(registration, pullRequest, fileSystem = fs) {
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
+  // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
+  if (!(await crossReviewToolExists(registration.cwd, fileSystem))) return undefined;
   const root = await findWorktreeRoot(registration.cwd, fileSystem);
   if (!root) return undefined;
-  // 状態ファイルは初めてのレビューで作られるので、使っているかは追跡される tools/cross-review.js の有無で見る。
-  try {
-    await fileSystem.stat(path.join(root, 'tools', 'cross-review.js'));
-  } catch {
-    return undefined;
-  }
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
@@ -950,6 +957,7 @@ module.exports = {
   normalizeOpenPullRequest,
   parsePullRequestList,
   parseRepositoryConfig,
+  crossReviewToolExists,
   readCrossReviewState,
   runGh,
 };

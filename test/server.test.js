@@ -508,10 +508,67 @@ test('/api/state は Claude のホームにある codex-agent.sh の有無を返
   });
   t.after(() => runtime.close());
 
-  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: false });
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: false, crossReview: false });
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   await fs.writeFile(scriptPath, '');
-  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: true });
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: true, crossReview: false });
+});
+
+test('/api/state は稼働中と PR 登録の worktree にあるクロスレビューの道具を検出する', async (t) => {
+  const runtime = await runningServer(t);
+  const activeRoot = path.join(runtime.homeDir, 'active-worktree');
+  const registeredRoot = path.join(runtime.homeDir, 'registered-worktree');
+  const activeTool = path.join(activeRoot, 'tools', 'cross-review.js');
+  const registeredTool = path.join(registeredRoot, 'tools', 'cross-review.js');
+
+  const integrations = async () => jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations;
+  assert.deepEqual(await integrations(), { codexAgent: false, crossReview: false });
+
+  await fs.mkdir(path.join(activeRoot, '.git'), { recursive: true });
+  await fs.mkdir(path.dirname(activeTool), { recursive: true });
+  await fs.writeFile(activeTool, '');
+  runtime.state.syncSessionFiles([{ session_id: 'live-cross-review', cwd: path.join(activeRoot, 'src') }]);
+  assert.deepEqual(await integrations(), { codexAgent: false, crossReview: true });
+
+  runtime.state.syncSessionFiles([]);
+  assert.deepEqual(await integrations(), { codexAgent: false, crossReview: false });
+
+  await fs.mkdir(path.join(registeredRoot, '.git'), { recursive: true });
+  await fs.mkdir(path.dirname(registeredTool), { recursive: true });
+  await fs.writeFile(registeredTool, '');
+  runtime.state.registerPullRequest('registered-cross-review', {
+    url: 'https://github.com/example/project/pull/99',
+  }, { cwd: path.join(registeredRoot, 'src') });
+  assert.deepEqual(await integrations(), { codexAgent: false, crossReview: true });
+
+  await fs.unlink(registeredTool);
+  assert.deepEqual(await integrations(), { codexAgent: false, crossReview: false });
+});
+
+test('/api/state のクロスレビュー判定を差し替え、両方の cwd を調べる', async (t) => {
+  const inspectedCwds = [];
+  const runtime = await runningServer(t, {
+    crossReviewToolExists: async (cwd) => {
+      inspectedCwds.push(cwd);
+      return cwd.endsWith('registered-worktree');
+    },
+  });
+  const activeCwd = path.join(runtime.homeDir, 'active-worktree');
+  const registeredCwd = path.join(runtime.homeDir, 'registered-worktree');
+  runtime.state.syncSessionFiles([
+    { session_id: 'live-one', cwd: activeCwd },
+    { session_id: 'live-two', cwd: activeCwd },
+    { session_id: 'live-no-cwd', cwd: 12 },
+  ]);
+  runtime.state.registerPullRequest('registered-one', {
+    url: 'https://github.com/example/project/pull/100',
+  }, { cwd: registeredCwd });
+
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, {
+    codexAgent: false,
+    crossReview: true,
+  });
+  assert.deepEqual(inspectedCwds, [activeCwd, registeredCwd]);
 });
 
 test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク登録後は返さない', async (t) => {
