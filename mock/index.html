@@ -93,6 +93,9 @@ header.top {
 .section-order-list button { min-width: 36px; padding: 4px 8px; }
 .settings-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .settings-dialog button { padding: 4px 12px; cursor: pointer; }
+.settings-save-error, .settings-input-error, .answer-error { color: var(--danger); font-size: 12px; }
+.settings-save-error { margin-top: 12px; }
+.settings-input-error { flex: 1 1 100%; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .chip strong { color: var(--text); font-size: 13px; }
 .chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
@@ -226,6 +229,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .primary { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .primary:disabled { opacity: .4; cursor: default; }
 .sent { font-size: 12px; color: var(--text-2); }
+.merge-result { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; color: var(--text-2); font-size: 12px; }
 
 .pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .rounds { display: inline-flex; gap: 4px; }
@@ -346,6 +350,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     <div class="summary" id="summary"></div>
     <div class="filter-note" id="filter-note" hidden></div>
     <div class="excluded-note" id="excluded-note" hidden></div>
+    <div class="excluded-note" id="finished-note" hidden></div>
     <div class="control-row">
       <div class="routing" id="routing"></div>
     </div>
@@ -378,12 +383,14 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
     </div>
     <div class="settings-theme-row">
-      <label for="settings-long-wait-minutes">長く待たせているとみなす時間(分)</label>
-      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric">
+      <label for="settings-long-wait-minutes">長く待たせているとみなす時間 (1〜120 分)</label>
+      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric" aria-describedby="settings-long-wait-error">
+      <span class="settings-input-error" id="settings-long-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
-      <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間(分)</label>
-      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric">
+      <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間 (1〜30 分)</label>
+      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
+      <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
@@ -392,6 +399,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <button type="button" id="settings-section-order-reset">既定に戻す</button>
     </div>
   </section>
+  <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <main class="wrap">
@@ -579,9 +587,14 @@ for (const p of DATA.products) {
 
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
-const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
+const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
 const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true }, load());
 let hiddenSessionsUndo = null;
+const answerErrors = new Map();
+const pendingClosedTasks = new Map();
+const pullRequestMergeResults = new Map();
+const pullRequestMergeInFlight = new Set();
+let nextPullRequestMergeResultId = 0;
 function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
@@ -630,12 +643,36 @@ function shortShaLabel(value) {
 const themeSelect = document.getElementById('settings-theme-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const longWaitMinutesError = document.getElementById('settings-long-wait-error');
+const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
 const settingsDialog = document.getElementById('settings-dialog');
 const awayToggle = document.getElementById('away-toggle');
 const topBar = document.querySelector('header.top');
+const settingsSaveError = document.getElementById('settings-save-error');
+
+function captureDisplayPreferences() {
+  return {
+    mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
+    sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
+    longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes,
+  };
+}
+
+function saveDisplayPreferences(previous) {
+  if (save()) return true;
+  Object.assign(ui, previous);
+  renderDisplaySettings();
+  renderSectionOrder();
+  if (settingsDialog.open) {
+    settingsSaveError.textContent = '表示の設定を保存できませんでした';
+    settingsSaveError.hidden = false;
+  }
+  render();
+  return false;
+}
 
 function applyTheme(theme) {
   const selected = ['light', 'dark', 'system'].includes(theme) ? theme : 'dark';
@@ -666,12 +703,19 @@ function renderDisplaySettings() {
 function changeDisplaySetting(key, input, minimum, maximum) {
   const value = input.valueAsNumber;
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    const error = input === longWaitMinutesInput ? longWaitMinutesError : awayAnswerWaitMinutesError;
+    error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
+    error.hidden = false;
     input.value = String(ui[key]);
     return false;
   }
+  const error = input === longWaitMinutesInput ? longWaitMinutesError : awayAnswerWaitMinutesError;
+  error.textContent = '';
+  error.hidden = true;
+  const previous = captureDisplayPreferences();
   ui[key] = value;
   input.value = String(value);
-  save();
+  if (!saveDisplayPreferences(previous)) return false;
   render();
   return true;
 }
@@ -680,8 +724,9 @@ renderDisplaySettings();
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
 hideFinishedInput.addEventListener('change', () => {
+  const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
-  save();
+  if (!saveDisplayPreferences(previous)) return;
   render();
 });
 
@@ -719,15 +764,17 @@ sectionOrderList.addEventListener('click', event => {
   const index = order.indexOf(button.dataset.sectionMove);
   const target = index + Number(button.dataset.dir);
   if (index < 0 || target < 0 || target >= order.length) return;
+  const previous = captureDisplayPreferences();
   [order[index], order[target]] = [order[target], order[index]];
   ui.sectionOrder = order;
-  save();
+  if (!saveDisplayPreferences(previous)) return;
   renderSectionOrder(button.dataset.sectionMove, button.dataset.dir);
   render();
 });
 document.getElementById('settings-section-order-reset').addEventListener('click', () => {
+  const previous = captureDisplayPreferences();
   ui.sectionOrder = [...DEFAULT_SECTION_ORDER];
-  save();
+  if (!saveDisplayPreferences(previous)) return;
   renderSectionOrder();
   render();
 });
@@ -740,14 +787,21 @@ renderSectionOrder();
 themeSelect.addEventListener('change', () => { applyTheme(themeSelect.value); save(); });
 awayToggle.addEventListener('change', () => { applyAway(awayToggle.checked); save(); render(); });
 sinceSeenSelect.addEventListener('change', () => { applySinceSeenMode(sinceSeenSelect.value); save(); render(); });
-settingsButton.addEventListener('click', () => settingsDialog.showModal());
+settingsButton.addEventListener('click', () => {
+  settingsDialog.showModal();
+  settingsSaveError.hidden = !settingsSaveError.textContent;
+});
 settingsClose.addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', event => {
   const box = settingsDialog.getBoundingClientRect();
   const isOutside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
   if (event.target === settingsDialog && isOutside) settingsDialog.close();
 });
-settingsDialog.addEventListener('close', () => settingsButton.focus());
+settingsDialog.addEventListener('close', () => {
+  settingsSaveError.textContent = '';
+  settingsSaveError.hidden = true;
+  settingsButton.focus();
+});
 
 function orderedProducts() {
   const pinned = ui.order.filter(id => ui.pinned.includes(id));
@@ -758,10 +812,16 @@ function orderedProducts() {
 // セッションを外すか終えて PR もマージを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
 // PR を非表示にしている間は、PR だけで残るカードの本文が空になるので、PR を理由に残さない。
 function hasProductContent(p) {
-  return visibleSessions(p).length > 0 || (isShown('prs') && openPrs(p).length > 0) || (sinceSeenVisible() && p.news.length > 0 && !ui.seen.includes(p.id));
+  return visibleSessions(p).length > 0 || (isShown('prs') && (p.repo.loading || openPrs(p).length > 0 || hasPullRequestMergeResults(p)
+    || p.prs.some(pr => isMerged(p, pr) && pr.headMismatch === true))) || (sinceSeenVisible() && p.news.length > 0 && !ui.seen.includes(p.id));
 }
 
 function answerOf(id) { return ui.answers[id] || { choice: null, picks: [], note: '', sent: null }; }
+const answerDraftKey = (sessionId, decisionId) => `${sessionId}::${decisionId}`;
+function clearAnswerErrorWhenDraftChanges(key, previous, next) {
+  if (previous.choice === next.choice && previous.note === next.note && picksOf(previous).join() === picksOf(next).join()) return;
+  answerErrors.delete(key);
+}
 const picksOf = a => a.choice === 'pick' ? (a.picks || []) : [];
 const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) || !!a.note.trim();
 const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
@@ -815,6 +875,21 @@ function countHidden() {
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }
 
+function finishedHiddenCounts() {
+  if (!ui.hideFinished) return { sessions: 0, pullRequests: 0 };
+  const pullRequests = new Set();
+  for (const product of DATA.products) {
+    for (const pr of product.prs.filter(item => isMerged(product, item) && item.headMismatch !== true)) {
+      pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
+    }
+    for (const pr of product.closedPrs || []) pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
+  }
+  return {
+    sessions: allSessions().filter(session => !ui.hiddenSessions.includes(session.id) && isFinishedSession(session)).length,
+    pullRequests: pullRequests.size,
+  };
+}
+
 function renderSummary() {
   const sessions = allSessions().filter(s => !ui.hiddenSessions.includes(s.id));
   const all = sessions.flatMap(s => s.decisions.map(d => ({ d, a: answerOf(d.id) })));
@@ -851,6 +926,16 @@ function renderSummary() {
     ? `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>外したセッションを戻す</button>`
     : '';
   excluded.innerHTML = `${undo}${showHidden}`;
+  const hiddenFinished = finishedHiddenCounts();
+  const finishedParts = [
+    hiddenFinished.sessions ? `セッション ${hiddenFinished.sessions} 件` : '',
+    hiddenFinished.pullRequests ? `PR ${hiddenFinished.pullRequests} 件` : '',
+  ].filter(Boolean);
+  const finished = document.getElementById('finished-note');
+  finished.hidden = finishedParts.length === 0;
+  finished.innerHTML = finishedParts.length
+    ? `<span>終わったものを隠しています (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished>表示する</button>`
+    : '';
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
@@ -1009,12 +1094,37 @@ function agentSection(p, session, withTag) {
 const closedTaskKey = (session, t) => `${session.id}::${t.title}`;
 const taskState = (session, t) => ui.closedTasks.includes(closedTaskKey(session, t)) ? 'done' : t.state;
 
+function scheduleTaskClose(key) {
+  if (pendingClosedTasks.has(key)) return;
+  const timer = setTimeout(() => {
+    if (pendingClosedTasks.get(key) !== timer) return;
+    pendingClosedTasks.delete(key);
+    if (!ui.closedTasks.includes(key)) ui.closedTasks.push(key);
+    save();
+    render();
+  }, 5_000);
+  pendingClosedTasks.set(key, timer);
+  render();
+}
+
+function cancelTaskClose(key) {
+  const timer = pendingClosedTasks.get(key);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  pendingClosedTasks.delete(key);
+  render();
+}
+
 function taskItem(p, session, t, withTag) {
   const state = taskState(session, t);
   const label = { done: '完了', doing: '作業中', todo: '未着手' }[state];
   const met = t.criteria.filter(c => c.met).length;
   const closedHere = state === 'done' && t.state !== 'done';
-  const close = state === 'done' ? '' : `<button type="button" class="link-btn" data-close-task="${esc(closedTaskKey(session, t))}">完了にする</button>`;
+  const key = closedTaskKey(session, t);
+  const pending = pendingClosedTasks.has(key);
+  const close = state === 'done' ? '' : pending
+    ? `<button type="button" class="link-btn" data-cancel-close-task="${esc(key)}">取り消す</button><span class="meta">5 秒後に完了にします。</span>`
+    : `<button type="button" class="link-btn" data-close-task="${esc(key)}">完了にする</button>`;
   return `<li class="task ${state}">
     <div class="line"><span class="state ${state}">${label}</span>${sessionTag(p, session, withTag)}
       <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}${closedHere ? '、画面で完了にした' : ''}</span>${close}</div>
@@ -1071,6 +1181,8 @@ function decisionCard(p, session, d, withTag) {
     ? `<span class="sent answer-status">${esc(absoluteTimeLabel(a.sent.at, Date.now(), a.sent.at))} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${esc(absoluteTimeLabel(a.sent.deliveredAt, Date.now(), a.sent.deliveredAt))} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = answerDirty(a);
+  const answerError = answerErrors.get(answerDraftKey(session.id, d.id)) || '';
+  const statusLine = a.sent && dirty ? '<span class="sent answer-status">変更は未送信</span>' : sentLine;
   const long = state === 'waiting' && !a.sent && isLongWait(d.waitMin);
   const active = (state === 'waiting' && !viaDialog) || state === 'provisional';
   const chosen = Array.isArray(d.resolution?.chosen) ? d.resolution.chosen.join('、') : d.resolution?.chosen;
@@ -1080,7 +1192,7 @@ function decisionCard(p, session, d, withTag) {
     !active && !viaDialog ? sentLine : '',
   ].filter(Boolean).join('');
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${durationLabel(Date.now() - d.waitMin * 60_000)}</span>` : '';
-  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">
+  return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}" data-session-id="${esc(session.id)}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
     <div class="ctx">${esc(d.ctx)}</div>
     <ul class="options">${d.options.map((o, i) => {
@@ -1099,9 +1211,11 @@ function decisionCard(p, session, d, withTag) {
       <textarea data-note placeholder="指示があれば書く (例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
         <button type="button" class="primary" data-send ${!canSend(a) || !dirty ? 'disabled' : ''}>回答を送る</button>
-        ${sentLine}
+        ${statusLine}
       </div>
+      ${answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
     </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} の「${esc(sessionDisplayName(session))}」セッションで答える。</div>` : ''}
+    ${!active && answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
 }
 
@@ -1183,6 +1297,66 @@ function mergeBlocker(p, pr) {
 }
 
 const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
+
+function pullRequestMergeResultLine(result) {
+  const parts = [`${METHOD_LABEL[result.method] || result.method} でマージしました`, result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません'];
+  if (result.retargetedBase) {
+    const numbers = result.retargetedNumbers?.length ? `${result.retargetedNumbers.map(number => `#${number}`).join('、')} の ` : '';
+    parts.push(`${numbers}base を ${result.retargetedBase} に付け替えました`);
+  }
+  if (result.warning) parts.push(result.warning);
+  return parts.join('。') + '。';
+}
+
+function rememberPullRequestMergeResult(product, result) {
+  const results = pullRequestMergeResults.get(product.repo.name) || [];
+  results.push({ id: String(++nextPullRequestMergeResultId), productId: product.id, ...result });
+  pullRequestMergeResults.set(product.repo.name, results);
+}
+
+function hasPullRequestMergeResults(product) {
+  return (pullRequestMergeResults.get(product.repo.name) || []).some(result => result.productId === product.id);
+}
+
+function closePullRequestMergeResult(id) {
+  for (const [key, results] of pullRequestMergeResults) {
+    const remaining = results.filter(result => result.id !== id);
+    if (remaining.length === results.length) continue;
+    if (remaining.length) pullRequestMergeResults.set(key, remaining);
+    else pullRequestMergeResults.delete(key);
+    return;
+  }
+}
+
+function finishMockMerge(product, pullRequest, options, automatic = false) {
+  const key = prKey(product, pullRequest.number);
+  const children = childPrs(product, pullRequest).map(child => child.number);
+  const at = absoluteTimeLabel(new Date());
+  ui.lastMethod[product.repo.name] = options.method;
+  ui.merged[key] = { method: options.method, del: options.del, at, auto: automatic };
+  rememberPullRequestMergeResult(product, {
+    number: pullRequest.number,
+    method: options.method,
+    branchDeleted: product.repo.autoDeleteBranch || options.del,
+    ...(children.length ? { retargetedBase: product.repo.defaultBranch, retargetedNumbers: children } : {}),
+    ...(pullRequest.headMismatch === true ? { warning: '予約時と異なる head SHA がマージされました' } : {}),
+  });
+  if (automatic) delete ui.reserved[key];
+  ui.confirm = null;
+  save();
+  render();
+}
+
+function startMockMerge(product, pullRequest, options) {
+  const key = prKey(product, pullRequest.number);
+  if (pullRequestMergeInFlight.has(key)) return;
+  pullRequestMergeInFlight.add(key);
+  render();
+  setTimeout(() => {
+    if (!pullRequestMergeInFlight.delete(key)) return;
+    finishMockMerge(product, pullRequest, options);
+  }, 700);
+}
 function mergeOpts(p, pr) {
   const k = prKey(p, pr.number);
   const last = ui.lastMethod[p.repo.name];
@@ -1210,6 +1384,7 @@ const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中' && (pr.revi
 
 function mergeConfirm(p, pr, auto) {
   const o = mergeOpts(p, pr);
+  const merging = pullRequestMergeInFlight.has(prKey(p, pr.number));
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const effects = [
@@ -1229,7 +1404,7 @@ function mergeConfirm(p, pr, auto) {
       ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
     ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}">${auto ? '予約する' : 'マージを実行'}</button>
+    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? 'マージ中…' : auto ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
 }
@@ -1316,20 +1491,23 @@ function prBlock(p, withTag) {
       ${prTree(p, r)}</div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
-  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', mergedNewestFirst.map(({ pr, m }) =>
-    `<span class="badge ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`));
+  const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
+  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) =>
+    `<span class="badge ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`), true);
   const closed = p.closedPrs || [];
   const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr =>
     `<a class="badge mute" href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`));
   const empty = !roots.length
-    ? `<div class="empty">${merged.length || closed.length ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'}</div>`
+    ? `<div class="empty">${p.repo.loading ? 'GitHub から取得しています' : merged.length || closed.length ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'}</div>`
     : '';
-  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${stacks || empty}${mergedLine}${closedLine}</div></section>`;
+  const results = (pullRequestMergeResults.get(p.repo.name) || []).filter(result => result.productId === p.id).map(result =>
+    `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
-function foldedPrLine(p, kind, label, badges) {
-  if (!badges.length || ui.hideFinished) return '';
+function foldedPrLine(p, kind, label, badges, visibleWhileHidden = false) {
+  if (!badges.length || (ui.hideFinished && !visibleWhileHidden)) return '';
   const key = `${kind}:${p.id}`;
   const expanded = ui.expandedMerged.includes(key);
   const olderCount = Math.max(0, badges.length - MERGED_VISIBLE_COUNT);
@@ -1512,6 +1690,12 @@ function productCloseButton(p, describedById) {
 
 function renderProductMode() {
   const ps = orderedProducts();
+  if (!ps.length) {
+    const hidden = finishedHiddenCounts();
+    return `<div class="empty">${hidden.sessions || hidden.pullRequests
+      ? '終わったものを隠しています。上部の「表示する」から表示できます。'
+      : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
+  }
   const pinnedCount = ps.filter(p => ui.pinned.includes(p.id)).length;
   return ps.map((p, i) => {
     const pend = pendingDecisions(p);
@@ -1536,6 +1720,12 @@ function renderProductMode() {
 
 function renderKindMode() {
   const ps = orderedProducts();
+  if (!ps.length) {
+    const hidden = finishedHiddenCounts();
+    return `<div class="empty">${hidden.sessions || hidden.pullRequests
+      ? '終わったものを隠しています。上部の「表示する」から表示できます。'
+      : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
+  }
   const sessions = ps.flatMap(p => sessionsByActivity(p).map(session => ({ p, session })));
   const section = (title, body, extra = '') => `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`;
   // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
@@ -1601,20 +1791,45 @@ function renderKindMode() {
 function render() {
   const active = document.activeElement;
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
-  const focusValue = focusAttribute ? active.getAttribute(focusAttribute) : null;
+  const focusData = focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
+    : active?.dataset?.showFinished ? { kind: 'show-finished' }
+      : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
+        : active?.dataset?.cancelCloseTask ? { kind: 'task-close', key: active.dataset.cancelCloseTask }
+          : active?.dataset?.closeTask ? { kind: 'task-close', key: active.dataset.closeTask }
+            : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo } : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
   renderConnectionNote();
   renderReloadNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
-  if (focusAttribute) [...document.querySelectorAll(`[${focusAttribute}]`)].find(button => button.getAttribute(focusAttribute) === focusValue)?.focus({ preventScroll: true });
+  if (focusData?.attribute) {
+    [...document.querySelectorAll(`[${focusData.attribute}]`)].find(button => button.getAttribute(focusData.attribute) === focusData.value)?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'show-finished') {
+    (document.querySelector('[data-show-finished]') || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'close-merge-result') {
+    (document.querySelector(`[data-close-merge-result="${CSS.escape(focusData.id)}"]`)
+      || document.querySelector('[data-close-merge-result]')
+      || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'task-close') {
+    (document.querySelector(`[data-cancel-close-task="${CSS.escape(focusData.key)}"]`)
+      || document.querySelector(`[data-close-task="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'merge-go') {
+    document.querySelector(`[data-merge-go="${CSS.escape(focusData.key)}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
   if (t.dataset.mode) { ui.mode = t.dataset.mode; }
+  else if (t.hasAttribute('data-show-finished')) {
+    const previous = captureDisplayPreferences();
+    ui.hideFinished = false;
+    hideFinishedInput.checked = false;
+    saveDisplayPreferences(previous);
+    return;
+  }
   else if (t.dataset.filter) {
     const k = t.dataset.filter;
     ui.hidden = ui.hidden.includes(k) ? ui.hidden.filter(x => x !== k) : [...ui.hidden, k];
@@ -1651,7 +1866,11 @@ document.addEventListener('click', e => {
   } else if (t.dataset.closeAgent) {
     if (!ui.closedAgents.includes(t.dataset.closeAgent)) ui.closedAgents.push(t.dataset.closeAgent);
   } else if (t.dataset.closeTask) {
-    if (!ui.closedTasks.includes(t.dataset.closeTask)) ui.closedTasks.push(t.dataset.closeTask);
+    scheduleTaskClose(t.dataset.closeTask);
+    return;
+  } else if (t.dataset.cancelCloseTask) {
+    cancelTaskClose(t.dataset.cancelCloseTask);
+    return;
   } else if (t.dataset.estimate) {
     const id = t.dataset.estimate;
     if (!ui.estimatedSessions.includes(id)) ui.estimatedSessions.push(id);
@@ -1707,10 +1926,8 @@ document.addEventListener('click', e => {
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
-    const now = new Date();
-    ui.lastMethod[p.repo.name] = o.method;
-    ui.merged[k] = { method: o.method, del: o.del, at: absoluteTimeLabel(now) };
-    ui.confirm = null;
+    startMockMerge(p, pr, o);
+    return;
   } else if (t.dataset.reserveGo) {
     const k = t.dataset.reserveGo;
     const [pid, n] = k.split('#');
@@ -1724,9 +1941,12 @@ document.addEventListener('click', e => {
     delete ui.reserved[t.dataset.unreserve];
   } else if (t.dataset.ciPass) {
     const k = t.dataset.ciPass;
-    const now = new Date();
-    ui.merged[k] = { ...ui.reserved[k], auto: true, at: absoluteTimeLabel(now) };
-    delete ui.reserved[k];
+    const [pid, n] = k.split('#');
+    const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
+    finishMockMerge(p, pr, ui.reserved[k], true);
+    return;
+  } else if (t.dataset.closeMergeResult) {
+    closePullRequestMergeResult(t.dataset.closeMergeResult);
   } else if (t.dataset.seen) {
     ui.seen = [...new Set([...ui.seen, t.dataset.seen])];
   } else if (t.dataset.route) {
@@ -1734,13 +1954,16 @@ document.addEventListener('click', e => {
   } else if (t.dataset.restack) {
     ui.restacked[t.dataset.restack] = true;
   } else if (t.hasAttribute('data-send')) {
-    const id = t.closest('.decision').dataset.id;
+    const card = t.closest('.decision');
+    const id = card.dataset.id;
+    const key = answerDraftKey(card.dataset.sessionId, id);
     const a = answerOf(id);
     const now = new Date();
     const at = absoluteTimeLabel(now);
     // 渡した時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ渡したものとして出す。
     a.sent = { choice: a.choice, picks: picksOf(a), note: a.note, at, deliveredAt: at };
     ui.answers[id] = a;
+    answerErrors.delete(key);
   } else return;
   save(); render();
 });
@@ -1760,23 +1983,31 @@ document.addEventListener('change', e => {
   }
   const pick = e.target.closest('input[data-pick]');
   if (pick) {
-    const id = pick.closest('.decision').dataset.id;
+    const card = pick.closest('.decision');
+    const id = card.dataset.id;
+    const key = answerDraftKey(card.dataset.sessionId, id);
     const a = answerOf(id);
+    const previous = { ...a, picks: [...picksOf(a)] };
     const i = Number(pick.dataset.pick);
     const rest = picksOf(a).filter(x => x !== i);
     a.picks = pick.type === 'radio' ? [i] : pick.checked ? [...rest, i].sort((x, y) => x - y) : rest;
     a.choice = a.picks.length ? 'pick' : null;
     ui.answers[id] = a;
+    clearAnswerErrorWhenDraftChanges(key, previous, a);
     save(); render();
     return;
   }
   const cb = e.target.closest('input[data-choice]');
   if (!cb) return;
-  const id = cb.closest('.decision').dataset.id;
+  const card = cb.closest('.decision');
+  const id = card.dataset.id;
+  const key = answerDraftKey(card.dataset.sessionId, id);
   const a = answerOf(id);
+  const previous = { ...a, picks: [...picksOf(a)] };
   a.choice = cb.checked ? cb.dataset.choice : null;
   a.picks = [];
   ui.answers[id] = a;
+  clearAnswerErrorWhenDraftChanges(key, previous, a);
   save(); render();
 });
 
@@ -1784,8 +2015,11 @@ document.addEventListener('input', e => {
   if (!e.target.matches('textarea[data-note]')) return;
   const card = e.target.closest('.decision');
   const a = answerOf(card.dataset.id);
+  const key = answerDraftKey(card.dataset.sessionId, card.dataset.id);
+  const previous = { ...a, picks: [...picksOf(a)] };
   a.note = e.target.value;
   ui.answers[card.dataset.id] = a;
+  clearAnswerErrorWhenDraftChanges(key, previous, a);
   save();
   card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a);
 });

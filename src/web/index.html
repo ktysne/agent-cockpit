@@ -114,6 +114,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .section-order-list button { min-width: 36px; padding: 4px 8px; }
 .settings-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .settings-dialog button { padding: 4px 12px; cursor: pointer; }
+.settings-save-error, .settings-input-error { color: var(--danger); font-size: 12px; }
+.settings-save-error { margin-top: 12px; }
+.settings-input-error { flex: 1 1 100%; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
 .section-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -189,6 +192,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-foot .primary:disabled { opacity: .45; cursor: default; }
 .answer-status { color: var(--text-2); font-size: 12px; }
 .answer-error { color: var(--danger); font-size: 12px; }
+.merge-result { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; color: var(--text-2); font-size: 12px; }
 .dialog-note { margin-top: 8px; }
 .task-list { list-style: none; margin: 0; padding: 0; }
 .group-frame { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
@@ -366,6 +370,7 @@ h3.sub .count { font-weight: normal; }
     <div class="summary" id="summary" aria-label="状態の件数と表示絞り込み"></div>
     <div class="filter-note" id="filter-note" hidden></div>
     <div class="excluded-note" id="excluded-note" hidden></div>
+    <div class="excluded-note" id="finished-note" hidden></div>
     <div class="control-row"><div class="routing" id="routing"></div></div>
     <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
@@ -396,12 +401,14 @@ h3.sub .count { font-weight: normal; }
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
     </div>
     <div class="settings-theme-row">
-      <label for="settings-long-wait-minutes">長く待たせているとみなす時間(分)</label>
-      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric">
+      <label for="settings-long-wait-minutes">長く待たせているとみなす時間 (1〜120 分)</label>
+      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric" aria-describedby="settings-long-wait-error">
+      <span class="settings-input-error" id="settings-long-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
-      <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間(分)</label>
-      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric">
+      <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間 (1〜30 分)</label>
+      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
+      <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
@@ -410,6 +417,7 @@ h3.sub .count { font-weight: normal; }
       <button type="button" id="settings-section-order-reset">既定に戻す</button>
     </div>
   </section>
+  <div class="settings-save-error" id="settings-save-error" role="alert" hidden></div>
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
 <main>
@@ -439,6 +447,8 @@ const themeSelect = document.getElementById('settings-theme-select');
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const longWaitMinutesError = document.getElementById('settings-long-wait-error');
+const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
@@ -448,6 +458,7 @@ const reloadNote = document.getElementById('reload-note');
 const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
+const settingsSaveError = document.getElementById('settings-save-error');
 const THEME_STORAGE_KEY = 'agent-cockpit.theme';
 const SINCE_SEEN_STORAGE_KEY = 'agent-cockpit.since-seen';
 const DISPLAY_STORAGE_KEY = 'agent-cockpit.display';
@@ -482,6 +493,10 @@ const expandedDoneTasks = new Set();
 const expandedPrLines = new Set();
 const expandedKindSections = new Set();
 const answerDrafts = new Map();
+const answerErrors = new Map();
+const pendingTaskCloseActions = new Map();
+const pullRequestMergeResults = new Map();
+let nextPullRequestMergeResultId = 0;
 let hiddenSessionsUndo = null;
 let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
@@ -613,6 +628,7 @@ let pendingDisplayChanges = {};
 let pendingDisplayRequests = 0;
 let displayWriteTail = Promise.resolve();
 const pendingDisplaySettingSaves = new Map();
+const displayPreferenceSaveStates = new Map();
 
 // 入力中の欄を定期の同期で上書きすると、確定前の値が消えるため、フォーカス中の欄は飛ばす。
 function renderDisplaySettings() {
@@ -639,6 +655,15 @@ function settleDisplaySettingSaves(saves, saved) {
   if (!saved && lastState) render(lastState);
 }
 
+function settleDisplayPreferenceSaves(saves, saved) {
+  for (const { key, state, sequence, value } of saves) {
+    if (saved) state.savedValue = value;
+    if (state.sequence !== sequence) continue;
+    if (!saved) displayPreferences[key] = state.savedValue;
+    displayPreferenceSaveStates.delete(key);
+  }
+}
+
 async function sendDisplayPatch(changes) {
   try {
     const response = await postUiAction('/api/display', changes);
@@ -658,19 +683,45 @@ function enqueueDisplayPatch(changes) {
 }
 
 function saveDisplayPreferences(changes) {
+  const saves = Object.entries(changes).map(([key, value]) => {
+    const state = displayPreferenceSaveStates.get(key) || { savedValue: displayPreferences[key], sequence: 0 };
+    state.sequence += 1;
+    state.latestValue = value;
+    displayPreferenceSaveStates.set(key, state);
+    return { key, state, sequence: state.sequence, value };
+  });
   Object.assign(displayPreferences, changes);
   if (!displayPreferencesReady) {
     Object.assign(pendingDisplayChanges, changes);
-    return;
+    return Promise.resolve(true);
   }
-  void enqueueDisplayPatch(changes);
+  return enqueueDisplayPatch(changes).then((saved) => {
+    settleDisplayPreferenceSaves(saves, saved);
+    if (!saved) {
+      renderDisplaySettings();
+      if (lastState) render(lastState);
+    }
+    return saved;
+  });
+}
+
+function displaySettingError(input) {
+  return input === longWaitMinutesInput ? longWaitMinutesError : awayAnswerWaitMinutesError;
 }
 
 function changeDisplaySetting(key, input, minimum, maximum) {
   const value = input.type === 'checkbox' ? input.checked : input.valueAsNumber;
   if (input.type !== 'checkbox' && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+    const error = displaySettingError(input);
+    error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
+    error.hidden = false;
     setDisplaySettingInput(input, displayPreferences[key]);
     return Promise.resolve(false);
+  }
+  if (input.type !== 'checkbox') {
+    const error = displaySettingError(input);
+    error.textContent = '';
+    error.hidden = true;
   }
   if (value === displayPreferences[key]) return Promise.resolve(true);
   const state = pendingDisplaySettingSaves.get(key) || { savedValue: displayPreferences[key], sequence: 0 };
@@ -692,6 +743,7 @@ function changeDisplaySetting(key, input, minimum, maximum) {
     if (!saved) displayPreferences[key] = state.savedValue;
     setDisplaySettingInput(input, displayPreferences[key]);
     pendingDisplaySettingSaves.delete(key);
+    if (!saved) renderDisplaySettings();
     if (lastState) render(lastState);
     return saved;
   });
@@ -710,16 +762,23 @@ async function syncDisplayPreferences(serverDisplay) {
       ? readDisplayPreferences()
       : normalizeDisplayPreferences(serverDisplay);
     for (const [key, state] of pendingDisplaySettingSaves) state.savedValue = current[key] ?? state.savedValue;
+    for (const [key, state] of displayPreferenceSaveStates) state.savedValue = current[key] ?? state.savedValue;
     displayPreferences = { ...current, ...pendingDisplayChanges };
     renderSectionOrder();
     renderDisplaySettings();
     displayPreferencesReady = true;
     const patch = serverDisplay === null ? displayPreferences : pendingDisplayChanges;
     const pendingSaves = [...pendingDisplaySettingSaves].map(([key, state]) => ({ key, state, sequence: state.sequence, value: state.latestValue }));
+    const pendingPreferenceSaves = [...displayPreferenceSaveStates].map(([key, state]) => ({ key, state, sequence: state.sequence, value: state.latestValue }));
     pendingDisplayChanges = {};
     if (Object.keys(patch).length) {
       const saved = await enqueueDisplayPatch(patch);
       settleDisplaySettingSaves(pendingSaves, saved);
+      settleDisplayPreferenceSaves(pendingPreferenceSaves, saved);
+      if (!saved) {
+        renderDisplaySettings();
+        if (lastState) render(lastState);
+      }
       if (serverDisplay === null) {
         displayMigrationPending = !saved;
         displayMigrationData = displayPreferences;
@@ -833,7 +892,11 @@ longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('long
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
 
-settingsButton.addEventListener('click', () => settingsDialog.showModal());
+settingsButton.addEventListener('click', () => {
+  settingsDialog.showModal();
+  settingsSaveError.textContent = Date.now() < writeErrorUntil ? writeErrorMessage : '';
+  settingsSaveError.hidden = !settingsSaveError.textContent;
+});
 settingsClose.addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', (event) => {
   // 内側の余白を押しても target はダイアログ自身になるので、位置で背景かを判定する。
@@ -841,7 +904,11 @@ settingsDialog.addEventListener('click', (event) => {
   const isOutside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
   if (event.target === settingsDialog && isOutside) settingsDialog.close();
 });
-settingsDialog.addEventListener('close', () => settingsButton.focus());
+settingsDialog.addEventListener('close', () => {
+  settingsSaveError.textContent = '';
+  settingsSaveError.hidden = true;
+  settingsButton.focus();
+});
 
 function applyAwayState(away) {
   const enabled = away?.enabled === true;
@@ -866,6 +933,10 @@ function updateConnectionNote() {
 function showWriteError(message) {
   writeErrorMessage = message;
   writeErrorUntil = Date.now() + 10_000;
+  if (settingsDialog.open) {
+    settingsSaveError.textContent = message;
+    settingsSaveError.hidden = false;
+  }
   clearTimeout(writeErrorTimer);
   writeErrorTimer = setTimeout(updateConnectionNote, 10_000);
   updateConnectionNote();
@@ -1222,6 +1293,45 @@ function renderExcludedNote(sessions) {
   note.replaceChildren(...children);
 }
 
+function finishedHiddenCounts(sessions, groups) {
+  if (!displayPreferences.hideFinished) return { sessions: 0, pullRequests: 0 };
+  const hiddenPullRequests = new Set();
+  for (const group of groups) {
+    const repository = `${group.owner}/${group.repo}`.toLowerCase();
+    for (const record of group.mergeHistory || []) {
+      if (record.headMismatch !== true) hiddenPullRequests.add(`${repository}#${record.number}`);
+    }
+    for (const pullRequest of group.merged || []) {
+      if (pullRequest.state === 'closed') hiddenPullRequests.add(`${repository}#${pullRequest.number}`);
+    }
+  }
+  return {
+    sessions: sessions.filter(isFinishedSession).length,
+    pullRequests: hiddenPullRequests.size,
+  };
+}
+
+function renderFinishedNote(counts) {
+  const note = document.getElementById('finished-note');
+  const parts = [
+    counts.sessions ? `セッション ${counts.sessions} 件` : '',
+    counts.pullRequests ? `PR ${counts.pullRequests} 件` : '',
+  ].filter(Boolean);
+  note.hidden = parts.length === 0;
+  if (!parts.length) {
+    note.replaceChildren();
+    return;
+  }
+  const show = element('button', 'link-btn', '表示する');
+  show.type = 'button';
+  show.dataset.showFinished = 'true';
+  show.addEventListener('click', () => {
+    hideFinishedInput.checked = false;
+    void changeDisplaySetting('hideFinished', hideFinishedInput);
+  });
+  note.replaceChildren(element('span', '', `終わったものを隠しています (${parts.join('、')})`), show);
+}
+
 function isFilterShown(key) {
   return !displayPreferences.hidden.includes(key);
 }
@@ -1266,9 +1376,37 @@ function pullRequestOpenCount(groups) {
   return groups.reduce((total, group) => total + (group.openCount || 0), 0);
 }
 
+function pullRequestRepositoryKey(group) {
+  const repository = `${group.owner}/${group.repo}`.toLowerCase();
+  return group.product?.key ? `${repository}\0${group.product.key}` : repository;
+}
+
+function hasPullRequestMergeResults(group) {
+  return (pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || []).length > 0;
+}
+
+function rememberPullRequestMergeResult(group, result) {
+  const key = pullRequestRepositoryKey(group);
+  const results = pullRequestMergeResults.get(key) || [];
+  results.push({ id: String(++nextPullRequestMergeResultId), ...result });
+  pullRequestMergeResults.set(key, results);
+}
+
+function removePullRequestMergeResult(id) {
+  for (const [key, results] of pullRequestMergeResults) {
+    const remaining = results.filter((result) => result.id !== id);
+    if (remaining.length === results.length) continue;
+    if (remaining.length) pullRequestMergeResults.set(key, remaining);
+    else pullRequestMergeResults.delete(key);
+    return true;
+  }
+  return false;
+}
+
 function visiblePullRequestGroups(groups) {
   if (!displayPreferences.hideFinished) return groups;
-  return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.trees?.length);
+  return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
+    || group.mergeHistory?.some((record) => record.headMismatch === true) || hasPullRequestMergeResults(group));
 }
 
 // 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
@@ -1487,7 +1625,8 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   panel.append(effects);
 
   const row = element('div', 'row');
-  const go = element('button', 'merge-go', automatic ? '予約する' : 'マージを実行');
+  const merging = !automatic && pullRequestMergeInFlight.has(key);
+  const go = element('button', 'merge-go', merging ? 'マージ中…' : automatic ? '予約する' : 'マージを実行');
   go.type = 'button';
   go.dataset[automatic ? 'reserveGo' : 'mergeGo'] = key;
   go.dataset.mergeKey = key;
@@ -1679,6 +1818,35 @@ function appendPullRequestTree(target, group, pullRequest) {
   target.append(item);
 }
 
+function pullRequestMergeResultLine(result) {
+  const parts = [
+    `${MERGE_METHOD_LABELS[result.method] || result.method} でマージしました`,
+    result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません',
+  ];
+  if (result.retargetedBase) {
+    const numbers = Array.isArray(result.retargetedNumbers) && result.retargetedNumbers.length
+      ? `${result.retargetedNumbers.map((number) => `#${number}`).join('、')} の `
+      : '';
+    parts.push(`${numbers}base を ${result.retargetedBase} に付け替えました`);
+  }
+  if (result.warning) parts.push(result.warning);
+  return parts.join('。') + '。';
+}
+
+function appendPullRequestMergeResults(content, group) {
+  const results = pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [];
+  for (const result of results) {
+    const row = element('div', 'merge-result');
+    row.setAttribute('role', 'status');
+    row.append(element('span', '', `PR #${result.number}: ${pullRequestMergeResultLine(result)}`));
+    const close = element('button', 'link-btn', '閉じる');
+    close.type = 'button';
+    close.dataset.closeMergeResult = result.id;
+    row.append(close);
+    content.append(row);
+  }
+}
+
 function appendPullRequestBlock(target, group, withTag = false) {
   if (!group) {
     target.append(element('div', 'empty', 'このセッションが作った PR はありません'));
@@ -1704,14 +1872,17 @@ function appendPullRequestBlock(target, group, withTag = false) {
     content.append(stack);
   }
   const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {
-    if (!items.length || displayPreferences.hideFinished) return;
+    const visibleItems = displayPreferences.hideFinished && kind === 'merged'
+      ? items.filter((item) => item.headMismatch === true)
+      : displayPreferences.hideFinished ? [] : items;
+    if (!visibleItems.length) return;
     const line = element('div', 'merged-list');
     line.append(document.createTextNode(`${heading}: `));
     const repositoryKey = `${group.owner}/${group.repo}`.toLowerCase();
     const key = `${kind}:${repositoryKey}`;
     const expanded = expandedPrLines.has(key);
-    const olderCount = Math.max(0, items.length - MERGED_VISIBLE_COUNT);
-    for (const item of expanded ? items : items.slice(0, MERGED_VISIBLE_COUNT)) appendItem(line, item);
+    const olderCount = Math.max(0, visibleItems.length - MERGED_VISIBLE_COUNT);
+    for (const item of expanded ? visibleItems : visibleItems.slice(0, MERGED_VISIBLE_COUNT)) appendItem(line, item);
     if (olderCount) {
       const toggle = element('button', 'ended-toggle', `${expanded ? '古い' + label + 'を隠す' : '古い' + label + 'を表示'} (${olderCount} 件)`);
       toggle.type = 'button';
@@ -1729,7 +1900,9 @@ function appendPullRequestBlock(target, group, withTag = false) {
     content.append(line);
   };
   if (!group.trees.length && !group.error) {
-    if (group.merged.length || group.mergeHistory?.length) {
+    if (group.loading) {
+      content.append(element('div', 'empty', 'GitHub から取得しています'));
+    } else if (group.merged.length || group.mergeHistory?.length) {
       content.append(element('div', 'empty', 'オープンの PR はありません'));
     } else {
       content.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
@@ -1766,6 +1939,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
     link.title = pullRequest.title;
     line.append(link);
   });
+  appendPullRequestMergeResults(content, group);
   section.append(content);
   target.append(section);
 }
@@ -1804,7 +1978,8 @@ function hasProductContent(product, sinceSeen) {
   const pullRequestGroups = isFilterShown('prs') ? visiblePullRequestGroups(product.pullRequestGroups || []) : [];
   return product.sessions.length > 0
     || pullRequestOpenCount(pullRequestGroups) > 0
-    || pullRequestGroups.some((group) => group.openStateUnknown)
+    || pullRequestGroups.some((group) => group.openStateUnknown || group.loading
+      || group.mergeHistory?.some((record) => record.headMismatch === true) || hasPullRequestMergeResults(group))
     || sinceSeen.some((entry) => entry.product?.key === product.key && entry.items?.length > 0);
 }
 
@@ -2051,6 +2226,17 @@ function sameAnswerPicks(left, right) {
   ));
 }
 
+function sameAnswerDraft(left, right) {
+  return left.choice === right.choice && left.note === right.note && sameAnswerPicks(left.picks, right.picks);
+}
+
+function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
+  if (sameAnswerDraft(previous, next)) return;
+  answerErrors.delete(key);
+  const error = card?.querySelector('.answer-error');
+  if (error) error.textContent = '';
+}
+
 function decisionAnswerAvailability(decision) {
   const questions = decision.questions || [];
   const duplicateQuestions = new Set(questions.map((question) => question.question)).size !== questions.length;
@@ -2118,14 +2304,26 @@ function answerStatusText(answer, decision) {
 }
 
 function appendDecisionAnswer(card, decision, product, session, summary) {
+  const key = answerDraftKey(session.session_id, decision.id);
+  const savedError = answerErrors.get(key) || '';
   const questions = decision.questions || [];
   const { active, viaDialog } = decisionAnswerAvailability(decision);
   if (viaDialog) {
     card.append(element('div', 'meta dialog-note', `質問はデスクトップアプリの ${product.name} の「${sessionDisplayName(session)}」セッションで答える。`));
+    if (savedError) {
+      const error = element('div', 'answer-error', savedError);
+      error.setAttribute('role', 'alert');
+      card.append(error);
+    }
     return;
   }
   if (!active) {
     if (decision.answer?.sentAt) summary.append(element('span', 'answer-status', answerStatusText(decision.answer, decision)));
+    if (savedError) {
+      const error = element('div', 'answer-error', savedError);
+      error.setAttribute('role', 'alert');
+      card.append(error);
+    }
     return;
   }
 
@@ -2175,8 +2373,8 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   send.dataset.sendAnswer = decision.id;
   send.dataset.sessionId = session.session_id;
   send.disabled = !canSendDecisionAnswer(decision, draft) || !dirty;
-  foot.append(send, element('span', 'answer-status', answerStatusText(answer, decision)));
-  const error = element('div', 'answer-error');
+  foot.append(send, element('span', 'answer-status', dirty && answer?.sentAt ? '変更は未送信' : answerStatusText(answer, decision)));
+  const error = element('div', 'answer-error', savedError);
   error.setAttribute('role', 'alert');
   answerBox.append(foot, error);
   card.append(answerBox);
@@ -2322,10 +2520,14 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
   if (task.closedByUser) header.append(element('span', 'meta', '画面で完了にした'));
   if (task.state !== 'done') {
-    const close = element('button', 'link-btn close-task', '完了にする');
+    const closeKey = `${session.session_id}::${task.title}`;
+    const pending = pendingTaskCloseActions.has(closeKey);
+    const close = element('button', 'link-btn close-task', pending ? '取り消す' : '完了にする');
     close.type = 'button';
-    close.dataset.closeTask = `${session.session_id}::${task.title}`;
+    if (pending) close.dataset.cancelCloseTask = closeKey;
+    else close.dataset.closeTask = closeKey;
     header.append(close);
+    if (pending) header.append(element('span', 'meta', '5 秒後に完了にします。'));
   }
   item.append(header);
   if (task.criteria.length) {
@@ -2785,19 +2987,25 @@ function render(state) {
                 : active?.dataset?.conflictOpen ? { kind: 'merge-conflict-open', key: active.dataset.conflictOpen }
                   : active?.dataset?.conflictGo ? { kind: 'merge-conflict-go', key: active.dataset.conflictGo }
                     : active?.dataset?.conflictCancel ? { kind: 'merge-conflict-cancel', key: active.dataset.conflictCancel }
-                : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
+       : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
                   : active?.dataset?.reserveGo ? { kind: 'merge-reserve-go', key: active.dataset.reserveGo }
                     : active?.dataset?.cancelReservation ? { kind: 'merge-cancel-reservation', key: active.dataset.cancelReservation }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
           : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
-            : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
+         : active?.dataset?.showFinished ? { kind: 'show-finished' }
+           : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
+             : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
+               : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
+                 : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
               : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
             : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
   renderSummary(sessions, pullRequestGroups);
   renderExcludedNote(allSessions);
+  const hiddenFinished = finishedHiddenCounts(sessions, pullRequestGroups);
+  renderFinishedNote(hiddenFinished);
   updateTitle(sessions);
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
@@ -2805,9 +3013,15 @@ function render(state) {
   const sinceSeen = visibleSinceSeen(state);
   const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
   if (!products.length) {
-    root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
+    const emptyText = hiddenFinished.sessions || hiddenFinished.pullRequests
+      ? '終わったものを隠しています。上部の「表示する」から表示できます。'
+      : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。';
+    root.replaceChildren(element('section', 'section empty', emptyText));
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
+    else if (['show-finished', 'merge-result-close'].includes(focusData?.kind)) {
+      document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
+    }
     return;
   }
 
@@ -2882,10 +3096,17 @@ function render(state) {
       if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
       if (focusData.kind === 'clear-hidden') return item.hasAttribute('data-clear-hidden-sessions');
       if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
+      if (focusData.kind === 'show-finished') return item.hasAttribute('data-show-finished');
+      if (focusData.kind === 'merge-result-close') return item.dataset.closeMergeResult === focusData.id;
+      if (['close-task', 'cancel-close-task'].includes(focusData.kind)) {
+        return item.dataset.closeTask === focusData.key || item.dataset.cancelCloseTask === focusData.key;
+      }
       return item.dataset.productAction === focusData.action && item.dataset.productKey === focusData.key && (item.dataset.direction || '') === focusData.direction;
     });
     const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled
       ? buttons.find((item) => item.dataset.productAction === 'move' && item.dataset.productKey === focusData.key && item.dataset.direction === String(-Number(focusData.direction)))
+      : ['show-finished', 'merge-result-close'].includes(focusData.kind) && !button
+        ? document.querySelector('[data-close-merge-result]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
       : focusData.kind === 'toggle' && focusData.attribute === 'data-hide-session' && !button
         ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
       : button;
@@ -2923,6 +3144,7 @@ function updateAnswerSubmit(card) {
 }
 
 function showAnswerError(sessionId, decisionId, message) {
+  answerErrors.set(answerDraftKey(sessionId, decisionId), message);
   const card = [...root.querySelectorAll('.decision-answer')].find((item) => (
     item.dataset.sessionId === sessionId && item.dataset.decisionId === decisionId
   ));
@@ -2954,6 +3176,7 @@ async function sendDecisionAnswer(button) {
       return;
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    answerErrors.delete(answerDraftKey(sessionId, decisionId));
     answerDrafts.delete(answerDraftKey(sessionId, decisionId));
     await refresh();
     liveStatus.textContent = '回答を送信しました。';
@@ -2975,12 +3198,12 @@ document.addEventListener('change', (event) => {
     if (!decision) return;
     const current = answerDraftFor(decision, { session_id: choice.dataset.sessionId });
     const next = { ...current, choice: choice.checked ? choice.dataset.answerChoice : null, picks: emptyAnswerPicks(decision) };
+    clearAnswerErrorWhenDraftChanges(key, current, next, card);
     answerDrafts.set(key, next);
     for (const input of card.querySelectorAll('[data-answer-choice]')) {
       input.checked = next.choice === input.dataset.answerChoice;
     }
     for (const input of choice.closest('.decision-card')?.querySelectorAll('[data-answer-pick]') || []) input.checked = false;
-    card.querySelector('.answer-error').textContent = '';
     updateAnswerSubmit(card);
     return;
   }
@@ -3003,12 +3226,14 @@ document.addEventListener('change', (event) => {
   else selectedLabels.delete(option.label);
   picks[questionIndex] = [...new Set(question.options.map((item) => item.label).filter((label) => selectedLabels.has(label)))];
   const choiceValue = picks.some((labels) => labels.length) ? 'pick' : null;
-  answerDrafts.set(answerDraftKey(sessionId, decisionId), { ...current, choice: choiceValue, picks });
+  const key = answerDraftKey(sessionId, decisionId);
+  const next = { ...current, choice: choiceValue, picks };
+  answerDrafts.set(key, next);
   // 選択肢は回答欄の外(質問の区画)にあるので、判断事項のカードから回答欄を引く。
   const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
   if (!card) return;
   for (const input of card.querySelectorAll('[data-answer-choice]')) input.checked = false;
-  card.querySelector('.answer-error').textContent = '';
+  clearAnswerErrorWhenDraftChanges(key, current, next, card);
   updateAnswerSubmit(card);
 });
 
@@ -3018,9 +3243,10 @@ document.addEventListener('input', (event) => {
   const key = answerDraftKey(note.dataset.sessionId, note.dataset.decisionId);
   const decision = findDecision(note.dataset.sessionId, note.dataset.decisionId);
   const current = decision ? answerDraftFor(decision, { session_id: note.dataset.sessionId }) : { choice: null, note: '' };
-  answerDrafts.set(key, { ...current, note: note.value });
+  const next = { ...current, note: note.value };
+  answerDrafts.set(key, next);
   const card = note.closest('.decision-answer');
-  card.querySelector('.answer-error').textContent = '';
+  clearAnswerErrorWhenDraftChanges(key, current, next, card);
   updateAnswerSubmit(card);
 });
 
@@ -3034,7 +3260,7 @@ document.addEventListener('compositionend', (event) => {
   renderDeferredState();
 }, true);
 
-async function runCloseAction(button, url, body, errorMessage) {
+async function sendCloseAction(button, url, body, errorMessage) {
   button.disabled = true;
   try {
     const response = await postUiAction(url, body);
@@ -3051,6 +3277,33 @@ async function runCloseAction(button, url, body, errorMessage) {
   } finally {
     if (button.isConnected) button.disabled = false;
   }
+}
+
+async function runCloseAction(button, url, body, errorMessage) {
+  if (url === '/api/closed-tasks') {
+    const key = button.dataset.closeTask;
+    if (!key) return;
+    const pending = { timeout: null };
+    pending.timeout = setTimeout(() => {
+      if (pendingTaskCloseActions.get(key) !== pending) return;
+      pendingTaskCloseActions.delete(key);
+      if (lastState) render(lastState);
+      void sendCloseAction(button, url, body, errorMessage);
+    }, 5_000);
+    pendingTaskCloseActions.set(key, pending);
+    if (lastState) render(lastState);
+    return;
+  }
+  await sendCloseAction(button, url, body, errorMessage);
+}
+
+function cancelTaskClose(button) {
+  const key = button.dataset.cancelCloseTask;
+  const pending = pendingTaskCloseActions.get(key);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingTaskCloseActions.delete(key);
+  if (lastState) render(lastState);
 }
 
 function closeTaskButton(button) {
@@ -3142,6 +3395,17 @@ async function runPullRequestMergeAction(button, action) {
     const queued = action === 'merge' && result.queued;
     if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
     pullRequestMergeMessages.delete(key);
+    if (action === 'merge' && result.merged === true) {
+      const retargetedNumbers = pullRequest.children.map((child) => child.number);
+      rememberPullRequestMergeResult(group, {
+        number,
+        method: options.method,
+        branchDeleted: result.branchDeleted === true,
+        retargetedBase: retargetedNumbers.length ? group.defaultBranch : null,
+        retargetedNumbers,
+        warning: result.warning || null,
+      });
+    }
     await refresh();
     liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : action === 'merge' ? `PR #${number} をマージしました。`
       : action === 'reserve' ? `PR #${number} のマージを予約しました。`
@@ -3315,6 +3579,15 @@ document.addEventListener('click', (event) => {
     if (lastState) render(lastState);
     return;
   }
+  if (button.dataset.closeMergeResult) {
+    removePullRequestMergeResult(button.dataset.closeMergeResult);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.cancelCloseTask) {
+    cancelTaskClose(button);
+    return;
+  }
   if (button.dataset.closeTask) {
     closeTaskButton(button);
     return;
@@ -3386,13 +3659,14 @@ document.addEventListener('click', (event) => {
   if (button.dataset.productAction) {
     const key = button.dataset.productKey;
     let changedKey;
+    let changedValue;
     if (button.dataset.productAction === 'collapse') {
-      displayPreferences.collapsed = displayPreferences.collapsed.includes(key)
+      changedValue = displayPreferences.collapsed.includes(key)
         ? displayPreferences.collapsed.filter((item) => item !== key)
         : [...displayPreferences.collapsed, key];
       changedKey = 'collapsed';
     } else if (button.dataset.productAction === 'pin') {
-      displayPreferences.pinned = displayPreferences.pinned.includes(key)
+      changedValue = displayPreferences.pinned.includes(key)
         ? displayPreferences.pinned.filter((item) => item !== key)
         : [...displayPreferences.pinned, key];
       changedKey = 'pinned';
@@ -3414,13 +3688,14 @@ document.addEventListener('click', (event) => {
       if (!canMove) return;
       const currentKey = products[index].key;
       const targetKey = products[targetIndex].key;
-      const currentOrderIndex = displayPreferences.order.indexOf(currentKey);
-      const targetOrderIndex = displayPreferences.order.indexOf(targetKey);
-      [displayPreferences.order[currentOrderIndex], displayPreferences.order[targetOrderIndex]] =
-        [displayPreferences.order[targetOrderIndex], displayPreferences.order[currentOrderIndex]];
+      changedValue = [...displayPreferences.order];
+      const currentOrderIndex = changedValue.indexOf(currentKey);
+      const targetOrderIndex = changedValue.indexOf(targetKey);
+      [changedValue[currentOrderIndex], changedValue[targetOrderIndex]] =
+        [changedValue[targetOrderIndex], changedValue[currentOrderIndex]];
       changedKey = 'order';
     }
-    saveDisplayPreferences({ [changedKey]: displayPreferences[changedKey] });
+    saveDisplayPreferences({ [changedKey]: changedValue });
     if (lastState) render(lastState);
   }
 });
