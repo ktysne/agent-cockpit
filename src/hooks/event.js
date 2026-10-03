@@ -106,7 +106,8 @@ function shellArguments(value) {
       quote = character;
       token.quoted = true;
       token.started = true;
-    } else if (/\s/.test(character)) pushToken();
+    } else if (/[\r\n]/.test(character)) break;
+    else if (/\s/.test(character)) pushToken();
     else if (character === '&' && (token.text.endsWith('>') || value[index + 1] === '>')) {
       token.text += character;
       token.started = true;
