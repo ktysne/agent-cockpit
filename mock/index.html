@@ -1300,7 +1300,7 @@ function mergeBlocker(p, pr) {
 const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 
 function pullRequestMergeResultLine(result) {
-  const parts = [`${METHOD_LABEL[result.method] || result.method} でマージしました`, result.autoDeleteBranch ? 'ブランチは GitHub の設定で自動削除されます' : result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません'];
+  const parts = [`${METHOD_LABEL[result.method] || result.method} でマージしました`, result.autoDeleteBranch ? 'ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)' : result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません'];
   if (result.retargetedBase) {
     const numbers = result.retargetedNumbers?.length ? `${result.retargetedNumbers.map(number => `#${number}`).join('、')} の ` : '';
     parts.push(`${numbers}base を ${result.retargetedBase} に付け替えました`);
@@ -1339,7 +1339,7 @@ function finishMockMerge(product, pullRequest, options, automatic = false) {
     number: pullRequest.number,
     method: options.method,
     branchDeleted: options.del,
-    autoDeleteBranch: product.repo.autoDeleteBranch === true,
+    autoDeleteBranch: product.repo.autoDeleteBranch === true && pullRequest.isCrossRepository !== true,
     ...(children.length ? { retargetedBase: product.repo.defaultBranch, retargetedNumbers: children } : {}),
     ...(pullRequest.headMismatch === true ? { warning: '予約時と異なる head SHA がマージされました' } : {}),
   });

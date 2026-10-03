@@ -683,9 +683,18 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
   vm.runInContext(`${findTargetSource}\n${rememberSource}\n${lineSource}\n${actionSource}\nthis.merge = runPullRequestMergeAction; this.resultLine = pullRequestMergeResultLine;`, webContext);
   await webContext.merge({ dataset: { mergeGo: key } }, 'merge');
   const webResult = webResults.get('example/project\0project-a')[0];
-  const expected = 'スカッシュ でマージしました。ブランチは GitHub の設定で自動削除されます。';
+  const expected = 'スカッシュ でマージしました。ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)。';
   assert.equal(webResult.autoDeleteBranch, true);
   assert.equal(webContext.resultLine(webResult), expected);
+
+  // fork の head ブランチは登録先の自動削除の対象にならない。
+  pullRequest.isCrossRepository = true;
+  webResults.clear();
+  await webContext.merge({ dataset: { mergeGo: key } }, 'merge');
+  const forkResult = webResults.get('example/project\0project-a')[0];
+  assert.equal(forkResult.autoDeleteBranch, false);
+  assert.equal(webContext.resultLine(forkResult), 'スカッシュ でマージしました。ブランチは削除していません。');
+  delete pullRequest.isCrossRepository;
 
   const mockResults = new Map();
   const mockContext = pageContext(mock, {

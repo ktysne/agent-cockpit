@@ -1394,7 +1394,7 @@ function hasPullRequestMergeResults(group) {
 function rememberPullRequestMergeResult(group, result) {
   const key = pullRequestRepositoryKey(group);
   const results = pullRequestMergeResults.get(key) || [];
-  results.push({ id: String(++nextPullRequestMergeResultId), ...result, autoDeleteBranch: group.autoDeleteBranch === true });
+  results.push({ id: String(++nextPullRequestMergeResultId), ...result, autoDeleteBranch: group.autoDeleteBranch === true && result.isCrossRepository !== true });
   pullRequestMergeResults.set(key, results);
 }
 
@@ -1827,7 +1827,7 @@ function appendPullRequestTree(target, group, pullRequest) {
 function pullRequestMergeResultLine(result) {
   const parts = [
     `${MERGE_METHOD_LABELS[result.method] || result.method} でマージしました`,
-    result.autoDeleteBranch ? 'ブランチは GitHub の設定で自動削除されます'
+    result.autoDeleteBranch ? 'ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)'
       : result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません',
   ];
   if (result.retargetedBase) {
@@ -3417,6 +3417,7 @@ async function runPullRequestMergeAction(button, action) {
         number,
         method: options.method,
         branchDeleted: result.branchDeleted === true,
+        isCrossRepository: pullRequest.isCrossRepository === true,
         retargetedBase: retargetedNumbers.length ? group.defaultBranch : null,
         retargetedNumbers,
         warning: result.warning || null,
