@@ -34,11 +34,12 @@ test('モックと実装の画面スクリプトを構文解析できる', () =>
 });
 
 test('モックに合わせた配色、札、タスク行を表示する', () => {
-  assert.match(web, /--on-ok: #ffffff;/);
+  assert.match(web, /--on-ok: #000000;/);
   assert.equal((web.match(/--on-ok: #1f1e1d;/g) || []).length, 2);
   assert.match(web, /\.merge-btn \{[^}]*color: var\(--on-ok\)/);
   assert.match(web, /\.merge-confirm \.merge-go \{[^}]*color: var\(--on-ok\)/);
-  assert.match(web, /\.merge-confirm\.auto \.merge-go \{[^}]*color: var\(--on-ok\)/);
+  assert.match(web, /\.merge-confirm\.auto \.merge-go \{[^}]*color: var\(--on-accent\)/);
+  assert.match(web, /\.merge-confirm\.conflict \.conflict-go \{[^}]*color: var\(--on-danger\)/);
   assert.match(web, /\.badge\.new-mark \{ background: var\(--accent\); color: var\(--on-accent\); \}/);
   assert.match(web, /\.permission code \{/);
   assert.match(web, /\.settings-dialog \{ width: min\(440px,/);
@@ -342,8 +343,10 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
   const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
   const isLongWait = functionSource(web, 'isLongWait');
   const elapsedLabel = functionSource(web, 'decisionElapsedLabel');
+  const duration = functionSource(web, 'durationLabel');
+  assert.ok(duration);
   const context = pageContext(web, { displayPreferences: { longWaitMinutes: 2 }, hasEffectiveAnswer: () => false });
-  vm.runInContext(`${normalizeMinutes}\n${isLongWait}\n${elapsedLabel}\nthis.normalizeMinutes = normalizeDisplayMinutes; this.isLongWait = isLongWait; this.elapsedLabel = decisionElapsedLabel;`, context);
+  vm.runInContext(`${duration}\n${normalizeMinutes}\n${isLongWait}\n${elapsedLabel}\nthis.normalizeMinutes = normalizeDisplayMinutes; this.isLongWait = isLongWait; this.elapsedLabel = decisionElapsedLabel;`, context);
 
   assert.equal(context.normalizeMinutes(120, 1, 120, 15), 120);
   assert.equal(context.normalizeMinutes(1.5, 1, 120, 15), 15);
