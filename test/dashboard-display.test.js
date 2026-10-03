@@ -331,7 +331,9 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 5,
+    hideFinished: true,
   });
+  assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 5);
 });
@@ -364,6 +366,7 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
 });
 
 test('表示時間の保存に失敗した数値設定を元に戻す', async () => {
+  const setInput = functionSource(web, 'setDisplaySettingInput');
   const change = functionSource(web, 'changeDisplaySetting');
   const patches = [];
   let saveCount = 0;
@@ -375,7 +378,7 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
     lastState: null,
     enqueueDisplayPatch: async (patch) => { patches.push(patch); saveCount += 1; return saveCount === 1; },
   });
-  vm.runInContext(`${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  vm.runInContext(`${setInput}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
   const savedInput = { valueAsNumber: 24, value: '24' };
   const failedInput = { valueAsNumber: 30, value: '30' };
 
@@ -507,9 +510,10 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
   const defaultOrder = web.match(/const DEFAULT_SECTION_ORDER = [^\n]+/)?.[0];
   const normalize = functionSource(web, 'normalizeSectionOrder');
   const ordered = functionSource(web, 'orderedSectionKeys');
+  const visiblePullRequests = functionSource(web, 'visiblePullRequestGroups');
   const renderKinds = functionSource(web, 'renderKindSections');
   const renderSession = functionSource(web, 'sessionBlock');
-  assert.ok(constants && defaultOrder && normalize && ordered && renderKinds && renderSession);
+  assert.ok(constants && defaultOrder && normalize && ordered && visiblePullRequests && renderKinds && renderSession);
 
   function renderWithOrder(sectionOrder) {
     const element = (tag, className = '', textContent = '') => ({
@@ -541,7 +545,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendUnknownSessionControls(target) { target.append({ marker: 'unknown' }); },
       mainRow: () => ({ marker: 'main' }),
     });
-    vm.runInContext([constants, defaultOrder, normalize, ordered, renderKinds, renderSession].join('\n'), context);
+    vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label || 'kindProductOrder'),
     ));
@@ -677,6 +681,7 @@ test('サブエージェントを隠したときに空の案内を出さない',
   const body = { children: [], append(item) { this.children.push(item); } };
   const webContext = pageContext(web, {
     expandedEndedSessions: new Set(),
+    displayPreferences: { hideFinished: false },
     isFilterShown: () => false,
     newestFirst: (items) => items,
     isEndedAgent: (agent) => !agent.active && !agent.unconfirmed,
@@ -708,7 +713,10 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     functionSource(web, 'kindDoneTaskCount'),
     functionSource(web, 'kindTodoTaskCount'),
   ];
-  const webContext = pageContext(web, { isEndedAgent: (agent) => !agent.active && !agent.unconfirmed });
+  const webContext = pageContext(web, {
+    displayPreferences: { hideFinished: false },
+    isEndedAgent: (agent) => !agent.active && !agent.unconfirmed,
+  });
   vm.runInContext(`${webHelpers.join('\n')}\nthis.collect = (references) => JSON.stringify({
     decisions: kindEndedDecisionEntries(references).map(({ decision }) => decision.id),
     endedAgentCount: kindEndedAgentCount(references),
@@ -760,6 +768,7 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     functionSource(mock, 'kindTodoTaskCount'),
   ];
   const mockContext = pageContext(mock, {
+    ui: { hideFinished: false },
     effectiveDecisionState: (decision) => decision.state,
     ageMinutes: (item) => item.age,
     isEndedAgent: (_session, agent) => agent.ended,
@@ -896,15 +905,18 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.ok(render);
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
+  const hideFinishedInput = { checked: false };
   const context = pageContext(web, {
     document: { activeElement: longWaitMinutesInput },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5 },
+    hideFinishedInput,
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: false },
   });
   vm.runInContext(render, context);
   context.renderDisplaySettings();
 
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
+  assert.equal(hideFinishedInput.checked, false);
 });

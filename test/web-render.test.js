@@ -38,6 +38,38 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
   assert.equal(context.decisionElapsedLabel({ state: 'withdrawn', updatedAt: old }), null);
 });
 
+test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
+  const endedAgent = pageHtml.match(/function isEndedAgent\(agent\) \{[\s\S]*?\n\}/)?.[0];
+  const isFinished = pageHtml.match(/function isFinishedSession\(session\) \{[\s\S]*?\n\}/)?.[0];
+  const status = pageHtml.match(/function activityStatus\(session\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(endedAgent && isFinished && status);
+  const context = pageContext(pageHtml, {});
+  vm.runInContext(`${endedAgent}\n${status}\n${isFinished}`, context);
+
+  const finished = {
+    status: '待機中',
+    tasks: [{ state: 'done' }],
+    decisions: [{ state: 'resolved' }, { state: 'withdrawn' }],
+    permissionWaits: [],
+    agents: [{ active: false, unconfirmed: false }],
+  };
+  assert.equal(context.isFinishedSession(finished), true);
+  for (const update of [
+    { tasks: [{ state: 'todo' }] },
+    { tasks: [{ state: 'doing' }] },
+    { tasks: [{ state: 'blocked' }] },
+    { decisions: [{ state: 'waiting' }] },
+    { decisions: [{ state: 'provisional' }] },
+    { permissionWaits: [{}] },
+    { agents: [{ active: true, unconfirmed: false }] },
+    { agents: [{ active: false, unconfirmed: true }] },
+    { status: '作業中' },
+    { status: '不明' },
+  ]) {
+    assert.equal(context.isFinishedSession({ ...finished, ...update }), false, JSON.stringify(update));
+  }
+});
+
 test('種類別の判断事項は有効な回答を送ったものを後ろに並べ、無視された回答は経過時間で並べる', () => {
   const age = pageHtml.match(/function kindDecisionWaitAge\(decision\) \{[\s\S]*?\n\}/)?.[0];
   const effective = pageHtml.match(/function hasEffectiveAnswer\(decision\) \{[\s\S]*?\n\}/)?.[0];
@@ -895,10 +927,10 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
 
 test('前回見てからの設定は常にを既定にし、保存値と不正な値を読み分ける', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode'];
+  const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode', 'visibleSinceSeen'];
   const functions = names.map((name) => source.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
-  assert.match(source, /id="settings-since-seen-select"[\s\S]*?<option value="always">常に<\/option>[\s\S]*?<option value="away">離席中のみ<\/option>/);
+  assert.match(source, /id="settings-since-seen-select"[\s\S]*?<option value="always">常に<\/option>[\s\S]*?<option value="away">離席中のみ<\/option>[\s\S]*?<option value="never">出さない<\/option>/);
   assert.match(source, /「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。/);
   assert.match(source, /applySinceSeenMode\(storedSinceSeenMode\(\)\)/);
 
@@ -913,6 +945,7 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
     SINCE_SEEN_STORAGE_KEY: 'agent-cockpit.since-seen',
     localStorage,
     sinceSeenSelect,
+    header: { dataset: { away: 'false' } },
     lastState: { sinceSeen: [] },
     render: () => { renderCount += 1; },
   });
@@ -932,13 +965,84 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
   context.setSinceSeenMode('away');
   assert.equal(storage.get('agent-cockpit.since-seen'), 'away');
   assert.equal(renderCount, 1);
+  storage.set('agent-cockpit.since-seen', 'never');
+  assert.equal(context.storedSinceSeenMode(), 'never');
+  context.applySinceSeenMode(context.storedSinceSeenMode());
+  assert.equal(sinceSeenSelect.value, 'never');
+  context.setSinceSeenMode('never');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'never');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleSinceSeen({ sinceSeen: [{ items: [{ text: '履歴' }] }] }))), []);
+  assert.equal(renderCount, 2);
   context.setSinceSeenMode('invalid');
   assert.equal(storage.get('agent-cockpit.since-seen'), 'always');
   assert.equal(sinceSeenSelect.value, 'always');
-  assert.equal(renderCount, 2);
+  assert.equal(renderCount, 3);
 
   localStorage.getItem = () => { throw new Error('storage unavailable'); };
   assert.equal(context.storedSinceSeenMode(), 'always');
+});
+
+test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
+  const names = ['normalizeDisplayMinutes', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'changeDisplaySetting'];
+  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+  assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
+
+  let activeElement = null;
+  let resolveSave;
+  let savedPatch;
+  const hideFinishedInput = { type: 'checkbox', checked: false };
+  const longWaitMinutesInput = { type: 'number', value: '' };
+  const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
+  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5 };
+  const context = pageContext(pageHtml, {
+    displayPreferences,
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    DEFAULT_LONG_WAIT_MINUTES: 15,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    FILTERS: [],
+    displayPreferencesReady: true,
+    pendingDisplayChanges: {},
+    pendingDisplaySettingSaves: new Map(),
+    hideFinishedInput,
+    longWaitMinutesInput,
+    awayAnswerWaitMinutesInput,
+    lastState: null,
+    document: { get activeElement() { return activeElement; } },
+    enqueueDisplayPatch: (patch) => {
+      savedPatch = patch;
+      return new Promise((resolve) => { resolveSave = resolve; });
+    },
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
+  assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
+  activeElement = hideFinishedInput;
+  hideFinishedInput.checked = true;
+  context.renderDisplaySettings();
+  assert.equal(hideFinishedInput.checked, true);
+
+  const saving = context.changeDisplaySetting('hideFinished', hideFinishedInput);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { hideFinished: true });
+  hideFinishedInput.checked = false;
+  context.renderDisplaySettings();
+  assert.equal(hideFinishedInput.checked, false);
+  hideFinishedInput.checked = true;
+  resolveSave(true);
+  assert.equal(await saving, true);
+  assert.equal(displayPreferences.hideFinished, true);
+  assert.equal(hideFinishedInput.checked, true);
+
+  context.enqueueDisplayPatch = async (patch) => {
+    savedPatch = patch;
+    return false;
+  };
+  hideFinishedInput.checked = false;
+  await context.changeDisplaySetting('hideFinished', hideFinishedInput);
+  assert.equal(displayPreferences.hideFinished, true);
+  assert.equal(hideFinishedInput.checked, true);
 });
 
 test('離席中のみでは履歴を離席状態で描き分け、非表示中の並び順に使わない', async () => {
@@ -1012,7 +1116,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
 
 test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestOpenCount', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
+  const functions = ['pullRequestOpenCount', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   const clickListener = source.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
@@ -1068,7 +1172,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
 
 test('表示中のセッションもオープンの PR も数えきれていない PR も未読の変化も無いプロダクトはカードを出さない', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestOpenCount', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
+  const functions = ['pullRequestOpenCount', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -1097,6 +1201,61 @@ test('表示中のセッションもオープンの PR も数えきれていな�
 
   pullRequestsShown = false;
   assert.deepEqual(keys([]), ['active']);
+});
+
+test('終わったセッションと履歴だけの PR しか残らないプロダクトは両方の表示から除く', () => {
+  const names = [
+    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences', 'element', 'productSection',
+  ];
+  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true, order: [], pinned: [], collapsed: [] },
+    saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
+    isFilterShown: () => true,
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    sharedBranch: () => '',
+    productControls: () => new FakeElement('div'),
+    sinceSeenBox: () => null,
+    sessionBlock: () => new FakeElement('div'),
+    isAwaitingDecision: () => false,
+    pullRequestMergeableCount: () => 0,
+    orderedSectionKeys: (keys) => keys,
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const finished = {
+    session_id: 'finished', status: '待機中', hidden: false, title: '完了',
+    product: { key: 'finished', name: '完了' }, tools: [], lastActivityAt: '2026-10-04T00:00:00.000Z',
+    tasks: [{ state: 'done' }], decisions: [{ state: 'resolved' }], permissionWaits: [], agents: [{ active: false, unconfirmed: false }],
+  };
+  const unknown = { ...finished, session_id: 'unknown', status: '不明', product: { key: 'unknown', name: '不明' } };
+  const busy = { ...finished, session_id: 'busy', status: '作業中', product: { key: 'busy', name: '作業中' } };
+  const unfinished = { ...finished, session_id: 'unfinished', tasks: [{ state: 'todo' }], product: { key: 'unfinished', name: '未完了' } };
+  const visible = [unknown, busy, unfinished];
+  const products = context.orderedProducts([finished, ...visible]);
+  assert.deepEqual(JSON.parse(JSON.stringify(products.map((product) => product.key).sort())), ['busy', 'unfinished', 'unknown']);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.sessionReferences([{ key: 'refs', name: '参照', sessions: [finished, unknown] }])
+    .map((reference) => reference.session.session_id))), ['unknown']);
+
+  const oldPullRequest = {
+    product: { key: 'old-pr', name: '古い PR' }, owner: 'acme', repo: 'old', openCount: 0,
+    openStateUnknown: false, trees: [], merged: [{ number: 7, state: 'closed' }], mergeHistory: [{}],
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.orderedProducts([], [oldPullRequest]))), []);
+
+  const displayedProduct = {
+    key: 'shown', name: '表示中', branches: new Set(), sessions: [{ permissionWaits: [], decisions: [] }], pullRequestGroups: [],
+  };
+  const section = context.productSection(displayedProduct, 0, [displayedProduct], 0);
+  const text = [section, ...section.children].flatMap((node) => [node.textContent || '', ...(node.children || []).map((child) => child.textContent || '')]).join(' ');
+  assert.match(text, /オープンの PR はありません/);
 });
 
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
@@ -1568,6 +1727,7 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     setAttribute() {}
   }
   const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: false },
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => ({ textContent: text }),
@@ -1596,6 +1756,45 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
   assert.equal(unavailable.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'), false);
 });
 
+test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
+  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const start = pageHtml.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
+  const end = pageHtml.indexOf('\nfunction productGroups(', start);
+  assert.ok(element && start >= 0 && end > start);
+  const appendBlock = pageHtml.slice(start, end);
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    addEventListener() {}
+    setAttribute() {}
+  }
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true },
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => ({ textContent: text }),
+    },
+    expandedPrLines: new Set(['merged:acme/widget', 'closed:acme/widget']),
+    MERGED_VISIBLE_COUNT: 5,
+    durationAgoLabel: () => '1 分前',
+  });
+  vm.runInContext(`${element}\n${appendBlock}`, context);
+  const target = new FakeElement('div');
+  context.appendPullRequestBlock(target, {
+    owner: 'acme', repo: 'widget', fetchedAt: new Date().toISOString(), openCount: 0, registeredCount: 2,
+    trees: [], error: null,
+    mergeHistory: [{ number: 8, url: 'https://example.com/8', title: 'merged', mergedAt: new Date().toISOString(), method: 'squash' }],
+    merged: [{ number: 7, state: 'closed', url: 'https://example.com/7', title: 'closed' }],
+  });
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  const nodes = descendants(target);
+  const text = nodes.map((node) => node.textContent || '').join(' ');
+  assert.doesNotMatch(text, /マージ済み|クローズ済み|#8|#7/);
+  assert.match(text, /オープンの PR はありません/);
+  assert.equal(nodes.some((node) => node.tagName === 'button'), false);
+});
+
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
@@ -1613,6 +1812,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
     constructor(text) { this.textContent = text; }
   }
   const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: false },
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1680,6 +1880,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
   let focusedToggle;
   const state = {};
   const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: false },
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1785,6 +1986,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
   };
   const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
   const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: false },
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1994,6 +2196,68 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
   assert.deepEqual(nodes.filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), ['todo-a', 'todo-b']);
   assert.equal(nodes.some((node) => node.dataset.planToggle && node.dataset.planToggle.startsWith('todoTasks:')), false);
+});
+
+test('終わったものを隠しても完了タスクとその開閉ボタンは残す', () => {
+  const names = [
+    'element', 'isEndedAgent', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendPlanToggle', 'appendTasks',
+    'kindEndedDecisionEntries', 'kindEndedAgentCount',
+  ];
+  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+  class FakeElement {
+    constructor(tagName, _className = '', textContent = '') {
+      this.tagName = tagName; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ''; this.textContent = textContent;
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener() {}
+  }
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true },
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    expandedEndedSessions: new Set(['session-finished']),
+    expandedEndedDecisions: new Set(['session-finished']),
+    expandedDoneTasks: new Set(),
+    expandedTodoTasks: new Set(),
+    newestFirst: (items) => [...items],
+    isFilterShown: () => true,
+    shownActiveDecisions: () => [],
+    shownPermissions: () => [],
+    hasHiddenJudgmentItems: () => false,
+    durationAgoLabel: () => '1 分前',
+    appendTaskItem: (list, task) => list.append(new FakeElement('li', '', task.title)),
+    lastState: null,
+    root: { querySelectorAll: () => [] },
+  });
+  vm.runInContext(functions.join('\n'), context);
+  const session = {
+    session_id: 'session-finished',
+    agents: [{ active: false, unconfirmed: false }],
+    decisions: [{ state: 'resolved' }],
+    permissionWaits: [],
+    tasks: [{ title: '作業中', state: 'doing', criteria: [] }, { title: '完了済み', state: 'done', criteria: [] }],
+  };
+
+  const agentBody = new FakeElement('div');
+  context.appendAgents(agentBody, session, { name: 'product' });
+  assert.equal(agentBody.children.some((node) => node.dataset.endedToggle), false);
+
+  const decisionBody = new FakeElement('div');
+  context.appendDecisions(decisionBody, session, { name: 'product' });
+  assert.equal(decisionBody.children.some((node) => node.dataset.planToggle), false);
+  const references = [{ session }];
+  assert.deepEqual(JSON.parse(JSON.stringify(context.kindEndedDecisionEntries(references))), []);
+  assert.equal(context.kindEndedAgentCount(references), 0);
+
+  const taskBody = new FakeElement('div');
+  context.appendTasks(taskBody, session, { name: 'product' });
+  assert.equal(taskBody.children.some((node) => node.dataset.planToggle === 'tasks:session-finished'), true);
+  context.expandedDoneTasks.add('session-finished');
+  const expandedTaskBody = new FakeElement('div');
+  context.appendTasks(expandedTaskBody, session, { name: 'product' });
+  assert.equal(expandedTaskBody.children.some((node) => node.className === 'task-list'
+    && node.children.some((item) => item.textContent === '完了済み')), true);
 });
 
 test('種類別では未着手の合計数を一つのボタンで切り替える', () => {

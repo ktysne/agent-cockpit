@@ -12,7 +12,7 @@ const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_DISPLAY = Object.freeze({
   mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
-  longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
+  longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES, hideFinished: true,
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
@@ -46,6 +46,7 @@ function cloneDisplay(display) {
     sectionOrder: [...display.sectionOrder],
     longWaitMinutes: display.longWaitMinutes,
     awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
+    hideFinished: display.hideFinished,
   };
 }
 
@@ -55,6 +56,7 @@ function defaultDisplay() {
     sectionOrder: [...DEFAULT_DISPLAY.sectionOrder],
     longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
     awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
+    hideFinished: DEFAULT_DISPLAY.hideFinished,
   };
 }
 
@@ -93,7 +95,7 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed', 'hidden']) {
@@ -112,6 +114,7 @@ function normalizeDisplay(value) {
     sectionOrder: normalizeSectionOrder(value.sectionOrder),
     longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
+    hideFinished: typeof value.hideFinished === 'boolean' ? value.hideFinished : DEFAULT_DISPLAY.hideFinished,
   };
 }
 

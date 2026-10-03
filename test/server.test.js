@@ -1158,6 +1158,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(mode.status, 200);
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
+  assert.equal(jsonBody(mode).display.hideFinished, true);
   const hidden = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
@@ -1179,6 +1180,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   for (const [key, invalidValue] of [
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
+    ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
   ]) {
     const invalidMinutes = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ [key]: invalidValue }), headers: validHeaders,
@@ -1201,10 +1203,15 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(waitSettings).display.longWaitMinutes, 120);
   assert.equal(jsonBody(waitSettings).display.awayAnswerWaitMinutes, 30);
   assert.equal(runtime.answerDelivery.answerWaitMs(), 30 * 60_000);
+  const hideFinished = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ hideFinished: true }), headers: validHeaders,
+  });
+  assert.equal(hideFinished.status, 200);
+  assert.equal(jsonBody(hideFinished).display.hideFinished, true);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30,
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true,
   });
 });
 
