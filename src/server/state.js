@@ -673,12 +673,13 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
-  const replayedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
+  const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
     if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
-    return [askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id];
+    const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
+    return decisionId === event.tool_use_id ? [decisionId] : [];
   }));
   const initialAskDecisionState = {
-    decisions: (askDecisionState.decisions || []).filter((decision) => !replayedAskDecisionIds.has(decision.id)),
+    decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
   };
   const ordered = [...entries].sort((left, right) => {

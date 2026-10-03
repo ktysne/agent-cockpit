@@ -87,6 +87,46 @@ test('再起動後の同じ tool_use_id の PostToolUse で判断事項を解決
   assert.deepEqual(savedAgain.plans['session-post'].decisions[0].resolution, decision.resolution);
 });
 
+test('再起動後に別の tool_use_id で同じ質問を出しても後続イベント後に判断事項を維持する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-retry', 'ask-original', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 10 });
+  restored.addEvent(askEvent('session-retry', 'ask-retry', 'PreToolUse', NOW + 20));
+  const retried = restored.decisionFor('session-retry', 'ask-original');
+  assert.equal(retried.id, 'ask-original');
+  assert.equal(retried.createdAt, new Date(NOW).toISOString());
+  assert.equal(restored.decisionIdForToolUse('session-retry', 'ask-retry'), 'ask-original');
+
+  const answer = {
+    choice: 'ok',
+    note: '推奨案で進める。',
+    sentAt: new Date(NOW + 21).toISOString(),
+    deliveredAt: null,
+    reflectedAt: null,
+    promptDeliveries: 0,
+  };
+  restored.setDecisionLifecycle('session-retry', 'ask-original', { answer }, NOW + 21);
+  restored.addEvent({
+    session_id: 'session-retry', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 30,
+  });
+
+  const decision = restored.decisionFor('session-retry', 'ask-original');
+  assert.equal(decision.id, 'ask-original');
+  assert.equal(decision.createdAt, new Date(NOW).toISOString());
+  assert.deepEqual(decision.answer, answer);
+  assert.equal(restored.decisionIdForToolUse('session-retry', 'ask-retry'), 'ask-original');
+
+  await restored.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.equal(saved.plans['session-retry'].decisions.length, 1);
+  assert.equal(saved.plans['session-retry'].decisions[0].id, 'ask-original');
+  assert.equal(saved.plans['session-retry'].decisions[0].createdAt, new Date(NOW).toISOString());
+  assert.deepEqual(saved.decisionLifecycles['session-retry']['ask-original'].answer, answer);
+});
+
 test('仮の推奨案と回答は再起動後も残る', async (t) => {
   const homeDir = await temporaryHome(t);
   const state = await DashboardState.load(homeDir, { now: NOW });
