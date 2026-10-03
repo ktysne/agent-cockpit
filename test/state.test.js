@@ -946,6 +946,22 @@ test('同じ実行 ID の --wait を別の親が呼んだら、行を増やさ�
   assert.deepEqual([second.gpt.model, second.gpt.active], ['gpt-6-luna', true]);
 });
 
+test('後続の出力の結果行で終えた行は実行 ID を持ち、同じ実行の --wait で行が増えない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const runId = 'impl-hard-20261003-123456-7';
+  state.addEvent({ session_id: 'read-then-wait', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'read-then-wait', 'bash-1', 2, 'sub-1', { model: 'gpt-6-luna', effort: 'xhigh' });
+  state.addEvent({ session_id: 'read-then-wait', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({
+    session_id: 'read-then-wait', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1', tool_name: 'Read', tool_use_id: 'read-1',
+    codexOutput: { ...codexOutput('gpt-6-luna', 'xhigh'), runLine: `codex-agent: run=${runId}` },
+  });
+  waitForCodex(state, 'read-then-wait', 'bash-wait', 5, 'sub-1', runId, { model: 'gpt-wait' });
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active], ['gpt-6-luna', false]);
+});
+
 test('起動イベントが無い --wait は実行 ID の定義で Codex 行を作る', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

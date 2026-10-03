@@ -36,7 +36,7 @@ function inputSummary(toolName, toolInput) {
 
 // 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前の、コマンドの位置にある呼び出しだけを見る。
 function extractCodexWaitRunId(command) {
-  const beforeHeredoc = pickString(command).split('<<')[0];
+  const beforeHeredoc = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
   const characters = [...beforeHeredoc];
   const separator = /[;|&()\r\n]/;
   // 引用符の中の区切りは消し、二重引用符の中の $( ) はコマンドとして扱う。
@@ -62,7 +62,12 @@ function extractCodexWaitRunId(command) {
       } else if (separator.test(character)) characters[index] = '_';
       continue;
     }
-    if (character === "'") contexts.push('single');
+    if (character === '#' && (index === 0 || /\s/.test(characters[index - 1]))) {
+      while (index + 1 < characters.length && !/[\r\n]/.test(characters[index + 1])) {
+        index += 1;
+        characters[index] = '_';
+      }
+    } else if (character === "'") contexts.push('single');
     else if (character === '"') contexts.push('double');
     else if (context === 'substitution' && character === '(') contexts.push('substitution');
     else if (context === 'substitution' && character === ')') contexts.pop();

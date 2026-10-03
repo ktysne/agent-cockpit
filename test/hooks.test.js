@@ -217,6 +217,9 @@ test('文字列やヒアドキュメントに書かれた Codex の --wait は�
   assert.equal(extractCodexWaitRunId(`bash "C:/Users/me/.claude/tools/codex-agent.sh" --wait ${runId}`), runId);
   assert.equal(extractCodexWaitRunId(`x=$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})`), runId);
   assert.equal(extractCodexWaitRunId(`x="$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})"`), runId);
+  assert.equal(extractCodexWaitRunId(`# it's slow\nbash ~/.claude/tools/codex-agent.sh --wait ${runId}`), runId);
+  assert.equal(extractCodexWaitRunId(`bash ~/.claude/tools/codex-agent.sh \\\n  --wait ${runId}`), runId);
+  assert.equal(extractCodexWaitRunId(`# bash ~/.claude/tools/codex-agent.sh --wait ${runId}`), '');
   assert.equal(extractCodexWaitRunId(`echo "$(printf '%s' 'a; codex-agent.sh --wait ${runId}')"`), '');
 });
 

@@ -779,6 +779,7 @@ function deriveSessions(entries) {
         const targetAgent = codexForRun
           ? (codexForRun.resultReceived ? null : codexForRun)
           : oldestBackgroundedCodex(session, agentId, event.codexRunId);
+        if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
         if (targetAgent) completeCodexAgent(targetAgent, event);
       }
 
