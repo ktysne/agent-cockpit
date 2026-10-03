@@ -590,7 +590,12 @@ settingsDialog.addEventListener('close', () => settingsButton.focus());
 function orderedProducts() {
   const pinned = ui.order.filter(id => ui.pinned.includes(id));
   const rest = ui.order.filter(id => !ui.pinned.includes(id));
-  return [...pinned, ...rest].map(byId).filter(Boolean);
+  return [...pinned, ...rest].map(byId).filter(Boolean).filter(hasProductContent);
+}
+
+// セッションを外すか終えて PR もマージを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
+function hasProductContent(p) {
+  return visibleSessions(p).length > 0 || openPrs(p).length > 0 || (p.news.length > 0 && !ui.seen.includes(p.id));
 }
 
 function answerOf(id) { return ui.answers[id] || { choice: null, picks: [], note: '', sent: null }; }
@@ -1434,8 +1439,8 @@ document.addEventListener('click', e => {
       ? j >= 0 && j < pinnedCount
       : j >= pinnedCount && j < vis.length;
     if (!canMove) return;
-    [vis[i], vis[j]] = [vis[j], vis[i]];
-    ui.order = vis;
+    const a = ui.order.indexOf(vis[i]), b = ui.order.indexOf(vis[j]);
+    [ui.order[a], ui.order[b]] = [ui.order[b], ui.order[a]];
   } else if (t.dataset.merge) {
     ui.confirm = t.dataset.merge;
   } else if (t.dataset.conflict) {
