@@ -200,9 +200,9 @@ test('Codex の --wait の状態の行を、監査行と結果行とは別に抜
   const runId = 'impl-hard-20261003-123456-7';
   const event = makeHookEvent({
     session_id: 's', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_use_id: 'b',
-    error: `codex-agent: agent=impl-hard model=gpt-6-luna effort=max\ncodex-agent: waiting run=${runId}\n`,
+    error: `codex-agent: agent=impl-hard model=gpt-6-luna effort=max\ncodex-agent: waiting run=${runId}\ncodex-agent: vanished run=${runId}\n`,
   });
-  assert.equal(event.codexOutput.waitStatusLine, `codex-agent: waiting run=${runId}`);
+  assert.equal(event.codexOutput.waitStatusLine, `codex-agent: vanished run=${runId}`);
   assert.equal(event.codexOutput.resultLine, undefined);
 });
 

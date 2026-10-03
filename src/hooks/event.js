@@ -90,13 +90,14 @@ function extractAskUserQuestionResolution(toolResponse) {
 function codexOutputLines(value) {
   const lines = {};
   const visit = (item, depth = 0) => {
-    if (depth > 6 || (lines.auditLine && lines.resultLine && lines.waitStatusLine)) return;
+    if (depth > 6) return;
     if (typeof item === 'string') {
       for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=|(?:waiting|vanished|orphaned|unverified|not-found)[\t ]+run=)[^\r\n]*/gm) || []) {
         const normalized = line.trimStart();
         if (!lines.auditLine && normalized.startsWith('codex-agent: agent=')) lines.auditLine = normalized.slice(0, 1024);
         else if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
-        else if (!lines.waitStatusLine && !normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=')) {
+        // codex-agent.sh は --wait の状態を最後の行で示すので、後の行で上書きする。
+        else if (!normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=')) {
           lines.waitStatusLine = normalized.slice(0, 1024);
         }
       }

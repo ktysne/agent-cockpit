@@ -704,8 +704,12 @@ test('上限までに終わらない --wait の後も Codex は稼働中で、�
   assert.deepEqual([state.snapshot().sessions[0].agents[0].gpt.active, state.snapshot().sessions[0].agents[0].gpt.unconfirmed], [false, false]);
 });
 
-for (const [status, expected] of [['vanished', [false, false]], ['not-found', [false, false]], ['orphaned', [false, true]], ['unverified', [false, true]]]) {
-  test(`--wait が ${status} で抜けたら Codex の行を稼働中に残さない`, async (t) => {
+for (const [status, expected, hookEventName] of [
+  ['vanished', [false, false], 'PostToolUseFailure'], ['not-found', [false, false], 'PostToolUseFailure'],
+  ['orphaned', [false, true], 'PostToolUseFailure'], ['unverified', [false, true], 'PostToolUseFailure'],
+  ['vanished', [false, false], 'PostToolUse'],
+]) {
+  test(`--wait が ${status} で抜けたら Codex の行を稼働中に残さない (${hookEventName})`, async (t) => {
     await temporaryHome(t);
     const state = new DashboardState();
     state.addEvent({ session_id: 'wait-status', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
@@ -713,7 +717,7 @@ for (const [status, expected] of [['vanished', [false, false]], ['not-found', [f
     state.addEvent({ session_id: 'wait-status', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
     waitForCodex(state, 'wait-status', 'bash-wait', 4, 'sub-1', 'impl-hard-20261003-123456-7');
     state.addEvent({
-      session_id: 'wait-status', hook_event_name: 'PostToolUseFailure', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-wait',
+      session_id: 'wait-status', hook_event_name: hookEventName, hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-wait',
       codexOutput: { waitStatusLine: `codex-agent: ${status} run=impl-hard-20261003-123456-7` },
     });
     const [agent] = state.snapshot().sessions[0].agents;

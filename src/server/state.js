@@ -736,7 +736,7 @@ function deriveSessions(entries) {
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
-        } else if (placeholder && eventName === 'PostToolUseFailure' && session.pendingCodexWait[toolUseId]) {
+        } else if (placeholder && session.pendingCodexWait[toolUseId]) {
           // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
           applyCodexAudit(placeholder, event);
           if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
