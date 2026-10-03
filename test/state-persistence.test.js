@@ -522,3 +522,116 @@ test('既読時刻より前後の完了、PR、仮適用、CI 失敗、マージ
   assert.equal(items.some((item) => item.text.includes('以前')), false);
   assert.equal(items.some((item) => item.text.includes('PR #1(PR before)を作成した')), false);
 });
+
+test('マージ履歴がなくても登録のマージ時刻を前回見てからに表示する', () => {
+  const state = new DashboardState();
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  const seenAt = new Date(now - 3 * DAY_MS).toISOString();
+  state.registerPullRequest('merged-registration', {
+    url: `https://github.com/${owner}/${repo}/pull/10`,
+  }, { product }, Date.parse(mergedAt));
+  state.updatePullRequest('merged-registration', owner, repo, 10, { state: 'merged', mergedAt });
+  state.setProductSeen(product.key, seenAt);
+
+  const result = state.snapshotSinceSeen([], [], now);
+
+  assert.equal(state.mergedPullRequests.size, 0);
+  assert.ok(result.sinceSeen[0].items.some((item) => (
+    item.type === 'merged-pull-request' && item.text === 'PR #10(#10)をマージした'
+  )));
+});
+
+test('セッション登録とマージ履歴の時刻書式が異なってもマージ項目は1件にする', () => {
+  const state = new DashboardState();
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = '2026-10-03T11:00:00Z';
+  state.registerPullRequest('duplicate-merge', {
+    url: `https://github.com/${owner}/${repo}/pull/11`,
+  }, { product }, now - 2 * 60 * 60_000);
+  state.recordMergedPullRequest({
+    owner, repo, number: 11, title: '同じPR', url: `https://github.com/${owner}/${repo}/pull/11`, mergedAt,
+  }, now);
+  state.updatePullRequest('duplicate-merge', owner, repo, 11, {
+    state: 'merged', mergedAt: '2026-10-03T11:00:00.000Z',
+  });
+  state.setProductSeen(product.key, now - 2 * 60 * 60_000);
+
+  const result = state.snapshotSinceSeen([], [], now);
+  const mergedItems = result.sinceSeen[0].items.filter((item) => item.type === 'merged-pull-request');
+
+  assert.equal(mergedItems.length, 1);
+  assert.equal(mergedItems[0].text, 'PR #11(同じPR)をマージした');
+});
+
+test('関連PR登録だけが残るマージも前回見てからに表示する', () => {
+  const state = new DashboardState();
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  const productKey = `repo:${owner}/${repo}`;
+  state.rememberRelatedPullRequest({
+    owner,
+    repo,
+    number: 12,
+    url: `https://github.com/${owner}/${repo}/pull/12`,
+    lastOpen: {
+      title: '関連PR', url: `https://github.com/${owner}/${repo}/pull/12`,
+      headRefName: 'feature', baseRefName: 'main', headRefOid: '',
+    },
+  }, Date.parse(mergedAt));
+  state.updateRelatedPullRequest(owner, repo, 12, { state: 'merged', mergedAt });
+  state.setProductSeen(productKey, now - 3 * DAY_MS);
+
+  const result = state.snapshotSinceSeen([], [], now);
+
+  assert.equal(result.sinceSeen[0].product.key, productKey);
+  assert.ok(result.sinceSeen[0].items.some((item) => (
+    item.type === 'merged-pull-request' && item.text === 'PR #12(関連PR)をマージした'
+  )));
+});
+
+test('20日前の既読時刻は参照記録が残る間維持して保持中の項目を未読にする', () => {
+  const state = new DashboardState();
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  const seenAt = new Date(now - 20 * DAY_MS).toISOString();
+  state.registerPullRequest('old-seen-merge', {
+    url: `https://github.com/${owner}/${repo}/pull/13`,
+  }, { product }, Date.parse(mergedAt));
+  state.updatePullRequest('old-seen-merge', owner, repo, 13, { state: 'merged', mergedAt });
+  state.setProductSeen(product.key, seenAt);
+
+  state.pruneExpiredStoreRecords(now);
+  const result = state.snapshotSinceSeen([], [], now);
+
+  assert.equal(state.seenAtByProduct.get(product.key), seenAt);
+  assert.ok(result.sinceSeen[0].items.some((item) => item.type === 'merged-pull-request'));
+});
+
+test('参照する記録がなくなったプロダクトの既読時刻をsnapshot時に削除する', () => {
+  const state = new DashboardState();
+  const sessionId = 'expired-product-records';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '期限切れ', product }], now);
+  state.setTasks(sessionId, [task('期限切れタスク', 'done')], now);
+  state.setProductSeen(product.key, now);
+
+  state.pruneExpiredStoreRecords(now + 15 * DAY_MS);
+  const versionBeforeSnapshot = state.version;
+  state.snapshotSinceSeen([], [], now + 15 * DAY_MS);
+
+  assert.equal(state.seenAtByProduct.has(product.key), false);
+  assert.ok(state.version > versionBeforeSnapshot);
+});

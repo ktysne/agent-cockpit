@@ -1061,11 +1061,7 @@ class DashboardState {
     }
     const previousFailureCount = this.ciFailures.length;
     this.ciFailures = this.ciFailures.filter((record) => now - Date.parse(record.at) < STORE_RETENTION_MS);
-    const seenBefore = this.seenAtByProduct.size;
-    for (const [key, timestamp] of this.seenAtByProduct) {
-      if (now - Date.parse(timestamp) >= STORE_RETENTION_MS) this.seenAtByProduct.delete(key);
-    }
-    if (mergeHistoryChanged || previousFailureCount !== this.ciFailures.length || seenBefore !== this.seenAtByProduct.size) {
+    if (mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -2062,10 +2058,38 @@ class DashboardState {
   snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now()) {
     const products = new Map();
     const visibleProductKeys = new Set();
+    const registrations = this.pullRequestRegistrations();
+    const relatedRegistrations = this.relatedPullRequestRegistrations();
+    const mergedPullRequests = new Map();
     const addProduct = (value) => {
       const product = cloneProduct(value);
       if (product && !products.has(product.key)) products.set(product.key, product);
       return product;
+    };
+    for (const merged of this.mergedPullRequests.values()) {
+      mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
+    }
+    for (const record of [...registrations, ...relatedRegistrations]) {
+      if (record.state !== 'merged' || !record.mergedAt) continue;
+      const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+      if (mergedPullRequests.has(key)) continue;
+      mergedPullRequests.set(key, {
+        owner: record.owner,
+        repo: record.repo,
+        number: record.number,
+        title: record.lastOpen?.title || `#${record.number}`,
+        mergedAt: record.mergedAt,
+      });
+    }
+    const productsForMergedPullRequest = (merged) => {
+      const sessionRegistrations = registrations.filter((record) => (
+        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
+      ));
+      if (!sessionRegistrations.length) return [repoProduct(merged.owner, merged.repo)];
+      return [...new Map(sessionRegistrations.map((record) => {
+        const product = cloneProduct(record.product) || repoProduct(merged.owner, merged.repo);
+        return [product.key, product];
+      })).values()];
     };
     for (const session of sessions) {
       const product = addProduct(session.product);
@@ -2076,17 +2100,19 @@ class DashboardState {
       if (product) visibleProductKeys.add(product.key);
     }
     for (const plan of this.plans.values()) addProduct(plan.product);
-    for (const record of this.pullRequestRegistrations()) addProduct(record.product || repoProduct(record.owner, record.repo));
+    for (const record of registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
     for (const record of this.ciFailures) addProduct(record.product);
-    for (const merged of this.mergedPullRequests.values()) {
-      const registrations = this.pullRequestRegistrations().filter((record) => (
-        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
-      ));
-      if (registrations.length) {
-        for (const registration of registrations) addProduct(registration.product || repoProduct(merged.owner, merged.repo));
-      } else addProduct(repoProduct(merged.owner, merged.repo));
+    for (const merged of mergedPullRequests.values()) {
+      for (const product of productsForMergedPullRequest(merged)) addProduct(product);
     }
 
+    let seenChanged = false;
+    for (const key of this.seenAtByProduct.keys()) {
+      if (!products.has(key)) {
+        this.seenAtByProduct.delete(key);
+        seenChanged = true;
+      }
+    }
     let initialized = false;
     for (const product of products.values()) {
       if (visibleProductKeys.has(product.key) && !this.seenAtByProduct.has(product.key)) {
@@ -2094,7 +2120,7 @@ class DashboardState {
         initialized = true;
       }
     }
-    if (initialized) {
+    if (initialized || seenChanged) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -2153,18 +2179,8 @@ class DashboardState {
         `PR #${failure.number} の CI が失敗した`);
     }
 
-    const registrations = this.pullRequestRegistrations();
-    for (const merged of this.mergedPullRequests.values()) {
-      const related = registrations.filter((record) => (
-        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
-      ));
-      const mergedProducts = related.length
-        ? [...new Map(related.map((record) => {
-          const product = cloneProduct(record.product) || repoProduct(merged.owner, merged.repo);
-          return [product.key, product];
-        })).values()]
-        : [repoProduct(merged.owner, merged.repo)];
-      for (const product of mergedProducts) {
+    for (const merged of mergedPullRequests.values()) {
+      for (const product of productsForMergedPullRequest(merged)) {
         addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
           `PR #${merged.number}(${merged.title})をマージした`);
       }
