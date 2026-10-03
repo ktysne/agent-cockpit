@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
@@ -39,7 +40,7 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   const routeTag = functionSource(web, 'routeTag');
   const appendModelLine = functionSource(web, 'appendModelLine');
   assert.ok(route && routeValues && routeName && routeTag && appendModelLine);
-  const context = vm.createContext({
+  const context = pageContext(web, {
     routing: { agents: 'claude' },
     codexAgentAvailable: true,
     element: (tag, className, textContent = '') => ({
@@ -97,7 +98,7 @@ test('経路の二段は実際の幅が収まる場合だけ横に並べる', ()
       },
     },
   };
-  const context = vm.createContext({
+  const context = pageContext(web, {
     document: { querySelector: () => group },
     getComputedStyle: () => ({ columnGap: '10px' }),
   });
@@ -118,7 +119,7 @@ test('経路の欄は連携の組み合わせに応じて段を作り直す', as
   const renderRouting = functionSource(web, 'renderRouting');
   const updateRouting = functionSource(web, 'updateRouting');
   const root = { innerHTML: '', hidden: false, dataset: {}, querySelectorAll: () => [] };
-  const renderContext = vm.createContext({
+  const renderContext = pageContext(web, {
     document: { getElementById: () => root },
     window: {},
     layoutRouting() {},
@@ -160,7 +161,7 @@ test('経路の欄は連携の組み合わせに応じて段を作り直す', as
 
   const posts = [];
   const renders = [];
-  const updateContext = vm.createContext({
+  const updateContext = pageContext(web, {
     postUiAction: async (...args) => {
       posts.push(args);
       return { ok: true, json: async () => ({ agents: 'codex', review: 'claude' }) };
@@ -182,7 +183,7 @@ test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン
   const closeTaskButton = functionSource(web, 'closeTaskButton');
   assert.ok(closeTaskButton);
   const calls = [];
-  const context = vm.createContext({
+  const context = pageContext(web, {
     runCloseAction: (...args) => { calls.push(args); },
   });
   vm.runInContext(`${closeTaskButton}\nthis.closeTaskButton = closeTaskButton;`, context);
@@ -201,7 +202,7 @@ test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン
 test('終了未確認のサブエージェント行に終了 API を呼ぶボタンを置く', () => {
   const closeAgentButton = functionSource(web, 'closeAgentButton');
   const calls = [];
-  const context = vm.createContext({
+  const context = pageContext(web, {
     runCloseAction: (...args) => { calls.push(args); },
   });
   vm.runInContext(`${closeAgentButton}\nthis.closeAgentButton = closeAgentButton;`, context);
@@ -220,7 +221,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
   const sync = `async ${functionSource(web, 'syncDisplayPreferences')}`;
   const syncCalls = [];
   let legacyReads = 0;
-  const context = vm.createContext({
+  const context = pageContext(web, {
     displayPreferences: {},
     displayPreferencesReady: false,
     displayMigrationPending: false,
@@ -243,7 +244,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'],
   });
 
-  const readyContext = vm.createContext({
+  const readyContext = pageContext(web, {
     displayPreferences: {},
     displayPreferencesReady: false,
     displayMigrationPending: false,
@@ -260,7 +261,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
   await readyContext.syncDisplayPreferences({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'] });
 
   const save = functionSource(web, 'saveDisplayPreferences');
-  const saveContext = vm.createContext({
+  const saveContext = pageContext(web, {
     displayPreferences: { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] },
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
@@ -315,7 +316,7 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
   sectionOrderList.addEventListener = (_type, handler) => { moveClick = handler; };
   const resetButton = { addEventListener: (_type, handler) => { resetClick = handler; } };
   const fakeDocument = { activeElement: null, getElementById: () => resetButton, createElement: (tagName) => new FakeElement(tagName) };
-  const context = vm.createContext({
+  const context = pageContext(web, {
     displayPreferences: preferences,
     sectionOrderList,
     document: fakeDocument,
@@ -385,7 +386,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       append(...nodes) { this.childNodes.push(...nodes); this.children.push(...nodes); },
       querySelector() { return null; },
     });
-    const context = vm.createContext({
+    const context = pageContext(web, {
       displayPreferences: { sectionOrder },
       element,
       sessionReferences: () => [],
@@ -444,7 +445,7 @@ test('種類別のタスクにはタスクがあるセッションだけを含�
 });
 
 test('許可待ちと判断事項のフィルターは非表示の行を検出する', () => {
-  const context = vm.createContext({ displayPreferences: { hidden: [] } });
+  const context = pageContext(web, { displayPreferences: { hidden: [] } });
   const helpers = ['isFilterShown', 'hasEffectiveAnswer', 'shownActiveDecisions', 'hasHiddenJudgmentItems']
     .map((name) => functionSource(web, name));
   assert.ok(helpers.every(Boolean));
@@ -476,7 +477,7 @@ test('PRフィルターの札はマージできる件数を表示する', () => 
     setAttribute(name, value) { this.attributes[name] = value; },
     addEventListener() {},
   });
-  const context = vm.createContext({
+  const context = pageContext(web, {
     summary,
     displayPreferences: { hidden: [] },
     pullRequestMergeableCount: (groups) => groups.reduce((count, group) => count + group.mergeableCount, 0),
@@ -504,7 +505,7 @@ test('PRフィルターの切り替えは保存し、両表示モードのPR欄�
   const kindSections = functionSource(web, 'renderKindSections');
   const patches = [];
   let renders = 0;
-  const context = vm.createContext({
+  const context = pageContext(web, {
     displayPreferences: { hidden: [] },
     lastState: { sessions: [], pullRequests: [] },
     isFilterShown: (key) => !context.displayPreferences.hidden.includes(key),
@@ -527,7 +528,7 @@ test('PRフィルターの切り替えは保存し、両表示モードのPR欄�
 
 test('サブエージェントを隠したときに空の案内を出さない', () => {
   const mockAgentSection = functionSource(mock, 'agentSection');
-  const mockContext = {
+  const mockContext = pageContext(mock, {
     ui: { expandedEndedAgents: [] },
     isShown: () => false,
     visibleSubagents: (session) => session.subagents.filter((agent) => agent.state !== 'busy'),
@@ -535,21 +536,21 @@ test('サブエージェントを隠したときに空の案内を出さない',
     ageMinutes: () => 0,
     agentRow: () => '<div>agent</div>',
     endedAgentToggle: () => '',
-  };
-  const mockResult = vm.runInNewContext(`(${mockAgentSection})`, mockContext)(
+  });
+  const mockResult = vm.runInContext(`(${mockAgentSection})`, mockContext)(
     {}, { id: 'session-a', subagents: [{ state: 'busy' }] }, true,
   );
   assert.equal(mockResult, '');
 
   const appendAgents = functionSource(web, 'appendAgents');
   const body = { children: [], append(item) { this.children.push(item); } };
-  const webContext = {
+  const webContext = pageContext(web, {
     expandedEndedSessions: new Set(),
     isFilterShown: () => false,
     newestFirst: (items) => items,
     isEndedAgent: (agent) => !agent.active && !agent.unconfirmed,
-  };
-  vm.runInNewContext(`(${appendAgents})`, webContext)(
+  });
+  vm.runInContext(`(${appendAgents})`, webContext)(
     body,
     { session_id: 'session-a', agents: [{ active: true }] },
     {},
@@ -576,7 +577,7 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     functionSource(web, 'kindDoneTaskCount'),
     functionSource(web, 'kindTodoTaskCount'),
   ];
-  const webContext = vm.createContext({ isEndedAgent: (agent) => !agent.active && !agent.unconfirmed });
+  const webContext = pageContext(web, { isEndedAgent: (agent) => !agent.active && !agent.unconfirmed });
   vm.runInContext(`${webHelpers.join('\n')}\nthis.collect = (references) => JSON.stringify({
     decisions: kindEndedDecisionEntries(references).map(({ decision }) => decision.id),
     endedAgentCount: kindEndedAgentCount(references),
@@ -627,7 +628,7 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     functionSource(mock, 'kindDoneTaskCount'),
     functionSource(mock, 'kindTodoTaskCount'),
   ];
-  const mockContext = vm.createContext({
+  const mockContext = pageContext(mock, {
     effectiveDecisionState: (decision) => decision.state,
     ageMinutes: (item) => item.age,
     isEndedAgent: (_session, agent) => agent.ended,
@@ -670,7 +671,7 @@ test('種類別の折り畳み文言と状態はセクション単位で切り�
   const webToggle = functionSource(web, 'appendKindToggle');
   const labelSource = functionSource(web, 'kindToggleLabel');
   const appended = [];
-  const context = vm.createContext({
+  const context = pageContext(web, {
     expandedKindSections: new Set(),
     lastState: null,
     root: { querySelectorAll: () => [] },
@@ -698,7 +699,7 @@ test('種類別の折り畳み文言と状態はセクション単位で切り�
 
   const mockLabel = functionSource(mock, 'kindToggleLabel');
   const mockToggle = functionSource(mock, 'kindToggle');
-  const mockContext = vm.createContext({});
+  const mockContext = pageContext(mock, {});
   vm.runInContext(`${mockLabel}\n${mockToggle}\nthis.makeToggle = kindToggle;`, mockContext);
   assert.match(mockContext.makeToggle('tasks', '完了したタスク', 3, false), /完了したタスクを表示 \(3 件\)/);
   assert.match(mockContext.makeToggle('tasks', '完了したタスク', 3, false), /data-kind-toggle="tasks"/);
@@ -708,7 +709,7 @@ test('種類別の折り畳み文言と状態はセクション単位で切り�
 test('種類別タスクのまとまりは先頭行に札と更新時刻を置き、カードから札を外す', () => {
   const mockTaskBlock = functionSource(mock, 'kindTaskSessionBlock');
   const mockVisibility = functionSource(mock, 'taskVisibility');
-  const mockContext = vm.createContext({
+  const mockContext = pageContext(mock, {
     taskState: (_session, task) => task.state,
     ui: { expandedKindTodoTasks: false },
     sessionTag: (_product, _session, _withTag, includeSession) => includeSession ? 'PRODUCT SESSION' : '',
