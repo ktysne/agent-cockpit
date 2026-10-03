@@ -7,6 +7,7 @@ const { performance } = require('node:perf_hooks');
 const {
   childEnvironment,
   extractAskUserQuestionResolution,
+  extractCodexWaitRunId,
   makeHookEvent,
   runHook,
 } = require('../src/hooks/event');
@@ -183,6 +184,15 @@ test('Codex の --wait は実行 ID の形だけを受け、同じコマンド�
   assert.equal(launchAndWait.codexDefinition, 'impl-hard');
   assert.equal(Object.hasOwn(launchAndWait, 'codexWaitRunId'), false);
   assert.equal(Object.hasOwn(launchAndWait, 'codexWaitDefinition'), false);
+});
+
+test('文字列やヒアドキュメントに書かれた Codex の --wait は拾わない', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  assert.equal(extractCodexWaitRunId(`cat > notes.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh --wait ${runId}\nEOF`), '');
+  assert.equal(extractCodexWaitRunId(`echo "codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`git commit -m "bash codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`cd /tmp; codex-agent.sh --wait ${runId}`), runId);
+  assert.equal(extractCodexWaitRunId(`bash "C:/Users/me/.claude/tools/codex-agent.sh" --wait ${runId}`), runId);
 });
 
 test('常駐サーバーに接続できなくても 1 秒程度で終了コード 0 を返す', async (t) => {

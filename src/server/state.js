@@ -456,6 +456,7 @@ function newSession(event) {
     stopped: false,
     ended: false,
     pendingCodex: Object.create(null),
+    pendingCodexWait: Object.create(null),
     agentToolBindings: Object.create(null),
   };
 }
@@ -514,23 +515,24 @@ function completeCodexAgent(agent, event) {
   agent.resultReceived = true;
 }
 
+// --wait で続きに戻った古い行も札に出すため、稼働中の行を優先する。
 function latestCodexForParent(agents, parentAgentId) {
   return agents
     .filter((agent) => agent.isCodex && sameAgent(agent.parent_agent_id, parentAgentId))
-    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
+    .sort((left, right) => (
+      Number(left.active === true) - Number(right.active === true) || Date.parse(left.startedAt) - Date.parse(right.startedAt)
+    ))
     .at(-1);
 }
 
+// 結果無しで失敗した起動は続きが無いので、背景へ移った行(終了未確認を含む)だけを候補にする。
 function latestWaitableCodex(session, parentAgentId, definition) {
   return session.agents
     .filter((agent) => (
-      agent.isCodex && agent.agent_type === definition && !agent.resultReceived &&
+      agent.isCodex && agent.agent_type === definition && agent.backgrounded === true && !agent.resultReceived &&
       sameAgent(agent.parent_agent_id, parentAgentId)
     ))
-    .sort((left, right) => {
-      const backgroundedDifference = Number(right.backgrounded === true) - Number(left.backgrounded === true);
-      return backgroundedDifference || Date.parse(right.startedAt) - Date.parse(left.startedAt);
-    })[0] || null;
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
 function deriveSessions(entries) {
@@ -612,7 +614,6 @@ function deriveSessions(entries) {
         if (agent) {
           agent.active = true;
           agent.unconfirmed = false;
-          agent.backgrounded = false;
           agent.lastTool = { tool_name: 'Bash', summary: event.summary };
           session.pendingCodex[toolUseId] = agent.agent_id;
         } else {
@@ -625,12 +626,14 @@ function deriveSessions(entries) {
             parent_agent_id: agentId,
             codex_home: '',
             unavailable: '',
+            backgrounded: true,
             startedAt: isoTime(event.hookAt),
             lastTool: { tool_name: 'Bash', summary: event.summary },
           });
           session.agents.push(waitAgent);
           session.pendingCodex[toolUseId] = agentIdForCall;
         }
+        session.pendingCodexWait[toolUseId] = true;
       } else if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
         const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
@@ -733,6 +736,9 @@ function deriveSessions(entries) {
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
+        } else if (placeholder && eventName === 'PostToolUseFailure' && session.pendingCodexWait[toolUseId]) {
+          // --wait は上限までに終わらないと 0 以外で抜けるが、Codex は背景で動き続けている。
+          applyCodexAudit(placeholder, event);
         } else if (placeholder && eventName === 'PostToolUseFailure') {
           applyCodexAudit(placeholder, event);
           placeholder.active = false;
@@ -741,6 +747,7 @@ function deriveSessions(entries) {
           placeholder.backgrounded = true;
         }
         delete session.pendingCodex[toolUseId];
+        delete session.pendingCodexWait[toolUseId];
       }
 
       // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。

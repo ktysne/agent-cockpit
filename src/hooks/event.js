@@ -34,8 +34,10 @@ function inputSummary(toolName, toolInput) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
+// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前の、コマンドの位置にある呼び出しだけを見る。
 function extractCodexWaitRunId(command) {
-  const match = pickString(command).match(/(?:^|[\s"'`/\\])codex-agent(?:\.sh|\.cmd|\.ps1)?["']?\s+--wait\s+["']?([^\s"'`;&|]+)/i);
+  const beforeHeredoc = pickString(command).split('<<')[0];
+  const match = beforeHeredoc.match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|]+)/im);
   return match ? match[1].slice(0, 256) : '';
 }
 
