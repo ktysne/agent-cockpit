@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { pageContext } = require('./support/page-context');
+
+const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
 
 function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
@@ -12,7 +15,7 @@ function reloadHarness(initialUiVersion, drafts = []) {
 
   let reloadCount = 0;
   const reloadNote = { hidden: true, innerHTML: '' };
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     initialUiVersion,
     uiUpdatePending: false,
     answerDrafts: new Map(drafts),
@@ -91,7 +94,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     return setDraft(...args);
   };
   let updatedAnswerCard = null;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     answerNoteComposing: false,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
@@ -165,7 +168,7 @@ function taskRenderHarness() {
     focus() {}
   }
 
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: { createElement: (tagName) => new FakeElement(tagName) },
     expandedTodoTasks: new Set(),
     expandedDoneTasks: new Set(),
@@ -205,7 +208,7 @@ function externalLinkHarness(responseStatus) {
   const listeners = {};
   const requests = [];
   const openedWindows = [];
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     URL,
     document: {
       addEventListener: (type, listener) => { listeners[type] = listener; },
@@ -403,7 +406,7 @@ test('経路の段は連携に応じて表示し、無効なサブエージェ�
     querySelectorAll() { return []; },
   };
   const document = { getElementById: () => root, querySelector: () => null };
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     ROUTE: {
       agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
       review: { label: 'クロスレビュー', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
@@ -464,7 +467,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   class FakeText {
     constructor(text) { this.textContent = text; }
   }
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -607,7 +610,7 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
   class FakeText {
     constructor(text) { this.textContent = text; }
   }
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -708,7 +711,7 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
   summary.replaceChildren = (...children) => { summary.children = children; };
   const note = new FakeElement('div');
   note.replaceChildren = (...children) => { note.children = children; };
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     FILTERS: [{ key: 'prs', label: 'マージできる PR', color: 'ok' }],
     summary,
     displayPreferences: { hidden: [] },
@@ -743,7 +746,7 @@ test('マージできる PR はマージボタンが出るものだけを、複�
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
-  const context = vm.createContext({});
+  const context = pageContext(pageHtml, {});
   vm.runInContext(functions.join('\n'), context);
 
   const shared = { number: 1, canMerge: true, mergeSessionId: 'session-a', children: [
@@ -763,7 +766,7 @@ test('見出しの判断待ちは回答を送ったものを数えず、保留�
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
-  const context = vm.createContext({});
+  const context = pageContext(pageHtml, {});
   vm.runInContext(functions.join('\n'), context);
   const sentAt = '2026-10-03T12:00:00.000Z';
 
@@ -811,7 +814,7 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
   };
   const sinceSeenSelect = { value: '' };
   let renderCount = 0;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     SINCE_SEEN_STORAGE_KEY: 'agent-cockpit.since-seen',
     localStorage,
     sinceSeenSelect,
@@ -873,7 +876,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
   assert.match(sinceSeenBox, /visibleSinceSeen\(lastState\)\.find/);
   assert.match(awayChange, /applyAwayState\(away\);\s*if \(lastState\) render\(lastState\);/);
 
-  const boxContext = vm.createContext({
+  const boxContext = pageContext(pageHtml, {
     lastState: state,
     sinceSeenMode: 'away',
     header: { dataset: { away: 'false' } },
@@ -897,7 +900,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
   const appliedAway = [];
   let rerenders = 0;
   let awayChangeHandler;
-  const awayContext = vm.createContext({
+  const awayContext = pageContext(pageHtml, {
     awayToggle: { checked: true, disabled: false, addEventListener: (_event, handler) => { awayChangeHandler = handler; } },
     lastState: state,
     postAway: async (enabled) => ({ ok: true, json: async () => ({ enabled }) }),
@@ -935,7 +938,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   };
   const saved = [];
   let handleClick;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     displayPreferences,
     lastState: state,
     sinceSeenMode: 'always',
@@ -975,7 +978,7 @@ test('表示中のセッションもオープンの PR も数えきれていな�
   ));
   assert.ok(functions.every(Boolean));
   let pullRequestsShown = true;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     displayPreferences: { order: [], pinned: [], collapsed: [] },
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: (key) => key !== 'prs' || pullRequestsShown,
@@ -1042,7 +1045,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
   const activePick = { dataset: pickData, hasAttribute: () => false };
   const replacementPick = { dataset: { ...pickData }, focused: false, focus() { this.focused = true; activeElement = this; } };
   activeElement = activePick;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     answerNoteComposing: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     HTMLTextAreaElement: class FakeTextArea {},
@@ -1121,7 +1124,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
     },
   };
   let handleChange;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     answerDrafts,
     findDecision: () => decision,
     document: { addEventListener: (name, handler) => { if (name === 'change') handleChange = handler; } },
@@ -1197,7 +1200,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     owner: 'acme', repo: 'widget', defaultBranch: 'main', mergeMethods: ['merge', 'squash', 'rebase'],
     lastMethod: 'merge', trees: [pullRequest],
   };
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1283,7 +1286,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   };
   const group = { owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: [], trees: [pullRequest] };
   const sent = [];
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1385,7 +1388,7 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     owner: 'acme', repo: 'widget', defaultBranch: 'main', autoDeleteBranch: true,
     mergeMethods: ['merge', 'squash'], lastMethod: 'merge', trees: [pullRequest],
   };
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1464,7 +1467,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
   class FakeText {
     constructor(text) { this.textContent = text; }
   }
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1530,7 +1533,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
   let root;
   let focusedToggle;
   const state = {};
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1634,7 +1637,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
     })),
   };
   const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
@@ -1699,7 +1702,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
     });
     const go = makeButton('conflictGo');
     const cancel = makeButton('conflictCancel');
-    const context = vm.createContext({
+    const context = pageContext(pageHtml, {
       answerNoteComposing: false,
       lastState: { sessions: [{ session_id: 'session-ui' }] },
       HTMLTextAreaElement: class FakeTextArea {},
@@ -1744,7 +1747,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       focus() { this.focused = true; activeElement = this; },
     };
     activeElement = activeButton;
-    const context = vm.createContext({
+    const context = pageContext(pageHtml, {
       answerNoteComposing: false,
       lastState: { sessions: [{ session_id: 'session-ui' }] },
       HTMLTextAreaElement: class FakeTextArea {},
@@ -1786,7 +1789,7 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     focus() { this.focused = true; activeElement = this; },
   };
   activeElement = activeButton;
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     answerNoteComposing: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     HTMLTextAreaElement: class FakeTextArea {},
@@ -1865,7 +1868,7 @@ test('種類別では未着手の合計数を一つのボタンで切り替え�
     focus() {}
   }
 
-  const context = vm.createContext({
+  const context = pageContext(pageHtml, {
     document: { createElement: (tagName) => new FakeElement(tagName) },
     expandedKindSections: new Set(),
     lastState: null,
@@ -1931,7 +1934,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
   const run = async (mode, awaySequence) => {
     let renders = 0;
     let index = 0;
-    const context = vm.createContext({
+    const context = pageContext(pageHtml, {
       fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
