@@ -490,9 +490,13 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
 }
 
 // 親が一度止まって終了未確認になった Codex も、再開した親が取り出した結果行で終了にする。
-function oldestBackgroundedCodex(session, parentAgentId) {
+// --wait の状態の行で終わった行は、ラッパーが消えていて結果行が届かないので除く。
+function oldestBackgroundedCodex(session, parentAgentId, runId = null) {
   return session.agents
-    .filter((agent) => agent.isCodex && agent.backgrounded && (agent.active || agent.unconfirmed) && sameAgent(agent.parent_agent_id, parentAgentId))
+    .filter((agent) => (
+      agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) &&
+      sameAgent(agent.parent_agent_id, parentAgentId) && (!runId || !agent.runId || agent.runId === runId)
+    ))
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
 }
 
@@ -526,11 +530,12 @@ function latestCodexForParent(agents, parentAgentId) {
 }
 
 // 結果無しで失敗した起動は続きが無いので、背景へ移った行(終了未確認を含む)だけを候補にする。
-function latestWaitableCodex(session, parentAgentId, definition) {
+// 実行 ID が分かっていて別の値の行は、別の実行なので候補にしない。
+function latestWaitableCodex(session, parentAgentId, definition, runId) {
   return session.agents
     .filter((agent) => (
       agent.isCodex && agent.agent_type === definition && agent.backgrounded === true && !agent.resultReceived &&
-      sameAgent(agent.parent_agent_id, parentAgentId)
+      sameAgent(agent.parent_agent_id, parentAgentId) && (!agent.runId || agent.runId === runId)
     ))
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
@@ -610,30 +615,41 @@ function deriveSessions(entries) {
       }
 
       if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
-        const agent = latestWaitableCodex(session, agentId, event.codexWaitDefinition);
-        if (agent) {
-          agent.active = true;
-          agent.unconfirmed = false;
-          agent.lastTool = { tool_name: 'Bash', summary: event.summary };
-          session.pendingCodex[toolUseId] = agent.agent_id;
+        // 実行 ID は一意なので親を問わずに探し、待ちを引き継いだ親の下へ付け替える。
+        const codexForRun = session.agents.find((candidate) => candidate.isCodex && candidate.runId === event.codexWaitRunId);
+        if (codexForRun?.resultReceived) {
+          // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
+          session.pendingCodex[toolUseId] = codexForRun.agent_id;
         } else {
-          const agentIdForCall = `codex:${toolUseId}`;
-          const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
-          Object.assign(waitAgent, {
-            agent_id: agentIdForCall,
-            agent_type: event.codexWaitDefinition,
-            isCodex: true,
-            parent_agent_id: agentId,
-            codex_home: '',
-            unavailable: '',
-            backgrounded: true,
-            startedAt: isoTime(event.hookAt),
-            lastTool: { tool_name: 'Bash', summary: event.summary },
-          });
-          session.agents.push(waitAgent);
-          session.pendingCodex[toolUseId] = agentIdForCall;
+          const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
+          if (agent) {
+            agent.parent_agent_id = agentId;
+            agent.active = true;
+            agent.unconfirmed = false;
+            agent.runId = event.codexWaitRunId;
+            delete agent.waitEnded;
+            agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+            session.pendingCodex[toolUseId] = agent.agent_id;
+          } else {
+            const agentIdForCall = `codex:${toolUseId}`;
+            const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
+            Object.assign(waitAgent, {
+              agent_id: agentIdForCall,
+              agent_type: event.codexWaitDefinition,
+              isCodex: true,
+              parent_agent_id: agentId,
+              codex_home: '',
+              unavailable: '',
+              backgrounded: true,
+              runId: event.codexWaitRunId,
+              startedAt: isoTime(event.hookAt),
+              lastTool: { tool_name: 'Bash', summary: event.summary },
+            });
+            session.agents.push(waitAgent);
+            session.pendingCodex[toolUseId] = agentIdForCall;
+          }
+          session.pendingCodexWait[toolUseId] = true;
         }
-        session.pendingCodexWait[toolUseId] = true;
       } else if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
         const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
@@ -733,6 +749,7 @@ function deriveSessions(entries) {
 
       if (event.tool_name === 'Bash' && toolUseId) {
         const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
+        if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
@@ -743,6 +760,7 @@ function deriveSessions(entries) {
           if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
             placeholder.active = false;
             placeholder.unconfirmed = true;
+            placeholder.waitEnded = true;
           }
         } else if (placeholder && eventName === 'PostToolUseFailure') {
           applyCodexAudit(placeholder, event);
@@ -757,7 +775,11 @@ function deriveSessions(entries) {
 
       // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
       if (event.codexResult && !completedCodexAgent && event.tool_name !== 'Agent') {
-        const targetAgent = oldestBackgroundedCodex(session, agentId);
+        const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
+        const targetAgent = codexForRun
+          ? (codexForRun.resultReceived ? null : codexForRun)
+          : oldestBackgroundedCodex(session, agentId, event.codexRunId);
+        if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
         if (targetAgent) completeCodexAgent(targetAgent, event);
       }
 
