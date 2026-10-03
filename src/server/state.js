@@ -5,7 +5,7 @@ const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { parsePullRequestUrl, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 
-const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
+const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
 const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
 const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const DEFAULT_LONG_WAIT_MINUTES = 15;
@@ -17,6 +17,7 @@ const DEFAULT_DISPLAY = Object.freeze({
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_AWAY_PERIODS = 50;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
@@ -393,10 +394,52 @@ async function atomicWriteAwayState(homeDir, value, fileSystem = fs, writer = nu
   return atomicWriteJson(homeDir, 'away.json', value, fileSystem);
 }
 
+function normalizeAwayState(value) {
+  if (!isRecord(value) || typeof value.enabled !== 'boolean' ||
+    !((value.enabled && Number.isFinite(value.since) && value.since >= 0) || (!value.enabled && value.since === null)) ||
+    !Number.isFinite(new Date(value.since).getTime())) return null;
+
+  let periods;
+  if (value.periods === undefined) {
+    // 旧形式は、離席中なら since から現在まで続く期間として読む。
+    periods = value.enabled ? [{ start: value.since, end: null }] : [];
+  } else {
+    if (!Array.isArray(value.periods) || value.periods.some((period) => !isRecord(period) ||
+      !Number.isFinite(period.start) || period.start < 0 ||
+      !(period.end === null || (Number.isFinite(period.end) && period.end >= period.start)))) return null;
+    periods = value.periods.map(({ start, end }) => ({ start, end }));
+  }
+
+  if (periods.some((period, index) => period.end === null && index !== periods.length - 1)) return null;
+  if (value.enabled) {
+    const activePeriod = periods.at(-1);
+    if (activePeriod?.end === null) {
+      if (activePeriod.start !== value.since) return null;
+    } else {
+      if (activePeriod && activePeriod.end > value.since) return null;
+      periods.push({ start: value.since, end: null });
+    }
+  } else if (periods.some((period) => period.end === null)) {
+    return null;
+  }
+
+  return { enabled: value.enabled, since: value.since, periods: periods.slice(-MAX_AWAY_PERIODS) };
+}
+
+function retainedAwayPeriods(periods, seenAtValues = [], now = Date.now()) {
+  const retentionOrigin = now - STORE_RETENTION_MS;
+  const seenTimes = [...seenAtValues].map((at) => typeof at === 'number' ? at : Date.parse(at)).filter(Number.isFinite);
+  return periods.filter((period) => {
+    if (period.end === null) return true;
+    if (period.end < retentionOrigin) return false;
+    return !seenTimes.length || !seenTimes.every((seenAt) => period.end <= seenAt);
+  }).slice(-MAX_AWAY_PERIODS);
+}
+
 class AwayState {
   constructor(homeDir, value = DEFAULT_AWAY_STATE, fileSystem = fs, writer = null) {
     this.homeDir = homeDir;
-    this.value = { ...value };
+    this.value = normalizeAwayState(value) || { ...DEFAULT_AWAY_STATE, periods: [] };
     this.fileSystem = fileSystem;
     this.writer = writer;
     this.pending = Promise.resolve();
@@ -405,19 +448,20 @@ class AwayState {
   static async load(homeDir, fileSystem = fs, writer = null) {
     try {
       const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'));
-      if (
-        value && typeof value === 'object' && !Array.isArray(value) &&
-        typeof value.enabled === 'boolean' &&
-        ((value.enabled && Number.isFinite(value.since) && value.since >= 0) || (!value.enabled && value.since === null)) &&
-        Number.isFinite(new Date(value.since).getTime())
-      ) return new AwayState(homeDir, { enabled: value.enabled, since: value.since }, fileSystem, writer);
+      const normalized = normalizeAwayState(value);
+      if (normalized) {
+        const away = new AwayState(homeDir, normalized, fileSystem, writer);
+        if (JSON.stringify(value) !== JSON.stringify(away.value)) await away.persistCurrent();
+        await away.prune([], Date.now());
+        return away;
+      }
     } catch {
     }
     return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
   }
 
   snapshot() {
-    return { ...this.value };
+    return { ...this.value, periods: this.value.periods.map((period) => ({ ...period })) };
   }
 
   // 画面とトレイから同時に切り替えても、保存の順と this.value の順が食い違わないよう直列にする。
@@ -428,13 +472,41 @@ class AwayState {
   }
 
   async applyEnabled(enabled, now) {
+    const periods = [...this.value.periods];
+    if (enabled && !this.value.enabled) periods.push({ start: now, end: null });
+    if (!enabled && this.value.enabled) {
+      const activePeriod = periods.at(-1);
+      if (activePeriod?.end === null) activePeriod.end = Math.max(now, activePeriod.start);
+    }
     const next = {
       enabled,
       since: enabled ? (this.value.enabled ? this.value.since : now) : null,
+      periods: retainedAwayPeriods(periods, [], now),
     };
     this.value = next;
     await atomicWriteAwayState(this.homeDir, next, this.fileSystem, this.writer).catch(() => {});
     return this.snapshot();
+  }
+
+  persistCurrent() {
+    const run = this.pending.then(async () => {
+      await atomicWriteAwayState(this.homeDir, this.value, this.fileSystem, this.writer).catch(() => {});
+      return this.snapshot();
+    });
+    this.pending = run.catch(() => {});
+    return run;
+  }
+
+  prune(seenAtValues, now = Date.now()) {
+    const run = this.pending.then(async () => {
+      const periods = retainedAwayPeriods(this.value.periods, seenAtValues, now);
+      if (periods.length === this.value.periods.length) return this.snapshot();
+      this.value = { ...this.value, periods };
+      await atomicWriteAwayState(this.homeDir, this.value, this.fileSystem, this.writer).catch(() => {});
+      return this.snapshot();
+    });
+    this.pending = run.catch(() => {});
+    return run;
   }
 
   attachWriter(writer) {
@@ -2147,7 +2219,7 @@ class DashboardState {
     return seenAt;
   }
 
-  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now()) {
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
     const products = new Map();
     const visibleProductKeys = new Set();
     const registrations = this.pullRequestRegistrations();
@@ -2221,6 +2293,11 @@ class DashboardState {
 
     const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
     const eventKeys = new Set();
+    const happenedWhileAway = (timestamp) => awayPeriods.some((period) => {
+      if (!Number.isFinite(period.start)) return false;
+      const end = period.end === null ? now : period.end;
+      return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
+    });
     const addEvent = (product, type, identity, at, text) => {
       const timestamp = Date.parse(at || '');
       if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
@@ -2286,7 +2363,10 @@ class DashboardState {
       if (!seenAt) continue;
       const seenMilliseconds = Date.parse(seenAt || '');
       const items = (eventsByProduct.get(product.key) || [])
-        .filter((event) => Date.parse(event.at) > seenMilliseconds)
+        .filter((event) => {
+          const timestamp = Date.parse(event.at);
+          return timestamp > seenMilliseconds && happenedWhileAway(timestamp);
+        })
         .sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       if (items.length) sinceSeen.push({ product, seenAt, items });
     }

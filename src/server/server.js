@@ -318,7 +318,10 @@ function createRequestHandler(options) {
     if (request.method === 'GET' && requestUrl.pathname === '/api/state') {
       const snapshot = state.snapshot();
       const pullRequests = pullRequestTracker?.snapshot() || [];
-      const sinceSeen = state.snapshotSinceSeen(snapshot.sessions, pullRequests);
+      const now = Date.now();
+      const awayState = away.snapshot();
+      const sinceSeen = state.snapshotSinceSeen(snapshot.sessions, pullRequests, now, awayState.periods);
+      await away.prune?.([...state.seenAtByProduct.values()], now);
       snapshot.version = state.version;
       snapshot.generatedAt = state.generatedAt;
       const sessions = snapshot.sessions.map((session) => {
@@ -686,6 +689,7 @@ function createRequestHandler(options) {
         return;
       }
       const seenAt = state.setProductSeen(body.productKey, body.generatedAt);
+      await away.prune?.([...state.seenAtByProduct.values()]);
       jsonResponse(response, 200, { productKey: body.productKey, seenAt });
       return;
     }

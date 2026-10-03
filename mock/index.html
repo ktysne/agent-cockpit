@@ -1145,7 +1145,7 @@ function permCard(p, session, x, withTag) {
 }
 const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
 
-// 前回見てからの変化。常駐サーバーが項目ごとの更新時刻を持ち、画面は最後に見た時刻と比べる想定
+// 離席中の期間に起きた変化だけを常駐サーバーが返し、画面は最後に見た時刻と比べる想定。
 // 「離席中のみ」では、離席中でない間は「前回見てから」が無いものとして扱う。既読の時刻は進めない。
 const sinceSeenVisible = () => ui.sinceSeenMode !== 'never' && (ui.sinceSeenMode !== 'away' || ui.away);
 function newsBox(p, withTag) {
