@@ -379,7 +379,7 @@ test('PR のスタックにクロスレビューを表示する', () => {
   assert.doesNotMatch(source, /data-reserve-go=/);
 });
 
-test('連携が無い時は経路の欄と稼働中の経路札を表示しない', () => {
+test('経路の段は連携に応じて表示し、無効なサブエージェントの札を隠す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const routingStart = html.indexOf('function routeName');
   const routingEnd = html.indexOf('\nasync function updateRouting', routingStart);
@@ -391,9 +391,10 @@ test('連携が無い時は経路の欄と稼働中の経路札を表示しな�
   const root = {
     innerHTML: '',
     hidden: false,
-    querySelector(selector) { return selector === '.rgroup' && this.innerHTML.includes('class="rgroup"') ? {} : null; },
+    dataset: {},
     querySelectorAll() { return []; },
   };
+  const document = { getElementById: () => root, querySelector: () => null };
   const context = vm.createContext({
     ROUTE: {
       agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
@@ -402,7 +403,10 @@ test('連携が無い時は経路の欄と稼働中の経路札を表示しな�
     ROUTE_VALUES: new Set(['default', 'codex', 'claude']),
     routing: { agents: 'default', review: 'default' },
     codexAgentAvailable: false,
-    document: { getElementById: () => root },
+    crossReviewAvailable: false,
+    document,
+    getComputedStyle: () => ({ columnGap: '10px' }),
+    window: {},
     element: (_tag, className, textContent = '') => ({ className, textContent }),
   });
   vm.runInContext(`${html.slice(routingStart, routingEnd)}\n${html.slice(routeTagStart, routeTagEnd)}\nthis.renderRouting = renderRouting; this.routeTag = routeTag;`, context);
@@ -412,10 +416,21 @@ test('連携が無い時は経路の欄と稼働中の経路札を表示しな�
   assert.equal(root.innerHTML, '');
   assert.equal(context.routeTag({ active: true, route: 'codex' }), null);
 
+  context.renderRouting({ agents: 'codex', review: 'claude' }, { crossReview: true });
+  assert.equal(root.hidden, false);
+  assert.equal((root.innerHTML.match(/data-route="review"/g) || []).length, 3);
+  assert.doesNotMatch(root.innerHTML, /data-route="agents"/);
+
   context.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true });
   assert.equal(root.hidden, false);
   assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 3);
-  assert.doesNotMatch(root.innerHTML, /data-route="review"|aria-describedby|未対応/);
+  assert.doesNotMatch(root.innerHTML, /data-route="review"/);
+
+  context.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true, crossReview: true });
+  assert.ok(root.innerHTML.indexOf('data-route="agents"') < root.innerHTML.indexOf('data-route="review"'));
+  assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 3);
+  assert.equal((root.innerHTML.match(/data-route="review"/g) || []).length, 3);
+  assert.doesNotMatch(root.innerHTML, /aria-describedby|未対応/);
 });
 
 test('クロスレビューの行は往復数と head の状態を表示する', () => {

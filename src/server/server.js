@@ -11,7 +11,7 @@ const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
-const { PullRequestTracker } = require('./pull-requests');
+const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
 const { parsePullRequestUrl, isGithubCreatePullRequestTool } = require('./pull-request-utils');
 
@@ -275,6 +275,7 @@ function createRequestHandler(options) {
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists = defaultCodexAgentScriptExists,
+    crossReviewToolExists = defaultCrossReviewToolExists,
     openExternalUrl = defaultOpenExternalUrl,
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
@@ -326,7 +327,14 @@ function createRequestHandler(options) {
       });
       const uiVersion = await currentUiVersion();
       const codexAgent = (await codexAgentScriptExists(path.join(claudeHome, 'tools', 'codex-agent.sh'))) === true;
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent }, uiVersion });
+      let crossReview = false;
+      for (const cwd of state.knownCwds()) {
+        if (await crossReviewToolExists(cwd) === true) {
+          crossReview = true;
+          break;
+        }
+      }
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, uiVersion });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -1092,6 +1100,7 @@ async function startServer(options = {}) {
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists: options.codexAgentScriptExists,
+    crossReviewToolExists: options.crossReviewToolExists,
     openExternalUrl: options.openExternalUrl,
     webPath: options.webPath,
     dev,

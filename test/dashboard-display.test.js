@@ -77,13 +77,51 @@ test('経路設定は上部バーにあり、サブエージェントの三択�
   assert.match(web, /review: \{ label: 'クロスレビュー'/);
 });
 
-test('経路の欄は連携があるときだけサブエージェントの三択を表示する', async () => {
+test('経路の二段は実際の幅が収まる場合だけ横に並べる', () => {
+  const layoutRouting = functionSource(web, 'layoutRouting');
+  assert.ok(layoutRouting);
+  assert.match(web, /const ROUTING_PAIR_GAP_PX = 12/);
+  assert.match(web, /new ResizeObserver\(layoutRouting\)\.observe\(document\.getElementById\('routing'\)\)/);
+  assert.match(web, /\.routing \.rgroup\.side-by-side \{ grid-template-columns: repeat\(4, max-content\); \}/);
+  assert.match(web, /\.routing \.rgroup\.side-by-side \.rrow \+ \.rrow \.rlabel \{ margin-left: 12px; \}/);
+
+  const widths = [80, 150, 80, 150];
+  const classes = new Set();
+  const group = {
+    clientWidth: 502,
+    querySelectorAll: () => widths.map((width) => ({ getBoundingClientRect: () => ({ width }) })),
+    classList: {
+      toggle(name, enabled) {
+        if (enabled) classes.add(name);
+        else classes.delete(name);
+      },
+    },
+  };
+  const context = vm.createContext({
+    document: { querySelector: () => group },
+    getComputedStyle: () => ({ columnGap: '10px' }),
+  });
+  vm.runInContext(`const ROUTING_PAIR_GAP_PX = 12;\n${layoutRouting}\nthis.layoutRouting = layoutRouting;`, context);
+
+  context.layoutRouting();
+  assert.equal(classes.has('side-by-side'), true);
+  group.clientWidth = 501;
+  context.layoutRouting();
+  assert.equal(classes.has('side-by-side'), false);
+  widths.splice(2);
+  group.clientWidth = 1000;
+  context.layoutRouting();
+  assert.equal(classes.has('side-by-side'), false);
+});
+
+test('経路の欄は連携の組み合わせに応じて段を作り直す', async () => {
   const renderRouting = functionSource(web, 'renderRouting');
   const updateRouting = functionSource(web, 'updateRouting');
-  const root = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+  const root = { innerHTML: '', hidden: false, dataset: {}, querySelectorAll: () => [] };
   const renderContext = vm.createContext({
     document: { getElementById: () => root },
     window: {},
+    layoutRouting() {},
   });
   vm.runInContext(`const ROUTE = {
     agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
@@ -93,24 +131,51 @@ test('経路の欄は連携があるときだけサブエージェントの三�
   let routing = { agents: 'default', review: 'default' };
   ${renderRouting}
   this.renderRouting = renderRouting;`, renderContext);
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: false });
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, {});
   assert.equal(root.hidden, true);
   assert.equal(root.innerHTML, '');
 
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true });
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { crossReview: true });
   assert.equal(root.hidden, false);
-
   const reviewButtons = root.innerHTML.match(/<button[^>]*data-route="review"[^>]*>/g) || [];
   const agentButtons = root.innerHTML.match(/<button[^>]*data-route="agents"[^>]*>/g) || [];
-  assert.equal(reviewButtons.length, 0);
-  assert.equal(agentButtons.length, 3);
+  assert.equal(reviewButtons.length, 3);
+  assert.equal(agentButtons.length, 0);
+
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true });
+  assert.equal(root.hidden, false);
+  const agentsOnly = root.innerHTML;
+  assert.equal((agentsOnly.match(/data-route="agents"/g) || []).length, 3);
+  assert.doesNotMatch(agentsOnly, /data-route="review"/);
+
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true, crossReview: true });
+  assert.ok(root.innerHTML.indexOf('data-route="agents"') < root.innerHTML.indexOf('data-route="review"'));
+  assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 3);
+  assert.equal((root.innerHTML.match(/data-route="review"/g) || []).length, 3);
   assert.doesNotMatch(root.innerHTML, /aria-describedby|未対応/);
 
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { crossReview: true });
+  assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 0);
+  assert.equal((root.innerHTML.match(/data-route="review"/g) || []).length, 3);
+
   const posts = [];
-  const updateContext = vm.createContext({ postUiAction: async (...args) => { posts.push(args); return { ok: true }; } });
+  const renders = [];
+  const updateContext = vm.createContext({
+    postUiAction: async (...args) => {
+      posts.push(args);
+      return { ok: true, json: async () => ({ agents: 'codex', review: 'claude' }) };
+    },
+    renderRouting: (...args) => renders.push(args),
+    codexAgentAvailable: true,
+    crossReviewAvailable: true,
+    lastState: null,
+    liveStatus: { textContent: '' },
+    showWriteError() {},
+  });
   vm.runInContext(`async ${updateRouting}\nthis.updateRouting = updateRouting;`, updateContext);
   await updateContext.updateRouting({ dataset: { route: 'review', v: 'claude' } });
-  assert.deepEqual(posts, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [['/api/routing', { key: 'review', value: 'claude' }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(renders[0][1])), { codexAgent: true, crossReview: true });
 });
 
 test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン用の識別子を送る', () => {
