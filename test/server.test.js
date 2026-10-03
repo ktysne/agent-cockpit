@@ -77,8 +77,10 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
   });
   assert.equal(enabled.status, 200);
-  assert.deepEqual(jsonBody(enabled).enabled, true);
-  assert.ok(Number.isFinite(jsonBody(enabled).since));
+  const enabledState = jsonBody(enabled);
+  assert.equal(enabledState.enabled, true);
+  assert.ok(Number.isFinite(enabledState.since));
+  assert.deepEqual(enabledState.periods, [{ start: enabledState.since, end: null }]);
 
   const enabledLocalhost = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
@@ -106,7 +108,12 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
     },
   });
   assert.equal(disabled.status, 200);
-  assert.deepEqual(jsonBody(disabled), { enabled: false, since: null });
+  const disabledState = jsonBody(disabled);
+  assert.equal(disabledState.enabled, false);
+  assert.equal(disabledState.since, null);
+  assert.equal(disabledState.periods.length, 1);
+  assert.equal(disabledState.periods[0].start, enabledState.since);
+  assert.ok(Number.isFinite(disabledState.periods[0].end));
 
   const invalidEnabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: 'true' }),
@@ -115,10 +122,10 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   assert.equal(invalidEnabled.status, 400);
 
   const away = await request(runtime.info.port, { path: '/api/away' });
-  assert.deepEqual(Object.keys(jsonBody(away)).sort(), ['enabled', 'since']);
-  assert.deepEqual(jsonBody(away), { enabled: false, since: null });
+  assert.deepEqual(Object.keys(jsonBody(away)).sort(), ['enabled', 'periods', 'since']);
+  assert.deepEqual(jsonBody(away), disabledState);
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
-  assert.deepEqual(state.away, { enabled: false, since: null });
+  assert.deepEqual(state.away, disabledState);
   assert.equal(away.headers['access-control-allow-origin'], undefined);
 });
 
@@ -496,6 +503,7 @@ test('離席状態は同じ置き場でサーバーを再起動しても残る',
   assert.equal(enabled.status, 200);
   const saved = jsonBody(enabled);
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).since, saved.since);
+  assert.deepEqual(saved.periods, [{ start: saved.since, end: null }]);
   await first.close();
 
   const second = await startServer({ homeDir, claudeHome, port: 0 });
@@ -596,7 +604,9 @@ test('壊れた離席状態は離席中ではない状態として読む', async
   await fs.writeFile(path.join(homeDir, 'away.json'), '{invalid');
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
-  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), { enabled: false, since: null });
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), {
+    enabled: false, since: null, periods: [],
+  });
 });
 
 test('画面には画面用の秘密値だけを埋め、iframe への埋め込みを拒み、/api/events は画面用の秘密値を受け付けない', async (t) => {
@@ -1292,7 +1302,10 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   assert.deepEqual(firstView.sinceSeen, []);
   assert.equal(firstView.sessions[0].decisions[0].isNew, false);
   assert.equal(state.seenAtByProduct.has(product.key), true);
-  const afterView = Date.parse(firstView.generatedAt) + 1000;
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: true }), headers: validHeaders,
+  });
+  const afterView = Date.now();
   state.setTasks(sessionId, [
     { title: '表示前の完了', state: 'done', criteria: [] },
     { title: '表示後・既読前の完了', state: 'done', criteria: [] },
@@ -1325,7 +1338,7 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   assert.equal(seen.status, 200);
   assert.equal(jsonBody(seen).seenAt, firstView.generatedAt);
 
-  const future = Math.max(Date.now(), afterView) + 1000;
+  const future = Math.max(Date.now(), afterView);
   state.setTasks(sessionId, [
     { title: '表示前の完了', state: 'done', criteria: [] },
     { title: '表示後・既読前の完了', state: 'done', criteria: [] },
@@ -1535,4 +1548,14 @@ test('離席状態の切り替えを続けて呼ぶと、呼んだ順に保存�
   assert.deepEqual(results.map((value) => value.enabled), [true, false, true]);
   assert.equal(away.snapshot().enabled, true);
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).enabled, true);
+});
+
+test('/api/state は版と時刻を、離席期間の整理を待つ前に中身と同じ時点で確定する', async () => {
+  const source = (await fs.readFile(path.join(__dirname, '../src/server/server.js'), 'utf8')).replace(/\r\n/g, '\n');
+  const start = source.indexOf("requestUrl.pathname === '/api/state'");
+  const handler = source.slice(start, source.indexOf('jsonResponse(response, 200', start));
+  const versionAt = handler.indexOf('snapshot.version = state.version;');
+  const pruneAt = handler.indexOf('away.prune?.(');
+  assert.ok(versionAt > 0 && pruneAt > versionAt);
+  assert.doesNotMatch(handler, /await away\.prune/);
 });

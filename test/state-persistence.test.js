@@ -540,9 +540,69 @@ test('away.json も共通の rename 再試行を使い、メモリーの切り�
   });
   const away = new AwayState(homeDir, { enabled: false, since: null }, fileSystem, writer);
 
-  assert.deepEqual(await away.setEnabled(true, 123), { enabled: true, since: 123 });
+  assert.deepEqual(await away.setEnabled(true, 123), {
+    enabled: true, since: 123, periods: [{ start: 123, end: null }],
+  });
   assert.equal(attempts, 2);
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')), { enabled: true, since: 123 });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')), {
+    enabled: true, since: 123, periods: [{ start: 123, end: null }],
+  });
+});
+
+test('旧形式の離席状態は enabled に応じた期間へ読み替える', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const filePath = path.join(homeDir, 'away.json');
+  await fs.writeFile(filePath, JSON.stringify({ enabled: true, since: 123 }));
+
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), {
+    enabled: true, since: 123, periods: [{ start: 123, end: null }],
+  });
+
+  await fs.writeFile(filePath, JSON.stringify({ enabled: false, since: null }));
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), { enabled: false, since: null, periods: [] });
+});
+
+test('away.json の離席期間を保存して読み戻す', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const away = await AwayState.load(homeDir);
+  const now = Date.now();
+  await away.setEnabled(true, now - 4000);
+  await away.setEnabled(false, now - 3000);
+  await away.setEnabled(true, now - 2000);
+  await away.setEnabled(false, now - 1000);
+
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8'));
+  assert.deepEqual(saved.periods, [
+    { start: now - 4000, end: now - 3000 },
+    { start: now - 2000, end: now - 1000 },
+  ]);
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), saved);
+});
+
+test('離席期間は既読時刻と保持期限で整理し、50件までにする', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const away = new AwayState(homeDir, {
+    enabled: false,
+    since: null,
+    periods: [
+      { start: now - 16 * DAY_MS, end: now - 15 * DAY_MS },
+      { start: now - 2 * DAY_MS, end: now - DAY_MS },
+      { start: now - DAY_MS, end: now - 6 * 60 * 60 * 1000 },
+    ],
+  });
+
+  await away.prune([new Date(now - DAY_MS).toISOString()], now);
+  assert.deepEqual(away.snapshot().periods, [
+    { start: now - DAY_MS, end: now - 6 * 60 * 60 * 1000 },
+  ]);
+
+  const overLimit = new AwayState(homeDir, {
+    enabled: false,
+    since: null,
+    periods: Array.from({ length: 51 }, (_, index) => ({ start: index * 2, end: index * 2 + 1 })),
+  });
+  assert.equal(overLimit.snapshot().periods.length, 50);
 });
 
 test('タスクを書き直すと題が消えた記録と state が変わった完了記録を消す', async (t) => {
@@ -699,8 +759,59 @@ test('初回表示は既存の完了を既読扱いにし、その後の完了�
   assert.equal(first.seenAtByProduct[product.key], new Date(now + 1000).toISOString());
 
   state.setTasks(sessionId, [task('既存の完了', 'done'), task('新しい完了', 'done')], now + 2000);
-  const next = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 3000);
+  const next = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 3000, [
+    { start: now + 1500, end: now + 3000 },
+  ]);
   assert.deepEqual(next.sinceSeen[0].items.map((item) => item.text), ['タスク「新しい完了」が完了した']);
+});
+
+test('席にいる間の変化は出さず、離席中の変化は離席後も既読まで表示する', () => {
+  const state = new DashboardState();
+  const sessionId = 'away-period-retained';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '離席期間', product }], now);
+  state.setTasks(sessionId, [task('既存の完了', 'done')], now);
+  state.snapshotSinceSeen(state.snapshot().sessions, [], now + 1);
+
+  state.setTasks(sessionId, [task('既存の完了', 'done'), task('席にいる間', 'done')], now + 2);
+  const whilePresent = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 3);
+  assert.deepEqual(whilePresent.sinceSeen, []);
+
+  state.setTasks(sessionId, [
+    task('既存の完了', 'done'), task('席にいる間', 'done'), task('離席中', 'done'),
+  ], now + 12);
+  const periods = [{ start: now + 10, end: now + 20 }];
+  const afterAway = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 30, periods);
+  assert.deepEqual(afterAway.sinceSeen[0].items.map((item) => item.text), ['タスク「離席中」が完了した']);
+  assert.deepEqual(state.snapshotSinceSeen(state.snapshot().sessions, [], now + 31, periods).sinceSeen, afterAway.sinceSeen);
+
+  state.setProductSeen(product.key, now + 32);
+  assert.deepEqual(state.snapshotSinceSeen(state.snapshot().sessions, [], now + 33, periods).sinceSeen, []);
+});
+
+test('離席を二度挟んだときは両方の期間の変化だけを出す', () => {
+  const state = new DashboardState();
+  const sessionId = 'multiple-away-periods';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '離席期間', product }], now);
+  state.snapshotSinceSeen(state.snapshot().sessions, [], now);
+
+  state.setTasks(sessionId, [task('席にいる間', 'done')], now + 1);
+  state.setTasks(sessionId, [task('席にいる間', 'done'), task('一度目の離席', 'done')], now + 3);
+  state.setTasks(sessionId, [
+    task('席にいる間', 'done'), task('一度目の離席', 'done'), task('二度目の離席', 'done'),
+  ], now + 9);
+
+  const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 12, [
+    { start: now + 2, end: now + 5 },
+    { start: now + 8, end: now + 10 },
+  ]);
+  assert.deepEqual(result.sinceSeen[0].items.map((item) => item.text), [
+    'タスク「二度目の離席」が完了した',
+    'タスク「一度目の離席」が完了した',
+  ]);
 });
 
 test('既読時刻は後退せず、既読後に同じ仮適用を更新しても新着に戻らない', () => {
@@ -756,7 +867,7 @@ test('既読時刻より前後の完了、PR、仮適用、CI 失敗、マージ
     owner, repo, number: 1, title: 'PR before', url: url(1), mergedAt: new Date(now + 16).toISOString(), method: 'squash',
   }, now + 16);
 
-  const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 20);
+  const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 20, [{ start: 0, end: now + 20 }]);
   const items = result.sinceSeen[0].items;
   assert.deepEqual(new Set(items.map((item) => item.type)), new Set([
     'task', 'pull-request', 'provisional', 'ci-failure', 'merged-pull-request',
@@ -793,7 +904,7 @@ test('マージ履歴がなくても登録のマージ時刻を前回見てか�
   state.updatePullRequest('merged-registration', owner, repo, 10, { state: 'merged', mergedAt });
   state.setProductSeen(product.key, seenAt);
 
-  const result = state.snapshotSinceSeen([], [], now);
+  const result = state.snapshotSinceSeen([], [], now, [{ start: 0, end: now }]);
 
   assert.equal(state.mergedPullRequests.size, 0);
   assert.ok(result.sinceSeen[0].items.some((item) => (
@@ -819,7 +930,7 @@ test('セッション登録とマージ履歴の時刻書式が異なっても�
   });
   state.setProductSeen(product.key, now - 2 * 60 * 60_000);
 
-  const result = state.snapshotSinceSeen([], [], now);
+  const result = state.snapshotSinceSeen([], [], now, [{ start: 0, end: now }]);
   const mergedItems = result.sinceSeen[0].items.filter((item) => item.type === 'merged-pull-request');
 
   assert.equal(mergedItems.length, 1);
@@ -846,7 +957,7 @@ test('関連PR登録だけが残るマージも前回見てからに表示する
   state.updateRelatedPullRequest(owner, repo, 12, { state: 'merged', mergedAt });
   state.setProductSeen(productKey, now - 3 * DAY_MS);
 
-  const result = state.snapshotSinceSeen([], [], now);
+  const result = state.snapshotSinceSeen([], [], now, [{ start: 0, end: now }]);
 
   assert.equal(result.sinceSeen[0].product.key, productKey);
   assert.ok(result.sinceSeen[0].items.some((item) => (
@@ -869,7 +980,7 @@ test('関連PRのマージはそのPRをマージ済みとして載せるPR群�
   state.setProductSeen(product.key, now - 3 * DAY_MS);
   const pullRequestGroups = [{ product, owner, repo, merged: [{ number: 13, state: 'merged' }] }];
 
-  const result = state.snapshotSinceSeen([], pullRequestGroups, now);
+  const result = state.snapshotSinceSeen([], pullRequestGroups, now, [{ start: 0, end: now }]);
 
   assert.deepEqual(result.sinceSeen.map((entry) => entry.product.key), [product.key]);
   assert.ok(result.sinceSeen[0].items.some((item) => item.text === 'PR #13(親のPR)をマージした'));
@@ -890,7 +1001,7 @@ test('20日前の既読時刻は参照記録が残る間維持して保持中の
   state.setProductSeen(product.key, seenAt);
 
   state.pruneExpiredStoreRecords(now);
-  const result = state.snapshotSinceSeen([], [], now);
+  const result = state.snapshotSinceSeen([], [], now, [{ start: 0, end: now }]);
 
   assert.equal(state.seenAtByProduct.get(product.key), seenAt);
   assert.ok(result.sinceSeen[0].items.some((item) => item.type === 'merged-pull-request'));
@@ -912,4 +1023,19 @@ test('参照する記録がなくなったプロダクトの既読時刻をsnaps
 
   assert.equal(state.seenAtByProduct.has(product.key), false);
   assert.ok(state.version > versionBeforeSnapshot);
+});
+
+test('離席期間の記録が食い違っていても、離席中かどうかの記録は保つ', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const filePath = path.join(homeDir, 'away.json');
+  // 閉じていない期間が途中にあり、since とも合わない。
+  await fs.writeFile(filePath, JSON.stringify({
+    enabled: true, since: 500, periods: [{ start: 100, end: null }, { start: 200, end: 300 }],
+  }));
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), {
+    enabled: true, since: 500, periods: [{ start: 500, end: null }],
+  });
+
+  await fs.writeFile(filePath, JSON.stringify({ enabled: false, since: null, periods: 'broken' }));
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), { enabled: false, since: null, periods: [] });
 });
