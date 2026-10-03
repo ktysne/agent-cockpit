@@ -455,6 +455,43 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   }
 }
 
+function listWorktreesForBranch(root, branch, execFileImpl = execFile) {
+  return new Promise((resolve) => {
+    execFileImpl('git', ['-C', root, 'worktree', 'list', '--porcelain'], {
+      encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+    }, (error, stdout) => {
+      if (error || typeof stdout !== 'string') {
+        resolve([]);
+        return;
+      }
+      const worktrees = [];
+      let current = null;
+      for (const line of stdout.split(/\r?\n/)) {
+        if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
+        else if (current && line === `branch refs/heads/${branch}`) worktrees.push(path.resolve(current));
+      }
+      resolve(worktrees);
+    });
+  });
+}
+
+// PR は登録したセッションとは別の worktree で作られることがあり、フックの cwd はコマンド中の cd を反映しないため、
+// head のブランチをチェックアウトしている worktree の状態ファイルも候補にする。
+async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
+  const fileSystem = options.fileSystem || fs;
+  let selected = await readCrossReviewState(registration, pullRequest, fileSystem);
+  const branch = pullRequest?.headRefName;
+  if (selected === undefined || !branch) return selected;
+  const root = await findWorktreeRoot(registration.cwd, fileSystem);
+  const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+  for (const worktree of await listWorktreesForBranch(root, branch, options.execFileImpl)) {
+    if (sameRoot(worktree, root)) continue;
+    const candidate = await readCrossReviewState({ ...registration, cwd: worktree }, pullRequest, fileSystem);
+    if (shouldReplaceCrossReview(selected, candidate, pullRequest.headRefOid)) selected = candidate;
+  }
+  return selected;
+}
+
 // 記録のある worktree を優先し、同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。
 function shouldReplaceCrossReview(current, candidate, headSha) {
   const priority = (review) => review === undefined ? 0 : review === null ? 1 : 2;
@@ -486,6 +523,7 @@ class PullRequestTracker {
     this.state = options.state;
     this.execFileImpl = options.execFileImpl || execFile;
     this.ghPath = options.ghPath || 'gh';
+    this.gitExecFileImpl = options.gitExecFileImpl || execFile;
     this.fileSystem = options.fileSystem || fs;
     this.now = options.now || Date.now;
     this.repositories = new Map();
@@ -894,7 +932,9 @@ class PullRequestTracker {
     for (const registration of registrations) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
-      const review = await readCrossReviewState(registration, pullRequest, this.fileSystem);
+      const review = await readCrossReviewStateAcrossWorktrees(registration, pullRequest, {
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl,
+      });
       const current = crossReviewByNumber.get(registration.number);
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;
       crossReviewByNumber.set(registration.number, review && {
@@ -1012,5 +1052,6 @@ module.exports = {
   parseRepositoryConfig,
   crossReviewToolExists,
   readCrossReviewState,
+  readCrossReviewStateAcrossWorktrees,
   runGh,
 };
