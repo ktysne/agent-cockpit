@@ -606,6 +606,27 @@ async function runningServer(t, options = {}) {
   return runtime;
 }
 
+test('不在終了と再開を注入された回答配信へ通知する', async (t) => {
+  const state = new DashboardState();
+  const ended = [];
+  const reopened = [];
+  const answerDelivery = {
+    sessionEnded: (sessionId, endedAt) => ended.push([sessionId, endedAt]),
+    sessionReopened: (sessionId) => reopened.push(sessionId),
+    close() {},
+  };
+  const runtime = await runningServer(t, { state, answerDelivery });
+  const sessionId = 'server-injected-delivery';
+  const file = { session_id: sessionId, cwd: 'C:\\project', name: '同期対象' };
+  state.syncSessionFiles([file], 1_000);
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: 1_000 });
+  state.syncSessionFiles([], 61_000);
+  state.syncSessionFiles([file], 61_001);
+
+  assert.deepEqual(ended, [[sessionId, 61_000]]);
+  assert.deepEqual(reopened, [sessionId]);
+});
+
 test('/api/state は Claude のホームにある codex-agent.sh の有無を返す', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const scriptPath = path.join(claudeHome, 'tools', 'codex-agent.sh');

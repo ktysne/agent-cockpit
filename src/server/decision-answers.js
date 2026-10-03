@@ -383,12 +383,29 @@ class DecisionAnswerDelivery {
     this.signal(sessionId);
   }
 
+  sessionEnded(sessionId, endedAt = this.now()) {
+    this.taskNudges.sessionEnded(sessionId);
+    this.sessionNotifications.delete(sessionId);
+    this.handleLifecycleEvent(sessionId, 'SessionEnd', `SessionEnd:${endedAt}`, endedAt);
+    this.clearSessionAskWaits(sessionId);
+    // 待ちの印が残ると、再開後に送った回答が通常の配信経路から外れたままになる。
+    this.state.clearAwaitingAnswers?.(sessionId, endedAt);
+  }
+
+  sessionReopened(sessionId) {
+    if (this.endedSessions.has(sessionId)) this.clearSessionAskWaits(sessionId);
+    this.endedSessions.delete(sessionId);
+  }
+
   afterEvent(event) {
-    this.taskNudges.afterEvent(event);
     const { session_id: sessionId, hook_event_name: eventName, tool_use_id: toolUseId } = event;
+    if (eventName === 'SessionEnd') {
+      this.sessionEnded(sessionId, event.hookAt);
+      return;
+    }
+    this.taskNudges.afterEvent(event);
     if (eventName === 'SessionStart') {
-      if (this.endedSessions.has(sessionId)) this.clearSessionAskWaits(sessionId);
-      this.endedSessions.delete(sessionId);
+      this.sessionReopened(sessionId);
       if (['startup', 'resume', 'clear'].includes(event.source)) this.lastLifecycleAt.delete(sessionId);
     }
     if (
@@ -399,10 +416,9 @@ class DecisionAnswerDelivery {
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
       this.signal(sessionId);
     }
-    if (eventName === 'SessionEnd' || eventName === 'UserPromptSubmit') {
+    if (eventName === 'UserPromptSubmit') {
       this.handleLifecycleEvent(sessionId, eventName, `${eventName}:${event.hookAt}`, event.hookAt);
     }
-    if (eventName === 'SessionEnd') this.clearSessionAskWaits(sessionId);
     if (eventName === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && toolUseId && !event.agent_id) {
       const key = keyFor(sessionId, toolUseId);
       const decisionId = this.state.decisionIdForToolUse(sessionId, toolUseId);

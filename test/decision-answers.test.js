@@ -673,6 +673,97 @@ test('後続の Stop、UserPromptSubmit、SessionEnd、親の終了で Stop の�
   assert.deepEqual(await delivery.waitForStopAnswer('session-parent', 0, false), { stderrText: null, done: true });
 });
 
+test('セッションファイル不在で終了すると質問待ち、通知、催促の記録を片付ける', async () => {
+  const clock = new FakeClock();
+  let delivery;
+  const state = new DashboardState({
+    onSessionEndedByAbsence: (sessionId, endedAt) => delivery.sessionEnded(sessionId, endedAt),
+    onSessionReopened: (sessionId) => delivery.sessionReopened(sessionId),
+  });
+  const away = { snapshot: () => ({ enabled: true }) };
+  delivery = new DecisionAnswerDelivery({
+    state,
+    away,
+    now: () => clock.now(),
+    setTimeoutImpl: (callback, milliseconds) => clock.setTimeout(callback, milliseconds),
+    clearTimeoutImpl: (id) => clock.clearTimeout(id),
+  });
+  const sessionId = 'session-absent-cleanup';
+  const toolUseId = 'ask-absent-cleanup';
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '質問待ち' }], clock.now());
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: clock.now() });
+  const registration = delivery.registerAsk({ sessionId, toolUseId, questions: QUESTIONS });
+  assert.equal(registration.awaiting, true);
+  const waiting = delivery.waitForAsk({ sessionId, toolUseId });
+  delivery.afterEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: clock.now() + 1 });
+  delivery.afterEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: clock.now() + 2, tool_name: 'Agent' });
+  delivery.notifySessions([sessionId], 'マージ結果');
+  assert.equal(delivery.taskNudges.sessions.has(sessionId), true);
+  assert.equal(delivery.sessionNotifications.has(sessionId), true);
+
+  state.syncSessionFiles([], clock.now() + 60_000);
+
+  assert.deepEqual(await waiting, { outcome: 'released' });
+  assert.equal(delivery.askWaits.has(`${sessionId}\0${toolUseId}`), false);
+  assert.equal(delivery.sessionNotifications.has(sessionId), false);
+  assert.equal(delivery.taskNudges.sessions.has(sessionId), false);
+});
+
+test('質問待ちのまま不在終了すると待ちの印を外し、再開後は届かない回答を受け付けない', async () => {
+  const clock = new FakeClock();
+  let delivery;
+  const state = new DashboardState({
+    onSessionEndedByAbsence: (sessionId, endedAt) => delivery.sessionEnded(sessionId, endedAt),
+    onSessionReopened: (sessionId) => delivery.sessionReopened(sessionId),
+  });
+  delivery = new DecisionAnswerDelivery({
+    state,
+    away: { snapshot: () => ({ enabled: true }) },
+    now: () => clock.now(),
+    setTimeoutImpl: (callback, milliseconds) => clock.setTimeout(callback, milliseconds),
+    clearTimeoutImpl: (id) => clock.clearTimeout(id),
+  });
+  const sessionId = 'session-absent-ask-reopened';
+  const toolUseId = 'ask-absent-reopened';
+  const file = { session_id: sessionId, cwd: 'C:\\project', name: '質問待ち' };
+  state.syncSessionFiles([file], clock.now());
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: clock.now() });
+  const registration = delivery.registerAsk({ sessionId, toolUseId, questions: QUESTIONS });
+  const waiting = delivery.waitForAsk({ sessionId, toolUseId });
+
+  state.syncSessionFiles([], clock.now() + 60_000);
+  assert.deepEqual(await waiting, { outcome: 'released' });
+  state.syncSessionFiles([file], clock.now() + 60_001);
+
+  // 質問を出したフックの待ちは解けたので、質問には Claude Code の画面で答える。
+  assert.equal(state.decisionFor(sessionId, registration.decisionId).awaitingAnswerUntil ?? null, null);
+  assert.equal(delivery.submitAnswer(sessionId, registration.decisionId, 'pick', '', [['CSV']]), null);
+  assert.equal(delivery.deliverPending(sessionId), null);
+});
+
+test('不在終了したセッションが再び一覧に載ると配信側の終了印を外す', () => {
+  let delivery;
+  const state = new DashboardState({
+    onSessionEndedByAbsence: (sessionId, endedAt) => delivery.sessionEnded(sessionId, endedAt),
+    onSessionReopened: (sessionId) => delivery.sessionReopened(sessionId),
+  });
+  delivery = new DecisionAnswerDelivery({
+    state,
+    away: { snapshot: () => ({ enabled: false }) },
+    now: () => NOW,
+  });
+  const sessionId = 'session-absent-reopened';
+  const file = { session_id: sessionId, cwd: 'C:\\project', name: '再開する作業' };
+  state.syncSessionFiles([file], NOW);
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: NOW });
+  state.syncSessionFiles([], NOW + 60_000);
+  assert.equal(delivery.endedSessions.has(sessionId), true);
+
+  state.syncSessionFiles([file], NOW + 60_001);
+
+  assert.equal(delivery.endedSessions.has(sessionId), false);
+});
+
 test('作業イベントは古い Stop を終え、回答待ちの質問を Stop から配信しない', async () => {
   const state = new DashboardState();
   const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: false }) }, now: () => NOW });

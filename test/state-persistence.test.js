@@ -165,7 +165,7 @@ test('復元直後はセッション記録を残し最初の同期で期限切�
   assert.equal(restored.closedTasks.has('expired-session'), false);
 });
 
-test('復元後の最初のセッションファイル同期でタスクもファイルも無い外し記録を捨てる', async (t) => {
+test('復元後の最初のセッションファイル同期でフックにもファイルにも無い外し記録を捨てる', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-03T00:00:00.000Z');
   const state = new DashboardState({ homeDir });
@@ -182,7 +182,7 @@ test('復元後の最初のセッションファイル同期でタスクもフ�
   restored.syncSessionFiles([] , now + 1);
 
   assert.equal(restored.hiddenSessions.has('hidden-without-task'), false);
-  assert.equal(restored.hiddenSessions.has('hidden-with-task'), true);
+  assert.equal(restored.hiddenSessions.has('hidden-with-task'), false);
 });
 
 test('一覧から外しただけで記録の無いセッションは prune 後も外れたままにする', () => {
