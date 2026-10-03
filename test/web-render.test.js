@@ -1228,7 +1228,6 @@ test('終わったセッションはタスクだけを描き、種類別の今�
     appendTasks: marker('tasks'),
     mainRow: () => { rendered.push('main'); return new FakeElement('main'); },
     appendAgents: marker('agents'),
-    appendUnknownSessionControls: marker('unknown'),
   });
   vm.runInContext(functions.join('\n'), context);
   const finished = {
@@ -1240,7 +1239,7 @@ test('終わったセッションはタスクだけを描き、種類別の今�
   rendered.length = 0;
   context.displayPreferences.hideFinished = false;
   context.sessionBlock({ branches: new Set() }, finished, true);
-  assert.deepEqual(rendered, ['permissions', 'decisions', 'tasks', 'main', 'agents', 'unknown']);
+  assert.deepEqual(rendered, ['permissions', 'decisions', 'tasks', 'main', 'agents']);
 
   const kind = pageHtml.match(/function renderKindSections\(products\) \{[^]*?\n\}/)?.[0];
   assert.match(kind, /if \(hidesFinishedSession\(session\)\) continue;\n    activityItems\.push/);
@@ -1503,7 +1502,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     },
     pullRequestMergeConfirmations: new Map([[key, 'merge']]),
     pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
-    pullRequestMergeMessages: new Map(),
+    pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -1588,7 +1587,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
-    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), pullRequestMergeInFlight: new Set(),
+    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(),
     pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictInFlight: new Set(),
     lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }], pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -1692,7 +1691,7 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     },
     pullRequestMergeOptions: new Map([[key, { method: 'merge', deleteBranch: true }]]),
     pullRequestMergeConfirmations: new Map(),
-    pullRequestMergeMessages: new Map(),
+    pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},

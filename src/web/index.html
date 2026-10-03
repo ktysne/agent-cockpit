@@ -178,7 +178,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-choice.hold input { accent-color: var(--hold); }
 .decision-answer textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
 .decision-answer textarea:focus-visible, .answer-choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .answer-foot .primary { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; }
 .answer-foot .primary:disabled { opacity: .45; cursor: default; }
 .answer-status { color: var(--text-2); font-size: 12px; }
@@ -326,7 +327,9 @@ h3.sub .count { font-weight: normal; }
 .ended-toggle { min-height: 32px; margin-top: 6px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); cursor: pointer; font: inherit; font-size: 12px; }
 .ended-toggle:hover { color: var(--text); }
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.estimate { display: grid; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.session-extra { display: grid; grid-column: 1 / -1; gap: 8px; margin-top: -2px; }
+.session-extra .session-actions { margin-top: 0; }
+.estimate { display: grid; gap: 6px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
 .estimate p { margin: 0; }
 .session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
@@ -468,6 +471,20 @@ let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
+// 常駐サーバーはキューに入れた時点でマージの意図を消し、キューの所属も取れないので、キューに入れた PR は画面で覚えておく。
+// GitHub でキューから外れても分からないため、head が変わったときと、利用者が外れたと知らせたときに忘れる。
+const queuedPullRequestMerges = new Map();
+
+function queuedPullRequestMerge(pullRequest) {
+  const key = pullRequestMergeKey(pullRequest);
+  const queued = queuedPullRequestMerges.get(key);
+  if (!queued) return null;
+  if (queued.headRefOid && pullRequest.headRefOid && queued.headRefOid !== pullRequest.headRefOid) {
+    queuedPullRequestMerges.delete(key);
+    return null;
+  }
+  return queued;
+}
 const pullRequestMergeInFlight = new Set();
 const pullRequestConflictConfirmations = new Set();
 const pullRequestConflictMessages = new Map();
@@ -1503,7 +1520,8 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
 
 function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
-  const mergeIntent = pullRequest.mergeIntent || null;
+  const queued = queuedPullRequestMerge(pullRequest);
+  const mergeIntent = pullRequest.mergeIntent || queued || null;
   const item = element('div', `pr ${reservation ? 'reserved' : pullRequest.canMerge ? 'can-merge' : ''}`.trim());
   const line = element('div', 'pline');
   if (pullRequest.stackPosition?.total > 1) {
@@ -1529,7 +1547,14 @@ function appendPullRequestTree(target, group, pullRequest) {
     cancel.disabled = pullRequestMergeInFlight.has(mergeKey);
     line.append(cancel);
   } else if (mergeKey && mergeIntent) {
-    line.append(badge('マージキューに追加済み', 'accent'));
+    line.append(badge('マージキューに追加済み (未マージ)', 'accent'));
+    if (queued && !pullRequest.mergeIntent) {
+      const left = element('button', 'link-btn', 'キューから外れた');
+      left.type = 'button';
+      left.dataset.queueLeft = mergeKey;
+      left.title = 'GitHub でキューから外れたときに押すと、マージの操作に戻る';
+      line.append(left);
+    }
   } else if (mergeKey && pullRequest.canMerge) {
     const merge = element('button', 'merge-btn', 'マージする');
     merge.type = 'button';
@@ -1555,7 +1580,6 @@ function appendPullRequestTree(target, group, pullRequest) {
     const reservedText = `マージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、head ${reservation.headRefOid})`;
     badges.append(badge(reservedText, 'accent'));
   }
-  if (mergeIntent) item.append(element('div', 'why-not', 'GitHub のマージキューに追加済みです。まだマージされていません。'));
   item.append(badges);
   if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
   if (pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
@@ -1776,19 +1800,24 @@ function isFinishedSession(session) {
 
 function mainRow(session, product, withTags = false, multipleSessions = false) {
   const status = activityStatus(session);
-  const mainTool = newestFirst(session.tools.filter((tool) => !tool.agent_id))[0];
+  const isUnknown = status.tone === 'unknown';
+  const hasEstimate = isUnknown && session.estimate?.canEstimate;
+  const mainTool = hasEstimate ? null : newestFirst(session.tools.filter((tool) => !tool.agent_id))[0];
   const doingTask = session.tasks.find((task) => task.state === 'doing');
   const row = element('div', 'now-row main-row');
   const who = element('div', 'who');
   who.append(element('span', `dot ${status.tone}`), document.createTextNode('メイン'));
   appendContextTags(who, product, session, withTags, multipleSessions);
-  who.append(element('strong', '', status.label));
+  who.append(element('strong', '', isUnknown && !hasEstimate ? `${status.label} (${durationAgoLabel(session.lastActivityAt)})` : status.label));
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) appendToolLine(detail, mainTool);
-  const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
-  const elapsed = element('time', 'since', durationAgoLabel(elapsedAt));
-  row.append(who, detail, elapsed);
+  row.append(who, detail);
+  if (!isUnknown) {
+    const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
+    row.append(element('time', 'since', durationAgoLabel(elapsedAt)));
+  }
+  appendUnknownSessionControls(row, session);
   return row;
 }
 
@@ -2008,7 +2037,7 @@ function answerStatusText(answer, decision) {
   return status.join('、');
 }
 
-function appendDecisionAnswer(card, decision, product, session) {
+function appendDecisionAnswer(card, decision, product, session, summary) {
   const questions = decision.questions || [];
   const { active, viaDialog } = decisionAnswerAvailability(decision);
   if (viaDialog) {
@@ -2016,7 +2045,7 @@ function appendDecisionAnswer(card, decision, product, session) {
     return;
   }
   if (!active) {
-    if (decision.answer?.sentAt) card.append(element('div', 'answer-status', answerStatusText(decision.answer, decision)));
+    if (decision.answer?.sentAt) summary.append(element('span', 'answer-status', answerStatusText(decision.answer, decision)));
     return;
   }
 
@@ -2138,14 +2167,16 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
     card.append(questionBox);
   }
 
+  const summary = element('div', 'decision-summary');
   if (decision.resolution) {
     const choices = Array.isArray(decision.resolution.chosen)
       ? decision.resolution.chosen.join('、')
       : decision.resolution.chosen;
-    if (choices) card.append(element('div', 'meta', `選択: ${choices}`));
-    if (decision.resolution.note) card.append(element('div', 'meta', decision.resolution.note));
+    if (choices) summary.append(element('span', 'meta', `選択: ${choices}`));
+    if (decision.resolution.note) summary.append(element('span', 'meta', decision.resolution.note));
   }
-  appendDecisionAnswer(card, decision, product, session);
+  appendDecisionAnswer(card, decision, product, session, summary);
+  if (summary.children.length) card.append(summary);
   list.append(card);
 }
 
@@ -2288,8 +2319,9 @@ function estimateTimeLabel(date) {
   return date.toDateString() === new Date().toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()} ${time}`;
 }
 
-function appendUnknownSessionControls(body, session) {
-  if (session.status !== '不明') return;
+function unknownSessionControls(session) {
+  if (session.status !== '不明') return null;
+  const extra = element('div', 'session-extra');
   const actions = element('div', 'session-actions');
   const estimateButton = element('button', 'ended-toggle', '状態を推定');
   estimateButton.type = 'button';
@@ -2298,9 +2330,9 @@ function appendUnknownSessionControls(body, session) {
   hideButton.type = 'button';
   hideButton.dataset.hideSession = session.session_id;
   actions.append(estimateButton, hideButton);
-  body.append(actions);
+  extra.append(actions);
 
-  if (!session.estimate) return;
+  if (!session.estimate) return extra;
   const panel = element('div', 'estimate');
   if (!session.estimate.canEstimate) {
     panel.textContent = '推定できませんでした';
@@ -2315,17 +2347,13 @@ function appendUnknownSessionControls(body, session) {
         : 'いいえ (応答の生成中)';
     panel.append(element('p', '', `入力待ちらしい: ${waiting}`));
   }
-  body.append(panel);
+  extra.append(panel);
+  return extra;
 }
 
-function unknownSessionControls(session, product, multipleSessions) {
-  if (session.status !== '不明') return null;
-  const block = element('div', 'kind-unknown');
-  const tags = element('div', 'meta');
-  appendContextTags(tags, product, session, true, multipleSessions);
-  block.append(tags);
-  appendUnknownSessionControls(block, session);
-  return block;
+function appendUnknownSessionControls(row, session) {
+  const controls = unknownSessionControls(session);
+  if (controls) row.append(controls);
 }
 
 function productStatusBadge(session) {
@@ -2339,7 +2367,7 @@ function sessionBlock(product, session, multipleSessions) {
     const head = element('div', 'session-head');
     head.append(element('h3', '', session.title || session.session_id));
     if (!sharedBranch(product) && session.product?.branch) head.append(element('span', 'meta branch', session.product.branch));
-    head.append(productStatusBadge(session));
+    if (hidesFinishedSession(session)) head.append(productStatusBadge(session));
     block.append(head);
   }
 
@@ -2373,7 +2401,6 @@ function sessionBlock(product, session, multipleSessions) {
   appendAgents(nowContent, session, product);
   sections.now.push(...nowContent.childNodes);
   for (const key of orderedSectionKeys(['judgment', 'tasks', 'now'])) body.append(...sections[key]);
-  appendUnknownSessionControls(body, session);
   block.append(body);
   return block;
 }
@@ -2602,10 +2629,6 @@ function renderKindSections(products) {
   for (const item of activityItems) activityList.append(item.row);
   if (!activityList.children.length) activityList.append(element('div', 'empty', 'ありません'));
   activity.append(activityList);
-  for (const { product, session, multipleSessions } of references) {
-    const controls = unknownSessionControls(session, product, multipleSessions);
-    if (controls) activity.append(controls);
-  }
   if (endedAgentCount) {
     appendKindToggle(activity, 'agents', showEndedAgents, endedAgentCount, '終了済み');
   }
@@ -3021,15 +3044,13 @@ async function runPullRequestMergeAction(button, action) {
       return;
     }
     pullRequestMergeConfirmations.delete(key);
-    const queuedMessage = action === 'merge' && result.queued
-      ? result.message || `PR #${number} はマージキューに入りました。まだマージされていません`
-      : null;
-    if (queuedMessage) pullRequestMergeMessages.set(key, queuedMessage);
-    else pullRequestMergeMessages.delete(key);
+    const queued = action === 'merge' && result.queued;
+    if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
+    pullRequestMergeMessages.delete(key);
     await refresh();
-    liveStatus.textContent = queuedMessage || (action === 'merge' ? `PR #${number} をマージしました。`
+    liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : action === 'merge' ? `PR #${number} をマージしました。`
       : action === 'reserve' ? `PR #${number} のマージを予約しました。`
-        : `PR #${number} のマージ予約を取り消しました。`);
+        : `PR #${number} のマージ予約を取り消しました。`;
   } catch {
     pullRequestMergeMessages.set(key, '操作結果を取得できませんでした。PR の状態を取り直してください。');
     if (lastState) render(lastState);
@@ -3184,6 +3205,11 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.cancelReservation) {
     void runPullRequestMergeAction(button, 'cancel');
+    return;
+  }
+  if (button.dataset.queueLeft) {
+    queuedPullRequestMerges.delete(button.dataset.queueLeft);
+    if (lastState) render(lastState);
     return;
   }
   if (button.dataset.closeTask) {
