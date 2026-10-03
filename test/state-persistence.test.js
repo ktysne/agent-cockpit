@@ -50,6 +50,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   const display = {
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
+    sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
   };
   state.patchDisplayPreferences(display);
   await state.flushPersistence();
@@ -66,6 +67,35 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   assert.equal(session.decisions[0].awaitingAnswerUntil, undefined);
   assert.equal(session.hidden, true);
   assert.deepEqual(snapshot.display, display);
+});
+
+test('古い表示設定は既定順を補い、保存済みの不明な種類や重複を正規化する', async (t) => {
+  const expectedDefault = ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'];
+  const cases = [
+    ['並び順がない', undefined, expectedDefault],
+    ['不明な種類と重複がある', ['now', 'legacy', 'now', 'prs'], ['now', 'prs', 'sinceSeen', 'judgment', 'tasks']],
+  ];
+
+  for (const [name, sectionOrder, expected] of cases) {
+    const homeDir = await temporaryHome(t);
+    const display = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
+    if (sectionOrder !== undefined) display.sectionOrder = sectionOrder;
+    await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
+      version: 1,
+      display,
+      plans: {},
+      decisionLifecycles: {},
+      closedTasks: [],
+      hiddenSessions: [],
+    }));
+
+    const restored = await DashboardState.load(homeDir, { now: Date.parse('2026-10-03T00:00:00.000Z') });
+    assert.deepEqual(restored.display.sectionOrder, expected, name);
+    assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
+    await restored.flushPersistence();
+    const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+    assert.deepEqual(saved.display.sectionOrder, expected, name);
+  }
 });
 
 test('積み直し用の項目を含む旧 store を退避せず読み、次の保存から項目を除く', async (t) => {

@@ -229,9 +229,10 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     pendingDisplayRequests: 0,
     readDisplayPreferences: () => {
       legacyReads += 1;
-      return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [] };
+      return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'] };
     },
     normalizeDisplayPreferences: (value) => value,
+    renderSectionOrder() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -239,7 +240,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
   await context.syncDisplayPreferences(null);
   assert.equal(legacyReads, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(syncCalls[0])), {
-    mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [],
+    mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'],
   });
 
   const readyContext = vm.createContext({
@@ -251,11 +252,12 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     pendingDisplayRequests: 0,
     readDisplayPreferences: () => { throw new Error('旧設定は読み込まない'); },
     normalizeDisplayPreferences: (value) => value,
+    renderSectionOrder() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
   vm.runInContext(`${sync}\nthis.syncDisplayPreferences = syncDisplayPreferences;`, readyContext);
-  await readyContext.syncDisplayPreferences({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] });
+  await readyContext.syncDisplayPreferences({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'] });
 
   const save = functionSource(web, 'saveDisplayPreferences');
   const saveContext = vm.createContext({
@@ -271,15 +273,164 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
   assert.equal(syncCalls.length, 2);
 });
 
+test('セクションの並び順を保存し、端のボタンを無効化してフォーカスを維持する', () => {
+  const sectionKinds = web.match(/const SECTION_KINDS = \[[\s\S]*?\n\];/)?.[0];
+  const defaultOrder = web.match(/const DEFAULT_SECTION_ORDER = [^\n]+/)?.[0];
+  const normalize = functionSource(web, 'normalizeSectionOrder');
+  const renderOrder = functionSource(web, 'renderSectionOrder');
+  const moveHandler = web.match(/sectionOrderList\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  const resetHandler = web.match(/document\.getElementById\('settings-section-order-reset'\)\.addEventListener\('click', \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(sectionKinds && defaultOrder && normalize && renderOrder && moveHandler && resetHandler);
+  assert.match(web, /id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"/);
+  assert.match(web, /\.settings-section-order \{ margin-top: 14px; \}/);
+  assert.match(web, /\.section-order-list button \{ min-width: 36px; padding: 4px 8px; \}/);
+  const elementSource = functionSource(web, 'element');
+  assert.ok(elementSource);
+
+  let moveClick;
+  let resetClick;
+  let focused;
+  let renderCount = 0;
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+      this.disabled = false;
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = nodes; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    contains(node) { return node === this || this.children.some((child) => child.contains?.(node)); }
+    focus() {
+      focused = { key: this.dataset.sectionMove, direction: this.dataset.dir };
+      fakeDocument.activeElement = this;
+    }
+  }
+  const preferences = { sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'] };
+  const sectionOrderList = new FakeElement('ol');
+  sectionOrderList.addEventListener = (_type, handler) => { moveClick = handler; };
+  const resetButton = { addEventListener: (_type, handler) => { resetClick = handler; } };
+  const fakeDocument = { activeElement: null, getElementById: () => resetButton, createElement: (tagName) => new FakeElement(tagName) };
+  const context = vm.createContext({
+    displayPreferences: preferences,
+    sectionOrderList,
+    document: fakeDocument,
+    saveDisplayPreferences: (patch) => Object.assign(preferences, patch),
+    lastState: {},
+    render: () => { renderCount += 1; },
+  });
+  vm.runInContext([sectionKinds, defaultOrder, elementSource, normalize, renderOrder, moveHandler, resetHandler].join('\n'), context);
+  context.renderSectionOrder();
+  const buttonOf = (key, direction) => sectionOrderList.children.flatMap((item) => item.children)
+    .find((node) => node.dataset.sectionMove === key && node.dataset.dir === direction);
+  assert.equal(sectionOrderList.children[0].children[0].textContent, '1. 前回見てから');
+  assert.equal(buttonOf('judgment', '-1').attributes['aria-label'], 'あなたの判断が必要なことを上へ');
+  assert.equal(buttonOf('judgment', '1').attributes['aria-label'], 'あなたの判断が必要なことを下へ');
+
+  const move = (key, direction) => {
+    const button = { dataset: { sectionMove: key, dir: direction }, closest: () => button };
+    moveClick({ target: button });
+  };
+  move('judgment', '-1');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), ['judgment', 'sinceSeen', 'tasks', 'now', 'prs']);
+  assert.deepEqual(focused, { key: 'judgment', direction: '1' });
+  assert.equal(buttonOf('judgment', '-1').disabled, true);
+  assert.equal(buttonOf('prs', '1').disabled, true);
+
+  move('tasks', '-1');
+  assert.deepEqual(focused, { key: 'tasks', direction: '-1' });
+  resetClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), ['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+  assert.equal(renderCount, 3);
+
+  // 別の画面で順が変わり、同期で一覧を作り直しても、フォーカスは同じ種類と向きのボタンに戻る。
+  buttonOf('now', '1').focus();
+  focused = null;
+  preferences.sectionOrder = ['now', 'sinceSeen', 'judgment', 'tasks', 'prs'];
+  context.renderSectionOrder();
+  assert.deepEqual(focused, { key: 'now', direction: '1' });
+
+  fakeDocument.activeElement = null;
+  focused = null;
+  context.renderSectionOrder();
+  assert.equal(focused, null);
+});
+
 test('種類別の並び順は最初のセクションより前に置く', () => {
   const mockKind = functionSource(mock, 'renderKindMode');
   const webKind = functionSource(web, 'renderKindSections');
 
-  assert.match(mockKind, /return orderBar\s*\+\s*\(news \?/);
+  assert.match(mockKind, /return orderBar \+ orderedSectionKeys\(DEFAULT_SECTION_ORDER\)/);
   assert.doesNotMatch(mockKind, /section\('あなたの判断が必要なこと[^\n]*, orderBar\)/);
-  assert.match(webKind, /const sections = \[productOrder\]/);
-  assert.match(webKind, /sections\.push\(kindSection\('あなたの判断が必要なこと/);
+  assert.match(webKind, /return \[productOrder, \.\.\.orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(\(key\) => sections\[key\]\)\.filter\(Boolean\)\]/);
   assert.doesNotMatch(webKind, /kindSection\('あなたの判断が必要なこと[^\n]*, productOrder\)/);
+});
+
+test('種類別とプロダクト別のセクションは設定順に並び、既定順では従来の順を保つ', () => {
+  const constants = web.match(/const SECTION_KINDS = \[[\s\S]*?\n\];/)?.[0];
+  const defaultOrder = web.match(/const DEFAULT_SECTION_ORDER = [^\n]+/)?.[0];
+  const normalize = functionSource(web, 'normalizeSectionOrder');
+  const ordered = functionSource(web, 'orderedSectionKeys');
+  const renderKinds = functionSource(web, 'renderKindSections');
+  const renderSession = functionSource(web, 'sessionBlock');
+  assert.ok(constants && defaultOrder && normalize && ordered && renderKinds && renderSession);
+
+  function renderWithOrder(sectionOrder) {
+    const element = (tag, className = '', textContent = '') => ({
+      tag, className, textContent, children: [], childNodes: [],
+      append(...nodes) { this.childNodes.push(...nodes); this.children.push(...nodes); },
+      querySelector() { return null; },
+    });
+    const context = vm.createContext({
+      displayPreferences: { sectionOrder },
+      element,
+      sessionReferences: () => [],
+      kindEndedDecisionEntries: () => [],
+      expandedKindSections: new Set(),
+      kindEndedAgentCount: () => 0,
+      kindTodoTaskCount: () => 0,
+      kindDoneTaskCount: () => 0,
+      kindProductOrder: () => ({ label: 'kindProductOrder' }),
+      hasHiddenJudgmentItems: () => false,
+      kindSection: (label, content) => ({ label, content }),
+      sinceSeenBox: () => element('div', 'news'),
+      isFilterShown: () => true,
+      appendPullRequestBlock() {},
+      shownPermissions: () => [{}],
+      shownActiveDecisions: () => [],
+      appendPermissionWaits(target) { target.append({ marker: 'permission' }); },
+      appendDecisions(target) { target.append({ marker: 'decision' }); },
+      appendTasks(target) { target.append({ marker: 'task' }); },
+      appendAgents(target) { target.append({ marker: 'agent' }); },
+      appendUnknownSessionControls(target) { target.append({ marker: 'unknown' }); },
+      mainRow: () => ({ marker: 'main' }),
+    });
+    vm.runInContext([constants, defaultOrder, normalize, ordered, renderKinds, renderSession].join('\n'), context);
+    const kindSections = JSON.parse(JSON.stringify(
+      context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label || 'kindProductOrder'),
+    ));
+    const session = { status: 'busy', decisions: [], tasks: [] };
+    const sessionBlock = context.sessionBlock({ sessions: [session] }, session, false);
+    const body = sessionBlock.children[0];
+    const sessionParts = body.childNodes.map((node) => node.textContent || node.marker || (node.children[0]?.marker === 'main' ? 'now-content' : ''));
+    return { kindSections, sessionParts };
+  }
+
+  const defaultResult = renderWithOrder(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+  assert.deepEqual(defaultResult.kindSections, [
+    'kindProductOrder', '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること', 'プルリクエスト',
+  ]);
+  assert.deepEqual(defaultResult.sessionParts, ['あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent', 'unknown']);
+
+  const customResult = renderWithOrder(['prs', 'now', 'tasks', 'judgment', 'sinceSeen']);
+  assert.deepEqual(customResult.kindSections, [
+    'kindProductOrder', 'プルリクエスト', '今やっていること', 'タスクと完了条件', 'あなたの判断が必要なこと', '前回見てから',
+  ]);
+  assert.deepEqual(customResult.sessionParts, ['今やっていること', 'now-content', 'agent', 'task', 'あなたの判断が必要なこと', 'permission', 'decision', 'unknown']);
 });
 
 test('種類別のタスクにはタスクがあるセッションだけを含める', () => {
@@ -412,7 +563,7 @@ test('種類別の混在セクションは残し、隠した判断事項だけ�
 
   assert.match(mockKind, /const showJudgment = Boolean\(decisionItems\) \|\| !hiddenJudgmentItems/);
   assert.match(mockKind, /const now = `?<div class="now">/);
-  assert.match(webKind, /if \(waitingItems\.length \|\| endedDecisionItems\.length \|\| !hasHiddenJudgments\)/);
+  assert.match(webKind, /judgment: waitingItems\.length \|\| endedDecisionItems\.length \|\| !hasHiddenJudgments/);
   assert.match(webKind, /activityItems\.push\(\{ age: sessionActivityTime\(session\), row: mainRow/);
 });
 
