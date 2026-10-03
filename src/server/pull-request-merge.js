@@ -174,9 +174,6 @@ class PullRequestMergeManager {
     if (this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number)) {
       return actionResult(409, 'この PR にはマージ予約があります。先に予約を取り消してください');
     }
-    if (this.state.pullRequestMergeIntent(registration.owner, registration.repo, registration.number)) {
-      return actionResult(409, 'この PR はマージキューに入っています。GitHub の状態を確認してください');
-    }
     const candidate = await this.freshCandidate(registration);
     if (candidate.error) return actionResult(409, candidate.error);
     const pullRequest = candidate.pullRequest;
@@ -242,8 +239,9 @@ class PullRequestMergeManager {
       stackedPullRequests: stackedPullRequests.map((item) => ({ number: item.number, baseRefName: item.baseRefName })),
     };
     if (!this.state.setPullRequestMergeIntent(mergeIntent)) return actionResult(500, 'マージ操作を保存できませんでした');
+    // キューに入ったまま落ちても方式と削除の選択を戻せるよう、gh を呼ぶ前にまとめ書きを待たずに保存し終える。
     try {
-      await this.state.waitForPersistence?.();
+      await this.state.flushStoreWrite();
     } catch {
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
       await this.state.waitForPersistence?.().catch(() => {});
@@ -269,9 +267,16 @@ class PullRequestMergeManager {
       return actionResult(502, `gh pr merge は成功しましたが、PR #${registration.number} の状態を確認できませんでした。後続の状態取得で確認します`);
     }
     if (view.state === 'OPEN') {
+      // マージキューでは方式の指定が効かず、キューの所属も gh から取れないので、意図を持たずに外でのマージとして扱う。
+      this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
       this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
       await this.state.waitForPersistence?.();
-      return { ok: true, merged: false, queued: true, message: `PR #${registration.number} はマージキューに入りました。まだマージされていません` };
+      return {
+        ok: true,
+        merged: false,
+        queued: true,
+        message: `PR #${registration.number} はマージキューに入りました。まだマージされていません。マージされたら外でのマージとして知らせ、ブランチは消しません`,
+      };
     }
     if (view.state !== 'MERGED') {
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
@@ -279,6 +284,7 @@ class PullRequestMergeManager {
       return actionResult(409, `PR #${registration.number} はマージされていません。GitHub の状態を確認してください`);
     }
 
+    this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
     const mergedAt = view.mergedAt || new Date(this.now()).toISOString();
     const outcome = await this.processMergedPullRequest(registration.owner, registration.repo, view.pullRequest, mergedAt);
     await this.tracker.refreshRepo(registration.owner, registration.repo).catch(() => {});
@@ -310,9 +316,6 @@ class PullRequestMergeManager {
     }
     if (this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number)) {
       return actionResult(409, 'この PR にはすでにマージ予約があります');
-    }
-    if (this.state.pullRequestMergeIntent(registration.owner, registration.repo, registration.number)) {
-      return actionResult(409, 'この PR はマージキューに入っています。GitHub の状態を確認してください');
     }
 
     const reservation = {
@@ -352,6 +355,16 @@ class PullRequestMergeManager {
     return { ok: true, reserved: true, reservation };
   }
 
+  // 状態を確かめられないときも、取り消せたと知らせないよう残っている扱いにする。
+  async autoMergeStillEnabled(owner, repo, number) {
+    try {
+      const view = await this.tracker.readPullRequestView(owner, repo, number);
+      return view.state === 'OPEN' && view.autoMergeEnabled === true;
+    } catch {
+      return true;
+    }
+  }
+
   async performCancelReservation(registration, reason) {
     const reservation = this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number);
     if (!reservation) return actionResult(404, 'マージ予約が見つかりません');
@@ -364,6 +377,10 @@ class PullRequestMergeManager {
         return actionResult(409, '取り消しより先に PR がマージされました。状態と通知を確認してください');
       }
       return actionResult(502, `PR #${registration.number} のマージ予約を取り消せませんでした`);
+    }
+
+    if (await this.autoMergeStillEnabled(registration.owner, registration.repo, registration.number)) {
+      return actionResult(502, `PR #${registration.number} のマージ予約を取り消せませんでした。GitHub で自動マージが有効なままです`);
     }
 
     let refreshed;
@@ -426,6 +443,8 @@ class PullRequestMergeManager {
       if (!this.state.pullRequestMergeReservation(reservation.owner, reservation.repo, reservation.number)) return null;
       return null;
     }
+
+    if (await this.autoMergeStillEnabled(reservation.owner, reservation.repo, reservation.number)) return null;
 
     let confirmed;
     try {

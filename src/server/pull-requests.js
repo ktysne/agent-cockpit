@@ -511,7 +511,7 @@ class PullRequestTracker {
 
   async readPullRequestView(owner, repo, number) {
     const output = await this.execute([
-      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
+      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt,autoMergeRequest`,
     ]);
     const value = JSON.parse(output);
     const state = String(value?.state || '').toUpperCase();
@@ -521,6 +521,7 @@ class PullRequestTracker {
       state,
       pullRequest,
       mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
+      autoMergeEnabled: Boolean(value.autoMergeRequest),
     };
   }
 

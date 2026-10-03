@@ -72,6 +72,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     failOpenList: false,
     blockAfterEdit: false,
     queueMerge: false,
+    keepAutoMerge: false,
     defaultBranch: 'main',
     waitForMerge: null,
   };
@@ -120,6 +121,13 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     if (args[0] === 'pr' && args[1] === 'merge') {
       const number = Number(args[2]);
       if (args.includes('--disable-auto')) {
+        const current = github.views.get(number) || github.openPullRequests.find((item) => item.number === number);
+        if (current) {
+          github.views.set(number, {
+            ...current, state: current.state || 'OPEN', mergedAt: current.mergedAt || null,
+            autoMergeRequest: control.keepAutoMerge ? { enabledAt: new Date(NOW).toISOString() } : null,
+          });
+        }
         finish(null);
         return;
       }
@@ -128,7 +136,10 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
           finish(Object.assign(new Error('merge failed'), { code: 'EIO' }));
           return;
         }
-        if (!args.includes('--auto') && control.queueMerge) {
+        if (args.includes('--auto')) {
+          const current = github.openPullRequests.find((item) => item.number === number);
+          if (current) github.views.set(number, { ...current, state: 'OPEN', mergedAt: null, autoMergeRequest: { enabledAt: new Date(NOW).toISOString() } });
+        } else if (control.queueMerge) {
           const current = github.openPullRequests.find((item) => item.number === number);
           if (current) github.views.set(number, { ...current, state: 'OPEN', mergedAt: null });
         } else if (!args.includes('--auto')) {
@@ -295,36 +306,42 @@ test('子 PR の base の付け替えに失敗したらマージせず完了位�
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
 
-test('マージキューに入って OPEN のままなら完了扱いせず、後の MERGED 検出で選択した削除と通知を行う', async (t) => {
+test('マージキューに入って OPEN のままなら意図を持たず、後のマージは外でのマージとして方式不明で知らせ、ブランチを消さない', async (t) => {
   const lower = ghPullRequest(1, 'feature/one', 'main');
   const upper = ghPullRequest(2, 'feature/two', 'feature/one');
   const fixture = await mergeFixture(t, [lower, upper]);
   fixture.control.queueMerge = true;
 
   const queued = await fixture.manager.merge(mergeInput(1, { method: 'squash', deleteBranch: true }));
-  const intent = fixture.state.pullRequestMergeIntent('example', 'project', 1);
 
   assert.equal(queued.ok, true);
   assert.equal(queued.merged, false);
   assert.equal(queued.queued, true);
   assert.match(queued.message, /マージキューに入りました。まだマージされていません/);
-  assert.equal(intent.deleteBranch, true);
+  assert.equal(fixture.state.pullRequestMergeIntent('example', 'project', 1), null);
   assert.deepEqual(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW), []);
-  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
   assert.equal(fixture.notices.length, 0);
-  const viewCall = fixture.calls.find((args) => args[0] === 'pr' && args[1] === 'view');
-  assert.ok(viewCall.at(-1).includes('state,mergedAt'));
 
   fixture.github.openPullRequests = fixture.github.openPullRequests.filter((item) => item.number !== 1);
   fixture.github.views.set(1, mergedView(lower));
   await fixture.tracker.refreshRepo('example', 'project');
 
-  assert.equal(fixture.state.pullRequestMergeIntent('example', 'project', 1), null);
-  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, 'squash');
-  assert.ok(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'));
-  assert.equal(fixture.notices.length, 1);
-  assert.match(fixture.notices[0].message, /PR #1 が main に入りました/);
-  assert.match(fixture.notices[0].message, /#2 を `git rebase --onto main feature\/one` で積み直して push する/);
+  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, null);
+  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
+  assert.ok(fixture.notices.some((notice) => /PR #1/.test(notice.message)));
+});
+
+test('予約の取り消しで GitHub に自動マージが残っていれば、取り消せたとは扱わず知らせない', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
+  const reserved = await fixture.manager.reserve(mergeInput(1));
+  assert.equal(reserved.ok, true);
+  fixture.control.keepAutoMerge = true;
+
+  const result = await fixture.manager.cancelReservation({ number: 1 });
+
+  assert.equal(result.status, 502);
+  assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+  assert.equal(fixture.notices.length, 0);
 });
 
 test('子 PR を付け替えた後に新しいマージ理由が出たら再確認して止まる', async (t) => {
@@ -652,4 +669,34 @@ test('PR 通知は PostToolBatch、UserPromptSubmit、Stop の待機で一度ず
   assert.match(result.stderrText, /PR #3 が main に入りました/);
   assert.equal(result.done, true);
   delivery.close();
+});
+
+test('即時のマージでも、選んだ方式を前回の方式として覚える', async (t) => {
+  const fixture = await mergeFixture(t);
+
+  const result = await fixture.manager.merge(mergeInput(1, { method: 'rebase' }));
+
+  assert.equal(result.merged, true);
+  assert.equal(fixture.state.lastPullRequestMethods.get('example/project'), 'rebase');
+});
+
+test('マージの意図を保存し終えてから gh pr merge を呼び、保存に失敗したら呼ばない', async (t) => {
+  const fixture = await mergeFixture(t);
+  const callCountsAtWrite = [];
+  fixture.state.attachWriter({
+    write: () => {
+      callCountsAtWrite.push(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length);
+      return Promise.resolve();
+    },
+    flush: () => Promise.resolve(),
+  });
+  await fixture.manager.merge(mergeInput(1));
+  assert.equal(callCountsAtWrite[0], 0);
+
+  const failing = await mergeFixture(t);
+  failing.state.attachWriter({ write: () => Promise.reject(new Error('disk full')), flush: () => Promise.resolve() });
+  const result = await failing.manager.merge(mergeInput(1));
+
+  assert.equal(result.status, 500);
+  assert.equal(failing.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
