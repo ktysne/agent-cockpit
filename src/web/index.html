@@ -411,6 +411,7 @@ const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
 const expandedTodoTasks = new Set();
 const expandedDoneTasks = new Set();
+const expandedPrLines = new Set();
 const expandedKindSections = new Set();
 const answerDrafts = new Map();
 let uiUpdatePending = false;
@@ -961,6 +962,7 @@ function appendPullRequestBadges(target, pullRequest) {
 }
 
 const MERGE_METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
+const MERGED_VISIBLE_COUNT = 5;
 
 function isFullCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
@@ -1223,10 +1225,33 @@ function appendPullRequestBlock(target, group, withTag = false) {
     stack.append(base, level);
     target.append(stack);
   }
+  const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {
+    if (!items.length) return;
+    const line = element('div', 'merged-list');
+    line.append(document.createTextNode(`${heading}: `));
+    const repositoryKey = `${group.owner}/${group.repo}`.toLowerCase();
+    const key = `${kind}:${repositoryKey}`;
+    const expanded = expandedPrLines.has(key);
+    const olderCount = Math.max(0, items.length - MERGED_VISIBLE_COUNT);
+    for (const item of expanded ? items : items.slice(0, MERGED_VISIBLE_COUNT)) appendItem(line, item);
+    if (olderCount) {
+      const toggle = element('button', 'ended-toggle', `${expanded ? '古い' + label + 'を隠す' : '古い' + label + 'を表示'} (${olderCount} 件)`);
+      toggle.type = 'button';
+      toggle.setAttribute('aria-expanded', String(expanded));
+      toggle.dataset.olderPrLine = key;
+      line.append(toggle);
+      toggle.addEventListener('click', () => {
+        if (expanded) expandedPrLines.delete(key);
+        else expandedPrLines.add(key);
+        if (lastState) render(lastState);
+        [...root.querySelectorAll('[data-older-pr-line]')]
+          .find((button) => button.dataset.olderPrLine === key)?.focus({ preventScroll: true });
+      });
+    }
+    target.append(line);
+  };
   if (Array.isArray(group.mergeHistory) && group.mergeHistory.length) {
-    const merged = element('div', 'merged-list');
-    merged.append(document.createTextNode('マージ済み (24 時間): '));
-    for (const record of group.mergeHistory) {
+    appendFoldedPrLine('merged', 'マージ済み (24 時間)', 'マージ済み', group.mergeHistory, (line, record) => {
       const item = element('span', record.headMismatch === true ? 'badge warn' : 'badge mute');
       const link = element('a', '', `#${record.number}`);
       link.href = record.url;
@@ -1240,24 +1265,19 @@ function appendPullRequestBlock(target, group, withTag = false) {
         parts.push(`警告: 予約時に確認した ${record.reservedHeadRefOid || '不明な SHA'} とは異なる ${record.mergedHeadRefOid || '不明な SHA'} がマージされました`);
       }
       item.append(link, document.createTextNode(` (${parts.join('、')})`));
-      merged.append(item);
-    }
-    target.append(merged);
+      line.append(item);
+    });
   }
-  const closed = group.merged.filter((pullRequest) => pullRequest.state === 'closed');
-  if (closed.length) {
-    const merged = element('div', 'merged-list');
-    merged.append(document.createTextNode('クローズ済み: '));
-    for (const pullRequest of closed) {
-      const link = element('a', 'badge mute', `#${pullRequest.number}`);
-      link.href = pullRequest.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.title = pullRequest.title;
-      merged.append(link);
-    }
-    target.append(merged);
-  }
+  const closed = group.merged.filter((pullRequest) => pullRequest.state === 'closed')
+    .sort((a, b) => b.number - a.number);
+  appendFoldedPrLine('closed', 'クローズ済み', 'クローズ済み', closed, (line, pullRequest) => {
+    const link = element('a', 'badge mute', `#${pullRequest.number}`);
+    link.href = pullRequest.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = pullRequest.title;
+    line.append(link);
+  });
   if (!group.trees.length && !group.merged.length && !group.mergeHistory?.length && !group.error) {
     target.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
   }
@@ -2207,7 +2227,7 @@ function render(state) {
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
-  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session'].find((attribute) => active?.hasAttribute(attribute));
+  const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
       : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }

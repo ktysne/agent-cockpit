@@ -1146,7 +1146,9 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const appendBlock = html.match(/function appendPullRequestBlock\(target, group, withTag = false\) \{[\s\S]*?\n\}/)?.[0];
+  const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
+  const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
+  const appendBlock = html.slice(appendStart, appendEnd);
   assert.ok(element);
   assert.ok(appendBlock);
 
@@ -1164,6 +1166,8 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
     },
     pullRequestTimeLabel: () => '1 分前',
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    expandedPrLines: new Set(),
+    MERGED_VISIBLE_COUNT: 5,
   });
   vm.runInContext(`${element}\n${appendBlock}`, context);
   const root = new FakeElement('div');
@@ -1188,6 +1192,191 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
   assert.match(visibleText, /予約時に確認した/);
   assert.match(visibleText, new RegExp(reservedSha));
   assert.match(visibleText, new RegExp(mergedSha));
+});
+
+test('マージ済み一覧は新しい順に5件を出し、古いPRをボタンで切り替える', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
+  const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
+  const appendBlock = html.slice(appendStart, appendEnd);
+  assert.ok(element);
+  assert.ok(appendBlock);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(_event, callback) { this.onClick = callback; }
+    focus(options) { this.focusOptions = options; }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+
+  const expandedPrLines = new Set();
+  let root;
+  let focusedToggle;
+  const state = {};
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    expandedPrLines,
+    MERGED_VISIBLE_COUNT: 5,
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    pullRequestTimeLabel: (value) => value,
+    lastState: state,
+    root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
+    render: () => {
+      root = new FakeElement('div');
+      context.appendPullRequestBlock(root, group);
+      focusedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'merged:acme/widget');
+    },
+  });
+  vm.runInContext(`${element}\n${appendBlock}`, context);
+
+  const group = {
+    owner: 'Acme', repo: 'Widget', trees: [], merged: [], registeredCount: 1,
+    mergeHistory: Array.from({ length: 7 }, (_, index) => ({
+      number: 7 - index,
+      title: `PR ${7 - index}`,
+      url: `https://github.com/acme/widget/pull/${7 - index}`,
+      mergedAt: `2026-10-03T0${7 - index}:00:00.000Z`,
+      method: 'squash',
+    })),
+  };
+  const history = group.mergeHistory;
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  const renderHistory = (history) => {
+    group.mergeHistory = history;
+    root = new FakeElement('div');
+    context.appendPullRequestBlock(root, group);
+    return descendants(root);
+  };
+
+  const fiveNodes = renderHistory(history.slice(0, 5));
+  assert.equal(fiveNodes.filter((node) => node.tagName === 'a').length, 5);
+  assert.equal(fiveNodes.some((node) => node.dataset?.olderPrLine), false);
+
+  const collapsedNodes = renderHistory(history);
+  const collapsedLinks = collapsedNodes.filter((node) => node.tagName === 'a');
+  const collapsedToggle = collapsedNodes.find((node) => node.dataset?.olderPrLine === 'merged:acme/widget');
+  assert.deepEqual(collapsedLinks.map((node) => node.textContent), ['#7', '#6', '#5', '#4', '#3']);
+  assert.equal(collapsedToggle.textContent, '古いマージ済みを表示 (2 件)');
+  assert.equal(collapsedToggle.attributes['aria-expanded'], 'false');
+
+  collapsedToggle.onClick();
+  assert.equal(expandedPrLines.has('merged:acme/widget'), true);
+  assert.equal(focusedToggle.focusOptions.preventScroll, true);
+  const expandedNodes = renderHistory(history);
+  const expandedToggle = expandedNodes.find((node) => node.dataset?.olderPrLine === 'merged:acme/widget');
+  assert.deepEqual(expandedNodes.filter((node) => node.tagName === 'a').map((node) => node.textContent), [
+    '#7', '#6', '#5', '#4', '#3', '#2', '#1',
+  ]);
+  assert.equal(expandedToggle.textContent, '古いマージ済みを隠す (2 件)');
+  assert.equal(expandedToggle.attributes['aria-expanded'], 'true');
+});
+
+test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに開閉状態を分ける', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
+  const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
+  const appendBlock = html.slice(appendStart, appendEnd);
+  assert.ok(element);
+  assert.ok(appendBlock);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(_event, callback) { this.onClick = callback; }
+    focus(options) { this.focusOptions = options; }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+
+  const expandedPrLines = new Set();
+  const state = {};
+  let root;
+  let focusedClosedToggle;
+  const group = {
+    owner: 'Acme', repo: 'Widget', trees: [], registeredCount: 1,
+    mergeHistory: Array.from({ length: 7 }, (_, index) => ({
+      number: index + 1, url: `https://github.com/acme/widget/pull/${index + 1}`,
+      mergedAt: '2026-10-03T00:00:00.000Z', method: 'squash',
+    })),
+    merged: Array.from({ length: 7 }, (_, index) => ({
+      number: index + 1, state: 'closed', title: `Closed PR ${index + 1}`,
+      url: `https://github.com/acme/widget/pull/${index + 1}`,
+    })),
+  };
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    expandedPrLines,
+    MERGED_VISIBLE_COUNT: 5,
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    pullRequestTimeLabel: (value) => value,
+    lastState: state,
+    root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
+    render: () => {
+      root = new FakeElement('div');
+      context.appendPullRequestBlock(root, group);
+      focusedClosedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'closed:acme/widget');
+    },
+  });
+  vm.runInContext(`${element}\n${appendBlock}`, context);
+
+  const renderGroup = () => {
+    root = new FakeElement('div');
+    context.appendPullRequestBlock(root, group);
+    return descendants(root);
+  };
+  group.merged = group.merged.slice(0, 5);
+  assert.equal(renderGroup().some((node) => node.dataset?.olderPrLine === 'closed:acme/widget'), false);
+  group.merged = Array.from({ length: 7 }, (_, index) => ({
+    number: index + 1, state: 'closed', title: `Closed PR ${index + 1}`,
+    url: `https://github.com/acme/widget/pull/${index + 1}`,
+  }));
+
+  const collapsedNodes = renderGroup();
+  const closedLinks = collapsedNodes.filter((node) => node.tagName === 'a' && node.className === 'badge mute');
+  const collapsedToggle = collapsedNodes.find((node) => node.dataset?.olderPrLine === 'closed:acme/widget');
+  assert.deepEqual(closedLinks.map((node) => node.textContent), ['#7', '#6', '#5', '#4', '#3']);
+  assert.equal(collapsedToggle.textContent, '古いクローズ済みを表示 (2 件)');
+  assert.equal(collapsedToggle.attributes['aria-expanded'], 'false');
+
+  collapsedToggle.onClick();
+  assert.equal(expandedPrLines.has('closed:acme/widget'), true);
+  assert.equal(expandedPrLines.has('merged:acme/widget'), false);
+  assert.equal(focusedClosedToggle.focusOptions.preventScroll, true);
+  const expandedNodes = renderGroup();
+  const expandedLinks = expandedNodes.filter((node) => node.tagName === 'a' && node.className === 'badge mute');
+  const expandedToggle = expandedNodes.find((node) => node.dataset?.olderPrLine === 'closed:acme/widget');
+  assert.deepEqual(expandedLinks.map((node) => node.textContent), ['#7', '#6', '#5', '#4', '#3', '#2', '#1']);
+  assert.equal(expandedToggle.textContent, '古いクローズ済みを隠す (2 件)');
+  assert.equal(expandedToggle.attributes['aria-expanded'], 'true');
 });
 
 test('マージ操作ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
@@ -1230,6 +1419,46 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
     assert.equal(replacementButton.focused, true, kind);
     assert.equal(activeElement, replacementButton, kind);
   }
+});
+
+test('古い PR の開閉ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render);
+
+  let activeElement;
+  const key = 'merged:acme/widget';
+  const attributes = { 'data-older-pr-line': key };
+  const activeButton = { dataset: { olderPrLine: key }, hasAttribute: (name) => name in attributes, getAttribute: (name) => attributes[name] };
+  const otherButton = {
+    dataset: { olderPrLine: 'closed:acme/widget' },
+    hasAttribute: (name) => name === 'data-older-pr-line',
+    getAttribute: () => 'closed:acme/widget',
+    focus() { activeElement = this; },
+  };
+  const replacementButton = {
+    ...activeButton,
+    focused: false,
+    focus() { this.focused = true; activeElement = this; },
+  };
+  activeElement = activeButton;
+  const context = vm.createContext({
+    answerNoteComposing: false,
+    lastState: { sessions: [{ session_id: 'session-ui' }] },
+    HTMLTextAreaElement: class FakeTextArea {},
+    document: { get activeElement() { return activeElement; }, querySelectorAll: (selector) => (selector === 'button' ? [otherButton, replacementButton] : []) },
+    root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [] },
+    displayPreferences: { mode: 'product', pinned: [] },
+    renderRouting() {},
+    renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+    orderedProducts: () => [{ key: 'product-ui' }],
+    productSection: () => ({}),
+  });
+  vm.runInContext(render, context);
+  context.render(context.lastState);
+
+  assert.equal(replacementButton.focused, true);
+  assert.equal(activeElement, replacementButton);
 });
 
 test('作業中のタスクがあるセッションでは未着手を畳み、ボタンで表示する', () => {

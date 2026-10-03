@@ -404,6 +404,8 @@ const DATA = {
       repo: { name: 'ktysne/rec-studio', defaultBranch: 'main', methods: ['squash'], fetched: '20 秒前', autoDeleteBranch: true },
       // xr はクロスレビューの道具の状態ファイル(往復の回数、最後にレビューした head、非対応の指摘)。
       // worktree に tools/cross-review.js はあるがこのブランチの記録が無い PR は null、tools/cross-review.js が無い(ai-cross-review を使っていない)PR には付けない。
+      // closedPrs はマージせずに閉じた PR。クローズの日時は取得しないので、PR 番号の大きい順に並べる。
+      closedPrs: [{ number: 138, title: '試作: 拍子変更を別ファイルで持つ' }],
       // triage は主セッションが記録した最後の結論(lastTriage)。記録が無ければ付けない。
       prs: [
         { number: 141, title: 'Session Score のパーサーを追加', head: 'feat/score-parser', base: 'main', sha: 'a1c9e04', ci: 'pass', review: 'approved', conflict: false, draft: false,
@@ -520,7 +522,9 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+// 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
+ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -1021,6 +1025,7 @@ function prTree(p, pr) {
   return prItem(p, pr) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k)).join('')}</div>` : '');
 }
 
+const MERGED_VISIBLE_COUNT = 5;
 function prBlock(p, withTag) {
   const roots = openPrs(p).filter(pr => !parentPr(p, pr));
   const merged = p.prs.filter(pr => isMerged(p, pr));
@@ -1029,11 +1034,27 @@ function prBlock(p, withTag) {
   const stacks = roots.map(r => `<div class="stack">
       <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${childPrs(p, r).length ? `<span>スタック ${stackPos(p, r).total} 段</span>` : ''}</div>
       <div class="stack-level">${prTree(p, r)}</div></div>`).join('');
-  const mergedLine = merged.length ? `<div class="merged-list">マージ済み: ${merged.map(pr => {
-      const m = ui.merged[prKey(p, pr.number)];
-      return `<span class="badge mute">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`; }).join('')}</div>` : '';
-  if (!roots.length && !merged.length) return head + '<div class="empty">このセッションが作った PR はありません</div>';
-  return head + (stacks || '<div class="empty">オープンの PR はありません</div>') + mergedLine;
+  const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
+    .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
+  const mergedLine = foldedPrLine(p, 'merged', 'マージ済み', mergedNewestFirst.map(({ pr, m }) =>
+    `<span class="badge mute">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`));
+  const closed = p.closedPrs || [];
+  const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr => `<span class="badge mute" title="${esc(pr.title)}">#${pr.number}</span>`));
+  if (!roots.length && !merged.length && !closed.length) return head + '<div class="empty">このセッションが作った PR はありません</div>';
+  return head + (stacks || '<div class="empty">オープンの PR はありません</div>') + mergedLine + closedLine;
+}
+
+// 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
+function foldedPrLine(p, kind, label, badges) {
+  if (!badges.length) return '';
+  const key = `${kind}:${p.id}`;
+  const expanded = ui.expandedMerged.includes(key);
+  const olderCount = Math.max(0, badges.length - MERGED_VISIBLE_COUNT);
+  const visible = expanded ? badges : badges.slice(0, MERGED_VISIBLE_COUNT);
+  const toggle = olderCount
+    ? `<button type="button" class="ended-toggle" data-older-merged="${esc(key)}" aria-expanded="${expanded}">${expanded ? `古い${label}を隠す` : `古い${label}を表示`} (${olderCount} 件)</button>`
+    : '';
+  return `<div class="merged-list">${label}: ${visible.join('')}${toggle}</div>`;
 }
 
 function endedDecisionToggle(session) {
@@ -1278,7 +1299,7 @@ function renderKindMode() {
 
 function render() {
   const active = document.activeElement;
-  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle'].find(attribute => active?.hasAttribute(attribute));
+  const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusValue = focusAttribute ? active.getAttribute(focusAttribute) : null;
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
@@ -1310,6 +1331,9 @@ document.addEventListener('click', e => {
   } else if (t.dataset.endedDecisions) {
     const id = t.dataset.endedDecisions;
     ui.expandedEndedDecisions = ui.expandedEndedDecisions.includes(id) ? ui.expandedEndedDecisions.filter(x => x !== id) : [...ui.expandedEndedDecisions, id];
+  } else if (t.dataset.olderMerged) {
+    const id = t.dataset.olderMerged;
+    ui.expandedMerged = ui.expandedMerged.includes(id) ? ui.expandedMerged.filter(x => x !== id) : [...ui.expandedMerged, id];
   } else if (t.dataset.todoTasks) {
     const id = t.dataset.todoTasks;
     ui.expandedTodoTasks = ui.expandedTodoTasks.includes(id) ? ui.expandedTodoTasks.filter(x => x !== id) : [...ui.expandedTodoTasks, id];
