@@ -37,21 +37,30 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
   assert.equal(context.decisionElapsedLabel({ state: 'withdrawn', updatedAt: old }), null);
 });
 
-test('種類別の判断事項は送信済みの回答を後ろに並べる', () => {
+test('種類別の判断事項は有効な回答を送ったものを後ろに並べ、無視された回答は経過時間で並べる', () => {
   const age = pageHtml.match(/function kindDecisionWaitAge\(decision\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(age);
+  const effective = pageHtml.match(/function hasEffectiveAnswer\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(age && effective);
   const context = pageContext(pageHtml, {});
-  vm.runInContext(age, context);
+  vm.runInContext(`${effective}\n${age}`, context);
 
+  const now = Date.now();
   const decisions = [
-    { id: 'sent', state: 'waiting', createdAt: new Date(Date.now() - 60 * 60_000).toISOString(), answer: { sentAt: new Date().toISOString() } },
-    { id: 'waiting', state: 'waiting', createdAt: new Date(Date.now() - 30 * 60_000).toISOString() },
-    { id: 'recent', state: 'waiting', createdAt: new Date(Date.now() - 60_000).toISOString() },
+    { id: 'sent', state: 'waiting', createdAt: new Date(now - 60 * 60_000).toISOString(), answer: { sentAt: new Date(now).toISOString() } },
+    { id: 'waiting', state: 'waiting', createdAt: new Date(now - 30 * 60_000).toISOString() },
+    {
+      id: 'ignored',
+      state: 'provisional',
+      createdAt: new Date(now - 50 * 60_000).toISOString(),
+      updatedAt: new Date(now - 10 * 60_000).toISOString(),
+      answer: { sentAt: new Date(now - 20 * 60_000).toISOString(), ignoredAt: new Date(now - 10 * 60_000).toISOString() },
+    },
+    { id: 'recent', state: 'waiting', createdAt: new Date(now - 60_000).toISOString() },
   ];
   const ordered = decisions.map((decision) => ({ decision, age: context.kindDecisionWaitAge(decision) }))
     .sort((left, right) => right.age - left.age);
 
-  assert.deepEqual(ordered.map(({ decision }) => decision.id), ['waiting', 'recent', 'sent']);
+  assert.deepEqual(ordered.map(({ decision }) => decision.id), ['waiting', 'ignored', 'recent', 'sent']);
 });
 
 test('種類別の今やっていることは行が無いときに空表示する', () => {

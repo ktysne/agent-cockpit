@@ -2402,7 +2402,7 @@ function kindEndedDecisionEntries(references) {
 }
 
 function kindDecisionWaitAge(decision) {
-  if (decision.answer?.sentAt) return -1;
+  if (hasEffectiveAnswer(decision)) return -1;
   const timestamp = Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
   return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : 0;
 }
