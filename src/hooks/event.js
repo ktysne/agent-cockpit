@@ -36,8 +36,43 @@ function inputSummary(toolName, toolInput) {
 
 // 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前の、コマンドの位置にある呼び出しだけを見る。
 function extractCodexWaitRunId(command) {
-  const beforeHeredoc = pickString(command).split('<<')[0];
-  const match = beforeHeredoc.match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
+  const beforeHeredoc = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
+  const characters = [...beforeHeredoc];
+  const separator = /[;|&()\r\n]/;
+  // 引用符の中の区切りは消し、二重引用符の中の $( ) はコマンドとして扱う。
+  const contexts = ['code'];
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    const context = contexts.at(-1);
+    if (context === 'single') {
+      if (character === "'") contexts.pop();
+      else if (separator.test(character)) characters[index] = '_';
+      continue;
+    }
+    if (character === '\\') {
+      if (context === 'double' && separator.test(characters[index + 1] || '')) characters[index + 1] = '_';
+      index += 1;
+      continue;
+    }
+    if (context === 'double') {
+      if (character === '"') contexts.pop();
+      else if (character === '$' && characters[index + 1] === '(') {
+        contexts.push('substitution');
+        index += 1;
+      } else if (separator.test(character)) characters[index] = '_';
+      continue;
+    }
+    if (character === '#' && (index === 0 || /\s/.test(characters[index - 1]))) {
+      while (index + 1 < characters.length && !/[\r\n]/.test(characters[index + 1])) {
+        index += 1;
+        characters[index] = '_';
+      }
+    } else if (character === "'") contexts.push('single');
+    else if (character === '"') contexts.push('double');
+    else if (context === 'substitution' && character === '(') contexts.push('substitution');
+    else if (context === 'substitution' && character === ')') contexts.pop();
+  }
+  const match = characters.join('').match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
   return match ? match[1].slice(0, 256) : '';
 }
 
@@ -92,12 +127,13 @@ function codexOutputLines(value) {
   const visit = (item, depth = 0) => {
     if (depth > 6) return;
     if (typeof item === 'string') {
-      for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=|(?:waiting|vanished|orphaned|unverified|not-found)[\t ]+run=)[^\r\n]*/gm) || []) {
+      for (const line of item.match(/^[\t ]*codex-agent:[\t ]*(?:agent=|result=|run=|(?:waiting|vanished|orphaned|unverified|not-found)[\t ]+run=)[^\r\n]*/gm) || []) {
         const normalized = line.trimStart();
         if (!lines.auditLine && normalized.startsWith('codex-agent: agent=')) lines.auditLine = normalized.slice(0, 1024);
         else if (!lines.resultLine && normalized.startsWith('codex-agent: result=')) lines.resultLine = normalized.slice(0, 1024);
+        else if (!lines.runLine && normalized.startsWith('codex-agent: run=')) lines.runLine = normalized.slice(0, 1024);
         // codex-agent.sh は --wait の状態を最後の行で示すので、後の行で上書きする。
-        else if (!normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=')) {
+        else if (!normalized.startsWith('codex-agent: agent=') && !normalized.startsWith('codex-agent: result=') && !normalized.startsWith('codex-agent: run=')) {
           lines.waitStatusLine = normalized.slice(0, 1024);
         }
       }
