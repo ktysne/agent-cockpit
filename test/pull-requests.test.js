@@ -90,12 +90,12 @@ function checkedRestackResults(pullRequests, parent = null) {
   return new Map(pullRequests.map((pr) => [pr.number, { checked: true, parent }]));
 }
 
-async function trackerFixture(testContext, registeredNumbers = [31]) {
+async function trackerFixture(testContext, registeredNumbers = [31], cwd = process.cwd()) {
   const homeDir = await temporaryDirectory(testContext);
   const state = new DashboardState({ homeDir });
   for (const number of registeredNumbers) {
     state.registerPullRequest(`session-${number}`, { url: `https://github.com/example/project/pull/${number}` }, {
-      cwd: process.cwd(), product: { key: 'project', name: 'project' },
+      cwd, product: { key: 'project', name: 'project' },
     });
   }
   const github = {
@@ -604,15 +604,75 @@ test('関連PRの保存記録は14日を過ぎると復元時に削除する', a
   assert.deepEqual(restored.relatedPullRequestRegistrations(), []);
 });
 
-test('クロスレビュー状態は PR head ブランチの round と非対応件数だけを読む', async (t) => {
+test('クロスレビュー状態は PR head ブランチの往復数、非対応件数、レビュー済み SHA を読む', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
-    branches: { 'feat/pr': { round: 2, dismissed: ['一件目', '二件目'] } },
+    branches: { 'feat/pr': { round: 2, dismissed: ['一件目', '二件目'], lastReviewedSha: 'A'.repeat(40) } },
   }));
   const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
-  assert.deepEqual(value, { number: 55, branch: 'feat/pr', round: 2, max: 3, dismissed: 2 });
+  assert.deepEqual(value, {
+    number: 55, branch: 'feat/pr', round: 2, max: 3, dismissed: 2, reviewedSha: 'a'.repeat(40),
+  });
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'missing' }), null);
+});
+
+test('壊れた lastReviewedSha は null にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'not-a-commit-sha' } },
+  }));
+
+  const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
+  assert.equal(value.reviewedSha, null);
+});
+
+test('クロスレビュー状態は開いている PR のスタックに付き、マージ済み PR には付かない', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  const openSha = 'a'.repeat(40);
+  const mergedSha = 'b'.repeat(40);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: {
+      'feat/open': { round: 2, dismissed: ['指摘'], lastReviewedSha: openSha },
+      'feat/merged': { round: 1, dismissed: [], lastReviewedSha: mergedSha },
+    },
+  }));
+  const { github, tracker } = await trackerFixture(t, [31, 32, 33], root);
+  tracker.state.updatePullRequest('session-32', 'example', 'project', 32, {
+    lastOpen: {
+      title: 'PR 32',
+      url: 'https://github.com/example/project/pull/32',
+      headRefName: 'feat/merged',
+      baseRefName: 'main',
+      headRefOid: mergedSha,
+    },
+  });
+  const unreviewedSha = 'c'.repeat(40);
+  github.openPullRequests = [
+    ghPullRequest(31, 'feat/open', 'main', openSha),
+    ghPullRequest(33, 'feat/unreviewed', 'main', unreviewedSha),
+  ];
+  github.mergedPullRequests = [mergedPullRequest(32, mergedSha)];
+  github.views.set(32, {
+    ...ghPullRequest(32, 'feat/merged', 'main', mergedSha),
+    state: 'MERGED', mergedAt: '2026-10-03T11:00:00.000Z',
+  });
+  github.comparisons.set(openSha, compareResult([openSha]));
+  github.comparisons.set(unreviewedSha, compareResult([unreviewedSha]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const [group] = tracker.snapshot();
+  assert.deepEqual(group.trees[0].crossReview, {
+    round: 2, max: 3, dismissed: 1, reviewedSha: openSha,
+  });
+  assert.equal(group.trees.find((pullRequest) => pullRequest.number === 33).crossReview, null);
+  const merged = group.merged.find((pullRequest) => pullRequest.number === 32);
+  assert.ok(merged);
+  assert.equal(Object.hasOwn(merged, 'crossReview'), false);
+  assert.equal(Object.hasOwn(group, 'reviews'), false);
 });
 
 test('マージ済みの一覧を最古のオープン PR の作成日以降に絞り、上限で切れたら積み直しを確かめられないとする', async (t) => {

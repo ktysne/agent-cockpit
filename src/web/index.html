@@ -262,6 +262,7 @@ h3.sub .count { font-weight: normal; }
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
+.pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .pr .pline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
 .pr .num { font-weight: 600; }
@@ -287,11 +288,7 @@ h3.sub .count { font-weight: normal; }
 .merge-error { color: var(--danger); font-size: 12px; }
 .merged-list { margin-top: 6px; color: var(--text-2); font-size: 12px; }
 .merged-list .badge { margin-right: 4px; }
-.review { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-.stat { padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
-.stat .k { color: var(--text-2); font-size: 12px; }
-.stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.rounds { display: flex; gap: 4px; margin-top: 4px; }
+.rounds { display: inline-flex; gap: 4px; }
 .rounds span { width: 22px; height: 6px; border-radius: 3px; background: var(--border); }
 .rounds span.used { background: var(--accent); }
 .decision-card { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
@@ -807,7 +804,7 @@ function renderSummary(sessions, pullRequestGroups = []) {
     button.dataset.filter = key;
     button.setAttribute('aria-pressed', String(!displayPreferences.hidden.includes(key)));
     button.title = displayPreferences.hidden.includes(key) ? '押すと表示に戻す' : '押すと非表示にする';
-    const count = key === 'prs' ? `(${counts[key]} 件)` : String(counts[key]);
+    const count = String(counts[key]);
     button.append(document.createTextNode(`${label} `), element('strong', '', count));
     return button;
   }));
@@ -925,6 +922,54 @@ function appendPullRequestBadges(target, pullRequest) {
 
 const MERGE_METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 
+function isFullCommitSha(value) {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
+}
+
+// crossReview が無い PR は、登録したセッションが無く状態ファイルを読めないので、行も警告も出さない。
+function crossReviewState(pullRequest) {
+  const review = pullRequest.crossReview;
+  if (review === undefined) return { cls: 'mute', text: '', warn: null };
+  if (!review) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (!isFullCommitSha(review.reviewedSha) || !isFullCommitSha(pullRequest.headRefOid)) {
+    return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
+  }
+  const reviewedSha = review.reviewedSha.toLowerCase();
+  const headSha = pullRequest.headRefOid.toLowerCase();
+  if (reviewedSha !== headSha) {
+    const reviewedShortSha = reviewedSha.slice(0, 7);
+    return {
+      cls: 'warn',
+      text: `レビューの後に変更あり (レビュー済み ${reviewedShortSha})`,
+      warn: `head ${headSha.slice(0, 7)} はクロスレビューの後に変更されている (レビュー済みは ${reviewedShortSha})`,
+    };
+  }
+  return { cls: 'ok', text: 'head をレビュー済み', warn: null };
+}
+
+function crossReviewLine(pullRequest) {
+  const review = pullRequest.crossReview;
+  const state = crossReviewState(pullRequest);
+  const line = element('div', 'xr');
+  line.append(document.createTextNode('クロスレビュー '));
+  if (!review) {
+    line.append(badge(state.text, state.cls));
+    return line;
+  }
+  const rounds = element('span', 'rounds');
+  rounds.setAttribute('aria-hidden', 'true');
+  for (let index = 0; index < review.max; index += 1) {
+    rounds.append(element('span', index < review.round ? 'used' : ''));
+  }
+  line.append(
+    rounds,
+    element('span', '', `${review.round} / ${review.max} 往復、非対応 ${review.dismissed}`),
+    document.createTextNode(' '),
+    badge(state.text, state.cls),
+  );
+  return line;
+}
+
 function pullRequestMergeKey(pullRequest) {
   return pullRequest.mergeRecordKey || '';
 }
@@ -979,7 +1024,9 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   panel.append(branchChoice);
 
   const effects = element('ul', 'effects');
+  const reviewWarning = crossReviewState(pullRequest).warn;
   const effectItems = [
+    reviewWarning ? { text: reviewWarning, warn: true } : null,
     { text: `head が ${pullRequest.headRefOid} のときだけマージする。表示後に push されていたら中止する。` },
     pullRequest.children.length ? { text: `先に ${pullRequest.children.map((child) => `#${child.number}`).join('、')} の base を ${group.defaultBranch} に付け替える。` } : null,
     options.deleteBranch ? { text: `リモートの ${pullRequest.headRefName} を削除する。手元の worktree には触れない。` } : null,
@@ -1063,6 +1110,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   }
   if (mergeIntent) item.append(element('div', 'why-not', 'GitHub のマージキューに追加済みです。まだマージされていません。'));
   item.append(badges);
+  if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
   if (pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
   if (mergeKey && confirmation && !reservation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest, confirmation === 'reserve');
   if (mergeKey && pullRequestMergeMessages.has(mergeKey)) {
@@ -1144,24 +1192,6 @@ function appendPullRequestBlock(target, group, withTag = false) {
   if (!group.trees.length && !group.merged.length && !group.mergeHistory?.length && !group.error) {
     target.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
   }
-}
-
-function reviewBlock(review, productName = null) {
-  const block = element('div', 'review');
-  const pr = element('div', 'stat');
-  const prLabel = element('div', 'k');
-  if (productName) prLabel.append(element('span', 'prod-tag', productName), document.createTextNode(' '));
-  prLabel.append(document.createTextNode(`PR #${review.number}`));
-  pr.append(prLabel, element('div', 'v', review.branch));
-  const rounds = element('div', 'stat');
-  rounds.append(element('div', 'k', `往復 (上限 ${review.max})`), element('div', 'v', `${review.round} / ${review.max}`));
-  const markers = element('div', 'rounds');
-  for (let index = 0; index < review.max; index += 1) markers.append(element('span', index < review.round ? 'used' : ''));
-  rounds.append(markers);
-  const dismissed = element('div', 'stat');
-  dismissed.append(element('div', 'k', '非対応'), element('div', 'v', String(review.dismissed)));
-  block.append(pr, rounds, dismissed);
-  return block;
 }
 
 function productGroups(sessions, pullRequestGroups = []) {
@@ -1918,11 +1948,6 @@ function productSection(product, index, products, pinnedCount) {
       appendPullRequestBlock(body, null);
     }
   }
-  const reviews = pullRequestGroups.flatMap((group) => group.reviews.map((review) => ({ group, review })));
-  if (reviews.length) {
-    body.append(element('h3', 'sub', 'レビュー'));
-    for (const { group, review } of reviews) body.append(reviewBlock(review));
-  }
   section.append(body);
   return section;
 }
@@ -2083,12 +2108,6 @@ function renderKindSections(products) {
     for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
     if (!pullRequestGroups.length) pullRequests.append(element('div', 'empty', 'ありません'));
     sections.push(kindSection('プルリクエスト', pullRequests));
-  }
-  const reviews = pullRequestGroups.flatMap(({ product, group }) => group.reviews.map((review) => ({ product, review })));
-  if (reviews.length) {
-    const reviewContent = element('div', 'body');
-    for (const { product, review } of reviews) reviewContent.append(reviewBlock(review, product.name));
-    sections.push(kindSection('レビュー', reviewContent));
   }
   return sections;
 }
