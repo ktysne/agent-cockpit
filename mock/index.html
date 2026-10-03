@@ -114,10 +114,13 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .section > .body { padding: 6px 14px 14px; }
 .section.pinned { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .meta { color: var(--text-2); font-size: 12px; }
-.session-group { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
-.session-group.single { border-top: 0; padding-top: 0; margin-top: 0; }
+.session-group { border-left: 2px solid var(--border); padding: 8px 0 0 12px; margin-top: 8px; }
+.session-group.single { border-left: 0; padding: 0; margin-top: 0; }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
-.session-head h3 { margin: 0; font-size: 14px; }
+.session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
+.session-group:not(.single) .session-body { padding-left: 12px; }
+.product-pr-divider { margin: 14px 0 0; border-top: 1px solid var(--border); }
+.kind-section-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .session-tag { font-size: 11px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .session-body { padding-bottom: 6px; }
 
@@ -158,8 +161,9 @@ h3.sub .count { font-weight: normal; }
 .model.off { color: var(--text-2); white-space: normal; }
 .arrow { color: var(--text-2); font-size: 12px; }
 .tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.kind-session-tasks + .kind-session-tasks { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
-.kind-task-head { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.group-frame { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
+.kind-task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin: 0 0 8px; font-size: 14px; }
+.kind-task-head .session-tag { color: var(--text); font-size: 13px; font-weight: 600; }
 .task { padding: 6px 10px; border-radius: 8px; }
 .task:hover { background: var(--surface-2); }
 .task .line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; }
@@ -222,10 +226,12 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 
 .prod-tag { display: inline-flex; align-items: center; min-height: 20px; font-size: 11px; padding: 1px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
+.group-frame > .empty, .pr-repo-content > .empty, .pr-repo-content > .stack, .pr-repo-content > .merged-list { padding-inline: 0; }
 .note { color: var(--text-2); font-size: 12px; margin: 0 0 12px; }
 
-.prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.stack { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
+.prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.pr-repo-title { margin: 0; color: var(--text); font-size: 14px; font-weight: 600; }
+.stack { border: 0; padding: 0; margin-bottom: 8px; background: transparent; }
 .stack-base { font-size: 12px; color: var(--text-2); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
@@ -1237,18 +1243,21 @@ function prBlock(p, withTag) {
   const roots = openPrs(p).filter(pr => !parentPr(p, pr));
   const merged = p.prs.filter(pr => isMerged(p, pr));
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
-  const head = `<div class="prs-head meta">${tag}<span>${esc(p.repo.name)}</span><span>GitHub から ${esc(p.repo.fetched)}に取得</span></div>`;
+  const headingTag = withTag ? 'h3' : 'h4';
+  const head = `<header class="prs-head"><${headingTag} class="pr-repo-title"><strong>${esc(p.repo.name)}</strong></${headingTag}>${tag}<span class="meta">GitHub から ${esc(p.repo.fetched)}に取得</span></header>`;
   const stacks = roots.map(r => `<div class="stack">
       <div class="stack-base"><code>${esc(effective(p, r).base)}</code>${childPrs(p, r).length ? `<span>スタック ${stackPos(p, r).total} 段</span>` : ''}</div>
-      <div class="stack-level">${prTree(p, r)}</div></div>`).join('');
+      ${prTree(p, r)}</div>`).join('');
   const mergedNewestFirst = merged.map(pr => ({ pr, m: ui.merged[prKey(p, pr.number)] }))
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
   const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', mergedNewestFirst.map(({ pr, m }) =>
     `<span class="badge mute">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(m.at)}${m.auto ? '、予約で自動' : ''})</span>`));
   const closed = p.closedPrs || [];
   const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr => `<span class="badge mute" title="${esc(pr.title)}">#${pr.number}</span>`));
-  if (!roots.length && !merged.length && !closed.length) return head + '<div class="empty">このセッションが作った PR はありません</div>';
-  return head + (stacks || '<div class="empty">オープンの PR はありません</div>') + mergedLine + closedLine;
+  const empty = !roots.length
+    ? `<div class="empty">${merged.length || closed.length ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'}</div>`
+    : '';
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${stacks || empty}${mergedLine}${closedLine}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
@@ -1319,7 +1328,7 @@ function kindTaskSessionBlock(p, session, expanded) {
   const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
   return {
     doneCount,
-    html: `<div class="kind-session-tasks"><div class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></div>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</div>`,
+    html: `<section class="kind-session-tasks group-frame"><h3 class="kind-task-head">${sessionTag(p, session, true, true)}<span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}</section>`,
   };
 }
 
@@ -1367,13 +1376,14 @@ function unknownSessionControls(session) {
 
 function sessionBlock(p, session) {
   const multiple = p.sessions.length > 1;
+  const groupTag = multiple ? 'section' : 'div';
   const status = session.status === 'busy' ? ['作業中', 'busy'] : session.status === 'wait' ? ['待機中', 'wait'] : ['状態不明', 'unknown'];
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
     || (!ui.hideFinished && session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d))))
     || !hasHiddenJudgmentItems(session);
-  return `<div class="session-group ${multiple ? '' : 'single'}">
+  return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}${hidesFinishedSession(session) ? `<span class="badge ${status[1]}">${status[0]}</span>` : ''}</div>` : ''}
     <div class="session-body">
       ${hidesFinishedSession(session) ? taskSessionBlock(p, session, false) : orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
@@ -1385,7 +1395,7 @@ function sessionBlock(p, session) {
       ${agentSection(p, session, false)}`,
       })[key]).join('')}
     </div>
-  </div>`;
+  </${groupTag}>`;
 }
 
 // セッションが全部同じブランチならプロダクトの見出しに出し、分かれていればセッションの頭に出す。
@@ -1451,7 +1461,7 @@ function renderProductMode() {
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
         ${newsBox(p, false)}
         ${sessions.map(session => sessionBlock(p, session)).join('')}
-        ${isShown('prs') ? `<h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false)}` : ''}
+        ${isShown('prs') ? `<div class="product-pr-divider"></div><h3 class="sub">プルリクエスト <span class="count">(${openPrs(p).length} 件)</span></h3>${prBlock(p, false)}` : ''}
       </div></section>`;
   }).join('');
 }
@@ -1474,9 +1484,10 @@ function renderKindMode() {
   const endedDecisionToggle = endedDecisionEntries.length
     ? kindToggle('decisions', '解決済みと取り下げ', endedDecisionEntries.length, ui.expandedKindDecisions)
     : '';
-  const decisionItems = visibleDecisionItems + endedDecisionCards + endedDecisionToggle;
-  const decisions = decisionItems || (hiddenJudgmentItems ? '' : '<div class="empty">ありません</div>');
-  const showJudgment = Boolean(decisionItems) || !hiddenJudgmentItems;
+  const decisionItems = visibleDecisionItems + endedDecisionCards;
+  const decisionControls = endedDecisionToggle ? `<div class="kind-section-controls">${endedDecisionToggle}</div>` : '';
+  const decisions = decisionItems || (hiddenJudgmentItems || endedDecisionToggle ? '' : '<div class="empty">ありません</div>');
+  const showJudgment = Boolean(decisionItems || endedDecisionToggle) || !hiddenJudgmentItems;
   const news = ps.map(p => newsBox(p, true)).join('');
   const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
   const nowRowsByAge = sessions.filter(({ session }) => !hidesFinishedSession(session)).flatMap(({ p, session }) => {
@@ -1490,7 +1501,8 @@ function renderKindMode() {
   const endedAgentToggle = endedAgentCount
     ? kindToggle('agents', '終了済み', endedAgentCount, showEndedAgents)
     : '';
-  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${endedAgentToggle}`;
+  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>`;
+  const activityControls = endedAgentToggle ? `<div class="kind-section-controls">${endedAgentToggle}</div>` : '';
   const taskSessions = sessions.filter(({ session }) => session.tasks.length > 0);
   const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks));
   const doneTaskCount = kindDoneTaskCount(sessions);
@@ -1501,15 +1513,18 @@ function renderKindMode() {
   const todoTaskToggle = todoTaskCount
     ? kindToggle('todoTasks', '未着手のタスク', todoTaskCount, ui.expandedKindTodoTasks)
     : '';
-  const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}${todoTaskToggle}${doneTaskToggle}`;
-  const prs = ps.filter(p => ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('<div style="height:12px"></div>')
+  const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}`;
+  const taskControls = todoTaskToggle || doneTaskToggle
+    ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
+    : '';
+  const prs = ps.filter(p => ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('')
     || '<div class="empty">ありません</div>';
   const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag" title="${esc(p.name)}">${i + 1}. ${esc(p.name)}</span>${productCloseButton(p, `kind-product-order-${i}`)}</span>`).join(' ')}</div>`;
   const sections = {
     sinceSeen: news ? section('前回見てから', news) : '',
-    judgment: showJudgment ? section('あなたの判断が必要なこと', decisions) : '',
-    tasks: section('タスクと完了条件', tasks),
-    now: section('今やっていること', now),
+    judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls) : '',
+    tasks: section('タスクと完了条件', tasks, taskControls),
+    now: section('今やっていること', now, activityControls),
     prs: isShown('prs') ? section('プルリクエスト', prs) : '',
   };
   return orderBar + orderedSectionKeys(DEFAULT_SECTION_ORDER).map(key => sections[key]).join('');

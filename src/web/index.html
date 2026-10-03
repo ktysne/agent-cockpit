@@ -186,8 +186,9 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-error { color: var(--danger); font-size: 12px; }
 .dialog-note { margin-top: 8px; }
 .task-list { list-style: none; margin: 0; padding: 0; }
-.kind-session-tasks + .kind-session-tasks { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
-.kind-task-head { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.group-frame { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
+.kind-task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin: 0 0 8px; font-size: 14px; }
+.kind-task-head .session-tag { color: var(--text); font-size: 13px; font-weight: 600; }
 .task-item { min-width: 0; overflow-wrap: anywhere; padding: 6px 10px; border-radius: 8px; }
 .task-item:hover { background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
@@ -202,6 +203,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .criteria-list li.met::marker { content: "✓ "; }
 .task-updated { margin-top: 6px; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
+.group-frame > .empty, .pr-repo-content > .empty, .pr-repo-content > .stack, .pr-repo-content > .merged-list { padding-inline: 0; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 640px) {
@@ -240,10 +242,13 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .icon-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .icon-btn:disabled { opacity: .35; cursor: default; }
 .icon-btn:focus-visible, .link-btn:focus-visible, button.chip:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.session-group { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
-.session-group.single { margin-top: 0; padding-top: 0; border-top: 0; }
+.session-group { margin-top: 8px; padding: 8px 0 0 12px; border-left: 2px solid var(--border); }
+.session-group.single { margin-top: 0; padding: 0; border-left: 0; }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
-.session-head h3 { margin: 0; font-size: 14px; }
+.session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
+.session-group:not(.single) .session-body { padding-left: 12px; }
+.product-pr-divider { margin: 14px 0 0; border-top: 1px solid var(--border); }
+.kind-section-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 .session-tag, .prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
 .session-body { padding-bottom: 6px; }
 h3.sub { display: flex; align-items: center; gap: 6px; margin: 14px 0 6px; color: var(--text-2); font-size: 13px; }
@@ -268,8 +273,9 @@ h3.sub .count { font-weight: normal; }
 .news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent); }
 .news ul { margin: 4px 0 0; padding-left: 20px; }
 .prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
-.prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-.stack { margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.pr-repo-title { margin: 0; color: var(--text); font-size: 14px; font-weight: 600; }
+.stack { margin-bottom: 8px; padding: 0; border: 0; background: transparent; }
 .stack-base { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; color: var(--text-2); font-size: 12px; }
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
@@ -1608,23 +1614,24 @@ function appendPullRequestBlock(target, group, withTag = false) {
     target.append(element('div', 'empty', 'このセッションが作った PR はありません'));
     return;
   }
-  const head = element('div', 'prs-head meta');
+  const section = element('section', 'group-frame pr-repo-group');
+  const head = element('header', 'prs-head');
+  const heading = element(withTag ? 'h3' : 'h4', 'pr-repo-title');
+  heading.append(element('strong', '', `${group.owner}/${group.repo}`));
+  head.append(heading);
   if (withTag) head.append(element('span', 'prod-tag', group.product.name));
-  head.append(
-    element('span', '', `${group.owner}/${group.repo}`),
-    element('span', '', `GitHub から ${durationAgoLabel(group.fetchedAt || group.checkedAt)}に取得`),
-  );
-  target.append(head);
-  if (group.error) target.append(element('div', 'error-box', group.error));
+  head.append(element('span', 'meta', `GitHub から ${durationAgoLabel(group.fetchedAt || group.checkedAt)}に取得`));
+  section.append(head);
+  const content = element('div', 'pr-repo-content');
+  if (group.error) content.append(element('div', 'error-box', group.error));
   for (const tree of group.trees) {
     const stack = element('div', 'stack');
     const base = element('div', 'stack-base');
     base.append(element('code', '', tree.effectiveBase));
     if (tree.children.length) base.append(element('span', '', `スタック ${tree.stackPosition.total} 段`));
-    const level = element('div', 'stack-level');
-    appendPullRequestTree(level, group, tree);
-    stack.append(base, level);
-    target.append(stack);
+    stack.append(base);
+    appendPullRequestTree(stack, group, tree);
+    content.append(stack);
   }
   const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {
     if (!items.length || displayPreferences.hideFinished) return;
@@ -1649,8 +1656,15 @@ function appendPullRequestBlock(target, group, withTag = false) {
           .find((button) => button.dataset.olderPrLine === key)?.focus({ preventScroll: true });
       });
     }
-    target.append(line);
+    content.append(line);
   };
+  if (!group.trees.length && !group.error) {
+    if (group.merged.length || group.mergeHistory?.length) {
+      content.append(element('div', 'empty', 'オープンの PR はありません'));
+    } else {
+      content.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
+    }
+  }
   if (Array.isArray(group.mergeHistory) && group.mergeHistory.length) {
     appendFoldedPrLine('merged', 'マージ済み (24 時間)', 'マージ済み', group.mergeHistory, (line, record) => {
       const item = element('span', record.headMismatch === true ? 'badge warn' : 'badge mute');
@@ -1679,13 +1693,8 @@ function appendPullRequestBlock(target, group, withTag = false) {
     link.title = pullRequest.title;
     line.append(link);
   });
-  if (!group.trees.length && !group.error) {
-    if (group.merged.length || group.mergeHistory?.length) {
-      target.append(element('div', 'empty', 'オープンの PR はありません'));
-    } else {
-      target.append(element('div', 'empty', group.registeredCount ? 'オープンの PR はありません' : 'このセッションが作った PR はありません'));
-    }
-  }
+  section.append(content);
+  target.append(section);
 }
 
 function productGroups(sessions, pullRequestGroups = []) {
@@ -2299,8 +2308,8 @@ function kindTodoTaskCount(references) {
 function appendKindTaskSession(body, reference, showTodo, showDone) {
   const { product, session, multipleSessions } = reference;
   const { visible } = taskVisibility(session, showTodo, showDone);
-  const group = element('div', 'kind-session-tasks');
-  const heading = element('div', 'kind-task-head');
+  const group = element('section', 'kind-session-tasks group-frame');
+  const heading = element('h3', 'kind-task-head');
   appendContextTags(heading, product, session, true, true);
   heading.append(element('span', 'meta', `最終更新 ${session.tasksUpdatedAt ? durationAgoLabel(session.tasksUpdatedAt) : '時刻不明'}`));
   group.append(heading);
@@ -2362,7 +2371,7 @@ function productStatusBadge(session) {
 }
 
 function sessionBlock(product, session, multipleSessions) {
-  const block = element('div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
+  const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
   if (multipleSessions) {
     const head = element('div', 'session-head');
     head.append(element('h3', '', session.title || session.session_id));
@@ -2486,6 +2495,7 @@ function productSection(product, index, products, pinnedCount) {
   const multipleSessions = product.sessions.length > 1;
   for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
   if (isFilterShown('prs')) {
+    body.append(element('div', 'product-pr-divider'));
     const openCount = pullRequestOpenCount(pullRequestGroups);
     const prsHeading = element('h3', 'sub', 'プルリクエスト');
     prsHeading.append(element('span', 'count', `(${openCount} 件)`));
@@ -2598,8 +2608,9 @@ function renderKindSections(products) {
     }
     endedDecisions.append(list);
   }
+  const endedDecisionControls = element('div', 'kind-section-controls');
   if (endedDecisionItems.length) {
-    appendKindToggle(endedDecisions, 'decisions', showEndedDecisions, endedDecisionItems.length, '解決済みと取り下げ');
+    appendKindToggle(endedDecisionControls, 'decisions', showEndedDecisions, endedDecisionItems.length, '解決済みと取り下げ');
   }
   waitingItems.sort((left, right) => right.age - left.age);
   const judgment = element('div', 'body');
@@ -2629,9 +2640,8 @@ function renderKindSections(products) {
   for (const item of activityItems) activityList.append(item.row);
   if (!activityList.children.length) activityList.append(element('div', 'empty', 'ありません'));
   activity.append(activityList);
-  if (endedAgentCount) {
-    appendKindToggle(activity, 'agents', showEndedAgents, endedAgentCount, '終了済み');
-  }
+  const activityControls = element('div', 'kind-section-controls');
+  if (endedAgentCount) appendKindToggle(activityControls, 'agents', showEndedAgents, endedAgentCount, '終了済み');
 
   const tasks = element('div', 'body');
   const showDoneTasks = expandedKindSections.has('tasks');
@@ -2643,8 +2653,9 @@ function renderKindSections(products) {
     appendKindTaskSession(tasks, { product, session, multipleSessions }, showTodoTasks, showDoneTasks);
   }
   if (!tasks.children.length) tasks.append(element('div', 'empty', 'ありません'));
-  if (todoTaskCount) appendKindToggle(tasks, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク');
-  if (doneTaskCount) appendKindToggle(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク');
+  const taskControls = element('div', 'kind-section-controls');
+  if (todoTaskCount) appendKindToggle(taskControls, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク');
+  if (doneTaskCount) appendKindToggle(taskControls, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク');
 
   const sinceSeenContent = element('div', 'body');
   for (const product of products) {
@@ -2654,10 +2665,10 @@ function renderKindSections(products) {
   const sections = {
     sinceSeen: sinceSeenContent.children.length ? kindSection('前回見てから', sinceSeenContent) : null,
     judgment: waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments
-      ? kindSection('あなたの判断が必要なこと', judgment)
+      ? kindSection('あなたの判断が必要なこと', judgment, endedDecisionItems.length ? endedDecisionControls : null)
       : null,
-    tasks: kindSection('タスクと完了条件', tasks),
-    now: kindSection('今やっていること', activity),
+    tasks: kindSection('タスクと完了条件', tasks, taskControls.children.length ? taskControls : null),
+    now: kindSection('今やっていること', activity, endedAgentCount ? activityControls : null),
     prs: null,
   };
   const pullRequestGroups = products.flatMap((product) => visiblePullRequestGroups(product.pullRequestGroups)

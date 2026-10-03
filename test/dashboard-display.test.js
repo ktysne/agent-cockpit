@@ -698,7 +698,7 @@ test('種類別の混在セクションは残し、隠した判断事項だけ�
   const mockKind = functionSource(mock, 'renderKindMode');
   const webKind = functionSource(web, 'renderKindSections');
 
-  assert.match(mockKind, /const showJudgment = Boolean\(decisionItems\) \|\| !hiddenJudgmentItems/);
+  assert.match(mockKind, /const showJudgment = Boolean\(decisionItems \|\| endedDecisionToggle\) \|\| !hiddenJudgmentItems/);
   assert.match(mockKind, /const now = `?<div class="now">/);
   assert.match(webKind, /judgment: waitingItems\.length \|\| endedDecisionItems\.length \|\| !hasHiddenJudgments/);
   assert.match(webKind, /activityItems\.push\(\{ age: sessionActivityTime\(session\), row: mainRow/);
@@ -861,7 +861,7 @@ test('種類別タスクのまとまりは先頭行に札と更新時刻を置�
     { id: 'session-a', tasksUpdatedMin: 5, tasks: [{ title: '表示タスク', state: 'doing' }, { title: '未着手タスク', state: 'todo' }, { title: '完了タスク', state: 'done' }] },
     false,
   );
-  assert.match(output.html, /class="kind-task-head">PRODUCT SESSION<span class="meta">最終更新 5 分前<\/span>/);
+  assert.match(output.html, /<section class="kind-session-tasks group-frame"><h3 class="kind-task-head">PRODUCT SESSION<span class="meta">最終更新 5 分前<\/span>/);
   assert.doesNotMatch(output.html, /タスクと完了条件/);
   assert.match(output.html, /<li data-tags="false">表示タスク<\/li>/);
   assert.doesNotMatch(output.html, /未着手タスク/);
@@ -871,11 +871,11 @@ test('種類別タスクのまとまりは先頭行に札と更新時刻を置�
   const webKind = functionSource(web, 'renderKindSections');
   const webTaskBlock = functionSource(web, 'appendKindTaskSession');
   assert.match(webKind, /appendKindTaskSession\(tasks, \{ product, session, multipleSessions \}, showTodoTasks, showDoneTasks\)/);
-  assert.match(webKind, /appendKindToggle\(tasks, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク'\)/);
-  assert.match(webKind, /appendKindToggle\(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク'\)/);
+  assert.match(webKind, /appendKindToggle\(taskControls, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク'\)/);
+  assert.match(webKind, /appendKindToggle\(taskControls, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク'\)/);
   assert.match(webTaskBlock, /appendContextTags\(heading, product, session, true, true\)/);
   assert.match(webTaskBlock, /appendTaskItem\(list, task, product, session, false, multipleSessions\)/);
-  assert.match(web, /\.kind-session-tasks \+ \.kind-session-tasks \{[^}]*border-top: 1px solid var\(--border\)/);
+  assert.match(web, /\.group-frame \{[^}]*border: 1px solid var\(--border\)/);
 });
 
 test('種類別の描画では集約折り畳みだけを使い、プロダクト別のセッション単位は残す', () => {
@@ -887,9 +887,9 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
   assert.match(mockKind, /kindToggle\('tasks', '完了したタスク', doneTaskCount/);
   assert.match(mockKind, /kindToggle\('todoTasks', '未着手のタスク', todoTaskCount/);
   assert.doesNotMatch(mockKind, /endedDecisionToggle\(session\)|endedAgentToggle\(session\)|taskSessionBlock\(p, session, true\)/);
-  assert.match(webKind, /appendKindToggle\(endedDecisions, 'decisions'/);
-  assert.match(webKind, /appendKindToggle\(activity, 'agents'/);
-  assert.match(webKind, /appendKindToggle\(tasks, 'tasks'/);
+  assert.match(webKind, /appendKindToggle\(endedDecisionControls, 'decisions'/);
+  assert.match(webKind, /appendKindToggle\(activityControls, 'agents'/);
+  assert.match(webKind, /appendKindToggle\(taskControls, 'tasks'/);
   assert.doesNotMatch(webKind, /appendPlanToggle\(endedDecisions|appendAgents\([^\n]*\);\s*\n\s*const list = holder\.querySelector\('\.agent-list'\);[\s\S]*data-ended-toggle/);
 
   assert.match(mock, /function decisionSessionBlock\([^]*?endedDecisionToggle\(session\)/);
