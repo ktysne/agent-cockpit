@@ -11,9 +11,7 @@ const {
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
   runGh,
-} = require('../src/server/pull-requests');
-const { execFileSync } = require('node:child_process');
-const {
+} = require('../src/server/pull-requests');const {
   findPullRequestUrl,
   firstPullRequestUrl,
   isGhPrCreateCommand,
@@ -1003,25 +1001,31 @@ test('登録の cwd とは別の worktree が PR のブランチをチェック�
   const base = await temporaryDirectory(t);
   const sessionRoot = path.join(base, 'session');
   const reviewRoot = path.join(base, 'review');
-  const git = (...args) => execFileSync('git', args, { cwd: sessionRoot, stdio: 'pipe', windowsHide: true });
-  await fs.mkdir(sessionRoot);
-  git('init', '-q', '-b', 'main');
-  await installCrossReview(sessionRoot);
-  git('add', '.');
-  git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init');
-  git('worktree', 'add', '-q', '-b', 'feat/open', reviewRoot);
+  for (const root of [sessionRoot, reviewRoot]) {
+    await fs.mkdir(path.join(root, '.git'), { recursive: true });
+    await installCrossReview(root);
+  }
   const headSha = 'a'.repeat(40);
   await fs.writeFile(path.join(reviewRoot, '.cross-review-state.json'), JSON.stringify({
     branches: { 'feat/open': { round: 2, dismissed: [], lastReviewedSha: headSha, lastTriage: { round: 2, sha: headSha, outcome: 'converged' } } },
   }));
   await fs.writeFile(path.join(sessionRoot, '.cross-review-state.json'), JSON.stringify({ branches: {} }));
   const { github, tracker } = await trackerFixture(t, [31], path.join(sessionRoot, 'tools'));
+  const gitCalls = [];
+  tracker.gitExecFileImpl = (file, args, _options, callback) => {
+    gitCalls.push([file, ...args]);
+    callback(null, [
+      `worktree ${sessionRoot.replaceAll('\\', '/')}`, `HEAD ${'c'.repeat(40)}`, 'branch refs/heads/main', '',
+      `worktree ${reviewRoot.replaceAll('\\', '/')}`, `HEAD ${headSha}`, 'branch refs/heads/feat/open', '',
+    ].join('\n'));
+  };
   github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
   github.comparisons.set(headSha, compareResult([headSha]));
 
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
+  assert.deepEqual(gitCalls, [['git', '-C', sessionRoot, 'worktree', 'list', '--porcelain']]);
   assert.deepEqual(group.trees[0].crossReview, {
     round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' },
   });
@@ -1042,6 +1046,12 @@ test('worktree の一覧を取れないときは、登録の cwd の状態ファ
   );
   assert.deepEqual(calls, [['git', '-C', root, 'worktree', 'list', '--porcelain']]);
   assert.equal(review.round, 1);
+  const thrown = await readCrossReviewStateAcrossWorktrees(
+    { number: 31, cwd: root },
+    { headRefName: 'feat/open', headRefOid: 'a'.repeat(40) },
+    { execFileImpl: () => { throw Object.assign(new Error('spawn EPERM'), { code: 'EPERM' }); } },
+  );
+  assert.equal(thrown.round, 1);
 });
 
 test('マージ済みの一覧を最古のオープン PR の作成日以降に絞り、上限で切れたら積み直しを確かめられないとする', async (t) => {

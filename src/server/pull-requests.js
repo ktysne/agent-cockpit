@@ -456,22 +456,24 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
 }
 
 function listWorktreesForBranch(root, branch, execFileImpl = execFile) {
+  const parse = (stdout) => {
+    const worktrees = [];
+    let current = null;
+    for (const line of stdout.split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
+      else if (current && line === `branch refs/heads/${branch}`) worktrees.push(path.resolve(current));
+    }
+    return worktrees;
+  };
   return new Promise((resolve) => {
-    execFileImpl('git', ['-C', root, 'worktree', 'list', '--porcelain'], {
-      encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
-    }, (error, stdout) => {
-      if (error || typeof stdout !== 'string') {
-        resolve([]);
-        return;
-      }
-      const worktrees = [];
-      let current = null;
-      for (const line of stdout.split(/\r?\n/)) {
-        if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
-        else if (current && line === `branch refs/heads/${branch}`) worktrees.push(path.resolve(current));
-      }
-      resolve(worktrees);
-    });
+    // EPERM など一部の起動失敗は callback ではなく同期の例外になる。
+    try {
+      execFileImpl('git', ['-C', root, 'worktree', 'list', '--porcelain'], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+      }, (error, stdout) => resolve(error || typeof stdout !== 'string' ? [] : parse(stdout)));
+    } catch {
+      resolve([]);
+    }
   });
 }
 
