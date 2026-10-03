@@ -236,6 +236,10 @@ h3.sub .count { font-weight: normal; }
 .badge.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
 .badge.mute { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
+.badge.new-mark { background: var(--accent-soft); color: var(--accent); }
+.news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
+.news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent); }
+.news ul { margin: 4px 0 0; padding-left: 20px; }
 .prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
 .prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
 .stack { margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
@@ -1107,8 +1111,12 @@ function sessionActivityTime(session) {
   return Math.max(mainTool, Number.isFinite(lastActivity) ? lastActivity : -Infinity);
 }
 
-function orderedProducts(sessions, pullRequestGroups = []) {
+function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
   const products = productGroups(sessions, pullRequestGroups);
+  for (const entry of sinceSeen) {
+    if (!entry.product?.key || products.some((product) => product.key === entry.product.key)) continue;
+    products.push({ key: entry.product.key, name: entry.product.name, branches: new Set(), sessions: [], pullRequestGroups: [] });
+  }
   const ids = products.map((product) => product.key);
   const visibleKeys = new Set(ids);
   const nextOrder = [...displayPreferences.order];
@@ -1455,6 +1463,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   const answerActive = decisionAnswerAvailability(decision).active;
   const optionDraft = answerActive ? answerDraftFor(decision, session) : null;
   const header = element('div', 'decision-head');
+  if (decision.isNew) header.append(badge('新着', 'new-mark'));
   appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(
     element('span', 'decision-title', decision.title),
@@ -1805,6 +1814,8 @@ function productSection(product, index, products, pinnedCount) {
 
   const body = element('div', 'body');
   body.hidden = displayPreferences.collapsed.includes(product.key);
+  const news = sinceSeenBox(product, false);
+  if (news) body.append(news);
   const multipleSessions = product.sessions.length > 1;
   for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
   if (isFilterShown('prs')) {
@@ -1835,6 +1846,23 @@ function kindSection(title, content, extra) {
   section.append(head, content);
   content.classList.add('body');
   return section;
+}
+
+function sinceSeenBox(product, withProductTag) {
+  const entry = (lastState?.sinceSeen || []).find((item) => item.product?.key === product.key);
+  if (!entry?.items?.length) return null;
+  const box = element('div', 'news');
+  const header = element('div', 'news-head');
+  if (withProductTag) header.append(element('span', 'prod-tag', product.name));
+  header.append(document.createTextNode(`前回見てから (${entry.items.length} 件)`));
+  const seen = element('button', 'link-btn', '既読にする');
+  seen.type = 'button';
+  seen.dataset.seen = product.key;
+  header.append(seen);
+  const list = element('ul');
+  for (const item of entry.items) list.append(element('li', '', item.text));
+  box.append(header, list);
+  return box;
 }
 
 function sessionReferences(products) {
@@ -1947,6 +1975,12 @@ function renderKindSections(products) {
   if (doneTaskCount) appendKindToggle(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク');
 
   const sections = [productOrder];
+  const sinceSeenContent = element('div', 'body');
+  for (const product of products) {
+    const news = sinceSeenBox(product, true);
+    if (news) sinceSeenContent.append(news);
+  }
+  if (sinceSeenContent.children.length) sections.push(kindSection('前回見てから', sinceSeenContent));
   if (waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments) {
     sections.push(kindSection('あなたの判断が必要なこと', judgment));
   }
@@ -2005,12 +2039,13 @@ function render(state) {
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
   });
-  if (!sessions.length && !pullRequestGroups.length) {
+  const sinceSeen = Array.isArray(state.sinceSeen) ? state.sinceSeen : [];
+  if (!sessions.length && !pullRequestGroups.length && !sinceSeen.length) {
     root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
     return;
   }
 
-  const products = orderedProducts(sessions, pullRequestGroups);
+  const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
   if (displayPreferences.mode === 'product') {
     const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
     root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount)));
@@ -2254,6 +2289,22 @@ function closeTaskButton(button) {
   }, 'タスクを完了にできませんでした');
 }
 
+async function markProductSeen(button) {
+  const productKey = button.dataset.seen;
+  button.disabled = true;
+  try {
+    const response = await postUiAction('/api/seen', { productKey });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await refresh();
+    liveStatus.textContent = '前回見てからの項目を既読にしました。';
+  } catch {
+    liveStatus.textContent = '項目を既読にできませんでした';
+    showWriteError('項目を既読にできませんでした');
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
 function closeAgentButton(button) {
   const key = button.dataset.closeAgent || '';
   const separator = key.indexOf('::');
@@ -2370,6 +2421,10 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.seen) {
+    void markProductSeen(button);
+    return;
+  }
   if (button.dataset.openMerge || button.dataset.openReserve) {
     const key = button.dataset.openMerge || button.dataset.openReserve;
     pullRequestMergeConfirmations.set(key, button.dataset.openReserve ? 'reserve' : 'merge');

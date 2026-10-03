@@ -148,6 +148,23 @@ test('PR のスタックとレビューを表示する', () => {
   assert.doesNotMatch(source, /data-reserve-go=/);
 });
 
+test('プロダクト別と種類別に前回見てからを表示し、新しい判断に印を付ける', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const productSection = source.match(/function productSection\(product,[\s\S]*?\n\}/)?.[0];
+  const renderKindSections = source.match(/function renderKindSections\(products\) \{[\s\S]*?\n\}/)?.[0];
+  const appendDecisionCard = source.match(/function appendDecisionCard\([\s\S]*?\n\}/)?.[0];
+
+  assert.ok(productSection);
+  assert.ok(renderKindSections);
+  assert.ok(appendDecisionCard);
+  assert.match(productSection, /sinceSeenBox\(product, false\)/);
+  assert.match(renderKindSections, /sinceSeenBox\(product, true\)/);
+  assert.match(source, /前回見てから \(\$\{entry\.items\.length\} 件\)/);
+  assert.match(source, /seen\.dataset\.seen = product\.key/);
+  assert.match(source, /postUiAction\('\/api\/seen'/);
+  assert.match(appendDecisionCard, /if \(decision\.isNew\) header\.append\(badge\('新着', 'new-mark'\)\)/);
+});
+
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
   const harness = renderHarness();
   harness.context.render(harness.context.lastState);

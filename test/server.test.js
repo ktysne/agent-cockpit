@@ -722,6 +722,62 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
 });
 
+test('既読 API は秘密値と Origin を照合し、初回表示後の変化と新しい判断を返す', async (t) => {
+  const state = new DashboardState();
+  const sessionId = 'seen-session';
+  const product = { key: 'C:\\seen-project', name: 'seen-project' };
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '既読の確認', product }]);
+  state.setTasks(sessionId, [{ title: '表示前の完了', state: 'done', criteria: [] }]);
+  state.addDecision(sessionId, {
+    title: '表示前の判断', context: '', state: 'waiting',
+    options: [{ label: '案 A', description: '', recommended: true }],
+  });
+  const runtime = await runningServer(t, { state });
+  const endpoint = '/api/seen';
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const body = JSON.stringify({ productKey: product.key });
+  const validHeaders = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+
+  const firstView = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.deepEqual(firstView.sinceSeen, []);
+  assert.equal(firstView.sessions[0].decisions[0].isNew, false);
+  assert.equal(state.seenAtByProduct.has(product.key), true);
+
+  assert.equal((await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', origin } })).status, 401);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body,
+    headers: { ...validHeaders, 'x-cockpit-secret': runtime.info.secret },
+  })).status, 401);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { ...validHeaders, origin: 'https://other.example' },
+  })).status, 403);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  })).status, 403);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ productKey: '' }), headers: validHeaders,
+  })).status, 400);
+  assert.equal((await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: validHeaders })).status, 200);
+
+  const future = Date.now() + 1000;
+  state.setTasks(sessionId, [
+    { title: '表示前の完了', state: 'done', criteria: [] },
+    { title: '既読後の完了', state: 'done', criteria: [] },
+  ], future);
+  const decision = state.addDecision(sessionId, {
+    title: '既読後の判断', context: '', state: 'waiting',
+    options: [{ label: '案 B', description: '', recommended: true }],
+  }, future);
+
+  const nextView = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const visibleSession = nextView.sessions.find((session) => session.session_id === sessionId);
+  assert.equal(visibleSession.decisions.find((item) => item.id === decision.id).isNew, true);
+  assert.equal(visibleSession.decisions.find((item) => item.title === '表示前の判断').isNew, false);
+  assert.deepEqual(nextView.sinceSeen[0].items.map((item) => item.text), [
+    'タスク「既読後の完了」が完了した',
+  ]);
+});
+
 test('画面からタスクを完了にし、終了未確認エージェントを終了にできる', async (t) => {
   const state = new DashboardState();
   const runtime = await runningServer(t, { state });
