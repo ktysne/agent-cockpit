@@ -82,10 +82,16 @@ function writeRouteRecord(recordPath, route, fileSystem) {
   }
 }
 
+// 掃除の期限を最後に使ってからの時間にするため、読めた記録は更新時刻を進める。
 function readRouteRecord(recordPath, fileSystem) {
   try {
     const record = JSON.parse(fileSystem.readFileSync(recordPath, 'utf8'));
-    return record && ROUTE_VALUES.has(record.route) ? record.route : null;
+    if (!record || !ROUTE_VALUES.has(record.route)) return null;
+    try {
+      const now = new Date();
+      fileSystem.utimesSync(recordPath, now, now);
+    } catch {}
+    return record.route;
   } catch {
     return null;
   }

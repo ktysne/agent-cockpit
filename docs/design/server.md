@@ -22,7 +22,7 @@
 | `start.lock` | 再起動の排他。10 秒で失効する | 1 |
 | `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、PR の記録 | 4、5 |
 | `routing.json` | 経路の設定 | 7 |
-| `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間より古い記録は次の開始時に削除する | 7 |
+| `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する | 7 |
 
 ## 起動と寿命
 
@@ -231,7 +231,7 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 ファイルは `AtomicJsonWriter` が一時ファイルから rename して保存する。
 
 `GET /api/state` は現在の経路を返す。`event.js` は `SubagentStart` の送信時に `agents` の値を `route` として記録し、画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
-同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。開始時に 24 時間より古い記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
+同期フック `route.js` は `SubagentStart` 時点の `agents` を `route-agents/` に記録し、指定がある場合は `additionalContext` へ差し込む。記録名は session ID と agent ID を小文字の 16 進数文字列にして作り、一時ファイルから rename して保存する。`PreToolUse` はこの記録を参照するため、起動後に設定を変えても稼働中の経路は変わらない。Claude 経路では `codex-agent.sh` 呼び出しを拒否し、Codex と既定の経路は拒否しない。同じサブエージェントの `SubagentStart` が再び届いても記録は上書きせず、終了時にも消さない。再開したサブエージェントの経路を初回のまま保つためである。記録は読むたびに更新時刻を進め、開始時に 24 時間使われていない記録を削除する。記録の読み書きに失敗したフックは応答を返さない。
 クロスレビューの画面操作は ai-cross-review 側の経路切替に対応するまで無効にし、「未対応」と表示する。`POST /api/routing` は `review` の値も引き続き受け付ける。
 
 ## 秘匿

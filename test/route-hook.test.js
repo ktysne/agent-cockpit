@@ -124,6 +124,23 @@ test('SubagentStart は 24 時間より古い経路記録を削除する', async
   await assert.rejects(fs.access(staleRecord), { code: 'ENOENT' });
 });
 
+test('使った経路記録は 24 時間の掃除の対象から外れる', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' });
+  const start = { hook_event_name: 'SubagentStart', session_id: 'session-long', agent_id: 'agent-long' };
+  outputForRoute(start, { homeDir });
+  const [recordName] = await fs.readdir(path.join(homeDir, 'route-agents'));
+  const recordPath = path.join(homeDir, 'route-agents', recordName);
+  const oldTime = new Date(Date.now() - 23 * 60 * 60 * 1000);
+  await fs.utimes(recordPath, oldTime, oldTime);
+
+  const input = {
+    ...start, hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    tool_input: { command: 'bash ~/.claude/tools/codex-agent.sh impl-hard' },
+  };
+  assert.equal(outputForRoute(input, { homeDir })?.hookSpecificOutput?.permissionDecision, 'deny');
+  assert.ok(Date.now() - (await fs.stat(recordPath)).mtimeMs < 60 * 1000);
+});
+
 test('経路記録を書けない SubagentStart は応答を返さない', async (t) => {
   const homeDir = await temporaryHome(t, { agents: 'codex', review: 'default' });
   const fileSystem = new Proxy(fsSync, {
