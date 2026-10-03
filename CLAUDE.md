@@ -22,3 +22,13 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 ## AIクロスレビュー
 
 手順は [docs/cross-review.md](docs/cross-review.md) と cross-review スキルに従う。観点は [.cross-review.md](.cross-review.md)。
+
+## テスト
+
+- 全体のテストは `npm test` で流す
+- 子プロセスを起動できない環境(Codex の Windows サンドボックスなど。`npm test` が `spawn EPERM` で止まる)では、`npm run test:inprocess` を使う。テストファイルを 1 つのプロセスで流すので、テストランナーが子プロセスを起動しない
+  - `test/ensure-server.test.js` は常駐サーバーを子プロセスで起動して確かめるので、この環境では失敗する。報告では、その失敗を「子プロセスを起動できないため未確認」と書き、ほかのテストの合否と分ける
+
+## CLAUDE.md と AGENTS.md の同期
+
+`CLAUDE.md`(Claude Code 向け)と `AGENTS.md`(Codex 向け)は同じ内容に保つ。片方を変えたら、もう一方にも同じ変更を入れる。
