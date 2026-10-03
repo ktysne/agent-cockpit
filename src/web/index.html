@@ -65,6 +65,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
+.routing .seg button:disabled { cursor: default; opacity: .55; }
+.routing .seg .rstatus { display: inline-flex; align-items: center; padding: 0 8px; border-left: 1px solid var(--border); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .top-inner .routing { min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
 .top-inner .routing .seg button { padding: 3px 7px; font-size: 12px; min-height: 30px; }
 .route-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-2); font-size: 11px; white-space: nowrap; }
@@ -626,7 +628,7 @@ function renderRouting(settings = {}) {
   };
   const root = document.getElementById('routing');
   if (!root.querySelector('.rgroup')) {
-    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div></div>`;
+    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路"${key === 'review' ? ' aria-describedby="route-review-status"' : ''}>${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false"${key === 'review' ? ' disabled' : ''}>${option.t}</button>`).join('')}${key === 'review' ? '<span id="route-review-status" class="rstatus">未対応</span>' : ''}</div></div>`;
     root.innerHTML = `<div class="rgroup">${row('agents')}${row('review')}</div>`;
   }
   for (const button of root.querySelectorAll('[data-route]')) {
@@ -653,6 +655,7 @@ renderRouting(routing);
 
 async function updateRouting(button) {
   const { route: key, v: value } = button.dataset;
+  if (key === 'review') return;
   button.disabled = true;
   try {
     const response = await postUiAction('/api/routing', { key, value });

@@ -63,7 +63,7 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   ]);
 });
 
-test('経路設定は上部バーにあり、三択の選択状態を API に保存する', () => {
+test('経路設定は上部バーにあり、サブエージェントの三択を API に保存する', () => {
   const routing = functionSource(web, 'renderRouting');
   const updateRouting = functionSource(web, 'updateRouting');
   assert.ok(web.indexOf('id="routing"') < web.indexOf('id="settings-button"'));
@@ -72,6 +72,38 @@ test('経路設定は上部バーにあり、三択の選択状態を API に保
   assert.match(updateRouting, /postUiAction\('\/api\/routing'/);
   assert.match(web, /agents: \{ label: 'サブエージェント'/);
   assert.match(web, /review: \{ label: 'クロスレビュー'/);
+});
+
+test('クロスレビューの経路は未対応と表示し、画面から保存できない', async () => {
+  const renderRouting = functionSource(web, 'renderRouting');
+  const updateRouting = functionSource(web, 'updateRouting');
+  const root = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+  const renderContext = vm.createContext({
+    document: { getElementById: () => root },
+    window: {},
+    layoutRouting() {},
+  });
+  vm.runInContext(`const ROUTE = {
+    agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
+    review: { label: 'クロスレビュー', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
+  };
+  const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
+  let routing = { agents: 'default', review: 'default' };
+  let routingResizeObserver = null;
+  ${renderRouting}
+  this.renderRouting = renderRouting;`, renderContext);
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' });
+
+  const reviewButtons = root.innerHTML.match(/<button[^>]*data-route="review"[^>]*>/g) || [];
+  const agentButtons = root.innerHTML.match(/<button[^>]*data-route="agents"[^>]*>/g) || [];
+  assert.equal(reviewButtons.length, 3);
+  assert.ok(reviewButtons.every((button) => / disabled>/.test(button)));
+  assert.ok(agentButtons.every((button) => !/ disabled>/.test(button)));
+  assert.match(root.innerHTML, /id="route-review-status" class="rstatus">未対応<\/span>/);
+
+  const updateContext = vm.createContext({});
+  vm.runInContext(`async ${updateRouting}\nthis.updateRouting = updateRouting;`, updateContext);
+  await updateContext.updateRouting({ dataset: { route: 'review', v: 'claude' } });
 });
 
 test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン用の識別子を送る', () => {

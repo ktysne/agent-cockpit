@@ -148,8 +148,9 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
 
 ### 経路の設定
 
-ダッシュボード上部の「経路の設定」で、サブエージェントとクロスレビューをそれぞれ「既定」「Codex」「Claude」から選びます。
-設定は常駐サーバーが `AGENT_COCKPIT_HOME` の `routing.json` に保存し、次に起動するサブエージェントから適用します。
+ダッシュボード上部の「経路の設定」で、サブエージェントの経路を「既定」「Codex」「Claude」から選びます。
+クロスレビューは ai-cross-review 側の経路切替に対応するまで、画面では「未対応」と表示し、選択できません。
+常駐サーバーはサブエージェントとクロスレビューの両方を `AGENT_COCKPIT_HOME` の `routing.json` に保存します。サブエージェントの設定は起動時に記録され、そのサブエージェントが終了するまで変わりません。
 設定ファイルが読めない場合は、両方を「既定」として扱います。
 
 次のフックを既存の `~/.claude/settings.json` の `hooks` に追加し、スクリプトのパスをこのリポジトリの絶対パスに置き換えてください。
@@ -163,12 +164,15 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
     ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
+    ],
+    "SubagentStop": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
     ]
   }
 }
 ```
 
-`route.js` は同期フックとして実行します。
+`route.js` は同期フックとして実行します。起動時の経路記録は `~/.agent-cockpit/route-agents/` に置き、サブエージェント停止時に削除します。24 時間を過ぎた記録は、新しいサブエージェントの開始時に削除します。
 エージェント定義や `~/.claude/CLAUDE.md` への追記、ai-cross-review の `route` コマンドへの対応は、この作業の範囲外です。
 
 ## タスクと判断事項

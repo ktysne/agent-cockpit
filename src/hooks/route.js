@@ -1,8 +1,10 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
+const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CLAUDE_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Claude で行い、codex-agent.sh を呼ばない';
 const CODEX_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Codex(codex-agent.sh 経由の委譲)で行う';
 const CODEX_AGENT_SCRIPT = /(?:^|[\\/])?codex-agent\.sh$/i;
@@ -40,20 +42,91 @@ function commandInvokesCodexAgent(command) {
   });
 }
 
+function routeRecordPath(input, homeDir) {
+  const encodeIdentifier = (value) => typeof value === 'string' && value
+    ? Buffer.from(value, 'utf8').toString('hex')
+    : null;
+  const sessionId = encodeIdentifier(input.session_id);
+  const agentId = encodeIdentifier(input.agent_id);
+  if (!sessionId || !agentId) return null;
+  return path.join(homeDir, 'route-agents', sessionId + '.' + agentId + '.json');
+}
+
+function cleanupOldRouteRecords(directory, fileSystem, now = Date.now()) {
+  let entries;
+  try {
+    entries = fileSystem.readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const recordPath = path.join(directory, entry);
+    try {
+      if (now - fileSystem.statSync(recordPath).mtimeMs > ROUTE_RECORD_MAX_AGE_MS) {
+        fileSystem.unlinkSync(recordPath);
+      }
+    } catch {}
+  }
+}
+
+function writeRouteRecord(recordPath, route, fileSystem) {
+  const temporaryPath = recordPath + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+  try {
+    fileSystem.writeFileSync(temporaryPath, JSON.stringify({ route }), { flag: 'wx' });
+    fileSystem.renameSync(temporaryPath, recordPath);
+    return true;
+  } catch {
+    try { fileSystem.unlinkSync(temporaryPath); } catch {}
+    return false;
+  }
+}
+
+function readRouteRecord(recordPath, fileSystem) {
+  try {
+    const record = JSON.parse(fileSystem.readFileSync(recordPath, 'utf8'));
+    return record && ROUTE_VALUES.has(record.route) ? record.route : null;
+  } catch {
+    return null;
+  }
+}
+
+function deleteRouteRecord(recordPath, fileSystem) {
+  if (!recordPath) return;
+  try { fileSystem.unlinkSync(recordPath); } catch {}
+}
+
 function outputForRoute(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const isStart = input.hook_event_name === 'SubagentStart';
+  const isStop = input.hook_event_name === 'SubagentStop';
   const isBashUse = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Bash';
-  if (!isStart && !isBashUse) return null;
+  if (!isStart && !isStop && !isBashUse) return null;
 
-  const routing = readRouting(options.homeDir || cockpitHome(options.environment), options.fileSystem || fs);
-  if (!routing) return null;
+  const homeDir = options.homeDir || cockpitHome(options.environment);
+  const fileSystem = options.fileSystem || fs;
+  if (isStop) {
+    deleteRouteRecord(routeRecordPath(input, homeDir), fileSystem);
+    return null;
+  }
   if (isStart) {
+    const directory = path.join(homeDir, 'route-agents');
+    try {
+      fileSystem.mkdirSync(directory, { recursive: true });
+      cleanupOldRouteRecords(directory, fileSystem);
+    } catch {
+      return null;
+    }
+    const routing = readRouting(homeDir, fileSystem);
+    if (!routing) return null;
+    const recordPath = routeRecordPath(input, homeDir);
+    if (!recordPath || !writeRouteRecord(recordPath, routing.agents, fileSystem)) return null;
     if (routing.agents === 'claude') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT } };
     if (routing.agents === 'codex') return { hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CODEX_ROUTE_CONTEXT } };
     return null;
   }
-  if (routing.agents !== 'claude' || typeof input.agent_id !== 'string' || !input.agent_id ||
+  const route = readRouteRecord(routeRecordPath(input, homeDir), fileSystem);
+  if (route !== 'claude' ||
     !commandInvokesCodexAgent(input.tool_input?.command)) return null;
   return {
     hookSpecificOutput: {
