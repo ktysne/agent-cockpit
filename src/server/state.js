@@ -14,6 +14,19 @@ const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
 const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
 
+function validProduct(value) {
+  return isRecord(value) && typeof value.key === 'string' && value.key.trim().length > 0 && value.key.length <= 500 &&
+    typeof value.name === 'string' && value.name.length > 0 && value.name.length <= 200;
+}
+
+function cloneProduct(product) {
+  return validProduct(product) ? { key: product.key, name: product.name } : null;
+}
+
+function repoProduct(owner, repo) {
+  return { key: `repo:${owner}/${repo}`, name: `${owner}/${repo}` };
+}
+
 function cloneDisplay(display) {
   if (display === null) return null;
   return {
@@ -72,13 +85,16 @@ function normalizeDisplay(value) {
 
 function validStoredPlan(plan) {
   return isRecord(plan) && Array.isArray(plan.tasks) && validTimestamp(plan.tasksUpdatedAt, true) &&
+    (plan.product === undefined || plan.product === null || validProduct(plan.product)) &&
     plan.tasks.every((task) => isRecord(task) && typeof task.title === 'string' && task.title.length <= 200 &&
       ['todo', 'doing', 'done'].includes(task.state) && Array.isArray(task.criteria) &&
-      task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean')) &&
+      task.criteria.every((item) => isRecord(item) && typeof item.text === 'string' && typeof item.met === 'boolean') &&
+      (task.completedAt === undefined || validTimestamp(task.completedAt))) &&
     Array.isArray(plan.decisions) && plan.decisions.every((decision) => isRecord(decision) &&
       typeof decision.id === 'string' && typeof decision.title === 'string' && typeof decision.state === 'string' &&
       Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options)) &&
-      validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt));
+      validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
+      (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)));
 }
 
 function pullRequestRecordKey(owner, repo, number) {
@@ -231,8 +247,10 @@ function normalizeStore(value) {
         title: task.title,
         state: task.state,
         criteria: task.criteria.map((item) => ({ text: item.text, met: item.met })),
+        ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
+      product: cloneProduct(plan.product),
       decisions: plan.decisions.map(cloneDecision),
     });
   }
@@ -259,8 +277,14 @@ function normalizeStore(value) {
   const closedTasks = [];
   for (const record of value.closedTasks) {
     if (!isRecord(record) || !validStoredSessionId(record.session_id) || typeof record.title !== 'string' ||
-      !['todo', 'doing'].includes(record.stateAtClose)) throw new Error('Invalid closed task');
-    closedTasks.push({ session_id: record.session_id, title: record.title, stateAtClose: record.stateAtClose });
+      !['todo', 'doing'].includes(record.stateAtClose) ||
+      (record.closedAt !== undefined && !validTimestamp(record.closedAt))) throw new Error('Invalid closed task');
+    closedTasks.push({
+      session_id: record.session_id,
+      title: record.title,
+      stateAtClose: record.stateAtClose,
+      ...(record.closedAt ? { closedAt: record.closedAt } : {}),
+    });
   }
   const hiddenSessions = [];
   for (const record of value.hiddenSessions) {
@@ -276,6 +300,8 @@ function normalizeStore(value) {
   const mergeReservations = value.mergeReservations === undefined ? [] : value.mergeReservations;
   const mergeIntents = value.mergeIntents === undefined ? [] : value.mergeIntents;
   const lastPullRequestMethods = value.lastPullRequestMethods === undefined ? {} : value.lastPullRequestMethods;
+  const seenAtByProduct = value.seenAtByProduct === undefined ? {} : value.seenAtByProduct;
+  const ciFailures = value.ciFailures === undefined ? [] : value.ciFailures;
   if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
     !Array.isArray(relatedPrs) || !relatedPrs.every(validRelatedPullRequestRecord) ||
     !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
@@ -285,7 +311,13 @@ function normalizeStore(value) {
     !isRecord(lastPullRequestMethods) || Object.entries(lastPullRequestMethods).some(([key, method]) => {
       const [owner, repo, extra] = key.split('/');
       return extra !== undefined || !validRepositoryPart(owner) || !validRepositoryPart(repo) || !PULL_REQUEST_MERGE_METHODS.has(method);
-    })) {
+    }) ||
+    !isRecord(seenAtByProduct) || Object.entries(seenAtByProduct).some(([key, timestamp]) => (
+      key.trim().length === 0 || key.length > 500 || !validTimestamp(timestamp)
+    )) ||
+    !Array.isArray(ciFailures) || !ciFailures.every((record) => isRecord(record) &&
+      validRepositoryPart(record.owner) && validRepositoryPart(record.repo) && Number.isSafeInteger(record.number) && record.number > 0 &&
+      validProduct(record.product) && validTimestamp(record.at))) {
     throw new Error('Invalid pull request records');
   }
   return {
@@ -307,6 +339,8 @@ function normalizeStore(value) {
       stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
     })),
     lastPullRequestMethods: new Map(Object.entries(lastPullRequestMethods)),
+    seenAtByProduct: new Map(Object.entries(seenAtByProduct)),
+    ciFailures: ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
   };
 }
 
@@ -821,6 +855,8 @@ class DashboardState {
     this.pullRequestMergeReservationRecords = new Map();
     this.pullRequestMergeIntentRecords = new Map();
     this.lastPullRequestMethods = new Map();
+    this.seenAtByProduct = new Map();
+    this.ciFailures = [];
     this.closedAgents = new Map();
     this.display = null;
     this.storeWriteTimer = null;
@@ -863,6 +899,8 @@ class DashboardState {
   restoreStore(store, now) {
     this.display = store.display;
     this.plans = store.plans;
+    this.seenAtByProduct = store.seenAtByProduct;
+    this.ciFailures = store.ciFailures;
     this.decisionLifecycles = store.decisionLifecycles;
     for (const [sessionId, lifecycles] of this.decisionLifecycles) {
       const decisionIds = new Set((this.plans.get(sessionId)?.decisions || []).map((decision) => decision.id));
@@ -875,7 +913,8 @@ class DashboardState {
     for (const record of store.closedTasks) {
       const task = this.plans.get(record.session_id)?.tasks.find((item) => item.title === record.title);
       if (!task || task.state !== record.stateAtClose) continue;
-      this.closedTaskMapFor(record.session_id).set(record.title, { stateAtClose: record.stateAtClose });
+      const closedAt = record.closedAt || this.plans.get(record.session_id)?.tasksUpdatedAt || isoTime(now);
+      this.closedTaskMapFor(record.session_id).set(record.title, { stateAtClose: record.stateAtClose, closedAt });
     }
     for (const record of store.hiddenSessions) {
       this.hiddenSessions.add(record.session_id);
@@ -946,7 +985,13 @@ class DashboardState {
         mergeHistoryChanged = true;
       }
     }
-    if (mergeHistoryChanged) {
+    const previousFailureCount = this.ciFailures.length;
+    this.ciFailures = this.ciFailures.filter((record) => now - Date.parse(record.at) < STORE_RETENTION_MS);
+    const seenBefore = this.seenAtByProduct.size;
+    for (const [key, timestamp] of this.seenAtByProduct) {
+      if (now - Date.parse(timestamp) >= STORE_RETENTION_MS) this.seenAtByProduct.delete(key);
+    }
+    if (mergeHistoryChanged || previousFailureCount !== this.ciFailures.length || seenBefore !== this.seenAtByProduct.size) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -986,8 +1031,10 @@ class DashboardState {
         title: task.title,
         state: task.state,
         criteria: task.criteria.map((item) => ({ text: item.text, met: item.met })),
+        ...(task.completedAt ? { completedAt: task.completedAt } : {}),
       })),
       tasksUpdatedAt: plan.tasksUpdatedAt,
+      product: cloneProduct(plan.product),
       decisions: plan.decisions.map(cloneDecision),
     }]));
     const decisionLifecycles = Object.fromEntries([...this.decisionLifecycles].flatMap(([sessionId, records]) => {
@@ -1001,6 +1048,7 @@ class DashboardState {
       session_id: sessionId,
       title,
       stateAtClose: record.stateAtClose,
+      ...(record.closedAt ? { closedAt: record.closedAt } : {}),
     })));
     const hiddenSessions = [...this.hiddenSessions].map((sessionId) => ({
       session_id: sessionId,
@@ -1026,6 +1074,8 @@ class DashboardState {
         stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
       })),
       lastPullRequestMethods: Object.fromEntries(this.lastPullRequestMethods),
+      seenAtByProduct: Object.fromEntries(this.seenAtByProduct),
+      ciFailures: this.ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
     };
   }
 
@@ -1212,16 +1262,47 @@ class DashboardState {
     return true;
   }
 
-  updateRelatedPullRequest(owner, repo, number, changes) {
+  updateRelatedPullRequest(owner, repo, number, changes, now = Date.now(), displayProducts = []) {
     const key = relatedPullRequestRecordKey(owner, repo, number);
     const current = this.relatedPullRequests.get(key);
     if (!current) return false;
+    if (changes.lastOpen && stableStringify(current.lastOpen) !== stableStringify(changes.lastOpen)) {
+      this.recordPullRequestCiFailure(owner, repo, number, changes.lastOpen, now, displayProducts);
+    }
     const next = normalizeRelatedPullRequestRecord({ ...current, ...changes });
     if (!validRelatedPullRequestRecord(next) || stableStringify(current) === stableStringify(next)) return false;
     this.relatedPullRequests.set(key, next);
     this.touch();
     this.requestStoreWrite();
     return true;
+  }
+
+  recordPullRequestCiFailure(owner, repo, number, nextLastOpen, now, displayProducts = []) {
+    if (nextLastOpen?.ci !== 'fail') return;
+    const registrations = this.pullRequestRegistrations().filter((record) => (
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
+    ));
+    const related = this.relatedPullRequestRegistrations().filter((record) => (
+      record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase() && record.number === number
+    ));
+    const records = [...registrations, ...related];
+    if (records.some((record) => record.lastOpen?.ci === 'fail') ||
+      !records.some((record) => ['pass', 'pending'].includes(record.lastOpen?.ci))) return;
+    const products = new Map();
+    for (const registration of registrations) {
+      const product = cloneProduct(registration.product) || repoProduct(owner, repo);
+      products.set(product.key, product);
+    }
+    for (const value of displayProducts) {
+      const product = cloneProduct(value);
+      if (product) products.set(product.key, product);
+    }
+    if (!products.size) {
+      const product = repoProduct(owner, repo);
+      products.set(product.key, product);
+    }
+    const at = isoTime(now);
+    for (const product of products.values()) this.ciFailures.push({ owner, repo, number, product, at });
   }
 
   registerPullRequest(sessionId, input, context = {}, now = Date.now()) {
@@ -1265,11 +1346,14 @@ class DashboardState {
     return normalizePullRequestRecord(next);
   }
 
-  updatePullRequest(sessionId, owner, repo, number, changes) {
+  updatePullRequest(sessionId, owner, repo, number, changes, now = Date.now(), displayProducts = []) {
     const records = this.pullRequests.get(sessionId);
     const key = pullRequestRecordKey(owner, repo, number);
     const current = records?.get(key);
     if (!current) return false;
+    if (changes.lastOpen && stableStringify(current.lastOpen) !== stableStringify(changes.lastOpen)) {
+      this.recordPullRequestCiFailure(owner, repo, number, changes.lastOpen, now, displayProducts);
+    }
     const next = { ...current, ...changes };
     if (changes.lastOpen) next.lastOpen = { ...changes.lastOpen };
     if (stableStringify(current) === stableStringify(next)) return false;
@@ -1353,6 +1437,14 @@ class DashboardState {
     let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
     let persistentChanged = false;
     this.sessionFiles = next;
+
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(next.get(sessionId)?.product || this.sessions.get(sessionId)?.product);
+      if (product && stableStringify(plan.product) !== stableStringify(product)) {
+        plan.product = product;
+        persistentChanged = true;
+      }
+    }
 
     if (this.restoreSessionCleanupPending) {
       this.restoreSessionCleanupPending = false;
@@ -1542,11 +1634,11 @@ class DashboardState {
     return cloneDisplay(this.display);
   }
 
-  closeTask(sessionId, title) {
+  closeTask(sessionId, title, now = Date.now()) {
     const task = this.plans.get(sessionId)?.tasks.find((item) => item.title === title);
     if (!task) return null;
     if (task.state === 'done') return false;
-    this.closedTaskMapFor(sessionId).set(title, { stateAtClose: task.state });
+    this.closedTaskMapFor(sessionId).set(title, { stateAtClose: task.state, closedAt: isoTime(now) });
     this.touch();
     this.requestStoreWrite();
     return true;
@@ -1595,12 +1687,21 @@ class DashboardState {
 
   setTasks(sessionId, tasks, now = Date.now()) {
     const plan = this.planFor(sessionId);
+    const previousTasks = new Map(plan.tasks.map((task) => [task.title, task]));
+    const previousUpdatedAt = plan.tasksUpdatedAt;
+    const updatedAt = isoTime(now);
     plan.tasks = tasks.map((task) => ({
       title: task.title,
       state: task.state,
       criteria: task.criteria.map((criterion) => ({ text: criterion.text, met: criterion.met })),
+      ...(task.state === 'done' ? {
+        completedAt: previousTasks.get(task.title)?.state === 'done'
+          ? previousTasks.get(task.title).completedAt || previousUpdatedAt || updatedAt
+          : updatedAt,
+      } : {}),
     }));
-    plan.tasksUpdatedAt = isoTime(now);
+    plan.tasksUpdatedAt = updatedAt;
+    plan.product ||= cloneProduct(this.productForSession(sessionId));
     const closed = this.closedTasks.get(sessionId);
     if (closed) {
       for (const [title, record] of closed) {
@@ -1617,6 +1718,7 @@ class DashboardState {
   addDecision(sessionId, input, now = Date.now()) {
     const plan = this.planFor(sessionId);
     const timestamp = isoTime(now);
+    plan.product ||= cloneProduct(this.productForSession(sessionId));
     const decision = {
       id: crypto.randomUUID(),
       session_id: sessionId,
@@ -1632,6 +1734,7 @@ class DashboardState {
       }],
       createdAt: timestamp,
       updatedAt: timestamp,
+      ...(input.state === 'provisional' ? { provisionalAt: timestamp } : {}),
       resolvedAt: null,
       answer: null,
       resolution: null,
@@ -1655,6 +1758,7 @@ class DashboardState {
       ...decision,
       state,
       updatedAt: timestamp,
+      ...(state === 'provisional' && decision.state !== 'provisional' ? { provisionalAt: timestamp } : decision.provisionalAt ? { provisionalAt: decision.provisionalAt } : {}),
       resolvedAt: state === 'resolved' ? timestamp : null,
       resolution: { chosen, note },
     };
@@ -1666,6 +1770,7 @@ class DashboardState {
       overrides.set(decision.id, {
         state: updated.state,
         updatedAt: updated.updatedAt,
+        ...(updated.provisionalAt ? { provisionalAt: updated.provisionalAt } : {}),
         resolvedAt: updated.resolvedAt,
         resolution: cloneResolution(updated.resolution),
       });
@@ -1695,10 +1800,14 @@ class DashboardState {
   planFor(sessionId) {
     let plan = this.plans.get(sessionId);
     if (!plan) {
-      plan = { tasks: [], tasksUpdatedAt: null, decisions: [] };
+      plan = { tasks: [], tasksUpdatedAt: null, product: cloneProduct(this.productForSession(sessionId)), decisions: [] };
       this.plans.set(sessionId, plan);
     }
     return plan;
+  }
+
+  productForSession(sessionId) {
+    return this.sessions.get(sessionId)?.product || this.sessionFiles.get(sessionId)?.product || this.plans.get(sessionId)?.product || null;
   }
 
   decisionsFor(sessionId) {
@@ -1819,6 +1928,148 @@ class DashboardState {
       generatedAt: this.generatedAt,
       display: cloneDisplay(this.display),
       sessions: currentSessions,
+    };
+  }
+
+  setProductSeen(productKey, at = Date.now()) {
+    if (typeof productKey !== 'string' || productKey.trim().length === 0 || productKey.length > 500) return null;
+    const milliseconds = typeof at === 'number' ? at : Date.parse(at || '');
+    if (!Number.isFinite(milliseconds)) return null;
+    const current = this.seenAtByProduct.get(productKey);
+    if (current && Date.parse(current) >= milliseconds) return current;
+    const seenAt = isoTime(milliseconds);
+    this.seenAtByProduct.set(productKey, seenAt);
+    this.touch();
+    this.requestStoreWrite();
+    return seenAt;
+  }
+
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now()) {
+    const products = new Map();
+    const visibleProductKeys = new Set();
+    const addProduct = (value) => {
+      const product = cloneProduct(value);
+      if (product && !products.has(product.key)) products.set(product.key, product);
+      return product;
+    };
+    for (const session of sessions) {
+      const product = addProduct(session.product);
+      if (product) visibleProductKeys.add(product.key);
+    }
+    for (const group of pullRequestGroups) {
+      const product = addProduct(group.product || (group.owner && group.repo ? repoProduct(group.owner, group.repo) : null));
+      if (product) visibleProductKeys.add(product.key);
+    }
+    for (const plan of this.plans.values()) addProduct(plan.product);
+    for (const record of this.pullRequestRegistrations()) addProduct(record.product || repoProduct(record.owner, record.repo));
+    for (const record of this.ciFailures) addProduct(record.product);
+    for (const merged of this.mergedPullRequests.values()) {
+      const registrations = this.pullRequestRegistrations().filter((record) => (
+        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
+      ));
+      if (registrations.length) {
+        for (const registration of registrations) addProduct(registration.product || repoProduct(merged.owner, merged.repo));
+      } else addProduct(repoProduct(merged.owner, merged.repo));
+    }
+
+    let initialized = false;
+    for (const product of products.values()) {
+      if (visibleProductKeys.has(product.key) && !this.seenAtByProduct.has(product.key)) {
+        this.seenAtByProduct.set(product.key, isoTime(now));
+        initialized = true;
+      }
+    }
+    if (initialized) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+
+    const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
+    const eventKeys = new Set();
+    const addEvent = (product, type, identity, at, text) => {
+      const timestamp = Date.parse(at || '');
+      if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
+      const key = `${product.key}\0${type}\0${identity}\0${at}`;
+      if (eventKeys.has(key)) return;
+      eventKeys.add(key);
+      eventsByProduct.get(product.key).push({ at, type, text });
+    };
+
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      if (!product) continue;
+      for (const task of plan.tasks) {
+        const closed = this.closedTasks.get(sessionId)?.get(task.title);
+        const closedByUser = closed?.stateAtClose === task.state;
+        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
+        if (at) addEvent(product, 'task', `${sessionId}\0${task.title}`, at, `タスク「${task.title}」が完了した`);
+      }
+    }
+
+    for (const record of this.pullRequestRegistrations()) {
+      const product = cloneProduct(record.product) || repoProduct(record.owner, record.repo);
+      const title = record.lastOpen?.title;
+      addEvent(product, 'pull-request', `${record.owner}/${record.repo}#${record.number}`, record.addedAt,
+        `PR #${record.number}${title ? `(${title})` : ''}を作成した`);
+    }
+
+    const sessionDecisionIds = new Set();
+    for (const session of sessions) {
+      for (const decision of session.decisions) {
+        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
+        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
+        const product = cloneProduct(session.product || this.plans.get(session.session_id)?.product);
+        const at = decision.provisionalAt || decision.updatedAt;
+        addEvent(product, 'provisional', `${session.session_id}\0${decision.id}`, at,
+          `判断「${decision.title}」を推奨案で仮に進めた`);
+      }
+    }
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const decision of plan.decisions) {
+        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
+        addEvent(product, 'provisional', `${sessionId}\0${decision.id}`, decision.provisionalAt || decision.updatedAt,
+          `判断「${decision.title}」を推奨案で仮に進めた`);
+      }
+    }
+
+    for (const failure of this.ciFailures) {
+      addEvent(failure.product, 'ci-failure', `${failure.owner}/${failure.repo}#${failure.number}`, failure.at,
+        `PR #${failure.number} の CI が失敗した`);
+    }
+
+    const registrations = this.pullRequestRegistrations();
+    for (const merged of this.mergedPullRequests.values()) {
+      const related = registrations.filter((record) => (
+        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
+      ));
+      const mergedProducts = related.length
+        ? [...new Map(related.map((record) => {
+          const product = cloneProduct(record.product) || repoProduct(merged.owner, merged.repo);
+          return [product.key, product];
+        })).values()]
+        : [repoProduct(merged.owner, merged.repo)];
+      for (const product of mergedProducts) {
+        addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
+          `PR #${merged.number}(${merged.title})をマージした`);
+      }
+    }
+
+    const sinceSeen = [];
+    for (const product of products.values()) {
+      const seenAt = this.seenAtByProduct.get(product.key);
+      if (!seenAt) continue;
+      const seenMilliseconds = Date.parse(seenAt || '');
+      const items = (eventsByProduct.get(product.key) || [])
+        .filter((event) => Date.parse(event.at) > seenMilliseconds)
+        .sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
+      if (items.length) sinceSeen.push({ product, seenAt, items });
+    }
+    return {
+      sinceSeen,
+      seenAtByProduct: Object.fromEntries([...visibleProductKeys]
+        .filter((key) => this.seenAtByProduct.has(key))
+        .map((key) => [key, this.seenAtByProduct.get(key)])),
     };
   }
 

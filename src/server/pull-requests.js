@@ -663,50 +663,6 @@ class PullRequestTracker {
       }
     }
 
-    const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
-    const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
-    const trackedPullRequests = [...registrations, ...relatedPullRequests].map((record) => (
-      record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record)
-    )).filter(Boolean);
-
-    if (listAvailable) {
-      for (const pr of openPullRequests) {
-        const lastOpen = lastOpenPullRequest(pr);
-        for (const record of registrations.filter((candidate) => candidate.number === pr.number)) {
-          this.state.updatePullRequest(record.session_id, owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen });
-        }
-        if (relatedPullRequests.some((record) => record.number === pr.number)) {
-          this.state.updateRelatedPullRequest(owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen });
-        }
-      }
-
-      const registeredNumbers = new Set(registrations.map((record) => record.number));
-      const productGroups = new Map();
-      for (const registration of registrations) {
-        const productKey = registration.product?.key || `repo:${key}`;
-        let group = productGroups.get(productKey);
-        if (!group) {
-          group = { product: registration.product || { key: productKey, name: `${owner}/${repo}` }, registrations: [] };
-          productGroups.set(productKey, group);
-        }
-        group.registrations.push(registration);
-      }
-      for (const group of productGroups.values()) {
-        const assembled = assemblePullRequestStacks({
-          defaultBranch,
-          openPullRequests,
-          registrations: group.registrations,
-          relatedPullRequests,
-          retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
-        });
-        for (const pr of assembled.relatedOpen) {
-          if (registeredNumbers.has(pr.number)) continue;
-          const lastOpen = lastOpenPullRequest(pr);
-          this.state.rememberRelatedPullRequest({ owner, repo, number: pr.number, url: pr.url, lastOpen }, this.now());
-        }
-      }
-    }
-
     // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
     if (listAvailable && !openPullRequests.length) {
       mergedPullRequests = [];
@@ -744,6 +700,73 @@ class PullRequestTracker {
       }))
       : openPullRequests.map((pr) => [pr.number, { checked: false, parent: null }]);
     for (const [number, result] of comparisons) restackResults.set(number, result);
+
+    // base を付け替えた子も親のプロダクトに数えるため、所属は積み直しの判定の後に、画面と同じ結果で集める。
+    const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const trackedPullRequests = [...registrations, ...relatedPullRequests].map((record) => (
+      record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record)
+    )).filter(Boolean);
+
+    if (listAvailable) {
+      const registeredNumbers = new Set(registrations.map((record) => record.number));
+      const productGroups = new Map();
+      for (const registration of registrations) {
+        const productKey = registration.product?.key || `repo:${key}`;
+        let group = productGroups.get(productKey);
+        if (!group) {
+          group = { product: registration.product || { key: productKey, name: `${owner}/${repo}` }, registrations: [] };
+          productGroups.set(productKey, group);
+        }
+        group.registrations.push(registration);
+      }
+      const groupAssemblies = [];
+      const displayProductsByNumber = new Map();
+      for (const group of productGroups.values()) {
+        const assembled = assemblePullRequestStacks({
+          defaultBranch,
+          openPullRequests,
+          registrations: group.registrations,
+          relatedPullRequests,
+          retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
+          restackResults,
+        });
+        groupAssemblies.push({ group, assembled });
+        const visit = (pullRequest) => {
+          let products = displayProductsByNumber.get(pullRequest.number);
+          if (!products) {
+            products = new Map();
+            displayProductsByNumber.set(pullRequest.number, products);
+          }
+          products.set(group.product.key, group.product);
+          for (const child of pullRequest.children) visit(child);
+        };
+        for (const pullRequest of assembled.trees) visit(pullRequest);
+      }
+
+      for (const pr of openPullRequests) {
+        const lastOpen = lastOpenPullRequest(pr);
+        const displayProducts = [...(displayProductsByNumber.get(pr.number)?.values() || [])];
+        for (const record of registrations.filter((candidate) => candidate.number === pr.number)) {
+          this.state.updatePullRequest(
+            record.session_id, owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen }, this.now(), displayProducts,
+          );
+        }
+        if (relatedPullRequests.some((record) => record.number === pr.number)) {
+          this.state.updateRelatedPullRequest(
+            owner, repo, pr.number, { state: 'open', mergedAt: null, lastOpen }, this.now(), displayProducts,
+          );
+        }
+      }
+
+      for (const { assembled } of groupAssemblies) {
+        for (const pr of assembled.relatedOpen) {
+          if (registeredNumbers.has(pr.number)) continue;
+          const lastOpen = lastOpenPullRequest(pr);
+          this.state.rememberRelatedPullRequest({ owner, repo, number: pr.number, url: pr.url, lastOpen }, this.now());
+        }
+      }
+    }
 
     this.repositories.set(key, {
       owner,

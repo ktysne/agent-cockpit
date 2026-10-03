@@ -400,3 +400,125 @@ test('締切を外して読み戻した回答記録を保存し直しても、�
   const files = await fs.readdir(homeDir);
   assert.equal(files.some((name) => name.startsWith('store.json.broken-')), false);
 });
+
+test('既読項目のない旧 store を退避せず読み、既読時刻を保存して読み戻す', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
+    version: 1,
+    display: null,
+    plans: {},
+    decisionLifecycles: {},
+    closedTasks: [],
+    hiddenSessions: [],
+  }));
+
+  const state = await DashboardState.load(homeDir, { now });
+  assert.equal(state.seenAtByProduct.size, 0);
+  assert.deepEqual(state.ciFailures, []);
+  state.setProductSeen('C:\\project', now + 1);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: now + 2 });
+  assert.equal(restored.seenAtByProduct.get('C:\\project'), new Date(now + 1).toISOString());
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+});
+
+test('初回表示は既存の完了を既読扱いにし、その後の完了だけを新着にする', () => {
+  const state = new DashboardState();
+  const sessionId = 'first-seen';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '最初の表示', product }], now);
+  state.setTasks(sessionId, [task('既存の完了', 'done')], now);
+
+  state.syncSessionFiles([], now + 500);
+  const hidden = state.snapshotSinceSeen([], [], now + 500);
+  assert.deepEqual(hidden.sinceSeen, []);
+  assert.equal(state.seenAtByProduct.has(product.key), false);
+
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '最初の表示', product }], now + 750);
+  const first = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 1000);
+  assert.deepEqual(first.sinceSeen, []);
+  assert.equal(first.seenAtByProduct[product.key], new Date(now + 1000).toISOString());
+
+  state.setTasks(sessionId, [task('既存の完了', 'done'), task('新しい完了', 'done')], now + 2000);
+  const next = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 3000);
+  assert.deepEqual(next.sinceSeen[0].items.map((item) => item.text), ['タスク「新しい完了」が完了した']);
+});
+
+test('既読時刻は後退せず、既読後に同じ仮適用を更新しても新着に戻らない', () => {
+  const state = new DashboardState();
+  const sessionId = 'seen-provisional';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '仮適用', product }], now);
+  const decision = state.addDecision(sessionId, { ...decisionInput('仮適用の判断'), state: 'provisional' }, now);
+
+  const seenAt = state.setProductSeen(product.key, now + 10);
+  assert.equal(state.setProductSeen(product.key, now + 5), seenAt);
+  const updated = state.updateDecision(sessionId, decision.id, 'provisional', '案 B', '選択内容だけを変更', now + 20);
+
+  assert.equal(updated.provisionalAt, decision.provisionalAt);
+  const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 30);
+  assert.deepEqual(result.sinceSeen, []);
+});
+
+test('既読時刻より前後の完了、PR、仮適用、CI 失敗、マージを分けて新しい順に並べる', () => {
+  const state = new DashboardState();
+  const sessionId = 'since-seen-events';
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const url = (number) => `https://github.com/${owner}/${repo}/pull/${number}`;
+  const lastOpen = (title, ci) => ({ title, url: url(title === 'PR before' ? 1 : 2), headRefName: `feature/${title}`, baseRefName: 'main', headRefOid: 'a'.repeat(40), ci });
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '変化一覧', product }], now);
+  state.setTasks(sessionId, [task('以前の完了', 'done'), task('以前に画面で完了', 'doing')], now);
+  state.closeTask(sessionId, '以前に画面で完了', now + 1);
+  const oldDecision = state.addDecision(sessionId, decisionInput('以前の仮適用'), now + 2);
+  state.updateDecision(sessionId, oldDecision.id, 'provisional', '案 A', '', now + 3);
+  state.registerPullRequest(sessionId, { url: url(1) }, { product }, now + 4);
+  state.updatePullRequest(sessionId, owner, repo, 1, { lastOpen: lastOpen('PR before', 'pass') }, now + 5);
+  state.updatePullRequest(sessionId, owner, repo, 1, { lastOpen: lastOpen('PR before', 'fail') }, now + 6);
+  state.setProductSeen(product.key, now + 7);
+
+  state.setTasks(sessionId, [
+    task('以前の完了', 'done'),
+    task('以前に画面で完了', 'doing'),
+    task('以後の完了', 'done'),
+    task('以後に画面で完了', 'doing'),
+  ], now + 8);
+  state.closeTask(sessionId, '以後に画面で完了', now + 9);
+  state.addDecision(sessionId, { ...decisionInput('以後の仮適用'), state: 'provisional' }, now + 10);
+  state.registerPullRequest(sessionId, { url: url(2) }, { product }, now + 11);
+  state.updatePullRequest(sessionId, owner, repo, 2, { lastOpen: lastOpen('PR after', 'pending') }, now + 12);
+  state.updatePullRequest(sessionId, owner, repo, 2, { lastOpen: lastOpen('PR after', 'fail') }, now + 13);
+  state.updatePullRequest(sessionId, owner, repo, 1, { lastOpen: lastOpen('PR before', 'pass') }, now + 14);
+  state.updatePullRequest(sessionId, owner, repo, 1, { lastOpen: lastOpen('PR before', 'fail') }, now + 15);
+  state.recordMergedPullRequest({
+    owner, repo, number: 1, title: 'PR before', url: url(1), mergedAt: new Date(now + 16).toISOString(), method: 'squash',
+  }, now + 16);
+
+  const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 20);
+  const items = result.sinceSeen[0].items;
+  assert.deepEqual(new Set(items.map((item) => item.type)), new Set([
+    'task', 'pull-request', 'provisional', 'ci-failure', 'merged-pull-request',
+  ]));
+  assert.equal(items.length, 7);
+  assert.deepEqual(items.map((item) => item.at), [...items.map((item) => item.at)].sort((left, right) => Date.parse(right) - Date.parse(left)));
+  assert.deepEqual(state.ciFailures.map((record) => record.at), [
+    new Date(now + 6).toISOString(), new Date(now + 13).toISOString(), new Date(now + 15).toISOString(),
+  ]);
+  assert.ok(items.some((item) => item.text === 'PR #1(PR before)をマージした'));
+  assert.ok(items.some((item) => item.text === 'PR #2(PR after)を作成した'));
+  assert.ok(items.some((item) => item.text === '判断「以後の仮適用」を推奨案で仮に進めた'));
+  assert.ok(items.some((item) => item.text === 'タスク「以後の完了」が完了した'));
+  assert.ok(items.some((item) => item.text === 'タスク「以後に画面で完了」が完了した'));
+  assert.deepEqual(items.filter((item) => item.type === 'ci-failure').map((item) => item.at), [
+    new Date(now + 15).toISOString(), new Date(now + 13).toISOString(),
+  ]);
+  assert.equal(items.some((item) => item.at === new Date(now + 6).toISOString()), false);
+  assert.equal(items.some((item) => item.text.includes('以前')), false);
+  assert.equal(items.some((item) => item.text.includes('PR #1(PR before)を作成した')), false);
+});

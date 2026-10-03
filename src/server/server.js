@@ -173,6 +173,14 @@ function validDisplayPatch(value) {
   return true;
 }
 
+function validSeenRequest(value) {
+  const generatedAt = Date.parse(value?.generatedAt || '');
+  return value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === 2 && Object.hasOwn(value, 'productKey') && Object.hasOwn(value, 'generatedAt') &&
+    typeof value.productKey === 'string' && value.productKey.trim().length > 0 && value.productKey.length <= 500 &&
+    typeof value.generatedAt === 'string' && Number.isFinite(generatedAt) && generatedAt <= Date.now();
+}
+
 function validDecisionOptions(value) {
   if (!Array.isArray(value) || value.length > 6) return false;
   let recommendedCount = 0;
@@ -242,7 +250,23 @@ function createRequestHandler(options) {
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/state') {
-      jsonResponse(response, 200, { ...state.snapshot(), pullRequests: pullRequestTracker?.snapshot() || [], away: away.snapshot() });
+      const snapshot = state.snapshot();
+      const pullRequests = pullRequestTracker?.snapshot() || [];
+      const sinceSeen = state.snapshotSinceSeen(snapshot.sessions, pullRequests);
+      snapshot.version = state.version;
+      snapshot.generatedAt = state.generatedAt;
+      const sessions = snapshot.sessions.map((session) => {
+        const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
+        const seenMilliseconds = Date.parse(seenAt || '');
+        return {
+          ...session,
+          decisions: session.decisions.map((decision) => ({
+            ...decision,
+            isNew: Number.isFinite(seenMilliseconds) && Date.parse(decision.createdAt) > seenMilliseconds,
+          })),
+        };
+      });
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot() });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -533,6 +557,30 @@ function createRequestHandler(options) {
         return;
       }
       jsonResponse(response, 200, { display: state.patchDisplayPreferences(body) });
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/seen') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!validSeenRequest(body)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const seenAt = state.setProductSeen(body.productKey, body.generatedAt);
+      jsonResponse(response, 200, { productKey: body.productKey, seenAt });
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/closed-tasks') {
