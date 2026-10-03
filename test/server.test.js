@@ -309,6 +309,9 @@ test('状態推定 API は画面の認証とセッション状態を照合し、
     headers: { ...validHeaders, origin: 'https://other.example' },
   });
   assert.equal(forbidden.status, 403);
+  const { origin: _estimateOrigin, ...withoutOrigin } = validHeaders;
+  const originMissing = await request(runtime.info.port, { method: 'POST', path: endpoint, headers: withoutOrigin });
+  assert.equal(originMissing.status, 403);
   const missing = await request(runtime.info.port, {
     method: 'POST', path: '/api/sessions/not_known/estimate', headers: validHeaders,
   });
@@ -342,7 +345,7 @@ test('一覧から外す API は認証し、複数の状態のセッションを
   const body = JSON.stringify({ action: 'hide', session_id: 'hide_unknown' });
   const validHeaders = {
     'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
-    origin: `http://localhost:${runtime.info.port}`,
+    origin: `http://127.0.0.1:${runtime.info.port}`,
   };
 
   const unauthorized = await request(runtime.info.port, { method: 'POST', path: endpoint, body });
@@ -352,6 +355,9 @@ test('一覧から外す API は認証し、複数の状態のセッションを
     headers: { ...validHeaders, origin: 'https://other.example' },
   });
   assert.equal(forbidden.status, 403);
+  const { origin: _hiddenOrigin, ...withoutOrigin } = validHeaders;
+  const originMissing = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers: withoutOrigin });
+  assert.equal(originMissing.status, 403);
   const missing = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ action: 'hide', session_id: 'not_known' }), headers: validHeaders,
   });
