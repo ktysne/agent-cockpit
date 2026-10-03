@@ -12,16 +12,18 @@ function functionSource(source, name) {
   return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
 }
 
-test('再表示案内は描画領域の後にあり、通信案内は上部に残る', () => {
+test('再表示案内は件数札の直後にあり、通信案内は上部に残る', () => {
   for (const html of [mock, web]) {
     const connection = html.indexOf('id="connection-note"');
     const root = html.indexOf('id="root"');
+    const summary = html.indexOf('id="summary"');
     const hiddenKinds = html.indexOf('id="filter-note"');
     const hiddenSessions = html.indexOf('id="excluded-note"');
 
     assert.ok(connection < root);
-    assert.ok(root < hiddenKinds);
+    assert.ok(summary < hiddenKinds);
     assert.ok(hiddenKinds < hiddenSessions);
+    assert.ok(hiddenSessions < root);
   }
 });
 
@@ -530,6 +532,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       sessionReferences: () => [],
       kindEndedDecisionEntries: () => [],
       expandedKindSections: new Set(),
+      sessionDisplayName: (item) => item.title || item.session_id || 'session',
       kindEndedAgentCount: () => 0,
       kindTodoTaskCount: () => 0,
       kindDoneTaskCount: () => 0,
@@ -552,7 +555,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label || 'kindProductOrder'),
     ));
-    const session = { status: 'busy', decisions: [], tasks: [] };
+    const session = { session_id: 'session-1', status: 'busy', decisions: [], tasks: [] };
     const sessionBlock = context.sessionBlock({ sessions: [session] }, session, false);
     const body = sessionBlock.children[0];
     const sessionParts = body.childNodes.map((node) => node.textContent || node.marker || (node.children[0]?.marker === 'main' ? 'now-content' : ''));
@@ -563,13 +566,13 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
   assert.deepEqual(defaultResult.kindSections, [
     'kindProductOrder', '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること', 'プルリクエスト',
   ]);
-  assert.deepEqual(defaultResult.sessionParts, ['あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent']);
+  assert.deepEqual(defaultResult.sessionParts, ['session-1', 'あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent']);
 
   const customResult = renderWithOrder(['prs', 'now', 'tasks', 'judgment', 'sinceSeen']);
   assert.deepEqual(customResult.kindSections, [
     'kindProductOrder', 'プルリクエスト', '今やっていること', 'タスクと完了条件', 'あなたの判断が必要なこと', '前回見てから',
   ]);
-  assert.deepEqual(customResult.sessionParts, ['今やっていること', 'now-content', 'agent', 'task', 'あなたの判断が必要なこと', 'permission', 'decision']);
+  assert.deepEqual(customResult.sessionParts, ['session-1', '今やっていること', 'now-content', 'agent', 'task', 'あなたの判断が必要なこと', 'permission', 'decision']);
 });
 
 test('種類別のタスクにはタスクがあるセッションだけを含める', () => {

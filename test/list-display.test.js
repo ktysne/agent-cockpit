@@ -303,6 +303,7 @@ test('プロダクト別の PR 欄はセッション群の外に区切って置�
     displayPreferences: { pinned: [], collapsed: [] },
     element: fakeElement,
     sharedBranch: () => '',
+    productCloseButton: () => null,
     productControls: () => fakeElement('div'),
     pullRequestMergeableCount: () => 0,
     pullRequestOpenCount: () => 1,

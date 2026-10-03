@@ -413,6 +413,64 @@ test('一覧から外す API は認証し、複数の状態のセッションを
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, undefined);
 });
 
+test('一覧から外したセッションを指定して戻す API は認証し、0 件と入力不正を処理する', async (t) => {
+  const state = new DashboardState();
+  state.syncSessionFiles([
+    { session_id: 'unhide_one', cwd: 'C:\\project', name: '戻すセッション' },
+    { session_id: 'unhide_two', cwd: 'C:\\project', name: '残すセッション' },
+  ]);
+  state.hideSession('unhide_one');
+  state.hideSession('unhide_two');
+  const runtime = await runningServer(t, { state });
+  const endpoint = '/api/hidden-sessions';
+  const headers = {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.uiSecret,
+    origin: `http://127.0.0.1:${runtime.info.port}`,
+  };
+
+  const unauthorized = await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    body: JSON.stringify({ action: 'unhide', session_ids: ['unhide_one'] }),
+    headers: { 'content-type': 'application/json', origin: headers.origin },
+  });
+  assert.equal(unauthorized.status, 401);
+
+  const versionBeforeUnhide = state.version;
+  const unhidden = await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    body: JSON.stringify({ action: 'unhide', session_ids: ['unhide_one'] }), headers,
+  });
+  assert.equal(unhidden.status, 200);
+  assert.deepEqual(jsonBody(unhidden), { unhidden: 1 });
+  assert.equal(state.version, versionBeforeUnhide + 1);
+  assert.equal(state.hiddenSessions.has('unhide_one'), false);
+  assert.equal(state.hiddenSessionUpdatedAt.has('unhide_one'), false);
+  assert.equal(state.hiddenSessions.has('unhide_two'), true);
+
+  const versionBeforeNoop = state.version;
+  const alreadyVisible = await request(runtime.info.port, {
+    method: 'POST', path: endpoint,
+    body: JSON.stringify({ action: 'unhide', session_ids: ['unhide_one'] }), headers,
+  });
+  assert.equal(alreadyVisible.status, 200);
+  assert.deepEqual(jsonBody(alreadyVisible), { unhidden: 0 });
+  assert.equal(state.version, versionBeforeNoop);
+
+  for (const invalidBody of [
+    { action: 'unhide', session_ids: [] },
+    { action: 'unhide', session_ids: ['bad id'] },
+    { action: 'unhide', session_ids: Array.from({ length: 51 }, (_, index) => `session_${index}`) },
+    { action: 'unhide', session_id: 'unhide_one' },
+    { action: 'unhide', session_ids: ['unhide_one'], extra: true },
+  ]) {
+    const invalid = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify(invalidBody), headers,
+    });
+    assert.equal(invalid.status, 400);
+  }
+});
+
 test('セッションファイルを読めない環境でも、読み込みの猶予を過ぎた期限切れの記録は走査のたびに片付ける', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const now = Date.now();

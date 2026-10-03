@@ -1776,6 +1776,20 @@ class DashboardState {
     return true;
   }
 
+  unhideSessions(sessionIds) {
+    let unhidden = 0;
+    for (const sessionId of new Set(sessionIds)) {
+      if (!this.hiddenSessions.delete(sessionId)) continue;
+      this.hiddenSessionUpdatedAt.delete(sessionId);
+      unhidden += 1;
+    }
+    if (unhidden > 0) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+    return unhidden;
+  }
+
   clearHiddenSessions() {
     const count = this.hiddenSessions.size;
     if (count > 0) {

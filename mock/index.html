@@ -100,11 +100,13 @@ header.top {
 .chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
 .chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok-text); }
 .chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
+.summary button.chip { border-color: var(--text-2); }
 button.chip { cursor: pointer; font: inherit; font-size: 12px; min-height: 28px; }
 button.chip[aria-pressed="false"] { background: transparent; border: 1px dashed var(--border); color: var(--text-2); text-decoration: line-through; }
 button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .filter-note[hidden] { display: none; }
+.top-inner > #filter-note, .top-inner > .excluded-note { flex: 1 1 100%; margin: 0; }
 .link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
 .spacer { flex: 1; }
 
@@ -122,6 +124,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
+.session-context { width: fit-content; margin-bottom: 4px; }
 .session-group:not(.single) .session-body { padding-left: 12px; }
 .product-pr-divider { margin: 14px 0 0; border-top: 1px solid var(--border); }
 .kind-section-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
@@ -129,6 +132,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .session-body { padding-bottom: 6px; }
 
 .order { display: inline-flex; gap: 4px; margin-left: auto; }
+.product-remove { margin-left: 12px; }
 .product-order { min-width: 0; max-width: 100%; flex-wrap: wrap; }
 .kind-order { display: flex; justify-content: flex-end; margin-bottom: 14px; }
 .product-order-item { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
@@ -289,6 +293,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .top-inner .routing .seg button { padding: 3px 7px; font-size: 12px; min-height: 30px; }
 .route-tag { font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .route-tag.stale { border-style: dashed; color: var(--warn); }
+.route-note { margin: 0; color: var(--text-2); font-size: 11px; overflow-wrap: anywhere; }
 .badge.unknown, .state.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
 .agent-list { display: grid; gap: 6px; }
 .agent-row { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
@@ -339,6 +344,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <label class="away-toggle" for="away-toggle"><input id="away-toggle" type="checkbox">離席中</label>
     </div>
     <div class="summary" id="summary"></div>
+    <div class="filter-note" id="filter-note" hidden></div>
+    <div class="excluded-note" id="excluded-note" hidden></div>
     <div class="control-row">
       <div class="routing" id="routing"></div>
     </div>
@@ -397,8 +404,6 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
   <div id="root"></div>
-  <div class="filter-note" id="filter-note" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
 </main>
 
 <script>
@@ -576,6 +581,7 @@ const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
 const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true }, load());
+let hiddenSessionsUndo = null;
 function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
@@ -769,6 +775,14 @@ const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filte
   const a = answerOf(d.id);
   return ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && (!a.sent || a.sent.choice === 'hold');
 });
+function decisionCountTitle(decisions) {
+  const counts = [
+    ['止めて待っている', decisions.filter(d => effectiveDecisionState(d) === 'waiting' && !answerOf(d.id).sent).length],
+    ['仮に推奨案で進行中', decisions.filter(d => effectiveDecisionState(d) === 'provisional' && !answerOf(d.id).sent).length],
+    ['保留中', decisions.filter(d => answerOf(d.id).sent?.choice === 'hold').length],
+  ];
+  return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
+}
 
 const FILTERS = [
   { key: 'permission', label: '許可待ち', cls: 'danger' },
@@ -822,7 +836,7 @@ function renderSummary() {
   note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
-  excluded.hidden = hiddenSessions.length === 0;
+  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo;
   const hiddenPermissionCount = hiddenSessions.reduce((n, s) => n + s.perms.length, 0);
   const hiddenDecisionCount = hiddenSessions.reduce((n, s) => n + s.decisions.filter(d => effectiveDecisionState(d) === 'waiting' && !answerOf(d.id).sent).length, 0);
   const pendingCounts = [
@@ -830,7 +844,13 @@ function renderSummary() {
     hiddenDecisionCount ? `止めて待っている ${hiddenDecisionCount} 件` : '',
   ].filter(Boolean);
   const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
-  excluded.innerHTML = `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>外したセッションを戻す</button>`;
+  const undo = hiddenSessionsUndo
+    ? `<span>${esc(hiddenSessionsUndo.productName)} を一覧から外しました。</span><button type="button" class="link-btn" data-undo-hidden-sessions>元に戻す</button>`
+    : '';
+  const showHidden = hiddenSessions.length
+    ? `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>外したセッションを戻す</button>`
+    : '';
+  excluded.innerHTML = `${undo}${showHidden}`;
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
@@ -875,11 +895,16 @@ function renderRouting() {
   const keys = ['agents', 'review'].filter(k => k === 'agents' ? DATA.integrations.codexAgent : DATA.integrations.crossReview);
   routing.hidden = keys.length === 0;
   if (routing.hidden) { routing.innerHTML = ''; return; }
+  const descriptions = {
+    agents: '既定は Codex で実装し、利用上限や指示があれば Claude に切り替える。次に起動するサブエージェントから効く。',
+    review: '既定はクロスレビューの手順が推奨する方法。次に回すレビューから効く。',
+  };
   const row = k => `<div class="rrow"><span class="rlabel">${ROUTE[k].label}</span>
       <div class="seg" role="group" aria-label="${ROUTE[k].label}の経路">${ROUTE[k].opts.map(o =>
         `<button type="button" data-route="${k}" data-v="${o.v}" aria-pressed="${o.v === ui.routing[k]}">${o.t}</button>`).join('')}</div>
       </div>`;
-  routing.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>`;
+  const note = k => `<p class="route-note">${ROUTE[k].label}: ${descriptions[k]}</p>`;
+  routing.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>${keys.map(note).join('')}`;
   layoutRouting();
 }
 
@@ -904,10 +929,14 @@ function ageMinutes(item) {
 
 const sessionsByActivity = p => visibleSessions(p).sort((a, b) => ageMinutes(a.main) - ageMinutes(b.main));
 
+function sessionDisplayName(session) {
+  return session.title || session.id;
+}
+
 function sessionTag(p, session, withTag, includeSession = false) {
   if (!withTag) return '';
   const product = `<span class="prod-tag">${esc(p.name)}</span>`;
-  const title = p.sessions.length > 1 || includeSession ? `<span class="session-tag">${esc(session.title || session.id)}</span>` : '';
+  const title = p.sessions.length > 1 || includeSession ? `<span class="session-tag">${esc(sessionDisplayName(session))}</span>` : '';
   return `${product}${title}`;
 }
 
@@ -1008,7 +1037,7 @@ function permCard(p, session, x, withTag) {
     <div class="dhead">${sessionTag(p, session, withTag)}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
       <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
     <div class="ctx">${esc(x.tool)}: <code>${esc(x.detail)}</code></div>
-    <div class="meta">許可はデスクトップアプリの ${esc(p.name)} のセッションで出す。ダッシュボードからは出せない。</div>
+    <div class="meta">許可はデスクトップアプリの ${esc(p.name)} の「${esc(sessionDisplayName(session))}」セッションで出す。ダッシュボードからは出せない。</div>
   </article>`;
 }
 const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
@@ -1027,7 +1056,7 @@ function decisionCard(p, session, d, withTag) {
   const a = answerOf(d.id);
   const state = effectiveDecisionState(d);
   const stateClass = { waiting: 'blocking', provisional: 'provisional', resolved: 'state-ok', withdrawn: 'withdrawn' }[state];
-  const stateLabel = { waiting: '止めて待っている', provisional: '推奨で仮に進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
+  const stateLabel = { waiting: '止めて待っている', provisional: '仮に推奨案で進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
   const stateTone = { waiting: 'danger', provisional: 'warn', resolved: 'ok', withdrawn: 'mute' }[state];
   const stateChip = state === 'waiting'
     ? `<span class="badge permission">${stateLabel}</span>`
@@ -1072,7 +1101,7 @@ function decisionCard(p, session, d, withTag) {
         <button type="button" class="primary" data-send ${!canSend(a) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${sentLine}
       </div>
-    </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} のセッションで答える。</div>` : ''}
+    </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} の「${esc(sessionDisplayName(session))}」セッションで答える。</div>` : ''}
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
 }
 
@@ -1424,6 +1453,7 @@ function sessionBlock(p, session) {
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}${hidesFinishedSession(session) ? `<span class="badge ${status[1]}">${status[0]}</span>` : ''}</div>` : ''}
     <div class="session-body">
+      ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
       ${hidesFinishedSession(session) ? taskSessionBlock(p, session, false) : orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
@@ -1471,7 +1501,6 @@ function orderControls(p, idx, total, pinnedCount) {
     <button type="button" class="icon-btn" data-pin="${p.id}" aria-pressed="${pinned}" title="最上部に固定">${pinned ? '固定中' : '固定'}</button>
     <button type="button" class="icon-btn" data-move="${p.id}" data-dir="-1" ${canMoveUp ? '' : 'disabled'} aria-label="${esc(p.name)} を上へ">↑</button>
     <button type="button" class="icon-btn" data-move="${p.id}" data-dir="1" ${canMoveDown ? '' : 'disabled'} aria-label="${esc(p.name)} を下へ">↓</button>
-    ${productCloseButton(p, `product-heading-${idx}`)}
   </div>`;
 }
 
@@ -1490,11 +1519,12 @@ function renderProductMode() {
     const permissionCount = sessions.reduce((total, session) => total + session.perms.length, 0);
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
-        <h2 id="product-heading-${i}">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
+        <h2 id="product-heading-${i}" tabindex="-1">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
         ${permissionCount ? `<span class="chip danger">許可待ち (${permissionCount} 件)</span>` : ''}
-        ${pend.length ? `<span class="chip danger">判断待ち (${pend.length} 件)</span>` : ''}
+        ${pend.length ? `<span class="chip danger" title="${esc(decisionCountTitle(pend))}">判断待ち (${pend.length} 件)</span>` : ''}
         ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
         ${orderControls(p, i, ps.length, pinnedCount)}
+        ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
       </div>
       <div class="body" ${ui.collapsed.includes(p.id) ? 'hidden' : ''}>
         ${newsBox(p, false)}
@@ -1590,7 +1620,14 @@ document.addEventListener('click', e => {
     ui.hidden = ui.hidden.includes(k) ? ui.hidden.filter(x => x !== k) : [...ui.hidden, k];
   }
   else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
-  else if (t.hasAttribute('data-show-hidden-sessions')) { ui.hiddenSessions = []; }
+  else if (t.hasAttribute('data-show-hidden-sessions')) { ui.hiddenSessions = []; hiddenSessionsUndo = null; }
+  else if (t.hasAttribute('data-undo-hidden-sessions')) {
+    if (hiddenSessionsUndo) {
+      const restored = new Set(hiddenSessionsUndo.sessionIds);
+      ui.hiddenSessions = ui.hiddenSessions.filter(id => !restored.has(id));
+      hiddenSessionsUndo = null;
+    }
+  }
   else if (t.dataset.kindToggle) {
     const stateKey = { decisions: 'expandedKindDecisions', agents: 'expandedKindAgents', tasks: 'expandedKindTasks', todoTasks: 'expandedKindTodoTasks' }[t.dataset.kindToggle];
     if (!stateKey) return;
@@ -1620,13 +1657,16 @@ document.addEventListener('click', e => {
     if (!ui.estimatedSessions.includes(id)) ui.estimatedSessions.push(id);
   } else if (t.dataset.hideSession) {
     const id = t.dataset.hideSession;
+    hiddenSessionsUndo = null;
     if (!ui.hiddenSessions.includes(id)) ui.hiddenSessions.push(id);
   } else if (t.dataset.closeProduct) {
     const product = byId(t.dataset.closeProduct);
     if (product) {
+      const sessionIds = visibleSessions(product).map(session => session.id);
+      hiddenSessionsUndo = { productName: product.name, sessionIds };
       ui.hiddenSessions = [...new Set([
         ...ui.hiddenSessions,
-        ...visibleSessions(product).map(session => session.id),
+        ...sessionIds,
       ])];
     }
   }
