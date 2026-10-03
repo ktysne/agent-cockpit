@@ -10,6 +10,7 @@ const DEFAULT_DISPLAY = Object.freeze({ mode: 'product', order: [], pinned: [], 
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
 const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
@@ -971,6 +972,8 @@ class DashboardState {
   }
 
   restoreStore(store, now) {
+    this.restoreSessionCleanupPending = true;
+    this.restoredAt = now;
     this.display = store.display;
     this.plans = store.plans;
     this.seenAtByProduct = store.seenAtByProduct;
@@ -1040,13 +1043,22 @@ class DashboardState {
 
   pruneExpiredStoreRecords(now) {
     let mergeHistoryChanged = false;
-    const sessionIds = new Set([
-      ...this.plans.keys(), ...this.decisionLifecycles.keys(), ...this.hiddenSessions,
-      ...this.closedTasks.keys(), ...this.pullRequests.keys(),
-    ]);
-    for (const sessionId of sessionIds) {
-      const updatedAt = this.lastStoredUpdateAt(sessionId);
-      if (!Number.isFinite(updatedAt) || now - updatedAt > STORE_RETENTION_MS) this.deleteStoredSession(sessionId);
+    let sessionRecordsChanged = false;
+    // セッションファイルを読めない環境では同期が来ないので、猶予の後はフックで届いたセッションだけで生死を判定する。
+    const sessionCleanupDeferred = this.restoreSessionCleanupPending && now - this.restoredAt < RESTORE_SESSION_CLEANUP_GRACE_MS;
+    if (!sessionCleanupDeferred) {
+      const sessionIds = new Set([
+        ...this.plans.keys(), ...this.decisionLifecycles.keys(),
+        ...this.closedTasks.keys(), ...this.pullRequests.keys(),
+      ]);
+      for (const sessionId of sessionIds) {
+        if (this.sessions.has(sessionId) || this.sessionFiles.has(sessionId)) continue;
+        const updatedAt = this.lastStoredUpdateAt(sessionId);
+        if (!Number.isFinite(updatedAt) || now - updatedAt > STORE_RETENTION_MS) {
+          this.deleteStoredSession(sessionId);
+          sessionRecordsChanged = true;
+        }
+      }
     }
     for (const [key, record] of this.relatedPullRequests) {
       if (!Number.isFinite(Date.parse(record.addedAt)) || now - Date.parse(record.addedAt) > STORE_RETENTION_MS) {
@@ -1061,7 +1073,7 @@ class DashboardState {
     }
     const previousFailureCount = this.ciFailures.length;
     this.ciFailures = this.ciFailures.filter((record) => now - Date.parse(record.at) < STORE_RETENTION_MS);
-    if (mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
+    if (sessionRecordsChanged || mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -1079,9 +1091,11 @@ class DashboardState {
         if (lifecycle.answer?.[key]) timestamps.push(Date.parse(lifecycle.answer[key]));
       }
     }
-    const hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
-    if (hiddenAt) timestamps.push(Date.parse(hiddenAt));
-    for (const record of this.pullRequests.get(sessionId)?.values() || []) timestamps.push(Date.parse(record.addedAt));
+    for (const record of this.closedTasks.get(sessionId)?.values() || []) timestamps.push(Date.parse(record.closedAt));
+    for (const record of this.pullRequests.get(sessionId)?.values() || []) {
+      timestamps.push(Date.parse(record.addedAt));
+      if (record.mergedAt) timestamps.push(Date.parse(record.mergedAt));
+    }
     const finite = timestamps.filter(Number.isFinite);
     return finite.length ? Math.max(...finite) : NaN;
   }
@@ -1089,8 +1103,6 @@ class DashboardState {
   deleteStoredSession(sessionId) {
     this.plans.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
-    this.hiddenSessions.delete(sessionId);
-    this.hiddenSessionUpdatedAt.delete(sessionId);
     this.closedTasks.delete(sessionId);
     this.pullRequests.delete(sessionId);
   }
@@ -1559,8 +1571,9 @@ class DashboardState {
 
     if (this.restoreSessionCleanupPending) {
       this.restoreSessionCleanupPending = false;
+      this.pruneExpiredStoreRecords(now);
       for (const sessionId of this.hiddenSessions) {
-        if (next.has(sessionId) || this.plans.get(sessionId)?.tasks.length) continue;
+        if (this.sessions.has(sessionId) || next.has(sessionId) || this.plans.get(sessionId)?.tasks.length) continue;
         this.hiddenSessions.delete(sessionId);
         this.hiddenSessionUpdatedAt.delete(sessionId);
         changed = true;
