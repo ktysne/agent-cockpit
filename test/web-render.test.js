@@ -940,6 +940,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
     lastState: state,
     sinceSeenMode: 'always',
     header: { dataset: { away: 'false' } },
+    isFilterShown: () => true,
     handleExternalLink: () => false,
     document: { addEventListener: (_name, callback) => { handleClick = callback; } },
     saveDisplayPreferences: (patch) => {
@@ -973,9 +974,11 @@ test('表示中のセッションもオープンの PR も数えきれていな�
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
+  let pullRequestsShown = true;
   const context = vm.createContext({
     displayPreferences: { order: [], pinned: [], collapsed: [] },
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
+    isFilterShown: (key) => key !== 'prs' || pullRequestsShown,
   });
   vm.runInContext(functions.join('\n'), context);
 
@@ -993,6 +996,9 @@ test('表示中のセッションもオープンの PR も数えきれていな�
   assert.deepEqual(keys([]), ['active', 'open', 'unreachable']);
   assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [{ text: 'PR #1 をマージした' }] }]), ['active', 'finished', 'open', 'unreachable']);
   assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [] }]), ['active', 'open', 'unreachable']);
+
+  pullRequestsShown = false;
+  assert.deepEqual(keys([]), ['active']);
 });
 
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
