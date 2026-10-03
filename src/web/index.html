@@ -407,6 +407,7 @@ let writeErrorMessage = '';
 let writeErrorTimer = null;
 const expandedEndedSessions = new Set();
 const expandedEndedDecisions = new Set();
+const expandedTodoTasks = new Set();
 const expandedDoneTasks = new Set();
 const expandedKindSections = new Set();
 const answerDrafts = new Map();
@@ -1739,30 +1740,41 @@ function appendTasks(body, session, product, withTags = false, multipleSessions 
     body.append(element('div', 'empty', 'タスクはありません。'));
     return;
   }
-  const done = tasks.filter((task) => task.state === 'done');
-  const expanded = expandedDoneTasks.has(session.session_id);
-  const visible = expanded ? tasks : tasks.filter((task) => task.state !== 'done');
+  const showTodo = expandedTodoTasks.has(session.session_id);
+  const showDone = expandedDoneTasks.has(session.session_id);
+  const { todoCount, doneCount, visible } = taskVisibility(session, showTodo, showDone);
   if (!visible.length) body.append(element('div', 'empty', '未完了のタスクはありません。'));
   else {
     const list = element('ul', 'task-list');
     for (const task of visible) appendTaskItem(list, task, product, session, withTags, multipleSessions);
     body.append(list);
   }
-  if (done.length) appendPlanToggle(body, 'tasks', session.session_id, expanded, done.length, '完了したタスク', expandedDoneTasks);
+  if (todoCount) appendPlanToggle(body, 'todoTasks', session.session_id, showTodo, todoCount, '未着手のタスク', expandedTodoTasks);
+  if (doneCount) appendPlanToggle(body, 'tasks', session.session_id, showDone, doneCount, '完了したタスク', expandedDoneTasks);
 }
 
-function kindTaskVisibility(session, expanded) {
+// 作業中のタスクがあるときは未着手を畳み、今やっていることを先に見せる。未着手しか無ければ畳まない。
+function taskVisibility(session, showTodo, showDone) {
+  const doing = session.tasks.some((task) => task.state === 'doing');
+  const todo = doing ? session.tasks.filter((task) => task.state === 'todo') : [];
   const done = session.tasks.filter((task) => task.state === 'done');
-  return { doneCount: done.length, visible: expanded ? session.tasks : session.tasks.filter((task) => task.state !== 'done') };
+  const visible = session.tasks.filter((task) => (
+    task.state === 'done' ? showDone : task.state === 'todo' && doing ? showTodo : true
+  ));
+  return { todoCount: todo.length, doneCount: done.length, visible };
 }
 
 function kindDoneTaskCount(references) {
-  return references.reduce((count, { session }) => count + kindTaskVisibility(session, true).doneCount, 0);
+  return references.reduce((count, { session }) => count + taskVisibility(session, true, true).doneCount, 0);
 }
 
-function appendKindTaskSession(body, reference, expanded) {
+function kindTodoTaskCount(references) {
+  return references.reduce((count, { session }) => count + taskVisibility(session, true, true).todoCount, 0);
+}
+
+function appendKindTaskSession(body, reference, showTodo, showDone) {
   const { product, session, multipleSessions } = reference;
-  const { visible } = kindTaskVisibility(session, expanded);
+  const { visible } = taskVisibility(session, showTodo, showDone);
   const group = element('div', 'kind-session-tasks');
   const heading = element('div', 'kind-task-head');
   appendContextTags(heading, product, session, true, true);
@@ -2080,12 +2092,15 @@ function renderKindSections(products) {
 
   const tasks = element('div', 'body');
   const showDoneTasks = expandedKindSections.has('tasks');
+  const showTodoTasks = expandedKindSections.has('todoTasks');
+  const todoTaskCount = kindTodoTaskCount(references);
   const doneTaskCount = kindDoneTaskCount(references);
   for (const { product, session, multipleSessions } of references) {
     if (!session.tasks.length) continue;
-    appendKindTaskSession(tasks, { product, session, multipleSessions }, showDoneTasks);
+    appendKindTaskSession(tasks, { product, session, multipleSessions }, showTodoTasks, showDoneTasks);
   }
   if (!tasks.children.length) tasks.append(element('div', 'empty', 'ありません'));
+  if (todoTaskCount) appendKindToggle(tasks, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク');
   if (doneTaskCount) appendKindToggle(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク');
 
   const sections = [productOrder];

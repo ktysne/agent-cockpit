@@ -515,7 +515,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
@@ -1029,26 +1029,36 @@ function decisionSessionBlock(p, session, withTag) {
   return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
+// 作業中のタスクがあるときは未着手を畳み、作業中だけを先に見せる。未着手しか無ければ畳まない。
+function taskVisibility(session, showTodo, showDone) {
+  const states = session.tasks.map(task => taskState(session, task));
+  const foldTodo = states.includes('doing');
+  const visible = session.tasks.filter((task, i) => states[i] === 'done' ? showDone : states[i] === 'todo' && foldTodo ? showTodo : true);
+  return {
+    todoCount: foldTodo ? states.filter(state => state === 'todo').length : 0,
+    doneCount: states.filter(state => state === 'done').length,
+    visible,
+  };
+}
+
 function taskSessionBlock(p, session, withTag) {
-  const done = session.tasks.filter(task => taskState(session, task) === 'done');
+  const showTodo = ui.expandedTodoTasks.includes(session.id);
   const expanded = ui.expandedDoneTasks.includes(session.id);
-  const visible = expanded ? session.tasks : session.tasks.filter(task => taskState(session, task) !== 'done');
+  const { todoCount, doneCount, visible } = taskVisibility(session, showTodo, expanded);
   const updated = `最終更新 ${session.tasksUpdatedMin} 分前`;
   const items = visible.map(task => taskItem(p, session, task, withTag)).join('');
-  const toggle = done.length
-    ? `<button type="button" class="ended-toggle" data-done-tasks="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '完了したタスクを隠す' : '完了したタスクを表示'} (${done.length} 件)</button>`
+  const todoToggle = todoCount
+    ? `<button type="button" class="ended-toggle" data-todo-tasks="${esc(session.id)}" aria-expanded="${showTodo}">${showTodo ? '未着手のタスクを隠す' : '未着手のタスクを表示'} (${todoCount} 件)</button>`
     : '';
+  const toggle = todoToggle + (doneCount
+    ? `<button type="button" class="ended-toggle" data-done-tasks="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '完了したタスクを隠す' : '完了したタスクを表示'} (${doneCount} 件)</button>`
+    : '');
   const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
   return `<h3 class="sub">タスクと完了条件 <span class="meta">${updated}</span></h3>${items ? `<ul class="tasks">${items}</ul>` : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
-function kindTaskVisibility(session, expanded) {
-  const done = session.tasks.filter(task => taskState(session, task) === 'done');
-  return { doneCount: done.length, visible: expanded ? session.tasks : session.tasks.filter(task => taskState(session, task) !== 'done') };
-}
-
 function kindTaskSessionBlock(p, session, expanded) {
-  const { doneCount, visible } = kindTaskVisibility(session, expanded);
+  const { doneCount, visible } = taskVisibility(session, ui.expandedKindTodoTasks, expanded);
   const updated = Number.isFinite(session.tasksUpdatedMin) ? `最終更新 ${session.tasksUpdatedMin} 分前` : '最終更新 時刻不明';
   const items = visible.map(task => taskItem(p, session, task, false)).join('');
   const empty = session.tasks.length ? '未完了のタスクはありません。' : 'タスクはありません。';
@@ -1078,7 +1088,11 @@ function kindEndedAgentCount(sessions) {
 }
 
 function kindDoneTaskCount(sessions) {
-  return sessions.reduce((count, { session }) => count + kindTaskVisibility(session, true).doneCount, 0);
+  return sessions.reduce((count, { session }) => count + taskVisibility(session, true, true).doneCount, 0);
+}
+
+function kindTodoTaskCount(sessions) {
+  return sessions.reduce((count, { session }) => count + taskVisibility(session, true, true).todoCount, 0);
 }
 
 // 会話の記録の最後の行から推定する。tool はツールの呼び出しで止まっている、model はユーザーの行で終わっている状態。
@@ -1221,7 +1235,11 @@ function renderKindMode() {
   const doneTaskToggle = doneTaskCount
     ? kindToggle('tasks', '完了したタスク', doneTaskCount, ui.expandedKindTasks)
     : '';
-  const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}${doneTaskToggle}`;
+  const todoTaskCount = kindTodoTaskCount(sessions);
+  const todoTaskToggle = todoTaskCount
+    ? kindToggle('todoTasks', '未着手のタスク', todoTaskCount, ui.expandedKindTodoTasks)
+    : '';
+  const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}${todoTaskToggle}${doneTaskToggle}`;
   const prs = ps.map(p => prBlock(p, true)).join('<div style="height:12px"></div>');
   const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag" title="${esc(p.name)}">${i + 1}. ${esc(p.name)}</span><button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトを閉じる" aria-describedby="kind-product-order-${i}" title="このプロダクトを閉じる">×</button></span>`).join(' ')}</div>`;
   return orderBar
@@ -1256,7 +1274,7 @@ document.addEventListener('click', e => {
   else if (t.hasAttribute('data-show-all')) { ui.hidden = []; }
   else if (t.hasAttribute('data-show-hidden-sessions')) { ui.hiddenSessions = []; }
   else if (t.dataset.kindToggle) {
-    const stateKey = { decisions: 'expandedKindDecisions', agents: 'expandedKindAgents', tasks: 'expandedKindTasks' }[t.dataset.kindToggle];
+    const stateKey = { decisions: 'expandedKindDecisions', agents: 'expandedKindAgents', tasks: 'expandedKindTasks', todoTasks: 'expandedKindTodoTasks' }[t.dataset.kindToggle];
     if (!stateKey) return;
     ui[stateKey] = !ui[stateKey];
   }
@@ -1266,6 +1284,9 @@ document.addEventListener('click', e => {
   } else if (t.dataset.endedDecisions) {
     const id = t.dataset.endedDecisions;
     ui.expandedEndedDecisions = ui.expandedEndedDecisions.includes(id) ? ui.expandedEndedDecisions.filter(x => x !== id) : [...ui.expandedEndedDecisions, id];
+  } else if (t.dataset.todoTasks) {
+    const id = t.dataset.todoTasks;
+    ui.expandedTodoTasks = ui.expandedTodoTasks.includes(id) ? ui.expandedTodoTasks.filter(x => x !== id) : [...ui.expandedTodoTasks, id];
   } else if (t.dataset.doneTasks) {
     const id = t.dataset.doneTasks;
     ui.expandedDoneTasks = ui.expandedDoneTasks.includes(id) ? ui.expandedDoneTasks.filter(x => x !== id) : [...ui.expandedDoneTasks, id];
