@@ -537,7 +537,7 @@ test('PR の衝突依頼スナップショットは登録セッションの稼�
     { sessionId: 'conflict-ended', alive: false },
   ]);
   assert.equal(snapshot.conflictRequestKey, state.pullRequestRegistrationKey(state.pullRequestRegistrationsForRepo('example', 'project')[0]));
-  assert.deepEqual(snapshot.conflictRequest, { requestedAt: new Date(1_790_000_000_000).toISOString() });
+  assert.deepEqual(snapshot.conflictRequest, { requestedAt: new Date(1_790_000_000_000).toISOString(), sessionIds: ['conflict-live'] });
 
   pullRequest.headRefOid = 'b'.repeat(40);
   snapshot = tracker.snapshot()[0].trees[0];

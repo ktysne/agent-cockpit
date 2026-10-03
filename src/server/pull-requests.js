@@ -942,7 +942,7 @@ function attachMergeState(pullRequest, registrations, owner, repo, state) {
       sessionId: record.session_id,
       alive: !state.sessionHasEnded(record.session_id),
     })),
-    ...(activeConflictRequest ? { conflictRequest: { requestedAt: activeConflictRequest.requestedAt } } : {}),
+    ...(activeConflictRequest ? { conflictRequest: { requestedAt: activeConflictRequest.requestedAt, sessionIds: activeConflictRequest.sessionIds } } : {}),
     reservation: state.pullRequestMergeReservation(owner, repo, pullRequest.number),
     mergeIntent,
     children: pullRequest.children.map((child) => attachMergeState(child, registrations, owner, repo, state)),

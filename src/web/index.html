@@ -425,7 +425,6 @@ const pullRequestMergeMessages = new Map();
 const pullRequestMergeInFlight = new Set();
 const pullRequestConflictConfirmations = new Set();
 const pullRequestConflictMessages = new Map();
-const pullRequestConflictRecipients = new Map();
 const pullRequestConflictInFlight = new Set();
 let routing = { agents: 'default', review: 'default' };
 let codexAgentAvailable = false;
@@ -1137,14 +1136,18 @@ function pullRequestConflictUiKey(group, pullRequest) {
   return `${group.owner.toLowerCase()}/${group.repo.toLowerCase()}#${pullRequest.number}`;
 }
 
-function pullRequestConflictTargetNames(pullRequest, aliveOnly = false) {
+function pullRequestConflictSessionNames(sessionIds) {
   const sessions = Array.isArray(lastState?.sessions) ? lastState.sessions : [];
-  return [...new Set((pullRequest.conflictRequestTargets || [])
+  return [...new Set((Array.isArray(sessionIds) ? sessionIds : []).map((sessionId) => {
+    const session = sessions.find((item) => item.session_id === sessionId);
+    return session?.title || session?.session_id || sessionId;
+  }))];
+}
+
+function pullRequestConflictTargetNames(pullRequest, aliveOnly = false) {
+  return pullRequestConflictSessionNames((pullRequest.conflictRequestTargets || [])
     .filter((target) => !aliveOnly || target.alive)
-    .map((target) => {
-      const session = sessions.find((item) => item.session_id === target.sessionId);
-      return session?.title || session?.session_id || target.sessionId;
-    }))];
+    .map((target) => target.sessionId));
 }
 
 function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey) {
@@ -1190,7 +1193,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
   line.append(button);
 
   if (pullRequest.conflictRequest) {
-    const recipients = pullRequestConflictRecipients.get(uiKey) || pullRequestConflictTargetNames(pullRequest);
+    const recipients = pullRequestConflictSessionNames(pullRequest.conflictRequest.sessionIds);
     const namesForStatus = recipients.length ? recipients : ['PR を登録したセッション'];
     const requestedAt = Date.parse(pullRequest.conflictRequest.requestedAt || '');
     const time = Number.isFinite(requestedAt)
@@ -2366,8 +2369,14 @@ function render(state) {
 
   if (focusData?.kind?.startsWith('merge-')) {
     const controls = [...root.querySelectorAll('[data-merge-method], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-open-reserve], [data-merge-go], [data-reserve-go], [data-cancel-reservation], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
-    let control = focusData.kind.startsWith('merge-conflict-')
-      ? controls.find((item) => item.dataset.conflictGo === focusData.key) || controls.find((item) => item.dataset.conflictOpen === focusData.key)
+    // 「やめる」から「依頼を送る」へ移ると、取り消すつもりの Enter で依頼が送られるため、同じ操作のボタンへ戻す。
+    const conflictFocusOrder = {
+      'merge-conflict-open': ['conflictGo', 'conflictOpen'],
+      'merge-conflict-go': ['conflictGo', 'conflictOpen'],
+      'merge-conflict-cancel': ['conflictCancel', 'conflictOpen'],
+    }[focusData.kind];
+    let control = conflictFocusOrder
+      ? conflictFocusOrder.map((name) => controls.find((item) => item.dataset[name] === focusData.key)).find(Boolean)
       : controls.find((item) => item.dataset.mergeKey === focusData.key && (
       focusData.kind === 'merge-method' ? item.dataset.mergeMethod === focusData.method
         : focusData.kind === 'merge-delete' ? item.hasAttribute('data-merge-delete')
@@ -2741,7 +2750,6 @@ async function runPullRequestConflictRequest(button) {
       return;
     }
     pullRequestConflictConfirmations.delete(uiKey);
-    pullRequestConflictRecipients.set(uiKey, recipients);
     pullRequestConflictMessages.delete(uiKey);
     await refresh();
     liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しました。`;

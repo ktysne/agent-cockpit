@@ -149,7 +149,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 書き込み口は `POST /api/pull-requests/conflict-request` で、本文は `{key, headRefOid}`(`key` はマージの口と同じ PR の記録キー)とする。`uiSecret` と `validRequiredUiOrigin` を照合する。
 受け付けるのは、追跡中のオープン PR で `conflict` が真、画面の `headRefOid` が今の head と一致し、PR を登録したセッションのうち終了扱いでないものが 1 つ以上あるときだけである。PR が無ければ `404`、衝突が無いか head が違えば `409`、依頼先が無ければ `409` を返す。
 依頼は、終了扱いでない登録セッションへ、マージの結果と同じ回答配信経路(`notifySessions`)で届ける。文面は PR の番号と URL、base のブランチ名を含め、base を取り込んで衝突を解消し、検証してから push すること、マージはしないこと、解消できなければ理由を報告することを伝える。
-依頼の記録 `{owner, repo, number, headRefOid, requestedAt, sessionIds}` はメモリーに持ち、PR ごとに最後の 1 件だけを残す。スナップショットの PR には、記録の `headRefOid` が今の head と一致するときだけ `conflictRequest: {requestedAt}` を付ける。head が変われば表示を消す。
+依頼の記録 `{owner, repo, number, headRefOid, requestedAt, sessionIds}` はメモリーに持ち、PR ごとに最後の 1 件だけを残す。スナップショットの PR には、記録の `headRefOid` が今の head と一致するときだけ `conflictRequest: {requestedAt, sessionIds}` を付ける。画面は依頼済みの表示の依頼先を、この `sessionIds`(実際に送ったセッション)から求める。head が変われば表示を消す。
 スナップショットの PR には、登録したセッションを `conflictRequestTargets: [{sessionId, alive}]` として付ける。`alive` は終了扱いでないこと。画面はセッションの表示名をこの `sessionId` から既存の表示と同じ方法で求め、`alive` が 1 つも無ければボタンを押せなくして理由を出す。
 
 ## サブエージェントのモデルと effort

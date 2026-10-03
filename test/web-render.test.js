@@ -1082,7 +1082,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
       createTextNode: (text) => new FakeText(text),
     },
     pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), pullRequestMergeInFlight: new Set(),
-    pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictRecipients: new Map(), pullRequestConflictInFlight: new Set(),
+    pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictInFlight: new Set(),
     lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }], pullRequests: [group] },
     appendPullRequestBadges() {},
     crossReviewState: () => ({}),
@@ -1112,7 +1112,17 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   assert.equal(noTarget.find((node) => node.dataset?.conflictOpen === uiKey).disabled, true);
   assert.ok(noTarget.some((node) => textOf(node).includes('依頼先の Feature session のセッションが終了している')));
 
-  pullRequest.conflictRequest = { requestedAt: '2026-10-03T03:04:00.000Z' };
+  // 依頼の後に登録したセッションは、依頼済みの表示に含めない。
+  const sentOnlyToFirst = renderPullRequest({
+    ...pullRequest,
+    conflictRequestTargets: [{ sessionId: 'session-pr', alive: true }, { sessionId: 'session-later', alive: true }],
+    conflictRequest: { requestedAt: '2026-10-03T03:04:00.000Z', sessionIds: ['session-pr'] },
+  });
+  const sentStatus = textOf(sentOnlyToFirst.find((node) => node.attributes?.role === 'status'));
+  assert.match(sentStatus, /Feature session のセッションへ/);
+  assert.doesNotMatch(sentStatus, /session-later/);
+
+  pullRequest.conflictRequest = { requestedAt: '2026-10-03T03:04:00.000Z', sessionIds: ['session-pr'] };
   context.pullRequestConflictConfirmations.add(uiKey);
   nodes = renderPullRequest(pullRequest);
   assert.equal(nodes.find((node) => node.dataset?.conflictOpen === uiKey).textContent, 'もう一度依頼する');
@@ -1465,6 +1475,42 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
   assert.deepEqual(expandedLinks.map((node) => node.textContent), ['#7', '#6', '#5', '#4', '#3', '#2', '#1']);
   assert.equal(expandedToggle.textContent, '古いクローズ済みを隠す (2 件)');
   assert.equal(expandedToggle.attributes['aria-expanded'], 'true');
+});
+
+test('衝突の依頼の確認欄では、描き直しの後も同じ操作のボタンへフォーカスを戻す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render);
+
+  const key = 'conflict-key';
+  for (const [dataAttribute, htmlAttribute] of [['conflictCancel', 'data-conflict-cancel'], ['conflictGo', 'data-conflict-go']]) {
+    let activeElement = { dataset: { [dataAttribute]: key }, hasAttribute: (name) => name === htmlAttribute };
+    const makeButton = (name) => ({
+      dataset: { [name]: key },
+      focused: false,
+      focus() { this.focused = true; activeElement = this; },
+    });
+    const go = makeButton('conflictGo');
+    const cancel = makeButton('conflictCancel');
+    const context = vm.createContext({
+      answerNoteComposing: false,
+      lastState: { sessions: [{ session_id: 'session-ui' }] },
+      HTMLTextAreaElement: class FakeTextArea {},
+      document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
+      root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [go, cancel] },
+      displayPreferences: { mode: 'product', pinned: [] },
+      renderRouting() {},
+      renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+      orderedProducts: () => [{ key: 'product-ui' }],
+      productSection: () => ({}),
+    });
+    vm.runInContext(render, context);
+    context.render(context.lastState);
+
+    const expected = dataAttribute === 'conflictCancel' ? cancel : go;
+    assert.equal(expected.focused, true, dataAttribute);
+    assert.equal(activeElement, expected, dataAttribute);
+  }
 });
 
 test('マージ操作ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
