@@ -348,7 +348,7 @@ h3.sub .count { font-weight: normal; }
 .excluded-note[hidden] { display: none; }
 .product-remove { margin-left: 12px; }
 .session-context { width: fit-content; margin-bottom: 4px; }
-.route-note { flex: 1 1 100%; color: var(--text-2); font-size: 11px; }
+.route-note { margin: 0; color: var(--text-2); font-size: 11px; overflow-wrap: anywhere; }
 @media (max-width: 640px) {
   .order { margin-left: 0; }
   .session-head { align-items: flex-start; }
@@ -956,8 +956,9 @@ function renderRouting(settings = {}, integrations = {}) {
       agents: '既定は Codex で実装し、利用上限や指示があれば Claude に切り替える。次に起動するサブエージェントから効く。',
       review: '既定はクロスレビューの手順が推奨する方法。次に回すレビューから効く。',
     };
-    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div><span class="route-note">${descriptions[key]}</span></div>`;
-    root.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>`;
+    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div></div>`;
+    const note = (key) => `<p class="route-note">${ROUTE[key].label}: ${descriptions[key]}</p>`;
+    root.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>${keys.map(note).join('')}`;
     root.dataset.routes = routeSignature;
   }
   for (const button of root.querySelectorAll('[data-route]')) {
@@ -2793,7 +2794,8 @@ function render(state) {
             : activeAnswerNote ? { kind: 'answer-note', sessionId: activeAnswerNote.dataset.sessionId, decisionId: activeAnswerNote.dataset.decisionId, start: activeAnswerNote.selectionStart, end: activeAnswerNote.selectionEnd, direction: activeAnswerNote.selectionDirection }
               : active?.dataset?.sendAnswer ? { kind: 'answer-submit', sessionId: active.dataset.sessionId, decisionId: active.dataset.sendAnswer }
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
-          : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' } : null;
+          : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
+            : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
   renderSummary(sessions, pullRequestGroups);
   renderExcludedNote(allSessions);
   updateTitle(sessions);
@@ -2804,6 +2806,8 @@ function render(state) {
   const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
   if (!products.length) {
     root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
+    const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
+    if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
     return;
   }
 
@@ -2877,6 +2881,7 @@ function render(state) {
       if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
       if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
       if (focusData.kind === 'clear-hidden') return item.hasAttribute('data-clear-hidden-sessions');
+      if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
       return item.dataset.productAction === focusData.action && item.dataset.productKey === focusData.key && (item.dataset.direction || '') === focusData.direction;
     });
     const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled

@@ -70,11 +70,22 @@ test('プロダクトを外す操作を並べ替えから離し、直前分だ�
   assert.match(mock, /const restored = new Set\(hiddenSessionsUndo\.sessionIds\)/);
 });
 
+test('「元に戻す」にフォーカスがあれば、表示するプロダクトが無くなる描き直しの後も同じボタンへ戻す', () => {
+  const render = functionSource(web, 'render');
+  assert.match(render, /hasAttribute\('data-undo-hidden-sessions'\) \? \{ kind: 'undo-hidden' \}/);
+  assert.match(render, /if \(focusData\.kind === 'undo-hidden'\) return item\.hasAttribute\('data-undo-hidden-sessions'\)/);
+  const emptyBranch = render.slice(render.indexOf('if (!products.length)'), render.indexOf('return;', render.indexOf('if (!products.length)')));
+  assert.match(emptyBranch, /'undo-hidden': 'data-undo-hidden-sessions'/);
+});
+
 test('経路の既定と有効になる時点を説明し、起動時の設定札にtitleを付ける', () => {
   for (const source of [web, mock]) {
     assert.match(source, /既定は Codex で実装し、利用上限や指示があれば Claude に切り替える。次に起動するサブエージェントから効く。/);
     assert.match(source, /既定はクロスレビューの手順が推奨する方法。次に回すレビューから効く。/);
   }
+  // .rrow は display: contents でグリッドに並ぶので、説明を中に置くとラベルと選択肢の対応が崩れる。
+  assert.match(functionSource(web, 'renderRouting'), /<div class="rgroup">\$\{keys\.map\(row\)\.join\(''\)\}<\/div>\$\{keys\.map\(note\)\.join\(''\)\}/);
+  assert.match(functionSource(mock, 'renderRouting'), /<div class="rgroup">\$\{keys\.map\(row\)\.join\(''\)\}<\/div>\$\{keys\.map\(note\)\.join\(''\)\}/);
   assert.match(mock, /title="起動時に効いていた経路の設定"/);
   assert.match(functionSource(web, 'routeTag'), /tag\.title = '起動時に効いていた経路の設定'/);
 });
