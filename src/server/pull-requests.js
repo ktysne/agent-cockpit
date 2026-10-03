@@ -472,6 +472,13 @@ function mergeablePullRequestCount(trees) {
   return trees.reduce((total, pullRequest) => total + Number(pullRequest.canMerge === true) + mergeablePullRequestCount(pullRequest.children || []), 0);
 }
 
+// 鍵の文字列はプロダクトの鍵次第で分解できないので、リポジトリは保存した owner と repo で比べる。
+function removeStaleProductViews(productViews, repositoryKey, currentIdentities) {
+  for (const [identity, view] of productViews) {
+    if (repoKey(view.owner, view.repo) === repositoryKey && !currentIdentities.has(identity)) productViews.delete(identity);
+  }
+}
+
 class PullRequestTracker {
   constructor(options = {}) {
     this.state = options.state;
@@ -480,6 +487,7 @@ class PullRequestTracker {
     this.fileSystem = options.fileSystem || fs;
     this.now = options.now || Date.now;
     this.repositories = new Map();
+    this.productViews = new Map();
     this.inFlight = new Map();
     this.timer = null;
     this.onMerged = options.onMerged || null;
@@ -504,7 +512,27 @@ class PullRequestTracker {
       const key = repoKey(record.owner, record.repo);
       repositories.set(key, { owner: record.owner, repo: record.repo });
     }
-    return Promise.all([...repositories.values()].map(({ owner, repo }) => this.refreshRepo(owner, repo)));
+    const refreshes = [...repositories.values()].map(({ owner, repo }) => this.refreshRepo(owner, repo));
+    return Promise.all(refreshes).then((results) => {
+      // 取り直しの間に登録されたリポジトリを消さないため、登録は待った後に数え直す。
+      const registeredKeys = new Set([...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()]
+        .map((record) => repoKey(record.owner, record.repo)));
+      let removed = false;
+      for (const key of this.repositories.keys()) {
+        if (!registeredKeys.has(key)) {
+          this.repositories.delete(key);
+          removed = true;
+        }
+      }
+      for (const [identity, view] of this.productViews) {
+        if (!registeredKeys.has(repoKey(view.owner, view.repo))) {
+          this.productViews.delete(identity);
+          removed = true;
+        }
+      }
+      if (removed) this.state.touch();
+      return results;
+    });
   }
 
   refreshRepo(owner, repo) {
@@ -858,6 +886,7 @@ class PullRequestTracker {
       }
       group.registrations.push(registration);
     }
+    const createdIdentities = new Set();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     for (const registration of registrations) {
@@ -888,7 +917,7 @@ class PullRequestTracker {
         crossReviewByNumber,
       ));
       const identity = `${productKey}\0${key}`;
-      this.productViews ||= new Map();
+      createdIdentities.add(identity);
       this.productViews.set(identity, {
         product: { ...group.product },
         owner,
@@ -912,10 +941,11 @@ class PullRequestTracker {
         lastMethod: this.state.lastPullRequestMethod(owner, repo),
       });
     }
+    removeStaleProductViews(this.productViews, key, createdIdentities);
   }
 
   snapshot() {
-    return [...(this.productViews || new Map()).values()].map((group) => {
+    return [...this.productViews.values()].map((group) => {
       const trees = group.trees.map((tree) => attachMergeState(tree, [], group.owner, group.repo, this.state));
       return {
         ...group,

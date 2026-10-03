@@ -287,6 +287,42 @@ test('マージできない理由は base、スタック、ドラフト、積み
   }
 });
 
+test('登録の保持期限後に refreshAll するとリポジトリと表示用データを消して版を進める', async (t) => {
+  const { state, tracker } = await trackerFixture(t);
+  await tracker.refreshRepo('example', 'project');
+  assert.equal(tracker.snapshot().length, 1);
+
+  const registration = state.pullRequestRegistrations()[0];
+  state.pruneExpiredStoreRecords(Date.parse(registration.addedAt) + 15 * 24 * 60 * 60 * 1000);
+  assert.equal(state.pullRequestRegistrations().length, 0);
+  const versionBeforeRefresh = state.version;
+
+  await tracker.refreshAll();
+
+  assert.deepEqual(tracker.snapshot(), []);
+  assert.equal(tracker.repositories.has('example/project'), false);
+  assert.ok(state.version > versionBeforeRefresh);
+});
+
+test('同じリポジトリで登録が消えたプロダクトの表示用データだけを refreshRepo で消す', async (t) => {
+  const { state, tracker } = await trackerFixture(t, []);
+  state.registerPullRequest('session-a', { url: 'https://github.com/example/project/pull/31' }, {
+    product: { key: 'product\0with-null', name: 'Product A' },
+  });
+  state.registerPullRequest('session-b', { url: 'https://github.com/example/project/pull/32' }, {
+    product: { key: 'product-b', name: 'Product B' },
+  });
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(tracker.snapshot().map((group) => group.product.key).sort(), ['product-b', 'product\0with-null'].sort());
+
+  state.deleteStoredSession('session-a');
+  const versionBeforeRefresh = state.version;
+  await tracker.refreshRepo('example', 'project');
+
+  assert.deepEqual(tracker.snapshot().map((group) => group.product.key), ['product-b']);
+  assert.ok(state.version > versionBeforeRefresh);
+});
+
 test('スカッシュした親のコミットはbaseをmainに変えても残り、pushで消える', async (t) => {
   const { github, calls, unexpectedCalls, tracker, state } = await trackerFixture(t);
   const parentSha = 'a'.repeat(40);
