@@ -349,9 +349,14 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
         <option value="always">常に</option>
         <option value="away">離席中のみ</option>
+        <option value="never">出さない</option>
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <div class="settings-theme-row">
+      <label for="settings-hide-finished">終わったものを表示しない</label>
+      <input id="settings-hide-finished" name="hideFinished" type="checkbox">
+    </div>
     <div class="settings-theme-row">
       <label for="settings-long-wait-minutes">長く待たせているとみなす時間(分)</label>
       <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric">
@@ -557,12 +562,13 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5 }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true }, load());
 function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
 ui.longWaitMinutes = normalizeDisplayMinutes(ui.longWaitMinutes, 1, 120, 15);
 ui.awayAnswerWaitMinutes = normalizeDisplayMinutes(ui.awayAnswerWaitMinutes, 1, 30, 5);
+ui.hideFinished = ui.hideFinished !== false;
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
 ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
@@ -575,6 +581,7 @@ const byId = id => DATA.products.find(p => p.id === id);
 const themeSelect = document.getElementById('settings-theme-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const hideFinishedInput = document.getElementById('settings-hide-finished');
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
 const settingsDialog = document.getElementById('settings-dialog');
@@ -597,13 +604,14 @@ function applyAway(away) {
 
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 function applySinceSeenMode(mode) {
-  ui.sinceSeenMode = mode === 'away' ? 'away' : 'always';
+  ui.sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'always';
   sinceSeenSelect.value = ui.sinceSeenMode;
 }
 
 function renderDisplaySettings() {
   longWaitMinutesInput.value = String(ui.longWaitMinutes);
   awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
+  hideFinishedInput.checked = ui.hideFinished;
 }
 
 function changeDisplaySetting(key, input, minimum, maximum) {
@@ -622,6 +630,11 @@ function changeDisplaySetting(key, input, minimum, maximum) {
 renderDisplaySettings();
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
+hideFinishedInput.addEventListener('change', () => {
+  ui.hideFinished = hideFinishedInput.checked;
+  save();
+  render();
+});
 
 const SECTION_KINDS = [
   { key: 'sinceSeen', label: '前回見てから' },
@@ -705,7 +718,9 @@ const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) 
 const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions);
-const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id));
+// 終わったセッションでも、完了したタスクは全体の進みを見るために残し、それ以外の欄だけを隠す。
+const hidesFinishedSession = s => ui.hideFinished && isFinishedSession(s);
+const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id) && (!hidesFinishedSession(s) || s.tasks.length > 0));
 const effectiveDecisionState = d => d.kind;
 const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(d => {
   const a = answerOf(d.id);
@@ -876,6 +891,14 @@ const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.t
 const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !ui.closedAgents.includes(closedAgentKey(session, agent));
 const isEndedAgent = (session, agent) => agent.state === 'done' && !isUnconfirmed(session, agent);
 
+function isFinishedSession(session) {
+  return session.status === 'wait'
+    && session.tasks.every(task => taskState(session, task) === 'done')
+    && session.decisions.every(decision => ['resolved', 'withdrawn'].includes(effectiveDecisionState(decision)))
+    && session.perms.length === 0
+    && !session.subagents.some(agent => !isEndedAgent(session, agent));
+}
+
 function agentRow(p, session, agent, withTag) {
   const unconfirmed = isUnconfirmed(session, agent);
   const state = agent.state === 'busy' ? ['稼働中', 'busy'] : unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
@@ -886,6 +909,7 @@ function agentRow(p, session, agent, withTag) {
 }
 
 function endedAgentToggle(session) {
+  if (ui.hideFinished) return '';
   const ended = session.subagents.filter(agent => isEndedAgent(session, agent));
   if (!ended.length) return '';
   const expanded = ui.expandedEndedAgents.includes(session.id);
@@ -894,11 +918,11 @@ function endedAgentToggle(session) {
 }
 
 function agentSection(p, session, withTag) {
-  const expanded = ui.expandedEndedAgents.includes(session.id);
+  const expanded = !ui.hideFinished && ui.expandedEndedAgents.includes(session.id);
   const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || expanded)
     .sort((a, b) => ageMinutes(a) - ageMinutes(b));
   const rows = agents.map(agent => agentRow(p, session, agent, withTag)).join('');
-  const hasEnded = session.subagents.some(agent => isEndedAgent(session, agent));
+  const hasEnded = !ui.hideFinished && session.subagents.some(agent => isEndedAgent(session, agent));
   const toggle = endedAgentToggle(session);
   if (!isShown('agents') && !rows && !toggle) return '';
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
@@ -942,7 +966,7 @@ const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => 
 
 // 前回見てからの変化。常駐サーバーが項目ごとの更新時刻を持ち、画面は最後に見た時刻と比べる想定
 // 「離席中のみ」では、離席中でない間は「前回見てから」が無いものとして扱う。既読の時刻は進めない。
-const sinceSeenVisible = () => ui.sinceSeenMode !== 'away' || ui.away;
+const sinceSeenVisible = () => ui.sinceSeenMode !== 'never' && (ui.sinceSeenMode !== 'away' || ui.away);
 function newsBox(p, withTag) {
   if (!sinceSeenVisible() || !p.news.length || ui.seen.includes(p.id)) return '';
   return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
@@ -1214,7 +1238,7 @@ function prBlock(p, withTag) {
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
 function foldedPrLine(p, kind, label, badges) {
-  if (!badges.length) return '';
+  if (!badges.length || ui.hideFinished) return '';
   const key = `${kind}:${p.id}`;
   const expanded = ui.expandedMerged.includes(key);
   const olderCount = Math.max(0, badges.length - MERGED_VISIBLE_COUNT);
@@ -1226,6 +1250,7 @@ function foldedPrLine(p, kind, label, badges) {
 }
 
 function endedDecisionToggle(session) {
+  if (ui.hideFinished) return '';
   const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
   if (!ended.length) return '';
   const expanded = ui.expandedEndedDecisions.includes(session.id);
@@ -1234,8 +1259,8 @@ function endedDecisionToggle(session) {
 
 function decisionSessionBlock(p, session, withTag) {
   const active = visibleDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
-  const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
-  const expanded = ui.expandedEndedDecisions.includes(session.id);
+  const ended = ui.hideFinished ? [] : session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
+  const expanded = !ui.hideFinished && ui.expandedEndedDecisions.includes(session.id);
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
@@ -1292,6 +1317,7 @@ function kindToggle(key, label, count, expanded) {
 }
 
 function kindEndedDecisionEntries(sessions) {
+  if (ui.hideFinished) return [];
   return sessions.flatMap(({ p, session }) => session.decisions
     .filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)))
     .map(decision => ({ p, session, decision })))
@@ -1299,6 +1325,7 @@ function kindEndedDecisionEntries(sessions) {
 }
 
 function kindEndedAgentCount(sessions) {
+  if (ui.hideFinished) return 0;
   return sessions.reduce((count, { session }) => count + session.subagents.filter(agent => isEndedAgent(session, agent)).length, 0);
 }
 
@@ -1329,12 +1356,12 @@ function sessionBlock(p, session) {
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
-    || session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)))
+    || (!ui.hideFinished && session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d))))
     || !hasHiddenJudgmentItems(session);
   return `<div class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}<span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
     <div class="session-body">
-      ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
+      ${hidesFinishedSession(session) ? taskSessionBlock(p, session, false) : orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
       ${decisionSessionBlock(p, session, false)}` : '',
@@ -1437,8 +1464,8 @@ function renderKindMode() {
   const decisions = decisionItems || (hiddenJudgmentItems ? '' : '<div class="empty">ありません</div>');
   const showJudgment = Boolean(decisionItems) || !hiddenJudgmentItems;
   const news = ps.map(p => newsBox(p, true)).join('');
-  const showEndedAgents = ui.expandedKindAgents;
-  const nowRowsByAge = sessions.flatMap(({ p, session }) => {
+  const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
+  const nowRowsByAge = sessions.filter(({ session }) => !hidesFinishedSession(session)).flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
     return [
       { age: ageMinutes(session.main), html: mainRow(p, session, true) },
@@ -1463,7 +1490,7 @@ function renderKindMode() {
     ? kindToggle('todoTasks', '未着手のタスク', todoTaskCount, ui.expandedKindTodoTasks)
     : '';
   const tasks = `${taskGroups.map(group => group.html).join('') || '<div class="empty">ありません</div>'}${todoTaskToggle}${doneTaskToggle}`;
-  const prs = ps.filter(p => p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('<div style="height:12px"></div>')
+  const prs = ps.filter(p => ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('<div style="height:12px"></div>')
     || '<div class="empty">ありません</div>';
   const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag" title="${esc(p.name)}">${i + 1}. ${esc(p.name)}</span>${productCloseButton(p, `kind-product-order-${i}`)}</span>`).join(' ')}</div>`;
   const sections = {

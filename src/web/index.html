@@ -367,9 +367,14 @@ h3.sub .count { font-weight: normal; }
       <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
         <option value="always">常に</option>
         <option value="away">離席中のみ</option>
+        <option value="never">出さない</option>
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <div class="settings-theme-row">
+      <label for="settings-hide-finished">終わったものを表示しない</label>
+      <input id="settings-hide-finished" name="hideFinished" type="checkbox">
+    </div>
     <div class="settings-theme-row">
       <label for="settings-long-wait-minutes">長く待たせているとみなす時間(分)</label>
       <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric">
@@ -416,6 +421,7 @@ const themeSelect = document.getElementById('settings-theme-select');
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const hideFinishedInput = document.getElementById('settings-hide-finished');
 const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
 const awayToggle = document.getElementById('away-toggle');
@@ -538,11 +544,13 @@ function readDisplayPreferences() {
       sectionOrder: normalizeSectionOrder(value.sectionOrder),
       longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
       awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
+      hideFinished: value.hideFinished !== false,
     };
   } catch {
     return {
       mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: [...DEFAULT_SECTION_ORDER],
       longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
+      hideFinished: true,
     };
   }
 }
@@ -558,6 +566,7 @@ function normalizeDisplayPreferences(value) {
     sectionOrder: normalizeSectionOrder(value?.sectionOrder),
     longWaitMinutes: normalizeDisplayMinutes(value?.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value?.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
+    hideFinished: value?.hideFinished !== false,
   };
 }
 
@@ -578,6 +587,12 @@ function renderDisplaySettings() {
     if (document.activeElement === input) continue;
     input.value = String(displayPreferences[key]);
   }
+  if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
+}
+
+function setDisplaySettingInput(input, value) {
+  if (input.type === 'checkbox') input.checked = value === true;
+  else input.value = String(value);
 }
 
 function settleDisplaySettingSaves(saves, saved) {
@@ -585,7 +600,7 @@ function settleDisplaySettingSaves(saves, saved) {
     if (saved) state.savedValue = value;
     if (state.sequence !== sequence) continue;
     if (!saved) displayPreferences[key] = state.savedValue;
-    state.input.value = String(displayPreferences[key]);
+    setDisplaySettingInput(state.input, displayPreferences[key]);
     pendingDisplaySettingSaves.delete(key);
   }
   if (!saved && lastState) render(lastState);
@@ -619,9 +634,9 @@ function saveDisplayPreferences(changes) {
 }
 
 function changeDisplaySetting(key, input, minimum, maximum) {
-  const value = input.valueAsNumber;
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    input.value = String(displayPreferences[key]);
+  const value = input.type === 'checkbox' ? input.checked : input.valueAsNumber;
+  if (input.type !== 'checkbox' && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+    setDisplaySettingInput(input, displayPreferences[key]);
     return Promise.resolve(false);
   }
   if (value === displayPreferences[key]) return Promise.resolve(true);
@@ -631,7 +646,7 @@ function changeDisplaySetting(key, input, minimum, maximum) {
   state.input = input;
   pendingDisplaySettingSaves.set(key, state);
   displayPreferences[key] = value;
-  input.value = String(value);
+  setDisplaySettingInput(input, value);
   if (lastState) render(lastState);
   if (!displayPreferencesReady) {
     pendingDisplayChanges[key] = value;
@@ -642,7 +657,7 @@ function changeDisplaySetting(key, input, minimum, maximum) {
     if (saved) state.savedValue = value;
     if (state.sequence !== sequence) return saved;
     if (!saved) displayPreferences[key] = state.savedValue;
-    input.value = String(displayPreferences[key]);
+    setDisplaySettingInput(input, displayPreferences[key]);
     pendingDisplaySettingSaves.delete(key);
     if (lastState) render(lastState);
     return saved;
@@ -733,21 +748,21 @@ themeSelect.addEventListener('change', () => {
 });
 
 function applySinceSeenMode(mode) {
-  sinceSeenMode = mode === 'away' ? 'away' : 'always';
+  sinceSeenMode = ['always', 'away', 'never'].includes(mode) ? mode : 'always';
   sinceSeenSelect.value = sinceSeenMode;
 }
 
 function storedSinceSeenMode() {
   try {
     const mode = localStorage.getItem(SINCE_SEEN_STORAGE_KEY);
-    if (mode === 'always' || mode === 'away') return mode;
+    if (mode === 'always' || mode === 'away' || mode === 'never') return mode;
   } catch {
   }
   return 'always';
 }
 
 function visibleSinceSeen(state) {
-  if (sinceSeenMode === 'away' && header.dataset.away !== 'true') return [];
+  if (sinceSeenMode === 'never' || (sinceSeenMode === 'away' && header.dataset.away !== 'true')) return [];
   return Array.isArray(state?.sinceSeen) ? state.sinceSeen : [];
 }
 
@@ -783,6 +798,7 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
 
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
+hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
 
 settingsButton.addEventListener('click', () => settingsDialog.showModal());
 settingsClose.addEventListener('click', () => settingsDialog.close());
@@ -1167,6 +1183,11 @@ function hasHiddenJudgmentItems(session) {
 
 function pullRequestOpenCount(groups) {
   return groups.reduce((total, group) => total + (group.openCount || 0), 0);
+}
+
+function visiblePullRequestGroups(groups) {
+  if (!displayPreferences.hideFinished) return groups;
+  return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.trees?.length);
 }
 
 // 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
@@ -1582,7 +1603,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
     target.append(stack);
   }
   const appendFoldedPrLine = (kind, heading, label, items, appendItem) => {
-    if (!items.length) return;
+    if (!items.length || displayPreferences.hideFinished) return;
     const line = element('div', 'merged-list');
     line.append(document.createTextNode(`${heading}: `));
     const repositoryKey = `${group.owner}/${group.repo}`.toLowerCase();
@@ -1674,7 +1695,7 @@ function productGroups(sessions, pullRequestGroups = []) {
 // オープンの PR を数えきれていない PR 群は、openCount が 0 でもオープンの PR が無いとは扱わない。
 // PR を非表示にしている間は、PR だけで残るカードの本文が空になるので、PR を理由に残さない。
 function hasProductContent(product, sinceSeen) {
-  const pullRequestGroups = isFilterShown('prs') ? product.pullRequestGroups || [] : [];
+  const pullRequestGroups = isFilterShown('prs') ? visiblePullRequestGroups(product.pullRequestGroups || []) : [];
   return product.sessions.length > 0
     || pullRequestOpenCount(pullRequestGroups) > 0
     || pullRequestGroups.some((group) => group.openStateUnknown)
@@ -1691,7 +1712,10 @@ function sessionActivityTime(session) {
 }
 
 function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
-  const grouped = productGroups(sessions, pullRequestGroups);
+  const visibleSessions = displayPreferences.hideFinished
+    ? sessions.filter((session) => session.tasks.length > 0 || !isFinishedSession(session))
+    : sessions;
+  const grouped = productGroups(visibleSessions, pullRequestGroups);
   for (const entry of sinceSeen) {
     if (!entry.product?.key || grouped.some((product) => product.key === entry.product.key)) continue;
     grouped.push({ key: entry.product.key, name: entry.product.name, branches: new Set(), sessions: [], pullRequestGroups: [] });
@@ -1721,7 +1745,7 @@ function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
     .map((product) => ({
       ...product,
       sessions: [...product.sessions].sort((left, right) => sessionActivityTime(right) - sessionActivityTime(left)),
-      pullRequestGroups: product.pullRequestGroups || [],
+      pullRequestGroups: visiblePullRequestGroups(product.pullRequestGroups || []),
     }))
     .sort((left, right) => {
       const leftPinned = displayPreferences.pinned.includes(left.key);
@@ -1735,6 +1759,19 @@ function activityStatus(session) {
   if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
   if (session.status === '不明') return { label: '状態不明', tone: 'unknown' };
   return { label: '待機中', tone: 'wait' };
+}
+
+// 終わったセッションでも、完了したタスクは全体の進みを見るために残し、それ以外の欄だけを隠す。
+function hidesFinishedSession(session) {
+  return displayPreferences.hideFinished && isFinishedSession(session);
+}
+
+function isFinishedSession(session) {
+  return activityStatus(session).tone === 'wait'
+    && session.tasks.every((task) => task.state === 'done')
+    && session.decisions.every((decision) => ['resolved', 'withdrawn'].includes(decision.state))
+    && session.permissionWaits.length === 0
+    && !session.agents.some((agent) => !isEndedAgent(agent));
 }
 
 function mainRow(session, product, withTags = false, multipleSessions = false) {
@@ -1764,8 +1801,8 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
   }
   const agents = newestFirst(session.agents);
   const runningAgents = agents.filter((agent) => !isEndedAgent(agent) && (!agent.active || isFilterShown('agents')));
-  const endedAgents = agents.filter(isEndedAgent);
-  const visibleAgents = showEnded ? [...runningAgents, ...endedAgents] : runningAgents;
+  const endedAgents = displayPreferences.hideFinished ? [] : agents.filter(isEndedAgent);
+  const visibleAgents = showEnded && !displayPreferences.hideFinished ? [...runningAgents, ...endedAgents] : runningAgents;
   const hiddenRunningAgents = agents.some((agent) => agent.active && !isFilterShown('agents'));
   if (!visibleAgents.length && !endedAgents.length && !isFilterShown('agents')) return;
   body.append(element('h3', 'sub', 'サブエージェント'));
@@ -2148,8 +2185,8 @@ function appendKindToggle(body, sectionKey, expanded, count, label) {
 function appendDecisions(body, session, product, withTags = false, multipleSessions = false) {
   const decisions = newestFirst(session.decisions);
   const active = newestFirst(shownActiveDecisions(session));
-  const ended = decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
-  const expanded = expandedEndedDecisions.has(session.session_id);
+  const ended = displayPreferences.hideFinished ? [] : decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const expanded = !displayPreferences.hideFinished && expandedEndedDecisions.has(session.session_id);
   const visible = expanded ? newestFirst([...active, ...ended]) : active;
   if (visible.length) {
     const list = element('div', 'decision-list');
@@ -2307,8 +2344,13 @@ function sessionBlock(product, session, multipleSessions) {
   }
 
   const body = element('div', 'session-body');
+  if (hidesFinishedSession(session)) {
+    appendTasks(body, session, product);
+    block.append(body);
+    return block;
+  }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
-  const hasEndedDecisions = session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
   const sections = { judgment: [], tasks: [], now: [] };
   if (showJudgment) {
@@ -2423,6 +2465,8 @@ function productSection(product, index, products, pinnedCount) {
     body.append(prsHeading);
     if (pullRequestGroups.length) {
       for (const group of pullRequestGroups) appendPullRequestBlock(body, group);
+    } else if (displayPreferences.hideFinished) {
+      body.append(element('div', 'empty', 'オープンの PR はありません'));
     } else {
       appendPullRequestBlock(body, null);
     }
@@ -2482,6 +2526,7 @@ function kindProductOrder(products) {
 }
 
 function kindEndedDecisionEntries(references) {
+  if (displayPreferences.hideFinished) return [];
   const entries = references.flatMap((reference) => reference.session.decisions
     .filter((decision) => ['resolved', 'withdrawn'].includes(decision.state))
     .map((decision) => ({ ...reference, decision })));
@@ -2495,6 +2540,7 @@ function kindDecisionWaitAge(decision) {
 }
 
 function kindEndedAgentCount(references) {
+  if (displayPreferences.hideFinished) return 0;
   return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
 
@@ -2540,6 +2586,7 @@ function renderKindSections(products) {
   const showEndedAgents = expandedKindSections.has('agents');
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
+    if (hidesFinishedSession(session)) continue;
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
     const holder = element('div');
     appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false);
@@ -2590,7 +2637,8 @@ function renderKindSections(products) {
     now: kindSection('今やっていること', activity),
     prs: null,
   };
-  const pullRequestGroups = products.flatMap((product) => product.pullRequestGroups.map((group) => ({ product, group })));
+  const pullRequestGroups = products.flatMap((product) => visiblePullRequestGroups(product.pullRequestGroups)
+    .map((group) => ({ product, group })));
   if (isFilterShown('prs')) {
     const pullRequests = element('div', 'body');
     for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
