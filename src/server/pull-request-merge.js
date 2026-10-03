@@ -29,6 +29,19 @@ function mergeCandidateError(candidate, input, number) {
   return null;
 }
 
+function errorText(error) {
+  return [error?.message, error?.stderr].filter((value) => typeof value === 'string').join('\n');
+}
+
+function isMissingRemoteBranchError(error) {
+  const text = errorText(error);
+  return /reference does not exist/i.test(text) && /(?:http\s+422|\b422\b)/i.test(text);
+}
+
+function isGitHubNotFoundError(error) {
+  return /(?:http\s+404|\b404\s+not found\b)/i.test(errorText(error));
+}
+
 class PullRequestMergeManager {
   constructor({ state, tracker, answerDelivery, now = Date.now, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval, reservationPollMs = RESERVATION_POLL_MS } = {}) {
     this.state = state;
@@ -179,7 +192,8 @@ class PullRequestMergeManager {
     if (candidate.error) return actionResult(409, candidate.error);
     const pullRequest = candidate.pullRequest;
     const repository = safeRepo(registration.owner, registration.repo);
-    if (input.deleteBranch && pullRequest.isCrossRepository) {
+    const deleteBranch = input.deleteBranch && candidate.repository.autoDeleteBranch !== true;
+    if (deleteBranch && pullRequest.isCrossRepository) {
       return actionResult(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません');
     }
     const initialError = mergeCandidateError(candidate, input, registration.number);
@@ -215,7 +229,7 @@ class PullRequestMergeManager {
       const completed = retargeted.length ? `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。` : '';
       return actionResult(409, `${completed}${latestCandidate.error}。マージはしていません`);
     }
-    if (input.deleteBranch && latestCandidate.pullRequest.isCrossRepository) {
+    if (deleteBranch && latestCandidate.pullRequest.isCrossRepository) {
       const completed = retargeted.length ? `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。` : '';
       return actionResult(400, `${completed}fork からの PR の head ブランチは登録先リポジトリから削除できません`);
     }
@@ -235,7 +249,7 @@ class PullRequestMergeManager {
       headRefName: pullRequest.headRefName,
       defaultBranch: candidate.repository.defaultBranch,
       method: input.method,
-      deleteBranch: input.deleteBranch,
+      deleteBranch: deleteBranch && latestCandidate.repository.autoDeleteBranch !== true,
       createdAt: new Date(this.now()).toISOString(),
       stackedPullRequests: stackedPullRequests.map((item) => ({ number: item.number, baseRefName: item.baseRefName })),
     };
@@ -306,7 +320,8 @@ class PullRequestMergeManager {
     if (candidate.error) return actionResult(409, candidate.error);
     const pullRequest = candidate.pullRequest;
     const repository = safeRepo(registration.owner, registration.repo);
-    if (input.deleteBranch && pullRequest.isCrossRepository) {
+    const deleteBranch = input.deleteBranch && candidate.repository.autoDeleteBranch !== true;
+    if (deleteBranch && pullRequest.isCrossRepository) {
       return actionResult(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません');
     }
     if (pullRequest.headRefOid.toLowerCase() !== input.headRefOid.toLowerCase()) {
@@ -330,7 +345,7 @@ class PullRequestMergeManager {
       headRefName: pullRequest.headRefName,
       defaultBranch: candidate.repository.defaultBranch,
       method: input.method,
-      deleteBranch: input.deleteBranch,
+      deleteBranch,
       createdAt: new Date(this.now()).toISOString(),
       stackedPullRequests: pullRequest.children.map((child) => ({ number: child.number, baseRefName: child.baseRefName })),
     };
@@ -474,7 +489,18 @@ class PullRequestMergeManager {
 
   async deleteRemoteBranch(owner, repo, branch) {
     if (!validRepositoryPart(owner) || !validRepositoryPart(repo) || !validBranchName(branch)) throw new Error('invalid branch');
-    await this.tracker.execute(['api', '-X', 'DELETE', `repos/${owner}/${repo}/git/refs/heads/${branch}`]);
+    const reference = `repos/${owner}/${repo}/git/ref/heads/${branch}`;
+    try {
+      await this.tracker.execute(['api', '-X', 'DELETE', `repos/${owner}/${repo}/git/refs/heads/${branch}`]);
+    } catch (error) {
+      if (isMissingRemoteBranchError(error)) return;
+      try {
+        await this.tracker.execute(['api', reference]);
+      } catch (lookupError) {
+        if (isGitHubNotFoundError(lookupError)) return;
+      }
+      throw error;
+    }
   }
 
   notifyMerge(owner, repo, pullRequest, defaultBranch, method, stackedPullRequests, sessionIds, warning = null, headMismatch = null) {
@@ -568,7 +594,8 @@ class PullRequestMergeManager {
       }
     }
     let branchDeleted = false;
-    const deleteBranch = reservation?.deleteBranch === true || confirmedIntent?.deleteBranch === true;
+    const deleteBranch = repositoryState?.autoDeleteBranch !== true
+      && (reservation?.deleteBranch === true || confirmedIntent?.deleteBranch === true);
     if (deleteBranch && pullRequest.isCrossRepository) {
       warning = [warning, 'fork からの PR の head ブランチは登録先リポジトリから削除しませんでした'].filter(Boolean).join('。');
     } else if (deleteBranch && !headMismatch && canDeleteBranch && validBranchName(pullRequest.headRefName)) {

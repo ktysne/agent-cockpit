@@ -749,6 +749,109 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   }]));
 });
 
+test('GitHub がブランチを自動削除する確認欄はチェックを隠してマージと予約に false を送る', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helpersStart = html.indexOf('function element(tag, className, text)');
+  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
+  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+  const actionStart = html.indexOf('function findPullRequestMergeTarget');
+  const actionEnd = html.indexOf('async function runSessionAction', actionStart);
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
+  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+      this.disabled = false;
+    }
+
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const sent = [];
+  const key = 'e'.repeat(64);
+  const pullRequest = {
+    mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
+    mergeRecordKey: key, headRefOid: 'abc123', headRefName: 'feature/pr-42', effectiveBase: 'main', canMerge: true,
+    isCrossRepository: false, blocker: null, review: 'approved', children: [], stackPosition: { depth: 1, total: 1 },
+  };
+  const group = {
+    owner: 'acme', repo: 'widget', defaultBranch: 'main', autoDeleteBranch: true,
+    mergeMethods: ['merge', 'squash'], lastMethod: 'merge', trees: [pullRequest],
+  };
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestMergeOptions: new Map([[key, { method: 'merge', deleteBranch: true }]]),
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeMessages: new Map(),
+    pullRequestMergeInFlight: new Set(),
+    lastState: { pullRequests: [group] },
+    appendPullRequestBadges() {},
+    pullRequestTimeLabel: () => '時刻不明',
+    postUiAction: async (url, body) => {
+      sent.push({ url, body });
+      return { ok: true, json: async () => ({}) };
+    },
+    refresh: async () => {},
+    render() {},
+    liveStatus: { textContent: '' },
+  });
+  const source = [
+    html.slice(helpersStart, helpersEnd),
+    html.slice(componentStart, componentEnd),
+    html.slice(actionStart, actionEnd),
+  ].join('\n');
+  vm.runInContext(source, context);
+
+  const flatten = (root) => {
+    const nodes = [root];
+    for (const child of root.children || []) nodes.push(...flatten(child));
+    return nodes;
+  };
+  const mergeRoot = new FakeElement('div');
+  const reserveRoot = new FakeElement('div');
+  context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest, false);
+  context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest, true);
+  const mergeNodes = flatten(mergeRoot);
+  const reserveNodes = flatten(reserveRoot);
+  const effectText = 'リモートのブランチ feature/pr-42 は GitHub が自動で削除する (リポジトリの設定)';
+  assert.equal(mergeNodes.some((node) => node.type === 'checkbox'), false);
+  assert.equal(reserveNodes.some((node) => node.type === 'checkbox'), false);
+  assert.ok(mergeNodes.some((node) => node.textContent === effectText));
+  assert.ok(reserveNodes.some((node) => node.textContent === effectText));
+  const mergeButton = mergeNodes.find((node) => node.dataset?.mergeGo === key);
+  const reserveButton = reserveNodes.find((node) => node.dataset?.reserveGo === key);
+  assert.ok(mergeButton);
+  assert.ok(reserveButton);
+
+  await context.runPullRequestMergeAction(mergeButton, 'merge');
+  await context.runPullRequestMergeAction(reserveButton, 'reserve');
+
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
+    {
+      url: '/api/pull-requests/merge',
+      body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
+    },
+    {
+      url: '/api/pull-requests/reserve',
+      body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
+    },
+  ]);
+});
+
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];

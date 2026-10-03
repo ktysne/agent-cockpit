@@ -986,7 +986,10 @@ function pullRequestMergeOptionsFor(group, pullRequest) {
   const method = methods.includes(previous?.method) ? previous.method
     : methods.includes(group.lastMethod) ? group.lastMethod
       : methods[0] || '';
-  return { method, deleteBranch: pullRequest.isCrossRepository ? false : previous?.deleteBranch ?? true };
+  return {
+    method,
+    deleteBranch: pullRequest.isCrossRepository || group.autoDeleteBranch === true ? false : previous?.deleteBranch ?? true,
+  };
 }
 
 function appendPullRequestMergeConfirmation(target, group, pullRequest, automatic) {
@@ -1017,16 +1020,18 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   if ((group.mergeMethods || []).length === 1) methods.append(element('span', 'meta', 'リポジトリで許可されている方式です'));
   panel.append(methods);
 
-  const branchChoice = element('label', 'opt');
-  const deleteBranch = element('input');
-  deleteBranch.type = 'checkbox';
-  deleteBranch.checked = pullRequest.isCrossRepository ? false : options.deleteBranch;
-  deleteBranch.disabled = pullRequest.isCrossRepository === true;
-  deleteBranch.dataset.mergeDelete = 'true';
-  deleteBranch.dataset.mergeKey = key;
-  branchChoice.append(deleteBranch, document.createTextNode('マージ後にリモートブランチを削除する'));
-  if (pullRequest.isCrossRepository) branchChoice.append(element('span', 'meta', 'fork のブランチは登録先から削除できません'));
-  panel.append(branchChoice);
+  if (group.autoDeleteBranch !== true) {
+    const branchChoice = element('label', 'opt');
+    const deleteBranch = element('input');
+    deleteBranch.type = 'checkbox';
+    deleteBranch.checked = pullRequest.isCrossRepository ? false : options.deleteBranch;
+    deleteBranch.disabled = pullRequest.isCrossRepository === true;
+    deleteBranch.dataset.mergeDelete = 'true';
+    deleteBranch.dataset.mergeKey = key;
+    branchChoice.append(deleteBranch, document.createTextNode('マージ後にリモートブランチを削除する'));
+    if (pullRequest.isCrossRepository) branchChoice.append(element('span', 'meta', 'fork のブランチは登録先から削除できません'));
+    panel.append(branchChoice);
+  }
 
   const effects = element('ul', 'effects');
   const review = crossReviewState(pullRequest);
@@ -1034,7 +1039,9 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
     review.warn ? { text: review.warn, warn: true } : review.note ? { text: review.note } : null,
     { text: `head が ${pullRequest.headRefOid} のときだけマージする。表示後に push されていたら中止する。` },
     pullRequest.children.length ? { text: `先に ${pullRequest.children.map((child) => `#${child.number}`).join('、')} の base を ${group.defaultBranch} に付け替える。` } : null,
-    options.deleteBranch ? { text: `リモートの ${pullRequest.headRefName} を削除する。手元の worktree には触れない。` } : null,
+    group.autoDeleteBranch === true && !pullRequest.isCrossRepository
+      ? { text: `リモートのブランチ ${pullRequest.headRefName} は GitHub が自動で削除する (リポジトリの設定)` }
+      : options.deleteBranch ? { text: `リモートの ${pullRequest.headRefName} を削除する。手元の worktree には触れない。` } : null,
     pullRequest.isCrossRepository ? { text: 'fork の head ブランチは登録先リポジトリから削除しない。', warn: true } : null,
     pullRequest.children.length && ['squash', 'rebase'].includes(options.method)
       ? { text: 'スカッシュまたはリベースでは上の PR に元のコミットが残るため、セッションに積み直しを依頼する。', warn: true } : null,
