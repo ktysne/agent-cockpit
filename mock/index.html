@@ -336,6 +336,14 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
         <option value="system">OS に従う</option>
       </select>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-since-seen-select">前回見てから</label>
+      <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
+        <option value="always">常に</option>
+        <option value="away">離席中のみ</option>
+      </select>
+    </div>
+    <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
   </section>
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
@@ -558,10 +566,18 @@ function applyAway(away) {
   topBar.dataset.away = String(ui.away);
 }
 
+const sinceSeenSelect = document.getElementById('settings-since-seen-select');
+function applySinceSeenMode(mode) {
+  ui.sinceSeenMode = mode === 'away' ? 'away' : 'always';
+  sinceSeenSelect.value = ui.sinceSeenMode;
+}
+
 applyTheme(ui.theme);
 applyAway(ui.away);
+applySinceSeenMode(ui.sinceSeenMode);
 themeSelect.addEventListener('change', () => { applyTheme(themeSelect.value); save(); });
-awayToggle.addEventListener('change', () => { applyAway(awayToggle.checked); save(); });
+awayToggle.addEventListener('change', () => { applyAway(awayToggle.checked); save(); render(); });
+sinceSeenSelect.addEventListener('change', () => { applySinceSeenMode(sinceSeenSelect.value); save(); render(); });
 settingsButton.addEventListener('click', () => settingsDialog.showModal());
 settingsClose.addEventListener('click', () => settingsDialog.close());
 settingsDialog.addEventListener('click', event => {
@@ -818,8 +834,10 @@ function permCard(p, session, x, withTag) {
 const visiblePerms = session => [...visiblePermissions(session)].sort((a, b) => ageMinutes(a) - ageMinutes(b));
 
 // 前回見てからの変化。常駐サーバーが項目ごとの更新時刻を持ち、画面は最後に見た時刻と比べる想定
+// 「離席中のみ」では、離席中でない間は「前回見てから」が無いものとして扱う。既読の時刻は進めない。
+const sinceSeenVisible = () => ui.sinceSeenMode !== 'away' || ui.away;
 function newsBox(p, withTag) {
-  if (!p.news.length || ui.seen.includes(p.id)) return '';
+  if (!sinceSeenVisible() || !p.news.length || ui.seen.includes(p.id)) return '';
   return `<div class="news"><div class="nhead">${withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : ''}前回見てから (${p.news.length} 件)
     <button type="button" class="link-btn" data-seen="${p.id}">既読にする</button></div>
     <ul>${p.news.map(n => `<li>${esc(n.t)}</li>`).join('')}</ul></div>`;

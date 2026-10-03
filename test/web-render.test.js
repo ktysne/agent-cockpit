@@ -31,7 +31,8 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
   const renderDeferredState = html.match(/function renderDeferredState\(\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(render);
+  const visibleSinceSeen = html.match(/function visibleSinceSeen\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render && visibleSinceSeen);
   assert.ok(renderDeferredState);
 
   let activeElement;
@@ -83,6 +84,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
   let renderCount = 0;
   const answerDrafts = new Map([['session-ui\0decision-ui', { choice: 'ok', note: initialDraftNote }]]);
   let answerDraftWriteCount = 0;
+  let orderedSinceSeen = null;
   const setDraft = answerDrafts.set.bind(answerDrafts);
   answerDrafts.set = (...args) => {
     answerDraftWriteCount += 1;
@@ -93,6 +95,8 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     answerNoteComposing: false,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
+    sinceSeenMode: 'always',
+    header: { dataset: { away: 'false' } },
     HTMLTextAreaElement: FakeTextArea,
     answerDrafts,
     answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
@@ -117,10 +121,13 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     renderSummary() {},
     renderExcludedNote() {},
     updateTitle() {},
-    orderedProducts: () => [{ key: 'product-ui' }],
+    orderedProducts: (_sessions, _pullRequests, sinceSeen) => {
+      orderedSinceSeen = sinceSeen;
+      return [{ key: 'product-ui' }];
+    },
     productSection: () => ({}),
   });
-  vm.runInContext(`${render}\n${renderDeferredState}`, context);
+  vm.runInContext(`${visibleSinceSeen}\n${render}\n${renderDeferredState}`, context);
   return {
     context,
     get renderCount() { return renderCount; },
@@ -131,6 +138,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     get answerDraftWriteCount() { return answerDraftWriteCount; },
     get answerDraft() { return answerDrafts.get('session-ui\0decision-ui'); },
     get updatedAnswerCard() { return updatedAnswerCard; },
+    get orderedSinceSeen() { return orderedSinceSeen; },
     answerCard,
     html,
   };
@@ -742,9 +750,126 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
   assert.match(appendDecisionCard, /if \(decision\.isNew\) header\.append\(badge\('新着', 'new-mark'\)\)/);
 });
 
+test('前回見てからの設定は常にを既定にし、保存値と不正な値を読み分ける', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode'];
+  const functions = names.map((name) => source.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+  assert.match(source, /id="settings-since-seen-select"[\s\S]*?<option value="always">常に<\/option>[\s\S]*?<option value="away">離席中のみ<\/option>/);
+  assert.match(source, /「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。/);
+  assert.match(source, /applySinceSeenMode\(storedSinceSeenMode\(\)\)/);
+
+  const storage = new Map();
+  const localStorage = {
+    getItem(key) { return storage.get(key) ?? null; },
+    setItem(key, value) { storage.set(key, value); },
+  };
+  const sinceSeenSelect = { value: '' };
+  let renderCount = 0;
+  const context = vm.createContext({
+    SINCE_SEEN_STORAGE_KEY: 'agent-cockpit.since-seen',
+    localStorage,
+    sinceSeenSelect,
+    lastState: { sinceSeen: [] },
+    render: () => { renderCount += 1; },
+  });
+  vm.runInContext(`let sinceSeenMode = 'always';\n${functions.join('\n')}`, context);
+
+  assert.equal(context.storedSinceSeenMode(), 'always');
+  context.applySinceSeenMode(context.storedSinceSeenMode());
+  assert.equal(sinceSeenSelect.value, 'always');
+
+  storage.set('agent-cockpit.since-seen', 'away');
+  assert.equal(context.storedSinceSeenMode(), 'away');
+  context.applySinceSeenMode(context.storedSinceSeenMode());
+  assert.equal(sinceSeenSelect.value, 'away');
+
+  storage.set('agent-cockpit.since-seen', 'sometimes');
+  assert.equal(context.storedSinceSeenMode(), 'always');
+  context.setSinceSeenMode('away');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'away');
+  assert.equal(renderCount, 1);
+  context.setSinceSeenMode('invalid');
+  assert.equal(storage.get('agent-cockpit.since-seen'), 'always');
+  assert.equal(sinceSeenSelect.value, 'always');
+  assert.equal(renderCount, 2);
+
+  localStorage.getItem = () => { throw new Error('storage unavailable'); };
+  assert.equal(context.storedSinceSeenMode(), 'always');
+});
+
+test('離席中のみでは履歴を離席状態で描き分け、非表示中の並び順に使わない', async () => {
+  const harness = renderHarness();
+  const product = { key: 'history-only', name: '履歴のみ' };
+  const state = {
+    routing: {},
+    integrations: {},
+    sessions: [{ product: { key: 'active', name: '稼働中' }, hidden: false }],
+    pullRequests: [],
+    sinceSeen: [{ product, items: [{ text: '完了' }] }],
+  };
+
+  harness.context.lastState = state;
+  harness.context.render(state);
+  assert.equal(harness.orderedSinceSeen.length, 1);
+
+  harness.context.sinceSeenMode = 'away';
+  harness.context.render(state);
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.orderedSinceSeen)), []);
+
+  harness.context.header.dataset.away = 'true';
+  harness.context.render(state);
+  assert.equal(harness.orderedSinceSeen.length, 1);
+
+  const sinceSeenBox = harness.html.match(/function sinceSeenBox\(product, withProductTag\) \{[\s\S]*?\n\}/)?.[0];
+  const visibleSinceSeen = harness.html.match(/function visibleSinceSeen\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const awayChange = harness.html.match(/awayToggle\.addEventListener\('change', async \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(sinceSeenBox && visibleSinceSeen && awayChange);
+  assert.match(sinceSeenBox, /visibleSinceSeen\(lastState\)\.find/);
+  assert.match(awayChange, /applyAwayState\(away\);\s*if \(lastState\) render\(lastState\);/);
+
+  const boxContext = vm.createContext({
+    lastState: state,
+    sinceSeenMode: 'away',
+    header: { dataset: { away: 'false' } },
+    document: { createTextNode: (text) => ({ textContent: text }) },
+    element: (tagName, className = '', textContent = '') => ({
+      tagName,
+      className,
+      textContent,
+      dataset: {},
+      children: [],
+      append(...children) { this.children.push(...children); },
+    }),
+  });
+  vm.runInContext(`${visibleSinceSeen}\n${sinceSeenBox}`, boxContext);
+  assert.equal(boxContext.sinceSeenBox(product, false), null);
+  boxContext.header.dataset.away = 'true';
+  const box = boxContext.sinceSeenBox(product, false);
+  assert.ok(box);
+  assert.equal(box.children[0].children[0].textContent, '前回見てから (1 件)');
+
+  const appliedAway = [];
+  let rerenders = 0;
+  let awayChangeHandler;
+  const awayContext = vm.createContext({
+    awayToggle: { checked: true, disabled: false, addEventListener: (_event, handler) => { awayChangeHandler = handler; } },
+    lastState: state,
+    postAway: async (enabled) => ({ ok: true, json: async () => ({ enabled }) }),
+    applyAwayState: (away) => { appliedAway.push(away.enabled); },
+    render: () => { rerenders += 1; },
+    liveStatus: { textContent: '' },
+    showWriteError() {},
+  });
+  vm.runInContext(awayChange, awayContext);
+  await awayChangeHandler();
+  assert.deepEqual(appliedAway, [true]);
+  assert.equal(rerenders, 1);
+});
+
 test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['productGroups', 'sessionActivityTime', 'orderedProducts'].map((name) => (
+  const functions = ['productGroups', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   const clickListener = source.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
@@ -768,6 +893,8 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   const context = vm.createContext({
     displayPreferences,
     lastState: state,
+    sinceSeenMode: 'always',
+    header: { dataset: { away: 'false' } },
     handleExternalLink: () => false,
     document: { addEventListener: (_name, callback) => { handleClick = callback; } },
     saveDisplayPreferences: (patch) => {
@@ -849,6 +976,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
       querySelectorAll: () => [replacementPick],
     },
     displayPreferences: { mode: 'product', pinned: [] },
+    visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
     orderedProducts: () => [{ key: 'product-ui' }],
@@ -1499,6 +1627,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
       root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [go, cancel] },
       displayPreferences: { mode: 'product', pinned: [] },
+      visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
       orderedProducts: () => [{ key: 'product-ui' }],
@@ -1543,6 +1672,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
       root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [replacementButton] },
       displayPreferences: { mode: 'product', pinned: [] },
+      visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
       orderedProducts: () => [{ key: 'product-ui' }],
@@ -1584,6 +1714,7 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     document: { get activeElement() { return activeElement; }, querySelectorAll: (selector) => (selector === 'button' ? [otherButton, replacementButton] : []) },
     root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [] },
     displayPreferences: { mode: 'product', pinned: [] },
+    visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
     orderedProducts: () => [{ key: 'product-ui' }],
