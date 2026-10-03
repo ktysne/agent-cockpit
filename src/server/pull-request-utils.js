@@ -4,6 +4,13 @@ function validRepositoryPart(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(value);
 }
 
+function validBranchName(value) {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 500 || value === '@' || value.startsWith('-') ||
+    value.startsWith('/') || value.endsWith('/') || value.endsWith('.') || value.includes('..') || value.includes('//') ||
+    value.includes('@{') || /[\x00-\x20\x7f~^:?*\[\\]/.test(value)) return false;
+  return value.split('/').every((part) => part.length > 0 && !part.startsWith('.') && !part.endsWith('.lock'));
+}
+
 function parsePullRequestUrl(value) {
   if (typeof value !== 'string' || value.length > 2000) return null;
   let parsed;
@@ -151,5 +158,6 @@ module.exports = {
   isGithubCreatePullRequestTool,
   parsePullRequestUrl,
   shouldRefreshPullRequests,
+  validBranchName,
   validRepositoryPart,
 };

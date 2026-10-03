@@ -124,6 +124,16 @@ base と head の対応から関連するオープン PR を積み上げ、ク�
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 取得と判定の詳細は [計画書](../handover/2026-10-02.md) の「段階 5、6 の設計(PR の表示とマージ)」を正本とする。
 
+## ダッシュボードからの PR マージ
+
+書き込み口は `POST /api/pull-requests/merge`、`/reserve`、`/cancel-reservation` とする。
+いずれも `uiSecret` と `validRequiredUiOrigin` を照合し、PR の記録キーから owner/repo を解決する。
+画面の SHA、許可方式、スタック最下段、現在のマージ理由を gh で取り直して確かめ、同じ PR への操作は同時に 1 件だけ実行する。
+予約中は 15 秒ごとに head SHA を取り直し、変化があれば自動マージを取り消す。
+マージ履歴、予約、リポジトリごとの前回方式は `store.json` に保存し、マージ履歴は 24 時間で消す。
+結果は PR を登録したセッションへ PostToolBatch、UserPromptSubmit、Stop の回答配信経路で知らせる。
+gh の順序、失敗時の扱い、積み直し通知は[計画書のマージの手順](../handover/2026-10-02.md#マージの手順常駐サーバー)を正本とする。
+
 ## サブエージェントのモデルと effort
 
 - Agent ツールの PreToolUse で受けた説明は、`tool_use_id` と `agent_id` の結び付けから対象のサブエージェントへ持たせる。

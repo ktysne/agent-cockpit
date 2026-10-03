@@ -136,7 +136,7 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.match(mock, /\.now-row\s*>\s*:nth-child\(2\)\s*\{[^}]*min-width:\s*0/);
 });
 
-test('PR のスタックとレビューを表示し、マージ操作は表示しない', () => {
+test('PR のスタックとレビューを表示する', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   assert.match(source, /function appendPullRequestBlock/);
   assert.match(source, /function appendPullRequestTree/);
@@ -144,7 +144,7 @@ test('PR のスタックとレビューを表示し、マージ操作は表示�
   assert.match(source, /プルリクエスト/);
   assert.match(source, /マージできる PR/);
   assert.match(source, /マージできない理由/);
-  assert.doesNotMatch(source, /data-merge(?:-go)?=/);
+  assert.match(source, /data-merge-go/);
   assert.doesNotMatch(source, /data-reserve-go=/);
 });
 
@@ -298,4 +298,184 @@ test('指示欄の変換中は描き直しを保留し、変換終了後に反�
   assert.equal(harness.currentNote, harness.note);
   assert.equal(harness.note.focused, true);
   assert.deepEqual(harness.note.selection, [2, 5, 'backward']);
+});
+
+test('PR マージ確認欄を表示し、登録キーと画面の head SHA だけを含む値を送る', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helpersStart = html.indexOf('function element(tag, className, text)');
+  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
+  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+  const actionStart = html.indexOf('function findPullRequestMergeTarget');
+  const actionEnd = html.indexOf('async function runSessionAction', actionStart);
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
+  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+      this.disabled = false;
+    }
+
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const sent = [];
+  const key = 'd'.repeat(64);
+  const pullRequest = {
+    mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
+    mergeRecordKey: key,
+    headRefOid: 'abc123', headRefName: 'feature/pr-42', effectiveBase: 'main', canMerge: true,
+    isCrossRepository: true,
+    blocker: null, review: 'approved', children: [], stackPosition: { depth: 1, total: 1 },
+  };
+  const group = {
+    owner: 'acme', repo: 'widget', defaultBranch: 'main', mergeMethods: ['merge', 'squash', 'rebase'],
+    lastMethod: 'merge', trees: [pullRequest],
+  };
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestMergeConfirmations: new Map([[key, 'merge']]),
+    pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
+    pullRequestMergeMessages: new Map(),
+    pullRequestMergeInFlight: new Set(),
+    lastState: { pullRequests: [group] },
+    appendPullRequestBadges() {},
+    pullRequestTimeLabel: () => '時刻不明',
+    postUiAction: async (url, body) => {
+      sent.push({ url, body });
+      return { ok: true, json: async () => ({}) };
+    },
+    refresh: async () => {},
+    render() {},
+    liveStatus: { textContent: '' },
+  });
+  const source = [
+    html.slice(helpersStart, helpersEnd),
+    html.slice(componentStart, componentEnd),
+    html.slice(actionStart, actionEnd),
+  ].join('\n');
+  vm.runInContext(source, context);
+
+  const root = new FakeElement('div');
+  context.appendPullRequestTree(root, group, pullRequest);
+  const nodes = [];
+  const visit = (node) => {
+    nodes.push(node);
+    for (const child of node.children || []) visit(child);
+  };
+  visit(root);
+  const panel = nodes.find((node) => node.dataset?.mergeConfirm === key);
+  assert.ok(panel);
+  assert.equal(panel.attributes['aria-label'], 'PR #42 のマージ確認');
+  assert.ok(nodes.some((node) => node.dataset?.mergeGo === key));
+  assert.ok(nodes.some((node) => node.type === 'radio' && node.checked && node.value === 'rebase'));
+  assert.ok(nodes.some((node) => node.type === 'checkbox' && node.checked === false && node.disabled));
+  assert.ok(nodes.some((node) => node.textContent === 'fork のブランチは登録先から削除できません'));
+
+  await context.runPullRequestMergeAction({ dataset: { mergeGo: key } }, 'merge');
+  assert.equal(JSON.stringify(sent), JSON.stringify([{
+    url: '/api/pull-requests/merge',
+    body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'rebase', deleteBranch: false },
+  }]));
+});
+
+test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const appendBlock = html.match(/function appendPullRequestBlock\(target, group, withTag = false\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(element);
+  assert.ok(appendBlock);
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestTimeLabel: () => '1 分前',
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+  });
+  vm.runInContext(`${element}\n${appendBlock}`, context);
+  const root = new FakeElement('div');
+  const reservedSha = 'a'.repeat(40);
+  const mergedSha = 'b'.repeat(40);
+  context.appendPullRequestBlock(root, {
+    trees: [], merged: [], registeredCount: 1,
+    mergeHistory: [{
+      number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
+      mergedAt: '2026-10-03T11:59:00.000Z', method: 'squash', automatic: true,
+      reservedHeadRefOid: reservedSha, mergedHeadRefOid: mergedSha, headMismatch: true,
+    }],
+  });
+  const nodes = [];
+  const visit = (node) => {
+    nodes.push(node);
+    for (const child of node.children || []) visit(child);
+  };
+  visit(root);
+  const visibleText = nodes.map((node) => node.textContent).join(' ');
+
+  assert.match(visibleText, /予約時に確認した/);
+  assert.match(visibleText, new RegExp(reservedSha));
+  assert.match(visibleText, new RegExp(mergedSha));
+});
+
+test('マージ操作ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render);
+
+  for (const [kind, dataAttribute, htmlAttribute] of [
+    ['merge-go', 'mergeGo', 'data-merge-go'],
+    ['merge-cancel', 'mergeCancel', 'data-merge-cancel'],
+    ['merge-reserve-go', 'reserveGo', 'data-reserve-go'],
+    ['merge-cancel-reservation', 'cancelReservation', 'data-cancel-reservation'],
+    ['merge-open', 'openMerge', 'data-open-merge'],
+  ]) {
+    let activeElement;
+    const key = `merge-${kind}`;
+    const activeButton = { dataset: { [dataAttribute]: key, mergeKey: key }, hasAttribute: (name) => name === htmlAttribute };
+    const replacementButton = {
+      dataset: { [dataAttribute]: key, mergeKey: key },
+      hasAttribute: (name) => name === htmlAttribute,
+      focused: false,
+      focus() { this.focused = true; activeElement = this; },
+    };
+    activeElement = activeButton;
+    const context = vm.createContext({
+      answerNoteComposing: false,
+      lastState: { sessions: [{ session_id: 'session-ui' }] },
+      HTMLTextAreaElement: class FakeTextArea {},
+      document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
+      root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [replacementButton] },
+      displayPreferences: { mode: 'product', pinned: [] },
+      renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+      orderedProducts: () => [{ key: 'product-ui' }],
+      productSection: () => ({}),
+    });
+    vm.runInContext(render, context);
+    context.render(context.lastState);
+
+    assert.equal(replacementButton.focused, true, kind);
+    assert.equal(activeElement, replacementButton, kind);
+  }
 });
