@@ -652,3 +652,31 @@ test('親だけを登録したスタックで、親がマージされ子の base
   assert.equal(result.trees[0].number, 31);
   assert.equal(result.trees[0].needsRestack, true);
 });
+
+test('親だけを登録したスタックで、親のマージ後に base を付け替えた子の CI の失敗も親のプロダクトに記録する', async (t) => {
+  const { state, github, tracker } = await trackerFixture(t, []);
+  const productA = { key: 'C:\project-a', name: 'project-a' };
+  const parentSha = 'a'.repeat(40);
+  const childSha = 'b'.repeat(40);
+  state.registerPullRequest('session-a', { url: 'https://github.com/example/project/pull/30' }, { product: productA });
+  const child = (baseRefName, statusCheckRollup) => ({
+    ...ghPullRequest(31, 'feat/child', baseRefName, childSha),
+    statusCheckRollup,
+  });
+  github.openPullRequests = [
+    ghPullRequest(30, 'feat/parent', 'main', parentSha),
+    child('feat/parent', [{ state: 'IN_PROGRESS', conclusion: '' }]),
+  ];
+  await tracker.refreshRepo('example', 'project');
+
+  github.openPullRequests = [child('main', [{ state: 'IN_PROGRESS', conclusion: '' }])];
+  github.mergedPullRequests = [mergedPullRequest(30, parentSha)];
+  github.views.set(30, { ...ghPullRequest(30, 'feat/parent', 'main', parentSha), state: 'MERGED', mergedAt: '2026-10-03T11:00:00.000Z' });
+  github.comparisons.set(childSha, compareResult([parentSha, childSha]));
+  await tracker.refreshRepo('example', 'project');
+
+  github.openPullRequests = [child('main', [{ state: 'COMPLETED', conclusion: 'FAILURE' }])];
+  await tracker.refreshRepo('example', 'project');
+
+  assert.deepEqual(state.ciFailures.filter((failure) => failure.number === 31).map((failure) => failure.product.key), [productA.key]);
+});
