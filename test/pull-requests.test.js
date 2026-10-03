@@ -440,7 +440,23 @@ test('compare の失敗と250件超では積み直しが必要か確かめられ
     assert.equal(group.trees[0].restackCheckUnknown, true, condition);
     assert.equal(group.trees[0].blocker, '積み直しが必要か確かめられない', condition);
     assert.equal(group.trees[0].canMerge, false, condition);
+    assert.equal(group.openStateUnknown, false, condition);
   }
+});
+
+test('状態を確かめられない PR を登録したプロダクトだけをオープンの PR を数えきれていないとする', async (t) => {
+  const { state, github, tracker } = await trackerFixture(t, [31]);
+  state.registerPullRequest('session-other', { url: 'https://github.com/example/project/pull/40' }, {
+    cwd: process.cwd(), product: { key: 'other', name: 'other' },
+  });
+  github.openPullRequests = [ghPullRequest(31, 'feat/31', 'main', '3'.repeat(40))];
+
+  await tracker.refreshRepo('example', 'project');
+
+  const groups = new Map(tracker.snapshot().map((group) => [group.product.key, group]));
+  assert.match(groups.get('project').error, /#40 の状態を確認できません/);
+  assert.equal(groups.get('project').openStateUnknown, false);
+  assert.equal(groups.get('other').openStateUnknown, true);
 });
 
 test('31件目以降の登録済みOPEN PRをgh pr viewから一覧へ補う', async (t) => {
@@ -496,6 +512,7 @@ test('gh が失敗しても PR の取得理由を返し、登録状態を維持�
   await tracker.refreshAll();
   const [group] = tracker.snapshot();
   assert.match(group.error, /gh コマンドが見つかりません/);
+  assert.equal(group.openStateUnknown, true);
   assert.equal(group.registeredCount, 1);
   assert.deepEqual(group.trees, []);
 });

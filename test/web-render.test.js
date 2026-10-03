@@ -795,7 +795,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   assert.deepEqual(saved, []);
 });
 
-test('表示中のセッションもオープンの PR も PR の取得失敗も未読の変化も無いプロダクトはカードを出さない', () => {
+test('表示中のセッションもオープンの PR も数えきれていない PR も未読の変化も無いプロダクトはカードを出さない', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['pullRequestOpenCount', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
@@ -813,7 +813,8 @@ test('表示中のセッションもオープンの PR も PR の取得失敗も
   const pullRequests = [
     { product: { key: 'finished', name: '終了済み' }, owner: 'example', repo: 'finished', openCount: 0 },
     { product: { key: 'open', name: 'オープンあり' }, owner: 'example', repo: 'open', openCount: 2 },
-    { product: { key: 'unreachable', name: '取得失敗' }, owner: 'example', repo: 'unreachable', openCount: 0, error: 'GitHub から取得できません' },
+    { product: { key: 'unreachable', name: '取得失敗' }, owner: 'example', repo: 'unreachable', openCount: 0, error: 'PR の一覧を取得できません', openStateUnknown: true },
+    { product: { key: 'unrelated-error', name: '他の PR の失敗' }, owner: 'example', repo: 'shared', openCount: 0, error: '#9 の積み直し状態を確認できません', openStateUnknown: false },
   ];
   const keys = (sinceSeen) => [...context.orderedProducts(visibleSessions, pullRequests, sinceSeen)].map((product) => product.key).sort();
 

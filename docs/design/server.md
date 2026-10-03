@@ -121,6 +121,7 @@ PostToolUse の出力全文は送らない。
 PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
 常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとと `git push` または `gh pr` の後にリポジトリの状態を取得する。
 base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は `crossReview: null` とする。`tools/cross-review.js` が無い worktree の PR、登録の無い関連 PR、マージ済み PR には設定せず、画面は行も確認欄の警告も出さない。状態ファイルは初めてのレビューで作られるので、ai-cross-review を使っているかは、追跡される `tools/cross-review.js` の有無で見る。
+各プロダクトの PR 群には、リポジトリ全体の失敗をまとめた `error` とは別に、そのプロダクトのオープンの PR を数えきれていないことを示す `openStateUnknown` を付ける。PR の一覧を取得できなかったときと、そのプロダクトが登録した PR の状態を確かめられなかったときに真にする。
 積み直し待ちは、GitHub のマージ済み PR の head SHA が各オープン PR の既定ブランチとの compare に残っているかで判定し、compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 取得と判定の詳細は [計画書](../handover/2026-10-02.md) の「段階 5、6 の設計(PR の表示とマージ)」を正本とする。
