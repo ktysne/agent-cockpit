@@ -351,6 +351,14 @@ h3.sub .count { font-weight: normal; }
         <option value="system">OS に従う</option>
       </select>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-since-seen-select">前回見てから</label>
+      <select id="settings-since-seen-select" name="sinceSeen" aria-describedby="settings-since-seen-note">
+        <option value="always">常に</option>
+        <option value="away">離席中のみ</option>
+      </select>
+    </div>
+    <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
   </section>
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
@@ -379,6 +387,7 @@ const root = document.getElementById('root');
 const liveStatus = document.getElementById('live-status');
 const initialUiVersion = document.querySelector('meta[name="cockpit-ui-version"]')?.content || '';
 const themeSelect = document.getElementById('settings-theme-select');
+const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 const settingsButton = document.getElementById('settings-button');
 const awayToggle = document.getElementById('away-toggle');
 const connectionNote = document.getElementById('connection-note');
@@ -387,6 +396,7 @@ const header = document.querySelector('header.top');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsClose = document.getElementById('settings-close');
 const THEME_STORAGE_KEY = 'agent-cockpit.theme';
+const SINCE_SEEN_STORAGE_KEY = 'agent-cockpit.since-seen';
 const DISPLAY_STORAGE_KEY = 'agent-cockpit.display';
 const FILTERS = [
   { key: 'permission', label: '許可待ち', color: 'danger' },
@@ -403,6 +413,7 @@ const ROUTE = {
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 let lastVersion = null;
 let lastState = null;
+let sinceSeenMode = 'always';
 let hasRenderedState = false;
 let answerNoteComposing = false;
 let deferredRenderPending = false;
@@ -566,6 +577,37 @@ themeSelect.addEventListener('change', () => {
   } catch {
   }
 });
+
+function applySinceSeenMode(mode) {
+  sinceSeenMode = mode === 'away' ? 'away' : 'always';
+  sinceSeenSelect.value = sinceSeenMode;
+}
+
+function storedSinceSeenMode() {
+  try {
+    const mode = localStorage.getItem(SINCE_SEEN_STORAGE_KEY);
+    if (mode === 'always' || mode === 'away') return mode;
+  } catch {
+  }
+  return 'always';
+}
+
+function visibleSinceSeen(state) {
+  if (sinceSeenMode === 'away' && header.dataset.away !== 'true') return [];
+  return Array.isArray(state?.sinceSeen) ? state.sinceSeen : [];
+}
+
+function setSinceSeenMode(mode) {
+  applySinceSeenMode(mode);
+  try {
+    localStorage.setItem(SINCE_SEEN_STORAGE_KEY, sinceSeenMode);
+  } catch {
+  }
+  if (lastState) render(lastState);
+}
+
+applySinceSeenMode(storedSinceSeenMode());
+sinceSeenSelect.addEventListener('change', () => setSinceSeenMode(sinceSeenSelect.value));
 
 settingsButton.addEventListener('click', () => settingsDialog.showModal());
 settingsClose.addEventListener('click', () => settingsDialog.close());
@@ -737,6 +779,7 @@ awayToggle.addEventListener('change', async () => {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const away = await response.json();
     applyAwayState(away);
+    if (lastState) render(lastState);
     liveStatus.textContent = '離席状態を更新しました。';
   } catch {
     awayToggle.checked = previous;
@@ -2173,7 +2216,7 @@ function kindSection(title, content, extra) {
 }
 
 function sinceSeenBox(product, withProductTag) {
-  const entry = (lastState?.sinceSeen || []).find((item) => item.product?.key === product.key);
+  const entry = visibleSinceSeen(lastState).find((item) => item.product?.key === product.key);
   if (!entry?.items?.length) return null;
   const box = element('div', 'news');
   const header = element('div', 'news-head');
@@ -2364,7 +2407,7 @@ function render(state) {
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
   });
-  const sinceSeen = Array.isArray(state.sinceSeen) ? state.sinceSeen : [];
+  const sinceSeen = visibleSinceSeen(state);
   const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
   if (!products.length) {
     root.replaceChildren(element('section', 'section empty', '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'));
@@ -2937,7 +2980,7 @@ document.addEventListener('click', (event) => {
       const state = lastState || {};
       const sessions = (Array.isArray(state.sessions) ? state.sessions : []).filter((session) => session.hidden !== true);
       const pullRequests = Array.isArray(state.pullRequests) ? state.pullRequests : [];
-      const sinceSeen = Array.isArray(state.sinceSeen) ? state.sinceSeen : [];
+      const sinceSeen = visibleSinceSeen(state);
       const products = orderedProducts(sessions, pullRequests, sinceSeen);
       const index = products.findIndex((product) => product.key === key);
       if (index < 0) return;
@@ -3037,7 +3080,11 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    const awayBefore = header.dataset.away;
     applyAwayState(state.away);
+    // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
+    const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
+    if (state.version === lastVersion && sinceSeenVisibilityChanged) render(state);
     if (state.version !== lastVersion) {
       render(state);
       lastVersion = state.version;

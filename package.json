@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server/server.js",
     "test": "node --test",
+    "test:inprocess": "node --test --test-isolation=none",
     "review:codex": "node tools/cross-review.js codex",
     "review:codex:fix": "node tools/cross-review.js codex --fix",
     "review:claude": "node tools/cross-review.js claude",
