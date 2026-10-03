@@ -727,7 +727,7 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
   const context = pageContext(web, {
     answerErrors: errors,
     decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
-    answerDraftFor: () => ({ choice: 'hold', picks: [[]], note: '新しい指示' }),
+    answerDraftFor: () => ({ choice: 'pick', picks: [[]], note: '新しい指示' }),
     element: fakeElement,
     document: { createElement: (tag) => fakeElement(tag), createTextNode: (text) => fakeElement('#text', '', text) },
     sameAnswerPicks: (left, right) => JSON.stringify(left) === JSON.stringify(right),
@@ -746,7 +746,7 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
   context.appendAnswer(card, decision, { name: 'project' }, { session_id: 'session-a' }, fakeElement('div'));
   assert.ok(descendants(card).some((node) => node.className === 'answer-error' && node.textContent === '回答を送信できませんでした。'));
   assert.ok(descendants(card).some((node) => node.className === 'answer-status' && node.textContent === '変更は未送信'));
-  context.clearError(key, { choice: 'hold', note: '旧下書き', picks: [[]] }, { choice: 'hold', note: '変更後', picks: [[]] }, null);
+  context.clearError(key, { choice: 'pick', note: '旧下書き', picks: [[]] }, { choice: 'pick', note: '変更後', picks: [[]] }, null);
   assert.equal(errors.has(key), false);
   assert.match(web, /answerErrors\.delete\(answerDraftKey\(sessionId, decisionId\)\)/);
   assert.match(mock, /変更は未送信/);
@@ -759,7 +759,7 @@ test('回答の編集時に送信済み回答の状態表示も更新する', ()
     id: 'decision-a', questions: [],
     answer: { choice: 'ok', note: '保存済みの指示', picks: [], sentAt: '2026-10-04T00:00:00Z' },
   };
-  let draft = { choice: 'hold', note: '編集中の指示', picks: [] };
+  let draft = { choice: 'pick', note: '編集中の指示', picks: [] };
   const button = { disabled: false };
   const meta = { textContent: '' };
   const status = { textContent: '' };
@@ -1018,7 +1018,7 @@ test('モックで指示欄を編集すると同じカードのエラーを消�
   assert.ok(helperSource && handlerSource);
   const key = 'session-a::decision-a';
   const errors = new Map([[key, '回答を送信できませんでした。']]);
-  const answer = { choice: 'hold', picks: [], note: '以前の指示', sent: null };
+  const answer = { choice: 'pick', picks: [], note: '以前の指示', sent: null };
   let removed = false;
   const error = { remove: () => { removed = true; } };
   const send = { disabled: true };

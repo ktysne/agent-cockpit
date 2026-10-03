@@ -27,8 +27,6 @@
   --ok: #2b8a3e;
   --ok-text: #236b31;
   --ok-soft: #e3f6e8;
-  --hold: #6741d9;
-  --hold-soft: #efe9ff;
   --on-accent: #ffffff;
   --accent-text: #3b5bdb;
   --on-ok: #000000;
@@ -41,7 +39,7 @@
     --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
     --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
-    --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+    --ok: #8cc391; --ok-soft: #233526;
     --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
@@ -50,7 +48,7 @@
   --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
   --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
-  --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
+  --ok: #8cc391; --ok-soft: #233526;
   --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
@@ -82,7 +80,6 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .chip strong { color: var(--text); font-size: 13px; margin-left: 4px; }
 .chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn-text); }
-.chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
 .chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok-text); }
 .summary button.chip { border-color: var(--text-2); }
 .meta { color: var(--text-2); font-size: 12px; }
@@ -181,9 +178,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-choice { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; }
 .answer-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .answer-choice.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-text); }
-.answer-choice.hold:has(input:checked) { background: var(--hold-soft); border-color: var(--hold); color: var(--hold); }
 .answer-choice.ok input { accent-color: var(--ok); }
-.answer-choice.hold input { accent-color: var(--hold); }
 .decision-answer textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
 .decision-answer textarea:focus-visible, .answer-choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
@@ -466,7 +461,6 @@ const FILTERS = [
   { key: 'permission', label: '許可待ち', color: 'danger' },
   { key: 'blocking', label: '止めて待っている', color: 'danger' },
   { key: 'provisional', label: '仮に推奨案で進行中', color: 'warn' },
-  { key: 'held', label: '保留中', color: 'hold' },
   { key: 'agents', label: '稼働中のサブエージェント', color: 'accent' },
   { key: 'prs', label: 'マージできる PR', color: 'ok' },
 ];
@@ -1200,20 +1194,15 @@ function isPendingDecision(decision) {
   return decision.state === 'waiting' && !hasEffectiveAnswer(decision);
 }
 
-function isHeldDecision(decision) {
-  return ['waiting', 'provisional'].includes(decision.state) && decision.answer?.choice === 'hold' && !decision.answer.ignoredAt;
-}
-
-// 回答を送ったものはセッションの反映を待つだけなので数えず、保留を選んだものは開発者の判断が残るので数える。
+// 回答を送ったものはセッションの反映を待つだけなので数えない。
 function isAwaitingDecision(decision) {
-  return ['waiting', 'provisional'].includes(decision.state) && (!hasEffectiveAnswer(decision) || isHeldDecision(decision));
+  return ['waiting', 'provisional'].includes(decision.state) && !hasEffectiveAnswer(decision);
 }
 
 function decisionCountTitle(decisions) {
   const counts = [
     ['止めて待っている', decisions.filter(isPendingDecision).length],
     ['仮に推奨案で進行中', decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length],
-    ['保留中', decisions.filter(isHeldDecision).length],
   ];
   return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
@@ -1223,13 +1212,11 @@ function renderSummary(sessions, pullRequestGroups = []) {
   const decisions = sessions.flatMap((session) => session.decisions);
   const blockingCount = decisions.filter(isPendingDecision).length;
   const provisionalCount = decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length;
-  const heldCount = decisions.filter(isHeldDecision).length;
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
   const counts = {
     permission: permissionCount,
     blocking: blockingCount,
     provisional: provisionalCount,
-    held: heldCount,
     agents: agentCount,
     prs: pullRequestMergeableCount(pullRequestGroups),
   };
@@ -1365,7 +1352,6 @@ function shownPermissions(session) {
 function shownActiveDecisions(session) {
   return session.decisions.filter((decision) => {
     if (!['waiting', 'provisional'].includes(decision.state)) return false;
-    if (decision.answer?.choice === 'hold' && !decision.answer.ignoredAt) return isFilterShown('held');
     if (hasEffectiveAnswer(decision)) return true;
     return decision.state === 'waiting' ? isFilterShown('blocking') : isFilterShown('provisional');
   });
@@ -2211,7 +2197,7 @@ function answerDraftFor(decision, session) {
   const saved = answerDrafts.get(key);
   const answer = saved || decision.answer || {};
   return {
-    choice: answer.choice ?? null,
+    choice: ['ok', 'pick'].includes(answer.choice) ? answer.choice : null,
     picks: copyAnswerPicks(answer.picks, (decision.questions || []).length),
     note: answer.note || '',
   };
@@ -2294,16 +2280,14 @@ function canSendDecisionAnswer(decision, draft) {
     return draft.picks.every((labels, index) => labels.length > 0 || recommendations[index] || draft.note.trim());
   }
   if (draft.choice === 'ok') return recommendedOptionsForQuestions(decision.questions || []).every(Boolean);
-  if (draft.choice === 'hold') return true;
   return Boolean(draft.note.trim());
 }
 
 function answerStatusText(answer, decision) {
   if (!answer?.sentAt) return '未送信';
   const label = answer.choice === 'ok' ? '推奨案で OK'
-    : answer.choice === 'hold' ? '判断を保留'
-      : answer.choice === 'pick' ? `${selectedAnswerLabels(decision, answer.picks || []).map((item) => `「${item}」`).join('')}を選択`
-        : '指示のみ';
+    : answer.choice === 'pick' ? `${selectedAnswerLabels(decision, answer.picks || []).map((item) => `「${item}」`).join('')}を選択`
+      : '指示のみ';
   const status = [`${absoluteTimeLabel(answer.sentAt, Date.now(), '')} に送信済み: ${label}${answer.note ? ' (指示あり)' : ''}`];
   if (answer.deliveredAt) status.push(`${absoluteTimeLabel(answer.deliveredAt, Date.now(), '')} に渡した`);
   if (answer.reflectedAt) status.push(`${absoluteTimeLabel(answer.reflectedAt, Date.now(), '')} に反映された`);
@@ -2345,10 +2329,7 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   answerBox.dataset.decisionId = decision.id;
   answerBox.dataset.sessionId = session.session_id;
   const choices = element('div', 'answer-choices');
-  for (const [choice, label, disabled] of [
-    ['ok', '推奨案で OK', !canUseRecommendation],
-    ['hold', '判断を保留する', false],
-  ]) {
+  for (const [choice, label, disabled] of [['ok', '推奨案で OK', !canUseRecommendation]]) {
     const control = document.createElement('label');
     control.className = `answer-choice ${choice}`;
     const checkbox = document.createElement('input');

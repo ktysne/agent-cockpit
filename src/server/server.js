@@ -211,7 +211,7 @@ function validDisplayPatch(value) {
   if (Object.hasOwn(value, 'sectionOrder') && (!Array.isArray(value.sectionOrder) || value.sectionOrder.length > sectionOrderKeys.size ||
     value.sectionOrder.some((item) => typeof item !== 'string' || !sectionOrderKeys.has(item)) ||
     new Set(value.sectionOrder).size !== value.sectionOrder.length)) return false;
-  const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
+  const filters = new Set(['permission', 'blocking', 'provisional', 'agents', 'prs']);
   if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
     value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
   if (Object.hasOwn(value, 'longWaitMinutes') && (!Number.isInteger(value.longWaitMinutes) || value.longWaitMinutes < 1 || value.longWaitMinutes > 120)) return false;
@@ -392,7 +392,7 @@ function createRequestHandler(options) {
           result = answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id });
         } else if (body.action === 'ask-poll' && body.event_name === 'PreToolUse') {
           result = await answerDelivery.waitForAsk({ sessionId: body.session_id, toolUseId: body.id });
-        } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'hold', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
+        } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
           result = answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome });
         } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch') {
           state.addEvent({
@@ -446,7 +446,7 @@ function createRequestHandler(options) {
       }
       if (
         !body || typeof body !== 'object' || Array.isArray(body) ||
-        !validSessionId(body.session_id) || body.choice !== null && !['ok', 'hold', 'pick'].includes(body.choice) ||
+        !validSessionId(body.session_id) || body.choice !== null && !['ok', 'pick'].includes(body.choice) ||
         (body.choice === 'pick' ? !Array.isArray(body.picks) : Object.hasOwn(body, 'picks')) ||
         !validText(body.note, 2000, true)
       ) {

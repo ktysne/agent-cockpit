@@ -5,7 +5,6 @@ const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
 const MAX_ASK_POLL_GAP_MS = 30_000;
 const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作、PR のマージ、main への push は行わず、判断待ちとして残してください。';
-const HOLD_CONTEXT = '開発者が判断を保留した。推奨のまま進め、あとで見直せるよう最後の報告に書いてください。';
 // 知らせはフックの英語の定型文に包まれて届き、返答が英語に引きずられやすいため、毎回添える。
 const SESSION_NOTIFICATION_REPLY_LANGUAGE = 'この知らせへの返答と、続けて開発者に見せる文は日本語で書く。';
 
@@ -57,7 +56,7 @@ function denyAnswerOutput(decisionId) {
 
 function askAnswerOutput(decision, answer) {
   const recommendations = recommendedOptions(decision);
-  const selected = answer.choice === 'ok' || answer.choice === 'hold'
+  const selected = answer.choice === 'ok'
     ? recommendations
     : decision.questions.map(() => null);
   if (answer.choice === 'pick' && !validPicks(decision, answer.picks, answer.note)) return denyAnswerOutput(decision.id);
@@ -72,8 +71,7 @@ function askAnswerOutput(decision, answer) {
         : selected[index].label,
   ]));
   const additionalContext = [];
-  if (answer.choice === 'hold') additionalContext.push(HOLD_CONTEXT);
-  if (['ok', 'hold', 'pick'].includes(answer.choice) && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
+  if (['ok', 'pick'].includes(answer.choice) && answer.note) additionalContext.push(`開発者の指示: ${answer.note}`);
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -106,9 +104,8 @@ function decisionAnswerText(decision) {
     }).join('、')
     : '';
   const answerKind = answer.choice === 'ok' ? '推奨案で OK'
-    : answer.choice === 'hold' ? '判断を保留(推奨のまま進め、最後の報告に書く)'
-      : answer.choice === 'pick' ? `選択肢を選んだ(${pickedQuestions})`
-        : '指示のみ';
+    : answer.choice === 'pick' ? `選択肢を選んだ(${pickedQuestions})`
+      : '指示のみ';
   const instruction = answer.note || 'なし';
   return `開発者がダッシュボードから判断事項 ${decision.id}「${decision.title}」に回答した: ${answerKind}。指示: ${instruction}。回答に沿って作業を直し、cockpit_update_decision で状態を更新する。`;
 }
@@ -205,10 +202,7 @@ class DecisionAnswerDelivery {
     const decision = this.state.decisionFor(record.sessionId, record.decisionId);
     const answer = decision?.answer;
     if (answer?.sentAt && Date.parse(answer.sentAt) <= record.deadline) {
-      if (answer.choice === 'hold' && recommendedOptions(decision).some((option) => !option)) {
-        return this.away.snapshot().enabled === true ? 'timeout' : 'released';
-      }
-      return answer.choice === 'hold' ? 'hold' : 'answered';
+      return 'answered';
     }
     if (this.away.snapshot().enabled !== true) return 'released';
     if (this.endedSessions.has(record.sessionId)) return 'released';
@@ -229,7 +223,7 @@ class DecisionAnswerDelivery {
     }
     if (record.result) return record.result;
     const askOutcome = this.askOutcome(record);
-    const currentOutcome = outcome === 'server-lost' && askOutcome !== 'answered' && askOutcome !== 'hold'
+    const currentOutcome = outcome === 'server-lost' && askOutcome !== 'answered'
       ? (this.away.snapshot().enabled === true ? 'server-lost' : 'released')
       : askOutcome;
     if (currentOutcome === 'waiting') return { outcome: 'waiting', hookOutput: null };
@@ -242,12 +236,11 @@ class DecisionAnswerDelivery {
       return record.result;
     }
 
-    if (currentOutcome === 'answered' || currentOutcome === 'hold') {
+    if (currentOutcome === 'answered') {
       const answer = { ...decision.answer, deliveredAt: decision.answer.deliveredAt || at };
       this.state.setDecisionLifecycle(sessionId, record.decisionId, {
         answer,
         awaitingAnswerUntil: null,
-        ...(currentOutcome === 'hold' ? { state: 'provisional' } : {}),
       }, this.now());
       this.clearAskWait(record);
       const latest = this.state.decisionFor(sessionId, record.decisionId);
@@ -256,9 +249,6 @@ class DecisionAnswerDelivery {
     }
 
     this.state.setDecisionLifecycle(sessionId, record.decisionId, {
-      ...(decision?.answer?.choice === 'hold' && recommendedOptions(decision).some((option) => !option)
-        ? { answer: { ...decision.answer, ignoredAt: at } }
-        : {}),
       state: 'provisional',
       awaitingAnswerUntil: null,
     }, this.now());
@@ -271,6 +261,7 @@ class DecisionAnswerDelivery {
     const decision = this.state.decisionFor(sessionId, decisionId);
     if (!decision || !canAnswerDecision(decision)) return null;
     if (decision.state === 'waiting' && !decision.awaitingAnswerUntil && !decision.answer?.sentAt) return null;
+    if (choice !== null && !['ok', 'pick'].includes(choice)) return false;
     if (choice === null && !note.trim()) return false;
     if (choice === 'ok' && recommendedOptions(decision).some((option) => !option)) return false;
     if (choice === 'pick' && !validPicks(decision, picks, note)) return false;
@@ -454,16 +445,6 @@ class DecisionAnswerDelivery {
         state: 'provisional',
         awaitingAnswerUntil: null,
       }, this.now());
-    } else if (decision.answer?.choice === 'hold') {
-      this.state.setDecisionLifecycle(sessionId, decisionId, {
-        answer: {
-          ...decision.answer,
-          deliveredAt: decision.answer.deliveredAt || new Date(this.now()).toISOString(),
-          reflectedAt: decision.answer.reflectedAt || new Date(this.now()).toISOString(),
-        },
-        state: 'provisional',
-        awaitingAnswerUntil: null,
-      }, this.now());
     } else if (decision.answer?.sentAt) {
       this.state.setDecisionLifecycle(sessionId, decisionId, {
         answer: {
@@ -559,11 +540,7 @@ class DecisionAnswerDelivery {
       this.signal(record.sessionId);
       return;
     }
-    const decision = this.state.decisionFor(record.sessionId, record.decisionId);
     this.state.setDecisionLifecycle(record.sessionId, record.decisionId, {
-      ...(decision?.answer?.choice === 'hold' && recommendedOptions(decision).some((option) => !option)
-        ? { answer: { ...decision.answer, ignoredAt: new Date(this.now()).toISOString() } }
-        : {}),
       state: 'provisional',
       awaitingAnswerUntil: null,
     }, this.now());

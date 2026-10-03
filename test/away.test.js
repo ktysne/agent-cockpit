@@ -53,6 +53,28 @@ test('離席中の AskUserQuestion は常駐サーバーの回答待ちに登録
   assert.equal(calls[0].id, 'ask-42');
 });
 
+test('未対応の質問結末は server-lost として終了する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const fallbackOutput = { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } };
+  const calls = [];
+  const result = await runAwayHook({
+    session_id: 'ask-session', hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'ask-43',
+    tool_input: { questions: [{ question: 'どの形式にしますか。', options: [] }] },
+  }, {
+    homeDir,
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (body.action === 'ask-register') return new Response(JSON.stringify({ awaiting: true, decisionId: 'ask-43', fallbackOutput }));
+      if (body.action === 'ask-poll') return new Response(JSON.stringify({ outcome: 'hold' }));
+      return new Response(JSON.stringify({ outcome: 'server-lost', hookOutput: fallbackOutput }));
+    },
+  });
+
+  assert.equal(calls.find((body) => body.action === 'ask-finish').outcome, 'server-lost');
+  assert.deepEqual(result, fallbackOutput);
+});
+
 test('離席中でも AskUserQuestion 以外のツールには出力しない', async (t) => {
   const homeDir = await temporaryHome(t);
   let fetchCount = 0;
