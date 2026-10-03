@@ -653,10 +653,12 @@ function deriveSessions(entries) {
       if (agent) {
         agent.active = true;
         agent.agent_type = event.agent_type || agent.agent_type;
+        if (event.route) agent.route = event.route;
       } else {
         agent = agentModelFromDefinition(event.agent_type, definition);
         agent.agent_id = agentId;
         agent.startedAt = isoTime(event.hookAt);
+        if (event.route) agent.route = event.route;
         session.agents.push(agent);
       }
       const unboundAgentCalls = unboundAgentCallsOf(session);

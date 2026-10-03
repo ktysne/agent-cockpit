@@ -53,6 +53,30 @@ test('PostToolUseFailure では error の文字列からも Codex の結果行�
   assert.ok(!JSON.stringify(event).includes('private output'));
 });
 
+test('SubagentStart イベントに起動時の経路を記録する', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  const startedAt = '2026-10-03T00:00:00.000Z';
+  await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify({ agents: 'claude', review: 'codex' }));
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({
+    pid: 12345, port: 47821, secret: 'hook-secret', uiSecret: 'ui-secret', startedAt,
+  }));
+  let postedEvent;
+  const result = await runHook({
+    session_id: 'route-event', hook_event_name: 'SubagentStart', agent_id: 'agent-1', agent_type: 'impl-hard',
+  }, {
+    homeDir,
+    deadline: Date.now() + 1000,
+    fetchImpl: async (url, options = {}) => {
+      if (url.endsWith('/health')) return { ok: true, json: async () => ({ app: 'agent-cockpit', pid: 12345, startedAt }) };
+      postedEvent = JSON.parse(options.body);
+      return { ok: true, status: 202 };
+    },
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(postedEvent.route, 'claude');
+});
+
 test('Agent の説明は 200 文字までフックイベントに含める', async (t) => {
   await temporaryHome(t);
   const event = makeHookEvent({

@@ -56,6 +56,19 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .title-row .away-toggle { margin-left: auto; }
 .mode-row { margin: 0 0 12px; }
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
+.control-row { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.routing { display: grid; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.routing .rgroup { display: grid; grid-template-columns: max-content max-content; gap: 8px 10px; align-items: center; }
+.routing .rgroup .rrow { display: contents; }
+.routing .rgroup.side-by-side { grid-template-columns: repeat(4, max-content); }
+.routing .rgroup.side-by-side .rrow + .rrow .rlabel { margin-left: 22px; }
+.routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
+.routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
+.routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
+.top-inner .routing { min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
+.top-inner .routing .seg button { padding: 3px 7px; font-size: 12px; min-height: 30px; }
+.route-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.route-tag.stale { border-style: dashed; color: var(--warn); }
 .chip { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .chip strong { color: var(--text); font-size: 13px; margin-left: 4px; }
 .chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
@@ -319,6 +332,7 @@ h3.sub .count { font-weight: normal; }
       <label class="away-toggle" for="away-toggle"><input id="away-toggle" type="checkbox">離席中</label>
     </div>
     <div class="summary" id="summary" aria-label="状態の件数と表示絞り込み"></div>
+    <div class="control-row"><div class="routing" id="routing"></div></div>
     <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
 </header>
@@ -376,6 +390,12 @@ const FILTERS = [
   { key: 'agents', label: '稼働中のサブエージェント', color: 'accent' },
   { key: 'prs', label: 'マージできる PR', color: 'ok' },
 ];
+const ROUTE = {
+  agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
+  review: { label: 'クロスレビュー', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
+};
+const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
+const ROUTING_PAIR_GAP_PX = 22;
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
@@ -395,6 +415,8 @@ const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
 const pullRequestMergeInFlight = new Set();
+let routing = { agents: 'default', review: 'default' };
+let routingResizeObserver = null;
 
 function readDisplayPreferences() {
   try {
@@ -593,6 +615,62 @@ function postAway(enabled) {
   return postUiAction('/api/away', { enabled });
 }
 
+function routeName(key, value) {
+  return ROUTE[key].opts.find((option) => option.v === value)?.t || ROUTE[key].opts[0].t;
+}
+
+function renderRouting(settings = {}) {
+  routing = {
+    agents: ROUTE_VALUES.has(settings.agents) ? settings.agents : 'default',
+    review: ROUTE_VALUES.has(settings.review) ? settings.review : 'default',
+  };
+  const root = document.getElementById('routing');
+  if (!root.querySelector('.rgroup')) {
+    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div></div>`;
+    root.innerHTML = `<div class="rgroup">${row('agents')}${row('review')}</div>`;
+  }
+  for (const button of root.querySelectorAll('[data-route]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.v === routing[button.dataset.route]));
+  }
+  layoutRouting();
+  if (!routingResizeObserver && 'ResizeObserver' in window) {
+    routingResizeObserver = new ResizeObserver(layoutRouting);
+    routingResizeObserver.observe(root);
+  }
+}
+
+function layoutRouting() {
+  const group = document.querySelector('#routing .rgroup');
+  if (!group) return;
+  const style = getComputedStyle(group);
+  const columnGap = parseFloat(style.columnGap) || 0;
+  const widths = [...group.querySelectorAll('.rlabel, .seg')].map((node) => node.getBoundingClientRect().width);
+  const needed = widths.reduce((sum, width) => sum + width, 0) + columnGap * (widths.length - 1) + ROUTING_PAIR_GAP_PX;
+  group.classList.toggle('side-by-side', needed <= group.clientWidth);
+}
+
+renderRouting(routing);
+
+async function updateRouting(button) {
+  const { route: key, v: value } = button.dataset;
+  button.disabled = true;
+  try {
+    const response = await postUiAction('/api/routing', { key, value });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const updated = await response.json();
+    renderRouting(updated);
+    if (lastState) {
+      lastState.routing = updated;
+      render(lastState);
+    }
+    liveStatus.textContent = '経路の設定を保存しました。';
+  } catch {
+    showWriteError('経路の設定を保存できませんでした。');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function refreshUiSecret() {
   const response = await fetch('/', { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -657,14 +735,22 @@ function appendToolLine(target, tool) {
   target.append(line);
 }
 
+function routeTag(agent) {
+  if (!agent.active || !ROUTE_VALUES.has(agent.route)) return null;
+  const stale = agent.route !== routing.agents;
+  return element('span', `route-tag${stale ? ' stale' : ''}`, `経路: ${routeName('agents', agent.route)}${stale ? ' (変更前)' : ''}`);
+}
+
 function appendModelLine(target, agent) {
   const claudeModel = !agent.isCodex && agent.model ? (agent.modelName || agent.model) : '';
   const gpt = agent.isCodex
     ? { model: agent.model, effort: agent.effort, codex_home: agent.codex_home, unavailable: agent.unavailable }
     : agent.gpt;
-  if (!claudeModel && !(gpt?.model || gpt?.unavailable)) return;
+  const route = routeTag(agent);
+  if (!route && !claudeModel && !(gpt?.model || gpt?.unavailable)) return;
 
   const models = element('div', 'models');
+  if (route) models.append(route);
   if (claudeModel) {
     const claude = element('span', 'model claude', `Claude ${claudeModel}`);
     if (agent.effort) claude.append(element('i', '', `effort ${agent.effort}`));
@@ -2010,6 +2096,7 @@ function render(state) {
     return;
   }
   deferredRenderPending = false;
+  renderRouting(state.routing);
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
@@ -2421,6 +2508,10 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.route) {
+    void updateRouting(button);
+    return;
+  }
   if (button.dataset.seen) {
     void markProductSeen(button);
     return;

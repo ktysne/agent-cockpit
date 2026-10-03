@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
+const { RoutingState, isValidRouteUpdate } = require('./routing');
 const { AtomicJsonWriter } = require('./json-storage');
 const { DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
@@ -226,6 +227,7 @@ function createRequestHandler(options) {
     claudeHome,
     state,
     away,
+    routing,
     answerDelivery,
     dev,
     getServerInfo,
@@ -266,7 +268,7 @@ function createRequestHandler(options) {
           })),
         };
       });
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot() });
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot() });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -683,6 +685,36 @@ function createRequestHandler(options) {
       }
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/routing') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!isValidRouteUpdate(body)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      try {
+        const snapshot = await routing.set(body.key, body.value);
+        state.touch?.();
+        jsonResponse(response, 200, snapshot);
+      } catch {
+        jsonResponse(response, 500, { error: 'Internal Server Error' });
+      }
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/events') {
       if (request.headers['x-cockpit-secret'] !== info.secret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -920,6 +952,7 @@ async function startServer(options = {}) {
   state.attachWriter?.(storageWriter);
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
+  const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
@@ -949,6 +982,7 @@ async function startServer(options = {}) {
     claudeHome,
     state,
     away,
+    routing,
     answerDelivery,
     pullRequestTracker,
     pullRequestMergeManager,
@@ -1004,14 +1038,14 @@ async function startServer(options = {}) {
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
-      await Promise.all([state.flushPersistence?.(), away.flushPersistence?.()].filter(Boolean));
+      await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');
     })();
     return closing;
   }
 
-  return { server, state, away, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
 }
 
 function parseArguments(argv) {

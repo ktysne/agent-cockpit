@@ -32,6 +32,48 @@ test('モックと実装の画面スクリプトを構文解析できる', () =>
   }
 });
 
+test('経路札は起動時の設定を表示し、現在と違う設定には変更前を付ける', () => {
+  const route = web.match(/const ROUTE = \{[\s\S]*?\n\};/)?.[0];
+  const routeValues = web.match(/const ROUTE_VALUES = new Set\([^\n]+/)?.[0];
+  const routeName = functionSource(web, 'routeName');
+  const routeTag = functionSource(web, 'routeTag');
+  const appendModelLine = functionSource(web, 'appendModelLine');
+  assert.ok(route && routeValues && routeName && routeTag && appendModelLine);
+  const context = vm.createContext({
+    routing: { agents: 'claude' },
+    element: (tag, className, textContent = '') => ({
+      tag, className, textContent, children: [],
+      append(...items) { this.children.push(...items); },
+    }),
+  });
+  vm.runInContext(`${route}\n${routeValues}\n${routeName}\n${routeTag}\n${appendModelLine}\nthis.routeTag = routeTag; this.appendModelLine = appendModelLine;`, context);
+
+  context.routing.agents = 'default';
+  assert.equal(context.routeTag({ active: true, route: 'default' }).textContent, '経路: 既定');
+  context.routing.agents = 'claude';
+  const tag = context.routeTag({ active: true, route: 'default' });
+  assert.equal(tag.textContent, '経路: 既定 (変更前)');
+  assert.equal(tag.className, 'route-tag stale');
+  assert.equal(context.routeTag({ active: false, route: 'default' }), null);
+
+  const target = { children: [], append(...items) { this.children.push(...items); } };
+  context.appendModelLine(target, { agent_id: 'agent-1', active: true, route: 'default', model: 'claude-sonnet-5-5' });
+  assert.deepEqual(JSON.parse(JSON.stringify(target.children[0].children.map((item) => item.className))), [
+    'route-tag stale', 'model claude',
+  ]);
+});
+
+test('経路設定は上部バーにあり、三択の選択状態を API に保存する', () => {
+  const routing = functionSource(web, 'renderRouting');
+  const updateRouting = functionSource(web, 'updateRouting');
+  assert.ok(web.indexOf('id="routing"') < web.indexOf('id="settings-button"'));
+  assert.match(routing, /data-route="\$\{key\}"/);
+  assert.match(routing, /aria-pressed=/);
+  assert.match(updateRouting, /postUiAction\('\/api\/routing'/);
+  assert.match(web, /agents: \{ label: 'サブエージェント'/);
+  assert.match(web, /review: \{ label: 'クロスレビュー'/);
+});
+
 test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン用の識別子を送る', () => {
   const closeTaskButton = functionSource(web, 'closeTaskButton');
   assert.ok(closeTaskButton);

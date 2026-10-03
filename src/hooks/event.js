@@ -4,6 +4,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
+const { readRouting } = require('../server/routing');
 const {
   firstPullRequestUrl,
   isGhPrCreateCommand,
@@ -361,6 +362,7 @@ async function runHook(input, options = {}) {
   const event = makeHookEvent(input, options.now === undefined ? Date.now() : options.now);
   if (!event) return { exitCode: 0, additionalContext: null };
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
+  if (event.hook_event_name === 'SubagentStart') event.route = (await readRouting(homeDir)).agents;
   let dashboardUrl = null;
 
   if (event.hook_event_name === 'SessionStart') {
