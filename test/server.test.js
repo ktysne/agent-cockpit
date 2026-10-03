@@ -394,6 +394,20 @@ test('外部リンク API は画面秘密値と Origin を照合し、安全な 
   failOpen = true;
   assert.equal((await send(url)).status, 500);
   assert.deepEqual(openedUrls, [url, url]);
+  failOpen = false;
+
+  // 起動するプログラムへは、検査した正規化後の値だけを渡す。
+  openedUrls.length = 0;
+  for (const raw of [' https://github.com/a', 'https://example.com/a b', 'https://example.com/?q=" & x', 'https:\\\\example.com\\a']) {
+    assert.equal((await send(raw)).status, 204, raw);
+  }
+  assert.deepEqual(openedUrls, [
+    'https://github.com/a',
+    'https://example.com/a%20b',
+    'https://example.com/?q=%22%20&%20x',
+    'https://example.com/a',
+  ]);
+  assert.ok(openedUrls.every((opened) => !/[\s"\\]/.test(opened)));
 });
 
 test('壊れた離席状態は離席中ではない状態として読む', async (t) => {

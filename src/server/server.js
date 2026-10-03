@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
@@ -135,25 +135,31 @@ function validRequiredUiOrigin(request, port) {
     (fetchSite === undefined || fetchSite === 'same-origin');
 }
 
-function validExternalUrl(value) {
-  if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return false;
+// 起動するプログラムには検査した値そのものを渡すため、正規化した href を返す。
+// rundll32 は引数を ShellExecute へそのまま渡すので、空白や引用符が残る値は受けない。
+function normalizeExternalUrl(value) {
+  if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return null;
   try {
-    return new URL(value).protocol === 'https:';
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.href.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(url.href)) return null;
+    return url.href;
   } catch {
-    return false;
+    return null;
   }
 }
 
+// xdg-open のようにすぐ終わらない起動もあるので、終了は待たずに起動できたかだけを見る。
 function defaultOpenExternalUrl(url) {
   const [command, args] = process.platform === 'win32'
     ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
     : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
   return new Promise((resolve, reject) => {
-    const child = execFile(command, args, { detached: true, shell: false, stdio: 'ignore', windowsHide: true }, (error) => {
-      if (error) reject(error);
-      else resolve();
+    const child = spawn(command, args, { detached: true, shell: false, stdio: 'ignore', windowsHide: true });
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
     });
-    child.unref();
+    child.once('error', reject);
   });
 }
 
@@ -799,12 +805,13 @@ function createRequestHandler(options) {
         jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
         return;
       }
-      if (!body || typeof body !== 'object' || Array.isArray(body) || !validExternalUrl(body.url)) {
+      const externalUrl = body && typeof body === 'object' && !Array.isArray(body) ? normalizeExternalUrl(body.url) : null;
+      if (!externalUrl) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
       try {
-        await openExternalUrl(body.url);
+        await openExternalUrl(externalUrl);
         response.writeHead(204, SECURITY_HEADERS);
         response.end();
       } catch {
