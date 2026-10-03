@@ -45,6 +45,20 @@ test('フックは入力全文を送らず、任意のツール出力から Code
   assert.ok(!JSON.stringify(event).includes('private output'));
 });
 
+test('Read の file.content から Codex の結果行と run= の行を抽出する', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  const event = makeHookEvent({
+    session_id: 'read-file-content', hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read-1',
+    tool_response: { file: { content: `private output\ncodex-agent: result=ok\ncodex-agent: run=${runId}` } },
+  });
+
+  assert.deepEqual(event.codexOutput, {
+    resultLine: 'codex-agent: result=ok',
+    runLine: `codex-agent: run=${runId}`,
+  });
+  assert.ok(!JSON.stringify(event).includes('private output'));
+});
+
 test('PostToolUseFailure では error の文字列からも Codex の結果行を抽出する', async (t) => {
   await temporaryHome(t);
   const event = makeHookEvent({

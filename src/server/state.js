@@ -602,15 +602,14 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
   }
 }
 
-// 親が一度止まって終了未確認になった Codex も、再開した親が取り出した結果行で終了にする。
-// --wait の状態の行で終わった行は、ラッパーが消えていて結果行が届かないので除く。
-function oldestBackgroundedCodex(session, parentAgentId, runId = null) {
-  return session.agents
-    .filter((agent) => (
-      agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) &&
-      sameAgent(agent.parent_agent_id, parentAgentId) && (!runId || !agent.runId || agent.runId === runId)
-    ))
-    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
+// 実行 ID で直接特定できない結果行は、条件に合う行が一つの場合だけ割り当てる。
+// --wait の状態行で終了未確認になった行は、ラッパーが消えて結果行が届かないので候補にしない。
+function uniqueBackgroundedCodex(session, parentAgentId, runId = null) {
+  const candidates = session.agents.filter((agent) => (
+    agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) &&
+    sameAgent(agent.parent_agent_id, parentAgentId) && (!agent.runId || agent.runId === runId)
+  ));
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function applyCodexAudit(agent, event) {
@@ -891,7 +890,7 @@ function deriveSessions(entries) {
         const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
         const targetAgent = codexForRun
           ? (codexForRun.resultReceived ? null : codexForRun)
-          : oldestBackgroundedCodex(session, agentId, event.codexRunId);
+          : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
         if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
         if (targetAgent) completeCodexAgent(targetAgent, event);
       }
