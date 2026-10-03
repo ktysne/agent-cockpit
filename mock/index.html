@@ -849,11 +849,11 @@ function decisionCard(p, session, d, withTag) {
 }
 
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-// 状態ファイルには指摘が残っているかが無いので、最後にレビューした head と今の head の一致だけで状態を示す。
+// 状態ファイルにはレビューが終わったかも指摘が残っているかも無いので、head が一致しても「済み」とは言わない。
 function crossReviewState(pr) {
   if (!pr.xr) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
   if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
-  return { cls: 'ok', text: 'head をレビュー済み', warn: null };
+  return { cls: 'mute', text: 'この head をレビューに回した', warn: null, note: 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる' };
 }
 
 function crossReviewLine(pr) {
@@ -945,7 +945,7 @@ function mergeConfirm(p, pr, auto) {
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const effects = [
-    crossReviewState(pr).warn ? `<span>${esc(crossReviewState(pr).warn)}</span>` : '',
+    crossReviewState(pr).warn ? `<span>${esc(crossReviewState(pr).warn)}</span>` : esc(crossReviewState(pr).note || ''),
     `head が ${esc(pr.sha)} のときだけマージする (画面を見たあとに push されていたら中止する)`,
     kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
     o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',

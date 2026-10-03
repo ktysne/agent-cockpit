@@ -675,6 +675,33 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   assert.equal(Object.hasOwn(group, 'reviews'), false);
 });
 
+for (const order of [['reviewed', 'missing'], ['missing', 'reviewed']]) {
+  test(`同じ PR を複数のセッションが登録しても有効なクロスレビューの記録を保つ (${order.join(' → ')})`, async (t) => {
+    const headSha = 'a'.repeat(40);
+    const roots = {};
+    for (const name of ['reviewed', 'missing']) {
+      roots[name] = await temporaryDirectory(t);
+      await fs.mkdir(path.join(roots[name], '.git'));
+    }
+    await fs.writeFile(path.join(roots.reviewed, '.cross-review-state.json'), JSON.stringify({
+      branches: { 'feat/open': { round: 1, dismissed: [], lastReviewedSha: headSha } },
+    }));
+    const { github, tracker } = await trackerFixture(t, []);
+    for (const name of order) {
+      tracker.state.registerPullRequest(`session-${name}`, { url: 'https://github.com/example/project/pull/31' }, {
+        cwd: roots[name], product: { key: 'project', name: 'project' },
+      });
+    }
+    github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
+    github.comparisons.set(headSha, compareResult([headSha]));
+
+    await tracker.refreshRepo('example', 'project');
+
+    const [group] = tracker.snapshot();
+    assert.deepEqual(group.trees[0].crossReview, { round: 1, max: 3, dismissed: 0, reviewedSha: headSha });
+  });
+}
+
 test('マージ済みの一覧を最古のオープン PR の作成日以降に絞り、上限で切れたら積み直しを確かめられないとする', async (t) => {
   const { github, calls, tracker } = await trackerFixture(t);
   const childSha = 'b'.repeat(40);

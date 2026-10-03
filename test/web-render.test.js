@@ -206,8 +206,8 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha },
   });
   const reviewedBadge = allNodes(reviewed).find((node) => node.className?.startsWith('badge'));
-  assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 head をレビュー済み');
-  assert.equal(reviewedBadge.className, 'badge ok');
+  assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 この head をレビューに回した');
+  assert.equal(reviewedBadge.className, 'badge mute');
 
   const unverifiable = line({
     headRefOid: headSha,
@@ -221,7 +221,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(context.crossReviewState({ headRefOid: headSha }).warn, null);
 });
 
-test('マージと予約の確認欄はレビュー未確認の警告を先頭に出し、レビュー済みなら省く', () => {
+test('マージと予約の確認欄は head がレビューの後に変わったか記録が無ければ警告を先頭に出し、一致していれば PR のコメントで確かめる一言を出す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpersStart = html.indexOf('function element(tag, className, text)');
   const helpersEnd = html.indexOf('function durationLabel', helpersStart);
@@ -279,7 +279,8 @@ test('マージと予約の確認欄はレビュー未確認の警告を先頭�
       round: 1, max: 3, dismissed: 0, reviewedSha: headSha,
     });
     assert.equal(reviewedEffects[0].className, '');
-    assert.match(reviewedEffects[0].textContent, /^head が /);
+    assert.equal(reviewedEffects[0].textContent, 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる。');
+    assert.match(reviewedEffects[1].textContent, /^head が /);
   }
   const missingReviewEffects = confirmation(false, null);
   assert.equal(missingReviewEffects[0].className, 'warn');

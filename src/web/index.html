@@ -944,7 +944,7 @@ function crossReviewState(pullRequest) {
       warn: `head ${headSha.slice(0, 7)} はクロスレビューの後に変更されている (レビュー済みは ${reviewedShortSha})`,
     };
   }
-  return { cls: 'ok', text: 'head をレビュー済み', warn: null };
+  return { cls: 'mute', text: 'この head をレビューに回した', warn: null, note: 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる。' };
 }
 
 function crossReviewLine(pullRequest) {
@@ -1024,9 +1024,9 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   panel.append(branchChoice);
 
   const effects = element('ul', 'effects');
-  const reviewWarning = crossReviewState(pullRequest).warn;
+  const review = crossReviewState(pullRequest);
   const effectItems = [
-    reviewWarning ? { text: reviewWarning, warn: true } : null,
+    review.warn ? { text: review.warn, warn: true } : review.note ? { text: review.note } : null,
     { text: `head が ${pullRequest.headRefOid} のときだけマージする。表示後に push されていたら中止する。` },
     pullRequest.children.length ? { text: `先に ${pullRequest.children.map((child) => `#${child.number}`).join('、')} の base を ${group.defaultBranch} に付け替える。` } : null,
     options.deleteBranch ? { text: `リモートの ${pullRequest.headRefName} を削除する。手元の worktree には触れない。` } : null,

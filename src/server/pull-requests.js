@@ -810,6 +810,9 @@ class PullRequestTracker {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
       const review = await readCrossReviewState(registration, pullRequest, this.fileSystem);
+      const current = crossReviewByNumber.get(registration.number);
+      // 同じ PR を複数のセッションが登録したときは、記録の無い worktree で有効な記録を消さず、今の head に一致する記録を選ぶ。
+      if (current && (!review || current.reviewedSha === pullRequest.headRefOid)) continue;
       crossReviewByNumber.set(registration.number, review && {
         round: review.round,
         max: review.max,
