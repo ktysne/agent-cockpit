@@ -1106,8 +1106,24 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     method: 'POST', path: endpoint, body: JSON.stringify({ pinned: ['C:\\project'] }), headers: validHeaders,
   });
   assert.equal(pinned.status, 200);
+  for (const sectionOrder of [
+    ['tasks', 'unknown'],
+    ['tasks', 'tasks'],
+    'tasks',
+  ]) {
+    const invalidOrder = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ sectionOrder }), headers: validHeaders,
+    });
+    assert.equal(invalidOrder.status, 400);
+  }
+  const sectionOrder = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ sectionOrder: ['tasks', 'now'] }), headers: validHeaders,
+  });
+  assert.equal(sectionOrder.status, 200);
+  assert.deepEqual(jsonBody(sectionOrder).display.sectionOrder, ['tasks', 'now', 'sinceSeen', 'judgment', 'prs']);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
+    sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
   });
 });
 

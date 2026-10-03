@@ -6,7 +6,11 @@ const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { parsePullRequestUrl, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
-const DEFAULT_DISPLAY = Object.freeze({ mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] });
+const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
+const DEFAULT_DISPLAY = Object.freeze({
+  mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
+});
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -36,11 +40,23 @@ function cloneDisplay(display) {
     pinned: [...display.pinned],
     collapsed: [...display.collapsed],
     hidden: [...display.hidden],
+    sectionOrder: [...display.sectionOrder],
   };
 }
 
 function defaultDisplay() {
-  return { mode: DEFAULT_DISPLAY.mode, order: [], pinned: [], collapsed: [], hidden: [] };
+  return {
+    mode: DEFAULT_DISPLAY.mode, order: [], pinned: [], collapsed: [], hidden: [],
+    sectionOrder: [...DEFAULT_DISPLAY.sectionOrder],
+  };
+}
+
+function normalizeSectionOrder(order) {
+  const known = [];
+  for (const key of Array.isArray(order) ? order : []) {
+    if (SECTION_ORDER_KEYS.has(key) && !known.includes(key)) known.push(key);
+  }
+  return [...known, ...DEFAULT_SECTION_ORDER.filter((key) => !known.includes(key))];
 }
 
 function isRecord(value) {
@@ -66,8 +82,9 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
+  if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed', 'hidden']) {
     if (!Array.isArray(value[key]) || value[key].length > 200 || value[key].some((item) => typeof item !== 'string' || item.length > 500)) {
       throw new Error('Invalid display preferences');
@@ -81,6 +98,7 @@ function normalizeDisplay(value) {
     pinned: [...value.pinned],
     collapsed: [...value.collapsed],
     hidden: [...value.hidden],
+    sectionOrder: normalizeSectionOrder(value.sectionOrder),
   };
 }
 
@@ -1754,7 +1772,7 @@ class DashboardState {
   }
 
   patchDisplayPreferences(changes) {
-    const next = { ...(this.display || defaultDisplay()), ...changes };
+    const next = normalizeDisplay({ ...(this.display || defaultDisplay()), ...changes });
     if (this.display && JSON.stringify(this.display) === JSON.stringify(next)) return cloneDisplay(this.display);
     this.display = next;
     this.touch();

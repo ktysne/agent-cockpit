@@ -201,12 +201,16 @@ function validTasks(value) {
 function validDisplayPatch(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden'].includes(key))) return false;
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder'].includes(key))) return false;
   if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
   for (const key of ['order', 'pinned', 'collapsed']) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
       value[key].some((item) => typeof item !== 'string' || item.length > 500) || new Set(value[key]).size !== value[key].length)) return false;
   }
+  const sectionOrderKeys = new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
+  if (Object.hasOwn(value, 'sectionOrder') && (!Array.isArray(value.sectionOrder) || value.sectionOrder.length > sectionOrderKeys.size ||
+    value.sectionOrder.some((item) => typeof item !== 'string' || !sectionOrderKeys.has(item)) ||
+    new Set(value.sectionOrder).size !== value.sectionOrder.length)) return false;
   const filters = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
   if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
     value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;

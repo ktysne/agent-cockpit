@@ -189,7 +189,7 @@ test('種類別の並び順の札には、外すセッションがあるプロ�
   assert.ok(closeButton);
   assert.ok(productOrder);
   assert.match(kindSections, /const productOrder = kindProductOrder\(products\);/);
-  assert.match(kindSections, /const sections = \[productOrder\]/);
+  assert.match(kindSections, /return \[productOrder, \.\.\.orderedSectionKeys\(DEFAULT_SECTION_ORDER\)/);
   assert.doesNotMatch(kindSections, /kindSection\('あなたの判断が必要なこと[^\n]*, productOrder\)/);
 
   const createElement = (tagName, className, textContent) => ({

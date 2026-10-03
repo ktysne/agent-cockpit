@@ -97,6 +97,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
 .settings-theme-row label { color: var(--text-2); }
 .settings-dialog select { max-width: 100%; padding: 4px 8px; }
+.settings-section-order { margin-top: 14px; }
+.settings-section-order h4 { margin: 0 0 4px; font-size: 13px; }
+.section-order-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.section-order-list li { display: flex; align-items: center; gap: 8px; }
+.section-order-list .section-order-label { flex: 1; min-width: 0; }
+.section-order-list button { min-width: 36px; padding: 4px 8px; }
 .settings-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .settings-dialog button { padding: 4px 12px; cursor: pointer; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
@@ -359,6 +365,12 @@ h3.sub .count { font-weight: normal; }
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <div class="settings-section-order">
+      <h4 id="settings-section-order-title">セクションの並び順</h4>
+      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
+      <ol class="section-order-list" id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"></ol>
+      <button type="button" id="settings-section-order-reset">既定に戻す</button>
+    </div>
   </section>
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
@@ -388,6 +400,7 @@ const liveStatus = document.getElementById('live-status');
 const initialUiVersion = document.querySelector('meta[name="cockpit-ui-version"]')?.content || '';
 const themeSelect = document.getElementById('settings-theme-select');
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
+const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
 const awayToggle = document.getElementById('away-toggle');
 const connectionNote = document.getElementById('connection-note');
@@ -441,6 +454,51 @@ let routing = { agents: 'default', review: 'default' };
 let codexAgentAvailable = false;
 let crossReviewAvailable = false;
 
+const SECTION_KINDS = [
+  { key: 'sinceSeen', label: '前回見てから' },
+  { key: 'judgment', label: 'あなたの判断が必要なこと' },
+  { key: 'tasks', label: 'タスクと完了条件' },
+  { key: 'now', label: '今やっていること' },
+  { key: 'prs', label: 'プルリクエスト' },
+];
+const DEFAULT_SECTION_ORDER = SECTION_KINDS.map(({ key }) => key);
+
+function normalizeSectionOrder(order) {
+  const known = (Array.isArray(order) ? order : []).filter((key, index, list) => (
+    DEFAULT_SECTION_ORDER.includes(key) && list.indexOf(key) === index
+  ));
+  return [...known, ...DEFAULT_SECTION_ORDER.filter((key) => !known.includes(key))];
+}
+
+function renderSectionOrder(focusKey, focusDirection) {
+  displayPreferences.sectionOrder = normalizeSectionOrder(displayPreferences.sectionOrder);
+  const lastIndex = displayPreferences.sectionOrder.length - 1;
+  const buttons = [];
+  sectionOrderList.replaceChildren(...displayPreferences.sectionOrder.map((key, index) => {
+    const { label } = SECTION_KINDS.find((kind) => kind.key === key);
+    const item = element('li');
+    item.append(element('span', 'section-order-label', `${index + 1}. ${label}`));
+    for (const [direction, text, disabled, action] of [['-1', '↑', index === 0, '上へ'], ['1', '↓', index === lastIndex, '下へ']]) {
+      const button = element('button', '', text);
+      button.type = 'button';
+      button.dataset.sectionMove = key;
+      button.dataset.dir = direction;
+      button.disabled = disabled;
+      button.setAttribute('aria-label', `${label}を${action}`);
+      item.append(button);
+      buttons.push(button);
+    }
+    return item;
+  }));
+  if (!focusKey) return;
+  const candidates = buttons.filter((button) => button.dataset.sectionMove === focusKey && !button.disabled);
+  (candidates.find((button) => button.dataset.dir === focusDirection) || candidates[0])?.focus();
+}
+
+function orderedSectionKeys(keys) {
+  return normalizeSectionOrder(displayPreferences.sectionOrder).filter((key) => keys.includes(key));
+}
+
 function readDisplayPreferences() {
   try {
     const value = JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}');
@@ -451,9 +509,10 @@ function readDisplayPreferences() {
       pinned: uniqueStrings(value.pinned),
       collapsed: uniqueStrings(value.collapsed),
       hidden: [...new Set(Array.isArray(value.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
+      sectionOrder: normalizeSectionOrder(value.sectionOrder),
     };
   } catch {
-    return { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
+    return { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: [...DEFAULT_SECTION_ORDER] };
   }
 }
 
@@ -465,10 +524,12 @@ function normalizeDisplayPreferences(value) {
     pinned: uniqueStrings(value?.pinned),
     collapsed: uniqueStrings(value?.collapsed),
     hidden: [...new Set(Array.isArray(value?.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
+    sectionOrder: normalizeSectionOrder(value?.sectionOrder),
   };
 }
 
 let displayPreferences = normalizeDisplayPreferences(null);
+renderSectionOrder();
 let displayPreferencesReady = false;
 let displayMigrationPending = false;
 let displayMigrationData = null;
@@ -516,6 +577,7 @@ async function syncDisplayPreferences(serverDisplay) {
       ? readDisplayPreferences()
       : normalizeDisplayPreferences(serverDisplay);
     displayPreferences = { ...current, ...pendingDisplayChanges };
+    renderSectionOrder();
     displayPreferencesReady = true;
     const patch = serverDisplay === null ? displayPreferences : pendingDisplayChanges;
     pendingDisplayChanges = {};
@@ -538,7 +600,9 @@ async function syncDisplayPreferences(serverDisplay) {
     return;
   }
   if (serverDisplay !== null && pendingDisplayRequests === 0) {
+    const previousSectionOrder = displayPreferences.sectionOrder;
     displayPreferences = normalizeDisplayPreferences(serverDisplay);
+    if (previousSectionOrder.some((key, index) => key !== displayPreferences.sectionOrder[index])) renderSectionOrder();
     displayMigrationPending = false;
     displayMigrationData = null;
     clearLegacyDisplayPreferences();
@@ -608,6 +672,24 @@ function setSinceSeenMode(mode) {
 
 applySinceSeenMode(storedSinceSeenMode());
 sinceSeenSelect.addEventListener('change', () => setSinceSeenMode(sinceSeenSelect.value));
+
+sectionOrderList.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-section-move]');
+  if (!button) return;
+  const order = normalizeSectionOrder(displayPreferences.sectionOrder);
+  const index = order.indexOf(button.dataset.sectionMove);
+  const target = index + Number(button.dataset.dir);
+  if (index < 0 || target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  saveDisplayPreferences({ sectionOrder: order });
+  renderSectionOrder(button.dataset.sectionMove, button.dataset.dir);
+  if (lastState) render(lastState);
+});
+document.getElementById('settings-section-order-reset').addEventListener('click', () => {
+  saveDisplayPreferences({ sectionOrder: [...DEFAULT_SECTION_ORDER] });
+  renderSectionOrder();
+  if (lastState) render(lastState);
+});
 
 settingsButton.addEventListener('click', () => settingsDialog.showModal());
 settingsClose.addEventListener('click', () => settingsDialog.close());
@@ -2114,19 +2196,27 @@ function sessionBlock(product, session, multipleSessions) {
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
   const hasEndedDecisions = session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
+  const sections = { judgment: [], tasks: [], now: [] };
   if (showJudgment) {
     const judgmentHeading = element('h3', 'sub', 'あなたの判断が必要なこと');
     judgmentHeading.append(element('span', 'count', `(${judgmentCount} 件)`));
-    body.append(judgmentHeading);
-    appendPermissionWaits(body, session, product);
-    appendDecisions(body, session, product);
+    sections.judgment.push(judgmentHeading);
+    const judgmentContent = element('div');
+    appendPermissionWaits(judgmentContent, session, product);
+    appendDecisions(judgmentContent, session, product);
+    sections.judgment.push(...judgmentContent.childNodes);
   }
-  appendTasks(body, session, product);
-  body.append(element('h3', 'sub', '今やっていること'));
+  const taskContent = element('div');
+  appendTasks(taskContent, session, product);
+  sections.tasks.push(...taskContent.childNodes);
+  const nowContent = element('div');
+  nowContent.append(element('h3', 'sub', '今やっていること'));
   const now = element('div', 'now');
   now.append(mainRow(session, product));
-  body.append(now);
-  appendAgents(body, session, product);
+  nowContent.append(now);
+  appendAgents(nowContent, session, product);
+  sections.now.push(...nowContent.childNodes);
+  for (const key of orderedSectionKeys(['judgment', 'tasks', 'now'])) body.append(...sections[key]);
   appendUnknownSessionControls(body, session);
   block.append(body);
   return block;
@@ -2368,28 +2458,28 @@ function renderKindSections(products) {
   if (todoTaskCount) appendKindToggle(tasks, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク');
   if (doneTaskCount) appendKindToggle(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク');
 
-  const sections = [productOrder];
   const sinceSeenContent = element('div', 'body');
   for (const product of products) {
     const news = sinceSeenBox(product, true);
     if (news) sinceSeenContent.append(news);
   }
-  if (sinceSeenContent.children.length) sections.push(kindSection('前回見てから', sinceSeenContent));
-  if (waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments) {
-    sections.push(kindSection('あなたの判断が必要なこと', judgment));
-  }
-  sections.push(
-    kindSection('タスクと完了条件', tasks),
-    kindSection('今やっていること', activity),
-  );
+  const sections = {
+    sinceSeen: sinceSeenContent.children.length ? kindSection('前回見てから', sinceSeenContent) : null,
+    judgment: waitingItems.length || endedDecisionItems.length || !hasHiddenJudgments
+      ? kindSection('あなたの判断が必要なこと', judgment)
+      : null,
+    tasks: kindSection('タスクと完了条件', tasks),
+    now: kindSection('今やっていること', activity),
+    prs: null,
+  };
   const pullRequestGroups = products.flatMap((product) => product.pullRequestGroups.map((group) => ({ product, group })));
   if (isFilterShown('prs')) {
     const pullRequests = element('div', 'body');
     for (const { group } of pullRequestGroups) appendPullRequestBlock(pullRequests, group, true);
     if (!pullRequestGroups.length) pullRequests.append(element('div', 'empty', 'ありません'));
-    sections.push(kindSection('プルリクエスト', pullRequests));
+    sections.prs = kindSection('プルリクエスト', pullRequests);
   }
-  return sections;
+  return [productOrder, ...orderedSectionKeys(DEFAULT_SECTION_ORDER).map((key) => sections[key]).filter(Boolean)];
 }
 
 function render(state) {

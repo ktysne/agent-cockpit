@@ -80,6 +80,12 @@ header.top {
 .settings-dialog h3 { margin: 0 0 10px; font-size: 14px; }
 .settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
 .settings-dialog select { max-width: 100%; padding: 4px 8px; }
+.settings-section-order { margin-top: 14px; }
+.settings-section-order h4 { margin: 0 0 4px; font-size: 13px; }
+.section-order-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.section-order-list li { display: flex; align-items: center; gap: 8px; }
+.section-order-list .section-order-label { flex: 1; min-width: 0; }
+.section-order-list button { min-width: 36px; padding: 4px 8px; }
 .settings-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
 .settings-dialog button { padding: 4px 12px; cursor: pointer; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
@@ -344,6 +350,12 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <div class="settings-section-order">
+      <h4 id="settings-section-order-title">セクションの並び順</h4>
+      <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
+      <ol class="section-order-list" id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"></ol>
+      <button type="button" id="settings-section-order-reset">既定に戻す</button>
+    </div>
   </section>
   <div class="settings-actions"><button id="settings-close" type="button" autofocus>閉じる</button></div>
 </dialog>
@@ -572,9 +584,58 @@ function applySinceSeenMode(mode) {
   sinceSeenSelect.value = ui.sinceSeenMode;
 }
 
+const SECTION_KINDS = [
+  { key: 'sinceSeen', label: '前回見てから' },
+  { key: 'judgment', label: 'あなたの判断が必要なこと' },
+  { key: 'tasks', label: 'タスクと完了条件' },
+  { key: 'now', label: '今やっていること' },
+  { key: 'prs', label: 'プルリクエスト' },
+];
+const DEFAULT_SECTION_ORDER = SECTION_KINDS.map(kind => kind.key);
+// 保存した順に知らない種類や欠けた種類があっても、既定の順で補って 5 つすべてを並べる。
+function normalizeSectionOrder(order) {
+  const known = (Array.isArray(order) ? order : []).filter((key, index, list) => DEFAULT_SECTION_ORDER.includes(key) && list.indexOf(key) === index);
+  return [...known, ...DEFAULT_SECTION_ORDER.filter(key => !known.includes(key))];
+}
+const sectionOrderList = document.getElementById('settings-section-order');
+function renderSectionOrder(focusKey, focusDirection) {
+  ui.sectionOrder = normalizeSectionOrder(ui.sectionOrder);
+  sectionOrderList.innerHTML = ui.sectionOrder.map((key, index) => {
+    const label = SECTION_KINDS.find(kind => kind.key === key).label;
+    return `<li><span class="section-order-label">${index + 1}. ${esc(label)}</span>
+      <button type="button" data-section-move="${key}" data-dir="-1" ${index === 0 ? 'disabled' : ''} aria-label="${esc(label)}を上へ">↑</button>
+      <button type="button" data-section-move="${key}" data-dir="1" ${index === ui.sectionOrder.length - 1 ? 'disabled' : ''} aria-label="${esc(label)}を下へ">↓</button></li>`;
+  }).join('');
+  if (!focusKey) return;
+  const target = sectionOrderList.querySelector(`[data-section-move="${focusKey}"][data-dir="${focusDirection}"]:not([disabled])`)
+    || sectionOrderList.querySelector(`[data-section-move="${focusKey}"]:not([disabled])`);
+  target?.focus();
+}
+sectionOrderList.addEventListener('click', event => {
+  const button = event.target.closest('[data-section-move]');
+  if (!button) return;
+  const order = normalizeSectionOrder(ui.sectionOrder);
+  const index = order.indexOf(button.dataset.sectionMove);
+  const target = index + Number(button.dataset.dir);
+  if (index < 0 || target < 0 || target >= order.length) return;
+  [order[index], order[target]] = [order[target], order[index]];
+  ui.sectionOrder = order;
+  save();
+  renderSectionOrder(button.dataset.sectionMove, button.dataset.dir);
+  render();
+});
+document.getElementById('settings-section-order-reset').addEventListener('click', () => {
+  ui.sectionOrder = [...DEFAULT_SECTION_ORDER];
+  save();
+  renderSectionOrder();
+  render();
+});
+const orderedSectionKeys = keys => normalizeSectionOrder(ui.sectionOrder).filter(key => keys.includes(key));
+
 applyTheme(ui.theme);
 applyAway(ui.away);
 applySinceSeenMode(ui.sinceSeenMode);
+renderSectionOrder();
 themeSelect.addEventListener('change', () => { applyTheme(themeSelect.value); save(); });
 awayToggle.addEventListener('change', () => { applyAway(awayToggle.checked); save(); render(); });
 sinceSeenSelect.addEventListener('change', () => { applySinceSeenMode(sinceSeenSelect.value); save(); render(); });
@@ -1231,12 +1292,14 @@ function sessionBlock(p, session) {
   return `<div class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}<span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
     <div class="session-body">
-      ${showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
+      ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
+        judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
-      ${decisionSessionBlock(p, session, false)}` : ''}
-      ${taskSessionBlock(p, session, false)}
-      <h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
-      ${agentSection(p, session, false)}
+      ${decisionSessionBlock(p, session, false)}` : '',
+        tasks: taskSessionBlock(p, session, false),
+        now: `<h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
+      ${agentSection(p, session, false)}`,
+      })[key]).join('')}
       ${unknownSessionControls(session)}
     </div>
   </div>`;
@@ -1361,12 +1424,14 @@ function renderKindMode() {
   const prs = ps.filter(p => p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('<div style="height:12px"></div>')
     || '<div class="empty">ありません</div>';
   const orderBar = `<div class="order product-order kind-order">${ps.map((p, i) => `<span class="product-order-item"><span id="kind-product-order-${i}" class="prod-tag" title="${esc(p.name)}">${i + 1}. ${esc(p.name)}</span>${productCloseButton(p, `kind-product-order-${i}`)}</span>`).join(' ')}</div>`;
-  return orderBar
-    + (news ? section('前回見てから', news) : '')
-    + (showJudgment ? section('あなたの判断が必要なこと', decisions) : '')
-    + section('タスクと完了条件', tasks)
-    + section('今やっていること', now)
-    + (isShown('prs') ? section('プルリクエスト', prs) : '');
+  const sections = {
+    sinceSeen: news ? section('前回見てから', news) : '',
+    judgment: showJudgment ? section('あなたの判断が必要なこと', decisions) : '',
+    tasks: section('タスクと完了条件', tasks),
+    now: section('今やっていること', now),
+    prs: isShown('prs') ? section('プルリクエスト', prs) : '',
+  };
+  return orderBar + orderedSectionKeys(DEFAULT_SECTION_ORDER).map(key => sections[key]).join('');
 }
 
 function render() {
