@@ -795,7 +795,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   assert.deepEqual(saved, []);
 });
 
-test('表示中のセッションもオープンの PR も未読の変化も無いプロダクトはカードを出さない', () => {
+test('表示中のセッションもオープンの PR も PR の取得失敗も未読の変化も無いプロダクトはカードを出さない', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['pullRequestOpenCount', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
@@ -813,12 +813,13 @@ test('表示中のセッションもオープンの PR も未読の変化も無�
   const pullRequests = [
     { product: { key: 'finished', name: '終了済み' }, owner: 'example', repo: 'finished', openCount: 0 },
     { product: { key: 'open', name: 'オープンあり' }, owner: 'example', repo: 'open', openCount: 2 },
+    { product: { key: 'unreachable', name: '取得失敗' }, owner: 'example', repo: 'unreachable', openCount: 0, error: 'GitHub から取得できません' },
   ];
   const keys = (sinceSeen) => [...context.orderedProducts(visibleSessions, pullRequests, sinceSeen)].map((product) => product.key).sort();
 
-  assert.deepEqual(keys([]), ['active', 'open']);
-  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [{ text: 'PR #1 をマージした' }] }]), ['active', 'finished', 'open']);
-  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [] }]), ['active', 'open']);
+  assert.deepEqual(keys([]), ['active', 'open', 'unreachable']);
+  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [{ text: 'PR #1 をマージした' }] }]), ['active', 'finished', 'open', 'unreachable']);
+  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [] }]), ['active', 'open', 'unreachable']);
 });
 
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
