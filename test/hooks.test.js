@@ -55,6 +55,24 @@ test('PostToolUseFailure では error の文字列からも Codex の結果行�
   assert.ok(!JSON.stringify(event).includes('private output'));
 });
 
+test('codex-agent: run= の最初の行を runLine として抽出し、形式の合う実行 ID だけを渡す', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  const event = makeHookEvent({
+    session_id: 'codex-run-line', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'bash-1',
+    tool_response: `codex-agent: run=${runId} ${'x'.repeat(1100)}\ncodex-agent: run=impl-hard-20261003-123457-8`,
+  });
+  assert.equal(event.codexOutput.runLine, `codex-agent: run=${runId} ${'x'.repeat(1024 - `codex-agent: run=${runId} `.length)}`);
+  assert.equal(event.codexOutput.runLine.length, 1024);
+  assert.equal(sanitizeEvent(event).codexRunId, runId);
+
+  const invalid = makeHookEvent({
+    session_id: 'codex-invalid-run-line', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'bash-2',
+    tool_response: 'codex-agent: run=not-a-run-id',
+  });
+  assert.equal(invalid.codexOutput.runLine, 'codex-agent: run=not-a-run-id');
+  assert.equal(Object.hasOwn(sanitizeEvent(invalid), 'codexRunId'), false);
+});
+
 test('SubagentStart イベントに起動時の経路を記録する', async (t) => {
   const { homeDir } = await temporaryHome(t);
   const startedAt = '2026-10-03T00:00:00.000Z';
@@ -191,6 +209,10 @@ test('文字列やヒアドキュメントに書かれた Codex の --wait は�
   assert.equal(extractCodexWaitRunId(`cat > notes.md <<'EOF'\nbash ~/.claude/tools/codex-agent.sh --wait ${runId}\nEOF`), '');
   assert.equal(extractCodexWaitRunId(`echo "codex-agent.sh --wait ${runId}"`), '');
   assert.equal(extractCodexWaitRunId(`git commit -m "bash codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`echo "手順: cd x; bash codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`printf "%s" "a | codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`echo "quoted\n; bash codex-agent.sh --wait ${runId}"`), '');
+  assert.equal(extractCodexWaitRunId(`echo 'quoted; codex-agent.sh --wait ${runId}'`), '');
   assert.equal(extractCodexWaitRunId(`cd /tmp; codex-agent.sh --wait ${runId}`), runId);
   assert.equal(extractCodexWaitRunId(`bash "C:/Users/me/.claude/tools/codex-agent.sh" --wait ${runId}`), runId);
   assert.equal(extractCodexWaitRunId(`x=$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})`), runId);

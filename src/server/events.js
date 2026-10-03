@@ -17,7 +17,7 @@ const EVENT_NAMES = new Set([
 const MAX_ASK_QUESTIONS = 4;
 const MAX_ASK_OPTIONS = 6;
 const QUESTION_TEXT_LIMIT = 2000;
-const CODEX_WAIT_RUN_ID_PATTERN = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)-\d{8}-\d{6}-\d+$/;
+const CODEX_RUN_ID_PATTERN = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)-\d{8}-\d{6}-\d+$/;
 
 function boundedString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : '';
@@ -90,6 +90,12 @@ function parseCodexResultLine(value) {
   return { status: match[1], exitCode: match[2] ? Number(match[2]) : null };
 }
 
+function parseCodexRunLine(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.slice(0, 1024).trim().match(/^codex-agent:\s*run=([^\s]+)(?:\s|$)/);
+  return match && CODEX_RUN_ID_PATTERN.test(match[1]) ? match[1] : null;
+}
+
 // 定義の名前は英数字か _ で始まる。--wait などのオプションは起動ではなく、背景の実行の結果を取り出す呼び出しである。
 function parseCodexLaunch(summary) {
   if (typeof summary !== 'string') return null;
@@ -130,7 +136,7 @@ function sanitizeEvent(input, metadata = {}) {
     event.summary = shortString(input.summary, 80) || event.tool_name;
     event.codexDefinition = parseCodexLaunch(event.summary);
     const codexWaitRunId = shortString(input.codexWaitRunId, 256) || '';
-    const codexWaitMatch = codexWaitRunId.match(CODEX_WAIT_RUN_ID_PATTERN);
+    const codexWaitMatch = codexWaitRunId.match(CODEX_RUN_ID_PATTERN);
     if (event.tool_name === 'Bash' && !event.codexDefinition && codexWaitMatch) {
       event.codexWaitRunId = codexWaitRunId;
       event.codexWaitDefinition = codexWaitRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
@@ -167,8 +173,10 @@ function sanitizeEvent(input, metadata = {}) {
     && input.codexOutput && typeof input.codexOutput === 'object' && !Array.isArray(input.codexOutput)) {
     const audit = parseCodexAuditLine(input.codexOutput.auditLine);
     const result = parseCodexResultLine(input.codexOutput.resultLine);
+    const runId = parseCodexRunLine(input.codexOutput.runLine);
     if (audit) event.codexAudit = audit;
     if (result) event.codexResult = result;
+    if (runId) event.codexRunId = runId;
     const waitStatus = typeof input.codexOutput.waitStatusLine === 'string'
       && input.codexOutput.waitStatusLine.slice(0, 1024).trim().match(/^codex-agent:\s*(waiting|vanished|orphaned|unverified|not-found)\s+run=/);
     if (waitStatus) event.codexWaitStatus = waitStatus[1];

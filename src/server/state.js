@@ -490,9 +490,10 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
 }
 
 // 親が一度止まって終了未確認になった Codex も、再開した親が取り出した結果行で終了にする。
+// --wait の状態の行で終わった行は、ラッパーが消えていて結果行が届かないので除く。
 function oldestBackgroundedCodex(session, parentAgentId) {
   return session.agents
-    .filter((agent) => agent.isCodex && agent.backgrounded && (agent.active || agent.unconfirmed) && sameAgent(agent.parent_agent_id, parentAgentId))
+    .filter((agent) => agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) && sameAgent(agent.parent_agent_id, parentAgentId))
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
 }
 
@@ -610,30 +611,41 @@ function deriveSessions(entries) {
       }
 
       if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
-        const agent = latestWaitableCodex(session, agentId, event.codexWaitDefinition);
-        if (agent) {
-          agent.active = true;
-          agent.unconfirmed = false;
-          agent.lastTool = { tool_name: 'Bash', summary: event.summary };
-          session.pendingCodex[toolUseId] = agent.agent_id;
+        const codexForRun = session.agents.find((candidate) => (
+          candidate.isCodex && sameAgent(candidate.parent_agent_id, agentId) && candidate.runId === event.codexWaitRunId
+        ));
+        if (codexForRun?.resultReceived) {
+          // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
+          session.pendingCodex[toolUseId] = codexForRun.agent_id;
         } else {
-          const agentIdForCall = `codex:${toolUseId}`;
-          const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
-          Object.assign(waitAgent, {
-            agent_id: agentIdForCall,
-            agent_type: event.codexWaitDefinition,
-            isCodex: true,
-            parent_agent_id: agentId,
-            codex_home: '',
-            unavailable: '',
-            backgrounded: true,
-            startedAt: isoTime(event.hookAt),
-            lastTool: { tool_name: 'Bash', summary: event.summary },
-          });
-          session.agents.push(waitAgent);
-          session.pendingCodex[toolUseId] = agentIdForCall;
+          const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition);
+          if (agent) {
+            agent.active = true;
+            agent.unconfirmed = false;
+            agent.runId = event.codexWaitRunId;
+            delete agent.waitEnded;
+            agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+            session.pendingCodex[toolUseId] = agent.agent_id;
+          } else {
+            const agentIdForCall = `codex:${toolUseId}`;
+            const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
+            Object.assign(waitAgent, {
+              agent_id: agentIdForCall,
+              agent_type: event.codexWaitDefinition,
+              isCodex: true,
+              parent_agent_id: agentId,
+              codex_home: '',
+              unavailable: '',
+              backgrounded: true,
+              runId: event.codexWaitRunId,
+              startedAt: isoTime(event.hookAt),
+              lastTool: { tool_name: 'Bash', summary: event.summary },
+            });
+            session.agents.push(waitAgent);
+            session.pendingCodex[toolUseId] = agentIdForCall;
+          }
+          session.pendingCodexWait[toolUseId] = true;
         }
-        session.pendingCodexWait[toolUseId] = true;
       } else if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
         const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
@@ -733,6 +745,7 @@ function deriveSessions(entries) {
 
       if (event.tool_name === 'Bash' && toolUseId) {
         const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
+        if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
           completedCodexAgent = placeholder;
@@ -743,6 +756,7 @@ function deriveSessions(entries) {
           if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
             placeholder.active = false;
             placeholder.unconfirmed = true;
+            placeholder.waitEnded = true;
           }
         } else if (placeholder && eventName === 'PostToolUseFailure') {
           applyCodexAudit(placeholder, event);
