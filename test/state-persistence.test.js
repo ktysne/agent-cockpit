@@ -1024,3 +1024,18 @@ test('参照する記録がなくなったプロダクトの既読時刻をsnaps
   assert.equal(state.seenAtByProduct.has(product.key), false);
   assert.ok(state.version > versionBeforeSnapshot);
 });
+
+test('離席期間の記録が食い違っていても、離席中かどうかの記録は保つ', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const filePath = path.join(homeDir, 'away.json');
+  // 閉じていない期間が途中にあり、since とも合わない。
+  await fs.writeFile(filePath, JSON.stringify({
+    enabled: true, since: 500, periods: [{ start: 100, end: null }, { start: 200, end: 300 }],
+  }));
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), {
+    enabled: true, since: 500, periods: [{ start: 500, end: null }],
+  });
+
+  await fs.writeFile(filePath, JSON.stringify({ enabled: false, since: null, periods: 'broken' }));
+  assert.deepEqual((await AwayState.load(homeDir)).snapshot(), { enabled: false, since: null, periods: [] });
+});

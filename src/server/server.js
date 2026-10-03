@@ -321,9 +321,10 @@ function createRequestHandler(options) {
       const now = Date.now();
       const awayState = away.snapshot();
       const sinceSeen = state.snapshotSinceSeen(snapshot.sessions, pullRequests, now, awayState.periods);
-      await away.prune?.([...state.seenAtByProduct.values()], now);
+      // 版と時刻は中身と同じ同期処理の中で確定する。後で待つと、待つ間の更新の版が古い中身に付く。
       snapshot.version = state.version;
       snapshot.generatedAt = state.generatedAt;
+      void away.prune?.([...state.seenAtByProduct.values()], now);
       const sessions = snapshot.sessions.map((session) => {
         const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
         const seenMilliseconds = Date.parse(seenAt || '');

@@ -399,28 +399,25 @@ function normalizeAwayState(value) {
     !((value.enabled && Number.isFinite(value.since) && value.since >= 0) || (!value.enabled && value.since === null)) ||
     !Number.isFinite(new Date(value.since).getTime())) return null;
 
-  let periods;
-  if (value.periods === undefined) {
-    // 旧形式は、離席中なら since から現在まで続く期間として読む。
-    periods = value.enabled ? [{ start: value.since, end: null }] : [];
-  } else {
-    if (!Array.isArray(value.periods) || value.periods.some((period) => !isRecord(period) ||
-      !Number.isFinite(period.start) || period.start < 0 ||
-      !(period.end === null || (Number.isFinite(period.end) && period.end >= period.start)))) return null;
-    periods = value.periods.map(({ start, end }) => ({ start, end }));
-  }
-
-  if (periods.some((period, index) => period.end === null && index !== periods.length - 1)) return null;
-  if (value.enabled) {
-    const activePeriod = periods.at(-1);
-    if (activePeriod?.end === null) {
-      if (activePeriod.start !== value.since) return null;
-    } else {
-      if (activePeriod && activePeriod.end > value.since) return null;
-      periods.push({ start: value.since, end: null });
+  // 旧形式と、期間の記録が食い違うものは、離席中なら since から現在まで続く期間だけとして読む。
+  // 期間が壊れていても、離席中かどうかの記録は保つ。
+  const sinceOnly = value.enabled ? [{ start: value.since, end: null }] : [];
+  let periods = sinceOnly;
+  if (Array.isArray(value.periods) && value.periods.every((period) => isRecord(period) &&
+    Number.isFinite(period.start) && period.start >= 0 &&
+    (period.end === null || (Number.isFinite(period.end) && period.end >= period.start)))) {
+    const candidate = value.periods.map(({ start, end }) => ({ start, end }));
+    const openIndexes = candidate.flatMap((period, index) => period.end === null ? [index] : []);
+    const activePeriod = candidate.at(-1);
+    const consistent = value.enabled
+      ? openIndexes.length === 0
+        ? !activePeriod || activePeriod.end <= value.since
+        : openIndexes.length === 1 && openIndexes[0] === candidate.length - 1 && activePeriod.start === value.since
+      : openIndexes.length === 0;
+    if (consistent) {
+      periods = candidate;
+      if (value.enabled && activePeriod?.end !== null) periods.push({ start: value.since, end: null });
     }
-  } else if (periods.some((period) => period.end === null)) {
-    return null;
   }
 
   return { enabled: value.enabled, since: value.since, periods: periods.slice(-MAX_AWAY_PERIODS) };
