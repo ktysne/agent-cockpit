@@ -239,6 +239,15 @@ npm test
 `ensure-server.js` のテストは空きポートを `AGENT_COCKPIT_PORT` に設定し、ポート `47821` を使いません。
 開発機の `~/.agent-cockpit` と通常ポートには接続しません。
 
+子プロセスを起動できない環境(Codex の Windows サンドボックスなど)では、`npm test` が `spawn EPERM` で止まります。
+その環境では、テストファイルを 1 つのプロセスで流す次のコマンドを使います。
+
+```powershell
+npm run test:inprocess
+```
+
+`ensure-server.js` のテストは常駐サーバーを子プロセスで起動するので、この環境では失敗します。
+
 ## イベント再生
 
 別の端末で一時保存先を設定してサーバーを起動します。
