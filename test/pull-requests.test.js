@@ -304,6 +304,25 @@ test('登録の保持期限後に refreshAll するとリポジトリと表示�
   assert.ok(state.version > versionBeforeRefresh);
 });
 
+test('初回の PR 取得中を snapshot に示し、成功と失敗の完了後に外す', async (t) => {
+  const success = await trackerFixture(t, [31]);
+  const firstFetch = success.tracker.refreshRepo('example', 'project');
+  const pending = success.tracker.snapshot();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].loading, true);
+  await firstFetch;
+  assert.equal(success.tracker.snapshot()[0].loading, false);
+
+  const failure = await trackerFixture(t, [32]);
+  failure.tracker.execFileImpl = (_file, _args, _options, callback) => callback(new Error('GitHub unavailable'));
+  const failedFetch = failure.tracker.refreshRepo('example', 'project');
+  assert.equal(failure.tracker.snapshot()[0].loading, true);
+  await failedFetch;
+  const [failedGroup] = failure.tracker.snapshot();
+  assert.equal(failedGroup.loading, false);
+  assert.match(failedGroup.error, /PR の一覧を取得できません/);
+});
+
 test('同じリポジトリで登録が消えたプロダクトの表示用データだけを refreshRepo で消す', async (t) => {
   const { state, tracker } = await trackerFixture(t, []);
   state.registerPullRequest('session-a', { url: 'https://github.com/example/project/pull/31' }, {

@@ -250,6 +250,8 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     renderRouting() {},
     renderSummary() {},
     renderExcludedNote() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    renderFinishedNote() {},
     updateTitle() {},
     orderedProducts: (_sessions, _pullRequests, sinceSeen) => {
       orderedSinceSeen = sinceSeen;
@@ -1161,7 +1163,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   };
   handleClick({ target: button });
 
-  assert.deepEqual(displayPreferences.order, ['history-only', 'hidden', 'active', 'pull-request-only']);
+  assert.deepEqual([...displayPreferences.order], ['history-only', 'hidden', 'active', 'pull-request-only']);
   assert.deepEqual(saved.map((patch) => ({ order: [...patch.order] })), [
     { order: ['history-only', 'hidden', 'active', 'pull-request-only'] },
   ]);
@@ -1183,6 +1185,7 @@ test('表示中のセッションもオープンの PR も数えきれていな�
     displayPreferences: { order: [], pinned: [], collapsed: [] },
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: (key) => key !== 'prs' || pullRequestsShown,
+    hasPullRequestMergeResults: () => false,
   });
   vm.runInContext(functions.join('\n'), context);
 
@@ -1263,6 +1266,7 @@ test('タスクの無い終わったセッションと履歴だけの PR しか�
     displayPreferences: { hideFinished: true, order: [], pinned: [], collapsed: [] },
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: () => true,
+    hasPullRequestMergeResults: () => false,
     document: { createElement: (tagName) => new FakeElement(tagName) },
     sharedBranch: () => '',
     productControls: () => new FakeElement('div'),
@@ -1357,6 +1361,8 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     },
     displayPreferences: { mode: 'product', pinned: [] },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    renderFinishedNote() {},
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
     orderedProducts: () => [{ key: 'product-ui' }],
@@ -1373,6 +1379,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functionNames = [
     'answerDraftKey', 'answerDraftFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
+    'sameAnswerDraft', 'clearAnswerErrorWhenDraftChanges',
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
     'answerMetaText', 'canSendDecisionAnswer', 'updateAnswerSubmit',
   ];
@@ -1424,6 +1431,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   let handleChange;
   const context = pageContext(pageHtml, {
     answerDrafts,
+    answerErrors: new Map(),
     findDecision: () => decision,
     document: { addEventListener: (name, handler) => { if (name === 'change') handleChange = handler; } },
   });
@@ -1780,6 +1788,7 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     expandedPrLines: new Set(),
     MERGED_VISIBLE_COUNT: 5,
     durationAgoLabel: () => '1 分前',
+    appendPullRequestMergeResults() {},
   });
   vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
 
@@ -1825,6 +1834,7 @@ test('終わったものを隠すとマージ済みとクローズ済みの PR �
     expandedPrLines: new Set(['merged:acme/widget', 'closed:acme/widget']),
     MERGED_VISIBLE_COUNT: 5,
     durationAgoLabel: () => '1 分前',
+    appendPullRequestMergeResults() {},
   });
   vm.runInContext(`${element}\n${appendBlock}`, context);
   const target = new FakeElement('div');
@@ -1870,6 +1880,7 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     expandedPrLines: new Set(),
     MERGED_VISIBLE_COUNT: 5,
+    appendPullRequestMergeResults() {},
   });
   vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
   const root = new FakeElement('div');
@@ -1940,6 +1951,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     absoluteTimeLabel: (value) => value,
     durationAgoLabel: () => '1 分前',
+    appendPullRequestMergeResults() {},
     lastState: state,
     root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
     render: () => {
@@ -2046,6 +2058,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     absoluteTimeLabel: (value) => value,
     durationAgoLabel: () => '1 分前',
+    appendPullRequestMergeResults() {},
     lastState: state,
     root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
     render: () => {
@@ -2112,6 +2125,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
@@ -2157,6 +2171,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
@@ -2199,6 +2214,7 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });

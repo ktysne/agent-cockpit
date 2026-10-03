@@ -531,6 +531,7 @@ class PullRequestTracker {
     this.repositories = new Map();
     this.productViews = new Map();
     this.inFlight = new Map();
+    this.initialFetchCompleted = new Set();
     this.timer = null;
     this.onMerged = options.onMerged || null;
     this.onClosed = options.onClosed || null;
@@ -582,7 +583,11 @@ class PullRequestTracker {
     const key = repoKey(owner, repo);
     if (this.inFlight.has(key)) return this.inFlight.get(key);
     const operation = this.fetchRepository(owner, repo, repository)
-      .finally(() => this.inFlight.delete(key));
+      .finally(() => {
+        this.initialFetchCompleted.add(key);
+        this.inFlight.delete(key);
+        this.state.touch();
+      });
     this.inFlight.set(key, operation);
     return operation;
   }
@@ -989,7 +994,7 @@ class PullRequestTracker {
   }
 
   snapshot() {
-    return [...this.productViews.values()].map((group) => {
+    const groups = [...this.productViews.values()].map((group) => {
       const trees = group.trees.map((tree) => attachMergeState(tree, [], group.owner, group.repo, this.state));
       return {
         ...group,
@@ -1001,8 +1006,34 @@ class PullRequestTracker {
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
         lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
+        loading: this.inFlight.has(repoKey(group.owner, group.repo)) && !this.initialFetchCompleted.has(repoKey(group.owner, group.repo)),
       };
     });
+    const existing = new Set(groups.map((group) => `${group.product.key || `repo:${repoKey(group.owner, group.repo)}`}\0${repoKey(group.owner, group.repo)}`));
+    const registrations = [...this.state.pullRequestRegistrations(), ...this.state.relatedPullRequestRegistrations()];
+    const pendingGroups = new Map();
+    for (const registration of registrations) {
+      const key = repoKey(registration.owner, registration.repo);
+      if (!this.inFlight.has(key) || this.initialFetchCompleted.has(key)) continue;
+      const product = registration.product || { key: `repo:${key}`, name: `${registration.owner}/${registration.repo}` };
+      const productKey = product.key || `repo:${key}`;
+      const identity = `${productKey}\0${key}`;
+      if (existing.has(identity)) continue;
+      let group = pendingGroups.get(identity);
+      if (!group) {
+        group = {
+          product: { ...product }, owner: registration.owner, repo: registration.repo,
+          defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
+          openStateUnknown: true, registeredCount: 0, openCount: 0, mergeableCount: 0, trees: [], merged: [],
+          mergeHistory: this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now()),
+          reservations: this.state.pullRequestMergeReservationsForRepo(registration.owner, registration.repo),
+          lastMethod: this.state.lastPullRequestMethod(registration.owner, registration.repo), loading: true,
+        };
+        pendingGroups.set(identity, group);
+      }
+      group.registeredCount += 1;
+    }
+    return [...groups, ...pendingGroups.values()];
   }
 }
 

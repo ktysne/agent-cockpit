@@ -232,7 +232,7 @@ test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン
   });
   assert.match(web, /if \(button\.dataset\.closeTask\) \{\s*closeTaskButton\(button\);/);
   assert.match(web, /'完了にする'/);
-  assert.match(web, /close\.dataset\.closeTask = `\$\{session\.session_id\}::\$\{task\.title\}`/);
+  assert.match(web, /close\.dataset\.closeTask = closeKey/);
 });
 
 test('終了未確認のサブエージェント行に終了 API を呼ぶボタンを置く', () => {
@@ -264,6 +264,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayMigrationData: null,
     pendingDisplayChanges: {},
     pendingDisplayRequests: 0,
+    displayPreferenceSaveStates: new Map(),
     pendingDisplaySettingSaves: new Map(),
     readDisplayPreferences: () => {
       legacyReads += 1;
@@ -273,6 +274,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     renderSectionOrder() {},
     renderDisplaySettings() {},
     settleDisplaySettingSaves() {},
+    settleDisplayPreferenceSaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -290,12 +292,14 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayMigrationData: null,
     pendingDisplayChanges: {},
     pendingDisplayRequests: 0,
+    displayPreferenceSaveStates: new Map(),
     pendingDisplaySettingSaves: new Map(),
     readDisplayPreferences: () => { throw new Error('旧設定は読み込まない'); },
     normalizeDisplayPreferences: (value) => value,
     renderSectionOrder() {},
     renderDisplaySettings() {},
     settleDisplaySettingSaves() {},
+    settleDisplayPreferenceSaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -307,7 +311,9 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayPreferences: { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] },
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
-    enqueueDisplayPatch: (patch) => { syncCalls.push(patch); },
+    displayPreferenceSaveStates: new Map(),
+    settleDisplayPreferenceSaves: () => {},
+    enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
   });
   vm.runInContext(`${save}\nthis.saveDisplayPreferences = saveDisplayPreferences;`, saveContext);
   saveContext.saveDisplayPreferences({ mode: 'kind' });
@@ -364,14 +370,15 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
   assert.equal(mockContext.isLongWait(4), true);
   assert.match(functionSource(mock, 'permCard'), /isLongWait\(x\.waitMin\)/);
   assert.match(functionSource(mock, 'decisionCard'), /isLongWait\(d\.waitMin\)/);
-  assert.match(web, /長く待たせているとみなす時間\(分\)/);
-  assert.match(web, /離席中に質問の回答を待つ時間\(分\)/);
-  assert.match(mock, /長く待たせているとみなす時間\(分\)/);
-  assert.match(mock, /離席中に質問の回答を待つ時間\(分\)/);
+  assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
+  assert.match(web, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
+  assert.match(mock, /長く待たせているとみなす時間 \(1〜120 分\)/);
+  assert.match(mock, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
 });
 
 test('表示時間の保存に失敗した数値設定を元に戻す', async () => {
   const setInput = functionSource(web, 'setDisplaySettingInput');
+  const settingError = functionSource(web, 'displaySettingError');
   const change = functionSource(web, 'changeDisplaySetting');
   const patches = [];
   let saveCount = 0;
@@ -380,10 +387,15 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
     displayPreferencesReady: true,
     pendingDisplaySettingSaves: new Map(),
     pendingDisplayChanges: {},
+    longWaitMinutesInput: null,
+    longWaitMinutesError: { hidden: true, textContent: '' },
+    awayAnswerWaitMinutesError: { hidden: true, textContent: '' },
     lastState: null,
+    renderDisplaySettings() {},
     enqueueDisplayPatch: async (patch) => { patches.push(patch); saveCount += 1; return saveCount === 1; },
   });
-  vm.runInContext(`${setInput}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  context.longWaitMinutesInput = { valueAsNumber: 24, value: '24' };
+  vm.runInContext(`${setInput}\n${settingError}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
   const savedInput = { valueAsNumber: 24, value: '24' };
   const failedInput = { valueAsNumber: 30, value: '30' };
 
@@ -399,14 +411,17 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
   const change = functionSource(mock, 'changeDisplaySetting');
   let saved = 0;
   let rendered = 0;
+  const input = { valueAsNumber: 24, value: '24' };
   const context = pageContext(mock, {
     ui: { longWaitMinutes: 15 },
-    save: () => { saved += 1; },
+    captureDisplayPreferences: () => ({}),
+    saveDisplayPreferences: () => { saved += 1; return true; },
+    longWaitMinutesInput: input,
+    longWaitMinutesError: { hidden: true, textContent: '' },
+    awayAnswerWaitMinutesError: { hidden: true, textContent: '' },
     render: () => { rendered += 1; },
   });
   vm.runInContext(`${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
-  const input = { valueAsNumber: 24, value: '24' };
-
   assert.equal(context.changeDisplaySetting('longWaitMinutes', input, 1, 120), true);
   assert.equal(context.ui.longWaitMinutes, 24);
   assert.equal(saved, 1);

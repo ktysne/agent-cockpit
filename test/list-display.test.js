@@ -12,6 +12,10 @@ function functionSource(source, name) {
   return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
 }
 
+function eventListenerSource(source, eventName) {
+  return source.match(new RegExp(`document\\.addEventListener\\('${eventName}', (e => \\{[\\s\\S]*?\\n\\})\\);`))?.[1];
+}
+
 class FakeElement {
   constructor(tagName, className = '', text = '') {
     this.tagName = tagName;
@@ -21,9 +25,11 @@ class FakeElement {
     this.attributes = {};
     this._textContent = text;
     this.classList = { add: (name) => { this.className = `${this.className} ${name}`.trim(); } };
+    this.listeners = new Map();
   }
 
   append(...nodes) { this.children.push(...nodes); }
+  addEventListener(type, listener) { this.listeners.set(type, listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
   querySelector() { return null; }
   get childNodes() { return this.children; }
@@ -210,7 +216,9 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
 
 test('リポジトリごとの PR は見出し付きの枠に同じ左端で順に並ぶ', () => {
   const webBlock = functionSource(web, 'appendPullRequestBlock');
-  assert.ok(webBlock);
+  const webResults = functionSource(web, 'appendPullRequestMergeResults');
+  const webResultLine = functionSource(web, 'pullRequestMergeResultLine');
+  assert.ok(webBlock && webResults && webResultLine);
   const webContext = pageContext(web, {
     displayPreferences: { hideFinished: false },
     expandedPrLines: new Set(),
@@ -220,9 +228,11 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     durationAgoLabel: () => '少し前',
     absoluteTimeLabel: () => '10:00',
+    pullRequestMergeResults: new Map(),
+    pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
     appendPullRequestTree(target) { target.append(fakeElement('article', 'pr', 'オープン #1')); },
   });
-  vm.runInContext(webBlock, webContext);
+  vm.runInContext(`${webResultLine}\n${webResults}\n${webBlock}`, webContext);
   const group = {
     owner: 'owner', repo: 'repo', product: { name: 'Product' }, fetchedAt: 'now',
     trees: [{ effectiveBase: 'main', children: [], stackPosition: { total: 1 } }],
@@ -255,6 +265,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   assert.ok(mockPr);
   const mockContext = pageContext(mock, {
     ui: { hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [] },
+    pullRequestMergeResults: new Map(),
     openPrs: () => [{ number: 1 }],
     parentPr: () => null,
     isMerged: (_product, pr) => pr.state === 'merged',
@@ -425,9 +436,10 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
 });
 
 test('判断事項の解決内容と回答状態は余白のある一行にまとまる', () => {
-  const webFunctions = ['appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
+  const webFunctions = ['answerDraftKey', 'appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
   assert.ok(webFunctions.every(Boolean));
   const webContext = pageContext(web, {
+    answerErrors: new Map(),
     element: fakeElement,
     decisionElapsedLabel: () => null,
     decisionAnswerAvailability: () => ({ active: false, viaDialog: false }),
@@ -452,6 +464,8 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
   assert.ok(mockDecision);
   const answer = { choice: 'pick', note: '送信メモ', picks: [0], sent: { at: '12:00', choice: 'pick', picks: [0], note: '送信メモ' } };
   const mockContext = pageContext(mock, {
+    answerErrors: new Map(),
+    answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
     answerOf: () => answer,
     effectiveDecisionState: () => 'resolved',
     picksOf: (item) => item.picks || [],
@@ -573,4 +587,462 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.equal(actionContext.pullRequestMergeMessages.size, 0);
   assert.ok(actionContext.queuedPullRequestMerges.has('key'));
   assert.equal(actionContext.liveStatus.textContent, 'PR #1 をマージキューに追加しました。');
+});
+
+test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {
+  const countsSource = functionSource(web, 'finishedHiddenCounts');
+  const noteSource = functionSource(web, 'renderFinishedNote');
+  assert.ok(countsSource && noteSource);
+  const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
+  const hideFinishedInput = { checked: true };
+  const changes = [];
+  const context = pageContext(web, {
+    displayPreferences: { hideFinished: true },
+    isFinishedSession: (session) => session.finished,
+    element: fakeElement,
+    document: { getElementById: () => note },
+    hideFinishedInput,
+    changeDisplaySetting: (key, input) => changes.push([key, input.checked]),
+  });
+  vm.runInContext(`${countsSource}\n${noteSource}\nthis.countHidden = finishedHiddenCounts; this.renderFinished = renderFinishedNote;`, context);
+  const counts = context.countHidden([{ finished: true }, { finished: false }], [
+    { owner: 'example', repo: 'project', mergeHistory: [{ number: 10 }, { number: 11, headMismatch: true }], merged: [{ number: 12, state: 'closed' }] },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(counts)), { sessions: 1, pullRequests: 2 });
+  context.renderFinished(counts);
+  assert.equal(note.hidden, false);
+  assert.match(note.children[0].textContent, /終わったものを隠しています \(セッション 1 件、PR 2 件\)/);
+  const show = note.children[1];
+  assert.equal(show.textContent, '表示する');
+  show.listeners.get('click')();
+  assert.equal(hideFinishedInput.checked, false);
+  assert.deepEqual(changes, [['hideFinished', false]]);
+  assert.match(web, /終わったものを隠しています。上部の「表示する」から表示できます。/);
+  assert.match(mock, /終わったものを隠しています。上部の「表示する」から表示できます。/);
+  assert.match(mock, /終わったものを隠しています \(\$\{finishedParts\.join\('、'\)\}\)/);
+});
+
+test('マージ結果の一行と予約時の SHA 違いを完了表示の設定中も残す', () => {
+  const lineSource = functionSource(web, 'pullRequestMergeResultLine');
+  const resultsSource = functionSource(web, 'appendPullRequestMergeResults');
+  const visibleSource = functionSource(web, 'visiblePullRequestGroups');
+  assert.ok(lineSource && resultsSource && visibleSource);
+  const key = 'example/project\0project-a';
+  const context = pageContext(web, {
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    displayPreferences: { hideFinished: true },
+    pullRequestMergeResults: new Map([[key, [{ id: 'result-1', number: 41, method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }]]]),
+    pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}\0${group.product.key}`,
+    hasPullRequestMergeResults: (group) => group.owner === 'example' && group.repo === 'project' && group.product.key === 'project-a',
+    element: fakeElement,
+  });
+  vm.runInContext(`${lineSource}\n${resultsSource}\n${visibleSource}\nthis.resultLine = pullRequestMergeResultLine; this.appendResults = appendPullRequestMergeResults; this.visibleGroups = visiblePullRequestGroups;`, context);
+  assert.equal(context.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }),
+    'スカッシュ でマージしました。ブランチを削除しました。#42 の base を main に付け替えました。予約時と異なる head SHA がマージされました。');
+  const content = fakeElement('div');
+  context.appendResults(content, { owner: 'example', repo: 'project', product: { key: 'project-a' } });
+  assert.match(content.textContent, /PR #41: スカッシュ でマージしました/);
+  assert.equal(descendants(content).find((node) => node.dataset.closeMergeResult === 'result-1').textContent, '閉じる');
+  const mismatch = { owner: 'example', repo: 'project', product: { key: 'project-b' }, openCount: 0, mergeHistory: [{ number: 51, headMismatch: true }] };
+  const finished = { owner: 'example', repo: 'project', product: { key: 'project-c' }, openCount: 0, mergeHistory: [{ number: 52 }] };
+  const loading = { owner: 'example', repo: 'new-project', product: { key: 'project-d' }, openCount: 0, loading: true };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([mismatch, finished, loading]))), [mismatch, loading]);
+  assert.match(web, /items\.filter\(\(item\) => item\.headMismatch === true\)/);
+  assert.match(mock, /visibleMerged = ui\.hideFinished \? mergedNewestFirst\.filter\(\(\{ pr \}\) => pr\.headMismatch === true\)/);
+  const mockLine = functionSource(mock, 'pullRequestMergeResultLine');
+  assert.ok(mockLine);
+  const mockContext = pageContext(mock, { METHOD_LABEL: { squash: 'スカッシュ' } });
+  vm.runInContext(`${mockLine}\nthis.resultLine = pullRequestMergeResultLine;`, mockContext);
+  assert.equal(mockContext.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }),
+    context.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }));
+});
+
+test('GitHub の自動削除設定があるマージ結果はブランチ状態を断定しない', async () => {
+  const findTargetSource = functionSource(web, 'findPullRequestMergeTarget');
+  const rememberSource = functionSource(web, 'rememberPullRequestMergeResult');
+  const lineSource = functionSource(web, 'pullRequestMergeResultLine');
+  const actionSource = `async ${functionSource(web, 'runPullRequestMergeAction')}`;
+  assert.ok(findTargetSource && rememberSource && lineSource && actionSource);
+  const key = 'a'.repeat(64);
+  const pullRequest = { mergeRecordKey: key, mergeSessionId: 'session-a', number: 41, headRefOid: 'abcdef', children: [] };
+  const group = {
+    owner: 'example', repo: 'project', product: { key: 'project-a' }, autoDeleteBranch: true,
+    defaultBranch: 'main', trees: [pullRequest],
+  };
+  const webResults = new Map();
+  const webContext = pageContext(web, {
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    lastState: { pullRequests: [group] }, pullRequestMergeInFlight: new Set(),
+    pullRequestMergeOptionsFor: () => ({ method: 'squash', deleteBranch: false }),
+    pullRequestMergeConfirmations: new Map(), queuedPullRequestMerges: new Map(), pullRequestMergeMessages: new Map(),
+    pullRequestMergeResults: webResults, nextPullRequestMergeResultId: 0,
+    pullRequestRepositoryKey: (item) => `${item.owner}/${item.repo}\0${item.product.key}`,
+    liveStatus: { textContent: '' }, render() {}, refresh: async () => {},
+    postUiAction: async () => ({ ok: true, json: async () => ({ merged: true, branchDeleted: false }) }),
+  });
+  vm.runInContext(`${findTargetSource}\n${rememberSource}\n${lineSource}\n${actionSource}\nthis.merge = runPullRequestMergeAction; this.resultLine = pullRequestMergeResultLine;`, webContext);
+  await webContext.merge({ dataset: { mergeGo: key } }, 'merge');
+  const webResult = webResults.get('example/project\0project-a')[0];
+  const expected = 'スカッシュ でマージしました。ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)。';
+  assert.equal(webResult.autoDeleteBranch, true);
+  assert.equal(webContext.resultLine(webResult), expected);
+
+  // fork の head ブランチは登録先の自動削除の対象にならない。
+  pullRequest.isCrossRepository = true;
+  webResults.clear();
+  await webContext.merge({ dataset: { mergeGo: key } }, 'merge');
+  const forkResult = webResults.get('example/project\0project-a')[0];
+  assert.equal(forkResult.autoDeleteBranch, false);
+  assert.equal(webContext.resultLine(forkResult), 'スカッシュ でマージしました。ブランチは削除していません。');
+  delete pullRequest.isCrossRepository;
+
+  const mockResults = new Map();
+  const mockContext = pageContext(mock, {
+    METHOD_LABEL: { squash: 'スカッシュ' },
+    ui: { lastMethod: {}, merged: {}, reserved: {}, confirm: null },
+    pullRequestMergeResults: mockResults, nextPullRequestMergeResultId: 0,
+    prKey: () => 'project#41', childPrs: () => [], absoluteTimeLabel: () => 'now',
+    save() {}, render() {},
+  });
+  const mockSources = [
+    functionSource(mock, 'rememberPullRequestMergeResult'),
+    functionSource(mock, 'finishMockMerge'),
+    functionSource(mock, 'pullRequestMergeResultLine'),
+  ];
+  assert.ok(mockSources.every(Boolean));
+  vm.runInContext(`${mockSources.join('\n')}\nthis.finish = finishMockMerge; this.resultLine = pullRequestMergeResultLine;`, mockContext);
+  mockContext.finish({ id: 'project', repo: { name: 'example/project', defaultBranch: 'main', autoDeleteBranch: true } }, { number: 41 }, { method: 'squash', del: false });
+  const mockResult = mockResults.get('example/project')[0];
+  assert.equal(mockResult.autoDeleteBranch, true);
+  assert.equal(mockContext.resultLine(mockResult), expected);
+});
+
+test('回答の送信失敗は再描画後も残り、下書き変更後に送信済み状態を置き換える', () => {
+  const keySource = functionSource(web, 'answerDraftKey');
+  const sameSource = functionSource(web, 'sameAnswerDraft');
+  const clearSource = functionSource(web, 'clearAnswerErrorWhenDraftChanges');
+  const appendSource = functionSource(web, 'appendDecisionAnswer');
+  assert.ok(keySource && sameSource && clearSource && appendSource);
+  const errors = new Map();
+  const context = pageContext(web, {
+    answerErrors: errors,
+    decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
+    answerDraftFor: () => ({ choice: 'hold', picks: [[]], note: '新しい指示' }),
+    element: fakeElement,
+    document: { createElement: (tag) => fakeElement(tag), createTextNode: (text) => fakeElement('#text', '', text) },
+    sameAnswerPicks: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+    copyAnswerPicks: (picks) => picks || [[]],
+    recommendedOptionsForQuestions: () => [],
+    canSendDecisionAnswer: () => true,
+    answerMetaText: () => '送る答え',
+    answerStatusText: () => '前回の回答を送信済み',
+    sessionDisplayName: (session) => session.session_id,
+  });
+  vm.runInContext(`${keySource}\n${sameSource}\n${clearSource}\n${appendSource}\nthis.key = answerDraftKey; this.clearError = clearAnswerErrorWhenDraftChanges; this.appendAnswer = appendDecisionAnswer;`, context);
+  const key = context.key('session-a', 'decision-a');
+  errors.set(key, '回答を送信できませんでした。');
+  const decision = { id: 'decision-a', questions: [], answer: { choice: 'ok', note: '以前の指示', picks: [], sentAt: '2026-10-04T00:00:00Z' } };
+  const card = fakeElement('article');
+  context.appendAnswer(card, decision, { name: 'project' }, { session_id: 'session-a' }, fakeElement('div'));
+  assert.ok(descendants(card).some((node) => node.className === 'answer-error' && node.textContent === '回答を送信できませんでした。'));
+  assert.ok(descendants(card).some((node) => node.className === 'answer-status' && node.textContent === '変更は未送信'));
+  context.clearError(key, { choice: 'hold', note: '旧下書き', picks: [[]] }, { choice: 'hold', note: '変更後', picks: [[]] }, null);
+  assert.equal(errors.has(key), false);
+  assert.match(web, /answerErrors\.delete\(answerDraftKey\(sessionId, decisionId\)\)/);
+  assert.match(mock, /変更は未送信/);
+});
+
+test('回答の編集時に送信済み回答の状態表示も更新する', () => {
+  const updateSource = functionSource(web, 'updateAnswerSubmit');
+  assert.ok(updateSource);
+  const decision = {
+    id: 'decision-a', questions: [],
+    answer: { choice: 'ok', note: '保存済みの指示', picks: [], sentAt: '2026-10-04T00:00:00Z' },
+  };
+  let draft = { choice: 'hold', note: '編集中の指示', picks: [] };
+  const button = { disabled: false };
+  const meta = { textContent: '' };
+  const status = { textContent: '' };
+  const card = {
+    dataset: { sessionId: 'session-a', decisionId: 'decision-a' },
+    querySelector(selector) {
+      return selector === '[data-send-answer]' ? button
+        : selector === '[data-answer-meta]' ? meta
+          : selector === '.answer-foot .answer-status' ? status : null;
+    },
+  };
+  const context = pageContext(web, {
+    findDecision: () => decision,
+    answerDraftFor: () => draft,
+    sameAnswerPicks: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+    copyAnswerPicks: (picks) => picks || [],
+    answerMetaText: () => '送る答え',
+    answerStatusText: () => '前回の回答を送信済み',
+    canSendDecisionAnswer: () => true,
+  });
+  vm.runInContext(`${updateSource}\nthis.update = updateAnswerSubmit;`, context);
+  context.update(card);
+  assert.equal(status.textContent, '変更は未送信');
+  assert.equal(button.disabled, false);
+
+  draft = { choice: 'ok', note: '保存済みの指示', picks: [] };
+  context.update(card);
+  assert.equal(status.textContent, '前回の回答を送信済み');
+  assert.equal(button.disabled, true);
+});
+
+test('表示設定の保存失敗は値を戻して設定ダイアログにも表示する', async () => {
+  const settleSource = functionSource(web, 'settleDisplayPreferenceSaves');
+  const saveSource = functionSource(web, 'saveDisplayPreferences');
+  const showErrorSource = functionSource(web, 'showWriteError');
+  const sendPatchSource = `async ${functionSource(web, 'sendDisplayPatch')}`;
+  assert.ok(settleSource && saveSource && showErrorSource && sendPatchSource);
+  let renders = 0;
+  let settingsRenders = 0;
+  let orderRenders = 0;
+  const savedOrder = ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'];
+  const context = pageContext(web, {
+    displayPreferences: { mode: 'product', sectionOrder: savedOrder },
+    displayPreferencesReady: true,
+    displayPreferenceSaveStates: new Map(),
+    pendingDisplayChanges: {},
+    enqueueDisplayPatch: async () => false,
+    settleDisplayPreferenceSaves: null,
+    renderSectionOrder: () => { orderRenders += 1; },
+    renderDisplaySettings: () => { settingsRenders += 1; },
+    lastState: {},
+    render: () => { renders += 1; },
+  });
+  vm.runInContext(`${settleSource}\n${saveSource}\nthis.savePreferences = saveDisplayPreferences;`, context);
+  context.settleDisplayPreferenceSaves = context.settleDisplayPreferenceSaves;
+  await context.savePreferences({ sectionOrder: ['judgment', 'sinceSeen', 'tasks', 'now', 'prs'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), savedOrder);
+  assert.equal(orderRenders, 1);
+  assert.equal(settingsRenders, 1);
+  assert.equal(renders, 1);
+
+  const settingsSaveError = { hidden: true, textContent: '' };
+  const writeContext = pageContext(web, {
+    settingsDialog: { open: true }, settingsSaveError, writeErrorMessage: '', writeErrorUntil: 0,
+    writeErrorTimer: null, updateConnectionNote() {}, postUiAction: async () => { throw new Error('offline'); },
+    setTimeout: () => 1, clearTimeout() {},
+  });
+  vm.runInContext(`${showErrorSource}\n${sendPatchSource}\nthis.sendPatch = sendDisplayPatch;`, writeContext);
+  assert.equal(await writeContext.sendPatch({ mode: 'kind' }), false);
+  assert.equal(settingsSaveError.textContent, '表示の設定を保存できませんでした');
+  assert.equal(settingsSaveError.hidden, false);
+  assert.match(mock, /settingsSaveError\.textContent = '表示の設定を保存できませんでした'/);
+});
+
+test('完了にする操作は 5 秒間取り消せ、再描画中も同じタスクに取り消しを出す', async () => {
+  const runSource = `async ${functionSource(web, 'runCloseAction')}`;
+  const cancelSource = functionSource(web, 'cancelTaskClose');
+  const itemSource = functionSource(web, 'appendTaskItem');
+  assert.ok(runSource && cancelSource && itemSource);
+  let scheduled;
+  let cleared;
+  let sent = 0;
+  let renders = 0;
+  const pending = new Map();
+  const context = pageContext(web, {
+    pendingTaskCloseActions: pending, lastState: {}, render: () => { renders += 1; },
+    sendCloseAction: () => { sent += 1; },
+    setTimeout: (callback, delay) => { scheduled = { callback, delay }; return 'timer-1'; },
+    clearTimeout: (timer) => { cleared = timer; },
+  });
+  vm.runInContext(`${runSource}\n${cancelSource}\nthis.runClose = runCloseAction; this.cancelClose = cancelTaskClose;`, context);
+  await context.runClose({ dataset: { closeTask: 'session-a::task-a' } }, '/api/closed-tasks', {}, 'failed');
+  assert.equal(scheduled.delay, 5000);
+  assert.equal(pending.has('session-a::task-a'), true);
+  const taskList = fakeElement('ul');
+  const taskContext = pageContext(web, {
+    pendingTaskCloseActions: pending, taskCloseActionsInFlight: new Set(), element: fakeElement, badge: (label, tone) => fakeElement('span', tone, label),
+    appendContextTags() {},
+  });
+  vm.runInContext(`${itemSource}\nthis.appendTask = appendTaskItem;`, taskContext);
+  taskContext.appendTask(taskList, { title: 'task-a', state: 'doing', criteria: [] }, { name: 'project' }, { session_id: 'session-a' });
+  assert.ok(descendants(taskList).some((node) => node.dataset.cancelCloseTask === 'session-a::task-a' && node.textContent === '取り消す'));
+  context.cancelClose({ dataset: { cancelCloseTask: 'session-a::task-a' } });
+  assert.equal(cleared, 'timer-1');
+  scheduled.callback();
+  assert.equal(pending.size, 0);
+  assert.equal(sent, 0);
+  assert.equal(renders, 2);
+  assert.match(web, /item\.dataset\.closeTask === focusData\.key \|\| item\.dataset\.cancelCloseTask === focusData\.key/);
+});
+
+test('完了操作の送信中はボタンを無効化し応答後に状態を解除する', async () => {
+  const sendSource = `async ${functionSource(web, 'sendCloseAction')}`;
+  const runSource = `async ${functionSource(web, 'runCloseAction')}`;
+  const itemSource = functionSource(web, 'appendTaskItem');
+  assert.ok(sendSource && runSource && itemSource);
+
+  const exercise = async (shouldFail) => {
+    const key = 'session-a::task-a';
+    const pending = new Map();
+    const inFlight = new Set();
+    let scheduled;
+    let resolveRequest;
+    let rejectRequest;
+    let renders = 0;
+    const request = new Promise((resolve, reject) => {
+      resolveRequest = resolve;
+      rejectRequest = reject;
+    });
+    const context = pageContext(web, {
+      pendingTaskCloseActions: pending, taskCloseActionsInFlight: inFlight, lastState: {},
+      render: () => { renders += 1; },
+      setTimeout: (callback, delay) => { scheduled = { callback, delay }; return 'timer'; },
+      postUiAction: () => request, refresh: async () => {},
+      liveStatus: { textContent: '' }, showWriteError() {},
+    });
+    vm.runInContext(`${sendSource}\n${runSource}\n${itemSource}\nthis.runClose = runCloseAction; this.appendTask = appendTaskItem;`, context);
+    const button = { dataset: { closeTask: key }, disabled: false, isConnected: false };
+    await context.runClose(button, '/api/closed-tasks', { session_id: 'session-a', title: 'task-a' }, '失敗');
+    assert.equal(scheduled.delay, 5000);
+    scheduled.callback();
+    assert.equal(inFlight.has(key), true);
+
+    const taskList = fakeElement('ul');
+    context.element = fakeElement;
+    context.badge = (label, tone) => fakeElement('span', tone, label);
+    context.appendContextTags = () => {};
+    context.appendTask(taskList, { title: 'task-a', state: 'doing', criteria: [] }, { name: 'project' }, { session_id: 'session-a' });
+    const sendingButton = descendants(taskList).find((node) => node.className === 'link-btn close-task');
+    assert.equal(sendingButton.textContent, '送信中…');
+    assert.equal(sendingButton.disabled, true);
+
+    if (shouldFail) rejectRequest(new Error('offline'));
+    else resolveRequest({ ok: true, status: 200 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(inFlight.has(key), false);
+    assert.equal(renders, 3);
+  };
+
+  await exercise(false);
+  await exercise(true);
+});
+
+test('マージの確認欄は実行中のボタンをマージ中に変える', () => {
+  const confirmationSource = functionSource(web, 'appendPullRequestMergeConfirmation');
+  assert.ok(confirmationSource);
+  const context = pageContext(web, {
+    MERGE_METHOD_LABELS: { merge: 'マージコミット' },
+    pullRequestMergeKey: (pullRequest) => pullRequest.mergeRecordKey,
+    pullRequestMergeOptionsFor: () => ({ method: 'merge', deleteBranch: false }),
+    pullRequestMergeInFlight: new Set(['merge-key']),
+    crossReviewState: () => ({ warn: null, note: null }),
+    shortShaElement: () => fakeElement('code', '', 'abcdef0'),
+    element: fakeElement,
+    document: { createTextNode: (text) => fakeElement('#text', '', text) },
+  });
+  vm.runInContext(`${confirmationSource}\nthis.renderConfirmation = appendPullRequestMergeConfirmation;`, context);
+  const target = fakeElement('div');
+  context.renderConfirmation(target, { mergeMethods: ['merge'], defaultBranch: 'main', autoDeleteBranch: false }, {
+    number: 7, mergeRecordKey: 'merge-key', headRefOid: 'abcdef0123456789', headRefName: 'feature', effectiveBase: 'main', children: [],
+  }, false);
+  const button = descendants(target).find((node) => node.dataset.mergeGo === 'merge-key');
+  assert.equal(button.textContent, 'マージ中…');
+  assert.equal(button.disabled, true);
+  assert.match(mock, /merging \? 'マージ中…'/);
+});
+
+test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {
+  const resultFunctions = [functionSource(web, 'pullRequestMergeResultLine'), functionSource(web, 'appendPullRequestMergeResults'), functionSource(web, 'appendPullRequestBlock')];
+  assert.ok(resultFunctions.every(Boolean));
+  const context = pageContext(web, {
+    MERGE_METHOD_LABELS: {}, MERGED_VISIBLE_COUNT: 5, displayPreferences: { hideFinished: true },
+    pullRequestMergeResults: new Map(), pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
+    element: fakeElement, document: { createTextNode: (text) => fakeElement('#text', '', text) },
+    durationAgoLabel: () => '少し前',
+  });
+  vm.runInContext(`${resultFunctions.join('\n')}\nthis.renderPrGroup = appendPullRequestBlock;`, context);
+  const target = fakeElement('div');
+  context.renderPrGroup(target, {
+    owner: 'example', repo: 'project', product: { key: 'project', name: 'Project' }, trees: [], error: null,
+    loading: true, merged: [], mergeHistory: [], fetchedAt: null, checkedAt: null,
+  });
+  assert.match(target.textContent, /GitHub から取得しています/);
+  assert.doesNotMatch(target.textContent, /オープンの PR はありません/);
+  assert.match(mock, /p\.repo\.loading \? 'GitHub から取得しています'/);
+});
+
+test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲を示す', async () => {
+  const inputSource = functionSource(web, 'setDisplaySettingInput');
+  const errorSource = functionSource(web, 'displaySettingError');
+  const changeSource = functionSource(web, 'changeDisplaySetting');
+  assert.ok(inputSource && errorSource && changeSource);
+  const longError = { hidden: true, textContent: '' };
+  const awayError = { hidden: true, textContent: '' };
+  const input = { type: 'number', valueAsNumber: 121, value: '121' };
+  const context = pageContext(web, {
+    longWaitMinutesInput: input, longWaitMinutesError: longError, awayAnswerWaitMinutesError: awayError,
+    displayPreferences: { longWaitMinutes: 15 },
+  });
+  vm.runInContext(`${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
+  assert.equal(await context.changeSetting('longWaitMinutes', input, 1, 120), false);
+  assert.equal(longError.hidden, false);
+  assert.equal(longError.textContent, '1〜120 分の値を入力してください。');
+  assert.equal(input.value, '15');
+  assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
+  assert.match(web, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
+  assert.match(web, /id="settings-long-wait-error" role="alert"/);
+  assert.match(mock, /id="settings-away-answer-wait-error" role="alert"/);
+});
+
+test('モックの終わった項目の表示設定が保存できたら一覧を描き直す', () => {
+  const handlerSource = eventListenerSource(mock, 'click');
+  assert.ok(handlerSource);
+  const previous = { hideFinished: true };
+  const button = { dataset: {}, hasAttribute: (name) => name === 'data-show-finished' };
+  let savedPreferences;
+  let renders = 0;
+  const hideFinishedInput = { checked: true };
+  const context = pageContext(mock, {
+    ui: { hideFinished: true, mode: 'product' }, hideFinishedInput,
+    captureDisplayPreferences: () => previous,
+    saveDisplayPreferences: (value) => { savedPreferences = value; return true; },
+    render: () => { renders += 1; },
+  });
+  vm.runInContext(`this.handleClick = ${handlerSource};`, context);
+  context.handleClick({ target: { closest: () => button } });
+  assert.equal(context.ui.hideFinished, false);
+  assert.equal(hideFinishedInput.checked, false);
+  assert.equal(savedPreferences, previous);
+  assert.equal(renders, 1);
+});
+
+test('モックで指示欄を編集すると同じカードのエラーを消しフォーカスを保つ', () => {
+  const helperSource = functionSource(mock, 'clearAnswerErrorWhenDraftChanges');
+  const handlerSource = eventListenerSource(mock, 'input');
+  assert.ok(helperSource && handlerSource);
+  const key = 'session-a::decision-a';
+  const errors = new Map([[key, '回答を送信できませんでした。']]);
+  const answer = { choice: 'hold', picks: [], note: '以前の指示', sent: null };
+  let removed = false;
+  const error = { remove: () => { removed = true; } };
+  const send = { disabled: true };
+  const card = {
+    dataset: { id: 'decision-a', sessionId: 'session-a' },
+    querySelector(selector) { return selector === '.answer-error' ? error : selector === '[data-send]' ? send : null; },
+  };
+  const textarea = {
+    value: '修正した指示',
+    matches: (selector) => selector === 'textarea[data-note]',
+    closest: (selector) => selector === '.decision' ? card : null,
+  };
+  const document = { activeElement: textarea };
+  const context = pageContext(mock, {
+    answerErrors: errors, answerOf: () => answer, answerDraftKey: () => key,
+    picksOf: (value) => value.choice === 'pick' ? value.picks || [] : [],
+    canSend: () => true, answerDirty: () => true, save() {}, document,
+    ui: { answers: {} },
+  });
+  vm.runInContext(`${helperSource}\nthis.handleInput = ${handlerSource};`, context);
+  context.handleInput({ target: textarea });
+  assert.equal(errors.has(key), false);
+  assert.equal(removed, true);
+  assert.equal(document.activeElement, textarea);
+  assert.equal(answer.note, '修正した指示');
+  assert.equal(send.disabled, false);
 });
