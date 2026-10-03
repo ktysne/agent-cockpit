@@ -3080,7 +3080,11 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    const awayBefore = header.dataset.away;
     applyAwayState(state.away);
+    // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
+    const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
+    if (state.version === lastVersion && sinceSeenVisibilityChanged) render(state);
     if (state.version !== lastVersion) {
       render(state);
       lastVersion = state.version;

@@ -1869,3 +1869,35 @@ test('種類別では未着手の合計数を一つのボタンで切り替え�
     'doing-a', 'todo-a', 'todo-b1', 'todo-b2', 'doing-c', 'todo-c1', 'todo-c2',
   ]);
 });
+
+test('「離席中のみ」では、版が同じでも離席の切り替えを受け取ったら描き直す', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const refresh = html.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
+  const applyAwayState = html.match(/function applyAwayState\(away\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(refresh && applyAwayState);
+
+  const run = async (mode, awaySequence) => {
+    let renders = 0;
+    let index = 0;
+    const context = vm.createContext({
+      fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
+      checkUiVersion: () => false,
+      syncDisplayPreferences: async () => {},
+      updateConnectionNote() {},
+      isPendingDecision: () => false,
+      render() { renders += 1; },
+      header: { dataset: { away: 'false' } },
+      awayToggle: { disabled: false, checked: false },
+      root: { replaceChildren() {} },
+      liveStatus: { textContent: '' },
+    });
+    vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = null, lastStateAt = null, connectionLost = false, hasRenderedState = false, sinceSeenMode = '${mode}';`, context);
+    for (let step = 0; step < awaySequence.length; step += 1) await context.refresh();
+    return renders;
+  };
+
+  // 1 回目は版が変わって描き、2 回目以降は版が同じで離席だけが変わる。
+  assert.equal(await run('away', [false, true, false]), 3);
+  assert.equal(await run('away', [false, false]), 1);
+  assert.equal(await run('always', [false, true, false]), 1);
+});
