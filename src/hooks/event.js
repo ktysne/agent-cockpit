@@ -215,7 +215,7 @@ function codexOutputLines(value) {
       return;
     }
     if (!item || typeof item !== 'object') return;
-    for (const key of ['stdout', 'output', 'text', 'content']) visit(item[key], depth + 1);
+    for (const key of ['stdout', 'output', 'text', 'content', 'file']) visit(item[key], depth + 1);
   };
   visit(value);
   return Object.keys(lines).length ? lines : null;
