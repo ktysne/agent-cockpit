@@ -572,9 +572,12 @@ let pendingDisplayRequests = 0;
 let displayWriteTail = Promise.resolve();
 const pendingDisplaySettingSaves = new Map();
 
+// 入力中の欄を定期の同期で上書きすると、確定前の値が消えるため、フォーカス中の欄は飛ばす。
 function renderDisplaySettings() {
-  longWaitMinutesInput.value = String(displayPreferences.longWaitMinutes);
-  awayAnswerWaitMinutesInput.value = String(displayPreferences.awayAnswerWaitMinutes);
+  for (const [input, key] of [[longWaitMinutesInput, 'longWaitMinutes'], [awayAnswerWaitMinutesInput, 'awayAnswerWaitMinutes']]) {
+    if (document.activeElement === input) continue;
+    input.value = String(displayPreferences[key]);
+  }
 }
 
 function settleDisplaySettingSaves(saves, saved) {

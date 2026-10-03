@@ -890,3 +890,21 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
   assert.match(web, /function appendTasks\([^]*?appendPlanToggle\(body, 'tasks', session\.session_id/);
   assert.match(web, /function appendTasks\([^]*?appendPlanToggle\(body, 'todoTasks', session\.session_id/);
 });
+
+test('定期の同期は入力中の待ち時間の欄を上書きせず、ほかの欄は保存値にそろえる', () => {
+  const render = functionSource(web, 'renderDisplaySettings');
+  assert.ok(render);
+  const longWaitMinutesInput = { value: '120' };
+  const awayAnswerWaitMinutesInput = { value: '9' };
+  const context = pageContext(web, {
+    document: { activeElement: longWaitMinutesInput },
+    longWaitMinutesInput,
+    awayAnswerWaitMinutesInput,
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5 },
+  });
+  vm.runInContext(render, context);
+  context.renderDisplaySettings();
+
+  assert.equal(longWaitMinutesInput.value, '120');
+  assert.equal(awayAnswerWaitMinutesInput.value, '5');
+});
