@@ -304,16 +304,21 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
     append(...nodes) { this.children.push(...nodes); }
     replaceChildren(...nodes) { this.children = nodes; }
     setAttribute(name, value) { this.attributes[name] = value; }
-    focus() { focused = { key: this.dataset.sectionMove, direction: this.dataset.dir }; }
+    contains(node) { return node === this || this.children.some((child) => child.contains?.(node)); }
+    focus() {
+      focused = { key: this.dataset.sectionMove, direction: this.dataset.dir };
+      fakeDocument.activeElement = this;
+    }
   }
   const preferences = { sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'] };
   const sectionOrderList = new FakeElement('ol');
   sectionOrderList.addEventListener = (_type, handler) => { moveClick = handler; };
   const resetButton = { addEventListener: (_type, handler) => { resetClick = handler; } };
+  const fakeDocument = { activeElement: null, getElementById: () => resetButton, createElement: (tagName) => new FakeElement(tagName) };
   const context = vm.createContext({
     displayPreferences: preferences,
     sectionOrderList,
-    document: { getElementById: () => resetButton, createElement: (tagName) => new FakeElement(tagName) },
+    document: fakeDocument,
     saveDisplayPreferences: (patch) => Object.assign(preferences, patch),
     lastState: {},
     render: () => { renderCount += 1; },
@@ -341,6 +346,18 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
   resetClick();
   assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), ['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
   assert.equal(renderCount, 3);
+
+  // 別の画面で順が変わり、同期で一覧を作り直しても、フォーカスは同じ種類と向きのボタンに戻る。
+  buttonOf('now', '1').focus();
+  focused = null;
+  preferences.sectionOrder = ['now', 'sinceSeen', 'judgment', 'tasks', 'prs'];
+  context.renderSectionOrder();
+  assert.deepEqual(focused, { key: 'now', direction: '1' });
+
+  fakeDocument.activeElement = null;
+  focused = null;
+  context.renderSectionOrder();
+  assert.equal(focused, null);
 });
 
 test('種類別の並び順は最初のセクションより前に置く', () => {

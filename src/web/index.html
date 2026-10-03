@@ -471,6 +471,12 @@ function normalizeSectionOrder(order) {
 }
 
 function renderSectionOrder(focusKey, focusDirection) {
+  // 別の画面の変更を同期して作り直すときも、一覧の中のフォーカスを同じ種類のボタンへ戻す。
+  const active = document.activeElement;
+  if (!focusKey && active?.dataset?.sectionMove && sectionOrderList.contains(active)) {
+    focusKey = active.dataset.sectionMove;
+    focusDirection = active.dataset.dir;
+  }
   displayPreferences.sectionOrder = normalizeSectionOrder(displayPreferences.sectionOrder);
   const lastIndex = displayPreferences.sectionOrder.length - 1;
   const buttons = [];
