@@ -918,7 +918,7 @@ function isFullCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
 }
 
-// 状態ファイルの無い worktree の PR と登録の無い関連 PR には crossReview が付かないので、行も警告も出さない。
+// tools/cross-review.js の無い worktree の PR と登録の無い関連 PR には crossReview が付かないので、行も警告も出さない。
 function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };

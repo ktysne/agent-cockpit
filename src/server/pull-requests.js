@@ -833,7 +833,7 @@ class PullRequestTracker {
       }
       group.registrations.push(registration);
     }
-    // 状態ファイルは登録したセッションの worktree にしか無いので、登録の無い関連 PR には crossReview を付けない。
+    // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     for (const registration of registrations) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
