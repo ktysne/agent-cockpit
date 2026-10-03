@@ -17,7 +17,7 @@ const {
   decisionAnswerText,
   denyAnswerOutput,
 } = require('../src/server/decision-answers');
-const { runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
+const { ANSWER_HOOK_TIMEOUT_MS, runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
 const { makeHookEvent } = require('../src/hooks/event');
 const { startServer } = require('../src/server/server');
 
@@ -422,6 +422,66 @@ test('最初に常駐サーバーへ届かないときは AskUserQuestion を止
 
   assert.equal(output, null);
   assert.equal(requests, 0);
+});
+
+test('回答待ち登録は現在の設定を使い、設定変更は既存の締切に反映しない', () => {
+  const clock = new FakeClock();
+  const state = new DashboardState();
+  const sessionId = 'session-wait-settings';
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: clock.now() });
+  const away = { snapshot: () => ({ enabled: true, since: clock.now() }) };
+  const delivery = new DecisionAnswerDelivery({
+    state,
+    away,
+    now: () => clock.now(),
+    setTimeoutImpl: (callback, milliseconds) => clock.setTimeout(callback, milliseconds),
+    clearTimeoutImpl: (id) => clock.clearTimeout(id),
+    answerWaitMs: () => state.getDisplayPreferences().awayAnswerWaitMinutes * 60_000,
+  });
+
+  state.patchDisplayPreferences({ awayAnswerWaitMinutes: 8 });
+  const first = delivery.registerAsk({ sessionId, toolUseId: 'ask-wait-1', questions: QUESTIONS });
+  const firstRecord = delivery.askWaits.get(`${sessionId}\0ask-wait-1`);
+  const firstTimer = firstRecord.timer;
+  assert.equal(first.deadline - firstRecord.lastPollAt, 8 * 60_000);
+
+  state.patchDisplayPreferences({ awayAnswerWaitMinutes: 11 });
+  const repeated = delivery.registerAsk({ sessionId, toolUseId: 'ask-wait-1', questions: QUESTIONS });
+  assert.equal(repeated.deadline, first.deadline);
+  assert.equal(firstRecord.timer, firstTimer);
+  assert.equal(Date.parse(state.decisionFor(sessionId, first.decisionId).awaitingAnswerUntil), first.deadline);
+
+  const next = delivery.registerAsk({ sessionId, toolUseId: 'ask-wait-2', questions: QUESTIONS });
+  const nextRecord = delivery.askWaits.get(`${sessionId}\0ask-wait-2`);
+  assert.equal(next.deadline - nextRecord.lastPollAt, 11 * 60_000);
+});
+
+test('回答フックはサーバーの締切と30秒の余裕で待ちを終える', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({ port: 47827, secret: 'hook-secret', pid: 1, startedAt: 'now' }));
+  let now = 0;
+  const actions = [];
+  const output = await runAskQuestion({
+    session_id: 'session-hook-deadline', tool_use_id: 'ask-hook-deadline', tool_name: 'AskUserQuestion',
+    tool_input: { questions: QUESTIONS },
+  }, {
+    homeDir,
+    now: () => now,
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      actions.push(body.action);
+      if (body.action === 'ask-register') return { ok: true, json: async () => ({ awaiting: true, decisionId: 'ask-hook-deadline', deadline: 90_000 }) };
+      if (body.action === 'ask-poll') {
+        now = 120_001;
+        return { ok: true, json: async () => ({ outcome: 'waiting' }) };
+      }
+      return { ok: true, json: async () => ({ hookOutput: null }) };
+    },
+  });
+
+  assert.equal(ANSWER_HOOK_TIMEOUT_MS, 1_830_000);
+  assert.deepEqual(actions, ['ask-register', 'ask-poll', 'ask-finish']);
+  assert.deepEqual(output, denyAnswerOutput('ask-hook-deadline'));
 });
 
 test('同じ tool_use_id の登録は冪等で、束ね直した質問では前の回答を使わない', async () => {

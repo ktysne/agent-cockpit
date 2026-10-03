@@ -66,10 +66,10 @@ header.top {
 .title-row { flex: 1 1 100%; display: flex; align-items: center; gap: 8px 12px; min-height: 40px; padding-right: 48px; }
 .title-row .away-toggle { margin-left: auto; }
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
-.settings-button, .settings-dialog button, .settings-dialog select { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.settings-button, .settings-dialog button, .settings-dialog select, .settings-dialog input[type="number"] { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
 .settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
 .settings-button:hover { color: var(--text); }
-.settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible, .settings-dialog input[type="number"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); cursor: pointer; white-space: nowrap; }
 .away-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
 .away-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -80,6 +80,7 @@ header.top {
 .settings-dialog h3 { margin: 0 0 10px; font-size: 14px; }
 .settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
 .settings-dialog select { max-width: 100%; padding: 4px 8px; }
+.settings-dialog input[type="number"] { width: 88px; padding: 4px 8px; text-align: right; }
 .settings-section-order { margin-top: 14px; }
 .settings-section-order h4 { margin: 0 0 4px; font-size: 13px; }
 .section-order-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -351,6 +352,14 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <div class="settings-theme-row">
+      <label for="settings-long-wait-minutes">長く待たせているとみなす時間(分)</label>
+      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric">
+    </div>
+    <div class="settings-theme-row">
+      <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間(分)</label>
+      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric">
+    </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
@@ -548,7 +557,12 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5 }, load());
+function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
+  return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+ui.longWaitMinutes = normalizeDisplayMinutes(ui.longWaitMinutes, 1, 120, 15);
+ui.awayAnswerWaitMinutes = normalizeDisplayMinutes(ui.awayAnswerWaitMinutes, 1, 30, 5);
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
 ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
@@ -559,6 +573,8 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 const byId = id => DATA.products.find(p => p.id === id);
 
 const themeSelect = document.getElementById('settings-theme-select');
+const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
+const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
 const settingsDialog = document.getElementById('settings-dialog');
@@ -584,6 +600,28 @@ function applySinceSeenMode(mode) {
   ui.sinceSeenMode = mode === 'away' ? 'away' : 'always';
   sinceSeenSelect.value = ui.sinceSeenMode;
 }
+
+function renderDisplaySettings() {
+  longWaitMinutesInput.value = String(ui.longWaitMinutes);
+  awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
+}
+
+function changeDisplaySetting(key, input, minimum, maximum) {
+  const value = input.valueAsNumber;
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    input.value = String(ui[key]);
+    return false;
+  }
+  ui[key] = value;
+  input.value = String(value);
+  save();
+  render();
+  return true;
+}
+
+renderDisplaySettings();
+longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
+awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
 
 const SECTION_KINDS = [
   { key: 'sinceSeen', label: '前回見てから' },
@@ -884,14 +922,15 @@ function taskItem(p, session, t, withTag) {
     <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
 }
 
-// 一定時間を超えて放置された待ちは強調する。閾値は判断待ち(計画書)
-const LONG_WAIT_MIN = 15;
-const waitLabel = m => `<span class="wait ${m > LONG_WAIT_MIN ? 'stale' : ''}">${m} 分待機中</span>`;
+function isLongWait(minutes) {
+  return Number.isFinite(minutes) && minutes > ui.longWaitMinutes;
+}
+const waitLabel = m => `<span class="wait ${isLongWait(m) ? 'stale' : ''}">${m} 分待機中</span>`;
 const isNew = (p, item) => !!item.isNew && !ui.seen.includes(p.id);
 
 // 許可待ち: Notification フックで受ける。許可そのものはデスクトップアプリで出す
 function permCard(p, session, x, withTag) {
-  const long = x.waitMin > LONG_WAIT_MIN;
+  const long = isLongWait(x.waitMin);
   return `<article class="decision blocking perm ${long ? 'long-wait' : ''}">
     <div class="dhead">${sessionTag(p, session, withTag)}<span class="dtitle">${esc(x.who)}がツールの実行許可を待っている</span>
       <span class="chip danger">許可待ち</span>${waitLabel(x.waitMin)}</div>
@@ -930,7 +969,7 @@ function decisionCard(p, session, d, withTag) {
     ? `<span class="sent">${a.sent.at} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = answerDirty(a);
-  const long = state === 'waiting' && !a.sent && d.waitMin > LONG_WAIT_MIN;
+  const long = state === 'waiting' && !a.sent && isLongWait(d.waitMin);
   const active = (state === 'waiting' && !viaDialog) || state === 'provisional';
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${d.waitMin} 分</span>` : '';
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">

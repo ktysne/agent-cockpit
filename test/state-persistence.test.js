@@ -51,6 +51,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
+    longWaitMinutes: 37, awayAnswerWaitMinutes: 12,
   };
   state.patchDisplayPreferences(display);
   await state.flushPersistence();
@@ -95,6 +96,35 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
     await restored.flushPersistence();
     const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
     assert.deepEqual(saved.display.sectionOrder, expected, name);
+  }
+});
+
+test('保存時刻の欠落や範囲外の値は表示設定の既定値で補う', async (t) => {
+  const cases = [
+    ['値がない', {}, 15, 5],
+    ['長い待ち時間が範囲外', { longWaitMinutes: 121, awayAnswerWaitMinutes: 12 }, 15, 12],
+    ['回答待ち時間が整数でない', { longWaitMinutes: 30, awayAnswerWaitMinutes: 2.5 }, 30, 5],
+  ];
+
+  for (const [name, settings, expectedLongWait, expectedAwayWait] of cases) {
+    const homeDir = await temporaryHome(t);
+    await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
+      version: 1,
+      display: { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], ...settings },
+      plans: {},
+      decisionLifecycles: {},
+      closedTasks: [],
+      hiddenSessions: [],
+    }));
+
+    const restored = await DashboardState.load(homeDir);
+    assert.equal(restored.display.longWaitMinutes, expectedLongWait, name);
+    assert.equal(restored.display.awayAnswerWaitMinutes, expectedAwayWait, name);
+    assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
+    await restored.flushPersistence();
+    const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+    assert.equal(saved.display.longWaitMinutes, expectedLongWait, name);
+    assert.equal(saved.display.awayAnswerWaitMinutes, expectedAwayWait, name);
   }
 });
 

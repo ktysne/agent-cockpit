@@ -95,7 +95,7 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
     ],
     "PreToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 330 }] }
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 1830 }] }
     ],
     "PostToolUse": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
@@ -134,7 +134,7 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 同期の `SessionStart` はサーバーの起動を確認し、起動 URL を `additionalContext` で返します。
 フックが送るツール入力は要約だけです。
 許可待ちは表示だけで、画面から許可を出す機能はありません。
-`away.js` は `PreToolUse`(matcher `AskUserQuestion`)に同期フックとして登録し、timeout を 330 秒にします。
+`away.js` は `PreToolUse`(matcher `AskUserQuestion`)に同期フックとして登録し、timeout を 1830 秒にします。離席中の回答待ち時間は設定画面で 1〜30 分に変更でき、既定値は 5 分です。フックの timeout は最大値に 30 秒の余裕を加えた固定値です。
 `UserPromptSubmit` と `SessionStart` の `away.js` は同期フックとして登録し、timeout を 5 秒にします。
 `PostToolBatch` の `answer.js` は同期フックとして登録し、timeout を 2 秒にします。
 `Stop` の `answer.js` は `asyncRewake: true` と timeout 3600 秒で登録します。
@@ -142,7 +142,7 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 `away.js` は開始時と各ターンの入力時にタスク登録の決まりを知らせ、`PostToolBatch` の `answer.js` は条件に応じて作業中の登録を促します。
 
 離席中は画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
-有効な間、`AskUserQuestion` はダッシュボードの回答を最大 5 分待ちます。締切までに回答が無ければ質問を止め、推奨で作業を続けるようフックが伝えます。
+有効な間、`AskUserQuestion` は設定画面の「離席中に質問の回答を待つ時間」に従ってダッシュボードの回答を待ちます(1〜30 分、既定 5 分)。締切までに回答が無ければ質問を止め、推奨で作業を続けるようフックが伝えます。
 finish が常駐サーバーに届いた場合、回答済みまたは保留ならその結末を返します。それ以外は離席状態を確認し、離席中が続いていれば質問を `deny` して推奨で進め、判断事項を `provisional` にします。離席中が解除されていれば `released` としてデスクトップアプリのダイアログへ戻します。
 finish も常駐サーバーに届かなかった場合、フックは離席状態を確認できないため、常に質問を `deny` して推奨で進めます。
 回答待ちのフックから 30 秒間 long-poll が届かない場合は待ちを解除し、届いていた回答も破棄してデスクトップアプリのダイアログへ戻します。
