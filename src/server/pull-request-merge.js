@@ -39,6 +39,8 @@ class PullRequestMergeManager {
     this.clearInterval = clearIntervalImpl;
     this.reservationPollMs = reservationPollMs;
     this.inFlight = new Map();
+    this.handledMerges = new Set();
+    this.mergeOutcomes = new Map();
     this.timer = null;
     this.polling = false;
   }
@@ -124,23 +126,69 @@ class PullRequestMergeManager {
     return candidate;
   }
 
+  stackedPullRequests(candidate, parentNumber) {
+    const stacked = new Map(candidate.pullRequest.children.map((child) => [child.number, {
+      number: child.number,
+      baseRefName: child.baseRefName,
+      headRefName: child.headRefName,
+    }]));
+    const openByNumber = new Map(candidate.repository.openPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]));
+    for (const retarget of this.state.pullRequestRetargetsForRepo(candidate.registration.owner, candidate.registration.repo)) {
+      if (retarget.fromNumber !== parentNumber) continue;
+      const child = openByNumber.get(retarget.number);
+      if (!child) continue;
+      stacked.set(child.number, {
+        number: child.number,
+        baseRefName: retarget.previousBaseRefName || child.baseRefName,
+        headRefName: child.headRefName,
+      });
+    }
+    return [...stacked.values()];
+  }
+
+  async processMergedPullRequest(owner, repo, pullRequest, mergedAt) {
+    const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo)
+      .filter((record) => record.number === pullRequest.number);
+    const related = this.state.relatedPullRequestRegistrationsForRepo(owner, repo)
+      .filter((record) => record.number === pullRequest.number);
+    for (const registration of registrations) {
+      this.state.updatePullRequest(registration.session_id, owner, repo, pullRequest.number, { state: 'merged', mergedAt });
+    }
+    for (const record of related) this.state.updateRelatedPullRequest(owner, repo, pullRequest.number, { state: 'merged', mergedAt });
+    return this.handleDetectedMerge({
+      owner,
+      repo,
+      pullRequest,
+      mergedAt,
+      reservation: this.state.pullRequestMergeReservation(owner, repo, pullRequest.number),
+      registrations,
+      stackedPullRequests: this.stackedPullRequests({
+        registration: { owner, repo },
+        repository: this.tracker.repositories.get(`${owner.toLowerCase()}/${repo.toLowerCase()}`) || { openPullRequests: [] },
+        pullRequest: { children: [] },
+      }, pullRequest.number),
+    });
+  }
+
   async performMerge(registration, input) {
     if (this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number)) {
       return actionResult(409, 'この PR にはマージ予約があります。先に予約を取り消してください');
+    }
+    if (this.state.pullRequestMergeIntent(registration.owner, registration.repo, registration.number)) {
+      return actionResult(409, 'この PR はマージキューに入っています。GitHub の状態を確認してください');
     }
     const candidate = await this.freshCandidate(registration);
     if (candidate.error) return actionResult(409, candidate.error);
     const pullRequest = candidate.pullRequest;
     const repository = safeRepo(registration.owner, registration.repo);
+    if (input.deleteBranch && pullRequest.isCrossRepository) {
+      return actionResult(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません');
+    }
     const initialError = mergeCandidateError(candidate, input, registration.number);
     if (initialError) return actionResult(409, initialError);
 
     const retargeted = [];
-    const stackedPullRequests = pullRequest.children.map((child) => ({
-      number: child.number,
-      baseRefName: child.baseRefName,
-      headRefName: child.headRefName,
-    }));
+    const stackedPullRequests = this.stackedPullRequests(candidate, registration.number);
     for (const child of pullRequest.children) {
       if (!Number.isSafeInteger(child.number) || child.number < 1 || !validBranchName(candidate.repository.defaultBranch)) {
         return actionResult(409, `#${child.number} の base を安全に付け替えられません。マージはしていません`);
@@ -159,6 +207,7 @@ class PullRequestMergeManager {
         number: child.number,
         base: candidate.repository.defaultBranch,
         fromNumber: registration.number,
+        previousBaseRefName: child.baseRefName,
       });
       retargeted.push(child);
     }
@@ -168,53 +217,80 @@ class PullRequestMergeManager {
       const completed = retargeted.length ? `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。` : '';
       return actionResult(409, `${completed}${latestCandidate.error}。マージはしていません`);
     }
+    if (input.deleteBranch && latestCandidate.pullRequest.isCrossRepository) {
+      const completed = retargeted.length ? `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。` : '';
+      return actionResult(400, `${completed}fork からの PR の head ブランチは登録先リポジトリから削除できません`);
+    }
     const latestError = mergeCandidateError(latestCandidate, input, registration.number);
     if (latestError) {
       const completed = retargeted.length ? `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。` : '';
       return actionResult(409, `${completed}${latestError}。マージはしていません`);
     }
 
+    const mergeIntent = {
+      session_id: registration.session_id,
+      owner: registration.owner,
+      repo: registration.repo,
+      number: registration.number,
+      url: pullRequest.url,
+      headRefOid: pullRequest.headRefOid,
+      headRefName: pullRequest.headRefName,
+      defaultBranch: candidate.repository.defaultBranch,
+      method: input.method,
+      deleteBranch: input.deleteBranch,
+      createdAt: new Date(this.now()).toISOString(),
+      stackedPullRequests: stackedPullRequests.map((item) => ({ number: item.number, baseRefName: item.baseRefName })),
+    };
+    if (!this.state.setPullRequestMergeIntent(mergeIntent)) return actionResult(500, 'マージ操作を保存できませんでした');
+    try {
+      await this.state.waitForPersistence?.();
+    } catch {
+      this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
+      await this.state.waitForPersistence?.().catch(() => {});
+      return actionResult(500, 'マージ操作を保存できませんでした');
+    }
+
     try {
       await this.tracker.execute([
         'pr', 'merge', String(registration.number), '-R', repository,
-        `--${input.method}`, '--match-head-commit', pullRequest.headRefOid,
+        `--${input.method}`, '--match-head-commit', latestCandidate.pullRequest.headRefOid,
       ]);
     } catch {
+      this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
+      await this.state.waitForPersistence?.().catch(() => {});
       const completed = retargeted.length ? `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。` : '';
       return actionResult(502, `${completed}PR #${registration.number} をマージできませんでした。状態を確認してください`);
     }
 
-    const mergedAt = new Date(this.now()).toISOString();
-    this.state.recordMergedPullRequest({
-      owner: registration.owner,
-      repo: registration.repo,
-      number: registration.number,
-      title: pullRequest.title,
-      url: pullRequest.url,
-      mergedAt,
-      method: input.method,
-      automatic: false,
-    }, this.now());
-    this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
-    this.state.clearPullRequestMergeReservation(registration.owner, registration.repo, registration.number);
-
-    let branchDeleted = false;
-    let warning = null;
-    if (input.deleteBranch) {
-      try {
-        await this.deleteRemoteBranch(registration.owner, registration.repo, pullRequest.headRefName);
-        branchDeleted = true;
-      } catch {
-        warning = `PR はマージしましたが、リモートブランチ ${pullRequest.headRefName} を削除できませんでした`;
-      }
+    let view;
+    try {
+      view = await this.tracker.readPullRequestView(registration.owner, registration.repo, registration.number);
+    } catch {
+      return actionResult(502, `gh pr merge は成功しましたが、PR #${registration.number} の状態を確認できませんでした。後続の状態取得で確認します`);
     }
-    const mergeSessions = this.state.pullRequestRegistrationsForRepo(registration.owner, registration.repo)
-      .filter((record) => record.number === registration.number)
-      .map((record) => record.session_id);
-    this.notifyMerge(registration.owner, registration.repo, pullRequest, candidate.repository.defaultBranch, input.method, stackedPullRequests, mergeSessions, warning);
+    if (view.state === 'OPEN') {
+      this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
+      await this.state.waitForPersistence?.();
+      return { ok: true, merged: false, queued: true, message: `PR #${registration.number} はマージキューに入りました。まだマージされていません` };
+    }
+    if (view.state !== 'MERGED') {
+      this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
+      await this.state.waitForPersistence?.();
+      return actionResult(409, `PR #${registration.number} はマージされていません。GitHub の状態を確認してください`);
+    }
+
+    const mergedAt = view.mergedAt || new Date(this.now()).toISOString();
+    const outcome = await this.processMergedPullRequest(registration.owner, registration.repo, view.pullRequest, mergedAt);
     await this.tracker.refreshRepo(registration.owner, registration.repo).catch(() => {});
     await this.state.waitForPersistence?.();
-    return { ok: true, merged: true, branchDeleted, warning };
+    const history = this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now())
+      .find((record) => record.number === registration.number);
+    return {
+      ok: true,
+      merged: true,
+      branchDeleted: outcome?.branchDeleted === true,
+      warning: outcome?.warning || (history?.headMismatch ? '予約時と異なる head SHA がマージされました' : null),
+    };
   }
 
   async performReservation(registration, input) {
@@ -222,6 +298,9 @@ class PullRequestMergeManager {
     if (candidate.error) return actionResult(409, candidate.error);
     const pullRequest = candidate.pullRequest;
     const repository = safeRepo(registration.owner, registration.repo);
+    if (input.deleteBranch && pullRequest.isCrossRepository) {
+      return actionResult(400, 'fork からの PR の head ブランチは登録先リポジトリから削除できません');
+    }
     if (pullRequest.headRefOid.toLowerCase() !== input.headRefOid.toLowerCase()) {
       return actionResult(409, '表示していた head SHA と現在の head SHA が異なります。状態を確認してください');
     }
@@ -231,6 +310,9 @@ class PullRequestMergeManager {
     }
     if (this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number)) {
       return actionResult(409, 'この PR にはすでにマージ予約があります');
+    }
+    if (this.state.pullRequestMergeIntent(registration.owner, registration.repo, registration.number)) {
+      return actionResult(409, 'この PR はマージキューに入っています。GitHub の状態を確認してください');
     }
 
     const reservation = {
@@ -329,7 +411,11 @@ class PullRequestMergeManager {
     if (!reservation) return null;
     const repository = this.tracker.repositories.get(`${reservation.owner.toLowerCase()}/${reservation.repo.toLowerCase()}`);
     const pullRequest = repository?.openPullRequests.find((item) => item.number === reservation.number);
-    if (!pullRequest || pullRequest.headRefOid.toLowerCase() === reservation.headRefOid.toLowerCase()) return null;
+    if (!pullRequest) return null;
+    const headChanged = pullRequest.headRefOid.toLowerCase() !== reservation.headRefOid.toLowerCase();
+    const baseChanged = pullRequest.baseRefName !== reservation.defaultBranch;
+    const defaultBranchChanged = Boolean(repository.defaultBranch && repository.defaultBranch !== reservation.defaultBranch);
+    if (!headChanged && !baseChanged && !defaultBranchChanged) return null;
 
     try {
       await this.tracker.execute([
@@ -353,9 +439,13 @@ class PullRequestMergeManager {
     const sessionIds = this.state.pullRequestRegistrationsForRepo(reservation.owner, reservation.repo)
       .filter((record) => record.number === reservation.number)
       .map((record) => record.session_id);
+    const reasons = [];
+    if (headChanged) reasons.push(`head SHA が予約時から変わったため`);
+    if (baseChanged) reasons.push(`base が予約時の既定ブランチ ${reservation.defaultBranch} から ${pullRequest.baseRefName} に変わったため`);
+    if (defaultBranchChanged) reasons.push(`リポジトリの既定ブランチが ${reservation.defaultBranch} から ${repository.defaultBranch} に変わったため`);
     this.answerDelivery?.notifySessions(
       unique([...sessionIds, reservation.session_id]),
-      `PR #${reservation.number} の head SHA が予約時から変わったため、マージ予約を取り消しました。予約時 ${reservation.headRefOid}、現在 ${pullRequest.headRefOid}。`,
+      `PR #${reservation.number} の ${reasons.join('。')}、マージ予約を取り消しました。予約時 head SHA ${reservation.headRefOid}、現在 ${pullRequest.headRefOid}。`,
     );
     await this.state.waitForPersistence?.();
     return { cancelled: true };
@@ -385,10 +475,17 @@ class PullRequestMergeManager {
     this.answerDelivery?.notifySessions(unique([...sessionIds, ...childSessions]), lines.join('\n'));
   }
 
-  async handleDetectedMerge({ owner, repo, pullRequest, mergedAt, reservation, registrations, stackedPullRequests }) {
-    if (!pullRequest) return;
-    const headMismatch = reservation && pullRequest.headRefOid.toLowerCase() !== reservation.headRefOid.toLowerCase()
-      ? { reserved: reservation.headRefOid, merged: pullRequest.headRefOid }
+  async handleDetectedMerge(event) {
+    const { owner, repo, pullRequest, mergedAt, registrations = [] } = event;
+    if (!pullRequest) return null;
+    const mergeKey = `${owner.toLowerCase()}/${repo.toLowerCase()}#${pullRequest.number}`;
+    if (this.handledMerges.has(mergeKey)) return this.mergeOutcomes.get(mergeKey) || null;
+    this.handledMerges.add(mergeKey);
+    const reservation = event.reservation || this.state.pullRequestMergeReservation(owner, repo, pullRequest.number);
+    const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, pullRequest.number);
+    const expectedHeadRefOid = reservation?.headRefOid || mergeIntent?.headRefOid || null;
+    const headMismatch = expectedHeadRefOid && pullRequest.headRefOid.toLowerCase() !== expectedHeadRefOid.toLowerCase()
+      ? { reserved: expectedHeadRefOid, merged: pullRequest.headRefOid }
       : null;
     this.state.recordMergedPullRequest({
       owner,
@@ -397,16 +494,39 @@ class PullRequestMergeManager {
       title: pullRequest.title,
       url: pullRequest.url,
       mergedAt,
-      method: reservation?.method || null,
+      method: reservation?.method || mergeIntent?.method || null,
       automatic: Boolean(reservation),
+      reservedHeadRefOid: expectedHeadRefOid,
+      mergedHeadRefOid: pullRequest.headRefOid || null,
+      headMismatch: Boolean(headMismatch),
     }, this.now());
     this.state.clearPullRequestMergeReservation(owner, repo, pullRequest.number);
+    this.state.clearPullRequestMergeIntent(owner, repo, pullRequest.number);
 
+    const repositoryState = this.tracker.repositories.get(`${owner.toLowerCase()}/${repo.toLowerCase()}`);
+    const defaultBranch = reservation?.defaultBranch || mergeIntent?.defaultBranch || repositoryState?.defaultBranch;
+    const savedStackedByNumber = new Map([
+      ...(reservation?.stackedPullRequests || []),
+      ...(mergeIntent?.stackedPullRequests || []),
+    ].map((item) => [item.number, item]));
+    const retargeted = this.state.pullRequestRetargetsForRepo(owner, repo)
+      .filter((record) => record.fromNumber === pullRequest.number);
+    const stackedByNumber = new Map();
+    const selectedStackedPullRequests = event.stackedPullRequests || [...savedStackedByNumber.values()];
+    for (const stacked of selectedStackedPullRequests) {
+      const prior = retargeted.find((record) => record.number === stacked.number);
+      const saved = savedStackedByNumber.get(stacked.number);
+      stackedByNumber.set(stacked.number, {
+        number: stacked.number,
+        baseRefName: prior?.previousBaseRefName || saved?.baseRefName || stacked.baseRefName,
+        headRefName: stacked.headRefName || repositoryState?.openPullRequests.find((item) => item.number === stacked.number)?.headRefName,
+      });
+    }
+    const stackedPullRequests = [...stackedByNumber.values()].sort((left, right) => left.number - right.number);
     let warning = null;
-    const defaultBranch = reservation?.defaultBranch || this.tracker.repositories.get(`${owner.toLowerCase()}/${repo.toLowerCase()}`)?.defaultBranch;
     let canDeleteBranch = true;
     if (reservation && validBranchName(defaultBranch)) {
-      for (const stacked of stackedPullRequests || []) {
+      for (const stacked of stackedPullRequests) {
         if (!Number.isSafeInteger(stacked.number) || stacked.number < 1) {
           warning = `#${stacked.number} の base を ${defaultBranch} に付け替えられませんでした`;
           canDeleteBranch = false;
@@ -414,7 +534,10 @@ class PullRequestMergeManager {
         }
         try {
           await this.tracker.execute(['pr', 'edit', String(stacked.number), '-R', safeRepo(owner, repo), '--base', defaultBranch]);
-          this.state.recordPullRequestRetarget({ owner, repo, number: stacked.number, base: defaultBranch, fromNumber: pullRequest.number });
+          this.state.recordPullRequestRetarget({
+            owner, repo, number: stacked.number, base: defaultBranch, fromNumber: pullRequest.number,
+            previousBaseRefName: stacked.baseRefName,
+          });
         } catch {
           warning = `#${stacked.number} の base を ${defaultBranch} に付け替えられませんでした`;
           canDeleteBranch = false;
@@ -422,25 +545,38 @@ class PullRequestMergeManager {
         }
       }
     }
-    if (reservation?.deleteBranch && !headMismatch && canDeleteBranch && validBranchName(pullRequest.headRefName)) {
+    let branchDeleted = false;
+    const deleteBranch = reservation?.deleteBranch || mergeIntent?.deleteBranch;
+    if (deleteBranch && pullRequest.isCrossRepository) {
+      warning = [warning, 'fork からの PR の head ブランチは登録先リポジトリから削除しませんでした'].filter(Boolean).join('。');
+    } else if (deleteBranch && !headMismatch && canDeleteBranch && validBranchName(pullRequest.headRefName)) {
       try {
         await this.deleteRemoteBranch(owner, repo, pullRequest.headRefName);
+        branchDeleted = true;
       } catch {
         warning = [warning, `PR はマージしましたが、リモートブランチ ${pullRequest.headRefName} を削除できませんでした`].filter(Boolean).join('。');
       }
     }
-    const method = reservation?.method || null;
-    const sessionIds = registrations.map((record) => record.session_id);
-    this.notifyMerge(owner, repo, pullRequest, defaultBranch || '既定ブランチ', method, stackedPullRequests || [], sessionIds, warning, headMismatch);
+    const method = reservation?.method || mergeIntent?.method || null;
+    const sessionIds = [
+      ...registrations.map((record) => record.session_id),
+      reservation?.session_id,
+      mergeIntent?.session_id,
+    ].filter(Boolean);
+    this.notifyMerge(owner, repo, pullRequest, defaultBranch || '既定ブランチ', method, stackedPullRequests, sessionIds, warning, headMismatch);
     await this.state.waitForPersistence?.();
+    const outcome = { branchDeleted, warning };
+    this.mergeOutcomes.set(mergeKey, outcome);
+    return outcome;
   }
 
-  async handleDetectedClose({ owner, repo, number, reservation, registrations }) {
+  async handleDetectedClose({ owner, repo, number, reservation, mergeIntent, registrations }) {
     this.state.clearPullRequestMergeReservation(owner, repo, number);
-    this.answerDelivery?.notifySessions(
-      [...registrations.map((record) => record.session_id), reservation.session_id],
-      `PR #${number} がクローズされたため、マージ予約は終了しました。`,
-    );
+    this.state.clearPullRequestMergeIntent(owner, repo, number);
+    const sessionIds = [...registrations.map((record) => record.session_id), reservation?.session_id, mergeIntent?.session_id].filter(Boolean);
+    if (reservation || mergeIntent) {
+      this.answerDelivery?.notifySessions(sessionIds, `PR #${number} がクローズされたため、マージ操作は終了しました。`);
+    }
     await this.state.waitForPersistence?.();
   }
 }

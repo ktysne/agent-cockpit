@@ -335,6 +335,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
     mergeRecordKey: key,
     headRefOid: 'abc123', headRefName: 'feature/pr-42', effectiveBase: 'main', canMerge: true,
+    isCrossRepository: true,
     blocker: null, review: 'approved', children: [], stackPosition: { depth: 1, total: 1 },
   };
   const group = {
@@ -381,11 +382,100 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   assert.equal(panel.attributes['aria-label'], 'PR #42 のマージ確認');
   assert.ok(nodes.some((node) => node.dataset?.mergeGo === key));
   assert.ok(nodes.some((node) => node.type === 'radio' && node.checked && node.value === 'rebase'));
-  assert.ok(nodes.some((node) => node.type === 'checkbox' && node.checked === false));
+  assert.ok(nodes.some((node) => node.type === 'checkbox' && node.checked === false && node.disabled));
+  assert.ok(nodes.some((node) => node.textContent === 'fork のブランチは登録先から削除できません'));
 
   await context.runPullRequestMergeAction({ dataset: { mergeGo: key } }, 'merge');
   assert.equal(JSON.stringify(sent), JSON.stringify([{
     url: '/api/pull-requests/merge',
     body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'rebase', deleteBranch: false },
   }]));
+});
+
+test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const appendBlock = html.match(/function appendPullRequestBlock\(target, group, withTag = false\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(element);
+  assert.ok(appendBlock);
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestTimeLabel: () => '1 分前',
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+  });
+  vm.runInContext(`${element}\n${appendBlock}`, context);
+  const root = new FakeElement('div');
+  const reservedSha = 'a'.repeat(40);
+  const mergedSha = 'b'.repeat(40);
+  context.appendPullRequestBlock(root, {
+    trees: [], merged: [], registeredCount: 1,
+    mergeHistory: [{
+      number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
+      mergedAt: '2026-10-03T11:59:00.000Z', method: 'squash', automatic: true,
+      reservedHeadRefOid: reservedSha, mergedHeadRefOid: mergedSha, headMismatch: true,
+    }],
+  });
+  const nodes = [];
+  const visit = (node) => {
+    nodes.push(node);
+    for (const child of node.children || []) visit(child);
+  };
+  visit(root);
+  const visibleText = nodes.map((node) => node.textContent).join(' ');
+
+  assert.match(visibleText, /予約時に確認した/);
+  assert.match(visibleText, new RegExp(reservedSha));
+  assert.match(visibleText, new RegExp(mergedSha));
+});
+
+test('マージ操作ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render);
+
+  for (const [kind, dataAttribute, htmlAttribute] of [
+    ['merge-go', 'mergeGo', 'data-merge-go'],
+    ['merge-cancel', 'mergeCancel', 'data-merge-cancel'],
+    ['merge-reserve-go', 'reserveGo', 'data-reserve-go'],
+    ['merge-cancel-reservation', 'cancelReservation', 'data-cancel-reservation'],
+    ['merge-open', 'openMerge', 'data-open-merge'],
+  ]) {
+    let activeElement;
+    const key = `merge-${kind}`;
+    const activeButton = { dataset: { [dataAttribute]: key, mergeKey: key }, hasAttribute: (name) => name === htmlAttribute };
+    const replacementButton = {
+      dataset: { [dataAttribute]: key, mergeKey: key },
+      hasAttribute: (name) => name === htmlAttribute,
+      focused: false,
+      focus() { this.focused = true; activeElement = this; },
+    };
+    activeElement = activeButton;
+    const context = vm.createContext({
+      answerNoteComposing: false,
+      lastState: { sessions: [{ session_id: 'session-ui' }] },
+      HTMLTextAreaElement: class FakeTextArea {},
+      document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
+      root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [replacementButton] },
+      displayPreferences: { mode: 'product', pinned: [] },
+      renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+      orderedProducts: () => [{ key: 'product-ui' }],
+      productSection: () => ({}),
+    });
+    vm.runInContext(render, context);
+    context.render(context.lastState);
+
+    assert.equal(replacementButton.focused, true, kind);
+    assert.equal(activeElement, replacementButton, kind);
+  }
 });

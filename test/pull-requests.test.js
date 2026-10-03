@@ -439,8 +439,9 @@ test('31件目以降の登録済みOPEN PRをgh pr viewから一覧へ補う', a
   assert.deepEqual(openListCall.slice(0, 8), [
     'pr', 'list', '-R', 'example/project', '--state', 'open', '--limit', '500',
   ]);
+  assert.ok(openListCall.at(-1).includes('isCrossRepository'));
   const viewCall = calls.find((args) => args[0] === 'pr' && args[1] === 'view');
-  assert.ok(viewCall.includes('number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt,state,mergedAt'));
+  assert.ok(viewCall.includes('number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt,state,mergedAt'));
   assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'list' && args[args.indexOf('--state') + 1] === 'merged').length, 1);
   assert.equal(calls.filter((args) => args[0] === 'api' && args[1].includes('/compare/')).length, 1);
   assert.equal(group.trees[0].number, 31);
@@ -513,7 +514,7 @@ test('オープン一覧から消えた PR の状態を gh pr view で確認す�
 
   const viewCall = calls.find((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '52');
   assert.ok(viewCall);
-  assert.equal(viewCall.at(-1), `${'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt'},state,mergedAt`);
+  assert.equal(viewCall.at(-1), `${'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt'},state,mergedAt`);
   assert.equal(Object.hasOwn(state.serializeStore(), 'mergedPrHeads'), false);
   const [group] = tracker.snapshot();
   assert.equal(group.defaultBranch, 'main');

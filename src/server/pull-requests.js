@@ -5,7 +5,7 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { validRepositoryPart } = require('./pull-request-utils');
 
-const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
+const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
@@ -51,6 +51,7 @@ function normalizeOpenPullRequest(value) {
     headRefName: asText(value.headRefName, 500),
     baseRefName: asText(value.baseRefName, 500),
     headRefOid: SHA_PATTERN.test(value.headRefOid || '') ? value.headRefOid : '',
+    isCrossRepository: value.isCrossRepository === true,
     createdAt: typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt)) ? value.createdAt : '',
     draft: value.isDraft === true,
     mergeable: asText(value.mergeable, 40).toUpperCase(),
@@ -79,6 +80,7 @@ function lastOpenPullRequest(pr) {
     headRefName: pr.headRefName,
     baseRefName: pr.baseRefName,
     headRefOid: pr.headRefOid,
+    isCrossRepository: pr.isCrossRepository,
     isDraft: pr.draft,
     mergeable: pr.mergeable,
     mergeStateStatus: pr.mergeStateStatus,
@@ -115,6 +117,7 @@ function storedPullRequest(registration) {
     headRefName: asText(known.headRefName, 500),
     baseRefName: asText(known.baseRefName, 500),
     headRefOid: SHA_PATTERN.test(known.headRefOid || '') ? known.headRefOid : '',
+    isCrossRepository: known.isCrossRepository === true,
     draft: known.isDraft === true,
     mergeable: asText(known.mergeable, 40).toUpperCase(),
     mergeStateStatus: asText(known.mergeStateStatus, 40).toUpperCase(),
@@ -416,6 +419,10 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   }
 }
 
+function mergeablePullRequestCount(trees) {
+  return trees.reduce((total, pullRequest) => total + Number(pullRequest.canMerge === true) + mergeablePullRequestCount(pullRequest.children || []), 0);
+}
+
 class PullRequestTracker {
   constructor(options = {}) {
     this.state = options.state;
@@ -500,6 +507,21 @@ class PullRequestTracker {
 
   async execute(args) {
     return runGh(args, { execFileImpl: this.execFileImpl, ghPath: this.ghPath });
+  }
+
+  async readPullRequestView(owner, repo, number) {
+    const output = await this.execute([
+      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
+    ]);
+    const value = JSON.parse(output);
+    const state = String(value?.state || '').toUpperCase();
+    const pullRequest = normalizeOpenPullRequest(value);
+    if (!['OPEN', 'CLOSED', 'MERGED'].includes(state) || !pullRequest) throw new Error('invalid PR view');
+    return {
+      state,
+      pullRequest,
+      mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
+    };
   }
 
   async fetchRepository(owner, repo, repository) {
@@ -608,8 +630,14 @@ class PullRequestTracker {
         }
         if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
           const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+          const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
           const pullRequest = normalizeOpenPullRequest(value);
-          const stackedPullRequests = new Map((reservation?.stackedPullRequests || []).map((item) => [item.number, item]));
+          const openByNumber = new Map(openPullRequests.map((item) => [item.number, item]));
+          const stackedPullRequests = new Map();
+          for (const item of [...(reservation?.stackedPullRequests || []), ...(mergeIntent?.stackedPullRequests || [])]) {
+            const child = openByNumber.get(item.number);
+            if (child) stackedPullRequests.set(item.number, { ...item, headRefName: child.headRefName });
+          }
           if (pullRequest) {
             for (const child of openPullRequests
               .filter((candidate) => candidate.baseRefName === pullRequest.headRefName)
@@ -628,7 +656,8 @@ class PullRequestTracker {
           });
         } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
           const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
-          if (reservation) await this.onClosed?.({ owner, repo, number: result.number, reservation, registrations: result.tracked.registrations });
+          const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
+          if (reservation || mergeIntent) await this.onClosed?.({ owner, repo, number: result.number, reservation, mergeIntent, registrations: result.tracked.registrations });
         }
       }
     }
@@ -767,6 +796,7 @@ class PullRequestTracker {
         const review = await readCrossReviewState(registration, pullRequest, this.fileSystem);
         if (review) reviews.push(review);
       }
+      const trees = assembled.trees.map((tree) => attachMergeState(tree, group.registrations, owner, repo, this.state));
       const identity = `${productKey}\0${key}`;
       this.productViews ||= new Map();
       this.productViews.set(identity, {
@@ -780,8 +810,8 @@ class PullRequestTracker {
         error: repositoryState.error,
         registeredCount: group.registrations.length,
         openCount: assembled.openCount,
-        mergeableCount: assembled.mergeableCount,
-        trees: assembled.trees.map((tree) => attachMergeState(tree, group.registrations, owner, repo, this.state)),
+        mergeableCount: mergeablePullRequestCount(trees),
+        trees,
         merged: assembled.merged,
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(owner, repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(owner, repo),
@@ -792,27 +822,34 @@ class PullRequestTracker {
   }
 
   snapshot() {
-    return [...(this.productViews || new Map()).values()].map((group) => ({
-      ...group,
-      product: { ...group.product },
-      mergeMethods: [...group.mergeMethods],
-      trees: group.trees.map((tree) => attachMergeState(tree, [], group.owner, group.repo, this.state)),
-      merged: structuredClone(group.merged),
-      mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
-      reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
-      lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
-      reviews: group.reviews.map((review) => ({ ...review })),
-    }));
+    return [...(this.productViews || new Map()).values()].map((group) => {
+      const trees = group.trees.map((tree) => attachMergeState(tree, [], group.owner, group.repo, this.state));
+      return {
+        ...group,
+        product: { ...group.product },
+        mergeMethods: [...group.mergeMethods],
+        mergeableCount: mergeablePullRequestCount(trees),
+        trees,
+        merged: structuredClone(group.merged),
+        mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
+        reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
+        lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
+        reviews: group.reviews.map((review) => ({ ...review })),
+      };
+    });
   }
 }
 
 function attachMergeState(pullRequest, registrations, owner, repo, state) {
   const registration = registrations.find((record) => record.number === pullRequest.number);
+  const mergeIntent = state.pullRequestMergeIntent(owner, repo, pullRequest.number);
   return {
     ...pullRequest,
+    canMerge: mergeIntent ? false : pullRequest.canMerge,
     mergeSessionId: registration?.session_id || pullRequest.mergeSessionId || null,
     mergeRecordKey: registration ? state.pullRequestRegistrationKey(registration) : pullRequest.mergeRecordKey || null,
     reservation: state.pullRequestMergeReservation(owner, repo, pullRequest.number),
+    mergeIntent,
     children: pullRequest.children.map((child) => attachMergeState(child, registrations, owner, repo, state)),
   };
 }
