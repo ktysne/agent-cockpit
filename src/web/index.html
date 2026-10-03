@@ -471,6 +471,8 @@ let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
+// 常駐サーバーはキューに入れた時点でマージの意図を消すので、キューに入れた PR は画面で覚えておく。
+const queuedPullRequestMerges = new Map();
 const pullRequestMergeInFlight = new Set();
 const pullRequestConflictConfirmations = new Set();
 const pullRequestConflictMessages = new Map();
@@ -1506,7 +1508,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
 
 function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
-  const mergeIntent = pullRequest.mergeIntent || null;
+  const mergeIntent = pullRequest.mergeIntent || queuedPullRequestMerges.get(pullRequestMergeKey(pullRequest)) || null;
   const item = element('div', `pr ${reservation ? 'reserved' : pullRequest.canMerge ? 'can-merge' : ''}`.trim());
   const line = element('div', 'pline');
   if (pullRequest.stackPosition?.total > 1) {
@@ -3023,6 +3025,7 @@ async function runPullRequestMergeAction(button, action) {
     }
     pullRequestMergeConfirmations.delete(key);
     const queued = action === 'merge' && result.queued;
+    if (queued) queuedPullRequestMerges.set(key, { message: result.message || '' });
     pullRequestMergeMessages.delete(key);
     await refresh();
     liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : action === 'merge' ? `PR #${number} をマージしました。`

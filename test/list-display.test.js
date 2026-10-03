@@ -268,6 +268,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeInFlight: new Set(),
     pullRequestMergeMessages: new Map(),
+    queuedPullRequestMerges: new Map(),
     badge: (label, tone = '') => fakeElement('span', tone, label),
     appendPullRequestBadges() {},
   });
@@ -281,6 +282,15 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.equal((webText.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
   assert.doesNotMatch(webText, /GitHub のマージキューに追加済みです/);
   assert.match(webText, /マージできない理由: CI 実行中/);
+
+  webContext.queuedPullRequestMerges.set('repo#1', { message: 'キューに入りました' });
+  const queuedTarget = fakeElement('div');
+  webContext.renderPullRequest(queuedTarget, {}, {
+    number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, children: [],
+  });
+  assert.equal((queuedTarget.textContent.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
+  assert.doesNotMatch(queuedTarget.textContent, /マージする|マージできます/);
 
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);
@@ -316,6 +326,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
       json: async () => ({ queued: true, message: 'GitHub のマージキューに追加済みです。まだマージされていません。' }),
     }),
     pullRequestMergeMessages: new Map(),
+    queuedPullRequestMerges: new Map(),
     pullRequestMergeConfirmations: new Map([['key', 'merge']]),
     liveStatus: { textContent: '' },
     lastState: null,
@@ -325,5 +336,6 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   vm.runInContext(action, actionContext);
   await actionContext.runPullRequestMergeAction({ dataset: { mergeGo: 'key' } }, 'merge');
   assert.equal(actionContext.pullRequestMergeMessages.size, 0);
+  assert.ok(actionContext.queuedPullRequestMerges.has('key'));
   assert.equal(actionContext.liveStatus.textContent, 'PR #1 をマージキューに追加しました。');
 });
