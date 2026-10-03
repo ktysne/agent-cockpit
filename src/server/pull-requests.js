@@ -587,6 +587,7 @@ class PullRequestTracker {
       this.execute(['api', `repos/${repository}`]),
     ]);
     const errors = [];
+    const uninspectedNumbers = new Set();
     let openPullRequests = current.openPullRequests;
     let defaultBranch = current.defaultBranch;
     let mergeMethods = current.mergeMethods;
@@ -649,12 +650,14 @@ class PullRequestTracker {
       for (const result of inspected) {
         if (result.error) {
           errors.push(`#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}`);
+          uninspectedNumbers.add(result.number);
           continue;
         }
         const value = result.value;
         const state = String(value.state || '').toUpperCase();
         if (!['OPEN', 'CLOSED', 'MERGED'].includes(state)) {
           errors.push(`#${result.number} の状態を読み取れませんでした`);
+          uninspectedNumbers.add(result.number);
           continue;
         }
         const closedState = state === 'MERGED' || (state === 'CLOSED' && value.mergedAt) ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
@@ -662,6 +665,7 @@ class PullRequestTracker {
           const normalized = normalizeOpenPullRequest(value);
           if (!normalized) {
             errors.push(`#${result.number} の状態を読み取れませんでした`);
+            uninspectedNumbers.add(result.number);
             continue;
           }
           openPullRequests.push(normalized);
@@ -829,6 +833,8 @@ class PullRequestTracker {
       fetchedAt,
       checkedAt,
       error: errors.length ? [...new Set(errors)].join('。') : null,
+      listAvailable,
+      uninspectedNumbers,
       restackResults,
     });
     await this.refreshReviewGroups(owner, repo);
@@ -893,6 +899,9 @@ class PullRequestTracker {
         checkedAt: repositoryState.checkedAt,
         fetchedAt: repositoryState.fetchedAt,
         error: repositoryState.error,
+        // error はリポジトリ全体の失敗を含むので、このプロダクトのオープンの PR が数えきれていないかは別に持つ。
+        openStateUnknown: !repositoryState.listAvailable
+          || group.registrations.some((registration) => repositoryState.uninspectedNumbers.has(registration.number)),
         registeredCount: group.registrations.length,
         openCount: assembled.openCount,
         mergeableCount: mergeablePullRequestCount(trees),

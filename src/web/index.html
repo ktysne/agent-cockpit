@@ -1410,12 +1410,12 @@ function productGroups(sessions, pullRequestGroups = []) {
 }
 
 // セッションを外すか終えて PR もマージかクローズを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
-// 取得に失敗した PR 群は openCount が 0 のままなので、オープンの PR が無いとは扱わない。
+// オープンの PR を数えきれていない PR 群は、openCount が 0 でもオープンの PR が無いとは扱わない。
 function hasProductContent(product, sinceSeen) {
   const pullRequestGroups = product.pullRequestGroups || [];
   return product.sessions.length > 0
     || pullRequestOpenCount(pullRequestGroups) > 0
-    || pullRequestGroups.some((group) => group.error)
+    || pullRequestGroups.some((group) => group.openStateUnknown)
     || sinceSeen.some((entry) => entry.product?.key === product.key && entry.items?.length > 0);
 }
 
