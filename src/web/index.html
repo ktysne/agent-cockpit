@@ -20,34 +20,38 @@
   --accent: #3b5bdb;
   --accent-soft: #e7ecff;
   --warn: #b35c00;
+  --warn-text: #8a4300;
   --warn-soft: #fff1df;
   --danger: #c92a2a;
   --danger-soft: #ffe8e8;
   --ok: #2b8a3e;
+  --ok-text: #236b31;
   --ok-soft: #e3f6e8;
   --hold: #6741d9;
   --hold-soft: #efe9ff;
   --on-accent: #ffffff;
-  --on-ok: #ffffff;
+  --accent-text: #3b5bdb;
+  --on-ok: #000000;
+  --on-danger: #ffffff;
   --radius: 10px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
-    --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
+    --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
     --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
     --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
-    --on-accent: #ffffff; --on-ok: #1f1e1d;
+    --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #1a1a18; --surface: #252523; --surface-2: #2f2f2c; --border: #3c3c37;
-  --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22;
+  --text: #faf9f5; --text-2: #b7b5a9; --accent: #d97757; --accent-soft: #452c22; --accent-text: #f2a78e;
   --warn: #e3b341; --warn-soft: #3d3220; --danger: #ec6a5e; --danger-soft: #45231f;
   --ok: #8cc391; --ok-soft: #233526; --hold: #b4a5e3; --hold-soft: #332e45;
-  --on-accent: #ffffff; --on-ok: #1f1e1d;
+  --warn-text: #e3b341; --ok-text: #8cc391; --on-accent: #1f1e1d; --on-ok: #1f1e1d; --on-danger: #1f1e1d;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
@@ -77,9 +81,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .chip { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .chip strong { color: var(--text); font-size: 13px; margin-left: 4px; }
 .chip.danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
-.chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn-text); }
 .chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
-.chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok-text); }
 .meta { color: var(--text-2); font-size: 12px; }
 #connection-note { color: var(--danger); }
 .settings-button, .settings-dialog button, .settings-dialog select, .settings-dialog input[type="number"] { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
@@ -116,10 +120,10 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .section-body { padding: 10px 14px 14px; }
 .product-key { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); }
-.badge.busy { background: var(--accent-soft); color: var(--accent); }
-.badge.wait { background: var(--warn-soft); color: var(--warn); }
+.badge.busy { background: var(--accent-soft); color: var(--accent-text); }
+.badge.wait { background: var(--warn-soft); color: var(--warn-text); }
 .badge.permission-chip { background: var(--danger-soft); color: var(--danger); }
-.badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.done { background: var(--ok-soft); color: var(--ok-text); }
 .badge.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
 h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
@@ -172,7 +176,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-choices { display: flex; gap: 8px; flex-wrap: wrap; }
 .answer-choice { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; }
 .answer-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.answer-choice.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+.answer-choice.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-text); }
 .answer-choice.hold:has(input:checked) { background: var(--hold-soft); border-color: var(--hold); color: var(--hold); }
 .answer-choice.ok input { accent-color: var(--ok); }
 .answer-choice.hold input { accent-color: var(--hold); }
@@ -195,8 +199,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
 .task-title { min-width: 0; }
 .task-state { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface); color: var(--text-2); }
-.task-state.doing { background: var(--accent-soft); color: var(--accent); }
-.task-state.done { background: var(--ok-soft); color: var(--ok); }
+.task-state.doing { background: var(--accent-soft); color: var(--accent-text); }
+.task-state.done { background: var(--ok-soft); color: var(--ok-text); }
 .criteria-list { margin: 4px 0 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .criteria-list li.met { color: var(--ok); }
 .criteria-list li::marker { content: "・"; }
@@ -216,9 +220,9 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg button { min-height: 36px; padding: 4px 12px; border: 0; background: none; color: var(--text-2); cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-.chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-text); }
 button.chip { min-height: 32px; cursor: pointer; font: inherit; font-size: 12px; }
-button.chip[aria-pressed="false"] { border: 1px dashed var(--border); background: transparent; color: var(--text-2); text-decoration: line-through; opacity: .75; }
+button.chip[aria-pressed="false"] { border: 1px dashed var(--border); background: transparent; color: var(--text-2); text-decoration: line-through; }
 button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
 .filter-note[hidden], .body[hidden] { display: none; }
@@ -262,15 +266,15 @@ h3.sub .count { font-weight: normal; }
 .activity-title { font-weight: 600; }
 @keyframes pulse { 50% { opacity: .35; } }
 .badge.unknown, .task-state.unknown { border: 1px dashed var(--border); background: var(--surface-2); color: var(--text-2); }
-.badge.done { background: var(--ok-soft); color: var(--ok); }
-.badge.accent { background: var(--accent-soft); color: var(--accent); }
-.badge.ok { background: var(--ok-soft); color: var(--ok); }
-.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.done { background: var(--ok-soft); color: var(--ok-text); }
+.badge.accent { background: var(--accent-soft); color: var(--accent-text); }
+.badge.ok { background: var(--ok-soft); color: var(--ok-text); }
+.badge.warn { background: var(--warn-soft); color: var(--warn-text); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
 .badge.mute { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 .badge.new-mark { background: var(--accent); color: var(--on-accent); }
 .news { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; margin: 10px 0 4px; font-size: 13px; }
-.news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent); }
+.news-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent-text); }
 .news ul { margin: 4px 0 0; padding-left: 20px; }
 .prod-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text-2); font-size: 11px; white-space: nowrap; }
 .prs-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -295,14 +299,14 @@ h3.sub .count { font-weight: normal; }
 .conflict-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--danger); border-radius: 8px; background: transparent; color: var(--danger); cursor: pointer; }
 .conflict-btn:disabled { cursor: default; opacity: .55; }
 .merge-confirm.conflict { border-color: var(--danger); }
-.merge-confirm.conflict .conflict-go { background: var(--danger); color: var(--on-ok); }
+.merge-confirm.conflict .conflict-go { background: var(--danger); color: var(--on-danger); }
 .merge-confirm .methods { display: flex; gap: 6px; flex-wrap: wrap; }
 .merge-confirm .methods label, .merge-confirm .opt { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .merge-confirm .effects { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .merge-confirm .effects li.warn { color: var(--warn); }
 .merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .merge-confirm .merge-go { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
-.merge-confirm.auto .merge-go { background: var(--accent); color: var(--on-ok); }
+.merge-confirm.auto .merge-go { background: var(--accent); color: var(--on-accent); }
 .merge-confirm .ghost { min-height: 40px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
 .merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .auto-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .merge-confirm button:disabled { cursor: wait; opacity: .65; }
@@ -1027,6 +1031,28 @@ function durationLabel(startedAt, now = Date.now()) {
   return remainder ? `${hours} 時間 ${remainder} 分` : `${hours} 時間`;
 }
 
+function absoluteTimeLabel(value, now = Date.now(), invalidLabel = '未取得') {
+  const date = value instanceof Date ? value : value === null || value === undefined || value === '' ? null : new Date(value);
+  if (!date || !Number.isFinite(date.getTime())) return invalidLabel;
+  const current = new Date(now);
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return date.getFullYear() === current.getFullYear()
+    && date.getMonth() === current.getMonth()
+    && date.getDate() === current.getDate()
+    ? time
+    : `${date.getMonth() + 1}/${date.getDate()} ${time}`;
+}
+
+function relativeTimeElement(value, className, label, now = Date.now()) {
+  const time = element('time', className, label);
+  const date = value instanceof Date ? value : value === null || value === undefined || value === '' ? null : new Date(value);
+  if (date && Number.isFinite(date.getTime())) {
+    time.dateTime = date.toISOString();
+    time.title = absoluteTimeLabel(date, now);
+  }
+  return time;
+}
+
 function durationAgoLabel(startedAt, now = Date.now()) {
   const label = durationLabel(startedAt, now);
   return ['時刻不明', '1 分以内'].includes(label) ? label : `${label}前`;
@@ -1126,7 +1152,7 @@ function renderSummary(sessions, pullRequestGroups = []) {
   const note = document.getElementById('filter-note');
   note.hidden = hiddenKinds.length === 0;
   if (hiddenKinds.length) {
-    const showAll = element('button', 'link-btn', 'すべて表示する');
+    const showAll = element('button', 'link-btn', '隠した種類をすべて表示する');
     showAll.type = 'button';
     showAll.dataset.showAll = 'true';
     showAll.addEventListener('click', () => {
@@ -1151,7 +1177,7 @@ function renderExcludedNote(sessions) {
     note.replaceChildren();
     return;
   }
-  const showAll = element('button', 'link-btn', 'すべて表示する');
+  const showAll = element('button', 'link-btn', '外したセッションを戻す');
   showAll.type = 'button';
   showAll.dataset.clearHiddenSessions = 'true';
   const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
@@ -1228,19 +1254,14 @@ function pullRequestMergeableCount(groups) {
   return pullRequestKeys(groups, (pullRequest) => pullRequest.canMerge === true && Boolean(pullRequest.mergeSessionId)).size;
 }
 
-function pullRequestTimeLabel(value) {
-  const time = Date.parse(value || '');
-  return Number.isFinite(time) ? new Date(time).toLocaleString('ja-JP') : '未取得';
-}
-
 function decisionElapsedLabel(decision) {
   if (decision.state === 'waiting') {
     const age = Date.now() - Date.parse(decision.createdAt);
-    const minutes = Number.isFinite(age) ? Math.max(0, Math.floor(age / 60_000)) : null;
+    const duration = durationLabel(decision.createdAt);
     const stale = isLongWait(age) && !hasEffectiveAnswer(decision);
     return {
       className: `wait ${stale ? 'stale' : ''}`.trim(),
-      label: minutes === null ? '時刻不明' : `${minutes} 分待機中`,
+      label: duration === '時刻不明' ? duration : `${duration}待機中`,
       stale,
     };
   }
@@ -1271,6 +1292,13 @@ function appendPullRequestBadges(target, pullRequest) {
 
 const MERGE_METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 const MERGED_VISIBLE_COUNT = 5;
+
+function shortShaElement(value) {
+  const sha = typeof value === 'string' && value ? value : '不明な SHA';
+  const code = element('code', '', sha.slice(0, 7));
+  code.title = sha;
+  return code;
+}
 
 function isFullCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
@@ -1404,7 +1432,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   const review = crossReviewState(pullRequest);
   const effectItems = [
     review.warn ? { text: review.warn, warn: true } : review.note ? { text: review.note } : null,
-    { text: `head が ${pullRequest.headRefOid} のときだけマージする。表示後に push されていたら中止する。` },
+    { headSha: true },
     pullRequest.children.length ? { text: `先に ${pullRequest.children.map((child) => `#${child.number}`).join('、')} の base を ${group.defaultBranch} に付け替える。` } : null,
     group.autoDeleteBranch === true && !pullRequest.isCrossRepository
       ? { text: `リモートのブランチ ${pullRequest.headRefName} は GitHub が自動で削除する (リポジトリの設定)` }
@@ -1415,7 +1443,15 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
     { text: '結果を PR を作ったセッションへ知らせる。' },
     automatic ? { text: '予約後に head が変わったら予約を取り消して知らせる。' } : null,
   ].filter(Boolean);
-  for (const effect of effectItems) effects.append(element('li', effect.warn ? 'warn' : '', effect.text));
+  for (const effect of effectItems) {
+    if (effect.headSha) {
+      const item = element('li');
+      item.append(document.createTextNode('head が '), shortShaElement(pullRequest.headRefOid), document.createTextNode(' のときだけマージする。表示後に push されていたら中止する。'));
+      effects.append(item);
+    } else {
+      effects.append(element('li', effect.warn ? 'warn' : '', effect.text));
+    }
+  }
   panel.append(effects);
 
   const row = element('div', 'row');
@@ -1467,7 +1503,9 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   targetInstruction.append(document.createTextNode(' を取り込んで衝突を解消し、push するよう依頼する'));
   effects.append(targetInstruction);
   effects.append(element('li', '', 'セッションにはマージしないよう伝える。解消した後に、このカードからマージする'));
-  effects.append(element('li', '', `head が ${pullRequest.headRefOid} から変わると、依頼済みの表示を消す`));
+  const headEffect = element('li');
+  headEffect.append(document.createTextNode('head が '), shortShaElement(pullRequest.headRefOid), document.createTextNode(' から変わると、依頼済みの表示を消す'));
+  effects.append(headEffect);
   panel.append(effects);
 
   const row = element('div', 'row');
@@ -1598,7 +1636,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   }
   if (reservation) {
     const cancelRow = element('div', 'why-not');
-    cancelRow.append(document.createTextNode(`予約時 ${reservation.createdAt ? pullRequestTimeLabel(reservation.createdAt) : '時刻不明'}。head SHA ${reservation.headRefOid}。`));
+    cancelRow.append(document.createTextNode(`予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}。head SHA ${reservation.headRefOid}。`));
     item.append(cancelRow);
   }
   if (pullRequest.children.length) {
@@ -1673,13 +1711,15 @@ function appendPullRequestBlock(target, group, withTag = false) {
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
       link.title = record.title;
-      const parts = [pullRequestTimeLabel(record.mergedAt)];
+      const parts = [absoluteTimeLabel(record.mergedAt)];
       if (record.method) parts.push(MERGE_METHOD_LABELS[record.method] || record.method);
       if (record.automatic) parts.push('予約で自動');
+      item.append(link, document.createTextNode(` (${parts.join('、')}`));
       if (record.headMismatch === true) {
-        parts.push(`警告: 予約時に確認した ${record.reservedHeadRefOid || '不明な SHA'} とは異なる ${record.mergedHeadRefOid || '不明な SHA'} がマージされました`);
+        item.append(document.createTextNode('、警告: 予約時に確認した '), shortShaElement(record.reservedHeadRefOid),
+          document.createTextNode(' とは異なる '), shortShaElement(record.mergedHeadRefOid), document.createTextNode(' がマージされました'));
       }
-      item.append(link, document.createTextNode(` (${parts.join('、')})`));
+      item.append(document.createTextNode(')'));
       line.append(item);
     });
   }
@@ -1690,6 +1730,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
     link.href = pullRequest.url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
+    link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
     link.title = pullRequest.title;
     line.append(link);
   });
@@ -1824,7 +1865,7 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   row.append(who, detail);
   if (!isUnknown) {
     const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
-    row.append(element('time', 'since', durationAgoLabel(elapsedAt)));
+    row.append(relativeTimeElement(elapsedAt, 'since', durationAgoLabel(elapsedAt)));
   }
   appendUnknownSessionControls(row, session);
   return row;
@@ -1867,7 +1908,7 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
     appendModelLine(detail, agent);
-    row.append(who, detail, element('time', 'since', agent.startedAt ? durationAgoLabel(agent.startedAt) : ''));
+    row.append(who, detail, relativeTimeElement(agent.startedAt, 'since', agent.startedAt ? durationAgoLabel(agent.startedAt) : ''));
     list.append(row);
   }
   if (visibleAgents.length) body.append(list);
@@ -1912,7 +1953,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
   const list = element('div', 'permission-list');
   for (const wait of newestFirst(waits)) {
     const age = Date.now() - Date.parse(wait.startedAt);
-    const minutes = Number.isFinite(age) ? Math.max(0, Math.floor(age / 60_000)) : null;
+    const duration = durationLabel(wait.startedAt);
     const isLong = isLongWait(age);
     const card = element('article', `permission ${isLong ? 'long-wait' : ''}`.trim());
     const header = element('div', 'permission-head');
@@ -1921,7 +1962,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
     const who = wait.agent_id ? (agent?.agent_type || 'サブエージェント') : 'メイン';
     header.append(element('strong', '', `${who}がツールの実行許可を待っている`));
     header.append(badge('許可待ち', 'permission-chip'));
-    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), minutes === null ? '時刻不明' : `${minutes} 分待機中`));
+    header.append(element('span', `wait ${isLong ? 'stale' : ''}`.trim(), duration === '時刻不明' ? duration : `${duration}待機中`));
     card.append(header);
     if (wait.tool_name || wait.summary) {
       const context = element('div', 'decision-context permission-tool');
@@ -2028,21 +2069,15 @@ function canSendDecisionAnswer(decision, draft) {
   return Boolean(draft.note.trim());
 }
 
-function answerTimeLabel(value) {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '';
-  return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 function answerStatusText(answer, decision) {
   if (!answer?.sentAt) return '未送信';
   const label = answer.choice === 'ok' ? '推奨案で OK'
     : answer.choice === 'hold' ? '判断を保留'
       : answer.choice === 'pick' ? `${selectedAnswerLabels(decision, answer.picks || []).map((item) => `「${item}」`).join('')}を選択`
         : '指示のみ';
-  const status = [`${answerTimeLabel(answer.sentAt)} に送信済み: ${label}${answer.note ? ' (指示あり)' : ''}`];
-  if (answer.deliveredAt) status.push(`${answerTimeLabel(answer.deliveredAt)} に渡した`);
-  if (answer.reflectedAt) status.push(`${answerTimeLabel(answer.reflectedAt)} に反映された`);
+  const status = [`${absoluteTimeLabel(answer.sentAt, Date.now(), '')} に送信済み: ${label}${answer.note ? ' (指示あり)' : ''}`];
+  if (answer.deliveredAt) status.push(`${absoluteTimeLabel(answer.deliveredAt, Date.now(), '')} に渡した`);
+  if (answer.reflectedAt) status.push(`${absoluteTimeLabel(answer.reflectedAt, Date.now(), '')} に反映された`);
   return status.join('、');
 }
 
@@ -2124,7 +2159,11 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
     element('span', 'decision-title', decision.title),
     badge(decisionStateLabel(decision.state), decision.state === 'waiting' ? 'permission' : decision.state === 'provisional' ? 'wait' : decision.state === 'resolved' ? 'done' : ''),
   );
-  if (elapsed) header.append(element('time', elapsed.className, elapsed.label));
+  if (elapsed) header.append(relativeTimeElement(
+    decision.state === 'waiting' ? decision.createdAt : decision.updatedAt,
+    elapsed.className,
+    elapsed.label,
+  ));
   if (decision.state === 'waiting' && decision.awaitingAnswerUntil) {
     const remaining = Math.max(0, Math.ceil((Date.parse(decision.awaitingAnswerUntil) - Date.now()) / 60_000));
     header.append(element('span', 'wait awaiting-min', `あと ${remaining} 分で推奨に進む`));
@@ -2322,12 +2361,6 @@ function appendKindTaskSession(body, reference, showTodo, showDone) {
   body.append(group);
 }
 
-// 状態不明のセッションは古い記録を持つことが多いので、今日でなければ日付も出す。
-function estimateTimeLabel(date) {
-  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-  return date.toDateString() === new Date().toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()} ${time}`;
-}
-
 function unknownSessionControls(session) {
   if (session.status !== '不明') return null;
   const extra = element('div', 'session-extra');
@@ -2347,7 +2380,7 @@ function unknownSessionControls(session) {
     panel.textContent = '推定できませんでした';
   } else {
     const timestamp = Date.parse(session.estimate.recordedAt);
-    const recordedAt = Number.isFinite(timestamp) ? estimateTimeLabel(new Date(timestamp)) : '時刻不明';
+    const recordedAt = Number.isFinite(timestamp) ? absoluteTimeLabel(new Date(timestamp)) : '時刻不明';
     panel.append(element('p', '', `最後の記録: ${recordedAt}、最後のツール: ${session.estimate.lastTool ?? 'なし'}`));
     const waiting = session.estimate.state === 'input'
       ? 'はい'
@@ -2457,9 +2490,9 @@ function productCloseButton(product, describedById) {
   close.type = 'button';
   close.dataset.productAction = 'close';
   close.dataset.productKey = product.key;
-  close.setAttribute('aria-label', 'このプロダクトを閉じる');
+  close.setAttribute('aria-label', 'このプロダクトのセッションを一覧から外す');
   if (describedById) close.setAttribute('aria-describedby', describedById);
-  close.title = 'このプロダクトを閉じる';
+  close.title = 'このプロダクトのセッションを一覧から外す';
   return close;
 }
 

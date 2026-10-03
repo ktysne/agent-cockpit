@@ -51,7 +51,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
     appendContextTags() {},
     appendToolLine(target, tool) { target.append(fakeElement('span', 'tool-line', tool.tool_name)); },
     durationAgoLabel: (at) => (at ? '記録時刻' : '時刻不明'),
-    estimateTimeLabel: () => '10:00',
+    absoluteTimeLabel: () => '10:00',
   });
   vm.runInContext(sourceFunctions.join('\n'), sourceContext);
 
@@ -81,6 +81,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
     taskState: (_session, task) => task.state,
     sessionTag: () => '<span class="session-tag">session</span>',
     esc: (value) => String(value ?? ''),
+    absoluteTimeLabel: (value) => value,
     renderToolLine: (tool) => `<span class="tool-line">${tool}</span>`,
     ESTIMATE_WAITING: { input: 'はい', tool: 'いいえ (許可待ちかツールの実行中)', model: 'いいえ (応答の生成中)' },
   });
@@ -218,7 +219,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     element: fakeElement,
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     durationAgoLabel: () => '少し前',
-    pullRequestTimeLabel: () => '10:00',
+    absoluteTimeLabel: () => '10:00',
     appendPullRequestTree(target) { target.append(fakeElement('article', 'pr', 'オープン #1')); },
   });
   vm.runInContext(webBlock, webContext);
@@ -265,6 +266,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     prKey: (_product, number) => String(number),
     METHOD_LABEL: { squash: 'スカッシュ' },
     esc: (value) => String(value ?? ''),
+    absoluteTimeLabel: (value) => value,
   });
   vm.runInContext(`${mockPr}\nthis.renderPr = prBlock;`, mockContext);
   const mockProduct = {
@@ -433,6 +435,7 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
     badge: (_label, tone = '') => fakeElement('span', tone),
     decisionStateLabel: () => '解決済み',
     answerStatusText: () => '12:00 に送信済み',
+    absoluteTimeLabel: () => '12:00',
   });
   vm.runInContext(`${webFunctions.join('\n')}\nthis.renderDecision = appendDecisionCard;`, webContext);
   const webList = fakeElement('div');
@@ -458,6 +461,7 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
     waitLabel: () => '',
     canSend: () => false,
     esc: (value) => String(value ?? ''),
+    absoluteTimeLabel: () => '12:00',
   });
   vm.runInContext(`${mockDecision}\nthis.renderDecision = decisionCard;`, mockContext);
   const mockCard = mockContext.renderDecision({ name: 'agent-cockpit' }, {}, {

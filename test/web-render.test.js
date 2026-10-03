@@ -10,29 +10,29 @@ const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
   const elapsed = pageHtml.match(/function decisionElapsedLabel\(decision\) \{[\s\S]*?\n\}/)?.[0];
   const isLongWait = pageHtml.match(/function isLongWait\(ageMs\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(elapsed && isLongWait);
+  const duration = pageHtml.match(/function durationLabel\(startedAt, now = Date\.now\(\)\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(elapsed && isLongWait && duration);
+  const old = new Date(Date.now() - (14 * 60 + 3) * 60_000 - 1_000).toISOString();
   const context = pageContext(pageHtml, {
     displayPreferences: { longWaitMinutes: 15 },
     hasEffectiveAnswer: (decision) => Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt),
-    durationLabel: () => '4 分',
   });
-  vm.runInContext(`${isLongWait}\n${elapsed}`, context);
+  vm.runInContext(`${duration}\n${isLongWait}\n${elapsed}`, context);
 
-  const old = new Date(Date.now() - 16 * 60_000 - 5_000).toISOString();
   const waiting = context.decisionElapsedLabel({ state: 'waiting', createdAt: old });
   const answered = context.decisionElapsedLabel({
     state: 'waiting', createdAt: old, answer: { sentAt: new Date().toISOString() },
   });
-  const provisional = context.decisionElapsedLabel({ state: 'provisional', updatedAt: new Date().toISOString() });
+  const provisional = context.decisionElapsedLabel({ state: 'provisional', updatedAt: new Date(Date.now() - 60_000).toISOString() });
 
   assert.deepEqual(JSON.parse(JSON.stringify(waiting)), {
-    className: 'wait stale', label: '16 分待機中', stale: true,
+    className: 'wait stale', label: '14 時間 3 分待機中', stale: true,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(answered)), {
-    className: 'wait', label: '16 分待機中', stale: false,
+    className: 'wait', label: '14 時間 3 分待機中', stale: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(provisional)), {
-    className: 'since', label: '仮適用から 4 分', stale: false,
+    className: 'since', label: '仮適用から 1 分', stale: false,
   });
   assert.equal(context.decisionElapsedLabel({ state: 'resolved', updatedAt: old }), null);
   assert.equal(context.decisionElapsedLabel({ state: 'withdrawn', updatedAt: old }), null);
@@ -774,7 +774,9 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
     });
     assert.equal(reviewedEffects[0].className, '');
     assert.equal(reviewedEffects[0].textContent, 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる。');
-    assert.match(reviewedEffects[1].textContent, /^head が /);
+    assert.equal(reviewedEffects[1].children[0].textContent, 'head が ');
+    assert.equal(reviewedEffects[1].children[1].textContent, 'aaaaaaa');
+    assert.equal(reviewedEffects[1].children[1].title, headSha);
   }
   const missingReviewEffects = confirmation(false, null);
   assert.equal(missingReviewEffects[0].className, 'warn');
@@ -1506,7 +1508,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     pullRequestMergeInFlight: new Set(),
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
-    pullRequestTimeLabel: () => '時刻不明',
+    absoluteTimeLabel: () => '時刻不明',
     durationAgoLabel: () => '時刻不明',
     postUiAction: async (url, body) => {
       sent.push({ url, body });
@@ -1695,7 +1697,7 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     pullRequestMergeInFlight: new Set(),
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
-    pullRequestTimeLabel: () => '時刻不明',
+    absoluteTimeLabel: () => '時刻不明',
     durationAgoLabel: () => '時刻不明',
     postUiAction: async (url, body) => {
       sent.push({ url, body });
@@ -1750,9 +1752,10 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
 
 test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
   const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const shortShaElement = pageHtml.match(/function shortShaElement\(value\) \{[\s\S]*?\n\}/)?.[0];
   const start = pageHtml.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
   const end = pageHtml.indexOf('\nfunction productGroups(', start);
-  assert.ok(element && start >= 0 && end > start);
+  assert.ok(element && shortShaElement && start >= 0 && end > start);
   const appendBlock = pageHtml.slice(start, end);
 
   class FakeElement {
@@ -1777,7 +1780,7 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     MERGED_VISIBLE_COUNT: 5,
     durationAgoLabel: () => '1 分前',
   });
-  vm.runInContext(`${element}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
 
   for (const state of ['merged', 'closed']) {
     const root = new FakeElement('div');
@@ -1841,10 +1844,11 @@ test('終わったものを隠すとマージ済みとクローズ済みの PR �
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const shortShaElement = html.match(/function shortShaElement\(value\) \{[\s\S]*?\n\}/)?.[0];
   const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
   const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
   const appendBlock = html.slice(appendStart, appendEnd);
-  assert.ok(element);
+  assert.ok(element && shortShaElement);
   assert.ok(appendBlock);
 
   class FakeElement {
@@ -1860,13 +1864,13 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
-    pullRequestTimeLabel: () => '1 分前',
+    absoluteTimeLabel: () => '1 分前',
     durationAgoLabel: () => '1 分前',
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     expandedPrLines: new Set(),
     MERGED_VISIBLE_COUNT: 5,
   });
-  vm.runInContext(`${element}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${shortShaElement}\n${appendBlock}`, context);
   const root = new FakeElement('div');
   const reservedSha = 'a'.repeat(40);
   const mergedSha = 'b'.repeat(40);
@@ -1887,8 +1891,10 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
   const visibleText = nodes.map((node) => node.textContent).join(' ');
 
   assert.match(visibleText, /予約時に確認した/);
-  assert.match(visibleText, new RegExp(reservedSha));
-  assert.match(visibleText, new RegExp(mergedSha));
+  assert.match(visibleText, /aaaaaaa/);
+  assert.match(visibleText, /bbbbbbb/);
+  assert.ok(nodes.some((node) => node.tagName === 'code' && node.textContent === 'aaaaaaa' && node.title === reservedSha));
+  assert.ok(nodes.some((node) => node.tagName === 'code' && node.textContent === 'bbbbbbb' && node.title === mergedSha));
 });
 
 test('マージ済み一覧は新しい順に5件を出し、古いPRをボタンで切り替える', () => {
@@ -1931,7 +1937,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
     expandedPrLines,
     MERGED_VISIBLE_COUNT: 5,
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
-    pullRequestTimeLabel: (value) => value,
+    absoluteTimeLabel: (value) => value,
     durationAgoLabel: () => '1 分前',
     lastState: state,
     root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },
@@ -2037,7 +2043,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
     expandedPrLines,
     MERGED_VISIBLE_COUNT: 5,
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
-    pullRequestTimeLabel: (value) => value,
+    absoluteTimeLabel: (value) => value,
     durationAgoLabel: () => '1 分前',
     lastState: state,
     root: { querySelectorAll: () => descendants(root).filter((node) => node.dataset?.olderPrLine) },

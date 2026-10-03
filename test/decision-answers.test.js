@@ -216,9 +216,9 @@ test('種類別の並び順の札には、外すセッションがあるプロ�
   assert.equal(close.type, 'button');
   assert.equal(close.dataset.productAction, 'close');
   assert.equal(close.dataset.productKey, 'product-key');
-  assert.equal(close.attributes['aria-label'], 'このプロダクトを閉じる');
+  assert.equal(close.attributes['aria-label'], 'このプロダクトのセッションを一覧から外す');
   assert.equal(close.attributes['aria-describedby'], tag.id);
-  assert.equal(close.title, 'このプロダクトを閉じる');
+  assert.equal(close.title, 'このプロダクトのセッションを一覧から外す');
 });
 
 test('種類別の並び順の札は省略表示し、モックでは title にエスケープした名前を入れる', () => {
