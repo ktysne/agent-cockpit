@@ -511,6 +511,7 @@ function completeCodexAgent(agent, event) {
   if (result?.status === 'unavailable' || (result?.status === 'failed' && result.exitCode === 3)) agent.unavailable = '使用不能';
   agent.active = false;
   agent.unconfirmed = false;
+  agent.resultReceived = true;
 }
 
 function latestCodexForParent(agents, parentAgentId) {
@@ -518,6 +519,18 @@ function latestCodexForParent(agents, parentAgentId) {
     .filter((agent) => agent.isCodex && sameAgent(agent.parent_agent_id, parentAgentId))
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
     .at(-1);
+}
+
+function latestWaitableCodex(session, parentAgentId, definition) {
+  return session.agents
+    .filter((agent) => (
+      agent.isCodex && agent.agent_type === definition && !agent.resultReceived &&
+      sameAgent(agent.parent_agent_id, parentAgentId)
+    ))
+    .sort((left, right) => {
+      const backgroundedDifference = Number(right.backgrounded === true) - Number(left.backgrounded === true);
+      return backgroundedDifference || Date.parse(right.startedAt) - Date.parse(left.startedAt);
+    })[0] || null;
 }
 
 function deriveSessions(entries) {
@@ -594,7 +607,31 @@ function deriveSessions(entries) {
         }
       }
 
-      if (event.codexDefinition && toolUseId) {
+      if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
+        const agent = latestWaitableCodex(session, agentId, event.codexWaitDefinition);
+        if (agent) {
+          agent.active = true;
+          agent.unconfirmed = false;
+          agent.backgrounded = false;
+          agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+          session.pendingCodex[toolUseId] = agent.agent_id;
+        } else {
+          const agentIdForCall = `codex:${toolUseId}`;
+          const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
+          Object.assign(waitAgent, {
+            agent_id: agentIdForCall,
+            agent_type: event.codexWaitDefinition,
+            isCodex: true,
+            parent_agent_id: agentId,
+            codex_home: '',
+            unavailable: '',
+            startedAt: isoTime(event.hookAt),
+            lastTool: { tool_name: 'Bash', summary: event.summary },
+          });
+          session.agents.push(waitAgent);
+          session.pendingCodex[toolUseId] = agentIdForCall;
+        }
+      } else if (event.codexDefinition && toolUseId) {
         const agentIdForCall = `codex:${toolUseId}`;
         const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
         Object.assign(agent, {

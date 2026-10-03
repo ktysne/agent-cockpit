@@ -34,6 +34,11 @@ function inputSummary(toolName, toolInput) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
+function extractCodexWaitRunId(command) {
+  const match = pickString(command).match(/(?:^|[\s"'`/\\])codex-agent(?:\.sh|\.cmd|\.ps1)?["']?\s+--wait\s+["']?([^\s"'`;&|]+)/i);
+  return match ? match[1].slice(0, 256) : '';
+}
+
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
   if (depth > 6 || output.length >= 6) return;
   if (typeof value === 'string') {
@@ -126,6 +131,8 @@ function makeHookEvent(input, now = Date.now()) {
     event.summary = inputSummary(event.tool_name, input.tool_input);
     if (event.tool_name === 'Bash') {
       const command = pickString(input.tool_input?.command);
+      const codexWaitRunId = extractCodexWaitRunId(command);
+      if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
       if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
     }
@@ -418,6 +425,7 @@ if (require.main === module) main();
 module.exports = {
   HOOK_TIMEOUT_MS,
   inputSummary,
+  extractCodexWaitRunId,
   codexOutputLines,
   extractAskUserQuestionResolution,
   makeHookEvent,

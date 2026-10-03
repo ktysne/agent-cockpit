@@ -17,6 +17,7 @@ const EVENT_NAMES = new Set([
 const MAX_ASK_QUESTIONS = 4;
 const MAX_ASK_OPTIONS = 6;
 const QUESTION_TEXT_LIMIT = 2000;
+const CODEX_WAIT_RUN_ID_PATTERN = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)-\d{8}-\d{6}-\d+$/;
 
 function boundedString(value, limit) {
   return typeof value === 'string' ? value.slice(0, limit) : '';
@@ -128,6 +129,12 @@ function sanitizeEvent(input, metadata = {}) {
   if (eventName === 'PreToolUse') {
     event.summary = shortString(input.summary, 80) || event.tool_name;
     event.codexDefinition = parseCodexLaunch(event.summary);
+    const codexWaitRunId = shortString(input.codexWaitRunId, 256) || '';
+    const codexWaitMatch = codexWaitRunId.match(CODEX_WAIT_RUN_ID_PATTERN);
+    if (event.tool_name === 'Bash' && !event.codexDefinition && codexWaitMatch) {
+      event.codexWaitRunId = codexWaitRunId;
+      event.codexWaitDefinition = codexWaitRunId.replace(/-\d{8}-\d{6}-\d+$/, '');
+    }
     if (metadata.codexAgentDefinition) event.codexAgentDefinition = metadata.codexAgentDefinition;
     if (event.tool_name === 'Agent') event.description = shortString(input.description, 200) || '';
     if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;

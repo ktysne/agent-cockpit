@@ -10,6 +10,7 @@ const {
   makeHookEvent,
   runHook,
 } = require('../src/hooks/event');
+const { sanitizeEvent } = require('../src/server/events');
 
 async function temporaryHome(testContext) {
   const previous = process.env.AGENT_COCKPIT_HOME;
@@ -145,6 +146,43 @@ test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', a
     tool_input: { command: 'gh pr create' }, tool_response: 'Pull request created successfully',
   });
   assert.equal(Object.hasOwn(noUrl, 'pullRequest'), false);
+});
+
+test('Bash の要約が切れても全文から Codex の --wait 実行 ID を送る', () => {
+  const runId = 'impl-hard-20261003-123456-7';
+  const event = makeHookEvent({
+    session_id: 'codex-wait-hook', hook_event_name: 'PreToolUse', agent_id: 'agent-1',
+    tool_name: 'Bash', tool_use_id: 'wait-1',
+    tool_input: { command: `${'x'.repeat(100)} && bash ~/.claude/tools/codex-agent.sh --wait "${runId}"` },
+  });
+
+  assert.equal(event.summary.length, 80);
+  assert.equal(event.codexWaitRunId, runId);
+
+  const longRunId = `${'x'.repeat(300)}-20261003-123456-7`;
+  const bounded = makeHookEvent({
+    session_id: 'codex-wait-limit', hook_event_name: 'PreToolUse', tool_name: 'Bash',
+    tool_input: { command: `bash ~/.claude/tools/codex-agent.sh --wait ${longRunId}` },
+  });
+  assert.equal(bounded.codexWaitRunId.length, 256);
+});
+
+test('Codex の --wait は実行 ID の形だけを受け、同じコマンドの起動より優先しない', () => {
+  const makeWaitEvent = (command) => makeHookEvent({
+    session_id: 'codex-wait-sanitize', hook_event_name: 'PreToolUse', agent_id: 'agent-1',
+    tool_name: 'Bash', tool_use_id: 'wait-1', tool_input: { command },
+  });
+  const invalid = sanitizeEvent(makeWaitEvent('bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>'));
+  assert.equal(Object.hasOwn(invalid, 'codexWaitRunId'), false);
+  assert.equal(Object.hasOwn(invalid, 'codexWaitDefinition'), false);
+
+  const runId = 'impl-hard-20261003-123456-7';
+  const launchAndWait = sanitizeEvent(makeWaitEvent(
+    `bash ~/.claude/tools/codex-agent.sh impl-hard --wait ${runId}`,
+  ));
+  assert.equal(launchAndWait.codexDefinition, 'impl-hard');
+  assert.equal(Object.hasOwn(launchAndWait, 'codexWaitRunId'), false);
+  assert.equal(Object.hasOwn(launchAndWait, 'codexWaitDefinition'), false);
 });
 
 test('常駐サーバーに接続できなくても 1 秒程度で終了コード 0 を返す', async (t) => {

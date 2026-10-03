@@ -791,8 +791,9 @@ function createRequestHandler(options) {
       }
       if (eventName === 'PreToolUse') {
         const preliminary = sanitizeEvent(body, { product });
-        if (preliminary?.codexDefinition) {
-          codexDefinitionMetadata = await codexAgentDefinition(preliminary.codexDefinition, claudeHome);
+        const codexAgentName = preliminary?.codexDefinition || preliminary?.codexWaitDefinition;
+        if (codexAgentName) {
+          codexDefinitionMetadata = await codexAgentDefinition(codexAgentName, claudeHome);
         }
       }
 
