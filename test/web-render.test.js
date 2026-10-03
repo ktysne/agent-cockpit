@@ -744,7 +744,7 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
 
 test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['productGroups', 'sessionActivityTime', 'orderedProducts'].map((name) => (
+  const functions = ['pullRequestOpenCount', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   const clickListener = source.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
@@ -760,7 +760,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
       { product: { key: 'active', name: '稼働中' }, hidden: false, tools: [], lastActivityAt: '2026-10-03T12:00:00.000Z' },
       { product: { key: 'hidden', name: '非表示' }, hidden: true, tools: [], lastActivityAt: '2026-10-03T12:00:00.000Z' },
     ],
-    pullRequests: [{ product: { key: 'pull-request-only', name: 'PR のみ' }, owner: 'example', repo: 'project' }],
+    pullRequests: [{ product: { key: 'pull-request-only', name: 'PR のみ' }, owner: 'example', repo: 'project', openCount: 1 }],
     sinceSeen: [{ product: { key: 'history-only', name: '履歴のみ' }, items: [{ text: '完了' }] }],
   };
   const saved = [];
@@ -793,6 +793,33 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   button.dataset.productKey = 'missing';
   assert.doesNotThrow(() => handleClick({ target: button }));
   assert.deepEqual(saved, []);
+});
+
+test('表示中のセッションもオープンの PR も PR の取得失敗も未読の変化も無いプロダクトはカードを出さない', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functions = ['pullRequestOpenCount', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
+    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+  ));
+  assert.ok(functions.every(Boolean));
+  const context = vm.createContext({
+    displayPreferences: { order: [], pinned: [], collapsed: [] },
+    saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const visibleSessions = [
+    { product: { key: 'active', name: '稼働中' }, tools: [], lastActivityAt: '2026-10-03T12:00:00.000Z' },
+  ];
+  const pullRequests = [
+    { product: { key: 'finished', name: '終了済み' }, owner: 'example', repo: 'finished', openCount: 0 },
+    { product: { key: 'open', name: 'オープンあり' }, owner: 'example', repo: 'open', openCount: 2 },
+    { product: { key: 'unreachable', name: '取得失敗' }, owner: 'example', repo: 'unreachable', openCount: 0, error: 'GitHub から取得できません' },
+  ];
+  const keys = (sinceSeen) => [...context.orderedProducts(visibleSessions, pullRequests, sinceSeen)].map((product) => product.key).sort();
+
+  assert.deepEqual(keys([]), ['active', 'open', 'unreachable']);
+  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [{ text: 'PR #1 をマージした' }] }]), ['active', 'finished', 'open', 'unreachable']);
+  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [] }]), ['active', 'open', 'unreachable']);
 });
 
 test('指示欄にフォーカスがある描き直しでは要素と選択範囲を保つ', () => {
