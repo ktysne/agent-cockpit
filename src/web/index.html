@@ -59,15 +59,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .summary { display: flex; gap: 8px; flex-wrap: wrap; }
 .control-row { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
 .routing { display: grid; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.routing[hidden], .control-row:has(> .routing[hidden]) { display: none; }
 .routing .rgroup { display: grid; grid-template-columns: max-content max-content; gap: 8px 10px; align-items: center; }
 .routing .rgroup .rrow { display: contents; }
-.routing .rgroup.side-by-side { grid-template-columns: repeat(4, max-content); }
-.routing .rgroup.side-by-side .rrow + .rrow .rlabel { margin-left: 22px; }
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
-.routing .seg button:disabled { cursor: default; opacity: .55; }
-.routing .seg .rstatus { display: inline-flex; align-items: center; padding: 0 8px; border-left: 1px solid var(--border); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .top-inner .routing { min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
 .top-inner .routing .seg button { padding: 3px 7px; font-size: 12px; min-height: 30px; }
 .route-tag { display: inline-flex; align-items: center; min-height: 20px; padding: 0 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-2); font-size: 11px; white-space: nowrap; }
@@ -398,7 +395,6 @@ const ROUTE = {
   review: { label: 'クロスレビュー', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
 };
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
-const ROUTING_PAIR_GAP_PX = 22;
 let lastVersion = null;
 let lastState = null;
 let hasRenderedState = false;
@@ -420,7 +416,7 @@ const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
 const pullRequestMergeInFlight = new Set();
 let routing = { agents: 'default', review: 'default' };
-let routingResizeObserver = null;
+let codexAgentAvailable = false;
 
 function readDisplayPreferences() {
   try {
@@ -623,34 +619,25 @@ function routeName(key, value) {
   return ROUTE[key].opts.find((option) => option.v === value)?.t || ROUTE[key].opts[0].t;
 }
 
-function renderRouting(settings = {}) {
+function renderRouting(settings = {}, integrations = {}) {
   routing = {
     agents: ROUTE_VALUES.has(settings.agents) ? settings.agents : 'default',
     review: ROUTE_VALUES.has(settings.review) ? settings.review : 'default',
   };
+  codexAgentAvailable = integrations.codexAgent === true;
   const root = document.getElementById('routing');
+  root.hidden = !codexAgentAvailable;
+  if (root.hidden) {
+    root.innerHTML = '';
+    return;
+  }
   if (!root.querySelector('.rgroup')) {
-    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路"${key === 'review' ? ' aria-describedby="route-review-status"' : ''}>${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false"${key === 'review' ? ' disabled' : ''}>${option.t}</button>`).join('')}${key === 'review' ? '<span id="route-review-status" class="rstatus">未対応</span>' : ''}</div></div>`;
-    root.innerHTML = `<div class="rgroup">${row('agents')}${row('review')}</div>`;
+    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div></div>`;
+    root.innerHTML = `<div class="rgroup">${row('agents')}</div>`;
   }
   for (const button of root.querySelectorAll('[data-route]')) {
     button.setAttribute('aria-pressed', String(button.dataset.v === routing[button.dataset.route]));
   }
-  layoutRouting();
-  if (!routingResizeObserver && 'ResizeObserver' in window) {
-    routingResizeObserver = new ResizeObserver(layoutRouting);
-    routingResizeObserver.observe(root);
-  }
-}
-
-function layoutRouting() {
-  const group = document.querySelector('#routing .rgroup');
-  if (!group) return;
-  const style = getComputedStyle(group);
-  const columnGap = parseFloat(style.columnGap) || 0;
-  const widths = [...group.querySelectorAll('.rlabel, .seg')].map((node) => node.getBoundingClientRect().width);
-  const needed = widths.reduce((sum, width) => sum + width, 0) + columnGap * (widths.length - 1) + ROUTING_PAIR_GAP_PX;
-  group.classList.toggle('side-by-side', needed <= group.clientWidth);
 }
 
 renderRouting(routing);
@@ -663,7 +650,7 @@ async function updateRouting(button) {
     const response = await postUiAction('/api/routing', { key, value });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const updated = await response.json();
-    renderRouting(updated);
+    renderRouting(updated, { codexAgent: codexAgentAvailable });
     if (lastState) {
       lastState.routing = updated;
       render(lastState);
@@ -741,7 +728,7 @@ function appendToolLine(target, tool) {
 }
 
 function routeTag(agent) {
-  if (!agent.active || !ROUTE_VALUES.has(agent.route)) return null;
+  if (!codexAgentAvailable || !agent.active || !ROUTE_VALUES.has(agent.route)) return null;
   const stale = agent.route !== routing.agents;
   return element('span', `route-tag${stale ? ' stale' : ''}`, `経路: ${routeName('agents', agent.route)}${stale ? ' (変更前)' : ''}`);
 }
@@ -931,7 +918,7 @@ function isFullCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
 }
 
-// crossReview が無い PR は、登録したセッションが無く状態ファイルを読めないので、行も警告も出さない。
+// tools/cross-review.js の無い worktree の PR と登録の無い関連 PR には crossReview が付かないので、行も警告も出さない。
 function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
@@ -954,6 +941,7 @@ function crossReviewState(pullRequest) {
 
 function crossReviewLine(pullRequest) {
   const review = pullRequest.crossReview;
+  if (review === undefined) return null;
   const state = crossReviewState(pullRequest);
   const line = element('div', 'xr');
   line.append(document.createTextNode('クロスレビュー '));
@@ -2130,7 +2118,7 @@ function render(state) {
     return;
   }
   deferredRenderPending = false;
-  renderRouting(state.routing);
+  renderRouting(state.routing, state.integrations);
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];

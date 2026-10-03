@@ -6,12 +6,38 @@ const os = require('node:os');
 const path = require('node:path');
 const { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, outputForInputText, outputForRoute } = require('../src/hooks/route');
 
-async function temporaryHome(t, routing = { agents: 'default', review: 'default' }) {
+async function temporaryHome(t, routing = { agents: 'default', review: 'default' }, withCodexAgent = true) {
+  const previousClaudeHome = process.env.CLAUDE_CONFIG_DIR;
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-route-hook-'));
+  process.env.CLAUDE_CONFIG_DIR = homeDir;
   await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify(routing));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  if (withCodexAgent) {
+    const toolsDirectory = path.join(homeDir, 'tools');
+    await fs.mkdir(toolsDirectory);
+    await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');
+  }
+  t.after(async () => {
+    if (previousClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;
+    await fs.rm(homeDir, { recursive: true, force: true });
+  });
   return homeDir;
 }
+
+test('SubagentStart は codex-agent.sh が無ければ経路を読み込まず、Claude ホームを差し替えられる', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' }, false);
+  const start = { hook_event_name: 'SubagentStart', session_id: 'session-no-codex', agent_id: 'agent-1' };
+  assert.equal(outputForRoute(start, { homeDir }), null);
+  await assert.rejects(fs.stat(path.join(homeDir, 'route-agents')));
+
+  const alternateClaudeHome = path.join(homeDir, 'alternate-claude-home');
+  const toolsDirectory = path.join(alternateClaudeHome, 'tools');
+  await fs.mkdir(toolsDirectory, { recursive: true });
+  await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');
+  assert.deepEqual(outputForRoute(start, { homeDir, claudeHome: alternateClaudeHome }), {
+    hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT },
+  });
+});
 
 test('SubagentStart は選択経路を差し込み、既定では出力しない', async (t) => {
   const homeDir = await temporaryHome(t);
@@ -157,9 +183,12 @@ test('経路記録を書けない SubagentStart は応答を返さない', async
 test('routing.json を読めない場合はフック出力を返さない', async (t) => {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-route-missing-'));
   t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
-  assert.equal(outputForRoute({ hook_event_name: 'SubagentStart' }, { homeDir }), null);
+  const toolsDirectory = path.join(homeDir, 'tools');
+  await fs.mkdir(toolsDirectory);
+  await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');
+  assert.equal(outputForRoute({ hook_event_name: 'SubagentStart' }, { homeDir, claudeHome: homeDir }), null);
   assert.equal(outputForInputText('{invalid', { homeDir }), null);
 
   await fs.writeFile(path.join(homeDir, 'routing.json'), '{invalid');
-  assert.equal(outputForRoute({ hook_event_name: 'SubagentStart' }, { homeDir }), null);
+  assert.equal(outputForRoute({ hook_event_name: 'SubagentStart' }, { homeDir, claudeHome: homeDir }), null);
 });

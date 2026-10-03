@@ -15,6 +15,14 @@ function cockpitHome(environment = process.env) {
     : path.join(os.homedir(), '.agent-cockpit');
 }
 
+function claudeHome(options = {}) {
+  if (options.claudeHome) return path.resolve(options.claudeHome);
+  const environment = options.environment || process.env;
+  return environment.CLAUDE_CONFIG_DIR
+    ? path.resolve(environment.CLAUDE_CONFIG_DIR)
+    : path.join(os.homedir(), '.claude');
+}
+
 function readRouting(homeDir = cockpitHome(), fileSystem = fs) {
   try {
     const value = JSON.parse(fileSystem.readFileSync(path.join(homeDir, 'routing.json'), 'utf8'));
@@ -106,6 +114,12 @@ function outputForRoute(input, options = {}) {
   const homeDir = options.homeDir || cockpitHome(options.environment);
   const fileSystem = options.fileSystem || fs;
   if (isStart) {
+    const codexAgentScript = path.join(claudeHome(options), 'tools', 'codex-agent.sh');
+    try {
+      if (!fileSystem.existsSync(codexAgentScript)) return null;
+    } catch {
+      return null;
+    }
     const directory = path.join(homeDir, 'route-agents');
     try {
       fileSystem.mkdirSync(directory, { recursive: true });

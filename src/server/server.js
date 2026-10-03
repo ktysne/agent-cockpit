@@ -22,6 +22,15 @@ const SESSION_SCAN_INTERVAL_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 128;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 
+async function defaultCodexAgentScriptExists(scriptPath) {
+  try {
+    await fs.access(scriptPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 画面を別のページの iframe に埋めて操作させる経路と、別のオリジンからの読み取りを塞ぐ。
 const SECURITY_HEADERS = Object.freeze({
   'cache-control': 'no-store',
@@ -235,6 +244,7 @@ function createRequestHandler(options) {
     findSessionIdByPid = (pid) => findLiveSessionIdByPid(pid, claudeHome),
     pullRequestTracker,
     pullRequestMergeManager,
+    codexAgentScriptExists = defaultCodexAgentScriptExists,
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
   let cachedUiFileStamp = null;
@@ -284,7 +294,8 @@ function createRequestHandler(options) {
         };
       });
       const uiVersion = await currentUiVersion();
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), uiVersion });
+      const codexAgent = (await codexAgentScriptExists(path.join(claudeHome, 'tools', 'codex-agent.sh'))) === true;
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent }, uiVersion });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -1017,6 +1028,7 @@ async function startServer(options = {}) {
     answerDelivery,
     pullRequestTracker,
     pullRequestMergeManager,
+    codexAgentScriptExists: options.codexAgentScriptExists,
     webPath: options.webPath,
     dev,
     getServerInfo: () => info,
