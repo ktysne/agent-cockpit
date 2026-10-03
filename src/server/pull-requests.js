@@ -403,11 +403,18 @@ async function findWorktreeRoot(cwd, fileSystem = fs) {
 
 async function readCrossReviewState(registration, pullRequest, fileSystem = fs) {
   const branch = pullRequest?.headRefName;
-  if (!branch || !registration.cwd) return null;
+  if (!registration.cwd) return undefined;
   const root = await findWorktreeRoot(registration.cwd, fileSystem);
-  if (!root) return null;
+  if (!root) return undefined;
+  let contents;
   try {
-    const parsed = JSON.parse(await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8'));
+    contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
+  } catch (error) {
+    return error.code === 'ENOENT' ? undefined : null;
+  }
+  try {
+    const parsed = JSON.parse(contents);
+    if (!branch) return null;
     const branchState = parsed?.branches?.[branch];
     if (!branchState || !Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return null;
     const lastReviewedSha = branchState.lastReviewedSha;
@@ -424,6 +431,15 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   } catch {
     return null;
   }
+}
+
+function shouldReplaceCrossReview(current, candidate, headSha) {
+  const priority = (review) => review === undefined ? 0 : review === null ? 1 : 2;
+  const currentPriority = priority(current);
+  const candidatePriority = priority(candidate);
+  if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
+  if (!current || !candidate) return false;
+  return current.reviewedSha !== headSha;
 }
 
 function mergeablePullRequestCount(trees) {
@@ -817,8 +833,7 @@ class PullRequestTracker {
       if (!pullRequest) continue;
       const review = await readCrossReviewState(registration, pullRequest, this.fileSystem);
       const current = crossReviewByNumber.get(registration.number);
-      // 同じ PR を複数のセッションが登録したときは、記録の無い worktree で有効な記録を消さず、今の head に一致する記録を選ぶ。
-      if (current && (!review || current.reviewedSha === pullRequest.headRefOid)) continue;
+      if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;
       crossReviewByNumber.set(registration.number, review && {
         round: review.round,
         max: review.max,
@@ -900,7 +915,8 @@ function attachCrossReviewState(pullRequest, crossReviewByNumber) {
     ...pullRequest,
     children: pullRequest.children.map((child) => attachCrossReviewState(child, crossReviewByNumber)),
   };
-  if (crossReviewByNumber.has(pullRequest.number)) value.crossReview = crossReviewByNumber.get(pullRequest.number);
+  const crossReview = crossReviewByNumber.get(pullRequest.number);
+  if (crossReview !== undefined) value.crossReview = crossReview;
   return value;
 }
 

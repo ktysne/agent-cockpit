@@ -647,6 +647,20 @@ test('クロスレビュー状態は PR head ブランチの往復数、非対�
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'missing' }), null);
 });
 
+test('クロスレビュー状態ファイルが無い worktree は undefined を返す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), undefined);
+  assert.equal(await readCrossReviewState({ number: 55, cwd: path.join(root, 'missing') }, { headRefName: 'feat/pr' }), undefined);
+});
+
+test('JSON として読めないクロスレビュー状態ファイルは null を返す', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), '{invalid');
+  assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), null);
+});
+
 test('壊れた lastReviewedSha は null にする', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
@@ -705,31 +719,56 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   assert.equal(Object.hasOwn(group, 'reviews'), false);
 });
 
-for (const order of [['reviewed', 'missing'], ['missing', 'reviewed']]) {
-  test(`同じ PR を複数のセッションが登録しても有効なクロスレビューの記録を保つ (${order.join(' → ')})`, async (t) => {
-    const headSha = 'a'.repeat(40);
-    const roots = {};
-    for (const name of ['reviewed', 'missing']) {
-      roots[name] = await temporaryDirectory(t);
-      await fs.mkdir(path.join(roots[name], '.git'));
-    }
-    await fs.writeFile(path.join(roots.reviewed, '.cross-review-state.json'), JSON.stringify({
-      branches: { 'feat/open': { round: 1, dismissed: [], lastReviewedSha: headSha } },
-    }));
-    const { github, tracker } = await trackerFixture(t, []);
-    for (const name of order) {
-      tracker.state.registerPullRequest(`session-${name}`, { url: 'https://github.com/example/project/pull/31' }, {
-        cwd: roots[name], product: { key: 'project', name: 'project' },
-      });
-    }
-    github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
-    github.comparisons.set(headSha, compareResult([headSha]));
+test('状態ファイルが無い登録だけの PR には crossReview キーを付けない', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  const headSha = 'a'.repeat(40);
+  const { github, tracker } = await trackerFixture(t, [31], root);
+  github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
+  github.comparisons.set(headSha, compareResult([headSha]));
 
-    await tracker.refreshRepo('example', 'project');
+  await tracker.refreshRepo('example', 'project');
 
-    const [group] = tracker.snapshot();
-    assert.deepEqual(group.trees[0].crossReview, { round: 1, max: 3, dismissed: 0, reviewedSha: headSha });
-  });
+  const [group] = tracker.snapshot();
+  assert.equal(Object.hasOwn(group.trees[0], 'crossReview'), false);
+});
+
+for (const [higher, lower] of [['valid', 'missing'], ['valid', 'null'], ['null', 'missing']]) {
+  for (const order of [[higher, lower], [lower, higher]]) {
+    test(`同じ PR のクロスレビュー登録は ${higher} を ${lower} より優先する (${order.join(' → ')})`, async (t) => {
+      const headSha = 'a'.repeat(40);
+      const roots = {};
+      for (const name of [higher, lower]) {
+        roots[name] = await temporaryDirectory(t);
+        await fs.mkdir(path.join(roots[name], '.git'));
+      }
+      if ([higher, lower].includes('valid')) {
+        await fs.writeFile(path.join(roots.valid, '.cross-review-state.json'), JSON.stringify({
+          branches: { 'feat/open': { round: 1, dismissed: [], lastReviewedSha: headSha } },
+        }));
+      }
+      if ([higher, lower].includes('null')) {
+        await fs.writeFile(path.join(roots.null, '.cross-review-state.json'), JSON.stringify({ branches: {} }));
+      }
+      const { github, tracker } = await trackerFixture(t, []);
+      for (const name of order) {
+        tracker.state.registerPullRequest(`session-${name}`, { url: 'https://github.com/example/project/pull/31' }, {
+          cwd: roots[name], product: { key: 'project', name: 'project' },
+        });
+      }
+      github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
+      github.comparisons.set(headSha, compareResult([headSha]));
+
+      await tracker.refreshRepo('example', 'project');
+
+      const [group] = tracker.snapshot();
+      if (higher === 'valid') {
+        assert.deepEqual(group.trees[0].crossReview, { round: 1, max: 3, dismissed: 0, reviewedSha: headSha });
+      } else {
+        assert.equal(group.trees[0].crossReview, null);
+      }
+    });
+  }
 }
 
 test('マージ済みの一覧を最古のオープン PR の作成日以降に絞り、上限で切れたら積み直しを確かめられないとする', async (t) => {

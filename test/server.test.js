@@ -435,6 +435,31 @@ async function runningServer(t, options = {}) {
   return runtime;
 }
 
+test('/api/state は Claude のホームにある codex-agent.sh の有無を返す', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const scriptPath = path.join(claudeHome, 'tools', 'codex-agent.sh');
+  const runtime = await startServer({
+    homeDir,
+    claudeHome,
+    port: 0,
+    codexAgentScriptExists: async (filePath) => {
+      assert.equal(filePath, scriptPath);
+      try {
+        await fs.access(filePath);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  t.after(() => runtime.close());
+
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: false });
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(scriptPath, '');
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: true });
+});
+
 test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク登録後は返さない', async (t) => {
   const runtime = await runningServer(t);
   const sessionId = 'task-nudge-integration';

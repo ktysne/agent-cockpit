@@ -243,6 +243,45 @@ test('PR のスタックにクロスレビューを表示する', () => {
   assert.doesNotMatch(source, /data-reserve-go=/);
 });
 
+test('連携が無い時は経路の欄と稼働中の経路札を表示しない', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const routingStart = html.indexOf('function routeName');
+  const routingEnd = html.indexOf('\nasync function updateRouting', routingStart);
+  const routeTagStart = html.indexOf('function routeTag');
+  const routeTagEnd = html.indexOf('\nfunction appendModelLine', routeTagStart);
+  assert.ok(routingStart >= 0 && routingEnd > routingStart);
+  assert.ok(routeTagStart >= 0 && routeTagEnd > routeTagStart);
+
+  const root = {
+    innerHTML: '',
+    hidden: false,
+    querySelector(selector) { return selector === '.rgroup' && this.innerHTML.includes('class="rgroup"') ? {} : null; },
+    querySelectorAll() { return []; },
+  };
+  const context = vm.createContext({
+    ROUTE: {
+      agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
+      review: { label: 'クロスレビュー', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
+    },
+    ROUTE_VALUES: new Set(['default', 'codex', 'claude']),
+    routing: { agents: 'default', review: 'default' },
+    codexAgentAvailable: false,
+    document: { getElementById: () => root },
+    element: (_tag, className, textContent = '') => ({ className, textContent }),
+  });
+  vm.runInContext(`${html.slice(routingStart, routingEnd)}\n${html.slice(routeTagStart, routeTagEnd)}\nthis.renderRouting = renderRouting; this.routeTag = routeTag;`, context);
+
+  context.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: false });
+  assert.equal(root.hidden, true);
+  assert.equal(root.innerHTML, '');
+  assert.equal(context.routeTag({ active: true, route: 'codex' }), null);
+
+  context.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true });
+  assert.equal(root.hidden, false);
+  assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 3);
+  assert.doesNotMatch(root.innerHTML, /data-route="review"|aria-describedby|未対応/);
+});
+
 test('クロスレビューの行は往復数と head の状態を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpersStart = html.indexOf('function element(tag, className, text)');
@@ -278,6 +317,11 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const allNodes = (root) => [root, ...(root.children || []).flatMap(allNodes)];
   const headSha = 'a'.repeat(40);
   const line = (pullRequest) => context.crossReviewLine(pullRequest);
+
+  const absent = { headRefOid: headSha };
+  assert.equal(line(absent), null);
+  assert.equal(context.crossReviewState(absent).warn, null);
+  assert.match(html, /if \(pullRequest\.crossReview !== undefined\) item\.append\(crossReviewLine\(pullRequest\)\)/);
 
   const missing = line({ headRefOid: headSha, crossReview: null });
   const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
@@ -377,6 +421,9 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
   const missingReviewEffects = confirmation(false, null);
   assert.equal(missingReviewEffects[0].className, 'warn');
   assert.equal(missingReviewEffects[0].textContent, 'クロスレビューの記録が無い');
+  const absentReviewEffects = confirmation(false, undefined);
+  assert.equal(absentReviewEffects[0].className, '');
+  assert.doesNotMatch(absentReviewEffects[0].textContent, /クロスレビュー|head を確かめられない/);
   const unverifiableEffects = confirmation(false, {
     round: 1, max: 3, dismissed: 0, reviewedSha: null,
   });

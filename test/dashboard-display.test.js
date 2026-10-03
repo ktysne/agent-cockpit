@@ -41,6 +41,7 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   assert.ok(route && routeValues && routeName && routeTag && appendModelLine);
   const context = vm.createContext({
     routing: { agents: 'claude' },
+    codexAgentAvailable: true,
     element: (tag, className, textContent = '') => ({
       tag, className, textContent, children: [],
       append(...items) { this.children.push(...items); },
@@ -61,6 +62,8 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   assert.deepEqual(JSON.parse(JSON.stringify(target.children[0].children.map((item) => item.className))), [
     'route-tag stale', 'model claude',
   ]);
+  context.codexAgentAvailable = false;
+  assert.equal(context.routeTag({ active: true, route: 'default' }), null);
 });
 
 test('経路設定は上部バーにあり、サブエージェントの三択を API に保存する', () => {
@@ -74,14 +77,13 @@ test('経路設定は上部バーにあり、サブエージェントの三択�
   assert.match(web, /review: \{ label: 'クロスレビュー'/);
 });
 
-test('クロスレビューの経路は未対応と表示し、画面から保存できない', async () => {
+test('経路の欄は連携があるときだけサブエージェントの三択を表示する', async () => {
   const renderRouting = functionSource(web, 'renderRouting');
   const updateRouting = functionSource(web, 'updateRouting');
   const root = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
   const renderContext = vm.createContext({
     document: { getElementById: () => root },
     window: {},
-    layoutRouting() {},
   });
   vm.runInContext(`const ROUTE = {
     agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
@@ -89,17 +91,20 @@ test('クロスレビューの経路は未対応と表示し、画面から保�
   };
   const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
   let routing = { agents: 'default', review: 'default' };
-  let routingResizeObserver = null;
   ${renderRouting}
   this.renderRouting = renderRouting;`, renderContext);
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' });
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: false });
+  assert.equal(root.hidden, true);
+  assert.equal(root.innerHTML, '');
+
+  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true });
+  assert.equal(root.hidden, false);
 
   const reviewButtons = root.innerHTML.match(/<button[^>]*data-route="review"[^>]*>/g) || [];
   const agentButtons = root.innerHTML.match(/<button[^>]*data-route="agents"[^>]*>/g) || [];
-  assert.equal(reviewButtons.length, 3);
-  assert.ok(reviewButtons.every((button) => / disabled>/.test(button)));
-  assert.ok(agentButtons.every((button) => !/ disabled>/.test(button)));
-  assert.match(root.innerHTML, /id="route-review-status" class="rstatus">未対応<\/span>/);
+  assert.equal(reviewButtons.length, 0);
+  assert.equal(agentButtons.length, 3);
+  assert.doesNotMatch(root.innerHTML, /aria-describedby|未対応/);
 
   const posts = [];
   const updateContext = vm.createContext({ postUiAction: async (...args) => { posts.push(args); return { ok: true }; } });
