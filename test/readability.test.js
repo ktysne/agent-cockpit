@@ -182,6 +182,7 @@ test('待ち時間と許可待ちは期間表示の形式を使う', () => {
     newestFirst: (items) => items,
     isLongWait: () => false,
     appendContextTags() {},
+    sessionDisplayName: (session) => session.title || session.session_id,
   });
   vm.runInContext(`${element}\n${badge}\n${durationLabel}\n${appendPermissionWaits}\nthis.appendPermissionWaits = appendPermissionWaits;`, context);
 

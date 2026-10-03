@@ -84,6 +84,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .chip.warn { background: var(--warn-soft); border-color: transparent; color: var(--warn-text); }
 .chip.hold { background: var(--hold-soft); border-color: transparent; color: var(--hold); }
 .chip.ok { background: var(--ok-soft); border-color: transparent; color: var(--ok-text); }
+.summary button.chip { border-color: var(--text-2); }
 .meta { color: var(--text-2); font-size: 12px; }
 #connection-note { color: var(--danger); }
 .settings-button, .settings-dialog button, .settings-dialog select, .settings-dialog input[type="number"] { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
@@ -226,6 +227,7 @@ button.chip[aria-pressed="false"] { border: 1px dashed var(--border); background
 button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
 .filter-note[hidden], .body[hidden] { display: none; }
+.top-inner > #filter-note, .top-inner > .excluded-note { flex: 1 1 100%; margin: 0; }
 .link-btn { min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
 .task-item .close-task { margin-left: auto; flex: none; color: var(--text-2); }
 .task-item .close-task:hover, .close-agent:hover { color: var(--text); }
@@ -344,6 +346,9 @@ h3.sub .count { font-weight: normal; }
 .session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .excluded-note[hidden] { display: none; }
+.product-remove { margin-left: 12px; }
+.session-context { width: fit-content; margin-bottom: 4px; }
+.route-note { flex: 1 1 100%; color: var(--text-2); font-size: 11px; }
 @media (max-width: 640px) {
   .order { margin-left: 0; }
   .session-head { align-items: flex-start; }
@@ -359,6 +364,8 @@ h3.sub .count { font-weight: normal; }
       <label class="away-toggle" for="away-toggle"><input id="away-toggle" type="checkbox">離席中</label>
     </div>
     <div class="summary" id="summary" aria-label="状態の件数と表示絞り込み"></div>
+    <div class="filter-note" id="filter-note" hidden></div>
+    <div class="excluded-note" id="excluded-note" hidden></div>
     <div class="control-row"><div class="routing" id="routing"></div></div>
     <button class="settings-button" id="settings-button" type="button" aria-haspopup="dialog" aria-label="設定" title="設定"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
@@ -416,8 +423,6 @@ h3.sub .count { font-weight: normal; }
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
   <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
-  <div class="filter-note" id="filter-note" hidden></div>
-  <div class="excluded-note" id="excluded-note" hidden></div>
 </main>
 <script>
 'use strict';
@@ -477,6 +482,7 @@ const expandedDoneTasks = new Set();
 const expandedPrLines = new Set();
 const expandedKindSections = new Set();
 const answerDrafts = new Map();
+let hiddenSessionsUndo = null;
 let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
@@ -946,7 +952,11 @@ function renderRouting(settings = {}, integrations = {}) {
   }
   const routeSignature = keys.join(',');
   if (root.dataset.routes !== routeSignature) {
-    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div></div>`;
+    const descriptions = {
+      agents: '既定は Codex で実装し、利用上限や指示があれば Claude に切り替える。次に起動するサブエージェントから効く。',
+      review: '既定はクロスレビューの手順が推奨する方法。次に回すレビューから効く。',
+    };
+    const row = (key) => `<div class="rrow"><span class="rlabel">${ROUTE[key].label}</span><div class="seg" role="group" aria-label="${ROUTE[key].label}の経路">${ROUTE[key].opts.map((option) => `<button type="button" data-route="${key}" data-v="${option.v}" aria-pressed="false">${option.t}</button>`).join('')}</div><span class="route-note">${descriptions[key]}</span></div>`;
     root.innerHTML = `<div class="rgroup">${keys.map(row).join('')}</div>`;
     root.dataset.routes = routeSignature;
   }
@@ -1069,7 +1079,9 @@ function appendToolLine(target, tool) {
 function routeTag(agent) {
   if (!codexAgentAvailable || !agent.active || !ROUTE_VALUES.has(agent.route)) return null;
   const stale = agent.route !== routing.agents;
-  return element('span', `route-tag${stale ? ' stale' : ''}`, `経路: ${routeName('agents', agent.route)}${stale ? ' (変更前)' : ''}`);
+  const tag = element('span', `route-tag${stale ? ' stale' : ''}`, `経路: ${routeName('agents', agent.route)}${stale ? ' (変更前)' : ''}`);
+  tag.title = '起動時に効いていた経路の設定';
+  return tag;
 }
 
 function appendModelLine(target, agent) {
@@ -1117,6 +1129,15 @@ function isHeldDecision(decision) {
 // 回答を送ったものはセッションの反映を待つだけなので数えず、保留を選んだものは開発者の判断が残るので数える。
 function isAwaitingDecision(decision) {
   return ['waiting', 'provisional'].includes(decision.state) && (!hasEffectiveAnswer(decision) || isHeldDecision(decision));
+}
+
+function decisionCountTitle(decisions) {
+  const counts = [
+    ['止めて待っている', decisions.filter(isPendingDecision).length],
+    ['仮に推奨案で進行中', decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length],
+    ['保留中', decisions.filter(isHeldDecision).length],
+  ];
+  return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
 
 function renderSummary(sessions, pullRequestGroups = []) {
@@ -1172,22 +1193,32 @@ function renderExcludedNote(sessions) {
   const note = document.getElementById('excluded-note');
   const hiddenSessions = sessions.filter((session) => session.hidden === true);
   const hiddenCount = hiddenSessions.length;
-  note.hidden = hiddenCount === 0;
-  if (!hiddenCount) {
+  note.hidden = hiddenCount === 0 && !hiddenSessionsUndo;
+  if (note.hidden) {
     note.replaceChildren();
     return;
   }
-  const showAll = element('button', 'link-btn', '外したセッションを戻す');
-  showAll.type = 'button';
-  showAll.dataset.clearHiddenSessions = 'true';
-  const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
-  const pendingCounts = [
-    permissionCount ? `許可待ち ${permissionCount} 件` : '',
-    decisionCount ? `止めて待っている ${decisionCount} 件` : '',
-  ].filter(Boolean);
-  const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
-  note.replaceChildren(element('span', '', `外したセッション (${hiddenCount} 件)${countNote}`), showAll);
+  const children = [];
+  if (hiddenSessionsUndo) {
+    const undo = element('button', 'link-btn', '元に戻す');
+    undo.type = 'button';
+    undo.dataset.undoHiddenSessions = 'true';
+    children.push(element('span', '', `${hiddenSessionsUndo.productName} を一覧から外しました。`), undo);
+  }
+  if (hiddenCount) {
+    const showAll = element('button', 'link-btn', '外したセッションを戻す');
+    showAll.type = 'button';
+    showAll.dataset.clearHiddenSessions = 'true';
+    const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+    const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
+    const pendingCounts = [
+      permissionCount ? `許可待ち ${permissionCount} 件` : '',
+      decisionCount ? `止めて待っている ${decisionCount} 件` : '',
+    ].filter(Boolean);
+    const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
+    children.push(element('span', '', `外したセッション (${hiddenCount} 件)${countNote}`), showAll);
+  }
+  note.replaceChildren(...children);
 }
 
 function isFilterShown(key) {
@@ -1941,10 +1972,14 @@ function newestFirst(items) {
   return [...items].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
 }
 
+function sessionDisplayName(session) {
+  return session.title || session.session_id;
+}
+
 function appendContextTags(target, product, session, withTags, multipleSessions) {
   if (!withTags) return;
   target.append(element('span', 'prod-tag', product.name));
-  if (multipleSessions) target.append(element('span', 'session-tag', session.title || session.session_id));
+  if (multipleSessions) target.append(element('span', 'session-tag', sessionDisplayName(session)));
 }
 
 function appendPermissionWaits(body, session, product, withTags = false, multipleSessions = false) {
@@ -1973,7 +2008,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
       }
       card.append(context);
     }
-    card.append(element('div', 'meta', `許可はデスクトップアプリの ${product.name} のセッションで出す。ダッシュボードからは出せない。`));
+    card.append(element('div', 'meta', `許可はデスクトップアプリの ${product.name} の「${sessionDisplayName(session)}」セッションで出す。ダッシュボードからは出せない。`));
     list.append(card);
   }
   body.append(list);
@@ -1982,7 +2017,7 @@ function appendPermissionWaits(body, session, product, withTags = false, multipl
 function decisionStateLabel(state) {
   return {
     waiting: '止めて待っている',
-    provisional: '推奨で仮に進行中',
+    provisional: '仮に推奨案で進行中',
     resolved: '解決済み',
     withdrawn: '取り下げ',
   }[state] || state;
@@ -2085,7 +2120,7 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   const questions = decision.questions || [];
   const { active, viaDialog } = decisionAnswerAvailability(decision);
   if (viaDialog) {
-    card.append(element('div', 'meta dialog-note', `質問はデスクトップアプリの ${product.name} のセッションで答える。`));
+    card.append(element('div', 'meta dialog-note', `質問はデスクトップアプリの ${product.name} の「${sessionDisplayName(session)}」セッションで答える。`));
     return;
   }
   if (!active) {
@@ -2414,6 +2449,7 @@ function sessionBlock(product, session, multipleSessions) {
   }
 
   const body = element('div', 'session-body');
+  if (!multipleSessions) body.append(element('div', 'session-tag session-context', sessionDisplayName(session)));
   if (hidesFinishedSession(session)) {
     appendTasks(body, session, product);
     block.append(body);
@@ -2478,8 +2514,6 @@ function productControls(product, index, total, pinnedCount, headingId) {
   moveDown.disabled = pinned ? index === pinnedCount - 1 : index === total - 1;
   moveDown.setAttribute('aria-label', `${product.name}を下へ`);
   controls.append(collapse, pin, moveUp, moveDown);
-  const close = productCloseButton(product, headingId);
-  if (close) controls.append(close);
   return controls;
 }
 
@@ -2507,18 +2541,30 @@ function productSection(product, index, products, pinnedCount) {
   const head = element('div', 'head');
   const heading = element('h2', '', product.name);
   heading.id = `product-heading-${index}`;
+  heading.tabIndex = -1;
   head.append(heading);
   const branch = sharedBranch(product);
   if (branch) head.append(element('span', 'meta branch', branch));
 
   const permissionCount = product.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = product.sessions.reduce((total, session) => total + session.decisions.filter(isAwaitingDecision).length, 0);
+  const awaitingDecisions = product.sessions.flatMap((session) => session.decisions).filter(isAwaitingDecision);
+  const decisionCount = awaitingDecisions.length;
   const pullRequestGroups = product.pullRequestGroups || [];
   if (permissionCount) head.append(element('span', 'chip danger', `許可待ち (${permissionCount} 件)`));
-  if (decisionCount) head.append(element('span', 'chip danger', `判断待ち (${decisionCount} 件)`));
+  if (decisionCount) {
+    const decisionChip = element('span', 'chip danger', `判断待ち (${decisionCount} 件)`);
+    decisionChip.title = decisionCountTitle(awaitingDecisions);
+    head.append(decisionChip);
+  }
   const mergeableCount = pullRequestMergeableCount(pullRequestGroups);
   if (mergeableCount) head.append(element('span', 'chip ok', `マージできる PR (${mergeableCount} 件)`));
   head.append(productControls(product, index, products.length, pinnedCount, heading.id));
+  const close = productCloseButton(product, heading.id);
+  if (close) {
+    const remove = element('div', 'product-remove');
+    remove.append(close);
+    head.append(remove);
+  }
   section.append(head);
 
   const body = element('div', 'body');
@@ -3162,31 +3208,39 @@ async function runPullRequestConflictRequest(button) {
   }
 }
 
-async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
+async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false, undoInfo = null) {
   button.disabled = true;
   try {
-    const requests = body.action === 'hide' && Array.isArray(body.session_ids)
+    const requests = ['hide', 'unhide'].includes(body.action) && Array.isArray(body.session_ids)
       ? Array.from({ length: Math.ceil(body.session_ids.length / 50) }, (_, index) => ({
-        action: 'hide', session_ids: body.session_ids.slice(index * 50, (index + 1) * 50),
+        action: body.action, session_ids: body.session_ids.slice(index * 50, (index + 1) * 50),
       }))
       : [body];
-    let hiddenAny = false;
+    let actionSucceeded = false;
     for (const requestBody of requests) {
       const response = await postUiAction(url, requestBody);
       // 押した直後にイベントが届いて状態が分かった場合は、失敗と出さずに表示を取り直す。
       if (response.status === 404 || response.status === 409) continue;
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      hiddenAny = true;
+      actionSucceeded = true;
     }
+    if (actionSucceeded && body.action === 'hide') hiddenSessionsUndo = undoInfo;
+    if (actionSucceeded && ['clear', 'unhide'].includes(body.action)) hiddenSessionsUndo = null;
     await refresh();
-    if (!hiddenAny) return;
-    if (focusExcludedNote) document.querySelector('[data-clear-hidden-sessions]')?.focus({ preventScroll: true });
+    if (!actionSucceeded) return;
+    if (focusExcludedNote) {
+      (document.querySelector('[data-undo-hidden-sessions]') || document.querySelector('[data-clear-hidden-sessions]'))
+        ?.focus({ preventScroll: true });
+    }
     else if (button.dataset.estimateSession) {
       [...document.querySelectorAll('[data-estimate-session]')]
         .find((item) => item.dataset.estimateSession === button.dataset.estimateSession)
         ?.focus({ preventScroll: true });
     } else if (body.action === 'clear') {
       (root.querySelector('[data-estimate-session]') || root.querySelector('button'))?.focus({ preventScroll: true });
+    } else if (body.action === 'unhide') {
+      (document.querySelector('[data-clear-hidden-sessions]') || root.querySelector('.section h2'))
+        ?.focus({ preventScroll: true });
     }
   } catch {
     liveStatus.textContent = errorMessage;
@@ -3296,6 +3350,16 @@ document.addEventListener('click', (event) => {
     );
     return;
   }
+  if (button.dataset.undoHiddenSessions) {
+    if (!hiddenSessionsUndo) return;
+    void runSessionAction(
+      button,
+      '/api/hidden-sessions',
+      { action: 'unhide', session_ids: hiddenSessionsUndo.sessionIds },
+      '外したセッションを戻せませんでした',
+    );
+    return;
+  }
   if (button.dataset.filter) {
     toggleFilter(button.dataset.filter);
     return;
@@ -3310,6 +3374,7 @@ document.addEventListener('click', (event) => {
       { action: 'hide', session_ids: product.sessions.map((session) => session.session_id) },
       'プロダクトのセッションを一覧から外せませんでした',
       true,
+      { productName: product.name, sessionIds: product.sessions.map((session) => session.session_id) },
     );
     return;
   }

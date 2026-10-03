@@ -1266,6 +1266,7 @@ test('タスクの無い終わったセッションと履歴だけの PR しか�
     document: { createElement: (tagName) => new FakeElement(tagName) },
     sharedBranch: () => '',
     productControls: () => new FakeElement('div'),
+    productCloseButton: () => null,
     sinceSeenBox: () => null,
     sessionBlock: () => new FakeElement('div'),
     isAwaitingDecision: () => false,

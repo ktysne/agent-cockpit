@@ -27,6 +27,29 @@ function decisionInput(title) {
   };
 }
 
+test('指定した外したセッションだけを戻し、変更があるときだけ保存する', () => {
+  const state = new DashboardState();
+  state.hiddenSessions.add('restore-one');
+  state.hiddenSessions.add('restore-two');
+  state.hiddenSessionUpdatedAt.set('restore-one', '2026-10-03T00:00:00.000Z');
+  state.hiddenSessionUpdatedAt.set('restore-two', '2026-10-03T00:00:01.000Z');
+  let writes = 0;
+  state.requestStoreWrite = () => { writes += 1; };
+  const initialVersion = state.version;
+
+  assert.equal(state.unhideSessions(['restore-one', 'restore-one', 'missing']), 1);
+  assert.equal(state.hiddenSessions.has('restore-one'), false);
+  assert.equal(state.hiddenSessionUpdatedAt.has('restore-one'), false);
+  assert.equal(state.hiddenSessions.has('restore-two'), true);
+  assert.equal(state.hiddenSessionUpdatedAt.has('restore-two'), true);
+  assert.equal(state.version, initialVersion + 1);
+  assert.equal(writes, 1);
+
+  assert.equal(state.unhideSessions(['restore-one', 'missing']), 0);
+  assert.equal(state.version, initialVersion + 1);
+  assert.equal(writes, 1);
+});
+
 test('保存したタスク、判断事項、回答、完了記録、外したセッション、表示設定を新しい状態へ復元する', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-03T00:00:00.000Z');

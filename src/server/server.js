@@ -611,6 +611,17 @@ function createRequestHandler(options) {
         return;
       }
       const validSessionId = (sessionId) => typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(sessionId);
+      const isBatchUnhide = body.action === 'unhide' && keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
+        Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
+        body.session_ids.every(validSessionId);
+      if (body.action === 'unhide') {
+        if (!isBatchUnhide) {
+          jsonResponse(response, 400, { error: 'Invalid request' });
+          return;
+        }
+        jsonResponse(response, 200, { unhidden: state.unhideSessions(body.session_ids) });
+        return;
+      }
       const isSingleHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_id' && validSessionId(body.session_id);
       const isBatchHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
         Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
