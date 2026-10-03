@@ -2688,6 +2688,21 @@ function renderReloadNote(pending) {
     : '';
 }
 
+// 下書きは送信の成功でしか消えないので、選んで戻したものや回答できなくなった判断事項のものは書きかけと数えない。
+function hasUnsentAnswerDraft(state) {
+  for (const [key, draft] of answerDrafts) {
+    const [sessionId, decisionId] = key.split('\0');
+    const session = state.sessions?.find((item) => item.session_id === sessionId);
+    const decision = session?.decisions?.find((item) => item.id === decisionId);
+    if (!decision || !decisionAnswerAvailability(decision).active) continue;
+    const questionCount = (decision.questions || []).length;
+    const sent = decision.answer?.sentAt ? decision.answer : {};
+    if ((draft.choice ?? null) !== (sent.choice ?? null) || (draft.note || '') !== (sent.note || '')
+      || !sameAnswerPicks(copyAnswerPicks(draft.picks, questionCount), copyAnswerPicks(sent.picks, questionCount))) return true;
+  }
+  return false;
+}
+
 function checkUiVersion(state) {
   if (!initialUiVersion || state.uiVersion == null) return false;
   if (state.uiVersion === initialUiVersion) {
@@ -2695,7 +2710,7 @@ function checkUiVersion(state) {
     uiUpdatePending = false;
     return false;
   }
-  if (answerDrafts.size === 0) {
+  if (!hasUnsentAnswerDraft(state)) {
     location.reload();
     return true;
   }

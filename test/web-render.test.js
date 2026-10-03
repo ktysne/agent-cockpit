@@ -4,25 +4,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function reloadHarness(initialUiVersion, draftCount = 0) {
+function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const renderReloadNote = html.match(/function renderReloadNote\(pending\) \{[\s\S]*?\n\}/)?.[0];
-  const checkUiVersion = html.match(/function checkUiVersion\(state\) \{[\s\S]*?\n\}/)?.[0];
-  const reloadNow = html.match(/function reloadNow\(event\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(renderReloadNote);
-  assert.ok(checkUiVersion);
-  assert.ok(reloadNow);
+  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
+    .map((name) => html.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
 
   let reloadCount = 0;
   const reloadNote = { hidden: true, innerHTML: '' };
   const context = vm.createContext({
     initialUiVersion,
     uiUpdatePending: false,
-    answerDrafts: new Map(Array.from({ length: draftCount }, (_, index) => [String(index), {}])),
+    answerDrafts: new Map(drafts),
     reloadNote,
     location: { reload: () => { reloadCount += 1; } },
   });
-  vm.runInContext(`${renderReloadNote}\n${checkUiVersion}\n${reloadNow}`, context);
+  vm.runInContext(functions.join('\n'), context);
   return {
     context,
     reloadNote,
@@ -159,16 +156,37 @@ test('新しい画面の版は下書きが無ければ読み込み直す', () =>
   assert.equal(harness.reloadCount, 1);
 });
 
-test('新しい画面の版は下書きがあれば知らせ、下書きが消えた後に読み込む', () => {
-  const harness = reloadHarness('v1', 1);
-  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v2' }), false);
+const DRAFT_KEY = 'session-1\u0000d1';
+const answerableState = (answer = null, state = 'provisional') => ({
+  uiVersion: 'v2',
+  sessions: [{ session_id: 'session-1', decisions: [{ id: 'd1', state, questions: [], answer }] }],
+});
+
+test('新しい画面の版は書きかけがあれば知らせ、書きかけを消した後に読み込む', () => {
+  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '', picks: [] }]]);
+  assert.equal(harness.context.checkUiVersion(answerableState()), false);
   assert.equal(harness.reloadCount, 0);
   assert.equal(harness.reloadNote.hidden, false);
   assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
 
-  harness.context.answerDrafts.clear();
-  assert.equal(harness.context.checkUiVersion({ uiVersion: 'v2' }), true);
+  harness.context.answerDrafts.set(DRAFT_KEY, { choice: null, note: '', picks: [] });
+  assert.equal(harness.context.checkUiVersion(answerableState()), true);
   assert.equal(harness.reloadCount, 1);
+});
+
+test('送った回答と同じ下書きは書きかけと数えない', () => {
+  const sent = { choice: 'hold', note: 'メモ', picks: [], sentAt: '2026-10-03T00:00:00.000Z' };
+  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: 'メモ', picks: [] }]]);
+  assert.equal(harness.context.checkUiVersion(answerableState(sent)), true);
+
+  const changed = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '書き足し', picks: [] }]]);
+  assert.equal(changed.context.checkUiVersion(answerableState(sent)), false);
+});
+
+test('回答できなくなった判断事項と消えた判断事項の下書きは書きかけと数えない', () => {
+  const draft = [[DRAFT_KEY, { choice: 'hold', note: '書きかけ', picks: [] }]];
+  assert.equal(reloadHarness('v1', draft).context.checkUiVersion(answerableState(null, 'resolved')), true);
+  assert.equal(reloadHarness('v1', draft).context.checkUiVersion({ uiVersion: 'v2', sessions: [] }), true);
 });
 
 test('自分の画面の版が空なら読み込み直さない', () => {
@@ -179,7 +197,7 @@ test('自分の画面の版が空なら読み込み直さない', () => {
 });
 
 test('今すぐ読み込み直す操作は下書きがあっても再読み込みする', () => {
-  const harness = reloadHarness('v1', 1);
+  const harness = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '書きかけ', picks: [] }]]);
   harness.context.reloadNow({ target: { closest: (selector) => selector === '[data-reload-now]' } });
   assert.equal(harness.reloadCount, 1);
 });
