@@ -94,7 +94,7 @@ PostToolUse の出力全文は送らない。
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、回答の記録、完了タスク、外したセッション、表示設定は `store.json` に保存する。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。テーマはブラウザーごとの `localStorage` に残す。離席中は `{enabled, since}` を `away.json` に保存し、起動時に読む。壊れているときは離席中ではない状態として扱う。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away, routing}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away, routing, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存

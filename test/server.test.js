@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const http = require('node:http');
@@ -391,6 +392,35 @@ test('画面には画面用の秘密値だけを埋め、iframe への埋め込�
 
 test('HTML 属性値のエスケープは一般の文字列に対応する', () => {
   assert.equal(escapeHtmlAttribute(`&"'<>`), '&amp;&quot;&#39;&lt;&gt;');
+});
+
+test('画面の版は配信した HTML と状態 API で一致し、ファイル更新後に変わる', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const webPath = path.join(homeDir, 'dashboard.html');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, webPath });
+  t.after(() => runtime.close());
+
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, null);
+
+  const initialHtml = '<!doctype html><meta name="cockpit-secret" content=""><meta name="cockpit-ui-version" content="">';
+  await fs.writeFile(webPath, initialHtml);
+  const firstPage = await request(runtime.info.port, { path: '/' });
+  const firstVersion = firstPage.body.match(/<meta name="cockpit-ui-version" content="([a-f0-9]{16})">/)?.[1];
+  assert.ok(firstVersion);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, firstVersion);
+
+  const updatedHtml = `${initialHtml}\n<!-- updated -->`;
+  await fs.writeFile(webPath, updatedHtml);
+  const updatedVersion = crypto.createHash('sha256').update(updatedHtml).digest('hex').slice(0, 16);
+  assert.notEqual(updatedVersion, firstVersion);
+  const updatedState = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const updatedPage = await request(runtime.info.port, { path: '/' });
+  const servedUpdatedVersion = updatedPage.body.match(/<meta name="cockpit-ui-version" content="([a-f0-9]{16})">/)?.[1];
+  assert.equal(updatedState.uiVersion, updatedVersion);
+  assert.equal(servedUpdatedVersion, updatedVersion);
+
+  await fs.unlink(webPath);
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).uiVersion, updatedVersion);
 });
 
 async function runningServer(t, options = {}) {

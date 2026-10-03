@@ -342,6 +342,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     </div>
   </div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
+  <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
   <div id="root"></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
@@ -492,6 +493,8 @@ const DATA = {
     },
   ],
   connection: { lost: false, lastAt: '14:32' },
+  // 画面のファイルが新しくなったが、書きかけの回答があるので読み込み直しを待っている状態。書きかけが無ければ知らせを出さずに読み込み直す。
+  uiUpdatePending: false,
 };
 
 for (const p of DATA.products) {
@@ -1132,6 +1135,17 @@ function renderConnectionNote() {
     : '';
 }
 
+function renderReloadNote() {
+  const note = document.getElementById('reload-note');
+  note.hidden = !DATA.uiUpdatePending;
+  note.innerHTML = DATA.uiUpdatePending
+    ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
+    : '';
+}
+document.getElementById('reload-note').addEventListener('click', e => {
+  if (e.target.closest('[data-reload-now]')) location.reload();
+});
+
 function orderControls(p, idx, total, pinnedCount) {
   const pinned = ui.pinned.includes(p.id);
   const collapsed = ui.collapsed.includes(p.id);
@@ -1230,6 +1244,7 @@ function render() {
   document.querySelectorAll('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
   renderSummary();
   renderConnectionNote();
+  renderReloadNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
   if (focusAttribute) [...document.querySelectorAll(`[${focusAttribute}]`)].find(button => button.getAttribute(focusAttribute) === focusValue)?.focus({ preventScroll: true });

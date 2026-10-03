@@ -236,7 +236,22 @@ function createRequestHandler(options) {
     pullRequestTracker,
     pullRequestMergeManager,
   } = options;
-  const webPath = path.join(__dirname, '..', 'web', 'index.html');
+  const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
+  let cachedUiFileStamp = null;
+  let uiVersion = null;
+
+  async function currentUiVersion() {
+    try {
+      const stat = await fs.stat(webPath);
+      const stamp = `${stat.mtimeMs}:${stat.size}`;
+      if (stamp !== cachedUiFileStamp) {
+        const content = await fs.readFile(webPath);
+        uiVersion = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+        cachedUiFileStamp = stamp;
+      }
+    } catch {}
+    return uiVersion;
+  }
 
   return async (request, response) => {
     const info = getServerInfo();
@@ -268,7 +283,8 @@ function createRequestHandler(options) {
           })),
         };
       });
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot() });
+      const uiVersion = await currentUiVersion();
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), uiVersion });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -446,10 +462,25 @@ function createRequestHandler(options) {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/') {
       try {
-        const template = await fs.readFile(webPath, 'utf8');
+        let beforeStat = null;
+        try {
+          beforeStat = await fs.stat(webPath);
+        } catch {}
+        const content = await fs.readFile(webPath);
+        let afterStat = null;
+        try {
+          afterStat = await fs.stat(webPath);
+        } catch {}
+        uiVersion = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+        const sameFile = beforeStat && afterStat && beforeStat.mtimeMs === afterStat.mtimeMs && beforeStat.size === afterStat.size && content.length === afterStat.size;
+        cachedUiFileStamp = sameFile ? `${afterStat.mtimeMs}:${afterStat.size}` : null;
+        const template = content.toString('utf8');
         const html = template.replace(
           '<meta name="cockpit-secret" content="">',
           `<meta name="cockpit-secret" content="${escapeHtmlAttribute(info.uiSecret)}">`,
+        ).replace(
+          '<meta name="cockpit-ui-version" content="">',
+          `<meta name="cockpit-ui-version" content="${uiVersion}">`,
         );
         textResponse(response, 200, html, 'text/html; charset=utf-8');
       } catch {
@@ -986,6 +1017,7 @@ async function startServer(options = {}) {
     answerDelivery,
     pullRequestTracker,
     pullRequestMergeManager,
+    webPath: options.webPath,
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
