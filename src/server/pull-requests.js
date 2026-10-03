@@ -407,12 +407,16 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
     const parsed = JSON.parse(await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8'));
     const branchState = parsed?.branches?.[branch];
     if (!branchState || !Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return null;
+    const lastReviewedSha = branchState.lastReviewedSha;
     return {
       number: registration.number,
       branch,
       round: branchState.round,
       max: CROSS_REVIEW_MAX_ROUNDS,
       dismissed: branchState.dismissed.length,
+      reviewedSha: typeof lastReviewedSha === 'string' && /^[0-9a-f]{40}$/i.test(lastReviewedSha)
+        ? lastReviewedSha.toLowerCase()
+        : null,
     };
   } catch {
     return null;
@@ -800,6 +804,22 @@ class PullRequestTracker {
       }
       group.registrations.push(registration);
     }
+    // 状態ファイルは登録したセッションの worktree にしか無いので、登録の無い関連 PR には crossReview を付けない。
+    const crossReviewByNumber = new Map();
+    for (const registration of registrations) {
+      const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
+      if (!pullRequest) continue;
+      const review = await readCrossReviewState(registration, pullRequest, this.fileSystem);
+      const current = crossReviewByNumber.get(registration.number);
+      // 同じ PR を複数のセッションが登録したときは、記録の無い worktree で有効な記録を消さず、今の head に一致する記録を選ぶ。
+      if (current && (!review || current.reviewedSha === pullRequest.headRefOid)) continue;
+      crossReviewByNumber.set(registration.number, review && {
+        round: review.round,
+        max: review.max,
+        dismissed: review.dismissed,
+        reviewedSha: review.reviewedSha,
+      });
+    }
     for (const [productKey, group] of productGroups) {
       const assembled = assemblePullRequestStacks({
         defaultBranch: repositoryState.defaultBranch,
@@ -809,18 +829,10 @@ class PullRequestTracker {
         retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
         restackResults: repositoryState.restackResults,
       });
-      const allRegistrations = registrations;
-      const knownByNumber = new Map([
-        ...repositoryState.openPullRequests.map((pr) => [pr.number, pr]),
-        ...allRegistrations.map((registration) => [registration.number, storedPullRequest(registration)]),
-      ]);
-      const reviews = [];
-      for (const registration of group.registrations) {
-        const pullRequest = knownByNumber.get(registration.number);
-        const review = await readCrossReviewState(registration, pullRequest, this.fileSystem);
-        if (review) reviews.push(review);
-      }
-      const trees = assembled.trees.map((tree) => attachMergeState(tree, group.registrations, owner, repo, this.state));
+      const trees = assembled.trees.map((tree) => attachCrossReviewState(
+        attachMergeState(tree, group.registrations, owner, repo, this.state),
+        crossReviewByNumber,
+      ));
       const identity = `${productKey}\0${key}`;
       this.productViews ||= new Map();
       this.productViews.set(identity, {
@@ -840,7 +852,6 @@ class PullRequestTracker {
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(owner, repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(owner, repo),
         lastMethod: this.state.lastPullRequestMethod(owner, repo),
-        reviews,
       });
     }
   }
@@ -858,7 +869,6 @@ class PullRequestTracker {
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
         lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
-        reviews: group.reviews.map((review) => ({ ...review })),
       };
     });
   }
@@ -876,6 +886,15 @@ function attachMergeState(pullRequest, registrations, owner, repo, state) {
     mergeIntent,
     children: pullRequest.children.map((child) => attachMergeState(child, registrations, owner, repo, state)),
   };
+}
+
+function attachCrossReviewState(pullRequest, crossReviewByNumber) {
+  const value = {
+    ...pullRequest,
+    children: pullRequest.children.map((child) => attachCrossReviewState(child, crossReviewByNumber)),
+  };
+  if (crossReviewByNumber.has(pullRequest.number)) value.crossReview = crossReviewByNumber.get(pullRequest.number);
+  return value;
 }
 
 module.exports = {

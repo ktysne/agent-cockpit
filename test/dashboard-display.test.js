@@ -273,7 +273,7 @@ test('PRフィルターの札はマージできる件数を表示する', () => 
 
   const chip = summary.children.find((item) => item.dataset.filter === 'prs');
   assert.ok(chip);
-  assert.equal(chip.children.find((item) => item.tag === 'strong').textContent, '(3 件)');
+  assert.equal(chip.children.find((item) => item.tag === 'strong').textContent, '3');
 });
 
 test('PRフィルターの切り替えは保存し、両表示モードのPR欄を隠す', () => {

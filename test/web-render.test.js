@@ -137,16 +137,207 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.match(mock, /\.now-row\s*>\s*:nth-child\(2\)\s*\{[^}]*min-width:\s*0/);
 });
 
-test('PR のスタックとレビューを表示する', () => {
+test('PR のスタックにクロスレビューを表示する', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   assert.match(source, /function appendPullRequestBlock/);
   assert.match(source, /function appendPullRequestTree/);
-  assert.match(source, /function reviewBlock/);
+  assert.match(source, /function crossReviewLine/);
   assert.match(source, /プルリクエスト/);
   assert.match(source, /マージできる PR/);
   assert.match(source, /マージできない理由/);
   assert.match(source, /data-merge-go/);
+  assert.doesNotMatch(source, /function reviewBlock/);
+  assert.doesNotMatch(source, /group\.reviews/);
   assert.doesNotMatch(source, /data-reserve-go=/);
+});
+
+test('クロスレビューの行は往復数と head の状態を表示する', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helpersStart = html.indexOf('function element(tag, className, text)');
+  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
+  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
+  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+  });
+  vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
+
+  const textOf = (node) => node.children?.length ? node.children.map(textOf).join('') : node.textContent;
+  const allNodes = (root) => [root, ...(root.children || []).flatMap(allNodes)];
+  const headSha = 'a'.repeat(40);
+  const line = (pullRequest) => context.crossReviewLine(pullRequest);
+
+  const missing = line({ headRefOid: headSha, crossReview: null });
+  const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
+  assert.equal(textOf(missing), 'クロスレビュー レビュー未実施');
+  assert.equal(missingBadge.className, 'badge mute');
+
+  const changed = line({
+    headRefOid: 'b'.repeat(40),
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha },
+  });
+  const changedBadge = allNodes(changed).find((node) => node.className?.startsWith('badge'));
+  assert.equal(textOf(changed), 'クロスレビュー 2 / 3 往復、非対応 1 レビューの後に変更あり (レビュー済み aaaaaaa)');
+  assert.equal(changedBadge.className, 'badge warn');
+  assert.ok(!textOf(changed).includes(headSha));
+
+  const reviewed = line({
+    headRefOid: headSha,
+    crossReview: { round: 2, max: 3, dismissed: 1, reviewedSha: headSha },
+  });
+  const reviewedBadge = allNodes(reviewed).find((node) => node.className?.startsWith('badge'));
+  assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 この head をレビューに回した');
+  assert.equal(reviewedBadge.className, 'badge mute');
+
+  const unverifiable = line({
+    headRefOid: headSha,
+    crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: null },
+  });
+  const unverifiableBadge = allNodes(unverifiable).find((node) => node.className?.startsWith('badge'));
+  assert.equal(textOf(unverifiable), 'クロスレビュー 1 / 3 往復、非対応 0 head を確かめられない');
+  assert.equal(unverifiableBadge.className, 'badge mute');
+  assert.ok(!textOf(unverifiable).includes('レビューの後に変更あり'));
+
+  assert.equal(context.crossReviewState({ headRefOid: headSha }).warn, null);
+});
+
+test('マージと予約の確認欄は head がレビューの後に変わったか記録が無ければ警告を先頭に出し、一致していれば PR のコメントで確かめる一言を出す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helpersStart = html.indexOf('function element(tag, className, text)');
+  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
+  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestMergeOptions: new Map(),
+    pullRequestMergeInFlight: new Set(),
+  });
+  vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
+
+  const headSha = 'a'.repeat(40);
+  const group = { defaultBranch: 'main', mergeMethods: ['merge'], lastMethod: 'merge' };
+  const confirmation = (automatic, review) => {
+    const pullRequest = {
+      mergeRecordKey: `pr-${automatic}-${review?.reviewedSha || 'unknown'}`,
+      number: 42,
+      headRefOid: headSha,
+      headRefName: 'feat/pr-42',
+      children: [],
+      isCrossRepository: false,
+      crossReview: review,
+    };
+    const target = new FakeElement('div');
+    context.appendPullRequestMergeConfirmation(target, group, pullRequest, automatic);
+    return target.children[0].children.find((node) => node.className === 'effects').children;
+  };
+  const changedReview = { round: 1, max: 3, dismissed: 0, reviewedSha: 'b'.repeat(40) };
+  for (const automatic of [false, true]) {
+    const effects = confirmation(automatic, changedReview);
+    assert.equal(effects[0].className, 'warn');
+    assert.equal(effects[0].textContent, 'head aaaaaaa はクロスレビューの後に変更されている (レビュー済みは bbbbbbb)');
+
+    const reviewedEffects = confirmation(automatic, {
+      round: 1, max: 3, dismissed: 0, reviewedSha: headSha,
+    });
+    assert.equal(reviewedEffects[0].className, '');
+    assert.equal(reviewedEffects[0].textContent, 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる。');
+    assert.match(reviewedEffects[1].textContent, /^head が /);
+  }
+  const missingReviewEffects = confirmation(false, null);
+  assert.equal(missingReviewEffects[0].className, 'warn');
+  assert.equal(missingReviewEffects[0].textContent, 'クロスレビューの記録が無い');
+  const unverifiableEffects = confirmation(false, {
+    round: 1, max: 3, dismissed: 0, reviewedSha: null,
+  });
+  assert.equal(unverifiableEffects[0].className, 'warn');
+  assert.equal(unverifiableEffects[0].textContent, 'head を確かめられない');
+});
+
+test('マージできる PR の件数タグはほかの件数タグと同じ形式で表示する', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const renderSummary = html.match(/function renderSummary\(sessions, pullRequestGroups = \[\]\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(element);
+  assert.ok(renderSummary);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute() {}
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const summary = new FakeElement('div');
+  summary.replaceChildren = (...children) => { summary.children = children; };
+  const note = new FakeElement('div');
+  note.replaceChildren = (...children) => { note.children = children; };
+  const context = vm.createContext({
+    FILTERS: [{ key: 'prs', label: 'マージできる PR', color: 'ok' }],
+    summary,
+    displayPreferences: { hidden: [] },
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+      getElementById: () => note,
+    },
+    pullRequestMergeableCount: () => 4,
+    isPendingDecision: () => false,
+    isHeldDecision: () => false,
+    hasEffectiveAnswer: () => false,
+  });
+  vm.runInContext(`${element}\n${renderSummary}`, context);
+  context.renderSummary([], []);
+
+  const chip = summary.children[0];
+  assert.equal(chip.children[0].textContent, 'マージできる PR ');
+  assert.equal(chip.children[1].textContent, '4');
+  assert.equal(chip.children.map((node) => node.textContent).join(''), 'マージできる PR 4');
 });
 
 test('プロダクト別と種類別に前回見てからを表示し、新しい判断に印を付ける', () => {
