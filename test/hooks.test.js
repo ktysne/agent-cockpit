@@ -216,6 +216,8 @@ test('文字列やヒアドキュメントに書かれた Codex の --wait は�
   assert.equal(extractCodexWaitRunId(`cd /tmp; codex-agent.sh --wait ${runId}`), runId);
   assert.equal(extractCodexWaitRunId(`bash "C:/Users/me/.claude/tools/codex-agent.sh" --wait ${runId}`), runId);
   assert.equal(extractCodexWaitRunId(`x=$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})`), runId);
+  assert.equal(extractCodexWaitRunId(`x="$(bash ~/.claude/tools/codex-agent.sh --wait ${runId})"`), runId);
+  assert.equal(extractCodexWaitRunId(`echo "$(printf '%s' 'a; codex-agent.sh --wait ${runId}')"`), '');
 });
 
 test('Codex の --wait の状態の行を、監査行と結果行とは別に抜き出す', () => {

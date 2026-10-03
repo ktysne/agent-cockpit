@@ -747,7 +747,7 @@ test('--wait は別の親の結果未受領 Codex を再利用しない', async 
   ]);
 });
 
-test('実行 ID が異なる --wait は同じ親と定義の最新の背景行を再開する', async (t) => {
+test('実行 ID が分かっていて別の値の背景行は、別の実行の --wait で再開せず、新しい行を作る', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   const waitRunId = 'impl-hard-20261003-123456-7';
@@ -773,7 +773,7 @@ test('実行 ID が異なる --wait は同じ親と定義の最新の背景行�
   });
 
   const [agent] = state.snapshot().sessions[0].agents;
-  assert.deepEqual([agent.gpt.model, agent.gpt.active, agent.gpt.unconfirmed], ['gpt-latest', false, false]);
+  assert.deepEqual([agent.gpt.model, agent.gpt.active, agent.gpt.unconfirmed], ['gpt-wait-placeholder', false, false]);
 });
 
 test('Agent の出力に含まれる run= は Codex 行の runId にしない', async (t) => {
@@ -794,10 +794,10 @@ test('Agent の出力に含まれる run= は Codex 行の runId にしない', 
     tool_name: 'Agent', tool_use_id: 'bash-pending', codexOutput: { runLine: `codex-agent: run=${agentOutputRunId}` },
   });
   state.addEvent({ session_id: 'agent-run-line', hook_event_name: 'SubagentStart', hookAt: 7, agent_id: 'sub-1', agent_type: 'impl-hard' });
-  waitForCodex(state, 'agent-run-line', 'bash-wait', 8, 'sub-1', agentOutputRunId);
+  waitForCodex(state, 'agent-run-line', 'bash-wait', 8, 'sub-1', agentOutputRunId, { model: 'gpt-wait' });
 
   const [parent] = state.snapshot().sessions[0].agents;
-  assert.deepEqual([parent.gpt.model, parent.gpt.active, parent.gpt.unconfirmed], ['gpt-background', true, false]);
+  assert.deepEqual([parent.gpt.model, parent.gpt.active, parent.gpt.unconfirmed], ['gpt-wait', true, false]);
 });
 
 test('結果行なしで失敗した起動は --wait で再開せず、新しい行を作る', async (t) => {
@@ -907,6 +907,43 @@ test('結果を受けた実行の --wait の結果行は、背景で動いてい
   });
   const [agent] = state.snapshot().sessions[0].agents;
   assert.deepEqual([agent.gpt.model, agent.gpt.active], ['gpt-running', true]);
+});
+
+test('後続の出力に出た終わった実行の結果行は、run= の行で照合し、背景で動いている別の Codex を終了にしない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const finishedRunId = 'impl-hard-20261003-123456-7';
+  state.addEvent({ session_id: 'reread', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  waitForCodex(state, 'reread', 'bash-wait', 2, 'sub-1', finishedRunId);
+  state.addEvent({
+    session_id: 'reread', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-wait', codexOutput: codexOutput('gpt-first', 'xhigh'),
+  });
+  launchCodex(state, 'reread', 'bash-2', 4, 'sub-1', { model: 'gpt-running', effort: 'high' });
+  state.addEvent({ session_id: 'reread', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-2' });
+  state.addEvent({
+    session_id: 'reread', hook_event_name: 'PostToolUse', hookAt: 6, agent_id: 'sub-1', tool_name: 'Read', tool_use_id: 'read-1',
+    codexOutput: { ...codexOutput('gpt-first', 'xhigh'), runLine: `codex-agent: run=${finishedRunId}` },
+  });
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active], ['gpt-running', true]);
+});
+
+test('同じ実行 ID の --wait を別の親が呼んだら、行を増やさずその親の下へ付け替える', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const runId = 'impl-hard-20261003-123456-7';
+  state.addEvent({ session_id: 'handoff', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  waitForCodex(state, 'handoff', 'bash-wait-1', 2, 'sub-1', runId, { model: 'gpt-6-luna' });
+  state.addEvent({ session_id: 'handoff', hook_event_name: 'PostToolUseFailure', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-wait-1' });
+  state.addEvent({ session_id: 'handoff', hook_event_name: 'SubagentStop', hookAt: 4, agent_id: 'sub-1' });
+  state.addEvent({ session_id: 'handoff', hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'sub-2', agent_type: 'impl-hard' });
+  waitForCodex(state, 'handoff', 'bash-wait-2', 6, 'sub-2', runId);
+  const agents = state.snapshot().sessions[0].agents;
+  const first = agents.find((agent) => agent.agent_id === 'sub-1');
+  const second = agents.find((agent) => agent.agent_id === 'sub-2');
+  assert.equal(first.gpt, undefined);
+  assert.deepEqual([second.gpt.model, second.gpt.active], ['gpt-6-luna', true]);
 });
 
 test('起動イベントが無い --wait は実行 ID の定義で Codex 行を作る', async (t) => {

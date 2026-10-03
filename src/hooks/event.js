@@ -38,26 +38,34 @@ function inputSummary(toolName, toolInput) {
 function extractCodexWaitRunId(command) {
   const beforeHeredoc = pickString(command).split('<<')[0];
   const characters = [...beforeHeredoc];
-  let quote = '';
+  const separator = /[;|&()\r\n]/;
+  // 引用符の中の区切りは消し、二重引用符の中の $( ) はコマンドとして扱う。
+  const contexts = ['code'];
   for (let index = 0; index < characters.length; index += 1) {
     const character = characters[index];
-    if (quote === 'double' && character === '\\') {
-      if (/[;|&()\r\n]/.test(characters[index + 1] || '')) characters[index + 1] = '_';
+    const context = contexts.at(-1);
+    if (context === 'single') {
+      if (character === "'") contexts.pop();
+      else if (separator.test(character)) characters[index] = '_';
+      continue;
+    }
+    if (character === '\\') {
+      if (context === 'double' && separator.test(characters[index + 1] || '')) characters[index + 1] = '_';
       index += 1;
       continue;
     }
-    if (quote === 'single') {
-      if (character === "'") quote = '';
-      else if (/[;|&()\r\n]/.test(character)) characters[index] = '_';
+    if (context === 'double') {
+      if (character === '"') contexts.pop();
+      else if (character === '$' && characters[index + 1] === '(') {
+        contexts.push('substitution');
+        index += 1;
+      } else if (separator.test(character)) characters[index] = '_';
       continue;
     }
-    if (quote === 'double') {
-      if (character === '"') quote = '';
-      else if (/[;|&()\r\n]/.test(character)) characters[index] = '_';
-      continue;
-    }
-    if (character === "'") quote = 'single';
-    else if (character === '"') quote = 'double';
+    if (character === "'") contexts.push('single');
+    else if (character === '"') contexts.push('double');
+    else if (context === 'substitution' && character === '(') contexts.push('substitution');
+    else if (context === 'substitution' && character === ')') contexts.pop();
   }
   const match = characters.join('').match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
   return match ? match[1].slice(0, 256) : '';
