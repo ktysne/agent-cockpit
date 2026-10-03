@@ -98,6 +98,7 @@ function parseRepositoryConfig(stdout) {
   }
   return {
     defaultBranch: value.default_branch.slice(0, 500),
+    autoDeleteBranch: value.delete_branch_on_merge === true,
     mergeMethods: [
       value.allow_merge_commit === true ? 'merge' : null,
       value.allow_squash_merge === true ? 'squash' : null,
@@ -354,9 +355,11 @@ function runGh(args, options = {}) {
       windowsHide: true,
       shell: false,
       env: ghEnvironment(options.environment),
-    }, (error, stdout) => {
-      if (error) reject(error);
-      else resolve(stdout);
+    }, (error, stdout, stderr) => {
+      if (error) {
+        if (stderr && error.stderr == null) error.stderr = stderr;
+        reject(error);
+      } else resolve(stdout);
     });
   });
 }
@@ -533,7 +536,7 @@ class PullRequestTracker {
     const key = repoKey(owner, repo);
     const checkedAt = new Date(this.now()).toISOString();
     const current = this.repositories.get(key) || {
-      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], fetchedAt: null, checkedAt: null,
+      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, fetchedAt: null, checkedAt: null,
     };
     const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
@@ -545,6 +548,7 @@ class PullRequestTracker {
     let openPullRequests = current.openPullRequests;
     let defaultBranch = current.defaultBranch;
     let mergeMethods = current.mergeMethods;
+    let autoDeleteBranch = current.autoDeleteBranch;
     let fetchedAt = current.fetchedAt;
     let listAvailable = false;
     let mergedPullRequests = null;
@@ -567,6 +571,7 @@ class PullRequestTracker {
         const config = parseRepositoryConfig(configResult.value);
         defaultBranch = config.defaultBranch;
         mergeMethods = config.mergeMethods;
+        autoDeleteBranch = config.autoDeleteBranch;
       } catch {
         errors.push('リポジトリ設定を読み取れませんでした');
       }
@@ -778,6 +783,7 @@ class PullRequestTracker {
       openPullRequests,
       defaultBranch,
       mergeMethods,
+      autoDeleteBranch,
       fetchedAt,
       checkedAt,
       error: errors.length ? [...new Set(errors)].join('。') : null,
@@ -841,6 +847,7 @@ class PullRequestTracker {
         repo,
         defaultBranch: repositoryState.defaultBranch,
         mergeMethods: [...repositoryState.mergeMethods],
+        autoDeleteBranch: repositoryState.autoDeleteBranch,
         checkedAt: repositoryState.checkedAt,
         fetchedAt: repositoryState.fetchedAt,
         error: repositoryState.error,

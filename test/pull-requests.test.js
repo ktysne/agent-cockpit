@@ -524,7 +524,7 @@ test('オープン一覧から消えた PR の状態を gh pr view で確認す�
       } else if (args[0] === 'api' && args[1] === 'repos/example/project') {
         callback(null, JSON.stringify({
           default_branch: 'main', allow_merge_commit: true,
-          allow_squash_merge: false, allow_rebase_merge: true,
+          allow_squash_merge: false, allow_rebase_merge: true, delete_branch_on_merge: false,
         }));
       } else if (args[0] === 'api' && args[1].includes('/compare/')) {
         callback(null, JSON.stringify(compareResult()));
@@ -550,7 +550,37 @@ test('オープン一覧から消えた PR の状態を gh pr view で確認す�
   const [group] = tracker.snapshot();
   assert.equal(group.defaultBranch, 'main');
   assert.deepEqual(group.mergeMethods, ['merge', 'rebase']);
+  assert.equal(group.autoDeleteBranch, false);
   assert.equal(group.merged[0].state, 'merged');
+});
+
+test('delete_branch_on_merge が true のリポジトリ設定を snapshot に載せる', async (t) => {
+  const homeDir = await temporaryDirectory(t);
+  const state = new DashboardState({ homeDir });
+  state.registerPullRequest('session-auto-delete', { url: 'https://github.com/example/project/pull/53' }, {
+    cwd: process.cwd(), product: { key: 'project', name: 'project' },
+  });
+  state.updatePullRequest('session-auto-delete', 'example', 'project', 53, { state: 'merged' });
+  const tracker = new PullRequestTracker({
+    state,
+    execFileImpl: (_file, args, _options, callback) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        callback(null, '[]');
+      } else if (args[0] === 'api' && args[1] === 'repos/example/project') {
+        callback(null, JSON.stringify({
+          default_branch: 'main', allow_merge_commit: true,
+          allow_squash_merge: false, allow_rebase_merge: true, delete_branch_on_merge: true,
+        }));
+      } else {
+        callback(new Error(`unexpected gh arguments: ${args.join(' ')}`));
+      }
+    },
+  });
+
+  await tracker.refreshRepo('example', 'project');
+
+  assert.equal(tracker.repositories.get('example/project').autoDeleteBranch, true);
+  assert.equal(tracker.snapshot()[0].autoDeleteBranch, true);
 });
 
 test('store.json は PR を version 1 で保存し、PR 項目のない旧形式も空として読む', async (t) => {

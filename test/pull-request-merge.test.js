@@ -69,6 +69,9 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     failEditNumber: null,
     failMerge: false,
     failDelete: false,
+    deleteStderr: '',
+    branchLookup404: false,
+    autoDeleteBranch: false,
     failOpenList: false,
     blockAfterEdit: false,
     queueMerge: false,
@@ -79,7 +82,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
   };
   const execFileImpl = (_file, args, _options, callback) => {
     calls.push([...args]);
-    const finish = (error, output = '') => callback(error, output);
+    const finish = (error, output = '', stderr = '') => callback(error, output, stderr);
     if (args[0] === 'pr' && args[1] === 'list') {
       const stateIndex = args.indexOf('--state');
       if (args[stateIndex + 1] === 'open' && control.failOpenList) {
@@ -92,7 +95,16 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     if (args[0] === 'api' && args[1] === 'repos/example/project') {
       finish(null, JSON.stringify({
         default_branch: control.defaultBranch, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true,
+        delete_branch_on_merge: control.autoDeleteBranch,
       }));
+      return;
+    }
+    if (args[0] === 'api' && args[1] === 'repos/example/project/git/ref/heads/feature/one') {
+      if (control.branchLookup404) {
+        finish(Object.assign(new Error('lookup failed'), { code: 1 }), '', 'gh: Not Found (HTTP 404)');
+      } else {
+        finish(null, JSON.stringify({ ref: 'refs/heads/feature/one' }));
+      }
       return;
     }
     if (args[0] === 'api' && args[1].includes('/compare/')) {
@@ -159,7 +171,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       return;
     }
     if (args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE') {
-      finish(control.failDelete ? Object.assign(new Error('delete failed'), { code: 'EIO' }) : null);
+      finish(control.failDelete ? Object.assign(new Error('delete failed'), { code: 'EIO' }) : null, '', control.deleteStderr);
       return;
     }
     finish(Object.assign(new Error(`unexpected gh arguments: ${args.join(' ')}`), { code: 'EIO' }));
@@ -293,6 +305,77 @@ test('子 PR の base を付け替え、head SHA を照合してマージし、�
   assert.equal(operations.flat().includes('--delete-branch'), false);
   assert.equal(fixture.state.pullRequestRetargetsForRepo('example', 'project')[0].base, 'main');
   assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, 'squash');
+});
+
+test('既に無いリモートブランチの削除は成功として扱い警告を出さない', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.control.failDelete = true;
+  fixture.control.deleteStderr = 'gh: Reference does not exist (HTTP 422)';
+
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.branchDeleted, true);
+  assert.equal(result.warning, null);
+  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === 'repos/example/project/git/ref/heads/feature/one'), false);
+  assert.doesNotMatch(fixture.notices.at(-1).message, /削除できませんでした/);
+});
+
+test('削除 API の別の失敗は ref が残っていれば警告する', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.control.failDelete = true;
+  fixture.control.deleteStderr = 'gh: Service Unavailable (HTTP 503)';
+
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.branchDeleted, false);
+  assert.match(result.warning, /リモートブランチ feature\/one を削除できませんでした/);
+  assert.ok(fixture.calls.some((args) => args[0] === 'api' && args[1] === 'repos/example/project/git/ref/heads/feature/one'));
+  assert.match(fixture.notices.at(-1).message, /削除できませんでした/);
+});
+
+test('削除 API のエラーが判別できず ref の確認が 404 なら警告を出さない', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.control.failDelete = true;
+  fixture.control.deleteStderr = 'gh: API request failed';
+  fixture.control.branchLookup404 = true;
+
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.branchDeleted, true);
+  assert.equal(result.warning, null);
+  assert.doesNotMatch(fixture.notices.at(-1).message, /削除できませんでした/);
+});
+
+test('自動削除設定があるリポジトリでは古い画面からの削除指定を実行しない', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.control.autoDeleteBranch = true;
+
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.warning, null);
+  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
+});
+
+test('自動削除設定があるリポジトリでは古い画面からの予約の削除指定も実行しない', async (t) => {
+  const pullRequest = ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' });
+  const fixture = await mergeFixture(t, [pullRequest]);
+  fixture.control.autoDeleteBranch = true;
+
+  const result = await fixture.manager.reserve(mergeInput(1, { deleteBranch: true }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reservation.deleteBranch, false);
+  fixture.state.setPullRequestMergeReservation({ ...result.reservation, deleteBranch: true });
+  fixture.github.openPullRequests = [];
+  fixture.github.views.set(1, mergedView(pullRequest));
+  await fixture.tracker.refreshRepo('example', 'project');
+
+  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
+  assert.doesNotMatch(fixture.notices.at(-1).message, /削除できませんでした/);
 });
 
 test('子 PR の base の付け替えに失敗したらマージせず完了位置を返す', async (t) => {
