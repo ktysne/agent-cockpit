@@ -121,7 +121,7 @@ test('積み直し用の項目を含む旧 store を退避せず読み、次の�
   assert.equal(Object.hasOwn(saved, 'mergedPrHeads'), false);
 });
 
-test('復元時に orphan の回答記録と14日を過ぎたセッションの記録を捨てる', async (t) => {
+test('復元直後はセッション記録を残し最初の同期で期限切れを捨てる', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-03T00:00:00.000Z');
   const expiredAt = now - 14 * DAY_MS - 1;
@@ -133,7 +133,7 @@ test('復元時に orphan の回答記録と14日を過ぎたセッションの�
   state.setTasks('expired-session', [task('古いタスク')], expiredAt);
   state.addDecision('expired-session', decisionInput('古い判断'), expiredAt);
   state.hideSession('expired-session', expiredAt);
-  state.closeTask('expired-session', '古いタスク');
+  state.closeTask('expired-session', '古いタスク', expiredAt);
   state.setTasks('current-session', [task('新しいタスク')], now - 1);
   const currentDecision = state.addDecision('current-session', decisionInput('新しい判断'), now - 1);
   state.setDecisionLifecycle('current-session', currentDecision.id, {
@@ -153,11 +153,16 @@ test('復元時に orphan の回答記録と14日を過ぎたセッションの�
   await fs.writeFile(storePath, JSON.stringify(persisted));
 
   const restored = await DashboardState.load(homeDir, { now });
+  assert.equal(restored.plans.has('expired-session'), true);
+  assert.equal(restored.hiddenSessions.has('expired-session'), true);
+  assert.equal(restored.closedTasks.has('expired-session'), true);
+  assert.deepEqual([...restored.decisionLifecycles.get('current-session').keys()], [currentDecision.id]);
+  assert.equal(restored.decisionFor('current-session', currentDecision.id).awaitingAnswerUntil, undefined);
+
+  restored.syncSessionFiles([], now);
   assert.equal(restored.plans.has('expired-session'), false);
   assert.equal(restored.hiddenSessions.has('expired-session'), false);
   assert.equal(restored.closedTasks.has('expired-session'), false);
-  assert.deepEqual([...restored.decisionLifecycles.get('current-session').keys()], [currentDecision.id]);
-  assert.equal(restored.decisionFor('current-session', currentDecision.id).awaitingAnswerUntil, undefined);
 });
 
 test('復元後の最初のセッションファイル同期でタスクもファイルも無い外し記録を捨てる', async (t) => {
@@ -178,6 +183,141 @@ test('復元後の最初のセッションファイル同期でタスクもフ�
 
   assert.equal(restored.hiddenSessions.has('hidden-without-task'), false);
   assert.equal(restored.hiddenSessions.has('hidden-with-task'), true);
+});
+
+test('一覧から外しただけで記録の無いセッションは prune 後も外れたままにする', () => {
+  const state = new DashboardState();
+  const sessionId = 'hidden-only';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: now });
+  state.hideSession(sessionId, now);
+
+  state.pruneExpiredStoreRecords(now + 15 * DAY_MS);
+
+  assert.equal(state.hiddenSessions.has(sessionId), true);
+  assert.equal(state.hiddenSessionUpdatedAt.get(sessionId), new Date(now).toISOString());
+  assert.equal(state.snapshot().sessions.find((session) => session.session_id === sessionId).hidden, true);
+});
+
+test('外した時刻が新しくても期限切れの plan は生存していないセッションから削除する', () => {
+  const state = new DashboardState();
+  const sessionId = 'hidden-expired-plan';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: now - 15 * DAY_MS });
+  state.setTasks(sessionId, [task('古いタスク')], now - 15 * DAY_MS);
+  state.hideSession(sessionId, now);
+  state.sessions.delete(sessionId);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), false);
+  assert.equal(state.hiddenSessions.has(sessionId), true);
+});
+
+test('hook session が生きていれば古い plan を保持する', () => {
+  const state = new DashboardState();
+  const sessionId = 'live-hook-session';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.sessions.set(sessionId, { session_id: sessionId });
+  state.setTasks(sessionId, [task('古いタスク')], now - 20 * DAY_MS);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), true);
+});
+
+test('session file にある生存中のセッションは古い plan を保持する', () => {
+  const state = new DashboardState();
+  const sessionId = 'live-file-session';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: 'C:\\project', name: '稼働中' }], now);
+  state.setTasks(sessionId, [task('古いタスク')], now - 20 * DAY_MS);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), true);
+});
+
+test('最初の同期ではファイルの無い期限切れ記録だけを削除する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const old = now - 20 * DAY_MS;
+  const state = new DashboardState({ homeDir });
+  state.setTasks('expired-without-file', [task('期限切れ')], old);
+  state.setTasks('expired-with-file', [task('ファイルあり')], old);
+  state.setTasks('recent-without-file', [task('新しい記録')], now - DAY_MS);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now });
+  assert.equal(restored.plans.has('expired-without-file'), true);
+  assert.equal(restored.plans.has('expired-with-file'), true);
+  assert.equal(restored.plans.has('recent-without-file'), true);
+
+  restored.syncSessionFiles([{ session_id: 'expired-with-file', cwd: 'C:\\project', name: 'ファイルあり' }], now);
+
+  assert.equal(restored.plans.has('expired-without-file'), false);
+  assert.equal(restored.plans.has('expired-with-file'), true);
+  assert.equal(restored.plans.has('recent-without-file'), true);
+});
+
+test('セッションファイルの同期が来ないまま猶予を過ぎると、フックで届いたセッション以外の期限切れ記録を捨てる', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  state.setTasks('expired-session', [task('期限切れ')], now - 20 * DAY_MS);
+  state.setTasks('live-hook-session', [task('稼働中')], now - 20 * DAY_MS);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now });
+  restored.sessions.set('live-hook-session', { session_id: 'live-hook-session' });
+  restored.pruneExpiredStoreRecords(now + 5 * 60_000);
+  assert.equal(restored.plans.has('expired-session'), true);
+
+  restored.pruneExpiredStoreRecords(now + 11 * 60_000);
+  assert.equal(restored.plans.has('expired-session'), false);
+  assert.equal(restored.plans.has('live-hook-session'), true);
+});
+
+test('閉じた時刻と PR のマージ時刻をセッション保持期限の起点にする', () => {
+  const state = new DashboardState();
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const old = now - 20 * DAY_MS;
+  const recentlyClosed = now - DAY_MS;
+  const recentlyMerged = now - 2 * DAY_MS;
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const sessionIdForClosedTask = 'recently-closed-task';
+  const sessionIdForMergedPr = 'recently-merged-pr';
+  state.setTasks(sessionIdForClosedTask, [task('閉じたタスク')], old);
+  state.closeTask(sessionIdForClosedTask, '閉じたタスク', recentlyClosed);
+  state.setTasks(sessionIdForMergedPr, [task('古いタスク')], old);
+  state.registerPullRequest(sessionIdForMergedPr, {
+    url: `https://github.com/${owner}/${repo}/pull/101`,
+  }, { product }, old);
+  state.updatePullRequest(sessionIdForMergedPr, owner, repo, 101, {
+    state: 'merged', mergedAt: new Date(recentlyMerged).toISOString(),
+  }, recentlyMerged);
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionIdForClosedTask), true);
+  assert.equal(state.closedTasks.get(sessionIdForClosedTask)?.has('閉じたタスク'), true);
+  assert.equal(state.plans.has(sessionIdForMergedPr), true);
+  assert.equal(state.pullRequests.get(sessionIdForMergedPr)?.size, 1);
+});
+
+test('実行中の prune でセッション記録を削除すると version を進める', () => {
+  const state = new DashboardState();
+  const sessionId = 'expired-prune-version';
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  state.setTasks(sessionId, [task('古いタスク')], now - 15 * DAY_MS);
+  const previousVersion = state.version;
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.plans.has(sessionId), false);
+  assert.ok(state.version > previousVersion);
 });
 
 test('通常の保存は500msでまとめ、回答記録の変更は待たずに書く', async (t) => {
@@ -521,4 +661,139 @@ test('既読時刻より前後の完了、PR、仮適用、CI 失敗、マージ
   assert.equal(items.some((item) => item.at === new Date(now + 6).toISOString()), false);
   assert.equal(items.some((item) => item.text.includes('以前')), false);
   assert.equal(items.some((item) => item.text.includes('PR #1(PR before)を作成した')), false);
+});
+
+test('マージ履歴がなくても登録のマージ時刻を前回見てからに表示する', () => {
+  const state = new DashboardState();
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  const seenAt = new Date(now - 3 * DAY_MS).toISOString();
+  state.registerPullRequest('merged-registration', {
+    url: `https://github.com/${owner}/${repo}/pull/10`,
+  }, { product }, Date.parse(mergedAt));
+  state.updatePullRequest('merged-registration', owner, repo, 10, { state: 'merged', mergedAt });
+  state.setProductSeen(product.key, seenAt);
+
+  const result = state.snapshotSinceSeen([], [], now);
+
+  assert.equal(state.mergedPullRequests.size, 0);
+  assert.ok(result.sinceSeen[0].items.some((item) => (
+    item.type === 'merged-pull-request' && item.text === 'PR #10(#10)をマージした'
+  )));
+});
+
+test('セッション登録とマージ履歴の時刻書式が異なってもマージ項目は1件にする', () => {
+  const state = new DashboardState();
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = '2026-10-03T11:00:00Z';
+  state.registerPullRequest('duplicate-merge', {
+    url: `https://github.com/${owner}/${repo}/pull/11`,
+  }, { product }, now - 2 * 60 * 60_000);
+  state.recordMergedPullRequest({
+    owner, repo, number: 11, title: '同じPR', url: `https://github.com/${owner}/${repo}/pull/11`, mergedAt,
+  }, now);
+  state.updatePullRequest('duplicate-merge', owner, repo, 11, {
+    state: 'merged', mergedAt: '2026-10-03T11:00:00.000Z',
+  });
+  state.setProductSeen(product.key, now - 2 * 60 * 60_000);
+
+  const result = state.snapshotSinceSeen([], [], now);
+  const mergedItems = result.sinceSeen[0].items.filter((item) => item.type === 'merged-pull-request');
+
+  assert.equal(mergedItems.length, 1);
+  assert.equal(mergedItems[0].text, 'PR #11(同じPR)をマージした');
+});
+
+test('関連PR登録だけが残るマージも前回見てからに表示する', () => {
+  const state = new DashboardState();
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  const productKey = `repo:${owner}/${repo}`;
+  state.rememberRelatedPullRequest({
+    owner,
+    repo,
+    number: 12,
+    url: `https://github.com/${owner}/${repo}/pull/12`,
+    lastOpen: {
+      title: '関連PR', url: `https://github.com/${owner}/${repo}/pull/12`,
+      headRefName: 'feature', baseRefName: 'main', headRefOid: '',
+    },
+  }, Date.parse(mergedAt));
+  state.updateRelatedPullRequest(owner, repo, 12, { state: 'merged', mergedAt });
+  state.setProductSeen(productKey, now - 3 * DAY_MS);
+
+  const result = state.snapshotSinceSeen([], [], now);
+
+  assert.equal(result.sinceSeen[0].product.key, productKey);
+  assert.ok(result.sinceSeen[0].items.some((item) => (
+    item.type === 'merged-pull-request' && item.text === 'PR #12(関連PR)をマージした'
+  )));
+});
+
+test('関連PRのマージはそのPRをマージ済みとして載せるPR群のプロダクトに表示する', () => {
+  const state = new DashboardState();
+  const owner = 'example';
+  const repo = 'project';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  state.rememberRelatedPullRequest({
+    owner, repo, number: 13, url: `https://github.com/${owner}/${repo}/pull/13`,
+    lastOpen: { title: '親のPR', url: `https://github.com/${owner}/${repo}/pull/13`, headRefName: 'parent', baseRefName: 'main', headRefOid: '' },
+  }, Date.parse(mergedAt));
+  state.updateRelatedPullRequest(owner, repo, 13, { state: 'merged', mergedAt });
+  state.setProductSeen(product.key, now - 3 * DAY_MS);
+  const pullRequestGroups = [{ product, owner, repo, merged: [{ number: 13, state: 'merged' }] }];
+
+  const result = state.snapshotSinceSeen([], pullRequestGroups, now);
+
+  assert.deepEqual(result.sinceSeen.map((entry) => entry.product.key), [product.key]);
+  assert.ok(result.sinceSeen[0].items.some((item) => item.text === 'PR #13(親のPR)をマージした'));
+});
+
+test('20日前の既読時刻は参照記録が残る間維持して保持中の項目を未読にする', () => {
+  const state = new DashboardState();
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const mergedAt = new Date(now - 2 * DAY_MS).toISOString();
+  const seenAt = new Date(now - 20 * DAY_MS).toISOString();
+  state.registerPullRequest('old-seen-merge', {
+    url: `https://github.com/${owner}/${repo}/pull/13`,
+  }, { product }, Date.parse(mergedAt));
+  state.updatePullRequest('old-seen-merge', owner, repo, 13, { state: 'merged', mergedAt });
+  state.setProductSeen(product.key, seenAt);
+
+  state.pruneExpiredStoreRecords(now);
+  const result = state.snapshotSinceSeen([], [], now);
+
+  assert.equal(state.seenAtByProduct.get(product.key), seenAt);
+  assert.ok(result.sinceSeen[0].items.some((item) => item.type === 'merged-pull-request'));
+});
+
+test('参照する記録がなくなったプロダクトの既読時刻をsnapshot時に削除する', () => {
+  const state = new DashboardState();
+  const sessionId = 'expired-product-records';
+  const product = { key: 'C:\\project', name: 'project' };
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  state.syncSessionFiles([{ session_id: sessionId, cwd: product.key, name: '期限切れ', product }], now);
+  state.setTasks(sessionId, [task('期限切れタスク', 'done')], now);
+  state.setProductSeen(product.key, now);
+  state.syncSessionFiles([], now + 15 * DAY_MS);
+
+  state.pruneExpiredStoreRecords(now + 15 * DAY_MS);
+  const versionBeforeSnapshot = state.version;
+  state.snapshotSinceSeen([], [], now + 15 * DAY_MS);
+
+  assert.equal(state.seenAtByProduct.has(product.key), false);
+  assert.ok(state.version > versionBeforeSnapshot);
 });

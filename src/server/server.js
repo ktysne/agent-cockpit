@@ -1137,6 +1137,8 @@ async function startServer(options = {}) {
   async function refreshSessionFiles() {
     const files = await listLiveSessionFiles(claudeHome);
     if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
+    // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
+    else state.pruneExpiredStoreRecords(Date.now());
   }
   await refreshSessionFiles().catch(() => {});
   const sessionScanTimer = setInterval(() => { refreshSessionFiles().catch(() => {}); }, SESSION_SCAN_INTERVAL_MS);

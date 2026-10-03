@@ -10,6 +10,7 @@ const DEFAULT_DISPLAY = Object.freeze({ mode: 'product', order: [], pinned: [], 
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
 const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'held', 'agents', 'prs']);
@@ -971,6 +972,8 @@ class DashboardState {
   }
 
   restoreStore(store, now) {
+    this.restoreSessionCleanupPending = true;
+    this.restoredAt = now;
     this.display = store.display;
     this.plans = store.plans;
     this.seenAtByProduct = store.seenAtByProduct;
@@ -1040,13 +1043,22 @@ class DashboardState {
 
   pruneExpiredStoreRecords(now) {
     let mergeHistoryChanged = false;
-    const sessionIds = new Set([
-      ...this.plans.keys(), ...this.decisionLifecycles.keys(), ...this.hiddenSessions,
-      ...this.closedTasks.keys(), ...this.pullRequests.keys(),
-    ]);
-    for (const sessionId of sessionIds) {
-      const updatedAt = this.lastStoredUpdateAt(sessionId);
-      if (!Number.isFinite(updatedAt) || now - updatedAt > STORE_RETENTION_MS) this.deleteStoredSession(sessionId);
+    let sessionRecordsChanged = false;
+    // セッションファイルを読めない環境では同期が来ないので、猶予の後はフックで届いたセッションだけで生死を判定する。
+    const sessionCleanupDeferred = this.restoreSessionCleanupPending && now - this.restoredAt < RESTORE_SESSION_CLEANUP_GRACE_MS;
+    if (!sessionCleanupDeferred) {
+      const sessionIds = new Set([
+        ...this.plans.keys(), ...this.decisionLifecycles.keys(),
+        ...this.closedTasks.keys(), ...this.pullRequests.keys(),
+      ]);
+      for (const sessionId of sessionIds) {
+        if (this.sessions.has(sessionId) || this.sessionFiles.has(sessionId)) continue;
+        const updatedAt = this.lastStoredUpdateAt(sessionId);
+        if (!Number.isFinite(updatedAt) || now - updatedAt > STORE_RETENTION_MS) {
+          this.deleteStoredSession(sessionId);
+          sessionRecordsChanged = true;
+        }
+      }
     }
     for (const [key, record] of this.relatedPullRequests) {
       if (!Number.isFinite(Date.parse(record.addedAt)) || now - Date.parse(record.addedAt) > STORE_RETENTION_MS) {
@@ -1061,11 +1073,7 @@ class DashboardState {
     }
     const previousFailureCount = this.ciFailures.length;
     this.ciFailures = this.ciFailures.filter((record) => now - Date.parse(record.at) < STORE_RETENTION_MS);
-    const seenBefore = this.seenAtByProduct.size;
-    for (const [key, timestamp] of this.seenAtByProduct) {
-      if (now - Date.parse(timestamp) >= STORE_RETENTION_MS) this.seenAtByProduct.delete(key);
-    }
-    if (mergeHistoryChanged || previousFailureCount !== this.ciFailures.length || seenBefore !== this.seenAtByProduct.size) {
+    if (sessionRecordsChanged || mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -1083,9 +1091,11 @@ class DashboardState {
         if (lifecycle.answer?.[key]) timestamps.push(Date.parse(lifecycle.answer[key]));
       }
     }
-    const hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
-    if (hiddenAt) timestamps.push(Date.parse(hiddenAt));
-    for (const record of this.pullRequests.get(sessionId)?.values() || []) timestamps.push(Date.parse(record.addedAt));
+    for (const record of this.closedTasks.get(sessionId)?.values() || []) timestamps.push(Date.parse(record.closedAt));
+    for (const record of this.pullRequests.get(sessionId)?.values() || []) {
+      timestamps.push(Date.parse(record.addedAt));
+      if (record.mergedAt) timestamps.push(Date.parse(record.mergedAt));
+    }
     const finite = timestamps.filter(Number.isFinite);
     return finite.length ? Math.max(...finite) : NaN;
   }
@@ -1093,8 +1103,6 @@ class DashboardState {
   deleteStoredSession(sessionId) {
     this.plans.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
-    this.hiddenSessions.delete(sessionId);
-    this.hiddenSessionUpdatedAt.delete(sessionId);
     this.closedTasks.delete(sessionId);
     this.pullRequests.delete(sessionId);
   }
@@ -1563,8 +1571,9 @@ class DashboardState {
 
     if (this.restoreSessionCleanupPending) {
       this.restoreSessionCleanupPending = false;
+      this.pruneExpiredStoreRecords(now);
       for (const sessionId of this.hiddenSessions) {
-        if (next.has(sessionId) || this.plans.get(sessionId)?.tasks.length) continue;
+        if (this.sessions.has(sessionId) || next.has(sessionId) || this.plans.get(sessionId)?.tasks.length) continue;
         this.hiddenSessions.delete(sessionId);
         this.hiddenSessionUpdatedAt.delete(sessionId);
         changed = true;
@@ -2062,10 +2071,40 @@ class DashboardState {
   snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now()) {
     const products = new Map();
     const visibleProductKeys = new Set();
+    const registrations = this.pullRequestRegistrations();
+    const relatedRegistrations = this.relatedPullRequestRegistrations();
+    const mergedPullRequests = new Map();
     const addProduct = (value) => {
       const product = cloneProduct(value);
       if (product && !products.has(product.key)) products.set(product.key, product);
       return product;
+    };
+    for (const merged of this.mergedPullRequests.values()) {
+      mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
+    }
+    for (const record of [...registrations, ...relatedRegistrations]) {
+      if (record.state !== 'merged' || !record.mergedAt) continue;
+      const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+      if (mergedPullRequests.has(key)) continue;
+      mergedPullRequests.set(key, {
+        owner: record.owner,
+        repo: record.repo,
+        number: record.number,
+        title: record.lastOpen?.title || `#${record.number}`,
+        mergedAt: record.mergedAt,
+      });
+    }
+    // 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
+    const productsForMergedPullRequest = (merged) => {
+      const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
+      const found = [
+        ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
+          .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
+        ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
+          .map((group) => cloneProduct(group.product)).filter(Boolean),
+      ];
+      if (!found.length) return [repoProduct(merged.owner, merged.repo)];
+      return [...new Map(found.map((product) => [product.key, product])).values()];
     };
     for (const session of sessions) {
       const product = addProduct(session.product);
@@ -2076,17 +2115,19 @@ class DashboardState {
       if (product) visibleProductKeys.add(product.key);
     }
     for (const plan of this.plans.values()) addProduct(plan.product);
-    for (const record of this.pullRequestRegistrations()) addProduct(record.product || repoProduct(record.owner, record.repo));
+    for (const record of registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
     for (const record of this.ciFailures) addProduct(record.product);
-    for (const merged of this.mergedPullRequests.values()) {
-      const registrations = this.pullRequestRegistrations().filter((record) => (
-        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
-      ));
-      if (registrations.length) {
-        for (const registration of registrations) addProduct(registration.product || repoProduct(merged.owner, merged.repo));
-      } else addProduct(repoProduct(merged.owner, merged.repo));
+    for (const merged of mergedPullRequests.values()) {
+      for (const product of productsForMergedPullRequest(merged)) addProduct(product);
     }
 
+    let seenChanged = false;
+    for (const key of this.seenAtByProduct.keys()) {
+      if (!products.has(key)) {
+        this.seenAtByProduct.delete(key);
+        seenChanged = true;
+      }
+    }
     let initialized = false;
     for (const product of products.values()) {
       if (visibleProductKeys.has(product.key) && !this.seenAtByProduct.has(product.key)) {
@@ -2094,7 +2135,7 @@ class DashboardState {
         initialized = true;
       }
     }
-    if (initialized) {
+    if (initialized || seenChanged) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -2153,18 +2194,8 @@ class DashboardState {
         `PR #${failure.number} の CI が失敗した`);
     }
 
-    const registrations = this.pullRequestRegistrations();
-    for (const merged of this.mergedPullRequests.values()) {
-      const related = registrations.filter((record) => (
-        record.owner.toLowerCase() === merged.owner.toLowerCase() && record.repo.toLowerCase() === merged.repo.toLowerCase() && record.number === merged.number
-      ));
-      const mergedProducts = related.length
-        ? [...new Map(related.map((record) => {
-          const product = cloneProduct(record.product) || repoProduct(merged.owner, merged.repo);
-          return [product.key, product];
-        })).values()]
-        : [repoProduct(merged.owner, merged.repo)];
-      for (const product of mergedProducts) {
+    for (const merged of mergedPullRequests.values()) {
+      for (const product of productsForMergedPullRequest(merged)) {
         addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
           `PR #${merged.number}(${merged.title})をマージした`);
       }
