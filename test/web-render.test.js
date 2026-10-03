@@ -1203,9 +1203,52 @@ test('表示中のセッションもオープンの PR も数えきれていな�
   assert.deepEqual(keys([]), ['active']);
 });
 
-test('終わったセッションと履歴だけの PR しか残らないプロダクトは両方の表示から除く', () => {
+test('終わったセッションはタスクだけを描き、種類別の今やっていることから除く', () => {
+  const names = ['isEndedAgent', 'activityStatus', 'isFinishedSession', 'hidesFinishedSession', 'element', 'sessionBlock'];
+  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    get childNodes() { return this.children; }
+  }
+  const rendered = [];
+  const marker = (name) => (target) => { rendered.push(name); target.append(new FakeElement(name)); };
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true },
+    document: { createElement: (tagName) => new FakeElement(tagName), createTextNode: (text) => ({ textContent: text }) },
+    sharedBranch: () => '',
+    productStatusBadge: () => new FakeElement('span'),
+    shownPermissions: () => [],
+    shownActiveDecisions: () => [],
+    hasHiddenJudgmentItems: () => false,
+    orderedSectionKeys: (keys) => keys,
+    appendPermissionWaits: marker('permissions'),
+    appendDecisions: marker('decisions'),
+    appendTasks: marker('tasks'),
+    mainRow: () => { rendered.push('main'); return new FakeElement('main'); },
+    appendAgents: marker('agents'),
+    appendUnknownSessionControls: marker('unknown'),
+  });
+  vm.runInContext(functions.join('\n'), context);
+  const finished = {
+    session_id: 'finished', status: '待機中', title: '完了', tasks: [{ state: 'done' }], decisions: [{ state: 'resolved' }],
+    permissionWaits: [], agents: [{ active: false, unconfirmed: false }],
+  };
+  context.sessionBlock({ branches: new Set() }, finished, true);
+  assert.deepEqual(rendered, ['tasks']);
+  rendered.length = 0;
+  context.displayPreferences.hideFinished = false;
+  context.sessionBlock({ branches: new Set() }, finished, true);
+  assert.deepEqual(rendered, ['permissions', 'decisions', 'tasks', 'main', 'agents', 'unknown']);
+
+  const kind = pageHtml.match(/function renderKindSections\(products\) \{[^]*?\n\}/)?.[0];
+  assert.match(kind, /if \(hidesFinishedSession\(session\)\) continue;\n    activityItems\.push/);
+});
+
+test('タスクの無い終わったセッションと履歴だけの PR しか残らないプロダクトは両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'hidesFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
@@ -1235,14 +1278,13 @@ test('終わったセッションと履歴だけの PR しか残らないプロ�
     product: { key: 'finished', name: '完了' }, tools: [], lastActivityAt: '2026-10-04T00:00:00.000Z',
     tasks: [{ state: 'done' }], decisions: [{ state: 'resolved' }], permissionWaits: [], agents: [{ active: false, unconfirmed: false }],
   };
+  const finishedWithoutTasks = { ...finished, session_id: 'no-tasks', tasks: [], product: { key: 'no-tasks', name: 'タスク無し' } };
   const unknown = { ...finished, session_id: 'unknown', status: '不明', product: { key: 'unknown', name: '不明' } };
   const busy = { ...finished, session_id: 'busy', status: '作業中', product: { key: 'busy', name: '作業中' } };
   const unfinished = { ...finished, session_id: 'unfinished', tasks: [{ state: 'todo' }], product: { key: 'unfinished', name: '未完了' } };
   const visible = [unknown, busy, unfinished];
-  const products = context.orderedProducts([finished, ...visible]);
-  assert.deepEqual(JSON.parse(JSON.stringify(products.map((product) => product.key).sort())), ['busy', 'unfinished', 'unknown']);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.sessionReferences([{ key: 'refs', name: '参照', sessions: [finished, unknown] }])
-    .map((reference) => reference.session.session_id))), ['unknown']);
+  const products = context.orderedProducts([finished, finishedWithoutTasks, ...visible]);
+  assert.deepEqual(JSON.parse(JSON.stringify(products.map((product) => product.key).sort())), ['busy', 'finished', 'unfinished', 'unknown']);
 
   const oldPullRequest = {
     product: { key: 'old-pr', name: '古い PR' }, owner: 'acme', repo: 'old', openCount: 0,

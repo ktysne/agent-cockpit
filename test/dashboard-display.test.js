@@ -541,6 +541,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendPermissionWaits(target) { target.append({ marker: 'permission' }); },
       appendDecisions(target) { target.append({ marker: 'decision' }); },
       appendTasks(target) { target.append({ marker: 'task' }); },
+      hidesFinishedSession: () => false,
       appendAgents(target) { target.append({ marker: 'agent' }); },
       appendUnknownSessionControls(target) { target.append({ marker: 'unknown' }); },
       mainRow: () => ({ marker: 'main' }),
