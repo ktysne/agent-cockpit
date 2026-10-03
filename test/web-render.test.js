@@ -136,6 +136,51 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
   };
 }
 
+function taskRenderHarness() {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functions = ['element', 'appendPlanToggle', 'taskVisibility', 'appendTasks']
+    .map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.textContent = '';
+      this.className = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(_event, callback) { this.onClick = callback; }
+    focus() {}
+  }
+
+  const context = vm.createContext({
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    expandedTodoTasks: new Set(),
+    expandedDoneTasks: new Set(),
+    lastState: null,
+    root: { querySelectorAll: () => [] },
+    durationAgoLabel: () => '',
+    appendTaskItem: (list, task) => {
+      const item = new FakeElement('li');
+      item.dataset.taskId = task.id;
+      list.append(item);
+    },
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const render = (session) => {
+    const body = new FakeElement('div');
+    context.appendTasks(body, session, { name: 'product' });
+    return body;
+  };
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  return { context, render, descendants };
+}
+
 test('同じ画面の版では読み込み直さない', () => {
   const harness = reloadHarness('v1');
   assert.equal(harness.context.checkUiVersion({ uiVersion: 'v1' }), false);
@@ -986,4 +1031,120 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
     assert.equal(replacementButton.focused, true, kind);
     assert.equal(activeElement, replacementButton, kind);
   }
+});
+
+test('作業中のタスクがあるセッションでは未着手を畳み、ボタンで表示する', () => {
+  const harness = taskRenderHarness();
+  const session = {
+    session_id: 'session-a',
+    tasks: [
+      { id: 'doing', state: 'doing' },
+      { id: 'todo', state: 'todo' },
+      { id: 'done', state: 'done' },
+    ],
+  };
+  const collapsed = harness.render(session);
+  const collapsedNodes = harness.descendants(collapsed);
+  const toggles = collapsedNodes.filter((node) => node.dataset.planToggle);
+
+  assert.deepEqual(collapsedNodes.filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), ['doing']);
+  assert.deepEqual(toggles.map((button) => button.textContent), [
+    '未着手のタスクを表示 (1 件)',
+    '完了したタスクを表示 (1 件)',
+  ]);
+
+  toggles[0].onClick();
+  const expanded = harness.descendants(harness.render(session));
+  assert.deepEqual(expanded.filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), ['doing', 'todo']);
+  assert.equal(harness.context.expandedTodoTasks.has('session-a'), true);
+  assert.equal(harness.context.expandedDoneTasks.has('session-a'), false);
+});
+
+test('作業中がなく未着手だけのセッションでは未着手を畳まない', () => {
+  const harness = taskRenderHarness();
+  const session = {
+    session_id: 'session-todo-only',
+    tasks: [{ id: 'todo-a', state: 'todo' }, { id: 'todo-b', state: 'todo' }],
+  };
+  const nodes = harness.descendants(harness.render(session));
+
+  assert.deepEqual(nodes.filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), ['todo-a', 'todo-b']);
+  assert.equal(nodes.some((node) => node.dataset.planToggle && node.dataset.planToggle.startsWith('todoTasks:')), false);
+});
+
+test('種類別では未着手の合計数を一つのボタンで切り替える', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const functions = ['element', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
+    .map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(_event, callback) { this.onClick = callback; }
+    focus() {}
+  }
+
+  const context = vm.createContext({
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    expandedKindSections: new Set(),
+    lastState: null,
+    root: { querySelectorAll: () => [] },
+    appendContextTags() {},
+    durationAgoLabel: () => '',
+    appendTaskItem: (list, task) => {
+      const item = new FakeElement('li');
+      item.dataset.taskId = task.id;
+      list.append(item);
+    },
+  });
+  vm.runInContext(functions.join('\n'), context);
+  const references = [
+    { product: { name: 'A' }, multipleSessions: false, session: { session_id: 'a', tasks: [
+      { id: 'doing-a', state: 'doing' }, { id: 'todo-a', state: 'todo' }, { id: 'done-a', state: 'done' },
+    ] } },
+    { product: { name: 'B' }, multipleSessions: false, session: { session_id: 'b', tasks: [
+      { id: 'todo-b1', state: 'todo' }, { id: 'todo-b2', state: 'todo' },
+    ] } },
+    { product: { name: 'C' }, multipleSessions: false, session: { session_id: 'c', tasks: [
+      { id: 'doing-c', state: 'doing' }, { id: 'todo-c1', state: 'todo' }, { id: 'todo-c2', state: 'todo' }, { id: 'done-c', state: 'done' },
+    ] } },
+  ];
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  const renderSessions = (body, showTodo, showDone) => {
+    for (const reference of references) context.appendKindTaskSession(body, reference, showTodo, showDone);
+  };
+  const body = new FakeElement('div');
+  const todoCount = context.kindTodoTaskCount(references);
+  const doneCount = context.kindDoneTaskCount(references);
+  renderSessions(body, false, false);
+  context.appendKindToggle(body, 'todoTasks', false, todoCount, '未着手のタスク');
+  context.appendKindToggle(body, 'tasks', false, doneCount, '完了したタスク');
+
+  assert.equal(todoCount, 3);
+  assert.deepEqual(descendants(body).filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), [
+    'doing-a', 'todo-b1', 'todo-b2', 'doing-c',
+  ]);
+  const toggles = body.children.filter((node) => node.dataset.kindToggle);
+  assert.deepEqual(toggles.map((button) => button.textContent), [
+    '未着手のタスクを表示 (3 件)',
+    '完了したタスクを表示 (2 件)',
+  ]);
+  assert.equal(toggles.filter((button) => button.dataset.kindToggle === 'todoTasks').length, 1);
+
+  toggles[0].onClick();
+  assert.equal(context.expandedKindSections.has('todoTasks'), true);
+  assert.equal(context.expandedKindSections.has('tasks'), false);
+  const expandedBody = new FakeElement('div');
+  renderSessions(expandedBody, context.expandedKindSections.has('todoTasks'), context.expandedKindSections.has('tasks'));
+  assert.deepEqual(descendants(expandedBody).filter((node) => node.dataset.taskId).map((node) => node.dataset.taskId), [
+    'doing-a', 'todo-a', 'todo-b1', 'todo-b2', 'doing-c', 'todo-c1', 'todo-c2',
+  ]);
 });

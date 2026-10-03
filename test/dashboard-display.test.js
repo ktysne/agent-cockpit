@@ -355,8 +355,9 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     functionSource(web, 'itemTimestamp'),
     functionSource(web, 'kindEndedDecisionEntries'),
     functionSource(web, 'kindEndedAgentCount'),
-    functionSource(web, 'kindTaskVisibility'),
+    functionSource(web, 'taskVisibility'),
     functionSource(web, 'kindDoneTaskCount'),
+    functionSource(web, 'kindTodoTaskCount'),
   ];
   const webContext = vm.createContext({ isEndedAgent: (agent) => !agent.active && !agent.unconfirmed });
   vm.runInContext(`${webHelpers.join('\n')}\nthis.collect = (references) => JSON.stringify({
@@ -364,8 +365,10 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     endedAgentCount: kindEndedAgentCount(references),
     fallbackTimestamp: itemTimestamp({ startedAt: '2026-10-02T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }),
     doneCount: kindDoneTaskCount(references),
-    collapsed: kindTaskVisibility(references[0].session, false).visible.map((task) => task.id),
-    expanded: kindTaskVisibility(references[0].session, true).visible.map((task) => task.id),
+    todoCount: kindTodoTaskCount(references),
+    collapsed: taskVisibility(references[0].session, false, false).visible.map((task) => task.id),
+    todoExpanded: taskVisibility(references[0].session, true, false).visible.map((task) => task.id),
+    expanded: taskVisibility(references[0].session, true, true).visible.map((task) => task.id),
   });`, webContext);
   const webReferences = [
     { product: { name: 'A' }, session: {
@@ -374,7 +377,7 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
         { id: 'active', state: 'waiting', createdAt: '2026-10-03T00:00:00Z' },
       ],
       agents: [{ id: 'agent-old', active: false, startedAt: '2026-10-01T00:00:00Z' }],
-      tasks: [{ id: 'open', state: 'todo' }, { id: 'done-a', state: 'done' }],
+      tasks: [{ id: 'open', state: 'todo' }, { id: 'doing', state: 'doing' }, { id: 'done-a', state: 'done' }],
     } },
     { product: { name: 'B' }, session: {
       decisions: [
@@ -394,15 +397,18 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     endedAgentCount: 2,
     fallbackTimestamp: Date.parse('2026-10-02T00:00:00Z'),
     doneCount: 2,
-    collapsed: ['open'],
-    expanded: ['open', 'done-a'],
+    todoCount: 1,
+    collapsed: ['doing'],
+    todoExpanded: ['open', 'doing'],
+    expanded: ['open', 'doing', 'done-a'],
   });
 
   const mockHelpers = [
     functionSource(mock, 'kindEndedDecisionEntries'),
     functionSource(mock, 'kindEndedAgentCount'),
-    functionSource(mock, 'kindTaskVisibility'),
+    functionSource(mock, 'taskVisibility'),
     functionSource(mock, 'kindDoneTaskCount'),
+    functionSource(mock, 'kindTodoTaskCount'),
   ];
   const mockContext = vm.createContext({
     effectiveDecisionState: (decision) => decision.state,
@@ -414,14 +420,16 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     decisions: kindEndedDecisionEntries(sessions).map(({ decision }) => decision.id),
     endedAgentCount: kindEndedAgentCount(sessions),
     doneCount: kindDoneTaskCount(sessions),
-    collapsed: kindTaskVisibility(sessions[0].session, false).visible.map((task) => task.id),
-    expanded: kindTaskVisibility(sessions[0].session, true).visible.map((task) => task.id),
+    todoCount: kindTodoTaskCount(sessions),
+    collapsed: taskVisibility(sessions[0].session, false, false).visible.map((task) => task.id),
+    todoExpanded: taskVisibility(sessions[0].session, true, false).visible.map((task) => task.id),
+    expanded: taskVisibility(sessions[0].session, true, true).visible.map((task) => task.id),
   });`, mockContext);
   const mockSessions = [
     { p: { name: 'A' }, session: {
       decisions: [{ id: 'old', state: 'resolved', age: 10 }, { id: 'active', state: 'waiting', age: 0 }],
       subagents: [{ id: 'agent-old', ended: true, age: 10 }],
-      tasks: [{ id: 'open', state: 'todo' }, { id: 'done-a', state: 'done' }],
+      tasks: [{ id: 'open', state: 'todo' }, { id: 'doing', state: 'doing' }, { id: 'done-a', state: 'done' }],
     } },
     { p: { name: 'B' }, session: {
       decisions: [{ id: 'new', state: 'withdrawn', age: 2 }],
@@ -434,8 +442,10 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
     decisions: ['new', 'old'],
     endedAgentCount: 2,
     doneCount: 2,
-    collapsed: ['open'],
-    expanded: ['open', 'done-a'],
+    todoCount: 1,
+    collapsed: ['doing'],
+    todoExpanded: ['open', 'doing'],
+    expanded: ['open', 'doing', 'done-a'],
   });
 });
 
@@ -480,27 +490,30 @@ test('種類別の折り畳み文言と状態はセクション単位で切り�
 
 test('種類別タスクのまとまりは先頭行に札と更新時刻を置き、カードから札を外す', () => {
   const mockTaskBlock = functionSource(mock, 'kindTaskSessionBlock');
-  const mockVisibility = functionSource(mock, 'kindTaskVisibility');
+  const mockVisibility = functionSource(mock, 'taskVisibility');
   const mockContext = vm.createContext({
     taskState: (_session, task) => task.state,
+    ui: { expandedKindTodoTasks: false },
     sessionTag: (_product, _session, _withTag, includeSession) => includeSession ? 'PRODUCT SESSION' : '',
     taskItem: (_product, _session, task, withTag) => `<li data-tags="${withTag}">${task.title}</li>`,
   });
   vm.runInContext(`${mockVisibility}\n${mockTaskBlock}\nthis.renderTasks = kindTaskSessionBlock;`, mockContext);
   const output = mockContext.renderTasks(
     { name: 'agent-cockpit' },
-    { id: 'session-a', tasksUpdatedMin: 5, tasks: [{ title: '表示タスク', state: 'doing' }, { title: '完了タスク', state: 'done' }] },
+    { id: 'session-a', tasksUpdatedMin: 5, tasks: [{ title: '表示タスク', state: 'doing' }, { title: '未着手タスク', state: 'todo' }, { title: '完了タスク', state: 'done' }] },
     false,
   );
   assert.match(output.html, /class="kind-task-head">PRODUCT SESSION<span class="meta">最終更新 5 分前<\/span>/);
   assert.doesNotMatch(output.html, /タスクと完了条件/);
   assert.match(output.html, /<li data-tags="false">表示タスク<\/li>/);
+  assert.doesNotMatch(output.html, /未着手タスク/);
   assert.doesNotMatch(output.html, /完了タスク/);
   assert.equal(output.doneCount, 1);
 
   const webKind = functionSource(web, 'renderKindSections');
   const webTaskBlock = functionSource(web, 'appendKindTaskSession');
-  assert.match(webKind, /appendKindTaskSession\(tasks, \{ product, session, multipleSessions \}, showDoneTasks\)/);
+  assert.match(webKind, /appendKindTaskSession\(tasks, \{ product, session, multipleSessions \}, showTodoTasks, showDoneTasks\)/);
+  assert.match(webKind, /appendKindToggle\(tasks, 'todoTasks', showTodoTasks, todoTaskCount, '未着手のタスク'\)/);
   assert.match(webKind, /appendKindToggle\(tasks, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク'\)/);
   assert.match(webTaskBlock, /appendContextTags\(heading, product, session, true, true\)/);
   assert.match(webTaskBlock, /appendTaskItem\(list, task, product, session, false, multipleSessions\)/);
@@ -514,6 +527,7 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
   assert.match(mockKind, /kindToggle\('decisions', '解決済みと取り下げ', endedDecisionEntries\.length/);
   assert.match(mockKind, /kindToggle\('agents', '終了済み', endedAgentCount/);
   assert.match(mockKind, /kindToggle\('tasks', '完了したタスク', doneTaskCount/);
+  assert.match(mockKind, /kindToggle\('todoTasks', '未着手のタスク', todoTaskCount/);
   assert.doesNotMatch(mockKind, /endedDecisionToggle\(session\)|endedAgentToggle\(session\)|taskSessionBlock\(p, session, true\)/);
   assert.match(webKind, /appendKindToggle\(endedDecisions, 'decisions'/);
   assert.match(webKind, /appendKindToggle\(activity, 'agents'/);
@@ -522,6 +536,8 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
 
   assert.match(mock, /function decisionSessionBlock\([^]*?endedDecisionToggle\(session\)/);
   assert.match(mock, /function taskSessionBlock\([^]*?data-done-tasks/);
+  assert.match(mock, /function taskSessionBlock\([^]*?data-todo-tasks/);
   assert.match(web, /function appendDecisions\([^]*?appendPlanToggle\(body, 'decisions', session\.session_id/);
   assert.match(web, /function appendTasks\([^]*?appendPlanToggle\(body, 'tasks', session\.session_id/);
+  assert.match(web, /function appendTasks\([^]*?appendPlanToggle\(body, 'todoTasks', session\.session_id/);
 });
