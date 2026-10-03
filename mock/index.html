@@ -595,7 +595,7 @@ function orderedProducts() {
 
 // セッションを外すか終えて PR もマージを終えたプロダクトは、未読の変化を既読にした時点でカードを消す。
 function hasProductContent(p) {
-  return visibleSessions(p).length > 0 || openPrs(p).length > 0 || (p.news.length > 0 && !ui.seen.includes(p.id));
+  return visibleSessions(p).length > 0 || openPrs(p).length > 0 || (sinceSeenVisible() && p.news.length > 0 && !ui.seen.includes(p.id));
 }
 
 function answerOf(id) { return ui.answers[id] || { choice: null, picks: [], note: '', sent: null }; }
