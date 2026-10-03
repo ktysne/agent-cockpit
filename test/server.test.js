@@ -407,6 +407,20 @@ test('一覧から外す API は認証し、複数の状態のセッションを
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, undefined);
 });
 
+test('セッションファイルを読めない環境でも、読み込みの猶予を過ぎた期限切れの記録は走査のたびに片付ける', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const now = Date.now();
+  const state = new DashboardState({ homeDir });
+  state.setTasks('expired-session', [{ title: '期限切れ', state: 'todo', criteria: [] }], now - 20 * 24 * 60 * 60 * 1000);
+  state.restoreSessionCleanupPending = true;
+  state.restoredAt = now - 11 * 60 * 1000;
+
+  const runtime = await startServer({ homeDir, claudeHome, port: 0, state });
+  t.after(() => runtime.close());
+
+  assert.equal(state.plans.has('expired-session'), false);
+});
+
 test('離席状態は同じ置き場でサーバーを再起動しても残る', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const first = await startServer({ homeDir, claudeHome, port: 0 });
