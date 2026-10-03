@@ -877,6 +877,64 @@ test('再起動後の Codex --wait は実行 ID の定義からモデルと effo
   assert.deepEqual([agent.gpt.model, agent.gpt.effort, agent.gpt.active], ['gpt-5.5-codex', 'xhigh', false]);
 });
 
+test('クロスレビュー定義から Codex の仮モデルを読み、未許可の定義名は行を作らない', async (t) => {
+  const { homeDir, claudeHome } = await temporaryHome(t);
+  const definitionPath = path.join(claudeHome, 'gpt-agents', 'codex-review.md');
+  await fs.mkdir(path.dirname(definitionPath), { recursive: true });
+  await fs.writeFile(definitionPath, '---\ncodex_model: gpt-review-definition\ncodex_reasoning_effort: high\n---\n');
+  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  t.after(() => runtime.close());
+
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const started = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: 'review-definition', hook_event_name: 'PreToolUse', hookAt: 100,
+      tool_name: 'Bash', tool_use_id: 'review-1',
+      summary: `cd "${'D:/long/worktree/path/'.repeat(8)}repo" && npm run review:codex`,
+      codexReviewDefinition: 'codex-review',
+    }),
+    headers,
+  });
+  assert.equal(started.status, 202);
+
+  const initialState = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const [initialAgent] = initialState.sessions.find((session) => session.session_id === 'review-definition').agents;
+  assert.deepEqual([initialAgent.agent_type, initialAgent.model, initialAgent.effort, initialAgent.active], [
+    'codex-review', 'gpt-review-definition', 'high', true,
+  ]);
+
+  const completed = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: 'review-definition', hook_event_name: 'PostToolUse', hookAt: 200,
+      tool_name: 'Bash', tool_use_id: 'review-1',
+      codexOutput: {
+        auditLine: 'codex-agent: agent=codex-review model=gpt-review-actual effort=xhigh sandbox=read-only',
+        resultLine: 'codex-agent: result=ok',
+      },
+    }),
+    headers,
+  });
+  assert.equal(completed.status, 202);
+
+  const rejected = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events',
+    body: JSON.stringify({
+      session_id: 'review-invalid-definition', hook_event_name: 'PreToolUse', hookAt: 300,
+      tool_name: 'Bash', tool_use_id: 'review-invalid', summary: 'npm run review:codex',
+      codexReviewDefinition: 'untrusted-definition',
+    }),
+    headers,
+  });
+  assert.equal(rejected.status, 202);
+
+  const finalState = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const [agent] = finalState.sessions.find((session) => session.session_id === 'review-definition').agents;
+  assert.deepEqual([agent.model, agent.effort, agent.active], ['gpt-review-actual', 'xhigh', false]);
+  assert.deepEqual(finalState.sessions.find((session) => session.session_id === 'review-invalid-definition').agents, []);
+});
+
 test('/plan は秘密値と Origin を照合し、session ID と入力上限を検査する', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/sessions/plan-session/plan';

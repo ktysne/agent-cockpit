@@ -164,6 +164,8 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - Agent ツールの PostToolUse の `resolvedModel` が来たら、モデルを置き換える。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
 - Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
+- Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
+- `npm run review:codex` と `node tools/cross-review.js codex` は `codex-review`、`--fix` 付きと `npm run review:codex:fix` は `codex-subagent` の定義を使い、`--no-codex-agent` 付きは対象にしない。
 - Codex 呼び出しを開始したイベントに親の `agent_id` がある場合は、GPT のモデル、effort、`codex_home` を親の行へまとめる。
 - 親が特定できないメインセッションからの呼び出しは、独立した行にする。
 - 監査行が届いたらモデル、effort、`codex_home` を実際の値に置き換える。

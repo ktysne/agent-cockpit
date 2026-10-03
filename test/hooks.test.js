@@ -223,6 +223,68 @@ test('文字列やヒアドキュメントに書かれた Codex の --wait は�
   assert.equal(extractCodexWaitRunId(`echo "$(printf '%s' 'a; codex-agent.sh --wait ${runId}')"`), '');
 });
 
+test('長い前置きがあっても Bash のクロスレビュー起動を検出して定義名を送る', () => {
+  const command = `cd "${'D:/Desktop/Develop/agent-cockpit/.claude/worktrees/'.repeat(3)}feature" && npm run review:codex 2>&1 | tail -40`;
+  const event = makeHookEvent({
+    session_id: 'codex-review-hook', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'bash-review',
+    tool_input: { command },
+  });
+  assert.ok(event.summary.length <= 80);
+  assert.equal(event.codexReviewDefinition, 'codex-review');
+});
+
+test('クロスレビューの fix 起動と node 起動から定義名を選ぶ', () => {
+  const commands = [
+    ['npm run review:codex:fix', 'codex-subagent'],
+    ['cd /tmp && npm run review:codex -- --fix', 'codex-subagent'],
+    ['node tools/cross-review.js codex', 'codex-review'],
+    ['node tools/cross-review.js codex --fix', 'codex-subagent'],
+    ["node tools/cross-review.js codex '--fix'", 'codex-subagent'],
+    ['npm run review:codex -- "note --no-codex-agent in documentation"', 'codex-review'],
+    ['node tools/cross-review.js codex --no-codex-agent && npm run review:codex', 'codex-review'],
+  ];
+  for (const [command, definition] of commands) {
+    const event = makeHookEvent({
+      session_id: 'codex-review-hook', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: command,
+      tool_input: { command },
+    });
+    assert.equal(event.codexReviewDefinition, definition, command);
+  }
+});
+
+test('文字列やヒアドキュメントのクロスレビュー手順と --no-codex-agent は拾わない', () => {
+  const commands = [
+    `cat <<'EOF'\nnpm run review:codex\nEOF`,
+    'echo "npm run review:codex"',
+    "git commit -m 'node tools/cross-review.js codex --fix'",
+    'npm run review:codex -- --no-codex-agent',
+    'node tools/cross-review.js codex --no-codex-agent',
+    "node tools/cross-review.js codex '--no-codex-agent'",
+  ];
+  for (const command of commands) {
+    const event = makeHookEvent({
+      session_id: 'codex-review-hook', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: command,
+      tool_input: { command },
+    });
+    assert.equal(Object.hasOwn(event, 'codexReviewDefinition'), false, command);
+  }
+});
+
+test('クロスレビュー定義は Bash の許可値だけを受け、既存の起動定義を優先する', () => {
+  const sanitize = (toolName, codexReviewDefinition, summary = 'npm run review:codex') => sanitizeEvent({
+    session_id: 'codex-review-sanitize', hook_event_name: 'PreToolUse', tool_name: toolName,
+    codexReviewDefinition, summary,
+  });
+  assert.equal(sanitize('Bash', 'codex-review').codexDefinition, 'codex-review');
+  assert.equal(sanitize('Bash', 'codex-subagent').codexDefinition, 'codex-subagent');
+  assert.equal(sanitize('Bash', 'untrusted-definition').codexDefinition, null);
+  assert.equal(sanitize('Read', 'codex-review').codexDefinition, null);
+  assert.equal(
+    sanitize('Bash', 'codex-review', 'bash ~/.claude/tools/codex-agent.sh custom < prompt.md').codexDefinition,
+    'custom',
+  );
+});
+
 test('Codex の --wait の状態の行を、監査行と結果行とは別に抜き出す', () => {
   const runId = 'impl-hard-20261003-123456-7';
   const event = makeHookEvent({

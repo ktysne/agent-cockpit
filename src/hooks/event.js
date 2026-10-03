@@ -34,8 +34,8 @@ function inputSummary(toolName, toolInput) {
   return normalizedValue.length > 80 ? `${normalizedValue.slice(0, 79)}…` : normalizedValue;
 }
 
-// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前の、コマンドの位置にある呼び出しだけを見る。
-function extractCodexWaitRunId(command) {
+// 依頼文や文字列に書かれた手順を拾わないため、ヒアドキュメントより前のコマンド位置を残す。
+function commandPositionText(command) {
   const beforeHeredoc = pickString(command).split('<<')[0].replace(/\\\r?\n/g, ' ');
   const characters = [...beforeHeredoc];
   const separator = /[;|&()\r\n]/;
@@ -72,8 +72,63 @@ function extractCodexWaitRunId(command) {
     else if (context === 'substitution' && character === '(') contexts.push('substitution');
     else if (context === 'substitution' && character === ')') contexts.pop();
   }
-  const match = characters.join('').match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
+  return characters.join('');
+}
+
+function extractCodexWaitRunId(command) {
+  const match = commandPositionText(command).match(/(?:^|&&|\|\||[;|(])[ \t]*(?:(?:bash|sh)[ \t]+)?(?:["']?[^\s"';&|<>]*[\\/])?codex-agent(?:\.sh|\.cmd|\.ps1)?["']?[ \t]+--wait[ \t]+["']?([^\s"'`;&|)]+)/im);
   return match ? match[1].slice(0, 256) : '';
+}
+
+function shellArguments(value) {
+  const argumentsList = [];
+  let argument = '';
+  let quote = '';
+  let started = false;
+  const pushArgument = () => {
+    if (started) argumentsList.push(argument);
+    argument = '';
+    started = false;
+  };
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote === "'") {
+      if (character === "'") quote = '';
+      else argument += character;
+    } else if (character === '\\' && quote !== "'") {
+      argument += value[index + 1] || '';
+      index += 1;
+      started = true;
+    } else if (quote === '"') {
+      if (character === '"') quote = '';
+      else argument += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      started = true;
+    } else if (/\s/.test(character)) pushArgument();
+    else {
+      argument += character;
+      started = true;
+    }
+  }
+  pushArgument();
+  return argumentsList;
+}
+
+function extractCodexReviewDefinition(command) {
+  const commandText = commandPositionText(command);
+  const pattern = /(?:^|&&|\|\||[;&|(\r\n])[ \t]*(npm[ \t]+run[ \t]+review:codex:fix|npm[ \t]+run[ \t]+review:codex|node[ \t]+(?:\.[\\/])?tools[\\/]cross-review\.js[ \t]+codex)(?=$|[\s;&|)])/gim;
+  for (const match of commandText.matchAll(pattern)) {
+    const commandStart = match.index + match[0].lastIndexOf(match[1]);
+    const commandTail = commandText.slice(commandStart + match[1].length).split(/[;&|()\r\n]/, 1)[0];
+    const argumentsList = shellArguments(commandTail);
+    if (argumentsList.includes('--no-codex-agent')) continue;
+
+    const fix = /review:codex:fix$/i.test(match[1]) || argumentsList.includes('--fix');
+    return fix ? 'codex-subagent' : 'codex-review';
+  }
+  return '';
 }
 
 function collectAnswerValues(value, output, depth = 0, allowObjectValues = false) {
@@ -175,6 +230,8 @@ function makeHookEvent(input, now = Date.now()) {
       const command = pickString(input.tool_input?.command);
       const codexWaitRunId = extractCodexWaitRunId(command);
       if (codexWaitRunId) event.codexWaitRunId = codexWaitRunId;
+      const codexReviewDefinition = extractCodexReviewDefinition(command);
+      if (codexReviewDefinition) event.codexReviewDefinition = codexReviewDefinition;
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
       if (shouldRefreshPullRequests(command)) event.refreshPullRequestsCommand = true;
     }
