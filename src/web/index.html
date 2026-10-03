@@ -2697,6 +2697,8 @@ function hasUnsentAnswerDraft(state) {
     if (!decision || !decisionAnswerAvailability(decision).active) continue;
     const questionCount = (decision.questions || []).length;
     const sent = decision.answer?.sentAt ? decision.answer : {};
+    const cannotSend = (draft.choice ?? null) === null && (draft.note || '') === (sent.note || '');
+    if (cannotSend) continue;
     if ((draft.choice ?? null) !== (sent.choice ?? null) || (draft.note || '') !== (sent.note || '')
       || !sameAnswerPicks(copyAnswerPicks(draft.picks, questionCount), copyAnswerPicks(sent.picks, questionCount))) return true;
   }

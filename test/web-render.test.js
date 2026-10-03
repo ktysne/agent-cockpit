@@ -181,6 +181,9 @@ test('送った回答と同じ下書きは書きかけと数えない', () => {
 
   const changed = reloadHarness('v1', [[DRAFT_KEY, { choice: 'hold', note: '書き足し', picks: [] }]]);
   assert.equal(changed.context.checkUiVersion(answerableState(sent)), false);
+
+  const unchecked = reloadHarness('v1', [[DRAFT_KEY, { choice: null, note: 'メモ', picks: [] }]]);
+  assert.equal(unchecked.context.checkUiVersion(answerableState(sent)), true);
 });
 
 test('回答できなくなった判断事項と消えた判断事項の下書きは書きかけと数えない', () => {
