@@ -925,12 +925,24 @@ class PullRequestTracker {
 
 function attachMergeState(pullRequest, registrations, owner, repo, state) {
   const registration = registrations.find((record) => record.number === pullRequest.number);
+  const conflictRegistrations = state.pullRequestRegistrationsForRepo(owner, repo)
+    .filter((record) => record.number === pullRequest.number);
+  const conflictRequest = state.pullRequestConflictRequest(owner, repo, pullRequest.number);
+  const activeConflictRequest = conflictRequest?.headRefOid.toLowerCase() === pullRequest.headRefOid.toLowerCase()
+    ? conflictRequest
+    : null;
   const mergeIntent = state.pullRequestMergeIntent(owner, repo, pullRequest.number);
   return {
     ...pullRequest,
     canMerge: mergeIntent ? false : pullRequest.canMerge,
     mergeSessionId: registration?.session_id || pullRequest.mergeSessionId || null,
     mergeRecordKey: registration ? state.pullRequestRegistrationKey(registration) : pullRequest.mergeRecordKey || null,
+    conflictRequestKey: conflictRegistrations.length ? state.pullRequestRegistrationKey(conflictRegistrations[0]) : null,
+    conflictRequestTargets: conflictRegistrations.map((record) => ({
+      sessionId: record.session_id,
+      alive: !state.sessionHasEnded(record.session_id),
+    })),
+    ...(activeConflictRequest ? { conflictRequest: { requestedAt: activeConflictRequest.requestedAt } } : {}),
     reservation: state.pullRequestMergeReservation(owner, repo, pullRequest.number),
     mergeIntent,
     children: pullRequest.children.map((child) => attachMergeState(child, registrations, owner, repo, state)),

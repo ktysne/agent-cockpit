@@ -274,6 +274,10 @@ h3.sub .count { font-weight: normal; }
 .auto-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .merge-confirm { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 8px; background: var(--surface); font-size: 13px; }
 .merge-confirm.auto { border-color: var(--accent); }
+.conflict-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--danger); border-radius: 8px; background: transparent; color: var(--danger); cursor: pointer; }
+.conflict-btn:disabled { cursor: default; opacity: .55; }
+.merge-confirm.conflict { border-color: var(--danger); }
+.merge-confirm.conflict .conflict-go { background: var(--danger); color: var(--on-ok); }
 .merge-confirm .methods { display: flex; gap: 6px; flex-wrap: wrap; }
 .merge-confirm .methods label, .merge-confirm .opt { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .merge-confirm .effects { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
@@ -282,7 +286,7 @@ h3.sub .count { font-weight: normal; }
 .merge-confirm .merge-go { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--ok); color: var(--text); cursor: pointer; }
 .merge-confirm.auto .merge-go { background: var(--accent); color: var(--text); }
 .merge-confirm .ghost { min-height: 40px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
-.merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .auto-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .auto-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .merge-confirm button:disabled { cursor: wait; opacity: .65; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-error { color: var(--danger); font-size: 12px; }
@@ -419,6 +423,10 @@ const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
 const pullRequestMergeMessages = new Map();
 const pullRequestMergeInFlight = new Set();
+const pullRequestConflictConfirmations = new Set();
+const pullRequestConflictMessages = new Map();
+const pullRequestConflictRecipients = new Map();
+const pullRequestConflictInFlight = new Set();
 let routing = { agents: 'default', review: 'default' };
 let codexAgentAvailable = false;
 let crossReviewAvailable = false;
@@ -1125,6 +1133,93 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   target.append(panel);
 }
 
+function pullRequestConflictUiKey(group, pullRequest) {
+  return `${group.owner.toLowerCase()}/${group.repo.toLowerCase()}#${pullRequest.number}`;
+}
+
+function pullRequestConflictTargetNames(pullRequest, aliveOnly = false) {
+  const sessions = Array.isArray(lastState?.sessions) ? lastState.sessions : [];
+  return [...new Set((pullRequest.conflictRequestTargets || [])
+    .filter((target) => !aliveOnly || target.alive)
+    .map((target) => {
+      const session = sessions.find((item) => item.session_id === target.sessionId);
+      return session?.title || session?.session_id || target.sessionId;
+    }))];
+}
+
+function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey) {
+  const panel = element('section', 'merge-confirm conflict');
+  panel.dataset.conflictConfirm = uiKey;
+  panel.setAttribute('aria-label', `PR #${pullRequest.number} の衝突解消依頼の確認`);
+  const heading = element('div');
+  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(' の衝突の解消を依頼する'));
+  panel.append(heading);
+
+  const names = pullRequestConflictTargetNames(pullRequest, true);
+  const effects = element('ul', 'effects');
+  const targetInstruction = element('li');
+  targetInstruction.append(document.createTextNode(`${names.length ? `${names.join('、')} のセッション` : 'PR を登録したセッション'}に、base の `));
+  targetInstruction.append(element('code', '', pullRequest.effectiveBase || pullRequest.baseRefName || group.defaultBranch || ''));
+  targetInstruction.append(document.createTextNode(' を取り込んで衝突を解消し、検証してから push するよう依頼する'));
+  effects.append(targetInstruction);
+  effects.append(element('li', '', 'セッションにはマージしないよう伝える。解消した後に、このカードからマージする'));
+  effects.append(element('li', '', `head が ${pullRequest.headRefOid} から変わると、依頼済みの表示を消す`));
+  panel.append(effects);
+
+  const row = element('div', 'row');
+  const go = element('button', 'merge-go conflict-go', '依頼を送る');
+  go.type = 'button';
+  go.dataset.conflictGo = uiKey;
+  go.disabled = !names.length || !pullRequest.conflictRequestKey || pullRequestConflictInFlight.has(uiKey);
+  const cancel = element('button', 'ghost', 'やめる');
+  cancel.type = 'button';
+  cancel.dataset.conflictCancel = uiKey;
+  row.append(go, cancel);
+  panel.append(row);
+  target.append(panel);
+}
+
+function appendPullRequestConflictControls(line, details, group, pullRequest) {
+  if (!pullRequest.conflict) return;
+  const uiKey = pullRequestConflictUiKey(group, pullRequest);
+  const names = pullRequestConflictTargetNames(pullRequest, true);
+  const button = element('button', 'conflict-btn', pullRequest.conflictRequest ? 'もう一度依頼する' : 'コンフリクト解決');
+  button.type = 'button';
+  button.dataset.conflictOpen = uiKey;
+  button.disabled = !names.length || !pullRequest.conflictRequestKey || pullRequestConflictConfirmations.has(uiKey) || pullRequestConflictInFlight.has(uiKey);
+  line.append(button);
+
+  if (pullRequest.conflictRequest) {
+    const recipients = pullRequestConflictRecipients.get(uiKey) || pullRequestConflictTargetNames(pullRequest);
+    const namesForStatus = recipients.length ? recipients : ['PR を登録したセッション'];
+    const requestedAt = Date.parse(pullRequest.conflictRequest.requestedAt || '');
+    const time = Number.isFinite(requestedAt)
+      ? `${String(new Date(requestedAt).getHours()).padStart(2, '0')}:${String(new Date(requestedAt).getMinutes()).padStart(2, '0')}`
+      : '時刻不明';
+    const status = element('div', 'badges');
+    status.setAttribute('role', 'status');
+    status.append(badge(`${time} に ${namesForStatus.join('、')} のセッションへ衝突の解消を依頼した`, 'accent'));
+    details.append(status);
+  }
+
+  if (!names.length) {
+    const allTargets = pullRequest.conflictRequestTargets || [];
+    const reason = allTargets.length
+      ? `依頼先の ${pullRequestConflictTargetNames(pullRequest).join('、')} のセッションが終了している`
+      : 'PR を登録したセッションがありません';
+    details.append(element('div', 'why-not', `衝突の解消を依頼できない理由: ${reason}`));
+  }
+
+  if (pullRequestConflictConfirmations.has(uiKey)) {
+    appendPullRequestConflictConfirmation(details, group, pullRequest, uiKey);
+  }
+  if (pullRequestConflictMessages.has(uiKey)) {
+    const message = element('div', 'merge-error', pullRequestConflictMessages.get(uiKey));
+    message.setAttribute('role', 'status');
+    details.append(message);
+  }
+}
+
 function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
   const mergeIntent = pullRequest.mergeIntent || null;
@@ -1183,6 +1278,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   item.append(badges);
   if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
   if (pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
+  if (pullRequest.conflict) appendPullRequestConflictControls(line, item, group, pullRequest);
   if (mergeKey && confirmation && !reservation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest, confirmation === 'reserve');
   if (mergeKey && pullRequestMergeMessages.has(mergeKey)) {
     const message = element('div', 'merge-error', pullRequestMergeMessages.get(mergeKey));
@@ -2235,6 +2331,9 @@ function render(state) {
           : active?.dataset?.mergeCancel ? { kind: 'merge-cancel', key: active.dataset.mergeCancel }
             : active?.dataset?.openMerge ? { kind: 'merge-open', key: active.dataset.openMerge }
               : active?.dataset?.openReserve ? { kind: 'merge-open-reserve', key: active.dataset.openReserve }
+                : active?.dataset?.conflictOpen ? { kind: 'merge-conflict-open', key: active.dataset.conflictOpen }
+                  : active?.dataset?.conflictGo ? { kind: 'merge-conflict-go', key: active.dataset.conflictGo }
+                    : active?.dataset?.conflictCancel ? { kind: 'merge-conflict-cancel', key: active.dataset.conflictCancel }
                 : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
                   : active?.dataset?.reserveGo ? { kind: 'merge-reserve-go', key: active.dataset.reserveGo }
                     : active?.dataset?.cancelReservation ? { kind: 'merge-cancel-reservation', key: active.dataset.cancelReservation }
@@ -2266,8 +2365,10 @@ function render(state) {
   }
 
   if (focusData?.kind?.startsWith('merge-')) {
-    const controls = [...root.querySelectorAll('[data-merge-method], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-open-reserve], [data-merge-go], [data-reserve-go], [data-cancel-reservation]')];
-    let control = controls.find((item) => item.dataset.mergeKey === focusData.key && (
+    const controls = [...root.querySelectorAll('[data-merge-method], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-open-reserve], [data-merge-go], [data-reserve-go], [data-cancel-reservation], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
+    let control = focusData.kind.startsWith('merge-conflict-')
+      ? controls.find((item) => item.dataset.conflictGo === focusData.key) || controls.find((item) => item.dataset.conflictOpen === focusData.key)
+      : controls.find((item) => item.dataset.mergeKey === focusData.key && (
       focusData.kind === 'merge-method' ? item.dataset.mergeMethod === focusData.method
         : focusData.kind === 'merge-delete' ? item.hasAttribute('data-merge-delete')
           : focusData.kind === 'merge-cancel' ? item.hasAttribute('data-merge-cancel')
@@ -2596,6 +2697,64 @@ async function runPullRequestMergeAction(button, action) {
   }
 }
 
+function findPullRequestConflictTarget(key) {
+  const find = (group, items) => {
+    for (const pullRequest of items || []) {
+      if (pullRequestConflictUiKey(group, pullRequest) === key) return { group, pullRequest };
+      const nested = find(group, pullRequest.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  for (const group of lastState?.pullRequests || []) {
+    const target = find(group, group.trees);
+    if (target) return target;
+  }
+  return null;
+}
+
+async function runPullRequestConflictRequest(button) {
+  const uiKey = button.dataset.conflictGo;
+  const target = findPullRequestConflictTarget(uiKey || '');
+  if (!target || pullRequestConflictInFlight.has(uiKey)) return;
+  const { pullRequest } = target;
+  if (!pullRequest.conflictRequestKey || !pullRequest.conflict) return;
+
+  const recipients = pullRequestConflictTargetNames(pullRequest, true);
+  if (!recipients.length) return;
+  pullRequestConflictInFlight.add(uiKey);
+  pullRequestConflictMessages.delete(uiKey);
+  button.disabled = true;
+  liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しています。`;
+  if (lastState) render(lastState);
+  try {
+    const response = await postUiAction('/api/pull-requests/conflict-request', {
+      key: pullRequest.conflictRequestKey,
+      headRefOid: pullRequest.headRefOid,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      pullRequestConflictMessages.set(uiKey, result.error || 'PR の状態が変わりました。表示を確認してください。');
+      await refresh();
+      if (lastState) render(lastState);
+      liveStatus.textContent = pullRequestConflictMessages.get(uiKey);
+      return;
+    }
+    pullRequestConflictConfirmations.delete(uiKey);
+    pullRequestConflictRecipients.set(uiKey, recipients);
+    pullRequestConflictMessages.delete(uiKey);
+    await refresh();
+    liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しました。`;
+  } catch {
+    pullRequestConflictMessages.set(uiKey, '操作結果を取得できませんでした。PR の状態を取り直してください。');
+    if (lastState) render(lastState);
+    liveStatus.textContent = pullRequestConflictMessages.get(uiKey);
+  } finally {
+    pullRequestConflictInFlight.delete(uiKey);
+    if (lastState) render(lastState);
+  }
+}
+
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false) {
   button.disabled = true;
   try {
@@ -2647,6 +2806,24 @@ document.addEventListener('click', (event) => {
     pullRequestMergeConfirmations.set(key, button.dataset.openReserve ? 'reserve' : 'merge');
     pullRequestMergeMessages.delete(key);
     if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.conflictOpen) {
+    const uiKey = button.dataset.conflictOpen;
+    pullRequestConflictConfirmations.add(uiKey);
+    pullRequestConflictMessages.delete(uiKey);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.conflictCancel) {
+    const uiKey = button.dataset.conflictCancel;
+    pullRequestConflictConfirmations.delete(uiKey);
+    pullRequestConflictMessages.delete(uiKey);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.conflictGo) {
+    void runPullRequestConflictRequest(button);
     return;
   }
   if (button.dataset.mergeCancel) {

@@ -175,6 +175,109 @@ test('PR マージ口は画面秘密値と Origin 必須照合を行い、owner/
   assert.equal(recordedKeyOnly.status, 404);
 });
 
+test('衝突解消依頼口は画面秘密値と Origin を照合する', async (t) => {
+  const runtime = await runningServer(t);
+  const path = '/api/pull-requests/conflict-request';
+  const body = JSON.stringify({ key: 'c'.repeat(64), headRefOid: 'a'.repeat(40) });
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', origin },
+  });
+  assert.equal(missingSecret.status, 401);
+
+  const wrongSecret = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin },
+  });
+  assert.equal(wrongSecret.status, 401);
+
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+
+  const missingOrigin = await request(runtime.info.port, {
+    method: 'POST', path, body,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  });
+  assert.equal(missingOrigin.status, 403);
+});
+
+test('衝突解消依頼は PR と head と依頼先を取り直し、終了扱いでない登録セッションへ届ける', async (t) => {
+  const state = new DashboardState();
+  const url = 'https://github.com/example/project/pull/42';
+  const product = { product: { key: 'project', name: 'Project' } };
+  for (const sessionId of ['request-active', 'request-ended', 'request-absent']) {
+    state.registerPullRequest(sessionId, { url }, product, 1_790_000_000_000);
+  }
+  state.endSession('request-ended', 1_790_000_000_000);
+  state.endSessionByAbsence('request-absent', 1_790_000_000_000);
+
+  let pullRequest = {
+    number: 42,
+    url,
+    headRefOid: 'a'.repeat(40),
+    headRefName: 'feature/conflict',
+    baseRefName: 'main',
+    conflict: true,
+  };
+  const tracker = {
+    start() {},
+    close() {},
+    async refreshRepoFresh() { return {}; },
+    mergeCandidate() { return pullRequest ? { repository: { defaultBranch: 'main' }, pullRequest } : null; },
+    snapshot() { return []; },
+  };
+  const notices = [];
+  const runtime = await runningServer(t, {
+    state,
+    pullRequestTracker: tracker,
+    answerDelivery: {
+      notifySessions: (sessionIds, message) => { notices.push({ sessionIds, message }); return true; },
+      close() {},
+    },
+    pullRequestMergeOptions: { now: () => 1_790_000_000_000 },
+  });
+  const registration = state.pullRequestRegistrationsForRepo('example', 'project')
+    .find((record) => record.session_id === 'request-active');
+  const key = state.pullRequestRegistrationKey(registration);
+  const path = '/api/pull-requests/conflict-request';
+  const headers = {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.uiSecret,
+    origin: `http://127.0.0.1:${runtime.info.port}`,
+  };
+  const send = (requestKey = key, headRefOid = 'a'.repeat(40)) => request(runtime.info.port, {
+    method: 'POST', path, body: JSON.stringify({ key: requestKey, headRefOid }), headers,
+  });
+
+  assert.equal((await send('f'.repeat(64))).status, 404);
+  pullRequest = null;
+  assert.equal((await send()).status, 404);
+  pullRequest = { ...registration.lastOpen, number: 42, url, headRefOid: 'a'.repeat(40), headRefName: 'feature/conflict', baseRefName: 'main', conflict: false };
+  assert.equal((await send()).status, 409);
+  pullRequest.conflict = true;
+  assert.equal((await send(key, 'b'.repeat(40))).status, 409);
+  state.endSession('request-active', 1_790_000_000_000);
+  assert.equal((await send()).status, 409);
+
+  state.endedAt.delete('request-active');
+  pullRequest.headRefOid = 'a'.repeat(40);
+  const accepted = await send();
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(notices.map((notice) => notice.sessionIds), [['request-active']]);
+  assert.match(notices[0].message, /#42.*https:\/\/github\.com\/example\/project\/pull\/42/);
+  assert.match(notices[0].message, /base ブランチ main を取り込んで衝突を解消し、検証してから push/);
+  assert.match(notices[0].message, /マージしない/);
+  assert.match(notices[0].message, /解消できない場合は、その理由を報告/);
+  assert.deepEqual(state.pullRequestConflictRequest('example', 'project', 42), {
+    owner: 'example', repo: 'project', number: 42, headRefOid: 'a'.repeat(40),
+    requestedAt: new Date(1_790_000_000_000).toISOString(), sessionIds: ['request-active'],
+  });
+});
+
 test('状態推定 API は画面の認証とセッション状態を照合し、結果を保存する', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();

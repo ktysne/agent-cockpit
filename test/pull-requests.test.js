@@ -500,6 +500,50 @@ test('gh が失敗しても PR の取得理由を返し、登録状態を維持�
   assert.deepEqual(group.trees, []);
 });
 
+test('PR の衝突依頼スナップショットは登録セッションの稼働状態を示し、head 変更後は依頼済み表示を外す', () => {
+  const state = new DashboardState();
+  const url = 'https://github.com/example/project/pull/42';
+  for (const sessionId of ['conflict-live', 'conflict-ended']) {
+    state.registerPullRequest(sessionId, { url }, { product: { key: 'project', name: 'Project' } }, 1_790_000_000_000);
+  }
+  state.endSession('conflict-ended', 1_790_000_000_000);
+  state.recordPullRequestConflictRequest({
+    owner: 'example', repo: 'project', number: 42, headRefOid: 'a'.repeat(40),
+    requestedAt: new Date(1_790_000_000_000).toISOString(), sessionIds: ['conflict-live'],
+  });
+
+  const pullRequest = {
+    number: 42,
+    title: 'PR 42',
+    url,
+    headRefName: 'feature/conflict',
+    baseRefName: 'main',
+    headRefOid: 'a'.repeat(40),
+    conflict: true,
+    canMerge: false,
+    children: [],
+  };
+  const tracker = new PullRequestTracker({ state });
+  tracker.productViews = new Map([['project', {
+    owner: 'example', repo: 'project', product: { key: 'project', name: 'Project' },
+    mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
+    registeredCount: 2, openCount: 1, mergeableCount: 0, trees: [pullRequest], merged: [],
+    mergeHistory: [], reservations: [], lastMethod: null,
+  }]]);
+
+  let snapshot = tracker.snapshot()[0].trees[0];
+  assert.deepEqual(snapshot.conflictRequestTargets, [
+    { sessionId: 'conflict-live', alive: true },
+    { sessionId: 'conflict-ended', alive: false },
+  ]);
+  assert.equal(snapshot.conflictRequestKey, state.pullRequestRegistrationKey(state.pullRequestRegistrationsForRepo('example', 'project')[0]));
+  assert.deepEqual(snapshot.conflictRequest, { requestedAt: new Date(1_790_000_000_000).toISOString() });
+
+  pullRequest.headRefOid = 'b'.repeat(40);
+  snapshot = tracker.snapshot()[0].trees[0];
+  assert.equal(Object.hasOwn(snapshot, 'conflictRequest'), false);
+});
+
 test('オープン一覧から消えた PR の状態を gh pr view で確認する', async (t) => {
   const homeDir = await temporaryDirectory(t);
   const state = new DashboardState({ homeDir });

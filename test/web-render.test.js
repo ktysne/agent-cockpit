@@ -1040,6 +1040,94 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   }]));
 });
 
+test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼先を無効化し、依頼済みの状態を表示する', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helpersStart = html.indexOf('function element(tag, className, text)');
+  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
+  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+  const actionStart = html.indexOf('function findPullRequestMergeTarget');
+  const actionEnd = html.indexOf('async function runSessionAction', actionStart);
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
+  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.dataset = {};
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+      this.disabled = false;
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText { constructor(text) { this.textContent = text; } }
+  const key = 'a'.repeat(64);
+  const uiKey = 'example/project#42';
+  const pullRequest = {
+    mergeSessionId: null, number: 42, title: 'Feature PR', url: 'https://github.com/example/project/pull/42',
+    conflictRequestKey: key, headRefOid: 'b'.repeat(40), headRefName: 'feature/conflict',
+    effectiveBase: 'main', baseRefName: 'main', conflict: true, canMerge: false,
+    blocker: 'コンフリクトあり', children: [], conflictRequestTargets: [{ sessionId: 'session-pr', alive: true }],
+  };
+  const group = { owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: [], trees: [pullRequest] };
+  const sent = [];
+  const context = vm.createContext({
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), pullRequestMergeInFlight: new Set(),
+    pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictRecipients: new Map(), pullRequestConflictInFlight: new Set(),
+    lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }], pullRequests: [group] },
+    appendPullRequestBadges() {},
+    crossReviewState: () => ({}),
+    postUiAction: async (url, body) => { sent.push({ url, body }); return { ok: true, json: async () => ({ requestedAt: '2026-10-03T03:04:00.000Z' }) }; },
+    refresh: async () => {}, render() {}, liveStatus: { textContent: '' },
+  });
+  vm.runInContext([
+    html.slice(helpersStart, helpersEnd), html.slice(componentStart, componentEnd), html.slice(actionStart, actionEnd),
+  ].join('\n'), context);
+  const flatten = (node) => [node, ...(node.children || []).flatMap(flatten)];
+  const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
+  const renderPullRequest = (value) => {
+    const root = new FakeElement('div');
+    context.appendPullRequestTree(root, group, value);
+    return flatten(root);
+  };
+
+  let nodes = renderPullRequest(pullRequest);
+  const requestButton = nodes.find((node) => node.dataset?.conflictOpen === uiKey);
+  assert.ok(requestButton);
+  assert.equal(requestButton.textContent, 'コンフリクト解決');
+
+  const nonConflict = renderPullRequest({ ...pullRequest, conflict: false });
+  assert.equal(nonConflict.some((node) => node.dataset?.conflictOpen), false);
+
+  const noTarget = renderPullRequest({ ...pullRequest, conflictRequestTargets: [{ sessionId: 'session-pr', alive: false }] });
+  assert.equal(noTarget.find((node) => node.dataset?.conflictOpen === uiKey).disabled, true);
+  assert.ok(noTarget.some((node) => textOf(node).includes('依頼先の Feature session のセッションが終了している')));
+
+  pullRequest.conflictRequest = { requestedAt: '2026-10-03T03:04:00.000Z' };
+  context.pullRequestConflictConfirmations.add(uiKey);
+  nodes = renderPullRequest(pullRequest);
+  assert.equal(nodes.find((node) => node.dataset?.conflictOpen === uiKey).textContent, 'もう一度依頼する');
+  assert.ok(nodes.some((node) => textOf(node).includes('Feature session のセッションへ衝突の解消を依頼した')));
+  assert.match(textOf(nodes.find((node) => node.attributes?.role === 'status')), /^\d{2}:\d{2} に Feature session/);
+  assert.ok(nodes.find((node) => node.dataset?.conflictConfirm === uiKey));
+  assert.equal(nodes.filter((node) => node.tagName === 'li').length, 3);
+  assert.ok(nodes.some((node) => node.dataset?.conflictGo === uiKey && node.textContent === '依頼を送る'));
+  assert.ok(nodes.some((node) => node.dataset?.conflictCancel === uiKey && node.textContent === 'やめる'));
+  await context.runPullRequestConflictRequest({ dataset: { conflictGo: uiKey } });
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [{
+    url: '/api/pull-requests/conflict-request', body: { key, headRefOid: 'b'.repeat(40) },
+  }]);
+});
+
 test('GitHub がブランチを自動削除する確認欄はチェックを隠してマージと予約に false を送る', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpersStart = html.indexOf('function element(tag, className, text)');
@@ -1390,6 +1478,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
     ['merge-reserve-go', 'reserveGo', 'data-reserve-go'],
     ['merge-cancel-reservation', 'cancelReservation', 'data-cancel-reservation'],
     ['merge-open', 'openMerge', 'data-open-merge'],
+    ['conflict-open', 'conflictOpen', 'data-conflict-open'],
   ]) {
     let activeElement;
     const key = `merge-${kind}`;

@@ -296,6 +296,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .auto-btn { background: none; color: var(--ok); border: 1px solid var(--ok); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-confirm.auto { border-color: var(--accent); }
+.conflict-btn { background: none; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
+.conflict-btn:disabled { cursor: default; opacity: .55; }
+.merge-confirm.conflict { border-color: var(--danger); }
+.merge-confirm .conflict-go { background: var(--danger); color: var(--on-ok); }
 .merge-confirm.auto .merge-go { background: var(--accent); }
 
 @media (max-width: 640px) {
@@ -463,8 +467,9 @@ const DATA = {
       prs: [
         { number: 57, title: 'ロックされた worktree を検出する', head: 'fix/worktree-scan', base: 'main', sha: '3b9e5d0', ci: 'fail', review: 'none', conflict: false, draft: false,
           xr: { round: 1, reviewedSha: '3b9e5d0', dismissed: 0, triage: { round: 1, sha: '3b9e5d0', outcome: 'fixing' } } },
+        // requestSession は PR を登録したセッション。衝突の解消の依頼はここへ届け、alive が偽なら依頼できない。
         { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false,
-          xr: null },
+          requestSession: { name: '確認ダイアログの追加', alive: true }, xr: null },
         { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
       ],
     },
@@ -522,7 +527,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); } catch {} };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {} }, load());
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
 ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
@@ -993,6 +998,39 @@ function mergeConfirm(p, pr, auto) {
   </div>`;
 }
 
+// 衝突の解消は PR を登録したセッションに頼む。ダッシュボードはマージ以外の変更を自分では行わない。
+function conflictConfirm(p, pr) {
+  const k = prKey(p, pr.number);
+  const e = effective(p, pr);
+  const effects = [
+    `${esc(pr.requestSession.name)} のセッションに、base の <code>${esc(e.base)}</code> を取り込んで衝突を解消し、push するよう依頼する`,
+    'セッションにはマージしないよう伝える。解消した後に、このカードからマージする',
+    `head が ${esc(pr.sha)} から変わると、依頼済みの表示を消す`,
+  ];
+  return `<div class="merge-confirm conflict" data-pr="${k}">
+    <div><strong>#${pr.number}</strong> の衝突の解消を依頼する</div>
+    <ul class="effects">${effects.map(x => `<li>${x}</li>`).join('')}</ul>
+    <div class="row"><button type="button" class="merge-go conflict-go" data-conflict-go="${k}">依頼を送る</button>
+      <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
+  </div>`;
+}
+
+function conflictButton(p, pr) {
+  if (!pr.conflict || !pr.requestSession) return '';
+  const k = prKey(p, pr.number);
+  const label = ui.conflictRequested[k] ? 'もう一度依頼する' : 'コンフリクト解決';
+  const disabled = !pr.requestSession.alive || ui.confirm === `conflict:${k}`;
+  return `<button type="button" class="conflict-btn" data-conflict="${k}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+}
+
+function conflictStatus(p, pr) {
+  if (!pr.conflict || !pr.requestSession) return '';
+  const k = prKey(p, pr.number);
+  if (!pr.requestSession.alive) return `<div class="why-not">衝突の解消を依頼できない理由: 依頼先の ${esc(pr.requestSession.name)} のセッションが終了している</div>`;
+  const at = ui.conflictRequested[k];
+  return at ? `<div class="badges"><span class="badge accent">${esc(at)} に ${esc(pr.requestSession.name)} のセッションへ衝突の解消を依頼した</span></div>` : '';
+}
+
 function prItem(p, pr) {
   const k = prKey(p, pr.number);
   const blocker = mergeBlocker(p, pr);
@@ -1006,6 +1044,7 @@ function prItem(p, pr) {
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
       ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>`}
       ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
+      ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
@@ -1015,6 +1054,8 @@ function prItem(p, pr) {
       <button type="button" class="link-btn" data-ci-pass="${k}">モック: CI の成功を再現する</button></div>` : ''}
     ${blocker && !rsv ? `<div class="why-not">マージできない理由: ${esc(blocker)}
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
+    ${conflictStatus(p, pr)}
+    ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
     ${ui.confirm === k && !blocker ? mergeConfirm(p, pr, false) : ''}
     ${ui.confirm === k && reservable ? mergeConfirm(p, pr, true) : ''}
   </div>`;
@@ -1379,6 +1420,12 @@ document.addEventListener('click', e => {
     ui.order = vis;
   } else if (t.dataset.merge) {
     ui.confirm = t.dataset.merge;
+  } else if (t.dataset.conflict) {
+    ui.confirm = `conflict:${t.dataset.conflict}`;
+  } else if (t.dataset.conflictGo) {
+    const now = new Date();
+    ui.conflictRequested[t.dataset.conflictGo] = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    ui.confirm = null;
   } else if (t.hasAttribute('data-merge-cancel')) {
     ui.confirm = null;
   } else if (t.dataset.mergeGo) {

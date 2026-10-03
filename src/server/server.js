@@ -472,7 +472,7 @@ function createRequestHandler(options) {
       jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
       return;
     }
-    const pullRequestMergePath = requestUrl.pathname.match(/^\/api\/pull-requests\/(merge|reserve|cancel-reservation)$/);
+    const pullRequestMergePath = requestUrl.pathname.match(/^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/);
     if (request.method === 'POST' && pullRequestMergePath) {
       if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -490,22 +490,27 @@ function createRequestHandler(options) {
         return;
       }
       const action = pullRequestMergePath[1];
-      const expectedFields = action === 'cancel-reservation'
+      const isConflictRequest = action === 'conflict-request';
+      const expectedFields = isConflictRequest ? ['headRefOid', 'key'] : action === 'cancel-reservation'
         ? ['number', 'registration_key']
         : ['deleteBranch', 'headRefOid', 'method', 'number', 'registration_key'];
       if (!body || typeof body !== 'object' || Array.isArray(body) ||
         Object.keys(body).sort().join(',') !== expectedFields.join(',') ||
-        !Number.isSafeInteger(body.number) || body.number < 1 || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
-        (action !== 'cancel-reservation' && (typeof body.headRefOid !== 'string' || body.headRefOid.length > 64 ||
-          typeof body.method !== 'string' || typeof body.deleteBranch !== 'boolean'))) {
+        (isConflictRequest
+          ? (!/^[a-f0-9]{64}$/i.test(body.key || '') || typeof body.headRefOid !== 'string' || body.headRefOid.length > 64)
+          : (!Number.isSafeInteger(body.number) || body.number < 1 || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
+            (action !== 'cancel-reservation' && (typeof body.headRefOid !== 'string' || body.headRefOid.length > 64 ||
+              typeof body.method !== 'string' || typeof body.deleteBranch !== 'boolean'))))) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const result = action === 'merge'
-        ? await pullRequestMergeManager.merge(body)
-        : action === 'reserve'
-          ? await pullRequestMergeManager.reserve(body)
-          : await pullRequestMergeManager.cancelReservation(body);
+      const result = isConflictRequest
+        ? await pullRequestMergeManager.requestConflictResolution(body)
+        : action === 'merge'
+          ? await pullRequestMergeManager.merge(body)
+          : action === 'reserve'
+            ? await pullRequestMergeManager.reserve(body)
+            : await pullRequestMergeManager.cancelReservation(body);
       await state.waitForPersistence();
       jsonResponse(response, result.ok ? 200 : result.status, result.ok ? result : { error: result.error });
       return;

@@ -93,6 +93,17 @@ class PullRequestMergeManager {
     return registration;
   }
 
+  registeredPullRequestByKey(registrationKey) {
+    const registration = this.state.pullRequestRegistrationByKey(registrationKey);
+    if (!registration || !validRepositoryPart(registration.owner) || !validRepositoryPart(registration.repo)) return null;
+    try {
+      safeRepo(registration.owner, registration.repo);
+    } catch {
+      return null;
+    }
+    return registration;
+  }
+
   merge(input) {
     const registration = this.registeredPullRequest(input.number, input.registration_key);
     if (!registration) return Promise.resolve(actionResult(404, '記録された PR が見つかりません'));
@@ -121,6 +132,55 @@ class PullRequestMergeManager {
     return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
       this.performCancelReservation(registration, '開発者がダッシュボードからマージ予約を取り消した')
     ));
+  }
+
+  requestConflictResolution(input) {
+    const registration = this.registeredPullRequestByKey(input.key);
+    if (!registration) return Promise.resolve(actionResult(404, '記録された PR が見つかりません'));
+    if (!SHA_PATTERN.test(input.headRefOid || '')) {
+      return Promise.resolve(actionResult(400, '衝突の解消依頼の head SHA を確認してください'));
+    }
+    return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
+      this.performConflictRequest(registration, input)
+    ));
+  }
+
+  async performConflictRequest(registration, input) {
+    const candidate = await this.freshCandidate(registration);
+    if (candidate.error) {
+      const missing = candidate.error.includes('オープンの記録済みスタックにありません');
+      return actionResult(missing ? 404 : 502, candidate.error);
+    }
+    const pullRequest = candidate.pullRequest;
+    if (!pullRequest.conflict) return actionResult(409, 'この PR に現在コンフリクトはありません');
+    if (pullRequest.headRefOid.toLowerCase() !== input.headRefOid.toLowerCase()) {
+      return actionResult(409, '表示していた head SHA と現在の head SHA が異なります。状態を確認してください');
+    }
+    const registrations = this.state.pullRequestRegistrationsForRepo(registration.owner, registration.repo)
+      .filter((record) => record.number === registration.number);
+    const sessionIds = unique(registrations
+      .filter((record) => !this.state.sessionHasEnded(record.session_id))
+      .map((record) => record.session_id));
+    if (!sessionIds.length) return actionResult(409, '衝突の解消を依頼できる稼働中のセッションがありません');
+
+    const message = [
+      `PR #${registration.number} (${pullRequest.url}) の衝突を解消してください。`,
+      `base ブランチ ${pullRequest.baseRefName} を取り込んで衝突を解消し、検証してから push してください。`,
+      'この PR はマージしないでください。',
+      '衝突を解消できない場合は、その理由を報告してください。',
+    ].join('\n');
+    this.answerDelivery?.notifySessions(sessionIds, message);
+    const requestedAt = new Date(this.now()).toISOString();
+    this.state.recordPullRequestConflictRequest({
+      owner: registration.owner,
+      repo: registration.repo,
+      number: registration.number,
+      headRefOid: pullRequest.headRefOid,
+      requestedAt,
+      sessionIds,
+    });
+    await this.state.waitForPersistence?.();
+    return { ok: true, requestedAt };
   }
 
   async freshCandidate(registration) {
