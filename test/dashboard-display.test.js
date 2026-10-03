@@ -543,7 +543,6 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendTasks(target) { target.append({ marker: 'task' }); },
       hidesFinishedSession: () => false,
       appendAgents(target) { target.append({ marker: 'agent' }); },
-      appendUnknownSessionControls(target) { target.append({ marker: 'unknown' }); },
       mainRow: () => ({ marker: 'main' }),
     });
     vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, renderKinds, renderSession].join('\n'), context);
@@ -561,13 +560,13 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
   assert.deepEqual(defaultResult.kindSections, [
     'kindProductOrder', '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること', 'プルリクエスト',
   ]);
-  assert.deepEqual(defaultResult.sessionParts, ['あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent', 'unknown']);
+  assert.deepEqual(defaultResult.sessionParts, ['あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent']);
 
   const customResult = renderWithOrder(['prs', 'now', 'tasks', 'judgment', 'sinceSeen']);
   assert.deepEqual(customResult.kindSections, [
     'kindProductOrder', 'プルリクエスト', '今やっていること', 'タスクと完了条件', 'あなたの判断が必要なこと', '前回見てから',
   ]);
-  assert.deepEqual(customResult.sessionParts, ['今やっていること', 'now-content', 'agent', 'task', 'あなたの判断が必要なこと', 'permission', 'decision', 'unknown']);
+  assert.deepEqual(customResult.sessionParts, ['今やっていること', 'now-content', 'agent', 'task', 'あなたの判断が必要なこと', 'permission', 'decision']);
 });
 
 test('種類別のタスクにはタスクがあるセッションだけを含める', () => {

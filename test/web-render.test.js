@@ -1228,7 +1228,6 @@ test('終わったセッションはタスクだけを描き、種類別の今�
     appendTasks: marker('tasks'),
     mainRow: () => { rendered.push('main'); return new FakeElement('main'); },
     appendAgents: marker('agents'),
-    appendUnknownSessionControls: marker('unknown'),
   });
   vm.runInContext(functions.join('\n'), context);
   const finished = {
@@ -1240,7 +1239,7 @@ test('終わったセッションはタスクだけを描き、種類別の今�
   rendered.length = 0;
   context.displayPreferences.hideFinished = false;
   context.sessionBlock({ branches: new Set() }, finished, true);
-  assert.deepEqual(rendered, ['permissions', 'decisions', 'tasks', 'main', 'agents', 'unknown']);
+  assert.deepEqual(rendered, ['permissions', 'decisions', 'tasks', 'main', 'agents']);
 
   const kind = pageHtml.match(/function renderKindSections\(products\) \{[^]*?\n\}/)?.[0];
   assert.match(kind, /if \(hidesFinishedSession\(session\)\) continue;\n    activityItems\.push/);

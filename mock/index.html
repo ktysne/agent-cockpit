@@ -209,7 +209,8 @@ h3.sub .count { font-weight: normal; }
 .check.hold input { accent-color: var(--hold); }
 .check.ok input { accent-color: var(--ok); }
 textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
-.answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
+.decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .primary { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .primary:disabled { opacity: .4; cursor: default; }
 .sent { font-size: 12px; color: var(--text-2); }
@@ -288,7 +289,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .ended-toggle { margin-top: 6px; min-height: 32px; padding: 2px 10px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
 .ended-toggle:hover { color: var(--text); }
 .ended-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.estimate { display: grid; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
+.session-extra { display: grid; grid-column: 1 / -1; gap: 8px; margin-top: -2px; }
+.session-extra .session-actions { margin-top: 0; }
+.estimate { display: grid; gap: 6px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); font-size: 12px; }
 .estimate p { margin: 0; }
 .session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
@@ -869,14 +872,17 @@ function sessionTag(p, session, withTag, includeSession = false) {
 }
 
 function mainRow(p, session, withTag) {
+  const unknown = session.status === 'unknown';
+  const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
-  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : '状態不明';
+  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : '状態不明 (時刻不明)';
   const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
-  const tool = session.main.tool || '—';
-  return `<div class="now-row">
+  const tool = estimate ? '' : session.main.tool || '—';
+  return `<div class="now-row main-row">
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<b>${status}</b></div>
-      <div>${taskTitle ? esc(taskTitle) : ''}${renderToolLine(tool)}</div>
-      <div class="since">${esc(session.main.since || '')}</div></div>`;
+      <div>${taskTitle ? esc(taskTitle) : ''}${tool ? renderToolLine(tool) : ''}</div>
+      ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
+      ${unknownSessionControls(session)}</div>`;
 }
 
 function renderToolLine(tool) {
@@ -990,11 +996,17 @@ function decisionCard(p, session, d, withTag) {
   const picked = picksOf(a).map(i => d.options[i].t);
   const sentKind = s => s.choice === 'ok' ? '推奨案で OK' : s.choice === 'hold' ? '判断を保留' : s.choice === 'pick' ? `「${picksOf(s).map(i => d.options[i].t).join('」「')}」を選択` : '指示のみ';
   const sentLine = a.sent
-    ? `<span class="sent">${a.sent.at} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
+    ? `<span class="sent answer-status">${a.sent.at} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${a.sent.deliveredAt} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
   const dirty = answerDirty(a);
   const long = state === 'waiting' && !a.sent && isLongWait(d.waitMin);
   const active = (state === 'waiting' && !viaDialog) || state === 'provisional';
+  const chosen = Array.isArray(d.resolution?.chosen) ? d.resolution.chosen.join('、') : d.resolution?.chosen;
+  const summary = [
+    chosen ? `<span class="meta">選択: ${esc(chosen)}</span>` : '',
+    d.resolution?.note ? `<span class="meta">${esc(d.resolution.note)}</span>` : '',
+    !active && !viaDialog ? sentLine : '',
+  ].filter(Boolean).join('');
   const elapsed = state === 'waiting' ? `${waitLabel(d.waitMin)}${viaDialog ? '' : `<span class="wait">あと ${d.awaitingMin} 分で推奨に進む</span>`}` : state === 'provisional' ? `<span class="wait">仮適用から ${d.waitMin} 分</span>` : '';
   return `<article class="decision ${stateClass} ${long ? 'long-wait' : ''}" data-id="${d.id}">
     <div class="dhead">${isNew(p, d) ? '<span class="new-mark">新着</span>' : ''}${sessionTag(p, session, withTag)}<span class="dtitle">${esc(d.title)}</span>${stateChip}${elapsed}</div>
@@ -1017,7 +1029,8 @@ function decisionCard(p, session, d, withTag) {
         <button type="button" class="primary" data-send ${!canSend(a) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${sentLine}
       </div>
-    </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} のセッションで答える。</div>` : sentLine ? `<div class="answer-foot">${sentLine}</div>` : ''}</article>`;
+    </div>` : viaDialog ? `<div class="meta dialog-note">質問はデスクトップアプリの ${esc(p.name)} のセッションで答える。</div>` : ''}
+    ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
 }
 
 const CROSS_REVIEW_MAX_ROUNDS = 3;
@@ -1185,6 +1198,7 @@ function conflictStatus(p, pr) {
 function prItem(p, pr) {
   const k = prKey(p, pr.number);
   const blocker = mergeBlocker(p, pr);
+  const mergeIntent = Boolean(pr.mergeIntent);
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
@@ -1193,8 +1207,9 @@ function prItem(p, pr) {
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
-      ${blocker ? '' : `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>`}
-      ${reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
+      ${mergeIntent ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : ''}
+      ${!mergeIntent && !blocker ? `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>` : ''}
+      ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
       ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
@@ -1203,7 +1218,7 @@ function prItem(p, pr) {
     ${rsv ? `<div class="badges"><span class="badge accent">マージ予約中(${METHOD_LABEL[rsv.method]}、${esc(rsv.at)} に予約、head ${esc(pr.sha)})</span>
       <button type="button" class="link-btn" data-unreserve="${k}">予約を取り消す</button>
       <button type="button" class="link-btn" data-ci-pass="${k}">モック: CI の成功を再現する</button></div>` : ''}
-    ${blocker && !rsv ? `<div class="why-not">マージできない理由: ${esc(blocker)}
+    ${blocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(blocker)}
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
     ${conflictStatus(p, pr)}
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
@@ -1344,10 +1359,10 @@ function unknownSessionControls(session) {
   if (session.status !== 'unknown') return '';
   const estimate = ui.estimatedSessions.includes(session.id)
     ? session.estimate?.canEstimate
-      ? `<div class="estimate"><p>最後の記録: ${esc(session.estimate.recordedAt)}、最後のツール: ${esc(session.estimate.tool)}</p><p>入力待ちらしい: ${ESTIMATE_WAITING[session.estimate.state]}</p></div>`
+      ? `<div class="estimate"><p>最後の記録: ${esc(session.estimate.recordedAt)}、最後のツール: ${esc(session.estimate.lastTool ?? session.estimate.tool ?? 'なし')}</p><p>入力待ちらしい: ${ESTIMATE_WAITING[session.estimate.state]}</p></div>`
       : '<div class="estimate">推定できませんでした</div>'
     : '';
-  return `<div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}`;
+  return `<div class="session-extra"><div class="session-actions"><button type="button" class="ended-toggle" data-estimate="${esc(session.id)}">状態を推定</button><button type="button" class="ended-toggle" data-hide-session="${esc(session.id)}">一覧から外す</button></div>${estimate}</div>`;
 }
 
 function sessionBlock(p, session) {
@@ -1359,7 +1374,7 @@ function sessionBlock(p, session) {
     || (!ui.hideFinished && session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d))))
     || !hasHiddenJudgmentItems(session);
   return `<div class="session-group ${multiple ? '' : 'single'}">
-    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}<span class="badge ${status[1]}">${status[0]}</span></div>` : ''}
+    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}${hidesFinishedSession(session) ? `<span class="badge ${status[1]}">${status[0]}</span>` : ''}</div>` : ''}
     <div class="session-body">
       ${hidesFinishedSession(session) ? taskSessionBlock(p, session, false) : orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
@@ -1369,7 +1384,6 @@ function sessionBlock(p, session) {
         now: `<h3 class="sub">今やっていること</h3><div class="now">${mainRow(p, session, false)}</div>
       ${agentSection(p, session, false)}`,
       })[key]).join('')}
-      ${unknownSessionControls(session)}
     </div>
   </div>`;
 }
@@ -1473,12 +1487,10 @@ function renderKindMode() {
     ];
   }).sort((a, b) => a.age - b.age);
   const endedAgentCount = kindEndedAgentCount(sessions);
-  const unknownActions = sessions.filter(({ session }) => session.status === 'unknown')
-    .map(({ p, session }) => `<div class="kind-unknown"><div class="meta">${sessionTag(p, session, true)}</div>${unknownSessionControls(session)}</div>`).join('');
   const endedAgentToggle = endedAgentCount
     ? kindToggle('agents', '終了済み', endedAgentCount, showEndedAgents)
     : '';
-  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${unknownActions}${endedAgentToggle}`;
+  const now = `<div class="now">${nowRowsByAge.map(row => row.html).join('') || '<div class="empty">ありません</div>'}</div>${endedAgentToggle}`;
   const taskSessions = sessions.filter(({ session }) => session.tasks.length > 0);
   const taskGroups = taskSessions.map(({ p, session }) => kindTaskSessionBlock(p, session, ui.expandedKindTasks));
   const doneTaskCount = kindDoneTaskCount(sessions);
