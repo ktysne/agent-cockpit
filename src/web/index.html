@@ -919,11 +919,32 @@ function isFullCommitSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
 }
 
-// tools/cross-review.js の無い worktree の PR と登録の無い関連 PR には crossReview が付かないので、行も警告も出さない。
+function isCompleteCommitSha(value) {
+  return typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
+}
+
+// 「レビュー済み」は、主セッションが記録した結論が converged で、その SHA が今の head のときだけ言う。
+// 結論の記録が無ければ、最後にレビューに回した head との比較だけを出す。
 function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
   if (!review) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  const triage = review.triage;
+  if (triage && review.round > triage.round) return { cls: 'warn', text: `${review.round} 往復目の結論待ち`, warn: `クロスレビューの ${review.round} 往復目の結論がまだ出ていない` };
+  if (triage && triage.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${triage.round} 往復目の指摘に対応している途中` };
+  if (triage && triage.outcome === 'halted') return { cls: 'warn', text: '開発者の判断待ち', warn: 'クロスレビューは開発者の判断を待って止まっている' };
+  if (triage && triage.outcome === 'converged') {
+    if (!isCompleteCommitSha(pullRequest.headRefOid)) return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
+    const triageSha = triage.sha.toLowerCase();
+    const headSha = pullRequest.headRefOid.toLowerCase();
+    if (triageSha === headSha) return { cls: 'ok', text: 'レビュー済み', warn: null, note: `クロスレビューはこの head で収束した (${triage.round} 往復目)` };
+    const triageShortSha = triageSha.slice(0, 7);
+    return {
+      cls: 'warn',
+      text: `収束の後に変更あり (収束 ${triageShortSha})`,
+      warn: `head ${headSha.slice(0, 7)} はクロスレビューの収束の後に変更されている (収束は ${triageShortSha})`,
+    };
+  }
   if (!isFullCommitSha(review.reviewedSha) || !isFullCommitSha(pullRequest.headRefOid)) {
     return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
   }

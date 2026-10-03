@@ -644,13 +644,55 @@ test('クロスレビュー状態は PR head ブランチの往復数、非対�
   await fs.mkdir(path.join(root, '.git'));
   await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
-    branches: { 'feat/pr': { round: 2, dismissed: ['一件目', '二件目'], lastReviewedSha: 'A'.repeat(40) } },
+    branches: { 'feat/pr': {
+      round: 2,
+      dismissed: ['一件目', '二件目'],
+      lastReviewedSha: 'A'.repeat(40),
+      lastTriage: { round: 2, sha: 'B'.repeat(64), outcome: 'converged' },
+    } },
   }));
   const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
   assert.deepEqual(value, {
-    number: 55, branch: 'feat/pr', round: 2, max: 3, dismissed: 2, reviewedSha: 'a'.repeat(40),
+    number: 55,
+    branch: 'feat/pr',
+    round: 2,
+    max: 3,
+    dismissed: 2,
+    reviewedSha: 'a'.repeat(40),
+    triage: { round: 2, sha: 'b'.repeat(64), outcome: 'converged' },
   });
   assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'missing' }), null);
+});
+
+test('不正な lastTriage は null にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  const invalidTriages = [
+    { round: 1, sha: 'a'.repeat(7), outcome: 'converged' },
+    { round: 1, sha: 'a'.repeat(40), outcome: 'unknown' },
+    { round: 0, sha: 'a'.repeat(40), outcome: 'fixing' },
+  ];
+
+  for (const lastTriage of invalidTriages) {
+    await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+      branches: { 'feat/pr': { round: 2, dismissed: [], lastTriage } },
+    }));
+    const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
+    assert.equal(value.triage, null);
+  }
+});
+
+test('lastTriage が無い旧形式では triage を null にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
+  }));
+
+  const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
+  assert.equal(value.triage, null);
 });
 
 test('tools/cross-review.js が無い worktree は状態ファイルがあっても undefined を返す', async (t) => {
@@ -698,7 +740,12 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
     branches: {
-      'feat/open': { round: 2, dismissed: ['指摘'], lastReviewedSha: openSha },
+      'feat/open': {
+        round: 2,
+        dismissed: ['指摘'],
+        lastReviewedSha: openSha,
+        lastTriage: { round: 2, sha: openSha, outcome: 'fixing' },
+      },
       'feat/merged': { round: 1, dismissed: [], lastReviewedSha: mergedSha },
     },
   }));
@@ -730,6 +777,7 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   const [group] = tracker.snapshot();
   assert.deepEqual(group.trees[0].crossReview, {
     round: 2, max: 3, dismissed: 1, reviewedSha: openSha,
+    triage: { round: 2, sha: openSha, outcome: 'fixing' },
   });
   assert.equal(group.trees.find((pullRequest) => pullRequest.number === 33).crossReview, null);
   const merged = group.merged.find((pullRequest) => pullRequest.number === 32);
@@ -784,7 +832,9 @@ for (const [higher, lower] of [['valid', 'missing'], ['valid', 'null'], ['null',
 
       const [group] = tracker.snapshot();
       if (higher === 'valid') {
-        assert.deepEqual(group.trees[0].crossReview, { round: 1, max: 3, dismissed: 0, reviewedSha: headSha });
+        assert.deepEqual(group.trees[0].crossReview, {
+          round: 1, max: 3, dismissed: 0, reviewedSha: headSha, triage: null,
+        });
       } else {
         assert.equal(group.trees[0].crossReview, null);
       }

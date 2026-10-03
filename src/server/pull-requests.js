@@ -424,6 +424,14 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
     const branchState = parsed?.branches?.[branch];
     if (!branchState || !Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return null;
     const lastReviewedSha = branchState.lastReviewedSha;
+    const lastTriage = branchState.lastTriage;
+    const triageSha = lastTriage?.sha;
+    const triageOutcome = lastTriage?.outcome;
+    const triage = Number.isSafeInteger(lastTriage?.round) && lastTriage.round >= 1
+      && typeof triageSha === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(triageSha)
+      && ['fixing', 'converged', 'halted'].includes(triageOutcome)
+      ? { round: lastTriage.round, sha: triageSha.toLowerCase(), outcome: triageOutcome }
+      : null;
     return {
       number: registration.number,
       branch,
@@ -433,6 +441,7 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
       reviewedSha: typeof lastReviewedSha === 'string' && /^[0-9a-f]{40}$/i.test(lastReviewedSha)
         ? lastReviewedSha.toLowerCase()
         : null,
+      triage,
     };
   } catch {
     return null;
@@ -846,6 +855,7 @@ class PullRequestTracker {
         max: review.max,
         dismissed: review.dismissed,
         reviewedSha: review.reviewedSha,
+        triage: review.triage,
       });
     }
     for (const [productKey, group] of productGroups) {
