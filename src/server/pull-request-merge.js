@@ -146,7 +146,7 @@ class PullRequestMergeManager {
     return [...stacked.values()];
   }
 
-  async processMergedPullRequest(owner, repo, pullRequest, mergedAt) {
+  async processMergedPullRequest(owner, repo, pullRequest, mergedAt, confirmedIntent = null) {
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo)
       .filter((record) => record.number === pullRequest.number);
     const related = this.state.relatedPullRequestRegistrationsForRepo(owner, repo)
@@ -160,6 +160,7 @@ class PullRequestMergeManager {
       repo,
       pullRequest,
       mergedAt,
+      confirmedIntent,
       reservation: this.state.pullRequestMergeReservation(owner, repo, pullRequest.number),
       registrations,
       stackedPullRequests: this.stackedPullRequests({
@@ -270,7 +271,7 @@ class PullRequestMergeManager {
       // マージキューでは方式の指定が効かず、キューの所属も gh から取れないので、意図を持たずに外でのマージとして扱う。
       this.state.clearPullRequestMergeIntent(registration.owner, registration.repo, registration.number);
       this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
-      await this.state.waitForPersistence?.();
+      await this.state.flushStoreWrite().catch(() => {});
       return {
         ok: true,
         merged: false,
@@ -286,7 +287,8 @@ class PullRequestMergeManager {
 
     this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
     const mergedAt = view.mergedAt || new Date(this.now()).toISOString();
-    const outcome = await this.processMergedPullRequest(registration.owner, registration.repo, view.pullRequest, mergedAt);
+    // gh の後に MERGED を確かめたので、この操作の意図は方式と削除の根拠にしてよい。
+    const outcome = await this.processMergedPullRequest(registration.owner, registration.repo, view.pullRequest, mergedAt, mergeIntent);
     await this.tracker.refreshRepo(registration.owner, registration.repo).catch(() => {});
     await this.state.waitForPersistence?.();
     const history = this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now())
@@ -495,7 +497,7 @@ class PullRequestMergeManager {
   }
 
   async handleDetectedMerge(event) {
-    const { owner, repo, pullRequest, mergedAt, registrations = [] } = event;
+    const { owner, repo, pullRequest, mergedAt, registrations = [], confirmedIntent = null } = event;
     if (!pullRequest) return null;
     const mergeKey = `${owner.toLowerCase()}/${repo.toLowerCase()}#${pullRequest.number}`;
     if (this.handledMerges.has(mergeKey)) return this.mergeOutcomes.get(mergeKey) || null;
@@ -513,7 +515,8 @@ class PullRequestMergeManager {
       title: pullRequest.title,
       url: pullRequest.url,
       mergedAt,
-      method: reservation?.method || mergeIntent?.method || null,
+      // 残った意図は、結果を確かめられなかった操作の記録なので、方式と削除の根拠にしない(キューでは方式の指定も効かない)。
+      method: reservation?.method || confirmedIntent?.method || null,
       automatic: Boolean(reservation),
       reservedHeadRefOid: expectedHeadRefOid,
       mergedHeadRefOid: pullRequest.headRefOid || null,
@@ -565,7 +568,7 @@ class PullRequestMergeManager {
       }
     }
     let branchDeleted = false;
-    const deleteBranch = reservation?.deleteBranch || mergeIntent?.deleteBranch;
+    const deleteBranch = reservation?.deleteBranch === true || confirmedIntent?.deleteBranch === true;
     if (deleteBranch && pullRequest.isCrossRepository) {
       warning = [warning, 'fork からの PR の head ブランチは登録先リポジトリから削除しませんでした'].filter(Boolean).join('。');
     } else if (deleteBranch && !headMismatch && canDeleteBranch && validBranchName(pullRequest.headRefName)) {

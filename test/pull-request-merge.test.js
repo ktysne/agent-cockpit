@@ -73,6 +73,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     blockAfterEdit: false,
     queueMerge: false,
     keepAutoMerge: false,
+    failView: false,
     defaultBranch: 'main',
     waitForMerge: null,
   };
@@ -99,6 +100,10 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
       return;
     }
     if (args[0] === 'pr' && args[1] === 'view') {
+      if (control.failView) {
+        finish(Object.assign(new Error('view failed'), { code: 'EIO' }));
+        return;
+      }
       const value = github.views.get(Number(args[2]));
       finish(value ? null : Object.assign(new Error('unexpected PR view'), { code: 'EIO' }), value ? JSON.stringify(value) : '');
       return;
@@ -699,4 +704,23 @@ test('マージの意図を保存し終えてから gh pr merge を呼び、保�
 
   assert.equal(result.status, 500);
   assert.equal(failing.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('キューに入れた後に状態を取り直せず意図が残っても、後のマージは方式不明でブランチを消さない', async (t) => {
+  const lower = ghPullRequest(1, 'feature/one', 'main');
+  const fixture = await mergeFixture(t, [lower]);
+  fixture.control.queueMerge = true;
+  fixture.control.failView = true;
+
+  const result = await fixture.manager.merge(mergeInput(1, { method: 'squash', deleteBranch: true }));
+  assert.equal(result.status, 502);
+  assert.ok(fixture.state.pullRequestMergeIntent('example', 'project', 1));
+
+  fixture.control.failView = false;
+  fixture.github.openPullRequests = [];
+  fixture.github.views.set(1, mergedView(lower));
+  await fixture.tracker.refreshRepo('example', 'project');
+
+  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].method, null);
+  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
 });
