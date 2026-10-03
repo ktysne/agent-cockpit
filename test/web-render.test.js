@@ -1785,7 +1785,8 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
       owner: 'acme', repo: 'widget', trees: [], registeredCount: 1, mergeHistory: [],
       merged: [{ number: 42, state, url: 'https://github.com/acme/widget/pull/42', title: 'Feature PR' }],
     });
-    assert.ok(root.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'));
+    const content = root.children[0].children.find((node) => node.className === 'pr-repo-content');
+    assert.ok(content.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'));
   }
 
   const unavailable = new FakeElement('div');
@@ -1794,7 +1795,8 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     error: 'GitHub から PR を取得できませんでした',
     merged: [{ number: 42, state: 'merged', url: 'https://github.com/acme/widget/pull/42', title: 'Feature PR' }],
   });
-  assert.equal(unavailable.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'), false);
+  const unavailableContent = unavailable.children[0].children.find((node) => node.className === 'pr-repo-content');
+  assert.equal(unavailableContent.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'), false);
 });
 
 test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
