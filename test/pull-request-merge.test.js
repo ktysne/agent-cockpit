@@ -744,7 +744,7 @@ test('PR 通知は PostToolBatch、UserPromptSubmit、Stop の待機で一度ず
   const delivery = new DecisionAnswerDelivery({ state, away: { snapshot: () => ({ enabled: false }) }, maxLongPollMs: 500 });
 
   delivery.notifySessions(['session-batch'], 'PR #1 が main に入りました');
-  assert.match(delivery.deliverPostToolBatch('session-batch'), /PR #1 が main に入りました/);
+  assert.match(delivery.deliverPostToolBatch('session-batch'), /PR #1 が main に入りました\nこの知らせへの返答と、続けて開発者に見せる文は日本語で書く。/);
   assert.equal(delivery.deliverPostToolBatch('session-batch'), null);
 
   delivery.notifySessions(['session-prompt'], 'PR #2 が main に入りました');
