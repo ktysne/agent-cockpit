@@ -146,6 +146,31 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
 フックの登録後に開いたセッションから離席中の制御が有効になります。
 すでに実行中のセッションは、後から追加したフックを読み込みません。
 
+### 経路の設定
+
+ダッシュボード上部の「経路の設定」で、サブエージェントとクロスレビューをそれぞれ「既定」「Codex」「Claude」から選びます。
+設定は常駐サーバーが `AGENT_COCKPIT_HOME` の `routing.json` に保存し、次に起動するサブエージェントから適用します。
+設定ファイルが読めない場合は、両方を「既定」として扱います。
+
+次のフックを既存の `~/.claude/settings.json` の `hooks` に追加し、スクリプトのパスをこのリポジトリの絶対パスに置き換えてください。
+同じイベントの既存配列がある場合は、その配列へ要素を追加します。
+
+```json
+{
+  "hooks": {
+    "SubagentStart": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
+    ]
+  }
+}
+```
+
+`route.js` は同期フックとして実行します。
+エージェント定義や `~/.claude/CLAUDE.md` への追記、ai-cross-review の `route` コマンドへの対応は、この作業の範囲外です。
+
 ## タスクと判断事項
 
 メインセッションは計画を立てた後に MCP ツール `cockpit_set_tasks` を呼び、タスクと完了条件を登録します。

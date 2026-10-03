@@ -322,6 +322,39 @@ test('離席状態は同じ置き場でサーバーを再起動しても残る',
   assert.deepEqual(jsonBody(await request(second.info.port, { path: '/api/state' })).away, saved);
 });
 
+test('経路設定 API は画面秘密値と必須 Origin を照合し、保存値をスナップショットに返す', async (t) => {
+  const runtime = await runningServer(t);
+  const endpoint = '/api/routing';
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const body = JSON.stringify({ key: 'agents', value: 'claude' });
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).routing, {
+    agents: 'default', review: 'default',
+  });
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', origin },
+  })).status, 401);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin },
+  })).status, 401);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { ...headers, origin: 'https://other.example' },
+  })).status, 403);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  })).status, 403);
+  assert.equal((await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ key: 'agents', value: 'unknown' }), headers,
+  })).status, 400);
+
+  const saved = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(jsonBody(saved), { agents: 'claude', review: 'default' });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(runtime.homeDir, 'routing.json'), 'utf8')), jsonBody(saved));
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).routing, jsonBody(saved));
+});
+
 test('壊れた離席状態は離席中ではない状態として読む', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   await fs.writeFile(path.join(homeDir, 'away.json'), '{invalid');
@@ -433,6 +466,15 @@ test('Host、秘密値、Origin を照合して書き込みを制限する', asy
 
   const devDisabled = await request(runtime.info.port, { path: '/api/dev/fields' });
   assert.equal(devDisabled.status, 404);
+});
+
+test('SubagentStart の経路をサブエージェントのスナップショットに記録する', () => {
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: 'route-record', hook_event_name: 'SubagentStart', hookAt: 100,
+    agent_id: 'agent-1', agent_type: 'impl-hard', route: 'claude',
+  });
+  assert.equal(state.snapshot().sessions[0].agents[0].route, 'claude');
 });
 
 test('SubagentStart のない agent_type 付きイベントから定義を読み込んで行を復元する', async (t) => {

@@ -117,6 +117,7 @@ function sanitizeEvent(input, metadata = {}) {
   const agentType = shortString(input.agent_type, 200);
   if (agentId) event.agent_id = agentId;
   if (agentType) event.agent_type = agentType;
+  if (eventName === 'SubagentStart' && ['default', 'codex', 'claude'].includes(input.route)) event.route = input.route;
   if (metadata.agentDefinition) event.agentDefinition = metadata.agentDefinition;
 
   if (eventName === 'PreToolUse' || eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {

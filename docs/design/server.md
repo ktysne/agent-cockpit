@@ -93,7 +93,7 @@ PostToolUse の出力全文は送らない。
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、回答の記録、完了タスク、外したセッション、表示設定は `store.json` に保存する。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。テーマはブラウザーごとの `localStorage` に残す。離席中は `{enabled, since}` を `away.json` に保存し、起動時に読む。壊れているときは離席中ではない状態として扱う。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away, routing}` を返す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存
@@ -222,6 +222,15 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 `SessionStart` の source が `compact` または `resume` のとき、`away.js` は `/context` からタスクと未解決判断事項の要約を読む。
 離席中の文脈も必要な場合は、同じ `additionalContext` にまとめる。
 メインの `SessionStart` と `UserPromptSubmit` では、常駐サーバーに届かない場合もタスク登録の決まりを `additionalContext` に足す。
+
+## 経路の設定
+
+`routing.json` に `{agents, review}` を保存し、値は `default`、`codex`、`claude` のいずれかとする。欠落、破損、無効な値の場合は両方を `default` として読む。
+書き込みは `POST /api/routing` だけで受け付け、画面用秘密値と `validRequiredUiOrigin` を照合する。
+ファイルは `AtomicJsonWriter` が一時ファイルから rename して保存する。
+
+`GET /api/state` は現在の経路を返す。`event.js` は `SubagentStart` の送信時に `agents` の値を `route` として記録し、画面は起動時の値と現在値が異なる稼働中の行に「変更前」を表示する。
+同期フック `route.js` は `routing.json` を直接読み、サブエージェント開始時に指定を `additionalContext` へ差し込む。Claude 経路では、サブエージェントによる `codex-agent.sh` 呼び出しを `PreToolUse` で拒否する。
 
 ## 秘匿
 
