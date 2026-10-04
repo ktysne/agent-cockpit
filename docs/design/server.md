@@ -295,6 +295,7 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 
 ## 画面
 
+- 設定画面の下端のボタン列には、利用者向けマニュアルへのリンクを置く。
 - 2 秒ごとに `GET /api/state` を読む。
 - セッションの `lastUpdatedAt` は、フックイベントの `lastActivityAt`、計画の `tasksUpdatedAt`、判断事項の `updatedAt` のうち最も新しい時刻とする。候補が無い場合は `lastActivityAt` を使う。
 - `lastUpdatedAt` から `display.idleHideMinutes` を過ぎたセッションは、プロダクト別と種類別の一覧から隠す。許可待ち、`waiting` または `provisional` の判断事項、稼働中のサブエージェント、状態が「作業中」のいずれかがあれば表示する。

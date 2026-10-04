@@ -8,6 +8,12 @@ const { pageContext } = require('./support/page-context');
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
+  const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
+  assert.ok(settingsDialog);
+  assert.match(settingsDialog, /<a\b(?=[^>]*\bhref="\/manual\/#help-settings")(?=[^>]*\btarget="_blank")(?=[^>]*\brel="noopener")[^>]*>マニュアル<\/a>/);
+});
+
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
   const elapsed = pageHtml.match(/function decisionElapsedLabel\(decision\) \{[\s\S]*?\n\}/)?.[0];
   const isLongWait = pageHtml.match(/function isLongWait\(ageMs\) \{[\s\S]*?\n\}/)?.[0];
