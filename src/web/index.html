@@ -1530,7 +1530,7 @@ function decisionElapsedLabel(decision) {
     };
   }
   if (decision.state === 'provisional') {
-    return { className: 'since', label: `仮適用から ${durationLabel(decision.updatedAt)}`, stale: false };
+    return { className: 'since', label: `仮適用から ${durationLabel(decision.provisionalAt || decision.updatedAt)}`, stale: false };
   }
   return null;
 }

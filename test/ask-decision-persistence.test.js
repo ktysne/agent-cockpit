@@ -154,6 +154,41 @@ test('仮の推奨案と回答は再起動後も残る', async (t) => {
   assert.equal(decision.awaitingAnswerUntil, undefined);
 });
 
+test('回答記録の provisionalAt は保存され、不正値や旧形式の欠落は読み飛ばす', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-provisional-time', 'ask-provisional-time', 'PreToolUse', NOW));
+  state.setDecisionLifecycle('session-provisional-time', 'ask-provisional-time', {
+    state: 'provisional',
+    answer: { choice: 'ok', note: '', sentAt: new Date(NOW + 10).toISOString() },
+  }, NOW + 20);
+  await state.flushPersistence();
+
+  const storePath = path.join(homeDir, 'store.json');
+  const stored = JSON.parse(await fs.readFile(storePath, 'utf8'));
+  const lifecycle = stored.decisionLifecycles['session-provisional-time']['ask-provisional-time'];
+  assert.equal(lifecycle.provisionalAt, new Date(NOW + 20).toISOString());
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 30 });
+  assert.equal(restored.decisionLifecycles.get('session-provisional-time').get('ask-provisional-time').provisionalAt, lifecycle.provisionalAt);
+  assert.equal(restored.decisionFor('session-provisional-time', 'ask-provisional-time').provisionalAt, lifecycle.provisionalAt);
+
+  for (const invalidValue of ['invalid timestamp', undefined]) {
+    const variant = JSON.parse(JSON.stringify(stored));
+    const record = variant.decisionLifecycles['session-provisional-time']['ask-provisional-time'];
+    if (invalidValue === undefined) delete record.provisionalAt;
+    else record.provisionalAt = invalidValue;
+    await fs.writeFile(storePath, JSON.stringify(variant));
+
+    const compatible = await DashboardState.load(homeDir, { now: NOW + 40 });
+    const restoredLifecycle = compatible.decisionLifecycles.get('session-provisional-time').get('ask-provisional-time');
+    assert.equal(Object.hasOwn(restoredLifecycle, 'provisionalAt'), false);
+    assert.equal(compatible.decisionFor('session-provisional-time', 'ask-provisional-time').provisionalAt, undefined);
+  }
+
+  assert.equal((await fs.readdir(homeDir)).some((name) => name.startsWith('store.json.broken-')), false);
+});
+
 test('保持期間を過ぎた判断事項は消し、生きているセッションの記録は残す', async (t) => {
   const homeDir = await temporaryHome(t);
   const state = await DashboardState.load(homeDir, { now: NOW });
