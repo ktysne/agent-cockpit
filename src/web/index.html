@@ -530,7 +530,8 @@ const pendingTaskCloseActions = new Map();
 const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeResultCloseInFlight = new Set();
-let renderedPullRequestMergeResultExpirySignature = '';
+const TRANSIENT_NOTICE_MS = 60_000;
+let renderedPullRequestExpirySignature = '';
 let nextPullRequestMergeResultId = 0;
 let hiddenSessionsUndo = null;
 let uiUpdatePending = false;
@@ -1488,20 +1489,36 @@ function pullRequestMergeResultHasWarning(result) {
   return details.headMismatch === true || (typeof details.warning === 'string' && details.warning.length > 0);
 }
 
+function pullRequestTimestampExpired(startedAt, durationMs, now = Date.now()) {
+  const timestamp = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt || '');
+  return Number.isFinite(timestamp) && now >= timestamp && now - timestamp >= durationMs;
+}
+
+function pullRequestTransientNoticeExpired(at, now = Date.now()) {
+  return pullRequestTimestampExpired(at, TRANSIENT_NOTICE_MS, now);
+}
+
+function recordPullRequestTransientMessage(messages, key, message) {
+  messages.set(key, { message, shownAt: Date.now() });
+}
+
 function pullRequestMergeResultExpired(result, startedAt, now = Date.now()) {
   if (result.mergeResultClosedAt || pullRequestMergeResultHasWarning(result)) return false;
-  const timestamp = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt || '');
-  return Number.isFinite(timestamp) && now >= timestamp && now - timestamp >= displayPreferences.mergeResultHideMinutes * 60_000;
+  return pullRequestTimestampExpired(startedAt, displayPreferences.mergeResultHideMinutes * 60_000, now);
 }
 
 function pullRequestMergeResultVisible(result, startedAt = result.recordedAt, now = Date.now()) {
   return !result.mergeResultClosedAt && !pullRequestMergeResultExpired(result, startedAt, now);
 }
 
-function pullRequestMergeResultExpirySignature(groups, now = Date.now()) {
+function pullRequestExpirySignature(groups, now = Date.now()) {
   const expired = [];
   for (const group of groups || []) {
     const groupKey = pullRequestRepositoryKey(group);
+    for (const notice of group.reservationNotices || []) {
+      const state = pullRequestTransientNoticeExpired(notice.at, now) ? 'expired' : 'visible';
+      expired.push(`${groupKey}:reservation:${notice.number}:${notice.at}:${state}`);
+    }
     for (const result of group.mergeHistory || []) {
       if (result.automatic === true && result.automaticResult && pullRequestMergeResultExpired(result, result.mergedAt, now)) {
         expired.push(`${groupKey}:automatic:${result.number}:${result.mergedAt}`);
@@ -1510,6 +1527,12 @@ function pullRequestMergeResultExpirySignature(groups, now = Date.now()) {
     for (const result of pullRequestMergeResults.get(groupKey) || []) {
       if (pullRequestMergeResultExpired(result, result.recordedAt, now)) expired.push(`${groupKey}:manual:${result.id}`);
     }
+  }
+  for (const [key, message] of pullRequestMergeMessages) {
+    if (pullRequestTransientNoticeExpired(message.shownAt, now)) expired.push(`merge:${key}`);
+  }
+  for (const [key, message] of pullRequestConflictMessages) {
+    if (pullRequestTransientNoticeExpired(message.shownAt, now)) expired.push(`conflict:${key}`);
   }
   return expired.sort().join('|');
 }
@@ -1530,7 +1553,7 @@ function visiblePullRequestGroups(groups) {
   return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
     || group.mergeHistory?.some((record) => record.headMismatch === true
       || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record, record.mergedAt)))
-    || group.reservationNotices?.length || hasPullRequestMergeResults(group));
+      || group.reservationNotices?.some((notice) => !pullRequestTransientNoticeExpired(notice.at)) || hasPullRequestMergeResults(group));
 }
 
 // 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
@@ -1945,8 +1968,9 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
   if (pullRequestConflictConfirmations.has(uiKey)) {
     appendPullRequestConflictConfirmation(details, group, pullRequest, uiKey);
   }
-  if (pullRequestConflictMessages.has(uiKey)) {
-    const message = element('div', 'merge-error', pullRequestConflictMessages.get(uiKey));
+  const conflictMessage = pullRequestConflictMessages.get(uiKey);
+  if (conflictMessage && !pullRequestTransientNoticeExpired(conflictMessage.shownAt)) {
+    const message = element('div', 'merge-error', conflictMessage.message);
     message.setAttribute('role', 'status');
     details.append(message);
   }
@@ -2015,8 +2039,9 @@ function appendPullRequestTree(target, group, pullRequest) {
   else if (!reservation && waiting.length) item.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
   if (pullRequest.conflict) appendPullRequestConflictControls(line, item, group, pullRequest);
   if (mergeKey && confirmation && !reservation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest);
-  if (mergeKey && pullRequestMergeMessages.has(mergeKey)) {
-    const message = element('div', 'merge-error', pullRequestMergeMessages.get(mergeKey));
+  const mergeMessage = mergeKey ? pullRequestMergeMessages.get(mergeKey) : null;
+  if (mergeMessage && !pullRequestTransientNoticeExpired(mergeMessage.shownAt)) {
+    const message = element('div', 'merge-error', mergeMessage.message);
     message.setAttribute('role', 'status');
     item.append(message);
   }
@@ -2088,6 +2113,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
   const content = element('div', 'pr-repo-content');
   if (group.error) content.append(element('div', 'error-box', group.error));
   for (const notice of group.reservationNotices || []) {
+    if (pullRequestTransientNoticeExpired(notice.at)) continue;
     const row = element('div', 'merge-result');
     row.setAttribute('role', 'status');
     const link = element('a', '', `PR #${notice.number}`);
@@ -3608,10 +3634,10 @@ async function runPullRequestMergeAction(button, action) {
     const response = await postUiAction(endpoint, body);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      pullRequestMergeMessages.set(key, result.error || 'PR の状態が変わりました。表示を確認してください。');
+      recordPullRequestTransientMessage(pullRequestMergeMessages, key, result.error || 'PR の状態が変わりました。表示を確認してください。');
       await refresh();
       if (lastState) render(lastState);
-      liveStatus.textContent = pullRequestMergeMessages.get(key);
+      liveStatus.textContent = pullRequestMergeMessages.get(key).message;
       return;
     }
     pullRequestMergeConfirmations.delete(key);
@@ -3635,9 +3661,9 @@ async function runPullRequestMergeAction(button, action) {
       : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しました。`
         : `PR #${number} のマージ予約を取り消しました。`;
   } catch {
-    pullRequestMergeMessages.set(key, '操作結果を取得できませんでした。PR の状態を取り直してください。');
+    recordPullRequestTransientMessage(pullRequestMergeMessages, key, '操作結果を取得できませんでした。PR の状態を取り直してください。');
     if (lastState) render(lastState);
-    liveStatus.textContent = pullRequestMergeMessages.get(key);
+    liveStatus.textContent = pullRequestMergeMessages.get(key).message;
   } finally {
     pullRequestMergeInFlight.delete(key);
     if (lastState) render(lastState);
@@ -3749,10 +3775,10 @@ async function runPullRequestConflictRequest(button) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      pullRequestConflictMessages.set(uiKey, result.error || 'PR の状態が変わりました。表示を確認してください。');
+      recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, result.error || 'PR の状態が変わりました。表示を確認してください。');
       await refresh();
       if (lastState) render(lastState);
-      liveStatus.textContent = pullRequestConflictMessages.get(uiKey);
+      liveStatus.textContent = pullRequestConflictMessages.get(uiKey).message;
       return;
     }
     pullRequestConflictConfirmations.delete(uiKey);
@@ -3760,9 +3786,9 @@ async function runPullRequestConflictRequest(button) {
     await refresh();
     liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しました。`;
   } catch {
-    pullRequestConflictMessages.set(uiKey, '操作結果を取得できませんでした。PR の状態を取り直してください。');
+    recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, '操作結果を取得できませんでした。PR の状態を取り直してください。');
     if (lastState) render(lastState);
-    liveStatus.textContent = pullRequestConflictMessages.get(uiKey);
+    liveStatus.textContent = pullRequestConflictMessages.get(uiKey).message;
   } finally {
     pullRequestConflictInFlight.delete(uiKey);
     if (lastState) render(lastState);
@@ -4077,15 +4103,15 @@ async function refresh() {
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
-    const mergeResultExpirySignature = pullRequestMergeResultExpirySignature(state.pullRequests);
-    const mergeResultExpiryChanged = mergeResultExpirySignature !== renderedPullRequestMergeResultExpirySignature;
-    if (state.version === lastVersion && (sinceSeenVisibilityChanged || mergeResultExpiryChanged)) {
+    const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);
+    const pullRequestExpiryChanged = pullRequestExpiry !== renderedPullRequestExpirySignature;
+    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged)) {
       render(state);
-      renderedPullRequestMergeResultExpirySignature = mergeResultExpirySignature;
+      renderedPullRequestExpirySignature = pullRequestExpiry;
     }
     if (state.version !== lastVersion) {
       render(state);
-      renderedPullRequestMergeResultExpirySignature = mergeResultExpirySignature;
+      renderedPullRequestExpirySignature = pullRequestExpiry;
       lastVersion = state.version;
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);

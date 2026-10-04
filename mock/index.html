@@ -227,6 +227,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .primary:disabled { opacity: .4; cursor: default; }
 .sent { font-size: 12px; color: var(--text-2); }
 .merge-result { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; color: var(--text-2); font-size: 12px; }
+.merge-error { color: var(--danger); font-size: 12px; }
 
 .pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .rounds { display: inline-flex; gap: 4px; }
@@ -619,7 +620,17 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
+const TRANSIENT_NOTICE_MS = 60_000;
+ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
+ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
+let reservationNoticesMigrated = false;
+for (const [key, notice] of Object.entries(ui.reservationNotices)) {
+  if (typeof notice === 'string') {
+    ui.reservationNotices[key] = { message: notice, shownAt: Date.now() };
+    reservationNoticesMigrated = true;
+  }
+}
 ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
@@ -629,6 +640,15 @@ const pendingClosedTasks = new Map();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeInFlight = new Set();
 let nextPullRequestMergeResultId = 0;
+function transientNoticeExpired(shownAt, now = Date.now()) {
+  const timestamp = typeof shownAt === 'number' ? shownAt : Date.parse(shownAt || '');
+  return Number.isFinite(timestamp) && now >= timestamp && now - timestamp >= TRANSIENT_NOTICE_MS;
+}
+
+function transientMessageVisible(notice, now = Date.now()) {
+  return Boolean(notice && typeof notice.message === 'string' && !transientNoticeExpired(notice.shownAt, now));
+}
+
 function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
@@ -643,6 +663,7 @@ ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
 ui.confirm = null;
 ui.routing = { agents: 'default', review: 'default', ...ui.routing };
+if (reservationNoticesMigrated) save();
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const byId = id => DATA.products.find(p => p.id === id);
@@ -1573,6 +1594,7 @@ function mergeConfirm(p, pr) {
     ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : o.mergeAfterReview ? '予約する' : 'マージを実行'}</button>
+      <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
 }
@@ -1595,6 +1617,7 @@ function conflictConfirm(p, pr) {
     <div><strong>#${pr.number}</strong> の衝突の解消を依頼する</div>
     <ul class="effects">${effects.map(x => `<li>${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go conflict-go" data-conflict-go="${k}">依頼を送る</button>
+      <button type="button" class="link-btn" data-mock-conflict-failure="${k}">モック: 失敗の知らせを表示</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
 }
@@ -1645,7 +1668,8 @@ function prItem(p, pr) {
     ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
-    ${ui.reservationNotices[k] ? `<div class="merge-result" role="status">${esc(ui.reservationNotices[k])}</div>` : ''}
+    ${transientMessageVisible(ui.reservationNotices[k]) ? `<div class="merge-result" role="status">${esc(ui.reservationNotices[k].message)}</div>` : ''}
+    ${transientMessageVisible(ui.mergeErrors[k]) ? `<div class="merge-error" role="status">${esc(ui.mergeErrors[k].message)}</div>` : ''}
     ${confirmManual && !operationBlocker && !rsv ? mergeConfirm(p, pr) : ''}
   </div>`;
 }
@@ -2113,24 +2137,34 @@ document.addEventListener('click', e => {
       if (pr.xr?.notRequired && pr.xr.source === 'recorded') pr.xr = null;
     }
   } else if (t.dataset.merge) {
+    delete ui.mergeErrors[t.dataset.merge];
     setMergeConfirmation(t.dataset.merge, t.dataset.mergeAction);
   } else if (t.dataset.conflict) {
+    delete ui.mergeErrors[t.dataset.conflict];
     ui.confirm = `conflict:${t.dataset.conflict}`;
   } else if (t.dataset.conflictGo) {
     const now = new Date();
     ui.conflictRequested[t.dataset.conflictGo] = absoluteTimeLabel(now);
+    delete ui.mergeErrors[t.dataset.conflictGo];
     ui.confirm = null;
   } else if (t.hasAttribute('data-merge-cancel')) {
+    if (ui.confirm?.key) delete ui.mergeErrors[ui.confirm.key];
+    else if (typeof ui.confirm === 'string' && ui.confirm.startsWith('conflict:')) delete ui.mergeErrors[ui.confirm.slice('conflict:'.length)];
     ui.confirm = null;
   } else if (t.dataset.queueLeft) {
     const [pid, n] = t.dataset.queueLeft.split('#');
     const pr = byId(pid).prs.find(x => String(x.number) === n);
     if (pr) pr.mergeIntent = false;
+  } else if (t.dataset.mockMergeFailure) {
+    ui.mergeErrors[t.dataset.mockMergeFailure] = { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: Date.now() };
+  } else if (t.dataset.mockConflictFailure) {
+    ui.mergeErrors[t.dataset.mockConflictFailure] = { message: '操作結果を取得できませんでした。PR の状態を取り直してください。', shownAt: Date.now() };
   } else if (t.dataset.mergeGo) {
     const k = t.dataset.mergeGo;
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
+    delete ui.mergeErrors[k];
     if (o.mergeAfterReview) {
       ui.lastMethod[p.repo.name] = o.method;
       ui.reserved[k] = { method: o.method, del: o.del, at: new Date().toISOString() };
@@ -2145,7 +2179,7 @@ document.addEventListener('click', e => {
   } else if (t.dataset.unreserve) {
     const k = t.dataset.unreserve;
     delete ui.reserved[k];
-    ui.reservationNotices[k] = 'レビュー収束後マージの予約を取り消しました。';
+    ui.reservationNotices[k] = { message: 'レビュー収束後マージの予約を取り消しました。', shownAt: Date.now() };
   } else if (t.dataset.readyMerge) {
     const k = t.dataset.readyMerge;
     const [pid, n] = k.split('#');
@@ -2238,7 +2272,7 @@ document.addEventListener('input', e => {
 });
 
 render();
-setInterval(render, 60_000);
+setInterval(render, 2_000);
 </script>
 </body>
 </html>
