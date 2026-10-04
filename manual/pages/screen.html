@@ -27,7 +27,7 @@
 
   <h2 id="screen-summary">件数の札</h2>
   <p>ヘッダの下に、5 種類の札が並びます。
-  数字は、いま一覧に出ているセッションの件数です。
+  数字は、いま一覧に出ているセッションにある、その種類の項目の数です。1 つのセッションに判断事項が 3 件あれば、3 と数えます。
   外したセッションと、更新が無くて隠れているセッションは含みません。</p>
   <p>札を押すと、その種類の項目を一覧から隠します。
   もう一度押すと、表示に戻ります。
@@ -116,7 +116,7 @@
       <li data-part="kind.judgment-head" data-place="top-start"><b>欄の見出し</b>：種類の名前です。</li>
       <li data-part="kind.card-product" data-place="bottom"><b>プロダクト名の札</b>：項目がどのプロダクトのものかを示します。</li>
       <li data-part="kind.card-state" data-place="bottom"><b>状態の札</b>：<span class="ui">仮に推奨案で進行中</span> や <span class="ui">止めて待っている</span> など、判断事項の状態です。</li>
-      <li data-part="kind.card-time" data-place="bottom"><b>経過時間</b>：回答を待っている時間です。仮に進めている判断事項は <span class="ui">仮適用から</span> の形で出ます。設定で決めた時間を超えると、強調されます。</li>
+      <li data-part="kind.card-time" data-place="bottom"><b>経過時間</b>：回答を待っている時間です。仮に進めている判断事項は <span class="ui">仮適用から</span> の形で出ます。回答を待っている判断事項は、設定で決めた時間を超えると強調されます。仮に進めている判断事項は強調されません。</li>
     </ol>
   </figure>
 
@@ -127,7 +127,7 @@
     <ol class="guide-list">
       <li data-part="kind.now-head" data-place="top-start"><b>欄の見出し</b>：種類の名前です。</li>
       <li data-part="kind.row-tags" data-place="right"><b>プロダクト名とセッション名の札</b>：行がどのプロダクトの、どのセッションのものかを示します。</li>
-      <li data-part="kind.row-time" data-place="top"><b>経過時間</b>：セッションの最後のイベントからの時間です。</li>
+      <li data-part="kind.row-time" data-place="top"><b>経過時間</b>：メインの行は、実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。サブエージェントの行は、開始からの時間です。</li>
     </ol>
   </figure>
 </section>
