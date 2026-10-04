@@ -808,7 +808,9 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         session.pendingCodex[toolUseId] = agentIdForCall;
       }
       if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
-        const existing = session.decisions.find((decision) => (
+        // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
+        const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
+        const existing = boundDecision || session.decisions.find((decision) => (
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
         if (existing) {

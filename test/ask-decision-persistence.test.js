@@ -216,3 +216,32 @@ test('askDecisionBindings が無い旧形式の store.json も読み込める', 
   assert.deepEqual(normalized.askDecisionBindings, {});
   assert.equal(normalized.plans['session-legacy'].decisions[0].source, 'mcp');
 });
+
+for (const [finishEvent, finishedState] of [['PostToolUse', 'resolved'], ['PostToolUseFailure', 'withdrawn']]) {
+  test(`再起動後に別の tool_use_id で出し直した質問が ${finishedState} になっても、判断事項は元の 1 件のまま`, async (t) => {
+    const homeDir = await temporaryHome(t);
+    const state = await DashboardState.load(homeDir, { now: NOW });
+    state.addEvent(askEvent('session-finish', 'ask-original', 'PreToolUse', NOW));
+    await state.flushPersistence();
+
+    const restored = await DashboardState.load(homeDir, { now: NOW + 10 });
+    restored.addEvent(askEvent('session-finish', 'ask-retry', 'PreToolUse', NOW + 20));
+    const answer = {
+      choice: 'ok', note: '', sentAt: new Date(NOW + 21).toISOString(),
+      deliveredAt: null, reflectedAt: null, promptDeliveries: 0,
+    };
+    restored.setDecisionLifecycle('session-finish', 'ask-original', { answer }, NOW + 21);
+    restored.addEvent(askEvent('session-finish', 'ask-retry', finishEvent, NOW + 30));
+    restored.addEvent({ session_id: 'session-finish', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 40 });
+
+    const decisions = restored.snapshot().sessions.find((session) => session.session_id === 'session-finish').decisions;
+    assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-original', finishedState]]);
+    assert.equal(decisions[0].createdAt, new Date(NOW).toISOString());
+    assert.deepEqual(decisions[0].answer, answer);
+    assert.equal(restored.decisionIdForToolUse('session-finish', 'ask-retry'), 'ask-original');
+
+    await restored.flushPersistence();
+    const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+    assert.deepEqual(saved.plans['session-finish'].decisions.map((decision) => decision.id), ['ask-original']);
+  });
+}
