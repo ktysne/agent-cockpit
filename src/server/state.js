@@ -621,6 +621,7 @@ function newSession(event, askDecisionState = {}) {
     status: '作業中',
     tools: [],
     completedToolIds: new Set(),
+    codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
@@ -953,8 +954,6 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     }
 
     if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
-      let completedCodexAgent = null;
-      let launchedCodex = null;
       if (toolUseId) {
         session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
         session.completedToolIds.add(toolUseId);
@@ -971,11 +970,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
       if (event.tool_name === 'Bash' && toolUseId) {
         const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-        launchedCodex = placeholder;
+        if (placeholder) session.codexLaunchToolIds.add(toolUseId);
         if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
-          completedCodexAgent = placeholder;
         } else if (placeholder && session.pendingCodexWait[toolUseId]) {
           // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
           applyCodexAudit(placeholder, event);
@@ -997,15 +995,18 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         delete session.pendingCodexWait[toolUseId];
       }
 
+      // Codex を起動した呼び出しの出力はその起動のものなので、別の行へ結び付けない。
+      // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
+      const isCodexLaunch = session.codexLaunchToolIds.has(toolUseId);
+
       // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
-      // Codex を起動した呼び出しの出力はその起動のものなので、引数に出力ファイルのパスがあっても別の行へ結び付けない。
-      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !launchedCodex
+      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !isCodexLaunch
         ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
         : null;
       if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
 
       // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
-      if (event.codexResult && !completedCodexAgent && event.tool_name !== 'Agent') {
+      if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
         const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
         const matched = codexForRun || outputCodex;
         const targetAgent = matched
