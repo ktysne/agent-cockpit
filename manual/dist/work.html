@@ -147,7 +147,7 @@
   <details class="more">
     <summary>終わったセッションのタスクの詳細</summary>
     <p>待機中で、タスクがすべて完了し、判断事項と許可待ちとサブエージェントが残っていないセッションは、終わったセッションとして扱います。
-    設定の <span class="ui">終わったものを表示しない</span> がオンのとき(既定)、終わったセッションは、タスクの欄だけを残して他の欄を隠します。
+    設定の <span class="ui">終わったものを非表示にする</span> がオンのとき(既定)、終わったセッションは、タスクの欄だけを残して他の欄を隠します。
     完了したタスクは、全体の進みを見るために、この場合も畳んだ状態で残ります。</p>
     <p>隠している終わったセッションの件数は、一覧の最下部の注記に出ます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   </details>
@@ -214,7 +214,7 @@
   行には、状態、名前、依頼の内容、使っているモデル、経過時間が出ます。</p>
   <figure class="guide-map" id="work-agents-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/390"><div class="gm-clip"><img src="img/work-rows/rows.png" width="788" height="315" alt="サブエージェントの行。稼働中の行に、状態の札、名前、依頼の内容、経路の札、Claude と GPT のモデルの札、経過時間がある。その下に、終了した行と、終了済みを隠すボタンが続く" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-15.228%"></div><a class="gm-badge gm-place-center" data-gm="1" href="#work-agents-map-1" style="left:12.7%;top:24.885%" aria-label="1. 状態の札と名前">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#work-agents-map-2" style="left:55.711%;top:6.41%" aria-label="2. 依頼の内容">2</a><a class="gm-badge gm-place-bottom" data-gm="3" href="#work-agents-map-3" style="left:23.065%;top:31.026%" aria-label="3. 経路の札">3</a><a class="gm-badge gm-place-bottom" data-gm="4" href="#work-agents-map-4" style="left:39.911%;top:31.795%" aria-label="4. モデルの札">4</a><a class="gm-badge gm-place-bottom" data-gm="5" href="#work-agents-map-5" style="left:96.193%;top:17.179%" aria-label="5. 経過時間">5</a><a class="gm-badge gm-place-bottom" data-gm="6" href="#work-agents-map-6" style="left:50%;top:80%" aria-label="6. 終了した行">6</a><a class="gm-badge gm-place-bottom" data-gm="7" href="#work-agents-map-7" style="left:8.376%;top:99.487%" aria-label="7. 終了済みを隠す">7</a></div></div></div><ol class="gm-list"><li id="work-agents-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態の札と名前</b>：状態の札は、<span class="ui">稼働中</span>、<span class="ui">終了</span>、<span class="ui">終了未確認</span> のどれかです(<a href="#work-agent-unconfirmed">終了未確認の行</a>)。名前は、サブエージェントの種類です。</div></li><li id="work-agents-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>依頼の内容</b>：メインセッションが渡した作業の説明です。説明が無いときは、最後に使ったツールが出ます。</div></li><li id="work-agents-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>経路の札</b>：起動の時点で効いていた、サブエージェントの経路の設定です(<a href="#work-agent-route">経路の札</a>)。</div></li><li id="work-agents-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>モデルの札</b>：Claude のモデルと effort です。サブエージェントが Codex を起動したときは、矢印に続けて GPT のモデルと effort が出ます。</div></li><li id="work-agents-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>経過時間</b>：サブエージェントを起動してからの時間です。</div></li><li id="work-agents-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>終了した行</b>：終わったサブエージェントです。状態の札は <span class="ui">終了</span> で、経路の札は付きません。</div></li><li id="work-agents-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">終了済みを隠す</span></b>：開いている終了済みの行を畳みます。畳んでいるときは <span class="ui">終了済みを表示</span> で、終了済みの件数が出ます。</div></li></ol></figure>
   <p>稼働中のサブエージェントの数は、画面上部の <span class="ui">稼働中のサブエージェント</span> の札に出ます(<a href="screen.html#screen-summary">件数の札</a>)。</p>
-  <p>終了した行は、設定の <span class="ui">終わったものを表示しない</span> がオフのときだけ、<span class="ui">終了済みを表示</span> から開けます。
+  <p>終了した行は、設定の <span class="ui">終わったものを非表示にする</span> がオフのときだけ、<span class="ui">終了済みを表示</span> から開けます。
   オン(既定)のときは、終了した行を出しません。
   サブエージェントが 1 つも無いセッションには、<span class="ui">サブエージェントはありません。</span> と出ます。
   稼働中のものが無く、終了済みも畳んでいるときは、<span class="ui">稼働中のサブエージェントはありません。</span> と出ます。</p>
@@ -268,7 +268,7 @@
     <summary>更新の無いセッションの判定の詳細</summary>
     <p>判定は、画面を描き直すときに行います。
     描き直しは、状態が変わったときと、1 分ごとです。</p>
-    <p>終わったセッションを隠す設定(<span class="ui">終わったものを表示しない</span>)がオンのとき、終わったセッションは、更新が無いセッションの件数には数えず、終わったものの注記に数えます。</p>
+    <p>終わったセッションを隠す設定(<span class="ui">終わったものを非表示にする</span>)がオンのとき、終わったセッションは、更新が無いセッションの件数には数えず、終わったものの注記に数えます。</p>
   </details>
 </section>
 
