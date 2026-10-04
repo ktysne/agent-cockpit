@@ -228,12 +228,21 @@ function validRequiredUiOrigin(request, port) {
 
 // 起動するプログラムには検査した値そのものを渡すため、正規化した href を返す。
 // rundll32 は引数を ShellExecute へそのまま渡すので、空白や引用符が残る値は受けない。
-function normalizeExternalUrl(value) {
+function normalizeExternalUrl(value, port) {
   if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return null;
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || url.href.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(url.href)) return null;
-    return url.href;
+    if (url.href.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(url.href)) return null;
+    if (url.protocol === 'https:') return url.href;
+
+    const urlPort = Number(url.port || 80);
+    const matchesLocalhost = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
+    const isManualPath = url.pathname === '/manual' || url.pathname.startsWith('/manual/');
+    if (url.protocol !== 'http:' || !matchesLocalhost || urlPort !== port || !isManualPath || url.username || url.password) return null;
+
+    const normalizedUrl = `http://127.0.0.1:${port}${url.pathname}${url.search}${url.hash}`;
+    if (normalizedUrl.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(normalizedUrl)) return null;
+    return normalizedUrl;
   } catch {
     return null;
   }
@@ -1046,7 +1055,9 @@ function createRequestHandler(options) {
         jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
         return;
       }
-      const externalUrl = body && typeof body === 'object' && !Array.isArray(body) ? normalizeExternalUrl(body.url) : null;
+      const externalUrl = body && typeof body === 'object' && !Array.isArray(body)
+        ? normalizeExternalUrl(body.url, info.port)
+        : null;
       if (!externalUrl) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;

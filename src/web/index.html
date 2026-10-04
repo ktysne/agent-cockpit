@@ -1023,17 +1023,22 @@ async function openExternalLink(url) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+function defaultBrowserUrl(link) {
+  try {
+    const url = new URL(link.href, window.location.href);
+    const isExternalHttps = url.protocol === 'https:' && url.origin !== window.location.origin;
+    const isManual = url.protocol === 'http:' && url.origin === window.location.origin && url.pathname.startsWith('/manual/');
+    return isExternalHttps || isManual ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function handleExternalLink(event) {
   const link = event.target.closest?.('a[target="_blank"]');
   if (!link) return false;
-  let url;
-  try {
-    const parsed = new URL(link.href, window.location.href);
-    if (parsed.protocol !== 'https:' || parsed.origin === window.location.origin) return false;
-    url = parsed.href;
-  } catch {
-    return false;
-  }
+  const url = defaultBrowserUrl(link);
+  if (!url) return false;
   event.preventDefault();
   void openExternalLink(url);
   return true;
