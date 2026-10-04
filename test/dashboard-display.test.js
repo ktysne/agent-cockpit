@@ -40,7 +40,8 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
   assert.equal((web.match(/--on-ok: #1f1e1d;/g) || []).length, 2);
   assert.match(web, /\.merge-btn \{[^}]*color: var\(--on-ok\)/);
   assert.match(web, /\.merge-confirm \.merge-go \{[^}]*color: var\(--on-ok\)/);
-  assert.match(web, /\.merge-confirm\.auto \.merge-go \{[^}]*color: var\(--on-accent\)/);
+  assert.doesNotMatch(web, /\.merge-confirm\.auto/);
+  assert.match(web, /\.dataset\.mergeAfterReview = 'true'/);
   assert.match(web, /\.merge-confirm\.conflict \.conflict-go \{[^}]*color: var\(--on-danger\)/);
   assert.match(web, /\.badge\.new-mark \{ background: var\(--accent\); color: var\(--on-accent\); \}/);
   assert.match(web, /\.permission code \{/);
@@ -341,6 +342,8 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 5,
     hideFinished: true,
+    mergeableCondition: 'cross-review',
+    mergeAfterReviewDefault: false,
   });
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
@@ -926,12 +929,16 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
   const hideFinishedInput = { checked: false };
+  const mergeAfterReviewDefaultInput = { checked: false };
+  const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
   const context = pageContext(web, {
     document: { activeElement: longWaitMinutesInput },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     hideFinishedInput,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: false },
+    mergeAfterReviewDefaultInput,
+    mergeableConditionInputs,
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
   });
   vm.runInContext(render, context);
   context.renderDisplaySettings();
@@ -939,4 +946,45 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
   assert.equal(hideFinishedInput.checked, false);
+  assert.equal(mergeAfterReviewDefaultInput.checked, true);
+  assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
+});
+
+test('保存に失敗したラジオはフォーカスを保ったまま保存値へ戻す', async () => {
+  const render = functionSource(web, 'renderDisplaySettings');
+  const settle = functionSource(web, 'settleDisplayPreferenceSaves');
+  const save = functionSource(web, 'saveDisplayPreferences');
+  assert.ok(render && settle && save);
+  const longWaitMinutesInput = { value: '15' };
+  const awayAnswerWaitMinutesInput = { value: '5' };
+  const hideFinishedInput = { checked: true };
+  const mergeAfterReviewDefaultInput = { checked: false };
+  const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
+  const displayPreferences = { mergeableCondition: 'cross-review', mergeAfterReviewDefault: true };
+  let activeElement = null;
+  const context = pageContext(web, {
+    document: { get activeElement() { return activeElement; } },
+    longWaitMinutesInput,
+    awayAnswerWaitMinutesInput,
+    hideFinishedInput,
+    mergeAfterReviewDefaultInput,
+    displayPreferences,
+    displayPreferenceSaveStates: new Map(),
+    displayPreferencesReady: true,
+    mergeableConditionInputs,
+    lastState: null,
+    enqueueDisplayPatch: async () => false,
+    renderSectionOrder() {},
+  });
+  vm.runInContext(`${render}\n${settle}\n${save}\nthis.renderSettings = renderDisplaySettings; this.savePreferences = saveDisplayPreferences;`, context);
+  context.renderSettings();
+  activeElement = mergeableConditionInputs[1];
+  mergeableConditionInputs[1].checked = true;
+  mergeableConditionInputs[2].checked = false;
+
+  assert.equal(await context.savePreferences({ mergeableCondition: 'ci' }), false);
+
+  assert.equal(activeElement, mergeableConditionInputs[1]);
+  assert.equal(displayPreferences.mergeableCondition, 'cross-review');
+  assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
 });

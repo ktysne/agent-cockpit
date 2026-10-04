@@ -348,6 +348,7 @@ test('同じ未解決質問は既存の ID に寄せ、別名から更新して�
   addQuestion('ask-repeat', 200);
   assert.equal(state.snapshot().sessions[0].decisions.length, 1);
   assert.equal(state.snapshot().sessions[0].decisions[0].id, 'ask-original');
+  assert.equal(state.snapshot().sessions[0].decisions[0].createdAt, new Date(100).toISOString());
   const updated = state.updateDecision('ask-duplicate', 'ask-repeat', 'provisional', ['JSON'], '推奨で進めた。', 250);
   assert.deepEqual([updated.id, updated.state], ['ask-original', 'provisional']);
   assert.deepEqual(state.snapshot().sessions[0].decisions[0].resolution, {
@@ -1084,13 +1085,13 @@ test('メインセッションの --wait は Codex 行を作らない', async (t
   assert.deepEqual(state.snapshot().sessions[0].agents, []);
 });
 
-test('同じ親の背景 Codex が複数あるときは、結果行を最も古い呼び出しへ結び付ける', async (t) => {
+test('同じ親の背景 Codex が複数あるときは、run= の無い結果行でどちらも終了にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
-  launchCodex(state, 'bg-oldest', 'bash-old', 2, 'sub-1', { model: 'gpt-old', effort: 'low' });
+  launchCodex(state, 'bg-oldest', 'bash-old', 2, 'sub-1', { model: 'gpt-old', effort: 'low' }, 'impl-standard');
   state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-old' });
-  launchCodex(state, 'bg-oldest', 'bash-new', 4, 'sub-1', { model: 'gpt-new', effort: 'high' });
+  launchCodex(state, 'bg-oldest', 'bash-new', 4, 'sub-1', { model: 'gpt-new', effort: 'high' }, 'impl-hard');
   state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'PostToolUse', hookAt: 5, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-new' });
   state.addEvent({
     session_id: 'bg-oldest', hook_event_name: 'PostToolUse', hookAt: 6, agent_id: 'sub-1',
@@ -1100,6 +1101,55 @@ test('同じ親の背景 Codex が複数あるときは、結果行を最も古�
 
   const [agent] = state.snapshot().sessions[0].agents;
   assert.deepEqual([agent.gpt.model, agent.gpt.unconfirmed], ['gpt-new', true]);
+
+  state.addEvent({ session_id: 'bg-oldest', hook_event_name: 'SubagentStart', hookAt: 8, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  waitForCodex(state, 'bg-oldest', 'bash-wait-old', 9, 'sub-1', 'impl-standard-20261003-123456-7', {
+    model: 'gpt-wait-placeholder', effort: 'high',
+  });
+  const [resumedAgent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([resumedAgent.gpt.model, resumedAgent.gpt.active, resumedAgent.gpt.unconfirmed], ['gpt-old', true, false]);
+});
+
+test('一致する runId の行が無い結果は、一意な背景 Codex に結び付ける', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const runId = 'impl-hard-20261003-123456-7';
+  state.addEvent({ session_id: 'single-background', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'single-background', 'bash-1', 2, 'sub-1', { model: 'gpt-draft', effort: 'low' });
+  state.addEvent({ session_id: 'single-background', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({
+    session_id: 'single-background', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1',
+    tool_name: 'Read', tool_use_id: 'read-1',
+    codexOutput: { runLine: `codex-agent: run=${runId}`, resultLine: 'codex-agent: result=ok' },
+  });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active, agent.gpt.unconfirmed], ['gpt-draft', false, false]);
+  waitForCodex(state, 'single-background', 'bash-wait', 5, 'sub-1', runId, {
+    model: 'gpt-wait-placeholder', effort: 'high',
+  });
+  const [afterWait] = state.snapshot().sessions[0].agents;
+  assert.equal(afterWait.gpt.model, 'gpt-draft');
+});
+
+test('run= の無い結果行を、実行 ID が記録済みの背景 Codex に結び付けない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const runId = 'impl-hard-20261003-123456-7';
+  state.addEvent({ session_id: 'known-run-background', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-hard' });
+  launchCodex(state, 'known-run-background', 'bash-1', 2, 'sub-1', { model: 'gpt-known-run', effort: 'low' });
+  state.addEvent({
+    session_id: 'known-run-background', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1',
+    tool_name: 'Bash', tool_use_id: 'bash-1', codexOutput: { runLine: `codex-agent: run=${runId}` },
+  });
+  state.addEvent({
+    session_id: 'known-run-background', hook_event_name: 'PostToolUse', hookAt: 4, agent_id: 'sub-1',
+    tool_name: 'Read', tool_use_id: 'read-1', codexOutput: { resultLine: 'codex-agent: result=ok' },
+  });
+  state.addEvent({ session_id: 'known-run-background', hook_event_name: 'SubagentStop', hookAt: 5, agent_id: 'sub-1' });
+
+  const [agent] = state.snapshot().sessions[0].agents;
+  assert.deepEqual([agent.gpt.model, agent.gpt.active, agent.gpt.unconfirmed], ['gpt-known-run', false, true]);
 });
 
 test('同じ定義の Codex の実行が 2 回あっても、監査行はそれぞれの実行に付く', async (t) => {

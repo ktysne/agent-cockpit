@@ -77,8 +77,10 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
   });
   assert.equal(enabled.status, 200);
-  assert.deepEqual(jsonBody(enabled).enabled, true);
-  assert.ok(Number.isFinite(jsonBody(enabled).since));
+  const enabledState = jsonBody(enabled);
+  assert.equal(enabledState.enabled, true);
+  assert.ok(Number.isFinite(enabledState.since));
+  assert.deepEqual(enabledState.periods, [{ start: enabledState.since, end: null }]);
 
   const enabledLocalhost = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
@@ -106,7 +108,12 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
     },
   });
   assert.equal(disabled.status, 200);
-  assert.deepEqual(jsonBody(disabled), { enabled: false, since: null });
+  const disabledState = jsonBody(disabled);
+  assert.equal(disabledState.enabled, false);
+  assert.equal(disabledState.since, null);
+  assert.equal(disabledState.periods.length, 1);
+  assert.equal(disabledState.periods[0].start, enabledState.since);
+  assert.ok(Number.isFinite(disabledState.periods[0].end));
 
   const invalidEnabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: 'true' }),
@@ -115,10 +122,10 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   assert.equal(invalidEnabled.status, 400);
 
   const away = await request(runtime.info.port, { path: '/api/away' });
-  assert.deepEqual(Object.keys(jsonBody(away)).sort(), ['enabled', 'since']);
-  assert.deepEqual(jsonBody(away), { enabled: false, since: null });
+  assert.deepEqual(Object.keys(jsonBody(away)).sort(), ['enabled', 'periods', 'since']);
+  assert.deepEqual(jsonBody(away), disabledState);
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
-  assert.deepEqual(state.away, { enabled: false, since: null });
+  assert.deepEqual(state.away, disabledState);
   assert.equal(away.headers['access-control-allow-origin'], undefined);
 });
 
@@ -413,6 +420,25 @@ test('一覧から外す API は認証し、複数の状態のセッションを
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, undefined);
 });
 
+test('予約と予約取消の口は画面秘密値と Origin を照合する', async (t) => {
+  const runtime = await runningServer(t);
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+  const reservationBody = JSON.stringify({ number: 41, registration_key: 'b'.repeat(64), headRefOid: 'a'.repeat(40), method: 'squash', deleteBranch: true });
+  const cancellationBody = JSON.stringify({ number: 41, registration_key: 'b'.repeat(64) });
+
+  for (const [path, body] of [
+    ['/api/pull-requests/reserve', reservationBody],
+    ['/api/pull-requests/cancel-reservation', cancellationBody],
+  ]) {
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers: { 'content-type': 'application/json', origin } })).status, 401);
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers: { ...headers, origin: 'https://other.example' } })).status, 403);
+    const { origin: _origin, ...withoutOrigin } = headers;
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers: withoutOrigin })).status, 403);
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers })).status, 404);
+  }
+});
+
 test('一覧から外したセッションを指定して戻す API は認証し、0 件と入力不正を処理する', async (t) => {
   const state = new DashboardState();
   state.syncSessionFiles([
@@ -496,6 +522,7 @@ test('離席状態は同じ置き場でサーバーを再起動しても残る',
   assert.equal(enabled.status, 200);
   const saved = jsonBody(enabled);
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).since, saved.since);
+  assert.deepEqual(saved.periods, [{ start: saved.since, end: null }]);
   await first.close();
 
   const second = await startServer({ homeDir, claudeHome, port: 0 });
@@ -596,7 +623,9 @@ test('壊れた離席状態は離席中ではない状態として読む', async
   await fs.writeFile(path.join(homeDir, 'away.json'), '{invalid');
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
-  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), { enabled: false, since: null });
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/away' })), {
+    enabled: false, since: null, periods: [],
+  });
 });
 
 test('画面には画面用の秘密値だけを埋め、iframe への埋め込みを拒み、/api/events は画面用の秘密値を受け付けない', async (t) => {
@@ -1117,6 +1146,77 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   assert.deepEqual(snapshot.pullRequests, []);
 });
 
+test('レビュー不要は画面から設定と取消ができ、MCP は秘密値と現在の head を照合する', async (t) => {
+  let headRefOid = 'a'.repeat(40);
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    async refreshRepoFresh() { return {}; },
+    mergeCandidate() { return { pullRequest: { headRefOid } }; },
+    async refreshReviewGroups() {},
+  };
+  const runtime = await runningServer(t, {
+    pullRequestTracker,
+    findSessionIdByPid: async () => null,
+  });
+  runtime.state.registerPullRequest('review-session', {
+    url: 'https://github.com/example/project/pull/49',
+  }, { cwd: process.cwd(), product: { key: 'project', name: 'project' } });
+  const registration = runtime.state.pullRequestRegistrations()[0];
+  const registrationKey = runtime.state.pullRequestRegistrationKey(registration);
+  const screenPath = '/api/pull-requests/review-skip';
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const screenHeaders = {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.uiSecret,
+    origin,
+  };
+  const screenBody = (action) => JSON.stringify({ action, headRefOid, registration_key: registrationKey });
+
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('set'),
+    headers: { 'content-type': 'application/json', origin },
+  });
+  assert.equal(missingSecret.status, 401);
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('set'),
+    headers: { ...screenHeaders, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+
+  const setFromScreen = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('set'), headers: screenHeaders,
+  });
+  assert.equal(setFromScreen.status, 200);
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 49).headRefOid, headRefOid);
+  const clearFromScreen = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('clear'), headers: screenHeaders,
+  });
+  assert.equal(clearFromScreen.status, 200);
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 49), null);
+
+  const mcpBody = JSON.stringify({
+    kind: 'skip_review', owner: 'example', repo: 'project', number: 49, headRefOid,
+    reason: 'この差分は設定ファイルの空白だけのため', ppid: 321, claudeCodeSessionId: 'review-session',
+  });
+  const mcpPath = '/api/sessions/review-session/prs';
+  const mcpWrite = await request(runtime.info.port, {
+    method: 'POST', path: mcpPath, body: mcpBody,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(mcpWrite.status, 200);
+  assert.equal(jsonBody(mcpWrite).reason, 'この差分は設定ファイルの空白だけのため');
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 49).headRefOid, headRefOid);
+
+  headRefOid = 'b'.repeat(40);
+  const staleHead = await request(runtime.info.port, {
+    method: 'POST', path: mcpPath, body: mcpBody,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(staleHead.status, 409);
+});
+
 test('/plan はタスクと判断事項を記録し、読み取り用の要約を返す', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/sessions/plan-session/plan';
@@ -1217,6 +1317,8 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
   assert.equal(jsonBody(mode).display.hideFinished, true);
+  assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
+  assert.equal(jsonBody(mode).display.mergeAfterReviewDefault, false);
   const hidden = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
@@ -1239,6 +1341,8 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
+    ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
+    ['mergeAfterReviewDefault', 1], ['mergeAfterReviewDefault', 'true'], ['mergeAfterReviewDefault', null],
   ]) {
     const invalidMinutes = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ [key]: invalidValue }), headers: validHeaders,
@@ -1266,10 +1370,22 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
   assert.equal(hideFinished.status, 200);
   assert.equal(jsonBody(hideFinished).display.hideFinished, true);
+  for (const mergeableCondition of ['operation', 'ci', 'cross-review']) {
+    const selected = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ mergeableCondition }), headers: validHeaders,
+    });
+    assert.equal(selected.status, 200);
+    assert.equal(jsonBody(selected).display.mergeableCondition, mergeableCondition);
+  }
+  const defaultReviewMerge = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ mergeAfterReviewDefault: true }), headers: validHeaders,
+  });
+  assert.equal(defaultReviewMerge.status, 200);
+  assert.equal(jsonBody(defaultReviewMerge).display.mergeAfterReviewDefault, true);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true,
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: true,
   });
 });
 
@@ -1292,7 +1408,10 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   assert.deepEqual(firstView.sinceSeen, []);
   assert.equal(firstView.sessions[0].decisions[0].isNew, false);
   assert.equal(state.seenAtByProduct.has(product.key), true);
-  const afterView = Date.parse(firstView.generatedAt) + 1000;
+  await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: true }), headers: validHeaders,
+  });
+  const afterView = Date.now();
   state.setTasks(sessionId, [
     { title: '表示前の完了', state: 'done', criteria: [] },
     { title: '表示後・既読前の完了', state: 'done', criteria: [] },
@@ -1325,7 +1444,7 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   assert.equal(seen.status, 200);
   assert.equal(jsonBody(seen).seenAt, firstView.generatedAt);
 
-  const future = Math.max(Date.now(), afterView) + 1000;
+  const future = Math.max(Date.now(), afterView);
   state.setTasks(sessionId, [
     { title: '表示前の完了', state: 'done', criteria: [] },
     { title: '表示後・既読前の完了', state: 'done', criteria: [] },
@@ -1535,4 +1654,14 @@ test('離席状態の切り替えを続けて呼ぶと、呼んだ順に保存�
   assert.deepEqual(results.map((value) => value.enabled), [true, false, true]);
   assert.equal(away.snapshot().enabled, true);
   assert.equal(JSON.parse(await fs.readFile(path.join(homeDir, 'away.json'), 'utf8')).enabled, true);
+});
+
+test('/api/state は版と時刻を、離席期間の整理を待つ前に中身と同じ時点で確定する', async () => {
+  const source = (await fs.readFile(path.join(__dirname, '../src/server/server.js'), 'utf8')).replace(/\r\n/g, '\n');
+  const start = source.indexOf("requestUrl.pathname === '/api/state'");
+  const handler = source.slice(start, source.indexOf('jsonResponse(response, 200', start));
+  const versionAt = handler.indexOf('snapshot.version = state.version;');
+  const pruneAt = handler.indexOf('away.prune?.(');
+  assert.ok(versionAt > 0 && pruneAt > versionAt);
+  assert.doesNotMatch(handler, /await away\.prune/);
 });

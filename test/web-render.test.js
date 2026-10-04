@@ -587,6 +587,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     constructor(tagName) {
       this.tagName = tagName;
       this.children = [];
+      this.dataset = {};
       this.attributes = {};
       this.className = '';
       this.textContent = '';
@@ -602,6 +603,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
+    pullRequestReviewSkipInFlight: new Set(),
   });
   vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
 
@@ -618,7 +620,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const missing = line({ headRefOid: headSha, crossReview: null });
   const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
   assert.equal(textOf(missing), 'クロスレビュー レビュー未実施');
-  assert.equal(missingBadge.className, 'badge mute');
+  assert.equal(missingBadge.className, 'badge warn');
 
   const changed = line({
     headRefOid: 'b'.repeat(40),
@@ -636,6 +638,20 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const reviewedBadge = allNodes(reviewed).find((node) => node.className?.startsWith('badge'));
   assert.equal(textOf(reviewed), 'クロスレビュー 2 / 3 往復、非対応 1 この head をレビューに回した');
   assert.equal(reviewedBadge.className, 'badge mute');
+
+  const notRequired = line({ headRefOid: headSha, crossReview: { notRequired: true, source: 'tool-absent' } });
+  const notRequiredBadge = allNodes(notRequired).find((node) => node.className?.startsWith('badge'));
+  assert.equal(textOf(notRequired), 'クロスレビュー レビュー不要');
+  assert.equal(notRequiredBadge.className, 'badge mute');
+
+  const recordedNotRequired = line({
+    headRefOid: headSha,
+    mergeRecordKey: 'recorded-key',
+    crossReview: { notRequired: true, source: 'recorded', reason: '軽微な変更のため' },
+  });
+  const undo = allNodes(recordedNotRequired).find((node) => node.dataset?.reviewSkip === 'clear');
+  assert.equal(undo.textContent, 'レビュー不要を取り消す');
+  assert.equal(allNodes(recordedNotRequired).find((node) => node.className?.startsWith('badge')).title, '軽微な変更のため');
 
   const waitingForTriage = context.crossReviewState({
     headRefOid: headSha,
@@ -745,6 +761,7 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
+    displayPreferences: { mergeAfterReviewDefault: false },
     pullRequestMergeOptions: new Map(),
     pullRequestMergeInFlight: new Set(),
   });
@@ -871,17 +888,94 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
   assert.equal(note.children[0].textContent, '非表示: マージできる PR (2 件)');
 });
 
-test('マージできる PR はマージボタンが出るものだけを、複数の PR 群にまたがっても 1 件として数える', () => {
+test('PR カードは条件達成、条件待ち、操作不可を分け、待ち条件を確認欄の先頭に出す', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const helpersStart = html.indexOf('function element(tag, className, text)');
+  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
+  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
+  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  class FakeText { constructor(text) { this.textContent = text; } }
+  const key = 'd'.repeat(64);
+  const group = { owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: ['merge'], lastMethod: 'merge', autoDeleteBranch: true };
+  const context = pageContext(pageHtml, {
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeOptions: new Map(),
+    pullRequestMergeMessages: new Map(),
+    queuedPullRequestMerges: new Map(),
+    queuedPullRequestMerge: () => null,
+    pullRequestMergeInFlight: new Set(),
+    pullRequestReviewSkipInFlight: new Set(),
+    pullRequestConflictConfirmations: new Set(),
+    pullRequestConflictMessages: new Map(),
+    pullRequestConflictInFlight: new Set(),
+    lastState: { pullRequests: [group] },
+    displayPreferences: { mergeableCondition: 'cross-review' },
+    appendPullRequestBadges() {},
+  });
+  vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
+  const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
+  const render = (changes = {}, confirmation = false) => {
+    const pullRequest = {
+      mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/example/project/pull/42',
+      mergeRecordKey: key, headRefOid: 'a'.repeat(40), headRefName: 'feature/pr-42', effectiveBase: 'main', baseRefName: 'main',
+      canMerge: true, isCrossRepository: false, blocker: null, ci: 'pending', crossReview: null,
+      children: [], stackPosition: { depth: 1, total: 1 }, ...changes,
+    };
+    if (confirmation) context.pullRequestMergeConfirmations.set(key, 'merge');
+    else context.pullRequestMergeConfirmations.delete(key);
+    const root = new FakeElement('div');
+    context.appendPullRequestTree(root, group, pullRequest);
+    const all = (node) => [node, ...(node.children || []).flatMap(all)];
+    return { all: all(root), text: textOf(root) };
+  };
+
+  let card = render({ ci: 'pass', crossReview: { notRequired: true, source: 'recorded' } });
+  assert.match(card.all[1].className, /can-merge/);
+  assert.ok(card.all.some((node) => node.textContent === 'マージできます'));
+  assert.ok(card.all.some((node) => node.dataset?.openMerge === key && node.className === 'merge-btn'));
+
+  card = render();
+  assert.match(card.all[1].className, /merge-pending/);
+  assert.ok(card.all.some((node) => node.textContent === 'マージ操作は可能'));
+  assert.ok(card.all.some((node) => node.dataset?.openMerge === key && node.className === 'merge-btn outline'));
+  assert.match(card.text, /待ち: CI 実行中、クロスレビュー未実施/);
+
+  card = render({ canMerge: false, blocker: 'レビューの承認待ち', ci: 'pass' });
+  assert.ok(card.text.includes('マージできない理由: レビューの承認待ち'));
+  assert.equal(card.all.some((node) => node.dataset?.openMerge === key), false);
+  assert.equal(card.all.some((node) => node.textContent === 'マージ操作は可能'), false);
+
+  card = render({}, true);
+  const panel = card.all.find((node) => node.dataset?.mergeConfirm === key);
+  assert.equal(panel.children[1].className, 'merge-condition-warning');
+  assert.equal(panel.children[1].textContent, '選択した条件の未達: CI 実行中、クロスレビュー未実施');
+  assert.ok(card.all.some((node) => node.dataset?.mergeGo === key && node.className === 'merge-go outline'));
+});
+
+test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestKeys', 'pullRequestMergeableCount'].map((name) => (
+  const functions = ['pullRequestKeys', 'pullRequestCrossReviewSettled', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
-  const context = pageContext(pageHtml, {});
+  const context = pageContext(pageHtml, { displayPreferences: { mergeableCondition: 'operation' } });
   vm.runInContext(functions.join('\n'), context);
 
-  const shared = { number: 1, canMerge: true, mergeSessionId: 'session-a', children: [
-    { number: 2, canMerge: true, mergeSessionId: null, children: [] },
+  const headRefOid = 'a'.repeat(40);
+  const shared = { number: 1, canMerge: true, mergeSessionId: 'session-a', ci: 'pending', crossReview: null, headRefOid, children: [
+    { number: 2, canMerge: true, mergeSessionId: null, ci: 'pass', crossReview: null, headRefOid, children: [] },
   ] };
   const groups = [
     { owner: 'Example', repo: 'Project', trees: [shared] },
@@ -889,6 +983,16 @@ test('マージできる PR はマージボタンが出るものだけを、複�
   ];
 
   assert.equal(context.pullRequestMergeableCount(groups), 1);
+  context.displayPreferences.mergeableCondition = 'ci';
+  assert.equal(context.pullRequestMergeableCount(groups), 0);
+  shared.ci = 'pass';
+  assert.equal(context.pullRequestMergeableCount(groups), 1);
+  context.displayPreferences.mergeableCondition = 'cross-review';
+  assert.equal(context.pullRequestMergeableCount(groups), 0);
+  shared.crossReview = { round: 2, triage: { round: 2, outcome: 'converged', sha: headRefOid } };
+  assert.equal(context.pullRequestMergeableCount(groups), 1);
+  shared.crossReview = null;
+  assert.equal(context.pullRequestMergeableCount(groups), 0);
 });
 
 test('見出しの判断待ちは有効な回答を数えず、無視された回答は数える', () => {
@@ -997,7 +1101,9 @@ test('終わったもののチェックは表示設定として保存し、失�
   const hideFinishedInput = { type: 'checkbox', checked: false };
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5 };
+  const mergeAfterReviewDefaultInput = { type: 'checkbox', checked: false };
+  const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
+  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
   const context = pageContext(pageHtml, {
     displayPreferences,
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
@@ -1008,8 +1114,10 @@ test('終わったもののチェックは表示設定として保存し、失�
     pendingDisplayChanges: {},
     pendingDisplaySettingSaves: new Map(),
     hideFinishedInput,
+    mergeAfterReviewDefaultInput,
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
+    mergeableConditionInputs,
     lastState: null,
     document: { get activeElement() { return activeElement; } },
     enqueueDisplayPatch: (patch) => {
@@ -1022,6 +1130,17 @@ test('終わったもののチェックは表示設定として保存し、失�
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
+  context.renderDisplaySettings();
+  assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
+  assert.equal(mergeAfterReviewDefaultInput.checked, false);
+  mergeAfterReviewDefaultInput.checked = true;
+  const savingDefault = context.changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { mergeAfterReviewDefault: true });
+  resolveSave(true);
+  assert.equal(await savingDefault, true);
+  assert.equal(displayPreferences.mergeAfterReviewDefault, true);
+  assert.equal(mergeAfterReviewDefaultInput.checked, true);
   activeElement = hideFinishedInput;
   hideFinishedInput.checked = true;
   context.renderDisplaySettings();
@@ -1514,6 +1633,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
+    displayPreferences: { mergeAfterReviewDefault: false },
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '時刻不明',
@@ -1654,7 +1774,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   }]);
 });
 
-test('GitHub がブランチを自動削除する確認欄はチェックを隠してマージと予約に false を送る', async () => {
+test('GitHub の自動削除設定を示し、チェックで即時マージとレビュー収束後マージを選ぶ', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpersStart = html.indexOf('function element(tag, className, text)');
   const helpersEnd = html.indexOf('function durationLabel', helpersStart);
@@ -1703,6 +1823,7 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
+    displayPreferences: { mergeAfterReviewDefault: false },
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '時刻不明',
@@ -1728,23 +1849,26 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     return nodes;
   };
   const mergeRoot = new FakeElement('div');
-  const reserveRoot = new FakeElement('div');
-  context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest, false);
-  context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest, true);
+  context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest);
   const mergeNodes = flatten(mergeRoot);
-  const reserveNodes = flatten(reserveRoot);
   const effectText = 'リモートのブランチ feature/pr-42 は GitHub が自動で削除する (リポジトリの設定)';
-  assert.equal(mergeNodes.some((node) => node.type === 'checkbox'), false);
-  assert.equal(reserveNodes.some((node) => node.type === 'checkbox'), false);
   assert.ok(mergeNodes.some((node) => node.textContent === effectText));
-  assert.ok(reserveNodes.some((node) => node.textContent === effectText));
+  const reviewMerge = mergeNodes.find((node) => node.dataset?.mergeAfterReview === 'true');
+  assert.ok(reviewMerge);
+  assert.equal(reviewMerge.checked, false);
   const mergeButton = mergeNodes.find((node) => node.dataset?.mergeGo === key);
-  const reserveButton = reserveNodes.find((node) => node.dataset?.reserveGo === key);
   assert.ok(mergeButton);
-  assert.ok(reserveButton);
+  assert.equal(mergeButton.textContent, 'マージを実行');
 
   await context.runPullRequestMergeAction(mergeButton, 'merge');
-  await context.runPullRequestMergeAction(reserveButton, 'reserve');
+  context.displayPreferences.mergeAfterReviewDefault = true;
+  const reserveRoot = new FakeElement('div');
+  context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest);
+  const reserveNodes = flatten(reserveRoot);
+  const reserveButton = reserveNodes.find((node) => node.dataset?.mergeGo === key);
+  assert.equal(reserveNodes.find((node) => node.dataset?.mergeAfterReview === 'true').checked, true);
+  assert.equal(reserveButton.textContent, '予約する');
+  await context.runPullRequestMergeAction(reserveButton, 'merge');
 
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
     {
@@ -1800,6 +1924,13 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
     const content = root.children[0].children.find((node) => node.className === 'pr-repo-content');
     assert.ok(content.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'));
   }
+
+  const counted = new FakeElement('div');
+  context.appendPullRequestBlock(counted, {
+    owner: 'acme', repo: 'widget', trees: [], registeredCount: 1, mergeableCount: 2, mergeHistory: [], merged: [],
+  });
+  const header = counted.children[0].children.find((node) => node.className === 'prs-head');
+  assert.ok(header.children.some((node) => node.className === 'chip ok' && node.textContent === 'マージできる PR (2 件)'));
 
   const unavailable = new FakeElement('div');
   context.appendPullRequestBlock(unavailable, {
@@ -2145,7 +2276,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
   for (const [kind, dataAttribute, htmlAttribute] of [
     ['merge-go', 'mergeGo', 'data-merge-go'],
     ['merge-cancel', 'mergeCancel', 'data-merge-cancel'],
-    ['merge-reserve-go', 'reserveGo', 'data-reserve-go'],
+    ['merge-after-review', 'mergeAfterReview', 'data-merge-after-review'],
     ['merge-cancel-reservation', 'cancelReservation', 'data-cancel-reservation'],
     ['merge-open', 'openMerge', 'data-open-merge'],
     ['conflict-open', 'conflictOpen', 'data-conflict-open'],

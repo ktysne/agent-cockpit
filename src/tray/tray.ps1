@@ -207,6 +207,86 @@ function Get-CockpitHome {
   return Join-Path ([Environment]::GetFolderPath('UserProfile')) '.agent-cockpit'
 }
 
+function Get-TrayNotificationSetting {
+  $settingsPath = Join-Path $script:cockpitHome 'tray.json'
+  try {
+    $settings = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $property = $settings.PSObject.Properties['notifyPendingCounts']
+    if ($property -and $property.Value -is [bool]) {
+      return [pscustomobject]@{ Found = $true; Enabled = $property.Value }
+    }
+  } catch { }
+  return [pscustomobject]@{ Found = $false; Enabled = $false }
+}
+
+function Save-TrayNotificationSetting([bool]$Enabled) {
+  $settingsPath = Join-Path $script:cockpitHome 'tray.json'
+  $settingsDirectory = [System.IO.Path]::GetDirectoryName($settingsPath)
+  New-Item -ItemType Directory -Path $settingsDirectory -Force | Out-Null
+
+  $settings = $null
+  try {
+    if ([System.IO.File]::Exists($settingsPath)) {
+      $settings = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    }
+  } catch { }
+  if ($null -eq $settings -or $settings -is [array] -or $settings -is [string] -or $settings -is [ValueType]) {
+    $settings = [pscustomobject]@{}
+  }
+  $property = $settings.PSObject.Properties['notifyPendingCounts']
+  if ($property) {
+    $property.Value = $Enabled
+  } else {
+    Add-Member -InputObject $settings -NotePropertyName 'notifyPendingCounts' -NotePropertyValue $Enabled
+  }
+
+  $temporaryPath = '{0}.{1}.tmp' -f $settingsPath, [Guid]::NewGuid().ToString('N')
+  try {
+    $json = ConvertTo-Json -InputObject $settings -Compress -Depth 10
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($temporaryPath, $json, $encoding)
+    if ([System.IO.File]::Exists($settingsPath)) {
+      [System.IO.File]::Replace($temporaryPath, $settingsPath, $null)
+    } else {
+      [System.IO.File]::Move($temporaryPath, $settingsPath)
+    }
+  } finally {
+    if ([System.IO.File]::Exists($temporaryPath)) {
+      Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Initialize-TrayNotificationSetting {
+  $setting = Get-TrayNotificationSetting
+  $script:notifyPendingCounts = $setting.Enabled
+  if ($setting.Found) { return }
+
+  $answer = [System.Windows.Forms.MessageBox]::Show(
+    '許可待ちと判断待ちが増えたときに Windows の通知を出しますか? Claude Code の通知と重なることがあります。',
+    'Agent Cockpit',
+    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+    [System.Windows.Forms.MessageBoxIcon]::Question,
+    [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+  )
+  $script:notifyPendingCounts = $answer -eq [System.Windows.Forms.DialogResult]::Yes
+  try {
+    Save-TrayNotificationSetting $script:notifyPendingCounts
+  } catch {
+    Show-TrayNotice 'トレイの設定を保存できませんでした。' ([System.Windows.Forms.ToolTipIcon]::Warning)
+  }
+}
+
+function Set-TrayNotificationPreference([bool]$Enabled) {
+  try {
+    Save-TrayNotificationSetting $Enabled
+    $script:notifyPendingCounts = $Enabled
+  } catch {
+    $script:notifyPendingCountsMenuItem.Checked = $script:notifyPendingCounts
+    Show-TrayNotice 'トレイの設定を保存できませんでした。' ([System.Windows.Forms.ToolTipIcon]::Warning)
+  }
+}
+
 function Export-TrayIcon([string]$Path) {
   $sizes = @(16, 32, 48, 256)
   $images = @(
@@ -277,7 +357,7 @@ function Get-ServerInfo {
 
 function Get-DashboardState([object]$ServerInfo) {
   if ($null -eq $ServerInfo) {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; AskDecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
   try {
     $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($ServerInfo.Port)/api/state" -Method Get -TimeoutSec 2 -UseBasicParsing
@@ -294,10 +374,9 @@ function Get-DashboardState([object]$ServerInfo) {
         if ($decision -and $decision.state -eq 'waiting' -and -not $hasEffectiveAnswer) { $decisionKeys += '{0}|{1}' -f $session.session_id, $decision.id }
       }
     }
-    $askDecisionCount = @($state.sessions | ForEach-Object { @($_.decisions) } | Where-Object { $_.source -eq 'ask' -and $_.state -in @('waiting', 'provisional') }).Count
-    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; AskDecisionCount = $askDecisionCount; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
+    return [pscustomobject]@{ Connected = $true; PermissionCount = $keys.Count; PermissionKeys = $keys; DecisionCount = $decisionKeys.Count; DecisionKeys = $decisionKeys; AwayEnabled = ($state.away.enabled -eq $true) }
   } catch {
-    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; AskDecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
+    return [pscustomobject]@{ Connected = $false; PermissionCount = 0; PermissionKeys = @(); DecisionCount = 0; DecisionKeys = @(); AwayEnabled = $false }
   }
 }
 
@@ -377,9 +456,9 @@ function Restart-ResidentServer {
   try {
     $previousServer = Get-ServerInfo
     $state = Get-DashboardState $previousServer
-    $confirmationText = '常駐サーバーを再起動します。タスク、判断事項、回答の記録、表示の設定、一覧から外したセッション、離席中の切り替えは残ります。実行中のツール、サブエージェントの行、離席中の質問から作った判断事項は消え、次のイベントから組み立て直されます。'
-    if ($state.Connected -and ($state.PermissionCount -gt 0 -or $state.AskDecisionCount -gt 0)) {
-      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件と、離席中の質問から作った未解決の判断事項 $($state.AskDecisionCount) 件は、再起動後に表示されません。"
+    $confirmationText = '常駐サーバーを再起動します。タスク、判断事項、回答の記録、表示の設定、一覧から外したセッション、離席中の切り替えは残ります。実行中のツール、サブエージェントの行、画面で終了にしたサブエージェントは消え、次のイベントから組み立て直されます。'
+    if ($state.Connected -and $state.PermissionCount -gt 0) {
+      $confirmationText += "`r`n`r`n許可待ち $($state.PermissionCount) 件は、再起動後に表示されません。"
     }
     $confirmation = [System.Windows.Forms.MessageBox]::Show(
       $confirmationText,
@@ -524,12 +603,14 @@ function Update-TrayState {
     $newDecisions = @($state.DecisionKeys | Where-Object { $script:lastDecisionKeys -notcontains $_ })
     $hasKnownWaits = $script:permissionKeysKnown -and $newWaits.Count -gt 0
     $hasKnownDecisions = $script:decisionKeysKnown -and $newDecisions.Count -gt 0
-    if ($hasKnownWaits -and $hasKnownDecisions) {
-      Show-TrayNotice "許可待ちが $($state.PermissionCount) 件、判断待ちが $($state.DecisionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
-    } elseif ($hasKnownWaits) {
-      Show-TrayNotice "許可待ちが $($state.PermissionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
-    } elseif ($hasKnownDecisions) {
-      Show-TrayNotice "判断待ちが $($state.DecisionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
+    if ($script:notifyPendingCounts) {
+      if ($hasKnownWaits -and $hasKnownDecisions) {
+        Show-TrayNotice "許可待ちが $($state.PermissionCount) 件、判断待ちが $($state.DecisionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
+      } elseif ($hasKnownWaits) {
+        Show-TrayNotice "許可待ちが $($state.PermissionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
+      } elseif ($hasKnownDecisions) {
+        Show-TrayNotice "判断待ちが $($state.DecisionCount) 件あります。クリックしてダッシュボードを開きます。" ([System.Windows.Forms.ToolTipIcon]::Warning) -OpensDashboard
+      }
     }
     $script:lastPermissionKeys = @($state.PermissionKeys)
     $script:lastDecisionKeys = @($state.DecisionKeys)
@@ -585,7 +666,10 @@ $script:decisionKeysKnown = $false
 $script:lastIconState = $null
 $script:balloonOpensDashboard = $false
 $script:awayMenuItem = $null
+$script:notifyPendingCountsMenuItem = $null
+$script:notifyPendingCounts = $false
 $script:restartInProgress = $false
+Initialize-TrayNotificationSetting
 $iconPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\assets\agent-cockpit_icon.png'))
 [void][AgentCockpitTray.NativeMethods]::LoadSourceImage($iconPath)
 try {
@@ -596,6 +680,11 @@ try {
   $menu = New-Object System.Windows.Forms.ContextMenuStrip
   $openItem = $menu.Items.Add('ダッシュボードを開く')
   $openItem.add_Click({ Open-Dashboard })
+  $script:notifyPendingCountsMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem('待ち件数を通知する')
+  $script:notifyPendingCountsMenuItem.CheckOnClick = $true
+  $script:notifyPendingCountsMenuItem.Checked = $script:notifyPendingCounts
+  $script:notifyPendingCountsMenuItem.add_Click({ param($sender, $eventArgs) Set-TrayNotificationPreference ([bool]$sender.Checked) })
+  $menu.Items.Add($script:notifyPendingCountsMenuItem) | Out-Null
   $script:awayMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem('離席中')
   $script:awayMenuItem.CheckOnClick = $true
   $script:awayMenuItem.add_Click({ param($sender, $eventArgs) Set-AwayStatus ([bool]$sender.Checked) })

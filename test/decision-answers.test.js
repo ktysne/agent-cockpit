@@ -1168,7 +1168,7 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
     .map((name) => fs.readFile(path.join(homeDir, name), 'utf8')))).join('\n');
   assert.doesNotMatch(persistedText, /UI からの回答本文|他セッションだけに渡す本文/);
   const stored = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
-  assert.equal(stored.decisionLifecycles['session-ui'], undefined);
+  assert.equal(stored.decisionLifecycles['session-ui']['ask-ui'].answer.note, 'UI からの回答本文');
   assert.equal(stored.decisionLifecycles['session-other'][privateDecision.id].answer.note, '他セッションだけに渡す本文');
 });
 

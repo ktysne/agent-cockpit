@@ -270,7 +270,7 @@ function assemblePullRequestStacks({
   const visibleOpenNumbers = new Set(visibleOpen.map((pr) => pr.number));
   const roots = visibleOpen.filter((pr) => !visibleOpenNumbers.has(parentByNumber.get(pr.number)));
 
-  function blockerFor(pr) {
+  function blockerFor(pr, includeCi = true) {
     const value = effective(pr);
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
     const hasBasePullRequest = visibleOpen.some((candidate) => candidate.headRefName === value.base);
@@ -284,8 +284,8 @@ function assemblePullRequestStacks({
     }
     if (value.restackCheckUnknown) return '積み直しが必要か確かめられない';
     if (pr.conflict) return 'コンフリクトあり';
-    if (pr.ci === 'fail') return 'CI が失敗';
-    if (pr.ci === 'pending') return 'CI 実行中';
+    if (includeCi && pr.ci === 'fail') return 'CI が失敗';
+    if (includeCi && pr.ci === 'pending') return 'CI 実行中';
     if (pr.review === 'changes') return '変更を求められている';
     if (pr.review === 'required') return 'レビューの承認待ち';
     return null;
@@ -311,7 +311,8 @@ function assemblePullRequestStacks({
       parentNumber: parentByNumber.get(root.number) || null,
       stackPosition: { depth, total: rootHeight },
       blocker,
-      canMerge: blocker === null,
+      operationBlocker: blockerFor(root, false),
+      canMerge: blockerFor(root, false) === null,
       children,
     };
   }
@@ -333,7 +334,7 @@ function assemblePullRequestStacks({
   return {
       trees,
       openCount: visibleOpen.length,
-      mergeableCount: visibleOpen.filter((pr) => blockerFor(pr) === null).length,
+      mergeableCount: visibleOpen.filter((pr) => blockerFor(pr, false) === null).length,
       relatedOpen: visibleOpen.filter((pr) => !registeredNumbers.has(pr.number)),
       merged: visibleClosed,
     orphanedOpenNumbers: visibleOpen.filter((pr) => blockerFor(pr) && blockerFor(pr).startsWith('base の ')).map((pr) => pr.number),
@@ -412,13 +413,45 @@ async function crossReviewToolExists(cwd, fileSystem = fs) {
   }
 }
 
+async function detectCrossReviewTool(cwd, fileSystem = fs) {
+  if (typeof cwd !== 'string' || !cwd || !path.isAbsolute(cwd)) return { status: 'unknown' };
+  try {
+    const cwdStat = await fileSystem.stat(cwd);
+    if (!cwdStat.isDirectory()) return { status: 'unknown' };
+  } catch {
+    return { status: 'unknown' };
+  }
+
+  let current = path.resolve(cwd);
+  while (true) {
+    try {
+      await fileSystem.stat(path.join(current, '.git'));
+      break;
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) return { status: 'unknown' };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return { status: 'unknown' };
+    current = parent;
+  }
+
+  try {
+    await fileSystem.stat(path.join(current, 'tools', 'cross-review.js'));
+    return { status: 'present', root: current };
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) return { status: 'absent', root: current };
+    return { status: 'unknown' };
+  }
+}
+
 async function readCrossReviewState(registration, pullRequest, fileSystem = fs) {
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
-  if (!(await crossReviewToolExists(registration.cwd, fileSystem))) return undefined;
-  const root = await findWorktreeRoot(registration.cwd, fileSystem);
-  if (!root) return undefined;
+  const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
+  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
+  if (tool.status !== 'present') return null;
+  const { root } = tool;
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
@@ -485,6 +518,7 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   const branch = pullRequest?.headRefName;
   if (selected === undefined || !branch) return selected;
   const root = await findWorktreeRoot(registration.cwd, fileSystem);
+  if (!root) return selected;
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   for (const worktree of await listWorktreesForBranch(root, branch, options.execFileImpl)) {
     if (sameRoot(worktree, root)) continue;
@@ -496,20 +530,51 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
 
 // 記録のある worktree を優先し、同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。
 function shouldReplaceCrossReview(current, candidate, headSha) {
-  const priority = (review) => review === undefined ? 0 : review === null ? 1 : 2;
+  const priority = (review) => review?.source === 'recorded' ? 4 : review === undefined ? 0
+    : review?.notRequired === true ? 1 : review === null ? 2 : 3;
   const currentPriority = priority(current);
   const candidatePriority = priority(candidate);
   if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
-  if (!current || !candidate) return false;
+  if (!current || !candidate || current.notRequired === true || candidate.notRequired === true) return false;
   const head = String(headSha || '').toLowerCase();
-  const convergedAtHead = (review) => review.triage?.outcome === 'converged' && review.triage.sha === head;
+  const convergedAtHead = (review) => review.triage?.round === review.round && review.triage.outcome === 'converged' &&
+    review.triage.sha === head.toLowerCase();
   if (convergedAtHead(current) !== convergedAtHead(candidate)) return convergedAtHead(candidate);
   return current.reviewedSha !== headSha;
 }
 
+function crossReviewConvergedAtHead(pullRequest) {
+  if (pullRequest.crossReview?.notRequired === true) return true;
+  const review = pullRequest.crossReview;
+  const triage = review?.triage && review.triage.round === review.round ? review.triage : null;
+  return triage?.outcome === 'converged' && SHA_PATTERN.test(pullRequest.headRefOid || '') && SHA_PATTERN.test(triage.sha || '') &&
+    triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase();
+}
+
+function mergeConditionWaits(pullRequest, condition) {
+  const waiting = [];
+  if (condition !== 'operation' && pullRequest.ci !== 'pass') {
+    waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
+  }
+  if (condition === 'cross-review' && !crossReviewConvergedAtHead(pullRequest)) waiting.push('クロスレビュー未実施');
+  return waiting;
+}
+
+function applyMergeCondition(pullRequest, condition) {
+  const children = pullRequest.children.map((child) => applyMergeCondition(child, condition));
+  const waiting = mergeConditionWaits(pullRequest, condition);
+  return {
+    ...pullRequest,
+    mergeCondition: condition,
+    mergeConditionWaits: waiting,
+    mergeConditionMet: pullRequest.canMerge === true && waiting.length === 0,
+    children,
+  };
+}
+
 // マージボタンは登録したセッションがある PR にだけ出るので、件数もそれに合わせる。
 function mergeablePullRequestCount(trees) {
-  return trees.reduce((total, pullRequest) => total + Number(pullRequest.canMerge === true && Boolean(pullRequest.mergeSessionId))
+  return trees.reduce((total, pullRequest) => total + Number((pullRequest.mergeConditionMet ?? pullRequest.canMerge) === true && Boolean(pullRequest.mergeSessionId))
     + mergeablePullRequestCount(pullRequest.children || []), 0);
 }
 
@@ -530,11 +595,14 @@ class PullRequestTracker {
     this.now = options.now || Date.now;
     this.repositories = new Map();
     this.productViews = new Map();
+    this.crossReviewByRepository = new Map();
     this.inFlight = new Map();
     this.initialFetchCompleted = new Set();
     this.timer = null;
     this.onMerged = options.onMerged || null;
     this.onClosed = options.onClosed || null;
+    this.onRefreshed = options.onRefreshed || null;
+    this.readCrossReviewState = options.readCrossReviewStateAcrossWorktrees || readCrossReviewStateAcrossWorktrees;
   }
 
   start() {
@@ -583,10 +651,19 @@ class PullRequestTracker {
     const key = repoKey(owner, repo);
     if (this.inFlight.has(key)) return this.inFlight.get(key);
     const operation = this.fetchRepository(owner, repo, repository)
-      .finally(() => {
+      .then(async (result) => {
         this.initialFetchCompleted.add(key);
         this.inFlight.delete(key);
         this.state.touch();
+        try {
+          await this.onRefreshed?.(owner, repo);
+        } catch {}
+        return result;
+      }, (error) => {
+        this.initialFetchCompleted.add(key);
+        this.inFlight.delete(key);
+        this.state.touch();
+        throw error;
       });
     this.inFlight.set(key, operation);
     return operation;
@@ -621,11 +698,15 @@ class PullRequestTracker {
       }
       return null;
     };
+    const pullRequest = find(assembled.trees);
+    if (pullRequest && this.crossReviewByRepository.get(key)?.has(pullRequest.number)) {
+      pullRequest.crossReview = this.crossReviewByRepository.get(key).get(pullRequest.number);
+    }
     return {
       registration,
       repository,
       registrations,
-      pullRequest: find(assembled.trees),
+      pullRequest,
     };
   }
 
@@ -635,7 +716,7 @@ class PullRequestTracker {
 
   async readPullRequestView(owner, repo, number) {
     const output = await this.execute([
-      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt,autoMergeRequest`,
+      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
     ]);
     const value = JSON.parse(output);
     const state = String(value?.state || '').toUpperCase();
@@ -645,7 +726,6 @@ class PullRequestTracker {
       state,
       pullRequest,
       mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
-      autoMergeEnabled: Boolean(value.autoMergeRequest),
     };
   }
 
@@ -653,7 +733,7 @@ class PullRequestTracker {
     const key = repoKey(owner, repo);
     const checkedAt = new Date(this.now()).toISOString();
     const current = this.repositories.get(key) || {
-      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, fetchedAt: null, checkedAt: null,
+      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
     };
     const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
@@ -667,6 +747,7 @@ class PullRequestTracker {
     let defaultBranch = current.defaultBranch;
     let mergeMethods = current.mergeMethods;
     let autoDeleteBranch = current.autoDeleteBranch;
+    let configAvailable = false;
     let fetchedAt = current.fetchedAt;
     let listAvailable = false;
     let mergedPullRequests = null;
@@ -690,6 +771,7 @@ class PullRequestTracker {
         defaultBranch = config.defaultBranch;
         mergeMethods = config.mergeMethods;
         autoDeleteBranch = config.autoDeleteBranch;
+        configAvailable = true;
       } catch {
         errors.push('リポジトリ設定を読み取れませんでした');
       }
@@ -905,6 +987,7 @@ class PullRequestTracker {
       defaultBranch,
       mergeMethods,
       autoDeleteBranch,
+      configAvailable,
       fetchedAt,
       checkedAt,
       error: errors.length ? [...new Set(errors)].join('。') : null,
@@ -936,21 +1019,29 @@ class PullRequestTracker {
     const createdIdentities = new Set();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
+    this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
     for (const registration of registrations) {
       const pullRequest = repositoryState.openPullRequests.find((candidate) => candidate.number === registration.number);
       if (!pullRequest) continue;
-      const review = await readCrossReviewStateAcrossWorktrees(registration, pullRequest, {
+      const skip = this.state.crossReviewSkip?.(owner, repo, registration.number);
+      if (skip?.headRefOid === pullRequest.headRefOid.toLowerCase()) {
+        crossReviewByNumber.set(registration.number, { notRequired: true, source: 'recorded', reason: skip.reason });
+        continue;
+      }
+      const review = await this.readCrossReviewState(registration, pullRequest, {
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl,
       });
       const current = crossReviewByNumber.get(registration.number);
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;
-      crossReviewByNumber.set(registration.number, review && {
-        round: review.round,
-        max: review.max,
-        dismissed: review.dismissed,
-        reviewedSha: review.reviewedSha,
-        triage: review.triage,
-      });
+      crossReviewByNumber.set(registration.number, review && (review.notRequired
+        ? { notRequired: true, source: review.source }
+        : {
+          round: review.round,
+          max: review.max,
+          dismissed: review.dismissed,
+          reviewedSha: review.reviewedSha,
+          triage: review.triage,
+        }));
     }
     for (const [productKey, group] of productGroups) {
       const assembled = assemblePullRequestStacks({
@@ -961,10 +1052,11 @@ class PullRequestTracker {
         retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
         restackResults: repositoryState.restackResults,
       });
-      const trees = assembled.trees.map((tree) => attachCrossReviewState(
+      const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
+      const trees = assembled.trees.map((tree) => applyMergeCondition(attachCrossReviewState(
         attachMergeState(tree, group.registrations, owner, repo, this.state),
         crossReviewByNumber,
-      ));
+      ), condition));
       const identity = `${productKey}\0${key}`;
       createdIdentities.add(identity);
       this.productViews.set(identity, {
@@ -986,16 +1078,21 @@ class PullRequestTracker {
         trees,
         merged: assembled.merged,
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(owner, repo, this.now()),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(owner, repo),
         reservations: this.state.pullRequestMergeReservationsForRepo(owner, repo),
         lastMethod: this.state.lastPullRequestMethod(owner, repo),
       });
     }
+    this.crossReviewByRepository.set(key, crossReviewByNumber);
     removeStaleProductViews(this.productViews, key, createdIdentities);
   }
 
   snapshot() {
     const groups = [...this.productViews.values()].map((group) => {
-      const trees = group.trees.map((tree) => attachMergeState(tree, [], group.owner, group.repo, this.state));
+      const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
+      const trees = group.trees.map((tree) => applyMergeCondition(
+        attachMergeState(tree, [], group.owner, group.repo, this.state), condition,
+      ));
       return {
         ...group,
         product: { ...group.product },
@@ -1004,6 +1101,7 @@ class PullRequestTracker {
         trees,
         merged: structuredClone(group.merged),
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
         lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
         loading: this.inFlight.has(repoKey(group.owner, group.repo)) && !this.initialFetchCompleted.has(repoKey(group.owner, group.repo)),
@@ -1026,6 +1124,7 @@ class PullRequestTracker {
           defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
           openStateUnknown: true, registeredCount: 0, openCount: 0, mergeableCount: 0, trees: [], merged: [],
           mergeHistory: this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now()),
+          reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(registration.owner, registration.repo),
           reservations: this.state.pullRequestMergeReservationsForRepo(registration.owner, registration.repo),
           lastMethod: this.state.lastPullRequestMethod(registration.owner, registration.repo), loading: true,
         };
@@ -1086,5 +1185,6 @@ module.exports = {
   crossReviewToolExists,
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
+  crossReviewConvergedAtHead,
   runGh,
 };

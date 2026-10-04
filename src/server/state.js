@@ -5,7 +5,7 @@ const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { parsePullRequestUrl, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 
-const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null });
+const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
 const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
 const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const DEFAULT_LONG_WAIT_MINUTES = 15;
@@ -13,13 +13,16 @@ const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_DISPLAY = Object.freeze({
   mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
   longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES, hideFinished: true,
+  mergeableCondition: 'cross-review', mergeAfterReviewDefault: false,
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_AWAY_PERIODS = 50;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
+const MERGEABLE_CONDITIONS = new Set(['operation', 'ci', 'cross-review']);
 const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'agents', 'prs']);
 
 function validProduct(value) {
@@ -47,6 +50,8 @@ function cloneDisplay(display) {
     longWaitMinutes: display.longWaitMinutes,
     awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
     hideFinished: display.hideFinished,
+    mergeableCondition: display.mergeableCondition,
+    mergeAfterReviewDefault: display.mergeAfterReviewDefault,
   };
 }
 
@@ -57,6 +62,8 @@ function defaultDisplay() {
     longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
     awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
     hideFinished: DEFAULT_DISPLAY.hideFinished,
+    mergeableCondition: DEFAULT_DISPLAY.mergeableCondition,
+    mergeAfterReviewDefault: DEFAULT_DISPLAY.mergeAfterReviewDefault,
   };
 }
 
@@ -95,7 +102,7 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed']) {
@@ -121,6 +128,8 @@ function normalizeDisplay(value) {
     longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
     hideFinished: typeof value.hideFinished === 'boolean' ? value.hideFinished : DEFAULT_DISPLAY.hideFinished,
+    mergeableCondition: MERGEABLE_CONDITIONS.has(value.mergeableCondition) ? value.mergeableCondition : DEFAULT_DISPLAY.mergeableCondition,
+    mergeAfterReviewDefault: typeof value.mergeAfterReviewDefault === 'boolean' ? value.mergeAfterReviewDefault : DEFAULT_DISPLAY.mergeAfterReviewDefault,
   };
 }
 
@@ -150,6 +159,25 @@ function pullRequestRegistrationKey(record) {
 
 function relatedPullRequestRecordKey(owner, repo, number) {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+}
+
+function validCrossReviewSkip(record) {
+  return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
+    Number.isSafeInteger(record.number) && record.number > 0 &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
+    typeof record.reason === 'string' && record.reason.trim().length > 0 && record.reason.length <= 2000 &&
+    validTimestamp(record.recordedAt);
+}
+
+function normalizeCrossReviewSkip(record) {
+  return {
+    owner: record.owner,
+    repo: record.repo,
+    number: record.number,
+    headRefOid: record.headRefOid.toLowerCase(),
+    reason: record.reason,
+    recordedAt: record.recordedAt,
+  };
 }
 
 function pullRequestRepositoryKey(owner, repo) {
@@ -243,20 +271,28 @@ function validMergedPullRequest(record) {
     typeof record.automatic !== 'boolean' || typeof record.url !== 'string' ||
     (record.reservedHeadRefOid !== undefined && record.reservedHeadRefOid !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.reservedHeadRefOid)) ||
     (record.mergedHeadRefOid !== undefined && record.mergedHeadRefOid !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.mergedHeadRefOid)) ||
-    (record.headMismatch !== undefined && typeof record.headMismatch !== 'boolean')) return false;
+    (record.headMismatch !== undefined && typeof record.headMismatch !== 'boolean') ||
+    (record.automaticResult !== undefined && !validPullRequestMergeResult(record.automaticResult))) return false;
   const parsedUrl = parsePullRequestUrl(record.url);
   return Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number);
 }
 
+function validPullRequestMergeResult(value) {
+  return isRecord(value) && typeof value.branchDeleted === 'boolean' && typeof value.autoDeleteBranch === 'boolean' &&
+    (value.retargetedBase === null || validBranchName(value.retargetedBase)) &&
+    Array.isArray(value.retargetedNumbers) && value.retargetedNumbers.length <= 100 &&
+    value.retargetedNumbers.every((number) => Number.isSafeInteger(number) && number > 0) &&
+    (value.warning === null || (typeof value.warning === 'string' && value.warning.length <= 5000));
+}
+
 function validPullRequestMergeReservation(record) {
   const parsedUrl = parsePullRequestUrl(record?.url);
+  const allowedKeys = new Set(['session_id', 'owner', 'repo', 'number', 'url', 'method', 'deleteBranch', 'createdAt']);
   return isRecord(record) && validStoredSessionId(record.session_id) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
-    Number.isSafeInteger(record.number) && record.number > 0 && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
-    PULL_REQUEST_MERGE_METHODS.has(record.method) && typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) &&
-    validBranchName(record.headRefName) && validBranchName(record.defaultBranch) && typeof record.url === 'string' &&
-    Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number) &&
-    Array.isArray(record.stackedPullRequests) && record.stackedPullRequests.length <= 100 &&
-    record.stackedPullRequests.every((item) => isRecord(item) && Number.isSafeInteger(item.number) && item.number > 0 && validBranchName(item.baseRefName));
+    Object.keys(record).every((key) => allowedKeys.has(key)) &&
+    Number.isSafeInteger(record.number) && record.number > 0 && PULL_REQUEST_MERGE_METHODS.has(record.method) &&
+    typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) && typeof record.url === 'string' &&
+    Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number);
 }
 
 function validPullRequestMergeIntent(record) {
@@ -264,6 +300,7 @@ function validPullRequestMergeIntent(record) {
   return isRecord(record) && validStoredSessionId(record.session_id) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Number.isSafeInteger(record.number) && record.number > 0 && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
     PULL_REQUEST_MERGE_METHODS.has(record.method) && typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) &&
+    (record.automatic === undefined || typeof record.automatic === 'boolean') &&
     validBranchName(record.headRefName) && validBranchName(record.defaultBranch) && typeof record.url === 'string' &&
     Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number) &&
     Array.isArray(record.stackedPullRequests) && record.stackedPullRequests.length <= 100 &&
@@ -294,6 +331,23 @@ function normalizeStore(value) {
       product: cloneProduct(plan.product),
       decisions: plan.decisions.map(cloneDecision),
     });
+  }
+  const askDecisionBindingsValue = value.askDecisionBindings === undefined ? {} : value.askDecisionBindings;
+  if (!isRecord(askDecisionBindingsValue)) throw new Error('Invalid ask decision bindings');
+  const askDecisionBindings = new Map();
+  for (const [sessionId, bindings] of Object.entries(askDecisionBindingsValue)) {
+    if (!validStoredSessionId(sessionId) || !isRecord(bindings)) throw new Error('Invalid ask decision bindings');
+    const askDecisionIds = new Set((plans.get(sessionId)?.decisions || [])
+      .filter((decision) => decision.source === 'ask').map((decision) => decision.id));
+    const normalizedBindings = new Map();
+    for (const [toolUseId, decisionId] of Object.entries(bindings)) {
+      if (!toolUseId || toolUseId.length > 256 || typeof decisionId !== 'string' ||
+        decisionId.length > 256 || !askDecisionIds.has(decisionId)) {
+        throw new Error('Invalid ask decision bindings');
+      }
+      normalizedBindings.set(toolUseId, decisionId);
+    }
+    if (normalizedBindings.size) askDecisionBindings.set(sessionId, normalizedBindings);
   }
   const decisionLifecycles = new Map();
   for (const [sessionId, records] of Object.entries(value.decisionLifecycles)) {
@@ -341,16 +395,16 @@ function normalizeStore(value) {
   const relatedPrs = value.relatedPrs === undefined ? [] : value.relatedPrs;
   const retargetedPrs = value.retargetedPrs === undefined ? [] : value.retargetedPrs;
   const mergedPrs = value.mergedPrs === undefined ? [] : value.mergedPrs;
-  const mergeReservations = value.mergeReservations === undefined ? [] : value.mergeReservations;
+  const mergeReservations = Array.isArray(value.mergeReservations) ? value.mergeReservations.filter(validPullRequestMergeReservation) : [];
   const mergeIntents = value.mergeIntents === undefined ? [] : value.mergeIntents;
   const lastPullRequestMethods = value.lastPullRequestMethods === undefined ? {} : value.lastPullRequestMethods;
   const seenAtByProduct = value.seenAtByProduct === undefined ? {} : value.seenAtByProduct;
   const ciFailures = value.ciFailures === undefined ? [] : value.ciFailures;
+  const crossReviewSkips = value.crossReviewSkips === undefined ? [] : value.crossReviewSkips;
   if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
     !Array.isArray(relatedPrs) || !relatedPrs.every(validRelatedPullRequestRecord) ||
     !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
     !Array.isArray(mergedPrs) || !mergedPrs.every(validMergedPullRequest) ||
-    !Array.isArray(mergeReservations) || !mergeReservations.every(validPullRequestMergeReservation) ||
     !Array.isArray(mergeIntents) || !mergeIntents.every(validPullRequestMergeIntent) ||
     !isRecord(lastPullRequestMethods) || Object.entries(lastPullRequestMethods).some(([key, method]) => {
       const [owner, repo, extra] = key.split('/');
@@ -361,12 +415,14 @@ function normalizeStore(value) {
     )) ||
     !Array.isArray(ciFailures) || !ciFailures.every((record) => isRecord(record) &&
       validRepositoryPart(record.owner) && validRepositoryPart(record.repo) && Number.isSafeInteger(record.number) && record.number > 0 &&
-      validProduct(record.product) && validTimestamp(record.at))) {
+      validProduct(record.product) && validTimestamp(record.at)) ||
+    !Array.isArray(crossReviewSkips) || !crossReviewSkips.every(validCrossReviewSkip)) {
     throw new Error('Invalid pull request records');
   }
   return {
     display,
     plans,
+    askDecisionBindings,
     decisionLifecycles,
     closedTasks,
     hiddenSessions,
@@ -374,10 +430,7 @@ function normalizeStore(value) {
     relatedPrs: relatedPrs.map(normalizeRelatedPullRequestRecord),
     retargetedPrs: retargetedPrs.map((record) => ({ ...record })),
     mergedPrs: mergedPrs.map((record) => ({ ...record })),
-    mergeReservations: mergeReservations.map((record) => ({
-      ...record,
-      stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
-    })),
+    mergeReservations: mergeReservations.map((record) => ({ ...record })),
     mergeIntents: mergeIntents.map((record) => ({
       ...record,
       stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
@@ -385,6 +438,7 @@ function normalizeStore(value) {
     lastPullRequestMethods: new Map(Object.entries(lastPullRequestMethods)),
     seenAtByProduct: new Map(Object.entries(seenAtByProduct)),
     ciFailures: ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
+    crossReviewSkips: crossReviewSkips.map(normalizeCrossReviewSkip),
   };
 }
 
@@ -393,10 +447,49 @@ async function atomicWriteAwayState(homeDir, value, fileSystem = fs, writer = nu
   return atomicWriteJson(homeDir, 'away.json', value, fileSystem);
 }
 
+function normalizeAwayState(value) {
+  if (!isRecord(value) || typeof value.enabled !== 'boolean' ||
+    !((value.enabled && Number.isFinite(value.since) && value.since >= 0) || (!value.enabled && value.since === null)) ||
+    !Number.isFinite(new Date(value.since).getTime())) return null;
+
+  // 旧形式と、期間の記録が食い違うものは、離席中なら since から現在まで続く期間だけとして読む。
+  // 期間が壊れていても、離席中かどうかの記録は保つ。
+  const sinceOnly = value.enabled ? [{ start: value.since, end: null }] : [];
+  let periods = sinceOnly;
+  if (Array.isArray(value.periods) && value.periods.every((period) => isRecord(period) &&
+    Number.isFinite(period.start) && period.start >= 0 &&
+    (period.end === null || (Number.isFinite(period.end) && period.end >= period.start)))) {
+    const candidate = value.periods.map(({ start, end }) => ({ start, end }));
+    const openIndexes = candidate.flatMap((period, index) => period.end === null ? [index] : []);
+    const activePeriod = candidate.at(-1);
+    const consistent = value.enabled
+      ? openIndexes.length === 0
+        ? !activePeriod || activePeriod.end <= value.since
+        : openIndexes.length === 1 && openIndexes[0] === candidate.length - 1 && activePeriod.start === value.since
+      : openIndexes.length === 0;
+    if (consistent) {
+      periods = candidate;
+      if (value.enabled && activePeriod?.end !== null) periods.push({ start: value.since, end: null });
+    }
+  }
+
+  return { enabled: value.enabled, since: value.since, periods: periods.slice(-MAX_AWAY_PERIODS) };
+}
+
+function retainedAwayPeriods(periods, seenAtValues = [], now = Date.now()) {
+  const retentionOrigin = now - STORE_RETENTION_MS;
+  const seenTimes = [...seenAtValues].map((at) => typeof at === 'number' ? at : Date.parse(at)).filter(Number.isFinite);
+  return periods.filter((period) => {
+    if (period.end === null) return true;
+    if (period.end < retentionOrigin) return false;
+    return !seenTimes.length || !seenTimes.every((seenAt) => period.end <= seenAt);
+  }).slice(-MAX_AWAY_PERIODS);
+}
+
 class AwayState {
   constructor(homeDir, value = DEFAULT_AWAY_STATE, fileSystem = fs, writer = null) {
     this.homeDir = homeDir;
-    this.value = { ...value };
+    this.value = normalizeAwayState(value) || { ...DEFAULT_AWAY_STATE, periods: [] };
     this.fileSystem = fileSystem;
     this.writer = writer;
     this.pending = Promise.resolve();
@@ -405,19 +498,20 @@ class AwayState {
   static async load(homeDir, fileSystem = fs, writer = null) {
     try {
       const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'away.json'), 'utf8'));
-      if (
-        value && typeof value === 'object' && !Array.isArray(value) &&
-        typeof value.enabled === 'boolean' &&
-        ((value.enabled && Number.isFinite(value.since) && value.since >= 0) || (!value.enabled && value.since === null)) &&
-        Number.isFinite(new Date(value.since).getTime())
-      ) return new AwayState(homeDir, { enabled: value.enabled, since: value.since }, fileSystem, writer);
+      const normalized = normalizeAwayState(value);
+      if (normalized) {
+        const away = new AwayState(homeDir, normalized, fileSystem, writer);
+        if (JSON.stringify(value) !== JSON.stringify(away.value)) await away.persistCurrent();
+        await away.prune([], Date.now());
+        return away;
+      }
     } catch {
     }
     return new AwayState(homeDir, DEFAULT_AWAY_STATE, fileSystem, writer);
   }
 
   snapshot() {
-    return { ...this.value };
+    return { ...this.value, periods: this.value.periods.map((period) => ({ ...period })) };
   }
 
   // 画面とトレイから同時に切り替えても、保存の順と this.value の順が食い違わないよう直列にする。
@@ -428,13 +522,41 @@ class AwayState {
   }
 
   async applyEnabled(enabled, now) {
+    const periods = [...this.value.periods];
+    if (enabled && !this.value.enabled) periods.push({ start: now, end: null });
+    if (!enabled && this.value.enabled) {
+      const activePeriod = periods.at(-1);
+      if (activePeriod?.end === null) activePeriod.end = Math.max(now, activePeriod.start);
+    }
     const next = {
       enabled,
       since: enabled ? (this.value.enabled ? this.value.since : now) : null,
+      periods: retainedAwayPeriods(periods, [], now),
     };
     this.value = next;
     await atomicWriteAwayState(this.homeDir, next, this.fileSystem, this.writer).catch(() => {});
     return this.snapshot();
+  }
+
+  persistCurrent() {
+    const run = this.pending.then(async () => {
+      await atomicWriteAwayState(this.homeDir, this.value, this.fileSystem, this.writer).catch(() => {});
+      return this.snapshot();
+    });
+    this.pending = run.catch(() => {});
+    return run;
+  }
+
+  prune(seenAtValues, now = Date.now()) {
+    const run = this.pending.then(async () => {
+      const periods = retainedAwayPeriods(this.value.periods, seenAtValues, now);
+      if (periods.length === this.value.periods.length) return this.snapshot();
+      this.value = { ...this.value, periods };
+      await atomicWriteAwayState(this.homeDir, this.value, this.fileSystem, this.writer).catch(() => {});
+      return this.snapshot();
+    });
+    this.pending = run.catch(() => {});
+    return run;
   }
 
   attachWriter(writer) {
@@ -485,7 +607,7 @@ function agentModelFromDefinition(agentType, definition) {
   };
 }
 
-function newSession(event) {
+function newSession(event, askDecisionState = {}) {
   return {
     session_id: event.session_id,
     product: event.product,
@@ -495,8 +617,8 @@ function newSession(event) {
     completedToolIds: new Set(),
     agents: [],
     permissionWaits: [],
-    decisions: [],
-    decisionBindings: Object.create(null),
+    decisions: (askDecisionState.decisions || []).map(cloneDecision),
+    decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     stopped: false,
     ended: false,
     pendingCodex: Object.create(null),
@@ -533,15 +655,14 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
   }
 }
 
-// 親が一度止まって終了未確認になった Codex も、再開した親が取り出した結果行で終了にする。
-// --wait の状態の行で終わった行は、ラッパーが消えていて結果行が届かないので除く。
-function oldestBackgroundedCodex(session, parentAgentId, runId = null) {
-  return session.agents
-    .filter((agent) => (
-      agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) &&
-      sameAgent(agent.parent_agent_id, parentAgentId) && (!runId || !agent.runId || agent.runId === runId)
-    ))
-    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0] || null;
+// 実行 ID で直接特定できない結果行は、条件に合う行が一つの場合だけ割り当てる。
+// --wait の状態行で終了未確認になった行は、ラッパーが消えて結果行が届かないので候補にしない。
+function uniqueBackgroundedCodex(session, parentAgentId, runId = null) {
+  const candidates = session.agents.filter((agent) => (
+    agent.isCodex && agent.backgrounded && !agent.waitEnded && (agent.active || agent.unconfirmed) &&
+    sameAgent(agent.parent_agent_id, parentAgentId) && (!agent.runId || agent.runId === runId)
+  ));
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function applyCodexAudit(agent, event) {
@@ -584,9 +705,18 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
-function deriveSessions(entries) {
+function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
+  const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
+    if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
+    const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
+    return decisionId === event.tool_use_id ? [decisionId] : [];
+  }));
+  const initialAskDecisionState = {
+    decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
+    bindings: askDecisionState.bindings || {},
+  };
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
@@ -596,11 +726,11 @@ function deriveSessions(entries) {
     let session = sessions.get(event.session_id);
     if (event.hook_event_name === 'SessionStart') {
       if (!session || session.ended) {
-        session = newSession(event);
+        session = newSession(event, initialAskDecisionState);
         sessions.set(event.session_id, session);
       }
     } else if (!session) {
-      session = newSession(event);
+      session = newSession(event, initialAskDecisionState);
       sessions.set(event.session_id, session);
     }
 
@@ -713,7 +843,9 @@ function deriveSessions(entries) {
         session.pendingCodex[toolUseId] = agentIdForCall;
       }
       if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
-        const existing = session.decisions.find((decision) => (
+        // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
+        const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
+        const existing = boundDecision || session.decisions.find((decision) => (
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
         if (existing) {
@@ -822,7 +954,7 @@ function deriveSessions(entries) {
         const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
         const targetAgent = codexForRun
           ? (codexForRun.resultReceived ? null : codexForRun)
-          : oldestBackgroundedCodex(session, agentId, event.codexRunId);
+          : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
         if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
         if (targetAgent) completeCodexAgent(targetAgent, event);
       }
@@ -959,6 +1091,7 @@ class DashboardState {
     this.sessionFiles = new Map();
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
+    this.askDecisionBindings = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
     this.estimates = new Map();
@@ -971,10 +1104,12 @@ class DashboardState {
     this.pullRequestRetargets = [];
     this.mergedPullRequests = new Map();
     this.pullRequestMergeReservationRecords = new Map();
+    this.pullRequestMergeReservationNotices = new Map();
     this.pullRequestMergeIntentRecords = new Map();
     this.lastPullRequestMethods = new Map();
     this.seenAtByProduct = new Map();
     this.ciFailures = [];
+    this.crossReviewSkips = new Map();
     this.closedAgents = new Map();
     this.display = null;
     this.storeWriteTimer = null;
@@ -1021,6 +1156,7 @@ class DashboardState {
     this.restoredAt = now;
     this.display = store.display;
     this.plans = store.plans;
+    this.askDecisionBindings = store.askDecisionBindings;
     this.seenAtByProduct = store.seenAtByProduct;
     this.ciFailures = store.ciFailures;
     this.decisionLifecycles = store.decisionLifecycles;
@@ -1079,16 +1215,22 @@ class DashboardState {
     this.pullRequestMergeReservationRecords = new Map(store.mergeReservations.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
+    this.pullRequestMergeReservationNotices = new Map();
     this.pullRequestMergeIntentRecords = new Map(store.mergeIntents.map((record) => [
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
     this.lastPullRequestMethods = store.lastPullRequestMethods;
+    this.crossReviewSkips = new Map(store.crossReviewSkips.map((record) => [
+      relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
+    ]));
     this.pruneExpiredStoreRecords(now);
   }
 
   pruneExpiredStoreRecords(now) {
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
+    let relatedPullRequestsChanged = false;
+    let crossReviewSkipsChanged = false;
     // セッションファイルを読めない環境では同期が来ないので、猶予の後はフックで届いたセッションだけで生死を判定する。
     const sessionCleanupDeferred = this.restoreSessionCleanupPending && now - this.restoredAt < RESTORE_SESSION_CLEANUP_GRACE_MS;
     if (!sessionCleanupDeferred) {
@@ -1108,7 +1250,17 @@ class DashboardState {
     for (const [key, record] of this.relatedPullRequests) {
       if (!Number.isFinite(Date.parse(record.addedAt)) || now - Date.parse(record.addedAt) > STORE_RETENTION_MS) {
         this.relatedPullRequests.delete(key);
+        relatedPullRequestsChanged = true;
       }
+    }
+    const retainedPullRequestKeys = new Set([
+      ...this.pullRequestRegistrations(),
+      ...this.relatedPullRequestRegistrations(),
+    ].map((record) => relatedPullRequestRecordKey(record.owner, record.repo, record.number)));
+    for (const key of this.crossReviewSkips.keys()) {
+      if (retainedPullRequestKeys.has(key)) continue;
+      this.crossReviewSkips.delete(key);
+      crossReviewSkipsChanged = true;
     }
     for (const [key, record] of this.mergedPullRequests) {
       if (!Number.isFinite(Date.parse(record.mergedAt)) || now - Date.parse(record.mergedAt) >= MERGED_PULL_REQUEST_RETENTION_MS) {
@@ -1118,7 +1270,7 @@ class DashboardState {
     }
     const previousFailureCount = this.ciFailures.length;
     this.ciFailures = this.ciFailures.filter((record) => now - Date.parse(record.at) < STORE_RETENTION_MS);
-    if (sessionRecordsChanged || mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
+    if (sessionRecordsChanged || relatedPullRequestsChanged || crossReviewSkipsChanged || mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -1147,6 +1299,7 @@ class DashboardState {
 
   deleteStoredSession(sessionId) {
     this.plans.delete(sessionId);
+    this.askDecisionBindings.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
     this.pullRequests.delete(sessionId);
@@ -1171,6 +1324,8 @@ class DashboardState {
         ? [[sessionId, Object.fromEntries(persistent.map(([decisionId, lifecycle]) => [decisionId, { ...lifecycle }]))]]
         : [];
     }));
+    const askDecisionBindings = Object.fromEntries([...this.askDecisionBindings]
+      .map(([sessionId, bindings]) => [sessionId, Object.fromEntries(bindings)]));
     const closedTasks = [...this.closedTasks].flatMap(([sessionId, tasks]) => [...tasks].map(([title, record]) => ({
       session_id: sessionId,
       title,
@@ -1185,6 +1340,7 @@ class DashboardState {
       version: 1,
       display: cloneDisplay(this.display),
       plans,
+      askDecisionBindings,
       decisionLifecycles,
       closedTasks,
       hiddenSessions,
@@ -1192,10 +1348,7 @@ class DashboardState {
       relatedPrs: [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord),
       retargetedPrs: this.pullRequestRetargets.map((record) => ({ ...record })),
       mergedPrs: [...this.mergedPullRequests.values()].map((record) => ({ ...record })),
-      mergeReservations: [...this.pullRequestMergeReservationRecords.values()].map((record) => ({
-        ...record,
-        stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
-      })),
+      mergeReservations: [...this.pullRequestMergeReservationRecords.values()].map((record) => ({ ...record })),
       mergeIntents: [...this.pullRequestMergeIntentRecords.values()].map((record) => ({
         ...record,
         stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
@@ -1203,11 +1356,61 @@ class DashboardState {
       lastPullRequestMethods: Object.fromEntries(this.lastPullRequestMethods),
       seenAtByProduct: Object.fromEntries(this.seenAtByProduct),
       ciFailures: this.ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
+      crossReviewSkips: [...this.crossReviewSkips.values()].map(normalizeCrossReviewSkip),
     };
   }
 
   pullRequestRegistrations() {
     return [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
+  }
+
+  pullRequestRegistrationForSession(sessionId, owner, repo, number) {
+    const record = this.pullRequests.get(sessionId)?.get(pullRequestRecordKey(owner, repo, number));
+    return record ? normalizePullRequestRecord(record) : null;
+  }
+
+  crossReviewSkip(owner, repo, number) {
+    const record = this.crossReviewSkips.get(relatedPullRequestRecordKey(owner, repo, number));
+    return record ? { ...record } : null;
+  }
+
+  setCrossReviewSkip(record) {
+    if (!validCrossReviewSkip(record)) return false;
+    const next = normalizeCrossReviewSkip(record);
+    const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
+    const current = this.crossReviewSkips.get(key);
+    if (current && stableStringify(current) === stableStringify(next)) return { ...current };
+    this.crossReviewSkips.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return { ...next };
+  }
+
+  clearCrossReviewSkip(owner, repo, number, expectedHeadRefOid) {
+    const key = relatedPullRequestRecordKey(owner, repo, number);
+    const current = this.crossReviewSkips.get(key);
+    if (!current || (expectedHeadRefOid && current.headRefOid !== expectedHeadRefOid.toLowerCase())) return false;
+    this.crossReviewSkips.delete(key);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  invalidateCrossReviewSkips(owner, repo, pullRequests) {
+    const currentHeads = new Map(pullRequests.map((pullRequest) => [pullRequest.number, String(pullRequest.headRefOid || '').toLowerCase()]));
+    let invalidated = 0;
+    for (const [key, record] of this.crossReviewSkips) {
+      if (record.owner.toLowerCase() !== owner.toLowerCase() || record.repo.toLowerCase() !== repo.toLowerCase()) continue;
+      const headRefOid = currentHeads.get(record.number);
+      if (!headRefOid || headRefOid === record.headRefOid) continue;
+      this.crossReviewSkips.delete(key);
+      invalidated += 1;
+    }
+    if (invalidated) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+    return invalidated;
   }
 
   knownCwds() {
@@ -1285,6 +1488,7 @@ class DashboardState {
       reservedHeadRefOid: record.reservedHeadRefOid || null,
       mergedHeadRefOid: record.mergedHeadRefOid || null,
       headMismatch: record.headMismatch === true,
+      ...(record.automaticResult ? { automaticResult: { ...record.automaticResult, retargetedNumbers: [...record.automaticResult.retargetedNumbers] } } : {}),
     };
     if (!validMergedPullRequest(next)) return false;
     const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
@@ -1311,16 +1515,21 @@ class DashboardState {
 
   setPullRequestMergeReservation(record) {
     const next = {
-      ...record,
+      session_id: record.session_id,
       owner: record.owner,
       repo: record.repo,
-      stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
+      number: record.number,
+      url: record.url,
+      method: record.method,
+      deleteBranch: record.deleteBranch,
+      createdAt: record.createdAt,
     };
     if (!validPullRequestMergeReservation(next)) return false;
     const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
     const previous = this.pullRequestMergeReservationRecords.get(key);
     if (previous && stableStringify(previous) === stableStringify(next)) return false;
     this.pullRequestMergeReservationRecords.set(key, next);
+    this.pullRequestMergeReservationNotices.delete(key);
     this.touch();
     this.requestStoreWrite();
     return true;
@@ -1328,20 +1537,41 @@ class DashboardState {
 
   pullRequestMergeReservation(owner, repo, number) {
     const record = this.pullRequestMergeReservationRecords.get(relatedPullRequestRecordKey(owner, repo, number));
-    return record ? { ...record, stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })) } : null;
+    return record ? { ...record } : null;
   }
 
   pullRequestMergeReservationsForRepo(owner, repo) {
     return [...this.pullRequestMergeReservationRecords.values()]
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
-      .map((record) => ({ ...record, stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })) }));
+      .map((record) => ({ ...record }));
   }
 
   pullRequestMergeReservations() {
-    return [...this.pullRequestMergeReservationRecords.values()].map((record) => ({
-      ...record,
-      stackedPullRequests: record.stackedPullRequests.map((item) => ({ ...item })),
-    }));
+    return [...this.pullRequestMergeReservationRecords.values()].map((record) => ({ ...record }));
+  }
+
+  recordPullRequestMergeReservationNotice(record) {
+    const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+    this.pullRequestMergeReservationNotices.set(key, {
+      owner: record.owner,
+      repo: record.repo,
+      number: record.number,
+      url: record.url,
+      at: record.at,
+      message: record.message,
+    });
+    if (this.pullRequestMergeReservationNotices.size > 100) {
+      const oldest = [...this.pullRequestMergeReservationNotices.entries()]
+        .sort((left, right) => Date.parse(left[1].at) - Date.parse(right[1].at))[0];
+      if (oldest) this.pullRequestMergeReservationNotices.delete(oldest[0]);
+    }
+    this.touch();
+  }
+
+  pullRequestMergeReservationNoticesForRepo(owner, repo) {
+    return [...this.pullRequestMergeReservationNotices.values()]
+      .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
+      .map((record) => ({ ...record }));
   }
 
   clearPullRequestMergeReservation(owner, repo, number) {
@@ -1688,9 +1918,55 @@ class DashboardState {
   reopenAbsentSession(sessionId) {
     this.endedByAbsence.delete(sessionId);
     const entries = this.entries.get(sessionId) || [];
-    const [session] = deriveSessions(entries);
+    const [session] = deriveSessions(entries, this.askDecisionStateFor(sessionId));
     if (session) this.sessions.set(sessionId, session);
     this.onSessionReopened?.(sessionId);
+  }
+
+  askDecisionStateFor(sessionId) {
+    return {
+      decisions: (this.plans.get(sessionId)?.decisions || [])
+        .filter((decision) => decision.source === 'ask').map(cloneDecision),
+      bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
+    };
+  }
+
+  persistAskDecisionState(sessionId, session) {
+    const plan = this.plans.get(sessionId);
+    const storedAskDecisions = new Map((plan?.decisions || [])
+      .filter((decision) => decision.source === 'ask').map((decision) => [decision.id, decision]));
+    const askDecisions = session.decisions.filter((decision) => decision.source === 'ask').map((decision) => {
+      const stored = storedAskDecisions.get(decision.id);
+      return stored && Date.parse(stored.updatedAt) > Date.parse(decision.updatedAt)
+        ? cloneDecision(stored)
+        : cloneDecision(decision);
+    });
+    const existingAskDecisions = (plan?.decisions || []).filter((decision) => decision.source === 'ask');
+    const askDecisionIds = new Set(askDecisions.map((decision) => decision.id));
+    const nextDecisions = [
+      ...(plan?.decisions || []).filter((decision) => decision.source !== 'ask'),
+      ...askDecisions.filter((decision) => !(plan?.decisions || []).some((stored) => (
+        stored.source !== 'ask' && stored.id === decision.id
+      ))),
+    ];
+    let changed = false;
+    if (askDecisions.length || existingAskDecisions.length) {
+      const targetPlan = plan || this.planFor(sessionId);
+      if (stableStringify(targetPlan.decisions) !== stableStringify(nextDecisions)) {
+        targetPlan.decisions = nextDecisions;
+        changed = true;
+      }
+    }
+
+    const nextBindings = new Map(Object.entries(session.decisionBindings)
+      .filter(([, decisionId]) => askDecisionIds.has(decisionId)));
+    const currentBindings = this.askDecisionBindings.get(sessionId) || new Map();
+    if (stableStringify(Object.fromEntries(currentBindings)) !== stableStringify(Object.fromEntries(nextBindings))) {
+      if (nextBindings.size) this.askDecisionBindings.set(sessionId, nextBindings);
+      else this.askDecisionBindings.delete(sessionId);
+      changed = true;
+    }
+    return changed;
   }
 
   hasAgentRow(sessionId, agentId) {
@@ -1745,10 +2021,15 @@ class DashboardState {
     }
 
     const entries = this.entries.get(event.session_id) || [];
-    entries.push({ event, sequence: this.sequence++ });
+    const eventSequence = this.sequence++;
+    entries.push({ event, sequence: eventSequence });
     this.entries.set(event.session_id, entries);
-    const nextSessions = deriveSessions(entries);
-    if (nextSessions.length > 0) this.sessions.set(event.session_id, nextSessions[0]);
+    const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
+    let askDecisionStateChanged = false;
+    if (nextSessions.length > 0) {
+      this.sessions.set(event.session_id, nextSessions[0]);
+      askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
+    }
     else this.sessions.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd') {
@@ -1758,6 +2039,7 @@ class DashboardState {
     const clearedClosedAgent = this.reconcileClosedAgents(event.session_id);
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
     if (wasHidden) this.requestStoreWrite();
+    if (askDecisionStateChanged) this.requestStoreWrite();
     return true;
   }
 
@@ -1953,8 +2235,9 @@ class DashboardState {
     };
     const plan = this.plans.get(sessionId);
     const stored = plan?.decisions.find((item) => item.id === decision.id);
+    const hasEventDecision = this.sessions.get(sessionId)?.decisions.some((item) => item.id === decision.id) === true;
     if (stored) Object.assign(stored, updated);
-    else {
+    if (!stored || hasEventDecision) {
       const overrides = this.decisionOverrides.get(sessionId) || new Map();
       overrides.set(decision.id, {
         state: updated.state,
@@ -2002,9 +2285,10 @@ class DashboardState {
   decisionsFor(sessionId) {
     const eventDecisions = this.sessions.get(sessionId)?.decisions || [];
     const planDecisions = this.plans.get(sessionId)?.decisions || [];
+    const eventDecisionIds = new Set(eventDecisions.map((decision) => decision.id));
     const overrides = this.decisionOverrides.get(sessionId);
     const lifecycles = this.decisionLifecycles.get(sessionId);
-    return [...eventDecisions, ...planDecisions].map((decision) => {
+    return [...eventDecisions, ...planDecisions.filter((decision) => !eventDecisionIds.has(decision.id))].map((decision) => {
       const override = overrides?.get(decision.id);
       const withOverride = override && Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt)
         ? { ...decision, ...override }
@@ -2026,7 +2310,8 @@ class DashboardState {
   }
 
   decisionIdForToolUse(sessionId, toolUseId) {
-    return this.sessions.get(sessionId)?.decisionBindings?.[toolUseId] || null;
+    return this.sessions.get(sessionId)?.decisionBindings?.[toolUseId] ||
+      this.askDecisionBindings.get(sessionId)?.get(toolUseId) || null;
   }
 
   // 終了の片付けはセッションを一覧から消した後にも呼ばれるので、判断事項を引かずに記録だけを直す。
@@ -2147,7 +2432,7 @@ class DashboardState {
     return seenAt;
   }
 
-  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now()) {
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
     const products = new Map();
     const visibleProductKeys = new Set();
     const registrations = this.pullRequestRegistrations();
@@ -2221,6 +2506,11 @@ class DashboardState {
 
     const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
     const eventKeys = new Set();
+    const happenedWhileAway = (timestamp) => awayPeriods.some((period) => {
+      if (!Number.isFinite(period.start)) return false;
+      const end = period.end === null ? now : period.end;
+      return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
+    });
     const addEvent = (product, type, identity, at, text) => {
       const timestamp = Date.parse(at || '');
       if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
@@ -2286,7 +2576,10 @@ class DashboardState {
       if (!seenAt) continue;
       const seenMilliseconds = Date.parse(seenAt || '');
       const items = (eventsByProduct.get(product.key) || [])
-        .filter((event) => Date.parse(event.at) > seenMilliseconds)
+        .filter((event) => {
+          const timestamp = Date.parse(event.at);
+          return timestamp > seenMilliseconds && happenedWhileAway(timestamp);
+        })
         .sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       if (items.length) sinceSeen.push({ product, seenAt, items });
     }
