@@ -77,7 +77,7 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Start
 - 停止中は、`Stop` の `asyncRewake` フックが回答を待ってセッションを起こします。
 - `UserPromptSubmit` の `answer.js` は、渡した回答が反映されていない場合に、最大 3 回まで文脈へ差し込み直します。
 - `awaitingAnswerUntil` がある質問の回答は、`PostToolBatch`、`UserPromptSubmit`、`Stop` からは渡しません。
-- 回答本文は常駐サーバーのメモリーとフックの出力にだけ置きます。
+- 回答本文は、常駐サーバーのメモリー、保存先の `store.json`、フックの出力にだけ置き、ログには書きません。`store.json` に残すのは、常駐サーバーを再起動しても、送信済みで未配信の回答を届け、同じ回答を二重に差し込まないためです。
 
 離席中は、画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
 有効な間、`AskUserQuestion` は設定画面の「離席中に質問の回答を待つ時間」に従ってダッシュボードの回答を待ちます(1〜30 分、既定 5 分)。締切までに回答が無ければ質問を止め、推奨で作業を続けるようフックが伝えます。
