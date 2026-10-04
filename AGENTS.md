@@ -33,3 +33,8 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 ## CLAUDE.md と AGENTS.md の同期
 
 `CLAUDE.md`(Claude Code 向け)と `AGENTS.md`(Codex 向け)は同じ内容に保つ。片方を変えたら、もう一方にも同じ変更を入れる。
+
+## リモートセッション時の作業について
+
+- クラウドセッションは `~/.claude` を読まないので、グローバルの CLAUDE.md とフックが効かない
+- 開発者に見える文を日本語に保つフックは、リポジトリの `.claude/hooks/japanese-guard.js` に置いてある。仕組みと他のリポジトリへの写し方は [docs/japanese-guard.md](docs/japanese-guard.md) にある
