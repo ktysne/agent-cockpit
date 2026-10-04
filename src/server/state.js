@@ -300,6 +300,7 @@ function validPullRequestMergeIntent(record) {
   return isRecord(record) && validStoredSessionId(record.session_id) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Number.isSafeInteger(record.number) && record.number > 0 && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
     PULL_REQUEST_MERGE_METHODS.has(record.method) && typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) &&
+    (record.automatic === undefined || typeof record.automatic === 'boolean') &&
     validBranchName(record.headRefName) && validBranchName(record.defaultBranch) && typeof record.url === 'string' &&
     Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number) &&
     Array.isArray(record.stackedPullRequests) && record.stackedPullRequests.length <= 100 &&

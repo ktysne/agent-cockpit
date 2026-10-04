@@ -81,6 +81,8 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     defaultBranch: 'main',
     waitForMerge: null,
     crossReviews: new Map(),
+    afterEdit: null,
+    crossReviewReader: null,
   };
   const execFileImpl = (_file, args, _options, callback) => {
     calls.push([...args]);
@@ -133,6 +135,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
           const parent = github.openPullRequests.find((item) => item.number === 1);
           if (parent) Object.assign(parent, ghPullRequest(1, 'feature/one', 'main', { fields: { reviewDecision: 'CHANGES_REQUESTED' } }));
         }
+        control.afterEdit?.(number);
         finish(null);
       }
       return;
@@ -167,7 +170,9 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
 
   const tracker = new PullRequestTracker({
     state, now: () => NOW, execFileImpl,
-    readCrossReviewStateAcrossWorktrees: async (_registration, pullRequest) => control.crossReviews.get(pullRequest.number) || null,
+    readCrossReviewStateAcrossWorktrees: async (registration, pullRequest) => control.crossReviewReader
+      ? control.crossReviewReader(registration, pullRequest)
+      : control.crossReviews.get(pullRequest.number) || null,
   });
   const answerDelivery = {
     notifySessions(sessionIds, message) { notices.push({ sessionIds, message }); },
@@ -191,6 +196,27 @@ function mergeInput(number = 1, changes = {}) {
 
 function convergedReview(number, shaValue = sha(number), round = 2) {
   return { round, reviewedSha: shaValue, dismissed: 0, triage: { round, sha: shaValue, outcome: 'converged' } };
+}
+
+function reviewWithOutcome(number, outcome) {
+  const review = convergedReview(number);
+  return { ...review, triage: { ...review.triage, outcome } };
+}
+
+async function primeReadyReservation(fixture) {
+  fixture.control.crossReviews.set(1, convergedReview(1));
+  fixture.github.openPullRequests = fixture.github.openPullRequests.map((pullRequest) => (
+    pullRequest.number === 1
+      ? ghPullRequest(1, pullRequest.headRefName, pullRequest.baseRefName, { reviewDecision: 'APPROVED' })
+      : pullRequest
+  ));
+  const onRefreshed = fixture.tracker.onRefreshed;
+  fixture.tracker.onRefreshed = null;
+  try {
+    await fixture.tracker.refreshRepo('example', 'project');
+  } finally {
+    fixture.tracker.onRefreshed = onRefreshed;
+  }
 }
 
 test('スタック最下段でない PR は状態を取り直して拒否する', async (t) => {
@@ -243,21 +269,23 @@ test('fork の head と同名ブランチが登録先にあっても削除要求
   assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
 });
 
-test('fork の PR が予約経由でマージされても登録先の同名ブランチを削除しない', async (t) => {
-  const pr = ghPullRequest(1, 'feature/shared', 'main', { fields: { isCrossRepository: true } });
+test('予約中に外部でマージされた PR は方式不明として記録しブランチを削除しない', async (t) => {
+  const pr = ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' });
   const fixture = await mergeFixture(t, [pr]);
-  fixture.state.setPullRequestMergeReservation({
-    session_id: 'session-1', owner: 'example', repo: 'project', number: 1,
-    url: pr.url, method: 'squash', deleteBranch: true, createdAt: new Date(NOW).toISOString(),
-  });
+  const reserved = await fixture.manager.reserve(mergeInput(1, { deleteBranch: true }));
+  assert.equal(reserved.ok, true);
   fixture.github.openPullRequests = [];
   fixture.github.views.set(1, mergedView(pr));
 
   await fixture.tracker.refreshRepo('example', 'project');
 
-  assert.equal(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automatic, true);
+  const history = fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0];
+  assert.equal(history.method, null);
+  assert.equal(history.automatic, false);
+  assert.equal(history.reservedHeadRefOid, null);
   assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
-  assert.match(fixture.notices.at(-1).message, /登録先リポジトリから削除しませんでした/);
+  assert.equal(fixture.state.pullRequestMergeReservation('example', 'project', 1), null);
+  assert.match(fixture.notices.at(-1).message, /方式は取得できませんでした/);
 });
 
 test('GitHub から新しい状態を取り直せない場合は保存済みの状態でマージしない', async (t) => {
@@ -606,6 +634,92 @@ test('予約による自動マージは子 PR を付け替え、選択した hea
   ]);
   assert.match(fixture.notices.at(-1).message, /#2 を `git rebase --onto main feature\/one` で積み直して push する/);
   assert.deepEqual(fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automaticResult.retargetedNumbers, [2]);
+});
+
+test('予約マージは最初の状態取り直しで同じ SHA の fixing への回帰を待つ', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
+  await fixture.manager.reserve(mergeInput(1));
+  await primeReadyReservation(fixture);
+  const refreshRepoFresh = fixture.tracker.refreshRepoFresh.bind(fixture.tracker);
+  fixture.tracker.refreshRepoFresh = async (...args) => {
+    fixture.control.crossReviews.set(1, reviewWithOutcome(1, 'fixing'));
+    return refreshRepoFresh(...args);
+  };
+
+  await fixture.manager.checkReservations();
+
+  assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('再取得後にクロスレビューが halted になった予約を取り消して知らせる', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
+  await fixture.manager.reserve(mergeInput(1));
+  await primeReadyReservation(fixture);
+  const refreshRepoFresh = fixture.tracker.refreshRepoFresh.bind(fixture.tracker);
+  fixture.tracker.refreshRepoFresh = async (...args) => {
+    fixture.control.crossReviews.set(1, reviewWithOutcome(1, 'halted'));
+    return refreshRepoFresh(...args);
+  };
+
+  await fixture.manager.checkReservations();
+
+  assert.equal(fixture.state.pullRequestMergeReservation('example', 'project', 1), null);
+  assert.match(fixture.notices.at(-1).message, /クロスレビューが halted/);
+  assert.match(fixture.tracker.snapshot()[0].reservationNotices[0].message, /予約を取り消しました/);
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('子 PR の付け替え後は同じ SHA の CI 再実行中を待って予約を残す', async (t) => {
+  const fixture = await mergeFixture(t, [
+    ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' }),
+    ghPullRequest(2, 'feature/two', 'feature/one'),
+  ]);
+  await fixture.manager.reserve(mergeInput(1, { deleteBranch: true }));
+  await primeReadyReservation(fixture);
+  fixture.control.afterEdit = (number) => {
+    if (number !== 2) return;
+    const parent = fixture.github.openPullRequests.find((pullRequest) => pullRequest.number === 1);
+    parent.statusCheckRollup = [{ state: 'IN_PROGRESS', status: 'IN_PROGRESS' }];
+  };
+
+  await fixture.manager.checkReservations();
+
+  assert.equal(fixture.github.openPullRequests.find((pullRequest) => pullRequest.number === 2).baseRefName, 'main');
+  assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('予約マージがキューに入ったら予約を消し、後のマージを方式不明として扱う', async (t) => {
+  const lower = ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' });
+  const fixture = await mergeFixture(t, [lower, ghPullRequest(2, 'feature/two', 'feature/one')]);
+  const reserved = await fixture.manager.reserve(mergeInput(1, { deleteBranch: true }));
+  assert.equal(reserved.ok, true);
+  fixture.control.queueMerge = true;
+  fixture.control.crossReviews.set(1, convergedReview(1));
+  fixture.github.openPullRequests[0] = ghPullRequest(1, 'feature/one', 'main', { reviewDecision: 'APPROVED' });
+
+  await fixture.tracker.refreshRepo('example', 'project');
+
+  assert.equal(fixture.state.pullRequestMergeReservation('example', 'project', 1), null);
+  assert.equal(fixture.state.pullRequestMergeIntent('example', 'project', 1), null);
+  assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
+  assert.match(fixture.tracker.snapshot()[0].reservationNotices[0].message, /マージキューに入りました/);
+  const editCount = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'edit').length;
+
+  await fixture.tracker.refreshRepo('example', 'project');
+  assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
+
+  fixture.github.openPullRequests = fixture.github.openPullRequests.filter((pullRequest) => pullRequest.number !== 1);
+  fixture.github.views.set(1, mergedView(lower));
+  await fixture.tracker.refreshRepo('example', 'project');
+
+  const history = fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0];
+  assert.equal(history.method, null);
+  assert.equal(history.automatic, false);
+  assert.equal(Object.hasOwn(history, 'automaticResult'), false);
+  assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'edit').length, editCount);
+  assert.equal(fixture.calls.some((args) => args[0] === 'api' && args[1] === '-X' && args[2] === 'DELETE'), false);
 });
 
 test('同じ PR の予約チェックが重なってもマージを一度だけ実行する', async (t) => {
