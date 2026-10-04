@@ -401,3 +401,63 @@ test('AskUserQuestion の回答を本文の全文なしで PostToolUse に載せ
   });
   assert.equal(Object.hasOwn(agentEvent, 'decisionResolution'), false);
 });
+
+test('背景タスクの出力を読む呼び出しと、背景へ移った Bash から背景タスク ID を取り出す', () => {
+  const base = { session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1' };
+  const started = makeHookEvent({
+    ...base, tool_name: 'Bash', tool_input: { command: 'npm run review:codex' },
+    tool_response: { stdout: '', backgroundTaskId: 'baepc74pm' },
+  }, 1);
+  assert.equal(started.backgroundTaskId, 'baepc74pm');
+  assert.equal(started.backgroundOutputTaskId, undefined);
+
+  const win = makeHookEvent({
+    ...base, tool_name: 'Read',
+    tool_input: { file_path: 'E:\\Temp\\claude\\x\\tasks\\baepc74pm.output' }, tool_response: {},
+  }, 1);
+  assert.equal(win.backgroundOutputTaskId, 'baepc74pm');
+  const posix = makeHookEvent({
+    ...base, tool_name: 'Read', tool_input: { file_path: '/tmp/tasks/b2.output' }, tool_response: {},
+  }, 1);
+  assert.equal(posix.backgroundOutputTaskId, 'b2');
+
+  const one = makeHookEvent({
+    ...base, tool_name: 'Bash', tool_input: { command: 'cat /tmp/tasks/a1.output; tail -5 /tmp/tasks/a1.output' }, tool_response: {},
+  }, 1);
+  assert.equal(one.backgroundOutputTaskId, 'a1');
+  const two = makeHookEvent({
+    ...base, tool_name: 'Bash', tool_input: { command: 'cat /tmp/tasks/a1.output /tmp/tasks/b2.output' }, tool_response: {},
+  }, 1);
+  assert.equal(two.backgroundOutputTaskId, undefined);
+
+  const taskOutput = makeHookEvent({
+    ...base, tool_name: 'TaskOutput', tool_input: { task_id: 'c3' }, tool_response: {},
+  }, 1);
+  assert.equal(taskOutput.backgroundOutputTaskId, 'c3');
+});
+
+test('形に合わない背景タスク ID はフックもサーバーの正規化も捨てる', () => {
+  const bad = makeHookEvent({
+    session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1', tool_name: 'Bash',
+    tool_input: { command: 'ls' }, tool_response: { backgroundTaskId: 'bad id!' },
+  }, 1);
+  assert.equal(bad.backgroundTaskId, undefined);
+  const badRead = makeHookEvent({
+    session_id: 'bgid', hook_event_name: 'PostToolUse', tool_use_id: 't1', tool_name: 'Read',
+    tool_input: { file_path: '/tmp/bad id.output' }, tool_response: {},
+  }, 1);
+  assert.equal(badRead.backgroundOutputTaskId, undefined);
+
+  const kept = sanitizeEvent({
+    session_id: 'bgid', hook_event_name: 'PostToolUse', hookAt: 1, tool_name: 'Bash', tool_use_id: 't1',
+    backgroundTaskId: 'baepc74pm', backgroundOutputTaskId: 'x_y-1',
+  });
+  assert.equal(kept.backgroundTaskId, 'baepc74pm');
+  assert.equal(kept.backgroundOutputTaskId, 'x_y-1');
+  const dropped = sanitizeEvent({
+    session_id: 'bgid', hook_event_name: 'PostToolUse', hookAt: 1, tool_name: 'Bash', tool_use_id: 't1',
+    backgroundTaskId: '../x', backgroundOutputTaskId: 42,
+  });
+  assert.equal(dropped.backgroundTaskId, undefined);
+  assert.equal(dropped.backgroundOutputTaskId, undefined);
+});

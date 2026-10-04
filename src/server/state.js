@@ -989,16 +989,24 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         } else if (placeholder) {
           applyCodexAudit(placeholder, event);
           placeholder.backgrounded = true;
+          if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
         }
         delete session.pendingCodex[toolUseId];
         delete session.pendingCodexWait[toolUseId];
       }
 
+      // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
+      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent'
+        ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
+        : null;
+      if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
+
       // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
       if (event.codexResult && !completedCodexAgent && event.tool_name !== 'Agent') {
         const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
-        const targetAgent = codexForRun
-          ? (codexForRun.resultReceived ? null : codexForRun)
+        const matched = codexForRun || outputCodex;
+        const targetAgent = matched
+          ? (matched.resultReceived ? null : matched)
           : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
         if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
         if (targetAgent) completeCodexAgent(targetAgent, event);
