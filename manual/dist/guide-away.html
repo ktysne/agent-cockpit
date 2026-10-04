@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>席を外している間に判断を返す | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">目的別のガイド</h3>
+        <ol class="nav-pages">
+        <li><a href="guide-away.html" aria-current="page">席を外している間に判断を返す</a></li>
+        <li><a href="guide-stack-merge.html">積み上げた PR を順にマージする</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">目的別のガイド</h3>
+        <ol class="nav-pages">
+        <li><a href="guide-away.html" aria-current="page">席を外している間に判断を返す</a></li>
+        <li><a href="guide-stack-merge.html">積み上げた PR を順にマージする</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#guide-away-start">席を外す前に離席中にする</a></li>
+        <li><a href="#guide-away-answer">回答を待つ時間の中で答える</a></li>
+        <li><a href="#guide-away-timeout">締切を過ぎて推奨で進んだ判断事項に答える</a></li>
+        <li><a href="#guide-away-return">戻ったら離席中を外す</a></li>
+        <li><a href="#guide-away-since-seen">変化を確かめて既読にする</a></li></ol>
+      </details>
+<section class="section">
+  <h1>席を外している間に判断を返す</h1>
+  <p class="lead">席を外す前に離席中にしておくと、その間にセッションが出した質問へ、ダッシュボードから答えられます。
+  戻ったあとは、離席中を外し、席を外している間に起きた変化を確かめて既読にします。
+  各手順の細かな仕様は、手順の最後のリンク先で説明します。</p>
+
+  <div class="guide-intro">
+    <div>
+      <p class="guide-intro-title">このページでできるようになること</p>
+      <ul>
+        <li>席を外す前に、離席中にする</li>
+        <li>回答を待つ時間の中で、質問に答える</li>
+        <li>締切を過ぎて推奨で進んだ判断事項に、戻ってから答える</li>
+        <li>戻ったら離席中を外し、「前回見てから」で変化を確かめて既読にする</li>
+      </ul>
+    </div>
+    <div>
+      <p class="guide-intro-title">必要なもの</p>
+      <ul>
+        <li>開いているダッシュボード(<a href="start.html#start-open">ダッシュボードを開く</a>)</li>
+        <li>ダッシュボードにつながったメインセッション(<a href="start.html#start-hooks">セッションとのつながり</a>)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 id="guide-away-start">席を外す前に離席中にする</h2>
+  <p>離席中にすると、メインセッションの質問をダッシュボードが預かります。
+  セッションは、開発者に尋ねずに推奨を適用して作業を続けます。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>離席中にチェックを入れる</b>ヘッダの右上の <span class="ui">離席中</span> にチェックを入れます。
+      ヘッダの背景が琥珀色になれば、離席中です。
+      タスクトレイのメニューの同じ名前の項目でも切り替えられます(<a href="away.html#away-toggle">離席中の切り替え</a>)。</div><figure class="guide-map" id="guide-away-map-away-header-on" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="610" style="max-width:458px;min-width:min(600px, 458px)"><div class="gm-segment" style="flex-grow:610;aspect-ratio:610/120"><div class="gm-clip"><img src="img/away-header/on.png" width="850" height="145" alt="離席中にしたヘッダの右上。離席中のチェックが入り、右に設定の歯車のボタンがある。背景は琥珀色になっている" loading="lazy" decoding="async" style="width:278.689%;margin-left:-178.689%;margin-top:0%"></div></div></div></div></figure></li>
+    <li><b>回答を待つ時間を確かめる</b>質問を預かる時間は、設定の <span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span> で決めます。
+      既定は 5 分です。
+      この時間を過ぎると、質問は推奨案で進みます(<a href="settings.html#settings-away-wait">離席中に質問の回答を待つ時間</a>)。</li>
+  </ol>
+  <div class="note warn">ツールの実行許可は、離席中も、デスクトップアプリで出す必要があります。
+  許可待ちのまま席を離れると、作業はそこで止まります(<a href="permission.html">許可待ち</a>)。</div>
+
+  <h2 id="guide-away-answer">回答を待つ時間の中で答える</h2>
+  <p>離席中にセッションが質問を出すと、デスクトップアプリにダイアログを出さず、ダッシュボードの判断事項のカードに回答欄つきで出ます。
+  締切までに回答を送ると、その回答が質問への答えとして渡されます。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>質問を見つける</b>ヘッダの <span class="ui">止めて待っている</span> の件数が増えます。
+      プロダクト parcel-api のカードに、質問「予約の確定を通知する方法」が出ています。
+      見出しの 「あと 3 分で推奨に進む」 が、締切までの残り時間です(<a href="away.html#away-questions">離席中の質問</a>)。</div><figure class="guide-map" id="guide-away-map-decisions-delivery-awaiting" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/924"><div class="gm-clip"><img src="img/decisions-delivery/awaiting.png" width="788" height="462" alt="離席中に出た質問のカード。見出しに、止めて待っているの札、2 分待機中、あと 3 分で推奨に進むの表示がある。推奨の札が付いたメールで通知するとアプリ内の通知だけにするの 2 つの選択肢、推奨案で OK、指示の入力欄、回答を送るのボタンが並ぶ" loading="lazy" decoding="async" style="width:143.273%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>選択肢を選ぶ</b>選択肢を押して選びます。
+      ここでは推奨ではない「アプリ内の通知だけにする」を選び、指示の欄に「メールは別の Issue で検討する」と書きます。
+      推奨の選択肢で答えるなら、<span class="ui">推奨案で OK</span> を入れます(<a href="decisions.html#decisions-answer">ダッシュボードから回答する</a>)。</div><figure class="guide-map" id="guide-away-map-guide-away-picked" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/924"><div class="gm-clip"><img src="img/guide-away/picked.png" width="788" height="462" alt="アプリ内の通知だけにするを選び、指示の欄にメールは別の Issue で検討すると書いた回答欄。選んだ選択肢が枠で囲まれ、送る答えにアプリ内の通知だけにすると出ている" loading="lazy" decoding="async" style="width:143.273%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>回答を送る</b><span class="ui">回答を送る</span> を押します。
+      回答欄の下に、送った時刻と回答の内容が出ます。
+      締切までに送った回答は、質問を待っているセッションに、質問への答えとして渡ります(<a href="decisions.html#decisions-status">送信済み、渡した、反映された</a>)。</div><figure class="guide-map" id="guide-away-map-guide-away-sent" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/924"><div class="gm-clip"><img src="img/guide-away/sent.png" width="788" height="462" alt="回答を送った後のカード。回答を送るのボタンは押せなくなり、横に、14 時 30 分にアプリ内の通知だけにするを選択して送信済み、指示ありと出ている" loading="lazy" decoding="async" style="width:143.273%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-away-timeout">締切を過ぎて推奨で進んだ判断事項に答える</h2>
+  <p>締切までに回答が無い質問は、止めて、推奨案で作業を続けるようセッションに伝えます。
+  戻ったあとに、その判断事項へ回答を送れます。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>仮に進んだ判断事項を見つける</b>状態が <span class="ui">仮に推奨案で進行中</span> に変わり、経過時間は <span class="ui">仮適用から</span> の形で出ます。
+      プロダクト parcel-api のカードの「予約の排他制御に使うロックの方式」が、推奨の「行ロック」で進んでいます(<a href="away.html#away-timeout">回答が無いまま締切を過ぎたとき</a>)。
+      <span class="ui">新着</span> の印は、プロダクトを最後に既読にしてから作られた判断事項に付きます。</div><figure class="guide-map" id="guide-away-map-decisions-answer-initial" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1330" style="max-width:665px;min-width:min(600px, 665px)"><div class="gm-segment" style="flex-grow:1330;aspect-ratio:1330/962"><div class="gm-clip"><img src="img/decisions-answer/initial.png" width="788" height="481" alt="仮に推奨案で進行中の判断事項のカード。見出しに新着の印、題、仮に推奨案で進行中の札、仮適用からの経過時間がある。推奨の札が付いた行ロックと楽観ロックの選択肢、推奨案で OK、指示の欄、回答を送るのボタンが並ぶ" loading="lazy" decoding="async" style="width:118.496%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>戻ってから答える</b>「楽観ロック」を選び、指示の欄に「離席中は再試行の回数を 3 回までにする」と書いて、<span class="ui">回答を送る</span> を押します。
+      この回答は、質問への答えではなく、作業への指示としてセッションに届きます。
+      セッションは、回答に沿って作業を直します(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</div><figure class="guide-map" id="guide-away-map-decisions-answer-picked" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1330" style="max-width:665px;min-width:min(600px, 665px)"><div class="gm-segment" style="flex-grow:1330;aspect-ratio:1330/962"><div class="gm-clip"><img src="img/decisions-answer/picked.png" width="788" height="481" alt="楽観ロックを選び、離席中は再試行の回数を 3 回までにすると書いた回答欄。選んだ選択肢が枠で囲まれ、送る答えに楽観ロックと出て、回答を送るのボタンが押せる状態になっている" loading="lazy" decoding="async" style="width:118.496%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-away-return">戻ったら離席中を外す</h2>
+  <ol class="steps">
+    <li><div class="step-body"><b>離席中のチェックを外す</b>ヘッダの <span class="ui">離席中</span> のチェックを外します。
+      預かっていた質問の待ちをやめ、まだ答えていない質問は、デスクトップアプリのダイアログに出ます。
+      締切より前に送った回答は、離席中を外したあとも、質問への答えとして渡ります(<a href="away.html#away-release">離席中を解除したとき</a>)。</div><figure class="guide-map" id="guide-away-map-overview-product" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="610" style="max-width:458px;min-width:min(600px, 458px)"><div class="gm-segment" style="flex-grow:610;aspect-ratio:610/120"><div class="gm-clip"><img src="img/overview/product.png" width="850" height="1000" alt="離席中を外したヘッダの右上。離席中のチェックが外れ、右に設定の歯車のボタンがある。背景は通常の色に戻っている" loading="lazy" decoding="async" style="width:278.689%;margin-left:-178.689%;margin-top:0%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-away-since-seen">変化を確かめて既読にする</h2>
+  <p>離席中の期間に起きた変化は、離席中を外したあとも、既読にするまで残ります。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>変化を確かめる</b>変化があるプロダクトのカードの先頭に、<span class="ui">前回見てから</span> の欄が出ます。
+      プロダクト shift-planner には、「PR #115(週の開始曜日を設定にする)をマージした」など 3 件の変化が、新しい順に並びます。
+      欄が出ないときは、設定の <span class="ui">前回見てから</span> が <span class="ui">出さない</span> になっていないかを確かめます(<a href="away.html#away-since-seen">前回見てから</a>)。</div><figure class="guide-map" id="guide-away-map-guide-away-return-unseen" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/610"><div class="gm-clip"><img src="img/guide-away-return/unseen.png" width="816" height="615" alt="shift-planner のカードの先頭。前回見てから 3 件の欄に、PR #115 のマージ、タスクの完了、PR #119 の作成が並び、既読にするのリンクがある。その下の判断事項のカードには新着の印が付いている" loading="lazy" decoding="async" style="width:148.364%;margin-left:0%;margin-top:-11.818%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>既読にする</b>確かめ終えたら、<span class="ui">既読にする</span> を押します。
+      そのプロダクトの欄が消え、判断事項の <span class="ui">新着</span> の印も外れます。
+      既読にするのはプロダクトごとなので、ほかのプロダクトの欄は残ります。</div><figure class="guide-map" id="guide-away-map-guide-away-return-seen" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1100" style="max-width:550px;min-width:min(600px, 550px)"><div class="gm-segment" style="flex-grow:1100;aspect-ratio:1100/520"><div class="gm-clip"><img src="img/guide-away-return/seen.png" width="816" height="488" alt="既読にした後の shift-planner のカード。前回見てからの欄が消え、判断事項のカードの新着の印も外れている" loading="lazy" decoding="async" style="width:148.364%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+  </ol>
+  <p>席を外している間の質問が、どの経路で、どのように扱われるかは、<a href="away.html">離席中</a>と<a href="decisions.html">判断事項と回答</a>で説明しています。</p>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="screen.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">画面の見方</span></a><a class="next" href="guide-stack-merge.html"><span class="page-navigation-label">次のページ</span><span class="page-navigation-title">積み上げた PR を順にマージする</span></a></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#guide-away-start">席を外す前に離席中にする</a></li>
+        <li><a href="#guide-away-answer">回答を待つ時間の中で答える</a></li>
+        <li><a href="#guide-away-timeout">締切を過ぎて推奨で進んだ判断事項に答える</a></li>
+        <li><a href="#guide-away-return">戻ったら離席中を外す</a></li>
+        <li><a href="#guide-away-since-seen">変化を確かめて既読にする</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

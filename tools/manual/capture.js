@@ -19,7 +19,7 @@ const SHOT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const STEP_FIELDS = Object.freeze({
   click: ['do', 'selector'],
   type: ['do', 'selector', 'text'],
-  wait: ['do', 'selector', 'gone', 'timeoutMs'],
+  wait: ['do', 'selector', 'text', 'gone', 'timeoutMs'],
   screenshot: ['do', 'name', 'target', 'viewport', 'parts'],
 });
 
@@ -66,6 +66,7 @@ function validateShotDefinition(definition, { label = '撮影の定義', scenari
     if (step.do !== 'screenshot' && !nonEmptyString(step.selector)) fail(`${where}: selector が空です`);
     if (step.do === 'type' && typeof step.text !== 'string') fail(`${where}: text が文字列ではありません`);
     if (step.do === 'wait') {
+      if (step.text !== undefined && !nonEmptyString(step.text)) fail(`${where}: text が空です`);
       if (step.gone !== undefined && typeof step.gone !== 'boolean') fail(`${where}: gone は真偽値にしてください`);
       if (step.timeoutMs !== undefined && (!Number.isInteger(step.timeoutMs) || step.timeoutMs < 100 || step.timeoutMs > 60_000)) fail(`${where}: timeoutMs は 100〜60000 の整数にしてください`);
     }
@@ -224,7 +225,7 @@ async function runStep(page, step, context) {
     await page.send('Input.insertText', { text: step.text });
     await page.evaluate(frames);
   } else if (step.do === 'wait') {
-    const expression = `(() => { const found = document.querySelector(${JSON.stringify(step.selector)}) !== null; return ${step.gone ? '!found' : 'found'}; })()`;
+    const expression = `(() => { const text = ${JSON.stringify(step.text ?? '')}; const found = [...document.querySelectorAll(${JSON.stringify(step.selector)})].some((element) => element.textContent.includes(text)); return ${step.gone ? '!found' : 'found'}; })()`;
     await page.waitUntil(expression, `${step.selector} が${step.gone ? '消える' : '現れる'}のを`, step.timeoutMs);
   } else {
     await takeScreenshot(page, step, context);

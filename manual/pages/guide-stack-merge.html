@@ -1,0 +1,119 @@
+<section class="section">
+  <h1>積み上げた PR を順にマージする</h1>
+  <p class="lead">前の PR のブランチを base にして積んだ PR は、スタックの一番下から順にマージします。
+  このページでは、スタックの表示を読み、一番下の PR がマージできる条件を確かめて、確認欄でマージするまでを説明します。
+  レビューが済んでいない PR にはマージの予約を使い、マージのあとは、結果と積み直しの依頼を確かめて次の PR へ進みます。
+  各手順の細かな仕様は、手順の最後のリンク先で説明します。</p>
+
+  <div class="guide-intro">
+    <div>
+      <p class="guide-intro-title">このページでできるようになること</p>
+      <ul>
+        <li>スタックの表示から、どの PR をいまマージできるかを読み取る</li>
+        <li>一番下の PR について、マージできる条件が残っていないかを確かめる</li>
+        <li>確認欄でマージの方式を選び、マージする</li>
+        <li>レビューの収束を待ってマージするよう、予約する</li>
+        <li>マージの結果と積み直しの依頼を確かめて、次の PR へ進む</li>
+      </ul>
+    </div>
+    <div>
+      <p class="guide-intro-title">必要なもの</p>
+      <ul>
+        <li>認証済みで使える GitHub CLI(<code>gh</code>)(<a href="start.html#start-integrations">連携ツールの有無で変わる表示</a>)</li>
+        <li>セッションに登録した PR(<a href="pull-requests.html#pr-register">PR の登録</a>)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 id="guide-stack-read">スタックの表示を読む</h2>
+  <p>PR は、プロダクトのカードの <span class="ui">プルリクエスト</span> の欄に、リポジトリごとの枠で並びます。
+  この例では、プロダクト parcel-api の PR #41、#42、#43 が、3 段のスタックになっています。</p>
+  <ol class="steps">
+    <li><b>リポジトリの枠を見つける</b>枠の見出しに、リポジトリ名と、<span class="ui">マージできる PR</span> の件数が出ます。
+      スタックの土台の <code>main</code> の横に、「スタック 3 段」と段数が出ます(<a href="pull-requests.html#pr-stack">スタックの表示</a>)。
+      <figure class="guide-map" data-shot="pull-requests-stack/stack" data-crop-y="0-130" data-crop="0-950" data-width="475" 
+              data-alt="リポジトリの枠の見出し。example-team の parcel-api、マージできる PR 2 件の札、GitHub から 1 分以内に取得の表示がある。その下に、main、スタック 3 段と出ている"></figure></li>
+    <li><b>下から数える</b>一番下の PR #41 の位置の札は「1/3」で、直上の #42 が「2/3」、その直上の #43 が「3/3」です。
+      <span class="ui">マージする</span> のボタンが付くのは、一番下の #41 だけです。
+      #42 には「マージできない理由: 下の #41 のマージ待ち」と出ます。
+      一番下以外の PR は、下の PR がマージされるまで、マージできません(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)。
+      <figure class="guide-map" data-shot="pull-requests-stack/stack" data-crop-y="130-910" data-crop="0-980,1360-1576" data-width="598" 
+              data-alt="3 段のスタック。一番下の PR #41 に 1/3 の札とマージできますの札、マージするのボタンがある。直上の #42 は 2/3 で、下の #41 のマージ待ちと出ている。その直上の #43 は 3/3 で、下の #42 のマージ待ちと出ている"></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-check">一番下の PR がマージできる条件を確かめる</h2>
+  <p>一番下の PR は、状態の札が <span class="ui">マージできます</span> か <span class="ui">マージ操作は可能</span> になっています。
+  <span class="ui">マージできます</span> は、設定で選んだ条件まで満たしている PR です(<a href="pull-requests.html#pr-mergeable">「マージできます」の条件</a>)。</p>
+  <ol class="steps">
+    <li><b>条件がそろっているかを確かめる</b>PR #41 には <span class="ui">マージできます</span> が出ています。
+      <span class="ui">CI 成功</span>、<span class="ui">承認済み</span>、クロスレビューの <span class="ui">レビュー済み</span> がそろっているためです。
+      既定の設定では、CI とクロスレビューが済んでいる PR に <span class="ui">マージできます</span> を出します(<a href="settings.html#settings-mergeable">「マージできます」と出す条件</a>)。
+      <figure class="guide-map" data-shot="pull-requests-stack/stack" data-crop-y="138-362" data-crop="0-980,1360-1576" data-width="598" 
+              data-alt="スタックの一番下の PR #41。1/3 の札、題、マージできますの札、マージするのボタンがある。feature/slots-api から main への表示の下に、CI 成功と承認済みの札、クロスレビューのレビュー済みの行が並ぶ"></figure></li>
+    <li><b>条件が残っているときの表示を知る</b>別のリポジトリの PR #118 は、<span class="ui">マージ操作は可能</span> のままです。
+      <span class="ui">CI 実行中</span> で、クロスレビューも対応中のため、<span class="ui">待ち:</span> の行に満たしていない条件が出ます。
+      この PR も、確認欄から手でマージできます。
+      その場合、確認欄の先頭に、満たしていない条件の警告が出ます(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)。
+      <figure class="guide-map" data-shot="pull-requests-confirm/pending" data-crop-y="120-420" data-crop="0-1000,1350-1576" data-width="613" 
+              data-alt="PR #118 の行。マージ操作は可能の札とマージするのボタンがある。CI 実行中と承認は任意の札、クロスレビューの 2 往復目の結論待ちの行、待ち: CI 実行中、クロスレビュー対応中の行が並ぶ"></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-merge-run">確認欄で方式を選んでマージする</h2>
+  <div class="note warn">マージは取り消せません。
+  方式、ブランチの削除、警告、照合する head SHA を読んでから、<span class="ui">マージを実行</span> を押します(<a href="pull-requests.html#pr-merge">マージする</a>)。</div>
+  <ol class="steps">
+    <li><b>確認欄を開く</b>PR #41 の <span class="ui">マージする</span> を押します。
+      PR の行の下に、「#41 を main へマージする」という確認欄が開きます。
+      <span class="ui">やめる</span> を押すと、何もせずに閉じます。</li>
+    <li><b>方式とブランチの扱いを選ぶ</b>マージの方式を、<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> から選びます。
+      リポジトリで許可されている方式だけが出ます。
+      ここでは <span class="ui">スカッシュ</span> を選びます。
+      <span class="ui">マージ後にリモートブランチを削除する</span> は、入れておくと、マージのあとに PR のブランチを GitHub から削除します。
+      すぐにはマージせず、予約したいときは <span class="ui">レビュー収束後マージ</span> を入れます(<a href="#guide-stack-reserve">レビュー収束後マージを予約する</a>)。
+      <figure class="guide-map" data-shot="pull-requests-confirm/squash" data-crop-y="385-725" data-crop="0-700" data-width="350" 
+              data-alt="PR #41 の確認欄の上半分。見出しは #41 を main へマージする。マージコミット、スカッシュ、リベースの 3 つの方式のうちスカッシュが選ばれ、その下にレビュー収束後マージとマージ後にリモートブランチを削除するのチェックが並ぶ"></figure></li>
+    <li><b>警告と照合する SHA を確かめて実行する</b>確認欄の下の方に、<span class="ui">照合する head SHA</span> の 7 桁が出ます。
+      画面で見ている head のコミット以外は、マージしません。
+      スカッシュかリベースで、直上に PR があるときは、上の PR に元のコミットが残るため、セッションに積み直しを依頼する旨の警告も出ます。
+      確かめたら <span class="ui">マージを実行</span> を押します(<a href="pull-requests.html#pr-merge-check">マージの前に確かめること</a>)。
+      <figure class="guide-map" data-shot="pull-requests-confirm/squash" data-crop-y="725-935" data-crop="0-1000" data-width="500" 
+              data-alt="PR #41 の確認欄の下半分。照合する head SHA の 7 桁と、スカッシュまたはリベースでは上の PR に元のコミットが残るため積み直しを依頼するという警告が出ている。緑のマージを実行のボタンとやめるのボタンが並ぶ"></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-reserve">レビューが済んでいない PR は収束後のマージを予約する</h2>
+  <p>クロスレビューの最中の PR は、すぐにはマージしたくないことがあります。
+  <span class="ui">レビュー収束後マージ</span> を予約しておくと、条件がそろった時点で、常駐サーバーがマージします。
+  ここでは、別のリポジトリの PR #118 を例にします。</p>
+  <ol class="steps">
+    <li><b>予約を入れる</b>確認欄で <span class="ui">レビュー収束後マージ</span> を入れます。
+      見出しが「#118 を main へレビュー収束後にマージする」に変わり、ボタンが <span class="ui">予約する</span> になります。
+      <span class="ui">照合する head SHA</span> は、PR の今の head ではなく、クロスレビューの収束記録になります。
+      方式を選んで <span class="ui">予約する</span> を押します(<a href="pull-requests.html#pr-reserve">レビュー収束後マージ</a>)。
+      <figure class="guide-map" data-shot="pull-requests-reserve/confirm" data-crop-y="410-1030" data-crop="0-700" data-width="350" 
+              data-alt="レビュー収束後マージを入れた確認欄。見出しは #118 を main へレビュー収束後にマージする。レビュー収束後マージのチェックが入り、照合する head SHA の欄はクロスレビューの収束記録になっている。ボタンは予約するとやめるである"></figure></li>
+    <li><b>予約中の表示を確かめる</b>PR の行が予約中の背景になり、<span class="ui">マージする</span> は <span class="ui">予約を取り消す</span> に変わります。
+      予約中の札に、方式、予約した時刻、まだ満たしていない条件が出ます。
+      予約はダッシュボードを開いていなくても実行され、取り消すまで残ります(<a href="pull-requests.html#pr-reserve-cancel">予約が取り消されるとき</a>)。
+      <figure class="guide-map" data-shot="pull-requests-reserve/reserved" data-crop-y="110-400" data-width="788"
+              data-alt="予約中の PR #118 の行。予約を取り消すのリンクと、レビュー収束後にマージ予約中の札があり、札の中に方式、予約した時刻、満たしていない条件が書かれている"></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-result">結果を確かめて次の PR へ進む</h2>
+  <p>マージが済むと、PR の枠に結果の行が出ます。
+  直上の PR は、base が既定ブランチに付け替わり、新しい一番下になります。</p>
+  <ol class="steps">
+    <li><b>結果の行を確かめる</b>枠の下端に、「PR #41: スカッシュ でマージしました。ブランチを削除しました。#42 の base を main に付け替えました。」と出ます。
+      <span class="ui">マージ済み (24 時間)</span> の一覧にも、#41 が時刻と方式つきで加わります(<a href="pull-requests.html#pr-result">マージの結果</a>)。
+      <figure class="guide-map" data-shot="pull-requests-result/result" data-crop-y="960-1142" data-crop="0-1080" data-width="540" 
+              data-alt="スカッシュでマージした後の枠の下端。マージ済みの一覧に PR #41 が時刻と方式つきで並び、その下に、#41 をスカッシュでマージし、ブランチを削除し、#42 の base を main に付け替えたという結果の行がある"></figure></li>
+    <li><b>積み直しの依頼を確かめる</b>スカッシュでマージしたので、#42 の差分に #41 のコミットが残っています。
+      #42 には <span class="ui">積み直しが必要</span> の札が付き、マージできない理由は「積み直し待ち」になります。
+      常駐サーバーは、PR を登録したセッションに、積み直しの依頼を送ります。
+      <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません(<a href="pull-requests.html#pr-restack">積み直し</a>、<a href="pull-requests.html#pr-notify">セッションへの知らせ</a>)。
+      <figure class="guide-map" data-shot="pull-requests-result/result" data-crop-y="120-400" data-crop="0-930" data-width="465" 
+              data-alt="新しく一番下になった PR #42 の行。1/2 の札と、CI 成功、base を main に付け替え済み、積み直しが必要の札がある。マージできない理由は、積み直し待ちと出ている"></figure></li>
+    <li><b>次の PR をマージする</b>セッションが #42 を積み直して push すると、<span class="ui">積み直しが必要</span> の札が消えます。
+      条件がそろえば <span class="ui">マージできます</span> が出るので、#42 を同じ手順でマージします。
+      #43 も、#42 のマージのあとに、同じ流れで進めます。</li>
+  </ol>
+</section>

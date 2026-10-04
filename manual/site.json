@@ -18,6 +18,18 @@
       "navGroup": "はじめに"
     },
     {
+      "id": "guide-away",
+      "source": "pages/guide-away.html",
+      "title": "席を外している間に判断を返す",
+      "navGroup": "目的別のガイド"
+    },
+    {
+      "id": "guide-stack-merge",
+      "source": "pages/guide-stack-merge.html",
+      "title": "積み上げた PR を順にマージする",
+      "navGroup": "目的別のガイド"
+    },
+    {
       "id": "work",
       "source": "pages/work.html",
       "title": "タスクと今やっていること",

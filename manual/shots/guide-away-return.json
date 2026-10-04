@@ -1,0 +1,40 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "戻ってから既読にする前と後の画面",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "unseen",
+      "target": [
+        "#root > section.section:nth-child(1) > .head",
+        "#root > section.section:nth-child(1) .decision-card"
+      ]
+    },
+    {
+      "do": "click",
+      "selector": ".news [data-seen]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .news",
+      "gone": true
+    },
+    {
+      "do": "screenshot",
+      "name": "seen",
+      "target": [
+        "#root > section.section:nth-child(1) > .head",
+        "#root > section.section:nth-child(1) .decision-card"
+      ]
+    }
+  ]
+}
