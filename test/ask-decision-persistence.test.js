@@ -346,3 +346,31 @@ test('2 回の再起動の後に元の呼び出しの終わりが遅れて届い
   const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
   assert.deepEqual(saved.plans['session-twice'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
 });
+
+test('2 回の再起動の後に、開始の届いていない出し直しの終わりが重複して届いても、判断事項は戻らない', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-dup-post', 'ask-original', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const first = await DashboardState.load(homeDir, { now: NOW + 10 });
+  first.addEvent(askEvent('session-dup-post', 'ask-retry', 'PreToolUse', NOW + 20));
+  first.addEvent(askEvent('session-dup-post', 'ask-retry', 'PostToolUse', NOW + 30, {
+    decisionResolution: { chosen: ['JSON (推奨)'], note: '' },
+  }));
+  await first.flushPersistence();
+
+  const second = await DashboardState.load(homeDir, { now: NOW + 40 });
+  second.addEvent(askEvent('session-dup-post', 'ask-original', 'PreToolUse', NOW));
+  second.addEvent(askEvent('session-dup-post', 'ask-original', 'PostToolUseFailure', NOW + 5));
+  second.addEvent(askEvent('session-dup-post', 'ask-retry', 'PostToolUse', NOW + 30, {
+    decisionResolution: { chosen: ['JSON (推奨)'], note: '' },
+  }));
+  second.addEvent({ session_id: 'session-dup-post', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 50 });
+
+  const decisions = second.snapshot().sessions.find((session) => session.session_id === 'session-dup-post').decisions;
+  assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  await second.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(saved.plans['session-dup-post'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+});

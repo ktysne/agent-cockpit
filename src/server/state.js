@@ -713,10 +713,16 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
   // 判断事項ごとに、メモリーにある終わりのイベントの最も新しい時刻。出し直した呼び出しの終わりも数える。
+  // 開始がメモリーに無い呼び出しの終わりは、作り直しで再現できないので数えない。
+  const startedAskToolUseIds = new Set(entries.flatMap(({ event }) => (
+    event.hook_event_name === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && !event.agent_id && event.tool_use_id
+      ? [event.tool_use_id]
+      : []
+  )));
   const latestAskFinishAt = new Map();
   for (const { event } of entries) {
     if (!['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) continue;
-    if (event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) continue;
+    if (event.tool_name !== 'AskUserQuestion' || event.agent_id || !startedAskToolUseIds.has(event.tool_use_id)) continue;
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
     latestAskFinishAt.set(decisionId, Math.max(latestAskFinishAt.get(decisionId) ?? -Infinity, event.hookAt));
   }
