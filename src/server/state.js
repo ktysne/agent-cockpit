@@ -2491,6 +2491,14 @@ class DashboardState {
     const registrations = this.pullRequestRegistrations();
     const relatedRegistrations = this.relatedPullRequestRegistrations();
     const mergedPullRequests = new Map();
+    const pullRequestTitles = new Map();
+    const rememberPullRequestTitle = (owner, repo, number, title) => {
+      if (typeof title !== 'string' || !title) return;
+      pullRequestTitles.set(relatedPullRequestRecordKey(owner, repo, number), title);
+    };
+    for (const record of [...registrations, ...relatedRegistrations]) {
+      rememberPullRequestTitle(record.owner, record.repo, record.number, record.lastOpen?.title);
+    }
     const addProduct = (value) => {
       const product = cloneProduct(value);
       if (product && !products.has(product.key)) products.set(product.key, product);
@@ -2498,6 +2506,7 @@ class DashboardState {
     };
     for (const merged of this.mergedPullRequests.values()) {
       mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
+      if (merged.title !== `#${merged.number}`) rememberPullRequestTitle(merged.owner, merged.repo, merged.number, merged.title);
     }
     for (const record of [...registrations, ...relatedRegistrations]) {
       if (record.state !== 'merged' || !record.mergedAt) continue;
@@ -2507,7 +2516,7 @@ class DashboardState {
         owner: record.owner,
         repo: record.repo,
         number: record.number,
-        title: record.lastOpen?.title || `#${record.number}`,
+        title: record.lastOpen?.title,
         mergedAt: record.mergedAt,
       });
     }
@@ -2564,13 +2573,13 @@ class DashboardState {
       const end = period.end === null ? now : period.end;
       return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
     });
-    const addEvent = (product, type, identity, at, text) => {
+    const addEvent = (product, type, identity, at, text, pullRequest = null) => {
       const timestamp = Date.parse(at || '');
       if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
       const key = `${product.key}\0${type}\0${identity}\0${at}`;
       if (eventKeys.has(key)) return;
       eventKeys.add(key);
-      eventsByProduct.get(product.key).push({ at, type, text });
+      eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
     };
 
     for (const [sessionId, plan] of this.plans) {
@@ -2584,11 +2593,12 @@ class DashboardState {
       }
     }
 
-    for (const record of this.pullRequestRegistrations()) {
+    for (const record of registrations) {
       const product = cloneProduct(record.product) || repoProduct(record.owner, record.repo);
-      const title = record.lastOpen?.title;
+      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+      const title = pullRequestTitles.get(identity);
       addEvent(product, 'pull-request', `${record.owner}/${record.repo}#${record.number}`, record.addedAt,
-        `PR #${record.number}${title ? `(${title})` : ''}を作成した`);
+        `PR #${record.number}${title ? `(${title})` : ''}を作成した`, { identity, number: record.number, action: 'created', title });
     }
 
     const sessionDecisionIds = new Set();
@@ -2612,14 +2622,18 @@ class DashboardState {
     }
 
     for (const failure of this.ciFailures) {
+      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
+      const title = pullRequestTitles.get(identity);
       addEvent(failure.product, 'ci-failure', `${failure.owner}/${failure.repo}#${failure.number}`, failure.at,
-        `PR #${failure.number} の CI が失敗した`);
+        `PR #${failure.number} の CI が失敗した`, { identity, number: failure.number, action: 'ci-failure', title });
     }
 
     for (const merged of mergedPullRequests.values()) {
       for (const product of productsForMergedPullRequest(merged)) {
+        const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
+        const title = pullRequestTitles.get(identity);
         addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
-          `PR #${merged.number}(${merged.title})をマージした`);
+          `PR #${merged.number}${title ? `(${title})` : ''}をマージした`, { identity, number: merged.number, action: 'merged', title });
       }
     }
 
@@ -2628,12 +2642,51 @@ class DashboardState {
       const seenAt = this.seenAtByProduct.get(product.key);
       if (!seenAt) continue;
       const seenMilliseconds = Date.parse(seenAt || '');
-      const items = (eventsByProduct.get(product.key) || [])
+      const events = (eventsByProduct.get(product.key) || [])
         .filter((event) => {
           const timestamp = Date.parse(event.at);
           return timestamp > seenMilliseconds && happenedWhileAway(timestamp);
-        })
-        .sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
+        });
+      const pullRequestSummaries = new Map();
+      const items = [];
+      for (const event of events) {
+        if (!event.pullRequest) {
+          items.push(event);
+          continue;
+        }
+        const { identity, number, action, title } = event.pullRequest;
+        let summary = pullRequestSummaries.get(identity);
+        if (!summary) {
+          summary = { at: event.at, number, title, actions: new Set() };
+          pullRequestSummaries.set(identity, summary);
+        }
+        if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
+        if (!summary.title && title) summary.title = title;
+        summary.actions.add(action);
+      }
+      for (const summary of pullRequestSummaries.values()) {
+        const { number, title, actions } = summary;
+        const prefix = `PR #${number}${title ? `(${title})` : ''}`;
+        const hasCreated = actions.has('created');
+        const hasMerged = actions.has('merged');
+        const hasCiFailure = actions.has('ci-failure');
+        let text;
+        if (hasCiFailure) {
+          const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
+          const outcome = hasCreated && hasMerged
+            ? '作成し、マージした'
+            : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
+          text = `${failure}${outcome ? `。${outcome}` : ''}`;
+        } else if (hasCreated && hasMerged) {
+          text = `${prefix}を作成し、マージした`;
+        } else if (hasCreated) {
+          text = `${prefix}を作成した`;
+        } else {
+          text = `${prefix}をマージした`;
+        }
+        items.push({ at: summary.at, type: 'pull-request-summary', text });
+      }
+      items.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       if (items.length) sinceSeen.push({ product, seenAt, items });
     }
     return {

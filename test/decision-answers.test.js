@@ -182,53 +182,25 @@ test('タイトル、外したセッション、読み上げは回答前の wait
   assert.equal(isPendingDecision({ state: 'provisional', answer: null }), false);
 });
 
-test('種類別の並び順の札には、外すセッションがあるプロダクトにだけ閉じるボタンを表示する', () => {
+test('種類別の並び順札を外し、プロダクト別の並び替えと除外を残す', () => {
   const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const closeButton = html.match(/function productCloseButton\(product, describedById\) \{[\s\S]*?\n\}/)?.[0];
-  const productOrder = html.match(/function kindProductOrder\(products\) \{[\s\S]*?\n\}/)?.[0];
+  const productControls = html.match(/function productControls\(product, index, total, pinnedCount, headingId\) \{[\s\S]*?\n\}/)?.[0];
+  const productSection = html.match(/function productSection\(product, index, products, pinnedCount\) \{[\s\S]*?\n\}/)?.[0];
   const kindSections = html.match(/function renderKindSections\(products\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(closeButton);
-  assert.ok(productOrder);
-  assert.match(kindSections, /const productOrder = kindProductOrder\(products\);/);
-  assert.match(kindSections, /return \[productOrder, \.\.\.orderedSectionKeys\(DEFAULT_SECTION_ORDER\)/);
-  assert.doesNotMatch(kindSections, /kindSection\('あなたの判断が必要なこと[^\n]*, productOrder\)/);
-
-  const createElement = (tagName, className, textContent) => ({
-    tagName, className, textContent, dataset: {}, attributes: {}, children: [],
-    append(...children) { this.children.push(...children); },
-    setAttribute(name, value) { this.attributes[name] = value; },
-  });
-  const rendered = vm.runInNewContext(`(() => {
-    ${closeButton}
-    ${productOrder}
-    return kindProductOrder([
-      { key: 'product-key', name: 'agent-cockpit', sessions: [{ session_id: 'session-1' }] },
-      { key: 'pull-request-only', name: 'PR のみ', sessions: [] },
-    ]);
-  })()`, { element: createElement });
-  const [item, pullRequestOnlyItem] = rendered.children;
-  const [tag, close] = item.children;
-  assert.equal(pullRequestOnlyItem.children.length, 1);
-
-  assert.equal(rendered.className, 'order product-order kind-order');
-  assert.equal(tag.textContent, '1. agent-cockpit');
-  assert.equal(tag.title, 'agent-cockpit');
-  assert.equal(close.textContent, '×');
-  assert.equal(close.type, 'button');
-  assert.equal(close.dataset.productAction, 'close');
-  assert.equal(close.dataset.productKey, 'product-key');
-  assert.equal(close.attributes['aria-label'], 'このプロダクトのセッションを一覧から外す');
-  assert.equal(close.attributes['aria-describedby'], tag.id);
-  assert.equal(close.title, 'このプロダクトのセッションを一覧から外す');
+  assert.ok(productControls && productSection && kindSections);
+  assert.match(productSection, /productControls\(product, index, products\.length, pinnedCount, heading\.id\)/);
+  assert.match(productSection, /productCloseButton\(product, heading\.id\)/);
+  assert.doesNotMatch(html, /kindProductOrder|kind-order|kind-product-order/);
+  assert.doesNotMatch(kindSections, /productOrder|orderBar/);
 });
 
-test('種類別の並び順の札は省略表示し、モックでは title にエスケープした名前を入れる', () => {
+test('種類別の並び順札用のスタイルを残さない', () => {
   const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const mock = fsSync.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-  const mockOrder = mock.match(/const orderBar = `[^\n]*`;/)?.[0];
-  assert.match(html, /\.product-order-item \.prod-tag \{ display: inline-block;[^}]*line-height: 20px;[^}]*text-overflow: ellipsis;/);
-  assert.match(mock, /\.product-order-item \.prod-tag \{ display: inline-block;[^}]*line-height: 20px;[^}]*text-overflow: ellipsis;/);
-  assert.match(mockOrder, /title="\$\{esc\(p\.name\)\}"/);
+  assert.doesNotMatch(html, /\.product-order-item|\.kind-order/);
+  assert.doesNotMatch(mock, /\.product-order-item|\.kind-order/);
+  assert.match(html, /\.order \{/);
+  assert.match(mock, /\.order \{/);
 });
 
 test('推奨案で OK は推奨 label を使い、指示を文脈に添える', () => {
