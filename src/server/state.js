@@ -144,7 +144,8 @@ function validStoredPlan(plan) {
       typeof decision.id === 'string' && typeof decision.title === 'string' && typeof decision.state === 'string' &&
       Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options)) &&
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
-      (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)));
+      (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)) &&
+      (decision.finishedByToolUseId === undefined || typeof decision.finishedByToolUseId === 'string'));
 }
 
 function pullRequestRecordKey(owner, repo, number) {
@@ -874,9 +875,11 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         const existing = boundDecision || session.decisions.find((decision) => (
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
-        // 同じ呼び出しか、終わった時点より古い開始の知らせは、遅れて届いたか重複なので、状態と解決の内容を変えない。
+        // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
+        // 遅れて届いたか重複なので、状態と解決の内容を変えない。
         const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
-          existing.id === toolUseId || event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
+          existing.id === toolUseId || existing.finishedByToolUseId === toolUseId ||
+          event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
         );
         if (staleStart) {
           session.decisionBindings[toolUseId] = existing.id;
@@ -1004,6 +1007,8 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
           decision.resolution = eventName === 'PostToolUse'
             ? event.decisionResolution || { chosen: [], note: '' }
             : null;
+          // 再起動の後に同じ呼び出しの開始が新しい時刻で届いても、重複と分かるように残す。
+          decision.finishedByToolUseId = toolUseId;
         }
       }
       if (!agentId) session.stopped = false;

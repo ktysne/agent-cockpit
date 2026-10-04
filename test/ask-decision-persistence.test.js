@@ -374,3 +374,33 @@ test('2 回の再起動の後に、開始の届いていない出し直しの終
   const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
   assert.deepEqual(saved.plans['session-dup-post'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
 });
+
+test('出し直しの呼び出しで解決した後に再起動し、同じ出し直しの PreToolUse が新しい時刻で届いても、判断事項は戻らない', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const resolution = { chosen: ['JSON (推奨)'], note: '出し直しで解決した。' };
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-retry-dup', 'ask-original', 'PreToolUse', NOW));
+  state.addEvent(askEvent('session-retry-dup', 'ask-retry', 'PreToolUse', NOW + 10));
+  assert.equal(state.decisionIdForToolUse('session-retry-dup', 'ask-retry'), 'ask-original');
+  state.addEvent(askEvent('session-retry-dup', 'ask-retry', 'PostToolUse', NOW + 20, { decisionResolution: resolution }));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 30 });
+  const expected = restored.decisionFor('session-retry-dup', 'ask-original');
+  assert.equal(expected.state, 'resolved');
+  restored.addEvent(askEvent('session-retry-dup', 'ask-retry', 'PreToolUse', NOW + 40));
+  restored.addEvent({ session_id: 'session-retry-dup', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 50 });
+
+  const decisions = restored.snapshot().sessions.find((session) => session.session_id === 'session-retry-dup').decisions;
+  assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  assert.deepEqual(restored.decisionFor('session-retry-dup', 'ask-original').resolution, resolution);
+
+  // 最初の呼び出しの開始が新しい時刻で届いても、同じく戻らない。
+  restored.addEvent(askEvent('session-retry-dup', 'ask-original', 'PreToolUse', NOW + 60));
+  assert.equal(restored.decisionFor('session-retry-dup', 'ask-original').state, 'resolved');
+
+  await restored.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(saved.plans['session-retry-dup'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  assert.deepEqual(saved.plans['session-retry-dup'].decisions[0].resolution, resolution);
+});
