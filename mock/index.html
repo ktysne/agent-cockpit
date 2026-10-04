@@ -1699,7 +1699,7 @@ function prBlock(p, withTag) {
     `<a class="badge mute" href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`));
   const empty = !roots.length
     ? p.repo.loading ? `<div class="empty">GitHub から取得しています</div>`
-      : merged.length || closed.length ? `<div class="empty">オープンの PR はありません</div>` : ''
+      : `<div class="empty">オープンの PR はありません</div>`
     : '';
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))

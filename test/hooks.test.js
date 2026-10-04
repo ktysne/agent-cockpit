@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -8,6 +9,7 @@ const {
   childEnvironment,
   extractAskUserQuestionResolution,
   extractCodexWaitRunId,
+  launchServer,
   makeHookEvent,
   runHook,
 } = require('../src/hooks/event');
@@ -150,6 +152,28 @@ test('常駐サーバーへ渡す環境から CLAUDE_CODE_ 変数を除く', asy
     CLAUDE_CODE_MESSAGING_TOKEN: 'secret-value', GH_TOKEN: 'gh-secret',
     GITHUB_TOKEN: 'github-secret', GH_ENTERPRISE_TOKEN: 'enterprise-secret', OTHER: 'kept',
   }), { PATH: 'path-value', OTHER: 'kept' });
+});
+
+test('launchServer は秘密値を除いた環境で子プロセスを起動する', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  let childEnvironment = null;
+  await launchServer({
+    homeDir,
+    environment: {
+      PATH: 'path-value', OTHER: 'kept',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'session-secret',
+      GH_TOKEN: 'gh-secret', GITHUB_TOKEN: 'github-secret', GH_ENTERPRISE_TOKEN: 'enterprise-secret',
+    },
+    spawnProcess: (_executable, _arguments, options) => {
+      childEnvironment = options.env;
+      const child = new EventEmitter();
+      child.unref = () => {};
+      setImmediate(() => child.emit('spawn'));
+      return child;
+    },
+  });
+
+  assert.deepEqual(childEnvironment, { PATH: 'path-value', OTHER: 'kept' });
 });
 
 test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', async () => {

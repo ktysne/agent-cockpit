@@ -5,6 +5,7 @@ const { spawn } = require('node:child_process');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
+const { isGithubCredentialEnvironmentVariable } = require('../server/credential-environment');
 const {
   firstPullRequestUrl,
   isGhPrCreateCommand,
@@ -332,8 +333,8 @@ async function readServerInfo(homeDir, fileSystem = fsp) {
 }
 
 function childEnvironment(environment) {
-  const excluded = new Set(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN']);
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.startsWith('CLAUDE_CODE_') && !excluded.has(key)));
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.startsWith('CLAUDE_CODE_') &&
+    !isGithubCredentialEnvironmentVariable(key)));
 }
 
 async function launchServer({ homeDir, environment = process.env, spawnProcess = spawn }) {
@@ -571,6 +572,7 @@ module.exports = {
   extractAskUserQuestionResolution,
   makeHookEvent,
   readServerInfo,
+  launchServer,
   childEnvironment,
   acquireStartLock,
   releaseStartLock,

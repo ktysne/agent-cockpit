@@ -1,9 +1,8 @@
 'use strict';
 
-const { validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { safeRepo, crossReviewConvergedAtHead } = require('./pull-requests');
 
-const SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const METHODS = new Set(['merge', 'squash', 'rebase']);
 const METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 
@@ -90,7 +89,7 @@ class PullRequestMergeManager {
   merge(input) {
     const registration = this.registeredPullRequest(input.number, input.registration_key);
     if (!registration) return Promise.resolve(actionResult(404, '記録された PR が見つかりません'));
-    if (!SHA_PATTERN.test(input.headRefOid || '') || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
+    if (!isCompleteCommitSha(input.headRefOid) || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
       return Promise.resolve(actionResult(400, 'マージ内容を確認してください'));
     }
     return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
@@ -101,7 +100,7 @@ class PullRequestMergeManager {
   reserve(input) {
     const registration = this.registeredPullRequest(input.number, input.registration_key);
     if (!registration) return Promise.resolve(actionResult(404, '記録された PR が見つかりません'));
-    if (!SHA_PATTERN.test(input.headRefOid || '') || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
+    if (!isCompleteCommitSha(input.headRefOid) || !METHODS.has(input.method) || typeof input.deleteBranch !== 'boolean') {
       return Promise.resolve(actionResult(400, 'マージ予約の内容を確認してください'));
     }
     return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
@@ -120,7 +119,7 @@ class PullRequestMergeManager {
   requestConflictResolution(input) {
     const registration = this.registeredPullRequestByKey(input.key);
     if (!registration) return Promise.resolve(actionResult(404, '記録された PR が見つかりません'));
-    if (!SHA_PATTERN.test(input.headRefOid || '')) {
+    if (!isCompleteCommitSha(input.headRefOid)) {
       return Promise.resolve(actionResult(400, '衝突の解消依頼の head SHA を確認してください'));
     }
     return this.withPullRequestLock(registration.owner, registration.repo, registration.number, () => (
@@ -483,7 +482,7 @@ class PullRequestMergeManager {
     const triage = review?.triage;
     if (triage?.outcome === 'halted') return { halted: true };
     if (review?.notRequired === true || triage?.outcome !== 'converged' || triage.round !== review?.round ||
-      !crossReviewConvergedAtHead(pullRequest) || !SHA_PATTERN.test(triage.sha || '') || pullRequest.ci !== 'pass' ||
+      !crossReviewConvergedAtHead(pullRequest) || !isCompleteCommitSha(triage.sha) || pullRequest.ci !== 'pass' ||
       pullRequest.review !== 'approved') return null;
     const input = { headRefOid: triage.sha, method: reservation.method, deleteBranch: reservation.deleteBranch };
     if (mergeCandidateError(candidate, input, reservation.number)) return null;

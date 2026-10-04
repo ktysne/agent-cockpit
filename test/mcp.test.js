@@ -145,3 +145,35 @@ test('常駐サーバーに届かない tools/call は isError で継続可能�
   assert.equal(responses[0].result.isError, true);
   assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE);
 });
+
+test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を到達不能として返す', async () => {
+  const calls = [
+    ['cockpit_set_tasks', { tasks: [] }],
+    ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
+    ['cockpit_skip_review', {
+      owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '記録しない理由',
+    }],
+  ];
+
+  for (const [index, [name, argumentsValue]] of calls.entries()) {
+    for (const status of [500, 401]) {
+      let fetchCount = 0;
+      const responses = await exchange([{
+        jsonrpc: '2.0', id: index * 10 + status, method: 'tools/call',
+        params: { name, arguments: argumentsValue },
+      }], {
+        homeDir: 'C:\\temporary-cockpit',
+        environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+        ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+        readServerInfo: async () => ({ port: 49125, secret: 'updated-secret' }),
+        fetchImpl: async () => {
+          fetchCount += 1;
+          return new Response('{}', { status });
+        },
+      });
+      assert.equal(responses[0].result.isError, true, `${name} with HTTP ${status}`);
+      assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE, `${name} with HTTP ${status}`);
+      assert.equal(fetchCount, status === 401 ? 2 : 1, `${name} with HTTP ${status}`);
+    }
+  }
+});

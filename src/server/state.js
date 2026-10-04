@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
-const { parsePullRequestUrl, validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, parsePullRequestUrl, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
 const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
@@ -176,7 +176,7 @@ function relatedPullRequestRecordKey(owner, repo, number) {
 function validCrossReviewSkip(record) {
   return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
     Number.isSafeInteger(record.number) && record.number > 0 &&
-    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
+    isCompleteCommitSha(record.headRefOid) &&
     typeof record.reason === 'string' && record.reason.trim().length > 0 && record.reason.length <= 2000 &&
     validTimestamp(record.recordedAt);
 }
@@ -201,7 +201,7 @@ function validPullRequestLastOpen(value) {
   if (!isRecord(value) ||
     ['title', 'url', 'headRefName', 'baseRefName'].some((key) => typeof value[key] !== 'string') ||
     ['title', 'headRefName', 'baseRefName'].some((key) => value[key].length > 500) ||
-    (value.headRefOid !== '' && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value.headRefOid))) return false;
+    (value.headRefOid !== '' && !isCompleteCommitSha(value.headRefOid))) return false;
   return true;
 }
 
@@ -281,8 +281,8 @@ function validMergedPullRequest(record) {
     !Number.isSafeInteger(record.number) || record.number < 1 || typeof record.title !== 'string' || record.title.length > 500 ||
     !validTimestamp(record.mergedAt) || ![null, 'merge', 'squash', 'rebase'].includes(record.method) ||
     typeof record.automatic !== 'boolean' || typeof record.url !== 'string' ||
-    (record.reservedHeadRefOid !== undefined && record.reservedHeadRefOid !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.reservedHeadRefOid)) ||
-    (record.mergedHeadRefOid !== undefined && record.mergedHeadRefOid !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.mergedHeadRefOid)) ||
+    (record.reservedHeadRefOid !== undefined && record.reservedHeadRefOid !== null && !isCompleteCommitSha(record.reservedHeadRefOid)) ||
+    (record.mergedHeadRefOid !== undefined && record.mergedHeadRefOid !== null && !isCompleteCommitSha(record.mergedHeadRefOid)) ||
     (record.headMismatch !== undefined && typeof record.headMismatch !== 'boolean') ||
     (record.mergeResultClosedAt !== undefined && !validTimestamp(record.mergeResultClosedAt)) ||
     (record.automaticResult !== undefined && !validPullRequestMergeResult(record.automaticResult))) return false;
@@ -311,7 +311,7 @@ function validPullRequestMergeReservation(record) {
 function validPullRequestMergeIntent(record) {
   const parsedUrl = parsePullRequestUrl(record?.url);
   return isRecord(record) && validStoredSessionId(record.session_id) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
-    Number.isSafeInteger(record.number) && record.number > 0 && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
+    Number.isSafeInteger(record.number) && record.number > 0 && isCompleteCommitSha(record.headRefOid) &&
     PULL_REQUEST_MERGE_METHODS.has(record.method) && typeof record.deleteBranch === 'boolean' && validTimestamp(record.createdAt) &&
     (record.automatic === undefined || typeof record.automatic === 'boolean') &&
     validBranchName(record.headRefName) && validBranchName(record.defaultBranch) && typeof record.url === 'string' &&

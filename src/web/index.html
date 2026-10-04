@@ -1548,12 +1548,16 @@ function removePullRequestMergeResult(id) {
   return false;
 }
 
-function visiblePullRequestGroups(groups) {
-  if (!displayPreferences.hideFinished) return groups;
-  return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
+function pullRequestGroupHasVisibleContent(group) {
+  return group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
     || group.mergeHistory?.some((record) => record.headMismatch === true
       || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record, record.mergedAt)))
-      || group.reservationNotices?.some((notice) => !pullRequestTransientNoticeExpired(notice.at)) || hasPullRequestMergeResults(group));
+      || group.reservationNotices?.some((notice) => !pullRequestTransientNoticeExpired(notice.at)) || hasPullRequestMergeResults(group);
+}
+
+function visiblePullRequestGroups(groups) {
+  if (!displayPreferences.hideFinished) return groups;
+  return groups.filter(pullRequestGroupHasVisibleContent);
 }
 
 // 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
@@ -1617,8 +1621,8 @@ function pullRequestCrossReviewSettled(pullRequest) {
   const triage = review?.triage;
   const head = pullRequest.headRefOid;
   return Number.isSafeInteger(review?.round) && triage?.round === review.round && triage.outcome === 'converged' &&
-    typeof head === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head) &&
-    typeof triage.sha === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(triage.sha) &&
+    isCompleteCommitSha(head) &&
+    isCompleteCommitSha(triage.sha) &&
     triage.sha.toLowerCase() === head.toLowerCase();
 }
 
@@ -1679,16 +1683,11 @@ function shortShaElement(value) {
   return code;
 }
 
-function isFullCommitSha(value) {
-  return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
-}
-
 function isCompleteCommitSha(value) {
-  return typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value);
+  return typeof value === 'string' && /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(value);
 }
 
-// 「レビュー済み」は、主セッションが記録した結論が converged で、その SHA が今の head のときだけ言う。
-// 結論の記録が無いか往復の数が合わなければ、最後にレビューに回した head との比較だけを出す。
+// 未収束の往復状態を優先し、収束済みなら収束 SHA、それ以外の比較可能な記録なら reviewed SHA を現在の head と比べる。
 function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
@@ -1711,7 +1710,7 @@ function crossReviewState(pullRequest) {
       warn: `head ${headSha.slice(0, 7)} はクロスレビューの収束の後に変更されている (収束は ${triageShortSha})`,
     };
   }
-  if (!isFullCommitSha(review.reviewedSha) || !isFullCommitSha(pullRequest.headRefOid)) {
+  if (!isCompleteCommitSha(review.reviewedSha) || !isCompleteCommitSha(pullRequest.headRefOid)) {
     return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
   }
   const reviewedSha = review.reviewedSha.toLowerCase();
@@ -2163,9 +2162,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
   if (!group.trees.length && !group.error) {
     if (group.loading) {
       content.append(element('div', 'empty', 'GitHub から取得しています'));
-    } else if (group.merged.length || group.mergeHistory?.length) {
-      content.append(element('div', 'empty', 'オープンの PR はありません'));
-    } else if (group.registeredCount) {
+    } else if (group.merged.length || group.mergeHistory?.length || group.registeredCount) {
       content.append(element('div', 'empty', 'オープンの PR はありません'));
     }
   }
@@ -2238,9 +2235,7 @@ function productGroups(sessions, pullRequestGroups = []) {
 function hasProductContent(product, sinceSeen) {
   const pullRequestGroups = isFilterShown('prs') ? visiblePullRequestGroups(product.pullRequestGroups || []) : [];
   return product.sessions.length > 0
-    || pullRequestOpenCount(pullRequestGroups) > 0
-    || pullRequestGroups.some((group) => group.openStateUnknown || group.loading
-      || group.mergeHistory?.some((record) => record.headMismatch === true) || hasPullRequestMergeResults(group))
+    || pullRequestGroups.some(pullRequestGroupHasVisibleContent)
     || sinceSeen.some((entry) => entry.product?.key === product.key && entry.items?.length > 0);
 }
 
@@ -3027,10 +3022,8 @@ function productSection(product, index, products, pinnedCount) {
     body.append(prsHeading);
     if (pullRequestGroups.length) {
       for (const group of pullRequestGroups) appendPullRequestBlock(body, group);
-    } else if (displayPreferences.hideFinished) {
-      body.append(element('div', 'empty', 'オープンの PR はありません'));
     } else {
-      appendPullRequestBlock(body, null);
+      body.append(element('div', 'empty', 'オープンの PR はありません'));
     }
   }
   section.append(body);

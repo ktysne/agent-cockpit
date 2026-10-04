@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { ensureServerRunning, readServerInfo } = require('../hooks/event');
-const { parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
+const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
 
 const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
@@ -20,7 +20,6 @@ const REVIEW_SKIP_ERROR_MESSAGES = new Map([
   [409, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください'],
   [502, 'GitHub から PR の状態を確認できませんでした'],
 ]);
-const COMMIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 const TOOL_DEFINITIONS = [
   {
@@ -119,7 +118,7 @@ const TOOL_DEFINITIONS = [
         owner: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,100}$' },
         repo: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,100}$' },
         number: { type: 'integer', minimum: 1 },
-        headRefOid: { type: 'string', pattern: '^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$' },
+        headRefOid: { type: 'string', pattern: COMPLETE_COMMIT_SHA_PATTERN.source },
         reason: { type: 'string', minLength: 1, maxLength: 2000 },
       },
       required: ['owner', 'repo', 'number', 'headRefOid', 'reason'],
@@ -302,7 +301,8 @@ async function postPullRequest(args, options = {}) {
         info = await readInfo(homeDir);
         continue;
       }
-      return { errorMessage: PR_ERROR_MESSAGES.get(response.status) || null };
+      const errorMessage = PR_ERROR_MESSAGES.get(response.status);
+      return errorMessage ? { errorMessage } : null;
     } catch {
       if (attempt > 0) return null;
       try {
@@ -317,7 +317,7 @@ async function postPullRequest(args, options = {}) {
 
 async function postCrossReviewSkip(args, options = {}) {
   if (!validRepositoryPart(args.owner) || !validRepositoryPart(args.repo) || !Number.isSafeInteger(args.number) || args.number < 1 ||
-    !COMMIT_SHA_PATTERN.test(args.headRefOid || '') || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
+    !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
     return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
@@ -363,7 +363,8 @@ async function postCrossReviewSkip(args, options = {}) {
         info = await readInfo(homeDir);
         continue;
       }
-      return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(response.status) || 'クロスレビュー不要を記録できませんでした' };
+      const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(response.status);
+      return errorMessage ? { errorMessage } : null;
     } catch {
       if (attempt > 0) return null;
       try {

@@ -1,7 +1,13 @@
 'use strict';
 
+const COMPLETE_COMMIT_SHA_PATTERN = /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/;
+
 function validRepositoryPart(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(value);
+}
+
+function isCompleteCommitSha(value) {
+  return typeof value === 'string' && COMPLETE_COMMIT_SHA_PATTERN.test(value);
 }
 
 function validBranchName(value) {
@@ -152,8 +158,12 @@ function shouldRefreshPullRequests(command) {
 }
 
 module.exports = {
+  COMPLETE_COMMIT_SHA_PATTERN,
+  commandSegments,
+  commandWords,
   findPullRequestUrl,
   firstPullRequestUrl,
+  isCompleteCommitSha,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   parsePullRequestUrl,
