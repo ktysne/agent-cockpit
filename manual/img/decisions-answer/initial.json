@@ -1,0 +1,88 @@
+{
+  "name": "initial",
+  "target": ".decision-card.provisional",
+  "width": 1576,
+  "height": 962,
+  "parts": [
+    {
+      "key": "answer.options",
+      "bounds": {
+        "x": 52,
+        "y": 166,
+        "width": 1478,
+        "height": 231
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.recommended",
+      "bounds": {
+        "x": 52,
+        "y": 166,
+        "width": 1478,
+        "height": 112
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.ok",
+      "bounds": {
+        "x": 32,
+        "y": 433,
+        "width": 256,
+        "height": 81
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.meta",
+      "bounds": {
+        "x": 32,
+        "y": 530,
+        "width": 1518,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.note",
+      "bounds": {
+        "x": 32,
+        "y": 584,
+        "width": 1518,
+        "height": 126
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.send",
+      "bounds": {
+        "x": 52,
+        "y": 742,
+        "width": 190,
+        "height": 80
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.status",
+      "bounds": {
+        "x": 262,
+        "y": 762,
+        "width": 72,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "answer.summary",
+      "bounds": {
+        "x": 32,
+        "y": 870,
+        "width": 1518,
+        "height": 70
+      },
+      "visible": true
+    }
+  ]
+}

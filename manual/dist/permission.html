@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>許可待ち | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html" aria-current="page">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html" aria-current="page">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#permission-where">許可はデスクトップアプリで出す</a></li>
+        <li><a href="#permission-card">許可待ちのカード</a></li>
+        <li><a href="#permission-long">長く待たせているとき</a></li>
+        <li><a href="#permission-count">許可待ちの数</a></li></ol>
+      </details>
+<section class="section">
+  <h1>許可待ち</h1>
+  <p class="lead">セッションがツールの実行許可を待っているとき、<span class="ui">あなたの判断が必要なこと</span> の欄に、許可待ちのカードが出ます。
+  このページでは、カードの見方と、待ち時間の強調を説明します。
+  許可を出す操作はダッシュボードにありません。</p>
+
+  <h2 id="permission-where">許可はデスクトップアプリで出す</h2>
+  <div class="note">許可は、Claude Code デスクトップアプリの該当するセッションで出します。
+  ダッシュボードから許可を出すことはできません。
+  ダッシュボードは、許可待ちが起きていることと、待たせている時間を知らせる表示だけを受け持ちます。</div>
+  <p>どのセッションを開けばよいかは、カードの最下段に書いてあります。
+  プロダクトの名前と、セッションの名前が出ます。</p>
+
+  <h2 id="permission-card">許可待ちのカード</h2>
+  <p>許可待ちのカードは、セッションが許可を求める通知を出した時点で現れます。
+  許可を求めているのがメインセッションか、サブエージェントかは、見出しで分かります。</p>
+  <figure class="guide-map" id="permission-card-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/206"><div class="gm-clip"><img src="img/permission-card/waiting.png" width="788" height="103" alt="許可待ちのカード。見出しに、メインがツールの実行許可を待っているとあり、許可待ちの札と待ち時間が続く。その下にツールの名前とコマンド、最下段にプロダクト名とセッション名がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#permission-card-map-1" style="left:15.355%;top:13.107%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#permission-card-map-2" style="left:33.312%;top:13.592%" aria-label="2. 許可待ち の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#permission-card-map-3" style="left:41.688%;top:15.049%" aria-label="3. 待ち時間">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#permission-card-map-4" style="left:98.35%;top:49.757%" aria-label="4. ツール">4</a><a class="gm-badge gm-place-right" data-gm="5" href="#permission-card-map-5" style="left:98.35%;top:77.67%" aria-label="5. プロダクトとセッション">5</a></div></div></div><ol class="gm-list"><li id="permission-card-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：許可を待っている作業者の名前に、<span class="ui">がツールの実行許可を待っている</span> が続きます。メインセッションのときは、名前が「メイン」になります。</div></li><li id="permission-card-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">許可待ち</span> の札</b>：許可待ちのカードであることを示します。</div></li><li id="permission-card-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>待ち時間</b>：許可を求める通知が出てからの時間です。「3 分待機中」の形で出ます。時刻が分からないときは <span class="ui">時刻不明</span> と出ます。</div></li><li id="permission-card-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>ツール</b>：許可を待っているツールの名前と、コマンドです。ファイルを扱うツールでは、ファイルのパスが出ます。</div></li><li id="permission-card-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>プロダクトとセッション</b>：デスクトップアプリで開くセッションを示します。</div></li></ol></figure>
+  <p>カードは、許可を待っていたツールが終わると消えます。
+  成功しても、失敗しても同じです。
+  メインセッションの許可待ちは、ターンが終わったときと、新しいプロンプトを送ったときにも消えます。</p>
+  <p>同じ作業者(メイン、または同じサブエージェント)が新しい許可待ちを出したときは、前のカードを置き換えます。
+  メインと、各サブエージェントは、別々に 1 件ずつ数えます。</p>
+  <details class="more">
+    <summary>許可を待っているツールの表示の詳細</summary>
+    <p>許可を求める通知には、ツールの名前が含まれません。
+    そこで、同じ作業者のなかで、実行が始まっていて終わっていないツールのうち、いちばん古いものを表示します。
+    Agent ツールは、サブエージェントが終わるまで続くので、候補にしません。
+    該当するツールが見つからないときは、ツールの行を出しません。</p>
+    <p>セッションが開始、再開、クリアされたときは、メインの許可待ちを消します。</p>
+  </details>
+
+  <h2 id="permission-long">長く待たせているとき</h2>
+  <p>待ち時間が設定の時間を超えると、カードの背景が赤みを帯び、待ち時間が太い赤の文字になります。
+  時間は、設定の <span class="ui">長く待たせているとみなす時間 (1〜120 分)</span> で決めます。
+  既定は 15 分で、ちょうどその時間に達しただけでは強調しません。</p>
+  <figure class="guide-map" id="permission-long-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/208"><div class="gm-clip"><img src="img/permission-card/long.png" width="762" height="104" alt="長く待たせている許可待ちのカード。背景が赤みを帯び、待ち時間が太い赤の文字になっている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#permission-long-map-1" style="left:43.537%;top:15.385%" aria-label="1. 待ち時間">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:0%;top:0.962%;width:100%;height:98.558%"></span><a class="gm-badge gm-place-left" data-gm="2" href="#permission-long-map-2" style="left:0%;top:50.24%" aria-label="2. カードの背景">2</a></div></div></div><ol class="gm-list"><li id="permission-long-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>待ち時間</b>：設定の時間を超えると、太い赤の文字になります。</div></li><li id="permission-long-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>カードの背景</b>：赤みを帯びた背景は、長く待たせていることを示します。</div></li></ol></figure>
+  <p>待ち時間は 1 分ごとに更新します。
+  同じ強調は、止めて待っている判断事項にも付きます(<a href="decisions.html#decisions-time">経過時間と強調</a>)。</p>
+
+  <h2 id="permission-count">許可待ちの数</h2>
+  <p>許可待ちの数は、次の場所に出ます。</p>
+  <ul>
+    <li>画面上部の <span class="ui">許可待ち</span> の札(<a href="screen.html#screen-summary">件数の札</a>)</li>
+    <li>プロダクトのカードの見出しの <span class="ui">許可待ち</span> の札(<a href="screen.html#screen-product-card">プロダクトのカード</a>)</li>
+    <li>ブラウザのタブの題の、先頭の括弧の数。許可待ちと、回答を送っていない止めて待っている判断事項の合計です</li>
+  </ul>
+  <p>件数の札を押して許可待ちを隠すと、カードは一覧から消えます。
+  タブの題の数は、隠していても数えます。</p>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="work.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">タスクと今やっていること</span></a><a class="next" href="decisions.html"><span class="page-navigation-label">次のページ</span><span class="page-navigation-title">判断事項と回答</span></a></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#permission-where">許可はデスクトップアプリで出す</a></li>
+        <li><a href="#permission-card">許可待ちのカード</a></li>
+        <li><a href="#permission-long">長く待たせているとき</a></li>
+        <li><a href="#permission-count">許可待ちの数</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

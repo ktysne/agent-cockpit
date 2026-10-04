@@ -1,0 +1,58 @@
+{
+  "name": "agents",
+  "target": ".agent-list",
+  "width": 1524,
+  "height": 324,
+  "parts": [
+    {
+      "key": "agents.route",
+      "bounds": {
+        "x": 300,
+        "y": 69,
+        "width": 229,
+        "height": 40
+      },
+      "visible": true
+    },
+    {
+      "key": "agents.unavailable",
+      "bounds": {
+        "x": 909,
+        "y": 66,
+        "width": 257,
+        "height": 46
+      },
+      "visible": true
+    },
+    {
+      "key": "agents.unconfirmed",
+      "bounds": {
+        "x": 20,
+        "y": 152,
+        "width": 260,
+        "height": 158
+      },
+      "visible": true
+    },
+    {
+      "key": "agents.close",
+      "bounds": {
+        "x": 160,
+        "y": 247,
+        "width": 120,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "agents.gpt",
+      "bounds": {
+        "x": 673,
+        "y": 201,
+        "width": 350,
+        "height": 46
+      },
+      "visible": true
+    }
+  ]
+}

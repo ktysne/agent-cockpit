@@ -10,6 +10,30 @@
       "source": "pages/screen.html",
       "title": "画面の見方",
       "navGroup": "はじめに"
+    },
+    {
+      "id": "work",
+      "source": "pages/work.html",
+      "title": "タスクと今やっていること",
+      "navGroup": "状況を見る"
+    },
+    {
+      "id": "permission",
+      "source": "pages/permission.html",
+      "title": "許可待ち",
+      "navGroup": "状況を見る"
+    },
+    {
+      "id": "decisions",
+      "source": "pages/decisions.html",
+      "title": "判断事項と回答",
+      "navGroup": "判断と回答"
+    },
+    {
+      "id": "away",
+      "source": "pages/away.html",
+      "title": "離席中",
+      "navGroup": "判断と回答"
     }
   ],
   "helpAnchors": {}

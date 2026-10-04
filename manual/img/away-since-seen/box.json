@@ -1,0 +1,38 @@
+{
+  "name": "box",
+  "target": ".news",
+  "width": 1576,
+  "height": 234,
+  "parts": [
+    {
+      "key": "since.head",
+      "bounds": {
+        "x": 26,
+        "y": 18,
+        "width": 1524,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "since.seen",
+      "bounds": {
+        "x": 253,
+        "y": 18,
+        "width": 120,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "since.items",
+      "bounds": {
+        "x": 26,
+        "y": 90,
+        "width": 1524,
+        "height": 125
+      },
+      "visible": true
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "判断事項のカード",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "dialog",
+      "target": ".decision-list > .decision-card:nth-child(2)",
+      "parts": {
+        "card.new": ".decision-list > .decision-card:nth-child(2) .new-mark",
+        "card.title": ".decision-list > .decision-card:nth-child(2) .decision-title",
+        "card.state": ".decision-list > .decision-card:nth-child(2) .decision-head .badge.permission",
+        "card.time": ".decision-list > .decision-card:nth-child(2) .decision-head time",
+        "card.context": ".decision-list > .decision-card:nth-child(2) > .decision-context",
+        "card.options": ".decision-list > .decision-card:nth-child(2) .decision-options",
+        "card.recommended": ".decision-list > .decision-card:nth-child(2) .decision-option.recommended",
+        "card.meta": ".decision-list > .decision-card:nth-child(2) > .meta"
+      }
+    }
+  ]
+}

@@ -138,6 +138,17 @@ test('画面で試すためのデモは、流し込みの後に時計を基準�
   assert.ok(Date.now() > BASE_TIME_MS);
 });
 
+test('デモで預かった質問は、生存確認の途絶を調べるタイマーが動いても回答待ちのまま残る', async (t) => {
+  const demo = await startDemoServer({ scenario: 'decisions' });
+  t.after(() => demo.close());
+  const awaiting = () => demo.getState().then((state) => state.sessions
+    .flatMap((session) => session.decisions)
+    .filter((decision) => decision.awaitingAnswerUntil));
+  assert.ok((await awaiting()).length > 0);
+  for (const record of [...demo.runtime.answerDelivery.askWaits.values()]) demo.runtime.answerDelivery.releaseStaleAsk(record);
+  assert.ok((await awaiting()).length > 0);
+});
+
 test('基本のシナリオを流し込むと、全体図に要る状態が隔離した保存先の常駐サーバーに揃う', async () => {
   const real = globalThis.Date;
   const demo = await startDemoServer({});

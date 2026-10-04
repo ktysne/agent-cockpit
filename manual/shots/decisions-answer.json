@@ -1,0 +1,55 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "判断事項の回答欄",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "initial",
+      "target": ".decision-card.provisional",
+      "parts": {
+        "answer.options": ".decision-card.provisional .decision-options",
+        "answer.recommended": ".decision-card.provisional .decision-option.recommended",
+        "answer.ok": ".decision-card.provisional .answer-choice.ok",
+        "answer.meta": ".decision-card.provisional [data-answer-meta]",
+        "answer.note": ".decision-card.provisional [data-answer-note]",
+        "answer.send": ".decision-card.provisional [data-send-answer]",
+        "answer.status": ".decision-card.provisional .answer-foot .answer-status",
+        "answer.summary": ".decision-card.provisional .decision-summary"
+      }
+    },
+    {
+      "do": "click",
+      "selector": ".decision-card.provisional [data-answer-pick][value=\"楽観ロック\"]"
+    },
+    {
+      "do": "type",
+      "selector": ".decision-card.provisional [data-answer-note]",
+      "text": "離席中は再試行の回数を 3 回までにする"
+    },
+    {
+      "do": "screenshot",
+      "name": "picked",
+      "target": ".decision-card.provisional",
+      "parts": {
+        "answer.options": ".decision-card.provisional .decision-options",
+        "answer.recommended": ".decision-card.provisional .decision-option.recommended",
+        "answer.ok": ".decision-card.provisional .answer-choice.ok",
+        "answer.meta": ".decision-card.provisional [data-answer-meta]",
+        "answer.note": ".decision-card.provisional [data-answer-note]",
+        "answer.send": ".decision-card.provisional [data-send-answer]",
+        "answer.status": ".decision-card.provisional .answer-foot .answer-status",
+        "answer.summary": ".decision-card.provisional .decision-summary",
+        "answer.picked": ".decision-card.provisional .decision-option:nth-child(2)"
+      }
+    }
+  ]
+}

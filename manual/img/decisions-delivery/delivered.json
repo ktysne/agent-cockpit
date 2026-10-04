@@ -1,0 +1,28 @@
+{
+  "name": "delivered",
+  "target": ".decision-list > .decision-card:nth-child(3)",
+  "width": 1576,
+  "height": 874,
+  "parts": [
+    {
+      "key": "delivered.state",
+      "bounds": {
+        "x": 211,
+        "y": 23,
+        "width": 238,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "delivered.status",
+      "bounds": {
+        "x": 262,
+        "y": 761,
+        "width": 584,
+        "height": 38
+      },
+      "visible": true
+    }
+  ]
+}

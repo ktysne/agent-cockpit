@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>離席中 | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html" aria-current="page">離席中</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html" aria-current="page">離席中</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#away-toggle">離席中の切り替え</a></li>
+        <li><a href="#away-questions">離席中の質問</a></li>
+        <li><a href="#away-timeout">回答が無いまま締切を過ぎたとき</a></li>
+        <li><a href="#away-release">離席中を解除したとき</a></li>
+        <li><a href="#away-lost">常駐サーバーと連絡が取れないとき</a></li>
+        <li><a href="#away-since-seen">前回見てから</a></li>
+        <li><a href="#away-display">前回見てからの表示の設定</a></li></ol>
+      </details>
+<section class="section">
+  <h1>離席中</h1>
+  <p class="lead">離席中は、席を外している間に出た質問への回答を、決めた時間だけ待たせる機能です。
+  待っても回答が無い質問は、推奨案で作業を進めます。
+  戻ったあとは、離席中に起きた変化を「前回見てから」で確かめられます。</p>
+
+  <h2 id="away-toggle">離席中の切り替え</h2>
+  <p>席を外すときに、ヘッダの右上の <span class="ui">離席中</span> にチェックを入れます。
+  タスクトレイのメニューにも、同じ名前の項目があります。
+  どちらで切り替えても、同じ状態が反映されます。</p>
+  <figure class="guide-map" id="away-toggle-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1700"><div class="gm-segment" style="flex-grow:1700;aspect-ratio:1700/196"><div class="gm-clip"><img src="img/away-header/on.png" width="850" height="145" alt="離席中にしたヘッダ。背景が琥珀色になり、右上の離席中のチェックが入っている。その下に件数の札が並ぶ" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:0%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#away-toggle-map-1" style="left:87.176%;top:10.204%" aria-label="1. 離席中">1</a><a class="gm-badge gm-place-center" data-gm="2" href="#away-toggle-map-2" style="left:55%;top:17.755%" aria-label="2. ヘッダの背景">2</a></div></div></div><ol class="gm-list"><li id="away-toggle-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">離席中</span></b>：チェックが入っている間が、離席中です。</div></li><li id="away-toggle-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>ヘッダの背景</b>：離席中は、背景が琥珀色になります。</div></li></ol></figure>
+  <p>離席中にすると、次のように変わります。</p>
+  <ul>
+    <li>メインセッションが出した質問を、ダッシュボードの回答を待って預かります(<a href="#away-questions">離席中の質問</a>)</li>
+    <li>セッションを開始したときと、プロンプトを送るたびに、開発者が離席中であることをセッションに伝えます。セッションは、開発者に尋ねずに推奨を適用して作業を続け、破壊的な操作は行わず、判断待ちとして最後の報告に書きます</li>
+    <li>離席中の期間が記録され、「前回見てから」に使われます(<a href="#away-since-seen">前回見てから</a>)</li>
+  </ul>
+  <div class="note">ツールの実行許可は、離席中も、デスクトップアプリで出す必要があります(<a href="permission.html">許可待ち</a>)。</div>
+  <p>離席中の状態は常駐サーバーが保存するので、常駐サーバーを再起動しても残ります。
+  切り替えに失敗したときは、チェックを元に戻し、<span class="ui">離席中を切り替えられませんでした</span> と出ます。</p>
+
+  <h2 id="away-questions">離席中の質問</h2>
+  <p>離席中にメインセッションが質問を出すと、質問のダイアログをデスクトップアプリに出さず、ダッシュボードの回答を待ちます。
+  質問は、判断事項のカードに回答欄つきで出ます。
+  待つ時間は、設定の <span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span> で決めます。
+  既定は 5 分です。</p>
+  <figure class="guide-map" id="away-questions-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/924"><div class="gm-clip"><img src="img/decisions-delivery/awaiting.png" width="788" height="462" alt="離席中に出た質問のカード。見出しに、止めて待っているの札、待ち時間、あと 3 分で推奨に進むの表示がある。その下に、推奨の札が付いた選択肢、推奨案で OK、指示の入力欄、回答を送るのボタンが並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#away-questions-map-1" style="left:29.346%;top:2.489%" aria-label="1. 状態の札">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#away-questions-map-2" style="left:40.482%;top:5.087%" aria-label="2. 待ち時間">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#away-questions-map-3" style="left:51.967%;top:5.087%" aria-label="3. 残り時間">3</a><a class="gm-badge gm-place-top" data-gm="4" href="#away-questions-map-4" style="left:50.19%;top:22.944%" aria-label="4. 選択肢">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#away-questions-map-5" style="left:10.152%;top:51.84%" aria-label="5. 推奨案で OK">5</a><a class="gm-badge gm-place-bottom" data-gm="6" href="#away-questions-map-6" style="left:9.327%;top:93.939%" aria-label="6. 回答を送る">6</a></div></div></div><ol class="gm-list"><li id="away-questions-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態の札</b>：質問を預かっている間は、<span class="ui">止めて待っている</span> です。</div></li><li id="away-questions-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>待ち時間</b>：質問が出てからの時間です。</div></li><li id="away-questions-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>残り時間</b>：「あと 3 分で推奨に進む」の形で、締切までの時間が出ます。</div></li><li id="away-questions-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>選択肢</b>：押して選びます。</div></li><li id="away-questions-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">推奨案で OK</span></b>：推奨の選択肢で答えます。</div></li><li id="away-questions-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">回答を送る</span></b>：回答を送ります。</div></li></ol></figure>
+  <p>締切までに回答を送ると、その回答が質問への答えとして渡されます。
+  回答の操作と、渡った後の表示は、判断事項のページで説明しています(<a href="decisions.html#decisions-answer">ダッシュボードから回答する</a>)。</p>
+  <p>設定を変えても、すでに預かっている質問の締切は変わりません。
+  新しい時間は、次に出る質問から効きます。</p>
+  <details class="more">
+    <summary>離席中の質問の詳細</summary>
+    <ul>
+      <li>サブエージェントが出した質問は、預からずに止め、推奨を適用して進めるようにサブエージェントへ伝えます</li>
+      <li>同じ質問の文が 2 つ以上含まれる質問は、預からずに、デスクトップアプリのダイアログに出します</li>
+      <li>残り時間は、分に切り上げて出します</li>
+      <li>質問を預かるフックは、待つ間、常駐サーバーに 25 秒ごとに確認します(<a href="#away-lost">常駐サーバーと連絡が取れないとき</a>)</li>
+    </ul>
+  </details>
+
+  <h2 id="away-timeout">回答が無いまま締切を過ぎたとき</h2>
+  <p>締切までに回答が無いと、質問を止めて、推奨案で作業を続けるようセッションに伝えます。
+  セッションは、推奨を適用して進め、破壊的な操作は行いません。
+  判断が必要だった事項と、仮に適用した推奨は、セッションが最後の報告に書きます。</p>
+  <p>判断事項は <span class="ui">仮に推奨案で進行中</span> に変わり、経過時間は <span class="ui">仮適用から</span> の形で出ます。</p>
+  <figure class="guide-map" id="away-timeout-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/860"><div class="gm-clip"><img src="img/decisions-delivery/timeout.png" width="788" height="430" alt="締切を過ぎた質問のカード。仮に推奨案で進行中の札と、仮適用からの経過時間が出ている。その下に選択肢と回答欄が続く" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#away-timeout-map-1" style="left:19.543%;top:2.674%" aria-label="1. 状態の札">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#away-timeout-map-2" style="left:35.914%;top:3.023%" aria-label="2. 経過時間">2</a><span class="gm-frame" data-gm="3" aria-hidden="true" style="left:2.03%;top:48.488%;width:96.32%;height:48.953%"></span><a class="gm-badge gm-place-left" data-gm="3" href="#away-timeout-map-3" style="left:2.03%;top:72.965%" aria-label="3. 回答欄">3</a></div></div></div><ol class="gm-list"><li id="away-timeout-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態の札</b>：<span class="ui">仮に推奨案で進行中</span> です。</div></li><li id="away-timeout-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>経過時間</b>：推奨案で進めてからの時間です。</div></li><li id="away-timeout-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>回答欄</b>：戻ってから、回答を送れます。</div></li></ol></figure>
+  <p>戻ってから送った回答は、質問への答えではなく、作業への指示として、セッションに届きます(<a href="decisions.html#decisions-route">回答が届く経路</a>)。
+  セッションは、回答に沿って作業を直します。</p>
+
+  <h2 id="away-release">離席中を解除したとき</h2>
+  <p>離席中のチェックを外すと、預かっていた質問の待ちをやめ、質問のダイアログをデスクトップアプリに出します。
+  判断事項は <span class="ui">止めて待っている</span> のままで、回答欄と残り時間は消えます。
+  デスクトップアプリで答えます(<a href="decisions.html#decisions-desktop">デスクトップアプリで答える判断事項</a>)。</p>
+  <p>締切より前に送った回答があるときは、離席中を解除していても、その回答を質問への答えとして渡します。</p>
+
+  <h2 id="away-lost">常駐サーバーと連絡が取れないとき</h2>
+  <p>質問を預かるフックは、待つ間、常駐サーバーに繰り返し確認します。
+  待ちが終わるときには、結末を知らせる終わりの通知を送ります。
+  常駐サーバーを再起動したときや、止まったときは、通知や確認が届かないことがあります。</p>
+  <ul>
+    <li>終わりの通知が常駐サーバーに届いたとき：回答があれば、その回答を渡します。回答が無ければ、離席の状態を確かめます。離席中のままなら、質問を止めて推奨案で進めます。解除されていれば、質問のダイアログをデスクトップアプリに出します</li>
+    <li>終わりの通知も届かなかったとき：フックは離席の状態を確かめられないので、いつも質問を止めて推奨案で進めます</li>
+    <li>常駐サーバーが、フックからの確認を 30 秒受け取れなかったとき：預かりをやめ、その判断事項に送っていた回答を破棄します。回答欄は消え、判断事項はデスクトップアプリで答える状態に戻ります</li>
+  </ul>
+  <details class="more">
+    <summary>終わりの通知の詳細</summary>
+    <p>終わりの通知は、内部では finish と呼びます。
+    通知が届いても、常駐サーバーが再起動して預かりの記録を失っていたときは、離席の状態だけを確かめて、離席中なら推奨案で進めます。
+    このとき、判断事項は <span class="ui">仮に推奨案で進行中</span> になります。</p>
+    <p>常駐サーバーを再起動しても、送信済みで渡していない回答は残ります。
+    ただし、預かりが切れるので、次のプロンプトの送信か、ツールの実行のひと区切りまで渡りません(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</p>
+  </details>
+
+  <h2 id="away-since-seen">前回見てから</h2>
+  <p>離席中の期間に起きた変化を、プロダクトごとにまとめて出す欄です。
+  変化があるプロダクトのカードの先頭に出ます(<a href="screen.html#screen-product-card">プロダクトのカード</a>)。
+  種類別の表示では、<span class="ui">前回見てから</span> の欄になります(<a href="screen.html#screen-modes">プロダクト別と種類別の違い</a>)。</p>
+  <figure class="guide-map" id="away-since-seen-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/234"><div class="gm-clip"><img src="img/away-since-seen/box.png" width="788" height="117" alt="前回見てからの欄。見出しに件数と既読にするがあり、その下に、PR のマージ、タスクの完了、PR の作成の 3 つの変化が並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-right" data-gm="1" href="#away-since-seen-map-1" style="left:98.35%;top:21.368%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#away-since-seen-map-2" style="left:19.86%;top:7.692%" aria-label="2. 既読にする">2</a><a class="gm-badge gm-place-right" data-gm="3" href="#away-since-seen-map-3" style="left:98.35%;top:65.171%" aria-label="3. 変化の一覧">3</a></div></div></div><ol class="gm-list"><li id="away-since-seen-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：<span class="ui">前回見てから</span> と、変化の件数です。</div></li><li id="away-since-seen-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">既読にする</span></b>：いまある変化を既読にして、欄を片付けます。</div></li><li id="away-since-seen-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>変化の一覧</b>：新しい順に並びます。</div></li></ol></figure>
+  <p>変化には、次の種類があります。</p>
+  <ul>
+    <li>タスクが完了した(画面で完了にしたタスクを含みます)</li>
+    <li>PR を作成した、PR をマージした、PR の CI が失敗した。1 つの PR の変化は、「PR #115(題)を作成し、マージした」のように 1 件にまとめます</li>
+    <li>判断を推奨案で仮に進めた</li>
+  </ul>
+  <p>出るのは、次の両方を満たす変化です。</p>
+  <ul>
+    <li>離席中の期間に起きた変化。離席中なら、いまの時刻までを含みます</li>
+    <li>そのプロダクトを最後に既読にした時刻より後の変化</li>
+  </ul>
+  <p>離席中を解除しても、既読にするまで、変化は残ります。
+  既読にしていないプロダクトは、初めて一覧に出た時刻を、既読にした時刻として数えます。
+  <span class="ui">既読にする</span> を押すと、そのプロダクトの判断事項の <span class="ui">新着</span> の印も外れます。</p>
+  <details class="more">
+    <summary>離席中の期間の記録の詳細</summary>
+    <p>離席中の期間は、開始と終了の時刻を記録します。
+    記録は、最大 50 件までで、14 日を過ぎた期間は消します。
+    すべてのプロダクトを既読にした後は、その前に終わった期間も消します。</p>
+  </details>
+
+  <h2 id="away-display">前回見てからの表示の設定</h2>
+  <p>「前回見てから」を出すかどうかは、設定の <span class="ui">前回見てから</span> で選びます。
+  設定の画面は、ヘッダの歯車のボタンで開きます(<a href="screen.html#screen-header">ヘッダ</a>)。</p>
+  <ul>
+    <li><span class="ui">常に</span>：離席中でないときも出します。既定です</li>
+    <li><span class="ui">離席中のみ</span>：離席中にしている間だけ出します。離席中を解除すると、欄は出なくなります</li>
+    <li><span class="ui">出さない</span>：出しません</li>
+  </ul>
+  <p>この設定は表示だけを切り替えます。
+  変化の記録は、どの設定でも続きます。
+  設定はブラウザごとに保存するので、別のブラウザには引き継がれません。</p>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="decisions.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">判断事項と回答</span></a><span class="page-navigation-empty" aria-hidden="true"></span></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#away-toggle">離席中の切り替え</a></li>
+        <li><a href="#away-questions">離席中の質問</a></li>
+        <li><a href="#away-timeout">回答が無いまま締切を過ぎたとき</a></li>
+        <li><a href="#away-release">離席中を解除したとき</a></li>
+        <li><a href="#away-lost">常駐サーバーと連絡が取れないとき</a></li>
+        <li><a href="#away-since-seen">前回見てから</a></li>
+        <li><a href="#away-display">前回見てからの表示の設定</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

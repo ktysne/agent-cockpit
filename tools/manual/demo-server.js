@@ -11,6 +11,7 @@ const { loadScenario, scenarioNames } = require('./demo');
 
 // 火曜日の 14:30 JST。曜日や月をまたがない平日の日中で、撮るたびに画像が変わらないよう固定する。
 const BASE_TIME_MS = Date.UTC(2026, 9, 6, 5, 30, 0);
+const DEMO_ASK_POLL_GAP_MS = 24 * 60 * 60 * 1000;
 const HOOK_PID_FOR_UNMAPPED_SESSION = 1;
 const DEFAULT_INTEGRATIONS = Object.freeze({ codexAgent: true, crossReview: true });
 
@@ -151,6 +152,8 @@ async function startDemoServer(options = {}) {
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,
       openExternalUrl: async () => {},
+      // デモには回答を待つフックが無く生存確認が届かないので、預かった質問を生存確認の途絶で解除しない。
+      answerDeliveryOptions: { maxAskPollGapMs: DEMO_ASK_POLL_GAP_MS },
     });
     const { port, secret, uiSecret } = runtime.info;
 
@@ -205,6 +208,14 @@ async function startDemoServer(options = {}) {
       /** 画面から送る操作(離席、外す、表示の設定など)を、画面と同じ秘密値と Origin で送る。 */
       async ui(requestPath, body) {
         return ensureOk(await post(requestPath, body, { ui: true }), requestPath);
+      },
+      /**
+       * 回答のフックが常駐サーバーへ送る形(ask-register、ask-finish、post-tool-batch など)を /api/hooks/answers へ送る。
+       * session_id は、セッションのキーから補う。
+       */
+      async hookAnswer(key, body) {
+        const session = sessionFor(key);
+        return ensureOk(await post('/api/hooks/answers', { session_id: session.id, ...body }), `${key} の ${body.action}`);
       },
       async getState() {
         return ensureOk(await requestJson(port, 'GET', '/api/state'), '/api/state');

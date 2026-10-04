@@ -1,0 +1,91 @@
+{
+  "name": "list",
+  "target": [
+    ".session-body > h3.sub:has(+ ul.task-list)",
+    ".session-body > ul.task-list + .ended-toggle + .ended-toggle"
+  ],
+  "width": 1524,
+  "height": 344,
+  "parts": [
+    {
+      "key": "task.heading",
+      "bounds": {
+        "x": 0,
+        "y": 2,
+        "width": 1524,
+        "height": 42
+      },
+      "visible": true
+    },
+    {
+      "key": "task.state",
+      "bounds": {
+        "x": 20,
+        "y": 80,
+        "width": 98,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "task.title",
+      "bounds": {
+        "x": 134,
+        "y": 78,
+        "width": 323,
+        "height": 45
+      },
+      "visible": true
+    },
+    {
+      "key": "task.count",
+      "bounds": {
+        "x": 473,
+        "y": 82,
+        "width": 138,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "task.close",
+      "bounds": {
+        "x": 1384,
+        "y": 67,
+        "width": 120,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "task.criteria",
+      "bounds": {
+        "x": 20,
+        "y": 139,
+        "width": 1484,
+        "height": 115
+      },
+      "visible": true
+    },
+    {
+      "key": "task.todo-toggle",
+      "bounds": {
+        "x": 0,
+        "y": 278,
+        "width": 321,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "task.done-toggle",
+      "bounds": {
+        "x": 321,
+        "y": 278,
+        "width": 313,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}

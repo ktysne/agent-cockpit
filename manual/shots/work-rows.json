@@ -1,0 +1,50 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "メインの作業行とサブエージェントの行",
+  "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "hideFinished": false
+    }
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(2) .session-body > .ended-toggle[data-ended-toggle]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(2)"
+    },
+    {
+      "do": "screenshot",
+      "name": "rows",
+      "target": [
+        "#root > section.section:nth-child(2) .session-body > h3.sub:has(+ .now)",
+        "#root > section.section:nth-child(2) .session-body > .ended-toggle[data-ended-toggle]"
+      ],
+      "parts": {
+        "rows.heading": "#root > section.section:nth-child(2) .session-body > h3.sub:has(+ .now)",
+        "rows.main-state": "#root > section.section:nth-child(2) .session-body .main-row .who strong",
+        "rows.main-title": "#root > section.section:nth-child(2) .session-body .main-row .activity-title",
+        "rows.main-tool": "#root > section.section:nth-child(2) .session-body .main-row .tool-line",
+        "rows.main-time": "#root > section.section:nth-child(2) .session-body .main-row time",
+        "rows.agent-who": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(1) .who",
+        "rows.agent-description": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(1) .agent-description",
+        "rows.route": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(1) .route-tag",
+        "rows.models": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(1) .models .model",
+        "rows.agent-time": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(1) time",
+        "rows.ended": "#root > section.section:nth-child(2) .session-body .agent-list > .agent-row:nth-child(2)",
+        "rows.toggle": "#root > section.section:nth-child(2) .session-body > .ended-toggle[data-ended-toggle]"
+      }
+    }
+  ]
+}
