@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "47810", "--bind", "127.0.0.1", "--directory", "mock"],
       "port": 47810
+    },
+    {
+      "name": "agent-cockpit-manual-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/manual/demo-server.js", "--port", "47830"],
+      "port": 47830
     }
   ]
 }

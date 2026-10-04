@@ -8,6 +8,8 @@
     "test": "node --test",
     "test:inprocess": "node --test --test-isolation=none",
     "manual:build": "node tools/manual/build.js",
+    "manual:capture": "node tools/manual/capture.js",
+    "manual:demo": "node tools/manual/demo-server.js",
     "lint:manual": "node tools/manual/lint.js",
     "review:codex": "node tools/cross-review.js codex",
     "review:codex:fix": "node tools/cross-review.js codex --fix",

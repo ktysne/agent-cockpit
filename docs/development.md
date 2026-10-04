@@ -26,6 +26,8 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | `src/web/` | ダッシュボードの画面(1 ファイル) |
 | `src/tray/` | Windows のタスクトレイとショートカットの作成 |
 | `src/dev/` | 開発用のイベント再生 |
+| `manual/` | 利用者向けマニュアルの原稿、撮影の定義、撮った画像、組み立てた結果(`dist/`) |
+| `tools/manual/` | マニュアルの組み立て、検査、デモ状態、撮影 |
 | `skills/agent-cockpit/` | メインセッションが読むスキル |
 | `test/` | テスト |
 
@@ -75,6 +77,20 @@ Invoke-RestMethod http://127.0.0.1:48377/api/state | ConvertTo-Json -Depth 8
 
 状態には、許可待ちの開始と解消、終了したサブエージェント、codex-agent の監査行、稼働中のサブエージェントと `Stop` による待機が含まれます。
 `SessionEnd` を送った再生用セッションは一覧から消えます。
+
+## マニュアル
+
+設計は [docs/design/manual.md](design/manual.md) にあります。
+
+| コマンド | すること |
+|---|---|
+| `npm run manual:build` | 原稿から `manual/dist/` を組み立て直す。原稿を直したら実行して、結果もコミットする |
+| `npm run lint:manual` | 組み立ての結果、画面の文言、画像、リンクを検査する。`npm test` からも走る |
+| `npm run manual:capture -- [定義名...]` | デモ状態の常駐サーバーと Edge(または Chrome)のヘッドレスで画面を撮り、`manual/img/` を更新する。画面を変えたら実行する |
+| `npm run manual:demo -- [シナリオ名] [--port N] [--fixed]` | デモ状態の常駐サーバーを起動したままにする。原稿を書くときに画面を見ながら確かめる |
+
+撮影とデモは、一時ディレクトリの保存先と偽の `gh` を使います。普段の `~/.agent-cockpit/`、`~/.claude/`、ポート `47821` の常駐サーバーには触れません。
+ブラウザは環境変数 `MANUAL_BROWSER` で指定でき、無ければ Edge と Chrome の既定の場所を探します。
 
 ## アプリアイコン
 
