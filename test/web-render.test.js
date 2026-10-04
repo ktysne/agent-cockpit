@@ -966,7 +966,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 
 test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestKeys', 'pullRequestCrossReviewSettled', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
+  const functions = ['pullRequestKeys', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -2310,6 +2310,61 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
 
     assert.equal(replacementButton.focused, true, kind);
     assert.equal(activeElement, replacementButton, kind);
+  }
+});
+
+test('レビュー不要ボタンは通信失敗後も同じPRの操作にフォーカスを保ち、操作が切り替われば反対側へ移す', async () => {
+  const render = pageHtml.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const runAction = pageHtml.match(/async function runCrossReviewSkipAction\(button\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render && runAction);
+
+  const key = 'example/project/42';
+  for (const [action, availableAction] of [['set', 'set'], ['set', 'clear'], ['clear', 'set']]) {
+    let activeElement;
+    const activeButton = { dataset: { mergeKey: key, reviewSkip: action }, hasAttribute: () => false };
+    let focusedButton;
+    const replacementButton = {
+      dataset: { mergeKey: key, reviewSkip: availableAction },
+      hasAttribute: () => false,
+      focus() { focusedButton = this; activeElement = this; },
+    };
+    let redrawCount = 0;
+    const context = pageContext(pageHtml, {
+      answerNoteComposing: false,
+      lastState: { sessions: [{ session_id: 'session-ui' }], pullRequests: [] },
+      HTMLTextAreaElement: class FakeTextArea {},
+      document: {
+        get activeElement() { return activeElement; },
+        querySelectorAll: (selector) => selector === 'button' ? [replacementButton] : [],
+      },
+      root: {
+        replaceChildren() { redrawCount += 1; activeElement = null; },
+        querySelectorAll: () => [],
+      },
+      displayPreferences: { mode: 'product', pinned: [] },
+      visibleSinceSeen: () => [],
+      renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, renderFinishedNote() {}, updateTitle() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      orderedProducts: () => [{ key: 'product-ui' }],
+      productSection: () => ({}),
+      findPullRequestMergeTarget: () => ({ pullRequest: { headRefOid: 'a'.repeat(40) }, number: 42 }),
+      pullRequestReviewSkipInFlight: new Set(),
+      liveStatus: { textContent: '' },
+      postUiAction: async () => { throw new Error('network unavailable'); },
+      showWriteError() {},
+    });
+    vm.runInContext(`${render}\n${runAction}`, context);
+
+    activeElement = activeButton;
+    if (action === 'set' && availableAction === 'set') {
+      await context.runCrossReviewSkipAction(activeButton);
+      assert.equal(redrawCount, 2);
+      assert.equal(focusedButton, replacementButton);
+    } else {
+      context.render(context.lastState);
+      assert.equal(focusedButton, replacementButton);
+    }
+    assert.equal(activeElement, replacementButton);
   }
 });
 

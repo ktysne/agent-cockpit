@@ -1511,12 +1511,31 @@ function pullRequestCrossReviewSettled(pullRequest) {
     triage.sha.toLowerCase() === head.toLowerCase();
 }
 
+function pullRequestCrossReviewWaitReason(pullRequest) {
+  const review = pullRequest.crossReview;
+  if (review?.notRequired === true) return null;
+  if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
+  if (!review) return 'クロスレビュー未実施';
+
+  const triage = review.triage;
+  if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
+  if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
+  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
+  if (triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)) {
+    if (triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()) return 'クロスレビュー後に push あり';
+    return null;
+  }
+  return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
+}
+
 function pullRequestMergeConditionWaits(pullRequest) {
   const condition = typeof displayPreferences === 'undefined' ? 'cross-review' : displayPreferences.mergeableCondition || 'cross-review';
   if (condition === 'operation') return [];
   const waiting = [];
   if (pullRequest.ci !== 'pass') waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
-  if (condition === 'cross-review' && !pullRequestCrossReviewSettled(pullRequest)) waiting.push('クロスレビュー未実施');
+  if (condition === 'cross-review' && !pullRequestCrossReviewSettled(pullRequest)) {
+    waiting.push(pullRequestCrossReviewWaitReason(pullRequest));
+  }
   return waiting;
 }
 
@@ -1564,6 +1583,7 @@ function crossReviewState(pullRequest) {
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
   if (review === null) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
   if (review.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null, note: review.reason || null };
+  if (review.unavailable === true) return { cls: 'warn', text: '状態を確認できない', warn: 'クロスレビューの状態を確認できない' };
   const triage = review.triage && review.triage.round <= review.round ? review.triage : null;
   if (triage && review.round > triage.round) return { cls: 'warn', text: `${review.round} 往復目の結論待ち`, warn: `クロスレビューの ${review.round} 往復目の結論がまだ出ていない` };
   if (triage && triage.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${triage.round} 往復目の指摘に対応している途中` };
@@ -1602,7 +1622,7 @@ function crossReviewLine(pullRequest) {
   const state = crossReviewState(pullRequest);
   const line = element('div', 'xr');
   line.append(document.createTextNode('クロスレビュー '));
-  if (!review) {
+  if (!review || review.unavailable === true) {
     line.append(badge(state.text, state.cls));
     appendCrossReviewSkipControl(line, pullRequest, false);
     return line;
@@ -3102,6 +3122,7 @@ function render(state) {
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
+    : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
          : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
         : active?.dataset?.mergeAfterReview ? { kind: 'merge-after-review', key: active.dataset.mergeKey }
@@ -3220,6 +3241,7 @@ function render(state) {
       if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
       if (focusData.kind === 'show-finished') return item.hasAttribute('data-show-finished');
       if (focusData.kind === 'merge-result-close') return item.dataset.closeMergeResult === focusData.id;
+      if (focusData.kind === 'review-skip') return item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip === focusData.action;
       if (['close-task', 'cancel-close-task'].includes(focusData.kind)) {
         return item.dataset.closeTask === focusData.key || item.dataset.cancelCloseTask === focusData.key;
       }
@@ -3231,6 +3253,8 @@ function render(state) {
         ? document.querySelector('[data-close-merge-result]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
       : focusData.kind === 'toggle' && focusData.attribute === 'data-hide-session' && !button
         ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
+      : focusData.kind === 'review-skip' && !button
+        ? buttons.find((item) => item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip !== focusData.action)
       : button;
     fallback?.focus({ preventScroll: true });
   }
