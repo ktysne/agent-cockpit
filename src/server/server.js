@@ -292,7 +292,7 @@ function validTasks(value) {
 function validDisplayPatch(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault'].includes(key))) return false;
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'mergeResultHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault'].includes(key))) return false;
   if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
   for (const key of ['order', 'pinned', 'collapsed']) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
@@ -308,6 +308,7 @@ function validDisplayPatch(value) {
   if (Object.hasOwn(value, 'longWaitMinutes') && (!Number.isInteger(value.longWaitMinutes) || value.longWaitMinutes < 1 || value.longWaitMinutes > 120)) return false;
   if (Object.hasOwn(value, 'awayAnswerWaitMinutes') && (!Number.isInteger(value.awayAnswerWaitMinutes) || value.awayAnswerWaitMinutes < 1 || value.awayAnswerWaitMinutes > 30)) return false;
   if (Object.hasOwn(value, 'idleHideMinutes') && (!Number.isInteger(value.idleHideMinutes) || value.idleHideMinutes < 5 || value.idleHideMinutes > 1440)) return false;
+  if (Object.hasOwn(value, 'mergeResultHideMinutes') && (!Number.isInteger(value.mergeResultHideMinutes) || value.mergeResultHideMinutes < 1 || value.mergeResultHideMinutes > 60)) return false;
   if (Object.hasOwn(value, 'hideFinished') && typeof value.hideFinished !== 'boolean') return false;
   if (Object.hasOwn(value, 'mergeableCondition') && !['operation', 'ci', 'cross-review'].includes(value.mergeableCondition)) return false;
   if (Object.hasOwn(value, 'mergeAfterReviewDefault') && typeof value.mergeAfterReviewDefault !== 'boolean') return false;
@@ -839,6 +840,38 @@ function createRequestHandler(options) {
         return;
       }
       jsonResponse(response, 200, { display: state.patchDisplayPreferences(body) });
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/pull-requests/merge-result/close') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).sort().join(',') !== 'number,owner,repo' ||
+        !validRepositoryPart(body.owner) || !validRepositoryPart(body.repo) ||
+        !Number.isSafeInteger(body.number) || body.number < 1) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const closed = state.closeAutomaticPullRequestMergeResult(body.owner, body.repo, body.number);
+      if (closed === null) {
+        jsonResponse(response, 404, { error: 'Automatic pull request merge result not found' });
+        return;
+      }
+      await state.waitForPersistence?.();
+      jsonResponse(response, 200, { closed: true });
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/seen') {

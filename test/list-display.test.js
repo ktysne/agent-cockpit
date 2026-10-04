@@ -766,6 +766,7 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
     pullRequestMergeResults: new Map([[key, [{ id: 'result-1', number: 41, method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }]]]),
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}\0${group.product.key}`,
     hasPullRequestMergeResults: (group) => group.owner === 'example' && group.repo === 'project' && group.product.key === 'project-a',
+    pullRequestMergeResultVisible: () => true,
     element: fakeElement,
   });
   vm.runInContext(`${lineSource}\n${resultsSource}\n${visibleSource}\nthis.resultLine = pullRequestMergeResultLine; this.appendResults = appendPullRequestMergeResults; this.visibleGroups = visiblePullRequestGroups;`, context);
@@ -797,6 +798,7 @@ test('常駐サーバーが記録した予約マージの結果を一行で表�
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     pullRequestMergeResults: new Map(),
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
+    pullRequestMergeResultVisible: () => true,
     element: fakeElement,
   });
   vm.runInContext(`${resultLine}\n${appendResults}\nthis.appendResults = appendPullRequestMergeResults;`, context);

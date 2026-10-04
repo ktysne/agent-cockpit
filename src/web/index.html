@@ -425,6 +425,11 @@ h3.sub .count { font-weight: normal; }
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-merge-result-hide-minutes">マージの結果を隠すまで (分)</label>
+      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" min="1" max="60" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
+      <span class="settings-input-error" id="settings-merge-result-hide-error" role="alert" hidden></span>
+    </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
@@ -459,6 +464,7 @@ const WAIT_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_IDLE_HIDE_MINUTES = 30;
+const DEFAULT_MERGE_RESULT_HIDE_MINUTES = 5;
 const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const liveStatus = document.getElementById('live-status');
@@ -468,9 +474,11 @@ const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
 const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
+const mergeResultHideMinutesInput = document.getElementById('settings-merge-result-hide-minutes');
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
+const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
@@ -521,6 +529,8 @@ const answerErrors = new Map();
 const pendingTaskCloseActions = new Map();
 const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
+const pullRequestMergeResultCloseInFlight = new Set();
+let renderedPullRequestMergeResultExpirySignature = '';
 let nextPullRequestMergeResultId = 0;
 let hiddenSessionsUndo = null;
 let uiUpdatePending = false;
@@ -607,31 +617,9 @@ function orderedSectionKeys(keys) {
 
 function readDisplayPreferences() {
   try {
-    const value = JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}');
-    const uniqueStrings = (items) => [...new Set(Array.isArray(items) ? items.filter((item) => typeof item === 'string').slice(0, 200) : [])];
-    return {
-      mode: value.mode === 'kind' ? 'kind' : 'product',
-      order: uniqueStrings(value.order),
-      pinned: uniqueStrings(value.pinned),
-      collapsed: uniqueStrings(value.collapsed),
-      hidden: [...new Set(Array.isArray(value.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
-      sectionOrder: normalizeSectionOrder(value.sectionOrder),
-      longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
-      awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
-      idleHideMinutes: normalizeDisplayMinutes(value.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
-      hideFinished: value.hideFinished !== false,
-      mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value.mergeableCondition) ? value.mergeableCondition : 'cross-review',
-      mergeAfterReviewDefault: value.mergeAfterReviewDefault === true,
-    };
+    return normalizeDisplayPreferences(JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}'));
   } catch {
-    return {
-      mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: [...DEFAULT_SECTION_ORDER],
-      longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
-      idleHideMinutes: DEFAULT_IDLE_HIDE_MINUTES,
-      hideFinished: true,
-      mergeableCondition: 'cross-review',
-      mergeAfterReviewDefault: false,
-    };
+    return normalizeDisplayPreferences(null);
   }
 }
 
@@ -647,6 +635,7 @@ function normalizeDisplayPreferences(value) {
     longWaitMinutes: normalizeDisplayMinutes(value?.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value?.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
     idleHideMinutes: normalizeDisplayMinutes(value?.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
+    mergeResultHideMinutes: normalizeDisplayMinutes(value?.mergeResultHideMinutes, 1, 60, DEFAULT_MERGE_RESULT_HIDE_MINUTES),
     hideFinished: value?.hideFinished !== false,
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
     mergeAfterReviewDefault: value?.mergeAfterReviewDefault === true,
@@ -671,6 +660,7 @@ function renderDisplaySettings() {
     [longWaitMinutesInput, 'longWaitMinutes'],
     [awayAnswerWaitMinutesInput, 'awayAnswerWaitMinutes'],
     [idleHideMinutesInput, 'idleHideMinutes'],
+    [mergeResultHideMinutesInput, 'mergeResultHideMinutes'],
   ]) {
     if (document.activeElement === input) continue;
     input.value = String(displayPreferences[key]);
@@ -759,6 +749,7 @@ function saveDisplayPreferences(changes) {
 function displaySettingError(key) {
   if (key === 'longWaitMinutes') return longWaitMinutesError;
   if (key === 'idleHideMinutes') return idleHideMinutesError;
+  if (key === 'mergeResultHideMinutes') return mergeResultHideMinutesError;
   return awayAnswerWaitMinutesError;
 }
 
@@ -944,6 +935,7 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
 idleHideMinutesInput.addEventListener('change', () => changeDisplaySetting('idleHideMinutes', idleHideMinutesInput, 5, 1440));
+mergeResultHideMinutesInput.addEventListener('change', () => changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60));
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
 mergeAfterReviewDefaultInput.addEventListener('change', () => changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput));
 for (const input of mergeableConditionInputs) {
@@ -1475,14 +1467,46 @@ function pullRequestRepositoryKey(group) {
 }
 
 function hasPullRequestMergeResults(group) {
-  return (pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || []).length > 0;
+  return (pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [])
+    .some((result) => pullRequestMergeResultVisible(result, result.recordedAt));
 }
 
 function rememberPullRequestMergeResult(group, result) {
   const key = pullRequestRepositoryKey(group);
   const results = pullRequestMergeResults.get(key) || [];
-  results.push({ id: String(++nextPullRequestMergeResultId), ...result, autoDeleteBranch: group.autoDeleteBranch === true && result.isCrossRepository !== true });
+  results.push({ id: String(++nextPullRequestMergeResultId), recordedAt: Date.now(), ...result, autoDeleteBranch: group.autoDeleteBranch === true && result.isCrossRepository !== true });
   pullRequestMergeResults.set(key, results);
+}
+
+function pullRequestMergeResultHasWarning(result) {
+  const details = result.automaticResult ? { ...result, ...result.automaticResult } : result;
+  return details.headMismatch === true || (typeof details.warning === 'string' && details.warning.length > 0);
+}
+
+function pullRequestMergeResultExpired(result, startedAt, now = Date.now()) {
+  if (result.mergeResultClosedAt || pullRequestMergeResultHasWarning(result)) return false;
+  const timestamp = typeof startedAt === 'number' ? startedAt : Date.parse(startedAt || '');
+  return Number.isFinite(timestamp) && now >= timestamp && now - timestamp >= displayPreferences.mergeResultHideMinutes * 60_000;
+}
+
+function pullRequestMergeResultVisible(result, startedAt = result.recordedAt, now = Date.now()) {
+  return !result.mergeResultClosedAt && !pullRequestMergeResultExpired(result, startedAt, now);
+}
+
+function pullRequestMergeResultExpirySignature(groups, now = Date.now()) {
+  const expired = [];
+  for (const group of groups || []) {
+    const groupKey = pullRequestRepositoryKey(group);
+    for (const result of group.mergeHistory || []) {
+      if (result.automatic === true && result.automaticResult && pullRequestMergeResultExpired(result, result.mergedAt, now)) {
+        expired.push(`${groupKey}:automatic:${result.number}:${result.mergedAt}`);
+      }
+    }
+    for (const result of pullRequestMergeResults.get(groupKey) || []) {
+      if (pullRequestMergeResultExpired(result, result.recordedAt, now)) expired.push(`${groupKey}:manual:${result.id}`);
+    }
+  }
+  return expired.sort().join('|');
 }
 
 function removePullRequestMergeResult(id) {
@@ -2017,8 +2041,9 @@ function pullRequestMergeResultLine(result) {
 
 function appendPullRequestMergeResults(content, group) {
   const results = pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [];
-  const serverResults = (group.mergeHistory || []).filter((result) => result.automatic === true && result.automaticResult);
-  for (const result of [...serverResults, ...results]) {
+  const serverResults = (group.mergeHistory || []).filter((result) => result.automatic === true && result.automaticResult && pullRequestMergeResultVisible(result, result.mergedAt));
+  const visibleLocalResults = results.filter((result) => pullRequestMergeResultVisible(result, result.recordedAt));
+  for (const result of [...serverResults, ...visibleLocalResults]) {
     const row = element('div', 'merge-result');
     row.setAttribute('role', 'status');
     row.append(element('span', '', `PR #${result.number}: ${pullRequestMergeResultLine(result)}`));
@@ -2026,6 +2051,15 @@ function appendPullRequestMergeResults(content, group) {
       const close = element('button', 'link-btn', '閉じる');
       close.type = 'button';
       close.dataset.closeMergeResult = result.id;
+      row.append(close);
+    } else {
+      const close = element('button', 'link-btn', '閉じる');
+      close.type = 'button';
+      close.dataset.closeAutomaticMergeResult = `${group.owner}/${group.repo}#${result.number}`;
+      close.dataset.closeMergeResult = close.dataset.closeAutomaticMergeResult;
+      close.dataset.owner = group.owner;
+      close.dataset.repo = group.repo;
+      close.dataset.number = String(result.number);
       row.append(close);
     }
     content.append(row);
@@ -3621,6 +3655,30 @@ async function runPullRequestMergeAction(button, action) {
   }
 }
 
+async function closeAutomaticPullRequestMergeResult(button) {
+  const owner = button.dataset.owner || '';
+  const repo = button.dataset.repo || '';
+  const number = Number(button.dataset.number);
+  const key = `${owner}/${repo}#${number}`.toLowerCase();
+  if (!owner || !repo || !Number.isSafeInteger(number) || number < 1 || pullRequestMergeResultCloseInFlight.has(key)) return;
+  pullRequestMergeResultCloseInFlight.add(key);
+  button.disabled = true;
+  try {
+    const response = await postUiAction('/api/pull-requests/merge-result/close', { owner, repo, number });
+    if (!response.ok) {
+      showWriteError('マージ結果を閉じられませんでした');
+      return;
+    }
+    await refresh();
+    liveStatus.textContent = `PR #${number} のマージ結果を閉じました。`;
+  } catch {
+    showWriteError('マージ結果を閉じられませんでした');
+  } finally {
+    pullRequestMergeResultCloseInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
+
 async function runCrossReviewSkipAction(button) {
   const key = button.dataset.mergeKey || '';
   const target = findPullRequestMergeTarget(key);
@@ -3825,6 +3883,10 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (button.dataset.closeMergeResult) {
+    if (button.dataset.closeAutomaticMergeResult) {
+      void closeAutomaticPullRequestMergeResult(button);
+      return;
+    }
     removePullRequestMergeResult(button.dataset.closeMergeResult);
     if (lastState) render(lastState);
     return;
@@ -4026,9 +4088,15 @@ async function refresh() {
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
-    if (state.version === lastVersion && sinceSeenVisibilityChanged) render(state);
+    const mergeResultExpirySignature = pullRequestMergeResultExpirySignature(state.pullRequests);
+    const mergeResultExpiryChanged = mergeResultExpirySignature !== renderedPullRequestMergeResultExpirySignature;
+    if (state.version === lastVersion && (sinceSeenVisibilityChanged || mergeResultExpiryChanged)) {
+      render(state);
+      renderedPullRequestMergeResultExpirySignature = mergeResultExpirySignature;
+    }
     if (state.version !== lastVersion) {
       render(state);
+      renderedPullRequestMergeResultExpirySignature = mergeResultExpirySignature;
       lastVersion = state.version;
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);

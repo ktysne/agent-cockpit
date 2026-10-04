@@ -57,6 +57,35 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
   assert.equal(context.decisionElapsedLabel({ state: 'withdrawn', updatedAt: old }), null);
 });
 
+test('ブラウザーに残った旧形式の表示設定を読んでも、サーバーの設定と同じ項目がそろう', () => {
+  const sources = ['readDisplayPreferences', 'normalizeDisplayPreferences', 'normalizeSectionOrder', 'normalizeDisplayMinutes']
+    .map((name) => pageHtml.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
+  assert.ok(sources.every(Boolean));
+  const storage = new Map();
+  const context = pageContext(pageHtml, {
+    localStorage: { getItem: (key) => storage.get(key) ?? null },
+    DISPLAY_STORAGE_KEY: 'agent-cockpit.display',
+    FILTERS: [],
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    DEFAULT_LONG_WAIT_MINUTES: 15,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
+  });
+  vm.runInContext(sources.join('\n'), context);
+  const expectedKeys = Object.keys(context.normalizeDisplayPreferences(null)).sort();
+
+  storage.set('agent-cockpit.display', JSON.stringify({ mode: 'kind', longWaitMinutes: 20 }));
+  const legacy = context.readDisplayPreferences();
+  assert.deepEqual(Object.keys(legacy).sort(), expectedKeys);
+  assert.equal(legacy.mode, 'kind');
+  assert.equal(legacy.longWaitMinutes, 20);
+  assert.equal(legacy.mergeResultHideMinutes, 5);
+
+  storage.set('agent-cockpit.display', '{壊れた JSON');
+  assert.deepEqual(Object.keys(context.readDisplayPreferences()).sort(), expectedKeys);
+});
+
 test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
   const endedAgent = pageHtml.match(/function isEndedAgent\(agent\) \{[\s\S]*?\n\}/)?.[0];
   const isFinished = pageHtml.match(/function isFinishedSession\(session\) \{[\s\S]*?\n\}/)?.[0];
@@ -1130,7 +1159,7 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
 });
 
 test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
-  const names = ['normalizeDisplayMinutes', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'changeDisplaySetting'];
+  const names = ['normalizeDisplayMinutes', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'displaySettingError', 'changeDisplaySetting'];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
   assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
@@ -1142,15 +1171,18 @@ test('終わったもののチェックは表示設定として保存し、失�
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
   const idleHideMinutesInput = { type: 'number', value: '' };
+  const mergeResultHideMinutesInput = { type: 'number', value: '', valueAsNumber: 5 };
+  const mergeResultHideMinutesError = { textContent: '', hidden: true };
   const mergeAfterReviewDefaultInput = { type: 'checkbox', checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
+  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
   const context = pageContext(pageHtml, {
     displayPreferences,
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
     DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     FILTERS: [],
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
@@ -1160,7 +1192,9 @@ test('終わったもののチェックは表示設定として保存し、失�
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
+    mergeResultHideMinutesInput,
     mergeableConditionInputs,
+    mergeResultHideMinutesError,
     lastState: null,
     document: { get activeElement() { return activeElement; } },
     enqueueDisplayPatch: (patch) => {
@@ -1172,12 +1206,14 @@ test('終わったもののチェックは表示設定として保存し、失�
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 30);
+  assert.equal(context.normalizeDisplayPreferences(null).mergeResultHideMinutes, 5);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
   context.renderDisplaySettings();
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
   assert.equal(mergeAfterReviewDefaultInput.checked, false);
+  assert.equal(mergeResultHideMinutesInput.value, '5');
   mergeAfterReviewDefaultInput.checked = true;
   const savingDefault = context.changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput);
   assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { mergeAfterReviewDefault: true });
@@ -1209,6 +1245,17 @@ test('終わったもののチェックは表示設定として保存し、失�
   await context.changeDisplaySetting('hideFinished', hideFinishedInput);
   assert.equal(displayPreferences.hideFinished, true);
   assert.equal(hideFinishedInput.checked, true);
+
+  mergeResultHideMinutesInput.valueAsNumber = 61;
+  assert.equal(await context.changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60), false);
+  assert.equal(mergeResultHideMinutesError.hidden, false);
+  assert.equal(mergeResultHideMinutesError.textContent, '1〜60 分の値を入力してください。');
+  assert.equal(mergeResultHideMinutesInput.value, '5');
+  context.enqueueDisplayPatch = async (patch) => { savedPatch = patch; return true; };
+  mergeResultHideMinutesInput.valueAsNumber = 60;
+  assert.equal(await context.changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { mergeResultHideMinutes: 60 });
+  assert.equal(displayPreferences.mergeResultHideMinutes, 60);
 });
 
 test('離席中のみでは履歴を離席状態で描き分け、非表示中の並び順に使わない', async () => {
@@ -2017,6 +2064,90 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
   assert.equal(unavailableContent.children.some((node) => node.className === 'empty' && node.textContent === 'オープンの PR はありません'), false);
 });
 
+test('マージ結果は設定時間後に隠し、警告と自動マージ結果の閉じるボタンを残す', () => {
+  const names = [
+    'element', 'pullRequestRepositoryKey', 'pullRequestMergeResultHasWarning',
+    'pullRequestMergeResultExpired', 'pullRequestMergeResultVisible',
+    'pullRequestMergeResultLine', 'appendPullRequestMergeResults',
+  ];
+  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute() {}
+  }
+  const context = pageContext(pageHtml, {
+    displayPreferences: { mergeResultHideMinutes: 5 },
+    pullRequestMergeResults: new Map(),
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const now = Date.now();
+  const mergedAt = (minutesAgo) => new Date(now - minutesAgo * 60_000).toISOString();
+  const automaticResult = (number, minutesAgo, options = {}) => ({
+    number, title: `PR ${number}`, url: `https://github.com/acme/widget/pull/${number}`,
+    mergedAt: mergedAt(minutesAgo), method: 'squash', automatic: true,
+    headMismatch: options.headMismatch === true,
+    automaticResult: { branchDeleted: false, autoDeleteBranch: false, retargetedBase: null, retargetedNumbers: [], warning: options.warning || null },
+    ...(options.closed ? { mergeResultClosedAt: new Date(now).toISOString() } : {}),
+  });
+  const group = {
+    owner: 'acme', repo: 'widget', product: { key: 'product' },
+    mergeHistory: [automaticResult(1, 6), automaticResult(2, 6, { warning: '警告' }),
+      automaticResult(3, 6, { headMismatch: true }), automaticResult(4, 2), automaticResult(5, 1, { closed: true })],
+  };
+  const content = new FakeElement('div');
+  context.appendPullRequestMergeResults(content, group);
+  const rows = content.children;
+  const texts = rows.map((row) => row.children[0].textContent);
+  assert.equal(rows.length, 3);
+  assert.ok(texts.some((text) => text.startsWith('PR #2:')));
+  assert.ok(texts.some((text) => text.startsWith('PR #3:')));
+  assert.ok(texts.some((text) => text.startsWith('PR #4:')));
+  assert.equal(texts.some((text) => text.startsWith('PR #1:')), false);
+  assert.equal(texts.some((text) => text.startsWith('PR #5:')), false);
+  for (const row of rows) {
+    const close = row.children[1];
+    assert.equal(close.textContent, '閉じる');
+    assert.equal(close.dataset.owner, 'acme');
+    assert.equal(close.dataset.repo, 'widget');
+  }
+});
+
+test('期限判定は描き直しの周期でマージ時刻を検出し、警告は期限判定から除く', () => {
+  const names = [
+    'pullRequestRepositoryKey', 'pullRequestMergeResultHasWarning',
+    'pullRequestMergeResultExpired', 'pullRequestMergeResultExpirySignature',
+  ];
+  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean));
+  const context = pageContext(pageHtml, {
+    displayPreferences: { mergeResultHideMinutes: 5 },
+    pullRequestMergeResults: new Map(),
+  });
+  vm.runInContext(functions.join('\n'), context);
+  const now = Date.now();
+  const mergedAt = new Date(now).toISOString();
+  const group = { owner: 'acme', repo: 'widget', mergeHistory: [{
+    number: 42, mergedAt, automatic: true, automaticResult: { warning: null },
+  }] };
+  assert.equal(context.pullRequestMergeResultExpirySignature([group], now + 299_999), '');
+  assert.match(context.pullRequestMergeResultExpirySignature([group], now + 300_000), /automatic:42/);
+  context.pullRequestMergeResults.set('acme/widget', [{ id: 'manual-1', recordedAt: now }]);
+  assert.match(context.pullRequestMergeResultExpirySignature([group], now + 300_000), /manual:manual-1/);
+  for (const warning of [
+    { warning: '警告' },
+    { headMismatch: true },
+    { automaticResult: { warning: '自動結果の警告' } },
+  ]) {
+    assert.equal(context.pullRequestMergeResultExpired(warning, now - 10 * 60_000, now), false);
+  }
+});
+
 test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
   const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
   const start = pageHtml.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
@@ -2739,6 +2870,8 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
+      pullRequestMergeResultExpirySignature: () => '',
+      renderedPullRequestMergeResultExpirySignature: '',
       updateConnectionNote() {},
       isPendingDecision: () => false,
       render() { renders += 1; },

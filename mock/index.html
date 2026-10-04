@@ -407,6 +407,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
+    <div class="settings-theme-row">
+      <label for="settings-merge-result-hide-minutes">マージの結果を隠すまで (分)</label>
+      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" min="1" max="60" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
+      <span class="settings-input-error" id="settings-merge-result-hide-error" role="alert" hidden></span>
+    </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
@@ -614,7 +619,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
 ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
@@ -630,6 +635,7 @@ function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
 ui.longWaitMinutes = normalizeDisplayMinutes(ui.longWaitMinutes, 1, 120, 15);
 ui.awayAnswerWaitMinutes = normalizeDisplayMinutes(ui.awayAnswerWaitMinutes, 1, 30, 5);
 ui.idleHideMinutes = normalizeDisplayMinutes(ui.idleHideMinutes, 5, 1440, 30);
+ui.mergeResultHideMinutes = normalizeDisplayMinutes(ui.mergeResultHideMinutes, 1, 60, 5);
 ui.hideFinished = ui.hideFinished !== false;
 ui.mergeAfterReviewDefault = ui.mergeAfterReviewDefault === true;
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
@@ -675,9 +681,11 @@ const themeSelect = document.getElementById('settings-theme-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
 const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
+const mergeResultHideMinutesInput = document.getElementById('settings-merge-result-hide-minutes');
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
+const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
@@ -693,6 +701,7 @@ function captureDisplayPreferences() {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
+    mergeResultHideMinutes: ui.mergeResultHideMinutes,
     mergeableCondition: ui.mergeableCondition,
     mergeAfterReviewDefault: ui.mergeAfterReviewDefault,
   };
@@ -735,6 +744,7 @@ function renderDisplaySettings() {
   longWaitMinutesInput.value = String(ui.longWaitMinutes);
   awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
   idleHideMinutesInput.value = String(ui.idleHideMinutes);
+  mergeResultHideMinutesInput.value = String(ui.mergeResultHideMinutes);
   hideFinishedInput.checked = ui.hideFinished;
   mergeAfterReviewDefaultInput.checked = ui.mergeAfterReviewDefault;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
@@ -744,14 +754,16 @@ function changeDisplaySetting(key, input, minimum, maximum) {
   const value = input.valueAsNumber;
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
     const error = key === 'longWaitMinutes' ? longWaitMinutesError
-      : key === 'idleHideMinutes' ? idleHideMinutesError : awayAnswerWaitMinutesError;
+      : key === 'idleHideMinutes' ? idleHideMinutesError
+        : key === 'mergeResultHideMinutes' ? mergeResultHideMinutesError : awayAnswerWaitMinutesError;
     error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
     error.hidden = false;
     input.value = String(ui[key]);
     return false;
   }
   const error = key === 'longWaitMinutes' ? longWaitMinutesError
-    : key === 'idleHideMinutes' ? idleHideMinutesError : awayAnswerWaitMinutesError;
+    : key === 'idleHideMinutes' ? idleHideMinutesError
+      : key === 'mergeResultHideMinutes' ? mergeResultHideMinutesError : awayAnswerWaitMinutesError;
   error.textContent = '';
   error.hidden = true;
   const previous = captureDisplayPreferences();
@@ -765,6 +777,7 @@ function changeDisplaySetting(key, input, minimum, maximum) {
 renderDisplaySettings();
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
+mergeResultHideMinutesInput.addEventListener('change', () => changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60));
 idleHideMinutesInput.addEventListener('change', () => changeDisplaySetting('idleHideMinutes', idleHideMinutesInput, 5, 1440));
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
@@ -1459,12 +1472,23 @@ function pullRequestMergeResultLine(result) {
 
 function rememberPullRequestMergeResult(product, result) {
   const results = pullRequestMergeResults.get(product.repo.name) || [];
-  results.push({ id: String(++nextPullRequestMergeResultId), productId: product.id, ...result });
+  results.push({ id: String(++nextPullRequestMergeResultId), productId: product.id, recordedAt: Date.now(), ...result });
   pullRequestMergeResults.set(product.repo.name, results);
 }
 
+function pullRequestMergeResultHasWarning(result) {
+  return result.headMismatch === true || (typeof result.warning === 'string' && result.warning.length > 0);
+}
+
+function pullRequestMergeResultVisible(result, now = Date.now()) {
+  if (result.closedAt) return false;
+  if (pullRequestMergeResultHasWarning(result)) return true;
+  const recordedAt = typeof result.recordedAt === 'number' ? result.recordedAt : Date.parse(result.recordedAt || '');
+  return !Number.isFinite(recordedAt) || now < recordedAt || now - recordedAt < ui.mergeResultHideMinutes * 60_000;
+}
+
 function hasPullRequestMergeResults(product) {
-  return (pullRequestMergeResults.get(product.repo.name) || []).some(result => result.productId === product.id);
+  return (pullRequestMergeResults.get(product.repo.name) || []).some(result => result.productId === product.id && pullRequestMergeResultVisible(result));
 }
 
 function closePullRequestMergeResult(id) {
@@ -1655,8 +1679,9 @@ function prBlock(p, withTag) {
     ? p.repo.loading ? `<div class="empty">GitHub から取得しています</div>`
       : merged.length || closed.length ? `<div class="empty">オープンの PR はありません</div>` : ''
     : '';
-  const results = (pullRequestMergeResults.get(p.repo.name) || []).filter(result => result.productId === p.id).map(result =>
-    `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
+  const results = (pullRequestMergeResults.get(p.repo.name) || [])
+    .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
+    .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
   return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
 }
 
