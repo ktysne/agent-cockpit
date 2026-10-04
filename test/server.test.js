@@ -744,7 +744,7 @@ test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合す�
     { path: '/api/pull-requests/conflict-request', secret: 'ui', originRequired: true },
     { path: '/api/sessions/session-a/estimate', secret: 'ui', originRequired: true },
     { path: '/api/hidden-sessions', secret: 'ui', originRequired: true },
-    { path: '/api/display', secret: 'ui', originRequired: false },
+    { path: '/api/display', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/merge-result/close', secret: 'ui', originRequired: true },
     { path: '/api/seen', secret: 'ui', originRequired: true },
     { path: '/api/closed-tasks', secret: 'ui', originRequired: true },

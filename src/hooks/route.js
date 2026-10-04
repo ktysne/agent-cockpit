@@ -10,18 +10,47 @@ const CLAUDE_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定):
 const CODEX_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Codex(codex-agent.sh 経由の委譲)で行う';
 const CODEX_AGENT_SCRIPT = /(?:^|[\\/])codex-agent\.sh$/i;
 const readRouting = readRoutingSync;
+const TRANSPARENT_COMMANDS = new Set(['exec', 'command', 'nohup', 'time']);
+
+function commandName(word) {
+  return (word || '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+}
+
+// 後ろのコマンドをそのまま実行するだけの前置きを外し、実際に起動されるコマンドの語から始める。
+function withoutCommandPrefixes(words) {
+  let rest = words;
+  for (;;) {
+    const name = commandName(rest[0]);
+    if (TRANSPARENT_COMMANDS.has(name)) {
+      rest = rest.slice(1);
+    } else if (name === 'nice' || name === 'timeout') {
+      rest = rest.slice(1);
+      while (rest[0]?.startsWith('-')) rest = rest.slice(['-n', '-s', '-k', '--signal', '--kill-after'].includes(rest[0]) ? 2 : 1);
+      if (name === 'timeout') rest = rest.slice(1);
+    } else if (name === 'env' || rest[0]?.startsWith('-')) {
+      // commandWords は先頭の env だけを外すので、残った env のオプションと代入もここで外す。
+      if (name === 'env') rest = rest.slice(1);
+      while (rest[0] !== undefined && (rest[0].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]))) {
+        rest = rest.slice(['-u', '--unset', '-C', '--chdir'].includes(rest[0]) ? 2 : 1);
+      }
+    } else {
+      return rest;
+    }
+  }
+}
 
 function commandInvokesCodexAgent(command, depth = 0) {
   if (typeof command !== 'string') return false;
   if (depth >= 8) return false;
   return commandSegments(command).some((segment) => {
     let ungrouped = segment.trim();
-    while (ungrouped.startsWith('(')) ungrouped = ungrouped.slice(1).trimStart();
-    while (ungrouped.endsWith(')')) ungrouped = ungrouped.slice(0, -1).trimEnd();
-    const words = commandWords(ungrouped);
+    while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
+    while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
+    const words = withoutCommandPrefixes(commandWords(ungrouped));
     const isScript = (word) => CODEX_AGENT_SCRIPT.test(word);
     if (isScript(words[0] || '')) return true;
-    const shell = (words[0] || '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+    if (['source', '.'].includes(words[0])) return isScript(words[1] || '');
+    const shell = commandName(words[0]);
     if (!['bash', 'sh', 'dash', 'zsh'].includes(shell)) return false;
     for (let index = 1; index < words.length;) {
       const option = words[index];
