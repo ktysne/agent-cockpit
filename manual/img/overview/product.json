@@ -1,0 +1,58 @@
+{
+  "name": "product",
+  "target": null,
+  "width": 1700,
+  "height": 2000,
+  "parts": [
+    {
+      "key": "overview.header",
+      "bounds": {
+        "x": 32,
+        "y": 20,
+        "width": 1636,
+        "height": 80
+      },
+      "visible": true
+    },
+    {
+      "key": "overview.summary",
+      "bounds": {
+        "x": 32,
+        "y": 120,
+        "width": 1218,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "overview.routing",
+      "bounds": {
+        "x": 32,
+        "y": 204,
+        "width": 1636,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "overview.mode",
+      "bounds": {
+        "x": 32,
+        "y": 322,
+        "width": 340,
+        "height": 76
+      },
+      "visible": true
+    },
+    {
+      "key": "overview.product-card",
+      "bounds": {
+        "x": 32,
+        "y": 422,
+        "width": 1636,
+        "height": 1578
+      },
+      "visible": true
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "title": "全体図",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 1000
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "product",
+      "viewport": true,
+      "parts": {
+        "overview.header": [
+          "header.top .title-row",
+          "#settings-button"
+        ],
+        "overview.summary": "#summary",
+        "overview.routing": "#routing",
+        "overview.mode": ".mode-row .seg",
+        "overview.product-card": "#root > section.section"
+      }
+    },
+    {
+      "do": "click",
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"][aria-pressed=\"true\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "kind",
+      "viewport": true,
+      "parts": {
+        "overview.header": [
+          "header.top .title-row",
+          "#settings-button"
+        ],
+        "overview.summary": "#summary",
+        "overview.routing": "#routing",
+        "overview.mode": ".mode-row .seg",
+        "overview.kind-section": "#root > section.section"
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
 *.cmd text eol=crlf
 # 検査が組み立て直した結果とバイト単位で比べるので、checkout で CRLF に変えない。
 manual/dist/** text eol=lf
+manual/img/**/*.json text eol=lf
