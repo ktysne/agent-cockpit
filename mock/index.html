@@ -888,7 +888,7 @@ const hidesFinishedSession = s => ui.hideFinished && isFinishedSession(s);
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.perms.length > 0) return false;
   if (session.decisions.some(decision => ['waiting', 'provisional'].includes(effectiveDecisionState(decision)))) return false;
-  if (session.subagents.some(agent => agent.state === 'busy')) return false;
+  if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
   const updatedAt = Date.parse(session.lastUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
 }
@@ -931,7 +931,7 @@ function decisionCategory(d) {
 }
 const isShown = key => !ui.hidden.includes(key);
 const visibleDecisions = s => s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && isShown(decisionCategory(d)));
-const visibleSubagents = s => s.subagents.filter(agent => agent.state !== 'busy' || isShown('agents'));
+const visibleSubagents = s => s.subagents.filter(agent => !isBusyAgent(s, agent) || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms : [];
 const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
   || s.decisions.some(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d)));
@@ -939,7 +939,7 @@ const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
     + s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d))).length
-    + s.subagents.filter(agent => agent.state === 'busy' && !isShown('agents')).length
+    + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
     + (isShown('permission') ? 0 : s.perms.length), 0);
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }
@@ -964,7 +964,7 @@ function renderSummary() {
   const all = sessions.flatMap(s => s.decisions.map(d => ({ d, a: answerOf(d.id) })));
   const blocking = all.filter(x => effectiveDecisionState(x.d) === 'waiting' && !x.a.sent).length;
   const provisional = all.filter(x => effectiveDecisionState(x.d) === 'provisional' && !x.a.sent).length;
-  const agents = sessions.flatMap(s => s.subagents).filter(agent => agent.state === 'busy').length;
+  const agents = sessions.reduce((n, s) => n + s.subagents.filter(agent => isBusyAgent(s, agent)).length, 0);
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
   const permission = sessions.reduce((n, s) => n + s.perms.length, 0);
   const counts = { permission, blocking, provisional, agents, prs };
@@ -1119,6 +1119,7 @@ const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.t
 // メイン直下の背景 Codex は、メインのターンが終わっても動き続けるので稼働中のまま出し、画面から閉じられるようにする。
 const isMainBackgroundCodex = agent => agent.isCodex === true && agent.backgrounded === true && !agent.parent_agent_id && agent.state === 'busy';
 const isClosedByUser = (session, agent) => ui.closedAgents.includes(closedAgentKey(session, agent));
+const isBusyAgent = (session, agent) => agent.state === 'busy' && !isClosedByUser(session, agent);
 const isClosable = (session, agent) => (!!agent.unconfirmed || isMainBackgroundCodex(agent)) && !isClosedByUser(session, agent);
 const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !isClosedByUser(session, agent);
 const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUser(session, agent)) && !isClosable(session, agent);
@@ -1132,7 +1133,7 @@ function isFinishedSession(session) {
 }
 
 function agentRow(p, session, agent, withTag) {
-  const state = isClosedByUser(session, agent) ? ['終了', 'done'] : agent.state === 'busy' ? ['稼働中', 'busy'] : isUnconfirmed(session, agent) ? ['終了未確認', 'wait'] : ['終了', 'done'];
+  const state = isClosedByUser(session, agent) ? ['終了', 'done'] : isBusyAgent(session, agent) ? ['稼働中', 'busy'] : isUnconfirmed(session, agent) ? ['終了未確認', 'wait'] : ['終了', 'done'];
   const close = isClosable(session, agent) ? `<button type="button" class="link-btn close-agent" data-close-agent="${esc(closedAgentKey(session, agent))}">終了にする</button>` : '';
   return `<div class="agent-row">
     <div class="who"><span class="dot ${state[1]}"></span>サブエージェント${sessionTag(p, session, withTag)}<span class="agent-name"><span class="badge ${state[1]}">${state[0]}</span><b>${esc(agent.type)}</b>${close}</span></div>
@@ -1157,7 +1158,7 @@ function agentSection(p, session, withTag) {
   const toggle = endedAgentToggle(session);
   if (!isShown('agents') && !rows && !toggle) return '';
   const empty = hasEnded ? '稼働中のサブエージェントはありません。' : 'サブエージェントはありません。';
-  const hiddenRunning = session.subagents.some(agent => agent.state === 'busy' && !isShown('agents'));
+  const hiddenRunning = session.subagents.some(agent => isBusyAgent(session, agent) && !isShown('agents'));
   return `<h3 class="sub">サブエージェント</h3>${rows ? `<div class="agent-list">${rows}</div>` : hiddenRunning ? '' : `<div class="empty">${empty}</div>`}${toggle}`;
 }
 
