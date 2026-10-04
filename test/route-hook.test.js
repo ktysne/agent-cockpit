@@ -120,6 +120,10 @@ test('Claude 経路の判定は env、代入、サブシェル、bash -lc の呼
     'env -u HOME A=1 bash ~/.claude/tools/codex-agent.sh impl-hard',
     'source ~/.claude/tools/codex-agent.sh',
     '. ~/.claude/tools/codex-agent.sh',
+    'exec -a worker bash ~/.claude/tools/codex-agent.sh impl-hard',
+    '! bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'builtin source ~/.claude/tools/codex-agent.sh',
+    'A=1 env -i bash ~/.claude/tools/codex-agent.sh impl-hard',
   ];
 
   for (const command of commands) {
@@ -135,6 +139,8 @@ test('Claude 経路の判定は env、代入、サブシェル、bash -lc の呼
     'time echo codex-agent.sh',
     'env A=1 grep codex-agent.sh notes.md',
     'source ~/.bashrc',
+    'cat > notes.md <<EOF\n- bash ~/.claude/tools/codex-agent.sh impl-hard で委譲\nEOF',
+    'command -v ~/.claude/tools/codex-agent.sh',
   ]) assert.equal(commandInvokesCodexAgent(command), false, command);
 });
 

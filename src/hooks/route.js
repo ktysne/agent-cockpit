@@ -10,33 +10,44 @@ const CLAUDE_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定):
 const CODEX_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Codex(codex-agent.sh 経由の委譲)で行う';
 const CODEX_AGENT_SCRIPT = /(?:^|[\\/])codex-agent\.sh$/i;
 const readRouting = readRoutingSync;
-const TRANSPARENT_COMMANDS = new Set(['exec', 'command', 'nohup', 'time']);
+const TRANSPARENT_COMMANDS = new Set(['command', 'nohup', 'time', 'builtin', '!']);
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 function commandName(word) {
   return (word || '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
 }
 
-// 後ろのコマンドをそのまま実行するだけの前置きを外し、実際に起動されるコマンドの語から始める。
-function withoutCommandPrefixes(words) {
+function withoutEnvOptions(words) {
   let rest = words;
+  while (rest[0] !== undefined && (rest[0].startsWith('-') || ASSIGNMENT_WORD.test(rest[0]))) {
+    rest = rest.slice(['-u', '--unset', '-C', '--chdir'].includes(rest[0]) ? 2 : 1);
+  }
+  return rest;
+}
+
+// 後ろのコマンドをそのまま実行するだけの前置きを外し、実際に起動されるコマンドの語から始める。
+// commandWords は先頭の代入と env を外すので、元の区切りが env で始まるかを startsWithEnv で受け、残った env のオプションを外す。
+function withoutCommandPrefixes(words, startsWithEnv) {
+  let rest = startsWithEnv ? withoutEnvOptions(words) : words;
   for (;;) {
     const name = commandName(rest[0]);
     if (TRANSPARENT_COMMANDS.has(name)) {
       rest = rest.slice(1);
-    } else if (name === 'nice' || name === 'timeout') {
+    } else if (name === 'exec' || name === 'nice' || name === 'timeout') {
       rest = rest.slice(1);
-      while (rest[0]?.startsWith('-')) rest = rest.slice(['-n', '-s', '-k', '--signal', '--kill-after'].includes(rest[0]) ? 2 : 1);
+      while (rest[0]?.startsWith('-')) rest = rest.slice(['-a', '-n', '-s', '-k', '--signal', '--kill-after'].includes(rest[0]) ? 2 : 1);
       if (name === 'timeout') rest = rest.slice(1);
-    } else if (name === 'env' || rest[0]?.startsWith('-')) {
-      // commandWords は先頭の env だけを外すので、残った env のオプションと代入もここで外す。
-      if (name === 'env') rest = rest.slice(1);
-      while (rest[0] !== undefined && (rest[0].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(rest[0]))) {
-        rest = rest.slice(['-u', '--unset', '-C', '--chdir'].includes(rest[0]) ? 2 : 1);
-      }
+    } else if (name === 'env') {
+      rest = withoutEnvOptions(rest.slice(1));
     } else {
       return rest;
     }
   }
+}
+
+function segmentStartsWithEnv(segment) {
+  const firstCommand = segment.split(/\s+/).find((word) => !ASSIGNMENT_WORD.test(word));
+  return commandName(firstCommand) === 'env';
 }
 
 function commandInvokesCodexAgent(command, depth = 0) {
@@ -46,7 +57,7 @@ function commandInvokesCodexAgent(command, depth = 0) {
     let ungrouped = segment.trim();
     while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
     while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
-    const words = withoutCommandPrefixes(commandWords(ungrouped));
+    const words = withoutCommandPrefixes(commandWords(ungrouped), segmentStartsWithEnv(ungrouped));
     const isScript = (word) => CODEX_AGENT_SCRIPT.test(word);
     if (isScript(words[0] || '')) return true;
     if (['source', '.'].includes(words[0])) return isScript(words[1] || '');
