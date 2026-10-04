@@ -8,13 +8,13 @@
   <p>設定画面は、ヘッダの右上の歯車のボタンで開きます(<a href="screen.html#screen-header">ヘッダ</a>)。
   画面の上に重なって開き、<span class="ui">閉じる</span> のボタンか、画面の外側を押すと閉じます。
   変えた設定は、その場で保存されて、一覧に反映されます。保存のボタンはありません。</p>
-  <figure class="guide-map" id="settings-dialog-map" data-shot="settings-dialog/dialog" data-alt="開いた設定の画面。表示の見出しの下に、配色、前回見てから、マージできますと出す条件、レビュー収束後マージ、終わったものを表示しない、4 つの時間の入力欄、セクションの並び順が並び、左下にマニュアルのリンク、右下に閉じるのボタンがある">
+  <figure class="guide-map" id="settings-dialog-map" data-shot="settings-dialog/dialog" data-alt="開いた設定の画面。表示の見出しの下に、配色、前回見てから、マージできますと出す条件、レビュー収束後マージ、終わったものを非表示にする、4 つの時間の入力欄、セクションの並び順が並び、左下にマニュアルのリンク、右下に閉じるのボタンがある">
     <ol class="guide-list">
       <li data-part="settings.theme" data-at="0.7450,0.1271"><b><span class="ui">配色</span></b>：画面の明るさを選びます(<a href="#settings-theme">配色</a>)。</li>
       <li data-part="settings.since-seen" data-at="0.7450,0.1571"><b><span class="ui">前回見てから</span></b>：「前回見てから」の欄を出すかどうかを選びます(<a href="#settings-since-seen">前回見てから</a>)。</li>
       <li data-part="settings.mergeable" data-at="0.7450,0.2212"><b><span class="ui">「マージできます」と出す条件</span></b>：PR に <span class="ui">マージできます</span> と出す条件を選びます(<a href="#settings-mergeable">「マージできます」と出す条件</a>)。</li>
       <li data-part="settings.merge-after" data-at="0.7450,0.4735"><b><span class="ui">レビュー収束後マージを既定でオンにする</span></b>：マージの確認欄の初期値を決めます(<a href="#settings-merge-after">レビュー収束後マージの既定</a>)。</li>
-      <li data-part="settings.hide-finished" data-at="0.7800,0.4919"><b><span class="ui">終わったものを表示しない</span></b>：終わったセッションやサブエージェントを隠します(<a href="#settings-hide-finished">終わったものを表示しない</a>)。</li>
+      <li data-part="settings.hide-finished" data-at="0.7800,0.4919"><b><span class="ui">終わったものを非表示にする</span></b>：終わったセッションやサブエージェントを隠します(<a href="#settings-hide-finished">終わったものを非表示にする</a>)。</li>
       <li data-part="settings.long-wait" data-at="0.7450,0.5162"><b><span class="ui">長く待たせているとみなす時間 (1〜120 分)</span></b>：待ち時間を強調するまでの時間です(<a href="#settings-long-wait">長く待たせているとみなす時間</a>)。</li>
       <li data-part="settings.idle" data-at="0.7800,0.5463"><b><span class="ui">更新の無いセッションを隠すまで (分)</span></b>：更新が無いセッションを隠すまでの時間です(<a href="#settings-idle">更新の無いセッションを隠すまで</a>)。</li>
       <li data-part="settings.away-wait" data-at="0.7450,0.5763"><b><span class="ui">離席中に質問の回答を待つ時間 (1〜30 分)</span></b>：離席中に質問を預かる時間です(<a href="#settings-away-wait">離席中に質問の回答を待つ時間</a>)。</li>
@@ -72,8 +72,8 @@
   確認欄で一度選び直した PR は、その選択が使われます。
   すでに予約した PR の予約は、変わりません(<a href="pull-requests.html#pr-reserve">レビュー収束後マージ</a>)。</p>
 
-  <h3 id="settings-hide-finished">終わったものを表示しない</h3>
-  <p><span class="ui">終わったものを表示しない</span> は、終わったものを一覧から隠します。
+  <h3 id="settings-hide-finished">終わったものを非表示にする</h3>
+  <p><span class="ui">終わったものを非表示にする</span> は、終わったものを一覧から隠します。
   オンが最初の設定です。
   隠しているものの件数は、一覧の最下部の注記に出て、<span class="ui">表示する</span> を押すとオフに変わります(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</p>
   <p>オンのとき、次のものを隠します。</p>
@@ -172,7 +172,7 @@
     <ol class="guide-list">
       <li data-part="bottom.filter" data-mark="frame" data-place="left"><b>非表示にした種類</b>：<span class="ui">隠した種類をすべて表示する</span> を押すと、種類の絞り込みをすべて解きます。</li>
       <li data-part="bottom.excluded" data-mark="frame" data-place="left"><b>外したセッション</b>：<span class="ui">外したセッションを戻す</span> で、外したセッションをすべて戻します。</li>
-      <li data-part="bottom.finished" data-mark="frame" data-place="left"><b>隠している終わったもの</b>：<span class="ui">表示する</span> を押すと、<span class="ui">終わったものを表示しない</span> がオフになります。</li>
+      <li data-part="bottom.finished" data-mark="frame" data-place="left"><b>隠している終わったもの</b>：<span class="ui">表示する</span> を押すと、<span class="ui">終わったものを非表示にする</span> がオフになります。</li>
       <li data-part="bottom.idle" data-mark="frame" data-place="left"><b>隠している更新の無いセッション</b>：<span class="ui">表示する</span> を押すと、開いているページの間だけ表示します。</li>
     </ol>
   </figure>

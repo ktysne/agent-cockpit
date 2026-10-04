@@ -68,7 +68,7 @@
   <h2 id="trouble-pr">PR が出ない、エラーが出る</h2>
   <ul>
     <li>PR が出ないとき：PR は、セッションに結び付けて登録したものだけが出ます。セッションが <code>gh pr create</code> で作った PR は、自動で登録されます。ほかの方法で作った PR は、メインセッションが <code>cockpit_add_pr</code> で登録します(<a href="pull-requests.html#pr-register">PR の登録</a>)</li>
-    <li>マージ済みの PR が見えないとき：<span class="ui">終わったものを表示しない</span> がオンだと、マージ済みの一覧は隠れます(<a href="settings.html#settings-hide-finished">終わったものを表示しない</a>)</li>
+    <li>マージ済みの PR が見えないとき：<span class="ui">終わったものを非表示にする</span> がオンだと、マージ済みの一覧は隠れます(<a href="settings.html#settings-hide-finished">終わったものを非表示にする</a>)</li>
     <li>赤い枠でエラーが出るとき：<code>gh</code> が見つからないか、認証が切れているか、通信できません。<code>gh auth login</code> でログインし、常駐サーバーの <code>PATH</code> に <code>gh</code> があることを確かめます。GitHub への取得は 60 秒ごとなので、直した後は、遅くとも 1 分ほどで消えます(<a href="pull-requests.html#pr-fetch-error">GitHub CLI が使えないとき</a>)</li>
     <li>状態が古いとき：リポジトリの見出しの <span class="ui">GitHub から</span> の時間を見ます。この時間は、最後に取得できてからの時間です</li>
   </ul>
