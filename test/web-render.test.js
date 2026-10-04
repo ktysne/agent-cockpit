@@ -760,6 +760,7 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
+    displayPreferences: { mergeAfterReviewDefault: false },
     pullRequestMergeOptions: new Map(),
     pullRequestMergeInFlight: new Set(),
   });
@@ -1099,8 +1100,9 @@ test('終わったもののチェックは表示設定として保存し、失�
   const hideFinishedInput = { type: 'checkbox', checked: false };
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
+  const mergeAfterReviewDefaultInput = { type: 'checkbox', checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, mergeableCondition: 'cross-review' };
+  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
   const context = pageContext(pageHtml, {
     displayPreferences,
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
@@ -1111,6 +1113,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     pendingDisplayChanges: {},
     pendingDisplaySettingSaves: new Map(),
     hideFinishedInput,
+    mergeAfterReviewDefaultInput,
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     mergeableConditionInputs,
@@ -1129,6 +1132,14 @@ test('終わったもののチェックは表示設定として保存し、失�
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
   context.renderDisplaySettings();
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
+  assert.equal(mergeAfterReviewDefaultInput.checked, false);
+  mergeAfterReviewDefaultInput.checked = true;
+  const savingDefault = context.changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { mergeAfterReviewDefault: true });
+  resolveSave(true);
+  assert.equal(await savingDefault, true);
+  assert.equal(displayPreferences.mergeAfterReviewDefault, true);
+  assert.equal(mergeAfterReviewDefaultInput.checked, true);
   activeElement = hideFinishedInput;
   hideFinishedInput.checked = true;
   context.renderDisplaySettings();
@@ -1621,6 +1632,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
+    displayPreferences: { mergeAfterReviewDefault: false },
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '時刻不明',
@@ -1761,7 +1773,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   }]);
 });
 
-test('GitHub がブランチを自動削除する確認欄はチェックを隠してマージと予約に false を送る', async () => {
+test('GitHub の自動削除設定を示し、チェックで即時マージとレビュー収束後マージを選ぶ', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpersStart = html.indexOf('function element(tag, className, text)');
   const helpersEnd = html.indexOf('function durationLabel', helpersStart);
@@ -1810,6 +1822,7 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
+    displayPreferences: { mergeAfterReviewDefault: false },
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '時刻不明',
@@ -1835,23 +1848,26 @@ test('GitHub がブランチを自動削除する確認欄はチェックを隠�
     return nodes;
   };
   const mergeRoot = new FakeElement('div');
-  const reserveRoot = new FakeElement('div');
-  context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest, false);
-  context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest, true);
+  context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest);
   const mergeNodes = flatten(mergeRoot);
-  const reserveNodes = flatten(reserveRoot);
   const effectText = 'リモートのブランチ feature/pr-42 は GitHub が自動で削除する (リポジトリの設定)';
-  assert.equal(mergeNodes.some((node) => node.type === 'checkbox'), false);
-  assert.equal(reserveNodes.some((node) => node.type === 'checkbox'), false);
   assert.ok(mergeNodes.some((node) => node.textContent === effectText));
-  assert.ok(reserveNodes.some((node) => node.textContent === effectText));
+  const reviewMerge = mergeNodes.find((node) => node.dataset?.mergeAfterReview === 'true');
+  assert.ok(reviewMerge);
+  assert.equal(reviewMerge.checked, false);
   const mergeButton = mergeNodes.find((node) => node.dataset?.mergeGo === key);
-  const reserveButton = reserveNodes.find((node) => node.dataset?.reserveGo === key);
   assert.ok(mergeButton);
-  assert.ok(reserveButton);
+  assert.equal(mergeButton.textContent, 'マージを実行');
 
   await context.runPullRequestMergeAction(mergeButton, 'merge');
-  await context.runPullRequestMergeAction(reserveButton, 'reserve');
+  context.displayPreferences.mergeAfterReviewDefault = true;
+  const reserveRoot = new FakeElement('div');
+  context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest);
+  const reserveNodes = flatten(reserveRoot);
+  const reserveButton = reserveNodes.find((node) => node.dataset?.mergeGo === key);
+  assert.equal(reserveNodes.find((node) => node.dataset?.mergeAfterReview === 'true').checked, true);
+  assert.equal(reserveButton.textContent, '予約する');
+  await context.runPullRequestMergeAction(reserveButton, 'merge');
 
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
     {
@@ -2259,7 +2275,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
   for (const [kind, dataAttribute, htmlAttribute] of [
     ['merge-go', 'mergeGo', 'data-merge-go'],
     ['merge-cancel', 'mergeCancel', 'data-merge-cancel'],
-    ['merge-reserve-go', 'reserveGo', 'data-reserve-go'],
+    ['merge-after-review', 'mergeAfterReview', 'data-merge-after-review'],
     ['merge-cancel-reservation', 'cancelReservation', 'data-cancel-reservation'],
     ['merge-open', 'openMerge', 'data-open-merge'],
     ['conflict-open', 'conflictOpen', 'data-conflict-open'],

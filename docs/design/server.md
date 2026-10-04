@@ -94,6 +94,7 @@ PostToolUse の出力全文は送らない。
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて既定の種類順で補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマはブラウザーごとの `localStorage` に残す。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
+- `display.mergeAfterReviewDefault` はマージ確認欄のレビュー収束後マージのチェックを既定でオンにする設定で、既定は `false`。旧形式で項目が無い場合も `false` として補う。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away, routing, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
@@ -128,7 +129,7 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 登録が保持期限などで消えたプロダクトの PR 群は、次の取り直しで配らなくなる。登録と関連 PR が 1 件も無くなったリポジトリは、取得した状態ごと捨てる。
 積み直し待ちは、GitHub のマージ済み PR の head SHA が各オープン PR の既定ブランチとの compare に残っているかで判定し、compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
-ダッシュボードからマージする口は、引き続き秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。
+ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。レビュー収束後マージの予約では、クロスレビューの最後の `converged` 記録と現在の head を照合し、その記録の SHA を `--match-head-commit` に渡す。
 取得と判定の詳細は [計画書](../handover/2026-10-02.md) の「段階 5、6 の設計(PR の表示とマージ)」を正本とする。
 
 ## 前回見てから
@@ -147,11 +148,12 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 
 書き込み口は `POST /api/pull-requests/merge`、`/reserve`、`/cancel-reservation` とする。
 いずれも `uiSecret` と `validRequiredUiOrigin` を照合し、PR の記録キーから owner/repo を解決する。
-画面の SHA、許可方式、スタック最下段、現在のマージ理由を gh で取り直して確かめ、同じ PR への操作は同時に 1 件だけ実行する。
-予約中は 15 秒ごとに head SHA を取り直し、変化があれば自動マージを取り消す。
-マージ履歴、予約、リポジトリごとの前回方式は `store.json` に保存し、マージ履歴は 24 時間で消す。
+即時マージは画面の SHA、許可方式、スタック最下段、現在のマージ操作条件を gh で取り直して確かめる。予約は方式とブランチ削除の有無を保存し、GitHub の自動マージ予約 API は呼ばない。同じ PR への操作は同時に 1 件だけ実行する。
+リポジトリの状態を取り直すたびに予約を確認する。最後のクロスレビュー記録が現在の round の `converged` で SHA が現在の head と一致し、スタック最下段、ドラフトでない、コンフリクトなし、CI 成功、GitHub レビュー承認済みを満たした場合、通常のマージ手順でその収束 SHA を `--match-head-commit` に指定する。head が収束 SHA と違う場合は予約を維持し、新しい head の収束を待つ。サーバー停止中に条件がそろった場合は起動後最初の PR 状態取得で処理する。
+画面からの予約取消、PR のクローズ、最後のクロスレビュー記録の `halted` ではローカル予約を消し、画面と作成元セッションへ知らせる。旧形式の GitHub 自動マージ予約は読み込み時に捨て、GitHub 側の取消 API は呼ばない。
+マージ履歴、予約、リポジトリごとの前回方式は `store.json` に保存し、マージ履歴は 24 時間で消す。予約取消の通知はメモリーに持ち、該当 PR グループの `reservationNotices` で画面へ配る。
 `delete_branch_on_merge` が有効なリポジトリではスナップショットに `autoDeleteBranch` を含め、確認欄に GitHub がブランチを削除することを示す。常駐サーバーはブランチを削除しない。削除 API の 422 応答に `Reference does not exist` が含まれる場合と、ref 取得 API が 404 を返す場合は、削除済みとして扱う。
-結果は PR を登録したセッションへ PostToolBatch、UserPromptSubmit、Stop の回答配信経路で知らせる。
+結果は PR を登録したセッションへ PostToolBatch、UserPromptSubmit、Stop の回答配信経路で知らせる。レビュー収束後マージの結果には、ブランチ削除、base の付け替え、警告を保存し、既存のマージ結果 1 行と同じ形式で画面へ配る。
 gh の順序、失敗時の扱い、積み直し通知は[計画書のマージの手順](../handover/2026-10-02.md#マージの手順常駐サーバー)を正本とする。
 
 ## 衝突の解消の依頼

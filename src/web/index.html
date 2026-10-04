@@ -302,9 +302,7 @@ h3.sub .count { font-weight: normal; }
 .pr.merge-pending { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--surface-2); }
 .merge-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
 .merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
-.auto-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .merge-confirm { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 8px; background: var(--surface); font-size: 13px; }
-.merge-confirm.auto { border-color: var(--accent); }
 .conflict-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--danger); border-radius: 8px; background: transparent; color: var(--danger); cursor: pointer; }
 .conflict-btn:disabled { cursor: default; opacity: .55; }
 .merge-confirm.conflict { border-color: var(--danger); }
@@ -316,11 +314,10 @@ h3.sub .count { font-weight: normal; }
 .merge-condition-warning { margin: 0; color: var(--warn); font-size: 12px; font-weight: 600; }
 .merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .merge-confirm .merge-go { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
-.merge-confirm.auto .merge-go { background: var(--accent); color: var(--on-accent); }
 .merge-confirm.pending { border-color: var(--border); }
 .merge-confirm .merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merge-confirm .ghost { min-height: 40px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
-.merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .auto-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .merge-confirm button:disabled { cursor: wait; opacity: .65; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-error { color: var(--danger); font-size: 12px; }
@@ -410,6 +407,10 @@ h3.sub .count { font-weight: normal; }
     </fieldset>
     <p class="meta" id="settings-mergeable-condition-note">条件が残っていてもマージ操作が可能なら、確認欄に未達の条件を表示する。</p>
     <div class="settings-theme-row">
+      <label for="settings-merge-after-review-default">レビュー収束後マージを既定でオンにする</label>
+      <input id="settings-merge-after-review-default" name="mergeAfterReviewDefault" type="checkbox">
+    </div>
+    <div class="settings-theme-row">
       <label for="settings-hide-finished">終わったものを表示しない</label>
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
     </div>
@@ -463,6 +464,7 @@ const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
@@ -609,6 +611,7 @@ function readDisplayPreferences() {
       awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
       hideFinished: value.hideFinished !== false,
       mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value.mergeableCondition) ? value.mergeableCondition : 'cross-review',
+      mergeAfterReviewDefault: value.mergeAfterReviewDefault === true,
     };
   } catch {
     return {
@@ -616,6 +619,7 @@ function readDisplayPreferences() {
       longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
       hideFinished: true,
       mergeableCondition: 'cross-review',
+      mergeAfterReviewDefault: false,
     };
   }
 }
@@ -633,6 +637,7 @@ function normalizeDisplayPreferences(value) {
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value?.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
     hideFinished: value?.hideFinished !== false,
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
+    mergeAfterReviewDefault: value?.mergeAfterReviewDefault === true,
   };
 }
 
@@ -655,6 +660,7 @@ function renderDisplaySettings() {
     input.value = String(displayPreferences[key]);
   }
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
+  if (document.activeElement !== mergeAfterReviewDefaultInput) mergeAfterReviewDefaultInput.checked = displayPreferences.mergeAfterReviewDefault;
   if (!mergeableConditionInputs.includes(document.activeElement)) {
     for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
   }
@@ -920,6 +926,7 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
+mergeAfterReviewDefaultInput.addEventListener('change', () => changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput));
 for (const input of mergeableConditionInputs) {
   input.addEventListener('change', () => {
     if (!input.checked || !['operation', 'ci', 'cross-review'].includes(input.value)) return;
@@ -1434,7 +1441,8 @@ function removePullRequestMergeResult(id) {
 function visiblePullRequestGroups(groups) {
   if (!displayPreferences.hideFinished) return groups;
   return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
-    || group.mergeHistory?.some((record) => record.headMismatch === true) || hasPullRequestMergeResults(group));
+    || group.mergeHistory?.some((record) => record.headMismatch === true || record.automatic === true)
+    || group.reservationNotices?.length || hasPullRequestMergeResults(group));
 }
 
 // 同じ PR が複数のプロダクトの PR 群に載ることがあるので、owner、repo、番号で重複を除いて数える。
@@ -1510,6 +1518,28 @@ function pullRequestMergeConditionWaits(pullRequest) {
   if (pullRequest.ci !== 'pass') waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
   if (condition === 'cross-review' && !pullRequestCrossReviewSettled(pullRequest)) waiting.push('クロスレビュー未実施');
   return waiting;
+}
+
+function pullRequestReservationWaits(pullRequest) {
+  const review = pullRequest.crossReview;
+  const triage = review?.triage;
+  const convergedAtHead = Number.isSafeInteger(review?.round) && triage?.round === review.round &&
+    triage.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid) &&
+    triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase();
+  const waiting = [];
+  if (!convergedAtHead) {
+    const pushedAfterConvergence = triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) &&
+      isCompleteCommitSha(pullRequest.headRefOid) && triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase();
+    waiting.push(pushedAfterConvergence ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
+  }
+  if (pullRequest.ci !== 'pass') {
+    waiting.push(pullRequest.ci === 'pending' ? 'CI 待ち' : pullRequest.ci === 'fail' ? 'CI 失敗' : 'CI 状態不明');
+  }
+  if (pullRequest.review !== 'approved' && !['レビューの承認待ち', '変更を求められている'].includes(pullRequest.operationBlocker)) {
+    waiting.push('GitHub のレビュー承認待ち');
+  }
+  if (pullRequest.operationBlocker) waiting.push(`マージ条件待ち: ${pullRequest.operationBlocker}`);
+  return waiting.length ? waiting : ['次の状態更新でマージ'];
 }
 
 function shortShaElement(value) {
@@ -1623,19 +1653,20 @@ function pullRequestMergeOptionsFor(group, pullRequest) {
   return {
     method,
     deleteBranch: pullRequest.isCrossRepository || group.autoDeleteBranch === true ? false : previous?.deleteBranch ?? true,
+    mergeAfterReview: previous?.mergeAfterReview ?? displayPreferences.mergeAfterReviewDefault,
   };
 }
 
-function appendPullRequestMergeConfirmation(target, group, pullRequest, automatic) {
+function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   const key = pullRequestMergeKey(pullRequest);
   const options = pullRequestMergeOptionsFor(group, pullRequest);
   const waiting = pullRequestMergeConditionWaits(pullRequest);
-  const conditionPending = !automatic && waiting.length > 0;
-  const panel = element('section', `merge-confirm ${automatic ? 'auto' : ''} ${conditionPending ? 'pending' : ''}`.trim());
+  const conditionPending = waiting.length > 0;
+  const panel = element('section', `merge-confirm ${conditionPending ? 'pending' : ''}`.trim());
   panel.dataset.mergeConfirm = key;
   panel.setAttribute('aria-label', `PR #${pullRequest.number} のマージ確認`);
   const heading = element('div');
-  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', group.defaultBranch || ''), document.createTextNode(` へ${automatic ? '、CI が通ったら自動で' : ''}マージする`));
+  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', group.defaultBranch || ''), document.createTextNode(options.mergeAfterReview ? ' へレビュー収束後にマージする' : ' へマージする'));
   panel.append(heading);
   if (waiting.length) {
     const warning = element('p', 'merge-condition-warning', `選択した条件の未達: ${waiting.join('、')}`);
@@ -1660,6 +1691,15 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   }
   if ((group.mergeMethods || []).length === 1) methods.append(element('span', 'meta', 'リポジトリで許可されている方式です'));
   panel.append(methods);
+
+  const reviewMergeChoice = element('label', 'opt');
+  const reviewMerge = element('input');
+  reviewMerge.type = 'checkbox';
+  reviewMerge.checked = options.mergeAfterReview;
+  reviewMerge.dataset.mergeAfterReview = 'true';
+  reviewMerge.dataset.mergeKey = key;
+  reviewMergeChoice.append(reviewMerge, document.createTextNode('レビュー収束後マージ'));
+  panel.append(reviewMergeChoice);
 
   if (group.autoDeleteBranch !== true) {
     const branchChoice = element('label', 'opt');
@@ -1687,12 +1727,14 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
     pullRequest.children.length && ['squash', 'rebase'].includes(options.method)
       ? { text: 'スカッシュまたはリベースでは上の PR に元のコミットが残るため、セッションに積み直しを依頼する。', warn: true } : null,
     { text: '結果を PR を作ったセッションへ知らせる。' },
-    automatic ? { text: '予約後に head が変わったら予約を取り消して知らせる。' } : null,
   ].filter(Boolean);
   for (const effect of effectItems) {
     if (effect.headSha) {
       const item = element('li');
-      item.append(document.createTextNode('head が '), shortShaElement(pullRequest.headRefOid), document.createTextNode(' のときだけマージする。表示後に push されていたら中止する。'));
+      item.append(options.mergeAfterReview
+        ? document.createTextNode('クロスレビューの収束記録にある head SHA と一致した場合にマージする。収束後に push されたら、その head の収束を待つ。')
+        : document.createTextNode('head が '));
+      if (!options.mergeAfterReview) item.append(shortShaElement(pullRequest.headRefOid), document.createTextNode(' のときだけマージする。表示後に push されていたら中止する。'));
       effects.append(item);
     } else {
       effects.append(element('li', effect.warn ? 'warn' : '', effect.text));
@@ -1701,10 +1743,10 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
   panel.append(effects);
 
   const row = element('div', 'row');
-  const merging = !automatic && pullRequestMergeInFlight.has(key);
-  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? 'マージ中…' : automatic ? '予約する' : 'マージを実行');
+  const merging = pullRequestMergeInFlight.has(key);
+  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : options.mergeAfterReview ? '予約する' : 'マージを実行');
   go.type = 'button';
-  go.dataset[automatic ? 'reserveGo' : 'mergeGo'] = key;
+  go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
   go.disabled = pullRequestMergeInFlight.has(key) || !(group.mergeMethods || []).length;
   const cancel = element('button', 'ghost', 'やめる');
@@ -1832,7 +1874,6 @@ function appendPullRequestTree(target, group, pullRequest) {
   else if (!mergeIntent && pullRequest.canMerge) line.append(badge('マージ操作は可能', 'mute'));
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
   const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
-  const reserveAllowed = pullRequest.blocker === 'CI 実行中' && ['approved', 'none'].includes(pullRequest.review);
   if (mergeKey && reservation) {
     const cancel = element('button', 'link-btn', '予約を取り消す');
     cancel.type = 'button';
@@ -1856,21 +1897,6 @@ function appendPullRequestTree(target, group, pullRequest) {
     merge.dataset.mergeKey = mergeKey;
     merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
     line.append(merge);
-    if (reserveAllowed) {
-      const reserve = element('button', 'auto-btn', 'CI が通ったらマージ');
-      reserve.type = 'button';
-      reserve.dataset.openReserve = mergeKey;
-      reserve.dataset.mergeKey = mergeKey;
-      reserve.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
-      line.append(reserve);
-    }
-  } else if (mergeKey && reserveAllowed) {
-    const reserve = element('button', 'auto-btn', 'CI が通ったらマージ');
-    reserve.type = 'button';
-    reserve.dataset.openReserve = mergeKey;
-    reserve.dataset.mergeKey = mergeKey;
-    reserve.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
-    line.append(reserve);
   }
   item.append(line);
   const branch = element('div', 'branch');
@@ -1879,24 +1905,19 @@ function appendPullRequestTree(target, group, pullRequest) {
   const badges = element('div', 'badges');
   appendPullRequestBadges(badges, pullRequest);
   if (reservation) {
-    const reservedText = `マージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、head ${reservation.headRefOid})`;
+    const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest).join('、')})`;
     badges.append(badge(reservedText, 'accent'));
   }
   item.append(badges);
   if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
-  if (!pullRequest.canMerge && pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
-  else if (waiting.length) item.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
+  if (!reservation && !pullRequest.canMerge && pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
+  else if (!reservation && waiting.length) item.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
   if (pullRequest.conflict) appendPullRequestConflictControls(line, item, group, pullRequest);
-  if (mergeKey && confirmation && !reservation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest, confirmation === 'reserve');
+  if (mergeKey && confirmation && !reservation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest);
   if (mergeKey && pullRequestMergeMessages.has(mergeKey)) {
     const message = element('div', 'merge-error', pullRequestMergeMessages.get(mergeKey));
     message.setAttribute('role', 'status');
     item.append(message);
-  }
-  if (reservation) {
-    const cancelRow = element('div', 'why-not');
-    cancelRow.append(document.createTextNode(`予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}。head SHA ${reservation.headRefOid}。`));
-    item.append(cancelRow);
   }
   if (pullRequest.children.length) {
     const children = element('div', 'stack-level');
@@ -1907,31 +1928,35 @@ function appendPullRequestTree(target, group, pullRequest) {
 }
 
 function pullRequestMergeResultLine(result) {
+  const details = result.automaticResult ? { ...result, ...result.automaticResult } : result;
   const parts = [
-    `${MERGE_METHOD_LABELS[result.method] || result.method} でマージしました`,
-    result.autoDeleteBranch ? 'ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)'
-      : result.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません',
+    `${MERGE_METHOD_LABELS[details.method] || details.method} でマージしました`,
+    details.autoDeleteBranch ? 'ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)'
+      : details.branchDeleted ? 'ブランチを削除しました' : 'ブランチは削除していません',
   ];
-  if (result.retargetedBase) {
-    const numbers = Array.isArray(result.retargetedNumbers) && result.retargetedNumbers.length
-      ? `${result.retargetedNumbers.map((number) => `#${number}`).join('、')} の `
+  if (details.retargetedBase) {
+    const numbers = Array.isArray(details.retargetedNumbers) && details.retargetedNumbers.length
+      ? `${details.retargetedNumbers.map((number) => `#${number}`).join('、')} の `
       : '';
-    parts.push(`${numbers}base を ${result.retargetedBase} に付け替えました`);
+    parts.push(`${numbers}base を ${details.retargetedBase} に付け替えました`);
   }
-  if (result.warning) parts.push(result.warning);
+  if (details.warning) parts.push(details.warning);
   return parts.join('。') + '。';
 }
 
 function appendPullRequestMergeResults(content, group) {
   const results = pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [];
-  for (const result of results) {
+  const serverResults = (group.mergeHistory || []).filter((result) => result.automatic === true && result.automaticResult);
+  for (const result of [...serverResults, ...results]) {
     const row = element('div', 'merge-result');
     row.setAttribute('role', 'status');
     row.append(element('span', '', `PR #${result.number}: ${pullRequestMergeResultLine(result)}`));
-    const close = element('button', 'link-btn', '閉じる');
-    close.type = 'button';
-    close.dataset.closeMergeResult = result.id;
-    row.append(close);
+    if (result.id) {
+      const close = element('button', 'link-btn', '閉じる');
+      close.type = 'button';
+      close.dataset.closeMergeResult = result.id;
+      row.append(close);
+    }
     content.append(row);
   }
 }
@@ -1954,6 +1979,16 @@ function appendPullRequestBlock(target, group, withTag = false) {
   section.append(head);
   const content = element('div', 'pr-repo-content');
   if (group.error) content.append(element('div', 'error-box', group.error));
+  for (const notice of group.reservationNotices || []) {
+    const row = element('div', 'merge-result');
+    row.setAttribute('role', 'status');
+    const link = element('a', '', `PR #${notice.number}`);
+    link.href = notice.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    row.append(link, document.createTextNode(`: ${notice.message}`));
+    content.append(row);
+  }
   for (const tree of group.trees) {
     const stack = element('div', 'stack');
     const base = element('div', 'stack-base');
@@ -3068,17 +3103,16 @@ function render(state) {
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
-      : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
-        : active?.dataset?.mergeDelete ? { kind: 'merge-delete', key: active.dataset.mergeKey }
+         : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
+        : active?.dataset?.mergeAfterReview ? { kind: 'merge-after-review', key: active.dataset.mergeKey }
+         : active?.dataset?.mergeDelete ? { kind: 'merge-delete', key: active.dataset.mergeKey }
           : active?.dataset?.mergeCancel ? { kind: 'merge-cancel', key: active.dataset.mergeCancel }
             : active?.dataset?.openMerge ? { kind: 'merge-open', key: active.dataset.openMerge }
-              : active?.dataset?.openReserve ? { kind: 'merge-open-reserve', key: active.dataset.openReserve }
-                : active?.dataset?.conflictOpen ? { kind: 'merge-conflict-open', key: active.dataset.conflictOpen }
+              : active?.dataset?.conflictOpen ? { kind: 'merge-conflict-open', key: active.dataset.conflictOpen }
                   : active?.dataset?.conflictGo ? { kind: 'merge-conflict-go', key: active.dataset.conflictGo }
                     : active?.dataset?.conflictCancel ? { kind: 'merge-conflict-cancel', key: active.dataset.conflictCancel }
-       : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
-                  : active?.dataset?.reserveGo ? { kind: 'merge-reserve-go', key: active.dataset.reserveGo }
-                    : active?.dataset?.cancelReservation ? { kind: 'merge-cancel-reservation', key: active.dataset.cancelReservation }
+        : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
+                     : active?.dataset?.cancelReservation ? { kind: 'merge-cancel-reservation', key: active.dataset.cancelReservation }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
           : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
@@ -3122,7 +3156,7 @@ function render(state) {
   }
 
   if (focusData?.kind?.startsWith('merge-')) {
-    const controls = [...root.querySelectorAll('[data-merge-method], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-open-reserve], [data-merge-go], [data-reserve-go], [data-cancel-reservation], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
+    const controls = [...root.querySelectorAll('[data-merge-method], [data-merge-after-review], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-merge-go], [data-cancel-reservation], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
     // 「やめる」から「依頼を送る」へ移ると、取り消すつもりの Enter で依頼が送られるため、同じ操作のボタンへ戻す。
     const conflictFocusOrder = {
       'merge-conflict-open': ['conflictGo', 'conflictOpen'],
@@ -3133,16 +3167,15 @@ function render(state) {
       ? conflictFocusOrder.map((name) => controls.find((item) => item.dataset[name] === focusData.key)).find(Boolean)
       : controls.find((item) => item.dataset.mergeKey === focusData.key && (
       focusData.kind === 'merge-method' ? item.dataset.mergeMethod === focusData.method
+        : focusData.kind === 'merge-after-review' ? item.hasAttribute('data-merge-after-review')
         : focusData.kind === 'merge-delete' ? item.hasAttribute('data-merge-delete')
           : focusData.kind === 'merge-cancel' ? item.hasAttribute('data-merge-cancel')
             : focusData.kind === 'merge-go' ? item.dataset.mergeGo === focusData.key
-              : focusData.kind === 'merge-reserve-go' ? item.dataset.reserveGo === focusData.key
-                : focusData.kind === 'merge-cancel-reservation' ? item.dataset.cancelReservation === focusData.key
+              : focusData.kind === 'merge-cancel-reservation' ? item.dataset.cancelReservation === focusData.key
                   : focusData.kind === 'merge-open' ? item.dataset.openMerge === focusData.key
-                    : focusData.kind === 'merge-open-reserve' ? item.dataset.openReserve === focusData.key
                       : false
     ));
-    if (!control && ['merge-open', 'merge-open-reserve'].includes(focusData.kind)) {
+    if (!control && focusData.kind === 'merge-open') {
       control = controls.find((item) => item.dataset.mergeKey === focusData.key && item.hasAttribute('data-merge-method'));
     }
     control?.focus({ preventScroll: true });
@@ -3456,16 +3489,17 @@ function findPullRequestMergeTarget(key) {
 }
 
 async function runPullRequestMergeAction(button, action) {
-  const key = button.dataset.mergeGo || button.dataset.reserveGo || button.dataset.cancelReservation;
+  const key = button.dataset.mergeGo || button.dataset.cancelReservation;
   const target = findPullRequestMergeTarget(key || '');
   if (!target || pullRequestMergeInFlight.has(key)) return;
   const { group, pullRequest, number } = target;
   const options = pullRequestMergeOptionsFor(group, pullRequest);
-  const endpoint = action === 'merge' ? '/api/pull-requests/merge'
-    : action === 'reserve' ? '/api/pull-requests/reserve'
+  const operation = action === 'merge' && options.mergeAfterReview ? 'reserve' : action;
+  const endpoint = operation === 'merge' ? '/api/pull-requests/merge'
+    : operation === 'reserve' ? '/api/pull-requests/reserve'
       : '/api/pull-requests/cancel-reservation';
   const body = { number, registration_key: pullRequest.mergeRecordKey };
-  if (action !== 'cancel') Object.assign(body, {
+  if (operation !== 'cancel') Object.assign(body, {
     headRefOid: pullRequest.headRefOid,
     method: options.method,
     deleteBranch: options.deleteBranch,
@@ -3473,8 +3507,8 @@ async function runPullRequestMergeAction(button, action) {
   pullRequestMergeInFlight.add(key);
   pullRequestMergeMessages.delete(key);
   button.disabled = true;
-  liveStatus.textContent = action === 'merge' ? `PR #${number} の状態を確認してマージしています。`
-    : action === 'reserve' ? `PR #${number} のマージを予約しています。`
+  liveStatus.textContent = operation === 'merge' ? `PR #${number} の状態を確認してマージしています。`
+    : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しています。`
       : `PR #${number} のマージ予約を取り消しています。`;
   if (lastState) render(lastState);
   try {
@@ -3488,10 +3522,10 @@ async function runPullRequestMergeAction(button, action) {
       return;
     }
     pullRequestMergeConfirmations.delete(key);
-    const queued = action === 'merge' && result.queued;
+    const queued = operation === 'merge' && result.queued;
     if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
     pullRequestMergeMessages.delete(key);
-    if (action === 'merge' && result.merged === true) {
+    if (operation === 'merge' && result.merged === true) {
       const retargetedNumbers = pullRequest.children.map((child) => child.number);
       rememberPullRequestMergeResult(group, {
         number,
@@ -3504,8 +3538,8 @@ async function runPullRequestMergeAction(button, action) {
       });
     }
     await refresh();
-    liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : action === 'merge' ? `PR #${number} をマージしました。`
-      : action === 'reserve' ? `PR #${number} のマージを予約しました。`
+    liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : operation === 'merge' ? `PR #${number} をマージしました。`
+      : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しました。`
         : `PR #${number} のマージ予約を取り消しました。`;
   } catch {
     pullRequestMergeMessages.set(key, '操作結果を取得できませんでした。PR の状態を取り直してください。');
@@ -3662,9 +3696,9 @@ document.addEventListener('click', (event) => {
     void markProductSeen(button);
     return;
   }
-  if (button.dataset.openMerge || button.dataset.openReserve) {
-    const key = button.dataset.openMerge || button.dataset.openReserve;
-    pullRequestMergeConfirmations.set(key, button.dataset.openReserve ? 'reserve' : 'merge');
+  if (button.dataset.openMerge) {
+    const key = button.dataset.openMerge;
+    pullRequestMergeConfirmations.set(key, 'merge');
     pullRequestMergeMessages.delete(key);
     if (lastState) render(lastState);
     return;
@@ -3699,10 +3733,6 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.mergeGo) {
     void runPullRequestMergeAction(button, 'merge');
-    return;
-  }
-  if (button.dataset.reserveGo) {
-    void runPullRequestMergeAction(button, 'reserve');
     return;
   }
   if (button.dataset.cancelReservation) {
@@ -3841,13 +3871,15 @@ document.addEventListener('auxclick', (event) => {
 
 document.addEventListener('change', (event) => {
   const method = event.target.closest('[data-merge-method]');
+  const mergeAfterReview = event.target.closest('[data-merge-after-review]');
   const deleteBranch = event.target.closest('[data-merge-delete]');
-  const control = method || deleteBranch;
+  const control = method || mergeAfterReview || deleteBranch;
   if (!control) return;
   const target = findPullRequestMergeTarget(control.dataset.mergeKey || '');
   if (!target) return;
   const options = pullRequestMergeOptionsFor(target.group, target.pullRequest);
   if (method) options.method = method.dataset.mergeMethod;
+  if (mergeAfterReview) options.mergeAfterReview = mergeAfterReview.checked;
   if (deleteBranch) options.deleteBranch = deleteBranch.checked;
   pullRequestMergeOptions.set(control.dataset.mergeKey, options);
   if (lastState) render(lastState);

@@ -328,14 +328,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .news .nhead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-weight: 600; color: var(--accent-text); }
 .news ul { margin: 4px 0 0; padding-left: 20px; }
 .new-mark { font-size: 10px; font-weight: 700; color: var(--on-accent); background: var(--accent); border-radius: 4px; padding: 0 5px; }
-.auto-btn { background: none; color: var(--ok); border: 1px solid var(--ok); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .pr.reserved { background: var(--accent-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
-.merge-confirm.auto { border-color: var(--accent); }
 .conflict-btn { background: none; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .conflict-btn:disabled { cursor: default; opacity: .55; }
 .merge-confirm.conflict { border-color: var(--danger); }
 .merge-confirm .conflict-go { background: var(--danger); color: var(--on-danger); }
-.merge-confirm.auto .merge-go { background: var(--accent); color: var(--on-accent); }
 
 @media (max-width: 640px) {
   .now-row { grid-template-columns: 1fr; gap: 2px; }
@@ -390,6 +387,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <label><input type="radio" name="mergeableCondition" value="cross-review"><span>クロスレビューも済んでいる(不要としたものを含む)</span><small>CI の成功と、この head のレビュー収束またはレビュー不要の記録がある。</small></label>
     </fieldset>
     <p class="meta" id="settings-mergeable-condition-note">条件が残っていてもマージ操作が可能なら、確認欄に未達の条件を表示する。</p>
+    <div class="settings-theme-row">
+      <label for="settings-merge-after-review-default">レビュー収束後マージを既定でオンにする</label>
+      <input id="settings-merge-after-review-default" name="mergeAfterReviewDefault" type="checkbox">
+    </div>
     <div class="settings-theme-row">
       <label for="settings-hide-finished">終わったものを表示しない</label>
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
@@ -601,7 +602,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
 ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
@@ -616,6 +617,7 @@ function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
 ui.longWaitMinutes = normalizeDisplayMinutes(ui.longWaitMinutes, 1, 120, 15);
 ui.awayAnswerWaitMinutes = normalizeDisplayMinutes(ui.awayAnswerWaitMinutes, 1, 30, 5);
 ui.hideFinished = ui.hideFinished !== false;
+ui.mergeAfterReviewDefault = ui.mergeAfterReviewDefault === true;
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
 ui.expandedMerged = [];
 for (const p of DATA.products) if (!ui.order.includes(p.id)) ui.order.push(p.id);
@@ -661,6 +663,7 @@ const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
@@ -675,6 +678,7 @@ function captureDisplayPreferences() {
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes,
     mergeableCondition: ui.mergeableCondition,
+    mergeAfterReviewDefault: ui.mergeAfterReviewDefault,
   };
 }
 
@@ -715,6 +719,7 @@ function renderDisplaySettings() {
   longWaitMinutesInput.value = String(ui.longWaitMinutes);
   awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
   hideFinishedInput.checked = ui.hideFinished;
+  mergeAfterReviewDefaultInput.checked = ui.mergeAfterReviewDefault;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
@@ -744,6 +749,12 @@ awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
+  if (!saveDisplayPreferences(previous)) return;
+  render();
+});
+mergeAfterReviewDefaultInput.addEventListener('change', () => {
+  const previous = captureDisplayPreferences();
+  ui.mergeAfterReviewDefault = mergeAfterReviewDefaultInput.checked;
   if (!saveDisplayPreferences(previous)) return;
   render();
 });
@@ -1354,6 +1365,20 @@ function crossReviewSettled(p, pr) {
   return Boolean(triage && triage.round === pr.xr.round && triage.outcome === 'converged' && triage.sha === pr.sha);
 }
 
+function reservationWait(p, pr) {
+  const triage = pr.xr?.triage;
+  const convergedAtHead = Number.isSafeInteger(pr.xr?.round) && triage?.round === pr.xr.round &&
+    triage.outcome === 'converged' && triage.sha === pr.sha;
+  const waiting = [];
+  if (!convergedAtHead) waiting.push(triage?.outcome === 'converged' && triage.sha !== pr.sha
+    ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
+  if (pr.ci !== 'pass') waiting.push(pr.ci === 'pending' ? 'CI 待ち' : pr.ci === 'fail' ? 'CI 失敗' : 'CI 状態不明');
+  const blocker = mergeOperationBlocker(p, pr);
+  if (pr.review !== 'approved' && !['レビューの承認待ち', '変更を求められている'].includes(blocker)) waiting.push('GitHub のレビュー承認待ち');
+  if (blocker) waiting.push(`マージ条件待ち: ${blocker}`);
+  return waiting.length ? waiting : ['次の状態更新でマージ'];
+}
+
 function mergeConditionWaits(p, pr) {
   if (ui.mergeableCondition === 'operation') return [];
   const waiting = [];
@@ -1432,7 +1457,7 @@ function mergeOpts(p, pr) {
   const k = prKey(p, pr.number);
   const last = ui.lastMethod[p.repo.name];
   const method = p.repo.methods.includes(last) ? last : p.repo.methods[0];
-  return ui.mergeOpts[k] || { method, del: !p.repo.autoDeleteBranch };
+  return { method, del: !p.repo.autoDeleteBranch, mergeAfterReview: ui.mergeAfterReviewDefault, ...ui.mergeOpts[k] };
 }
 
 function prBadges(p, pr) {
@@ -1449,42 +1474,40 @@ function prBadges(p, pr) {
   ].join('');
 }
 
-// CI 実行中だけが理由のときは「CI が通ったらマージ」を予約できる(gh pr merge --auto)
-// 承認待ちや変更要求が残る PR は CI が通ってもマージされないので、予約を出さない。
-const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中' && (pr.review === 'approved' || pr.review === 'none');
-
-function mergeConfirm(p, pr, auto) {
+function mergeConfirm(p, pr) {
   const o = mergeOpts(p, pr);
   const merging = pullRequestMergeInFlight.has(prKey(p, pr.number));
   const waiting = mergeConditionWaits(p, pr);
-  const conditionPending = !auto && waiting.length > 0;
+  const conditionPending = waiting.length > 0;
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const effects = [
     crossReviewState(pr).warn ? `<span>${esc(crossReviewState(pr).warn)}</span>` : esc(crossReviewState(pr).note || ''),
-    `head が ${shortShaLabel(pr.sha)} のときだけマージする (画面を見たあとに push されていたら中止する)`,
+    o.mergeAfterReview
+      ? 'クロスレビューの収束記録にある head SHA と一致した場合にマージする。収束後に push されたら、その head の収束を待つ'
+      : `head が ${shortShaLabel(pr.sha)} のときだけマージする (画面を見たあとに push されていたら中止する)`,
     kids.length ? `先に ${kidNames} の base を ${esc(p.repo.defaultBranch)} に付け替える` : '',
     p.repo.autoDeleteBranch ? `リモートのブランチ ${esc(pr.head)} は GitHub が自動で削除する (リポジトリの設定)`
       : o.del ? `リモートのブランチ ${esc(pr.head)} を削除する (手元の worktree には触れない)` : '',
     kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する</span>` : '',
     '結果を PR を作ったセッションへ知らせる',
-    auto ? `予約のあとに push されたら、予約を取り消して知らせる` : '',
   ].filter(Boolean);
-  return `<div class="merge-confirm ${auto ? 'auto' : ''} ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
-    <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へ${auto ? '、CI が通ったら自動で' : ''}マージする</div>
+  return `<div class="merge-confirm ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
+    <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へ${o.mergeAfterReview ? 'レビュー収束後に' : ''}マージする</div>
     ${waiting.length ? `<p class="merge-condition-warning" role="status">選択した条件の未達: ${waiting.map(esc).join('、')}</p>` : ''}
     <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
       `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
       ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
+    <label class="opt"><input type="checkbox" data-review-merge ${o.mergeAfterReview ? 'checked' : ''}>レビュー収束後マージ</label>
     ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? 'マージ中…' : auto ? '予約する' : 'マージを実行'}</button>
+    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : o.mergeAfterReview ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
 }
 
 function setMergeConfirmation(key, action) {
-  if (!['manual', 'reserve'].includes(action)) return;
+  if (action !== 'manual') return;
   ui.confirm = { key, action };
 }
 
@@ -1524,7 +1547,6 @@ function conflictStatus(p, pr) {
 function prItem(p, pr) {
   const k = prKey(p, pr.number);
   const confirmManual = ui.confirm?.key === k && ui.confirm.action === 'manual';
-  const confirmReserve = ui.confirm?.key === k && ui.confirm.action === 'reserve';
   const operationBlocker = mergeOperationBlocker(p, pr);
   const waiting = operationBlocker ? [] : mergeConditionWaits(p, pr);
   const conditionMet = !operationBlocker && waiting.length === 0;
@@ -1532,7 +1554,6 @@ function prItem(p, pr) {
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
-  const reservable = !rsv && canReserve(p, pr);
   return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
@@ -1540,22 +1561,21 @@ function prItem(p, pr) {
       ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
       ${!mergeIntent && conditionMet ? '<span class="badge ok">マージできます</span>' : !mergeIntent && !operationBlocker ? '<span class="badge mute">マージ操作は可能</span>' : ''}
       ${!mergeIntent && !operationBlocker ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual ? 'disabled' : ''}>マージする</button>` : ''}
-      ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" data-merge-action="reserve" ${confirmReserve ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
       ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
-    ${rsv ? `<div class="badges"><span class="badge accent">マージ予約中(${METHOD_LABEL[rsv.method]}、${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))} に予約、head ${esc(pr.sha)})</span>
+    ${rsv ? `<div class="badges"><span class="badge accent">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr).join('、'))})</span>
       <button type="button" class="link-btn" data-unreserve="${k}">予約を取り消す</button>
-      <button type="button" class="link-btn" data-ci-pass="${k}">モック: CI の成功を再現する</button></div>` : ''}
+      <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
     ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
     ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
-    ${confirmManual && !operationBlocker ? mergeConfirm(p, pr, false) : ''}
-    ${confirmReserve && reservable ? mergeConfirm(p, pr, true) : ''}
+    ${ui.reservationNotices[k] ? `<div class="merge-result" role="status">${esc(ui.reservationNotices[k])}</div>` : ''}
+    ${confirmManual && !operationBlocker && !rsv ? mergeConfirm(p, pr) : ''}
   </div>`;
 }
 
@@ -2022,23 +2042,30 @@ document.addEventListener('click', e => {
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
+    if (o.mergeAfterReview) {
+      ui.lastMethod[p.repo.name] = o.method;
+      ui.reserved[k] = { method: o.method, del: o.del, at: new Date().toISOString() };
+      delete ui.reservationNotices[k];
+      ui.confirm = null;
+      save();
+      render();
+      return;
+    }
     startMockMerge(p, pr, o);
     return;
-  } else if (t.dataset.reserveGo) {
-    const k = t.dataset.reserveGo;
-    const [pid, n] = k.split('#');
-    const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
-    const o = mergeOpts(p, pr);
-    const now = new Date();
-    ui.lastMethod[p.repo.name] = o.method;
-    ui.reserved[k] = { method: o.method, del: o.del, at: absoluteTimeLabel(now) };
-    ui.confirm = null;
   } else if (t.dataset.unreserve) {
-    delete ui.reserved[t.dataset.unreserve];
-  } else if (t.dataset.ciPass) {
-    const k = t.dataset.ciPass;
+    const k = t.dataset.unreserve;
+    delete ui.reserved[k];
+    ui.reservationNotices[k] = 'レビュー収束後マージの予約を取り消しました。';
+  } else if (t.dataset.readyMerge) {
+    const k = t.dataset.readyMerge;
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
+    const triage = pr.xr?.triage;
+    const round = Number.isSafeInteger(triage?.round) ? Math.max(pr.xr?.round || 1, triage.round) : Math.max(pr.xr?.round || 1, 1);
+    pr.xr = { ...(pr.xr && !pr.xr.notRequired ? pr.xr : {}), round, reviewedSha: pr.sha, dismissed: pr.xr?.dismissed || 0, triage: { round, sha: pr.sha, outcome: 'converged' } };
+    pr.review = 'approved';
+    pr.ci = 'pass';
     finishMockMerge(p, pr, ui.reserved[k], true);
     return;
   } else if (t.dataset.closeMergeResult) {
@@ -2073,6 +2100,7 @@ document.addEventListener('change', e => {
     const o = mergeOpts(p, pr);
     if (e.target.dataset.method) o.method = e.target.dataset.method;
     if (e.target.hasAttribute('data-del')) o.del = e.target.checked;
+    if (e.target.hasAttribute('data-review-merge')) o.mergeAfterReview = e.target.checked;
     ui.mergeOpts[k] = o;
     save(); render();
     return;
