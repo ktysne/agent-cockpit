@@ -944,3 +944,40 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(hideFinishedInput.checked, false);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
 });
+
+test('保存に失敗したラジオはフォーカスを保ったまま保存値へ戻す', async () => {
+  const render = functionSource(web, 'renderDisplaySettings');
+  const settle = functionSource(web, 'settleDisplayPreferenceSaves');
+  const save = functionSource(web, 'saveDisplayPreferences');
+  assert.ok(render && settle && save);
+  const longWaitMinutesInput = { value: '15' };
+  const awayAnswerWaitMinutesInput = { value: '5' };
+  const hideFinishedInput = { checked: true };
+  const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
+  const displayPreferences = { mergeableCondition: 'cross-review' };
+  let activeElement = null;
+  const context = pageContext(web, {
+    document: { get activeElement() { return activeElement; } },
+    longWaitMinutesInput,
+    awayAnswerWaitMinutesInput,
+    hideFinishedInput,
+    displayPreferences,
+    displayPreferenceSaveStates: new Map(),
+    displayPreferencesReady: true,
+    mergeableConditionInputs,
+    lastState: null,
+    enqueueDisplayPatch: async () => false,
+    renderSectionOrder() {},
+  });
+  vm.runInContext(`${render}\n${settle}\n${save}\nthis.renderSettings = renderDisplaySettings; this.savePreferences = saveDisplayPreferences;`, context);
+  context.renderSettings();
+  activeElement = mergeableConditionInputs[1];
+  mergeableConditionInputs[1].checked = true;
+  mergeableConditionInputs[2].checked = false;
+
+  assert.equal(await context.savePreferences({ mergeableCondition: 'ci' }), false);
+
+  assert.equal(activeElement, mergeableConditionInputs[1]);
+  assert.equal(displayPreferences.mergeableCondition, 'cross-review');
+  assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
+});

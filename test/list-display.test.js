@@ -592,6 +592,42 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.equal(actionContext.liveStatus.textContent, 'PR #1 をマージキューに追加しました。');
 });
 
+test('手動マージと予約は選んだ操作の確認欄だけを表示する', () => {
+  const setConfirmation = functionSource(mock, 'setMergeConfirmation');
+  const item = functionSource(mock, 'prItem');
+  assert.ok(setConfirmation && item);
+  const key = 'example/project#42';
+  const context = pageContext(mock, {
+    prKey: () => key,
+    mergeOperationBlocker: () => null,
+    mergeConditionWaits: () => ['CI 実行中'],
+    stackPos: () => ({ depth: 1, total: 1 }),
+    effective: () => ({ base: 'main' }),
+    ui: { reserved: {}, confirm: null },
+    canReserve: () => true,
+    mergeConfirm: (_product, _pullRequest, automatic) => `<div class="merge-confirm" data-action="${automatic ? 'reserve' : 'manual'}"></div>`,
+    conflictButton: () => '',
+    prBadges: () => '',
+    crossReviewLine: () => '',
+    conflictStatus: () => '',
+    esc: (value) => String(value ?? ''),
+  });
+  vm.runInContext(`${setConfirmation}\n${item}\nthis.selectConfirmation = setMergeConfirmation; this.renderPullRequest = prItem;`, context);
+  const product = { name: 'agent-cockpit' };
+  const pullRequest = { number: 42, title: 'Feature', head: 'feature', sha: 'abc', conflict: false };
+
+  for (const action of ['manual', 'reserve']) {
+    context.selectConfirmation(key, action);
+    const html = context.renderPullRequest(product, pullRequest);
+    const confirmations = [...html.matchAll(/class="merge-confirm" data-action="(manual|reserve)"/g)].map((match) => match[1]);
+    assert.deepEqual(confirmations, [action]);
+  }
+
+  const buttons = context.renderPullRequest(product, pullRequest);
+  assert.match(buttons, /data-merge-action="manual"/);
+  assert.match(buttons, /data-merge-action="reserve"/);
+});
+
 test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {
   const countsSource = functionSource(web, 'finishedHiddenCounts');
   const noteSource = functionSource(web, 'renderFinishedNote');

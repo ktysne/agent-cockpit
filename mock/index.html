@@ -1483,6 +1483,11 @@ function mergeConfirm(p, pr, auto) {
   </div>`;
 }
 
+function setMergeConfirmation(key, action) {
+  if (!['manual', 'reserve'].includes(action)) return;
+  ui.confirm = { key, action };
+}
+
 // 衝突の解消は PR を登録したセッションに頼む。ダッシュボードはマージ以外の変更を自分では行わない。
 function conflictConfirm(p, pr) {
   const k = prKey(p, pr.number);
@@ -1518,6 +1523,8 @@ function conflictStatus(p, pr) {
 
 function prItem(p, pr) {
   const k = prKey(p, pr.number);
+  const confirmManual = ui.confirm?.key === k && ui.confirm.action === 'manual';
+  const confirmReserve = ui.confirm?.key === k && ui.confirm.action === 'reserve';
   const operationBlocker = mergeOperationBlocker(p, pr);
   const waiting = operationBlocker ? [] : mergeConditionWaits(p, pr);
   const conditionMet = !operationBlocker && waiting.length === 0;
@@ -1532,8 +1539,8 @@ function prItem(p, pr) {
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
       ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
       ${!mergeIntent && conditionMet ? '<span class="badge ok">マージできます</span>' : !mergeIntent && !operationBlocker ? '<span class="badge mute">マージ操作は可能</span>' : ''}
-      ${!mergeIntent && !operationBlocker ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>` : ''}
-      ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
+      ${!mergeIntent && !operationBlocker ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual ? 'disabled' : ''}>マージする</button>` : ''}
+      ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" data-merge-action="reserve" ${confirmReserve ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
       ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
@@ -1547,8 +1554,8 @@ function prItem(p, pr) {
     ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
-    ${ui.confirm === k && !operationBlocker ? mergeConfirm(p, pr, false) : ''}
-    ${ui.confirm === k && reservable ? mergeConfirm(p, pr, true) : ''}
+    ${confirmManual && !operationBlocker ? mergeConfirm(p, pr, false) : ''}
+    ${confirmReserve && reservable ? mergeConfirm(p, pr, true) : ''}
   </div>`;
 }
 
@@ -1997,7 +2004,7 @@ document.addEventListener('click', e => {
       if (pr.xr?.notRequired && pr.xr.source === 'recorded') pr.xr = null;
     }
   } else if (t.dataset.merge) {
-    ui.confirm = t.dataset.merge;
+    setMergeConfirmation(t.dataset.merge, t.dataset.mergeAction);
   } else if (t.dataset.conflict) {
     ui.confirm = `conflict:${t.dataset.conflict}`;
   } else if (t.dataset.conflictGo) {

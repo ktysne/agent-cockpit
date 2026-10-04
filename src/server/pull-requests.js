@@ -413,13 +413,45 @@ async function crossReviewToolExists(cwd, fileSystem = fs) {
   }
 }
 
+async function detectCrossReviewTool(cwd, fileSystem = fs) {
+  if (typeof cwd !== 'string' || !cwd || !path.isAbsolute(cwd)) return { status: 'unknown' };
+  try {
+    const cwdStat = await fileSystem.stat(cwd);
+    if (!cwdStat.isDirectory()) return { status: 'unknown' };
+  } catch {
+    return { status: 'unknown' };
+  }
+
+  let current = path.resolve(cwd);
+  while (true) {
+    try {
+      await fileSystem.stat(path.join(current, '.git'));
+      break;
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) return { status: 'unknown' };
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return { status: 'unknown' };
+    current = parent;
+  }
+
+  try {
+    await fileSystem.stat(path.join(current, 'tools', 'cross-review.js'));
+    return { status: 'present', root: current };
+  } catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) return { status: 'absent', root: current };
+    return { status: 'unknown' };
+  }
+}
+
 async function readCrossReviewState(registration, pullRequest, fileSystem = fs) {
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
-  if (!(await crossReviewToolExists(registration.cwd, fileSystem))) return { notRequired: true, source: 'tool-absent' };
-  const root = await findWorktreeRoot(registration.cwd, fileSystem);
-  if (!root) return undefined;
+  const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
+  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
+  if (tool.status !== 'present') return null;
+  const { root } = tool;
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');

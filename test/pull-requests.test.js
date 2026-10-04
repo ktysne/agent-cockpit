@@ -927,9 +927,36 @@ test('tools/cross-review.js が無い worktree はレビュー不要として扱
   assert.deepEqual(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), {
     notRequired: true, source: 'tool-absent',
   });
-  assert.deepEqual(await readCrossReviewState({ number: 55, cwd: path.join(root, 'missing') }, { headRefName: 'feat/pr' }), {
-    notRequired: true, source: 'tool-absent',
-  });
+});
+
+test('保存した cwd が消失した worktree はクロスレビュー未実施として扱う', async (t) => {
+  const root = await temporaryDirectory(t);
+  const cwd = path.join(root, 'checkout');
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(cwd);
+  await fs.rm(cwd, { recursive: true });
+
+  assert.equal(await readCrossReviewState({ number: 55, cwd }, { headRefName: 'feat/pr' }), null);
+});
+
+test('保存した cwd を読み取れない worktree はクロスレビュー未実施として扱う', async (t) => {
+  const root = await temporaryDirectory(t);
+  const cwd = path.join(root, 'src');
+  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(cwd);
+  const fileSystem = {
+    stat: (target) => {
+      if (target === cwd) {
+        const error = new Error('permission denied');
+        error.code = 'EACCES';
+        return Promise.reject(error);
+      }
+      return fs.stat(target);
+    },
+    readFile: fs.readFile,
+  };
+
+  assert.equal(await readCrossReviewState({ number: 55, cwd }, { headRefName: 'feat/pr' }, fileSystem), null);
 });
 
 test('tools/cross-review.js はあるが状態ファイルがまだ無い worktree は null を返す', async (t) => {

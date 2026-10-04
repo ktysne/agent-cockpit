@@ -725,6 +725,9 @@ function saveDisplayPreferences(changes) {
     settleDisplayPreferenceSaves(saves, saved);
     if (!saved) {
       renderDisplaySettings();
+      if (saves.some(({ key }) => key === 'mergeableCondition')) {
+        for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
+      }
       if (lastState) render(lastState);
     }
     return saved;
