@@ -12,18 +12,45 @@ function functionSource(source, name) {
   return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
 }
 
-test('再表示案内は件数札の直後にあり、通信案内は上部に残る', () => {
+test('注記は一覧と接続案内の後ろに置き、固定表示に含めない', () => {
   for (const html of [mock, web]) {
-    const connection = html.indexOf('id="connection-note"');
-    const root = html.indexOf('id="root"');
+    const header = html.indexOf('<header class="top">');
+    const headerEnd = html.indexOf('</header>', header);
     const summary = html.indexOf('id="summary"');
+    const root = html.indexOf('id="root"');
+    const connection = html.indexOf('id="connection-note"');
+    const reload = html.indexOf('id="reload-note"');
     const hiddenKinds = html.indexOf('id="filter-note"');
     const hiddenSessions = html.indexOf('id="excluded-note"');
+    const finished = html.indexOf('id="finished-note"');
 
-    assert.ok(connection < root);
-    assert.ok(summary < hiddenKinds);
+    assert.ok(header >= 0 && summary > header && summary < headerEnd);
+    assert.ok(headerEnd < root);
+    assert.ok(root < connection);
+    assert.ok(connection < reload);
+    assert.ok(reload < hiddenKinds);
     assert.ok(hiddenKinds < hiddenSessions);
-    assert.ok(hiddenSessions < root);
+    assert.ok(hiddenSessions < finished);
+  }
+});
+
+test('経路の切り替えには操作名を残し、補足文を表示しない', () => {
+  for (const html of [mock, web]) {
+    assert.doesNotMatch(html, /route-note|既定は Codex で実装|既定はクロスレビューの手順が推奨する方法/);
+    assert.match(html, /role="group" aria-label="\$\{ROUTE\[[^\]]+\]\.label\}の経路"/);
+  }
+});
+
+test('項目説明を消し、回答内容とマージ照合の SHA は残す', () => {
+  for (const html of [mock, web]) {
+    assert.doesNotMatch(html, /許可はデスクトップアプリの .*ダッシュボードからは出せない/);
+    assert.doesNotMatch(html, /質問はデスクトップアプリの .*セッションで答える/);
+    assert.doesNotMatch(html, /ほかの案は押して選べる|推奨が無いので、選択肢を押して選ぶか、指示の欄に答えを書く/);
+    assert.doesNotMatch(html, /結果を PR を作ったセッションへ知らせる|このセッションが作った PR はありません/);
+    assert.doesNotMatch(html, /リモートのブランチ .* は GitHub が自動で削除する/);
+    assert.match(html, /OK で送る答え:/);
+    assert.match(html, /照合する head SHA:/);
+    assert.match(html, /選択した条件の未達:/);
   }
 });
 
@@ -519,14 +546,14 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
   assert.equal(focused, null);
 });
 
-test('種類別の並び順は最初のセクションより前に置く', () => {
+test('種類別の並び順札は表示せず、設定順にセクションを並べる', () => {
   const mockKind = functionSource(mock, 'renderKindMode');
   const webKind = functionSource(web, 'renderKindSections');
 
-  assert.match(mockKind, /return orderBar \+ orderedSectionKeys\(DEFAULT_SECTION_ORDER\)/);
-  assert.doesNotMatch(mockKind, /section\('あなたの判断が必要なこと[^\n]*, orderBar\)/);
-  assert.match(webKind, /return \[productOrder, \.\.\.orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(\(key\) => sections\[key\]\)\.filter\(Boolean\)\]/);
-  assert.doesNotMatch(webKind, /kindSection\('あなたの判断が必要なこと[^\n]*, productOrder\)/);
+  assert.match(mockKind, /return orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(key => sections\[key\]\)\.join\(''\)/);
+  assert.doesNotMatch(mockKind, /orderBar|kind-order|kindProductOrder/);
+  assert.match(webKind, /return orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(\(key\) => sections\[key\]\)\.filter\(Boolean\)/);
+  assert.doesNotMatch(webKind, /kindProductOrder|kind-order|productOrder/);
 });
 
 test('種類別とプロダクト別のセクションは設定順に並び、既定順では従来の順を保つ', () => {
@@ -555,7 +582,6 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       kindEndedAgentCount: () => 0,
       kindTodoTaskCount: () => 0,
       kindDoneTaskCount: () => 0,
-      kindProductOrder: () => ({ label: 'kindProductOrder' }),
       hasHiddenJudgmentItems: () => false,
       kindSection: (label, content) => ({ label, content }),
       sinceSeenBox: () => element('div', 'news'),
@@ -572,7 +598,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
     });
     vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
-      context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label || 'kindProductOrder'),
+      context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
     ));
     const session = { session_id: 'session-1', status: 'busy', decisions: [], tasks: [] };
     const sessionBlock = context.sessionBlock({ sessions: [session] }, session, false);
@@ -583,13 +609,13 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
 
   const defaultResult = renderWithOrder(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
   assert.deepEqual(defaultResult.kindSections, [
-    'kindProductOrder', '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること', 'プルリクエスト',
+    '前回見てから', 'あなたの判断が必要なこと', 'タスクと完了条件', '今やっていること', 'プルリクエスト',
   ]);
   assert.deepEqual(defaultResult.sessionParts, ['session-1', 'あなたの判断が必要なこと', 'permission', 'decision', 'task', '今やっていること', 'now-content', 'agent']);
 
   const customResult = renderWithOrder(['prs', 'now', 'tasks', 'judgment', 'sinceSeen']);
   assert.deepEqual(customResult.kindSections, [
-    'kindProductOrder', 'プルリクエスト', '今やっていること', 'タスクと完了条件', 'あなたの判断が必要なこと', '前回見てから',
+    'プルリクエスト', '今やっていること', 'タスクと完了条件', 'あなたの判断が必要なこと', '前回見てから',
   ]);
   assert.deepEqual(customResult.sessionParts, ['session-1', '今やっていること', 'now-content', 'agent', 'task', 'あなたの判断が必要なこと', 'permission', 'decision']);
 });
@@ -599,9 +625,9 @@ test('種類別のタスクにはタスクがあるセッションだけを含�
   const webKind = functionSource(web, 'renderKindSections');
 
   assert.match(mockKind, /sessions\.filter\(\(\{ session \}\) => session\.tasks\.length > 0\)/);
-  assert.match(mockKind, /\|\| '<div class="empty">ありません<[/]div>'/);
+  assert.doesNotMatch(mockKind, /class="empty">ありません/);
   assert.match(webKind, /if \(!session\.tasks\.length\) continue/);
-  assert.match(webKind, /if \(!tasks\.children\.length\) tasks\.append\(element\('div', 'empty', 'ありません'\)\)/);
+  assert.doesNotMatch(webKind, /tasks\.append\(element\('div', 'empty', 'ありません'\)\)/);
 });
 
 test('許可待ちと判断事項のフィルターは非表示の行を検出する', () => {
@@ -722,7 +748,7 @@ test('種類別の混在セクションは残し、隠した判断事項だけ�
   const webKind = functionSource(web, 'renderKindSections');
 
   assert.match(mockKind, /const showJudgment = Boolean\(decisionItems \|\| endedDecisionToggle\) \|\| !hiddenJudgmentItems/);
-  assert.match(mockKind, /const now = `?<div class="now">/);
+  assert.match(mockKind, /const now = nowRowsByAge\.length \? `<div class="now">/);
   assert.match(webKind, /judgment: waitingItems\.length \|\| endedDecisionItems\.length \|\| !hasHiddenJudgments/);
   assert.match(webKind, /activityItems\.push\(\{ age: sessionActivityTime\(session\), row: mainRow/);
 });

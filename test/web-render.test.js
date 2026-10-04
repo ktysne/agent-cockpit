@@ -97,7 +97,7 @@ test('種類別の判断事項は有効な回答を送ったものを後ろに�
   assert.deepEqual(ordered.map(({ decision }) => decision.id), ['waiting', 'ignored', 'recent', 'sent']);
 });
 
-test('種類別の今やっていることは行が無いときに空表示する', () => {
+test('種類別の今やっていることは行が無いとき本文を出さない', () => {
   const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
   const start = pageHtml.indexOf('function renderKindSections(products) {');
   const end = pageHtml.indexOf('\nfunction ', start + 1);
@@ -122,7 +122,6 @@ test('種類別の今やっていることは行が無いときに空表示す�
     kindEndedAgentCount: () => 0,
     kindTodoTaskCount: () => 0,
     kindDoneTaskCount: () => 0,
-    kindProductOrder: () => new FakeElement('div'),
     kindSection: (title, body) => ({ title, body }),
     orderedSectionKeys: (keys) => keys,
     isFilterShown: () => false,
@@ -130,9 +129,8 @@ test('種類別の今やっていることは行が無いときに空表示す�
   vm.runInContext(`${element}\n${render}`, context);
 
   const now = context.renderKindSections([]).find((section) => section.title === '今やっていること');
-  assert.equal(now.body.children[0].className, 'now');
-  assert.equal(now.body.children[0].children[0].className, 'empty');
-  assert.equal(now.body.children[0].children[0].textContent, 'ありません');
+  assert.equal(now.body.className, 'body now');
+  assert.equal(now.body.children.length, 0);
 });
 
 function reloadHarness(initialUiVersion, drafts = []) {
@@ -734,7 +732,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(context.crossReviewState({ headRefOid: headSha }).warn, null);
 });
 
-test('マージと予約の確認欄は head がレビューの後に変わったか記録が無ければ警告を先頭に出し、一致していれば PR のコメントで確かめる一言を出す', () => {
+test('マージと予約の確認欄は警告と照合用 SHA を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpersStart = html.indexOf('function element(tag, className, text)');
   const helpersEnd = html.indexOf('function durationLabel', helpersStart);
@@ -788,22 +786,24 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
     const effects = confirmation(automatic, changedReview);
     assert.equal(effects[0].className, 'warn');
     assert.equal(effects[0].textContent, 'head aaaaaaa はクロスレビューの後に変更されている (レビュー済みは bbbbbbb)');
+    assert.equal(effects[1].children[0].textContent, '照合する head SHA: ');
+    assert.equal(effects[1].children[1].textContent, 'aaaaaaa');
 
     const reviewedEffects = confirmation(automatic, {
       round: 1, max: 3, dismissed: 0, reviewedSha: headSha,
     });
-    assert.equal(reviewedEffects[0].className, '');
-    assert.equal(reviewedEffects[0].textContent, 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる。');
-    assert.equal(reviewedEffects[1].children[0].textContent, 'head が ');
-    assert.equal(reviewedEffects[1].children[1].textContent, 'aaaaaaa');
-    assert.equal(reviewedEffects[1].children[1].title, headSha);
+    assert.equal(reviewedEffects.length, 1);
+    assert.equal(reviewedEffects[0].children[0].textContent, '照合する head SHA: ');
+    assert.equal(reviewedEffects[0].children[1].textContent, 'aaaaaaa');
+    assert.equal(reviewedEffects[0].children[1].title, headSha);
   }
   const missingReviewEffects = confirmation(false, null);
   assert.equal(missingReviewEffects[0].className, 'warn');
   assert.equal(missingReviewEffects[0].textContent, 'クロスレビューの記録が無い');
+  assert.equal(missingReviewEffects.length, 2);
   const absentReviewEffects = confirmation(false, undefined);
-  assert.equal(absentReviewEffects[0].className, '');
-  assert.doesNotMatch(absentReviewEffects[0].textContent, /クロスレビュー|head を確かめられない/);
+  assert.equal(absentReviewEffects.length, 1);
+  assert.equal(absentReviewEffects[0].children[0].textContent, '照合する head SHA: ');
   const unverifiableEffects = confirmation(false, {
     round: 1, max: 3, dismissed: 0, reviewedSha: null,
   });
@@ -824,8 +824,8 @@ test('マージと予約の確認欄は head がレビューの後に変わっ�
     round: 2, max: 3, dismissed: 0, reviewedSha: null,
     triage: { round: 2, sha: headSha, outcome: 'converged' },
   });
-  assert.equal(convergedEffects[0].className, '');
-  assert.equal(convergedEffects[0].textContent, 'クロスレビューはこの head で収束した (2 往復目)');
+  assert.equal(convergedEffects.length, 1);
+  assert.equal(convergedEffects[0].children[0].textContent, '照合する head SHA: ');
   const changedConvergenceEffects = confirmation(false, {
     round: 2, max: 3, dismissed: 0, reviewedSha: headSha,
     triage: { round: 2, sha: 'b'.repeat(40), outcome: 'converged' },
@@ -1851,8 +1851,12 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
   const mergeRoot = new FakeElement('div');
   context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest);
   const mergeNodes = flatten(mergeRoot);
-  const effectText = 'リモートのブランチ feature/pr-42 は GitHub が自動で削除する (リポジトリの設定)';
-  assert.ok(mergeNodes.some((node) => node.textContent === effectText));
+  const shaEffect = mergeNodes.find((node) => node.children?.[0]?.textContent === '照合する head SHA: ');
+  assert.ok(shaEffect);
+  assert.equal(shaEffect.children[1].textContent, 'abc123');
+  assert.ok(mergeNodes.some((node) => node.className === 'merge-condition-warning'));
+  const effectText = mergeNodes.map((node) => node.textContent).join(' ');
+  assert.doesNotMatch(effectText, /GitHub が自動で削除する|結果を PR を作ったセッションへ知らせる/);
   const reviewMerge = mergeNodes.find((node) => node.dataset?.mergeAfterReview === 'true');
   assert.ok(reviewMerge);
   assert.equal(reviewMerge.checked, false);
