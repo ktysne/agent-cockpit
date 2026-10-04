@@ -692,6 +692,7 @@ async function runningServer(t, options = {}) {
   const runtime = await startServer({
     homeDir,
     claudeHome,
+    userHome: homeDir,
     port: 0,
     ...options,
   });
@@ -726,6 +727,7 @@ test('/api/state は Claude のホームにある codex-agent.sh の有無を返
   const runtime = await startServer({
     homeDir,
     claudeHome,
+    userHome: homeDir,
     port: 0,
     codexAgentScriptExists: async (filePath) => {
       assert.equal(filePath, scriptPath);
@@ -743,6 +745,28 @@ test('/api/state は Claude のホームにある codex-agent.sh の有無を返
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   await fs.writeFile(scriptPath, '');
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: true, crossReview: false });
+});
+
+test('/api/state は CLAUDE_CONFIG_DIR が別の場所でも ~/.claude にある codex-agent.sh を検出する', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  const claudeHome = path.join(homeDir, 'custom-claude-home');
+  const userHome = path.join(homeDir, 'user');
+  const fallbackScript = path.join(userHome, '.claude', 'tools', 'codex-agent.sh');
+  const inspected = [];
+  const runtime = await startServer({
+    homeDir,
+    claudeHome,
+    userHome,
+    port: 0,
+    codexAgentScriptExists: async (filePath) => {
+      inspected.push(filePath);
+      return filePath === fallbackScript;
+    },
+  });
+  t.after(() => runtime.close());
+
+  assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).integrations, { codexAgent: true, crossReview: false });
+  assert.deepEqual(inspected, [path.join(claudeHome, 'tools', 'codex-agent.sh'), fallbackScript]);
 });
 
 test('/api/state は稼働中と PR 登録の worktree にあるクロスレビューの道具を検出する', async (t) => {
