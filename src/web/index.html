@@ -1523,7 +1523,8 @@ function removePullRequestMergeResult(id) {
 function visiblePullRequestGroups(groups) {
   if (!displayPreferences.hideFinished) return groups;
   return groups.filter((group) => group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
-    || group.mergeHistory?.some((record) => record.headMismatch === true || record.automatic === true)
+    || group.mergeHistory?.some((record) => record.headMismatch === true
+      || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record, record.mergedAt)))
     || group.reservationNotices?.length || hasPullRequestMergeResults(group));
 }
 
