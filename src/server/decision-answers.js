@@ -1,4 +1,5 @@
 const { sanitizeQuestions } = require('./events');
+const { isStoredSessionId } = require('./session-ids');
 const { TaskNudges } = require('./task-nudges');
 
 const ANSWER_WAIT_MS = 5 * 60_000;
@@ -157,6 +158,7 @@ class DecisionAnswerDelivery {
     }, createdAt);
     if (hasDuplicateQuestions({ questions: event.questions })) {
       this.releaseAskWaitsForDecision(sessionId, decisionId);
+      // 同じ値でも lifecycle の更新時刻、状態版、保存要求を更新する。
       this.state.setDecisionLifecycle(sessionId, decisionId, {
         answer: null,
         awaitingAnswerUntil: null,
@@ -302,7 +304,7 @@ class DecisionAnswerDelivery {
   notifySessions(sessionIds, message) {
     if (!Array.isArray(sessionIds) || typeof message !== 'string' || !message.trim()) return false;
     for (const sessionId of new Set(sessionIds)) {
-      if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) continue;
+      if (!isStoredSessionId(sessionId)) continue;
       const pending = this.sessionNotifications.get(sessionId) || [];
       pending.push(message.slice(0, 8000));
       this.sessionNotifications.set(sessionId, pending.slice(-20));

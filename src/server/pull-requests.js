@@ -3,8 +3,9 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { isCompleteCommitSha, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, repositoryKey, validRepositoryPart } = require('./pull-request-utils');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
+const { findWorktreeRoot } = require('./git-worktree');
 
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
@@ -381,28 +382,10 @@ function safeRepo(owner, repo) {
   return `${owner}/${repo}`;
 }
 
-function repoKey(owner, repo) {
-  return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
-}
-
-async function findWorktreeRoot(cwd, fileSystem = fs) {
-  if (typeof cwd !== 'string' || !cwd || !path.isAbsolute(cwd)) return null;
-  let current = path.resolve(cwd);
-  while (true) {
-    try {
-      await fileSystem.stat(path.join(current, '.git'));
-      return current;
-    } catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) return null;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
-}
+const repoKey = repositoryKey;
 
 async function crossReviewToolExists(cwd, fileSystem = fs) {
-  const root = await findWorktreeRoot(cwd, fileSystem);
+  const { root } = await findWorktreeRoot(cwd, fileSystem);
   if (!root) return false;
   try {
     await fileSystem.stat(path.join(root, 'tools', 'cross-review.js'));
@@ -421,18 +404,9 @@ async function detectCrossReviewTool(cwd, fileSystem = fs) {
     return { status: 'unknown' };
   }
 
-  let current = path.resolve(cwd);
-  while (true) {
-    try {
-      await fileSystem.stat(path.join(current, '.git'));
-      break;
-    } catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) return { status: 'unknown' };
-    }
-    const parent = path.dirname(current);
-    if (parent === current) return { status: 'unknown' };
-    current = parent;
-  }
+  const worktree = await findWorktreeRoot(cwd, fileSystem);
+  if (!worktree.root) return { status: 'unknown', reason: worktree.reason };
+  const current = worktree.root;
 
   try {
     await fileSystem.stat(path.join(current, 'tools', 'cross-review.js'));
@@ -517,7 +491,7 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   let selected = await readCrossReviewState(registration, pullRequest, fileSystem);
   const branch = pullRequest?.headRefName;
   if (selected === undefined || !branch) return selected;
-  const root = await findWorktreeRoot(registration.cwd, fileSystem);
+  const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
   if (!root) return selected;
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   for (const worktree of await listWorktreesForBranch(root, branch, options.execFileImpl)) {
@@ -728,6 +702,10 @@ class PullRequestTracker {
       registrations,
       pullRequest,
     };
+  }
+
+  repositoryState(owner, repo) {
+    return this.repositories.get(repositoryKey(owner, repo)) || null;
   }
 
   async execute(args) {

@@ -1,13 +1,13 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { isShortSessionId } = require('./session-ids');
 
 const MAX_TRANSCRIPT_BYTES = 256 * 1024;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
 const INTERRUPTED_PREFIX = '[Request interrupted';
 const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function transcriptPathFor(claudeHome, cwd, sessionId) {
-  if (typeof cwd !== 'string' || cwd.length === 0 || !SESSION_ID_PATTERN.test(sessionId)) return null;
+  if (typeof cwd !== 'string' || cwd.length === 0 || !isShortSessionId(sessionId)) return null;
   const projectsDirectory = path.resolve(claudeHome, 'projects');
   const projectDirectory = path.resolve(projectsDirectory, cwd.replace(/[^A-Za-z0-9]/g, '-'));
   const filePath = path.resolve(projectDirectory, `${sessionId}.jsonl`);

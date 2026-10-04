@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { removeDirectory } = require('./fs-utils');
 
 const DEFAULT_BROWSER_PATHS = Object.freeze({
   win32: [
@@ -142,10 +143,6 @@ function killProcessTree(child) {
   });
 }
 
-async function removeDirectory(directory) {
-  await fsp.rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
-}
-
 /**
  * ブラウザをヘッドレスで起動して DevTools につなぐ。
  * 普段のプロファイルの localStorage と拡張機能が画面に混ざらないよう、一時のユーザーデータを使う。
@@ -175,7 +172,7 @@ async function launchBrowser({ browserPath, temporaryParent = os.tmpdir() }) {
       else child.once('exit', resolve);
       setTimeout(resolve, 5_000).unref();
     });
-    await removeDirectory(userDataDirectory);
+    await removeDirectory(userDataDirectory, { maxRetries: 20, retryDelay: 200 });
   }
 
   try {

@@ -3,22 +3,12 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { recommendedOptionFor, sanitizeEvent } = require('./events');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
-const { isCompleteCommitSha, parsePullRequestUrl, validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, pullRequestKey, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const { cloneDisplay, defaultDisplay, normalizeDisplay } = require('./display-preferences');
+const { isStoredSessionId } = require('./session-ids');
+const { isRecord } = require('./value-utils');
 
 const DEFAULT_AWAY_STATE = Object.freeze({ enabled: false, since: null, periods: Object.freeze([]) });
-const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
-const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
-const DEFAULT_LONG_WAIT_MINUTES = 15;
-const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
-const DEFAULT_IDLE_HIDE_MINUTES = 30;
-const DEFAULT_MERGE_RESULT_HIDE_MINUTES = 5;
-const DEFAULT_DISPLAY = Object.freeze({
-  mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
-  longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES, hideFinished: true,
-  idleHideMinutes: DEFAULT_IDLE_HIDE_MINUTES,
-  mergeResultHideMinutes: DEFAULT_MERGE_RESULT_HIDE_MINUTES,
-  mergeableCondition: 'cross-review', mergeAfterReviewDefault: false,
-});
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const TRANSIENT_NOTICE_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
@@ -27,8 +17,9 @@ const MAX_AWAY_PERIODS = 50;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
-const MERGEABLE_CONDITIONS = new Set(['operation', 'ci', 'cross-review']);
-const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'agents', 'prs']);
+const pullRequestRecordKey = pullRequestKey;
+const relatedPullRequestRecordKey = pullRequestKey;
+const pullRequestRepositoryKey = repositoryKey;
 
 function validProduct(value) {
   return isRecord(value) && typeof value.key === 'string' && value.key.trim().length > 0 && value.key.length <= 500 &&
@@ -43,57 +34,8 @@ function repoProduct(owner, repo) {
   return { key: `repo:${owner}/${repo}`, name: `${owner}/${repo}` };
 }
 
-function cloneDisplay(display) {
-  if (display === null) return null;
-  return {
-    mode: display.mode,
-    order: [...display.order],
-    pinned: [...display.pinned],
-    collapsed: [...display.collapsed],
-    hidden: [...display.hidden],
-    sectionOrder: [...display.sectionOrder],
-    longWaitMinutes: display.longWaitMinutes,
-    awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
-    idleHideMinutes: display.idleHideMinutes,
-    mergeResultHideMinutes: display.mergeResultHideMinutes,
-    hideFinished: display.hideFinished,
-    mergeableCondition: display.mergeableCondition,
-    mergeAfterReviewDefault: display.mergeAfterReviewDefault,
-  };
-}
-
-function defaultDisplay() {
-  return {
-    mode: DEFAULT_DISPLAY.mode, order: [], pinned: [], collapsed: [], hidden: [],
-    sectionOrder: [...DEFAULT_DISPLAY.sectionOrder],
-    longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
-    awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
-    idleHideMinutes: DEFAULT_DISPLAY.idleHideMinutes,
-    mergeResultHideMinutes: DEFAULT_DISPLAY.mergeResultHideMinutes,
-    hideFinished: DEFAULT_DISPLAY.hideFinished,
-    mergeableCondition: DEFAULT_DISPLAY.mergeableCondition,
-    mergeAfterReviewDefault: DEFAULT_DISPLAY.mergeAfterReviewDefault,
-  };
-}
-
-function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
-  return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
-}
-
-function normalizeSectionOrder(order) {
-  const known = [];
-  for (const key of Array.isArray(order) ? order : []) {
-    if (SECTION_ORDER_KEYS.has(key) && !known.includes(key)) known.push(key);
-  }
-  return [...known, ...DEFAULT_SECTION_ORDER.filter((key) => !known.includes(key))];
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function validStoredSessionId(value) {
-  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+  return isStoredSessionId(value);
 }
 
 function validTimestamp(value, nullable = false) {
@@ -106,42 +48,6 @@ function stableStringify(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
-}
-
-function normalizeDisplay(value) {
-  if (value === null) return null;
-  if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'mergeResultHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault']);
-  if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
-  if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
-  for (const key of ['order', 'pinned', 'collapsed']) {
-    if (!Array.isArray(value[key]) || value[key].length > 200 || value[key].some((item) => typeof item !== 'string' || item.length > 500)) {
-      throw new Error('Invalid display preferences');
-    }
-    if (new Set(value[key]).size !== value[key].length) throw new Error('Invalid display preferences');
-  }
-  if (!Array.isArray(value.hidden) || value.hidden.length > 200 || value.hidden.some((key) => typeof key !== 'string' || key.length > 500)) {
-    throw new Error('Invalid display preferences');
-  }
-  const hidden = value.hidden.filter((key) => DISPLAY_FILTER_KEYS.has(key));
-  if (value.hidden.some((key) => !DISPLAY_FILTER_KEYS.has(key) && key !== 'held') || new Set(hidden).size !== hidden.length) {
-    throw new Error('Invalid display preferences');
-  }
-  return {
-    mode: value.mode,
-    order: [...value.order],
-    pinned: [...value.pinned],
-    collapsed: [...value.collapsed],
-    hidden,
-    sectionOrder: normalizeSectionOrder(value.sectionOrder),
-    longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
-    awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
-    idleHideMinutes: normalizeDisplayMinutes(value.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
-    mergeResultHideMinutes: normalizeDisplayMinutes(value.mergeResultHideMinutes, 1, 60, DEFAULT_MERGE_RESULT_HIDE_MINUTES),
-    hideFinished: typeof value.hideFinished === 'boolean' ? value.hideFinished : DEFAULT_DISPLAY.hideFinished,
-    mergeableCondition: MERGEABLE_CONDITIONS.has(value.mergeableCondition) ? value.mergeableCondition : DEFAULT_DISPLAY.mergeableCondition,
-    mergeAfterReviewDefault: typeof value.mergeAfterReviewDefault === 'boolean' ? value.mergeAfterReviewDefault : DEFAULT_DISPLAY.mergeAfterReviewDefault,
-  };
 }
 
 function validStoredPlan(plan) {
@@ -159,18 +65,10 @@ function validStoredPlan(plan) {
       (decision.finishedByToolUseId === undefined || typeof decision.finishedByToolUseId === 'string'));
 }
 
-function pullRequestRecordKey(owner, repo, number) {
-  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
-}
-
 function pullRequestRegistrationKey(record) {
   return crypto.createHash('sha256')
     .update([record.session_id, record.owner.toLowerCase(), record.repo.toLowerCase(), record.number, record.addedAt].join('\0'))
     .digest('hex');
-}
-
-function relatedPullRequestRecordKey(owner, repo, number) {
-  return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
 }
 
 function validCrossReviewSkip(record) {
@@ -190,10 +88,6 @@ function normalizeCrossReviewSkip(record) {
     reason: record.reason,
     recordedAt: record.recordedAt,
   };
-}
-
-function pullRequestRepositoryKey(owner, repo) {
-  return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
 }
 
 function validPullRequestLastOpen(value) {
@@ -1515,7 +1409,7 @@ class DashboardState {
   }
 
   pullRequestRegistrationByKey(registrationKey) {
-    if (typeof registrationKey !== 'string' || !/^[a-f0-9]{64}$/i.test(registrationKey)) return null;
+    if (!isSha256Digest(registrationKey)) return null;
     const record = this.pullRequestRegistrations().find((candidate) => pullRequestRegistrationKey(candidate) === registrationKey);
     return record ? normalizePullRequestRecord(record) : null;
   }

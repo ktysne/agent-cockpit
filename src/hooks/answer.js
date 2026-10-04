@@ -1,7 +1,8 @@
 const crypto = require('node:crypto');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { MAX_LONG_POLL_MS, denyAnswerOutput } = require('../server/decision-answers');
-const { readServerInfo } = require('./event');
+const { postToServer } = require('../client/server-connection');
+const { isHookSessionId } = require('../server/session-ids');
 
 const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
@@ -9,7 +10,7 @@ const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
 const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
 
 function validSessionId(value) {
-  return typeof value === 'string' && /^[A-Za-z0-9-]{1,128}$/.test(value);
+  return isHookSessionId(value);
 }
 
 function isParentAlive(pid, processApi = process) {
@@ -40,31 +41,19 @@ async function postHookRequest(body, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || Date.now;
   const deadline = now() + (options.timeoutMs || 1_000);
-  let info = await readServerInfo(homeDir, options.fileSystem);
-  for (let attempt = 0; attempt < 2 && now() < deadline; attempt += 1) {
-    if (!info) return null;
-    const remaining = deadline - now();
-    const attemptTimeout = Math.min(options.attemptTimeoutMs || remaining, remaining);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), attemptTimeout);
-    try {
-      const response = await fetchImpl(`http://127.0.0.1:${info.port}/api/hooks/answers`, {
-        method: 'POST',
-        cache: 'no-store',
-        headers: { 'content-type': 'application/json', 'x-cockpit-secret': info.secret },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (response.ok) return await response.json();
-      if (response.status !== 401 || attempt > 0) return null;
-    } catch {
-      if (attempt > 0) return null;
-    } finally {
-      clearTimeout(timer);
-    }
-    info = await readServerInfo(homeDir, options.fileSystem);
-  }
-  return null;
+  const result = await postToServer('/api/hooks/answers', body, {
+    homeDir,
+    fetchImpl,
+    cache: 'no-store',
+    deadline,
+    attemptTimeoutMs: options.attemptTimeoutMs,
+    fileSystem: options.fileSystem,
+    readServerInfo: options.readServerInfo,
+    ensure: false,
+    reuseInfoOnConnectionFailure: true,
+    now,
+  });
+  return result.ok ? result.json : null;
 }
 
 async function runAskQuestion(input, options) {

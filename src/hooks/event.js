@@ -1,11 +1,17 @@
-const fs = require('node:fs');
-const fsp = require('node:fs/promises');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
-const { isGithubCredentialEnvironmentVariable } = require('../server/credential-environment');
+const {
+  HOOK_TIMEOUT_MS,
+  acquireStartLock,
+  childEnvironment,
+  ensureServerRunning,
+  launchServer,
+  postToServer,
+  readServerInfo,
+  releaseStartLock,
+  serverIsHealthy,
+} = require('../client/server-connection');
 const {
   firstPullRequestUrl,
   isGhPrCreateCommand,
@@ -13,9 +19,6 @@ const {
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
 
-const SERVER_SCRIPT = path.join(__dirname, '..', 'server', 'server.js');
-const SERVER_PORT = Number(process.env.AGENT_COCKPIT_PORT || 47821);
-const HOOK_TIMEOUT_MS = 1000;
 
 function pickString(value) {
   return typeof value === 'string' ? value : '';
@@ -309,201 +312,27 @@ function makeHookEvent(input, now = Date.now()) {
   } else if (eventName === 'Notification') {
     event.notification_type = pickString(input.notification_type).slice(0, 100);
     event.message = pickString(input.message).slice(0, 200);
-  } else if (eventName === 'SubagentStart' || eventName === 'SubagentStop') {
-    if (typeof input.agent_type === 'string') event.agent_type = input.agent_type;
   }
   return event;
 }
 
-function serverInfoPath(homeDir) {
-  return path.join(homeDir, 'server.json');
-}
-
-async function readServerInfo(homeDir, fileSystem = fsp) {
-  try {
-    const value = JSON.parse(await fileSystem.readFile(serverInfoPath(homeDir), 'utf8'));
-    if (
-      !value || !Number.isInteger(value.port) || typeof value.secret !== 'string' ||
-      !Number.isInteger(value.pid) || typeof value.startedAt !== 'string'
-    ) return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-function childEnvironment(environment) {
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => !key.startsWith('CLAUDE_CODE_') &&
-    !isGithubCredentialEnvironmentVariable(key)));
-}
-
-async function launchServer({ homeDir, environment = process.env, spawnProcess = spawn }) {
-  await fsp.mkdir(homeDir, { recursive: true });
-  const logPath = path.join(homeDir, 'server.log');
-  const logFd = fs.openSync(logPath, 'w');
-  try {
-    const child = spawnProcess(process.execPath, [SERVER_SCRIPT, '--port', String(SERVER_PORT)], {
-      cwd: homeDir,
-      detached: true,
-      windowsHide: true,
-      stdio: ['ignore', logFd, logFd],
-      env: childEnvironment(environment),
-    });
-    await new Promise((resolve, reject) => {
-      child.once('spawn', resolve);
-      child.once('error', reject);
-    });
-    child.unref();
-  } finally {
-    fs.closeSync(logFd);
-  }
-}
-
-async function acquireStartLock(homeDir, now = Date.now()) {
-  const lockPath = path.join(homeDir, 'start.lock');
-  await fsp.mkdir(homeDir, { recursive: true });
-  const token = `${process.pid}-${now}-${Math.random().toString(36).slice(2)}`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fsp.open(lockPath, 'wx', 0o600);
-      await handle.writeFile(JSON.stringify({ pid: process.pid, token, createdAt: now }));
-      await handle.close();
-      return token;
-    } catch (error) {
-      if (error.code !== 'EEXIST') return null;
-      try {
-        const stat = await fsp.stat(lockPath);
-        if (now - stat.mtimeMs <= 10_000) return null;
-        await fsp.rm(lockPath);
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
-}
-
-async function releaseStartLock(homeDir, token) {
-  if (!token) return;
-  const lockPath = path.join(homeDir, 'start.lock');
-  try {
-    const lock = JSON.parse(await fsp.readFile(lockPath, 'utf8'));
-    if (lock.token === token) await fsp.rm(lockPath, { force: true });
-  } catch {
-    return;
-  }
-}
-
-async function fetchWithTimeout(fetchImpl, url, options, deadline, maximumTimeout = 300) {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error('hook deadline elapsed');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.min(maximumTimeout, remaining));
-  try {
-    return await fetchImpl(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() + 250 } = {}) {
-  if (!info) return false;
-  try {
-    const response = await fetchWithTimeout(
-      fetchImpl,
-      `http://127.0.0.1:${info.port}/health`,
-      { method: 'GET' },
-      deadline,
-      120,
-    );
-    if (!response.ok) return false;
-    const health = await response.json();
-    return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForHealthyServer(homeDir, { fetchImpl = fetch, deadline, intervalMs = 35 } = {}) {
-  while (Date.now() < deadline) {
-    const info = await readServerInfo(homeDir);
-    if (await serverIsHealthy(info, { fetchImpl, deadline: Math.min(deadline, Date.now() + 150) })) return info;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now()))));
-  }
-  return null;
-}
-
-async function ensureServerRunning({
-  homeDir,
-  fetchImpl = fetch,
-  startServer = (args) => launchServer(args),
-  environment = process.env,
-  deadline = Date.now() + HOOK_TIMEOUT_MS,
-} = {}) {
-  let info = await readServerInfo(homeDir);
-  if (await serverIsHealthy(info, { fetchImpl, deadline })) return info;
-
-  const token = await acquireStartLock(homeDir);
-  if (!token) return waitForHealthyServer(homeDir, { fetchImpl, deadline });
-
-  try {
-    info = await readServerInfo(homeDir);
-    if (await serverIsHealthy(info, { fetchImpl, deadline })) return info;
-    await startServer({ homeDir, environment });
-    return await waitForHealthyServer(homeDir, { fetchImpl, deadline });
-  } catch {
-    return null;
-  } finally {
-    await releaseStartLock(homeDir, token);
-  }
-}
-
 async function postEvent(event, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
-  const fetchImpl = options.fetchImpl || fetch;
-  const startServer = options.startServer || ((args) => launchServer(args));
-  const deadline = options.deadline || Date.now() + HOOK_TIMEOUT_MS;
-  let info = await ensureServerRunning({
+  const result = await postToServer('/api/events', event, {
     homeDir,
-    fetchImpl,
-    startServer,
+    fetchImpl: options.fetchImpl || fetch,
+    startServer: options.startServer,
     environment: options.environment || process.env,
-    deadline,
+    deadline: options.deadline || Date.now() + HOOK_TIMEOUT_MS,
+    attemptTimeoutMs: 500,
+    ensureServerRunning: options.ensureServerRunning,
+    readServerInfo: options.readServerInfo,
+    ensure: true,
+    parseJson: false,
+    reuseInfoOnUnauthorized: true,
+    ...(Object.hasOwn(options, 'initialInfo') ? { initialInfo: options.initialInfo } : {}),
   });
-
-  for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt += 1) {
-    if (!info) return false;
-    try {
-      const response = await fetchWithTimeout(
-        fetchImpl,
-        `http://127.0.0.1:${info.port}/api/events`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-cockpit-secret': info.secret,
-          },
-          body: JSON.stringify(event),
-        },
-        deadline,
-        500,
-      );
-      if (response.ok) return true;
-      if (response.status !== 401 || attempt > 0) return false;
-      const replacement = await readServerInfo(homeDir);
-      info = replacement || info;
-    } catch {
-      if (attempt > 0) return false;
-      info = await ensureServerRunning({
-        homeDir,
-        fetchImpl,
-        startServer,
-        environment: options.environment || process.env,
-        deadline,
-      });
-    }
-  }
-  return false;
+  return result.ok;
 }
 
 async function runHook(input, options = {}) {
@@ -527,6 +356,7 @@ async function runHook(input, options = {}) {
       ...options,
       homeDir,
       deadline,
+      initialInfo: info,
     });
   } else {
     await postEvent(event, { ...options, homeDir });

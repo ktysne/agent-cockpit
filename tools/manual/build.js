@@ -4,6 +4,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { expandGuideMaps } = require('./guide-map.js');
+const { escapeHtml } = require('./html-utils');
+const { isRecord: isPlainObject } = require('./value-utils');
 
 const ROOT = path.resolve(__dirname, '../..');
 const MANUAL_ROOT = path.join(ROOT, 'manual');
@@ -25,19 +27,6 @@ function readText(filePath) {
   return fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
 }
 const HELP_ANCHOR_NAME_PATTERN = /^help-[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 function assertRelativePath(value, description) {
   if (typeof value !== 'string' || value.length === 0 || path.posix.isAbsolute(value)

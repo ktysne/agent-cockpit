@@ -6,6 +6,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { installFakeClock } = require('./fake-clock');
+const { removeDirectory } = require('./fs-utils');
 const { createFakeGh } = require('./fake-gh');
 const { loadScenario, scenarioNames } = require('./demo');
 
@@ -69,10 +70,6 @@ function requestJson(port, method, requestPath, { headers = {}, body } = {}) {
     request.once('error', reject);
     request.end(payload);
   });
-}
-
-async function removeDirectory(directory) {
-  await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
 /**
