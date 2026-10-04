@@ -494,6 +494,7 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   // 長い MCP のツール名でも行からはみ出さないよう、幅の上限を超えた分は省略記号で切る。
   assert.match(source, /\.tool-name\s*\{[^}]*max-width:\s*60%/);
   assert.match(source, /\.tool-name\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(source, /\.tool-name\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(mock, /\.tool-content\s*\{[^}]*text-overflow:\s*ellipsis/);
   assert.match(mock, /\.tool-content\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(mock, /\.tool-content\s*\{[^}]*overflow:\s*hidden/);
@@ -2690,8 +2691,11 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
     assert.match(html, /\.badge\.long\s*\{[^}]*white-space:\s*normal/);
     assert.match(html, /\.badge\.long\s*\{[^}]*overflow-wrap:\s*anywhere/);
     assert.match(html, /\.badge\.long\s*\{[^}]*max-width:\s*100%/);
-    assert.match(html, /\.session-context\s*\{[^}]*white-space:\s*normal/);
-    assert.match(html, /\.session-context\s*\{[^}]*max-width:\s*100%/);
+    // マージ履歴のバッジは子要素を複数持つ。inline-flex のままだと子ごとに縦へ細く割れるので、1 つの文として流す。
+    assert.match(html, /\.badge\.long\s*\{[^}]*display:\s*inline-block/);
+    // .session-tag の nowrap に上書きされないよう、2 つのクラスで詳細度を上げる。
+    assert.match(html, /\.session-tag\.session-context\s*\{[^}]*white-space:\s*normal/);
+    assert.match(html, /\.session-tag\.session-context\s*\{[^}]*max-width:\s*100%/);
   }
   // 予約中、衝突の解消の依頼、base の付け替え、マージ履歴は、時刻やセッション名やブランチ名が入って長くなる。
   assert.match(source, /badge\(reservedText, 'accent long'\)/);

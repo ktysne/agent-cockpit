@@ -129,7 +129,8 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
-.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
+/* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
+.session-tag.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
 .session-group:not(.single) .session-body { padding-left: 12px; }
 .product-pr-divider { margin: 14px 0 0; border-top: 1px solid var(--border); }
 .kind-section-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
