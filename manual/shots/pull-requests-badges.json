@@ -1,0 +1,57 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "PR の行の札",
+  "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "hideFinished": false
+    }
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "group",
+      "target": "#root > section.section:nth-child(1) .pr-repo-group",
+      "parts": {
+        "row.heading": [
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > a.num",
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > span:not([class])"
+        ],
+        "row.state": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > .badge",
+        "row.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline .merge-btn",
+        "row.branch": [
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .branch code:first-child",
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .branch code:last-child"
+        ],
+        "row.badges": [
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .badges .badge:nth-child(1)",
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .badges .badge:nth-child(2)"
+        ],
+        "row.rounds": [
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .xr .rounds",
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .xr > span:nth-of-type(2)"
+        ],
+        "row.xr-state": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .xr .badge",
+        "row.skip": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .xr .link-btn",
+        "row.wait": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .why-not",
+        "variants.restack-badge": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(2) .badges .badge.warn",
+        "variants.restack-reason": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(2) .why-not",
+        "variants.reviewed": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(2) .xr .badge",
+        "variants.conflict-badge": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .badges .badge.danger",
+        "variants.conflict-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .conflict-btn",
+        "variants.unreviewed": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .xr",
+        "variants.draft": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(4) .badges .badge:nth-child(1)",
+        "variants.draft-reason": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(4) .why-not",
+        "variants.merged-list": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merged-list"
+      }
+    }
+  ]
+}

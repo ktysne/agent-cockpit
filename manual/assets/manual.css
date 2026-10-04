@@ -315,8 +315,8 @@ li { margin: 5px 0; }
 .gm-place-inside { transform: translate(0, 0); }
 .gm-place-top { transform: translate(-50%, -85%); }
 .gm-place-bottom { transform: translate(-50%, -15%); }
-.gm-place-left { transform: translate(-85%, -50%); }
-.gm-place-right { transform: translate(-15%, -50%); }
+.gm-place-left { transform: translate(calc(-100% - 4px), -50%); }
+.gm-place-right { transform: translate(4px, -50%); }
 .gm-place-top-start { transform: translate(0, -85%); }
 .gm-place-bottom-start { transform: translate(0, -15%); }
 .gm-list { display: grid; gap: 5px; margin: 17px 0 0; padding: 0; list-style: none; }

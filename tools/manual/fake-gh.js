@@ -180,6 +180,8 @@ function createFakeGh(definition, { now = () => Date.now(), onUnexpected = () =>
 
   function run(file, args) {
     if (file !== 'gh') fail([file, ...args], 'gh 以外のコマンド');
+    // gh を実行できない環境を再現する。unavailable には、起動の失敗の code(ENOENT など)を書く。
+    if (definition.unavailable) throw Object.assign(new Error(`spawn gh ${definition.unavailable}`), { code: definition.unavailable, stderr: '' });
     if (args[0] === 'pr') return handlePullRequest(args);
     if (args[0] === 'api') return handleApi(args);
     return fail(args);

@@ -1,0 +1,98 @@
+{
+  "name": "pending",
+  "target": "#root > section.section:nth-child(1) .pr-repo-group",
+  "width": 1576,
+  "height": 2042,
+  "parts": [
+    {
+      "key": "confirm.heading",
+      "bounds": {
+        "x": 52,
+        "y": 444,
+        "width": 1472,
+        "height": 42
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.warning",
+      "bounds": {
+        "x": 52,
+        "y": 502,
+        "width": 1472,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.methods",
+      "bounds": {
+        "x": 52,
+        "y": 556,
+        "width": 1472,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.review",
+      "bounds": {
+        "x": 52,
+        "y": 644,
+        "width": 1472,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.delete",
+      "bounds": {
+        "x": 52,
+        "y": 732,
+        "width": 1472,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.effect-review",
+      "bounds": {
+        "x": 92,
+        "y": 820,
+        "width": 1432,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.effect-head",
+      "bounds": {
+        "x": 301,
+        "y": 865,
+        "width": 92,
+        "height": 28
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.go",
+      "bounds": {
+        "x": 52,
+        "y": 915,
+        "width": 227,
+        "height": 80
+      },
+      "visible": true
+    },
+    {
+      "key": "confirm.cancel",
+      "bounds": {
+        "x": 295,
+        "y": 915,
+        "width": 140,
+        "height": 80
+      },
+      "visible": true
+    }
+  ]
+}

@@ -109,6 +109,7 @@ module.exports = function basic({ baseTime }) {
             }),
             open(42, {
               title: '枠の予約を排他制御にする', head: 'feature/slots-lock', base: 'feature/slots-api', createdMinutesAgo: 186, checks: 'pass',
+              parentCommits: [headOf(PARCEL_REPOSITORY, 41)],
             }),
             open(43, {
               title: '予約の確定を通知する', head: 'feature/slots-notify', base: 'feature/slots-lock', createdMinutesAgo: 120, checks: 'pending',

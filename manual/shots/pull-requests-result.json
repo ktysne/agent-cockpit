@@ -1,0 +1,57 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "マージの結果",
+  "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "hideFinished": false
+    }
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack .merge-btn"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(2) .merge-confirm"
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(2) .merge-confirm input[data-merge-method=\"squash\"]"
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(2) [data-merge-go]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(2) .merge-result"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(2) .merged-list"
+    },
+    {
+      "do": "screenshot",
+      "name": "result",
+      "target": "#root > section.section:nth-child(2) .pr-repo-group",
+      "parts": {
+        "result.row": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .merge-result",
+        "result.close": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .merge-result .link-btn",
+        "result.retargeted": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .badges .badge.accent",
+        "result.restack": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .badges .badge.warn",
+        "result.reason": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .why-not",
+        "result.merged-list": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .merged-list"
+      }
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "衝突の解消の依頼",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(1) .conflict-btn"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .merge-confirm.conflict"
+    },
+    {
+      "do": "screenshot",
+      "name": "confirm",
+      "target": "#root > section.section:nth-child(1) .pr-repo-group",
+      "parts": {
+        "conflict.heading": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .merge-confirm.conflict > div:first-child",
+        "conflict.effects": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .merge-confirm.conflict .effects",
+        "conflict.go": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .conflict-go",
+        "conflict.cancel": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) [data-conflict-cancel]"
+      }
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(1) [data-conflict-go]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .pr [role=\"status\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "requested",
+      "target": "#root > section.section:nth-child(1) .pr-repo-group",
+      "parts": {
+        "requested.status": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .badges[role=\"status\"] .badge",
+        "requested.again": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(3) .conflict-btn"
+      }
+    }
+  ]
+}

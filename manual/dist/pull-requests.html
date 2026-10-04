@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PR とマージ | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html" aria-current="page">PR とマージ</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html" aria-current="page">PR とマージ</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#pr-register">PR の登録</a></li>
+        <li><a href="#pr-fetch">GitHub からの取得</a></li>
+        <li class="level-3"><a href="#pr-fetch-error">GitHub CLI が使えないとき</a></li>
+        <li><a href="#pr-stack">スタックの表示</a></li>
+        <li><a href="#pr-row">PR の行の札</a></li>
+        <li class="level-3"><a href="#pr-ci-review">CI とレビューの札</a></li>
+        <li class="level-3"><a href="#pr-badges-other">そのほかの札</a></li>
+        <li class="level-3"><a href="#pr-restack">積み直し</a></li>
+        <li class="level-3"><a href="#pr-reason">マージできない理由と待ち</a></li>
+        <li class="level-3"><a href="#pr-cross-review">クロスレビューの行</a></li>
+        <li><a href="#pr-mergeable">「マージできます」の条件</a></li>
+        <li><a href="#pr-merge">マージする</a></li>
+        <li class="level-3"><a href="#pr-merge-check">マージの前に確かめること</a></li>
+        <li class="level-3"><a href="#pr-merge-stack">スタックの途中をマージする</a></li>
+        <li><a href="#pr-reserve">レビュー収束後マージ</a></li>
+        <li class="level-3"><a href="#pr-reserve-cancel">予約が取り消されるとき</a></li>
+        <li><a href="#pr-skip">レビュー不要の記録</a></li>
+        <li><a href="#pr-conflict">衝突の解消の依頼</a></li>
+        <li><a href="#pr-result">マージの結果</a></li>
+        <li class="level-3"><a href="#pr-notify">セッションへの知らせ</a></li>
+        <li class="level-3"><a href="#pr-merged-list">マージ済みの一覧</a></li></ol>
+      </details>
+<section class="section">
+  <h1>PR とマージ</h1>
+  <p class="lead">セッションが作った PR は、プロダクトのカードの <span class="ui">プルリクエスト</span> の欄に、スタックの形で並びます。
+  条件がそろった PR は、この欄から、スタックの一番下のものだけをマージできます。
+  このページでは、PR の登録と取得、行の見方、<span class="ui">マージできます</span> の条件、マージの確認欄、レビュー収束後マージの予約、レビュー不要の記録、衝突の解消の依頼、マージの結果を説明します。</p>
+
+  <h2 id="pr-register">PR の登録</h2>
+  <p>欄に出るのは、セッションに結び付けて登録した PR と、その PR とスタックでつながるオープンの PR です。
+  登録は、次のどれかで行われます。</p>
+  <ul>
+    <li>セッションが <code>gh pr create</code> を実行し、その出力に PR の URL がある。自動で登録されます</li>
+    <li>セッションが GitHub の MCP サーバーのツール(<code>create_pull_request</code>)で PR を作り、その応答に PR の URL がある。自動で登録されます</li>
+    <li>メインセッションが、Agent Cockpit のツール <code>cockpit_add_pr</code> に PR の URL を渡す。手で作った PR のように、上の 2 つで登録されなかった PR に使います</li>
+  </ul>
+  <p>URL は <code>https://github.com/&lt;owner&gt;/&lt;repo&gt;/pull/&lt;番号&gt;</code> の形でなければ登録されません。
+  PR は、登録したセッションのプロダクトの欄に出ます。</p>
+  <p>登録していない PR でも、登録した PR とスタックでつながっていれば、行に出ます。
+  ただし、その PR にはクロスレビューの行も <span class="ui">マージする</span> のボタンも出ません。
+  クロスレビューの状態を読む作業ツリーが分かるのは登録したセッションだけで、マージの操作も、登録したセッションに結び付くためです。</p>
+  <p>登録した PR が 1 件も無いプロダクトでは、<span class="ui">プルリクエスト</span> の見出しに「(0 件)」と出ます。
+  設定の <span class="ui">終わったものを表示しない</span> がオン(既定)のときは、続けて <span class="ui">オープンの PR はありません</span> と出ます。</p>
+  <details class="more">
+    <summary>登録の詳細</summary>
+    <p><code>gh pr create</code> の出力や GitHub の MCP ツールの応答に PR の URL が複数あるときは、最初の 1 件を登録します。
+    登録は常駐サーバーの保存先に保存するので、常駐サーバーを再起動しても残ります。</p>
+  </details>
+
+  <h2 id="pr-fetch">GitHub からの取得</h2>
+  <p>PR の状態は、常駐サーバーが GitHub CLI(<code>gh</code>)で GitHub から取得します。
+  <code>gh</code> に保存された認証を使い、環境変数 <code>GH_TOKEN</code> などは渡しません。
+  各リポジトリの枠の見出しに、最後に取得できてからの時間が <span class="ui">GitHub から</span> の形で出ます。</p>
+  <p>取得し直すのは、次のときです。</p>
+  <ul>
+    <li>常駐サーバーを起動した直後と、そのあとの 60 秒ごと</li>
+    <li>PR を登録した直後</li>
+    <li>セッションが、<code>git push</code> か <code>gh pr</code> で始まるコマンドを実行した後(失敗したときも含みます)</li>
+    <li>マージ、レビュー収束後マージの予約、衝突の解消の依頼、画面からのレビュー不要の記録を行う直前</li>
+  </ul>
+  <p>最後の操作の直前の取得は、画面に出ている状態が古くても、操作を最新の状態で判定するためです。</p>
+
+  <h3 id="pr-fetch-error">GitHub CLI が使えないとき</h3>
+  <p><code>gh</code> が見つからないとき、認証や通信に失敗したときは、リポジトリの見出しの下に赤い枠でエラーが出ます。
+  一度も取得できていない PR の行は出ません。
+  前に取得できていたときは、そのときの行が残り、枠が加わります。</p>
+  <figure class="guide-map" id="pr-no-gh-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/204"><div class="gm-clip"><img src="img/pull-requests-no-gh/error.png" width="788" height="102" alt="gh が見つからないときのプルリクエストの枠。リポジトリ名の右に取得の時間があり、その下の赤い枠に、PR の一覧とリポジトリ設定を取得できない旨のエラーが出ている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-no-gh-map-1" style="left:11.865%;top:11.765%" aria-label="1. リポジトリ名">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-no-gh-map-2" style="left:32.075%;top:13.725%" aria-label="2. 取得の時間">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-no-gh-map-3" style="left:1.65%;top:65.441%" aria-label="3. エラーの枠">3</a></div></div></div><ol class="gm-list"><li id="pr-no-gh-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>リポジトリ名</b>：PR を登録したリポジトリです。</div></li><li id="pr-no-gh-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>取得の時間</b>：取得に成功した最後の時間です。一度も成功していないときは、取得を試した時間が出ます。</div></li><li id="pr-no-gh-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>エラーの枠</b>：取得できなかった内容と、その原因が出ます。</div></li></ol></figure>
+  <p>エラーの原因は、次のどれかの文で出ます。</p>
+  <ul>
+    <li>「gh コマンドが見つかりません」：<code>gh</code> が入っていないか、常駐サーバーの <code>PATH</code> にありません</li>
+    <li>「gh を実行できません」：<code>gh</code> の実行を OS が許可していません</li>
+    <li>「gh の取得がタイムアウトしました」：<code>gh</code> の 1 回の実行が 20 秒で終わりませんでした</li>
+    <li>「gh の認証、通信、または取得結果を確認してください」：上のどれでもない失敗です。<code>gh</code> の認証が切れているときや、通信できないときがこれに当たります</li>
+  </ul>
+  <p>この文の前に、「PR の一覧を取得できません。」のように、取得できなかった対象が付きます。
+  マージ済みの PR の一覧や、PR 1 件の状態、積み直しの確認が取得できないときも、同じ形で出ます。</p>
+
+  <h2 id="pr-stack">スタックの表示</h2>
+  <p>PR の base ブランチが別の PR の head ブランチになっているとき、この 2 つの PR は積み上がった関係(スタック)にあります。
+  スタックは、base が既定ブランチの PR を一番下にして、その直上の PR を 1 段下げて入れ子で並べます。
+  登録した PR とつながる PR は、すべて同じスタックに出ます。</p>
+  <figure class="guide-map" id="pr-stack-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/1262"><div class="gm-clip"><img src="img/pull-requests-stack/stack.png" width="788" height="631" alt="PR の枠。見出しにリポジトリ名、マージできる PR の札、取得の時間がある。その下に 3 段のスタックがあり、一番下の PR にマージできますの札とマージするボタンがある。直上の 2 つの PR は 1 段ずつ下がって入れ子になり、マージできない理由が出ている。その下に、1 つだけの PR のスタックがある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-stack-map-1" style="left:11.865%;top:1.981%" aria-label="1. リポジトリ名">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-stack-map-2" style="left:31.091%;top:1.823%" aria-label="2. マージできる PR の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#pr-stack-map-3" style="left:49.08%;top:2.298%" aria-label="3. 取得の時間">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-stack-map-4" style="left:1.65%;top:8.637%" aria-label="4. スタックの土台">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-stack-map-5" style="left:1.65%;top:14.857%" aria-label="5. 位置の札">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#pr-stack-map-6" style="left:37.659%;top:13.154%" aria-label="6. マージできます">6</a><a class="gm-badge gm-place-bottom" data-gm="7" href="#pr-stack-map-7" style="left:92.608%;top:17.195%" aria-label="7. マージする">7</a><span class="gm-frame" data-gm="8" aria-hidden="true" style="left:2.919%;top:29.635%;width:95.431%;height:41.759%"></span><a class="gm-badge gm-place-bottom-start" data-gm="8" href="#pr-stack-map-8" style="left:2.919%;top:71.395%" aria-label="8. 直上の PR">8</a><a class="gm-badge gm-place-left" data-gm="9" href="#pr-stack-map-9" style="left:4.695%;top:32.765%" aria-label="9. 2 段目の位置の札">9</a><a class="gm-badge gm-place-right" data-gm="10" href="#pr-stack-map-10" style="left:36.358%;top:36.054%" aria-label="10. head と base">10</a><a class="gm-badge gm-place-left" data-gm="11" href="#pr-stack-map-11" style="left:4.695%;top:48.336%" aria-label="11. マージできない理由">11</a><a class="gm-badge gm-place-left" data-gm="12" href="#pr-stack-map-12" style="left:7.741%;top:52.971%" aria-label="12. 3 段目の位置の札">12</a><span class="gm-frame" data-gm="13" aria-hidden="true" style="left:1.65%;top:73.613%;width:96.701%;height:23.376%"></span><a class="gm-badge gm-place-left" data-gm="13" href="#pr-stack-map-13" style="left:1.65%;top:85.301%" aria-label="13. 別のスタック">13</a></div></div></div><ol class="gm-list"><li id="pr-stack-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>リポジトリ名</b>：プロダクトとリポジトリの組ごとに、1 つの枠が出ます。</div></li><li id="pr-stack-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">マージできる PR</span> の札</b>：この枠で <span class="ui">マージできます</span> と表示している PR の件数です。0 件のときは出ません。</div></li><li id="pr-stack-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>取得の時間</b>：最後に取得できてからの時間です(<a href="#pr-fetch">GitHub からの取得</a>)。</div></li><li id="pr-stack-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>スタックの土台</b>：一番下の PR の base ブランチです。スタックが 2 段以上のときは、「スタック 3 段」のように段数が続きます。</div></li><li id="pr-stack-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>位置の札</b>：「1/3」のように、下から数えた位置と、スタックの段数が出ます。1 段だけの PR には出ません。</div></li><li id="pr-stack-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">マージできます</span></b>：マージの条件がそろっている PR です(<a href="#pr-mergeable">「マージできます」の条件</a>)。</div></li><li id="pr-stack-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">マージする</span></b>：確認欄を開きます。スタックの一番下の PR にだけ出ます(<a href="#pr-merge">マージする</a>)。</div></li><li id="pr-stack-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>直上の PR</b>：1 段下げた枠の中に出ます。</div></li><li id="pr-stack-map-9" data-gm="9"><span class="gm-num" aria-hidden="true">9</span><div class="gm-body"><b>2 段目の位置の札</b>：下から 2 番目の PR です。</div></li><li id="pr-stack-map-10" data-gm="10"><span class="gm-num" aria-hidden="true">10</span><div class="gm-body"><b>head と base</b>：<code>head のブランチ → base のブランチ</code> の形です。2 段目以降の base は、下の PR の head ブランチです。</div></li><li id="pr-stack-map-11" data-gm="11"><span class="gm-num" aria-hidden="true">11</span><div class="gm-body"><b>マージできない理由</b>：下の PR が先にマージされるまで、この PR はマージできません(<a href="#pr-reason">マージできない理由と待ち</a>)。</div></li><li id="pr-stack-map-12" data-gm="12"><span class="gm-num" aria-hidden="true">12</span><div class="gm-body"><b>3 段目の位置の札</b>：一番上の PR です。</div></li><li id="pr-stack-map-13" data-gm="13"><span class="gm-num" aria-hidden="true">13</span><div class="gm-body"><b>別のスタック</b>：どの PR ともつながらない PR は、1 段だけのスタックとして出ます。</div></li></ol></figure>
+  <p>スタックの一番下以外の PR は、マージできません。
+  下の PR がマージされると、その直上の PR が一番下になります。</p>
+  <details class="more">
+    <summary>スタックの組み立ての詳細</summary>
+    <p>オープンの PR の中から、base ブランチ名が別の PR の head ブランチ名と一致する PR を、その PR の上に積みます。
+    登録した PR を起点に、base と head でつながる PR をたどり、つながった PR をすべて出します。</p>
+    <p>base が既定ブランチでも、オープンの PR の head ブランチでもない PR は、<span class="ui">マージできない理由</span> に「base の &lt;ブランチ名&gt; に対応する PR が見つからない」と出て、マージできません。</p>
+  </details>
+
+  <h2 id="pr-row">PR の行の札</h2>
+  <p>PR の行は、題、状態の札、head と base、CI とレビューの札、クロスレビューの行、待ちの行で構成します。
+  下の図は、マージ操作はできるが、条件が残っている PR の行です。</p>
+  <figure class="guide-map" id="pr-row-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/300"><div class="gm-clip"><img src="img/pull-requests-badges/group.png" width="788" height="738" alt="マージ操作は可能の PR の行。1 行目に番号、題、マージ操作は可能の札、マージするのボタンがある。続いて head と base、CI と GitHub のレビューの札、クロスレビューの行、待ちの行が並ぶ" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-7.614%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-row-map-1" style="left:13.991%;top:12.667%" aria-label="1. PR の番号と題">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-row-map-2" style="left:33.407%;top:13.333%" aria-label="2. 状態の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#pr-row-map-3" style="left:92.481%;top:9%" aria-label="3. マージする">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-row-map-4" style="left:1.65%;top:37%" aria-label="4. head と base">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-row-map-5" style="left:1.65%;top:53.667%" aria-label="5. CI の札と GitHub のレビューの札">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#pr-row-map-6" style="left:22.081%;top:65.333%" aria-label="6. 往復の目盛りと数">6</a><a class="gm-badge gm-place-top" data-gm="7" href="#pr-row-map-7" style="left:41.815%;top:64.333%" aria-label="7. クロスレビューの状態">7</a><a class="gm-badge gm-place-top" data-gm="8" href="#pr-row-map-8" style="left:56.536%;top:61%" aria-label="8. レビュー不要にする">8</a><a class="gm-badge gm-place-left" data-gm="9" href="#pr-row-map-9" style="left:1.65%;top:88.667%" aria-label="9. 待ち">9</a></div></div></div><ol class="gm-list"><li id="pr-row-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>PR の番号と題</b>：番号は GitHub で PR を開くリンクです。</div></li><li id="pr-row-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>状態の札</b>：<span class="ui">マージできます</span> か <span class="ui">マージ操作は可能</span> です(<a href="#pr-mergeable">「マージできます」の条件</a>)。どちらでもない PR には出ません。</div></li><li id="pr-row-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">マージする</span></b>：確認欄を開きます。条件が残っているときは、枠だけの見た目になります。</div></li><li id="pr-row-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>head と base</b>：head のブランチと、実際の base のブランチです。base を付け替えた PR は、付け替えた後の base が出ます。</div></li><li id="pr-row-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>CI の札と GitHub のレビューの札</b>：左が CI、右が GitHub のレビューです(<a href="#pr-ci-review">CI とレビューの札</a>)。</div></li><li id="pr-row-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>往復の目盛りと数</b>：クロスレビューを何往復したかです。目盛りは上限の 3 往復で、済んだ往復が塗られます。数は「2 / 3 往復、非対応 1」の形で、往復の数と、指摘のうち対応しないと決めた数が出ます。</div></li><li id="pr-row-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b>クロスレビューの状態</b>：結論と、head との関係です(<a href="#pr-cross-review">クロスレビューの行</a>)。</div></li><li id="pr-row-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b><span class="ui">レビュー不要にする</span></b>：この PR の今の head について、クロスレビューを不要と記録します(<a href="#pr-skip">レビュー不要の記録</a>)。</div></li><li id="pr-row-map-9" data-gm="9"><span class="gm-num" aria-hidden="true">9</span><div class="gm-body"><b>待ち</b>：<span class="ui">待ち:</span> に、設定で選んだ条件のうち、まだ満たしていないものが出ます。</div></li></ol></figure>
+
+  <h3 id="pr-ci-review">CI とレビューの札</h3>
+  <p>CI の札は、PR のチェックの結果を示します。</p>
+  <ul>
+    <li><span class="ui">CI 成功</span>：すべてのチェックが成功しています。チェックが 1 つも無い PR も、この札です</li>
+    <li><span class="ui">CI 実行中</span>：実行中か、待機中のチェックがあります</li>
+    <li><span class="ui">CI 失敗</span>：失敗、エラー、取り消し、時間切れなどで終わったチェックがあります。実行中のチェックが残っていても、失敗が 1 つでもあればこの札です</li>
+  </ul>
+  <p>GitHub のレビューの札は、PR の承認の状態を示します。</p>
+  <ul>
+    <li><span class="ui">承認済み</span>：必要な承認がそろっています</li>
+    <li><span class="ui">承認待ち</span>：承認が必要で、まだそろっていません</li>
+    <li><span class="ui">変更要求</span>：変更を求められています</li>
+    <li><span class="ui">承認は任意</span>：リポジトリが承認を求めていません</li>
+  </ul>
+
+  <h3 id="pr-badges-other">そのほかの札</h3>
+  <p>CI とレビューの札の後ろに、PR の状態によって次の札が加わります。
+  下の図は、その札が出る PR の行です。</p>
+  <figure class="guide-map" id="pr-variants-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/976"><div class="gm-clip"><img src="img/pull-requests-badges/group.png" width="788" height="738" alt="3 つの PR の行と、マージ済みの一覧。1 つ目は積み直しが必要の札とマージできない理由が出ている。2 つ目はコンフリクトの札とコンフリクト解決のボタンがあり、クロスレビューがレビュー未実施になっている。3 つ目はドラフトの札があり、マージできない理由がドラフトになっている。最下段にマージ済みの一覧がある" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-31.726%"></div><a class="gm-badge gm-place-right" data-gm="1" href="#pr-variants-map-1" style="left:29.124%;top:10.553%" aria-label="1. 積み直しが必要">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-variants-map-2" style="left:1.65%;top:21.311%" aria-label="2. マージできない理由">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#pr-variants-map-3" style="left:39.181%;top:13.832%" aria-label="3. クロスレビューの状態">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#pr-variants-map-4" style="left:26.142%;top:45.082%" aria-label="4. コンフリクト">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-variants-map-5" style="left:81.599%;top:34.631%" aria-label="5. コンフリクト解決">5</a><span class="gm-frame" data-gm="6" aria-hidden="true" style="left:1.65%;top:47.336%;width:96.701%;height:6.557%"></span><a class="gm-badge gm-place-left" data-gm="6" href="#pr-variants-map-6" style="left:1.65%;top:50.615%" aria-label="6. クロスレビューの行">6</a><a class="gm-badge gm-place-left" data-gm="7" href="#pr-variants-map-7" style="left:1.65%;top:77.664%" aria-label="7. ドラフト">7</a><a class="gm-badge gm-place-left" data-gm="8" href="#pr-variants-map-8" style="left:1.65%;top:88.422%" aria-label="8. マージできない理由">8</a><a class="gm-badge gm-place-left" data-gm="9" href="#pr-variants-map-9" style="left:1.65%;top:95.338%" aria-label="9. マージ済みの一覧">9</a></div></div></div><ol class="gm-list"><li id="pr-variants-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">積み直しが必要</span></b>：下の PR をスカッシュかリベースでマージした後も、そのコミットが、この PR の差分に残っています(<a href="#pr-restack">積み直し</a>)。</div></li><li id="pr-variants-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</div></li><li id="pr-variants-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>クロスレビューの状態</b>：<span class="ui">レビュー済み</span> は、この head のクロスレビューが収束した PR です。</div></li><li id="pr-variants-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">コンフリクト</span></b>：base と衝突しています。</div></li><li id="pr-variants-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">コンフリクト解決</span></b>：衝突の解消を、PR を登録したセッションに依頼します(<a href="#pr-conflict">衝突の解消の依頼</a>)。</div></li><li id="pr-variants-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>クロスレビューの行</b>：<span class="ui">レビュー未実施</span> は、この PR のブランチに、クロスレビューの記録が無い PR です。</div></li><li id="pr-variants-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">ドラフト</span></b>：ドラフトの PR です。</div></li><li id="pr-variants-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>マージできない理由</b>：ドラフトを解除するまで、マージできません。</div></li><li id="pr-variants-map-9" data-gm="9"><span class="gm-num" aria-hidden="true">9</span><div class="gm-body"><b>マージ済みの一覧</b>：<span class="ui">マージ済み (24 時間)</span> に、直近にマージした PR が出ます(<a href="#pr-merged-list">マージ済みの一覧</a>)。</div></li></ol></figure>
+  <p>図に無い札が 1 つあります。
+  <span class="ui">base を</span> で始まる札は、ダッシュボードが、下の PR をマージするときに base を既定ブランチへ付け替えた PR に付きます(<a href="#pr-result">マージの結果</a>)。</p>
+
+  <h3 id="pr-restack">積み直し</h3>
+  <p>スカッシュかリベースでマージすると、下の PR の元のコミットが、既定ブランチに別のコミットとして入ります。
+  下の PR のコミットは、その上の PR のブランチにも残ったままなので、上の PR の差分に、すでに既定ブランチに入った内容が重なります。
+  この状態の PR に <span class="ui">積み直しが必要</span> が付き、積み直し待ちとしてマージできなくなります。</p>
+  <p>積み直しは、セッションが行います。
+  上の PR を既定ブランチの上に積み直して push すると、札が消えます。
+  ダッシュボードからマージしたときは、積み直しの依頼をセッションに送ります(<a href="#pr-result">マージの結果</a>)。</p>
+  <details class="more">
+    <summary>積み直しの判定の詳細</summary>
+    <p>オープンの PR ごとに、既定ブランチとの差分に含まれるコミットを取得し、マージ済みの PR の head のコミットが含まれているかを調べます。
+    含まれていれば、積み直しが必要です。</p>
+    <p>差分やマージ済みの PR の一覧を取得できないとき、結果が取得の上限で切れて全件を確かめられないときは、確かめられない扱いにします。
+    この PR には「積み直しが必要か確かめられない」と出て、マージできません。</p>
+  </details>
+
+  <h3 id="pr-reason">マージできない理由と待ち</h3>
+  <p>マージ操作ができない PR には、<span class="ui">マージできない理由</span> の行が出ます。
+  理由は、次の順に調べ、最初に当たった 1 つを出します。</p>
+  <ul>
+    <li>「リポジトリ設定を取得できません」：既定ブランチを取得できていません</li>
+    <li>「base の &lt;ブランチ名&gt; に対応する PR が見つからない」：base が既定ブランチでも、オープンの PR の head でもありません</li>
+    <li>「下の #&lt;番号&gt; のマージ待ち」：スタックの一番下の PR ではありません</li>
+    <li>「base を &lt;既定ブランチ&gt; に付け替える必要がある」：下の PR がマージされたのに、この PR の base が既定ブランチに付け替わっていません</li>
+    <li>「ドラフト」</li>
+    <li>「積み直し待ち」：<a href="#pr-restack">積み直し</a>が済んでいません</li>
+    <li>「積み直しが必要か確かめられない」</li>
+    <li>「コンフリクトあり」</li>
+    <li>「変更を求められている」：GitHub のレビューの札が <span class="ui">変更要求</span> です</li>
+    <li>「レビューの承認待ち」：GitHub のレビューの札が <span class="ui">承認待ち</span> です</li>
+  </ul>
+  <p>どれにも当たらない PR は、マージ操作ができます。
+  CI とクロスレビューは、マージ操作ができるかどうかの判定には含めません。
+  この 2 つのうち、設定で選んだ条件を満たしていないものは、<span class="ui">待ち:</span> の行に出ます(<a href="#pr-mergeable">「マージできます」の条件</a>)。</p>
+
+  <h3 id="pr-cross-review">クロスレビューの行</h3>
+  <p><span class="ui">クロスレビュー</span> の行は、ai-cross-review のクロスレビューが、この PR の head のブランチで何往復進んだかと、その結論を示します。
+  PR を登録したセッションの PR にだけ出ます。
+  状態の札は、次のどれかです。</p>
+  <ul>
+    <li><span class="ui">レビュー済み</span>：最後の結論が「収束」で、その結論を出した時点のコミットが、PR の今の head と同じです</li>
+    <li><span class="ui">収束の後に変更あり</span>：収束した後に push があり、今の head が収束したコミットと違います。収束したコミットの 7 桁が続きます</li>
+    <li><span class="ui">指摘の対応中</span>：最後の結論が「指摘に対応中」です</li>
+    <li><span class="ui">開発者の判断待ち</span>：最後の結論が <code>halted</code>(停止)で、開発者の判断を待って止まっています</li>
+    <li><span class="ui">往復目の結論待ち</span>：「2 往復目の結論待ち」のように、前の往復の結論は記録されていますが、新しい往復の結論がまだ記録されていません</li>
+    <li><span class="ui">この head をレビューに回した</span>：結論は記録されておらず、最後にレビューに回したコミットが今の head と同じです</li>
+    <li><span class="ui">レビューの後に変更あり</span>：結論は記録されておらず、最後にレビューに回した後に push があります</li>
+    <li><span class="ui">レビュー未実施</span>：この PR のブランチに、クロスレビューの記録がありません</li>
+    <li><span class="ui">レビュー不要</span>：クロスレビューを使っていないか、レビュー不要と記録されています(<a href="#pr-skip">レビュー不要の記録</a>)</li>
+    <li><span class="ui">状態を確認できない</span>：記録を読めませんでした</li>
+    <li><span class="ui">head を確かめられない</span>：PR の今の head を取得できていません</li>
+  </ul>
+  <details class="more">
+    <summary>クロスレビューの状態を読む場所の詳細</summary>
+    <p>状態は、PR を登録したセッションの作業ツリーにある、ai-cross-review の状態ファイル(<code>.cross-review-state.json</code>)から、PR の head のブランチの記録を読みます。
+    同じブランチを別の作業ツリーでチェックアウトしているときは、その作業ツリーの記録も読み、記録のあるものと、今の head で収束しているものを選びます。</p>
+    <p>作業ツリーに <code>tools/cross-review.js</code> が無いリポジトリは、クロスレビューを使っていないとみなし、<span class="ui">レビュー不要</span> と出します。
+    この場合は、<span class="ui">レビュー不要にする</span> のボタンは出ません。
+    状態ファイルが無くても、<code>tools/cross-review.js</code> があれば <span class="ui">レビュー未実施</span> です。</p>
+  </details>
+
+  <h2 id="pr-mergeable">「マージできます」の条件</h2>
+  <p>PR の状態の札は、2 段階の条件で決まります。</p>
+  <ul>
+    <li><span class="ui">マージ操作は可能</span>：マージの操作ができる PR です。スタックの一番下で、ドラフト、積み直し待ち、コンフリクト、GitHub のレビュー待ち(<span class="ui">変更要求</span> と <span class="ui">承認待ち</span>)のどれでもありません。灰色の背景で出ます</li>
+    <li><span class="ui">マージできます</span>：マージの操作ができ、さらに設定で選んだ条件を満たす PR です。緑の背景で出ます</li>
+  </ul>
+  <p>設定の <span class="ui">「マージできます」と出す条件</span> で、さらに満たす条件を選びます。</p>
+  <ul>
+    <li><span class="ui">マージの操作ができる</span>：マージの操作ができれば、<span class="ui">マージできます</span> と出します</li>
+    <li><span class="ui">CI も通っている(CI が無ければ問わない)</span>：マージの操作ができ、<span class="ui">CI 成功</span> のときに出します</li>
+    <li><span class="ui">クロスレビューも済んでいる(不要としたものを含む)</span>：マージの操作ができ、<span class="ui">CI 成功</span> で、クロスレビューが <span class="ui">レビュー済み</span> か <span class="ui">レビュー不要</span> のときに出します。既定の選択です</li>
+  </ul>
+  <p>条件が残っている PR は <span class="ui">マージ操作は可能</span> のまま、<span class="ui">待ち:</span> の行に、満たしていない条件が出ます。
+  この PR も、確認欄から手でマージできます。
+  確認欄の先頭に、満たしていない条件を警告します(<a href="#pr-merge">マージする</a>)。</p>
+  <p><span class="ui">マージできます</span> と出ている PR の数は、画面上部の <span class="ui">マージできる PR</span> の札、プロダクトのカードの見出し、リポジトリの枠の見出しに出ます(<a href="screen.html#screen-summary">件数の札</a>)。
+  <span class="ui">マージする</span> のボタンの無い PR は、数えません。</p>
+  <details class="more">
+    <summary>条件の判定の詳細</summary>
+    <p>待ちの行に出る言葉は、次のとおりです。</p>
+    <ul>
+      <li>CI：「CI が失敗」「CI 実行中」</li>
+      <li>クロスレビュー：「クロスレビュー未実施」「クロスレビュー対応中」「クロスレビューが開発者の判断待ち」「クロスレビュー後に push あり」「クロスレビューの状態を確認できない」</li>
+    </ul>
+    <p>クロスレビューが済んでいるとみなすのは、最後の結論が「収束」で、その往復が今の往復と一致し、結論を出したコミットが PR の今の head と同じときです。
+    クロスレビューを使っていないリポジトリの PR は、レビュー不要として済んでいるとみなします。</p>
+  </details>
+
+  <h2 id="pr-merge">マージする</h2>
+  <div class="note warn">マージは取り消せません。
+  ダッシュボードに、マージした PR を元に戻す操作はありません。
+  確認欄の方式、ブランチの削除、未達条件の警告、照合する head の SHA を読んでから、<span class="ui">マージを実行</span> を押します。
+  ダッシュボードがマージを実行するのは、開発者が確認欄で実行を押したときと、開発者が予約したレビュー収束後マージの条件がそろったときだけです。</div>
+  <p>マージするには、<span class="ui">マージする</span> を押して確認欄を開き、<span class="ui">マージを実行</span> を押します。
+  確認欄は、PR の行の下に出ます。
+  <span class="ui">やめる</span> を押すと、何もせずに閉じます。</p>
+  <figure class="guide-map" id="pr-confirm-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/600"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="1021" alt="マージの確認欄。見出しに PR の番号と main へマージするとある。その下に、条件の未達の警告、3 つのマージの方式、レビュー収束後マージとブランチ削除のチェック、クロスレビューの警告と照合する head の SHA の一覧、マージを実行とやめるのボタンが並ぶ" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-26.65%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-confirm-map-1" style="left:3.299%;top:7.5%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-confirm-map-2" style="left:3.299%;top:16.833%" aria-label="2. 未達条件の警告">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-confirm-map-3" style="left:3.299%;top:28.667%" aria-label="3. マージの方式">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-confirm-map-4" style="left:3.299%;top:43.333%" aria-label="4. レビュー収束後マージ">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-confirm-map-5" style="left:3.299%;top:58%" aria-label="5. マージ後にリモートブランチを削除する">5</a><a class="gm-badge gm-place-left" data-gm="6" href="#pr-confirm-map-6" style="left:5.838%;top:69.833%" aria-label="6. クロスレビューの警告">6</a><a class="gm-badge gm-place-right" data-gm="7" href="#pr-confirm-map-7" style="left:24.937%;top:76.5%" aria-label="7. 照合する head SHA">7</a><a class="gm-badge gm-place-left" data-gm="8" href="#pr-confirm-map-8" style="left:3.299%;top:89.167%" aria-label="8. マージを実行">8</a><a class="gm-badge gm-place-right" data-gm="9" href="#pr-confirm-map-9" style="left:27.602%;top:89.167%" aria-label="9. やめる">9</a></div></div></div><ol class="gm-list"><li id="pr-confirm-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：マージする PR と、マージ先の既定ブランチです。<span class="ui">レビュー収束後マージ</span> を入れると、「へレビュー収束後にマージする」に変わります。</div></li><li id="pr-confirm-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>未達条件の警告</b>：<span class="ui">選択した条件の未達</span> に、設定で選んだ条件のうち、満たしていないものが出ます。条件が残っていないときは出ません。</div></li><li id="pr-confirm-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>マージの方式</b>：<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> のうち、リポジトリで許可されているものだけが出ます。</div></li><li id="pr-confirm-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">レビュー収束後マージ</span></b>：入れると、すぐにはマージせず、予約します(<a href="#pr-reserve">レビュー収束後マージ</a>)。</div></li><li id="pr-confirm-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">マージ後にリモートブランチを削除する</span></b>：入れると、マージの後に PR の head のブランチを GitHub から削除します。</div></li><li id="pr-confirm-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>クロスレビューの警告</b>：クロスレビューが <span class="ui">レビュー済み</span> でないとき、その理由が出ます。</div></li><li id="pr-confirm-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">照合する head SHA</span></b>：画面で見ている PR の head のコミットの先頭 7 桁です。このコミット以外はマージしません。</div></li><li id="pr-confirm-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b><span class="ui">マージを実行</span></b>：マージを実行します。実行中は <span class="ui">処理中…</span> に変わります。</div></li><li id="pr-confirm-map-9" data-gm="9"><span class="gm-num" aria-hidden="true">9</span><div class="gm-body"><b><span class="ui">やめる</span></b>：確認欄を閉じます。</div></li></ol></figure>
+  <p>確認欄の既定は、次のとおりです。</p>
+  <ul>
+    <li>方式：同じリポジトリで最後にマージまたは予約した方式です。初めてのリポジトリでは、許可された方式のうち、<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> の順で最初のものです。方式が 1 つしか許可されていないときは、<span class="ui">リポジトリで許可されている方式です</span> と出ます</li>
+    <li><span class="ui">マージ後にリモートブランチを削除する</span>：入っています</li>
+    <li><span class="ui">レビュー収束後マージ</span>：設定の <span class="ui">レビュー収束後マージを既定でオンにする</span> に従います(既定はオフです)</li>
+  </ul>
+  <p>確認欄で選んだ内容は、ページを開いている間だけ覚えています。
+  ページを開き直すと、既定に戻ります。</p>
+  <details class="more">
+    <summary>ブランチの削除の詳細</summary>
+    <p>リポジトリが、マージしたブランチを GitHub 側で自動的に削除する設定のとき、<span class="ui">マージ後にリモートブランチを削除する</span> は出ません。
+    ブランチの削除は GitHub に任せます。
+    結果の行には「ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)」と出ます。</p>
+    <p>fork から出した PR の head のブランチは、登録先のリポジトリから削除できません。
+    チェックは外れて押せなくなり、<span class="ui">fork のブランチは登録先から削除できません</span> と出ます。</p>
+    <p>ブランチは、マージが済んだ後に、常駐サーバーが GitHub の API で削除します。
+    すでに削除されているときは、削除できたものとして扱います。
+    削除に失敗したときは、マージ済みのまま、結果の行に警告が出ます。</p>
+  </details>
+
+  <h3 id="pr-merge-check">マージの前に確かめること</h3>
+  <p>確認欄を開いた時点から実行するまでに PR が変わっても、意図しないコミットをマージしないために、常駐サーバーは次を確かめます。</p>
+  <ul>
+    <li>実行を押した時点で、GitHub から PR の状態を取り直します</li>
+    <li>画面で見ていた head のコミットが、取り直した head と同じです。違うときは、マージせずに、「表示していた head SHA と現在の head SHA が異なります。状態を確認してください」と出します</li>
+    <li>選んだ方式を、リポジトリが許可しています</li>
+    <li>PR が、スタックの一番下で、マージ操作ができる状態です。CI とクロスレビューは確かめません。確認欄に警告を出すだけで、実行は止めません</li>
+  </ul>
+  <p>確かめた後、<code>gh pr merge</code> には、画面で見た head のコミットを <code>--match-head-commit</code> で渡します。
+  取り直してから <code>gh pr merge</code> を呼ぶまでの間に push があっても、GitHub がマージを断ります。</p>
+  <details class="more">
+    <summary>マージの手順の詳細</summary>
+    <p>実行を押すと、常駐サーバーは次の順に進めます。</p>
+    <ol>
+      <li>GitHub から PR の状態を取り直し、上の条件を確かめます</li>
+      <li>直上の PR があれば、その base を既定ブランチに付け替えます。方式にかかわらず行い、1 件でも失敗したらマージしません</li>
+      <li>もう一度取り直して、条件を確かめます</li>
+      <li><code>gh pr merge</code> を実行します</li>
+      <li>PR の状態を読み、マージ済みであることを確かめます</li>
+      <li>ブランチの削除を選んだときは、ブランチを削除します</li>
+      <li>PR を登録したセッションに、結果を知らせます(<a href="#pr-result">マージの結果</a>)</li>
+    </ol>
+    <p>同じ PR の操作が進行中のときは、後から押した操作を断り、「操作が進行中です」と出します。</p>
+    <p>失敗したときは、PR の行の下に理由が出ます。
+    付け替えが済んだ後に失敗したときは、付け替えが済んでいることも書きます。</p>
+    <p><code>gh pr merge</code> が成功しても PR がマージ済みにならないときは、マージキューに入ったとみなします。
+    PR の行に <span class="ui">マージキューに追加済み (未マージ)</span> と出ます。
+    マージされた後は、画面の外でのマージとして扱うので、方式は不明になり、ブランチは削除しません。
+    GitHub のキューから外れたときは、<span class="ui">キューから外れた</span> を押すと、マージの操作に戻ります。</p>
+  </details>
+
+  <h3 id="pr-merge-stack">スタックの途中をマージする</h3>
+  <p>直上に PR のあるスタックの一番下を、<span class="ui">スカッシュ</span> か <span class="ui">リベース</span> でマージするときは、確認欄に、上の PR に元のコミットが残るため、セッションに積み直しを依頼する旨の警告が出ます。</p>
+  <figure class="guide-map" id="pr-confirm-squash-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/555"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="910" alt="スカッシュを選んだ確認欄。方式の行でスカッシュが選ばれ、その下に照合する head の SHA と、スカッシュまたはリベースでは上の PR に元のコミットが残るため積み直しを依頼するという警告が出ている。マージを実行のボタンは緑になっている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-24.112%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-confirm-squash-map-1" style="left:3.299%;top:22.883%" aria-label="1. マージの方式">1</a><a class="gm-badge gm-place-right" data-gm="2" href="#pr-confirm-squash-map-2" style="left:24.937%;top:67.568%" aria-label="2. 照合する head SHA">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-confirm-squash-map-3" style="left:5.838%;top:74.595%" aria-label="3. 積み直しの案内">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-confirm-squash-map-4" style="left:3.299%;top:88.288%" aria-label="4. マージを実行">4</a></div></div></div><ol class="gm-list"><li id="pr-confirm-squash-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>マージの方式</b>：<span class="ui">スカッシュ</span> を選んでいます。</div></li><li id="pr-confirm-squash-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">照合する head SHA</span></b>：条件が残っていないので、クロスレビューの警告は出ません。</div></li><li id="pr-confirm-squash-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>積み直しの案内</b>：直上の PR があるときだけ出ます。</div></li><li id="pr-confirm-squash-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">マージを実行</span></b>：条件がそろっているので、緑のボタンです。条件が残っているときは、枠だけのボタンです。</div></li></ol></figure>
+
+  <h2 id="pr-reserve">レビュー収束後マージ</h2>
+  <p><span class="ui">レビュー収束後マージ</span> は、クロスレビューが収束し、条件がそろうまで待ち、そろった時点で常駐サーバーがマージする予約です。
+  クロスレビューの最中に、方式とブランチ削除を決めておけます。
+  予約はダッシュボードを開いていなくても実行されます。</p>
+  <p>確認欄で <span class="ui">レビュー収束後マージ</span> を入れると、ボタンが <span class="ui">予約する</span> に変わります。
+  <span class="ui">照合する head SHA</span> は、PR の今の head ではなく、クロスレビューの収束記録のコミットになります。</p>
+  <figure class="guide-map" id="pr-reserve-confirm-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/600"><div class="gm-clip"><img src="img/pull-requests-reserve/confirm.png" width="788" height="1020" alt="レビュー収束後マージを入れた確認欄。見出しがレビュー収束後にマージするになり、レビュー収束後マージのチェックが入っている。照合する head の SHA の欄はクロスレビューの収束記録になり、ボタンが予約するになっている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-26.65%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-reserve-confirm-map-1" style="left:3.299%;top:7.5%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-reserve-confirm-map-2" style="left:3.299%;top:43.333%" aria-label="2. レビュー収束後マージ">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-reserve-confirm-map-3" style="left:5.838%;top:76.333%" aria-label="3. 照合する head SHA">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-reserve-confirm-map-4" style="left:3.299%;top:88.833%" aria-label="4. 予約する">4</a></div></div></div><ol class="gm-list"><li id="pr-reserve-confirm-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：「へレビュー収束後にマージする」に変わります。</div></li><li id="pr-reserve-confirm-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">レビュー収束後マージ</span></b>：入っています。</div></li><li id="pr-reserve-confirm-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">照合する head SHA</span></b>：<span class="ui">クロスレビューの収束記録</span> と出ます。</div></li><li id="pr-reserve-confirm-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">予約する</span></b>：予約を保存します。</div></li></ol></figure>
+  <p>予約すると、PR の行の <span class="ui">マージする</span> は <span class="ui">予約を取り消す</span> に変わり、行が予約中の背景になります。
+  予約中の札には、方式、予約した時刻、まだ満たしていない条件が出ます。</p>
+  <figure class="guide-map" id="pr-reserved-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/290"><div class="gm-clip"><img src="img/pull-requests-reserve/reserved.png" width="788" height="696" alt="予約中の PR の行。マージ操作は可能の札の隣に予約を取り消すがある。CI と承認の札の隣に、レビュー収束後にマージ予約中の札があり、方式、予約した時刻、満たしていない条件が書かれている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-6.98%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-reserved-map-1" style="left:45.876%;top:12.759%" aria-label="1. 予約を取り消す">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-reserved-map-2" style="left:54.664%;top:51.379%" aria-label="2. 予約中の札">2</a></div></div></div><ol class="gm-list"><li id="pr-reserved-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">予約を取り消す</span></b>：予約を取り消します。</div></li><li id="pr-reserved-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>予約中の札</b>：<span class="ui">レビュー収束後にマージ予約中</span> に続けて、括弧の中に、マージの方式、予約した時刻、まだ満たしていない条件が出ます。</div></li></ol></figure>
+  <p>常駐サーバーは、PR の状態を取得するたびに予約を確かめ、次の条件がすべてそろったときに、通常のマージの手順でマージします。</p>
+  <ul>
+    <li>クロスレビューの最後の結論が「収束」で、その往復が今の往復と一致し、結論を出したコミットが PR の今の head と同じである。<span class="ui">レビュー不要</span> の記録だけでは、実行されません</li>
+    <li>CI が成功している</li>
+    <li>GitHub のレビューが <span class="ui">承認済み</span> である。<span class="ui">承認は任意</span> のリポジトリの PR は、承認が付くまで実行されません</li>
+    <li>PR が、スタックの一番下で、ドラフトでもコンフリクトでもなく、<span class="ui">マージ操作は可能</span> である。選んだ方式を、リポジトリが許可している</li>
+  </ul>
+  <p>収束した後に push があって、今の head が収束したコミットと違うときは、予約は残ったまま、新しい head の収束を待ちます。
+  <code>gh pr merge</code> には、収束記録のコミットを <code>--match-head-commit</code> で渡します。</p>
+  <p>常駐サーバーが止まっている間に条件がそろったときは、起動後の最初の取得で実行します。
+  予約は常駐サーバーの保存先に保存するので、再起動しても残ります。</p>
+
+  <h3 id="pr-reserve-cancel">予約が取り消されるとき</h3>
+  <p>予約は、次のときに取り消されます。</p>
+  <ul>
+    <li><span class="ui">予約を取り消す</span> を押したとき</li>
+    <li>PR が、マージされずにクローズされたとき</li>
+    <li>クロスレビューの最後の結論が <code>halted</code>(停止)になったとき</li>
+    <li>マージを実行して、PR がマージキューに入ったとき(以降は、方式を不明として扱い、ブランチは削除しません)</li>
+  </ul>
+  <p>取り消されると、リポジトリの枠に、PR へのリンクと取り消した理由が出ます。
+  PR を登録したセッションにも、同じ内容を知らせます。</p>
+  <figure class="guide-map" id="pr-reserve-cancelled-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/440"><div class="gm-clip"><img src="img/pull-requests-reserve/cancelled.png" width="788" height="746" alt="予約を取り消した後の PR の枠。上に、PR へのリンクと取り消した理由の一行がある。その下の PR の行は、予約中の表示が消え、マージするのボタンが戻っている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-3.807%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-reserve-cancelled-map-1" style="left:1.65%;top:12.727%" aria-label="1. 取り消しの知らせ">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-reserve-cancelled-map-2" style="left:92.481%;top:33.864%" aria-label="2. マージする">2</a></div></div></div><ol class="gm-list"><li id="pr-reserve-cancelled-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>取り消しの知らせ</b>：PR へのリンクに、取り消した理由が続きます。</div></li><li id="pr-reserve-cancelled-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">マージする</span></b>：予約が無くなったので、マージの操作に戻ります。</div></li></ol></figure>
+  <p>取り消しの知らせは、常駐サーバーを再起動するか、同じ PR を予約し直すまで残ります。
+  取り消す前に PR が画面の外でマージされたときは、予約が消えるだけで、取り消しの知らせは出ません。</p>
+
+  <h2 id="pr-skip">レビュー不要の記録</h2>
+  <p>クロスレビューを省く PR は、レビュー不要と記録できます。
+  記録した PR は、<span class="ui">クロスレビューも済んでいる(不要としたものを含む)</span> の条件を満たします。
+  ただし、<span class="ui">レビュー収束後マージ</span> は、クロスレビューの収束記録が要るので、レビュー不要の記録だけでは実行されません。</p>
+  <p>記録は、次の 2 つの方法で行います。</p>
+  <ul>
+    <li>PR の行の <span class="ui">レビュー不要にする</span> を押す。記録する理由は、画面からの記録だと分かる文になります</li>
+    <li>PR を登録したセッションが、Agent Cockpit のツール <code>cockpit_skip_review</code> に、リポジトリ、PR の番号、今の head のコミット、理由を渡す。そのセッションが登録した PR にだけ使えます</li>
+  </ul>
+  <p>記録すると、クロスレビューの状態の札が <span class="ui">レビュー不要</span> に変わり、ボタンは <span class="ui">レビュー不要を取り消す</span> になります。
+  <span class="ui">レビュー不要</span> の札にマウスを載せると、記録した理由が出ます。
+  <span class="ui">レビュー不要を取り消す</span> を押すと、記録を消します。</p>
+  <figure class="guide-map" id="pr-skipped-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/240"><div class="gm-clip"><img src="img/pull-requests-skip/skipped.png" width="788" height="715" alt="レビュー不要と記録した PR の行。クロスレビューの行に、レビュー不要の札と、レビュー不要を取り消すがある" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-75.508%"></div><span class="gm-frame" data-gm="1" aria-hidden="true" style="left:1.65%;top:37.5%;width:96.701%;height:26.667%"></span><a class="gm-badge gm-place-left" data-gm="1" href="#pr-skipped-map-1" style="left:1.65%;top:50.833%" aria-label="1. クロスレビューの行">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-skipped-map-2" style="left:28.426%;top:37.5%" aria-label="2. レビュー不要を取り消す">2</a></div></div></div><ol class="gm-list"><li id="pr-skipped-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>クロスレビューの行</b>：<span class="ui">レビュー不要</span> は、クロスレビューを不要と記録した PR です。</div></li><li id="pr-skipped-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">レビュー不要を取り消す</span></b>：記録を消します。</div></li></ol></figure>
+  <p>記録は、記録した時点の head にだけ有効です。
+  push で head が変わると、記録は無効になり、札が元の状態に戻ります。
+  記録する時点でも、常駐サーバーが PR の head を取り直し、画面やセッションが見ていた head と違えば、記録しません。</p>
+
+  <h2 id="pr-conflict">衝突の解消の依頼</h2>
+  <p>コンフリクトのある PR には、<span class="ui">コンフリクト解決</span> のボタンが出ます。
+  押すと、PR を登録したセッションに、衝突の解消を依頼する確認欄が開きます。
+  ダッシュボードは、PR のブランチを変えません。作業はセッションが行います。</p>
+  <figure class="guide-map" id="pr-conflict-confirm-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/620"><div class="gm-clip"><img src="img/pull-requests-conflict/confirm.png" width="788" height="881" alt="衝突の解消を依頼する確認欄。コンフリクトの PR の行の下に、依頼の見出し、依頼の内容を書いた 3 つの箇条書き、依頼を送るとやめるのボタンが並ぶ" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-49.492%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-conflict-confirm-map-1" style="left:3.299%;top:55.484%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-conflict-confirm-map-2" style="left:3.299%;top:70.887%" aria-label="2. 依頼の内容">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-conflict-confirm-map-3" style="left:3.299%;top:89.516%" aria-label="3. 依頼を送る">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#pr-conflict-confirm-map-4" style="left:25.698%;top:89.516%" aria-label="4. やめる">4</a></div></div></div><ol class="gm-list"><li id="pr-conflict-confirm-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：衝突の解消を依頼する PR です。</div></li><li id="pr-conflict-confirm-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>依頼の内容</b>：依頼先のセッション、セッションにマージさせないこと、head が変わると依頼済みの表示を消すことが書かれています。</div></li><li id="pr-conflict-confirm-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">依頼を送る</span></b>：依頼を送ります。</div></li><li id="pr-conflict-confirm-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">やめる</span></b>：何も送らずに、確認欄を閉じます。</div></li></ol></figure>
+  <p>依頼を受けたセッションには、次の内容が届きます。</p>
+  <ul>
+    <li>PR の番号と URL</li>
+    <li>base のブランチを取り込んで衝突を解消し、検証してから push すること</li>
+    <li>PR をマージしないこと</li>
+    <li>衝突を解消できないときは、その理由を報告すること</li>
+  </ul>
+  <p>依頼は、PR を登録したセッションのうち、終了していないものへ送ります。
+  届く経路は、判断事項への回答と同じです(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</p>
+  <p>依頼を送ると、PR の行に、依頼した時刻と依頼先が出て、ボタンは <span class="ui">もう一度依頼する</span> に変わります。</p>
+  <figure class="guide-map" id="pr-conflict-requested-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/360"><div class="gm-clip"><img src="img/pull-requests-conflict/requested.png" width="788" height="741" alt="依頼を送った後のコンフリクトの PR の行。ボタンがもう一度依頼するに変わり、行の下端に、依頼した時刻と依頼先のセッションの名前が出ている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-49.492%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-conflict-requested-map-1" style="left:81.599%;top:16.111%" aria-label="1. もう一度依頼する">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-conflict-requested-map-2" style="left:1.65%;top:87.5%" aria-label="2. 依頼済みの札">2</a></div></div></div><ol class="gm-list"><li id="pr-conflict-requested-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">もう一度依頼する</span></b>：同じ依頼を、もう一度送れます。</div></li><li id="pr-conflict-requested-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>依頼済みの札</b>：依頼した時刻と、依頼先のセッションです。</div></li></ol></figure>
+  <p>依頼済みの表示は、PR の head が依頼した時点から変わると消えます。
+  衝突が解消されてコンフリクトの札が消えたら、PR の行からマージします。
+  依頼の記録はメモリーにだけ置くので、常駐サーバーを再起動すると消えます。</p>
+  <p>依頼先のセッションが無いときは、ボタンが押せなくなり、<span class="ui">衝突の解消を依頼できない理由</span> が出ます。
+  PR を登録したセッションが無いときと、登録したセッションがすべて終了しているときです。</p>
+
+  <h2 id="pr-result">マージの結果</h2>
+  <p>マージが済むと、PR の枠に結果の行が出ます。
+  スタックの直上の PR は、base が既定ブランチに付け替わり、一番下の PR になります。</p>
+  <figure class="guide-map" id="pr-result-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/1142"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="571" alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、マージの結果の行がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-result-map-1" style="left:27.57%;top:20.928%" aria-label="1. 付け替え済みの札">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-result-map-2" style="left:42.989%;top:20.928%" aria-label="2. 積み直しが必要">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-result-map-3" style="left:1.65%;top:32.049%" aria-label="3. マージできない理由">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-result-map-4" style="left:1.65%;top:88.135%" aria-label="4. マージ済みの一覧">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-result-map-5" style="left:1.65%;top:94.046%" aria-label="5. 結果の行">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#pr-result-map-6" style="left:65.038%;top:91.243%" aria-label="6. 閉じる">6</a></div></div></div><ol class="gm-list"><li id="pr-result-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base を既定ブランチに付け替えました。</div></li><li id="pr-result-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">積み直しが必要</span></b>：スカッシュでマージしたので、この PR の差分に、下の PR のコミットが残っています(<a href="#pr-restack">積み直し</a>)。</div></li><li id="pr-result-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</div></li><li id="pr-result-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>マージ済みの一覧</b>：マージした PR が、時刻と方式つきで加わります。</div></li><li id="pr-result-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>結果の行</b>：マージした PR の番号に、方式、ブランチの扱い、付け替えた PR が続きます。</div></li><li id="pr-result-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">閉じる</span></b>：結果の行を消します。</div></li></ol></figure>
+  <p>結果の行には、次の内容が出ます。</p>
+  <ul>
+    <li>マージの方式</li>
+    <li>ブランチを削除したか。削除しなかったときと、GitHub の自動削除に任せたときは、その旨</li>
+    <li>直上の PR の base を付け替えたときは、付け替えた PR の番号</li>
+    <li>ブランチを削除できなかったときなどの警告</li>
+  </ul>
+  <p>結果の行は、ページを開いている間だけ出ます。
+  ページを開き直すと消えます。
+  レビュー収束後マージで実行された結果の行は、常駐サーバーが覚えているので、<span class="ui">閉じる</span> は無く、24 時間たつと消えます。</p>
+
+  <h3 id="pr-notify">セッションへの知らせ</h3>
+  <p>マージを検出すると、常駐サーバーは、PR を登録したセッションと、直上の PR を登録したセッションに知らせます。
+  「PR #41 が main に入りました。方式: スカッシュ。」のような文です。
+  届く経路は、判断事項への回答と同じです(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</p>
+  <p>スカッシュかリベースでマージしたときは、直上の PR ごとに、<code>git rebase --onto</code> で積み直して push する依頼が続きます。
+  <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません。</p>
+  <p>ダッシュボード以外でマージした PR も、取得の中で検出して知らせます。
+  この場合は方式が分からないので、「方式は取得できませんでした」と書き、積み直しの依頼とブランチの削除は行いません。</p>
+
+  <h3 id="pr-merged-list">マージ済みの一覧</h3>
+  <p>リポジトリの枠の下端に、<span class="ui">マージ済み (24 時間)</span> として、常駐サーバーがマージを確認してから 24 時間以内の PR が、新しい順に並びます。
+  各項目は、PR の番号に、マージした時刻と方式が続きます。
+  レビュー収束後マージで実行したものには、<span class="ui">予約で自動</span> が付きます。
+  5 件を超える分は、「古いマージ済みを表示」のボタンで開きます。</p>
+  <p>この一覧は、設定の <span class="ui">終わったものを表示しない</span> がオフのときだけ出ます。
+  ただし、予約のときに確認したコミットと違うコミットがマージされた PR は、設定にかかわらず、警告つきで出ます。
+  マージされずにクローズした PR は、同じ設定がオフのときに、<span class="ui">クローズ済み</span> として並びます。</p>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="away.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">離席中</span></a><span class="page-navigation-empty" aria-hidden="true"></span></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#pr-register">PR の登録</a></li>
+        <li><a href="#pr-fetch">GitHub からの取得</a></li>
+        <li class="level-3"><a href="#pr-fetch-error">GitHub CLI が使えないとき</a></li>
+        <li><a href="#pr-stack">スタックの表示</a></li>
+        <li><a href="#pr-row">PR の行の札</a></li>
+        <li class="level-3"><a href="#pr-ci-review">CI とレビューの札</a></li>
+        <li class="level-3"><a href="#pr-badges-other">そのほかの札</a></li>
+        <li class="level-3"><a href="#pr-restack">積み直し</a></li>
+        <li class="level-3"><a href="#pr-reason">マージできない理由と待ち</a></li>
+        <li class="level-3"><a href="#pr-cross-review">クロスレビューの行</a></li>
+        <li><a href="#pr-mergeable">「マージできます」の条件</a></li>
+        <li><a href="#pr-merge">マージする</a></li>
+        <li class="level-3"><a href="#pr-merge-check">マージの前に確かめること</a></li>
+        <li class="level-3"><a href="#pr-merge-stack">スタックの途中をマージする</a></li>
+        <li><a href="#pr-reserve">レビュー収束後マージ</a></li>
+        <li class="level-3"><a href="#pr-reserve-cancel">予約が取り消されるとき</a></li>
+        <li><a href="#pr-skip">レビュー不要の記録</a></li>
+        <li><a href="#pr-conflict">衝突の解消の依頼</a></li>
+        <li><a href="#pr-result">マージの結果</a></li>
+        <li class="level-3"><a href="#pr-notify">セッションへの知らせ</a></li>
+        <li class="level-3"><a href="#pr-merged-list">マージ済みの一覧</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

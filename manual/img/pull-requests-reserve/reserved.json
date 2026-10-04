@@ -1,0 +1,38 @@
+{
+  "name": "reserved",
+  "target": "#root > section.section:nth-child(1) .pr-repo-group",
+  "width": 1576,
+  "height": 1392,
+  "parts": [
+    {
+      "key": "reserved.card",
+      "bounds": {
+        "x": 14,
+        "y": 131,
+        "width": 1548,
+        "height": 248
+      },
+      "visible": true
+    },
+    {
+      "key": "reserved.badge",
+      "bounds": {
+        "x": 308,
+        "y": 259,
+        "width": 1107,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "reserved.cancel",
+      "bounds": {
+        "x": 639,
+        "y": 147,
+        "width": 168,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}
