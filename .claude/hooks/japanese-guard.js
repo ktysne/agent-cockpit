@@ -14,10 +14,10 @@ function globalSettingsPath(environment = process.env) {
   return path.join(claudeHome, 'settings.json');
 }
 
-// matcher は英数字と | だけなら完全一致の列挙、それ以外は正規表現として扱われる。
+// SessionStart の matcher は、英数字、_、-、空白、カンマ、| だけなら | かカンマで区切った完全一致の列挙、それ以外は正規表現として扱われる。
 function matcherMatches(matcher, value) {
   if (matcher === undefined || matcher === '' || matcher === '*') return true;
-  if (/^[\w|]+$/.test(matcher)) return matcher.split('|').includes(value);
+  if (/^[\w\s,|-]+$/.test(matcher)) return matcher.split(/[|,]/).map((item) => item.trim()).includes(value);
   try {
     return new RegExp(matcher).test(value);
   } catch {

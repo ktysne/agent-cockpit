@@ -61,10 +61,10 @@ test('グローバル版の登録は exec 形式とシェル形式のどちら�
 test('SessionStart は matcher が compact に当たる登録だけをグローバル版として数える', () => {
   const script = '/home/me/.claude/hooks/compact-language.js';
   const sessionStart = (matcher) => [{ matcher, hooks: [{ type: 'command', command: 'node', args: [script] }] }];
-  for (const matcher of [undefined, '', '*', 'compact', 'startup|compact', 'comp.*']) {
+  for (const matcher of [undefined, '', '*', 'compact', 'startup|compact', 'startup, compact', 'compact | startup', 'comp.*']) {
     assert.equal(globalGuardEvents(settingsWith({ SessionStart: sessionStart(matcher) })).has('SessionStart'), true, String(matcher));
   }
-  for (const matcher of ['startup', 'resume|clear', '(']) {
+  for (const matcher of ['startup', 'resume|clear', 'resume, clear', 'compactor', '(']) {
     assert.equal(globalGuardEvents(settingsWith({ SessionStart: sessionStart(matcher) })).has('SessionStart'), false, matcher);
   }
 });
