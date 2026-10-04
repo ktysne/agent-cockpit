@@ -374,12 +374,13 @@ function externalLinkHarness(responseStatus) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const postUiAction = html.match(/async function postUiAction\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
   const openExternalLink = html.match(/async function openExternalLink\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
+  const defaultBrowserUrl = html.match(/function defaultBrowserUrl\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
   const handleExternalLink = html.match(/function handleExternalLink\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
   const clickStart = html.indexOf("document.addEventListener('click', (event) => {", html.indexOf('function handleExternalLink'));
   const clickEnd = html.indexOf('\n});', clickStart) + '\n});'.length;
   const auxclickStart = html.indexOf("document.addEventListener('auxclick', (event) => {", clickEnd);
   const auxclickEnd = html.indexOf('\n});', auxclickStart) + '\n});'.length;
-  assert.ok(postUiAction && openExternalLink && handleExternalLink);
+  assert.ok(postUiAction && openExternalLink && defaultBrowserUrl && handleExternalLink);
   assert.ok(clickStart >= 0 && clickEnd > clickStart);
   assert.ok(auxclickStart >= 0 && auxclickEnd > auxclickStart);
 
@@ -404,6 +405,7 @@ function externalLinkHarness(responseStatus) {
   vm.runInContext([
     postUiAction,
     openExternalLink,
+    defaultBrowserUrl,
     handleExternalLink,
     html.slice(clickStart, clickEnd),
     html.slice(auxclickStart, auxclickEnd),
@@ -446,6 +448,40 @@ test('外部 HTTPS リンクのクリックをサーバーへ送り、失敗時�
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(middleDefaultPrevented, true);
   assert.equal(harness.requests.length, 2);
+});
+
+test('同じオリジンのマニュアルリンクはサーバーへ送り、ほかの同じオリジンのリンクは送らない', async () => {
+  const harness = externalLinkHarness(204);
+  const manualLink = {
+    href: 'http://127.0.0.1:47821/manual/#help-settings',
+    closest: (selector) => selector === 'a[target="_blank"]' ? manualLink : null,
+  };
+  let manualDefaultPrevented = false;
+  harness.listeners.click({
+    target: manualLink,
+    button: 0,
+    preventDefault: () => { manualDefaultPrevented = true; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(manualDefaultPrevented, true);
+  assert.equal(harness.requests.length, 1);
+  assert.deepEqual(JSON.parse(harness.requests[0].options.body), { url: manualLink.href });
+  assert.deepEqual(harness.openedWindows, []);
+
+  const sameOriginLink = {
+    href: 'http://127.0.0.1:47821/settings',
+    closest: (selector) => selector === 'a[target="_blank"]' ? sameOriginLink : null,
+  };
+  let sameOriginDefaultPrevented = false;
+  harness.listeners.click({
+    target: sameOriginLink,
+    button: 0,
+    preventDefault: () => { sameOriginDefaultPrevented = true; },
+  });
+
+  assert.equal(sameOriginDefaultPrevented, false);
+  assert.equal(harness.requests.length, 1);
 });
 
 test('外部 HTTPS リンクをサーバーが開けたときはフォールバックを使わない', async () => {

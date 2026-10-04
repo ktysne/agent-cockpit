@@ -564,7 +564,7 @@ test('経路設定 API は画面秘密値と必須 Origin を照合し、保存�
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).routing, jsonBody(saved));
 });
 
-test('外部リンク API は画面秘密値と Origin を照合し、安全な HTTPS URL だけを開く', async (t) => {
+test('外部リンク API は画面秘密値と Origin を照合し、HTTPS と自サーバーのマニュアル URL だけを開く', async (t) => {
   const openedUrls = [];
   let failOpen = false;
   const runtime = await runningServer(t, {
@@ -585,6 +585,13 @@ test('外部リンク API は画面秘密値と Origin を照合し、安全な 
 
   for (const url of [
     'http://example.com',
+    `http://127.0.0.1:${runtime.info.port + 1}/manual/`,
+    `http://example.com:${runtime.info.port}/manual/`,
+    `http://127.0.0.1:${runtime.info.port}/settings`,
+    `http://127.0.0.1:${runtime.info.port}/manuality/`,
+    `http://127.0.0.1:${runtime.info.port}/manual`,
+    `http://127.0.0.1:${runtime.info.port}/manual/with\ncontrol`,
+    `http://127.0.0.1:${runtime.info.port}/manual/${'a'.repeat(2048)}`,
     'javascript:alert(1)',
     'https://example.com/with\ncontrol',
     `https://example.com/${'a'.repeat(2048)}`,
@@ -603,6 +610,12 @@ test('外部リンク API は画面秘密値と Origin を照合し、安全な 
   assert.equal((await send(url)).status, 500);
   assert.deepEqual(openedUrls, [url, url]);
   failOpen = false;
+
+  openedUrls.length = 0;
+  const manualUrl = `http://localhost:${runtime.info.port}/manual/pages/settings.html?from=dashboard#help-settings`;
+  const manualOpened = await send(manualUrl);
+  assert.equal(manualOpened.status, 204);
+  assert.deepEqual(openedUrls, [`http://127.0.0.1:${runtime.info.port}/manual/pages/settings.html?from=dashboard#help-settings`]);
 
   // 起動するプログラムへは、検査した正規化後の値だけを渡す。
   openedUrls.length = 0;
