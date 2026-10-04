@@ -1582,7 +1582,7 @@ function mergeConfirm(p, pr) {
   const effects = [
     reviewWarning ? `<span>${esc(reviewWarning)}</span>` : '',
     `照合する head SHA: ${o.mergeAfterReview ? 'クロスレビューの収束記録' : shortShaLabel(pr.sha)}`,
-    kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する</span>` : '',
+    kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する。</span>` : '',
   ].filter(Boolean);
   return `<div class="merge-confirm ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
     <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へ${o.mergeAfterReview ? 'レビュー収束後に' : ''}マージする</div>
@@ -1992,7 +1992,7 @@ function renderKindMode() {
   const taskControls = todoTaskToggle || doneTaskToggle
     ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
     : '';
-  const prs = ps.filter(p => ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('');
+  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',

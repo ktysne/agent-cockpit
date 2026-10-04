@@ -376,7 +376,7 @@ ul.points li { margin-bottom: 6px; }
       <text class="t" x="1256" y="826">GitHub（gh CLI）</text>
       <text class="m" x="1256" y="852">gh pr view / gh api</text><text class="s" x="1400" y="852">60 秒ごと</text>
       <text class="m" x="1256" y="876">gh pr merge</text><text class="s" x="1340" y="876">--match-head-commit</text>
-      <text class="s" x="1256" y="900">レビュー収束後マージの予約を 15 秒ごとに確認</text>
+      <text class="s" x="1256" y="900">レビュー収束後マージの予約を PR の取得のたび(60 秒ごと)に確認</text>
       <text class="s" x="1256" y="924">GH_TOKEN などの環境変数は消し、</text>
       <text class="s" x="1256" y="942">gh 自身のログインを使う</text>
 
@@ -624,7 +624,7 @@ ul.points li { margin-bottom: 6px; }
         <text class="t2" x="406" y="216">P5　マージする</text>
         <text class="s" x="406" y="240">gh pr merge --match-head-commit（⑬）</text>
         <text class="s" x="406" y="258">head が変わっても予約を保ち、新しい head の</text>
-        <text class="s" x="406" y="276">レビュー収束を待つ（15 秒ごとに確認）</text>
+        <text class="s" x="406" y="276">レビュー収束を待つ（PR の取得のたびに確認）</text>
       </g>
       <g>
         <rect class="b-cc" x="20" y="190" width="320" height="120" rx="10"/>
