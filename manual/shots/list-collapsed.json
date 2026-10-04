@@ -1,0 +1,35 @@
+{
+  "title": "プロダクトを畳んだ一覧",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 700
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "[data-product-action=\"collapse\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-product-action=\"collapse\"][aria-expanded=\"false\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "first",
+      "target": [
+        "#root > section.section:nth-child(1)",
+        "#root > section.section:nth-child(2) .head"
+      ],
+      "parts": {
+        "collapsed.card": "#root > section.section:nth-child(1)",
+        "collapsed.open": "[data-product-action=\"collapse\"][aria-expanded=\"false\"]"
+      }
+    }
+  ]
+}

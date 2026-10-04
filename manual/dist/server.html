@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>常駐サーバーと保存されるもの | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html" aria-current="page">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html" aria-current="page">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#server-life">起動と寿命</a></li>
+        <li><a href="#server-storage">保存先とファイル</a></li>
+        <li><a href="#server-restart">再起動で残るものと消えるもの</a></li>
+        <li><a href="#server-config">ポートと保存先を変える</a></li>
+        <li><a href="#server-security">守っていること</a></li></ol>
+      </details>
+<section class="section">
+  <h1>常駐サーバーと保存されるもの</h1>
+  <p class="lead">常駐サーバーは、ダッシュボードの画面を配り、セッションのフックと MCP ツールからの情報を集める、あなたの PC だけで動くサーバーです。
+  このページでは、起動と寿命、保存先のファイル、再起動で残るものと消えるもの、ポートと保存先の変え方を説明します。</p>
+
+  <h2 id="server-life">起動と寿命</h2>
+  <p>常駐サーバーは、次のどれかのときに起動します。</p>
+  <ul>
+    <li>Claude Code のセッションを開始したとき。フックが、動いていなければ起動します</li>
+    <li>セッションのフックが情報を送るとき。動いていなければ起動します</li>
+    <li>タスクトレイでダッシュボードを開くとき(<a href="tray.html#tray-start">タスクトレイを起動する</a>)</li>
+    <li>リポジトリのルートで <code>npm start</code> を実行したとき</li>
+  </ul>
+  <p>同時に複数のフックが起動しようとしても、保存先の <code>start.lock</code> で順番を守るので、常駐サーバーは 1 つだけ動きます。
+  待ち受けるのは <code>127.0.0.1</code> のポート <code>47821</code> だけで、ほかの PC からは接続できません。</p>
+  <p>常駐サーバーは、次のときに止まります。</p>
+  <ul>
+    <li>手で起動したものは、起動した端末で <code>Ctrl+C</code> を押したとき</li>
+    <li>30 分間、何も要求を受けず、常駐サーバーが把握しているセッションも無く、Claude Code のセッションのファイル(<code>~/.claude/sessions/</code> の <code>.json</code>)も無いとき。セッションをすべて閉じて、ダッシュボードもタスクトレイも閉じていると、自動で止まります。次にセッションを開くと、起動し直します</li>
+    <li>タスクトレイから再起動したとき(<a href="tray.html#tray-restart">常駐サーバーを再起動する</a>)</li>
+  </ul>
+  <p>タスクトレイの「終了」では、常駐サーバーは止まりません。
+  ダッシュボードのウィンドウは 2 秒ごと、タスクトレイは 5 秒ごとに状態を取りに行くので、どちらかが開いている間は、30 分の無通信にはなりません。</p>
+  <details class="more">
+    <summary>起動と停止の詳細</summary>
+    <ul>
+      <li>セッション開始のフックが常駐サーバーの起動を待つのは 1 秒までです。起動が間に合わなかったときは、セッションにダッシュボードの URL が伝わりませんが、常駐サーバーはそのまま起動を続けます</li>
+      <li>自動で起動した常駐サーバーは、フックとは別のプロセスとして動くので、セッションを閉じても止まりません。出力は、保存先の <code>server.log</code> に書きます</li>
+      <li>自動で止まるかどうかは、1 分ごとに確かめます。セッションのファイルを読めないときは、ファイルがあるものとして扱い、止まりません</li>
+      <li>止まるときは、保存していない変更を書き出してから、<code>server.json</code> を消します</li>
+    </ul>
+  </details>
+
+  <h2 id="server-storage">保存先とファイル</h2>
+  <p>常駐サーバーが保存するものは、保存先のフォルダーに置きます。
+  既定の保存先は、ユーザーのホームフォルダーの <code>.agent-cockpit</code> です(Windows では <code>C:\Users\&lt;ユーザー名&gt;\.agent-cockpit</code>)。</p>
+  <ul>
+    <li><code>store.json</code>：タスク、判断事項と回答の記録、PR の登録、表示の設定、外したセッションなど、再起動しても残したい記録の本体です</li>
+    <li><code>away.json</code>：離席中の切り替えと、離席中の期間の記録です</li>
+    <li><code>routing.json</code>：経路の設定です(<a href="routing.html">経路の設定</a>)</li>
+    <li><code>route-agents/</code>：サブエージェントを起動したときの経路の記録です。24 時間使われていないものは消えます</li>
+    <li><code>tray.json</code>：タスクトレイの通知の設定です(<a href="tray.html#tray-notify">待ち件数の通知</a>)</li>
+    <li><code>browser/</code>：タスクトレイから開くダッシュボードの Edge のプロファイルです</li>
+    <li><code>agent-cockpit.ico</code>：ショートカットのアイコンです</li>
+    <li><code>server.json</code>：動いている常駐サーバーのプロセス番号、ポート、起動した時刻と、書き込みを照合する秘密値です。フックとタスクトレイが、接続先を知るために読みます。秘密値が入っているので、他人に渡さないでください</li>
+    <li><code>server.log</code>：常駐サーバーのログです。起動のたびに空にして書き直します。起動と停止、保存に失敗したファイルの名前、処理に失敗したことだけを書きます。回答の本文や、PR の情報は書きません</li>
+    <li><code>start.lock</code>：起動の順番を守るための一時ファイルです。起動が終わると消えます</li>
+  </ul>
+  <p>ファイルは、一時ファイルに書いてから置き換える形で書くので、書き込みの途中で止まっても、壊れたファイルは残りません。
+  PC に Claude Code のセッション情報として元からある <code>~/.claude/sessions/*.json</code> は、読むだけで、書きません。</p>
+  <details class="more">
+    <summary>保存の詳細</summary>
+    <ul>
+      <li><code>store.json</code> の書き込みは、変更から 0.5 秒ほどまとめて遅らせます。タスクトレイの再起動は常駐サーバーを強制終了するので、その直前の変更は保存されないことがあります</li>
+      <li>セッションの記録(タスク、判断事項、PR の登録など)は、そのセッションが動いていない状態で、最後の更新から 14 日を過ぎると消えます。マージ済みの PR の一覧は、マージから 24 時間で消えます。CI の失敗の記録は 14 日です</li>
+      <li><code>store.json</code> が壊れているか、新しい版のものであるときは、<code>store.json.broken-&lt;時刻&gt;</code> の名前に変えて、空の状態から始めます。消えたと思った記録は、この名前のファイルに残っています</li>
+      <li><code>away.json</code> と <code>routing.json</code> が読めないときは、離席中ではない状態と、両方が <span class="ui">既定</span> の経路から始めます</li>
+    </ul>
+  </details>
+
+  <h2 id="server-restart">再起動で残るものと消えるもの</h2>
+  <p>常駐サーバーを再起動しても、保存先のファイルに書いてあるものは残ります。
+  イベントから組み立てているものは消えて、セッションの次のイベントから組み立て直されます。</p>
+  <p>残るものは、次のとおりです。</p>
+  <ul>
+    <li>メインセッションが登録したタスクと完了条件、画面で完了にしたタスクの記録</li>
+    <li>判断事項と、それへの回答の記録(送信済みで、まだ渡していない回答を含みます)</li>
+    <li>登録した PR、マージ済みの PR の一覧(24 時間分)、レビュー収束後マージの予約、レビュー不要の記録</li>
+    <li>「前回見てから」の既読の時刻と離席中の期間、離席中の切り替え</li>
+    <li>表示の設定(表示モード、カードの並びと畳み、隠した種類、設定画面の項目)と、外したセッション</li>
+    <li>経路の設定</li>
+  </ul>
+  <p>消えるものは、次のとおりです。</p>
+  <ul>
+    <li>許可待ち。再起動の後は、表示されません</li>
+    <li>実行中のツールの行、サブエージェントの行、画面で終了にしたサブエージェントの記録。次のイベントから組み立て直されます</li>
+    <li>離席中に質問を預かっているフックとの接続。預かっていた質問は、離席中のままなら推奨案で進み、離席中が解除されていれば、デスクトップアプリの質問に戻ります(<a href="away.html#away-lost">常駐サーバーと連絡が取れないとき</a>)</li>
+  </ul>
+  <p>送信済みで、まだセッションに渡していない回答は、残ります。
+  ただし、再起動で質問の待ちが切れるので、次のプロンプトの送信か、ツールの実行のひと区切りまで渡りません(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</p>
+  <p>ダッシュボードの画面は、再起動の間は <span class="ui">常駐サーバーに接続できません。</span> と出て、起動し直すと自動でつながります(<a href="trouble.html#trouble-connect">画面がつながらない</a>)。</p>
+  <p>ブラウザーに保存した <span class="ui">配色</span> と <span class="ui">前回見てから</span> の設定は、常駐サーバーとは別なので、再起動の影響を受けません。</p>
+
+  <h2 id="server-config">ポートと保存先を変える</h2>
+  <p>既定のポートと保存先は、環境変数で変えられます。</p>
+  <ul>
+    <li><code>AGENT_COCKPIT_HOME</code>：保存先のフォルダーです</li>
+    <li><code>AGENT_COCKPIT_PORT</code>：常駐サーバーのポートです。手で起動するときは、<code>--port</code> でも指定できます</li>
+  </ul>
+  <p>フック、MCP サーバー、タスクトレイ、常駐サーバーは、同じ保存先を読む必要があります。
+  Claude Code を起動する環境(ユーザーの環境変数など)に設定して、どれにも同じ値が見えるようにしてください。
+  ポートを変えたときは、ダッシュボードの URL も変わります(<code>http://127.0.0.1:&lt;ポート&gt;/</code>)。</p>
+  <p>指定したポートがほかのプログラムに使われていると、常駐サーバーは起動できません。
+  理由は、保存先の <code>server.log</code> に書かれます(<a href="trouble.html#trouble-connect">画面がつながらない</a>)。</p>
+  <details class="more">
+    <summary>ポートの扱いの詳細</summary>
+    <ul>
+      <li>ポートの環境変数を読むのは、常駐サーバーを起動するフックとタスクトレイです。起動した後は、フックもタスクトレイも、<code>server.json</code> のポートに接続します</li>
+      <li>Claude のホーム(<code>CLAUDE_CONFIG_DIR</code>、無ければ <code>~/.claude</code>)は、セッションのファイルとサブエージェントの定義を読むために使います</li>
+    </ul>
+  </details>
+
+  <h2 id="server-security">守っていること</h2>
+  <p>常駐サーバーは、セッションへ指示を渡せる口を持つので、次のことを守っています。</p>
+  <ul>
+    <li>待ち受けるのは <code>127.0.0.1</code> だけです。<code>Host</code> が <code>127.0.0.1</code> か <code>localhost</code> の要求だけを受け付けます</li>
+    <li>書き込みを受ける口は、起動のたびに作る秘密値と、要求の送り元(Origin)を照合します。ほかのウェブページから、セッションへ指示を送ることはできません</li>
+    <li>許可待ちは表示だけで、ダッシュボードから許可を出す口はありません(<a href="permission.html#permission-where">許可はデスクトップアプリで出す</a>)</li>
+  </ul>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="tray.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">タスクトレイ</span></a><a class="next" href="trouble.html"><span class="page-navigation-label">次のページ</span><span class="page-navigation-title">困ったとき</span></a></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#server-life">起動と寿命</a></li>
+        <li><a href="#server-storage">保存先とファイル</a></li>
+        <li><a href="#server-restart">再起動で残るものと消えるもの</a></li>
+        <li><a href="#server-config">ポートと保存先を変える</a></li>
+        <li><a href="#server-security">守っていること</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

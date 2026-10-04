@@ -1,0 +1,39 @@
+{
+  "title": "経路を変えた後の「変更前」の札",
+  "scenario": "states",
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "[data-route=\"agents\"][data-v=\"claude\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-route=\"agents\"][data-v=\"claude\"][aria-pressed=\"true\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "setting",
+      "target": "#routing",
+      "parts": {
+        "changed.selected": "#routing .rgroup > .rrow:nth-child(1) .seg [aria-pressed=\"true\"]"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "agent",
+      "target": ".agent-list > .agent-row:nth-child(1)",
+      "parts": {
+        "changed.tag": ".agent-list > .agent-row:nth-child(1) .route-tag"
+      }
+    }
+  ]
+}

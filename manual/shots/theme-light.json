@@ -1,0 +1,20 @@
+{
+  "title": "ライトの配色の全体図",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 1000
+  },
+  "theme": "light",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "overview",
+      "viewport": true
+    }
+  ]
+}

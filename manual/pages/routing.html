@@ -1,0 +1,89 @@
+<section class="section">
+  <h1>経路の設定</h1>
+  <p class="lead">経路の設定は、サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選ぶ欄です。
+  画面の上部にあり、全セッションに共通です。
+  変えた設定は、次に起動するサブエージェントと、次に始めるクロスレビューから効きます。</p>
+
+  <h2 id="routing-choices">選べる経路</h2>
+  <p>サブエージェントとクロスレビューのそれぞれに、<span class="ui">既定</span>、<span class="ui">Codex</span>、<span class="ui">Claude</span> の 3 つから 1 つを選びます。
+  押したボタンがすぐ保存され、選んでいるボタンが色付きで出ます。</p>
+  <figure class="guide-map" id="routing-both-map" data-shot="routing-settings/both" data-alt="経路の設定。左にサブエージェントの段、右にクロスレビューの段があり、それぞれ、既定、Codex、Claude の 3 つのボタンが並ぶ。どちらも既定が選ばれている">
+    <ol class="guide-list">
+      <li data-part="routing.agents" data-place="left"><b><span class="ui">サブエージェント</span></b>：サブエージェントを、どの経路で動かすかを選びます。</li>
+      <li data-part="routing.review"><b><span class="ui">クロスレビュー</span></b>：クロスレビューのレビュアーを、どの経路で動かすかを選びます。</li>
+      <li data-part="routing.selected" data-place="bottom"><b>選んでいるボタン</b>：いま効いている経路です。色が付いて出ます。</li>
+    </ol>
+  </figure>
+  <p>経路の意味は、サブエージェントとクロスレビューで少し違います。</p>
+  <ul>
+    <li><span class="ui">既定</span>：経路を指定しません。サブエージェントにもクロスレビューにも、何も伝えず、止めもしません。選び直さなければ、この状態です</li>
+    <li><span class="ui">Codex</span>：サブエージェントは、Codex へ委譲して作業するよう、起動時に伝えられます。クロスレビューは、Codex をレビュアーにします</li>
+    <li><span class="ui">Claude</span>：サブエージェントは、Codex へ委譲せずに Claude 自身で作業するよう、起動時に伝えられます。クロスレビューは、Claude をレビュアーにします</li>
+  </ul>
+  <p>サブエージェントの経路は、claude-codex-bridge の窓口(<code>impl-hard</code> など)が Codex を呼ぶ仕組みに対する指定です。
+  <span class="ui">Claude</span> を選んだサブエージェントが Codex を呼び出そうとすると、フックが止めます。
+  止められた窓口は、Claude 側で実装する担当への委譲し直しを、メインセッションに報告します。</p>
+  <p>クロスレビューの経路は、ai-cross-review が、レビューを始める直前に読みます。
+  <span class="ui">Codex</span> か <span class="ui">Claude</span> を選んでいるのに、違うレビュアーで始めようとすると、ai-cross-review は始めずに断ります。
+  会話で別の指定があるときは、ai-cross-review のオプションで、理由を添えて上書きできます。</p>
+  <details class="more">
+    <summary>経路の動きの詳細</summary>
+    <ul>
+      <li>サブエージェントへの指定は、<code>route.js</code> のフックが、サブエージェントの開始時に追加の文脈として渡します。<span class="ui">Claude</span> のときは、Codex を呼ぶコマンドをツールの実行の直前に断ります。このフックを登録していないと、経路の札は付きますが、サブエージェントには伝わりません(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>のパターン C)</li>
+      <li>クロスレビューの経路は、<code>node tools/cross-review.js route</code> が、常駐サーバーの保存先の <code>routing.json</code> を読んで、<code>codex</code>、<code>claude</code>、<code>default</code> のどれかを出力します。ファイルが読めないときは <code>default</code> です</li>
+      <li>常駐サーバーも、<code>routing.json</code> が読めないとき、または値が不正なときは、両方を <span class="ui">既定</span> として扱います</li>
+      <li>claude-codex-bridge の窓口が <span class="ui">Claude</span> の指定を受けたときの動きは、claude-codex-bridge 側の <a href="https://github.com/ktysne/claude-codex-bridge/issues/129">Issue 129</a> で扱っています</li>
+    </ul>
+  </details>
+
+  <h2 id="routing-visible">欄が出る条件</h2>
+  <p>経路の設定の欄は、連携ツールを入れているときだけ出ます。
+  段ごとに条件が違います。</p>
+  <ul>
+    <li><span class="ui">サブエージェント</span> の段：claude-codex-bridge を入れているときです。Claude のホーム(環境変数 <code>CLAUDE_CONFIG_DIR</code>、無ければ <code>~/.claude</code>)か <code>~/.claude</code> の <code>tools/</code> に、<code>codex-agent.sh</code> があれば入っているとみなします</li>
+    <li><span class="ui">クロスレビュー</span> の段：ai-cross-review を入れたリポジトリを、画面が知っているときです。動いているセッションの作業ディレクトリか、PR を登録したセッションの作業ディレクトリのどれかで、作業ツリーのルートに <code>tools/cross-review.js</code> があれば出ます</li>
+  </ul>
+  <p>片方だけのときは、その段だけが出ます。
+  どちらも無いときは、欄ごと出ません。
+  連携ツールを入れても外しても、画面を開き直さなくても、遅くとも 1 分ほどで欄が出入りします。</p>
+  <figure class="guide-map" id="routing-agents-only-map" data-shot="routing-agents-only/agents" data-alt="サブエージェントの段だけが出た経路の設定。クロスレビューの段は無い">
+    <ol class="guide-list">
+      <li data-part="routing.agents"><b><span class="ui">サブエージェント</span> の段だけ</b>：claude-codex-bridge だけを入れているときの表示です。クロスレビューの段は出ません。</li>
+    </ol>
+  </figure>
+  <p>連携ツールが無くても、Agent Cockpit はエラーも警告も出さずに動きます(<a href="start.html#start-integrations">連携ツールの有無で変わる表示</a>)。</p>
+
+  <h2 id="routing-timing">効く時点</h2>
+  <p>経路の設定は、ボタンを押した時点で常駐サーバーの <code>routing.json</code> に保存されます。
+  保存できなかったときは、<span class="ui">経路の設定を保存できませんでした。</span> と出て、ボタンは元の選択のままです。</p>
+  <p>変えた設定は、次のものから効きます。</p>
+  <ul>
+    <li>サブエージェント：設定を変えた後に起動するものから。稼働中のサブエージェントは、止めも、切り替えもしません</li>
+    <li>クロスレビュー：設定を変えた後に始めるレビューから</li>
+  </ul>
+  <details class="more">
+    <summary>サブエージェントの経路の記録の詳細</summary>
+    <ul>
+      <li>サブエージェントの経路は、起動したときに読み、そのときの値を保存先の <code>route-agents/</code> に記録します。起動した後は、設定を変えても、この記録を使い続けます</li>
+      <li>同じサブエージェントが再開したときも、最初の記録の経路のままです</li>
+      <li>記録は、読むたびに更新時刻を進めます。24 時間使われていない記録は、新しいサブエージェントの開始時に削除します</li>
+    </ul>
+  </details>
+
+  <h2 id="routing-stale">経路の札と「変更前」</h2>
+  <p>claude-codex-bridge を入れているときは、稼働中のサブエージェントの行に、起動したときの経路が <span class="ui">経路:</span> の札で出ます。
+  起動した後で経路の設定を変えると、いまの設定と違う札に <span class="ui">(変更前)</span> が付きます。
+  札は、稼働中のサブエージェントが、いまの設定とは別の経路で動いていることを示します。</p>
+  <figure class="guide-map" id="routing-changed-setting-map" data-shot="routing-changed/setting" data-alt="サブエージェントの経路を Claude に変えた経路の設定。サブエージェントの段で Claude が選ばれている">
+    <ol class="guide-list">
+      <li data-part="changed.selected"><b>変えた後の設定</b>：サブエージェントの経路を <span class="ui">Claude</span> にしました。</li>
+    </ol>
+  </figure>
+  <figure class="guide-map" id="routing-changed-agent-map" data-shot="routing-changed/agent" data-alt="稼働中のサブエージェントの行。経路の札に、Codex と変更前が出ている。その右に、Claude のモデル、Codex が使えなかった表示が並ぶ">
+    <ol class="guide-list">
+      <li data-part="changed.tag" data-place="left"><b>経路の札</b>：起動したときは <span class="ui">Codex</span> の経路でした。いまの設定は <span class="ui">Claude</span> なので、<span class="ui">(変更前)</span> が付きます。</li>
+    </ol>
+  </figure>
+  <p>札にマウスを載せると、<span class="ui">起動時に効いていた経路の設定</span> と出ます。
+  行のほかの札の見方は、サブエージェントのページにあります(<a href="work.html#work-agent-route">経路の札</a>)。</p>
+</section>

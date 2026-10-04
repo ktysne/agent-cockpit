@@ -1,0 +1,31 @@
+{
+  "name": "empty",
+  "target": [
+    ".mode-row",
+    "#root"
+  ],
+  "width": 1636,
+  "height": 170,
+  "parts": [
+    {
+      "key": "empty.mode",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 340,
+        "height": 76
+      },
+      "visible": true
+    },
+    {
+      "key": "empty.message",
+      "bounds": {
+        "x": 0,
+        "y": 100,
+        "width": 1636,
+        "height": 70
+      },
+      "visible": true
+    }
+  ]
+}

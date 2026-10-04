@@ -1,0 +1,31 @@
+{
+  "name": "first",
+  "target": [
+    "#root > section.section:nth-child(1)",
+    "#root > section.section:nth-child(2) .head"
+  ],
+  "width": 1636,
+  "height": 262,
+  "parts": [
+    {
+      "key": "collapsed.card",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1636,
+        "height": 118
+      },
+      "visible": true
+    },
+    {
+      "key": "collapsed.open",
+      "bounds": {
+        "x": 1167,
+        "y": 26,
+        "width": 89,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}

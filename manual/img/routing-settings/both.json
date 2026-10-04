@@ -1,0 +1,38 @@
+{
+  "name": "both",
+  "target": "#routing",
+  "width": 1636,
+  "height": 64,
+  "parts": [
+    {
+      "key": "routing.agents",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 457,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "routing.review",
+      "bounds": {
+        "x": 501,
+        "y": 0,
+        "width": 434,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "routing.selected",
+      "bounds": {
+        "x": 177,
+        "y": 2,
+        "width": 76,
+        "height": 60
+      },
+      "visible": true
+    }
+  ]
+}

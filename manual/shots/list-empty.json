@@ -1,0 +1,27 @@
+{
+  "title": "セッションが無いとき",
+  "scenario": "empty",
+  "window": {
+    "width": 850,
+    "height": 600
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "empty",
+      "target": [
+        ".mode-row",
+        "#root"
+      ],
+      "parts": {
+        "empty.mode": ".mode-row .seg",
+        "empty.message": "#root > section.section"
+      }
+    }
+  ]
+}

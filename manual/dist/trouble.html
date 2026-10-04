@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>困ったとき | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html" aria-current="page">困ったとき</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html" aria-current="page">困ったとき</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#trouble-connect">画面がつながらない</a></li>
+        <li><a href="#trouble-sessions">セッションが一覧に出ない</a></li>
+        <li><a href="#trouble-tasks">タスクが出ない</a></li>
+        <li><a href="#trouble-routing">経路の設定が出ない、効かない</a></li>
+        <li><a href="#trouble-pr">PR が出ない、エラーが出る</a></li>
+        <li><a href="#trouble-merge">マージできない</a></li>
+        <li><a href="#trouble-answer">回答がセッションに届かない</a></li>
+        <li><a href="#trouble-settings">設定が保存されない、戻ってしまう</a></li>
+        <li><a href="#trouble-reload">「画面が新しくなりました」と出た</a></li>
+        <li><a href="#trouble-tray">タスクトレイが動かない、通知が出ない</a></li></ol>
+      </details>
+<section class="section">
+  <h1>困ったとき</h1>
+  <p class="lead">このページは、起きたことから、原因と直し方の書かれた節を探すための案内です。
+  画面に出る文や、見たままの症状から、該当する節を選んでください。
+  詳しい仕様は、各節のリンク先にあります。</p>
+  <ul>
+    <li><a href="#trouble-connect">画面がつながらない</a></li>
+    <li><a href="#trouble-sessions">セッションが一覧に出ない</a></li>
+    <li><a href="#trouble-tasks">タスクが出ない</a></li>
+    <li><a href="#trouble-routing">経路の設定が出ない、効かない</a></li>
+    <li><a href="#trouble-pr">PR が出ない、エラーが出る</a></li>
+    <li><a href="#trouble-merge">マージできない</a></li>
+    <li><a href="#trouble-answer">回答がセッションに届かない</a></li>
+    <li><a href="#trouble-settings">設定が保存されない、戻ってしまう</a></li>
+    <li><a href="#trouble-reload">「画面が新しくなりました」と出た</a></li>
+    <li><a href="#trouble-tray">タスクトレイが動かない、通知が出ない</a></li>
+  </ul>
+
+  <h2 id="trouble-connect">画面がつながらない</h2>
+  <p>次の表示が出たときの対処です。</p>
+  <ul>
+    <li>画面の上に <span class="ui">常駐サーバーに接続できません。</span> と出て、「表示は 14:30 時点のものです」と続く</li>
+    <li>画面の中央に <span class="ui">状態を取得できません。常駐サーバーが起動しているか確認してください。</span> と出る</li>
+    <li>ブラウザーが接続できない、または <code>Invalid Host</code> と出る</li>
+  </ul>
+  <p>まず、常駐サーバーが動いているかを確かめます。
+  ブラウザーで <code>http://127.0.0.1:47821/health</code> を開き、<code>"app":"agent-cockpit"</code> を含む文字が出れば、動いています。
+  ポートを変えているときは、変えた値で開きます。</p>
+  <ul>
+    <li>動いていないとき：セッションを新しく開くか、タスクトレイの「ダッシュボードを開く」を選ぶと、起動します。リポジトリのルートで <code>npm start</code> を実行しても起動できます。画面は 2 秒ごとに取り直すので、起動すれば自動でつながります。セッションもダッシュボードも閉じたまま 30 分たつと、自動で止まります(<a href="server.html#server-life">起動と寿命</a>)</li>
+    <li>起動しないとき：保存先の <code>server.log</code> を見ます。ポートがほかのプログラムに使われているときは、その旨が書かれます。使っているプログラムを止めるか、<code>AGENT_COCKPIT_PORT</code> でポートを変えます(<a href="server.html#server-config">ポートと保存先を変える</a>)</li>
+    <li><code>Invalid Host</code> と出るとき：<code>127.0.0.1</code> か <code>localhost</code> 以外の名前で開いています。常駐サーバーは、この 2 つの名前のどちらかでの接続だけを受け付けます</li>
+    <li>再起動の直後：起動し直す間だけ、上の表示が出ます。待てば消えます(<a href="tray.html#tray-restart">常駐サーバーを再起動する</a>)</li>
+  </ul>
+
+  <h2 id="trouble-sessions">セッションが一覧に出ない</h2>
+  <p>画面に <span class="ui">表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。</span> と出ているか、開いているはずのセッションが見当たらないときの対処です。</p>
+  <ul>
+    <li>隠していないかを確かめます。一覧の最下部の注記に、隠している種類、外したセッション、終わったもの、更新の無いセッションの件数が出ます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。隠している間は、一覧が空になることもあります</li>
+    <li>導入の後に開いたセッションかを確かめます。フックは、新しく開いたセッションから効きます。導入の前から開いていたセッションは、新しく開き直します</li>
+    <li>フックを正しく登録できているかを確かめます。<code>~/.claude/settings.json</code> の JSON が壊れていないか、フックのパスが本体のチェックアウトを指しているかを見ます(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>)</li>
+    <li>常駐サーバーが動いているかを確かめます(<a href="#trouble-connect">画面がつながらない</a>)</li>
+  </ul>
+  <p>セッションの状態は、フックが送る出来事から組み立てます。
+  <code>~/.claude/sessions/*.json</code> は、Claude Code が公開している仕様ではありません。
+  読めなくても、フックから組み立てた表示は動きます。</p>
+
+  <h2 id="trouble-tasks">タスクが出ない</h2>
+  <p>タスクは、メインセッションが <code>cockpit_set_tasks</code> で登録したときだけ出ます。
+  画面の <span class="ui">タスクはありません。</span> が続くときは、次を確かめます。</p>
+  <ul>
+    <li>MCP サーバーを登録できているか。<code>claude mcp list</code> で、<code>agent-cockpit</code> が <code>Connected</code> と出れば登録できています</li>
+    <li>スキル(<code>~/.claude/skills/agent-cockpit/SKILL.md</code>)を置けているか</li>
+    <li>MCP サーバーとスキルは、新しく開いたセッションから効きます。開いたままのセッションは、開き直します</li>
+    <li>別のセッションの欄に出ていないか。MCP サーバーの登録が正しくないと、別のセッションの欄に出たり、どこにも出なかったりします</li>
+  </ul>
+  <p>セッションがタスクを登録しないまま作業を進めると、フックが、ツールの実行の合間に登録を促します(<a href="start.html#start-hooks">セッションとのつながり</a>)。
+  更新が無いまま時間がたったセッションは、一覧から隠れます(<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
+
+  <h2 id="trouble-routing">経路の設定が出ない、効かない</h2>
+  <ul>
+    <li>欄が出ないとき：サブエージェントの段は claude-codex-bridge、クロスレビューの段は ai-cross-review を入れていないと出ません。どちらも無いと、欄ごと出ません。クロスレビューの段は、画面が知っているセッションの作業ディレクトリに <code>tools/cross-review.js</code> があるときだけ出ます(<a href="routing.html#routing-visible">欄が出る条件</a>)</li>
+    <li>変えたのに稼働中のサブエージェントが変わらないとき：経路は、次に起動するサブエージェントから効きます。稼働中のものには、<span class="ui">(変更前)</span> の札が付きます(<a href="routing.html#routing-stale">経路の札と「変更前」</a>)</li>
+    <li>経路の札は付くが、サブエージェントが従わないとき：経路を伝えるフック(<code>route.js</code>)を、登録していません。導入手順書のパターン C を確かめます</li>
+    <li>保存に失敗したとき：<span class="ui">経路の設定を保存できませんでした。</span> と出ます。常駐サーバーに接続できているかを確かめます</li>
+  </ul>
+
+  <h2 id="trouble-pr">PR が出ない、エラーが出る</h2>
+  <ul>
+    <li>PR が出ないとき：PR は、セッションに結び付けて登録したものだけが出ます。セッションが <code>gh pr create</code> で作った PR は、自動で登録されます。ほかの方法で作った PR は、メインセッションが <code>cockpit_add_pr</code> で登録します(<a href="pull-requests.html#pr-register">PR の登録</a>)</li>
+    <li>マージ済みの PR が見えないとき：<span class="ui">終わったものを表示しない</span> がオンだと、マージ済みの一覧は隠れます(<a href="settings.html#settings-hide-finished">終わったものを表示しない</a>)</li>
+    <li>赤い枠でエラーが出るとき：<code>gh</code> が見つからないか、認証が切れているか、通信できません。<code>gh auth login</code> でログインし、常駐サーバーの <code>PATH</code> に <code>gh</code> があることを確かめます。GitHub への取得は 60 秒ごとなので、直した後は、遅くとも 1 分ほどで消えます(<a href="pull-requests.html#pr-fetch-error">GitHub CLI が使えないとき</a>)</li>
+    <li>状態が古いとき：リポジトリの見出しの <span class="ui">GitHub から</span> の時間を見ます。この時間は、最後に取得できてからの時間です</li>
+  </ul>
+
+  <h2 id="trouble-merge">マージできない</h2>
+  <ul>
+    <li><span class="ui">マージする</span> のボタンが無いとき：マージできるのは、スタックの一番下の PR だけです。<span class="ui">マージできない理由</span> の行に、その理由が出ます(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)</li>
+    <li><span class="ui">マージできます</span> と出ないとき：<span class="ui">待ち:</span> の行に、満たしていない条件が出ます。条件は、設定の <span class="ui">「マージできます」と出す条件</span> で選べます(<a href="settings.html#settings-mergeable">「マージできます」と出す条件</a>)</li>
+    <li><span class="ui">マージする</span> を押した後に失敗したとき：PR の行の下に、理由が出ます(<a href="pull-requests.html#pr-merge-check">マージの前に確かめること</a>)</li>
+  </ul>
+
+  <h2 id="trouble-answer">回答がセッションに届かない</h2>
+  <p>回答を送ると、回答欄の下に <span class="ui">送信済み</span>、<span class="ui">に渡した</span>、<span class="ui">に反映された</span> の順に、時刻が増えていきます。
+  どこで止まっているかで、原因が分かります(<a href="decisions.html#decisions-status">送信済み、渡した、反映された</a>)。</p>
+  <ul>
+    <li>回答欄が無いとき：デスクトップアプリのダイアログで答える判断事項です(<a href="decisions.html#decisions-desktop">デスクトップアプリで答える判断事項</a>)</li>
+    <li><span class="ui">送信済み</span> で止まっているとき：セッションに渡す機会を待っています。セッションが作業中ならツールの実行のひと区切りで、待機中なら回答を待つフックが、渡します。セッションが閉じていると、届きません(<a href="decisions.html#decisions-route">回答が届く経路</a>)</li>
+    <li>常駐サーバーを再起動した後：送信済みの回答は残りますが、次のプロンプトを送るか、ツールの実行がひと区切りするまで、渡りません(<a href="server.html#server-restart">再起動で残るものと消えるもの</a>)</li>
+    <li>離席中の質問に答えたのに、デスクトップアプリに質問が出たとき：質問を預かるフックと連絡が取れなかったときの動きです(<a href="away.html#away-lost">常駐サーバーと連絡が取れないとき</a>)</li>
+    <li><span class="ui">回答を送信できませんでした</span> と出たとき：常駐サーバーに接続できているかを確かめます(<a href="#trouble-connect">画面がつながらない</a>)</li>
+  </ul>
+
+  <h2 id="trouble-settings">設定が保存されない、戻ってしまう</h2>
+  <ul>
+    <li><span class="ui">表示の設定を保存できませんでした</span> と出たとき：常駐サーバーに保存できていません。常駐サーバーに接続できているかを確かめます。項目は、最後に保存できた値に戻ります(<a href="settings.html#help-settings">設定画面</a>)</li>
+    <li>時間の入力欄の値が元に戻るとき：範囲外の値か、整数でない値を入れています。「1〜120 分の値を入力してください。」のように、範囲が出ます</li>
+    <li><span class="ui">配色</span> と <span class="ui">前回見てから</span> が、別のウィンドウで違うとき：この 2 つは、ブラウザーごとの設定です。タスクトレイから開くウィンドウは、普段のブラウザーとは別のプロファイルを使います(<a href="settings.html#settings-storage">設定の保存先</a>)</li>
+    <li>ページを開き直すと戻るとき：ブラウザーに保存できない環境(プライベートウィンドウなど)です。<span class="ui">配色</span> と <span class="ui">前回見てから</span> は、開き直すと最初の設定に戻ります</li>
+  </ul>
+
+  <h2 id="trouble-reload">「画面が新しくなりました」と出た</h2>
+  <p>画面の上に <span class="ui">画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span> と出たときです。
+  リポジトリを更新して、画面のファイルが変わったときに出ます。
+  書きかけの回答があるときは、読み込み直すと消えるので、すぐには読み込み直さずに、この表示を出します。
+  回答を送るか消すと、自動で読み込み直します。<span class="ui">今すぐ読み込み直す</span> を押すと、書きかけの回答を捨てて、すぐに読み込み直します。</p>
+
+  <h2 id="trouble-tray">タスクトレイが動かない、通知が出ない</h2>
+  <ul>
+    <li>起動しても何も出ないとき：PowerShell の実行ポリシーが <code>Restricted</code> のままだと、何も表示せずに失敗します。<code>RemoteSigned</code> 以上にします(<a href="tray.html#tray-start">タスクトレイを起動する</a>)</li>
+    <li>アイコンが灰色のとき：常駐サーバーに接続できていません。セッションを開くか、ダッシュボードを開くと、起動します(<a href="server.html#server-life">起動と寿命</a>)</li>
+    <li>通知が出ないとき：メニューの「待ち件数を通知する」にチェックが入っているかを確かめます。最初の設定は、通知しないです。タスクトレイを起動した時点で、すでにあった許可待ちと判断待ちは、通知しません(<a href="tray.html#tray-notify">待ち件数の通知</a>)</li>
+    <li>ダッシュボードが開かないとき：Edge か Node.js が見つかりません、という通知が出ます。普段のブラウザーで <code>http://127.0.0.1:47821/</code> を開けば、同じ画面が使えます</li>
+  </ul>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="server.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">常駐サーバーと保存されるもの</span></a><span class="page-navigation-empty" aria-hidden="true"></span></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#trouble-connect">画面がつながらない</a></li>
+        <li><a href="#trouble-sessions">セッションが一覧に出ない</a></li>
+        <li><a href="#trouble-tasks">タスクが出ない</a></li>
+        <li><a href="#trouble-routing">経路の設定が出ない、効かない</a></li>
+        <li><a href="#trouble-pr">PR が出ない、エラーが出る</a></li>
+        <li><a href="#trouble-merge">マージできない</a></li>
+        <li><a href="#trouble-answer">回答がセッションに届かない</a></li>
+        <li><a href="#trouble-settings">設定が保存されない、戻ってしまう</a></li>
+        <li><a href="#trouble-reload">「画面が新しくなりました」と出た</a></li>
+        <li><a href="#trouble-tray">タスクトレイが動かない、通知が出ない</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

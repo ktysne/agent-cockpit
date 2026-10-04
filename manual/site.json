@@ -6,6 +6,12 @@
       "title": "Agent Cockpit でできること"
     },
     {
+      "id": "start",
+      "source": "pages/start.html",
+      "title": "使い始める",
+      "navGroup": "はじめに"
+    },
+    {
       "id": "screen",
       "source": "pages/screen.html",
       "title": "画面の見方",
@@ -40,7 +46,42 @@
       "source": "pages/pull-requests.html",
       "title": "PR とマージ",
       "navGroup": "PR"
+    },
+    {
+      "id": "routing",
+      "source": "pages/routing.html",
+      "title": "経路の設定",
+      "navGroup": "設定と運用"
+    },
+    {
+      "id": "settings",
+      "source": "pages/settings.html",
+      "title": "表示の設定",
+      "navGroup": "設定と運用"
+    },
+    {
+      "id": "tray",
+      "source": "pages/tray.html",
+      "title": "タスクトレイ",
+      "navGroup": "設定と運用"
+    },
+    {
+      "id": "server",
+      "source": "pages/server.html",
+      "title": "常駐サーバーと保存されるもの",
+      "navGroup": "設定と運用"
+    },
+    {
+      "id": "trouble",
+      "source": "pages/trouble.html",
+      "title": "困ったとき",
+      "navGroup": "設定と運用"
     }
   ],
-  "helpAnchors": {}
+  "helpAnchors": {
+    "help-settings": {
+      "output": "settings.html",
+      "fragment": "help-settings"
+    }
+  }
 }
