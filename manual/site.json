@@ -34,6 +34,12 @@
       "source": "pages/away.html",
       "title": "離席中",
       "navGroup": "判断と回答"
+    },
+    {
+      "id": "pull-requests",
+      "source": "pages/pull-requests.html",
+      "title": "PR とマージ",
+      "navGroup": "PR"
     }
   ],
   "helpAnchors": {}

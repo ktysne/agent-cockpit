@@ -122,6 +122,26 @@ test('偽の gh は定義に無い呼び出しをエラーにして記録する'
   assert.equal(seen.length, cases.length + 1);
 });
 
+test('偽の gh は unavailable を指定されると、どの呼び出しも起動の失敗で返し、定義に無い呼び出しとは数えない', async () => {
+  const gh = createFakeGh({ unavailable: 'ENOENT', repositories: {} });
+  const { error } = await run(gh, ['pr', 'list', '-R', 'example-team/app', '--state', 'open', '--json', 'number']);
+  assert.equal(error.code, 'ENOENT');
+  assert.deepEqual(gh.unexpectedCalls(), []);
+});
+
+test('gh が無いシナリオでは、登録した PR の枠にエラーだけが載る', async () => {
+  const demo = await startDemoServer({ scenario: 'no-gh' });
+  try {
+    demo.assertHealthy();
+    const state = await demo.getState();
+    assert.equal(state.pullRequests.length, 1);
+    assert.match(state.pullRequests[0].error, /gh コマンドが見つかりません/);
+    assert.deepEqual(state.pullRequests[0].trees, []);
+  } finally {
+    await demo.close();
+  }
+});
+
 test('デモの起動引数はシナリオ名とポートだけを受け付ける', () => {
   assert.deepEqual(parseDemoArguments([]), { scenario: 'basic', port: 0, live: true });
   assert.deepEqual(parseDemoArguments(['basic', '--port', '47830', '--fixed']), { scenario: 'basic', port: 47830, live: false });

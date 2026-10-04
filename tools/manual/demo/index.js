@@ -3,6 +3,7 @@
 const scenarios = Object.freeze({
   basic: () => require('./basic'),
   decisions: () => require('./decisions'),
+  'no-gh': () => require('./no-gh'),
   states: () => require('./states'),
 });
 

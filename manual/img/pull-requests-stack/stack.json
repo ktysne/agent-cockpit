@@ -1,0 +1,138 @@
+{
+  "name": "stack",
+  "target": "#root > section.section:nth-child(2) .pr-repo-group",
+  "width": 1576,
+  "height": 1262,
+  "parts": [
+    {
+      "key": "stack.repo",
+      "bounds": {
+        "x": 26,
+        "y": 25,
+        "width": 322,
+        "height": 45
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.mergeable",
+      "bounds": {
+        "x": 364,
+        "y": 23,
+        "width": 252,
+        "height": 50
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.fetched",
+      "bounds": {
+        "x": 632,
+        "y": 29,
+        "width": 283,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.base",
+      "bounds": {
+        "x": 26,
+        "y": 89,
+        "width": 189,
+        "height": 40
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.pos-bottom",
+      "bounds": {
+        "x": 26,
+        "y": 168,
+        "width": 60,
+        "height": 39
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.pos-middle",
+      "bounds": {
+        "x": 74,
+        "y": 394,
+        "width": 60,
+        "height": 39
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.pos-top",
+      "bounds": {
+        "x": 122,
+        "y": 649,
+        "width": 60,
+        "height": 39
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.mergeable-badge",
+      "bounds": {
+        "x": 519,
+        "y": 166,
+        "width": 149,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.merge-button",
+      "bounds": {
+        "x": 1369,
+        "y": 153,
+        "width": 181,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.branch-middle",
+      "bounds": {
+        "x": 74,
+        "y": 441,
+        "width": 499,
+        "height": 28
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.wait-middle",
+      "bounds": {
+        "x": 74,
+        "y": 591,
+        "width": 1476,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.level",
+      "bounds": {
+        "x": 46,
+        "y": 374,
+        "width": 1504,
+        "height": 527
+      },
+      "visible": true
+    },
+    {
+      "key": "stack.single",
+      "bounds": {
+        "x": 26,
+        "y": 929,
+        "width": 1524,
+        "height": 295
+      },
+      "visible": true
+    }
+  ]
+}

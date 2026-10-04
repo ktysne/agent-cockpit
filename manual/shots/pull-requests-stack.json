@@ -1,0 +1,46 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "PR のスタック",
+  "scenario": "basic",
+  "storage": {
+    "agent-cockpit.display": {
+      "hideFinished": false
+    }
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "stack",
+      "target": "#root > section.section:nth-child(2) .pr-repo-group",
+      "parts": {
+        "stack.repo": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-title",
+        "stack.mergeable": "#root > section.section:nth-child(2) .pr-repo-group .prs-head .chip.ok",
+        "stack.fetched": "#root > section.section:nth-child(2) .pr-repo-group .prs-head > .meta",
+        "stack.base": [
+          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .stack-base code",
+          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .stack-base span"
+        ],
+        "stack.pos-bottom": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pline .pos",
+        "stack.pos-middle": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .pline .pos",
+        "stack.pos-top": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .stack-level > .pr > .pline .pos",
+        "stack.mergeable-badge": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pline .badge",
+        "stack.merge-button": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pline .merge-btn",
+        "stack.branch-middle": [
+          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .branch code:first-child",
+          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .branch code:last-child"
+        ],
+        "stack.wait-middle": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .why-not",
+        "stack.level": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level",
+        "stack.single": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(2)"
+      }
+    }
+  ]
+}

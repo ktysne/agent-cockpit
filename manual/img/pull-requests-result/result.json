@@ -1,0 +1,68 @@
+{
+  "name": "result",
+  "target": "#root > section.section:nth-child(2) .pr-repo-group",
+  "width": 1576,
+  "height": 1142,
+  "parts": [
+    {
+      "key": "result.row",
+      "bounds": {
+        "x": 26,
+        "y": 1030,
+        "width": 1524,
+        "height": 88
+      },
+      "visible": true
+    },
+    {
+      "key": "result.close",
+      "bounds": {
+        "x": 989,
+        "y": 1042,
+        "width": 72,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "result.retargeted",
+      "bounds": {
+        "x": 286,
+        "y": 239,
+        "width": 297,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "result.restack",
+      "bounds": {
+        "x": 591,
+        "y": 239,
+        "width": 173,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "result.reason",
+      "bounds": {
+        "x": 26,
+        "y": 347,
+        "width": 1524,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "result.merged-list",
+      "bounds": {
+        "x": 26,
+        "y": 983,
+        "width": 1524,
+        "height": 47
+      },
+      "visible": true
+    }
+  ]
+}

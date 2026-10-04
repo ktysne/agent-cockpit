@@ -1,0 +1,48 @@
+{
+  "name": "confirm",
+  "target": "#root > section.section:nth-child(1) .pr-repo-group",
+  "width": 1576,
+  "height": 1762,
+  "parts": [
+    {
+      "key": "conflict.heading",
+      "bounds": {
+        "x": 52,
+        "y": 1103,
+        "width": 1472,
+        "height": 42
+      },
+      "visible": true
+    },
+    {
+      "key": "conflict.effects",
+      "bounds": {
+        "x": 52,
+        "y": 1160,
+        "width": 1472,
+        "height": 119
+      },
+      "visible": true
+    },
+    {
+      "key": "conflict.go",
+      "bounds": {
+        "x": 52,
+        "y": 1295,
+        "width": 197,
+        "height": 80
+      },
+      "visible": true
+    },
+    {
+      "key": "conflict.cancel",
+      "bounds": {
+        "x": 265,
+        "y": 1295,
+        "width": 140,
+        "height": 80
+      },
+      "visible": true
+    }
+  ]
+}

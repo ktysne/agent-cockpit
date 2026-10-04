@@ -1,0 +1,71 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "マージの確認欄",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(1) .merge-btn"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .merge-confirm"
+    },
+    {
+      "do": "screenshot",
+      "name": "pending",
+      "target": "#root > section.section:nth-child(1) .pr-repo-group",
+      "parts": {
+        "confirm.heading": "#root > section.section:nth-child(1) .merge-confirm > div:first-child",
+        "confirm.warning": "#root > section.section:nth-child(1) .merge-condition-warning",
+        "confirm.methods": "#root > section.section:nth-child(1) .merge-confirm .methods",
+        "confirm.review": "#root > section.section:nth-child(1) .merge-confirm label.opt:has([data-merge-after-review])",
+        "confirm.delete": "#root > section.section:nth-child(1) .merge-confirm label.opt:has([data-merge-delete])",
+        "confirm.effect-review": "#root > section.section:nth-child(1) .merge-confirm .effects li:nth-child(1)",
+        "confirm.effect-head": "#root > section.section:nth-child(1) .merge-confirm .effects li:nth-child(2) code",
+        "confirm.go": "#root > section.section:nth-child(1) .merge-confirm .merge-go",
+        "confirm.cancel": "#root > section.section:nth-child(1) .merge-confirm .row .ghost"
+      }
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(1) [data-merge-cancel]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .merge-confirm",
+      "gone": true
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack .merge-btn"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(2) .merge-confirm"
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(2) .merge-confirm input[data-merge-method=\"squash\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "squash",
+      "target": "#root > section.section:nth-child(2) .pr-repo-group",
+      "parts": {
+        "squash.methods": "#root > section.section:nth-child(2) .merge-confirm .methods",
+        "squash.effect-head": "#root > section.section:nth-child(2) .merge-confirm .effects li:nth-child(1) code",
+        "squash.effect-restack": "#root > section.section:nth-child(2) .merge-confirm .effects li:nth-child(2)",
+        "squash.go": "#root > section.section:nth-child(2) .merge-confirm .merge-go"
+      }
+    }
+  ]
+}

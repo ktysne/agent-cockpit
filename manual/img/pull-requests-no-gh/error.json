@@ -1,0 +1,38 @@
+{
+  "name": "error",
+  "target": ".pr-repo-group",
+  "width": 1576,
+  "height": 204,
+  "parts": [
+    {
+      "key": "error.repo",
+      "bounds": {
+        "x": 26,
+        "y": 24,
+        "width": 322,
+        "height": 45
+      },
+      "visible": true
+    },
+    {
+      "key": "error.fetched",
+      "bounds": {
+        "x": 364,
+        "y": 28,
+        "width": 283,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "error.box",
+      "bounds": {
+        "x": 26,
+        "y": 85,
+        "width": 1524,
+        "height": 97
+      },
+      "visible": true
+    }
+  ]
+}

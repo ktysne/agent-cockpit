@@ -1,0 +1,32 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "レビュー不要の記録",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(4) [data-review-skip=\"set\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(4) [data-review-skip=\"clear\"]"
+    },
+    {
+      "do": "screenshot",
+      "name": "skipped",
+      "target": "#root > section.section:nth-child(1) .pr-repo-group",
+      "parts": {
+        "skipped.state": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(4) .xr",
+        "skipped.clear": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(4) [data-review-skip=\"clear\"]"
+      }
+    }
+  ]
+}

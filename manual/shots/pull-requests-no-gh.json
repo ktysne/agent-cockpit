@@ -1,0 +1,25 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "GitHub CLI が使えないとき",
+  "scenario": "no-gh",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "error",
+      "target": ".pr-repo-group",
+      "parts": {
+        "error.repo": ".pr-repo-group .pr-repo-title",
+        "error.fetched": ".pr-repo-group .prs-head > .meta",
+        "error.box": ".pr-repo-group .error-box"
+      }
+    }
+  ]
+}
