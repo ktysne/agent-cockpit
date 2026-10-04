@@ -1,0 +1,10 @@
+{
+  "pages": [
+    {
+      "id": "index",
+      "source": "pages/index.html",
+      "title": "Agent Cockpit でできること"
+    }
+  ],
+  "helpAnchors": {}
+}

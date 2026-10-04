@@ -7,6 +7,8 @@
     "start": "node src/server/server.js",
     "test": "node --test",
     "test:inprocess": "node --test --test-isolation=none",
+    "manual:build": "node tools/manual/build.js",
+    "lint:manual": "node tools/manual/lint.js",
     "review:codex": "node tools/cross-review.js codex",
     "review:codex:fix": "node tools/cross-review.js codex --fix",
     "review:claude": "node tools/cross-review.js claude",

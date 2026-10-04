@@ -17,6 +17,7 @@ const { parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart 
 
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
+const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_EXTERNAL_URL_LENGTH = 2048;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -24,6 +25,12 @@ const SESSION_SCAN_INTERVAL_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 128;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const COMMIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
+const MANUAL_CONTENT_TYPES = Object.freeze({
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.png': 'image/png',
+});
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -65,6 +72,89 @@ function requestHostIsLocal(request, port) {
   if (typeof host !== 'string') return false;
   const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
   return allowed.has(host.toLowerCase());
+}
+
+function rawRequestPath(requestUrl) {
+  const pathAndQuery = String(requestUrl).split(/[?#]/, 1)[0];
+  if (pathAndQuery.startsWith('/')) return pathAndQuery;
+  try {
+    return new URL(pathAndQuery).pathname;
+  } catch {
+    return '';
+  }
+}
+
+function isPathWithin(root, target) {
+  const relative = path.relative(root, target);
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+async function serveManualRequest(request, response, manualDir) {
+  const requestPath = rawRequestPath(request.url);
+  if (requestPath !== '/manual' && !requestPath.startsWith('/manual/')) return false;
+  if (request.method !== 'GET') {
+    textResponse(response, 404, 'Not Found');
+    return true;
+  }
+  if (/%(?:2f|5c)/i.test(requestPath)) {
+    textResponse(response, 404, 'Not Found');
+    return true;
+  }
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(requestPath);
+  } catch {
+    textResponse(response, 404, 'Not Found');
+    return true;
+  }
+  if (decodedPath.includes('\\') || decodedPath.includes('//')
+      || decodedPath.split('/').some(segment => segment === '.' || segment === '..')) {
+    textResponse(response, 404, 'Not Found');
+    return true;
+  }
+
+  // 入口のページは相対パスで assets を指すので、末尾の / が無いと /assets/ を読みに行って崩れる。
+  if (decodedPath === '/manual') {
+    response.writeHead(308, { location: '/manual/', ...SECURITY_HEADERS });
+    response.end();
+    return true;
+  }
+  const manualPath = decodedPath;
+  let root;
+  let relativePath;
+  if (manualPath === '/manual/') {
+    root = path.join(manualDir, 'dist');
+    relativePath = 'index.html';
+  } else if (manualPath.startsWith('/manual/img/')) {
+    root = path.join(manualDir, 'img');
+    relativePath = manualPath.slice('/manual/img/'.length);
+  } else {
+    root = path.join(manualDir, 'dist');
+    relativePath = manualPath.slice('/manual/'.length);
+  }
+
+  const segments = relativePath.split('/');
+  const extension = path.extname(relativePath).toLowerCase();
+  if (!relativePath || segments.some(segment => !segment || segment === '.' || segment === '..')
+      || !Object.prototype.hasOwnProperty.call(MANUAL_CONTENT_TYPES, extension)) {
+    textResponse(response, 404, 'Not Found');
+    return true;
+  }
+  const resolvedRoot = path.resolve(root);
+  const filePath = path.resolve(resolvedRoot, ...segments);
+  if (!isPathWithin(resolvedRoot, filePath)) {
+    textResponse(response, 404, 'Not Found');
+    return true;
+  }
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) throw new Error('not a file');
+    const content = await fs.readFile(filePath);
+    textResponse(response, 200, content, MANUAL_CONTENT_TYPES[extension]);
+  } catch {
+    textResponse(response, 404, 'Not Found');
+  }
+  return true;
 }
 
 function readJsonBody(request) {
@@ -291,6 +381,7 @@ function createRequestHandler(options) {
     openExternalUrl = defaultOpenExternalUrl,
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
+  const manualDir = options.manualDir || DEFAULT_MANUAL_DIR;
   let cachedUiFileStamp = null;
   let uiVersion = null;
 
@@ -316,6 +407,7 @@ function createRequestHandler(options) {
     markRequest();
 
     const requestUrl = new URL(request.url, `http://127.0.0.1:${info.port}`);
+    if (await serveManualRequest(request, response, manualDir)) return;
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
       jsonResponse(response, 200, { app: APP_NAME, pid: info.pid, startedAt: info.startedAt });
       return;
@@ -1266,6 +1358,7 @@ async function startServer(options = {}) {
     crossReviewToolExists: options.crossReviewToolExists,
     openExternalUrl: options.openExternalUrl,
     webPath: options.webPath,
+    manualDir: options.manualDir,
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
