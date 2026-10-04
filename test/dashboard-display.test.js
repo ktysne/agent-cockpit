@@ -12,7 +12,7 @@ function functionSource(source, name) {
   return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
 }
 
-test('注記は一覧と接続案内の後ろに置き、固定表示に含めない', () => {
+test('接続案内は一覧の前に、注記は一覧の後ろに置き、固定表示に含めない', () => {
   for (const html of [mock, web]) {
     const header = html.indexOf('<header class="top">');
     const headerEnd = html.indexOf('</header>', header);
@@ -25,10 +25,10 @@ test('注記は一覧と接続案内の後ろに置き、固定表示に含め�
     const finished = html.indexOf('id="finished-note"');
 
     assert.ok(header >= 0 && summary > header && summary < headerEnd);
-    assert.ok(headerEnd < root);
-    assert.ok(root < connection);
+    assert.ok(headerEnd < connection);
     assert.ok(connection < reload);
-    assert.ok(reload < hiddenKinds);
+    assert.ok(reload < root);
+    assert.ok(root < hiddenKinds);
     assert.ok(hiddenKinds < hiddenSessions);
     assert.ok(hiddenSessions < finished);
   }

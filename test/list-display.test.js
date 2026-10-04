@@ -680,8 +680,8 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
   show.listeners.get('click')();
   assert.equal(hideFinishedInput.checked, false);
   assert.deepEqual(changes, [['hideFinished', false]]);
-  assert.match(web, /終わったものを隠しています。上部の「表示する」から表示できます。/);
-  assert.match(mock, /終わったものを隠しています。上部の「表示する」から表示できます。/);
+  assert.match(web, /終わったものを隠しています。下の「表示する」から表示できます。/);
+  assert.match(mock, /終わったものを隠しています。下の「表示する」から表示できます。/);
   assert.match(mock, /終わったものを隠しています \(\$\{finishedParts\.join\('、'\)\}\)/);
 });
 

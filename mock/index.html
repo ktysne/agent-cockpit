@@ -415,9 +415,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <button type="button" data-mode="kind" aria-pressed="false">種類別</button>
     </div>
   </div>
-  <div id="root"></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
+  <div id="root"></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
   <div class="excluded-note" id="finished-note" hidden></div>
@@ -1801,7 +1801,7 @@ function renderProductMode() {
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
     return `<div class="empty">${hidden.sessions || hidden.pullRequests
-      ? '終わったものを隠しています。上部の「表示する」から表示できます。'
+      ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const pinnedCount = ps.filter(p => ui.pinned.includes(p.id)).length;
@@ -1831,7 +1831,7 @@ function renderKindMode() {
   if (!ps.length) {
     const hidden = finishedHiddenCounts();
     return `<div class="empty">${hidden.sessions || hidden.pullRequests
-      ? '終わったものを隠しています。上部の「表示する」から表示できます。'
+      ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const sessions = ps.flatMap(p => sessionsByActivity(p).map(session => ({ p, session })));

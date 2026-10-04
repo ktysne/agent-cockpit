@@ -1519,7 +1519,8 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   // 単一選択で選び直したときに、前の選択が残らないことも確かめるため、推奨を選んだ状態から始める。
   const answerDrafts = new Map([[key, { choice: 'pick', picks: [['JSON (推奨)']], note: '' }]]);
   const button = { disabled: true };
-  const meta = { textContent: '' };
+  // 推奨の無い質問を未選択で描くと、送る答えの欄は空で隠れている。
+  const meta = { textContent: '', hidden: true };
   const error = { textContent: '' };
   const answerChoices = [{ checked: true }, { checked: true }];
   const card = {
@@ -1559,6 +1560,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   assert.equal(answerDrafts.get(key).choice, 'pick');
   assert.equal(JSON.stringify(answerDrafts.get(key).picks), '[["CSV"]]');
   assert.equal(meta.textContent, '送る答え: CSV');
+  assert.equal(meta.hidden, false);
   assert.equal(button.disabled, false);
   assert.deepEqual(answerChoices.map((choice) => choice.checked), [false, false]);
   assert.equal(error.textContent, '');

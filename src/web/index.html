@@ -434,9 +434,9 @@ h3.sub .count { font-weight: normal; }
     </div>
   </div>
   <div id="live-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
-  <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
   <div class="filter-note" id="connection-note" role="status" aria-live="polite" hidden></div>
   <div class="filter-note" id="reload-note" role="status" aria-live="polite" hidden></div>
+  <div id="root" aria-live="off"><div class="section"><div class="empty">状態を読み込んでいます。</div></div></div>
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
   <div class="excluded-note" id="finished-note" hidden></div>
@@ -2477,12 +2477,10 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
     choices.append(control);
   }
   answerBox.append(choices);
-  const answerMeta = answerMetaText(decision, draft);
-  if (answerMeta) {
-    const answerMetaElement = element('div', 'meta', answerMeta);
-    answerMetaElement.dataset.answerMeta = 'true';
-    answerBox.append(answerMetaElement);
-  }
+  const answerMeta = element('div', 'meta', answerMetaText(decision, draft));
+  answerMeta.dataset.answerMeta = 'true';
+  answerMeta.hidden = !answerMeta.textContent;
+  answerBox.append(answerMeta);
   const note = document.createElement('textarea');
   note.dataset.answerNote = 'true';
   note.dataset.sessionId = session.session_id;
@@ -3128,7 +3126,7 @@ function render(state) {
   const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
   if (!products.length) {
     const emptyText = hiddenFinished.sessions || hiddenFinished.pullRequests
-      ? '終わったものを隠しています。上部の「表示する」から表示できます。'
+      ? '終わったものを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。';
     root.replaceChildren(element('section', 'section empty', emptyText));
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
@@ -3255,7 +3253,10 @@ function updateAnswerSubmit(card) {
   const answer = decision.answer;
   const changed = !answer?.sentAt || draft.choice !== (answer?.choice ?? null) || draft.note !== (answer?.note || '') || !sameAnswerPicks(draft.picks, copyAnswerPicks(answer?.picks, (decision.questions || []).length));
   const meta = card.querySelector('[data-answer-meta]');
-  if (meta) meta.textContent = answerMetaText(decision, draft);
+  if (meta) {
+    meta.textContent = answerMetaText(decision, draft);
+    meta.hidden = !meta.textContent;
+  }
   const status = card.querySelector('.answer-foot .answer-status');
   if (status) status.textContent = answer?.sentAt && changed ? '変更は未送信' : answerStatusText(answer, decision);
   button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
