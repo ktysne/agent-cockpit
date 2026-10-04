@@ -902,24 +902,119 @@ test('既読時刻より前後の完了、PR、仮適用、CI 失敗、マージ
   const result = state.snapshotSinceSeen(state.snapshot().sessions, [], now + 20, [{ start: 0, end: now + 20 }]);
   const items = result.sinceSeen[0].items;
   assert.deepEqual(new Set(items.map((item) => item.type)), new Set([
-    'task', 'pull-request', 'provisional', 'ci-failure', 'merged-pull-request',
+    'task', 'provisional', 'pull-request-summary',
   ]));
-  assert.equal(items.length, 7);
+  assert.equal(items.length, 5);
   assert.deepEqual(items.map((item) => item.at), [...items.map((item) => item.at)].sort((left, right) => Date.parse(right) - Date.parse(left)));
   assert.deepEqual(state.ciFailures.map((record) => record.at), [
     new Date(now + 6).toISOString(), new Date(now + 13).toISOString(), new Date(now + 15).toISOString(),
   ]);
-  assert.ok(items.some((item) => item.text === 'PR #1(PR before)をマージした'));
-  assert.ok(items.some((item) => item.text === 'PR #2(PR after)を作成した'));
+  assert.ok(items.some((item) => item.text === 'PR #1(PR before)の CI が失敗した。マージした'));
+  assert.ok(items.some((item) => item.text === 'PR #2(PR after)の CI が失敗した。作成した'));
   assert.ok(items.some((item) => item.text === '判断「以後の仮適用」を推奨案で仮に進めた'));
   assert.ok(items.some((item) => item.text === 'タスク「以後の完了」が完了した'));
   assert.ok(items.some((item) => item.text === 'タスク「以後に画面で完了」が完了した'));
-  assert.deepEqual(items.filter((item) => item.type === 'ci-failure').map((item) => item.at), [
-    new Date(now + 15).toISOString(), new Date(now + 13).toISOString(),
+  assert.deepEqual(items.filter((item) => item.type === 'pull-request-summary').map((item) => item.at), [
+    new Date(now + 16).toISOString(), new Date(now + 13).toISOString(),
   ]);
   assert.equal(items.some((item) => item.at === new Date(now + 6).toISOString()), false);
   assert.equal(items.some((item) => item.text.includes('以前')), false);
   assert.equal(items.some((item) => item.text.includes('PR #1(PR before)を作成した')), false);
+});
+
+test('作成とマージを1件にまとめ、まとめた時刻で並べる', () => {
+  const state = new DashboardState();
+  const sessionId = 'since-seen-pr-summary-order';
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const url = (number) => `https://github.com/${owner}/${repo}/pull/${number}`;
+  const mixedCaseUrl = (number) => `https://github.com/Example/Project/pull/${number}`;
+  const lastOpen = (title, number) => ({
+    title, url: number === 20 ? mixedCaseUrl(number) : url(number),
+    headRefName: `feature/${number}`, baseRefName: 'main', headRefOid: 'a'.repeat(40), ci: 'pass',
+  });
+  state.registerPullRequest(sessionId, { url: mixedCaseUrl(20) }, { product }, now + 3);
+  state.updatePullRequest(sessionId, owner, repo, 20, { lastOpen: lastOpen('作成とマージ', 20) }, now + 4);
+  state.registerPullRequest(sessionId, { url: url(21) }, { product }, now + 5);
+  state.updatePullRequest(sessionId, owner, repo, 21, { lastOpen: lastOpen('作成のみ', 21) }, now + 6);
+  state.setProductSeen(product.key, now + 2);
+  state.recordMergedPullRequest({
+    owner, repo, number: 20, url: url(20), mergedAt: new Date(now + 10).toISOString(), method: 'squash',
+  }, now + 10);
+
+  const result = state.snapshotSinceSeen([], [], now + 12, [{ start: 0, end: now + 12 }]);
+  const items = result.sinceSeen[0].items;
+
+  assert.equal(items.length, 2);
+  assert.deepEqual(items.map((item) => item.text), [
+    'PR #20(作成とマージ)を作成し、マージした',
+    'PR #21(作成のみ)を作成した',
+  ]);
+  assert.deepEqual(items.map((item) => item.at), [new Date(now + 10).toISOString(), new Date(now + 5).toISOString()]);
+});
+
+test('CI失敗を含むPRの変化を失敗、作成、マージの順でまとめる', () => {
+  const state = new DashboardState();
+  const sessionId = 'since-seen-ci-pr-summaries';
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const url = (number) => `https://github.com/${owner}/${repo}/pull/${number}`;
+  const lastOpen = (number, title, ci) => ({
+    title, url: url(number), headRefName: `feature/${number}`, baseRefName: 'main', headRefOid: 'a'.repeat(40), ci,
+  });
+  for (const [number, title] of [[30, '失敗のみ']]) {
+    state.registerPullRequest(sessionId, { url: url(number) }, { product }, now - 2);
+    state.updatePullRequest(sessionId, owner, repo, number, { lastOpen: lastOpen(number, title, 'pending') }, now - 1);
+  }
+  state.setProductSeen(product.key, now);
+  state.updatePullRequest(sessionId, owner, repo, 30, { lastOpen: lastOpen(30, '失敗のみ', 'fail') }, now + 1);
+  state.registerPullRequest(sessionId, { url: url(31) }, { product }, now + 2);
+  state.updatePullRequest(sessionId, owner, repo, 31, { lastOpen: lastOpen(31, '作成と失敗', 'pending') }, now + 3);
+  state.updatePullRequest(sessionId, owner, repo, 31, { lastOpen: lastOpen(31, '作成と失敗', 'fail') }, now + 4);
+  state.registerPullRequest(sessionId, { url: url(32) }, { product }, now + 2);
+  state.updatePullRequest(sessionId, owner, repo, 32, { lastOpen: lastOpen(32, '作成、失敗、マージ', 'pending') }, now + 3);
+  state.updatePullRequest(sessionId, owner, repo, 32, { lastOpen: lastOpen(32, '作成、失敗、マージ', 'fail') }, now + 5);
+  state.recordMergedPullRequest({
+    owner, repo, number: 32, title: '作成、失敗、マージ', url: url(32), mergedAt: new Date(now + 6).toISOString(), method: 'squash',
+  }, now + 6);
+  state.ciFailures.push({ owner, repo, number: 33, product, at: new Date(now + 7).toISOString() });
+
+  const result = state.snapshotSinceSeen([], [], now + 8, [{ start: 0, end: now + 8 }]);
+
+  assert.deepEqual(result.sinceSeen[0].items.map((item) => item.text), [
+    'PR #33 の CI が失敗した',
+    'PR #32(作成、失敗、マージ)の CI が失敗した。作成し、マージした',
+    'PR #31(作成と失敗)の CI が失敗した。作成した',
+    'PR #30(失敗のみ)の CI が失敗した',
+  ]);
+  assert.equal(result.sinceSeen[0].items.length, 4);
+});
+
+test('既読前の作成を除外して、既読後のマージだけを表示する', () => {
+  const state = new DashboardState();
+  const sessionId = 'since-seen-merge-only';
+  const product = { key: 'C:\\project', name: 'project' };
+  const owner = 'example';
+  const repo = 'project';
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const url = 'https://github.com/example/project/pull/40';
+  state.registerPullRequest(sessionId, { url }, { product }, now - 2);
+  state.updatePullRequest(sessionId, owner, repo, 40, {
+    lastOpen: { title: '既読前の作成', url, headRefName: 'feature', baseRefName: 'main', headRefOid: 'a'.repeat(40), ci: 'pass' },
+  }, now - 1);
+  state.setProductSeen(product.key, now);
+  state.recordMergedPullRequest({
+    owner, repo, number: 40, title: '既読前の作成', url, mergedAt: new Date(now + 1).toISOString(), method: 'squash',
+  }, now + 1);
+
+  const result = state.snapshotSinceSeen([], [], now + 2, [{ start: 0, end: now + 2 }]);
+
+  assert.equal(result.sinceSeen[0].items.length, 1);
+  assert.equal(result.sinceSeen[0].items[0].text, 'PR #40(既読前の作成)をマージした');
 });
 
 test('マージ履歴がなくても登録のマージ時刻を前回見てからに表示する', () => {
@@ -940,7 +1035,7 @@ test('マージ履歴がなくても登録のマージ時刻を前回見てか�
 
   assert.equal(state.mergedPullRequests.size, 0);
   assert.ok(result.sinceSeen[0].items.some((item) => (
-    item.type === 'merged-pull-request' && item.text === 'PR #10(#10)をマージした'
+    item.type === 'pull-request-summary' && item.text === 'PR #10を作成し、マージした'
   )));
 });
 
@@ -963,7 +1058,7 @@ test('セッション登録とマージ履歴の時刻書式が異なっても�
   state.setProductSeen(product.key, now - 2 * 60 * 60_000);
 
   const result = state.snapshotSinceSeen([], [], now, [{ start: 0, end: now }]);
-  const mergedItems = result.sinceSeen[0].items.filter((item) => item.type === 'merged-pull-request');
+  const mergedItems = result.sinceSeen[0].items.filter((item) => item.type === 'pull-request-summary');
 
   assert.equal(mergedItems.length, 1);
   assert.equal(mergedItems[0].text, 'PR #11(同じPR)をマージした');
@@ -993,7 +1088,7 @@ test('関連PR登録だけが残るマージも前回見てからに表示する
 
   assert.equal(result.sinceSeen[0].product.key, productKey);
   assert.ok(result.sinceSeen[0].items.some((item) => (
-    item.type === 'merged-pull-request' && item.text === 'PR #12(関連PR)をマージした'
+    item.type === 'pull-request-summary' && item.text === 'PR #12(関連PR)をマージした'
   )));
 });
 
@@ -1036,7 +1131,7 @@ test('20日前の既読時刻は参照記録が残る間維持して保持中の
   const result = state.snapshotSinceSeen([], [], now, [{ start: 0, end: now }]);
 
   assert.equal(state.seenAtByProduct.get(product.key), seenAt);
-  assert.ok(result.sinceSeen[0].items.some((item) => item.type === 'merged-pull-request'));
+  assert.ok(result.sinceSeen[0].items.some((item) => item.type === 'pull-request-summary'));
 });
 
 test('参照する記録がなくなったプロダクトの既読時刻をsnapshot時に削除する', () => {
