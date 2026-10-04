@@ -266,7 +266,7 @@ test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン
   assert.match(web, /close\.dataset\.closeTask = closeKey/);
 });
 
-test('終了未確認のサブエージェント行に終了 API を呼ぶボタンを置く', () => {
+test('終了にできるエージェント行に終了 API を呼ぶボタンを置く', () => {
   const closeAgentButton = functionSource(web, 'closeAgentButton');
   const calls = [];
   const context = pageContext(web, {
@@ -281,6 +281,8 @@ test('終了未確認のサブエージェント行に終了 API を呼ぶボタ
     session_id: 'session-a', agent_id: 'agent-1',
   });
   assert.match(web, /if \(button\.dataset\.closeAgent\) \{\s*closeAgentButton\(button\);/);
+  assert.match(web, /if \(agent\.closable\)/);
+  assert.match(web, /name\.append\(close\)/);
   assert.match(web, /close\.dataset\.closeAgent = `\$\{session\.session_id\}::\$\{agent\.agent_id\}`/);
 });
 

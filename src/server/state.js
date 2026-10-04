@@ -647,6 +647,11 @@ function sameAgent(left, right) {
   return (left || null) === (right || null);
 }
 
+function isClosableAgent(agent) {
+  return (!agent.active && agent.unconfirmed)
+    || (agent.isCodex && agent.backgrounded && !agent.parent_agent_id && agent.active);
+}
+
 function sameQuestionSet(left, right) {
   if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
   return left.every((question, index) => question.question === right[index]?.question);
@@ -1059,7 +1064,6 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     if (eventName === 'UserPromptSubmit') session.stopped = false;
     if (eventName === 'Stop') {
       session.stopped = true;
-      deactivateBackgroundedCodex(session, null);
     }
     if (eventName === 'SessionEnd') session.ended = true;
   }
@@ -2170,7 +2174,7 @@ class DashboardState {
   closeAgent(sessionId, agentId) {
     const agent = this.sessions.get(sessionId)?.agents.find((item) => item.agent_id === agentId);
     if (!agent) return null;
-    if (agent.active || !agent.unconfirmed) return false;
+    if (!isClosableAgent(agent)) return false;
     let closed = this.closedAgents.get(sessionId);
     if (!closed) {
       closed = new Set();
@@ -2199,7 +2203,7 @@ class DashboardState {
     let changed = false;
     for (const agentId of closed) {
       const agent = agents.find((item) => item.agent_id === agentId);
-      if (!agent || agent.active || !agent.unconfirmed) {
+      if (!agent || !isClosableAgent(agent)) {
         closed.delete(agentId);
         changed = true;
       }
@@ -2442,6 +2446,8 @@ class DashboardState {
       };
       const { decisionBindings: _decisionBindings, ...visible } = base;
       const decisions = this.decisionsFor(sessionId);
+      const closedAgents = this.closedAgents.get(sessionId) || new Set();
+      const isClosedByUser = (agent) => closedAgents.has(agent.agent_id) && isClosableAgent(agent);
       const updateTimestamps = [base.lastActivityAt, plan?.tasksUpdatedAt, ...decisions.map((decision) => decision.updatedAt)]
         .filter((timestamp) => Number.isFinite(Date.parse(timestamp || '')));
       const lastUpdatedAt = updateTimestamps.reduce((latest, timestamp) => (
@@ -2453,11 +2459,19 @@ class DashboardState {
         product: base.product ? { ...base.product } : null,
         lastUpdatedAt,
         tools: base.tools.map((tool) => ({ ...tool })),
-        agents: base.agents.map((agent) => ({
-          ...agent,
-          ...(agent.unconfirmed && !agent.active && this.closedAgents.get(sessionId)?.has(agent.agent_id) ? { unconfirmed: false } : {}),
-          lastTool: agent.lastTool && { ...agent.lastTool },
-        })),
+        agents: base.agents.map((agent) => {
+          const closedByUser = isClosedByUser(agent);
+          const snapshotAgent = closedByUser ? { ...agent, active: false, unconfirmed: false } : agent;
+          return {
+            ...snapshotAgent,
+            ...(isClosableAgent(snapshotAgent) ? { closable: true } : {}),
+            lastTool: agent.lastTool && { ...agent.lastTool },
+          };
+        }),
+        ...(base.status === '待機中(サブエージェント稼働中)'
+          && !base.agents.some((agent) => agent.active && !isClosedByUser(agent))
+          ? { status: '待機中' }
+          : {}),
         permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
         decisions,
         tasks: (plan?.tasks || []).map((task) => {

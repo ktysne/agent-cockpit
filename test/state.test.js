@@ -1215,6 +1215,69 @@ test('結果行が無いまま親が終わった背景 Codex は終了未確認�
   assert.deepEqual([agent.gpt.active, agent.gpt.unconfirmed], [false, true]);
 });
 
+test('メインの Stop 後もメイン直下の背景 Codex は稼働中で、結果行が届くと終了する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchCodex(state, 'main-background', 'bash-1', 1, null, { model: 'gpt-draft', effort: 'low' });
+  state.addEvent({ session_id: 'main-background', hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: 'main-background', hook_event_name: 'Stop', hookAt: 3 });
+
+  let session = state.snapshot().sessions[0];
+  let [agent] = session.agents;
+  assert.deepEqual([agent.active, agent.unconfirmed, agent.closable], [true, undefined, true]);
+  assert.equal(session.status, '待機中(サブエージェント稼働中)');
+
+  state.addEvent({
+    session_id: 'main-background', hook_event_name: 'PostToolUse', hookAt: 4,
+    tool_name: 'Read', tool_use_id: 'read-1', codexOutput: codexOutput('gpt-6-luna', 'low'),
+  });
+  session = state.snapshot().sessions[0];
+  [agent] = session.agents;
+  assert.deepEqual([agent.active, agent.unconfirmed, agent.closable], [false, false, undefined]);
+  assert.equal(session.status, '作業中');
+});
+
+test('メイン直下の稼働中の背景 Codex は閉じられ、結果行で閉じた記録が消える', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchCodex(state, 'close-background', 'bash-1', 1, null);
+  state.addEvent({ session_id: 'close-background', hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-1' });
+  state.addEvent({ session_id: 'close-background', hook_event_name: 'Stop', hookAt: 3 });
+  const agentId = state.sessions.get('close-background').agents[0].agent_id;
+
+  assert.equal(state.closeAgent('close-background', agentId), true);
+  let session = state.snapshot().sessions[0];
+  let [agent] = session.agents;
+  assert.deepEqual([agent.active, agent.unconfirmed, agent.closable], [false, false, undefined]);
+  assert.equal(session.status, '待機中');
+
+  state.addEvent({
+    session_id: 'close-background', hook_event_name: 'PostToolUse', hookAt: 4,
+    tool_name: 'Read', tool_use_id: 'read-1', codexOutput: codexOutput('gpt-6-luna', 'low'),
+  });
+  assert.equal(state.closedAgents.has('close-background'), false);
+  session = state.snapshot().sessions[0];
+  [agent] = session.agents;
+  assert.deepEqual([agent.active, agent.unconfirmed], [false, false]);
+  assert.equal(session.status, '作業中');
+});
+
+test('サブエージェント配下の稼働中 Codex と通常のサブエージェントは閉じられない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'not-closable', hook_event_name: 'SubagentStart', hookAt: 1, agent_id: 'sub-1', agent_type: 'impl-standard' });
+  launchCodex(state, 'not-closable', 'bash-1', 2, 'sub-1');
+  state.addEvent({ session_id: 'not-closable', hook_event_name: 'PostToolUse', hookAt: 3, agent_id: 'sub-1', tool_name: 'Bash', tool_use_id: 'bash-1' });
+
+  assert.equal(state.closeAgent('not-closable', 'sub-1'), false);
+  assert.notEqual(state.closeAgent('not-closable', 'codex:bash-1'), true);
+  const session = state.snapshot().sessions[0];
+  const parent = session.agents.find((agent) => agent.agent_id === 'sub-1');
+  assert.equal(parent.gpt.active, true);
+  assert.equal(parent.closable, undefined);
+  assert.equal(state.closedAgents.has('not-closable'), false);
+});
+
 test('終了コードが 0 以外で PostToolUseFailure になった Codex も、結果行で GPT 不使用にする', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
