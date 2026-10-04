@@ -19,7 +19,7 @@
 |---|---|---|
 | A | agent-cockpit だけ | — |
 | B | + GitHub CLI | `gh --version` が通る |
-| C | + claude-codex-bridge | Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)に `tools/codex-agent.sh` がある |
+| C | + claude-codex-bridge | Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` に `tools/codex-agent.sh` がある |
 | D | + ai-cross-review | 対象のリポジトリの worktree のルートに `tools/cross-review.js` がある(リポジトリごとに導入するツールです) |
 
 D の PR カードの表示は、B の PR の表示に加わるものです。D で PR のクロスレビュー状態を見たいときは、B も行ってください。
@@ -225,8 +225,8 @@ PR は、セッションが `gh pr create` を実行したときに自動で登�
 
 ### 前提
 
-[claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge) を、そのドキュメントに従って導入しておきます。agent-cockpit は、Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)の `tools/codex-agent.sh` があることで、bridge が導入済みだと判断します。
-bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く作りです。`CLAUDE_CONFIG_DIR` を `~/.claude` 以外に設定しているときは、agent-cockpit が bridge を検出できません。([#115](https://github.com/ktysne/agent-cockpit/issues/115))
+[claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge) を、そのドキュメントに従って導入しておきます。agent-cockpit は、Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)か `~/.claude` のどちらかに `tools/codex-agent.sh` があることで、bridge が導入済みだと判断します。
+bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く作りなので、`CLAUDE_CONFIG_DIR` を別の場所に設定していても検出できます。
 
 ### agent-cockpit 側の設定
 
@@ -253,7 +253,7 @@ bridge を外したときは、`codex-agent.sh` が無いので `route.js` は�
 
 ### 確認
 
-1. 新しいセッションを開き、ダッシュボードを再読み込みします。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出れば、bridge が検出されています。出ないときは、`codex-agent.sh` の場所と、`CLAUDE_CONFIG_DIR` の設定を確かめます。
+1. 新しいセッションを開き、ダッシュボードを再読み込みします。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出れば、bridge が検出されています。出ないときは、`codex-agent.sh` が `~/.claude/tools/` か `CLAUDE_CONFIG_DIR` の `tools/` にあるかを確かめます。
 2. 経路を「Claude」にしてから、セッションでサブエージェントを起動させます。サブエージェントが動いている間に、その行に「経路: Claude」の札が出て、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に記録のファイルができれば成功です。bridge の窓口(`impl-light` など)を起動したときは、窓口が `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` で始まる拒否の文言を報告するのが期待される動きです。違う報告になったときは [ktysne/claude-codex-bridge#129](https://github.com/ktysne/claude-codex-bridge/issues/129) を見てください。
 3. 確かめ終わったら、経路を元の値に戻します。
 

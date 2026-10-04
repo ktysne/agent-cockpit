@@ -118,10 +118,16 @@ function claudeHomeFromOptions(options = {}) {
   return path.join(require('node:os').homedir(), '.claude');
 }
 
+// bridge は CLAUDE_CONFIG_DIR を見ずに ~/.claude/tools/ へ置く作りなので、Claude のホームに加えて ~/.claude も探す。
+function codexAgentScriptPaths(claudeHome, userHome = require('node:os').homedir()) {
+  const paths = [path.join(claudeHome, 'tools', 'codex-agent.sh'), path.join(userHome, '.claude', 'tools', 'codex-agent.sh')];
+  return paths[0] === paths[1] ? [paths[0]] : paths;
+}
+
 function cockpitHomeFromOptions(options = {}) {
   if (options.homeDir) return path.resolve(options.homeDir);
   if (process.env.AGENT_COCKPIT_HOME) return path.resolve(process.env.AGENT_COCKPIT_HOME);
   return path.join(require('node:os').homedir(), '.agent-cockpit');
 }
 
-module.exports = { productFromCwd, branchFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions };
+module.exports = { productFromCwd, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions };

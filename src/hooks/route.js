@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { codexAgentScriptPaths } = require('../server/identity');
 
 const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -114,12 +115,14 @@ function outputForRoute(input, options = {}) {
   const homeDir = options.homeDir || cockpitHome(options.environment);
   const fileSystem = options.fileSystem || fs;
   if (isStart) {
-    const codexAgentScript = path.join(claudeHome(options), 'tools', 'codex-agent.sh');
-    try {
-      if (!fileSystem.existsSync(codexAgentScript)) return null;
-    } catch {
-      return null;
-    }
+    const scriptExists = (scriptPath) => {
+      try {
+        return fileSystem.existsSync(scriptPath);
+      } catch {
+        return false;
+      }
+    };
+    if (!codexAgentScriptPaths(claudeHome(options), options.userHome).some(scriptExists)) return null;
     const directory = path.join(homeDir, 'route-agents');
     try {
       fileSystem.mkdirSync(directory, { recursive: true });

@@ -9,7 +9,7 @@ const { AtomicJsonWriter } = require('./json-storage');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
-const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
+const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
@@ -275,6 +275,7 @@ function createRequestHandler(options) {
   const {
     homeDir,
     claudeHome,
+    userHome,
     state,
     away,
     routing,
@@ -341,7 +342,13 @@ function createRequestHandler(options) {
         };
       });
       const uiVersion = await currentUiVersion();
-      const codexAgent = (await codexAgentScriptExists(path.join(claudeHome, 'tools', 'codex-agent.sh'))) === true;
+      let codexAgent = false;
+      for (const scriptPath of codexAgentScriptPaths(claudeHome, userHome)) {
+        if (await codexAgentScriptExists(scriptPath) === true) {
+          codexAgent = true;
+          break;
+        }
+      }
       let crossReview = false;
       for (const cwd of state.knownCwds()) {
         if (await crossReviewToolExists(cwd) === true) {
@@ -1254,6 +1261,7 @@ async function startServer(options = {}) {
     answerDelivery,
     pullRequestTracker,
     pullRequestMergeManager,
+    userHome: options.userHome,
     codexAgentScriptExists: options.codexAgentScriptExists,
     crossReviewToolExists: options.crossReviewToolExists,
     openExternalUrl: options.openExternalUrl,

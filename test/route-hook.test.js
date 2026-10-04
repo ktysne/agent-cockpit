@@ -27,14 +27,26 @@ async function temporaryHome(t, routing = { agents: 'default', review: 'default'
 test('SubagentStart は codex-agent.sh が無ければ経路を読み込まず、Claude ホームを差し替えられる', async (t) => {
   const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' }, false);
   const start = { hook_event_name: 'SubagentStart', session_id: 'session-no-codex', agent_id: 'agent-1' };
-  assert.equal(outputForRoute(start, { homeDir }), null);
+  assert.equal(outputForRoute(start, { homeDir, userHome: homeDir }), null);
   await assert.rejects(fs.stat(path.join(homeDir, 'route-agents')));
 
   const alternateClaudeHome = path.join(homeDir, 'alternate-claude-home');
   const toolsDirectory = path.join(alternateClaudeHome, 'tools');
   await fs.mkdir(toolsDirectory, { recursive: true });
   await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');
-  assert.deepEqual(outputForRoute(start, { homeDir, claudeHome: alternateClaudeHome }), {
+  assert.deepEqual(outputForRoute(start, { homeDir, claudeHome: alternateClaudeHome, userHome: homeDir }), {
+    hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT },
+  });
+});
+
+test('SubagentStart は Claude のホームに無くても ~/.claude の codex-agent.sh で bridge を検出する', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' }, false);
+  const start = { hook_event_name: 'SubagentStart', session_id: 'session-fallback', agent_id: 'agent-1' };
+  const userHome = path.join(homeDir, 'user');
+  const toolsDirectory = path.join(userHome, '.claude', 'tools');
+  await fs.mkdir(toolsDirectory, { recursive: true });
+  await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');
+  assert.deepEqual(outputForRoute(start, { homeDir, userHome }), {
     hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: CLAUDE_ROUTE_CONTEXT },
   });
 });
