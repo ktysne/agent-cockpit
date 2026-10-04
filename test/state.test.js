@@ -1486,7 +1486,7 @@ test('メインが背景で起動した複数の Codex は、背景タスク ID 
   assert.ok(gpt().every((item) => item.active === false && item.unconfirmed === false));
 });
 
-test('Codex を起動した呼び出しの引数に別の背景タスクの出力ファイルがあっても、その行に結び付けない', async (t) => {
+test('Codex を起動した呼び出しの引数に別の背景タスクの出力ファイルがあっても、完了が重複して届いても、その行に結び付けない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
   launchBackgroundCodexInMain(state, 'bg-launch', 'bash-a', 'taska', 1);
@@ -1495,6 +1495,10 @@ test('Codex を起動した呼び出しの引数に別の背景タスクの出�
     tool_name: 'Bash', tool_use_id: 'bash-b', summary: 'npm run review:codex', codexReviewDefinition: 'codex-review',
   }, { codexAgentDefinition: { model: 'gpt-review', effort: 'low' } });
   const resultOfB = { runLine: 'codex-agent: run=codex-review-20261004-100000-2', resultLine: 'codex-agent: result=ok' };
+  state.addEvent({
+    session_id: 'bg-launch', hook_event_name: 'PostToolUse', hookAt: 4,
+    tool_name: 'Bash', tool_use_id: 'bash-b', backgroundOutputTaskId: 'taska', codexOutput: resultOfB,
+  });
   state.addEvent({
     session_id: 'bg-launch', hook_event_name: 'PostToolUse', hookAt: 4,
     tool_name: 'Bash', tool_use_id: 'bash-b', backgroundOutputTaskId: 'taska', codexOutput: resultOfB,

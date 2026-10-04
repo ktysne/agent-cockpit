@@ -621,6 +621,7 @@ function newSession(event, askDecisionState = {}) {
     status: '作業中',
     tools: [],
     completedToolIds: new Set(),
+    codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
@@ -954,7 +955,6 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
     if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
       let completedCodexAgent = null;
-      let launchedCodex = null;
       if (toolUseId) {
         session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
         session.completedToolIds.add(toolUseId);
@@ -971,7 +971,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
       if (event.tool_name === 'Bash' && toolUseId) {
         const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-        launchedCodex = placeholder;
+        if (placeholder) session.codexLaunchToolIds.add(toolUseId);
         if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
         if (placeholder && event.codexResult) {
           completeCodexAgent(placeholder, event);
@@ -999,7 +999,8 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
       // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
       // Codex を起動した呼び出しの出力はその起動のものなので、引数に出力ファイルのパスがあっても別の行へ結び付けない。
-      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !launchedCodex
+      // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
+      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !session.codexLaunchToolIds.has(toolUseId)
         ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
         : null;
       if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
