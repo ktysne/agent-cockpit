@@ -116,7 +116,7 @@ PostToolUse の出力全文は送らない。
   `SubagentStop` 後のイベントでは行を作らず、稼働中にも戻さない。
   `codex:<tool_use_id>` の Codex 行はこの復元の対象外とする。
 - タスク: `tasks` の全項目と、最後に書いた時刻 `tasksUpdatedAt`。
-- 判断事項: AskUserQuestion の記録と MCP から登録した項目を `decisions` に持つ。
+- 判断事項: AskUserQuestion の記録と MCP から登録した項目を `decisions` に持つ。MCP の仮適用時刻は `plans.decisions.provisionalAt` に、回答記録で仮適用になった時刻は `decisionLifecycles.provisionalAt` に保存する。
 
 ## PR の表示
 
@@ -218,6 +218,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
   }],
   "createdAt": "作成時刻",
   "updatedAt": "更新時刻",
+  "provisionalAt": "仮適用になった時刻",
   "resolvedAt": null,
   "awaitingAnswerUntil": null,
   "answer": {
@@ -233,6 +234,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 ```
 
 回答を送る前の `answer` は `null` にする。
+回答記録の状態が仮適用へ変わった時刻は `decisionLifecycles.provisionalAt` に保存し、回答の送信や配信では更新しない。
 回答の `choice` は `ok`、`pick`、`null` のいずれかにし、`note` に指示を持つ。
 `deliveredAt` と `reflectedAt` は常駐サーバーが記録する。
 AskUserQuestion は `tool_use_id` を id にし、1 回の呼び出しを質問配列付きの 1 件として記録する。

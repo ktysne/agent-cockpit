@@ -1024,7 +1024,51 @@ test('server-lost の結末は判断事項を provisional にする', () => {
   });
 
   assert.deepEqual(result.hookOutput, denyAnswerOutput(fixture.registration.decisionId));
-  assert.equal(fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).state, 'provisional');
+  const decision = fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId);
+  const provisionalAt = new Date(fixture.clock.now()).toISOString();
+  assert.equal(decision.state, 'provisional');
+  assert.equal(decision.provisionalAt, provisionalAt);
+  assert.equal(fixture.state.decisionLifecycles.get(fixture.sessionId).get(fixture.registration.decisionId).provisionalAt, provisionalAt);
+  assert.equal(fixture.state.snapshot().sessions[0].decisions[0].provisionalAt, provisionalAt);
+});
+
+test('仮適用中に回答を送っても仮適用時刻を保ち、待機へ戻ると消す', () => {
+  const fixture = makeFixture();
+  fixture.delivery.finishAsk({
+    sessionId: fixture.sessionId,
+    toolUseId: fixture.toolUseId,
+    decisionId: fixture.registration.decisionId,
+    outcome: 'server-lost',
+  });
+  const provisionalAt = fixture.state.decisionFor(fixture.sessionId, fixture.registration.decisionId).provisionalAt;
+
+  fixture.clock.advance(60_000);
+  const submitted = fixture.delivery.submitAnswer(fixture.sessionId, fixture.registration.decisionId, 'ok', '推奨案で進める。');
+
+  assert.equal(submitted.provisionalAt, provisionalAt);
+  assert.equal(fixture.state.decisionLifecycles.get(fixture.sessionId).get(fixture.registration.decisionId).provisionalAt, provisionalAt);
+
+  fixture.state.setDecisionLifecycle(fixture.sessionId, fixture.registration.decisionId, { state: 'waiting' }, fixture.clock.now() + 1);
+  assert.equal(Object.hasOwn(fixture.state.decisionLifecycles.get(fixture.sessionId).get(fixture.registration.decisionId), 'provisionalAt'), false);
+});
+
+test('provisionalAt が無い旧形式へ回答しても更新前の経過時間を保つ', () => {
+  const fixture = makeFixture();
+  fixture.delivery.finishAsk({
+    sessionId: fixture.sessionId,
+    toolUseId: fixture.toolUseId,
+    decisionId: fixture.registration.decisionId,
+    outcome: 'server-lost',
+  });
+  const lifecycle = fixture.state.decisionLifecycles.get(fixture.sessionId).get(fixture.registration.decisionId);
+  const previousUpdatedAt = lifecycle.updatedAt;
+  delete lifecycle.provisionalAt;
+
+  fixture.clock.advance(60_000);
+  const submitted = fixture.delivery.submitAnswer(fixture.sessionId, fixture.registration.decisionId, 'ok', '推奨案で進める。');
+
+  assert.equal(submitted.provisionalAt, previousUpdatedAt);
+  assert.equal(fixture.state.decisionLifecycles.get(fixture.sessionId).get(fixture.registration.decisionId).provisionalAt, previousUpdatedAt);
 });
 
 test('待ちの記録がある server-lost でも離席解除後は released で質問を戻す', () => {

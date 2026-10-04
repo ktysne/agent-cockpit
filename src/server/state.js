@@ -373,6 +373,7 @@ function normalizeStore(value) {
         answer: lifecycle.answer && !legacyAnswer ? { ...lifecycle.answer } : null,
         state: legacyPendingDecision ? 'provisional' : lifecycle.state ?? null,
         updatedAt: lifecycle.updatedAt ?? null,
+        ...(validTimestamp(lifecycle.provisionalAt) ? { provisionalAt: lifecycle.provisionalAt } : {}),
         ...(validTimestamp(lifecycle.awaitingAnswerUntil) ? { awaitingAnswerUntil: lifecycle.awaitingAnswerUntil } : {}),
       });
     }
@@ -2325,6 +2326,7 @@ class DashboardState {
     const lifecycle = this.decisionLifecycles.get(sessionId)?.get(decision.id);
     if (lifecycle) {
       lifecycle.state = null;
+      delete lifecycle.provisionalAt;
       lifecycle.updatedAt = isoTime(now);
     }
     this.touch();
@@ -2373,6 +2375,7 @@ class DashboardState {
         ...withOverride,
         ...(lifecycle.state ? { state: lifecycle.state } : {}),
         ...(lifecycle.updatedAt ? { updatedAt: lifecycle.updatedAt } : {}),
+        ...(lifecycle.provisionalAt ? { provisionalAt: lifecycle.provisionalAt } : {}),
         answer: lifecycle.answer,
         ...(lifecycle.awaitingAnswerUntil ? { awaitingAnswerUntil: lifecycle.awaitingAnswerUntil } : {}),
       });
@@ -2404,14 +2407,30 @@ class DashboardState {
 
   setDecisionLifecycle(sessionId, decisionId, updates, now = Date.now()) {
     if (!this.decisionFor(sessionId, decisionId)) return null;
+    const sourceDecision = this.sessions.get(sessionId)?.decisions.find((decision) => decision.id === decisionId) ||
+      this.plans.get(sessionId)?.decisions.find((decision) => decision.id === decisionId);
+    const override = this.decisionOverrides.get(sessionId)?.get(decisionId);
+    const baseDecision = override && Date.parse(override.updatedAt) >= Date.parse(sourceDecision.updatedAt)
+      ? { ...sourceDecision, ...override }
+      : sourceDecision;
+    const baseState = baseDecision.state;
     let lifecycles = this.decisionLifecycles.get(sessionId);
     if (!lifecycles) {
       lifecycles = new Map();
       this.decisionLifecycles.set(sessionId, lifecycles);
     }
     const current = lifecycles.get(decisionId) || { answer: null, awaitingAnswerUntil: null, state: null, updatedAt: null };
+    const currentEffectiveState = current.state ?? baseState;
+    const nextEffectiveState = Object.hasOwn(updates, 'state') ? updates.state ?? baseState : currentEffectiveState;
     const next = { ...current, ...updates };
     next.updatedAt = isoTime(now);
+    delete next.provisionalAt;
+    if (nextEffectiveState === 'provisional') {
+      const provisionalAt = currentEffectiveState === 'provisional'
+        ? current.provisionalAt || (baseState === 'provisional' ? baseDecision.provisionalAt : null) || current.updatedAt || baseDecision.updatedAt
+        : isoTime(now);
+      if (provisionalAt) next.provisionalAt = provisionalAt;
+    }
     lifecycles.set(decisionId, next);
     this.touch();
     this.requestStoreWrite(true);
