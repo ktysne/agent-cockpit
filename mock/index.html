@@ -129,7 +129,8 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .session-group.single { border-left: 0; padding: 0; margin-top: 0; }
 .session-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
 .session-head h3 { margin: 0; color: var(--text); font-size: 15px; font-weight: 600; }
-.session-context { width: fit-content; margin-bottom: 4px; }
+/* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
+.session-tag.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
 .session-group:not(.single) .session-body { padding-left: 12px; }
 .product-pr-divider { margin: 14px 0 0; border-top: 1px solid var(--border); }
 .kind-section-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
@@ -150,7 +151,7 @@ h3.sub .count { font-weight: normal; }
 .now-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .now-row > :nth-child(2) { min-width: 0; }
 .tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
-.tool-name { flex: none; min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
+.tool-name { display: block; flex: none; max-width: 60%; min-height: 20px; overflow: hidden; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .tool-content { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .now-row .who { font-size: 12px; color: var(--text-2); }
 .now-row .who .prod-tag { display: table; margin: 2px 0; }
@@ -249,6 +250,8 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .pr .branch { color: var(--text-2); font-size: 12px; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; align-items: center; }
 .badge { font-size: 11px; padding: 0 8px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
+/* 文や名前を差し込むバッジは折り返す。nowrap のままだと、長いときに枠の外へはみ出す */
+.badge.long { display: inline-block; max-width: 100%; padding: 2px 8px; border-radius: 11px; white-space: normal; overflow-wrap: anywhere; }
 .badge.ok { background: var(--ok-soft); color: var(--ok-text); }
 .badge.warn { background: var(--warn-soft); color: var(--warn-text); }
 .badge.danger { background: var(--danger-soft); color: var(--danger); }
@@ -1069,7 +1072,7 @@ function renderToolLine(tool) {
   const separator = tool.indexOf(': ');
   const name = separator < 0 ? '' : tool.slice(0, separator);
   const content = separator < 0 ? tool : tool.slice(separator + 2);
-  return '<div class="tool-line">' + (name ? '<span class="tool-name">' + esc(name) + '</span>' : '') + '<span class="tool-content">' + esc(content) + '</span></div>';
+  return '<div class="tool-line">' + (name ? '<span class="tool-name" title="' + esc(name) + '">' + esc(name) + '</span>' : '') + '<span class="tool-content">' + esc(content) + '</span></div>';
 }
 
 // 画面で終了にした終了未確認は常駐サーバーが覚え、そのサブエージェントのイベントがまた届くまで終了として出す。
@@ -1476,7 +1479,7 @@ function prBadges(p, pr) {
     `<span class="badge ${ci[0]}">${ci[1]}</span>`,
     `<span class="badge ${rv[0]}">${rv[1]}</span>`,
     pr.conflict ? '<span class="badge danger">コンフリクト</span>' : '',
-    e.retargetedFrom ? `<span class="badge accent">base を ${esc(e.base)} に付け替え済み</span>` : '',
+    e.retargetedFrom ? `<span class="badge accent long">base を ${esc(e.base)} に付け替え済み</span>` : '',
     e.needsRestack ? '<span class="badge warn">積み直しが必要</span>' : '',
   ].join('');
 }
@@ -1543,7 +1546,7 @@ function conflictStatus(p, pr) {
   const k = prKey(p, pr.number);
   if (!pr.requestSession.alive) return `<div class="why-not">衝突の解消を依頼できない理由: 依頼先の ${esc(pr.requestSession.name)} のセッションが終了している</div>`;
   const at = ui.conflictRequested[k];
-  return at ? `<div class="badges"><span class="badge accent">${esc(absoluteTimeLabel(at, Date.now(), at))} に ${esc(pr.requestSession.name)} のセッションへ衝突の解消を依頼した</span></div>` : '';
+  return at ? `<div class="badges"><span class="badge accent long">${esc(absoluteTimeLabel(at, Date.now(), at))} に ${esc(pr.requestSession.name)} のセッションへ衝突の解消を依頼した</span></div>` : '';
 }
 
 function prItem(p, pr) {
@@ -1568,7 +1571,7 @@ function prItem(p, pr) {
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
-    ${rsv ? `<div class="badges"><span class="badge accent">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr).join('、'))})</span>
+    ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr).join('、'))})</span>
       <button type="button" class="link-btn" data-unreserve="${k}">予約を取り消す</button>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
     ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
@@ -1600,7 +1603,7 @@ function prBlock(p, withTag) {
     .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.pr.number - a.pr.number);
   const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
   const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) =>
-    `<span class="badge ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`), true);
+    `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`), true);
   const closed = p.closedPrs || [];
   const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr =>
     `<a class="badge mute" href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`));

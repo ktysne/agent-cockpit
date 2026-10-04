@@ -132,6 +132,8 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .badge.permission-chip { background: var(--danger-soft); color: var(--danger); }
 .badge.done { background: var(--ok-soft); color: var(--ok-text); }
 .badge.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
+/* 文や名前を差し込むバッジは折り返す。nowrap のままだと、長いときに枠の外へはみ出す */
+.badge.long { display: inline-block; max-width: 100%; padding: 2px 8px; border-radius: 11px; white-space: normal; overflow-wrap: anywhere; }
 h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
 .permission-list { gap: 0; }
@@ -143,7 +145,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .detail { overflow-wrap: anywhere; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
-.tool-name { flex: none; min-height: 20px; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; }
+.tool-name { display: block; flex: none; max-width: 60%; min-height: 20px; overflow: hidden; padding: 0 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2); font-size: 11px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .tool-content { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .model { display: inline-flex; gap: 6px; align-items: baseline; padding: 1px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; white-space: nowrap; }
 .model i { color: var(--text-2); font-size: 11px; font-style: normal; }
@@ -348,7 +350,8 @@ h3.sub .count { font-weight: normal; }
 .excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .excluded-note[hidden] { display: none; }
 .product-remove { margin-left: 12px; }
-.session-context { width: fit-content; margin-bottom: 4px; }
+/* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
+.session-tag.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
 .kind-empty { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .kind-empty h2 { margin: 0; color: var(--text-2); font-size: 15px; }
 @media (max-width: 640px) {
@@ -1176,7 +1179,11 @@ function durationAgoLabel(startedAt, now = Date.now()) {
 function appendToolLine(target, tool) {
   if (!tool) return;
   const line = element('div', 'tool-line');
-  if (tool.tool_name) line.append(badge(tool.tool_name, 'tool-name'));
+  if (tool.tool_name) {
+    const name = badge(tool.tool_name, 'tool-name');
+    name.title = tool.tool_name;
+    line.append(name);
+  }
   if (tool.summary && tool.summary !== tool.tool_name) line.append(element('span', 'tool-content', tool.summary));
   target.append(line);
 }
@@ -1483,7 +1490,7 @@ function appendPullRequestBadges(target, pullRequest) {
   if (pullRequest.draft) target.append(badge('ドラフト', 'mute'));
   target.append(badge(ci[1], ci[0]), badge(review[1], review[0]));
   if (pullRequest.conflict) target.append(badge('コンフリクト', 'danger'));
-  if (pullRequest.retargetedFrom) target.append(badge(`base を ${pullRequest.effectiveBase} に付け替え済み`, 'accent'));
+  if (pullRequest.retargetedFrom) target.append(badge(`base を ${pullRequest.effectiveBase} に付け替え済み`, 'accent long'));
   if (pullRequest.needsRestack) target.append(badge('積み直しが必要', 'warn'));
 }
 
@@ -1832,7 +1839,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
       : '時刻不明';
     const status = element('div', 'badges');
     status.setAttribute('role', 'status');
-    status.append(badge(`${time} に ${namesForStatus.join('、')} のセッションへ衝突の解消を依頼した`, 'accent'));
+    status.append(badge(`${time} に ${namesForStatus.join('、')} のセッションへ衝突の解消を依頼した`, 'accent long'));
     details.append(status);
   }
 
@@ -1909,7 +1916,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   appendPullRequestBadges(badges, pullRequest);
   if (reservation) {
     const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest).join('、')})`;
-    badges.append(badge(reservedText, 'accent'));
+    badges.append(badge(reservedText, 'accent long'));
   }
   item.append(badges);
   if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
@@ -2037,7 +2044,7 @@ function appendPullRequestBlock(target, group, withTag = false) {
   }
   if (Array.isArray(group.mergeHistory) && group.mergeHistory.length) {
     appendFoldedPrLine('merged', 'マージ済み (24 時間)', 'マージ済み', group.mergeHistory, (line, record) => {
-      const item = element('span', record.headMismatch === true ? 'badge warn' : 'badge mute');
+      const item = element('span', record.headMismatch === true ? 'badge long warn' : 'badge long mute');
       const link = element('a', '', `#${record.number}`);
       link.href = record.url;
       link.target = '_blank';
