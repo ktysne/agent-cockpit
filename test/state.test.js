@@ -348,6 +348,7 @@ test('同じ未解決質問は既存の ID に寄せ、別名から更新して�
   addQuestion('ask-repeat', 200);
   assert.equal(state.snapshot().sessions[0].decisions.length, 1);
   assert.equal(state.snapshot().sessions[0].decisions[0].id, 'ask-original');
+  assert.equal(state.snapshot().sessions[0].decisions[0].createdAt, new Date(100).toISOString());
   const updated = state.updateDecision('ask-duplicate', 'ask-repeat', 'provisional', ['JSON'], '推奨で進めた。', 250);
   assert.deepEqual([updated.id, updated.state], ['ask-original', 'provisional']);
   assert.deepEqual(state.snapshot().sessions[0].decisions[0].resolution, {

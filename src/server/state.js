@@ -296,6 +296,23 @@ function normalizeStore(value) {
       decisions: plan.decisions.map(cloneDecision),
     });
   }
+  const askDecisionBindingsValue = value.askDecisionBindings === undefined ? {} : value.askDecisionBindings;
+  if (!isRecord(askDecisionBindingsValue)) throw new Error('Invalid ask decision bindings');
+  const askDecisionBindings = new Map();
+  for (const [sessionId, bindings] of Object.entries(askDecisionBindingsValue)) {
+    if (!validStoredSessionId(sessionId) || !isRecord(bindings)) throw new Error('Invalid ask decision bindings');
+    const askDecisionIds = new Set((plans.get(sessionId)?.decisions || [])
+      .filter((decision) => decision.source === 'ask').map((decision) => decision.id));
+    const normalizedBindings = new Map();
+    for (const [toolUseId, decisionId] of Object.entries(bindings)) {
+      if (!toolUseId || toolUseId.length > 256 || typeof decisionId !== 'string' ||
+        decisionId.length > 256 || !askDecisionIds.has(decisionId)) {
+        throw new Error('Invalid ask decision bindings');
+      }
+      normalizedBindings.set(toolUseId, decisionId);
+    }
+    if (normalizedBindings.size) askDecisionBindings.set(sessionId, normalizedBindings);
+  }
   const decisionLifecycles = new Map();
   for (const [sessionId, records] of Object.entries(value.decisionLifecycles)) {
     if (!validStoredSessionId(sessionId) || !isRecord(records)) throw new Error('Invalid decision lifecycle');
@@ -368,6 +385,7 @@ function normalizeStore(value) {
   return {
     display,
     plans,
+    askDecisionBindings,
     decisionLifecycles,
     closedTasks,
     hiddenSessions,
@@ -554,7 +572,7 @@ function agentModelFromDefinition(agentType, definition) {
   };
 }
 
-function newSession(event) {
+function newSession(event, askDecisionState = {}) {
   return {
     session_id: event.session_id,
     product: event.product,
@@ -564,8 +582,8 @@ function newSession(event) {
     completedToolIds: new Set(),
     agents: [],
     permissionWaits: [],
-    decisions: [],
-    decisionBindings: Object.create(null),
+    decisions: (askDecisionState.decisions || []).map(cloneDecision),
+    decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     stopped: false,
     ended: false,
     pendingCodex: Object.create(null),
@@ -652,9 +670,18 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
-function deriveSessions(entries) {
+function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
+  const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
+    if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
+    const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
+    return decisionId === event.tool_use_id ? [decisionId] : [];
+  }));
+  const initialAskDecisionState = {
+    decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
+    bindings: askDecisionState.bindings || {},
+  };
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
@@ -664,11 +691,11 @@ function deriveSessions(entries) {
     let session = sessions.get(event.session_id);
     if (event.hook_event_name === 'SessionStart') {
       if (!session || session.ended) {
-        session = newSession(event);
+        session = newSession(event, initialAskDecisionState);
         sessions.set(event.session_id, session);
       }
     } else if (!session) {
-      session = newSession(event);
+      session = newSession(event, initialAskDecisionState);
       sessions.set(event.session_id, session);
     }
 
@@ -781,7 +808,9 @@ function deriveSessions(entries) {
         session.pendingCodex[toolUseId] = agentIdForCall;
       }
       if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
-        const existing = session.decisions.find((decision) => (
+        // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
+        const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
+        const existing = boundDecision || session.decisions.find((decision) => (
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
         if (existing) {
@@ -1027,6 +1056,7 @@ class DashboardState {
     this.sessionFiles = new Map();
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
+    this.askDecisionBindings = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
     this.estimates = new Map();
@@ -1089,6 +1119,7 @@ class DashboardState {
     this.restoredAt = now;
     this.display = store.display;
     this.plans = store.plans;
+    this.askDecisionBindings = store.askDecisionBindings;
     this.seenAtByProduct = store.seenAtByProduct;
     this.ciFailures = store.ciFailures;
     this.decisionLifecycles = store.decisionLifecycles;
@@ -1215,6 +1246,7 @@ class DashboardState {
 
   deleteStoredSession(sessionId) {
     this.plans.delete(sessionId);
+    this.askDecisionBindings.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
     this.pullRequests.delete(sessionId);
@@ -1239,6 +1271,8 @@ class DashboardState {
         ? [[sessionId, Object.fromEntries(persistent.map(([decisionId, lifecycle]) => [decisionId, { ...lifecycle }]))]]
         : [];
     }));
+    const askDecisionBindings = Object.fromEntries([...this.askDecisionBindings]
+      .map(([sessionId, bindings]) => [sessionId, Object.fromEntries(bindings)]));
     const closedTasks = [...this.closedTasks].flatMap(([sessionId, tasks]) => [...tasks].map(([title, record]) => ({
       session_id: sessionId,
       title,
@@ -1253,6 +1287,7 @@ class DashboardState {
       version: 1,
       display: cloneDisplay(this.display),
       plans,
+      askDecisionBindings,
       decisionLifecycles,
       closedTasks,
       hiddenSessions,
@@ -1756,9 +1791,55 @@ class DashboardState {
   reopenAbsentSession(sessionId) {
     this.endedByAbsence.delete(sessionId);
     const entries = this.entries.get(sessionId) || [];
-    const [session] = deriveSessions(entries);
+    const [session] = deriveSessions(entries, this.askDecisionStateFor(sessionId));
     if (session) this.sessions.set(sessionId, session);
     this.onSessionReopened?.(sessionId);
+  }
+
+  askDecisionStateFor(sessionId) {
+    return {
+      decisions: (this.plans.get(sessionId)?.decisions || [])
+        .filter((decision) => decision.source === 'ask').map(cloneDecision),
+      bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
+    };
+  }
+
+  persistAskDecisionState(sessionId, session) {
+    const plan = this.plans.get(sessionId);
+    const storedAskDecisions = new Map((plan?.decisions || [])
+      .filter((decision) => decision.source === 'ask').map((decision) => [decision.id, decision]));
+    const askDecisions = session.decisions.filter((decision) => decision.source === 'ask').map((decision) => {
+      const stored = storedAskDecisions.get(decision.id);
+      return stored && Date.parse(stored.updatedAt) > Date.parse(decision.updatedAt)
+        ? cloneDecision(stored)
+        : cloneDecision(decision);
+    });
+    const existingAskDecisions = (plan?.decisions || []).filter((decision) => decision.source === 'ask');
+    const askDecisionIds = new Set(askDecisions.map((decision) => decision.id));
+    const nextDecisions = [
+      ...(plan?.decisions || []).filter((decision) => decision.source !== 'ask'),
+      ...askDecisions.filter((decision) => !(plan?.decisions || []).some((stored) => (
+        stored.source !== 'ask' && stored.id === decision.id
+      ))),
+    ];
+    let changed = false;
+    if (askDecisions.length || existingAskDecisions.length) {
+      const targetPlan = plan || this.planFor(sessionId);
+      if (stableStringify(targetPlan.decisions) !== stableStringify(nextDecisions)) {
+        targetPlan.decisions = nextDecisions;
+        changed = true;
+      }
+    }
+
+    const nextBindings = new Map(Object.entries(session.decisionBindings)
+      .filter(([, decisionId]) => askDecisionIds.has(decisionId)));
+    const currentBindings = this.askDecisionBindings.get(sessionId) || new Map();
+    if (stableStringify(Object.fromEntries(currentBindings)) !== stableStringify(Object.fromEntries(nextBindings))) {
+      if (nextBindings.size) this.askDecisionBindings.set(sessionId, nextBindings);
+      else this.askDecisionBindings.delete(sessionId);
+      changed = true;
+    }
+    return changed;
   }
 
   hasAgentRow(sessionId, agentId) {
@@ -1813,10 +1894,15 @@ class DashboardState {
     }
 
     const entries = this.entries.get(event.session_id) || [];
-    entries.push({ event, sequence: this.sequence++ });
+    const eventSequence = this.sequence++;
+    entries.push({ event, sequence: eventSequence });
     this.entries.set(event.session_id, entries);
-    const nextSessions = deriveSessions(entries);
-    if (nextSessions.length > 0) this.sessions.set(event.session_id, nextSessions[0]);
+    const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
+    let askDecisionStateChanged = false;
+    if (nextSessions.length > 0) {
+      this.sessions.set(event.session_id, nextSessions[0]);
+      askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
+    }
     else this.sessions.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd') {
@@ -1826,6 +1912,7 @@ class DashboardState {
     const clearedClosedAgent = this.reconcileClosedAgents(event.session_id);
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
     if (wasHidden) this.requestStoreWrite();
+    if (askDecisionStateChanged) this.requestStoreWrite();
     return true;
   }
 
@@ -2021,8 +2108,9 @@ class DashboardState {
     };
     const plan = this.plans.get(sessionId);
     const stored = plan?.decisions.find((item) => item.id === decision.id);
+    const hasEventDecision = this.sessions.get(sessionId)?.decisions.some((item) => item.id === decision.id) === true;
     if (stored) Object.assign(stored, updated);
-    else {
+    if (!stored || hasEventDecision) {
       const overrides = this.decisionOverrides.get(sessionId) || new Map();
       overrides.set(decision.id, {
         state: updated.state,
@@ -2070,9 +2158,10 @@ class DashboardState {
   decisionsFor(sessionId) {
     const eventDecisions = this.sessions.get(sessionId)?.decisions || [];
     const planDecisions = this.plans.get(sessionId)?.decisions || [];
+    const eventDecisionIds = new Set(eventDecisions.map((decision) => decision.id));
     const overrides = this.decisionOverrides.get(sessionId);
     const lifecycles = this.decisionLifecycles.get(sessionId);
-    return [...eventDecisions, ...planDecisions].map((decision) => {
+    return [...eventDecisions, ...planDecisions.filter((decision) => !eventDecisionIds.has(decision.id))].map((decision) => {
       const override = overrides?.get(decision.id);
       const withOverride = override && Date.parse(override.updatedAt) >= Date.parse(decision.updatedAt)
         ? { ...decision, ...override }
@@ -2094,7 +2183,8 @@ class DashboardState {
   }
 
   decisionIdForToolUse(sessionId, toolUseId) {
-    return this.sessions.get(sessionId)?.decisionBindings?.[toolUseId] || null;
+    return this.sessions.get(sessionId)?.decisionBindings?.[toolUseId] ||
+      this.askDecisionBindings.get(sessionId)?.get(toolUseId) || null;
   }
 
   // 終了の片付けはセッションを一覧から消した後にも呼ばれるので、判断事項を引かずに記録だけを直す。
