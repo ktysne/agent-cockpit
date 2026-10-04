@@ -412,6 +412,11 @@ h3.sub .count { font-weight: normal; }
       <span class="settings-input-error" id="settings-long-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
+      <label for="settings-idle-hide-minutes">更新の無いセッションを隠すまで (分)</label>
+      <input id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440" step="1" inputmode="numeric" aria-describedby="settings-idle-hide-error">
+      <span class="settings-input-error" id="settings-idle-hide-error" role="alert" hidden></span>
+    </div>
+    <div class="settings-theme-row">
       <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間 (1〜30 分)</label>
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
@@ -440,6 +445,7 @@ h3.sub .count { font-weight: normal; }
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
   <div class="excluded-note" id="finished-note" hidden></div>
+  <div class="excluded-note" id="idle-note" role="status" aria-live="polite" hidden></div>
 </main>
 <script>
 'use strict';
@@ -448,6 +454,7 @@ const POLL_INTERVAL_MS = 2000;
 const WAIT_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
+const DEFAULT_IDLE_HIDE_MINUTES = 30;
 const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const liveStatus = document.getElementById('live-status');
@@ -456,8 +463,10 @@ const themeSelect = document.getElementById('settings-theme-select');
 const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
+const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
@@ -488,6 +497,7 @@ const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 let lastVersion = null;
 let lastState = null;
 let sinceSeenMode = 'always';
+let showIdleSessions = false;
 let hasRenderedState = false;
 let answerNoteComposing = false;
 let deferredRenderPending = false;
@@ -604,6 +614,7 @@ function readDisplayPreferences() {
       sectionOrder: normalizeSectionOrder(value.sectionOrder),
       longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
       awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
+      idleHideMinutes: normalizeDisplayMinutes(value.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
       hideFinished: value.hideFinished !== false,
       mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value.mergeableCondition) ? value.mergeableCondition : 'cross-review',
       mergeAfterReviewDefault: value.mergeAfterReviewDefault === true,
@@ -612,6 +623,7 @@ function readDisplayPreferences() {
     return {
       mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: [...DEFAULT_SECTION_ORDER],
       longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
+      idleHideMinutes: DEFAULT_IDLE_HIDE_MINUTES,
       hideFinished: true,
       mergeableCondition: 'cross-review',
       mergeAfterReviewDefault: false,
@@ -630,6 +642,7 @@ function normalizeDisplayPreferences(value) {
     sectionOrder: normalizeSectionOrder(value?.sectionOrder),
     longWaitMinutes: normalizeDisplayMinutes(value?.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value?.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
+    idleHideMinutes: normalizeDisplayMinutes(value?.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
     hideFinished: value?.hideFinished !== false,
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
     mergeAfterReviewDefault: value?.mergeAfterReviewDefault === true,
@@ -650,7 +663,11 @@ const displayPreferenceSaveStates = new Map();
 
 // 入力中の欄を定期の同期で上書きすると、確定前の値が消えるため、フォーカス中の欄は飛ばす。
 function renderDisplaySettings() {
-  for (const [input, key] of [[longWaitMinutesInput, 'longWaitMinutes'], [awayAnswerWaitMinutesInput, 'awayAnswerWaitMinutes']]) {
+  for (const [input, key] of [
+    [longWaitMinutesInput, 'longWaitMinutes'],
+    [awayAnswerWaitMinutesInput, 'awayAnswerWaitMinutes'],
+    [idleHideMinutesInput, 'idleHideMinutes'],
+  ]) {
     if (document.activeElement === input) continue;
     input.value = String(displayPreferences[key]);
   }
@@ -735,21 +752,23 @@ function saveDisplayPreferences(changes) {
   });
 }
 
-function displaySettingError(input) {
-  return input === longWaitMinutesInput ? longWaitMinutesError : awayAnswerWaitMinutesError;
+function displaySettingError(key) {
+  if (key === 'longWaitMinutes') return longWaitMinutesError;
+  if (key === 'idleHideMinutes') return idleHideMinutesError;
+  return awayAnswerWaitMinutesError;
 }
 
 function changeDisplaySetting(key, input, minimum, maximum) {
   const value = input.type === 'checkbox' ? input.checked : input.valueAsNumber;
   if (input.type !== 'checkbox' && (!Number.isInteger(value) || value < minimum || value > maximum)) {
-    const error = displaySettingError(input);
+    const error = displaySettingError(key);
     error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
     error.hidden = false;
     setDisplaySettingInput(input, displayPreferences[key]);
     return Promise.resolve(false);
   }
   if (input.type !== 'checkbox') {
-    const error = displaySettingError(input);
+    const error = displaySettingError(key);
     error.textContent = '';
     error.hidden = true;
   }
@@ -920,6 +939,7 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
 
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
+idleHideMinutesInput.addEventListener('change', () => changeDisplaySetting('idleHideMinutes', idleHideMinutesInput, 5, 1440));
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
 mergeAfterReviewDefaultInput.addEventListener('change', () => changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput));
 for (const input of mergeableConditionInputs) {
@@ -1356,6 +1376,46 @@ function renderFinishedNote(counts) {
     void changeDisplaySetting('hideFinished', hideFinishedInput);
   });
   note.replaceChildren(element('span', '', `終わったものを隠しています (${parts.join('、')})`), show);
+}
+
+function isIdleHiddenSession(session, now = Date.now()) {
+  if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
+  if ((session.decisions || []).some((decision) => ['waiting', 'provisional'].includes(decision.state))) return false;
+  if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
+  const updatedAt = Date.parse(session.lastUpdatedAt || '');
+  return Number.isFinite(updatedAt) && now - updatedAt > displayPreferences.idleHideMinutes * 60_000;
+}
+
+function idleHiddenSessions(sessions, now = Date.now()) {
+  return sessions.filter((session) => session.hidden !== true
+    && !(displayPreferences.hideFinished && isFinishedSession(session))
+    && isIdleHiddenSession(session, now));
+}
+
+function sessionsAfterIdleFilter(sessions) {
+  if (showIdleSessions) return sessions;
+  const hiddenSessionIds = new Set(idleHiddenSessions(sessions).map((session) => session.session_id));
+  return sessions.filter((session) => !hiddenSessionIds.has(session.session_id));
+}
+
+function renderIdleNote(hiddenCount) {
+  const note = document.getElementById('idle-note');
+  note.hidden = hiddenCount === 0;
+  if (note.hidden) {
+    note.replaceChildren();
+    return;
+  }
+  const toggle = element('button', 'link-btn', showIdleSessions ? '隠す' : '表示する');
+  toggle.type = 'button';
+  toggle.dataset.showIdle = 'true';
+  toggle.addEventListener('click', () => {
+    showIdleSessions = !showIdleSessions;
+    if (lastState) render(lastState);
+  });
+  const message = showIdleSessions
+    ? '更新の無いセッションを表示しています'
+    : `更新の無いセッションを隠しています (${hiddenCount} 件)`;
+  note.replaceChildren(element('span', '', message), toggle);
 }
 
 function isFilterShown(key) {
@@ -2120,9 +2180,10 @@ function sessionActivityTime(session) {
 }
 
 function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
+  const idleFilteredSessions = sessionsAfterIdleFilter(sessions);
   const visibleSessions = displayPreferences.hideFinished
-    ? sessions.filter((session) => session.tasks.length > 0 || !isFinishedSession(session))
-    : sessions;
+    ? idleFilteredSessions.filter((session) => session.tasks.length > 0 || !isFinishedSession(session))
+    : idleFilteredSessions;
   const grouped = productGroups(visibleSessions, pullRequestGroups);
   for (const entry of sinceSeen) {
     if (!entry.product?.key || grouped.some((product) => product.key === entry.product.key)) continue;
@@ -3085,6 +3146,8 @@ function render(state) {
   renderRouting(state.routing, state.integrations);
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
   const sessions = allSessions.filter((session) => session.hidden !== true);
+  const idleHiddenCount = idleHiddenSessions(sessions).length;
+  const displayedSessions = sessionsAfterIdleFilter(sessions);
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
@@ -3106,6 +3169,7 @@ function render(state) {
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
           : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
          : active?.dataset?.showFinished ? { kind: 'show-finished' }
+         : active?.dataset?.showIdle ? { kind: 'show-idle' }
            : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
              : active?.dataset?.closeTask ? { kind: 'close-task', key: active.dataset.closeTask }
                : active?.dataset?.cancelCloseTask ? { kind: 'cancel-close-task', key: active.dataset.cancelCloseTask }
@@ -3114,24 +3178,27 @@ function render(state) {
         : active?.hasAttribute('data-show-all') ? { kind: 'show-all' }
           : active?.hasAttribute('data-clear-hidden-sessions') ? { kind: 'clear-hidden' }
             : active?.hasAttribute('data-undo-hidden-sessions') ? { kind: 'undo-hidden' } : null;
-  renderSummary(sessions, pullRequestGroups);
+  renderSummary(displayedSessions, pullRequestGroups);
   renderExcludedNote(allSessions);
   const hiddenFinished = finishedHiddenCounts(sessions, pullRequestGroups);
   renderFinishedNote(hiddenFinished);
-  updateTitle(sessions);
+  renderIdleNote(idleHiddenCount);
+  updateTitle(displayedSessions);
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
   });
   const sinceSeen = visibleSinceSeen(state);
-  const products = orderedProducts(sessions, pullRequestGroups, sinceSeen);
+  const products = orderedProducts(displayedSessions, pullRequestGroups, sinceSeen);
   if (!products.length) {
     const emptyText = hiddenFinished.sessions || hiddenFinished.pullRequests
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
+      : idleHiddenCount
+        ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。';
     root.replaceChildren(element('section', 'section empty', emptyText));
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
-    else if (['show-finished', 'merge-result-close'].includes(focusData?.kind)) {
+    else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
     return;
@@ -3208,6 +3275,7 @@ function render(state) {
       if (focusData.kind === 'clear-hidden') return item.hasAttribute('data-clear-hidden-sessions');
       if (focusData.kind === 'undo-hidden') return item.hasAttribute('data-undo-hidden-sessions');
       if (focusData.kind === 'show-finished') return item.hasAttribute('data-show-finished');
+      if (focusData.kind === 'show-idle') return item.hasAttribute('data-show-idle');
       if (focusData.kind === 'merge-result-close') return item.dataset.closeMergeResult === focusData.id;
       if (focusData.kind === 'review-skip') return item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip === focusData.action;
       if (['close-task', 'cancel-close-task'].includes(focusData.kind)) {

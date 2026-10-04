@@ -23,6 +23,7 @@ test('接続案内は一覧の前に、注記は一覧の後ろに置き、固�
     const hiddenKinds = html.indexOf('id="filter-note"');
     const hiddenSessions = html.indexOf('id="excluded-note"');
     const finished = html.indexOf('id="finished-note"');
+    const idle = html.indexOf('id="idle-note"');
 
     assert.ok(header >= 0 && summary > header && summary < headerEnd);
     assert.ok(headerEnd < connection);
@@ -31,6 +32,8 @@ test('接続案内は一覧の前に、注記は一覧の後ろに置き、固�
     assert.ok(root < hiddenKinds);
     assert.ok(hiddenKinds < hiddenSessions);
     assert.ok(hiddenSessions < finished);
+    assert.match(html.slice(finished), /id="finished-note" hidden><\/div>\s*<div class="excluded-note" id="idle-note"/);
+    assert.ok(finished < idle);
   }
 });
 
@@ -358,6 +361,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    DEFAULT_IDLE_HIDE_MINUTES: 30,
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
@@ -368,6 +372,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     sectionOrder: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 5,
+    idleHideMinutes: 30,
     hideFinished: true,
     mergeableCondition: 'cross-review',
     mergeAfterReviewDefault: false,
@@ -375,6 +380,12 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).awayAnswerWaitMinutes, 5);
+  for (const idleHideMinutes of [4, 1441, 30.5]) {
+    assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, 30);
+  }
+  for (const idleHideMinutes of [5, 1440]) {
+    assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, idleHideMinutes);
+  }
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay({ ...base, hidden: ['held'] }).hidden)), []);
 });
 
@@ -421,6 +432,7 @@ test('表示時間の保存に失敗した数値設定を元に戻す', async ()
     longWaitMinutesInput: null,
     longWaitMinutesError: { hidden: true, textContent: '' },
     awayAnswerWaitMinutesError: { hidden: true, textContent: '' },
+    idleHideMinutesError: { hidden: true, textContent: '' },
     lastState: null,
     renderDisplaySettings() {},
     enqueueDisplayPatch: async (patch) => { patches.push(patch); saveCount += 1; return saveCount === 1; },
@@ -444,12 +456,13 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
   let rendered = 0;
   const input = { valueAsNumber: 24, value: '24' };
   const context = pageContext(mock, {
-    ui: { longWaitMinutes: 15 },
+    ui: { longWaitMinutes: 15, idleHideMinutes: 30 },
     captureDisplayPreferences: () => ({}),
     saveDisplayPreferences: () => { saved += 1; return true; },
     longWaitMinutesInput: input,
     longWaitMinutesError: { hidden: true, textContent: '' },
     awayAnswerWaitMinutesError: { hidden: true, textContent: '' },
+    idleHideMinutesError: { hidden: true, textContent: '' },
     render: () => { rendered += 1; },
   });
   vm.runInContext(`${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
@@ -457,6 +470,11 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
   assert.equal(context.ui.longWaitMinutes, 24);
   assert.equal(saved, 1);
   assert.equal(rendered, 1);
+  const idleInput = { valueAsNumber: 5, value: '5' };
+  assert.equal(context.changeDisplaySetting('idleHideMinutes', idleInput, 5, 1440), true);
+  assert.equal(context.ui.idleHideMinutes, 5);
+  assert.equal(saved, 2);
+  assert.equal(rendered, 2);
 });
 
 test('セクションの並び順を保存し、端のボタンを無効化してフォーカスを維持する', () => {
@@ -954,6 +972,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.ok(render);
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
+  const idleHideMinutesInput = { value: '90' };
   const hideFinishedInput = { checked: false };
   const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
@@ -961,16 +980,18 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     document: { activeElement: longWaitMinutesInput },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
+    idleHideMinutesInput,
     hideFinishedInput,
     mergeAfterReviewDefaultInput,
     mergeableConditionInputs,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
   });
   vm.runInContext(render, context);
   context.renderDisplaySettings();
 
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
+  assert.equal(idleHideMinutesInput.value, '30');
   assert.equal(hideFinishedInput.checked, false);
   assert.equal(mergeAfterReviewDefaultInput.checked, true);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
@@ -983,6 +1004,7 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
   assert.ok(render && settle && save);
   const longWaitMinutesInput = { value: '15' };
   const awayAnswerWaitMinutesInput = { value: '5' };
+  const idleHideMinutesInput = { value: '30' };
   const hideFinishedInput = { checked: true };
   const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
@@ -992,6 +1014,7 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     document: { get activeElement() { return activeElement; } },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
+    idleHideMinutesInput,
     hideFinishedInput,
     mergeAfterReviewDefaultInput,
     displayPreferences,

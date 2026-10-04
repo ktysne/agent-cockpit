@@ -202,7 +202,7 @@ function validTasks(value) {
 function validDisplayPatch(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault'].includes(key))) return false;
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault'].includes(key))) return false;
   if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
   for (const key of ['order', 'pinned', 'collapsed']) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
@@ -217,6 +217,7 @@ function validDisplayPatch(value) {
     value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
   if (Object.hasOwn(value, 'longWaitMinutes') && (!Number.isInteger(value.longWaitMinutes) || value.longWaitMinutes < 1 || value.longWaitMinutes > 120)) return false;
   if (Object.hasOwn(value, 'awayAnswerWaitMinutes') && (!Number.isInteger(value.awayAnswerWaitMinutes) || value.awayAnswerWaitMinutes < 1 || value.awayAnswerWaitMinutes > 30)) return false;
+  if (Object.hasOwn(value, 'idleHideMinutes') && (!Number.isInteger(value.idleHideMinutes) || value.idleHideMinutes < 5 || value.idleHideMinutes > 1440)) return false;
   if (Object.hasOwn(value, 'hideFinished') && typeof value.hideFinished !== 'boolean') return false;
   if (Object.hasOwn(value, 'mergeableCondition') && !['operation', 'ci', 'cross-review'].includes(value.mergeableCondition)) return false;
   if (Object.hasOwn(value, 'mergeAfterReviewDefault') && typeof value.mergeAfterReviewDefault !== 'boolean') return false;

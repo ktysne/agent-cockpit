@@ -245,10 +245,13 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
       },
       querySelectorAll: () => [currentNote],
     },
-    displayPreferences: { mode: 'product', pinned: [] },
+    displayPreferences: { mode: 'product', pinned: [], idleHideMinutes: 30 },
     renderRouting() {},
     renderSummary() {},
     renderExcludedNote() {},
+    idleHiddenSessions: () => [],
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    renderIdleNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
     renderFinishedNote() {},
     updateTitle() {},
@@ -1101,14 +1104,16 @@ test('終わったもののチェックは表示設定として保存し、失�
   const hideFinishedInput = { type: 'checkbox', checked: false };
   const longWaitMinutesInput = { type: 'number', value: '' };
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
+  const idleHideMinutesInput = { type: 'number', value: '' };
   const mergeAfterReviewDefaultInput = { type: 'checkbox', checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
+  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
   const context = pageContext(pageHtml, {
     displayPreferences,
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    DEFAULT_IDLE_HIDE_MINUTES: 30,
     FILTERS: [],
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
@@ -1117,6 +1122,7 @@ test('終わったもののチェックは表示設定として保存し、失�
     mergeAfterReviewDefaultInput,
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
+    idleHideMinutesInput,
     mergeableConditionInputs,
     lastState: null,
     document: { get activeElement() { return activeElement; } },
@@ -1128,6 +1134,7 @@ test('終わったもののチェックは表示設定として保存し、失�
   vm.runInContext(functions.join('\n'), context);
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
+  assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 30);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
@@ -1264,6 +1271,8 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
     lastState: state,
     sinceSeenMode: 'always',
     header: { dataset: { away: 'false' } },
+    idleHiddenSessions: () => [],
+    sessionsAfterIdleFilter: (sessions) => sessions,
     isFilterShown: () => true,
     handleExternalLink: () => false,
     document: { addEventListener: (_name, callback) => { handleClick = callback; } },
@@ -1301,6 +1310,8 @@ test('表示中のセッションもオープンの PR も数えきれていな�
   let pullRequestsShown = true;
   const context = pageContext(pageHtml, {
     displayPreferences: { order: [], pinned: [], collapsed: [] },
+    idleHiddenSessions: () => [],
+    sessionsAfterIdleFilter: (sessions) => sessions,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: (key) => key !== 'prs' || pullRequestsShown,
     hasPullRequestMergeResults: () => false,
@@ -1371,7 +1382,8 @@ test('終わったセッションはタスクだけを描き、種類別の今�
 test('タスクの無い終わったセッションと履歴だけの PR しか残らないプロダクトは両方の表示から除く', () => {
   const names = [
     'isEndedAgent', 'activityStatus', 'isFinishedSession', 'hidesFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
-    'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences', 'element', 'productSection',
+    'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
+    'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
@@ -1381,7 +1393,8 @@ test('タスクの無い終わったセッションと履歴だけの PR しか�
     append(...nodes) { this.children.push(...nodes); }
   }
   const context = pageContext(pageHtml, {
-    displayPreferences: { hideFinished: true, order: [], pinned: [], collapsed: [] },
+    displayPreferences: { hideFinished: true, idleHideMinutes: 30, order: [], pinned: [], collapsed: [] },
+    showIdleSessions: false,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: () => true,
     hasPullRequestMergeResults: () => false,
@@ -1409,6 +1422,22 @@ test('タスクの無い終わったセッションと履歴だけの PR しか�
   const visible = [unknown, busy, unfinished];
   const products = context.orderedProducts([finished, finishedWithoutTasks, ...visible]);
   assert.deepEqual(JSON.parse(JSON.stringify(products.map((product) => product.key).sort())), ['busy', 'finished', 'unfinished', 'unknown']);
+
+  const stale = {
+    ...unknown, session_id: 'idle', lastUpdatedAt: new Date(Date.now() - 31 * 60_000).toISOString(),
+    product: { key: 'idle', name: '更新なし' },
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.orderedProducts([stale]).map((product) => product.key))), []);
+  const staleWithNews = context.orderedProducts([stale], [], [{
+    product: stale.product, items: [{ text: '前回見てからの変化' }],
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(staleWithNews.map((product) => [product.key, product.sessions.length]))), [['idle', 0]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.sessionReferences(staleWithNews))), []);
+  const staleWithPr = context.orderedProducts([stale], [{
+    product: stale.product, owner: 'example', repo: 'idle', openCount: 1, openStateUnknown: false,
+    loading: false, trees: [], mergeHistory: [], reservationNotices: [],
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(staleWithPr.map((product) => [product.key, product.sessions.length]))), [['idle', 0]]);
 
   const oldPullRequest = {
     product: { key: 'old-pr', name: '古い PR' }, owner: 'acme', repo: 'old', openCount: 0,
@@ -1477,8 +1506,11 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
       replaceChildren: () => { activeElement = null; },
       querySelectorAll: () => [replacementPick],
     },
-    displayPreferences: { mode: 'product', pinned: [] },
+    displayPreferences: { mode: 'product', pinned: [], idleHideMinutes: 30 },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+    idleHiddenSessions: () => [],
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    renderIdleNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
     renderFinishedNote() {},
     renderRouting() {},
@@ -2259,6 +2291,9 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [go, cancel] },
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: (sessions) => sessions,
+      renderIdleNote() {},
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
@@ -2305,6 +2340,9 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [replacementButton] },
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: (sessions) => sessions,
+      renderIdleNote() {},
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
@@ -2383,6 +2421,9 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
       },
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: () => [],
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: (sessions) => sessions,
+      renderIdleNote() {},
       renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, renderFinishedNote() {}, updateTitle() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
       orderedProducts: () => [{ key: 'product-ui' }],
@@ -2454,6 +2495,9 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     root: { replaceChildren: () => { activeElement = null; }, querySelectorAll: () => [] },
     displayPreferences: { mode: 'product', pinned: [] },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+    idleHiddenSessions: () => [],
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    renderIdleNote() {},
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},

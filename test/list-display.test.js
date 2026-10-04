@@ -685,6 +685,73 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
   assert.match(mock, /終わったものを隠しています \(\$\{finishedParts\.join\('、'\)\}\)/);
 });
 
+test('更新の無いセッションを隠す条件、件数、ページ内の表示切り替えを行う', () => {
+  const idleSource = functionSource(web, 'isIdleHiddenSession');
+  const countsSource = functionSource(web, 'idleHiddenSessions');
+  const noteSource = functionSource(web, 'renderIdleNote');
+  assert.ok(idleSource && countsSource && noteSource);
+  const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
+  let renders = 0;
+  const context = pageContext(web, {
+    displayPreferences: { idleHideMinutes: 30, hideFinished: true },
+    showIdleSessions: false,
+    isFinishedSession: (session) => session.finished === true,
+    element: fakeElement,
+    document: { getElementById: () => note },
+    lastState: {},
+    render: () => { renders += 1; },
+  });
+  vm.runInContext(`${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
+  const now = 2_000_000;
+  const stale = {
+    session_id: 'stale', status: '不明', lastUpdatedAt: new Date(now - 1_800_001).toISOString(),
+    permissionWaits: [], decisions: [], agents: [], tasks: [],
+  };
+  const atThreshold = { ...stale, lastUpdatedAt: new Date(now - 1_800_000).toISOString() };
+  const beforeThreshold = { ...stale, lastUpdatedAt: new Date(now - 1_700_000).toISOString() };
+  assert.equal(context.isIdle(stale, now), true);
+  assert.equal(context.isIdle(atThreshold, now), false);
+  assert.equal(context.isIdle(beforeThreshold, now), false);
+  assert.equal(context.isIdle({ ...stale, lastUpdatedAt: null }, now), false);
+  for (const exempt of [
+    { ...stale, permissionWaits: [{}] },
+    { ...stale, decisions: [{ state: 'waiting' }] },
+    { ...stale, decisions: [{ state: 'provisional' }] },
+    { ...stale, agents: [{ active: true }] },
+    { ...stale, status: '作業中' },
+  ]) assert.equal(context.isIdle(exempt, now), false);
+
+  const finished = { ...stale, session_id: 'finished', finished: true };
+  const manuallyHidden = { ...stale, session_id: 'manual', hidden: true };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.idleCount([stale, finished, manuallyHidden], now))), [stale]);
+  context.renderIdle(1);
+  assert.equal(note.hidden, false);
+  assert.equal(note.children[0].textContent, '更新の無いセッションを隠しています (1 件)');
+  assert.equal(note.children[1].textContent, '表示する');
+  note.children[1].listeners.get('click')();
+  assert.equal(context.showIdleSessions, true);
+  assert.equal(renders, 1);
+  context.renderIdle(1);
+  assert.equal(note.children[0].textContent, '更新の無いセッションを表示しています');
+  assert.equal(note.children[1].textContent, '隠す');
+  note.children[1].listeners.get('click')();
+  assert.equal(context.showIdleSessions, false);
+  assert.equal(renders, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences)), { idleHideMinutes: 30, hideFinished: true });
+
+  const mockIdle = functionSource(mock, 'isIdleHiddenSession');
+  const mockContext = pageContext(mock, {
+    ui: { idleHideMinutes: 30 },
+    effectiveDecisionState: (decision) => decision.kind,
+  });
+  vm.runInContext(`${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
+  assert.equal(mockContext.isIdle({
+    status: 'unknown', lastUpdatedAt: new Date(now - 45 * 60_000).toISOString(), perms: [], decisions: [], subagents: [],
+  }, now), true);
+  assert.match(mock, /id: 'agent-cockpit-unknown',[^]*lastUpdatedMin: 45/);
+  assert.match(mock, /data-show-idle/);
+});
+
 test('マージ結果の一行と予約時の SHA 違いを完了表示の設定中も残す', () => {
   const lineSource = functionSource(web, 'pullRequestMergeResultLine');
   const resultsSource = functionSource(web, 'appendPullRequestMergeResults');
@@ -1097,20 +1164,32 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   assert.ok(inputSource && errorSource && changeSource);
   const longError = { hidden: true, textContent: '' };
   const awayError = { hidden: true, textContent: '' };
+  const idleError = { hidden: true, textContent: '' };
   const input = { type: 'number', valueAsNumber: 121, value: '121' };
   const context = pageContext(web, {
     longWaitMinutesInput: input, longWaitMinutesError: longError, awayAnswerWaitMinutesError: awayError,
-    displayPreferences: { longWaitMinutes: 15 },
+    idleHideMinutesError: idleError,
+    idleHideMinutesInput: { type: 'number', valueAsNumber: 4, value: '4' },
+    displayPreferences: { longWaitMinutes: 15, idleHideMinutes: 30 },
   });
   vm.runInContext(`${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
   assert.equal(await context.changeSetting('longWaitMinutes', input, 1, 120), false);
   assert.equal(longError.hidden, false);
   assert.equal(longError.textContent, '1〜120 分の値を入力してください。');
   assert.equal(input.value, '15');
+  assert.equal(await context.changeSetting('idleHideMinutes', context.idleHideMinutesInput, 5, 1440), false);
+  assert.equal(idleError.hidden, false);
+  assert.equal(idleError.textContent, '5〜1440 分の値を入力してください。');
+  assert.equal(context.idleHideMinutesInput.value, '30');
   assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
+  assert.match(web, /更新の無いセッションを隠すまで \(分\)/);
+  assert.match(web, /id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440"/);
+  assert.match(web, /id="settings-idle-hide-error" role="alert"/);
   assert.match(web, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
   assert.match(web, /id="settings-long-wait-error" role="alert"/);
   assert.match(mock, /id="settings-away-answer-wait-error" role="alert"/);
+  assert.match(mock, /更新の無いセッションを隠すまで \(分\)/);
+  assert.match(mock, /id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440"/);
 });
 
 test('モックの終わった項目の表示設定が保存できたら一覧を描き直す', () => {

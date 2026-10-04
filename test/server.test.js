@@ -1316,6 +1316,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(mode.status, 200);
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
+  assert.equal(jsonBody(mode).display.idleHideMinutes, 30);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(jsonBody(mode).display.mergeAfterReviewDefault, false);
@@ -1340,6 +1341,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   for (const [key, invalidValue] of [
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
+    ['idleHideMinutes', 4], ['idleHideMinutes', 1441], ['idleHideMinutes', 30.5], ['idleHideMinutes', '30'], ['idleHideMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
     ['mergeAfterReviewDefault', 1], ['mergeAfterReviewDefault', 'true'], ['mergeAfterReviewDefault', null],
@@ -1354,6 +1356,13 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
   assert.equal(sectionOrder.status, 200);
   assert.deepEqual(jsonBody(sectionOrder).display.sectionOrder, ['tasks', 'now', 'sinceSeen', 'judgment', 'prs']);
+  for (const idleHideMinutes of [5, 1440]) {
+    const idleHideRange = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ idleHideMinutes }), headers: validHeaders,
+    });
+    assert.equal(idleHideRange.status, 200);
+    assert.equal(jsonBody(idleHideRange).display.idleHideMinutes, idleHideMinutes);
+  }
   const minimumWaitSettings = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ longWaitMinutes: 1, awayAnswerWaitMinutes: 1 }), headers: validHeaders,
   });
@@ -1385,7 +1394,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: true,
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: true,
   });
 });
 
