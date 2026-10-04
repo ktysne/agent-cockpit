@@ -32,6 +32,7 @@
         "settings.idle": ".settings-theme-row:has(#settings-idle-hide-minutes)",
         "settings.away-wait": ".settings-theme-row:has(#settings-away-answer-wait-minutes)",
         "settings.order": ".settings-section-order",
+        "settings.manual": ".settings-manual-link",
         "settings.close": "#settings-close"
       },
       "viewport": true

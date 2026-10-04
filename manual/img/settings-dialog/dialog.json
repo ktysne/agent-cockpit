@@ -95,6 +95,16 @@
       "visible": true
     },
     {
+      "key": "settings.manual",
+      "bounds": {
+        "x": 448,
+        "y": 2203,
+        "width": 90,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
       "key": "settings.close",
       "bounds": {
         "x": 1131,
