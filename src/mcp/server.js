@@ -1,7 +1,7 @@
 const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { ensureServerRunning, readServerInfo } = require('../hooks/event');
-const { parsePullRequestUrl } = require('../server/pull-request-utils');
+const { parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
 
 const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
@@ -14,6 +14,13 @@ const PLAN_ERROR_MESSAGES = new Map([
   [404, '判断事項が見つからないか、解決済みです'],
 ]);
 const PR_ERROR_MESSAGES = new Map([[400, 'PR の URL が正しくありません']]);
+const REVIEW_SKIP_ERROR_MESSAGES = new Map([
+  [400, 'owner、repo、PR 番号、head SHA、理由を確認してください'],
+  [404, 'このセッションで登録した PR が見つかりません'],
+  [409, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください'],
+  [502, 'GitHub から PR の状態を確認できませんでした'],
+]);
+const COMMIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 const TOOL_DEFINITIONS = [
   {
@@ -100,6 +107,22 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: { url: { type: 'string', maxLength: 2000 } },
       required: ['url'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cockpit_skip_review',
+    description: '理由を添えて、登録済み PR の指定した head をクロスレビュー不要として記録します。head が変わると記録は無効になります。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,100}$' },
+        repo: { type: 'string', pattern: '^[A-Za-z0-9._-]{1,100}$' },
+        number: { type: 'integer', minimum: 1 },
+        headRefOid: { type: 'string', pattern: '^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$' },
+        reason: { type: 'string', minLength: 1, maxLength: 2000 },
+      },
+      required: ['owner', 'repo', 'number', 'headRefOid', 'reason'],
       additionalProperties: false,
     },
   },
@@ -292,6 +315,67 @@ async function postPullRequest(args, options = {}) {
   return null;
 }
 
+async function postCrossReviewSkip(args, options = {}) {
+  if (!validRepositoryPart(args.owner) || !validRepositoryPart(args.repo) || !Number.isSafeInteger(args.number) || args.number < 1 ||
+    !COMMIT_SHA_PATTERN.test(args.headRefOid || '') || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
+    return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
+  }
+  const homeDir = options.homeDir || cockpitHomeFromOptions(options);
+  const environment = options.environment || process.env;
+  const fetchImpl = options.fetchImpl || fetch;
+  const ensure = options.ensureServerRunning || ensureServerRunning;
+  const readInfo = options.readServerInfo || readServerInfo;
+  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string' ? environment.CLAUDE_CODE_SESSION_ID : '';
+  const routeSessionId = /^[A-Za-z0-9-]{1,128}$/.test(sessionId) ? sessionId : 'pending';
+  const infoOptions = { homeDir, fetchImpl, environment, deadline, startServer: options.startServer };
+  let info;
+  try {
+    info = await ensure(infoOptions);
+  } catch {
+    return null;
+  }
+  const body = {
+    kind: 'skip_review',
+    owner: args.owner,
+    repo: args.repo,
+    number: args.number,
+    headRefOid: args.headRefOid,
+    reason: args.reason,
+    ppid: options.ppid === undefined ? process.ppid : options.ppid,
+    claudeCodeSessionId: sessionId || null,
+  };
+  for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt += 1) {
+    if (!info) return null;
+    try {
+      const response = await fetchWithDeadline(
+        fetchImpl,
+        `http://127.0.0.1:${info.port}/api/sessions/${encodeURIComponent(routeSessionId)}/prs`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-cockpit-secret': info.secret },
+          body: JSON.stringify(body),
+        },
+        deadline,
+      );
+      if (response.ok) return await response.json();
+      if (response.status === 401 && attempt === 0) {
+        info = await readInfo(homeDir);
+        continue;
+      }
+      return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(response.status) || 'クロスレビュー不要を記録できませんでした' };
+    } catch {
+      if (attempt > 0) return null;
+      try {
+        info = await ensure(infoOptions);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
@@ -301,6 +385,12 @@ async function callTool(name, args, options = {}) {
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
+  }
+  if (name === 'cockpit_skip_review') {
+    const saved = await postCrossReviewSkip(args, options);
+    if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
+    if (saved.errorMessage) return toolResult(saved.errorMessage, true);
+    return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
@@ -382,10 +472,12 @@ module.exports = {
   UNREACHABLE_MESSAGE,
   TOOL_DEFINITIONS,
   PR_ERROR_MESSAGES,
+  REVIEW_SKIP_ERROR_MESSAGES,
   shortSavedList,
   planArguments,
   postPlan,
   postPullRequest,
+  postCrossReviewSkip,
   callTool,
   handleRequest,
   startMcpServer,

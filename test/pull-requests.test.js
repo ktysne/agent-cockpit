@@ -455,6 +455,82 @@ test('merge commit の親コミットが差分に残らなければ積み直し�
   assert.equal(group.trees[0].blocker, null);
 });
 
+test('マージ可能件数は選択した条件に従い、レビュー不要の記録は同じ head だけで有効にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  const { state, github, tracker } = await trackerFixture(t, [31], root);
+  const headSha = 'a'.repeat(40);
+  const convergedRoot = await temporaryDirectory(t);
+  await fs.mkdir(path.join(convergedRoot, '.git'));
+  await installCrossReview(convergedRoot);
+  state.registerPullRequest('session-converged', { url: 'https://github.com/example/project/pull/31' }, {
+    cwd: convergedRoot, product: { key: 'project', name: 'project' },
+  });
+  github.openPullRequests = [ghPullRequest(31, 'feat/open', 'main', headSha)];
+  github.openPullRequests[0].statusCheckRollup = [{ state: 'IN_PROGRESS', status: 'IN_PROGRESS' }];
+  github.comparisons.set(headSha, compareResult([headSha]));
+
+  await tracker.refreshRepo('example', 'project');
+  let [group] = tracker.snapshot();
+  assert.equal(group.trees[0].canMerge, true);
+  assert.equal(group.trees[0].mergeConditionMet, false);
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['CI 実行中', 'クロスレビュー未実施']);
+
+  state.patchDisplayPreferences({ mergeableCondition: 'operation' });
+  [group] = tracker.snapshot();
+  assert.equal(group.trees[0].mergeConditionMet, true);
+  assert.deepEqual(group.trees[0].mergeConditionWaits, []);
+  assert.equal(group.mergeableCount, 1);
+
+  state.patchDisplayPreferences({ mergeableCondition: 'ci' });
+  [group] = tracker.snapshot();
+  assert.equal(group.trees[0].mergeConditionMet, false);
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['CI 実行中']);
+  assert.equal(group.mergeableCount, 0);
+
+  github.openPullRequests[0].statusCheckRollup = [{ state: 'SUCCESS', conclusion: 'SUCCESS' }];
+  await tracker.refreshRepo('example', 'project');
+  state.patchDisplayPreferences({ mergeableCondition: 'cross-review' });
+  [group] = tracker.snapshot();
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー未実施']);
+  assert.equal(group.mergeableCount, 0);
+
+  await fs.writeFile(path.join(convergedRoot, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/open': { round: 2, dismissed: [], lastReviewedSha: headSha, lastTriage: { round: 1, sha: headSha, outcome: 'converged' } } },
+  }));
+  await tracker.refreshReviewGroups('example', 'project');
+  [group] = tracker.snapshot();
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー未実施']);
+  assert.equal(group.mergeableCount, 0);
+
+  await fs.writeFile(path.join(convergedRoot, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/open': { round: 2, dismissed: [], lastReviewedSha: headSha, lastTriage: { round: 2, sha: headSha, outcome: 'converged' } } },
+  }));
+  await tracker.refreshReviewGroups('example', 'project');
+  [group] = tracker.snapshot();
+  assert.deepEqual(group.trees[0].mergeConditionWaits, []);
+  assert.equal(group.mergeableCount, 1);
+
+  state.setCrossReviewSkip({
+    owner: 'example', repo: 'project', number: 31, headRefOid: headSha,
+    reason: '変更が文言だけのため', recordedAt: new Date(1_790_000_000_000).toISOString(),
+  });
+  await tracker.refreshReviewGroups('example', 'project');
+  [group] = tracker.snapshot();
+  assert.deepEqual(group.trees[0].crossReview, { notRequired: true, source: 'recorded', reason: '変更が文言だけのため' });
+  assert.equal(group.mergeableCount, 1);
+
+  const nextHead = 'b'.repeat(40);
+  github.openPullRequests[0] = ghPullRequest(31, 'feat/open', 'main', nextHead);
+  github.comparisons.set(nextHead, compareResult([nextHead]));
+  await tracker.refreshRepo('example', 'project');
+  [group] = tracker.snapshot();
+  assert.equal(state.crossReviewSkip('example', 'project', 31), null);
+  assert.notDeepEqual(group.trees[0].crossReview, { notRequired: true, source: 'recorded', reason: '変更が文言だけのため' });
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー未実施']);
+});
+
 test('閉じられた親のコミットは compare に残っていても積み直し待ちにしない', async (t) => {
   const { github, tracker } = await trackerFixture(t, [31, 30]);
   const childSha = 'b'.repeat(40);
@@ -574,6 +650,7 @@ test('gh が失敗しても PR の取得理由を返し、登録状態を維持�
 
 test('マージできる PR の件数は、登録したセッションがありマージボタンが出る PR だけを数える', () => {
   const state = new DashboardState();
+  state.patchDisplayPreferences({ mergeableCondition: 'operation' });
   const tracker = new PullRequestTracker({ state });
   const pullRequest = (number, mergeSessionId, children = []) => ({
     number, title: `PR ${number}`, url: `https://github.com/example/project/pull/${number}`,
@@ -841,14 +918,18 @@ test('lastTriage が無い旧形式では triage を null にする', async (t) 
   assert.equal(value.triage, null);
 });
 
-test('tools/cross-review.js が無い worktree は状態ファイルがあっても undefined を返す', async (t) => {
+test('tools/cross-review.js が無い worktree はレビュー不要として扱う', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
   await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
     branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
   }));
-  assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), undefined);
-  assert.equal(await readCrossReviewState({ number: 55, cwd: path.join(root, 'missing') }, { headRefName: 'feat/pr' }), undefined);
+  assert.deepEqual(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), {
+    notRequired: true, source: 'tool-absent',
+  });
+  assert.deepEqual(await readCrossReviewState({ number: 55, cwd: path.join(root, 'missing') }, { headRefName: 'feat/pr' }), {
+    notRequired: true, source: 'tool-absent',
+  });
 });
 
 test('tools/cross-review.js はあるが状態ファイルがまだ無い worktree は null を返す', async (t) => {
@@ -932,7 +1013,7 @@ test('クロスレビュー状態は開いている PR のスタックに付き�
   assert.equal(Object.hasOwn(group, 'reviews'), false);
 });
 
-test('tools/cross-review.js が無い worktree の PR には crossReview キーを付けない', async (t) => {
+test('tools/cross-review.js が無い worktree の PR はレビュー不要の状態を付ける', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
   const headSha = 'a'.repeat(40);
@@ -943,7 +1024,8 @@ test('tools/cross-review.js が無い worktree の PR には crossReview キー�
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
-  assert.equal(Object.hasOwn(group.trees[0], 'crossReview'), false);
+  assert.deepEqual(group.trees[0].crossReview, { notRequired: true, source: 'tool-absent' });
+  assert.equal(group.mergeableCount, 1);
 });
 
 for (const [higher, lower] of [['valid', 'missing'], ['valid', 'null'], ['null', 'missing']]) {

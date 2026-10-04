@@ -507,6 +507,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     pullRequestMergeInFlight: new Set(),
     pullRequestMergeMessages: new Map(),
     queuedPullRequestMerges: new Map(),
+    pullRequestMergeConditionWaits: (pullRequest) => pullRequest.ci === 'pending' ? ['CI 実行中'] : [],
     badge: (label, tone = '') => fakeElement('span', tone, label),
     appendPullRequestBadges() {},
   });
@@ -514,12 +515,12 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   const webTarget = fakeElement('div');
   webContext.renderPullRequest(webTarget, {}, {
     number: 1, title: 'キュー中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
-    mergeSessionId: 'session-1', canMerge: true, mergeIntent: { at: '12:00' }, blocker: 'CI 実行中', children: [],
+    mergeSessionId: 'session-1', canMerge: true, mergeIntent: { at: '12:00' }, blocker: 'CI 実行中', ci: 'pending', children: [],
   });
   const webText = webTarget.textContent;
   assert.equal((webText.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
   assert.doesNotMatch(webText, /GitHub のマージキューに追加済みです/);
-  assert.match(webText, /マージできない理由: CI 実行中/);
+  assert.match(webText, /待ち: CI 実行中/);
 
   webContext.queuedPullRequestMerges.set('repo#1', { headRefOid: 'abc' });
   const queuedTarget = fakeElement('div');
@@ -545,6 +546,8 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   const mockContext = pageContext(mock, {
     prKey: () => 'repo#1',
     mergeBlocker: () => 'GitHub のマージキュー',
+    mergeOperationBlocker: () => null,
+    mergeConditionWaits: () => [],
     stackPos: () => ({ total: 1, depth: 1 }),
     effective: () => ({ base: 'main' }),
     ui: { reserved: {}, confirm: null },
@@ -932,6 +935,7 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
     pullRequestMergeOptionsFor: () => ({ method: 'merge', deleteBranch: false }),
     pullRequestMergeInFlight: new Set(['merge-key']),
     crossReviewState: () => ({ warn: null, note: null }),
+    pullRequestMergeConditionWaits: () => [],
     shortShaElement: () => fakeElement('code', '', 'abcdef0'),
     element: fakeElement,
     document: { createTextNode: (text) => fakeElement('#text', '', text) },

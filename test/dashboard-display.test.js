@@ -341,6 +341,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 5,
     hideFinished: true,
+    mergeableCondition: 'cross-review',
   });
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
@@ -926,12 +927,14 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
   const hideFinishedInput = { checked: false };
+  const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
   const context = pageContext(web, {
     document: { activeElement: longWaitMinutesInput },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     hideFinishedInput,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: false },
+    mergeableConditionInputs,
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: false, mergeableCondition: 'ci' },
   });
   vm.runInContext(render, context);
   context.renderDisplaySettings();
@@ -939,4 +942,5 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
   assert.equal(hideFinishedInput.checked, false);
+  assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
 });

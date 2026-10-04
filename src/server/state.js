@@ -13,6 +13,7 @@ const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_DISPLAY = Object.freeze({
   mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
   longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES, hideFinished: true,
+  mergeableCondition: 'cross-review',
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
@@ -21,6 +22,7 @@ const MAX_AWAY_PERIODS = 50;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
 const PULL_REQUEST_MERGE_METHODS = new Set(['merge', 'squash', 'rebase']);
+const MERGEABLE_CONDITIONS = new Set(['operation', 'ci', 'cross-review']);
 const DISPLAY_FILTER_KEYS = new Set(['permission', 'blocking', 'provisional', 'agents', 'prs']);
 
 function validProduct(value) {
@@ -48,6 +50,7 @@ function cloneDisplay(display) {
     longWaitMinutes: display.longWaitMinutes,
     awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
     hideFinished: display.hideFinished,
+    mergeableCondition: display.mergeableCondition,
   };
 }
 
@@ -58,6 +61,7 @@ function defaultDisplay() {
     longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
     awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
     hideFinished: DEFAULT_DISPLAY.hideFinished,
+    mergeableCondition: DEFAULT_DISPLAY.mergeableCondition,
   };
 }
 
@@ -96,7 +100,7 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed']) {
@@ -122,6 +126,7 @@ function normalizeDisplay(value) {
     longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
     hideFinished: typeof value.hideFinished === 'boolean' ? value.hideFinished : DEFAULT_DISPLAY.hideFinished,
+    mergeableCondition: MERGEABLE_CONDITIONS.has(value.mergeableCondition) ? value.mergeableCondition : DEFAULT_DISPLAY.mergeableCondition,
   };
 }
 
@@ -151,6 +156,25 @@ function pullRequestRegistrationKey(record) {
 
 function relatedPullRequestRecordKey(owner, repo, number) {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+}
+
+function validCrossReviewSkip(record) {
+  return isRecord(record) && validRepositoryPart(record.owner) && validRepositoryPart(record.repo) &&
+    Number.isSafeInteger(record.number) && record.number > 0 &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.headRefOid || '') &&
+    typeof record.reason === 'string' && record.reason.trim().length > 0 && record.reason.length <= 2000 &&
+    validTimestamp(record.recordedAt);
+}
+
+function normalizeCrossReviewSkip(record) {
+  return {
+    owner: record.owner,
+    repo: record.repo,
+    number: record.number,
+    headRefOid: record.headRefOid.toLowerCase(),
+    reason: record.reason,
+    recordedAt: record.recordedAt,
+  };
 }
 
 function pullRequestRepositoryKey(owner, repo) {
@@ -364,6 +388,7 @@ function normalizeStore(value) {
   const lastPullRequestMethods = value.lastPullRequestMethods === undefined ? {} : value.lastPullRequestMethods;
   const seenAtByProduct = value.seenAtByProduct === undefined ? {} : value.seenAtByProduct;
   const ciFailures = value.ciFailures === undefined ? [] : value.ciFailures;
+  const crossReviewSkips = value.crossReviewSkips === undefined ? [] : value.crossReviewSkips;
   if (!Array.isArray(prs) || !prs.every(validPullRequestRecord) ||
     !Array.isArray(relatedPrs) || !relatedPrs.every(validRelatedPullRequestRecord) ||
     !Array.isArray(retargetedPrs) || !retargetedPrs.every(validPullRequestRetarget) ||
@@ -379,7 +404,8 @@ function normalizeStore(value) {
     )) ||
     !Array.isArray(ciFailures) || !ciFailures.every((record) => isRecord(record) &&
       validRepositoryPart(record.owner) && validRepositoryPart(record.repo) && Number.isSafeInteger(record.number) && record.number > 0 &&
-      validProduct(record.product) && validTimestamp(record.at))) {
+      validProduct(record.product) && validTimestamp(record.at)) ||
+    !Array.isArray(crossReviewSkips) || !crossReviewSkips.every(validCrossReviewSkip)) {
     throw new Error('Invalid pull request records');
   }
   return {
@@ -404,6 +430,7 @@ function normalizeStore(value) {
     lastPullRequestMethods: new Map(Object.entries(lastPullRequestMethods)),
     seenAtByProduct: new Map(Object.entries(seenAtByProduct)),
     ciFailures: ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
+    crossReviewSkips: crossReviewSkips.map(normalizeCrossReviewSkip),
   };
 }
 
@@ -1073,6 +1100,7 @@ class DashboardState {
     this.lastPullRequestMethods = new Map();
     this.seenAtByProduct = new Map();
     this.ciFailures = [];
+    this.crossReviewSkips = new Map();
     this.closedAgents = new Map();
     this.display = null;
     this.storeWriteTimer = null;
@@ -1182,12 +1210,17 @@ class DashboardState {
       relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
     ]));
     this.lastPullRequestMethods = store.lastPullRequestMethods;
+    this.crossReviewSkips = new Map(store.crossReviewSkips.map((record) => [
+      relatedPullRequestRecordKey(record.owner, record.repo, record.number), record,
+    ]));
     this.pruneExpiredStoreRecords(now);
   }
 
   pruneExpiredStoreRecords(now) {
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
+    let relatedPullRequestsChanged = false;
+    let crossReviewSkipsChanged = false;
     // セッションファイルを読めない環境では同期が来ないので、猶予の後はフックで届いたセッションだけで生死を判定する。
     const sessionCleanupDeferred = this.restoreSessionCleanupPending && now - this.restoredAt < RESTORE_SESSION_CLEANUP_GRACE_MS;
     if (!sessionCleanupDeferred) {
@@ -1207,7 +1240,17 @@ class DashboardState {
     for (const [key, record] of this.relatedPullRequests) {
       if (!Number.isFinite(Date.parse(record.addedAt)) || now - Date.parse(record.addedAt) > STORE_RETENTION_MS) {
         this.relatedPullRequests.delete(key);
+        relatedPullRequestsChanged = true;
       }
+    }
+    const retainedPullRequestKeys = new Set([
+      ...this.pullRequestRegistrations(),
+      ...this.relatedPullRequestRegistrations(),
+    ].map((record) => relatedPullRequestRecordKey(record.owner, record.repo, record.number)));
+    for (const key of this.crossReviewSkips.keys()) {
+      if (retainedPullRequestKeys.has(key)) continue;
+      this.crossReviewSkips.delete(key);
+      crossReviewSkipsChanged = true;
     }
     for (const [key, record] of this.mergedPullRequests) {
       if (!Number.isFinite(Date.parse(record.mergedAt)) || now - Date.parse(record.mergedAt) >= MERGED_PULL_REQUEST_RETENTION_MS) {
@@ -1217,7 +1260,7 @@ class DashboardState {
     }
     const previousFailureCount = this.ciFailures.length;
     this.ciFailures = this.ciFailures.filter((record) => now - Date.parse(record.at) < STORE_RETENTION_MS);
-    if (sessionRecordsChanged || mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
+    if (sessionRecordsChanged || relatedPullRequestsChanged || crossReviewSkipsChanged || mergeHistoryChanged || previousFailureCount !== this.ciFailures.length) {
       this.touch();
       this.requestStoreWrite();
     }
@@ -1306,11 +1349,61 @@ class DashboardState {
       lastPullRequestMethods: Object.fromEntries(this.lastPullRequestMethods),
       seenAtByProduct: Object.fromEntries(this.seenAtByProduct),
       ciFailures: this.ciFailures.map((record) => ({ ...record, product: cloneProduct(record.product) })),
+      crossReviewSkips: [...this.crossReviewSkips.values()].map(normalizeCrossReviewSkip),
     };
   }
 
   pullRequestRegistrations() {
     return [...this.pullRequests.values()].flatMap((records) => [...records.values()].map(normalizePullRequestRecord));
+  }
+
+  pullRequestRegistrationForSession(sessionId, owner, repo, number) {
+    const record = this.pullRequests.get(sessionId)?.get(pullRequestRecordKey(owner, repo, number));
+    return record ? normalizePullRequestRecord(record) : null;
+  }
+
+  crossReviewSkip(owner, repo, number) {
+    const record = this.crossReviewSkips.get(relatedPullRequestRecordKey(owner, repo, number));
+    return record ? { ...record } : null;
+  }
+
+  setCrossReviewSkip(record) {
+    if (!validCrossReviewSkip(record)) return false;
+    const next = normalizeCrossReviewSkip(record);
+    const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
+    const current = this.crossReviewSkips.get(key);
+    if (current && stableStringify(current) === stableStringify(next)) return { ...current };
+    this.crossReviewSkips.set(key, next);
+    this.touch();
+    this.requestStoreWrite();
+    return { ...next };
+  }
+
+  clearCrossReviewSkip(owner, repo, number, expectedHeadRefOid) {
+    const key = relatedPullRequestRecordKey(owner, repo, number);
+    const current = this.crossReviewSkips.get(key);
+    if (!current || (expectedHeadRefOid && current.headRefOid !== expectedHeadRefOid.toLowerCase())) return false;
+    this.crossReviewSkips.delete(key);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  invalidateCrossReviewSkips(owner, repo, pullRequests) {
+    const currentHeads = new Map(pullRequests.map((pullRequest) => [pullRequest.number, String(pullRequest.headRefOid || '').toLowerCase()]));
+    let invalidated = 0;
+    for (const [key, record] of this.crossReviewSkips) {
+      if (record.owner.toLowerCase() !== owner.toLowerCase() || record.repo.toLowerCase() !== repo.toLowerCase()) continue;
+      const headRefOid = currentHeads.get(record.number);
+      if (!headRefOid || headRefOid === record.headRefOid) continue;
+      this.crossReviewSkips.delete(key);
+      invalidated += 1;
+    }
+    if (invalidated) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+    return invalidated;
   }
 
   knownCwds() {

@@ -13,7 +13,7 @@ const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = requir
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
-const { parsePullRequestUrl, isGithubCreatePullRequestTool } = require('./pull-request-utils');
+const { parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
 
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
@@ -23,6 +23,7 @@ const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 128;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+const COMMIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -201,7 +202,7 @@ function validTasks(value) {
 function validDisplayPatch(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished'].includes(key))) return false;
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition'].includes(key))) return false;
   if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
   for (const key of ['order', 'pinned', 'collapsed']) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
@@ -217,6 +218,7 @@ function validDisplayPatch(value) {
   if (Object.hasOwn(value, 'longWaitMinutes') && (!Number.isInteger(value.longWaitMinutes) || value.longWaitMinutes < 1 || value.longWaitMinutes > 120)) return false;
   if (Object.hasOwn(value, 'awayAnswerWaitMinutes') && (!Number.isInteger(value.awayAnswerWaitMinutes) || value.awayAnswerWaitMinutes < 1 || value.awayAnswerWaitMinutes > 30)) return false;
   if (Object.hasOwn(value, 'hideFinished') && typeof value.hideFinished !== 'boolean') return false;
+  if (Object.hasOwn(value, 'mergeableCondition') && !['operation', 'ci', 'cross-review'].includes(value.mergeableCondition)) return false;
   return true;
 }
 
@@ -483,6 +485,75 @@ function createRequestHandler(options) {
       jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/pull-requests/review-skip') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+        Object.keys(body).sort().join(',') !== 'action,headRefOid,registration_key' ||
+        !['set', 'clear'].includes(body.action) || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
+        !COMMIT_SHA_PATTERN.test(body.headRefOid || '')) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const registration = state.pullRequestRegistrationByKey(body.registration_key);
+      if (!registration) {
+        jsonResponse(response, 404, { error: 'Registered pull request not found' });
+        return;
+      }
+      if (!pullRequestTracker?.refreshRepoFresh || !pullRequestTracker.mergeCandidate) {
+        jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
+        return;
+      }
+      try {
+        const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo);
+        const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
+        if (!candidate?.pullRequest) {
+          jsonResponse(response, 409, { error: 'Pull request is no longer open' });
+          return;
+        }
+        if (candidate.pullRequest.headRefOid.toLowerCase() !== body.headRefOid.toLowerCase()) {
+          jsonResponse(response, 409, { error: 'Pull request head has changed' });
+          return;
+        }
+        if (body.action === 'set') {
+          const saved = state.setCrossReviewSkip({
+            owner: registration.owner,
+            repo: registration.repo,
+            number: registration.number,
+            headRefOid: candidate.pullRequest.headRefOid,
+            reason: '開発者がダッシュボードでこの head のレビューを不要と判断した',
+            recordedAt: new Date().toISOString(),
+          });
+          if (!saved) {
+            jsonResponse(response, 400, { error: 'Invalid review skip' });
+            return;
+          }
+        } else if (!state.clearCrossReviewSkip(registration.owner, registration.repo, registration.number, candidate.pullRequest.headRefOid)) {
+          jsonResponse(response, 409, { error: 'Review skip is no longer active' });
+          return;
+        }
+        await state.waitForPersistence();
+        await pullRequestTracker.refreshReviewGroups(registration.owner, registration.repo);
+        jsonResponse(response, 200, { action: body.action, number: registration.number });
+      } catch {
+        jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
+      }
+      return;
+    }
+
     const pullRequestMergePath = requestUrl.pathname.match(/^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/);
     if (request.method === 'POST' && pullRequestMergePath) {
       if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
@@ -1013,8 +1084,14 @@ function createRequestHandler(options) {
         jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
         return;
       }
-      const pullRequest = body?.kind === 'add_pr' ? parsePullRequestUrl(body.url) : null;
-      if (!pullRequest || !Number.isInteger(body.ppid) || body.ppid < 1 ||
+      const isAddPullRequest = body?.kind === 'add_pr';
+      const isSkipReview = body?.kind === 'skip_review';
+      const pullRequest = isAddPullRequest ? parsePullRequestUrl(body.url) : null;
+      const skipReviewKeys = ['claudeCodeSessionId', 'headRefOid', 'kind', 'number', 'owner', 'ppid', 'reason', 'repo'];
+      const validSkipReview = isSkipReview && Object.keys(body).sort().join(',') === skipReviewKeys.join(',') &&
+        validRepositoryPart(body.owner) && validRepositoryPart(body.repo) && Number.isSafeInteger(body.number) && body.number > 0 &&
+        COMMIT_SHA_PATTERN.test(body.headRefOid || '') && validText(body.reason, 2000);
+      if ((!pullRequest && !validSkipReview) || !Number.isInteger(body.ppid) || body.ppid < 1 ||
         (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
         (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
         jsonResponse(response, 400, { error: 'Invalid request' });
@@ -1025,6 +1102,47 @@ function createRequestHandler(options) {
       const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
       if (!validSessionId(sessionId) || (!validSessionId(mappedSessionId) && routeSessionId !== 'pending' && fallbackSessionId !== routeSessionId)) {
         jsonResponse(response, 400, { error: 'Session id unavailable' });
+        return;
+      }
+      if (isSkipReview) {
+        const registration = state.pullRequestRegistrationForSession(sessionId, body.owner, body.repo, body.number);
+        if (!registration) {
+          jsonResponse(response, 404, { error: 'PR is not registered by this session' });
+          return;
+        }
+        if (!pullRequestTracker?.refreshRepoFresh || !pullRequestTracker.mergeCandidate) {
+          jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
+          return;
+        }
+        try {
+          const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo);
+          const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
+          if (!candidate?.pullRequest) {
+            jsonResponse(response, 409, { error: 'Pull request is no longer open' });
+            return;
+          }
+          if (candidate.pullRequest.headRefOid.toLowerCase() !== body.headRefOid.toLowerCase()) {
+            jsonResponse(response, 409, { error: 'Pull request head has changed' });
+            return;
+          }
+          const saved = state.setCrossReviewSkip({
+            owner: registration.owner,
+            repo: registration.repo,
+            number: registration.number,
+            headRefOid: candidate.pullRequest.headRefOid,
+            reason: body.reason,
+            recordedAt: new Date().toISOString(),
+          });
+          if (!saved) {
+            jsonResponse(response, 400, { error: 'Invalid review skip' });
+            return;
+          }
+          await state.waitForPersistence();
+          await pullRequestTracker.refreshReviewGroups(registration.owner, registration.repo);
+          jsonResponse(response, 200, { ...saved });
+        } catch {
+          jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
+        }
         return;
       }
       const product = productFromCwd(body.cwd);

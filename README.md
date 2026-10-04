@@ -10,7 +10,7 @@ agent-cockpit は単独で使えます。次の道具があれば、表示が増
 | 道具 | あるときに増える表示 | 無いとき |
 |---|---|---|
 | [claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge)(`~/.claude/tools/codex-agent.sh`) | 経路の設定、サブエージェントの行の経路の札と Codex のモデル | 経路の設定と札を出さず、`route.js` は何も差し込まない |
-| [ai-cross-review](https://github.com/ktysne/ai-cross-review)(worktree の `tools/cross-review.js`) | PR のカードのクロスレビューの行と、マージの確認欄の注意 | その worktree の PR にはレビューの行も注意も出さない |
+| [ai-cross-review](https://github.com/ktysne/ai-cross-review)(worktree の `tools/cross-review.js`) | PR のカードのクロスレビュー状態 | 道具の無い PR は「レビュー不要」として表示する |
 
 ## 起動
 
@@ -216,7 +216,10 @@ claude mcp add --scope user agent-cockpit -- $nodePath $serverPath
 登録後、実際のセッションで MCP 環境の `CLAUDE_CODE_SESSION_ID` とフックの `session_id` が同じ値であることを確かめてください。
 MCP ツール `cockpit_add_pr` に PR の URL を渡すと、そのセッションへ登録して読み取り専用のスタック表示に追加できます。
 
-記録済みのスタック最下段 PR は、画面で方式とリモートブランチ削除の有無を確認してマージできます。
+表示設定の「『マージできます』と出す条件」では、「マージの操作ができる」「CI も通っている(CI が無ければ問わない)」「クロスレビューも済んでいる(不要としたものを含む)」から選べます。既定はクロスレビューまで済んでいることです。条件を満たした PR は緑の「マージできます」、操作はできるが条件が残る PR は灰色の「マージ操作は可能」と未達条件を表示します。未達でも手動マージはでき、確認欄の先頭に未達条件を示します。
+
+記録済みのスタック最下段 PR は、画面で方式とリモートブランチ削除の有無を確認してマージできます。条件の表示にかかわらず、常駐サーバーは画面に出した head SHA を取り直し、同じ SHA のときだけマージします。
+PR の差分が軽微でクロスレビューを省くときは、メインセッションから MCP ツール `cockpit_skip_review` に owner、repo、PR 番号、現在の head SHA、理由を渡します。記録はその head に限り、push で head が変わると無効になります。カードの「レビュー不要にする」からも記録でき、取り消せます。使い方は [agent-cockpit スキル](skills/agent-cockpit/SKILL.md) にあります。
 CI 実行中だけが理由で、レビューが承認済みまたは任意の場合は、自動マージを予約できます。
 予約した PR の head が変わると、常駐サーバーが予約を取り消して作成元セッションへ知らせます。
 マージ結果は作成元セッションへ配信し、直上の PR があるスカッシュまたはリベースでは積み直しを依頼します。

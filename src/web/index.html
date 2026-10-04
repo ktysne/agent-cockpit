@@ -103,6 +103,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .settings-theme-row label { color: var(--text-2); }
 .settings-dialog select { max-width: 100%; padding: 4px 8px; }
 .settings-dialog input[type="number"] { width: 88px; padding: 4px 8px; text-align: right; }
+.settings-mergeable-condition { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; border: 0; }
+.settings-mergeable-condition legend { margin-bottom: 2px; font-size: 13px; font-weight: 600; }
+.settings-mergeable-condition label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.settings-mergeable-condition input { grid-row: span 2; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+.settings-mergeable-condition small { color: var(--text-2); font-size: 12px; }
+.settings-mergeable-condition label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-section-order { margin-top: 14px; }
 .settings-section-order h4 { margin: 0 0 4px; font-size: 13px; }
 .section-order-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -293,7 +299,9 @@ h3.sub .count { font-weight: normal; }
 .pr .branch { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
 .pr .why-not { color: var(--text-2); font-size: 12px; }
 .pr.can-merge { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--ok-soft); }
+.pr.merge-pending { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--surface-2); }
 .merge-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
+.merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .auto-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 .merge-confirm { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 8px; background: var(--surface); font-size: 13px; }
 .merge-confirm.auto { border-color: var(--accent); }
@@ -305,9 +313,12 @@ h3.sub .count { font-weight: normal; }
 .merge-confirm .methods label, .merge-confirm .opt { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .merge-confirm .effects { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .merge-confirm .effects li.warn { color: var(--warn); }
+.merge-condition-warning { margin: 0; color: var(--warn); font-size: 12px; font-weight: 600; }
 .merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .merge-confirm .merge-go { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
 .merge-confirm.auto .merge-go { background: var(--accent); color: var(--on-accent); }
+.merge-confirm.pending { border-color: var(--border); }
+.merge-confirm .merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merge-confirm .ghost { min-height: 40px; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
 .merge-confirm button:focus-visible, .merge-confirm input:focus-visible, .merge-btn:focus-visible, .auto-btn:focus-visible, .conflict-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .merge-confirm button:disabled { cursor: wait; opacity: .65; }
@@ -391,6 +402,13 @@ h3.sub .count { font-weight: normal; }
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <fieldset class="settings-mergeable-condition" aria-describedby="settings-mergeable-condition-note">
+      <legend>「マージできます」と出す条件</legend>
+      <label><input type="radio" name="mergeableCondition" value="operation"><span>マージの操作ができる</span><small>スタックの一番下で、ドラフト、積み直し、コンフリクト、GitHub のレビュー待ちがない。</small></label>
+      <label><input type="radio" name="mergeableCondition" value="ci"><span>CI も通っている(CI が無ければ問わない)</span><small>マージ操作に加えて、CI が成功している。</small></label>
+      <label><input type="radio" name="mergeableCondition" value="cross-review"><span>クロスレビューも済んでいる(不要としたものを含む)</span><small>CI の成功と、この head のレビュー収束またはレビュー不要の記録がある。</small></label>
+    </fieldset>
+    <p class="meta" id="settings-mergeable-condition-note">条件が残っていてもマージ操作が可能なら、確認欄に未達の条件を表示する。</p>
     <div class="settings-theme-row">
       <label for="settings-hide-finished">終わったものを表示しない</label>
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
@@ -445,6 +463,7 @@ const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const sectionOrderList = document.getElementById('settings-section-order');
 const settingsButton = document.getElementById('settings-button');
 const awayToggle = document.getElementById('away-toggle');
@@ -512,6 +531,7 @@ function queuedPullRequestMerge(pullRequest) {
   return queued;
 }
 const pullRequestMergeInFlight = new Set();
+const pullRequestReviewSkipInFlight = new Set();
 const pullRequestConflictConfirmations = new Set();
 const pullRequestConflictMessages = new Map();
 const pullRequestConflictInFlight = new Set();
@@ -588,12 +608,14 @@ function readDisplayPreferences() {
       longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
       awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
       hideFinished: value.hideFinished !== false,
+      mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value.mergeableCondition) ? value.mergeableCondition : 'cross-review',
     };
   } catch {
     return {
       mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: [...DEFAULT_SECTION_ORDER],
       longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES,
       hideFinished: true,
+      mergeableCondition: 'cross-review',
     };
   }
 }
@@ -610,6 +632,7 @@ function normalizeDisplayPreferences(value) {
     longWaitMinutes: normalizeDisplayMinutes(value?.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value?.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
     hideFinished: value?.hideFinished !== false,
+    mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
   };
 }
 
@@ -632,6 +655,9 @@ function renderDisplaySettings() {
     input.value = String(displayPreferences[key]);
   }
   if (document.activeElement !== hideFinishedInput) hideFinishedInput.checked = displayPreferences.hideFinished;
+  if (!mergeableConditionInputs.includes(document.activeElement)) {
+    for (const input of mergeableConditionInputs) input.checked = input.value === displayPreferences.mergeableCondition;
+  }
 }
 
 function setDisplaySettingInput(input, value) {
@@ -891,6 +917,13 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
+for (const input of mergeableConditionInputs) {
+  input.addEventListener('change', () => {
+    if (!input.checked || !['operation', 'ci', 'cross-review'].includes(input.value)) return;
+    void saveDisplayPreferences({ mergeableCondition: input.value });
+    if (lastState) render(lastState);
+  });
+}
 
 settingsButton.addEventListener('click', () => {
   settingsDialog.showModal();
@@ -1413,7 +1446,8 @@ function pullRequestKeys(groups, includes) {
 }
 
 function pullRequestMergeableCount(groups) {
-  return pullRequestKeys(groups, (pullRequest) => pullRequest.canMerge === true && Boolean(pullRequest.mergeSessionId)).size;
+  return pullRequestKeys(groups, (pullRequest) => pullRequest.canMerge === true &&
+    pullRequestMergeConditionWaits(pullRequest).length === 0 && Boolean(pullRequest.mergeSessionId)).size;
 }
 
 function decisionElapsedLabel(decision) {
@@ -1455,6 +1489,26 @@ function appendPullRequestBadges(target, pullRequest) {
 const MERGE_METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 const MERGED_VISIBLE_COUNT = 5;
 
+function pullRequestCrossReviewSettled(pullRequest) {
+  const review = pullRequest.crossReview;
+  if (review?.notRequired === true) return true;
+  const triage = review?.triage;
+  const head = pullRequest.headRefOid;
+  return Number.isSafeInteger(review?.round) && triage?.round === review.round && triage.outcome === 'converged' &&
+    typeof head === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(head) &&
+    typeof triage.sha === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(triage.sha) &&
+    triage.sha.toLowerCase() === head.toLowerCase();
+}
+
+function pullRequestMergeConditionWaits(pullRequest) {
+  const condition = typeof displayPreferences === 'undefined' ? 'cross-review' : displayPreferences.mergeableCondition || 'cross-review';
+  if (condition === 'operation') return [];
+  const waiting = [];
+  if (pullRequest.ci !== 'pass') waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
+  if (condition === 'cross-review' && !pullRequestCrossReviewSettled(pullRequest)) waiting.push('クロスレビュー未実施');
+  return waiting;
+}
+
 function shortShaElement(value) {
   const sha = typeof value === 'string' && value ? value : '不明な SHA';
   const code = element('code', '', sha.slice(0, 7));
@@ -1475,7 +1529,8 @@ function isCompleteCommitSha(value) {
 function crossReviewState(pullRequest) {
   const review = pullRequest.crossReview;
   if (review === undefined) return { cls: 'mute', text: '', warn: null };
-  if (!review) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (review === null) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (review.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null, note: review.reason || null };
   const triage = review.triage && review.triage.round <= review.round ? review.triage : null;
   if (triage && review.round > triage.round) return { cls: 'warn', text: `${review.round} 往復目の結論待ち`, warn: `クロスレビューの ${review.round} 往復目の結論がまだ出ていない` };
   if (triage && triage.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${triage.round} 往復目の指摘に対応している途中` };
@@ -1516,6 +1571,14 @@ function crossReviewLine(pullRequest) {
   line.append(document.createTextNode('クロスレビュー '));
   if (!review) {
     line.append(badge(state.text, state.cls));
+    appendCrossReviewSkipControl(line, pullRequest, false);
+    return line;
+  }
+  if (review.notRequired === true) {
+    const stateBadge = badge(state.text, state.cls);
+    if (review.reason) stateBadge.title = review.reason;
+    line.append(stateBadge);
+    if (review.source === 'recorded') appendCrossReviewSkipControl(line, pullRequest, true);
     return line;
   }
   const rounds = element('span', 'rounds');
@@ -1529,7 +1592,18 @@ function crossReviewLine(pullRequest) {
     document.createTextNode(' '),
     badge(state.text, state.cls),
   );
+  appendCrossReviewSkipControl(line, pullRequest, false);
   return line;
+}
+
+function appendCrossReviewSkipControl(target, pullRequest, skipped) {
+  if (!pullRequest.mergeRecordKey || !pullRequest.headRefOid) return;
+  const button = element('button', 'link-btn', skipped ? 'レビュー不要を取り消す' : 'レビュー不要にする');
+  button.type = 'button';
+  button.dataset.reviewSkip = skipped ? 'clear' : 'set';
+  button.dataset.mergeKey = pullRequest.mergeRecordKey;
+  button.disabled = pullRequestReviewSkipInFlight.has(pullRequest.mergeRecordKey);
+  target.append(button);
 }
 
 function pullRequestMergeKey(pullRequest) {
@@ -1552,12 +1626,19 @@ function pullRequestMergeOptionsFor(group, pullRequest) {
 function appendPullRequestMergeConfirmation(target, group, pullRequest, automatic) {
   const key = pullRequestMergeKey(pullRequest);
   const options = pullRequestMergeOptionsFor(group, pullRequest);
-  const panel = element('section', `merge-confirm ${automatic ? 'auto' : ''}`.trim());
+  const waiting = pullRequestMergeConditionWaits(pullRequest);
+  const conditionPending = !automatic && waiting.length > 0;
+  const panel = element('section', `merge-confirm ${automatic ? 'auto' : ''} ${conditionPending ? 'pending' : ''}`.trim());
   panel.dataset.mergeConfirm = key;
   panel.setAttribute('aria-label', `PR #${pullRequest.number} のマージ確認`);
   const heading = element('div');
   heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', group.defaultBranch || ''), document.createTextNode(` へ${automatic ? '、CI が通ったら自動で' : ''}マージする`));
   panel.append(heading);
+  if (waiting.length) {
+    const warning = element('p', 'merge-condition-warning', `選択した条件の未達: ${waiting.join('、')}`);
+    warning.setAttribute('role', 'status');
+    panel.append(warning);
+  }
 
   const methods = element('div', 'methods');
   methods.setAttribute('role', 'radiogroup');
@@ -1618,7 +1699,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest, automati
 
   const row = element('div', 'row');
   const merging = !automatic && pullRequestMergeInFlight.has(key);
-  const go = element('button', 'merge-go', merging ? 'マージ中…' : automatic ? '予約する' : 'マージを実行');
+  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? 'マージ中…' : automatic ? '予約する' : 'マージを実行');
   go.type = 'button';
   go.dataset[automatic ? 'reserveGo' : 'mergeGo'] = key;
   go.dataset.mergeKey = key;
@@ -1729,7 +1810,9 @@ function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
   const queued = queuedPullRequestMerge(pullRequest);
   const mergeIntent = pullRequest.mergeIntent || queued || null;
-  const item = element('div', `pr ${reservation ? 'reserved' : pullRequest.canMerge ? 'can-merge' : ''}`.trim());
+  const waiting = pullRequest.canMerge ? pullRequestMergeConditionWaits(pullRequest) : [];
+  const conditionMet = pullRequest.canMerge === true && waiting.length === 0;
+  const item = element('div', `pr ${reservation ? 'reserved' : conditionMet ? 'can-merge' : pullRequest.canMerge ? 'merge-pending' : ''}`.trim());
   const line = element('div', 'pline');
   if (pullRequest.stackPosition?.total > 1) {
     const position = element('span', 'pos', `${pullRequest.stackPosition.depth}/${pullRequest.stackPosition.total}`);
@@ -1742,7 +1825,8 @@ function appendPullRequestTree(target, group, pullRequest) {
   link.rel = 'noopener noreferrer';
   link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
   line.append(link, element('span', '', pullRequest.title));
-  if (pullRequest.canMerge && !mergeIntent) line.append(badge('マージできます', 'ok'));
+  if (!mergeIntent && conditionMet) line.append(badge('マージできます', 'ok'));
+  else if (!mergeIntent && pullRequest.canMerge) line.append(badge('マージ操作は可能', 'mute'));
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
   const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
   const reserveAllowed = pullRequest.blocker === 'CI 実行中' && ['approved', 'none'].includes(pullRequest.review);
@@ -1763,12 +1847,20 @@ function appendPullRequestTree(target, group, pullRequest) {
       line.append(left);
     }
   } else if (mergeKey && pullRequest.canMerge) {
-    const merge = element('button', 'merge-btn', 'マージする');
+    const merge = element('button', `merge-btn ${conditionMet ? '' : 'outline'}`.trim(), 'マージする');
     merge.type = 'button';
     merge.dataset.openMerge = mergeKey;
     merge.dataset.mergeKey = mergeKey;
     merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
     line.append(merge);
+    if (reserveAllowed) {
+      const reserve = element('button', 'auto-btn', 'CI が通ったらマージ');
+      reserve.type = 'button';
+      reserve.dataset.openReserve = mergeKey;
+      reserve.dataset.mergeKey = mergeKey;
+      reserve.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
+      line.append(reserve);
+    }
   } else if (mergeKey && reserveAllowed) {
     const reserve = element('button', 'auto-btn', 'CI が通ったらマージ');
     reserve.type = 'button';
@@ -1789,7 +1881,8 @@ function appendPullRequestTree(target, group, pullRequest) {
   }
   item.append(badges);
   if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
-  if (pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
+  if (!pullRequest.canMerge && pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
+  else if (waiting.length) item.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
   if (pullRequest.conflict) appendPullRequestConflictControls(line, item, group, pullRequest);
   if (mergeKey && confirmation && !reservation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest, confirmation === 'reserve');
   if (mergeKey && pullRequestMergeMessages.has(mergeKey)) {
@@ -1851,6 +1944,9 @@ function appendPullRequestBlock(target, group, withTag = false) {
   heading.append(element('strong', '', `${group.owner}/${group.repo}`));
   head.append(heading);
   if (withTag) head.append(element('span', 'prod-tag', group.product.name));
+  if (Number.isSafeInteger(group.mergeableCount) && group.mergeableCount > 0) {
+    head.append(element('span', 'chip ok', `マージできる PR (${group.mergeableCount} 件)`));
+  }
   head.append(element('span', 'meta', `GitHub から ${durationAgoLabel(group.fetchedAt || group.checkedAt)}に取得`));
   section.append(head);
   const content = element('div', 'pr-repo-content');
@@ -3418,6 +3514,40 @@ async function runPullRequestMergeAction(button, action) {
   }
 }
 
+async function runCrossReviewSkipAction(button) {
+  const key = button.dataset.mergeKey || '';
+  const target = findPullRequestMergeTarget(key);
+  if (!target || pullRequestReviewSkipInFlight.has(key)) return;
+  const action = button.dataset.reviewSkip;
+  if (!['set', 'clear'].includes(action)) return;
+  const { pullRequest, number } = target;
+  pullRequestReviewSkipInFlight.add(key);
+  button.disabled = true;
+  liveStatus.textContent = action === 'set' ? `PR #${number} のレビュー不要を記録しています。` : `PR #${number} のレビュー不要を取り消しています。`;
+  if (lastState) render(lastState);
+  try {
+    const response = await postUiAction('/api/pull-requests/review-skip', {
+      action,
+      registration_key: key,
+      headRefOid: pullRequest.headRefOid,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      await refresh();
+      liveStatus.textContent = result.error || 'PR の状態が変わりました。表示を確認してください。';
+      return;
+    }
+    await refresh();
+    liveStatus.textContent = action === 'set' ? `PR #${number} をレビュー不要として記録しました。` : `PR #${number} のレビュー不要を取り消しました。`;
+  } catch {
+    showWriteError('レビュー不要の記録を保存できませんでした');
+    liveStatus.textContent = 'レビュー不要の記録を保存できませんでした。';
+  } finally {
+    pullRequestReviewSkipInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
+
 function findPullRequestConflictTarget(key) {
   const find = (group, items) => {
     for (const pullRequest of items || []) {
@@ -3552,6 +3682,10 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.conflictGo) {
     void runPullRequestConflictRequest(button);
+    return;
+  }
+  if (button.dataset.reviewSkip) {
+    void runCrossReviewSkipAction(button);
     return;
   }
   if (button.dataset.mergeCancel) {
