@@ -4,10 +4,18 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { globalGuardPath, isMostlyEnglish, output } = require('../.claude/hooks/japanese-guard');
+const { globalGuardEvents, globalSettingsPath, isMostlyEnglish, output } = require('../.claude/hooks/japanese-guard');
 
 const SCRIPT = path.join(__dirname, '..', '.claude', 'hooks', 'japanese-guard.js');
 const ENGLISH = 'The build finished and all of the tests passed without any failures.';
+
+function settingsWith(hooks) {
+  return JSON.stringify({ hooks });
+}
+
+function hookGroup(command, args) {
+  return [{ hooks: [{ type: 'command', command, args }] }];
+}
 
 test('UserPromptSubmit と PostToolBatch では日本語で書く決まりを差し込む', () => {
   for (const event of ['UserPromptSubmit', 'PostToolBatch']) {
@@ -34,32 +42,58 @@ test('コードブロック、インラインコード、URL、パスは英語�
   assert.equal(isMostlyEnglish(ENGLISH), true);
 });
 
-test('グローバル版があるときはどのイベントでも何も出さない', () => {
-  for (const input of [
-    { hook_event_name: 'UserPromptSubmit' },
-    { hook_event_name: 'SessionStart', source: 'compact' },
-    { hook_event_name: 'Stop', last_assistant_message: ENGLISH },
-  ]) {
-    assert.equal(output(input, { hasGlobalGuard: true }), null);
-  }
+test('グローバル版が登録されたイベントだけ何も出さない', () => {
+  const globalEvents = new Set(['Stop']);
+  assert.equal(output({ hook_event_name: 'Stop', last_assistant_message: ENGLISH }, { globalEvents }), null);
+  assert.match(output({ hook_event_name: 'UserPromptSubmit' }, { globalEvents }).hookSpecificOutput.additionalContext, /日本語で書く/);
 });
 
-test('グローバル版の場所は CLAUDE_CONFIG_DIR を優先する', () => {
-  assert.equal(globalGuardPath({ CLAUDE_CONFIG_DIR: path.join('x', 'home') }), path.join('x', 'home', 'hooks', 'japanese-guard.js'));
-  assert.equal(globalGuardPath({}), path.join(os.homedir(), '.claude', 'hooks', 'japanese-guard.js'));
+test('グローバル版の登録は exec 形式とシェル形式のどちらでも見つける', () => {
+  const events = globalGuardEvents(settingsWith({
+    Stop: hookGroup('D:/Program Files/nodejs/node.exe', ['C:\\Users\\me\\.claude\\hooks\\japanese-guard.js']),
+    UserPromptSubmit: hookGroup('node ~/.claude/hooks/japanese-guard.js'),
+    SessionStart: hookGroup('node', ['/home/me/.claude/hooks/compact-language.js']),
+    PostToolBatch: hookGroup('node', ['/home/me/.claude/hooks/other.js']),
+  }));
+  assert.deepEqual([...events].sort(), ['SessionStart', 'Stop', 'UserPromptSubmit']);
 });
 
-test('スクリプトとして起動すると、グローバル版の有無で出力を切り替える', (t) => {
+test('ユーザー設定が無いか壊れているときは、グローバル版が無いものとして扱う', () => {
+  assert.equal(globalGuardEvents('{').size, 0);
+  assert.equal(globalGuardEvents(settingsWith({ Stop: 'not-an-array' })).size, 0);
+  assert.equal(globalGuardEvents('{}').size, 0);
+});
+
+test('ユーザー設定の場所は CLAUDE_CONFIG_DIR を優先する', () => {
+  assert.equal(globalSettingsPath({ CLAUDE_CONFIG_DIR: path.join('x', 'home') }), path.join('x', 'home', 'settings.json'));
+  assert.equal(globalSettingsPath({}), path.join(os.homedir(), '.claude', 'settings.json'));
+});
+
+test('スクリプトとして起動すると、グローバル版の登録の有無で出力を切り替える', (t) => {
   const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-japanese-guard-'));
   t.after(() => fs.rmSync(claudeHome, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(claudeHome, 'hooks'));
+  fs.writeFileSync(path.join(claudeHome, 'hooks', 'japanese-guard.js'), '');
   const run = () => spawnSync(process.execPath, [SCRIPT], {
     input: JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: ENGLISH }),
     env: { ...process.env, CLAUDE_CONFIG_DIR: claudeHome },
     encoding: 'utf8',
   });
 
-  assert.equal(JSON.parse(run().stdout).decision, 'block');
-  fs.mkdirSync(path.join(claudeHome, 'hooks'));
-  fs.writeFileSync(path.join(claudeHome, 'hooks', 'japanese-guard.js'), '');
-  assert.equal(run().stdout, '');
+  const unregistered = run();
+  if (unregistered.error && unregistered.error.code === 'EPERM') {
+    t.skip('子プロセスを起動できないため未確認');
+    return;
+  }
+  assert.ifError(unregistered.error);
+  assert.equal(unregistered.status, 0);
+  assert.equal(JSON.parse(unregistered.stdout).decision, 'block');
+
+  fs.writeFileSync(path.join(claudeHome, 'settings.json'), settingsWith({
+    Stop: hookGroup('node', [path.join(claudeHome, 'hooks', 'japanese-guard.js')]),
+  }));
+  const registered = run();
+  assert.ifError(registered.error);
+  assert.equal(registered.status, 0);
+  assert.equal(registered.stdout, '');
 });
