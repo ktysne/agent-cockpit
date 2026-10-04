@@ -1441,3 +1441,89 @@ test('SessionStart の compact は直前の状態を保つ', async (t) => {
   assert.equal(statusOf('compact-working'), '作業中');
   assert.equal(statusOf('compact-idle'), '待機中');
 });
+
+function launchBackgroundCodexInMain(state, sessionId, toolUseId, backgroundTaskId, hookAt) {
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'PreToolUse', hookAt,
+    tool_name: 'Bash', tool_use_id: toolUseId, summary: 'npm run review:codex', codexReviewDefinition: 'codex-review',
+  }, { codexAgentDefinition: { model: 'gpt-review', effort: 'low' } });
+  state.addEvent({
+    session_id: sessionId, hook_event_name: 'PostToolUse', hookAt: hookAt + 1,
+    tool_name: 'Bash', tool_use_id: toolUseId, backgroundTaskId,
+  });
+}
+
+test('メインが背景で起動した複数の Codex は、背景タスク ID で出力を読んだ行だけを終了にする', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchBackgroundCodexInMain(state, 'bg-ids', 'bash-a', 'taska', 1);
+  launchBackgroundCodexInMain(state, 'bg-ids', 'bash-b', 'taskb', 3);
+  const gpt = () => state.snapshot().sessions[0].agents.filter((agent) => agent.agent_type === 'codex-review');
+  const states = () => gpt().map((agent) => [agent.active, agent.unconfirmed]);
+
+  state.addEvent({
+    session_id: 'bg-ids', hook_event_name: 'PostToolUse', hookAt: 5,
+    tool_name: 'Read', tool_use_id: 'read-a', backgroundOutputTaskId: 'taska',
+    codexOutput: { runLine: 'codex-agent: run=codex-review-20261004-100000-1' },
+  });
+  assert.equal(gpt().length, 2);
+  assert.ok(gpt().every((item) => item.active));
+
+  state.addEvent({
+    session_id: 'bg-ids', hook_event_name: 'PostToolUse', hookAt: 6,
+    tool_name: 'Read', tool_use_id: 'read-a2', backgroundOutputTaskId: 'taska',
+    codexOutput: { runLine: 'codex-agent: run=codex-review-20261004-100000-1', resultLine: 'codex-agent: result=ok' },
+  });
+  const afterA = states();
+  assert.equal(afterA.filter(([active]) => active === false).length, 1);
+  assert.equal(afterA.filter(([active]) => active === true).length, 1);
+
+  state.addEvent({
+    session_id: 'bg-ids', hook_event_name: 'PostToolUse', hookAt: 7,
+    tool_name: 'Read', tool_use_id: 'read-b', backgroundOutputTaskId: 'taskb',
+    codexOutput: { resultLine: 'codex-agent: result=ok' },
+  });
+  assert.ok(gpt().every((item) => item.active === false && item.unconfirmed === false));
+});
+
+test('Codex を起動した呼び出しの引数に別の背景タスクの出力ファイルがあっても、その行に結び付けない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchBackgroundCodexInMain(state, 'bg-launch', 'bash-a', 'taska', 1);
+  state.addEvent({
+    session_id: 'bg-launch', hook_event_name: 'PreToolUse', hookAt: 3,
+    tool_name: 'Bash', tool_use_id: 'bash-b', summary: 'npm run review:codex', codexReviewDefinition: 'codex-review',
+  }, { codexAgentDefinition: { model: 'gpt-review', effort: 'low' } });
+  const resultOfB = { runLine: 'codex-agent: run=codex-review-20261004-100000-2', resultLine: 'codex-agent: result=ok' };
+  state.addEvent({
+    session_id: 'bg-launch', hook_event_name: 'PostToolUse', hookAt: 4,
+    tool_name: 'Bash', tool_use_id: 'bash-b', backgroundOutputTaskId: 'taska', codexOutput: resultOfB,
+  });
+  state.addEvent({
+    session_id: 'bg-launch', hook_event_name: 'PostToolUse', hookAt: 5,
+    tool_name: 'Bash', tool_use_id: 'refetch-b', codexOutput: resultOfB,
+  });
+  const agents = state.snapshot().sessions[0].agents.filter((agent) => agent.agent_type === 'codex-review');
+  assert.equal(agents.length, 2);
+  assert.equal(agents.filter((agent) => agent.active === true).length, 1);
+});
+
+test('背景タスクの途中の出力に run= の行があれば、行に実行 ID を記録して後の結果行を実行 ID で照合する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchBackgroundCodexInMain(state, 'bg-run', 'bash-a', 'taska', 1);
+  launchBackgroundCodexInMain(state, 'bg-run', 'bash-b', 'taskb', 3);
+  state.addEvent({
+    session_id: 'bg-run', hook_event_name: 'PostToolUse', hookAt: 5,
+    tool_name: 'Read', tool_use_id: 'read-b', backgroundOutputTaskId: 'taskb',
+    codexOutput: { runLine: 'codex-agent: run=codex-review-20261004-100000-2' },
+  });
+  state.addEvent({
+    session_id: 'bg-run', hook_event_name: 'PostToolUse', hookAt: 6,
+    tool_name: 'Bash', tool_use_id: 'later',
+    codexOutput: { runLine: 'codex-agent: run=codex-review-20261004-100000-2', resultLine: 'codex-agent: result=ok' },
+  });
+  const flags = state.snapshot().sessions[0].agents.filter((agent) => agent.agent_type === 'codex-review').map((agent) => agent.active);
+  assert.equal(flags.filter((active) => active === false).length, 1);
+  assert.equal(flags.filter((active) => active === true).length, 1);
+});

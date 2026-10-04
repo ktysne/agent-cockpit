@@ -166,6 +166,9 @@ function sanitizeEvent(input, metadata = {}) {
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
     if (input.ghPrCreateCommand === true) event.ghPrCreateCommand = true;
     if (input.refreshPullRequests === true) event.refreshPullRequests = true;
+    for (const key of ['backgroundTaskId', 'backgroundOutputTaskId']) {
+      if (typeof input[key] === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(input[key])) event[key] = input[key];
+    }
   }
   if (eventName === 'PostToolUse') {
     const pullRequest = parsePullRequestUrl(input.pullRequest?.url);

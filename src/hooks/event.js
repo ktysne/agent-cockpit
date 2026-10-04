@@ -193,6 +193,27 @@ function extractAskUserQuestionResolution(toolResponse) {
   return resolution || { chosen: [], note: '' };
 }
 
+const BACKGROUND_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// 背景タスクの出力ファイルは <ID>.output という名前で書かれる。公開仕様ではないので、形に合わなければ何も返さない。
+function backgroundOutputTaskIdOf(toolName, toolInput) {
+  if (!toolInput || typeof toolInput !== 'object') return '';
+  if (toolName === 'Read') {
+    const match = pickString(toolInput.file_path).match(/(?:^|[\\/])([A-Za-z0-9_-]{1,64})\.output$/);
+    return match ? match[1] : '';
+  }
+  if (toolName === 'Bash') {
+    const ids = new Set();
+    for (const match of pickString(toolInput.command).matchAll(/[\\/]([A-Za-z0-9_-]{1,64})\.output(?![A-Za-z0-9_.-])/g)) ids.add(match[1]);
+    return ids.size === 1 ? [...ids][0] : '';
+  }
+  if (toolName === 'TaskOutput' || toolName === 'BashOutput') {
+    const id = pickString(toolInput.task_id) || pickString(toolInput.bash_id);
+    return BACKGROUND_TASK_ID.test(id) ? id : '';
+  }
+  return '';
+}
+
 function codexOutputLines(value) {
   const lines = {};
   const visit = (item, depth = 0) => {
@@ -277,6 +298,10 @@ function makeHookEvent(input, now = Date.now()) {
         event.resolvedModel = response.resolvedModel.slice(0, 160);
       }
     }
+    const backgroundTaskId = event.tool_name === 'Bash' ? input.tool_response?.backgroundTaskId : null;
+    if (typeof backgroundTaskId === 'string' && BACKGROUND_TASK_ID.test(backgroundTaskId)) event.backgroundTaskId = backgroundTaskId;
+    const backgroundOutputTaskId = backgroundOutputTaskIdOf(event.tool_name, input.tool_input);
+    if (backgroundOutputTaskId) event.backgroundOutputTaskId = backgroundOutputTaskId;
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。
     const codexOutput = { ...codexOutputLines(input.error), ...codexOutputLines(input.tool_response) };
     if (Object.keys(codexOutput).length) event.codexOutput = codexOutput;
@@ -542,6 +567,7 @@ module.exports = {
   inputSummary,
   extractCodexWaitRunId,
   codexOutputLines,
+  backgroundOutputTaskIdOf,
   extractAskUserQuestionResolution,
   makeHookEvent,
   readServerInfo,
