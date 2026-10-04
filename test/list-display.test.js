@@ -121,8 +121,8 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
   assert.match(webKind, /mainRow\(session, product, true, multipleSessions\)/);
   assert.match(mockKind, /mainRow\(p, session, true\)/);
   assert.ok(webKind.indexOf('activity.append(activityList)') < webKind.indexOf("appendKindToggle(activityControls, 'agents'"));
-  assert.match(mockKind, /const now = `<div class="now">[\s\S]*?<\/div>`;/);
-  assert.match(mockKind, /now: section\('今やっていること', now, activityControls\)/);
+  assert.match(mockKind, /const now = nowRowsByAge\.length \? `<div class="now">[\s\S]*?<\/div>` : '';/);
+  assert.match(mockKind, /now: section\('今やっていること', now, activityControls, nowRowsByAge\.length \+ endedAgentCount\)/);
 
   const webContext = pageContext(web, {
     displayPreferences: { hideFinished: true },
@@ -189,7 +189,6 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
     kindEndedAgentCount: () => 1,
     kindTodoTaskCount: () => 0,
     kindDoneTaskCount: () => 0,
-    kindProductOrder: () => fakeElement('div'),
     kindSection: (title, body, extra) => ({ title, body, extra }),
     element: fakeElement,
     appendKindToggle(target) { target.append(fakeElement('button', 'ended-toggle', '終了済みを表示')); },
@@ -207,8 +206,8 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
   vm.runInContext(`${functionSource(web, 'renderKindSections')}\nthis.renderKinds = renderKindSections;`, kindContext);
   const activitySection = kindContext.renderKinds([{ pullRequestGroups: [] }]).find((section) => section.title === '今やっていること');
   const activity = activitySection.body;
-  assert.equal(activity.children[0].className, 'now');
-  assert.equal(activity.children[0].children[0].textContent, 'unknown');
+  assert.equal(activity.className, 'body now');
+  assert.equal(activity.children[0].textContent, 'unknown');
   assert.equal(activity.children.length, 1);
   assert.equal(activitySection.extra.className, 'kind-section-controls');
   assert.equal(activitySection.extra.children[0].className, 'ended-toggle');
@@ -397,7 +396,6 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     kindEndedAgentCount: () => 1,
     kindTodoTaskCount: () => 1,
     kindDoneTaskCount: () => 1,
-    kindProductOrder: () => fakeElement('div'),
     kindSection: (title, body, extra) => ({ title, body, extra }),
     element: fakeElement,
     appendKindToggle(target, key) {
@@ -430,9 +428,40 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
   const mockKind = functionSource(mock, 'renderKindMode');
   assert.ok(mockKind);
   assert.match(mockKind, /const taskControls = todoTaskToggle \|\| doneTaskToggle[\s\S]*?<div class="kind-section-controls">\$\{todoTaskToggle\}\$\{doneTaskToggle\}/);
-  assert.match(mockKind, /tasks: section\('タスクと完了条件', tasks, taskControls\)/);
-  assert.match(mockKind, /now: section\('今やっていること', now, activityControls\)/);
-  assert.match(mockKind, /judgment: showJudgment \? section\('あなたの判断が必要なこと', decisions, decisionControls\)/);
+  assert.match(mockKind, /tasks: section\('タスクと完了条件', tasks, taskControls, todoTaskCount \+ doneTaskCount\)/);
+  assert.match(mockKind, /now: section\('今やっていること', now, activityControls, nowRowsByAge\.length \+ endedAgentCount\)/);
+  assert.match(mockKind, /judgment: showJudgment \? section\('あなたの判断が必要なこと', decisions, decisionControls, waits\.length \+ endedDecisionEntries\.length\)/);
+});
+
+test('種類別の空欄は本文と枠を省き、件数付きの見出し一行を表示する', () => {
+  const source = functionSource(web, 'kindSection');
+  assert.ok(source);
+  const context = pageContext(web, {
+    element: fakeElement,
+    document: { createTextNode: (text) => fakeElement('#text', '', text) },
+  });
+  vm.runInContext(`${source}\nthis.renderSection = kindSection;`, context);
+
+  const empty = context.renderSection('プルリクエスト', fakeElement('div'));
+  assert.equal(empty.className, 'kind-empty');
+  assert.equal(empty.textContent, 'プルリクエスト（なし）');
+  assert.equal(empty.children.length, 1);
+  assert.equal(empty.children[0].tagName, 'h2');
+
+  const counted = context.renderSection('タスクと完了条件', fakeElement('div'), null, 2);
+  assert.equal(counted.textContent, 'タスクと完了条件(2 件)');
+  assert.equal(counted.children.length, 1);
+
+  const content = fakeElement('div');
+  content.append(fakeElement('article', 'decision-card'));
+  const populated = context.renderSection('判断', content);
+  assert.equal(populated.className, 'section kind-section');
+  assert.equal(populated.children.length, 2);
+  assert.equal(content.className, 'body');
+
+  const mockKind = functionSource(mock, 'renderKindMode');
+  assert.match(mockKind, /class="kind-empty"/);
+  assert.doesNotMatch(mockKind, /class="empty">ありません/);
 });
 
 test('判断事項の解決内容と回答状態は余白のある一行にまとまる', () => {
@@ -651,8 +680,8 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
   show.listeners.get('click')();
   assert.equal(hideFinishedInput.checked, false);
   assert.deepEqual(changes, [['hideFinished', false]]);
-  assert.match(web, /終わったものを隠しています。上部の「表示する」から表示できます。/);
-  assert.match(mock, /終わったものを隠しています。上部の「表示する」から表示できます。/);
+  assert.match(web, /終わったものを隠しています。下の「表示する」から表示できます。/);
+  assert.match(mock, /終わったものを隠しています。下の「表示する」から表示できます。/);
   assert.match(mock, /終わったものを隠しています \(\$\{finishedParts\.join\('、'\)\}\)/);
 });
 
@@ -1058,7 +1087,7 @@ test('PR の初回取得中は空一覧の代わりに取得中の案内を出�
   });
   assert.match(target.textContent, /GitHub から取得しています/);
   assert.doesNotMatch(target.textContent, /オープンの PR はありません/);
-  assert.match(mock, /p\.repo\.loading \? 'GitHub から取得しています'/);
+  assert.match(mock, /p\.repo\.loading \? `<div class="empty">GitHub から取得しています<\/div>`/);
 });
 
 test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲を示す', async () => {

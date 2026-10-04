@@ -42,13 +42,15 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   assert.match(functionSource(mock, 'renderProductMode'), /title="\$\{esc\(decisionCountTitle\(pend\)\)\}"/);
 });
 
-test('許可待ちと質問にプロダクト名とセッション名を出し、単一セッションのカードにも名前を出す', () => {
+test('許可待ちと質問はセッションを示し、操作の説明文を出さない', () => {
   for (const [source, permissionFunction, questionFunction] of [
     [web, 'appendPermissionWaits', 'appendDecisionAnswer'],
     [mock, 'permCard', 'decisionCard'],
   ]) {
-    assert.match(functionSource(source, permissionFunction), /デスクトップアプリの .*sessionDisplayName\(session\)/);
-    assert.match(functionSource(source, questionFunction), /デスクトップアプリの .*sessionDisplayName\(session\)/);
+    assert.match(functionSource(source, permissionFunction), /sessionDisplayName\(session\)/);
+    assert.match(functionSource(source, questionFunction), /sessionDisplayName\(session\)/);
+    assert.doesNotMatch(functionSource(source, permissionFunction), /デスクトップアプリの/);
+    assert.doesNotMatch(functionSource(source, questionFunction), /デスクトップアプリの/);
     assert.match(functionSource(source, 'sessionBlock'), /session-context[\s\S]*sessionDisplayName\(session\)/);
   }
 });
@@ -75,14 +77,11 @@ test('「元に戻す」にフォーカスがあれば、表示するプロダ�
   assert.match(emptyBranch, /'undo-hidden': 'data-undo-hidden-sessions'/);
 });
 
-test('経路の既定と有効になる時点を説明し、起動時の設定札にtitleを付ける', () => {
+test('経路の切り替えから説明文を外し、起動時の設定札にtitleを付ける', () => {
   for (const source of [web, mock]) {
-    assert.match(source, /既定は Codex で実装し、利用上限や指示があれば Claude に切り替える。次に起動するサブエージェントから効く。/);
-    assert.match(source, /既定はクロスレビューの手順が推奨する方法。次に回すレビューから効く。/);
+    assert.doesNotMatch(source, /route-note|既定は Codex で実装|既定はクロスレビューの手順が推奨する方法/);
+    assert.match(source, /role="group" aria-label="\$\{ROUTE\[[^\]]+\]\.label\}の経路"/);
   }
-  // .rrow は display: contents でグリッドに並ぶので、説明を中に置くとラベルと選択肢の対応が崩れる。
-  assert.match(functionSource(web, 'renderRouting'), /<div class="rgroup">\$\{keys\.map\(row\)\.join\(''\)\}<\/div>\$\{keys\.map\(note\)\.join\(''\)\}/);
-  assert.match(functionSource(mock, 'renderRouting'), /<div class="rgroup">\$\{keys\.map\(row\)\.join\(''\)\}<\/div>\$\{keys\.map\(note\)\.join\(''\)\}/);
   assert.match(mock, /title="起動時に効いていた経路の設定"/);
   assert.match(functionSource(web, 'routeTag'), /tag\.title = '起動時に効いていた経路の設定'/);
 });
