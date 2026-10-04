@@ -4,6 +4,12 @@
       "id": "index",
       "source": "pages/index.html",
       "title": "Agent Cockpit でできること"
+    },
+    {
+      "id": "screen",
+      "source": "pages/screen.html",
+      "title": "画面の見方",
+      "navGroup": "はじめに"
     }
   ],
   "helpAnchors": {}

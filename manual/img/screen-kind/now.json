@@ -1,0 +1,41 @@
+{
+  "name": "now",
+  "target": [
+    "#root > section.kind-section:nth-child(4) > .head",
+    "#root > section.kind-section:nth-child(4) .now-row:nth-child(1)"
+  ],
+  "width": 1632,
+  "height": 314,
+  "parts": [
+    {
+      "key": "kind.now-head",
+      "bounds": {
+        "x": 28,
+        "y": 26,
+        "width": 190,
+        "height": 48
+      },
+      "visible": true
+    },
+    {
+      "key": "kind.row-tags",
+      "bounds": {
+        "x": 48,
+        "y": 170,
+        "width": 196,
+        "height": 90
+      },
+      "visible": true
+    },
+    {
+      "key": "kind.row-time",
+      "bounds": {
+        "x": 1516,
+        "y": 128,
+        "width": 68,
+        "height": 38
+      },
+      "visible": true
+    }
+  ]
+}

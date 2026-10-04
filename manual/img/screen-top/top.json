@@ -1,0 +1,108 @@
+{
+  "name": "top",
+  "target": "header.top",
+  "width": 1700,
+  "height": 290,
+  "parts": [
+    {
+      "key": "top.title",
+      "bounds": {
+        "x": 32,
+        "y": 32,
+        "width": 279,
+        "height": 56
+      },
+      "visible": true
+    },
+    {
+      "key": "top.away",
+      "bounds": {
+        "x": 1392,
+        "y": 20,
+        "width": 180,
+        "height": 80
+      },
+      "visible": true
+    },
+    {
+      "key": "top.settings",
+      "bounds": {
+        "x": 1588,
+        "y": 20,
+        "width": 80,
+        "height": 80
+      },
+      "visible": true
+    },
+    {
+      "key": "top.chip-permission",
+      "bounds": {
+        "x": 32,
+        "y": 120,
+        "width": 156,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "top.chip-blocking",
+      "bounds": {
+        "x": 204,
+        "y": 120,
+        "width": 223,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "top.chip-provisional",
+      "bounds": {
+        "x": 443,
+        "y": 120,
+        "width": 268,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "top.chip-agents",
+      "bounds": {
+        "x": 728,
+        "y": 120,
+        "width": 297,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "top.chip-prs",
+      "bounds": {
+        "x": 1041,
+        "y": 120,
+        "width": 209,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "top.route-agents",
+      "bounds": {
+        "x": 32,
+        "y": 204,
+        "width": 457,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "top.route-review",
+      "bounds": {
+        "x": 533,
+        "y": 204,
+        "width": 434,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}

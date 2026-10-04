@@ -1,0 +1,133 @@
+<section class="section">
+  <h1>画面の見方</h1>
+  <p class="lead">ダッシュボードの画面は、上から順に、ヘッダ、件数の札、経路の設定、表示モードの切り替え、プロダクトのカードが並びます。
+  一覧の下には、隠している項目の注記が出ます。
+  このページでは、それぞれの名前と位置、見えている情報の意味を説明します。</p>
+
+  <figure class="guide-map" id="screen-overview-map" data-shot="overview/product" data-alt="ダッシュボードの全体。上から、ヘッダ、件数の札、経路の設定、表示モードの切り替えが並び、その下にプロダクトのカードがある">
+    <ol class="guide-list">
+      <li data-part="overview.header" data-mark="frame" data-place="left"><b>ヘッダ</b>：アプリの名前、<span class="ui">離席中</span> のチェック、設定のボタンです(<a href="#screen-header">ヘッダ</a>)。</li>
+      <li data-part="overview.summary" data-mark="frame" data-place="right"><b>件数の札</b>：許可待ちや判断待ちなど、5 種類の件数です。押すと、その種類を一覧から隠せます(<a href="#screen-summary">件数の札</a>)。</li>
+      <li data-part="overview.routing" data-mark="frame" data-place="right"><b>経路の設定</b>：サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選びます(<a href="#screen-routing">経路の設定</a>)。</li>
+      <li data-part="overview.mode" data-mark="frame" data-place="right"><b>表示モードの切り替え</b>：一覧を、プロダクトごとに並べるか、種類ごとに並べるかを選びます(<a href="#screen-modes">プロダクト別と種類別の違い</a>)。</li>
+      <li data-part="overview.product-card" data-mark="frame" data-place="left"><b>プロダクトのカード</b>：プロダクトごとに、セッションの状態をまとめたものです。種類別では、種類ごとの欄に代わります(<a href="#screen-product-card">プロダクトのカード</a>)。</li>
+    </ol>
+  </figure>
+
+  <h2 id="screen-header">ヘッダ</h2>
+  <p>ヘッダは画面の最上段です。
+  左にアプリの名前、右に <span class="ui">離席中</span> のチェックと設定のボタンがあります。</p>
+  <figure class="guide-map" id="screen-header-map" data-shot="screen-top/top" data-crop="0-340,1370-1700" data-crop-y="0-112" data-alt="ヘッダ。左にアイコンとアプリの名前があり、右に離席中のチェックと、歯車の設定のボタンがある">
+    <ol class="guide-list">
+      <li data-part="top.title"><b>アプリの名前</b>：Agent Cockpit の名前とアイコンです。ページの題には、許可待ちと止めて待っている判断事項の合計が、括弧で付きます。</li>
+      <li data-part="top.away"><b><span class="ui">離席中</span></b>：席を外している間にチェックを入れます。離席中は、セッションからの質問への回答を、設定で決めた時間だけ待ち、時間内に回答が無い質問は推奨案で進めます。タスクトレイのメニューからも切り替えられます。</li>
+      <li data-part="top.settings"><b>設定のボタン</b>：歯車の形のボタンです。押すと <span class="ui">設定</span> の画面が開き、配色や、待ち時間と更新の無いセッションの扱いなどを決められます。</li>
+    </ol>
+  </figure>
+
+  <h2 id="screen-summary">件数の札</h2>
+  <p>ヘッダの下に、5 種類の札が並びます。
+  数字は、いま一覧に出ているセッションの件数です。
+  外したセッションと、更新が無くて隠れているセッションは含みません。</p>
+  <p>札を押すと、その種類の項目を一覧から隠します。
+  もう一度押すと、表示に戻ります。
+  隠している種類は、一覧の最下部の注記に出ます(<a href="#screen-bottom">一覧の最下部</a>)。</p>
+  <figure class="guide-map" id="screen-summary-map" data-shot="screen-top/top" data-crop="0-1270" data-crop-y="112-196" data-alt="件数の札。左から、許可待ち、止めて待っている、仮に推奨案で進行中、稼働中のサブエージェント、マージできる PR の 5 つの札が並ぶ">
+    <ol class="guide-list">
+      <li data-part="top.chip-permission"><b><span class="ui">許可待ち</span></b>：ツールの実行許可を待っている件数です。許可はデスクトップアプリで出します。ダッシュボードからは出せません。</li>
+      <li data-part="top.chip-blocking"><b><span class="ui">止めて待っている</span></b>：回答があるまで作業を止めて待っている判断事項の件数です。</li>
+      <li data-part="top.chip-provisional"><b><span class="ui">仮に推奨案で進行中</span></b>：回答を待たず、推奨案を仮に適用して作業を進めている判断事項の件数です。</li>
+      <li data-part="top.chip-agents"><b><span class="ui">稼働中のサブエージェント</span></b>：いま動いているサブエージェントの件数です。</li>
+      <li data-part="top.chip-prs"><b><span class="ui">マージできる PR</span></b>：<span class="ui">マージできます</span> と表示している PR の件数です。この表示の条件は、設定の画面で選びます。</li>
+    </ol>
+  </figure>
+
+  <h2 id="screen-routing">経路の設定</h2>
+  <p>経路の設定は、サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選ぶ欄です。
+  claude-codex-bridge を入れているときはサブエージェントの段が、ai-cross-review を入れたリポジトリでセッションを開いているときはクロスレビューの段が出ます。
+  どちらも無いときは、欄ごと出ません。</p>
+  <figure class="guide-map" id="screen-routing-map" data-shot="screen-top/top" data-crop="0-1000" data-crop-y="196-290" data-alt="経路の設定。サブエージェントとクロスレビューの 2 段があり、それぞれ、既定、Codex、Claude の 3 つのボタンが並ぶ">
+    <ol class="guide-list">
+      <li data-part="top.route-agents"><b><span class="ui">サブエージェント</span></b>：サブエージェントの経路です。<span class="ui">既定</span> は経路を指定しません。<span class="ui">Codex</span> は Codex へ委譲するよう、<span class="ui">Claude</span> は Claude 自身で作業するよう、セッションに伝えます。</li>
+      <li data-part="top.route-review"><b><span class="ui">クロスレビュー</span></b>：クロスレビューのレビュアーの経路です。ai-cross-review は、レビューを始める直前にこの設定を読みます。</li>
+    </ol>
+  </figure>
+  <p>経路の設定は、全セッションに共通です。
+  変えた後に起動するサブエージェントから効き、すでに動いているサブエージェントの経路は変わりません。</p>
+
+  <h2 id="screen-product-card">プロダクトのカード</h2>
+  <p>プロダクト別の表示では、セッションをプロダクトごとにまとめて、1 枚のカードに入れます。
+  カードの中は、上から次の順に並びます。</p>
+  <ul>
+    <li><b>前回見てから</b>：離席中に起きた変化のうち、まだ既読にしていないものです。変化が無いときは出ません。</li>
+    <li><b>セッションのまとまり</b>：セッションごとに、<span class="ui">あなたの判断が必要なこと</span>、<span class="ui">タスクと完了条件</span>、<span class="ui">今やっていること</span> が並びます。この 3 つの順は、設定の <span class="ui">セクションの並び順</span> で変えられます。</li>
+    <li><b>プルリクエスト</b>：このプロダクトの PR のスタックです。</li>
+  </ul>
+  <p>1 つのプロダクトに複数のセッションがあるときは、セッションのまとまりの頭にセッション名が出ます。</p>
+
+  <h3 id="screen-product-head">カードの見出し</h3>
+  <p>カードの見出しには、プロダクトの名前と件数の札があり、右端に並べ替えのボタンがあります。</p>
+  <figure class="guide-map" id="screen-product-head-map" data-shot="screen-list/product-head" data-alt="プロダクトのカードの見出し。左から、プロダクト名、ブランチ名、許可待ち、判断待ち、マージできる PR の札が並び、右に、畳む、固定、上へ、下へ、外すのボタンがある">
+    <ol class="guide-list">
+      <li data-part="card.name"><b>プロダクト名</b>：プロダクトの名前です。</li>
+      <li data-part="card.branch"><b>ブランチ名</b>：セッションが開いているブランチです。セッションごとにブランチが違うときは、見出しには出さず、各セッションのまとまりの頭に出ます。</li>
+      <li data-part="card.permission"><b><span class="ui">許可待ち</span> の札</b>：このプロダクトの許可待ちの件数です。0 件のときは出ません。</li>
+      <li data-part="card.decision"><b><span class="ui">判断待ち</span> の札</b>：このプロダクトの判断事項のうち、止めて待っているものと、推奨案を仮に適用して進めているものの合計です。内訳は、マウスを載せると表示されます。</li>
+      <li data-part="card.pull-requests"><b><span class="ui">マージできる PR</span> の札</b>：このプロダクトで <span class="ui">マージできます</span> と表示している PR の件数です。</li>
+      <li data-part="card.collapse"><b><span class="ui">畳む</span></b>：カードの中身を畳みます。畳むと <span class="ui">開く</span> に変わります。</li>
+      <li data-part="card.pin" data-place="bottom"><b><span class="ui">固定</span></b>：カードを一覧の最上部に固定します。固定すると <span class="ui">固定中</span> に変わり、もう一度押すと解除します。</li>
+      <li data-part="card.move-up"><b><span class="ui">↑</span></b>：カードを 1 つ上へ動かします。先頭のカードでは押せません。固定したカードと固定していないカードの境は越えられません。</li>
+      <li data-part="card.move-down" data-place="bottom"><b><span class="ui">↓</span></b>：カードを 1 つ下へ動かします。末尾のカードでは押せません。</li>
+      <li data-part="card.close"><b><span class="ui">×</span></b>：このプロダクトのセッションを一覧から外します。外したセッションは、新しいイベントが届くと一覧に戻ります。外した直後の操作は、一覧の最下部で取り消せます。</li>
+    </ol>
+  </figure>
+
+  <h2 id="screen-bottom">一覧の最下部</h2>
+  <p>一覧の下に、隠している項目の注記が出ます。
+  注記は、隠している項目があるときだけ出ます。</p>
+  <figure class="guide-map" id="screen-bottom-map" data-shot="screen-list/bottom" data-alt="一覧の最下部の 4 つの注記。上から、非表示にした種類、外したセッション、隠している終わったもの、隠している更新の無いセッションの順に並ぶ">
+    <ol class="guide-list">
+      <li data-part="bottom.filter" data-mark="frame" data-place="left"><b>非表示にした種類</b>：件数の札で隠した種類と、隠れている件数です。<span class="ui">隠した種類をすべて表示する</span> を押すと、すべて戻ります。</li>
+      <li data-part="bottom.excluded" data-mark="frame" data-place="left"><b>外したセッション</b>：<span class="ui">×</span> で外したセッションの件数と、そのうちの許可待ちと止めて待っている判断事項の件数です。<span class="ui">外したセッションを戻す</span> を押すと、すべて戻ります。外した直後は <span class="ui">元に戻す</span> も出て、直前に外したプロダクトだけを戻せます。</li>
+      <li data-part="bottom.finished" data-mark="frame" data-place="left"><b>隠している終わったもの</b>：<span class="ui">終わったものを隠しています</span> と、隠している終わったセッションとマージ済みの PR の件数が出ます。<span class="ui">表示する</span> を押すと、設定の <span class="ui">終わったものを表示しない</span> がオフになります。</li>
+      <li data-part="bottom.idle" data-mark="frame" data-place="left"><b>隠している更新の無いセッション</b>：<span class="ui">更新の無いセッションを隠しています</span> と、隠している件数が出ます。作業中のセッションと、許可待ち、判断待ち、稼働中のサブエージェントのあるセッションは隠れません。<span class="ui">表示する</span> は、開いているページの間だけ有効です。</li>
+    </ol>
+  </figure>
+
+  <h2 id="screen-modes">プロダクト別と種類別の違い</h2>
+  <p>表示モードの切り替えは、同じ情報を 2 通りに並べ替えます。
+  <span class="ui">プロダクト別</span> は、プロダクトのカードの中に、種類ごとの項目を並べます。
+  <span class="ui">種類別</span> は、種類ごとの欄の中に、プロダクトをまたいだ項目を並べます。</p>
+  <p>種類別の欄は、既定では次の順に並びます。
+  <span class="ui">前回見てから</span>、<span class="ui">あなたの判断が必要なこと</span>、<span class="ui">タスクと完了条件</span>、<span class="ui">今やっていること</span>、<span class="ui">プルリクエスト</span> の順です。
+  この順は、設定の <span class="ui">セクションの並び順</span> で変えられます。</p>
+  <figure class="guide-map" id="screen-kind-map" data-shot="overview/kind" data-crop-y="300-1220" data-alt="種類別の表示。表示モードの切り替えで種類別が選ばれ、その下に、前回見てからの欄が、プロダクトごとの変化を並べて表示されている">
+    <ol class="guide-list">
+      <li data-part="overview.mode" data-mark="frame" data-place="right"><b>表示モードの切り替え</b>：<span class="ui">種類別</span> を選んだ状態です。</li>
+      <li data-part="overview.kind-section" data-mark="frame" data-place="left"><b>種類ごとの欄</b>：種類ごとに 1 つの欄があります。この図は <span class="ui">前回見てから</span> の欄で、変化のあったプロダクトごとに、プロダクト名の札を付けて並びます。</li>
+    </ol>
+  </figure>
+
+  <h3 id="screen-kind-judgment">判断が必要なことの欄</h3>
+  <p>許可待ちと判断事項は、待ち時間の長い順に並びます。
+  各項目にはプロダクト名の札が付き、同じプロダクトに複数のセッションがあるときは、セッション名の札も付きます。</p>
+  <figure class="guide-map" id="screen-kind-judgment-map" data-shot="screen-kind/judgment" data-alt="あなたの判断が必要なことの欄の見出しと、先頭の判断事項の見出しの行。新着の印、プロダクト名の札、判断事項の題、状態の札、時間が並ぶ">
+    <ol class="guide-list">
+      <li data-part="kind.judgment-head" data-place="top-start"><b>欄の見出し</b>：種類の名前です。</li>
+      <li data-part="kind.card-product" data-place="bottom"><b>プロダクト名の札</b>：項目がどのプロダクトのものかを示します。</li>
+      <li data-part="kind.card-state" data-place="bottom"><b>状態の札</b>：<span class="ui">仮に推奨案で進行中</span> や <span class="ui">止めて待っている</span> など、判断事項の状態です。</li>
+      <li data-part="kind.card-time" data-place="bottom"><b>経過時間</b>：回答を待っている時間です。仮に進めている判断事項は <span class="ui">仮適用から</span> の形で出ます。設定で決めた時間を超えると、強調されます。</li>
+    </ol>
+  </figure>
+
+  <h3 id="screen-kind-now">今やっていることの欄</h3>
+  <p>メインの作業行とサブエージェントの行が、新しい順に並びます。
+  行ごとにプロダクト名の札が付きます。</p>
+  <figure class="guide-map" id="screen-kind-now-map" data-shot="screen-kind/now" data-alt="今やっていることの欄の見出しと、先頭の作業行。左にプロダクト名とセッション名の札と作業中の表示があり、中央に作業の題と実行中のツール、右に経過時間がある">
+    <ol class="guide-list">
+      <li data-part="kind.now-head" data-place="top-start"><b>欄の見出し</b>：種類の名前です。</li>
+      <li data-part="kind.row-tags" data-place="right"><b>プロダクト名とセッション名の札</b>：行がどのプロダクトの、どのセッションのものかを示します。</li>
+      <li data-part="kind.row-time" data-place="top"><b>経過時間</b>：セッションの最後のイベントからの時間です。</li>
+    </ol>
+  </figure>
+</section>

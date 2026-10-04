@@ -21,7 +21,10 @@
           "#settings-button"
         ],
         "overview.summary": "#summary",
-        "overview.routing": "#routing",
+        "overview.routing": [
+          "#routing .rrow:nth-child(1) .rlabel",
+          "#routing .rrow:nth-child(2) .seg"
+        ],
         "overview.mode": ".mode-row .seg",
         "overview.product-card": "#root > section.section"
       }
@@ -44,7 +47,10 @@
           "#settings-button"
         ],
         "overview.summary": "#summary",
-        "overview.routing": "#routing",
+        "overview.routing": [
+          "#routing .rrow:nth-child(1) .rlabel",
+          "#routing .rrow:nth-child(2) .seg"
+        ],
         "overview.mode": ".mode-row .seg",
         "overview.kind-section": "#root > section.section"
       }

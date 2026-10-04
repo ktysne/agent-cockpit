@@ -1,0 +1,53 @@
+{
+  "name": "bottom",
+  "target": [
+    "#filter-note",
+    "#excluded-note",
+    "#finished-note",
+    "#idle-note"
+  ],
+  "width": 1636,
+  "height": 442,
+  "parts": [
+    {
+      "key": "bottom.filter",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1636,
+        "height": 92
+      },
+      "visible": true
+    },
+    {
+      "key": "bottom.excluded",
+      "bounds": {
+        "x": 0,
+        "y": 116,
+        "width": 1636,
+        "height": 92
+      },
+      "visible": true
+    },
+    {
+      "key": "bottom.finished",
+      "bounds": {
+        "x": 0,
+        "y": 232,
+        "width": 1636,
+        "height": 92
+      },
+      "visible": true
+    },
+    {
+      "key": "bottom.idle",
+      "bounds": {
+        "x": 0,
+        "y": 348,
+        "width": 1636,
+        "height": 92
+      },
+      "visible": true
+    }
+  ]
+}

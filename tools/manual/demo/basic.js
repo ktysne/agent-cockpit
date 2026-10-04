@@ -213,6 +213,9 @@ module.exports = function basic({ baseTime }) {
       // 古いセッションは、最後の更新から時間が経っているので一覧から隠れる。
       at(175);
       await tool('notes-old', 'old-read-1', 'Read', { file_path: 'docs/notes.md' });
+      await plan('notes-old', taskList(
+        ['Markdown の見出しを整理する', 'doing', ['見出しの階層がそろう', false]],
+      ));
       await hook('notes-old', { hook_event_name: 'Stop' });
 
       // 170 分前: 画面を開いた時点を「前回見た時刻」にする。以降の変化が「前回見てから」に出る。
