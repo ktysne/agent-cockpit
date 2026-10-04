@@ -8,6 +8,7 @@
 - 既存の設定は消さずに統合します。同じイベントの配列がすでにあるときは、その配列へ要素を足します。
 - 連携ツール(GitHub CLI、claude-codex-bridge、ai-cross-review)そのものの導入手順は、この文書では扱いません。導入されていなければ、各ツールのドキュメントへ案内してください。この文書は、連携ツールが導入済みのときに agent-cockpit 側で必要な設定だけを書いています。
 - 手順の中の `D:/path/to/agent-cockpit` は、このリポジトリを置いた絶対パスに置き換えます。worktree ではなく、残しておく本体のチェックアウトを指してください。worktree を消すと、フックの参照先が無くなります。
+- この文書の `~/.claude` は Claude のホームを指します。`CLAUDE_CONFIG_DIR` を設定しているときは、そのディレクトリの `settings.json` と `skills/` を使ってください。
 - 設定を変えた後は、新しく開いたセッションから効きます。実行中のセッションは、後から足したフックや MCP サーバーを読み込みません。
 
 ## パターンの選び方
@@ -19,9 +20,9 @@
 | A | agent-cockpit だけ | — |
 | B | + GitHub CLI | `gh --version` が通る |
 | C | + claude-codex-bridge | Claude のホーム(`CLAUDE_CONFIG_DIR`、無ければ `~/.claude`)に `tools/codex-agent.sh` がある |
-| D | + ai-cross-review | 対象のリポジトリに `tools/cross-review.js` がある(リポジトリごとに導入するツールです) |
+| D | + ai-cross-review | 対象のリポジトリの worktree のルートに `tools/cross-review.js` がある(リポジトリごとに導入するツールです) |
 
-D の PR カードの表示は、B の PR の表示の上に出ます。D で PR のクロスレビュー状態を見たいときは、B も行ってください。
+D の PR カードの表示は、B の PR の表示に加わるものです。D で PR のクロスレビュー状態を見たいときは、B も行ってください。
 
 ## パターン A: agent-cockpit だけ
 
@@ -147,7 +148,13 @@ Windows では、タスクトレイからダッシュボードを専用のウィ
 powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1"
 ```
 
-デスクトップとスタートメニューに「Agent Cockpit」のショートカットができます。ログオン時に自動で起動するには `-Startup` を付けます。ショートカットには、実行したチェックアウトの絶対パスが入ります。
+デスクトップとスタートメニューに「Agent Cockpit」のショートカットができます。ショートカットには実行したチェックアウトの絶対パスが入るので、worktree ではなく本体のチェックアウトから実行してください。
+
+ログオン時にタスクトレイだけを自動で起動する(ダッシュボードは開かない)には、上のコマンドとは別に `-Startup` を付けて実行します。`-Startup` を付けた実行は、スタートアップのショートカットだけを作ります。
+
+```powershell
+powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup
+```
 
 ### 6. 保存先とポートを変えるとき(任意)
 
@@ -172,7 +179,7 @@ powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1"
 4. `claude mcp list` を実行し、`agent-cockpit` がつながっている(`Connected`)ことを確かめます。
 5. 1 のセッションで「`cockpit_set_tasks` で確認用のタスクを 1 件登録して」と依頼します。そのセッションの欄にタスクが出れば、MCP サーバーとフックが同じセッションを指していることも確かめられます。別のセッションの欄に出たり、どこにも出なかったりするときは、MCP サーバーの登録を確かめます。
 6. `~/.claude/skills/agent-cockpit/SKILL.md` があることを確かめます。
-7. 回答の経路を確かめるときは、セッションに「確認のために `AskUserQuestion` で質問して」と依頼します。ダッシュボードに判断待ちとして出て、画面から回答するとセッションへ届けば成功です。
+7. 回答の経路を確かめるときは、画面上部の「離席中」をオンにしてから、セッションに「確認のために `AskUserQuestion` で質問して」と依頼します。ダッシュボードに判断待ちとして出て、画面から回答するとセッションがその回答で進めば成功です。確かめ終わったら「離席中」をオフに戻します。離席中でないときは、質問はデスクトップアプリのダイアログに出ます。
 
 ## パターン B: + GitHub CLI
 
@@ -194,11 +201,11 @@ PR は、セッションが `gh pr create` を実行したときに自動で登�
 1. 環境変数のトークンを外した状態で、`gh` が認証済みであることを確かめます。
 
    ```powershell
-   Remove-Item Env:GH_TOKEN, Env:GITHUB_TOKEN -ErrorAction SilentlyContinue; gh auth status
+   powershell.exe -NoProfile -Command "Remove-Item Env:GH_TOKEN, Env:GITHUB_TOKEN, Env:GH_ENTERPRISE_TOKEN -ErrorAction SilentlyContinue; gh auth status"
    ```
 
    ```bash
-   env -u GH_TOKEN -u GITHUB_TOKEN gh auth status
+   env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN gh auth status
    ```
 
 2. セッションで PR を作るか、既存の PR の URL を `cockpit_add_pr` で登録させます。ダッシュボードのプルリクエストの欄に、その PR が CI とレビューの状態と一緒に出れば成功です。
@@ -230,18 +237,19 @@ PR は、セッションが `gh pr create` を実行したときに自動で登�
 
 `route.js` は同期フックです。`SubagentStart` で、その時点の経路を `AGENT_COCKPIT_HOME` の `route-agents/` に記録し、Codex か Claude を選んでいればサブエージェントへ伝えます。Claude を選んだサブエージェントが `codex-agent.sh` を呼ぶと、`PreToolUse` で止めます。
 経路は起動時に決まり、稼働中のサブエージェントは設定を変えても切り替わりません。
+bridge を外したときは、`codex-agent.sh` が無いので `route.js` は何も差し込みません。登録は残したままで構いません。
 
 ### 確認
 
 1. 新しいセッションを開き、ダッシュボードを再読み込みします。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出れば、bridge が検出されています。出ないときは、`codex-agent.sh` の場所を確かめます。
-2. 経路を「Claude」にしてから、セッションでサブエージェントを起動させます。サブエージェントの行に経路の札が出て、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に記録のファイルができれば成功です。
+2. 経路を「Claude」にしてから、セッションでサブエージェントを起動させます。サブエージェントが動いている間に、その行に「経路: Claude」の札が出て、`AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に記録のファイルができれば成功です。
 3. 確かめ終わったら、経路を元の値に戻します。
 
 ## パターン D: + ai-cross-review
 
 ### 前提
 
-[ai-cross-review](https://github.com/ktysne/ai-cross-review) を、そのドキュメントに従って、レビューを回すリポジトリへ導入しておきます。ai-cross-review はリポジトリごとに入れるツールで、agent-cockpit は、セッションの作業ディレクトリがある worktree に `tools/cross-review.js` があるかで判断します。
+[ai-cross-review](https://github.com/ktysne/ai-cross-review) を、そのドキュメントに従って、レビューを回すリポジトリへ導入しておきます。ai-cross-review はリポジトリごとに入れるツールです。agent-cockpit は、稼働中のセッション(`~/.claude/sessions/*.json`)の作業ディレクトリと、PR を登録したセッションの作業ディレクトリについて、その worktree のルートに `tools/cross-review.js` があるかで判断します。
 
 ### agent-cockpit 側の設定
 
@@ -253,8 +261,8 @@ agent-cockpit 側で追加するフックや登録はありません。次の点
 
 ### 確認
 
-1. ai-cross-review を入れたリポジトリでセッションを開き、ダッシュボードを再読み込みします。「経路の設定」にクロスレビューの段が出れば、検出されています。
-2. クロスレビューの段で「Codex」を選び、そのリポジトリで次を実行します。`codex` が返れば成功です。確かめ終わったら、元の値に戻します。
+1. ai-cross-review を入れたリポジトリでセッションを開き、ダッシュボードを再読み込みします。「経路の設定」にクロスレビューの段が出れば、検出されています。出ないときは、うまくいかないときの `~/.claude/sessions/*.json` の項を確かめます。
+2. クロスレビューの段で「Codex」を選び、そのリポジトリで次を実行します。`codex` が返れば成功です。確かめ終わったら、元の値に戻します。`route` を使えない古い版のときは、ai-cross-review のドキュメントの同期の手順で更新します。
 
    ```bash
    node tools/cross-review.js route
@@ -267,4 +275,4 @@ agent-cockpit 側で追加するフックや登録はありません。次の点
 - 画面にセッションが出ない:フックの登録後に開いたセッションかを確かめます。`~/.claude/settings.json` の JSON が壊れていないか、パスが本体のチェックアウトを指しているかを確かめます。
 - 常駐サーバーのログは `AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `server.log` にあります。
 - 常駐サーバーを手で起動するときは、リポジトリのルートで `npm start` を実行します。終了は `Ctrl+C` です。
-- `~/.claude/sessions/*.json` は Claude Code の公開仕様ではありません。読めない版でも、フックから組み立てた表示は動きます。
+- `~/.claude/sessions/*.json` は Claude Code の公開仕様ではありません。読めない版でも、フックから組み立てた表示は動きます。ただし、パターン D のクロスレビューの段は、そのリポジトリの PR を登録するまで出ません。

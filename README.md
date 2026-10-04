@@ -31,7 +31,7 @@ agent-cockpit は単独で使えます。次のツールを導入済みなら、
 導入は AI(Claude Code など)に任せる前提で、手順を [docs/setup.md](docs/setup.md) にまとめています。
 AI には、次のように依頼してください。
 
-> agent-cockpit を導入して。手順は https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md にある。
+> agent-cockpit を導入して。手順は https://raw.githubusercontent.com/ktysne/agent-cockpit/main/docs/setup.md にある。
 
 手順書は、agent-cockpit だけを導入する手順と、連携ツールごとに agent-cockpit 側で必要な設定の手順に分かれています。
 連携ツールそのものの導入は、それぞれのドキュメントに従ってください。手順書は、導入済みの連携ツールに合わせて agent-cockpit 側の設定を案内します。
@@ -45,7 +45,7 @@ AI には、次のように依頼してください。
 |---|---|
 | agent-cockpit だけ | `http://127.0.0.1:47821/health` が `"app":"agent-cockpit"` を返す。新しく開いたセッションがダッシュボードに出る。`claude mcp list` で `agent-cockpit` がつながっている。セッションに計画を登録させると、タスクが画面に出る。 |
 | + GitHub CLI | `gh auth status` が、環境変数のトークンに頼らずに通る。セッションが作った PR が、CI の状態と一緒に画面に出る。 |
-| + claude-codex-bridge | 画面の「経路の設定」にサブエージェントの段が出る。経路を選んでから起動したサブエージェントの行に、経路の札が付く。 |
+| + claude-codex-bridge | 画面の「経路の設定」にサブエージェントの段が出る。経路を選んでから起動したサブエージェントの行に、動いている間は経路の札が付く。 |
 | + ai-cross-review | ai-cross-review を入れたリポジトリでセッションを開くと、「経路の設定」にクロスレビューの段が出る。画面で選んだ値を `node tools/cross-review.js route` が返す。PR のカードにクロスレビューの段が出る。 |
 
 ## 開発者向けドキュメント

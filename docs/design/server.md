@@ -405,7 +405,7 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
 
 `PostToolBatch` と `Stop` は `agent_id` のあるサブエージェント内では何もしない。
 
-README のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop` を 3600 秒、AskUserQuestion の `PreToolUse` を 1830 秒にする。
+[導入手順](../setup.md) のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop` を 3600 秒、AskUserQuestion の `PreToolUse` を 1830 秒にする。
 
 配信済みで未反映の回答は、`UserPromptSubmit` の `additionalContext` で最大 3 回差し込み直す。
 
@@ -415,7 +415,7 @@ README のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop
 
 回答本文は常駐サーバーのメモリーとフックの出力にだけ置き、ファイルとログには書かない。
 
-フック設定の例は README に記載し、`~/.claude/settings.json` は自動で変更しない。
+フック設定の例は [導入手順](../setup.md) に記載し、`~/.claude/settings.json` は自動で変更しない。
 
 ## 登録
 
