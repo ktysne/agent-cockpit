@@ -1194,6 +1194,10 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   assert.match(mock, /id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440"/);
 });
 
+test('更新の無いセッションの「表示する」「隠す」が描き直しで消えても、表示の切り替えへフォーカスを戻す', () => {
+  assert.match(web, /\['show-finished', 'show-idle', 'merge-result-close'\]\.includes\(focusData\.kind\) && !button\s+\? document\.querySelector\('\[data-close-merge-result\]'\) \|\| document\.querySelector\('\[data-action="mode"\]/);
+});
+
 test('モックの終わった項目の表示設定が保存できたら一覧を描き直す', () => {
   const handlerSource = eventListenerSource(mock, 'click');
   assert.ok(handlerSource);

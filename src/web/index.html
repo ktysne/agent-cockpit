@@ -3292,7 +3292,7 @@ function render(state) {
     });
     const fallback = focusData.kind === 'product' && focusData.action === 'move' && button?.disabled
       ? buttons.find((item) => item.dataset.productAction === 'move' && item.dataset.productKey === focusData.key && item.dataset.direction === String(-Number(focusData.direction)))
-      : ['show-finished', 'merge-result-close'].includes(focusData.kind) && !button
+      : ['show-finished', 'show-idle', 'merge-result-close'].includes(focusData.kind) && !button
         ? document.querySelector('[data-close-merge-result]') || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
       : focusData.kind === 'toggle' && focusData.attribute === 'data-hide-session' && !button
         ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
