@@ -237,7 +237,7 @@ function normalizeExternalUrl(value, port) {
 
     const urlPort = Number(url.port || 80);
     const matchesLocalhost = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
-    const isManualPath = url.pathname === '/manual' || url.pathname.startsWith('/manual/');
+    const isManualPath = url.pathname.startsWith('/manual/');
     if (url.protocol !== 'http:' || !matchesLocalhost || urlPort !== port || !isManualPath || url.username || url.password) return null;
 
     const normalizedUrl = `http://127.0.0.1:${port}${url.pathname}${url.search}${url.hash}`;

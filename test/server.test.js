@@ -589,6 +589,7 @@ test('外部リンク API は画面秘密値と Origin を照合し、HTTPS と�
     `http://example.com:${runtime.info.port}/manual/`,
     `http://127.0.0.1:${runtime.info.port}/settings`,
     `http://127.0.0.1:${runtime.info.port}/manuality/`,
+    `http://127.0.0.1:${runtime.info.port}/manual`,
     `http://127.0.0.1:${runtime.info.port}/manual/with\ncontrol`,
     `http://127.0.0.1:${runtime.info.port}/manual/${'a'.repeat(2048)}`,
     'javascript:alert(1)',
@@ -615,11 +616,6 @@ test('外部リンク API は画面秘密値と Origin を照合し、HTTPS と�
   const manualOpened = await send(manualUrl);
   assert.equal(manualOpened.status, 204);
   assert.deepEqual(openedUrls, [`http://127.0.0.1:${runtime.info.port}/manual/pages/settings.html?from=dashboard#help-settings`]);
-
-  openedUrls.length = 0;
-  const manualRoot = await send(`http://127.0.0.1:${runtime.info.port}/manual`);
-  assert.equal(manualRoot.status, 204);
-  assert.deepEqual(openedUrls, [`http://127.0.0.1:${runtime.info.port}/manual`]);
 
   // 起動するプログラムへは、検査した正規化後の値だけを渡す。
   openedUrls.length = 0;
