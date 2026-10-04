@@ -14,7 +14,19 @@ function globalSettingsPath(environment = process.env) {
   return path.join(claudeHome, 'settings.json');
 }
 
+// matcher は英数字と | だけなら完全一致の列挙、それ以外は正規表現として扱われる。
+function matcherMatches(matcher, value) {
+  if (matcher === undefined || matcher === '' || matcher === '*') return true;
+  if (/^[\w|]+$/.test(matcher)) return matcher.split('|').includes(value);
+  try {
+    return new RegExp(matcher).test(value);
+  } catch {
+    return false;
+  }
+}
+
 // ユーザー設定でグローバル版を登録しているイベントの一覧。読めないときは空にし、重複より無効化を避ける。
+// リポジトリ版の SessionStart は圧縮の直後にだけ出力するので、compact に当たる登録だけを数える。
 function globalGuardEvents(settingsText) {
   const events = new Set();
   let hooks;
@@ -25,6 +37,7 @@ function globalGuardEvents(settingsText) {
   }
   for (const [event, groups] of Object.entries(hooks)) {
     for (const group of Array.isArray(groups) ? groups : []) {
+      if (event === 'SessionStart' && !matcherMatches(group && group.matcher, 'compact')) continue;
       for (const hook of Array.isArray(group && group.hooks) ? group.hooks : []) {
         const commandLine = [hook.command, ...(Array.isArray(hook.args) ? hook.args : [])].join(' ').replace(/\\/g, '/');
         if (GLOBAL_GUARD_SCRIPTS.some((script) => commandLine.includes(`/${script}`))) events.add(event);

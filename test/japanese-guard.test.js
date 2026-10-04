@@ -58,6 +58,17 @@ test('グローバル版の登録は exec 形式とシェル形式のどちら�
   assert.deepEqual([...events].sort(), ['SessionStart', 'Stop', 'UserPromptSubmit']);
 });
 
+test('SessionStart は matcher が compact に当たる登録だけをグローバル版として数える', () => {
+  const script = '/home/me/.claude/hooks/compact-language.js';
+  const sessionStart = (matcher) => [{ matcher, hooks: [{ type: 'command', command: 'node', args: [script] }] }];
+  for (const matcher of [undefined, '', '*', 'compact', 'startup|compact', 'comp.*']) {
+    assert.equal(globalGuardEvents(settingsWith({ SessionStart: sessionStart(matcher) })).has('SessionStart'), true, String(matcher));
+  }
+  for (const matcher of ['startup', 'resume|clear', '(']) {
+    assert.equal(globalGuardEvents(settingsWith({ SessionStart: sessionStart(matcher) })).has('SessionStart'), false, matcher);
+  }
+});
+
 test('ユーザー設定が無いか壊れているときは、グローバル版が無いものとして扱う', () => {
   assert.equal(globalGuardEvents('{').size, 0);
   assert.equal(globalGuardEvents(settingsWith({ Stop: 'not-an-array' })).size, 0);
