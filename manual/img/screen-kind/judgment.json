@@ -1,0 +1,51 @@
+{
+  "name": "judgment",
+  "target": [
+    "#root > section.kind-section:nth-child(2) > .head",
+    "#root > section.kind-section:nth-child(2) .decision-card .decision-head"
+  ],
+  "width": 1632,
+  "height": 180,
+  "parts": [
+    {
+      "key": "kind.judgment-head",
+      "bounds": {
+        "x": 28,
+        "y": 26,
+        "width": 315,
+        "height": 48
+      },
+      "visible": true
+    },
+    {
+      "key": "kind.card-product",
+      "bounds": {
+        "x": 152,
+        "y": 136,
+        "width": 133,
+        "height": 43
+      },
+      "visible": true
+    },
+    {
+      "key": "kind.card-state",
+      "bounds": {
+        "x": 719,
+        "y": 135,
+        "width": 238,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "kind.card-time",
+      "bounds": {
+        "x": 973,
+        "y": 138,
+        "width": 246,
+        "height": 38
+      },
+      "visible": true
+    }
+  ]
+}

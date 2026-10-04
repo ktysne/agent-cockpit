@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>画面の見方 | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html" aria-current="page">画面の見方</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html" aria-current="page">画面の見方</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#screen-header">ヘッダ</a></li>
+        <li><a href="#screen-summary">件数の札</a></li>
+        <li><a href="#screen-routing">経路の設定</a></li>
+        <li><a href="#screen-product-card">プロダクトのカード</a></li>
+        <li class="level-3"><a href="#screen-product-head">カードの見出し</a></li>
+        <li><a href="#screen-bottom">一覧の最下部</a></li>
+        <li><a href="#screen-modes">プロダクト別と種類別の違い</a></li>
+        <li class="level-3"><a href="#screen-kind-judgment">判断が必要なことの欄</a></li>
+        <li class="level-3"><a href="#screen-kind-now">今やっていることの欄</a></li></ol>
+      </details>
+<section class="section">
+  <h1>画面の見方</h1>
+  <p class="lead">ダッシュボードの画面は、上から順に、ヘッダ、件数の札、経路の設定、表示モードの切り替え、プロダクトのカードが並びます。
+  一覧の下には、隠している項目の注記が出ます。
+  このページでは、それぞれの名前と位置、見えている情報の意味を説明します。</p>
+
+  <figure class="guide-map" id="screen-overview-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1700"><div class="gm-segment" style="flex-grow:1700;aspect-ratio:1700/2000"><div class="gm-clip"><img src="img/overview/product.png" width="850" height="1000" alt="ダッシュボードの全体。上から、ヘッダ、件数の札、経路の設定、表示モードの切り替えが並び、その下にプロダクトのカードがある" loading="lazy" decoding="async"></div><span class="gm-frame" data-gm="1" aria-hidden="true" style="left:1.882%;top:1%;width:96.235%;height:4%"></span><a class="gm-badge gm-place-left" data-gm="1" href="#screen-overview-map-1" style="left:1.882%;top:3%" aria-label="1. ヘッダ">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:1.882%;top:6%;width:71.647%;height:3.2%"></span><a class="gm-badge gm-place-right" data-gm="2" href="#screen-overview-map-2" style="left:73.529%;top:7.6%" aria-label="2. 件数の札">2</a><span class="gm-frame" data-gm="3" aria-hidden="true" style="left:1.882%;top:10.2%;width:55%;height:3.2%"></span><a class="gm-badge gm-place-right" data-gm="3" href="#screen-overview-map-3" style="left:56.882%;top:11.8%" aria-label="3. 経路の設定">3</a><span class="gm-frame" data-gm="4" aria-hidden="true" style="left:1.882%;top:16.1%;width:20%;height:3.8%"></span><a class="gm-badge gm-place-right" data-gm="4" href="#screen-overview-map-4" style="left:21.882%;top:18%" aria-label="4. 表示モードの切り替え">4</a><span class="gm-frame" data-gm="5" aria-hidden="true" style="left:1.882%;top:21.1%;width:96.235%;height:78.9%"></span><a class="gm-badge gm-place-left" data-gm="5" href="#screen-overview-map-5" style="left:1.882%;top:60.55%" aria-label="5. プロダクトのカード">5</a></div></div></div><ol class="gm-list"><li id="screen-overview-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>ヘッダ</b>：アプリの名前、<span class="ui">離席中</span> のチェック、設定のボタンです(<a href="#screen-header">ヘッダ</a>)。</div></li><li id="screen-overview-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>件数の札</b>：許可待ちや判断待ちなど、5 種類の件数です。押すと、その種類を一覧から隠せます(<a href="#screen-summary">件数の札</a>)。</div></li><li id="screen-overview-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>経路の設定</b>：サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選びます(<a href="#screen-routing">経路の設定</a>)。</div></li><li id="screen-overview-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>表示モードの切り替え</b>：一覧を、プロダクトごとに並べるか、種類ごとに並べるかを選びます(<a href="#screen-modes">プロダクト別と種類別の違い</a>)。</div></li><li id="screen-overview-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>プロダクトのカード</b>：プロダクトごとに、セッションの状態をまとめたものです。種類別では、種類ごとの欄に代わります(<a href="#screen-product-card">プロダクトのカード</a>)。</div></li></ol></figure>
+
+  <h2 id="screen-header">ヘッダ</h2>
+  <p>ヘッダは画面の最上段です。
+  左にアプリの名前、右に <span class="ui">離席中</span> のチェックと設定のボタンがあります。</p>
+  <figure class="guide-map" id="screen-header-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="670"><div class="gm-segment" style="flex-grow:340;aspect-ratio:340/112"><div class="gm-clip"><img src="img/screen-top/top.png" width="850" height="145" alt="ヘッダ。左にアイコンとアプリの名前があり、右に離席中のチェックと、歯車の設定のボタンがある" loading="lazy" decoding="async" style="width:500%;margin-left:0%;margin-top:0%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#screen-header-map-1" style="left:50.441%;top:28.571%" aria-label="1. アプリの名前">1</a></div><div class="gm-segment" style="flex-grow:330;aspect-ratio:330/112"><div class="gm-clip"><img src="img/screen-top/top.png" width="850" height="145" alt="" loading="lazy" decoding="async" style="width:515.152%;margin-left:-415.152%;margin-top:0%"></div><a class="gm-badge gm-place-top" data-gm="2" href="#screen-header-map-2" style="left:33.939%;top:17.857%" aria-label="2. 離席中">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#screen-header-map-3" style="left:78.182%;top:17.857%" aria-label="3. 設定のボタン">3</a></div></div></div><ol class="gm-list"><li id="screen-header-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>アプリの名前</b>：Agent Cockpit の名前とアイコンです。ページの題には、許可待ちと止めて待っている判断事項の合計が、括弧で付きます。</div></li><li id="screen-header-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">離席中</span></b>：席を外している間にチェックを入れます。離席中は、セッションからの質問への回答を、設定で決めた時間だけ待ち、時間内に回答が無い質問は推奨案で進めます。タスクトレイのメニューからも切り替えられます。</div></li><li id="screen-header-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>設定のボタン</b>：歯車の形のボタンです。押すと <span class="ui">設定</span> の画面が開き、配色や、待ち時間と更新の無いセッションの扱いなどを決められます。</div></li></ol></figure>
+
+  <h2 id="screen-summary">件数の札</h2>
+  <p>ヘッダの下に、5 種類の札が並びます。
+  数字は、いま一覧に出ているセッションにある、その種類の項目の数です。1 つのセッションに判断事項が 3 件あれば、3 と数えます。
+  外したセッションと、更新が無くて隠れているセッションは含みません。</p>
+  <p>札を押すと、その種類の項目を一覧から隠します。
+  もう一度押すと、表示に戻ります。
+  隠している種類は、一覧の最下部の注記に出ます(<a href="#screen-bottom">一覧の最下部</a>)。</p>
+  <figure class="guide-map" id="screen-summary-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1270"><div class="gm-segment" style="flex-grow:1270;aspect-ratio:1270/84"><div class="gm-clip"><img src="img/screen-top/top.png" width="850" height="145" alt="件数の札。左から、許可待ち、止めて待っている、仮に推奨案で進行中、稼働中のサブエージェント、マージできる PR の 5 つの札が並ぶ" loading="lazy" decoding="async" style="width:133.858%;margin-left:0%;margin-top:-8.819%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#screen-summary-map-1" style="left:8.661%;top:9.524%" aria-label="1. 許可待ち">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#screen-summary-map-2" style="left:24.843%;top:9.524%" aria-label="2. 止めて待っている">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#screen-summary-map-3" style="left:45.433%;top:9.524%" aria-label="3. 仮に推奨案で進行中">3</a><a class="gm-badge gm-place-top" data-gm="4" href="#screen-summary-map-4" style="left:69.016%;top:9.524%" aria-label="4. 稼働中のサブエージェント">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#screen-summary-map-5" style="left:90.197%;top:9.524%" aria-label="5. マージできる PR">5</a></div></div></div><ol class="gm-list"><li id="screen-summary-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">許可待ち</span></b>：ツールの実行許可を待っている件数です。許可はデスクトップアプリで出します。ダッシュボードからは出せません。</div></li><li id="screen-summary-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">止めて待っている</span></b>：回答があるまで作業を止めて待っている判断事項の件数です。</div></li><li id="screen-summary-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">仮に推奨案で進行中</span></b>：回答を待たず、推奨案を仮に適用して作業を進めている判断事項の件数です。</div></li><li id="screen-summary-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">稼働中のサブエージェント</span></b>：いま動いているサブエージェントの件数です。</div></li><li id="screen-summary-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">マージできる PR</span></b>：<span class="ui">マージできます</span> と表示している PR の件数です。この表示の条件は、設定の画面で選びます。</div></li></ol></figure>
+
+  <h2 id="screen-routing">経路の設定</h2>
+  <p>経路の設定は、サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選ぶ欄です。
+  claude-codex-bridge を入れているときはサブエージェントの段が、ai-cross-review を入れたリポジトリでセッションを開いているときはクロスレビューの段が出ます。
+  どちらも無いときは、欄ごと出ません。</p>
+  <figure class="guide-map" id="screen-routing-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1000"><div class="gm-segment" style="flex-grow:1000;aspect-ratio:1000/94"><div class="gm-clip"><img src="img/screen-top/top.png" width="850" height="145" alt="経路の設定。サブエージェントとクロスレビューの 2 段があり、それぞれ、既定、Codex、Claude の 3 つのボタンが並ぶ" loading="lazy" decoding="async" style="width:170%;margin-left:0%;margin-top:-19.6%"></div><a class="gm-badge gm-place-top" data-gm="1" href="#screen-routing-map-1" style="left:26.05%;top:8.511%" aria-label="1. サブエージェント">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#screen-routing-map-2" style="left:75%;top:8.511%" aria-label="2. クロスレビュー">2</a></div></div></div><ol class="gm-list"><li id="screen-routing-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">サブエージェント</span></b>：サブエージェントの経路です。<span class="ui">既定</span> は経路を指定しません。<span class="ui">Codex</span> は Codex へ委譲するよう、<span class="ui">Claude</span> は Claude 自身で作業するよう、セッションに伝えます。</div></li><li id="screen-routing-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">クロスレビュー</span></b>：クロスレビューのレビュアーの経路です。ai-cross-review は、レビューを始める直前にこの設定を読みます。</div></li></ol></figure>
+  <p>経路の設定は、全セッションに共通です。
+  変えた後に起動するサブエージェントから効き、すでに動いているサブエージェントの経路は変わりません。</p>
+
+  <h2 id="screen-product-card">プロダクトのカード</h2>
+  <p>プロダクト別の表示では、セッションをプロダクトごとにまとめて、1 枚のカードに入れます。
+  カードの中は、上から次の順に並びます。</p>
+  <ul>
+    <li><b>前回見てから</b>：離席中に起きた変化のうち、まだ既読にしていないものです。変化が無いときは出ません。</li>
+    <li><b>セッションのまとまり</b>：セッションごとに、<span class="ui">あなたの判断が必要なこと</span>、<span class="ui">タスクと完了条件</span>、<span class="ui">今やっていること</span> が並びます。この 3 つの順は、設定の <span class="ui">セクションの並び順</span> で変えられます。</li>
+    <li><b>プルリクエスト</b>：このプロダクトの PR のスタックです。</li>
+  </ul>
+  <p>1 つのプロダクトに複数のセッションがあるときは、セッションのまとまりの頭にセッション名が出ます。</p>
+
+  <h3 id="screen-product-head">カードの見出し</h3>
+  <p>カードの見出しには、プロダクトの名前と件数の札があり、右端に並べ替えのボタンがあります。</p>
+  <figure class="guide-map" id="screen-product-head-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1632"><div class="gm-segment" style="flex-grow:1632;aspect-ratio:1632/116"><div class="gm-clip"><img src="img/screen-list/product-head.png" width="816" height="58" alt="プロダクトのカードの見出し。左から、プロダクト名、ブランチ名、許可待ち、判断待ち、マージできる PR の札が並び、右に、畳む、固定、上へ、下へ、外すのボタンがある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#screen-product-head-map-1" style="left:5.882%;top:28.448%" aria-label="1. プロダクト名">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#screen-product-head-map-2" style="left:16.942%;top:31.897%" aria-label="2. ブランチ名">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#screen-product-head-map-3" style="left:29.994%;top:26.724%" aria-label="3. 許可待ち の札">3</a><a class="gm-badge gm-place-top" data-gm="4" href="#screen-product-head-map-4" style="left:43.352%;top:26.724%" aria-label="4. 判断待ち の札">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#screen-product-head-map-5" style="left:58.395%;top:26.724%" aria-label="5. マージできる PR の札">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#screen-product-head-map-6" style="left:74.112%;top:21.552%" aria-label="6. 畳む">6</a><a class="gm-badge gm-place-bottom" data-gm="7" href="#screen-product-head-map-7" style="left:80.116%;top:76.724%" aria-label="7. 固定">7</a><a class="gm-badge gm-place-top" data-gm="8" href="#screen-product-head-map-8" style="left:85.294%;top:21.552%" aria-label="8. ↑">8</a><a class="gm-badge gm-place-bottom" data-gm="9" href="#screen-product-head-map-9" style="left:89.706%;top:76.724%" aria-label="9. ↓">9</a><a class="gm-badge gm-place-top" data-gm="10" href="#screen-product-head-map-10" style="left:96.324%;top:21.552%" aria-label="10. ×">10</a></div></div></div><ol class="gm-list"><li id="screen-product-head-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>プロダクト名</b>：プロダクトの名前です。</div></li><li id="screen-product-head-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>ブランチ名</b>：セッションが開いているブランチです。セッションごとにブランチが違うときは、見出しには出さず、各セッションのまとまりの頭に出ます。</div></li><li id="screen-product-head-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">許可待ち</span> の札</b>：このプロダクトの許可待ちの件数です。0 件のときは出ません。</div></li><li id="screen-product-head-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">判断待ち</span> の札</b>：このプロダクトの判断事項のうち、止めて待っているものと、推奨案を仮に適用して進めているものの合計です。内訳は、マウスを載せると表示されます。</div></li><li id="screen-product-head-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b><span class="ui">マージできる PR</span> の札</b>：このプロダクトで <span class="ui">マージできます</span> と表示している PR の件数です。</div></li><li id="screen-product-head-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">畳む</span></b>：カードの中身を畳みます。畳むと <span class="ui">開く</span> に変わります。</div></li><li id="screen-product-head-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">固定</span></b>：カードを一覧の最上部に固定します。固定すると <span class="ui">固定中</span> に変わり、もう一度押すと解除します。</div></li><li id="screen-product-head-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b><span class="ui">↑</span></b>：カードを 1 つ上へ動かします。先頭のカードでは押せません。固定したカードと固定していないカードの境は越えられません。</div></li><li id="screen-product-head-map-9" data-gm="9"><span class="gm-num" aria-hidden="true">9</span><div class="gm-body"><b><span class="ui">↓</span></b>：カードを 1 つ下へ動かします。末尾のカードでは押せません。</div></li><li id="screen-product-head-map-10" data-gm="10"><span class="gm-num" aria-hidden="true">10</span><div class="gm-body"><b><span class="ui">×</span></b>：このプロダクトのセッションを一覧から外します。外したセッションは、新しいイベントが届くと一覧に戻ります。外した直後の操作は、一覧の最下部で取り消せます。</div></li></ol></figure>
+
+  <h2 id="screen-bottom">一覧の最下部</h2>
+  <p>一覧の下に、隠している項目の注記が出ます。
+  注記は、隠している項目があるときだけ出ます。</p>
+  <figure class="guide-map" id="screen-bottom-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1636"><div class="gm-segment" style="flex-grow:1636;aspect-ratio:1636/442"><div class="gm-clip"><img src="img/screen-list/bottom.png" width="818" height="221" alt="一覧の最下部の 4 つの注記。上から、非表示にした種類、外したセッション、隠している終わったもの、隠している更新の無いセッションの順に並ぶ" loading="lazy" decoding="async"></div><span class="gm-frame" data-gm="1" aria-hidden="true" style="left:0%;top:0%;width:100%;height:20.814%"></span><a class="gm-badge gm-place-left" data-gm="1" href="#screen-bottom-map-1" style="left:0%;top:10.407%" aria-label="1. 非表示にした種類">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:0%;top:26.244%;width:100%;height:20.814%"></span><a class="gm-badge gm-place-left" data-gm="2" href="#screen-bottom-map-2" style="left:0%;top:36.652%" aria-label="2. 外したセッション">2</a><span class="gm-frame" data-gm="3" aria-hidden="true" style="left:0%;top:52.489%;width:100%;height:20.814%"></span><a class="gm-badge gm-place-left" data-gm="3" href="#screen-bottom-map-3" style="left:0%;top:62.896%" aria-label="3. 隠している終わったもの">3</a><span class="gm-frame" data-gm="4" aria-hidden="true" style="left:0%;top:78.733%;width:100%;height:20.814%"></span><a class="gm-badge gm-place-left" data-gm="4" href="#screen-bottom-map-4" style="left:0%;top:89.14%" aria-label="4. 隠している更新の無いセッション">4</a></div></div></div><ol class="gm-list"><li id="screen-bottom-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>非表示にした種類</b>：件数の札で隠した種類と、隠れている件数です。<span class="ui">隠した種類をすべて表示する</span> を押すと、すべて戻ります。</div></li><li id="screen-bottom-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>外したセッション</b>：<span class="ui">×</span> で外したセッションの件数と、そのうちの許可待ちと止めて待っている判断事項の件数です。<span class="ui">外したセッションを戻す</span> を押すと、すべて戻ります。外した直後は <span class="ui">元に戻す</span> も出て、直前に外したプロダクトだけを戻せます。</div></li><li id="screen-bottom-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>隠している終わったもの</b>：<span class="ui">終わったものを隠しています</span> と、隠している終わったセッションとマージ済みの PR の件数が出ます。<span class="ui">表示する</span> を押すと、設定の <span class="ui">終わったものを表示しない</span> がオフになります。</div></li><li id="screen-bottom-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>隠している更新の無いセッション</b>：<span class="ui">更新の無いセッションを隠しています</span> と、隠している件数が出ます。作業中のセッションと、許可待ち、判断待ち、稼働中のサブエージェントのあるセッションは隠れません。<span class="ui">表示する</span> は、開いているページの間だけ有効です。</div></li></ol></figure>
+
+  <h2 id="screen-modes">プロダクト別と種類別の違い</h2>
+  <p>表示モードの切り替えは、同じ情報を 2 通りに並べ替えます。
+  <span class="ui">プロダクト別</span> は、プロダクトのカードの中に、種類ごとの項目を並べます。
+  <span class="ui">種類別</span> は、種類ごとの欄の中に、プロダクトをまたいだ項目を並べます。</p>
+  <p>種類別の欄は、既定では次の順に並びます。
+  <span class="ui">前回見てから</span>、<span class="ui">あなたの判断が必要なこと</span>、<span class="ui">タスクと完了条件</span>、<span class="ui">今やっていること</span>、<span class="ui">プルリクエスト</span> の順です。
+  この順は、設定の <span class="ui">セクションの並び順</span> で変えられます。</p>
+  <figure class="guide-map" id="screen-kind-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1700"><div class="gm-segment" style="flex-grow:1700;aspect-ratio:1700/920"><div class="gm-clip"><img src="img/overview/kind.png" width="850" height="1000" alt="種類別の表示。表示モードの切り替えで種類別が選ばれ、その下に、前回見てからの欄が、プロダクトごとの変化を並べて表示されている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-17.647%"></div><span class="gm-frame" data-gm="1" aria-hidden="true" style="left:1.882%;top:2.391%;width:20%;height:8.261%"></span><a class="gm-badge gm-place-right" data-gm="1" href="#screen-kind-map-1" style="left:21.882%;top:6.522%" aria-label="1. 表示モードの切り替え">1</a><span class="gm-frame" data-gm="2" aria-hidden="true" style="left:1.882%;top:13.261%;width:96.235%;height:85.217%"></span><a class="gm-badge gm-place-left" data-gm="2" href="#screen-kind-map-2" style="left:1.882%;top:55.87%" aria-label="2. 種類ごとの欄">2</a></div></div></div><ol class="gm-list"><li id="screen-kind-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>表示モードの切り替え</b>：<span class="ui">種類別</span> を選んだ状態です。</div></li><li id="screen-kind-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>種類ごとの欄</b>：種類ごとに 1 つの欄があります。この図は <span class="ui">前回見てから</span> の欄で、変化のあったプロダクトごとに、プロダクト名の札を付けて並びます。</div></li></ol></figure>
+
+  <h3 id="screen-kind-judgment">判断が必要なことの欄</h3>
+  <p>許可待ちと判断事項は、待ち時間の長い順に並びます。
+  各項目にはプロダクト名の札が付き、同じプロダクトに複数のセッションがあるときは、セッション名の札も付きます。</p>
+  <figure class="guide-map" id="screen-kind-judgment-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1632"><div class="gm-segment" style="flex-grow:1632;aspect-ratio:1632/180"><div class="gm-clip"><img src="img/screen-kind/judgment.png" width="816" height="90" alt="あなたの判断が必要なことの欄の見出しと、先頭の判断事項の見出しの行。新着の印、プロダクト名の札、判断事項の題、状態の札、時間が並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top-start" data-gm="1" href="#screen-kind-judgment-map-1" style="left:1.716%;top:14.444%" aria-label="1. 欄の見出し">1</a><a class="gm-badge gm-place-bottom" data-gm="2" href="#screen-kind-judgment-map-2" style="left:13.388%;top:99.444%" aria-label="2. プロダクト名の札">2</a><a class="gm-badge gm-place-bottom" data-gm="3" href="#screen-kind-judgment-map-3" style="left:51.348%;top:99.444%" aria-label="3. 状態の札">3</a><a class="gm-badge gm-place-bottom" data-gm="4" href="#screen-kind-judgment-map-4" style="left:67.157%;top:97.778%" aria-label="4. 経過時間">4</a></div></div></div><ol class="gm-list"><li id="screen-kind-judgment-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>欄の見出し</b>：種類の名前です。</div></li><li id="screen-kind-judgment-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>プロダクト名の札</b>：項目がどのプロダクトのものかを示します。</div></li><li id="screen-kind-judgment-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>状態の札</b>：<span class="ui">仮に推奨案で進行中</span> や <span class="ui">止めて待っている</span> など、判断事項の状態です。</div></li><li id="screen-kind-judgment-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>経過時間</b>：回答を待っている時間です。仮に進めている判断事項は <span class="ui">仮適用から</span> の形で出ます。回答を待っている判断事項は、設定で決めた時間を超えると強調されます。仮に進めている判断事項は強調されません。</div></li></ol></figure>
+
+  <h3 id="screen-kind-now">今やっていることの欄</h3>
+  <p>メインの作業行とサブエージェントの行が、新しい順に並びます。
+  行ごとにプロダクト名の札が付きます。</p>
+  <figure class="guide-map" id="screen-kind-now-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1632"><div class="gm-segment" style="flex-grow:1632;aspect-ratio:1632/314"><div class="gm-clip"><img src="img/screen-kind/now.png" width="816" height="157" alt="今やっていることの欄の見出しと、先頭の作業行。左にプロダクト名とセッション名の札と作業中の表示があり、中央に作業の題と実行中のツール、右に経過時間がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top-start" data-gm="1" href="#screen-kind-now-map-1" style="left:1.716%;top:8.28%" aria-label="1. 欄の見出し">1</a><a class="gm-badge gm-place-right" data-gm="2" href="#screen-kind-now-map-2" style="left:14.951%;top:68.471%" aria-label="2. プロダクト名とセッション名の札">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#screen-kind-now-map-3" style="left:94.975%;top:40.764%" aria-label="3. 経過時間">3</a></div></div></div><ol class="gm-list"><li id="screen-kind-now-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>欄の見出し</b>：種類の名前です。</div></li><li id="screen-kind-now-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>プロダクト名とセッション名の札</b>：行がどのプロダクトの、どのセッションのものかを示します。</div></li><li id="screen-kind-now-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>経過時間</b>：メインの行は、実行中のツールがあればその開始から、無ければセッションの最後のイベントからの時間です。サブエージェントの行は、開始からの時間です。</div></li></ol></figure>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="index.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">Agent Cockpit でできること</span></a><span class="page-navigation-empty" aria-hidden="true"></span></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#screen-header">ヘッダ</a></li>
+        <li><a href="#screen-summary">件数の札</a></li>
+        <li><a href="#screen-routing">経路の設定</a></li>
+        <li><a href="#screen-product-card">プロダクトのカード</a></li>
+        <li class="level-3"><a href="#screen-product-head">カードの見出し</a></li>
+        <li><a href="#screen-bottom">一覧の最下部</a></li>
+        <li><a href="#screen-modes">プロダクト別と種類別の違い</a></li>
+        <li class="level-3"><a href="#screen-kind-judgment">判断が必要なことの欄</a></li>
+        <li class="level-3"><a href="#screen-kind-now">今やっていることの欄</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

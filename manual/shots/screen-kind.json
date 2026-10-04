@@ -1,0 +1,57 @@
+{
+  "title": "種類別の表示",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "[data-action=\"mode\"][data-mode=\"kind\"][aria-pressed=\"true\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "#root > section.kind-section:nth-child(4)"
+    },
+    {
+      "do": "screenshot",
+      "name": "judgment",
+      "target": [
+        "#root > section.kind-section:nth-child(2) > .head",
+        "#root > section.kind-section:nth-child(2) .decision-card .decision-head"
+      ],
+      "parts": {
+        "kind.judgment-head": "#root > section.kind-section:nth-child(2) > .head h2",
+        "kind.card-product": "#root > section.kind-section:nth-child(2) .decision-card .decision-head .prod-tag",
+        "kind.card-state": "#root > section.kind-section:nth-child(2) .decision-card .decision-head .badge.wait",
+        "kind.card-time": "#root > section.kind-section:nth-child(2) .decision-card .decision-head time"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "now",
+      "target": [
+        "#root > section.kind-section:nth-child(4) > .head",
+        "#root > section.kind-section:nth-child(4) .now-row:nth-child(1)"
+      ],
+      "parts": {
+        "kind.now-head": "#root > section.kind-section:nth-child(4) > .head h2",
+        "kind.row-tags": [
+          "#root > section.kind-section:nth-child(4) .now-row:nth-child(1) .prod-tag",
+          "#root > section.kind-section:nth-child(4) .now-row:nth-child(1) .session-tag"
+        ],
+        "kind.row-time": "#root > section.kind-section:nth-child(4) .now-row:nth-child(1) time"
+      }
+    }
+  ]
+}

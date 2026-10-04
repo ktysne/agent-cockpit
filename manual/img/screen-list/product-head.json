@@ -1,0 +1,108 @@
+{
+  "name": "product-head",
+  "target": "#root > section.section:nth-child(2) > .head",
+  "width": 1632,
+  "height": 116,
+  "parts": [
+    {
+      "key": "card.name",
+      "bounds": {
+        "x": 28,
+        "y": 33,
+        "width": 136,
+        "height": 48
+      },
+      "visible": true
+    },
+    {
+      "key": "card.branch",
+      "bounds": {
+        "x": 184,
+        "y": 37,
+        "width": 185,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "card.permission",
+      "bounds": {
+        "x": 390,
+        "y": 31,
+        "width": 199,
+        "height": 50
+      },
+      "visible": true
+    },
+    {
+      "key": "card.decision",
+      "bounds": {
+        "x": 608,
+        "y": 31,
+        "width": 199,
+        "height": 50
+      },
+      "visible": true
+    },
+    {
+      "key": "card.pull-requests",
+      "bounds": {
+        "x": 827,
+        "y": 31,
+        "width": 252,
+        "height": 50
+      },
+      "visible": true
+    },
+    {
+      "key": "card.collapse",
+      "bounds": {
+        "x": 1165,
+        "y": 25,
+        "width": 89,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "card.pin",
+      "bounds": {
+        "x": 1263,
+        "y": 25,
+        "width": 89,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "card.move-up",
+      "bounds": {
+        "x": 1360,
+        "y": 25,
+        "width": 64,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "card.move-down",
+      "bounds": {
+        "x": 1432,
+        "y": 25,
+        "width": 64,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "card.close",
+      "bounds": {
+        "x": 1540,
+        "y": 25,
+        "width": 64,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}

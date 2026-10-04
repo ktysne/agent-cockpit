@@ -73,7 +73,7 @@ function validateShotDefinition(definition, { label = '撮影の定義', scenari
       if (typeof step.name !== 'string' || !SHOT_NAME.test(step.name) || step.name.includes('..')) fail(`${where}: name がファイル名として使えません: ${step.name}`);
       if (names.has(step.name)) fail(`${where}: name が重複しています: ${step.name}`);
       names.add(step.name);
-      if (step.target !== undefined && !nonEmptyString(step.target)) fail(`${where}: target が空です`);
+      if (step.target !== undefined && !(nonEmptyString(step.target) || (Array.isArray(step.target) && step.target.length > 0 && step.target.every(nonEmptyString)))) fail(`${where}: target が空です`);
       if (step.viewport !== undefined && typeof step.viewport !== 'boolean') fail(`${where}: viewport は true か false にしてください`);
       if (step.viewport && step.target !== undefined) fail(`${where}: viewport と target は同時に指定できません`);
       if (step.parts !== undefined) {
@@ -266,7 +266,7 @@ async function takeScreenshot(page, step, context) {
     const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
     return { x: left, y: top, width: right - left, height: bottom - top };
   };
-  const clip = step.target ? clipFromRect(await rectOf(step.target)) : { x: 0, y: 0, width: definition.window.width, height };
+  const clip = step.target ? clipFromRect(await unionRectOf([step.target].flat())) : { x: 0, y: 0, width: definition.window.width, height };
   const parts = [];
   for (const [key, selector] of Object.entries(step.parts || {})) parts.push(partBounds(key, await unionRectOf([selector].flat()), clip));
   const { data } = await page.send('Page.captureScreenshot', { format: 'png', clip: { ...clip, scale: 1 }, captureBeyondViewport: false });

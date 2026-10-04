@@ -1,0 +1,38 @@
+{
+  "title": "ヘッダ、件数の札、経路の設定",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "top",
+      "target": "header.top",
+      "parts": {
+        "top.title": "header.top h1",
+        "top.away": ".away-toggle",
+        "top.settings": "#settings-button",
+        "top.chip-permission": "#summary [data-filter=\"permission\"]",
+        "top.chip-blocking": "#summary [data-filter=\"blocking\"]",
+        "top.chip-provisional": "#summary [data-filter=\"provisional\"]",
+        "top.chip-agents": "#summary [data-filter=\"agents\"]",
+        "top.chip-prs": "#summary [data-filter=\"prs\"]",
+        "top.route-agents": [
+          "#routing .rgroup > .rrow:nth-child(1) .rlabel",
+          "#routing .rgroup > .rrow:nth-child(1) .seg"
+        ],
+        "top.route-review": [
+          "#routing .rgroup > .rrow:nth-child(2) .rlabel",
+          "#routing .rgroup > .rrow:nth-child(2) .seg"
+        ]
+      }
+    }
+  ]
+}

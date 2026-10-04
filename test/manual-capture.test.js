@@ -70,6 +70,9 @@ test('不正な撮影の定義は撮影を始める前に拒否する', () => {
   rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a', parts: { 'bad key': 'x' } }] }), /部品の鍵/);
   rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a', parts: { ok: [] } }] }), /selector が空/);
   rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a', viewport: 'yes' }] }), /viewport は/);
+  rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a', target: [] }] }), /target が空/);
+  rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a', target: ['.a', ''] }] }), /target が空/);
+  assert.doesNotThrow(() => validateShotDefinition(validDefinition({ steps: [{ do: 'screenshot', name: 'a', target: ['.a', '.b'] }] })));
   rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a', viewport: true, target: '#root' }] }), /同時に指定できません/);
 });
 

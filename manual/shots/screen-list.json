@@ -1,0 +1,68 @@
+{
+  "title": "プロダクトのカードの見出しと一覧の最下部",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "product-head",
+      "target": "#root > section.section:nth-child(2) > .head",
+      "parts": {
+        "card.name": "#root > section.section:nth-child(2) > .head h2",
+        "card.branch": "#root > section.section:nth-child(2) > .head .branch",
+        "card.permission": "#root > section.section:nth-child(2) > .head > .chip:nth-child(3)",
+        "card.decision": "#root > section.section:nth-child(2) > .head > .chip:nth-child(4)",
+        "card.pull-requests": "#root > section.section:nth-child(2) > .head > .chip:nth-child(5)",
+        "card.collapse": "#root > section.section:nth-child(2) > .head [data-product-action=\"collapse\"]",
+        "card.pin": "#root > section.section:nth-child(2) > .head [data-product-action=\"pin\"]",
+        "card.move-up": "#root > section.section:nth-child(2) > .head [data-product-action=\"move\"][data-direction=\"-1\"]",
+        "card.move-down": "#root > section.section:nth-child(2) > .head [data-product-action=\"move\"][data-direction=\"1\"]",
+        "card.close": "#root > section.section:nth-child(2) > .head [data-product-action=\"close\"]"
+      }
+    },
+    {
+      "do": "click",
+      "selector": "[data-filter=\"permission\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "#filter-note:not([hidden])"
+    },
+    {
+      "do": "click",
+      "selector": "#root > section.section:nth-child(1) [data-product-action=\"close\"]"
+    },
+    {
+      "do": "wait",
+      "selector": "#excluded-note [data-undo-hidden-sessions]"
+    },
+    {
+      "do": "wait",
+      "selector": "#idle-note:not([hidden])"
+    },
+    {
+      "do": "screenshot",
+      "name": "bottom",
+      "target": [
+        "#filter-note",
+        "#excluded-note",
+        "#finished-note",
+        "#idle-note"
+      ],
+      "parts": {
+        "bottom.filter": "#filter-note",
+        "bottom.excluded": "#excluded-note",
+        "bottom.finished": "#finished-note",
+        "bottom.idle": "#idle-note"
+      }
+    }
+  ]
+}
