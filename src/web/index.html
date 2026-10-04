@@ -2298,14 +2298,13 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     appendContextTags(who, product, session, withTags, multipleSessions);
     const name = element('span', 'agent-name');
     name.append(badge(agentState[0], agentState[1]), element('strong', '', agent.agent_type || agent.agent_id));
-    if (agent.unconfirmed && !agent.active) {
+    if (agent.closable) {
       const close = element('button', 'link-btn close-agent', '終了にする');
       close.type = 'button';
       close.dataset.closeAgent = `${session.session_id}::${agent.agent_id}`;
-      who.append(name, close);
-    } else {
-      who.append(name);
+      name.append(close);
     }
+    who.append(name);
     const detail = element('div', 'detail');
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);

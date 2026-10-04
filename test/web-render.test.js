@@ -513,6 +513,19 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.match(mock, /\.now-row\s*>\s*:nth-child\(2\)\s*\{[^}]*min-width:\s*0/);
 });
 
+test('終了ボタンは状態と名前を含む flex 行の右端に置く', () => {
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
+
+  assert.match(pageHtml, /if \(agent\.closable\) \{[\s\S]*?name\.append\(close\);/);
+  assert.match(pageHtml, /\.agent-name\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap/);
+  assert.match(pageHtml, /\.close-agent\s*\{[^}]*margin-left:\s*auto/);
+  assert.match(pageHtml, /@media \(max-width: 640px\)[\s\S]*?\.now-row, \.agent-row \{ grid-template-columns: 1fr/);
+  assert.match(mock, /const isClosable = \(session, agent\) => \(!!agent\.unconfirmed \|\| isMainBackgroundCodex\(agent\)\)/);
+  assert.match(mock, /<span class="agent-name"><span class="badge \$\{state\[1\]\}">[\s\S]*?\$\{close\}<\/span>/);
+  assert.match(mock, /\.agent-row \.agent-name \{ display: flex;[^}]*flex-wrap: wrap/);
+  assert.match(mock, /\.close-agent \{ margin-left: auto/);
+});
+
 test('PR のスタックにクロスレビューを表示する', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   assert.match(source, /function appendPullRequestBlock/);

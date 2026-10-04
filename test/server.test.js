@@ -1474,7 +1474,7 @@ test('既読 API は秘密値と Origin を照合し、初回表示後の変化�
   ]);
 });
 
-test('画面からタスクを完了にし、終了未確認エージェントを終了にできる', async (t) => {
+test('画面からタスクと終了可能なエージェントを終了にできる', async (t) => {
   const state = new DashboardState();
   const runtime = await runningServer(t, { state });
   const sessionId = 'close-actions';
@@ -1516,6 +1516,26 @@ test('画面からタスクを完了にし、終了未確認エージェント�
   state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStart', hookAt: 5, agent_id: 'agent-1', agent_type: 'impl-hard' });
   assert.equal(state.closedAgents.has(sessionId), false);
   assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+
+  const rootSessionId = 'close-root-codex';
+  state.addEvent({
+    session_id: rootSessionId, hook_event_name: 'PreToolUse', hookAt: 1,
+    tool_name: 'Bash', tool_use_id: 'bash-root', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard < prompt.md',
+  });
+  state.addEvent({ session_id: rootSessionId, hook_event_name: 'PostToolUse', hookAt: 2, tool_name: 'Bash', tool_use_id: 'bash-root' });
+  state.addEvent({ session_id: rootSessionId, hook_event_name: 'Stop', hookAt: 3 });
+  const rootAgent = state.snapshot().sessions.find((session) => session.session_id === rootSessionId).agents[0];
+  assert.equal(rootAgent.closable, true);
+
+  const closeRootAgent = await request(runtime.info.port, {
+    method: 'POST', path: '/api/closed-agents',
+    body: JSON.stringify({ session_id: rootSessionId, agent_id: rootAgent.agent_id }), headers,
+  });
+  assert.equal(closeRootAgent.status, 200);
+  const closedRootSession = state.snapshot().sessions.find((session) => session.session_id === rootSessionId);
+  const closedRootAgent = closedRootSession.agents[0];
+  assert.deepEqual([closedRootAgent.active, closedRootAgent.unconfirmed, closedRootAgent.closable], [false, false, undefined]);
+  assert.equal(closedRootSession.status, '待機中');
 });
 
 test('/plan は ppid に一致するセッションファイルの ID を優先する', async (t) => {
