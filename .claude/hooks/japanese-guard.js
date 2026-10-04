@@ -7,7 +7,11 @@ const path = require('node:path');
 const REMINDER = '開発者に見える文(途中経過、ツールの合間の一言、英語の通知への返答を含む)は日本語で書く。';
 const COMPACT_REMINDER = '会話を圧縮した直後である。上の要約が英語でも、開発者に見える文(途中経過、ツールの合間の一言、割り込みの通知への返答を含む)はすべて日本語で書く。';
 const REWRITE_REASON = '最後の返答が英語で書かれている。同じ内容を日本語で書き直す。コード、コマンド、識別子は元のままでよい。';
-const GLOBAL_GUARD_SCRIPTS = ['japanese-guard.js', 'compact-language.js'];
+// グローバル版のスクリプトと、それぞれが出力するイベント。
+const GLOBAL_GUARD_EVENTS = {
+  'japanese-guard.js': ['UserPromptSubmit', 'PostToolBatch', 'Stop'],
+  'compact-language.js': ['SessionStart'],
+};
 
 function globalSettingsPath(environment = process.env) {
   const claudeHome = environment.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -40,7 +44,11 @@ function globalGuardEvents(settingsText) {
       if (event === 'SessionStart' && !matcherMatches(group && group.matcher, 'compact')) continue;
       for (const hook of Array.isArray(group && group.hooks) ? group.hooks : []) {
         const commandLine = [hook.command, ...(Array.isArray(hook.args) ? hook.args : [])].join(' ').replace(/\\/g, '/');
-        if (GLOBAL_GUARD_SCRIPTS.some((script) => commandLine.includes(`/${script}`))) events.add(event);
+        // リポジトリ版をユーザー設定にも書くと 1 回だけ動くので、それを数えると自分で黙ってしまう。
+        if (commandLine.includes('CLAUDE_PROJECT_DIR')) continue;
+        const covered = Object.entries(GLOBAL_GUARD_EVENTS)
+          .some(([script, scriptEvents]) => scriptEvents.includes(event) && commandLine.includes(`/${script}`));
+        if (covered) events.add(event);
       }
     }
   }
@@ -81,7 +89,7 @@ function output(input, { globalEvents = new Set() } = {}) {
   if (globalEvents.has(event)) return null;
   if (event === 'UserPromptSubmit' || event === 'PostToolBatch') return context(event, REMINDER);
   if (event === 'SessionStart' && input.source === 'compact') return context(event, COMPACT_REMINDER);
-  // stop_hook_active は書き直しの後のターンを表す。ここで止めると書き直しが終わらなくなる。
+  // stop_hook_active はいずれかの Stop フックで続行したターンを表す。ここでも止めると書き直しが終わらなくなる場合がある。
   if (event === 'Stop' && !input.stop_hook_active && isMostlyEnglish(input.last_assistant_message)) {
     return { decision: 'block', reason: REWRITE_REASON };
   }

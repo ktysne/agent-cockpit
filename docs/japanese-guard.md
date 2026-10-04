@@ -27,15 +27,17 @@
 両方が出力すると、決まりが 2 回差し込まれ、`Stop` も 2 つが同時に書き直しを求める。
 
 そこでリポジトリ版は、ユーザー設定(`$CLAUDE_CONFIG_DIR/settings.json`、未設定なら `~/.claude/settings.json`)を読み、グローバル版を登録しているイベントでは何も出力しない。
-グローバル版の登録は、そのイベントのフックのコマンドか引数に `/japanese-guard.js` か `/compact-language.js` が含まれるかで見分ける。
+グローバル版の登録は、スクリプトとイベントの組で見分ける。
+`UserPromptSubmit`、`PostToolBatch`、`Stop` はフックのコマンドか引数に `/japanese-guard.js` が、`SessionStart` は `/compact-language.js` が含まれるときに数える。
 `SessionStart` は、matcher が `compact` に当たる登録だけを数える。
+`${CLAUDE_PROJECT_DIR}` を含む登録はリポジトリ版なので数えない。
 イベントごとに見分けるので、グローバル版を一部のイベントにだけ登録した環境や、スクリプトを残したまま登録を外した環境でも、ガードが抜けない。
 
 クラウドのユーザー設定にはグローバル版の登録が無いので、リポジトリ版が全イベントで動く。
 グローバル版を入れていない手元の環境でも、リポジトリ版が動く。
 ユーザー設定が無いか読めないときも、リポジトリ版は動く。重複するほうが、ガードが黙って抜けるより害が小さいためである。
 
-グローバル版のスクリプト名を変えたら、`GLOBAL_GUARD_SCRIPTS` も合わせて直す。
+グローバル版のスクリプト名や、それぞれが出力するイベントを変えたら、`GLOBAL_GUARD_EVENTS` も合わせて直す。
 
 ## 他のリポジトリへの写し方
 
@@ -46,7 +48,8 @@
 
 登録は `"command": "node", "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/japanese-guard.js"]` の exec 形式にする。
 絶対パスで書くと、クラウドや他の開発者の環境で見つからない。
-`args` を省いたシェル形式にすると、Git Bash の無い Windows では PowerShell で動き、`$CLAUDE_PROJECT_DIR` が展開されない。
+`args` を省いたシェル形式では、空白を含むパスを引用符で囲む必要があり、Git Bash の無い Windows では PowerShell で動くので、波括弧の無い `$CLAUDE_PROJECT_DIR` は展開されない。
+exec 形式なら、置き換えたパスがそのまま 1 つの引数として渡る。
 
 ## 判定を直すとき
 

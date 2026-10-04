@@ -69,6 +69,21 @@ test('SessionStart は matcher が compact に当たる登録だけをグロー�
   }
 });
 
+test('グローバル版のスクリプトが本来出力しないイベントの登録は数えない', () => {
+  const events = globalGuardEvents(settingsWith({
+    SessionStart: hookGroup('node', ['/home/me/.claude/hooks/japanese-guard.js']),
+    Stop: hookGroup('node', ['/home/me/.claude/hooks/compact-language.js']),
+  }));
+  assert.equal(events.size, 0);
+});
+
+test('ユーザー設定に書いたリポジトリ版の登録はグローバル版として数えない', () => {
+  const events = globalGuardEvents(settingsWith({
+    Stop: hookGroup('node', ['${CLAUDE_PROJECT_DIR}/.claude/hooks/japanese-guard.js']),
+  }));
+  assert.equal(events.size, 0);
+});
+
 test('ユーザー設定が無いか壊れているときは、グローバル版が無いものとして扱う', () => {
   assert.equal(globalGuardEvents('{').size, 0);
   assert.equal(globalGuardEvents(settingsWith({ Stop: 'not-an-array' })).size, 0);
