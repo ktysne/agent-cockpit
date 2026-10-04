@@ -18,6 +18,12 @@ const NAV_GROUP_ORDER = Object.freeze([
   'PR',
   '設定と運用',
 ]);
+const TEXT_ASSET_EXTENSIONS = new Set(['.css', '.js']);
+
+// 原稿は checkout の設定で CRLF になりうる。組み立ての結果を環境によらず同じにするため LF にそろえる。
+function readText(filePath) {
+  return fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n');
+}
 const HELP_ANCHOR_NAME_PATTERN = /^help-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isPlainObject(value) {
@@ -152,7 +158,7 @@ function createPageList(site, page) {
 function prepareManualPages(site, manualRoot = MANUAL_ROOT) {
   const pages = site.pages.map(page => {
     const sourcePath = path.join(manualRoot, ...page.source.split('/'));
-    let source = fs.readFileSync(sourcePath, 'utf8');
+    let source = readText(sourcePath);
     const pageListMarkers = source.match(/\{\{PAGE_LIST\}\}/g) ?? [];
     if (page.id === 'index' && pageListMarkers.length !== 1) {
       throw new Error(`manual/${page.source}: {{PAGE_LIST}} は 1 か所必要です`);
@@ -265,7 +271,7 @@ function validateSite(site, manualRoot = MANUAL_ROOT, repoRoot = path.resolve(ma
       const sourcePath = path.join(manualRoot, ...page.source.split('/'));
       try {
         if (!fs.statSync(sourcePath).isFile()) throw new Error('not a file');
-        sourceByOutput.set(output, fs.readFileSync(sourcePath, 'utf8'));
+        sourceByOutput.set(output, readText(sourcePath));
       } catch {
         errors.push(`manual/${page.source}: ページ原稿がありません`);
       }
@@ -332,7 +338,8 @@ function copyAssets(sourceDir, targetDir) {
     const sourcePath = path.join(sourceDir, ...relative.split('/'));
     const targetPath = path.join(targetDir, ...relative.split('/'));
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.copyFileSync(sourcePath, targetPath);
+    if (TEXT_ASSET_EXTENSIONS.has(path.extname(relative).toLowerCase())) fs.writeFileSync(targetPath, readText(sourcePath), 'utf8');
+    else fs.copyFileSync(sourcePath, targetPath);
   }
 }
 
@@ -366,7 +373,7 @@ function isWithinPath(parent, child) {
 function buildManual(outDir = DEFAULT_OUT_DIR, manualRoot = MANUAL_ROOT, repoRoot = ROOT) {
   const site = readSite(manualRoot, repoRoot);
   const preparedManual = prepareManualPages(site, manualRoot);
-  const layout = fs.readFileSync(path.join(manualRoot, 'layout.html'), 'utf8');
+  const layout = readText(path.join(manualRoot, 'layout.html'));
   const targetRoot = path.resolve(repoRoot, outDir);
   if (isWithinPath(targetRoot, path.resolve(manualRoot))) throw new Error('出力先が原稿の manual/ を含むため組み立てを中止しました');
   fs.rmSync(targetRoot, { recursive: true, force: true });

@@ -69,3 +69,27 @@ test('見出しから節 ID を作り、節ごとの本文を検索索引に入�
   assert.deepEqual(index.map(item => item.href), ['index.html#index-pr-と回答', 'index.html#fixed']);
   assert.equal(index[0].text, '導入文 レビュー後に回答する。');
 });
+
+test('原稿が CRLF でも LF の原稿と同じ結果を組み立てる', t => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-manual-eol-'));
+  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
+  const copyWithEol = (name, eol) => {
+    const manualRoot = path.join(temporaryRoot, name);
+    fs.cpSync(path.join(ROOT, 'manual'), manualRoot, { recursive: true, filter: source => !source.includes(`${path.sep}dist`) });
+    for (const file of listFiles(manualRoot)) {
+      if (!/\.(html|css|js|json)$/.test(file)) continue;
+      const filePath = path.join(manualRoot, ...file.split('/'));
+      fs.writeFileSync(filePath, fs.readFileSync(filePath, 'utf8').replace(/\r?\n/g, eol));
+    }
+    return manualRoot;
+  };
+  const lfOutput = path.join(temporaryRoot, 'lf-out');
+  const crlfOutput = path.join(temporaryRoot, 'crlf-out');
+  buildManual(lfOutput, copyWithEol('lf', '\n'), ROOT);
+  buildManual(crlfOutput, copyWithEol('crlf', '\r\n'), ROOT);
+  const files = listFiles(lfOutput);
+  assert.deepEqual(listFiles(crlfOutput), files);
+  for (const file of files) {
+    assert.deepEqual(fs.readFileSync(path.join(crlfOutput, ...file.split('/'))), fs.readFileSync(path.join(lfOutput, ...file.split('/'))), file);
+  }
+});
