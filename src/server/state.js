@@ -20,6 +20,7 @@ const DEFAULT_DISPLAY = Object.freeze({
   mergeableCondition: 'cross-review', mergeAfterReviewDefault: false,
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
+const TRANSIENT_NOTICE_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_AWAY_PERIODS = 50;
@@ -1658,9 +1659,13 @@ class DashboardState {
     this.touch();
   }
 
-  pullRequestMergeReservationNoticesForRepo(owner, repo) {
+  pullRequestMergeReservationNoticesForRepo(owner, repo, now = Date.now()) {
     return [...this.pullRequestMergeReservationNotices.values()]
-      .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
+      .filter((record) => {
+        const timestamp = Date.parse(record.at || '');
+        return record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase()
+          && !(Number.isFinite(timestamp) && now >= timestamp && now - timestamp >= TRANSIENT_NOTICE_MS);
+      })
       .map((record) => ({ ...record }));
   }
 

@@ -2112,7 +2112,7 @@ test('マージ済みかクローズ済みの PR だけがあるときもオー�
 
 test('マージ結果は設定時間後に隠し、警告と自動マージ結果の閉じるボタンを残す', () => {
   const names = [
-    'element', 'pullRequestRepositoryKey', 'pullRequestMergeResultHasWarning',
+    'element', 'pullRequestRepositoryKey', 'pullRequestTimestampExpired', 'pullRequestTransientNoticeExpired', 'pullRequestMergeResultHasWarning',
     'pullRequestMergeResultExpired', 'pullRequestMergeResultVisible',
     'pullRequestMergeResultLine', 'appendPullRequestMergeResults',
   ];
@@ -2125,8 +2125,11 @@ test('マージ結果は設定時間後に隠し、警告と自動マージ結�
     setAttribute() {}
   }
   const context = pageContext(pageHtml, {
+    TRANSIENT_NOTICE_MS: 60_000,
     displayPreferences: { mergeResultHideMinutes: 5 },
     pullRequestMergeResults: new Map(),
+    pullRequestMergeMessages: new Map(),
+    pullRequestConflictMessages: new Map(),
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     document: { createElement: (tagName) => new FakeElement(tagName) },
   });
@@ -2166,14 +2169,17 @@ test('マージ結果は設定時間後に隠し、警告と自動マージ結�
 
 test('期限判定は描き直しの周期でマージ時刻を検出し、警告は期限判定から除く', () => {
   const names = [
-    'pullRequestRepositoryKey', 'pullRequestMergeResultHasWarning',
-    'pullRequestMergeResultExpired', 'pullRequestMergeResultExpirySignature',
+    'pullRequestRepositoryKey', 'pullRequestTimestampExpired', 'pullRequestTransientNoticeExpired', 'pullRequestMergeResultHasWarning',
+    'pullRequestMergeResultExpired', 'pullRequestExpirySignature',
   ];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
   const context = pageContext(pageHtml, {
+    TRANSIENT_NOTICE_MS: 60_000,
     displayPreferences: { mergeResultHideMinutes: 5 },
     pullRequestMergeResults: new Map(),
+    pullRequestMergeMessages: new Map(),
+    pullRequestConflictMessages: new Map(),
   });
   vm.runInContext(functions.join('\n'), context);
   const now = Date.now();
@@ -2181,10 +2187,23 @@ test('期限判定は描き直しの周期でマージ時刻を検出し、警�
   const group = { owner: 'acme', repo: 'widget', mergeHistory: [{
     number: 42, mergedAt, automatic: true, automaticResult: { warning: null },
   }] };
-  assert.equal(context.pullRequestMergeResultExpirySignature([group], now + 299_999), '');
-  assert.match(context.pullRequestMergeResultExpirySignature([group], now + 300_000), /automatic:42/);
+  assert.equal(context.pullRequestExpirySignature([group], now + 299_999), '');
+  assert.match(context.pullRequestExpirySignature([group], now + 300_000), /automatic:42/);
   context.pullRequestMergeResults.set('acme/widget', [{ id: 'manual-1', recordedAt: now }]);
-  assert.match(context.pullRequestMergeResultExpirySignature([group], now + 300_000), /manual:manual-1/);
+  assert.match(context.pullRequestExpirySignature([group], now + 300_000), /manual:manual-1/);
+  const noticeGroup = {
+    owner: 'acme', repo: 'widget', product: { key: 'product' }, mergeHistory: [],
+    reservationNotices: [{ number: 41, at: new Date(now).toISOString() }],
+  };
+  context.pullRequestMergeMessages.set('merge-one', { shownAt: now });
+  context.pullRequestConflictMessages.set('conflict-one', { shownAt: now });
+  const visibleNoticeSignature = context.pullRequestExpirySignature([noticeGroup], now);
+  const expiredNoticeSignature = context.pullRequestExpirySignature([noticeGroup], now + 60_000);
+  assert.match(visibleNoticeSignature, /reservation:41:.*:visible/);
+  assert.match(expiredNoticeSignature, /reservation:41:.*:expired/);
+  assert.match(expiredNoticeSignature, /merge:merge-one/);
+  assert.match(expiredNoticeSignature, /conflict:conflict-one/);
+  assert.notEqual(expiredNoticeSignature, context.pullRequestExpirySignature([{ ...noticeGroup, reservationNotices: [] }], now + 60_000));
   for (const warning of [
     { warning: '警告' },
     { headMismatch: true },
@@ -2192,6 +2211,123 @@ test('期限判定は描き直しの周期でマージ時刻を検出し、警�
   ]) {
     assert.equal(context.pullRequestMergeResultExpired(warning, now - 10 * 60_000, now), false);
   }
+});
+
+test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操作ボタンを残す', () => {
+  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const repositoryKey = pageHtml.match(/function pullRequestRepositoryKey\(group\) \{[^]*?\n\}/)?.[0];
+  const timestampExpired = pageHtml.match(/function pullRequestTimestampExpired\([^]*?\n\}/)?.[0];
+  const transientNoticeExpired = pageHtml.match(/function pullRequestTransientNoticeExpired\([^]*?\n\}/)?.[0];
+  const componentStart = pageHtml.indexOf('const MERGE_METHOD_LABELS');
+  const componentEnd = pageHtml.indexOf('\nfunction productGroups(', componentStart);
+  assert.ok(element && repositoryKey && timestampExpired && transientNoticeExpired && componentStart >= 0 && componentEnd > componentStart);
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  const flatten = (node) => [node, ...(node.children || []).flatMap(flatten)];
+  const startedAt = 1_800_000_000_000;
+  const mergeKey = 'd'.repeat(64);
+  const conflictKey = 'example/project#42';
+  const context = pageContext(pageHtml, {
+    TRANSIENT_NOTICE_MS: 60_000,
+    displayPreferences: { hideFinished: true, mergeAfterReviewDefault: false },
+    document: { createElement: (tagName) => new FakeElement(tagName), createTextNode: (text) => ({ textContent: text }) },
+    pullRequestMergeResults: new Map(),
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeOptions: new Map(),
+    pullRequestMergeMessages: new Map([[mergeKey, { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: startedAt }]]),
+    queuedPullRequestMerges: new Map(),
+    queuedPullRequestMerge: () => null,
+    pullRequestMergeInFlight: new Set(),
+    pullRequestReviewSkipInFlight: new Set(),
+    pullRequestConflictConfirmations: new Set(),
+    pullRequestConflictMessages: new Map([[conflictKey, { message: '操作結果を取得できませんでした。PR の状態を取り直してください。', shownAt: startedAt }]]),
+    pullRequestConflictInFlight: new Set(),
+    lastState: { sessions: [{ session_id: 'session-pr', title: 'worker' }] },
+    pullRequestMergeConditionWaits: () => [],
+    appendPullRequestBadges() {},
+    badge: (text, className = '') => Object.assign(new FakeElement('span'), { textContent: text, className }),
+    pullRequestReservationWaits: () => [],
+    appendPullRequestMergeResults() {},
+    durationAgoLabel: () => '1 分前',
+    expandedPrLines: new Set(),
+  });
+  vm.runInContext([
+    'let testNow = 0; Date.now = () => testNow; function setTestNow(value) { testNow = value; }',
+    element, repositoryKey, timestampExpired, transientNoticeExpired, pageHtml.slice(componentStart, componentEnd),
+  ].join('\n'), context);
+  context.setTestNow(startedAt);
+
+  const pullRequest = {
+    mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/example/project/pull/42',
+    mergeRecordKey: mergeKey, conflictRequestKey: 'e'.repeat(64), headRefOid: 'a'.repeat(40), headRefName: 'feature/pr-42',
+    effectiveBase: 'main', canMerge: true, blocker: null, conflict: true,
+    conflictRequestTargets: [{ sessionId: 'session-pr', alive: true }], children: [], stackPosition: { depth: 1, total: 1 },
+  };
+  const group = { owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: ['merge'], trees: [pullRequest] };
+  const renderTree = () => {
+    const root = new FakeElement('div');
+    context.appendPullRequestTree(root, group, pullRequest);
+    return flatten(root);
+  };
+  const renderNotice = (at) => {
+    const root = new FakeElement('div');
+    context.appendPullRequestBlock(root, {
+      owner: 'example', repo: 'project', trees: [], merged: [], mergeHistory: [],
+      reservationNotices: [{ number: 41, at: new Date(at).toISOString(), url: 'https://github.com/example/project/pull/41', message: '予約を取り消しました。' }],
+    });
+    return flatten(root);
+  };
+  const hasStatus = (nodes, className) => nodes.some((node) => node.className === className);
+
+  assert.ok(hasStatus(renderNotice(startedAt), 'merge-result'));
+  let nodes = renderTree();
+  assert.equal(nodes.filter((node) => node.className === 'merge-error').length, 2);
+  assert.ok(nodes.some((node) => node.dataset.openMerge === mergeKey));
+  assert.ok(nodes.some((node) => node.dataset.conflictOpen === conflictKey));
+
+  context.setTestNow(startedAt + 59_999);
+  assert.ok(hasStatus(renderNotice(startedAt), 'merge-result'));
+  assert.equal(renderTree().filter((node) => node.className === 'merge-error').length, 2);
+
+  context.setTestNow(startedAt + 60_000);
+  assert.equal(hasStatus(renderNotice(startedAt), 'merge-result'), false);
+  nodes = renderTree();
+  assert.equal(nodes.some((node) => node.className === 'merge-error'), false);
+  assert.ok(nodes.some((node) => node.dataset.openMerge === mergeKey));
+  assert.ok(nodes.some((node) => node.dataset.conflictOpen === conflictKey));
+});
+
+test('通知が状態版の変化なしに期限切れになっても、次の取得で描き直す', async () => {
+  const refresh = pageHtml.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
+  const applyAwayState = pageHtml.match(/function applyAwayState\(away\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(refresh && applyAwayState);
+  let renders = 0;
+  let signature = 'reservation:visible';
+  const context = pageContext(pageHtml, {
+    fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], pullRequests: [], away: { enabled: false } }) }),
+    checkUiVersion: () => false,
+    syncDisplayPreferences: async () => {},
+    pullRequestExpirySignature: () => signature,
+    renderedPullRequestExpirySignature: 'reservation:visible',
+    updateConnectionNote() {},
+    isAwaitingDecision: () => false,
+    render() { renders += 1; },
+    header: { dataset: { away: 'false' } },
+    awayToggle: { disabled: false, checked: false },
+    root: { replaceChildren() {} },
+    liveStatus: { textContent: '' },
+  });
+  vm.runInContext(`${applyAwayState}\n${refresh}\nvar lastState = null, lastVersion = 7, lastStateAt = null, connectionLost = false, hasRenderedState = true, sinceSeenMode = 'always';`, context);
+
+  await context.refresh();
+  assert.equal(renders, 0);
+  signature = '';
+  await context.refresh();
+  assert.equal(renders, 1);
 });
 
 test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
@@ -2918,8 +3054,8 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       fetch: async () => ({ ok: true, json: async () => ({ version: 7, sessions: [], away: { enabled: awaySequence[index++] } }) }),
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
-      pullRequestMergeResultExpirySignature: () => '',
-      renderedPullRequestMergeResultExpirySignature: '',
+      pullRequestExpirySignature: () => '',
+      renderedPullRequestExpirySignature: '',
       updateConnectionNote() {},
       isPendingDecision: () => false,
       render() { renders += 1; },

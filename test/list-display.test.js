@@ -586,7 +586,8 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     mergeConditionWaits: () => [],
     stackPos: () => ({ total: 1, depth: 1 }),
     effective: () => ({ base: 'main' }),
-    ui: { reserved: {}, reservationNotices: {}, confirm: null },
+    ui: { reserved: {}, reservationNotices: {}, mergeErrors: {}, confirm: null },
+    transientMessageVisible: () => false,
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
@@ -638,7 +639,8 @@ test('モックのマージ欄は即時マージと収束後マージの確認�
     mergeConditionWaits: () => ['CI 実行中'],
     stackPos: () => ({ depth: 1, total: 1 }),
     effective: () => ({ base: 'main' }),
-    ui: { reserved: {}, reservationNotices: {}, confirm: null, mergeAfterReviewDefault: false, mergeOpts: {} },
+    ui: { reserved: {}, reservationNotices: {}, mergeErrors: {}, confirm: null, mergeAfterReviewDefault: false, mergeOpts: {} },
+    transientMessageVisible: () => false,
     mergeConfirm: () => '<div class="merge-confirm" data-action="shared"></div>',
     conflictButton: () => '',
     prBadges: () => '',
@@ -657,6 +659,46 @@ test('モックのマージ欄は即時マージと収束後マージの確認�
   const buttons = context.renderPullRequest(product, pullRequest);
   assert.match(buttons, /data-merge-action="manual"/);
   assert.doesNotMatch(buttons, /data-merge-action="reserve"|CI が通ったらマージ/);
+});
+
+test('モックの予約取消と依頼失敗の知らせは1分で隠す', () => {
+  const expiration = functionSource(mock, 'transientNoticeExpired');
+  const visible = functionSource(mock, 'transientMessageVisible');
+  const item = functionSource(mock, 'prItem');
+  assert.ok(expiration && visible && item);
+  let now = 1_800_000_000_000;
+  const context = pageContext(mock, {
+    TRANSIENT_NOTICE_MS: 60_000,
+    prKey: () => 'repo#1',
+    mergeOperationBlocker: () => null,
+    mergeConditionWaits: () => [],
+    stackPos: () => ({ total: 1, depth: 1 }),
+    effective: () => ({ base: 'main' }),
+    ui: {
+      reserved: {}, confirm: null,
+      reservationNotices: { 'repo#1': { message: '予約を取り消しました。', shownAt: now } },
+      mergeErrors: { 'repo#1': { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: now } },
+    },
+    conflictButton: () => '',
+    prBadges: () => '',
+    crossReviewLine: () => '',
+    conflictStatus: () => '',
+    esc: (value) => String(value ?? ''),
+  });
+  vm.runInContext(`let mockNow = ${now}; Date.now = () => mockNow; function setMockNow(value) { mockNow = value; }\n${expiration}\n${visible}\n${item}\nthis.renderPullRequest = prItem;`, context);
+  const product = { name: 'demo' };
+  const pullRequest = { number: 1, title: 'PR', head: 'feature', sha: 'abc', conflict: false };
+
+  let rendered = context.renderPullRequest(product, pullRequest);
+  assert.match(rendered, /class="merge-result"/);
+  assert.match(rendered, /class="merge-error"/);
+  context.setMockNow(now + 59_999);
+  rendered = context.renderPullRequest(product, pullRequest);
+  assert.match(rendered, /class="merge-result"/);
+  assert.match(rendered, /class="merge-error"/);
+  context.setMockNow(now + 60_000);
+  rendered = context.renderPullRequest(product, pullRequest);
+  assert.doesNotMatch(rendered, /class="merge-result"|class="merge-error"/);
 });
 
 test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {

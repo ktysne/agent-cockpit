@@ -1101,7 +1101,7 @@ class PullRequestTracker {
         trees,
         merged: assembled.merged,
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(owner, repo, this.now()),
-        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(owner, repo),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(owner, repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(owner, repo),
         lastMethod: this.state.lastPullRequestMethod(owner, repo),
       });
@@ -1124,7 +1124,7 @@ class PullRequestTracker {
         trees,
         merged: structuredClone(group.merged),
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
-        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo, this.now()),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
         lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
         loading: this.inFlight.has(repoKey(group.owner, group.repo)) && !this.initialFetchCompleted.has(repoKey(group.owner, group.repo)),
@@ -1147,7 +1147,7 @@ class PullRequestTracker {
           defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
           openStateUnknown: true, registeredCount: 0, openCount: 0, mergeableCount: 0, trees: [], merged: [],
           mergeHistory: this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now()),
-          reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(registration.owner, registration.repo),
+          reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(registration.owner, registration.repo, this.now()),
           reservations: this.state.pullRequestMergeReservationsForRepo(registration.owner, registration.repo),
           lastMethod: this.state.lastPullRequestMethod(registration.owner, registration.repo), loading: true,
         };

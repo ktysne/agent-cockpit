@@ -53,6 +53,23 @@ test('マージ結果を隠す時間は既定で5分', () => {
   assert.equal(new DashboardState().getDisplayPreferences().mergeResultHideMinutes, 5);
 });
 
+test('予約取消の知らせは記録時刻から1分後に PR の状態へ含めない', () => {
+  const state = new DashboardState();
+  const now = Date.now();
+  const notice = (number, at) => ({
+    owner: 'example', repo: 'project', number,
+    url: `https://github.com/example/project/pull/${number}`,
+    at: new Date(at).toISOString(), message: '予約を取り消しました。',
+  });
+  state.recordPullRequestMergeReservationNotice(notice(1, now - 60_001));
+  state.recordPullRequestMergeReservationNotice(notice(2, now - 30_000));
+
+  assert.deepEqual(
+    state.pullRequestMergeReservationNoticesForRepo('example', 'project').map((record) => record.number),
+    [2],
+  );
+});
+
 test('lastUpdatedAt はイベント、計画、判断事項の最新時刻を返す', () => {
   const state = new DashboardState();
   state.syncSessionFiles([{ session_id: 'last-updated', cwd: 'C:\\project', name: '更新時刻' }]);
