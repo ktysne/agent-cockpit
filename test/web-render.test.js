@@ -24,7 +24,16 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
   const answered = context.decisionElapsedLabel({
     state: 'waiting', createdAt: old, answer: { sentAt: new Date().toISOString() },
   });
-  const provisional = context.decisionElapsedLabel({ state: 'provisional', updatedAt: new Date(Date.now() - 60_000).toISOString() });
+  const now = Date.now();
+  const provisional = context.decisionElapsedLabel({
+    state: 'provisional',
+    provisionalAt: new Date(now - 23 * 60_000 - 30_000).toISOString(),
+    updatedAt: new Date(now - 2 * 60_000 - 30_000).toISOString(),
+  });
+  const legacyProvisional = context.decisionElapsedLabel({
+    state: 'provisional',
+    updatedAt: new Date(now - 2 * 60_000 - 30_000).toISOString(),
+  });
 
   assert.deepEqual(JSON.parse(JSON.stringify(waiting)), {
     className: 'wait stale', label: '14 時間 3 分待機中', stale: true,
@@ -33,7 +42,10 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
     className: 'wait', label: '14 時間 3 分待機中', stale: false,
   });
   assert.deepEqual(JSON.parse(JSON.stringify(provisional)), {
-    className: 'since', label: '仮適用から 1 分', stale: false,
+    className: 'since', label: '仮適用から 23 分', stale: false,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(legacyProvisional)), {
+    className: 'since', label: '仮適用から 2 分', stale: false,
   });
   assert.equal(context.decisionElapsedLabel({ state: 'resolved', updatedAt: old }), null);
   assert.equal(context.decisionElapsedLabel({ state: 'withdrawn', updatedAt: old }), null);
