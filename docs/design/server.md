@@ -420,6 +420,6 @@ README のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop
 ## 登録
 
 フックの登録先の `~/.claude/settings.json` はリポジトリの外にあるので、自動では書き換えない。
-追記する内容は README に書き、開発者の確認を取ってから登録する。
+追記する内容は [導入手順](../setup.md) に書き、開発者の確認を取ってから登録する。
 登録は exec 形式(`command` と `args` を分ける)で書く。Windows ではフックのコマンドが PowerShell で解釈され、引用符付きの実行ファイルのパスが失敗するためである。
-MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~/.claude/skills/agent-cockpit/` にコピーする。手順は README に記載し、自動登録やコピーはしない。
+MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~/.claude/skills/agent-cockpit/` にコピーする。手順は [導入手順](../setup.md) に記載し、自動登録やコピーはしない。

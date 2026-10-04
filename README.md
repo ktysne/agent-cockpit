@@ -1,275 +1,53 @@
 # agent-cockpit
 
-Claude Code のフックを受け取り、セッションの状態をローカルのダッシュボードに表示する常駐サーバーです。
+Claude Code のセッションの状態を、ローカルのダッシュボードにまとめて表示する常駐サーバーです。
 外部パッケージは使わず、Node.js 22 以上で動きます。
 
-## 連携(オプション)
+## 概要
 
-agent-cockpit は単独で使えます。次の道具があれば、表示が増えます。無くてもエラーや警告は出ません。
+複数の Claude Code セッションを並行して動かしているときに、「どのセッションが何をしていて、どこで自分を待っているか」を 1 画面で見渡せます。
 
-| 道具 | あるときに増える表示 | 無いとき |
+- **セッションの状態**:作業中のツール、稼働中のサブエージェント、待機中かどうかを、フックが送るイベントから組み立てて表示します。
+- **タスクと完了条件**:メインセッションが MCP ツールで登録した計画を表示します。
+- **判断待ちと回答**:`AskUserQuestion` の質問や、推奨で仮に進めた判断を一覧にします。ダッシュボードから回答すると、フックがセッションへ届けます。
+- **離席中**:離席中にすると、質問はダッシュボードで回答を待ち、締切を過ぎたら推奨で進めます。
+- **許可待ち**:許可を待っているセッションを表示します。画面から許可は出しません。
+
+常駐サーバーは `127.0.0.1` だけで待ち受け、書き込みの口は起動ごとの秘密値と Origin を照合します。
+画面の使い方は [docs/usage.md](docs/usage.md) にあります。
+
+## 連携できるツール
+
+agent-cockpit は単独で使えます。次のツールを導入済みなら、表示と操作が増えます。導入していなくても、エラーや警告は出ません。
+
+| ツール | 概要 | 連携するとできること |
 |---|---|---|
-| [claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge)(`~/.claude/tools/codex-agent.sh`) | 経路の設定、サブエージェントの行の経路の札と Codex のモデル | 経路の設定と札を出さず、`route.js` は何も差し込まない |
-| [ai-cross-review](https://github.com/ktysne/ai-cross-review)(worktree の `tools/cross-review.js`) | PR のカードのクロスレビュー状態 | 道具の無い PR は「レビュー不要」として表示する |
+| [GitHub CLI(`gh`)](https://cli.github.com/) | GitHub の公式 CLI | セッションが作った PR を、スタックの形で CI やレビューの状態と一緒に表示します。スタックの一番下の PR を、画面で確認してマージできます。 |
+| [claude-codex-bridge](https://github.com/ktysne/claude-codex-bridge) | Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出す定義一式 | サブエージェントを Codex と Claude のどちらで動かすかを、画面の「経路の設定」で切り替えます。サブエージェントの行に経路と Codex のモデルを表示します。 |
+| [ai-cross-review](https://github.com/ktysne/ai-cross-review) | Claude と Codex に、git の差分で交互にコードレビューさせる CLI | PR のカードにクロスレビューの往復と結論を表示します。レビューの収束を待ってからマージする予約ができます。レビュアーを画面の「経路の設定」で選べます。 |
 
-## 起動
+## 導入
 
-通常は次のコマンドで起動します。
+導入は AI(Claude Code など)に任せる前提で、手順を [docs/setup.md](docs/setup.md) にまとめています。
+AI には、次のように依頼してください。
 
-```powershell
-npm start
-```
+> agent-cockpit を導入して。手順は https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md にある。
 
-サーバーは `127.0.0.1:47821` で待ち受け、ブラウザーで `http://127.0.0.1:47821/` を開くと画面が表示されます。
-保存先は `~/.agent-cockpit/` です。
-`AGENT_COCKPIT_HOME` を設定すると保存先を変更できます。
-`--port` でポートを変え、`--dev` を付けると受信した項目名を調べる開発用 API が有効になります。
+手順書は、agent-cockpit だけを導入する手順と、連携ツールごとに agent-cockpit 側で必要な設定の手順に分かれています。
+連携ツールそのものの導入は、それぞれのドキュメントに従ってください。手順書は、導入済みの連携ツールに合わせて agent-cockpit 側の設定を案内します。
+`~/.claude/settings.json` など、リポジトリの外のファイルを変えるときは、AI が変更内容を示して確認を求めます。
 
-```powershell
-$env:AGENT_COCKPIT_HOME = Join-Path $env:TEMP 'agent-cockpit-dev'
-npm start -- --port 48377 --dev
-```
+## 導入できたかの確認
 
-サーバーを終了するときは、起動した端末で `Ctrl+C` を押します。
+パターンごとに、次の点を確かめます。具体的なコマンドと期待する結果は、[docs/setup.md](docs/setup.md) の各パターンの「確認」にあります。
 
-## タスクトレイ
+| パターン | 確かめること |
+|---|---|
+| agent-cockpit だけ | `http://127.0.0.1:47821/health` が `"app":"agent-cockpit"` を返す。新しく開いたセッションがダッシュボードに出る。`claude mcp list` で `agent-cockpit` がつながっている。セッションに計画を登録させると、タスクが画面に出る。 |
+| + GitHub CLI | `gh auth status` が、環境変数のトークンに頼らずに通る。セッションが作った PR が、CI の状態と一緒に画面に出る。 |
+| + claude-codex-bridge | 画面の「経路の設定」にサブエージェントの段が出る。経路を選んでから起動したサブエージェントの行に、経路の札が付く。 |
+| + ai-cross-review | ai-cross-review を入れたリポジトリでセッションを開くと、「経路の設定」にクロスレビューの段が出る。画面で選んだ値を `node tools/cross-review.js route` が返す。PR のカードにクロスレビューの段が出る。 |
 
-Windows では、リポジトリ直下の `start-tray.cmd` をダブルクリックすると、タスクトレイを起動してダッシュボードを開きます。
-起動の瞬間に黒いウィンドウが一瞬表示されます。
-どの起動方法も、PowerShell の実行ポリシーが `RemoteSigned` 以上であることを前提にしています(`Get-ExecutionPolicy` で確かめられます)。
-既定の `Restricted` のままでは、ウィンドウを出さずに起動が失敗します。
-初回起動時に、許可待ちと判断待ちが増えたときに Windows の通知を出すか確認します(既定はオフ)。
-右クリックメニューの「待ち件数を通知する」で切り替えられ、設定は Agent Cockpit のホーム(`AGENT_COCKPIT_HOME`、既定は `~/.agent-cockpit`)にある `tray.json` に保存されます。
-常駐サーバーなどのエラー通知はこの設定にかかわらず表示します。
+## 開発者向けドキュメント
 
-ダッシュボードのウィンドウは専用のプロファイルの Edge で開きますが、PR や CI などのリンクは OS の既定のブラウザで開きます。
-
-ショートカットには、スクリプトを実行したチェックアウトの絶対パスが入ります。
-worktree を消すとリンクが切れるので、本体のチェックアウトから実行してください。
-
-```powershell
-powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1"
-```
-
-このスクリプトを実行すると、デスクトップとスタートメニューに「Agent Cockpit」のショートカットができます。
-ショートカットを作り直すと、起動引数も更新されます。
-これらのショートカットをダブルクリックすると、タスクトレイを起動してダッシュボードを開きます。
-黒いウィンドウは表示されません。
-
-ログオン時にタスクトレイだけを自動起動するには、`-Startup` を付けて実行します。
-自動起動をやめるときは、同じ場所の指定に `-Remove` を付けます。
-
-```powershell
-powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup
-powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Startup
-```
-
-ダッシュボードを閉じてもタスクトレイは動き続けます。
-タスクトレイのメニューに「常駐サーバーを再起動」があります。確認すると、`server.json` の PID のプロセスコマンドラインに、このチェックアウトの `src/server/server.js` が含まれる場合だけ停止して起動し直します。ファイルが無い場合や別のプロセスを指している場合は、停止せずに起動処理へ進みます。ダッシュボードのウィンドウは閉じず、開いている画面は自動につなぎ直します。MCP で登録したタスクと判断事項、`AskUserQuestion` から作る判断事項、それらへの回答の記録、表示設定、一覧から外したセッション、離席中はファイルから復元します。イベントから組み立てるセッション状態とサブエージェント、画面で終了にしたサブエージェントは再起動で消え、次のイベントから組み立て直されます。判断事項に送信済みで未配信の回答は残りますが、再起動で質問の待ちが切れるため、次の `UserPromptSubmit` または `PostToolBatch` まで配信されません。テーマはブラウザーごとの `localStorage` に残ります。
-タスクトレイのメニューで「終了」を選ぶと、ダッシュボードとタスクトレイを終了します。常駐サーバーは動き続けます。
-
-アプリアイコンの元画像は `assets/agent-cockpit_icon.png` にあります。64×64 の画面用画像は次のコマンドで作り直せます。ショートカット用 ICO はインストール時に元画像から生成されます。
-
-```powershell
-powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
-```
-
-画面のアイコンは、`src/web/index.html` と `mock/index.html` にこの 64×64 の画像を data URI で埋め込んでいます(タブのアイコンとタイトルの左の 2 か所ずつ)。元画像を差し替えたら、作り直した画像の base64 でこの 4 か所も書き換えてください。
-
-「設定」の画面では「表示」から配色を変更できます。
-
-表示モードを「プロダクト別」と「種類別」で切り替えられます。上部の件数タグを押すとその種類を隠し、「すべて表示する」で戻せます。プロダクト別では、各プロダクトを固定、上下移動、折りたたみできます。表示設定はブラウザーの `localStorage` に保存されます。保存できない場合も操作できますが、再読み込みすると初期状態に戻ります。
-
-プロダクトごとに、離席中の期間に起きた変化のうち、最後に既読にした後のタスク完了、PR 作成、仮適用した判断、CI 失敗、PR マージを「前回見てから」に表示します。新しい判断事項には「新着」を付けます。
-
-## フックの登録
-
-`~/.claude/settings.json` は自動では変更しません。
-次の `hooks` の内容を既存設定へ統合し、スクリプトのパスをこのリポジトリの絶対パスに置き換えてください。
-`event.js` の `SessionStart` は同期フックとして登録し、それ以外には `async: true` を付けます。
-実行ファイルと引数を分ける exec 形式で登録します。
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"] }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
-    ],
-    "PreToolUse": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 1830 }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
-    ],
-    "PostToolUseFailure": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
-    ],
-    "PostToolBatch": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 2 }] }
-    ],
-    "Notification": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
-    ],
-    "SubagentStart": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
-    ],
-    "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
-    ],
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "asyncRewake": true, "timeout": 3600 }] }
-    ],
-    "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
-    ],
-    "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 5 }] }
-    ]
-  }
-}
-```
-
-同期の `SessionStart` はサーバーの起動を確認し、起動 URL を `additionalContext` で返します。
-フックが送るツール入力は要約だけです。
-許可待ちは表示だけで、画面から許可を出す機能はありません。
-`away.js` は `PreToolUse`(matcher `AskUserQuestion`)に同期フックとして登録し、timeout を 1830 秒にします。離席中の回答待ち時間は設定画面で 1〜30 分に変更でき、既定値は 5 分です。フックの timeout は最大値に 30 秒の余裕を加えた固定値です。
-`UserPromptSubmit` と `SessionStart` の `away.js` は同期フックとして登録し、timeout を 5 秒にします。
-`PostToolBatch` の `answer.js` は同期フックとして登録し、timeout を 2 秒にします。
-`Stop` の `answer.js` は `asyncRewake: true` と timeout 3600 秒で登録します。
-`UserPromptSubmit` にも `answer.js` を同期フックとして登録し、渡した回答が反映されていない場合に、最大 3 回まで文脈へ差し込み直します。
-`away.js` は開始時と各ターンの入力時にタスク登録の決まりを知らせ、`PostToolBatch` の `answer.js` は条件に応じて作業中の登録を促します。
-
-離席中は画面上部のチェックボックスか、タスクトレイの右クリックメニューで切り替えます。
-有効な間、`AskUserQuestion` は設定画面の「離席中に質問の回答を待つ時間」に従ってダッシュボードの回答を待ちます(1〜30 分、既定 5 分)。締切までに回答が無ければ質問を止め、推奨で作業を続けるようフックが伝えます。
-finish が常駐サーバーに届いた場合、回答があればその内容を返します。それ以外は離席状態を確認し、離席中が続いていれば質問を `deny` して推奨で進め、判断事項を `provisional` にします。離席中が解除されていれば `released` としてデスクトップアプリのダイアログへ戻します。
-finish も常駐サーバーに届かなかった場合、フックは離席状態を確認できないため、常に質問を `deny` して推奨で進めます。
-回答待ちのフックから 30 秒間 long-poll が届かない場合は待ちを解除し、届いていた回答も破棄してデスクトップアプリのダイアログへ戻します。
-ダッシュボードでは「推奨案で OK」、選択肢の選択、指示を組み合わせて回答できます。単一選択は 1 つ、複数選択は複数の選択肢を押して選び、「回答を送る」で送信します。「推奨案で OK」と選択肢の選択は排他的です。
-回答待ちの質問への回答は `PreToolUse` の `updatedInput` で渡し、元の `tool_input` を保ったまま `answers` を加えます。
-作業中は `PostToolBatch` から回答を差し込み、停止中は `Stop` の `asyncRewake` フックが回答を待ってセッションを起こします。
-`awaitingAnswerUntil` がある質問の回答は、`PostToolBatch`、`UserPromptSubmit`、`Stop` からは渡しません。
-回答本文は常駐サーバーのメモリーとフックの出力にだけ置きます。
-許可のダイアログには答えず、破壊的な操作、PR のマージ、`main` への push は判断待ちに残します。
-`claude -p` では `AskUserQuestion` が無効なため、この制御は対話セッションでだけ働きます。
-
-フックの登録後に開いたセッションから離席中の制御が有効になります。
-すでに実行中のセッションは、後から追加したフックを読み込みません。
-
-### 経路の設定
-
-claude-codex-bridge を入れているときは、ダッシュボード上部の「経路の設定」で、サブエージェントの経路を「既定」「Codex」「Claude」から選びます。
-ai-cross-review を入れたリポジトリでセッションを開いているときは、クロスレビューのレビュアーも同じ欄で選べます。ai-cross-review はレビューを回す直前に `node tools/cross-review.js route` でこの設定を読みます。
-常駐サーバーはサブエージェントとクロスレビューの両方を `AGENT_COCKPIT_HOME` の `routing.json` に保存します。サブエージェントの設定は起動時に記録され、そのサブエージェントが終了するまで変わりません。
-設定ファイルが読めない場合は、両方を「既定」として扱います。
-
-次のフックを既存の `~/.claude/settings.json` の `hooks` に追加し、スクリプトのパスをこのリポジトリの絶対パスに置き換えてください。
-同じイベントの既存配列がある場合は、その配列へ要素を追加します。
-
-```json
-{
-  "hooks": {
-    "SubagentStart": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
-    ],
-    "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
-    ]
-  }
-}
-```
-
-`route.js` は同期フックとして実行します。起動時の経路の記録は `AGENT_COCKPIT_HOME`(既定は `~/.agent-cockpit`)の `route-agents/` に置きます。同じサブエージェントが再開しても初回の経路を使い、24 時間使われていない記録は、新しいサブエージェントの開始時に削除します。
-エージェント定義や `~/.claude/CLAUDE.md` への追記、ai-cross-review の `route` コマンドへの対応は、この作業の範囲外です。
-
-## タスクと判断事項
-
-メインセッションは計画を立てた後に MCP ツール `cockpit_set_tasks` を呼び、タスクと完了条件を登録します。
-タスクの状態や完了条件が変わったときは、一覧全体を置き換えます。
-
-`AskUserQuestion` の質問はフックが自動で判断事項にします。
-推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使いません。
-複数の選択肢に含まれる場合や、質問が複数選択の場合は推奨なしとして扱います。
-質問せずに推奨を適用する判断は `cockpit_add_decision` または `cockpit_update_decision` で記録します。
-
-画面は判断事項の状態、待ち時間、背景、質問、選択肢を表示します。
-解決済みと取り下げの判断事項と完了したタスクは折りたたまれます。作業中のタスクがあるセッションでは、未着手のタスクも折りたたまれます。
-回答欄から「推奨案で OK」、選択肢、指示を組み合わせて回答できます。
-メインセッションでの MCP ツールの使い方は [agent-cockpit スキル](skills/agent-cockpit/SKILL.md) にあります。
-
-## MCP サーバーとスキルの登録
-
-MCP サーバーは、Node.js の実行ファイルとこのリポジトリの `src/mcp/server.js` をユーザースコープで登録します。
-作業ツリーのルートで次を実行してください。
-
-```powershell
-$nodePath = (Get-Command node).Source
-$serverPath = (Resolve-Path .\src\mcp\server.js).Path
-claude mcp add --scope user agent-cockpit -- $nodePath $serverPath
-```
-
-この登録方法と `--` による実行コマンドの指定は [Claude Code の MCP ガイド](https://docs.anthropic.com/en/docs/claude-code/mcp) に記載されています。
-登録後、実際のセッションで MCP 環境の `CLAUDE_CODE_SESSION_ID` とフックの `session_id` が同じ値であることを確かめてください。
-MCP ツール `cockpit_add_pr` に PR の URL を渡すと、そのセッションへ登録して読み取り専用のスタック表示に追加できます。
-
-表示設定の「『マージできます』と出す条件」では、「マージの操作ができる」「CI も通っている(CI が無ければ問わない)」「クロスレビューも済んでいる(不要としたものを含む)」から選べます。既定はクロスレビューまで済んでいることです。条件を満たした PR は緑の「マージできます」、操作はできるが条件が残る PR は灰色の「マージ操作は可能」と未達条件を表示します。未達でも手動マージはでき、確認欄の先頭に未達条件を示します。
-
-記録済みのスタック最下段 PR は、画面で方式とリモートブランチ削除の有無を確認してマージできます。確認欄の「レビュー収束後マージ」は既定でオフです。オンにすると、常駐サーバーが予約を保存し、PR の状態を取り直すたびにクロスレビューの最後の収束記録、CI、GitHub のレビュー承認、スタック位置、ドラフトとコンフリクトを確かめます。条件がそろうと通常のマージ手順で、収束記録の SHA を `--match-head-commit` に渡してマージします。収束後に push されたら新しい head の収束まで待ちます。表示設定から予約チェックを既定でオンにできます。オフで実行した即時マージは画面に表示した head SHA を照合します。
-PR の差分が軽微でクロスレビューを省くときは、メインセッションから MCP ツール `cockpit_skip_review` に owner、repo、PR 番号、現在の head SHA、理由を渡します。記録はその head に限り、push で head が変わると無効になります。カードの「レビュー不要にする」からも記録でき、取り消せます。使い方は [agent-cockpit スキル](skills/agent-cockpit/SKILL.md) にあります。
-確認欄の「予約を取り消す」はローカル予約を消し、PR がマージ以外で閉じられたときやクロスレビューの最後の記録が `halted` になったときも予約を取り消して画面と作成元セッションへ知らせます。旧 GitHub 自動マージ形式の保存データは読み込み時に捨て、GitHub 側は操作しません。
-マージ結果は作成元セッションへ配信し、直上の PR があるスカッシュまたはリベースでは積み直しを依頼します。
-マージ済みの一覧は 24 時間表示します。
-
-スキルは `~/.claude/skills/agent-cockpit/` にコピーします。
-PowerShell では次のように実行します。
-
-```powershell
-$skillDirectory = Join-Path $env:USERPROFILE '.claude\skills\agent-cockpit'
-New-Item -ItemType Directory -Path $skillDirectory -Force | Out-Null
-Copy-Item .\skills\agent-cockpit\SKILL.md (Join-Path $skillDirectory 'SKILL.md') -Force
-```
-
-## テスト
-
-```powershell
-npm test
-```
-
-テストは `AGENT_COCKPIT_HOME` を一時ディレクトリに設定します。
-サーバーの単体テストはポート `0` で起動します。
-`ensure-server.js` のテストは空きポートを `AGENT_COCKPIT_PORT` に設定し、ポート `47821` を使いません。
-開発機の `~/.agent-cockpit` と通常ポートには接続しません。
-
-子プロセスを起動できない環境(Codex の Windows サンドボックスなど)では、`npm test` が `spawn EPERM` で止まります。
-その環境では、テストファイルを 1 つのプロセスで流す次のコマンドを使います。
-
-```powershell
-npm run test:inprocess
-```
-
-`ensure-server.js` のテストは常駐サーバーを子プロセスで起動するので、この環境では失敗します。
-
-## イベント再生
-
-別の端末で一時保存先を設定してサーバーを起動します。
-
-```powershell
-$env:AGENT_COCKPIT_HOME = Join-Path $env:TEMP 'agent-cockpit-replay'
-npm start -- --port 48377 --dev
-```
-
-もう一つの端末でも同じ保存先を設定し、イベントを再生します。
-
-```powershell
-$env:AGENT_COCKPIT_HOME = Join-Path $env:TEMP 'agent-cockpit-replay'
-node src/dev/replay.js
-Invoke-RestMethod http://127.0.0.1:48377/api/state | ConvertTo-Json -Depth 8
-```
-
-状態には許可待ちの開始と解消、終了したサブエージェント、codex-agent の監査行、稼働中のサブエージェントと `Stop` による待機が含まれます。
-`SessionEnd` を送った再生用セッションは一覧から消えます。
-受信した項目名と通知の種類は、`--dev` 起動時だけ `GET /api/dev/fields` で確認できます。
+agent-cockpit 自体を開発するときは、[docs/development.md](docs/development.md) から読み始めてください。テストの流し方、イベントの再生、設計資料と計画書の場所をまとめています。
