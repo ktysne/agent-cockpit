@@ -1,0 +1,10 @@
+{
+  "name": "seen",
+  "target": [
+    "#root > section.section:nth-child(1) > .head",
+    "#root > section.section:nth-child(1) .decision-card"
+  ],
+  "width": 1632,
+  "height": 976,
+  "parts": []
+}

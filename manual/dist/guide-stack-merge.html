@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>積み上げた PR を順にマージする | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">目的別のガイド</h3>
+        <ol class="nav-pages">
+        <li><a href="guide-away.html">席を外している間に判断を返す</a></li>
+        <li><a href="guide-stack-merge.html" aria-current="page">積み上げた PR を順にマージする</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">目的別のガイド</h3>
+        <ol class="nav-pages">
+        <li><a href="guide-away.html">席を外している間に判断を返す</a></li>
+        <li><a href="guide-stack-merge.html" aria-current="page">積み上げた PR を順にマージする</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#guide-stack-read">スタックの表示を読む</a></li>
+        <li><a href="#guide-stack-check">一番下の PR がマージできる条件を確かめる</a></li>
+        <li><a href="#guide-stack-merge-run">確認欄で方式を選んでマージする</a></li>
+        <li><a href="#guide-stack-reserve">レビューが済んでいない PR は収束後のマージを予約する</a></li>
+        <li><a href="#guide-stack-result">結果を確かめて次の PR へ進む</a></li></ol>
+      </details>
+<section class="section">
+  <h1>積み上げた PR を順にマージする</h1>
+  <p class="lead">前の PR のブランチを base にして積んだ PR は、スタックの一番下から順にマージします。
+  このページでは、スタックの表示を読み、一番下の PR がマージできる条件を確かめて、確認欄でマージするまでを説明します。
+  レビューが済んでいない PR にはマージの予約を使い、マージのあとは、結果と積み直しの依頼を確かめて次の PR へ進みます。
+  各手順の細かな仕様は、手順の最後のリンク先で説明します。</p>
+
+  <div class="guide-intro">
+    <div>
+      <p class="guide-intro-title">このページでできるようになること</p>
+      <ul>
+        <li>スタックの表示から、どの PR をいまマージできるかを読み取る</li>
+        <li>一番下の PR について、マージできる条件が残っていないかを確かめる</li>
+        <li>確認欄でマージの方式を選び、マージする</li>
+        <li>レビューの収束を待ってマージするよう、予約する</li>
+        <li>マージの結果と積み直しの依頼を確かめて、次の PR へ進む</li>
+      </ul>
+    </div>
+    <div>
+      <p class="guide-intro-title">必要なもの</p>
+      <ul>
+        <li>認証済みで使える GitHub CLI(<code>gh</code>)(<a href="start.html#start-integrations">連携ツールの有無で変わる表示</a>)</li>
+        <li>セッションに登録した PR(<a href="pull-requests.html#pr-register">PR の登録</a>)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 id="guide-stack-read">スタックの表示を読む</h2>
+  <p>PR は、プロダクトのカードの <span class="ui">プルリクエスト</span> の欄に、リポジトリごとの枠で並びます。
+  この例では、プロダクト parcel-api の PR #41、#42、#43 が、3 段のスタックになっています。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>リポジトリの枠を見つける</b>枠の見出しに、リポジトリ名と、<span class="ui">マージできる PR</span> の件数が出ます。
+      スタックの土台の <code>main</code> の横に、「スタック 3 段」と段数が出ます(<a href="pull-requests.html#pr-stack">スタックの表示</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-stack-stack" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="950" style="max-width:475px;min-width:min(600px, 475px)"><div class="gm-segment" style="flex-grow:950;aspect-ratio:950/130"><div class="gm-clip"><img src="img/pull-requests-stack/stack.png" width="788" height="631" alt="リポジトリの枠の見出し。example-team の parcel-api、マージできる PR 2 件の札、GitHub から 1 分以内に取得の表示がある。その下に、main、スタック 3 段と出ている" loading="lazy" decoding="async" style="width:165.895%;margin-left:0%;margin-top:0%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>下から数える</b>一番下の PR #41 の位置の札は「1/3」で、直上の #42 が「2/3」、その直上の #43 が「3/3」です。
+      <span class="ui">マージする</span> のボタンが付くのは、一番下の #41 だけです。
+      #42 には「マージできない理由: 下の #41 のマージ待ち」と出ます。
+      一番下以外の PR は、下の PR がマージされるまで、マージできません(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-stack-stack-v2" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1196" style="max-width:598px;min-width:min(600px, 598px)"><div class="gm-segment" style="flex-grow:980;aspect-ratio:980/780"><div class="gm-clip"><img src="img/pull-requests-stack/stack.png" width="788" height="631" alt="3 段のスタック。一番下の PR #41 に 1/3 の札とマージできますの札、マージするのボタンがある。直上の #42 は 2/3 で、下の #41 のマージ待ちと出ている。その直上の #43 は 3/3 で、下の #42 のマージ待ちと出ている" loading="lazy" decoding="async" style="width:160.816%;margin-left:0%;margin-top:-13.265%"></div></div><div class="gm-segment" style="flex-grow:216;aspect-ratio:216/780"><div class="gm-clip"><img src="img/pull-requests-stack/stack.png" width="788" height="631" alt="" loading="lazy" decoding="async" style="width:729.63%;margin-left:-629.63%;margin-top:-60.185%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-check">一番下の PR がマージできる条件を確かめる</h2>
+  <p>一番下の PR は、状態の札が <span class="ui">マージできます</span> か <span class="ui">マージ操作は可能</span> になっています。
+  <span class="ui">マージできます</span> は、設定で選んだ条件まで満たしている PR です(<a href="pull-requests.html#pr-mergeable">「マージできます」の条件</a>)。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>条件がそろっているかを確かめる</b>PR #41 には <span class="ui">マージできます</span> が出ています。
+      <span class="ui">CI 成功</span>、<span class="ui">承認済み</span>、クロスレビューの <span class="ui">レビュー済み</span> がそろっているためです。
+      既定の設定では、CI とクロスレビューが済んでいる PR に <span class="ui">マージできます</span> を出します(<a href="settings.html#settings-mergeable">「マージできます」と出す条件</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-stack-stack-v3" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1196" style="max-width:598px;min-width:min(600px, 598px)"><div class="gm-segment" style="flex-grow:980;aspect-ratio:980/224"><div class="gm-clip"><img src="img/pull-requests-stack/stack.png" width="788" height="631" alt="スタックの一番下の PR #41。1/3 の札、題、マージできますの札、マージするのボタンがある。feature/slots-api から main への表示の下に、CI 成功と承認済みの札、クロスレビューのレビュー済みの行が並ぶ" loading="lazy" decoding="async" style="width:160.816%;margin-left:0%;margin-top:-14.082%"></div></div><div class="gm-segment" style="flex-grow:216;aspect-ratio:216/224"><div class="gm-clip"><img src="img/pull-requests-stack/stack.png" width="788" height="631" alt="" loading="lazy" decoding="async" style="width:729.63%;margin-left:-629.63%;margin-top:-63.889%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>条件が残っているときの表示を知る</b>別のリポジトリの PR #118 は、<span class="ui">マージ操作は可能</span> のままです。
+      <span class="ui">CI 実行中</span> で、クロスレビューも対応中のため、<span class="ui">待ち:</span> の行に満たしていない条件が出ます。
+      この PR も、確認欄から手でマージできます。
+      その場合、確認欄の先頭に、満たしていない条件の警告が出ます(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-pending" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1226" style="max-width:613px;min-width:min(600px, 613px)"><div class="gm-segment" style="flex-grow:1000;aspect-ratio:1000/300"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="1021" alt="PR #118 の行。マージ操作は可能の札とマージするのボタンがある。CI 実行中と承認は任意の札、クロスレビューの 2 往復目の結論待ちの行、待ち: CI 実行中、クロスレビュー対応中の行が並ぶ" loading="lazy" decoding="async" style="width:157.6%;margin-left:0%;margin-top:-12%"></div></div><div class="gm-segment" style="flex-grow:226;aspect-ratio:226/300"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="1021" alt="" loading="lazy" decoding="async" style="width:697.345%;margin-left:-597.345%;margin-top:-53.097%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-merge-run">確認欄で方式を選んでマージする</h2>
+  <div class="note warn">マージは取り消せません。
+  方式、ブランチの削除、警告、照合する head SHA を読んでから、<span class="ui">マージを実行</span> を押します(<a href="pull-requests.html#pr-merge">マージする</a>)。</div>
+  <ol class="steps">
+    <li><b>確認欄を開く</b>PR #41 の <span class="ui">マージする</span> を押します。
+      PR の行の下に、「#41 を main へマージする」という確認欄が開きます。
+      <span class="ui">やめる</span> を押すと、何もせずに閉じます。</li>
+    <li><div class="step-body"><b>方式とブランチの扱いを選ぶ</b>マージの方式を、<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> から選びます。
+      リポジトリで許可されている方式だけが出ます。
+      ここでは <span class="ui">スカッシュ</span> を選びます。
+      <span class="ui">マージ後にリモートブランチを削除する</span> は、入れておくと、マージのあとに PR のブランチを GitHub から削除します。
+      すぐにはマージせず、予約したいときは <span class="ui">レビュー収束後マージ</span> を入れます(<a href="#guide-stack-reserve">レビュー収束後マージを予約する</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-squash" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="700" style="max-width:350px;min-width:min(600px, 350px)"><div class="gm-segment" style="flex-grow:700;aspect-ratio:700/340"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="910" alt="PR #41 の確認欄の上半分。見出しは #41 を main へマージする。マージコミット、スカッシュ、リベースの 3 つの方式のうちスカッシュが選ばれ、その下にレビュー収束後マージとマージ後にリモートブランチを削除するのチェックが並ぶ" loading="lazy" decoding="async" style="width:225.143%;margin-left:0%;margin-top:-55%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>警告と照合する SHA を確かめて実行する</b>確認欄の下の方に、<span class="ui">照合する head SHA</span> の 7 桁が出ます。
+      画面で見ている head のコミット以外は、マージしません。
+      スカッシュかリベースで、直上に PR があるときは、上の PR に元のコミットが残るため、セッションに積み直しを依頼する旨の警告も出ます。
+      確かめたら <span class="ui">マージを実行</span> を押します(<a href="pull-requests.html#pr-merge-check">マージの前に確かめること</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-squash-v2" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1000" style="max-width:500px;min-width:min(600px, 500px)"><div class="gm-segment" style="flex-grow:1000;aspect-ratio:1000/210"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="910" alt="PR #41 の確認欄の下半分。照合する head SHA の 7 桁と、スカッシュまたはリベースでは上の PR に元のコミットが残るため積み直しを依頼するという警告が出ている。緑のマージを実行のボタンとやめるのボタンが並ぶ" loading="lazy" decoding="async" style="width:157.6%;margin-left:0%;margin-top:-72.5%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-reserve">レビューが済んでいない PR は収束後のマージを予約する</h2>
+  <p>クロスレビューの最中の PR は、すぐにはマージしたくないことがあります。
+  <span class="ui">レビュー収束後マージ</span> を予約しておくと、条件がそろった時点で、常駐サーバーがマージします。
+  ここでは、別のリポジトリの PR #118 を例にします。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>予約を入れる</b>確認欄で <span class="ui">レビュー収束後マージ</span> を入れます。
+      見出しが「#118 を main へレビュー収束後にマージする」に変わり、ボタンが <span class="ui">予約する</span> になります。
+      <span class="ui">照合する head SHA</span> は、PR の今の head ではなく、クロスレビューの収束記録になります。
+      方式を選んで <span class="ui">予約する</span> を押します(<a href="pull-requests.html#pr-reserve">レビュー収束後マージ</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-reserve-confirm" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="700" style="max-width:350px;min-width:min(600px, 350px)"><div class="gm-segment" style="flex-grow:700;aspect-ratio:700/620"><div class="gm-clip"><img src="img/pull-requests-reserve/confirm.png" width="788" height="1020" alt="レビュー収束後マージを入れた確認欄。見出しは #118 を main へレビュー収束後にマージする。レビュー収束後マージのチェックが入り、照合する head SHA の欄はクロスレビューの収束記録になっている。ボタンは予約するとやめるである" loading="lazy" decoding="async" style="width:225.143%;margin-left:0%;margin-top:-58.571%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>予約中の表示を確かめる</b>PR の行が予約中の背景になり、<span class="ui">マージする</span> は <span class="ui">予約を取り消す</span> に変わります。
+      予約中の札に、方式、予約した時刻、まだ満たしていない条件が出ます。
+      予約はダッシュボードを開いていなくても実行されます。
+      ただし、クロスレビューが止まったときや PR が閉じられたときは、常駐サーバーが予約を取り消して知らせます。その場合は理由を確かめ、必要なら予約し直します(<a href="pull-requests.html#pr-reserve-cancel">予約が取り消されるとき</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-reserve-reserved" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576" style="max-width:788px;min-width:min(600px, 788px)"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/290"><div class="gm-clip"><img src="img/pull-requests-reserve/reserved.png" width="788" height="696" alt="予約中の PR #118 の行。予約を取り消すのリンクと、レビュー収束後にマージ予約中の札があり、札の中に方式、予約した時刻、満たしていない条件が書かれている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-6.98%"></div></div></div></div></figure></li>
+  </ol>
+
+  <h2 id="guide-stack-result">結果を確かめて次の PR へ進む</h2>
+  <p>マージが済むと、PR の枠に結果の行が出ます。
+  直上の PR は、base が既定ブランチに付け替わり、新しい一番下になります。</p>
+  <ol class="steps">
+    <li><div class="step-body"><b>結果の行を確かめる</b>枠の下端に、「PR #41: スカッシュ でマージしました。ブランチを削除しました。#42 の base を main に付け替えました。」と出ます。
+      <span class="ui">マージ済み (24 時間)</span> の一覧にも、#41 が時刻と方式つきで加わります(<a href="pull-requests.html#pr-result">マージの結果</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-result-result" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1080" style="max-width:540px;min-width:min(600px, 540px)"><div class="gm-segment" style="flex-grow:1080;aspect-ratio:1080/182"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="571" alt="スカッシュでマージした後の枠の下端。マージ済みの一覧に PR #41 が時刻と方式つきで並び、その下に、#41 をスカッシュでマージし、ブランチを削除し、#42 の base を main に付け替えたという結果の行がある" loading="lazy" decoding="async" style="width:145.926%;margin-left:0%;margin-top:-88.889%"></div></div></div></div></figure></li>
+    <li><div class="step-body"><b>積み直しの依頼を確かめる</b>スカッシュでマージしたので、#42 の差分に #41 のコミットが残っています。
+      #42 には <span class="ui">積み直しが必要</span> の札が付き、マージできない理由は「積み直し待ち」になります。
+      常駐サーバーは、PR を登録したセッションに、積み直しの依頼を送ります。
+      <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません(<a href="pull-requests.html#pr-restack">積み直し</a>、<a href="pull-requests.html#pr-notify">セッションへの知らせ</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-result-result-v2" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="930" style="max-width:465px;min-width:min(600px, 465px)"><div class="gm-segment" style="flex-grow:930;aspect-ratio:930/280"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="571" alt="新しく一番下になった PR #42 の行。1/2 の札と、CI 成功、base を main に付け替え済み、積み直しが必要の札がある。マージできない理由は、積み直し待ちと出ている" loading="lazy" decoding="async" style="width:169.462%;margin-left:0%;margin-top:-12.903%"></div></div></div></div></figure></li>
+    <li><b>次の PR をマージする</b>セッションが #42 を積み直して push すると、<span class="ui">積み直しが必要</span> の札が消えます。
+      条件がそろえば <span class="ui">マージできます</span> が出るので、#42 を同じ手順でマージします。
+      #43 も、#42 のマージのあとに、同じ流れで進めます。</li>
+  </ol>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="guide-away.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">席を外している間に判断を返す</span></a><a class="next" href="work.html"><span class="page-navigation-label">次のページ</span><span class="page-navigation-title">タスクと今やっていること</span></a></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#guide-stack-read">スタックの表示を読む</a></li>
+        <li><a href="#guide-stack-check">一番下の PR がマージできる条件を確かめる</a></li>
+        <li><a href="#guide-stack-merge-run">確認欄で方式を選んでマージする</a></li>
+        <li><a href="#guide-stack-reserve">レビューが済んでいない PR は収束後のマージを予約する</a></li>
+        <li><a href="#guide-stack-result">結果を確かめて次の PR へ進む</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

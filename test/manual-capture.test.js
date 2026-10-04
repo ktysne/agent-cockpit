@@ -26,7 +26,7 @@ function validDefinition(overrides = {}) {
     steps: [
       { do: 'click', selector: '.decision-card' },
       { do: 'type', selector: 'textarea', text: '画面の幅は 850px で撮る' },
-      { do: 'wait', selector: '.done', timeoutMs: 500 },
+      { do: 'wait', selector: '.done', text: '送信済み', timeoutMs: 500 },
       { do: 'screenshot', name: 'answer', target: '.decision-card', parts: { 'decision.pick': '.pick', 'decision.bottom': ['.a', '.b'] } },
     ],
     ...overrides,
@@ -64,6 +64,7 @@ test('不正な撮影の定義は撮影を始める前に拒否する', () => {
   rejected(validDefinition({ steps: [{ do: 'click', selector: 'a', text: 'x' }] }), /未知の項目/);
   rejected(validDefinition({ steps: [{ do: 'type', selector: 'a' }] }), /text/);
   rejected(validDefinition({ steps: [{ do: 'wait', selector: 'a', timeoutMs: 5 }] }), /timeoutMs/);
+  rejected(validDefinition({ steps: [{ do: 'wait', selector: 'a', text: ' ' }, { do: 'screenshot', name: 'a' }] }), /text が空/);
   rejected(validDefinition({ steps: [{ do: 'click', selector: 'a' }] }), /screenshot の手順がありません/);
   rejected(validDefinition({ steps: [{ do: 'screenshot', name: '../outside' }] }), /name/);
   rejected(validDefinition({ steps: [{ do: 'screenshot', name: 'a' }, { do: 'screenshot', name: 'a' }] }), /重複/);

@@ -1,0 +1,43 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "離席中に出た質問への回答",
+  "scenario": "decisions",
+  "steps": [
+    {
+      "do": "click",
+      "selector": ".decision-card.waiting [data-answer-pick][value=\"アプリ内の通知だけにする\"]"
+    },
+    {
+      "do": "type",
+      "selector": ".decision-card.waiting [data-answer-note]",
+      "text": "メールは別の Issue で検討する"
+    },
+    {
+      "do": "screenshot",
+      "name": "picked",
+      "target": ".decision-card.waiting"
+    },
+    {
+      "do": "click",
+      "selector": ".decision-card.waiting [data-send-answer]"
+    },
+    {
+      "do": "wait",
+      "selector": ".decision-card.waiting .answer-foot .answer-status",
+      "text": "送信済み"
+    },
+    {
+      "do": "screenshot",
+      "name": "sent",
+      "target": ".decision-card.waiting"
+    }
+  ]
+}

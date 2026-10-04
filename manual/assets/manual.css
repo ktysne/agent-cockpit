@@ -342,9 +342,34 @@ li { margin: 5px 0; }
 .lc-image { position: relative; max-width: 100%; margin: 0 auto; line-height: 0; }
 .lc-image img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 7px; }
 .lc-frame { position: absolute; border: 3px solid var(--gm); border-radius: 5px; background: color-mix(in srgb, var(--gm) 10%, transparent); pointer-events: none; }
-.steps { padding-left: 26px; }
-.steps > li { margin: 22px 0; padding-left: 5px; }
+.steps { padding-left: 0; list-style: none; counter-reset: step; }
+.steps > li { position: relative; margin: 22px 0; padding-left: 38px; counter-increment: step; }
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  top: 3px;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 700 12px/1 var(--font-mono);
+}
 .step-body { min-width: 0; }
+.steps > li > b:first-child,
+.step-body > b:first-child { display: block; }
+.guide-intro { display: grid; gap: 12px; margin: 0 0 26px; }
+.guide-intro > div { padding: 14px 18px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.guide-intro-title { margin: 0 0 6px; color: var(--accent-text); font-size: 14px; font-weight: 700; }
+.guide-intro ul { margin: 0 0 0 1.3em; padding: 0; font-size: 14px; line-height: 1.8; }
+@media (min-width: 700px) {
+  .guide-intro { grid-template-columns: 1fr 1fr; }
+}
+/* 手順の画面は、どの幅でも文の下に本文の幅で置く。文と横に並べると、画面の列が狭くなり画像の文字が読めないため。 */
 .steps .guide-map { margin: 10px 0 0; }
 .steps .gm-image { min-width: 0 !important; }
 .steps .gm-stage:not(:has(.gm-badge)) { padding: 12px 12px 38px; }
@@ -394,9 +419,6 @@ footer { padding: 22px 20px; border-top: 1px solid var(--border); color: var(--t
 @media (min-width: 1040px) {
   .locator { float: right; width: min(34%, 300px); margin: 4px 0 14px 24px; }
   .guide-map, .steps, details.more { clear: right; }
-  .steps > li:has(> figure.guide-map) { display: grid; grid-template-columns: 2fr 3fr; column-gap: 24px; align-items: start; }
-  .steps > li:has(> figure.guide-map) > .step-body { grid-column: 1; }
-  .steps > li:has(> figure.guide-map) > figure.guide-map { grid-column: 2; margin: 4px 0 0; }
 }
 @media (max-width: 1120px) {
   .page-columns { grid-template-columns: minmax(170px, 210px) minmax(0, 1fr); gap: 26px; }
