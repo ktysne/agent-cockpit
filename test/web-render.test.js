@@ -1457,51 +1457,61 @@ test('表示中のセッションもオープンの PR も数えきれていな�
   assert.deepEqual(keys([]), ['active']);
 });
 
-test('終わったセッションはタスクだけを描き、種類別の今やっていることから除く', () => {
-  const names = ['isEndedAgent', 'activityStatus', 'isFinishedSession', 'hidesFinishedSession', 'element', 'sessionBlock'];
-  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
+  const names = [
+    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
+    'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
+  ];
+  const functions = names.map((name) => pageHtml.match(new RegExp('function ' + name + '\\([^]*?\\n\\}'))?.[0]);
   assert.ok(functions.every(Boolean));
   class FakeElement {
-    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; }
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; this.textContent = ''; }
     append(...nodes) { this.children.push(...nodes); }
-    get childNodes() { return this.children; }
   }
-  const rendered = [];
-  const marker = (name) => (target) => { rendered.push(name); target.append(new FakeElement(name)); };
   const context = pageContext(pageHtml, {
-    displayPreferences: { hideFinished: true },
-    document: { createElement: (tagName) => new FakeElement(tagName), createTextNode: (text) => ({ textContent: text }) },
-    sharedBranch: () => '',
-    productStatusBadge: () => new FakeElement('span'),
-    shownPermissions: () => [],
-    shownActiveDecisions: () => [],
-    hasHiddenJudgmentItems: () => false,
-    orderedSectionKeys: (keys) => keys,
-    appendPermissionWaits: marker('permissions'),
-    appendDecisions: marker('decisions'),
-    appendTasks: marker('tasks'),
-    mainRow: () => { rendered.push('main'); return new FakeElement('main'); },
-    appendAgents: marker('agents'),
+    displayPreferences: { hideFinished: true, order: [], pinned: [], collapsed: [] },
+    showIdleSessions: false,
+    idleHiddenSessions: () => [],
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
+    isFilterShown: () => true,
+    hasPullRequestMergeResults: () => false,
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    appendContextTags() {},
   });
   vm.runInContext(functions.join('\n'), context);
   const finished = {
-    session_id: 'finished', status: '待機中', title: '完了', tasks: [{ state: 'done' }], decisions: [{ state: 'resolved' }],
+    session_id: 'finished', status: '待機中', hidden: false, title: '完了', product: { key: 'finished', name: '完了' },
+    tools: [], lastActivityAt: '2026-10-04T00:00:00.000Z', tasks: [{ state: 'done' }], decisions: [{ state: 'resolved' }],
     permissionWaits: [], agents: [{ active: false, unconfirmed: false }],
   };
-  context.sessionBlock({ branches: new Set() }, finished, true);
-  assert.deepEqual(rendered, ['tasks']);
-  rendered.length = 0;
-  context.displayPreferences.hideFinished = false;
-  context.sessionBlock({ branches: new Set() }, finished, true);
-  assert.deepEqual(rendered, ['permissions', 'decisions', 'tasks', 'main', 'agents']);
+  const finishedWithoutTasks = { ...finished, session_id: 'no-tasks', tasks: [], product: { key: 'no-tasks', name: 'タスク無し' } };
+  const partial = {
+    ...finished, session_id: 'partial', title: '一部完了', product: { key: 'partial', name: '一部完了' },
+    tasks: [{ id: 'done', state: 'done' }, { id: 'todo', state: 'todo' }],
+  };
+  const visible = context.orderedProducts([finished, finishedWithoutTasks, partial]);
+  assert.deepEqual(JSON.parse(JSON.stringify(visible.map((product) => product.key))), ['partial']);
+  const references = context.sessionReferences(visible);
+  assert.deepEqual(JSON.parse(JSON.stringify(references.map(({ session }) => session.session_id))), ['partial']);
+  assert.equal(context.kindDoneTaskCount(references), 1);
+  const taskList = new FakeElement('ul');
+  context.appendTaskItem(taskList, { ...partial.tasks[0], title: '完了済み', criteria: [] }, {}, partial);
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  assert.ok(descendants(taskList).some((node) => node.className === 'badge done' && node.textContent === '完了'));
 
-  const kind = pageHtml.match(/function renderKindSections\(products\) \{[^]*?\n\}/)?.[0];
-  assert.match(kind, /if \(hidesFinishedSession\(session\)\) continue;\n    activityItems\.push/);
+  context.displayPreferences.hideFinished = false;
+  const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, partial]);
+  assert.deepEqual(JSON.parse(JSON.stringify(shownWhenDisabled.map((product) => product.key).sort())), ['finished', 'no-tasks', 'partial']);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.sessionReferences(shownWhenDisabled).map(({ session }) => session.session_id).sort())), [
+    'finished', 'no-tasks', 'partial',
+  ]);
 });
 
-test('タスクの無い終わったセッションと履歴だけの PR しか残らないプロダクトは両方の表示から除く', () => {
+test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'hidesFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
@@ -1541,7 +1551,7 @@ test('タスクの無い終わったセッションと履歴だけの PR しか�
   const unfinished = { ...finished, session_id: 'unfinished', tasks: [{ state: 'todo' }], product: { key: 'unfinished', name: '未完了' } };
   const visible = [unknown, busy, unfinished];
   const products = context.orderedProducts([finished, finishedWithoutTasks, ...visible]);
-  assert.deepEqual(JSON.parse(JSON.stringify(products.map((product) => product.key).sort())), ['busy', 'finished', 'unfinished', 'unknown']);
+  assert.deepEqual(JSON.parse(JSON.stringify(products.map((product) => product.key).sort())), ['busy', 'unfinished', 'unknown']);
 
   const stale = {
     ...unknown, session_id: 'idle', lastUpdatedAt: new Date(Date.now() - 31 * 60_000).toISOString(),
@@ -2754,9 +2764,9 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
   assert.equal(nodes.some((node) => node.dataset.planToggle && node.dataset.planToggle.startsWith('todoTasks:')), false);
 });
 
-test('終わったものを隠しても完了タスクとその開閉ボタンは残す', () => {
+test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'isEndedAgent', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount',
   ];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
@@ -2772,8 +2782,8 @@ test('終わったものを隠しても完了タスクとその開閉ボタン�
   const context = pageContext(pageHtml, {
     displayPreferences: { hideFinished: true },
     document: { createElement: (tagName) => new FakeElement(tagName) },
-    expandedEndedSessions: new Set(['session-finished']),
-    expandedEndedDecisions: new Set(['session-finished']),
+    expandedEndedSessions: new Set(['session-partial']),
+    expandedEndedDecisions: new Set(['session-partial']),
     expandedDoneTasks: new Set(),
     expandedTodoTasks: new Set(),
     newestFirst: (items) => [...items],
@@ -2788,12 +2798,14 @@ test('終わったものを隠しても完了タスクとその開閉ボタン�
   });
   vm.runInContext(functions.join('\n'), context);
   const session = {
-    session_id: 'session-finished',
+    session_id: 'session-partial',
+    status: '待機中',
     agents: [{ active: false, unconfirmed: false }],
     decisions: [{ state: 'resolved' }],
     permissionWaits: [],
     tasks: [{ title: '作業中', state: 'doing', criteria: [] }, { title: '完了済み', state: 'done', criteria: [] }],
   };
+  assert.equal(context.isFinishedSession(session), false);
 
   const agentBody = new FakeElement('div');
   context.appendAgents(agentBody, session, { name: 'product' });
@@ -2808,8 +2820,8 @@ test('終わったものを隠しても完了タスクとその開閉ボタン�
 
   const taskBody = new FakeElement('div');
   context.appendTasks(taskBody, session, { name: 'product' });
-  assert.equal(taskBody.children.some((node) => node.dataset.planToggle === 'tasks:session-finished'), true);
-  context.expandedDoneTasks.add('session-finished');
+  assert.equal(taskBody.children.some((node) => node.dataset.planToggle === 'tasks:session-partial'), true);
+  context.expandedDoneTasks.add('session-partial');
   const expandedTaskBody = new FakeElement('div');
   context.appendTasks(expandedTaskBody, session, { name: 'product' });
   assert.equal(expandedTaskBody.children.some((node) => node.className === 'task-list'

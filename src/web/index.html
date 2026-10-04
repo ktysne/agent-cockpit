@@ -2230,7 +2230,7 @@ function sessionActivityTime(session) {
 function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
   const idleFilteredSessions = sessionsAfterIdleFilter(sessions);
   const visibleSessions = displayPreferences.hideFinished
-    ? idleFilteredSessions.filter((session) => session.tasks.length > 0 || !isFinishedSession(session))
+    ? idleFilteredSessions.filter((session) => !isFinishedSession(session))
     : idleFilteredSessions;
   const grouped = productGroups(visibleSessions, pullRequestGroups);
   for (const entry of sinceSeen) {
@@ -2276,11 +2276,6 @@ function activityStatus(session) {
   if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
   if (session.status === '不明') return { label: '状態不明', tone: 'unknown' };
   return { label: '待機中', tone: 'wait' };
-}
-
-// 終わったセッションでも、完了したタスクは全体の進みを見るために残し、それ以外の欄だけを隠す。
-function hidesFinishedSession(session) {
-  return displayPreferences.hideFinished && isFinishedSession(session);
 }
 
 function isFinishedSession(session) {
@@ -2869,28 +2864,17 @@ function appendUnknownSessionControls(row, session) {
   if (controls) row.append(controls);
 }
 
-function productStatusBadge(session) {
-  const status = activityStatus(session);
-  return badge(status.label, status.tone);
-}
-
 function sessionBlock(product, session, multipleSessions) {
   const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
   if (multipleSessions) {
     const head = element('div', 'session-head');
     head.append(element('h3', '', session.title || session.session_id));
     if (!sharedBranch(product) && session.product?.branch) head.append(element('span', 'meta branch', session.product.branch));
-    if (hidesFinishedSession(session)) head.append(productStatusBadge(session));
     block.append(head);
   }
 
   const body = element('div', 'session-body');
   if (!multipleSessions) body.append(element('div', 'session-tag session-context', sessionDisplayName(session)));
-  if (hidesFinishedSession(session)) {
-    appendTasks(body, session, product);
-    block.append(body);
-    return block;
-  }
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
   const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
@@ -3131,7 +3115,6 @@ function renderKindSections(products) {
   const showEndedAgents = expandedKindSections.has('agents');
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
-    if (hidesFinishedSession(session)) continue;
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
     const holder = element('div');
     appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false);

@@ -897,8 +897,6 @@ const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) 
 const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions);
-// 終わったセッションでも、完了したタスクは全体の進みを見るために残し、それ以外の欄だけを隠す。
-const hidesFinishedSession = s => ui.hideFinished && isFinishedSession(s);
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.perms.length > 0) return false;
   if (session.decisions.some(decision => ['waiting', 'provisional'].includes(effectiveDecisionState(decision)))) return false;
@@ -912,8 +910,8 @@ function idleHiddenSessions(sessions = allSessions(), now = Date.now()) {
     && isIdleHiddenSession(session, now));
 }
 const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id)
-  && (!hidesFinishedSession(s) || s.tasks.length > 0)
-  && (showIdleSessions || (ui.hideFinished && isFinishedSession(s)) || !isIdleHiddenSession(s)));
+  && !(ui.hideFinished && isFinishedSession(s))
+  && (showIdleSessions || !isIdleHiddenSession(s)));
 const effectiveDecisionState = d => d.kind;
 const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(d => {
   const a = answerOf(d.id);
@@ -1802,17 +1800,16 @@ function unknownSessionControls(session) {
 function sessionBlock(p, session) {
   const multiple = p.sessions.length > 1;
   const groupTag = multiple ? 'section' : 'div';
-  const status = session.status === 'busy' ? ['作業中', 'busy'] : session.status === 'wait' ? ['待機中', 'wait'] : ['状態不明', 'unknown'];
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
     || (!ui.hideFinished && session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d))))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
-    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}${hidesFinishedSession(session) ? `<span class="badge ${status[1]}">${status[0]}</span>` : ''}</div>` : ''}
+    ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
     <div class="session-body">
       ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
-      ${hidesFinishedSession(session) ? taskSessionBlock(p, session, false) : orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
+      ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
         judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
       ${decisionSessionBlock(p, session, false)}` : '',
@@ -1934,7 +1931,7 @@ function renderKindMode() {
   const showJudgment = Boolean(decisionItems || endedDecisionToggle) || !hiddenJudgmentItems;
   const news = ps.map(p => newsBox(p, true)).join('');
   const showEndedAgents = ui.expandedKindAgents && !ui.hideFinished;
-  const nowRowsByAge = sessions.filter(({ session }) => !hidesFinishedSession(session)).flatMap(({ p, session }) => {
+  const nowRowsByAge = sessions.flatMap(({ p, session }) => {
     const agents = visibleSubagents(session).filter(agent => !isEndedAgent(session, agent) || showEndedAgents);
     return [
       { age: ageMinutes(session.main), html: mainRow(p, session, true) },
