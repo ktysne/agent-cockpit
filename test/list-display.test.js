@@ -104,12 +104,10 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.match(mockRow, /入力待ちらしい: いいえ/);
 });
 
-test('セッション見出しはタスクだけの完了行に札を残し、種類別の終了済み切替は欄の見出し行に置く', () => {
+test('セッション見出しと種類別表示の欄配置を保つ', () => {
   const webSession = functionSource(web, 'sessionBlock');
   const mockSession = functionSource(mock, 'sessionBlock');
   assert.ok(webSession && mockSession);
-  assert.match(webSession, /if \(hidesFinishedSession\(session\)\) head\.append\(productStatusBadge\(session\)\)/);
-  assert.match(mockSession, /hidesFinishedSession\(session\) \? `<span class="badge/);
 
   for (const [source, kindName] of [[web, 'renderKindSections'], [mock, 'renderKindMode']]) {
     const kind = functionSource(source, kindName);
@@ -128,9 +126,7 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
     displayPreferences: { hideFinished: true },
     element: fakeElement,
     document: { createElement: fakeElement },
-    hidesFinishedSession: (session) => session.hideMain,
     sharedBranch: () => '',
-    productStatusBadge: () => fakeElement('span', 'badge unknown', '状態不明'),
     shownPermissions: () => [],
     shownActiveDecisions: () => [],
     hasHiddenJudgmentItems: () => false,
@@ -145,15 +141,10 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
   const webVisible = webContext.renderSession({ key: 'p', name: 'P' }, {
     session_id: 'active', status: '不明', title: '稼働中', decisions: [], tasks: [], permissionWaits: [], agents: [],
   }, true);
-  const webFinished = webContext.renderSession({ key: 'p', name: 'P' }, {
-    session_id: 'finished', status: '不明', title: '完了', decisions: [], tasks: [], permissionWaits: [], agents: [], hideMain: true,
-  }, true);
   assert.equal(webVisible.children[0].children.length, 1);
-  assert.equal(webFinished.children[0].children.length, 2);
 
   const mockContext = pageContext(mock, {
     ui: { hideFinished: true },
-    hidesFinishedSession: (session) => session.hideMain,
     sharedBranch: () => '',
     visibleDecisions: () => [],
     visiblePerms: () => [],
@@ -169,11 +160,7 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
   const mockVisible = mockContext.renderSession({ sessions: [{}, {}] }, {
     id: 'active', status: 'unknown', title: '稼働中', decisions: [], tasks: [], perms: [], subagents: [],
   });
-  const mockFinished = mockContext.renderSession({ sessions: [{}, {}] }, {
-    id: 'finished', status: 'unknown', title: '完了', decisions: [], tasks: [], perms: [], subagents: [], hideMain: true,
-  });
   assert.doesNotMatch(mockVisible, /class="badge unknown">状態不明/);
-  assert.match(mockFinished, /class="badge unknown">状態不明/);
 
   const kindContext = pageContext(web, {
     DEFAULT_SECTION_ORDER: ['judgment', 'tasks', 'now'],
@@ -194,7 +181,6 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
     appendKindToggle(target) { target.append(fakeElement('button', 'ended-toggle', '終了済みを表示')); },
     hasHiddenJudgmentItems: () => false,
     sessionActivityTime: () => 1,
-    hidesFinishedSession: () => false,
     appendAgents() {},
     mainRow: (session) => fakeElement('div', 'now-row main-row', session.session_id),
     appendKindTaskSession() {},
@@ -211,6 +197,28 @@ test('セッション見出しはタスクだけの完了行に札を残し、�
   assert.equal(activity.children.length, 1);
   assert.equal(activitySection.extra.className, 'kind-section-controls');
   assert.equal(activitySection.extra.children[0].className, 'ended-toggle');
+});
+
+test('モックでも終わったセッションはタスクの有無にかかわらず一覧から隠す', () => {
+  const visibleSource = mock.match(/const visibleSessions = p => p\.sessions\.filter\([\s\S]*?\);/)?.[0];
+  assert.ok(visibleSource);
+  const context = pageContext(mock, {
+    ui: { hideFinished: true, hiddenSessions: [] },
+    showIdleSessions: false,
+    isFinishedSession: (session) => session.finished,
+    isIdleHiddenSession: () => false,
+  });
+  vm.runInContext(visibleSource + '\nthis.visibleSessions = visibleSessions;', context);
+  const product = { sessions: [
+    { id: 'finished', finished: true, tasks: [{ state: 'done' }] },
+    { id: 'no-tasks', finished: true, tasks: [] },
+    { id: 'partial', finished: false, tasks: [{ state: 'done' }, { state: 'todo' }] },
+  ] };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleSessions(product).map((session) => session.id))), ['partial']);
+  context.ui.hideFinished = false;
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleSessions(product).map((session) => session.id).sort())), [
+    'finished', 'no-tasks', 'partial',
+  ]);
 });
 
 test('リポジトリごとの PR は見出し付きの枠に同じ左端で順に並ぶ', () => {
@@ -405,7 +413,6 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     },
     hasHiddenJudgmentItems: () => false,
     sessionActivityTime: () => 1,
-    hidesFinishedSession: () => false,
     appendAgents() {},
     mainRow: () => fakeElement('div', 'now-row main-row'),
     appendKindTaskSession(target) { target.append(fakeElement('section', 'kind-session-tasks group-frame')); },
@@ -668,13 +675,17 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
     changeDisplaySetting: (key, input) => changes.push([key, input.checked]),
   });
   vm.runInContext(`${countsSource}\n${noteSource}\nthis.countHidden = finishedHiddenCounts; this.renderFinished = renderFinishedNote;`, context);
-  const counts = context.countHidden([{ finished: true }, { finished: false }], [
+  const counts = context.countHidden([
+    { finished: true, tasks: [{ state: 'done' }] },
+    { finished: true, tasks: [] },
+    { finished: false, tasks: [{ state: 'todo' }] },
+  ], [
     { owner: 'example', repo: 'project', mergeHistory: [{ number: 10 }, { number: 11, headMismatch: true }], merged: [{ number: 12, state: 'closed' }] },
   ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(counts)), { sessions: 1, pullRequests: 2 });
+  assert.deepEqual(JSON.parse(JSON.stringify(counts)), { sessions: 2, pullRequests: 2 });
   context.renderFinished(counts);
   assert.equal(note.hidden, false);
-  assert.match(note.children[0].textContent, /終わったものを隠しています \(セッション 1 件、PR 2 件\)/);
+  assert.match(note.children[0].textContent, /終わったものを隠しています \(セッション 2 件、PR 2 件\)/);
   const show = note.children[1];
   assert.equal(show.textContent, '表示する');
   show.listeners.get('click')();
