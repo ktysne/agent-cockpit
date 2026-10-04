@@ -5,7 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { pageContext } = require('./support/page-context');
 
-const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+// 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
+const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
   const elapsed = pageHtml.match(/function decisionElapsedLabel\(decision\) \{[\s\S]*?\n\}/)?.[0];

@@ -4,7 +4,7 @@ const { TaskNudges } = require('./task-nudges');
 const ANSWER_WAIT_MS = 5 * 60_000;
 const MAX_LONG_POLL_MS = 25_000;
 const MAX_ASK_POLL_GAP_MS = 30_000;
-const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作、PR のマージ、main への push は行わず、判断待ちとして残してください。';
+const ANSWER_HOOK_DENY_REASON = '開発者は離席中です。AskUserQuestion で尋ねずに、推奨の選択肢を適用して作業を続けてください。判断事項の id は「{id}」です。推奨で進めたら cockpit_update_decision でこの id を provisional にし、選んだ選択肢を書いてください。判断が必要だった事項と仮に適用した推奨は、最後の報告の「あなたの判断が必要なこと」に一覧で書いてください。破壊的な操作は行わず、判断待ちとして残してください。';
 // 知らせはフックの英語の定型文に包まれて届き、返答が英語に引きずられやすいため、毎回添える。
 const SESSION_NOTIFICATION_REPLY_LANGUAGE = 'この知らせへの返答と、続けて開発者に見せる文は日本語で書く。';
 
