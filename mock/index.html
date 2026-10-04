@@ -83,6 +83,12 @@ header.top {
 .settings-theme-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
 .settings-dialog select { max-width: 100%; padding: 4px 8px; }
 .settings-dialog input[type="number"] { width: 88px; padding: 4px 8px; text-align: right; }
+.settings-mergeable-condition { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; border: 0; }
+.settings-mergeable-condition legend { margin-bottom: 2px; font-size: 13px; font-weight: 600; }
+.settings-mergeable-condition label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.settings-mergeable-condition input { grid-row: span 2; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); }
+.settings-mergeable-condition small { color: var(--text-2); font-size: 12px; }
+.settings-mergeable-condition label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-section-order { margin-top: 14px; }
 .settings-section-order h4 { margin: 0 0 4px; font-size: 13px; }
 .section-order-list { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -258,9 +264,13 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .badge.done { background: var(--ok-soft); color: var(--ok-text); }
 .badge.permission { margin-bottom: 10px; border: 1px solid var(--border); border-left: 4px solid var(--danger); border-radius: var(--radius); padding: 12px; background: var(--surface); }
 .pr .why-not { font-size: 12px; color: var(--text-2); }
-.pr.can-merge { background: var(--ok-soft); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.pr.can-merge { background: var(--ok-soft); border: 1px solid var(--ok); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
+.pr.merge-pending { background: var(--surface-2); border: 1px solid var(--border); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-btn { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
+.merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merge-confirm { margin-top: 8px; border: 1px solid var(--ok); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 8px; font-size: 13px; }
+.merge-confirm.pending { border-color: var(--border); }
+.merge-condition-warning { margin: 0; color: var(--warn-text); font-size: 12px; font-weight: 600; }
 .merge-confirm .methods { display: flex; gap: 6px; flex-wrap: wrap; }
 .merge-confirm .opt { justify-self: start; }
 .merge-confirm .methods label, .merge-confirm .opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; min-height: 32px; }
@@ -269,6 +279,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .merge-confirm .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .ghost { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; cursor: pointer; min-height: 40px; }
 .merge-go { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
+.merge-go.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
 .merged-list { font-size: 12px; color: var(--text-2); margin-top: 6px; }
 .merged-list .badge { margin-right: 4px; }
 
@@ -372,6 +383,13 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       </select>
     </div>
     <p class="meta" id="settings-since-seen-note">「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。</p>
+    <fieldset class="settings-mergeable-condition" aria-describedby="settings-mergeable-condition-note">
+      <legend>「マージできます」と出す条件</legend>
+      <label><input type="radio" name="mergeableCondition" value="operation"><span>マージの操作ができる</span><small>スタックの一番下で、ドラフト、積み直し、コンフリクト、GitHub のレビュー待ちがない。</small></label>
+      <label><input type="radio" name="mergeableCondition" value="ci"><span>CI も通っている(CI が無ければ問わない)</span><small>マージ操作に加えて、CI が成功している。</small></label>
+      <label><input type="radio" name="mergeableCondition" value="cross-review"><span>クロスレビューも済んでいる(不要としたものを含む)</span><small>CI の成功と、この head のレビュー収束またはレビュー不要の記録がある。</small></label>
+    </fieldset>
+    <p class="meta" id="settings-mergeable-condition-note">条件が残っていてもマージ操作が可能なら、確認欄に未達の条件を表示する。</p>
     <div class="settings-theme-row">
       <label for="settings-hide-finished">終わったものを表示しない</label>
       <input id="settings-hide-finished" name="hideFinished" type="checkbox">
@@ -525,7 +543,8 @@ const DATA = {
         // requestSession は PR を登録したセッション。衝突の解消の依頼はここへ届け、alive が偽なら依頼できない。
         { number: 58, title: '削除前の確認ダイアログ', head: 'feat/gc-confirm', base: 'fix/worktree-scan', sha: 'c41d7f2', ci: 'pass', review: 'none', conflict: true, draft: false,
           requestSession: { name: '確認ダイアログの追加', alive: true }, xr: null },
-        { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false },
+        { number: 55, title: 'README に dry-run の説明を追加', head: 'docs/dry-run', base: 'main', sha: '9a03b7e', ci: 'pending', review: 'approved', conflict: false, draft: false,
+          xr: { notRequired: true, source: 'tool-absent' } },
       ],
     },
     {
@@ -582,7 +601,9 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
+ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
 const answerErrors = new Map();
 const pendingClosedTasks = new Map();
@@ -640,6 +661,7 @@ const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
+const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
 const settingsButton = document.getElementById('settings-button');
 const settingsClose = document.getElementById('settings-close');
 const settingsDialog = document.getElementById('settings-dialog');
@@ -652,6 +674,7 @@ function captureDisplayPreferences() {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes,
+    mergeableCondition: ui.mergeableCondition,
   };
 }
 
@@ -692,6 +715,7 @@ function renderDisplaySettings() {
   longWaitMinutesInput.value = String(ui.longWaitMinutes);
   awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
   hideFinishedInput.checked = ui.hideFinished;
+  for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
 function changeDisplaySetting(key, input, minimum, maximum) {
@@ -720,6 +744,13 @@ awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
+  if (!saveDisplayPreferences(previous)) return;
+  render();
+});
+for (const input of mergeableConditionInputs) input.addEventListener('change', () => {
+  if (!['operation', 'ci', 'cross-review'].includes(input.value)) return;
+  const previous = captureDisplayPreferences();
+  ui.mergeableCondition = input.value;
   if (!saveDisplayPreferences(previous)) return;
   render();
 });
@@ -890,7 +921,7 @@ function renderSummary() {
   const blocking = all.filter(x => effectiveDecisionState(x.d) === 'waiting' && !x.a.sent).length;
   const provisional = all.filter(x => effectiveDecisionState(x.d) === 'provisional' && !x.a.sent).length;
   const agents = sessions.flatMap(s => s.subagents).filter(agent => agent.state === 'busy').length;
-  const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => !mergeBlocker(p, pr)).length, 0);
+  const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
   const permission = sessions.reduce((n, s) => n + s.perms.length, 0);
   const counts = { permission, blocking, provisional, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
@@ -1216,7 +1247,8 @@ const CROSS_REVIEW_MAX_ROUNDS = 3;
 // 結論の記録が無いか往復の数が合わなければ、最後にレビューに回した head との比較だけを出す。
 function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
-  if (!pr.xr) return { cls: 'mute', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
+  if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null, note: pr.xr.reason || null };
+  if (!pr.xr) return { cls: 'warn', text: 'レビュー未実施', warn: 'クロスレビューの記録が無い' };
   const t = pr.xr.triage && pr.xr.triage.round <= pr.xr.round ? pr.xr.triage : null;
   if (t && pr.xr.round > t.round) return { cls: 'warn', text: `${pr.xr.round} 往復目の結論待ち`, warn: `クロスレビューの ${pr.xr.round} 往復目の結論がまだ出ていない` };
   if (t && t.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${t.round} 往復目の指摘に対応している途中` };
@@ -1229,13 +1261,27 @@ function crossReviewState(pr) {
   return { cls: 'mute', text: 'この head をレビューに回した', warn: null, note: 'クロスレビューはこの head で回した。指摘が残っていないかは PR のコメントで確かめる' };
 }
 
-function crossReviewLine(pr) {
+function crossReviewLine(p, pr) {
   if (pr.xr === undefined) return '';
+  const key = prKey(p, pr.number);
+  const skip = ui.reviewSkips[key];
+  if (skip?.sha === pr.sha) {
+    return `<div class="xr">クロスレビュー <span class="badge mute" title="${esc(skip.reason)}">レビュー不要</span>
+      <button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button></div>`;
+  }
   const state = crossReviewState(pr);
-  if (!pr.xr) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span></div>`;
+  if (pr.xr?.notRequired === true) {
+    const reason = pr.xr.reason ? ` title="${esc(pr.xr.reason)}"` : '';
+    const action = pr.xr.source === 'recorded'
+      ? `<button type="button" class="link-btn" data-review-skip="clear" data-review-key="${esc(key)}">レビュー不要を取り消す</button>` : '';
+    return `<div class="xr">クロスレビュー <span class="badge mute"${reason}>レビュー不要</span>${action}</div>`;
+  }
+  if (!pr.xr) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span>
+    <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
   const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');
   return `<div class="xr">クロスレビュー <span class="rounds" aria-hidden="true">${rounds}</span>
-    <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span></div>`;
+    <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span>
+    <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
 }
 
 
@@ -1273,7 +1319,7 @@ function stackPos(p, pr) {
   return { depth, total: height(root) };
 }
 
-function mergeBlocker(p, pr) {
+function mergeBaseConflictBlocker(p, pr) {
   const e = effective(p, pr);
   const parent = parentPr(p, pr);
   if (parent) return `下の #${parent.number} のマージ待ち`;
@@ -1281,11 +1327,43 @@ function mergeBlocker(p, pr) {
   if (pr.draft) return 'ドラフト';
   if (e.needsRestack) return `積み直し待ち (squash で入った #${e.squashedUnder.number} のコミットが差分に残っている)`;
   if (pr.conflict) return 'コンフリクトあり';
-  if (pr.ci === 'fail') return 'CI が失敗';
-  if (pr.ci === 'pending') return 'CI 実行中';
+  return null;
+}
+
+function mergeReviewBlocker(pr) {
   if (pr.review === 'changes') return '変更を求められている';
   if (pr.review === 'required') return 'レビューの承認待ち';
   return null;
+}
+
+function mergeOperationBlocker(p, pr) {
+  return mergeBaseConflictBlocker(p, pr) || mergeReviewBlocker(pr);
+}
+
+function mergeBlocker(p, pr) {
+  const baseConflictBlocker = mergeBaseConflictBlocker(p, pr);
+  if (baseConflictBlocker) return baseConflictBlocker;
+  if (pr.ci === 'fail') return 'CI が失敗';
+  if (pr.ci === 'pending') return 'CI 実行中';
+  return mergeReviewBlocker(pr);
+}
+
+function crossReviewSettled(p, pr) {
+  if (pr.xr?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return true;
+  const triage = pr.xr?.triage;
+  return Boolean(triage && triage.round === pr.xr.round && triage.outcome === 'converged' && triage.sha === pr.sha);
+}
+
+function mergeConditionWaits(p, pr) {
+  if (ui.mergeableCondition === 'operation') return [];
+  const waiting = [];
+  if (pr.ci !== 'pass') waiting.push(pr.ci === 'pending' ? 'CI 実行中' : pr.ci === 'fail' ? 'CI が失敗' : 'CI 状態不明');
+  if (ui.mergeableCondition === 'cross-review' && !crossReviewSettled(p, pr)) waiting.push('クロスレビュー未実施');
+  return waiting;
+}
+
+function pullRequestMergeable(p, pr) {
+  return !mergeOperationBlocker(p, pr) && mergeConditionWaits(p, pr).length === 0;
 }
 
 const METHOD_LABEL = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
@@ -1378,6 +1456,8 @@ const canReserve = (p, pr) => mergeBlocker(p, pr) === 'CI 実行中' && (pr.revi
 function mergeConfirm(p, pr, auto) {
   const o = mergeOpts(p, pr);
   const merging = pullRequestMergeInFlight.has(prKey(p, pr.number));
+  const waiting = mergeConditionWaits(p, pr);
+  const conditionPending = !auto && waiting.length > 0;
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
   const effects = [
@@ -1390,16 +1470,22 @@ function mergeConfirm(p, pr, auto) {
     '結果を PR を作ったセッションへ知らせる',
     auto ? `予約のあとに push されたら、予約を取り消して知らせる` : '',
   ].filter(Boolean);
-  return `<div class="merge-confirm ${auto ? 'auto' : ''}" data-pr="${prKey(p, pr.number)}">
+  return `<div class="merge-confirm ${auto ? 'auto' : ''} ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
     <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へ${auto ? '、CI が通ったら自動で' : ''}マージする</div>
+    ${waiting.length ? `<p class="merge-condition-warning" role="status">選択した条件の未達: ${waiting.map(esc).join('、')}</p>` : ''}
     <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
       `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
       ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
     ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
-    <div class="row"><button type="button" class="merge-go" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? 'マージ中…' : auto ? '予約する' : 'マージを実行'}</button>
+    <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" ${auto ? 'data-reserve-go' : 'data-merge-go'}="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? 'マージ中…' : auto ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
   </div>`;
+}
+
+function setMergeConfirmation(key, action) {
+  if (!['manual', 'reserve'].includes(action)) return;
+  ui.confirm = { key, action };
 }
 
 // 衝突の解消は PR を登録したセッションに頼む。ダッシュボードはマージ以外の変更を自分では行わない。
@@ -1437,33 +1523,39 @@ function conflictStatus(p, pr) {
 
 function prItem(p, pr) {
   const k = prKey(p, pr.number);
-  const blocker = mergeBlocker(p, pr);
+  const confirmManual = ui.confirm?.key === k && ui.confirm.action === 'manual';
+  const confirmReserve = ui.confirm?.key === k && ui.confirm.action === 'reserve';
+  const operationBlocker = mergeOperationBlocker(p, pr);
+  const waiting = operationBlocker ? [] : mergeConditionWaits(p, pr);
+  const conditionMet = !operationBlocker && waiting.length === 0;
   const mergeIntent = Boolean(pr.mergeIntent);
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
   const reservable = !rsv && canReserve(p, pr);
-  return `<div class="pr ${blocker ? (rsv ? 'reserved' : '') : 'can-merge'}">
+  return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
       ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
-      ${!mergeIntent && !blocker ? `<button type="button" class="merge-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>マージする</button>` : ''}
-      ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" ${ui.confirm === k ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
+      ${!mergeIntent && conditionMet ? '<span class="badge ok">マージできます</span>' : !mergeIntent && !operationBlocker ? '<span class="badge mute">マージ操作は可能</span>' : ''}
+      ${!mergeIntent && !operationBlocker ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual ? 'disabled' : ''}>マージする</button>` : ''}
+      ${!mergeIntent && reservable ? `<button type="button" class="auto-btn" data-merge="${k}" data-merge-action="reserve" ${confirmReserve ? 'disabled' : ''}>CI が通ったらマージ</button>` : ''}
       ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
     <div class="badges">${prBadges(p, pr)}</div>
-    ${crossReviewLine(pr)}
+    ${crossReviewLine(p, pr)}
     ${rsv ? `<div class="badges"><span class="badge accent">マージ予約中(${METHOD_LABEL[rsv.method]}、${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))} に予約、head ${esc(pr.sha)})</span>
       <button type="button" class="link-btn" data-unreserve="${k}">予約を取り消す</button>
       <button type="button" class="link-btn" data-ci-pass="${k}">モック: CI の成功を再現する</button></div>` : ''}
-    ${blocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(blocker)}
+    ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
+    ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
-    ${ui.confirm === k && !blocker ? mergeConfirm(p, pr, false) : ''}
-    ${ui.confirm === k && reservable ? mergeConfirm(p, pr, true) : ''}
+    ${confirmManual && !operationBlocker ? mergeConfirm(p, pr, false) : ''}
+    ${confirmReserve && reservable ? mergeConfirm(p, pr, true) : ''}
   </div>`;
 }
 
@@ -1699,7 +1791,7 @@ function renderProductMode() {
         <h2 id="product-heading-${i}" tabindex="-1">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
         ${permissionCount ? `<span class="chip danger">許可待ち (${permissionCount} 件)</span>` : ''}
         ${pend.length ? `<span class="chip danger" title="${esc(decisionCountTitle(pend))}">判断待ち (${pend.length} 件)</span>` : ''}
-        ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => !mergeBlocker(p, pr)).length)}
+        ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length)}
         ${orderControls(p, i, ps.length, pinnedCount)}
         ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
       </div>
@@ -1900,8 +1992,19 @@ document.addEventListener('click', e => {
     if (!canMove) return;
     const a = ui.order.indexOf(vis[i]), b = ui.order.indexOf(vis[j]);
     [ui.order[a], ui.order[b]] = [ui.order[b], ui.order[a]];
+  } else if (t.dataset.reviewSkip) {
+    const key = t.dataset.reviewKey;
+    const [pid, number] = key.split('#');
+    const pr = byId(pid)?.prs.find(item => String(item.number) === number);
+    if (!pr || !['set', 'clear'].includes(t.dataset.reviewSkip)) return;
+    if (t.dataset.reviewSkip === 'set') {
+      ui.reviewSkips[key] = { sha: pr.sha, reason: '開発者がダッシュボードでこの head のレビューを不要と判断した' };
+    } else {
+      delete ui.reviewSkips[key];
+      if (pr.xr?.notRequired && pr.xr.source === 'recorded') pr.xr = null;
+    }
   } else if (t.dataset.merge) {
-    ui.confirm = t.dataset.merge;
+    setMergeConfirmation(t.dataset.merge, t.dataset.mergeAction);
   } else if (t.dataset.conflict) {
     ui.confirm = `conflict:${t.dataset.conflict}`;
   } else if (t.dataset.conflictGo) {

@@ -129,7 +129,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
         if (current && baseIndex >= 0) current.baseRefName = args[baseIndex + 1];
         if (control.blockAfterEdit) {
           const parent = github.openPullRequests.find((item) => item.number === 1);
-          if (parent) Object.assign(parent, ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' }));
+          if (parent) Object.assign(parent, ghPullRequest(1, 'feature/one', 'main', { fields: { reviewDecision: 'CHANGES_REQUESTED' } }));
         }
         finish(null);
       }
@@ -220,15 +220,16 @@ test('表示した head SHA と取り直した SHA が違う PR は拒否する'
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
 
-test('表示後にマージを止める理由が現れた PR は取り直した状態で拒否する', async (t) => {
+test('CI 条件が残っていても表示した head SHA が一致すれば手動マージできる', async (t) => {
   const fixture = await mergeFixture(t);
   fixture.github.openPullRequests[0] = ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' });
 
   const result = await fixture.manager.merge(mergeInput(1));
 
-  assert.equal(result.ok, false);
-  assert.match(result.error, /CI 実行中/);
-  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+  assert.equal(result.ok, true);
+  const merge = fixture.calls.find((args) => args[0] === 'pr' && args[1] === 'merge');
+  assert.ok(merge);
+  assert.equal(merge[merge.indexOf('--match-head-commit') + 1], sha(1));
 });
 
 test('fork の head と同名ブランチが登録先にあっても削除要求を 400 で拒む', async (t) => {
@@ -443,7 +444,7 @@ test('子 PR を付け替えた後に新しいマージ理由が出たら再確�
 
   assert.equal(result.ok, false);
   assert.match(result.error, /#2 の base は付け替え済み/);
-  assert.match(result.error, /CI 実行中/);
+  assert.match(result.error, /変更を求められている/);
   assert.match(result.error, /マージはしていません/);
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });

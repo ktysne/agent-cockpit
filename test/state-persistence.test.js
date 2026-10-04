@@ -74,9 +74,17 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     mode: 'kind', order: ['C:\\project'], pinned: ['C:\\project'],
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
-    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, hideFinished: true,
+    longWaitMinutes: 37, awayAnswerWaitMinutes: 12, hideFinished: true, mergeableCondition: 'ci',
   };
   state.patchDisplayPreferences(display);
+  state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
+    cwd: 'C:\\project', product: { key: 'project', name: 'project' },
+  }, now);
+  const reviewSkip = {
+    owner: 'example', repo: 'project', number: 47, headRefOid: 'a'.repeat(40),
+    reason: '軽微な文言修正のため', recordedAt: new Date(now).toISOString(),
+  };
+  assert.deepEqual(state.setCrossReviewSkip(reviewSkip), reviewSkip);
   await state.flushPersistence();
 
   const restored = await DashboardState.load(homeDir, { now: now + 5 });
@@ -91,6 +99,9 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
   assert.equal(session.decisions[0].awaitingAnswerUntil, undefined);
   assert.equal(session.hidden, true);
   assert.deepEqual(snapshot.display, display);
+  assert.deepEqual(restored.crossReviewSkip('example', 'project', 47), reviewSkip);
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(saved.crossReviewSkips, [reviewSkip]);
 });
 
 test('古い表示設定は既定順を補い、保存済みの不明な種類や重複を正規化する', async (t) => {
@@ -115,11 +126,30 @@ test('古い表示設定は既定順を補い、保存済みの不明な種類�
 
     const restored = await DashboardState.load(homeDir, { now: Date.parse('2026-10-03T00:00:00.000Z') });
     assert.deepEqual(restored.display.sectionOrder, expected, name);
+    assert.equal(restored.getDisplayPreferences().mergeableCondition, 'cross-review', name);
+    assert.deepEqual(restored.crossReviewSkips.size, 0, name);
     assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
     await restored.flushPersistence();
     const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
     assert.deepEqual(saved.display.sectionOrder, expected, name);
+    assert.equal(saved.display.mergeableCondition, 'cross-review', name);
+    assert.deepEqual(saved.crossReviewSkips, [], name);
   }
+});
+
+test('レビュー不要の記録は PR 登録と同じ保持期限で片付ける', () => {
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const state = new DashboardState();
+  state.registerPullRequest('expired-review-session', { url: 'https://github.com/example/project/pull/48' }, {}, now - 14 * DAY_MS - 1);
+  state.setCrossReviewSkip({
+    owner: 'example', repo: 'project', number: 48, headRefOid: 'b'.repeat(40),
+    reason: '変更が軽微なため', recordedAt: new Date(now - 14 * DAY_MS - 1).toISOString(),
+  });
+
+  state.pruneExpiredStoreRecords(now);
+
+  assert.equal(state.pullRequestRegistrations().some((record) => record.number === 48), false);
+  assert.equal(state.crossReviewSkip('example', 'project', 48), null);
 });
 
 test('保存時刻の欠落や範囲外の値は表示設定の既定値で補う', async (t) => {

@@ -41,7 +41,7 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.equal(responses[0].id, 1);
   assert.equal(responses[0].result.serverInfo.name, 'agent-cockpit');
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
-    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr',
+    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review',
   ]);
   assert.equal(responses[2].id, 3);
   assert.match(responses[2].result.content[0].text, /テストを書く \(doing\)/);
@@ -82,6 +82,36 @@ test('cockpit_add_pr は PR URL を秘密値付きで常駐サーバーへ登録
     'add_pr', 'https://github.com/example/project/pull/45', 321,
   ]);
   assert.equal(sent.body.claudeCodeSessionId, 'mcp-session');
+});
+
+test('cockpit_skip_review は理由と指定 head を秘密値付きで常駐サーバーへ記録する', async () => {
+  let sent = null;
+  const headRefOid = 'a'.repeat(40);
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_skip_review', arguments: {
+      owner: 'example', repo: 'project', number: 45, headRefOid, reason: '変更が説明文だけのため',
+    } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    ppid: 321,
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      sent = { url, headers: init.headers, body: JSON.parse(init.body) };
+      return new Response(JSON.stringify({ number: 45, owner: 'example', repo: 'project', headRefOid }), { status: 200 });
+    },
+  });
+
+  assert.equal(responses[0].result.isError, undefined);
+  assert.match(responses[0].result.content[0].text, /クロスレビュー不要として記録しました/);
+  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/mcp-session/prs');
+  assert.equal(sent.headers['x-cockpit-secret'], 'test-secret');
+  assert.equal(sent.headers.origin, undefined);
+  assert.deepEqual([
+    sent.body.kind, sent.body.owner, sent.body.repo, sent.body.number,
+    sent.body.headRefOid, sent.body.reason, sent.body.ppid, sent.body.claudeCodeSessionId,
+  ], ['skip_review', 'example', 'project', 45, headRefOid, '変更が説明文だけのため', 321, 'mcp-session']);
 });
 
 test('400 と 404 は理由を示す固定文を isError で返す', async () => {

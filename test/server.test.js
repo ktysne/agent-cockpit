@@ -1127,6 +1127,77 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   assert.deepEqual(snapshot.pullRequests, []);
 });
 
+test('レビュー不要は画面から設定と取消ができ、MCP は秘密値と現在の head を照合する', async (t) => {
+  let headRefOid = 'a'.repeat(40);
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    async refreshRepoFresh() { return {}; },
+    mergeCandidate() { return { pullRequest: { headRefOid } }; },
+    async refreshReviewGroups() {},
+  };
+  const runtime = await runningServer(t, {
+    pullRequestTracker,
+    findSessionIdByPid: async () => null,
+  });
+  runtime.state.registerPullRequest('review-session', {
+    url: 'https://github.com/example/project/pull/49',
+  }, { cwd: process.cwd(), product: { key: 'project', name: 'project' } });
+  const registration = runtime.state.pullRequestRegistrations()[0];
+  const registrationKey = runtime.state.pullRequestRegistrationKey(registration);
+  const screenPath = '/api/pull-requests/review-skip';
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const screenHeaders = {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.uiSecret,
+    origin,
+  };
+  const screenBody = (action) => JSON.stringify({ action, headRefOid, registration_key: registrationKey });
+
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('set'),
+    headers: { 'content-type': 'application/json', origin },
+  });
+  assert.equal(missingSecret.status, 401);
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('set'),
+    headers: { ...screenHeaders, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+
+  const setFromScreen = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('set'), headers: screenHeaders,
+  });
+  assert.equal(setFromScreen.status, 200);
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 49).headRefOid, headRefOid);
+  const clearFromScreen = await request(runtime.info.port, {
+    method: 'POST', path: screenPath, body: screenBody('clear'), headers: screenHeaders,
+  });
+  assert.equal(clearFromScreen.status, 200);
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 49), null);
+
+  const mcpBody = JSON.stringify({
+    kind: 'skip_review', owner: 'example', repo: 'project', number: 49, headRefOid,
+    reason: 'この差分は設定ファイルの空白だけのため', ppid: 321, claudeCodeSessionId: 'review-session',
+  });
+  const mcpPath = '/api/sessions/review-session/prs';
+  const mcpWrite = await request(runtime.info.port, {
+    method: 'POST', path: mcpPath, body: mcpBody,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(mcpWrite.status, 200);
+  assert.equal(jsonBody(mcpWrite).reason, 'この差分は設定ファイルの空白だけのため');
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 49).headRefOid, headRefOid);
+
+  headRefOid = 'b'.repeat(40);
+  const staleHead = await request(runtime.info.port, {
+    method: 'POST', path: mcpPath, body: mcpBody,
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(staleHead.status, 409);
+});
+
 test('/plan はタスクと判断事項を記録し、読み取り用の要約を返す', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/sessions/plan-session/plan';
@@ -1227,6 +1298,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
   assert.equal(jsonBody(mode).display.hideFinished, true);
+  assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   const hidden = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
@@ -1249,6 +1321,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
+    ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
   ]) {
     const invalidMinutes = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ [key]: invalidValue }), headers: validHeaders,
@@ -1276,10 +1349,17 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
   assert.equal(hideFinished.status, 200);
   assert.equal(jsonBody(hideFinished).display.hideFinished, true);
+  for (const mergeableCondition of ['operation', 'ci', 'cross-review']) {
+    const selected = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ mergeableCondition }), headers: validHeaders,
+    });
+    assert.equal(selected.status, 200);
+    assert.equal(jsonBody(selected).display.mergeableCondition, mergeableCondition);
+  }
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true,
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review',
   });
 });
 
