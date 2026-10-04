@@ -705,13 +705,27 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
+function isFinishedAskDecision(decision) {
+  return ['resolved', 'withdrawn'].includes(decision?.state);
+}
+
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
+  const finishedAskToolUseIds = new Set(entries.flatMap(({ event }) => (
+    ['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name) &&
+    event.tool_name === 'AskUserQuestion' && !event.agent_id && event.tool_use_id ? [event.tool_use_id] : []
+  )));
+  const storedAskDecisions = new Map((askDecisionState.decisions || []).map((decision) => [decision.id, decision]));
+  const restoredFinishedIds = new Set(askDecisionState.restoredFinishedIds || []);
+  // 再起動の前に終わった判断事項は、終わりのイベントがメモリーに無いので、作り直すと巻き戻る。保存済みの状態を保つ。
   const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
     if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
-    return decisionId === event.tool_use_id ? [decisionId] : [];
+    if (decisionId !== event.tool_use_id) return [];
+    const stored = storedAskDecisions.get(decisionId);
+    const keepStored = isFinishedAskDecision(stored) && restoredFinishedIds.has(decisionId) && !finishedAskToolUseIds.has(decisionId);
+    return keepStored ? [] : [decisionId];
   }));
   const initialAskDecisionState = {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
@@ -848,7 +862,13 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         const existing = boundDecision || session.decisions.find((decision) => (
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
-        if (existing) {
+        // 同じ呼び出しか、終わった時点より古い開始の知らせは、遅れて届いたか重複なので、状態と解決の内容を変えない。
+        const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
+          existing.id === toolUseId || event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
+        );
+        if (staleStart) {
+          session.decisionBindings[toolUseId] = existing.id;
+        } else if (existing) {
           existing.state = 'waiting';
           existing.updatedAt = isoTime(event.hookAt);
           existing.resolvedAt = null;
@@ -1092,6 +1112,8 @@ class DashboardState {
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.askDecisionBindings = new Map();
+    // 読み込んだ時点で終わっていた離席中の質問の判断事項。終わりのイベントはメモリーに無い。
+    this.restoredFinishedAskDecisionIds = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
     this.estimates = new Map();
@@ -1157,6 +1179,11 @@ class DashboardState {
     this.display = store.display;
     this.plans = store.plans;
     this.askDecisionBindings = store.askDecisionBindings;
+    this.restoredFinishedAskDecisionIds = new Map([...this.plans].flatMap(([sessionId, plan]) => {
+      const ids = (plan.decisions || [])
+        .filter((decision) => decision.source === 'ask' && isFinishedAskDecision(decision)).map((decision) => decision.id);
+      return ids.length ? [[sessionId, new Set(ids)]] : [];
+    }));
     this.seenAtByProduct = store.seenAtByProduct;
     this.ciFailures = store.ciFailures;
     this.decisionLifecycles = store.decisionLifecycles;
@@ -1300,6 +1327,7 @@ class DashboardState {
   deleteStoredSession(sessionId) {
     this.plans.delete(sessionId);
     this.askDecisionBindings.delete(sessionId);
+    this.restoredFinishedAskDecisionIds.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
     this.pullRequests.delete(sessionId);
@@ -1928,6 +1956,7 @@ class DashboardState {
       decisions: (this.plans.get(sessionId)?.decisions || [])
         .filter((decision) => decision.source === 'ask').map(cloneDecision),
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
+      restoredFinishedIds: [...(this.restoredFinishedAskDecisionIds.get(sessionId) || [])],
     };
   }
 

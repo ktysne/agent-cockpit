@@ -245,3 +245,53 @@ for (const [finishEvent, finishedState] of [['PostToolUse', 'resolved'], ['PostT
     assert.deepEqual(saved.plans['session-finish'].decisions.map((decision) => decision.id), ['ask-original']);
   });
 }
+
+for (const [finishEvent, finishedState] of [['PostToolUse', 'resolved'], ['PostToolUseFailure', 'withdrawn']]) {
+  test(`再起動後に同じ呼び出しの古い PreToolUse が届いても、${finishedState} の判断事項は戻らない`, async (t) => {
+    const homeDir = await temporaryHome(t);
+    const resolution = { chosen: ['JSON (推奨)'], note: 'この形式で進める。' };
+    const state = await DashboardState.load(homeDir, { now: NOW });
+    state.addEvent(askEvent('session-late', 'ask-late', 'PreToolUse', NOW));
+    state.addEvent(askEvent('session-late', 'ask-late', finishEvent, NOW + 10, { decisionResolution: resolution }));
+    await state.flushPersistence();
+
+    const restored = await DashboardState.load(homeDir, { now: NOW + 20 });
+    const expected = restored.decisionFor('session-late', 'ask-late');
+    assert.equal(expected.state, finishedState);
+
+    // 遅れて届いた開始の知らせ(元の時刻)と、重複して届いた開始の知らせ(届いた時刻)の両方を確かめる。
+    restored.addEvent(askEvent('session-late', 'ask-late', 'PreToolUse', NOW));
+    assert.deepEqual(restored.decisionFor('session-late', 'ask-late'), expected);
+    restored.addEvent({ session_id: 'session-late', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 30 });
+    assert.deepEqual(restored.decisionFor('session-late', 'ask-late'), expected);
+    restored.addEvent(askEvent('session-late', 'ask-late', 'PreToolUse', NOW + 40));
+    restored.addEvent({ session_id: 'session-late', hook_event_name: 'Stop', hookAt: NOW + 50 });
+
+    const decisions = restored.snapshot().sessions.find((session) => session.session_id === 'session-late').decisions;
+    assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-late', finishedState]]);
+    assert.deepEqual(restored.decisionFor('session-late', 'ask-late'), expected);
+
+    await restored.flushPersistence();
+    const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+    assert.deepEqual(saved.plans['session-late'].decisions.map((decision) => [decision.id, decision.state]), [['ask-late', finishedState]]);
+    assert.deepEqual(saved.plans['session-late'].decisions[0].resolution, expected.resolution);
+  });
+}
+
+test('再起動後に古い PreToolUse の後で同じ呼び出しの終わりが届いたら、その終わりで解決する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-late-open', 'ask-open', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 10 });
+  restored.addEvent(askEvent('session-late-open', 'ask-open', 'PreToolUse', NOW));
+  assert.equal(restored.decisionFor('session-late-open', 'ask-open').state, 'waiting');
+  restored.addEvent(askEvent('session-late-open', 'ask-open', 'PostToolUse', NOW + 20, {
+    decisionResolution: { chosen: ['CSV'], note: '' },
+  }));
+  restored.addEvent({ session_id: 'session-late-open', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 30 });
+  const decision = restored.decisionFor('session-late-open', 'ask-open');
+  assert.equal(decision.state, 'resolved');
+  assert.deepEqual(decision.resolution, { chosen: ['CSV'], note: '' });
+});
