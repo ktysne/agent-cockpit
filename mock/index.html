@@ -2271,14 +2271,16 @@ document.addEventListener('input', e => {
   card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a);
 });
 
+const expiredTransientNoticeSignature = () => [...Object.entries(ui.reservationNotices), ...Object.entries(ui.mergeErrors)]
+  .filter(([, notice]) => notice && transientNoticeExpired(notice.shownAt))
+  .map(([key]) => key).sort().join('|');
+
 render();
 setInterval(render, 60_000);
 // 全体を描き直すと入力中の欄のフォーカスが外れるため、一時的な知らせの期限が来たときだけ描き直す。
-let renderedTransientNoticeSignature = '';
+let renderedTransientNoticeSignature = expiredTransientNoticeSignature();
 setInterval(() => {
-  const signature = [...Object.entries(ui.reservationNotices), ...Object.entries(ui.mergeErrors)]
-    .filter(([, notice]) => notice && transientNoticeExpired(notice.shownAt))
-    .map(([key]) => key).sort().join('|');
+  const signature = expiredTransientNoticeSignature();
   if (signature === renderedTransientNoticeSignature) return;
   renderedTransientNoticeSignature = signature;
   render();
