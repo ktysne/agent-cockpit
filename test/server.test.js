@@ -420,6 +420,25 @@ test('一覧から外す API は認証し、複数の状態のセッションを
   assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions.find((session) => session.session_id === 'hide_unknown').hidden, undefined);
 });
 
+test('予約と予約取消の口は画面秘密値と Origin を照合する', async (t) => {
+  const runtime = await runningServer(t);
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+  const reservationBody = JSON.stringify({ number: 41, registration_key: 'b'.repeat(64), headRefOid: 'a'.repeat(40), method: 'squash', deleteBranch: true });
+  const cancellationBody = JSON.stringify({ number: 41, registration_key: 'b'.repeat(64) });
+
+  for (const [path, body] of [
+    ['/api/pull-requests/reserve', reservationBody],
+    ['/api/pull-requests/cancel-reservation', cancellationBody],
+  ]) {
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers: { 'content-type': 'application/json', origin } })).status, 401);
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers: { ...headers, origin: 'https://other.example' } })).status, 403);
+    const { origin: _origin, ...withoutOrigin } = headers;
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers: withoutOrigin })).status, 403);
+    assert.equal((await request(runtime.info.port, { method: 'POST', path, body, headers })).status, 404);
+  }
+});
+
 test('一覧から外したセッションを指定して戻す API は認証し、0 件と入力不正を処理する', async (t) => {
   const state = new DashboardState();
   state.syncSessionFiles([
@@ -1299,6 +1318,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
+  assert.equal(jsonBody(mode).display.mergeAfterReviewDefault, false);
   const hidden = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
@@ -1322,6 +1342,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
+    ['mergeAfterReviewDefault', 1], ['mergeAfterReviewDefault', 'true'], ['mergeAfterReviewDefault', null],
   ]) {
     const invalidMinutes = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ [key]: invalidValue }), headers: validHeaders,
@@ -1356,10 +1377,15 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     assert.equal(selected.status, 200);
     assert.equal(jsonBody(selected).display.mergeableCondition, mergeableCondition);
   }
+  const defaultReviewMerge = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ mergeAfterReviewDefault: true }), headers: validHeaders,
+  });
+  assert.equal(defaultReviewMerge.status, 200);
+  assert.equal(jsonBody(defaultReviewMerge).display.mergeAfterReviewDefault, true);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review',
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: true,
   });
 });
 

@@ -550,8 +550,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     mergeConditionWaits: () => [],
     stackPos: () => ({ total: 1, depth: 1 }),
     effective: () => ({ base: 'main' }),
-    ui: { reserved: {}, confirm: null },
-    canReserve: () => false,
+    ui: { reserved: {}, reservationNotices: {}, confirm: null },
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
@@ -592,7 +591,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.equal(actionContext.liveStatus.textContent, 'PR #1 をマージキューに追加しました。');
 });
 
-test('手動マージと予約は選んだ操作の確認欄だけを表示する', () => {
+test('モックのマージ欄は即時マージと収束後マージの確認欄を共用する', () => {
   const setConfirmation = functionSource(mock, 'setMergeConfirmation');
   const item = functionSource(mock, 'prItem');
   assert.ok(setConfirmation && item);
@@ -603,9 +602,8 @@ test('手動マージと予約は選んだ操作の確認欄だけを表示す�
     mergeConditionWaits: () => ['CI 実行中'],
     stackPos: () => ({ depth: 1, total: 1 }),
     effective: () => ({ base: 'main' }),
-    ui: { reserved: {}, confirm: null },
-    canReserve: () => true,
-    mergeConfirm: (_product, _pullRequest, automatic) => `<div class="merge-confirm" data-action="${automatic ? 'reserve' : 'manual'}"></div>`,
+    ui: { reserved: {}, reservationNotices: {}, confirm: null, mergeAfterReviewDefault: false, mergeOpts: {} },
+    mergeConfirm: () => '<div class="merge-confirm" data-action="shared"></div>',
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
@@ -616,16 +614,13 @@ test('手動マージと予約は選んだ操作の確認欄だけを表示す�
   const product = { name: 'agent-cockpit' };
   const pullRequest = { number: 42, title: 'Feature', head: 'feature', sha: 'abc', conflict: false };
 
-  for (const action of ['manual', 'reserve']) {
-    context.selectConfirmation(key, action);
-    const html = context.renderPullRequest(product, pullRequest);
-    const confirmations = [...html.matchAll(/class="merge-confirm" data-action="(manual|reserve)"/g)].map((match) => match[1]);
-    assert.deepEqual(confirmations, [action]);
-  }
+  context.selectConfirmation(key, 'manual');
+  const html = context.renderPullRequest(product, pullRequest);
+  assert.deepEqual([...html.matchAll(/class="merge-confirm" data-action="(shared)"/g)].map((match) => match[1]), ['shared']);
 
   const buttons = context.renderPullRequest(product, pullRequest);
   assert.match(buttons, /data-merge-action="manual"/);
-  assert.match(buttons, /data-merge-action="reserve"/);
+  assert.doesNotMatch(buttons, /data-merge-action="reserve"|CI が通ったらマージ/);
 });
 
 test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {
@@ -694,6 +689,65 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
   vm.runInContext(`${mockLine}\nthis.resultLine = pullRequestMergeResultLine;`, mockContext);
   assert.equal(mockContext.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }),
     context.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }));
+});
+
+test('常駐サーバーが記録した予約マージの結果を一行で表示する', () => {
+  const resultLine = functionSource(web, 'pullRequestMergeResultLine');
+  const appendResults = functionSource(web, 'appendPullRequestMergeResults');
+  assert.ok(resultLine && appendResults);
+  const context = pageContext(web, {
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    pullRequestMergeResults: new Map(),
+    pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
+    element: fakeElement,
+  });
+  vm.runInContext(`${resultLine}\n${appendResults}\nthis.appendResults = appendPullRequestMergeResults;`, context);
+  const content = fakeElement('div');
+  context.appendResults(content, {
+    owner: 'example', repo: 'project',
+    mergeHistory: [{
+      number: 43, method: 'squash', automatic: true,
+      automaticResult: { branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [44] },
+    }],
+  });
+  assert.match(content.textContent, /PR #43: スカッシュ でマージしました。ブランチを削除しました。#44 の base を main に付け替えました/);
+});
+
+test('予約中の PR は待ち条件と取消操作を出し、マージできない理由を隠す', () => {
+  const treeSource = functionSource(web, 'appendPullRequestTree');
+  assert.ok(treeSource);
+  const mergeKey = 'reservation-key';
+  const context = pageContext(web, {
+    displayPreferences: { mergeableCondition: 'cross-review' },
+    MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
+    element: fakeElement,
+    badge: (text, tone) => fakeElement('span', tone, text),
+    queuedPullRequestMerge: () => null,
+    pullRequestMergeConditionWaits: () => ['CI 実行中', 'クロスレビュー未実施'],
+    pullRequestMergeKey: () => mergeKey,
+    pullRequestMergeConfirmations: new Map(),
+    pullRequestMergeInFlight: new Set(),
+    appendPullRequestBadges() {},
+    absoluteTimeLabel: () => '2026/10/04 10:00',
+    pullRequestReservationWaits: () => ['クロスレビューの収束待ち', 'CI 待ち', 'GitHub のレビュー承認待ち'],
+    crossReviewLine: () => null,
+    pullRequestMergeMessages: new Map(),
+    appendPullRequestConflictControls() {},
+    appendPullRequestMergeConfirmation() {},
+    document: { createTextNode: (text) => fakeElement('#text', '', text) },
+  });
+  vm.runInContext(`${treeSource}\nthis.renderTree = appendPullRequestTree;`, context);
+  const target = fakeElement('div');
+  context.renderTree(target, { defaultBranch: 'main' }, {
+    number: 7, url: 'https://github.com/example/repo/pull/7', title: 'Feature', headRefName: 'feature', effectiveBase: 'main',
+    canMerge: false, blocker: 'ドラフト', operationBlocker: 'ドラフト', ci: 'pending', review: 'required',
+    reservation: { method: 'squash', createdAt: '2026-10-04T01:00:00.000Z' }, children: [], mergeSessionId: 'session-a',
+  });
+  const rendered = target.children[0];
+  assert.match(rendered.textContent, /レビュー収束後にマージ予約中 \(スカッシュ、予約時 2026\/10\/04 10:00、クロスレビューの収束待ち、CI 待ち、GitHub のレビュー承認待ち\)/);
+  assert.match(rendered.textContent, /予約を取り消す/);
+  assert.doesNotMatch(rendered.textContent, /マージできない理由/);
+  assert.equal(descendants(rendered).find((node) => node.dataset.cancelReservation === mergeKey).disabled, false);
 });
 
 test('GitHub の自動削除設定があるマージ結果はブランチ状態を断定しない', async () => {
@@ -982,9 +1036,9 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
     number: 7, mergeRecordKey: 'merge-key', headRefOid: 'abcdef0123456789', headRefName: 'feature', effectiveBase: 'main', children: [],
   }, false);
   const button = descendants(target).find((node) => node.dataset.mergeGo === 'merge-key');
-  assert.equal(button.textContent, 'マージ中…');
+  assert.equal(button.textContent, '処理中…');
   assert.equal(button.disabled, true);
-  assert.match(mock, /merging \? 'マージ中…'/);
+  assert.match(mock, /merging \? '処理中…'/);
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {

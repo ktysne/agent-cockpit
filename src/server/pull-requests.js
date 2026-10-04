@@ -595,11 +595,14 @@ class PullRequestTracker {
     this.now = options.now || Date.now;
     this.repositories = new Map();
     this.productViews = new Map();
+    this.crossReviewByRepository = new Map();
     this.inFlight = new Map();
     this.initialFetchCompleted = new Set();
     this.timer = null;
     this.onMerged = options.onMerged || null;
     this.onClosed = options.onClosed || null;
+    this.onRefreshed = options.onRefreshed || null;
+    this.readCrossReviewState = options.readCrossReviewStateAcrossWorktrees || readCrossReviewStateAcrossWorktrees;
   }
 
   start() {
@@ -648,10 +651,19 @@ class PullRequestTracker {
     const key = repoKey(owner, repo);
     if (this.inFlight.has(key)) return this.inFlight.get(key);
     const operation = this.fetchRepository(owner, repo, repository)
-      .finally(() => {
+      .then(async (result) => {
         this.initialFetchCompleted.add(key);
         this.inFlight.delete(key);
         this.state.touch();
+        try {
+          await this.onRefreshed?.(owner, repo);
+        } catch {}
+        return result;
+      }, (error) => {
+        this.initialFetchCompleted.add(key);
+        this.inFlight.delete(key);
+        this.state.touch();
+        throw error;
       });
     this.inFlight.set(key, operation);
     return operation;
@@ -686,11 +698,15 @@ class PullRequestTracker {
       }
       return null;
     };
+    const pullRequest = find(assembled.trees);
+    if (pullRequest && this.crossReviewByRepository.get(key)?.has(pullRequest.number)) {
+      pullRequest.crossReview = this.crossReviewByRepository.get(key).get(pullRequest.number);
+    }
     return {
       registration,
       repository,
       registrations,
-      pullRequest: find(assembled.trees),
+      pullRequest,
     };
   }
 
@@ -700,7 +716,7 @@ class PullRequestTracker {
 
   async readPullRequestView(owner, repo, number) {
     const output = await this.execute([
-      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt,autoMergeRequest`,
+      'pr', 'view', String(number), '-R', safeRepo(owner, repo), '--json', `${PULL_REQUEST_FIELDS},state,mergedAt`,
     ]);
     const value = JSON.parse(output);
     const state = String(value?.state || '').toUpperCase();
@@ -710,7 +726,6 @@ class PullRequestTracker {
       state,
       pullRequest,
       mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
-      autoMergeEnabled: Boolean(value.autoMergeRequest),
     };
   }
 
@@ -718,7 +733,7 @@ class PullRequestTracker {
     const key = repoKey(owner, repo);
     const checkedAt = new Date(this.now()).toISOString();
     const current = this.repositories.get(key) || {
-      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, fetchedAt: null, checkedAt: null,
+      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
     };
     const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
@@ -732,6 +747,7 @@ class PullRequestTracker {
     let defaultBranch = current.defaultBranch;
     let mergeMethods = current.mergeMethods;
     let autoDeleteBranch = current.autoDeleteBranch;
+    let configAvailable = false;
     let fetchedAt = current.fetchedAt;
     let listAvailable = false;
     let mergedPullRequests = null;
@@ -755,6 +771,7 @@ class PullRequestTracker {
         defaultBranch = config.defaultBranch;
         mergeMethods = config.mergeMethods;
         autoDeleteBranch = config.autoDeleteBranch;
+        configAvailable = true;
       } catch {
         errors.push('リポジトリ設定を読み取れませんでした');
       }
@@ -970,6 +987,7 @@ class PullRequestTracker {
       defaultBranch,
       mergeMethods,
       autoDeleteBranch,
+      configAvailable,
       fetchedAt,
       checkedAt,
       error: errors.length ? [...new Set(errors)].join('。') : null,
@@ -1010,7 +1028,7 @@ class PullRequestTracker {
         crossReviewByNumber.set(registration.number, { notRequired: true, source: 'recorded', reason: skip.reason });
         continue;
       }
-      const review = await readCrossReviewStateAcrossWorktrees(registration, pullRequest, {
+      const review = await this.readCrossReviewState(registration, pullRequest, {
         fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl,
       });
       const current = crossReviewByNumber.get(registration.number);
@@ -1060,10 +1078,12 @@ class PullRequestTracker {
         trees,
         merged: assembled.merged,
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(owner, repo, this.now()),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(owner, repo),
         reservations: this.state.pullRequestMergeReservationsForRepo(owner, repo),
         lastMethod: this.state.lastPullRequestMethod(owner, repo),
       });
     }
+    this.crossReviewByRepository.set(key, crossReviewByNumber);
     removeStaleProductViews(this.productViews, key, createdIdentities);
   }
 
@@ -1081,6 +1101,7 @@ class PullRequestTracker {
         trees,
         merged: structuredClone(group.merged),
         mergeHistory: this.state.mergedPullRequestHistoryForRepo(group.owner, group.repo, this.now()),
+        reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(group.owner, group.repo),
         reservations: this.state.pullRequestMergeReservationsForRepo(group.owner, group.repo),
         lastMethod: this.state.lastPullRequestMethod(group.owner, group.repo),
         loading: this.inFlight.has(repoKey(group.owner, group.repo)) && !this.initialFetchCompleted.has(repoKey(group.owner, group.repo)),
@@ -1103,6 +1124,7 @@ class PullRequestTracker {
           defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, checkedAt: null, fetchedAt: null, error: null,
           openStateUnknown: true, registeredCount: 0, openCount: 0, mergeableCount: 0, trees: [], merged: [],
           mergeHistory: this.state.mergedPullRequestHistoryForRepo(registration.owner, registration.repo, this.now()),
+          reservationNotices: this.state.pullRequestMergeReservationNoticesForRepo(registration.owner, registration.repo),
           reservations: this.state.pullRequestMergeReservationsForRepo(registration.owner, registration.repo),
           lastMethod: this.state.lastPullRequestMethod(registration.owner, registration.repo), loading: true,
         };
@@ -1163,5 +1185,6 @@ module.exports = {
   crossReviewToolExists,
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
+  crossReviewConvergedAtHead,
   runGh,
 };

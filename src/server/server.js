@@ -202,7 +202,7 @@ function validTasks(value) {
 function validDisplayPatch(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition'].includes(key))) return false;
+  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault'].includes(key))) return false;
   if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
   for (const key of ['order', 'pinned', 'collapsed']) {
     if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
@@ -219,6 +219,7 @@ function validDisplayPatch(value) {
   if (Object.hasOwn(value, 'awayAnswerWaitMinutes') && (!Number.isInteger(value.awayAnswerWaitMinutes) || value.awayAnswerWaitMinutes < 1 || value.awayAnswerWaitMinutes > 30)) return false;
   if (Object.hasOwn(value, 'hideFinished') && typeof value.hideFinished !== 'boolean') return false;
   if (Object.hasOwn(value, 'mergeableCondition') && !['operation', 'ci', 'cross-review'].includes(value.mergeableCondition)) return false;
+  if (Object.hasOwn(value, 'mergeAfterReviewDefault') && typeof value.mergeAfterReviewDefault !== 'boolean') return false;
   return true;
 }
 
@@ -1232,6 +1233,7 @@ async function startServer(options = {}) {
   });
   pullRequestTracker.onMerged = (event) => pullRequestMergeManager.handleDetectedMerge?.(event);
   pullRequestTracker.onClosed = (event) => pullRequestMergeManager.handleDetectedClose?.(event);
+  pullRequestTracker.onRefreshed = (owner, repo) => pullRequestMergeManager.checkReservations?.(owner, repo);
   let info = null;
   let closing = null;
   let lastRequestAt = Date.now();
