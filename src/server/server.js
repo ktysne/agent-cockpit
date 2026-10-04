@@ -5,7 +5,8 @@ const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState, isValidRouteUpdate } = require('./routing');
-const { AtomicJsonWriter } = require('./json-storage');
+const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
+const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
@@ -13,7 +14,7 @@ const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHom
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
-const { parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
 
 const APP_NAME = 'agent-cockpit';
 const DEFAULT_PORT = 47821;
@@ -24,7 +25,6 @@ const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 128;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
-const COMMIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const MANUAL_CONTENT_TYPES = Object.freeze({
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -186,15 +186,7 @@ function readJsonBody(request) {
 }
 
 async function atomicWriteServerInfo(homeDir, info, fileSystem = fs) {
-  const target = path.join(homeDir, 'server.json');
-  const temporary = path.join(homeDir, `.server.${process.pid}.${crypto.randomUUID()}.tmp`);
-  await fileSystem.writeFile(temporary, `${JSON.stringify(info, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-  try {
-    await fileSystem.rename(temporary, target);
-  } catch (error) {
-    await fileSystem.rm(temporary, { force: true }).catch(() => {});
-    throw error;
-  }
+  return atomicWriteJson(homeDir, 'server.json', info, fileSystem);
 }
 
 async function removeServerInfoIfOwned(homeDir, info, fileSystem = fs) {
@@ -210,12 +202,13 @@ async function removeServerInfoIfOwned(homeDir, info, fileSystem = fs) {
 }
 
 function validOriginForWrite(request) {
-  return request.headers.origin === undefined;
+  return request.headers.origin === undefined && request.headers['sec-fetch-site'] !== 'cross-site';
 }
 
 function validUiOrigin(request, port) {
   const origin = request.headers.origin;
-  return origin === undefined || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+  return request.headers['sec-fetch-site'] !== 'cross-site' &&
+    (origin === undefined || origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`);
 }
 
 function validRequiredUiOrigin(request, port) {
@@ -615,7 +608,7 @@ function createRequestHandler(options) {
       if (!body || typeof body !== 'object' || Array.isArray(body) ||
         Object.keys(body).sort().join(',') !== 'action,headRefOid,registration_key' ||
         !['set', 'clear'].includes(body.action) || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
-        !COMMIT_SHA_PATTERN.test(body.headRefOid || '')) {
+        !isCompleteCommitSha(body.headRefOid)) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
@@ -1235,7 +1228,7 @@ function createRequestHandler(options) {
       const skipReviewKeys = ['claudeCodeSessionId', 'headRefOid', 'kind', 'number', 'owner', 'ppid', 'reason', 'repo'];
       const validSkipReview = isSkipReview && Object.keys(body).sort().join(',') === skipReviewKeys.join(',') &&
         validRepositoryPart(body.owner) && validRepositoryPart(body.repo) && Number.isSafeInteger(body.number) && body.number > 0 &&
-        COMMIT_SHA_PATTERN.test(body.headRefOid || '') && validText(body.reason, 2000);
+        isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000);
       if ((!pullRequest && !validSkipReview) || !Number.isInteger(body.ppid) || body.ppid < 1 ||
         (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
         (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
@@ -1340,7 +1333,9 @@ async function hasSessionJsonFiles(claudeHome) {
 }
 
 async function startServer(options = {}) {
-  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN']) delete process.env[key];
+  for (const key of Object.keys(process.env)) {
+    if (isGithubCredentialEnvironmentVariable(key)) delete process.env[key];
+  }
   const homeDir = cockpitHomeFromOptions(options);
   const claudeHome = claudeHomeFromOptions(options);
   const port = options.port === undefined ? DEFAULT_PORT : Number(options.port);

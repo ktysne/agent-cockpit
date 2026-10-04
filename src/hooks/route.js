@@ -1,53 +1,84 @@
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const crypto = require('node:crypto');
-const { codexAgentScriptPaths } = require('../server/identity');
+const { claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('../server/identity');
+const { ROUTE_VALUES, readRoutingSync } = require('../server/routing');
+const { commandSegments, commandWords } = require('../server/pull-request-utils');
+const { atomicWriteJsonSync } = require('../server/json-storage');
 
-const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
 const ROUTE_RECORD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CLAUDE_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Claude で行い、codex-agent.sh を呼ばない';
 const CODEX_ROUTE_CONTEXT = '開発者の指定(agent-cockpit の経路設定): この作業は Codex(codex-agent.sh 経由の委譲)で行う';
-const CODEX_AGENT_SCRIPT = /(?:^|[\\/])?codex-agent\.sh$/i;
+const CODEX_AGENT_SCRIPT = /(?:^|[\\/])codex-agent\.sh$/i;
+const readRouting = readRoutingSync;
+const TRANSPARENT_COMMANDS = new Set(['command', 'nohup', 'time', 'builtin', '!']);
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-function cockpitHome(environment = process.env) {
-  return environment.AGENT_COCKPIT_HOME
-    ? path.resolve(environment.AGENT_COCKPIT_HOME)
-    : path.join(os.homedir(), '.agent-cockpit');
+function commandName(word) {
+  return (word || '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
 }
 
-function claudeHome(options = {}) {
-  if (options.claudeHome) return path.resolve(options.claudeHome);
-  const environment = options.environment || process.env;
-  return environment.CLAUDE_CONFIG_DIR
-    ? path.resolve(environment.CLAUDE_CONFIG_DIR)
-    : path.join(os.homedir(), '.claude');
+function withoutEnvOptions(words) {
+  let rest = words;
+  while (rest[0] !== undefined && (rest[0].startsWith('-') || ASSIGNMENT_WORD.test(rest[0]))) {
+    rest = rest.slice(['-u', '--unset', '-C', '--chdir'].includes(rest[0]) ? 2 : 1);
+  }
+  return rest;
 }
 
-function readRouting(homeDir = cockpitHome(), fileSystem = fs) {
-  try {
-    const value = JSON.parse(fileSystem.readFileSync(path.join(homeDir, 'routing.json'), 'utf8'));
-    if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).length !== 2 || !ROUTE_VALUES.has(value.agents) || !ROUTE_VALUES.has(value.review)) return null;
-    return { agents: value.agents, review: value.review };
-  } catch {
-    return null;
+// 後ろのコマンドをそのまま実行するだけの前置きを外し、実際に起動されるコマンドの語から始める。
+// commandWords は先頭の代入と env を外すので、元の区切りが env で始まるかを startsWithEnv で受け、残った env のオプションを外す。
+function withoutCommandPrefixes(words, startsWithEnv) {
+  let rest = startsWithEnv ? withoutEnvOptions(words) : words;
+  for (;;) {
+    const name = commandName(rest[0]);
+    if (TRANSPARENT_COMMANDS.has(name)) {
+      rest = rest.slice(1);
+    } else if (name === 'exec' || name === 'nice' || name === 'timeout') {
+      rest = rest.slice(1);
+      while (rest[0]?.startsWith('-')) rest = rest.slice(['-a', '-n', '-s', '-k', '--signal', '--kill-after'].includes(rest[0]) ? 2 : 1);
+      if (name === 'timeout') rest = rest.slice(1);
+    } else if (name === 'env') {
+      rest = withoutEnvOptions(rest.slice(1));
+    } else {
+      return rest;
+    }
   }
 }
 
-function commandInvokesCodexAgent(command) {
+function segmentStartsWithEnv(segment) {
+  const firstCommand = segment.split(/\s+/).find((word) => !ASSIGNMENT_WORD.test(word));
+  return commandName(firstCommand) === 'env';
+}
+
+function commandInvokesCodexAgent(command, depth = 0) {
   if (typeof command !== 'string') return false;
-  const segments = command.split(/&&|\|\||[;|\n]/);
-  return segments.some((segment) => {
-    const words = segment.match(/"[^"\n]*"|'[^'\n]*'|`[^`\n]*`|[^\s]+/g)
-      ?.map((word) => word.replace(/^(?:"([\s\S]*)"|'([\s\S]*)'|`([\s\S]*)`)$/, '$1$2$3')) || [];
+  if (depth >= 8) return false;
+  return commandSegments(command).some((segment) => {
+    let ungrouped = segment.trim();
+    while (/^[({]/.test(ungrouped)) ungrouped = ungrouped.slice(1).trimStart();
+    while (/[)}]$/.test(ungrouped)) ungrouped = ungrouped.slice(0, -1).trimEnd();
+    const words = withoutCommandPrefixes(commandWords(ungrouped), segmentStartsWithEnv(ungrouped));
     const isScript = (word) => CODEX_AGENT_SCRIPT.test(word);
     if (isScript(words[0] || '')) return true;
-    const shell = (words[0] || '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+    if (['source', '.'].includes(words[0])) return isScript(words[1] || '');
+    const shell = commandName(words[0]);
     if (!['bash', 'sh', 'dash', 'zsh'].includes(shell)) return false;
-    const inlineCommand = words.indexOf('-c');
-    if (inlineCommand >= 0) return commandInvokesCodexAgent(words[inlineCommand + 1] || '');
-    return words.slice(1).some(isScript);
+    for (let index = 1; index < words.length;) {
+      const option = words[index];
+      if (option === '-c' || option === '--command' || /^-[^-]*c[^-]*$/.test(option)) {
+        return commandInvokesCodexAgent(words[index + 1] || '', depth + 1);
+      }
+      if (option === '--help' || option === '--version' || option === '-help' || option === '-version') return false;
+      if (option === '--') return isScript(words[index + 1] || '');
+      if (option === '-o' || option === '-O' || option === '--rcfile' || option === '--init-file') {
+        index += 2;
+      } else if (option.startsWith('-') && option !== '-') {
+        index += 1;
+      } else {
+        return isScript(option);
+      }
+    }
+    return false;
   });
 }
 
@@ -80,13 +111,10 @@ function cleanupOldRouteRecords(directory, fileSystem, now = Date.now()) {
 }
 
 function writeRouteRecord(recordPath, route, fileSystem) {
-  const temporaryPath = recordPath + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
   try {
-    fileSystem.writeFileSync(temporaryPath, JSON.stringify({ route }), { flag: 'wx' });
-    fileSystem.renameSync(temporaryPath, recordPath);
+    atomicWriteJsonSync(path.dirname(recordPath), path.basename(recordPath), { route }, fileSystem);
     return true;
   } catch {
-    try { fileSystem.unlinkSync(temporaryPath); } catch {}
     return false;
   }
 }
@@ -112,7 +140,7 @@ function outputForRoute(input, options = {}) {
   const isBashUse = input.hook_event_name === 'PreToolUse' && input.tool_name === 'Bash';
   if (!isStart && !isBashUse) return null;
 
-  const homeDir = options.homeDir || cockpitHome(options.environment);
+  const homeDir = cockpitHomeFromOptions(options);
   const fileSystem = options.fileSystem || fs;
   if (isStart) {
     const scriptExists = (scriptPath) => {
@@ -122,7 +150,7 @@ function outputForRoute(input, options = {}) {
         return false;
       }
     };
-    if (!codexAgentScriptPaths(claudeHome(options), options.userHome).some(scriptExists)) return null;
+    if (!codexAgentScriptPaths(claudeHomeFromOptions(options), options.userHome).some(scriptExists)) return null;
     const directory = path.join(homeDir, 'route-agents');
     try {
       fileSystem.mkdirSync(directory, { recursive: true });

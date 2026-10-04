@@ -58,8 +58,14 @@ function mergedView(pr, headRefOid = pr.headRefOid, mergedAt = new Date(NOW).toI
 
 async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'feature/one', 'main')]) {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-merge-'));
-  testContext.after(() => fs.rm(homeDir, { recursive: true, force: true }));
-  const state = await DashboardState.load(homeDir, { now: NOW });
+  let state;
+  let tracker;
+  testContext.after(async () => {
+    tracker?.close();
+    await state?.flushPersistence();
+    await fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  state = await DashboardState.load(homeDir, { now: NOW });
   for (const pr of pullRequests) state.registerPullRequest(`session-${pr.number}`, { url: pr.url }, {
     product: { key: 'project', name: 'Project' },
   }, NOW);
@@ -168,7 +174,7 @@ async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'featu
     finish(Object.assign(new Error(`unexpected gh arguments: ${args.join(' ')}`), { code: 'EIO' }));
   };
 
-  const tracker = new PullRequestTracker({
+  tracker = new PullRequestTracker({
     state, now: () => NOW, execFileImpl,
     readCrossReviewStateAcrossWorktrees: async (registration, pullRequest) => control.crossReviewReader
       ? control.crossReviewReader(registration, pullRequest)
@@ -191,6 +197,15 @@ function mergeInput(number = 1, changes = {}) {
     method: 'squash',
     deleteBranch: false,
     ...changes,
+  };
+}
+
+function setCandidateMergeable(tracker) {
+  const mergeCandidate = tracker.mergeCandidate.bind(tracker);
+  tracker.mergeCandidate = (...args) => {
+    const candidate = mergeCandidate(...args);
+    if (candidate?.pullRequest) candidate.pullRequest.canMerge = true;
+    return candidate;
   };
 }
 
@@ -230,6 +245,33 @@ test('スタック最下段でない PR は状態を取り直して拒否する'
   assert.equal(result.ok, false);
   assert.match(result.error, /下の #1 のマージ待ち/);
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
+test('既定ブランチを base にしない PR は即時マージも予約マージもしない', async (t) => {
+  const cases = [
+    { baseRefName: 'release', defaultBranch: 'main' },
+    { baseRefName: 'main', defaultBranch: 'develop' },
+  ];
+
+  for (const scenario of cases) {
+    const pullRequest = ghPullRequest(1, 'feature/one', scenario.baseRefName, { reviewDecision: 'APPROVED' });
+    const immediate = await mergeFixture(t, [pullRequest]);
+    immediate.control.defaultBranch = scenario.defaultBranch;
+    setCandidateMergeable(immediate.tracker);
+    const result = await immediate.manager.merge(mergeInput(1));
+    assert.equal(result.ok, false, `即時マージ: ${scenario.defaultBranch}/${scenario.baseRefName}`);
+    assert.match(result.error, /既定ブランチ/);
+    assert.equal(immediate.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+
+    const reserved = await mergeFixture(t, [pullRequest]);
+    reserved.control.defaultBranch = scenario.defaultBranch;
+    reserved.control.crossReviews.set(1, convergedReview(1));
+    setCandidateMergeable(reserved.tracker);
+    const reservation = await reserved.manager.reserve(mergeInput(1));
+    assert.equal(reservation.ok, true, `予約: ${scenario.defaultBranch}/${scenario.baseRefName}`);
+    assert.ok(reserved.state.pullRequestMergeReservation('example', 'project', 1));
+    assert.equal(reserved.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+  }
 });
 
 test('表示した head SHA と取り直した SHA が違う PR は拒否する', async (t) => {

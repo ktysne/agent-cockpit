@@ -1,5 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs');
+const { isCompleteCommitSha } = require('./pull-request-utils');
 
 const HEAD_FILE_LIMIT_BYTES = 4096;
 const BRANCH_CACHE_TTL_MS = 10_000;
@@ -23,7 +24,7 @@ function branchFromHead(headPath, fileSystem) {
     const line = head.split(/\r?\n/, 1)[0].trim();
     const ref = line.match(/^ref: refs\/heads\/(.+)$/);
     if (ref) return ref[1] || null;
-    return /^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(line) ? line.slice(0, 7) : null;
+    return isCompleteCommitSha(line) ? line.slice(0, 7) : null;
   } catch {
     return null;
   }
@@ -113,9 +114,10 @@ function productFromCwd(cwd, options = {}) {
 }
 
 function claudeHomeFromOptions(options = {}) {
+  const environment = options.environment || process.env;
   if (options.claudeHome) return path.resolve(options.claudeHome);
-  if (process.env.CLAUDE_CONFIG_DIR) return path.resolve(process.env.CLAUDE_CONFIG_DIR);
-  return path.join(require('node:os').homedir(), '.claude');
+  if (environment.CLAUDE_CONFIG_DIR) return path.resolve(environment.CLAUDE_CONFIG_DIR);
+  return path.join(options.userHome || require('node:os').homedir(), '.claude');
 }
 
 // bridge は CLAUDE_CONFIG_DIR を見ずに ~/.claude/tools/ へ置く作りなので、Claude のホームに加えて ~/.claude も探す。
@@ -126,8 +128,9 @@ function codexAgentScriptPaths(claudeHome, userHome = require('node:os').homedir
 
 function cockpitHomeFromOptions(options = {}) {
   if (options.homeDir) return path.resolve(options.homeDir);
-  if (process.env.AGENT_COCKPIT_HOME) return path.resolve(process.env.AGENT_COCKPIT_HOME);
-  return path.join(require('node:os').homedir(), '.agent-cockpit');
+  const environment = options.environment || process.env;
+  if (environment.AGENT_COCKPIT_HOME) return path.resolve(environment.AGENT_COCKPIT_HOME);
+  return path.join(options.userHome || require('node:os').homedir(), '.agent-cockpit');
 }
 
 module.exports = { productFromCwd, branchFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions };

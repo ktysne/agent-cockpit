@@ -4,7 +4,7 @@ const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, outputForInputText, outputForRoute } = require('../src/hooks/route');
+const { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, commandInvokesCodexAgent, outputForInputText, outputForRoute } = require('../src/hooks/route');
 
 async function temporaryHome(t, routing = { agents: 'default', review: 'default' }, withCodexAgent = true) {
   const previousClaudeHome = process.env.CLAUDE_CONFIG_DIR;
@@ -93,6 +93,55 @@ test('Claude 経路ではサブエージェントの codex-agent.sh 呼び出し
   assert.equal(outputForRoute({ ...input, tool_input: { command: 'npm test' } }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_name: 'Read' }, { homeDir }), null);
   assert.equal(outputForRoute({ ...input, tool_input: { command: 'echo codex-agent.sh' } }, { homeDir }), null);
+});
+
+test('Claude 経路の判定は env、代入、サブシェル、bash -lc の呼び出しを検出する', async (t) => {
+  const homeDir = await temporaryHome(t, { agents: 'claude', review: 'default' });
+  const input = {
+    hook_event_name: 'PreToolUse', tool_name: 'Bash', session_id: 'session-shell-forms', agent_id: 'agent-shell-forms',
+    tool_input: { command: '' },
+  };
+  outputForRoute({ ...input, hook_event_name: 'SubagentStart' }, { homeDir });
+  const commands = [
+    'VAR=1 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'env A=1 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    '( bash ~/.claude/tools/codex-agent.sh impl-hard )',
+    'bash -lc "bash ~/.claude/tools/codex-agent.sh impl-hard"',
+    '{ bash ~/.claude/tools/codex-agent.sh impl-hard; }',
+    'timeout 600 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'timeout -s KILL 600 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'nohup bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'exec bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'command bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'time bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'nice -n 10 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    '/usr/bin/env bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'env -i bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'env -u HOME A=1 bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'source ~/.claude/tools/codex-agent.sh',
+    '. ~/.claude/tools/codex-agent.sh',
+    'exec -a worker bash ~/.claude/tools/codex-agent.sh impl-hard',
+    '! bash ~/.claude/tools/codex-agent.sh impl-hard',
+    'builtin source ~/.claude/tools/codex-agent.sh',
+    'A=1 env -i bash ~/.claude/tools/codex-agent.sh impl-hard',
+  ];
+
+  for (const command of commands) {
+    assert.equal(commandInvokesCodexAgent(command), true, command);
+    assert.equal(outputForRoute({ ...input, tool_input: { command } }, { homeDir })?.hookSpecificOutput?.permissionDecision, 'deny', command);
+  }
+  for (const command of [
+    'echo codex-agent.sh',
+    'printf "%s\\n" codex-agent.sh',
+    'bash -lc "echo codex-agent.sh"',
+    'bash echo codex-agent.sh',
+    'bash --version ~/.claude/tools/codex-agent.sh',
+    'time echo codex-agent.sh',
+    'env A=1 grep codex-agent.sh notes.md',
+    'source ~/.bashrc',
+    'cat > notes.md <<EOF\n- bash ~/.claude/tools/codex-agent.sh impl-hard で委譲\nEOF',
+    'command -v ~/.claude/tools/codex-agent.sh',
+  ]) assert.equal(commandInvokesCodexAgent(command), false, command);
 });
 
 test('起動後に経路を変えても稼働中の Codex は codex-agent.sh --wait を拒否されない', async (t) => {

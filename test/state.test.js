@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { DashboardState, claudeModelName } = require('../src/server/state');
 const { productFromCwd } = require('../src/server/identity');
-const { readSessionName, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
+const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 
 async function temporaryHome(testContext) {
   const previous = process.env.AGENT_COCKPIT_HOME;
@@ -588,6 +588,29 @@ test('セッション名を *.json から読み、*.key は開かない', async 
   };
   assert.equal(await readSessionName('session-1', homeDir, fileSystem), '設計作業');
   assert.deepEqual(reads, ['session-1.json']);
+});
+
+test('公開仕様でないセッション JSON の不正な項目を飛ばす', async (t) => {
+  const { claudeHome } = await temporaryHome(t);
+  const sessionsDirectory = path.join(claudeHome, 'sessions');
+  await fs.mkdir(sessionsDirectory, { recursive: true });
+  await Promise.all([
+    fs.writeFile(path.join(sessionsDirectory, 'broken.json'), '{invalid'),
+    fs.writeFile(path.join(sessionsDirectory, 'null.json'), 'null'),
+    fs.writeFile(path.join(sessionsDirectory, 'array.json'), '[]'),
+    fs.writeFile(path.join(sessionsDirectory, 'missing-pid.json'), JSON.stringify({ session_id: 'missing-pid' })),
+    fs.writeFile(path.join(sessionsDirectory, 'missing-id.json'), JSON.stringify({ pid: process.pid })),
+    fs.writeFile(path.join(sessionsDirectory, 'session-valid.json'), JSON.stringify({
+      session_id: 'session-valid', pid: process.pid, cwd: 'D:\\project', name: '正常なセッション',
+    })),
+  ]);
+
+  assert.deepEqual(await listLiveSessionFiles(claudeHome), [{
+    session_id: 'session-valid', pid: process.pid, cwd: 'D:\\project', name: '正常なセッション',
+  }]);
+  assert.equal(await findLiveSessionIdByPid(process.pid, claudeHome), 'session-valid');
+  assert.equal(await readSessionName('session-valid', claudeHome), '正常なセッション');
+  assert.equal(await findLiveSessionIdByPid(Number.MAX_SAFE_INTEGER, claudeHome), null);
 });
 
 test('サブエージェント定義から Claude と Codex のモデルおよび effort を読む', async (t) => {

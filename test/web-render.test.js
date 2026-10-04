@@ -8,6 +8,10 @@ const { pageContext } = require('./support/page-context');
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+function functionSource(source, name) {
+  return source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0];
+}
+
 test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
   const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
   assert.ok(settingsDialog);
@@ -834,6 +838,13 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(unverifiableBadge.className, 'badge mute');
   assert.ok(!textOf(unverifiable).includes('レビューの後に変更あり'));
 
+  const changedAfter64DigitReview = context.crossReviewState({
+    headRefOid: 'e'.repeat(64),
+    crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: 'd'.repeat(64) },
+  });
+  assert.equal(changedAfter64DigitReview.text, 'レビューの後に変更あり (レビュー済み ddddddd)');
+  assert.match(changedAfter64DigitReview.warn, /head eeeeeee はクロスレビューの後に変更されている/);
+
   assert.equal(context.crossReviewState({ headRefOid: headSha }).warn, null);
 });
 
@@ -1365,7 +1376,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
 
 test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestOpenCount', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
+  const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   const clickListener = source.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
@@ -1421,9 +1432,9 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   assert.deepEqual(saved, []);
 });
 
-test('表示中のセッションもオープンの PR も数えきれていない PR も未読の変化も無いプロダクトはカードを出さない', () => {
+test('表示中のセッション、PR、PR のエラー、未読の変化が無いプロダクトはカードを出さない', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestOpenCount', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
+  const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -1449,17 +1460,93 @@ test('表示中のセッションもオープンの PR も数えきれていな�
   ];
   const keys = (sinceSeen) => [...context.orderedProducts(visibleSessions, pullRequests, sinceSeen)].map((product) => product.key).sort();
 
-  assert.deepEqual(keys([]), ['active', 'open', 'unreachable']);
-  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [{ text: 'PR #1 をマージした' }] }]), ['active', 'finished', 'open', 'unreachable']);
-  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [] }]), ['active', 'open', 'unreachable']);
+  assert.deepEqual(keys([]), ['active', 'open', 'unreachable', 'unrelated-error']);
+  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [{ text: 'PR #1 をマージした' }] }]), ['active', 'finished', 'open', 'unreachable', 'unrelated-error']);
+  assert.deepEqual(keys([{ product: { key: 'finished', name: '終了済み' }, items: [] }]), ['active', 'open', 'unreachable', 'unrelated-error']);
 
   pullRequestsShown = false;
   assert.deepEqual(keys([]), ['active']);
 });
 
+test('予約通知、予約マージ結果、PR 取得エラーがカードを残す条件を共有する', () => {
+  const names = ['pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'hasProductContent'];
+  const functions = names.map((name) => functionSource(pageHtml, name));
+  assert.ok(functions.every(Boolean));
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true },
+    isFilterShown: () => true,
+    pullRequestTransientNoticeExpired: () => false,
+    pullRequestMergeResultVisible: () => true,
+    hasPullRequestMergeResults: (group) => group.localMergeResult === true,
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const base = { openCount: 0, openStateUnknown: false, loading: false, trees: [], mergeHistory: [], reservationNotices: [] };
+  const groups = [
+    { ...base, reservationNotices: [{ number: 1, at: '2026-10-05T00:00:00.000Z' }] },
+    { ...base, mergeHistory: [{ number: 2, automatic: true, automaticResult: {}, mergedAt: '2026-10-05T00:00:00.000Z' }] },
+    { ...base, error: 'PR の一覧を取得できません' },
+    { ...base, localMergeResult: true },
+  ];
+
+  for (const [index, group] of groups.entries()) {
+    const product = { key: `finished-${index}`, sessions: [], pullRequestGroups: [group] };
+    assert.deepEqual(context.visiblePullRequestGroups([group]), [group]);
+    assert.equal(context.hasProductContent(product, []), true);
+  }
+  const empty = { ...base };
+  assert.deepEqual(context.visiblePullRequestGroups([empty]), []);
+  assert.equal(context.hasProductContent({ key: 'empty', sessions: [], pullRequestGroups: [empty] }, []), false);
+});
+
+test('PR 群が無いプロダクトの空表示は完了表示の設定にかかわらずモックとそろう', () => {
+  const productSection = functionSource(pageHtml, 'productSection');
+  const element = functionSource(pageHtml, 'element');
+  assert.ok(productSection && element);
+
+  class FakeElement {
+    constructor(tagName) { this.tagName = tagName; this.children = []; this.className = ''; this.textContent = ''; }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute() {}
+  }
+  class FakeText {
+    constructor(text) { this.textContent = text; }
+  }
+  const context = pageContext(pageHtml, {
+    displayPreferences: { pinned: [], collapsed: [], hideFinished: true },
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    sharedBranch: () => '',
+    productControls: () => new FakeElement('div'),
+    productCloseButton: () => null,
+    pullRequestMergeableCount: () => 0,
+    isAwaitingDecision: () => false,
+    sinceSeenBox: () => null,
+    sessionBlock: () => new FakeElement('div'),
+    isFilterShown: () => true,
+    pullRequestOpenCount: () => 0,
+    appendPullRequestBlock() {},
+  });
+  vm.runInContext(`${element}\n${productSection}`, context);
+  const textOf = (node) => (node.textContent || '') + (node.children || []).map(textOf).join('');
+  const product = { key: 'product', name: 'Project', branches: new Set(), sessions: [], pullRequestGroups: [] };
+  const values = [];
+
+  for (const hideFinished of [true, false]) {
+    context.displayPreferences.hideFinished = hideFinished;
+    values.push(textOf(context.productSection(product, 0, [product], 0)).match(/オープンの PR はありません/g)?.length || 0);
+  }
+
+  const mockPrBlock = functionSource(fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8'), 'prBlock');
+  assert.deepEqual(values, [1, 1]);
+  assert.match(mockPrBlock, /const empty = !roots\.length[\s\S]*?p\.repo\.loading[\s\S]*?オープンの PR はありません/);
+});
+
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
@@ -1511,7 +1598,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];

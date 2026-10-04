@@ -986,6 +986,19 @@ test('壊れた lastReviewedSha は null にする', async (t) => {
   assert.equal(value.reviewedSha, null);
 });
 
+test('64 桁の lastReviewedSha はクロスレビュー状態に保持する', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  const sha = 'D'.repeat(64);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: sha } },
+  }));
+
+  const value = await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' });
+  assert.equal(value.reviewedSha, sha.toLowerCase());
+});
+
 test('クロスレビュー状態は開いている PR のスタックに付き、マージ済み PR には付かない', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));

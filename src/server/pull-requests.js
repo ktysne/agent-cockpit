@@ -3,13 +3,13 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, validRepositoryPart } = require('./pull-request-utils');
+const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 
 const PULL_REQUEST_FIELDS = 'number,title,url,headRefName,baseRefName,headRefOid,isCrossRepository,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,createdAt';
 const MERGED_PULL_REQUEST_LIMIT = 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-const SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 function asText(value, maximum = 500) {
   return typeof value === 'string' ? value.slice(0, maximum) : '';
@@ -50,7 +50,7 @@ function normalizeOpenPullRequest(value) {
     url: url.replace(/\/$/, ''),
     headRefName: asText(value.headRefName, 500),
     baseRefName: asText(value.baseRefName, 500),
-    headRefOid: SHA_PATTERN.test(value.headRefOid || '') ? value.headRefOid : '',
+    headRefOid: isCompleteCommitSha(value.headRefOid) ? value.headRefOid : '',
     isCrossRepository: value.isCrossRepository === true,
     createdAt: typeof value.createdAt === 'string' && Number.isFinite(Date.parse(value.createdAt)) ? value.createdAt : '',
     draft: value.isDraft === true,
@@ -117,7 +117,7 @@ function storedPullRequest(registration) {
     url: asText(known.url || registration.url, 2000),
     headRefName: asText(known.headRefName, 500),
     baseRefName: asText(known.baseRefName, 500),
-    headRefOid: SHA_PATTERN.test(known.headRefOid || '') ? known.headRefOid : '',
+    headRefOid: isCompleteCommitSha(known.headRefOid) ? known.headRefOid : '',
     isCrossRepository: known.isCrossRepository === true,
     draft: known.isDraft === true,
     mergeable: asText(known.mergeable, 40).toUpperCase(),
@@ -152,7 +152,7 @@ function parseMergedPullRequestList(stdout) {
     const number = Number(value?.number);
     const headRefOid = value?.headRefOid;
     const mergedAt = value?.mergedAt;
-    if (!Number.isSafeInteger(number) || number < 1 || !SHA_PATTERN.test(headRefOid || '') ||
+    if (!Number.isSafeInteger(number) || number < 1 || !isCompleteCommitSha(headRefOid) ||
       typeof mergedAt !== 'string' || !Number.isFinite(Date.parse(mergedAt))) {
       throw new Error('invalid merged PR');
     }
@@ -163,7 +163,7 @@ function parseMergedPullRequestList(stdout) {
 function parseCompareResult(stdout) {
   const value = JSON.parse(stdout);
   if (!value || typeof value !== 'object' || !Number.isSafeInteger(value.ahead_by) || value.ahead_by < 0 ||
-    !Array.isArray(value.commits) || !value.commits.every((commit) => SHA_PATTERN.test(commit?.sha || ''))) {
+    !Array.isArray(value.commits) || !value.commits.every((commit) => isCompleteCommitSha(commit?.sha))) {
     throw new Error('invalid compare result');
   }
   if (value.commits.length < value.ahead_by) return null;
@@ -373,8 +373,7 @@ function ghErrorMessage(error) {
 }
 
 function ghEnvironment(environment = process.env) {
-  const credentialVariables = new Set(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN']);
-  return Object.fromEntries(Object.entries(environment).filter(([key]) => !credentialVariables.has(key.toUpperCase())));
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => !isGithubCredentialEnvironmentVariable(key)));
 }
 
 function safeRepo(owner, repo) {
@@ -469,7 +468,7 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
     const triageSha = lastTriage?.sha;
     const triageOutcome = lastTriage?.outcome;
     const triage = Number.isSafeInteger(lastTriage?.round) && lastTriage.round >= 1
-      && typeof triageSha === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(triageSha)
+      && isCompleteCommitSha(triageSha)
       && ['fixing', 'converged', 'halted'].includes(triageOutcome)
       ? { round: lastTriage.round, sha: triageSha.toLowerCase(), outcome: triageOutcome }
       : null;
@@ -479,7 +478,7 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
       round: branchState.round,
       max: CROSS_REVIEW_MAX_ROUNDS,
       dismissed: branchState.dismissed.length,
-      reviewedSha: typeof lastReviewedSha === 'string' && /^[0-9a-f]{40}$/i.test(lastReviewedSha)
+      reviewedSha: isCompleteCommitSha(lastReviewedSha)
         ? lastReviewedSha.toLowerCase()
         : null,
       triage,
@@ -548,7 +547,7 @@ function crossReviewConvergedAtHead(pullRequest) {
   if (pullRequest.crossReview?.notRequired === true) return true;
   const review = pullRequest.crossReview;
   const triage = review?.triage && review.triage.round === review.round ? review.triage : null;
-  return triage?.outcome === 'converged' && SHA_PATTERN.test(pullRequest.headRefOid || '') && SHA_PATTERN.test(triage.sha || '') &&
+  return triage?.outcome === 'converged' && isCompleteCommitSha(pullRequest.headRefOid) && isCompleteCommitSha(triage.sha) &&
     triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase();
 }
 
@@ -562,7 +561,7 @@ function crossReviewWaitReason(review, headSha) {
   if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
   if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
   if (triage?.outcome === 'converged') {
-    if (SHA_PATTERN.test(headSha || '') && SHA_PATTERN.test(triage.sha || '') && triage.sha.toLowerCase() !== headSha.toLowerCase()) {
+    if (isCompleteCommitSha(headSha) && isCompleteCommitSha(triage.sha) && triage.sha.toLowerCase() !== headSha.toLowerCase()) {
       return 'クロスレビュー後に push あり';
     }
     if (crossReviewConvergedAtHead({ crossReview: review, headRefOid: headSha })) return null;
@@ -916,7 +915,7 @@ class PullRequestTracker {
     const restackResults = new Map();
     const comparisons = listAvailable && defaultBranch
       ? await Promise.all(openPullRequests.map(async (pr) => {
-        if (!SHA_PATTERN.test(pr.headRefOid || '')) return [pr.number, { checked: false, parent: null }];
+        if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
         try {
           const output = await this.execute([
             'api',

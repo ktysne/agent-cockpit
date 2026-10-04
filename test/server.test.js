@@ -14,16 +14,17 @@ const {
   escapeHtmlAttribute,
 } = require('../src/server/server');
 
-async function temporaryHome(testContext) {
+async function temporaryHome(testContext, { deferCleanup = false } = {}) {
   const previous = process.env.AGENT_COCKPIT_HOME;
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-test-'));
   process.env.AGENT_COCKPIT_HOME = homeDir;
-  testContext.after(async () => {
+  const cleanup = async () => {
     if (previous === undefined) delete process.env.AGENT_COCKPIT_HOME;
     else process.env.AGENT_COCKPIT_HOME = previous;
-    await fs.rm(homeDir, { recursive: true, force: true });
-  });
-  return { homeDir, claudeHome: path.join(homeDir, '.claude') };
+    await fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  };
+  if (!deferCleanup) testContext.after(cleanup);
+  return { homeDir, claudeHome: path.join(homeDir, '.claude'), cleanup };
 }
 
 async function request(port, options = {}) {
@@ -701,17 +702,94 @@ test('画面の版は配信した HTML と状態 API で一致し、ファイル
 });
 
 async function runningServer(t, options = {}) {
-  const { homeDir, claudeHome } = await temporaryHome(t);
-  const runtime = await startServer({
-    homeDir,
-    claudeHome,
-    userHome: homeDir,
+  const temporary = await temporaryHome(t, { deferCleanup: true });
+  let runtime;
+  t.after(async () => {
+    await runtime?.close();
+    await temporary.cleanup();
+  });
+  runtime = await startServer({
+    homeDir: temporary.homeDir,
+    claudeHome: temporary.claudeHome,
+    userHome: temporary.homeDir,
     port: 0,
     ...options,
   });
-  t.after(() => runtime.close());
+  assert.equal(runtime.server.address().address, '127.0.0.1');
   return runtime;
 }
+
+test('常駐サーバーの Host は state と POST の要求でも照合する', async (t) => {
+  const runtime = await runningServer(t);
+  const host = `example.test:${runtime.info.port}`;
+  const state = await request(runtime.info.port, { path: '/api/state', headers: { host } });
+  assert.equal(state.status, 400);
+
+  const posted = await request(runtime.info.port, {
+    method: 'POST', path: '/api/events', body: JSON.stringify({}),
+    headers: { host, 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  assert.equal(posted.status, 400);
+});
+
+test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合する', async (t) => {
+  const runtime = await runningServer(t);
+  const endpoints = [
+    { path: '/api/hooks/answers', secret: 'hook', originRequired: false },
+    { path: '/api/decisions/decision-1/answer', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/review-skip', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/merge', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/reserve', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/cancel-reservation', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/conflict-request', secret: 'ui', originRequired: true },
+    { path: '/api/sessions/session-a/estimate', secret: 'ui', originRequired: true },
+    { path: '/api/hidden-sessions', secret: 'ui', originRequired: true },
+    { path: '/api/display', secret: 'ui', originRequired: true },
+    { path: '/api/pull-requests/merge-result/close', secret: 'ui', originRequired: true },
+    { path: '/api/seen', secret: 'ui', originRequired: true },
+    { path: '/api/closed-tasks', secret: 'ui', originRequired: true },
+    { path: '/api/closed-agents', secret: 'ui', originRequired: true },
+    { path: '/api/away', secret: 'ui', originRequired: false },
+    { path: '/api/routing', secret: 'ui', originRequired: true },
+    { path: '/api/open-url', secret: 'ui', originRequired: true },
+    { path: '/api/events', secret: 'hook', originRequired: false },
+    { path: '/api/sessions/session-a/plan', secret: 'hook', originRequired: false },
+    { path: '/api/sessions/session-a/prs', secret: 'hook', originRequired: false },
+  ];
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const secretFor = (kind) => kind === 'hook' ? runtime.info.secret : runtime.info.uiSecret;
+  const write = (endpoint, headers = {}) => request(runtime.info.port, {
+    method: 'POST', path: endpoint.path, body: '{}',
+    headers: { 'content-type': 'application/json', ...headers },
+  });
+
+  for (const endpoint of endpoints) {
+    const label = endpoint.path;
+    const missingSecret = await write(endpoint);
+    assert.equal(missingSecret.status, 401, `${label}: secretなし`);
+
+    const otherSecret = endpoint.secret === 'hook' ? runtime.info.uiSecret : runtime.info.secret;
+    const wrongSecret = await write(endpoint, { 'x-cockpit-secret': otherSecret });
+    assert.equal(wrongSecret.status, 401, `${label}: 別の秘密値`);
+
+    const foreignOrigin = await write(endpoint, {
+      'x-cockpit-secret': secretFor(endpoint.secret), origin: 'https://other.example',
+    });
+    assert.equal(foreignOrigin.status, 403, `${label}: 他の Origin`);
+
+    if (endpoint.originRequired) {
+      const missingOrigin = await write(endpoint, { 'x-cockpit-secret': secretFor(endpoint.secret) });
+      assert.equal(missingOrigin.status, 403, `${label}: Originなし`);
+    }
+
+    const crossSite = await write(endpoint, {
+      'x-cockpit-secret': secretFor(endpoint.secret),
+      ...(endpoint.secret === 'ui' ? { origin } : {}),
+      'sec-fetch-site': 'cross-site',
+    });
+    assert.equal(crossSite.status, 403, `${label}: cross-site`);
+  }
+});
 
 test('不在終了と再開を注入された回答配信へ通知する', async (t) => {
   const state = new DashboardState();

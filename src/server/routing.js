@@ -1,4 +1,5 @@
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const { AtomicJsonWriter } = require('./json-storage');
 
@@ -21,10 +22,23 @@ function isValidRouteUpdate(value) {
 async function readRouting(homeDir, fileSystem = fs) {
   try {
     const value = JSON.parse(await fileSystem.readFile(path.join(homeDir, 'routing.json'), 'utf8'));
-    return isValidRouting(value) ? { agents: value.agents, review: value.review } : { ...DEFAULT_ROUTING };
+    return normalizeRouting(value);
   } catch {
     return { ...DEFAULT_ROUTING };
   }
+}
+
+function readRoutingSync(homeDir, fileSystem = fsSync) {
+  try {
+    const value = JSON.parse(fileSystem.readFileSync(path.join(homeDir, 'routing.json'), 'utf8'));
+    return normalizeRouting(value);
+  } catch {
+    return { ...DEFAULT_ROUTING };
+  }
+}
+
+function normalizeRouting(value) {
+  return isValidRouting(value) ? { agents: value.agents, review: value.review } : { ...DEFAULT_ROUTING };
 }
 
 class RoutingState {
@@ -61,4 +75,4 @@ class RoutingState {
   }
 }
 
-module.exports = { DEFAULT_ROUTING, ROUTE_KEYS, ROUTE_VALUES, RoutingState, isValidRouting, isValidRouteUpdate, readRouting };
+module.exports = { DEFAULT_ROUTING, ROUTE_KEYS, ROUTE_VALUES, RoutingState, isValidRouting, isValidRouteUpdate, readRouting, readRoutingSync };

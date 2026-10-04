@@ -95,10 +95,22 @@ function makeFixture(options = {}) {
   return { clock, state, away, delivery, registration, sessionId, toolUseId };
 }
 
-async function temporaryHome(testContext) {
+async function temporaryHome(testContext, { deferCleanup = false } = {}) {
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-answer-test-'));
-  testContext.after(() => fs.rm(homeDir, { recursive: true, force: true }));
-  return { homeDir, claudeHome: path.join(homeDir, '.claude') };
+  const cleanup = () => fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  if (!deferCleanup) testContext.after(cleanup);
+  return { homeDir, claudeHome: path.join(homeDir, '.claude'), cleanup };
+}
+
+async function runningServer(testContext, options) {
+  const temporary = await temporaryHome(testContext, { deferCleanup: true });
+  let runtime;
+  testContext.after(async () => {
+    await runtime?.close();
+    await temporary.cleanup();
+  });
+  runtime = await startServer({ homeDir: temporary.homeDir, claudeHome: temporary.claudeHome, port: 0, ...options });
+  return { ...temporary, runtime };
 }
 
 async function request(port, options = {}) {
@@ -1100,15 +1112,13 @@ test('record がなくても離席中の server-lost は deny で進める', () 
 });
 
 test('UI 回答の Origin と秘密値を照合し、回答を別セッションへ渡さない', async (t) => {
-  const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'session-ui', hook_event_name: 'SessionStart', hookAt: NOW });
   const away = {
     snapshot: () => ({ enabled: true, since: NOW }),
     setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
   };
-  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, away });
-  t.after(() => runtime.close());
+  const { homeDir, runtime } = await runningServer(t, { state, away });
   runtime.answerDelivery.registerAsk({ sessionId: 'session-ui', toolUseId: 'ask-ui', questions: QUESTIONS });
   const url = `/api/decisions/ask-ui/answer`;
   const body = JSON.stringify({ session_id: 'session-ui', choice: 'ok', note: 'UI からの回答本文' });
@@ -1189,15 +1199,13 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
 });
 
 test('選択肢の回答 API は label と質問ごとの選択数を検査して回答を渡す', async (t) => {
-  const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();
   state.addEvent({ session_id: 'session-pick', hook_event_name: 'SessionStart', hookAt: NOW });
   const away = {
     snapshot: () => ({ enabled: true, since: NOW }),
     setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
   };
-  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, away });
-  t.after(() => runtime.close());
+  const { homeDir, runtime } = await runningServer(t, { state, away });
   const questions = [
     { question: '形式を決める', header: '', multiSelect: false, options: [
       { label: 'JSON (推奨)', description: '' }, { label: 'CSV', description: '' },
@@ -1255,14 +1263,12 @@ test('選択肢の回答 API は label と質問ごとの選択数を検査し�
 });
 
 test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を付ける', async (t) => {
-  const { homeDir, claudeHome } = await temporaryHome(t);
   const state = new DashboardState();
   const away = {
     snapshot: () => ({ enabled: false, since: null }),
     setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
   };
-  const runtime = await startServer({ homeDir, claudeHome, port: 0, state, away });
-  t.after(() => runtime.close());
+  const { homeDir, runtime } = await runningServer(t, { state, away });
 
   const batchDecision = state.addDecision('session-delivery', {
     title: '期限をどうしますか。', context: '', state: 'provisional', options: [],

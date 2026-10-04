@@ -810,8 +810,9 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
 test('マージ結果の一行と予約時の SHA 違いを完了表示の設定中も残す', () => {
   const lineSource = functionSource(web, 'pullRequestMergeResultLine');
   const resultsSource = functionSource(web, 'appendPullRequestMergeResults');
+  const groupContentSource = functionSource(web, 'pullRequestGroupHasVisibleContent');
   const visibleSource = functionSource(web, 'visiblePullRequestGroups');
-  assert.ok(lineSource && resultsSource && visibleSource);
+  assert.ok(lineSource && resultsSource && groupContentSource && visibleSource);
   const key = 'example/project\0project-a';
   const context = pageContext(web, {
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
@@ -822,7 +823,7 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
     pullRequestMergeResultVisible: (result) => result.number !== 54,
     element: fakeElement,
   });
-  vm.runInContext(`${lineSource}\n${resultsSource}\n${visibleSource}\nthis.resultLine = pullRequestMergeResultLine; this.appendResults = appendPullRequestMergeResults; this.visibleGroups = visiblePullRequestGroups;`, context);
+  vm.runInContext(`${lineSource}\n${resultsSource}\n${groupContentSource}\n${visibleSource}\nthis.resultLine = pullRequestMergeResultLine; this.appendResults = appendPullRequestMergeResults; this.visibleGroups = visiblePullRequestGroups;`, context);
   assert.equal(context.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }),
     'スカッシュ でマージしました。ブランチを削除しました。#42 の base を main に付け替えました。予約時と異なる head SHA がマージされました。');
   const content = fakeElement('div');
