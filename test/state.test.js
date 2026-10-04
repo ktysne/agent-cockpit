@@ -45,6 +45,33 @@ test('既知の cwd は稼働中セッションと PR 登録から文字列だ�
   assert.deepEqual(state.knownCwds(), ['C:\\worktree\\active', 'D:\\worktree\\registered']);
 });
 
+test('更新の無いセッションを隠す時間は既定で30分', () => {
+  assert.equal(new DashboardState().getDisplayPreferences().idleHideMinutes, 30);
+});
+
+test('lastUpdatedAt はイベント、計画、判断事項の最新時刻を返す', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'last-updated', cwd: 'C:\\project', name: '更新時刻' }]);
+  state.addEvent({ session_id: 'last-updated', hook_event_name: 'SessionStart', hookAt: 1_000 });
+  const session = () => state.snapshot().sessions.find((item) => item.session_id === 'last-updated');
+  const timestamp = (milliseconds) => new Date(milliseconds).toISOString();
+
+  assert.equal(session().lastUpdatedAt, timestamp(1_000));
+  state.setTasks('last-updated', [{ title: '計画', state: 'todo', criteria: [] }], 3_000);
+  assert.equal(session().lastUpdatedAt, timestamp(3_000));
+  const decision = state.addDecision('last-updated', {
+    title: '判断', context: '', state: 'waiting', options: [{ label: '続ける' }],
+  }, 2_000);
+  assert.equal(session().lastUpdatedAt, timestamp(3_000));
+  state.updateDecision('last-updated', decision.id, 'provisional', [], '', 4_000);
+  assert.equal(session().lastUpdatedAt, timestamp(4_000));
+  state.addEvent({ session_id: 'last-updated', hook_event_name: 'UserPromptSubmit', hookAt: 5_000 });
+  assert.equal(session().lastUpdatedAt, timestamp(5_000));
+
+  state.syncSessionFiles([{ session_id: 'file-only', cwd: 'C:\\project', name: '時刻なし' }]);
+  assert.equal(state.snapshot().sessions.find((item) => item.session_id === 'file-only').lastUpdatedAt, null);
+});
+
 test('状態不明のセッションを外し、すべて表示する操作で戻す', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

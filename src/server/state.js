@@ -10,9 +10,11 @@ const DEFAULT_SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', '
 const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
+const DEFAULT_IDLE_HIDE_MINUTES = 30;
 const DEFAULT_DISPLAY = Object.freeze({
   mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
   longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES, hideFinished: true,
+  idleHideMinutes: DEFAULT_IDLE_HIDE_MINUTES,
   mergeableCondition: 'cross-review', mergeAfterReviewDefault: false,
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
@@ -49,6 +51,7 @@ function cloneDisplay(display) {
     sectionOrder: [...display.sectionOrder],
     longWaitMinutes: display.longWaitMinutes,
     awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
+    idleHideMinutes: display.idleHideMinutes,
     hideFinished: display.hideFinished,
     mergeableCondition: display.mergeableCondition,
     mergeAfterReviewDefault: display.mergeAfterReviewDefault,
@@ -61,6 +64,7 @@ function defaultDisplay() {
     sectionOrder: [...DEFAULT_DISPLAY.sectionOrder],
     longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
     awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
+    idleHideMinutes: DEFAULT_DISPLAY.idleHideMinutes,
     hideFinished: DEFAULT_DISPLAY.hideFinished,
     mergeableCondition: DEFAULT_DISPLAY.mergeableCondition,
     mergeAfterReviewDefault: DEFAULT_DISPLAY.mergeAfterReviewDefault,
@@ -102,7 +106,7 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed']) {
@@ -127,6 +131,7 @@ function normalizeDisplay(value) {
     sectionOrder: normalizeSectionOrder(value.sectionOrder),
     longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
+    idleHideMinutes: normalizeDisplayMinutes(value.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
     hideFinished: typeof value.hideFinished === 'boolean' ? value.hideFinished : DEFAULT_DISPLAY.hideFinished,
     mergeableCondition: MERGEABLE_CONDITIONS.has(value.mergeableCondition) ? value.mergeableCondition : DEFAULT_DISPLAY.mergeableCondition,
     mergeAfterReviewDefault: typeof value.mergeAfterReviewDefault === 'boolean' ? value.mergeAfterReviewDefault : DEFAULT_DISPLAY.mergeAfterReviewDefault,
@@ -2436,10 +2441,17 @@ class DashboardState {
         decisions: [],
       };
       const { decisionBindings: _decisionBindings, ...visible } = base;
+      const decisions = this.decisionsFor(sessionId);
+      const updateTimestamps = [base.lastActivityAt, plan?.tasksUpdatedAt, ...decisions.map((decision) => decision.updatedAt)]
+        .filter((timestamp) => Number.isFinite(Date.parse(timestamp || '')));
+      const lastUpdatedAt = updateTimestamps.reduce((latest, timestamp) => (
+        !latest || Date.parse(timestamp) > Date.parse(latest) ? timestamp : latest
+      ), null) || base.lastActivityAt || null;
       const current = {
         ...visible,
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
+        lastUpdatedAt,
         tools: base.tools.map((tool) => ({ ...tool })),
         agents: base.agents.map((agent) => ({
           ...agent,
@@ -2447,7 +2459,7 @@ class DashboardState {
           lastTool: agent.lastTool && { ...agent.lastTool },
         })),
         permissionWaits: base.permissionWaits.map((wait) => ({ ...wait })),
-        decisions: this.decisionsFor(sessionId),
+        decisions,
         tasks: (plan?.tasks || []).map((task) => {
           const closed = this.closedTasks.get(sessionId)?.get(task.title);
           const isClosedByUser = closed?.stateAtClose === task.state;

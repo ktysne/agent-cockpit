@@ -397,6 +397,11 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <span class="settings-input-error" id="settings-long-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
+      <label for="settings-idle-hide-minutes">更新の無いセッションを隠すまで (分)</label>
+      <input id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440" step="1" inputmode="numeric" aria-describedby="settings-idle-hide-error">
+      <span class="settings-input-error" id="settings-idle-hide-error" role="alert" hidden></span>
+    </div>
+    <div class="settings-theme-row">
       <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間 (1〜30 分)</label>
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
@@ -424,6 +429,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
   <div class="filter-note" id="filter-note" hidden></div>
   <div class="excluded-note" id="excluded-note" hidden></div>
   <div class="excluded-note" id="finished-note" hidden></div>
+  <div class="excluded-note" id="idle-note" role="status" aria-live="polite" hidden></div>
 </main>
 
 <script>
@@ -573,7 +579,7 @@ const DATA = {
         {
           id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown', branch: 'plan/pr-stack-view',
           main: { tool: 'Read: mock/index.html', since: '記録時刻不明' },
-          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [],
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 45,
           estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', state: 'input' },
         },
       ],
@@ -588,23 +594,27 @@ const DATA = {
 };
 
 for (const p of DATA.products) {
+  const updatedAt = (minutesAgo) => new Date(Date.now() - Math.max(0, minutesAgo) * 60_000).toISOString();
   const mainSession = {
     id: `${p.id}-main`, title: p.sessionTitle, status: p.status, branch: p.branch,
     main: p.main, perms: p.perms, subagents: p.subagents,
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
-    tasksUpdatedMin: 5, decisions: p.decisions,
+    tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
-  p.sessions = [mainSession, ...(p.extraSessions || [])];
-  for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions']) delete p[key];
+  p.sessions = [mainSession, ...(p.extraSessions || []).map(session => ({
+    ...session, lastUpdatedAt: updatedAt(session.lastUpdatedMin ?? 2),
+  }))];
+  for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
 }
 
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false }, load());
 ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
+let showIdleSessions = false;
 const answerErrors = new Map();
 const pendingClosedTasks = new Map();
 const pullRequestMergeResults = new Map();
@@ -615,6 +625,7 @@ function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
 }
 ui.longWaitMinutes = normalizeDisplayMinutes(ui.longWaitMinutes, 1, 120, 15);
 ui.awayAnswerWaitMinutes = normalizeDisplayMinutes(ui.awayAnswerWaitMinutes, 1, 30, 5);
+ui.idleHideMinutes = normalizeDisplayMinutes(ui.idleHideMinutes, 5, 1440, 30);
 ui.hideFinished = ui.hideFinished !== false;
 ui.mergeAfterReviewDefault = ui.mergeAfterReviewDefault === true;
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
@@ -659,8 +670,10 @@ function shortShaLabel(value) {
 const themeSelect = document.getElementById('settings-theme-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
+const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
@@ -675,7 +688,7 @@ function captureDisplayPreferences() {
   return {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
-    longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes,
+    longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
     mergeableCondition: ui.mergeableCondition,
     mergeAfterReviewDefault: ui.mergeAfterReviewDefault,
   };
@@ -717,6 +730,7 @@ function applySinceSeenMode(mode) {
 function renderDisplaySettings() {
   longWaitMinutesInput.value = String(ui.longWaitMinutes);
   awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
+  idleHideMinutesInput.value = String(ui.idleHideMinutes);
   hideFinishedInput.checked = ui.hideFinished;
   mergeAfterReviewDefaultInput.checked = ui.mergeAfterReviewDefault;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
@@ -725,13 +739,15 @@ function renderDisplaySettings() {
 function changeDisplaySetting(key, input, minimum, maximum) {
   const value = input.valueAsNumber;
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    const error = input === longWaitMinutesInput ? longWaitMinutesError : awayAnswerWaitMinutesError;
+    const error = key === 'longWaitMinutes' ? longWaitMinutesError
+      : key === 'idleHideMinutes' ? idleHideMinutesError : awayAnswerWaitMinutesError;
     error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
     error.hidden = false;
     input.value = String(ui[key]);
     return false;
   }
-  const error = input === longWaitMinutesInput ? longWaitMinutesError : awayAnswerWaitMinutesError;
+  const error = key === 'longWaitMinutes' ? longWaitMinutesError
+    : key === 'idleHideMinutes' ? idleHideMinutesError : awayAnswerWaitMinutesError;
   error.textContent = '';
   error.hidden = true;
   const previous = captureDisplayPreferences();
@@ -745,6 +761,7 @@ function changeDisplaySetting(key, input, minimum, maximum) {
 renderDisplaySettings();
 longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
 awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
+idleHideMinutesInput.addEventListener('change', () => changeDisplaySetting('idleHideMinutes', idleHideMinutesInput, 5, 1440));
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
@@ -865,7 +882,21 @@ const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !=
 const allSessions = () => DATA.products.flatMap(p => p.sessions);
 // 終わったセッションでも、完了したタスクは全体の進みを見るために残し、それ以外の欄だけを隠す。
 const hidesFinishedSession = s => ui.hideFinished && isFinishedSession(s);
-const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id) && (!hidesFinishedSession(s) || s.tasks.length > 0));
+function isIdleHiddenSession(session, now = Date.now()) {
+  if (session.status === 'busy' || session.perms.length > 0) return false;
+  if (session.decisions.some(decision => ['waiting', 'provisional'].includes(effectiveDecisionState(decision)))) return false;
+  if (session.subagents.some(agent => agent.state === 'busy')) return false;
+  const updatedAt = Date.parse(session.lastUpdatedAt || '');
+  return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
+}
+function idleHiddenSessions(sessions = allSessions(), now = Date.now()) {
+  return sessions.filter(session => !ui.hiddenSessions.includes(session.id)
+    && !(ui.hideFinished && isFinishedSession(session))
+    && isIdleHiddenSession(session, now));
+}
+const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id)
+  && (!hidesFinishedSession(s) || s.tasks.length > 0)
+  && (showIdleSessions || (ui.hideFinished && isFinishedSession(s)) || !isIdleHiddenSession(s)));
 const effectiveDecisionState = d => d.kind;
 const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(d => {
   const a = answerOf(d.id);
@@ -969,6 +1000,12 @@ function renderSummary() {
   finished.hidden = finishedParts.length === 0;
   finished.innerHTML = finishedParts.length
     ? `<span>終わったものを隠しています (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished>表示する</button>`
+    : '';
+  const idleHiddenCount = idleHiddenSessions().length;
+  const idle = document.getElementById('idle-note');
+  idle.hidden = idleHiddenCount === 0;
+  idle.innerHTML = idleHiddenCount
+    ? `<span>${showIdleSessions ? '更新の無いセッションを表示しています' : `更新の無いセッションを隠しています (${idleHiddenCount} 件)`}</span><button type="button" class="link-btn" data-show-idle>${showIdleSessions ? '隠す' : '表示する'}</button>`
     : '';
 }
 
@@ -1805,6 +1842,8 @@ function renderProductMode() {
     const hidden = finishedHiddenCounts();
     return `<div class="empty">${hidden.sessions || hidden.pullRequests
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
+      : idleHiddenSessions().length
+        ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const pinnedCount = ps.filter(p => ui.pinned.includes(p.id)).length;
@@ -1835,6 +1874,8 @@ function renderKindMode() {
     const hidden = finishedHiddenCounts();
     return `<div class="empty">${hidden.sessions || hidden.pullRequests
       ? '終わったものを隠しています。下の「表示する」から表示できます。'
+      : idleHiddenSessions().length
+        ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const sessions = ps.flatMap(p => sessionsByActivity(p).map(session => ({ p, session })));
@@ -1904,7 +1945,8 @@ function render() {
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusData = focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
-      : active?.dataset?.showFinished ? { kind: 'show-finished' }
+       : active?.dataset?.showFinished ? { kind: 'show-finished' }
+       : active?.dataset?.showIdle ? { kind: 'show-idle' }
       : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
         : active?.dataset?.cancelCloseTask ? { kind: 'task-close', key: active.dataset.cancelCloseTask }
           : active?.dataset?.closeTask ? { kind: 'task-close', key: active.dataset.closeTask }
@@ -1919,6 +1961,8 @@ function render() {
     [...document.querySelectorAll(`[${focusData.attribute}]`)].find(button => button.getAttribute(focusData.attribute) === focusData.value)?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'show-finished') {
     (document.querySelector('[data-show-finished]') || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'show-idle') {
+    document.querySelector('[data-show-idle]')?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'close-merge-result') {
     (document.querySelector(`[data-close-merge-result="${CSS.escape(focusData.id)}"]`)
       || document.querySelector('[data-close-merge-result]')
@@ -1939,6 +1983,11 @@ document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
   if (t.dataset.mode) { ui.mode = t.dataset.mode; }
+  else if (t.hasAttribute('data-show-idle')) {
+    showIdleSessions = !showIdleSessions;
+    render();
+    return;
+  }
   else if (t.hasAttribute('data-show-finished')) {
     const previous = captureDisplayPreferences();
     ui.hideFinished = false;
@@ -2160,6 +2209,7 @@ document.addEventListener('input', e => {
 });
 
 render();
+setInterval(render, 60_000);
 </script>
 </body>
 </html>
