@@ -6,6 +6,7 @@ const path = require('node:path');
 const { findBrowser, launchBrowser, sleep } = require('./cdp');
 const { startDemoServer } = require('./demo-server');
 const { scenarioNames } = require('./demo');
+const { isRecord } = require('./value-utils');
 
 const MANUAL_ROOT = path.join(__dirname, '..', '..', 'manual');
 const DEVICE_SCALE = 2;
@@ -23,7 +24,6 @@ const STEP_FIELDS = Object.freeze({
   screenshot: ['do', 'name', 'target', 'viewport', 'parts'],
 });
 
-const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0;
 
 /**

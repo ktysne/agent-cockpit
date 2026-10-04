@@ -1,7 +1,8 @@
 const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { ensureServerRunning, readServerInfo } = require('../hooks/event');
+const { postToServer } = require('../client/server-connection');
 const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
+const { isHookSessionId } = require('../server/session-ids');
 
 const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
@@ -168,111 +169,47 @@ function shortSavedList(toolName, saved) {
   return `${action}: ${summary}${remainder}`;
 }
 
-async function fetchWithDeadline(fetchImpl, url, init, deadline) {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error('deadline elapsed');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.min(2000, remaining));
-  try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
+function postMcpRequest(requestPath, body, options, deadline) {
+  return postToServer(requestPath, body, {
+    homeDir: options.homeDir || cockpitHomeFromOptions(options),
+    environment: options.environment || process.env,
+    fetchImpl: options.fetchImpl || fetch,
+    startServer: options.startServer,
+    ensureServerRunning: options.ensureServerRunning,
+    readServerInfo: options.readServerInfo,
+    deadline,
+    attemptTimeoutMs: 2000,
+    ensure: true,
+  });
 }
 
 async function postPlan(toolName, args, options = {}) {
-  const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const environment = options.environment || process.env;
-  const fetchImpl = options.fetchImpl || fetch;
-  const ensure = options.ensureServerRunning || ensureServerRunning;
-  const readInfo = options.readServerInfo || readServerInfo;
   const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
   const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
     ? environment.CLAUDE_CODE_SESSION_ID
     : '';
-  const routeSessionId = /^[A-Za-z0-9-]{1,128}$/.test(sessionId) ? sessionId : 'pending';
-  const ppid = options.ppid === undefined ? process.ppid : options.ppid;
-  const infoOptions = {
-    homeDir,
-    fetchImpl,
-    environment,
-    deadline,
-    startServer: options.startServer,
-  };
-  let info;
-  try {
-    info = await ensure(infoOptions);
-  } catch {
-    return null;
-  }
-
+  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
     ...planArguments(toolName, args),
-    ppid,
+    ppid: options.ppid === undefined ? process.ppid : options.ppid,
     claudeCodeSessionId: sessionId || null,
   };
-  for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt += 1) {
-    if (!info) return null;
-    try {
-      const response = await fetchWithDeadline(
-        fetchImpl,
-        `http://127.0.0.1:${info.port}/api/sessions/${encodeURIComponent(routeSessionId)}/plan`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-cockpit-secret': info.secret,
-          },
-          body: JSON.stringify(body),
-        },
-        deadline,
-      );
-      if (response.ok) return await response.json();
-      if (response.status === 401 && attempt === 0) {
-        info = await readInfo(homeDir);
-        continue;
-      }
-      const errorMessage = PLAN_ERROR_MESSAGES.get(response.status);
-      if (errorMessage) return { errorMessage };
-      return null;
-    } catch {
-      if (attempt > 0) return null;
-      try {
-        info = await ensure(infoOptions);
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
+  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
+  if (result.ok) return result.json;
+  const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
+  return errorMessage ? { errorMessage } : null;
 }
 
 async function postPullRequest(args, options = {}) {
   const pullRequest = parsePullRequestUrl(args.url);
   if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
-  const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const environment = options.environment || process.env;
-  const fetchImpl = options.fetchImpl || fetch;
-  const ensure = options.ensureServerRunning || ensureServerRunning;
-  const readInfo = options.readServerInfo || readServerInfo;
   const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
   const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
     ? environment.CLAUDE_CODE_SESSION_ID
     : '';
-  const routeSessionId = /^[A-Za-z0-9-]{1,128}$/.test(sessionId) ? sessionId : 'pending';
-  const infoOptions = {
-    homeDir,
-    fetchImpl,
-    environment,
-    deadline,
-    startServer: options.startServer,
-  };
-  let info;
-  try {
-    info = await ensure(infoOptions);
-  } catch {
-    return null;
-  }
+  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
     kind: 'add_pr',
     url: pullRequest.url,
@@ -280,39 +217,10 @@ async function postPullRequest(args, options = {}) {
     claudeCodeSessionId: sessionId || null,
     cwd: options.cwd === undefined ? process.cwd() : options.cwd,
   };
-  for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt += 1) {
-    if (!info) return null;
-    try {
-      const response = await fetchWithDeadline(
-        fetchImpl,
-        `http://127.0.0.1:${info.port}/api/sessions/${encodeURIComponent(routeSessionId)}/prs`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-cockpit-secret': info.secret,
-          },
-          body: JSON.stringify(body),
-        },
-        deadline,
-      );
-      if (response.ok) return await response.json();
-      if (response.status === 401 && attempt === 0) {
-        info = await readInfo(homeDir);
-        continue;
-      }
-      const errorMessage = PR_ERROR_MESSAGES.get(response.status);
-      return errorMessage ? { errorMessage } : null;
-    } catch {
-      if (attempt > 0) return null;
-      try {
-        info = await ensure(infoOptions);
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
+  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
+  if (result.ok) return result.json;
+  const errorMessage = PR_ERROR_MESSAGES.get(result.status);
+  return errorMessage ? { errorMessage } : null;
 }
 
 async function postCrossReviewSkip(args, options = {}) {
@@ -320,21 +228,10 @@ async function postCrossReviewSkip(args, options = {}) {
     !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
     return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
-  const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const environment = options.environment || process.env;
-  const fetchImpl = options.fetchImpl || fetch;
-  const ensure = options.ensureServerRunning || ensureServerRunning;
-  const readInfo = options.readServerInfo || readServerInfo;
   const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
   const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string' ? environment.CLAUDE_CODE_SESSION_ID : '';
-  const routeSessionId = /^[A-Za-z0-9-]{1,128}$/.test(sessionId) ? sessionId : 'pending';
-  const infoOptions = { homeDir, fetchImpl, environment, deadline, startServer: options.startServer };
-  let info;
-  try {
-    info = await ensure(infoOptions);
-  } catch {
-    return null;
-  }
+  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
     kind: 'skip_review',
     owner: args.owner,
@@ -345,36 +242,10 @@ async function postCrossReviewSkip(args, options = {}) {
     ppid: options.ppid === undefined ? process.ppid : options.ppid,
     claudeCodeSessionId: sessionId || null,
   };
-  for (let attempt = 0; attempt < 2 && Date.now() < deadline; attempt += 1) {
-    if (!info) return null;
-    try {
-      const response = await fetchWithDeadline(
-        fetchImpl,
-        `http://127.0.0.1:${info.port}/api/sessions/${encodeURIComponent(routeSessionId)}/prs`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-cockpit-secret': info.secret },
-          body: JSON.stringify(body),
-        },
-        deadline,
-      );
-      if (response.ok) return await response.json();
-      if (response.status === 401 && attempt === 0) {
-        info = await readInfo(homeDir);
-        continue;
-      }
-      const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(response.status);
-      return errorMessage ? { errorMessage } : null;
-    } catch {
-      if (attempt > 0) return null;
-      try {
-        info = await ensure(infoOptions);
-      } catch {
-        return null;
-      }
-    }
-  }
-  return null;
+  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
+  if (result.ok) return result.json;
+  const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
+  return errorMessage ? { errorMessage } : null;
 }
 
 async function callTool(name, args, options = {}) {

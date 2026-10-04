@@ -13,6 +13,7 @@ const {
   makeHookEvent,
   runHook,
 } = require('../src/hooks/event');
+const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
 
 async function temporaryHome(testContext) {
@@ -365,6 +366,29 @@ test('常駐サーバーに接続できなくても 1 秒程度で終了コー�
   assert.equal(result.exitCode, 0);
   assert.ok(connectionAttempts > 0);
   assert.ok(performance.now() - startedAt < 1000);
+});
+
+test('回答フックは接続失敗後に server.json を読み直して新しい secret で再送する', async () => {
+  const serverInfos = [
+    { port: 41001, secret: 'old-secret', pid: 1234, startedAt: '2026-10-05T00:00:00.000Z' },
+    { port: 41002, secret: 'new-secret', pid: 5678, startedAt: '2026-10-05T00:01:00.000Z' },
+  ];
+  const secrets = [];
+  let reads = 0;
+  const response = await postHookRequest({ action: 'test' }, {
+    homeDir: 'unused',
+    timeoutMs: 500,
+    readServerInfo: async () => serverInfos[reads++],
+    fetchImpl: async (_url, options) => {
+      secrets.push(options.headers['x-cockpit-secret']);
+      if (secrets.length === 1) throw new Error('ECONNREFUSED');
+      return { ok: true, status: 200, json: async () => ({ accepted: true }) };
+    },
+  });
+
+  assert.deepEqual(response, { accepted: true });
+  assert.equal(reads, 2);
+  assert.deepEqual(secrets, ['old-secret', 'new-secret']);
 });
 
 test('AskUserQuestion の質問だけを上限付きでフックイベントに含める', async (t) => {

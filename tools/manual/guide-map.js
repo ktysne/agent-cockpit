@@ -2,11 +2,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { escapeHtml } = require('./html-utils');
 
 const PLACES = new Set(['inside', 'center', 'top', 'bottom', 'left', 'right', 'top-start', 'bottom-start']);
 
 function escapeAttribute(value) {
-  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // 属性値は二重引用符で囲むため、アポストロフィは既存出力どおり変換しない。
+  return escapeHtml(value, { escapeSingleQuote: false });
 }
 
 function readAttributes(source) {

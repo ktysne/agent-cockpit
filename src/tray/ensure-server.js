@@ -1,5 +1,5 @@
 const { cockpitHomeFromOptions } = require('../server/identity');
-const { ensureServerRunning } = require('../hooks/event');
+const { ensureServerRunning } = require('../client/server-connection');
 
 // フックの 1 秒はセッションを止めないための上限で、利用者の操作で開くトレイには短すぎる。
 const TRAY_START_TIMEOUT_MS = 5000;

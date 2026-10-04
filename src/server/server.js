@@ -7,6 +7,7 @@ const { AwayState, DashboardState } = require('./state');
 const { RoutingState, isValidRouteUpdate } = require('./routing');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
+const { validDisplayPatch } = require('./display-preferences');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
@@ -14,17 +15,16 @@ const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHom
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
-const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
+const { isRequestSessionId, isShortSessionId } = require('./session-ids');
+const { DEFAULT_PORT } = require('./server-constants');
 
 const APP_NAME = 'agent-cockpit';
-const DEFAULT_PORT = 47821;
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_EXTERNAL_URL_LENGTH = 2048;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
-const MAX_SESSION_ID_LENGTH = 128;
-const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const MANUAL_CONTENT_TYPES = Object.freeze({
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -267,7 +267,7 @@ function escapeHtmlAttribute(value) {
 }
 
 function validSessionId(value) {
-  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SESSION_ID_LENGTH && SESSION_ID_PATTERN.test(value);
+  return isRequestSessionId(value);
 }
 
 function validText(value, maxLength, allowEmpty = false) {
@@ -288,32 +288,6 @@ function validTasks(value) {
     ) return false;
     titles.add(task.title);
   }
-  return true;
-}
-
-function validDisplayPatch(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const keys = Object.keys(value);
-  if (!keys.length || keys.some((key) => !['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'mergeResultHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault'].includes(key))) return false;
-  if (Object.hasOwn(value, 'mode') && !['product', 'kind'].includes(value.mode)) return false;
-  for (const key of ['order', 'pinned', 'collapsed']) {
-    if (Object.hasOwn(value, key) && (!Array.isArray(value[key]) || value[key].length > 200 ||
-      value[key].some((item) => typeof item !== 'string' || item.length > 500) || new Set(value[key]).size !== value[key].length)) return false;
-  }
-  const sectionOrderKeys = new Set(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
-  if (Object.hasOwn(value, 'sectionOrder') && (!Array.isArray(value.sectionOrder) || value.sectionOrder.length > sectionOrderKeys.size ||
-    value.sectionOrder.some((item) => typeof item !== 'string' || !sectionOrderKeys.has(item)) ||
-    new Set(value.sectionOrder).size !== value.sectionOrder.length)) return false;
-  const filters = new Set(['permission', 'blocking', 'provisional', 'agents', 'prs']);
-  if (Object.hasOwn(value, 'hidden') && (!Array.isArray(value.hidden) || value.hidden.length > filters.size ||
-    value.hidden.some((item) => !filters.has(item)) || new Set(value.hidden).size !== value.hidden.length)) return false;
-  if (Object.hasOwn(value, 'longWaitMinutes') && (!Number.isInteger(value.longWaitMinutes) || value.longWaitMinutes < 1 || value.longWaitMinutes > 120)) return false;
-  if (Object.hasOwn(value, 'awayAnswerWaitMinutes') && (!Number.isInteger(value.awayAnswerWaitMinutes) || value.awayAnswerWaitMinutes < 1 || value.awayAnswerWaitMinutes > 30)) return false;
-  if (Object.hasOwn(value, 'idleHideMinutes') && (!Number.isInteger(value.idleHideMinutes) || value.idleHideMinutes < 5 || value.idleHideMinutes > 1440)) return false;
-  if (Object.hasOwn(value, 'mergeResultHideMinutes') && (!Number.isInteger(value.mergeResultHideMinutes) || value.mergeResultHideMinutes < 1 || value.mergeResultHideMinutes > 60)) return false;
-  if (Object.hasOwn(value, 'hideFinished') && typeof value.hideFinished !== 'boolean') return false;
-  if (Object.hasOwn(value, 'mergeableCondition') && !['operation', 'ci', 'cross-review'].includes(value.mergeableCondition)) return false;
-  if (Object.hasOwn(value, 'mergeAfterReviewDefault') && typeof value.mergeAfterReviewDefault !== 'boolean') return false;
   return true;
 }
 
@@ -399,6 +373,16 @@ function createRequestHandler(options) {
       }
     } catch {}
     return uiVersion;
+  }
+
+  async function resolveWriterSessionId(routeId, body) {
+    // 呼び出し元が ID 不一致を個別の応答へ変換できるよう、解決した ID と不一致状態を返す。
+    const mappedSessionId = Number.isInteger(body.ppid) ? await findSessionIdByPid(body.ppid) : null;
+    const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeId;
+    const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
+    const routeMismatch = !validSessionId(mappedSessionId) && typeof fallbackSessionId === 'string' &&
+      routeId !== 'pending' && fallbackSessionId !== routeId;
+    return { sessionId: validSessionId(sessionId) ? sessionId : null, routeMismatch };
   }
 
   return async (request, response) => {
@@ -607,7 +591,7 @@ function createRequestHandler(options) {
       }
       if (!body || typeof body !== 'object' || Array.isArray(body) ||
         Object.keys(body).sort().join(',') !== 'action,headRefOid,registration_key' ||
-        !['set', 'clear'].includes(body.action) || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
+        !['set', 'clear'].includes(body.action) || !isSha256Digest(body.registration_key) ||
         !isCompleteCommitSha(body.headRefOid)) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
@@ -621,6 +605,23 @@ function createRequestHandler(options) {
         jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
         return;
       }
+      if (body.action === 'set') {
+        if (!pullRequestMergeManager?.setReviewSkip) {
+          jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
+          return;
+        }
+        const result = await pullRequestMergeManager.setReviewSkip(
+          registration,
+          body.headRefOid,
+          '開発者がダッシュボードでこの head のレビューを不要と判断した',
+        );
+        if (!result.ok) {
+          jsonResponse(response, result.status, { error: result.error });
+          return;
+        }
+        jsonResponse(response, 200, { action: body.action, number: registration.number });
+        return;
+      }
       try {
         const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo);
         const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
@@ -632,20 +633,7 @@ function createRequestHandler(options) {
           jsonResponse(response, 409, { error: 'Pull request head has changed' });
           return;
         }
-        if (body.action === 'set') {
-          const saved = state.setCrossReviewSkip({
-            owner: registration.owner,
-            repo: registration.repo,
-            number: registration.number,
-            headRefOid: candidate.pullRequest.headRefOid,
-            reason: '開発者がダッシュボードでこの head のレビューを不要と判断した',
-            recordedAt: new Date().toISOString(),
-          });
-          if (!saved) {
-            jsonResponse(response, 400, { error: 'Invalid review skip' });
-            return;
-          }
-        } else if (!state.clearCrossReviewSkip(registration.owner, registration.repo, registration.number, candidate.pullRequest.headRefOid)) {
+        if (!state.clearCrossReviewSkip(registration.owner, registration.repo, registration.number, candidate.pullRequest.headRefOid)) {
           jsonResponse(response, 409, { error: 'Review skip is no longer active' });
           return;
         }
@@ -683,8 +671,8 @@ function createRequestHandler(options) {
       if (!body || typeof body !== 'object' || Array.isArray(body) ||
         Object.keys(body).sort().join(',') !== expectedFields.join(',') ||
         (isConflictRequest
-          ? (!/^[a-f0-9]{64}$/i.test(body.key || '') || typeof body.headRefOid !== 'string' || body.headRefOid.length > 64)
-          : (!Number.isSafeInteger(body.number) || body.number < 1 || !/^[a-f0-9]{64}$/i.test(body.registration_key || '') ||
+          ? (!isSha256Digest(body.key) || typeof body.headRefOid !== 'string' || body.headRefOid.length > 64)
+          : (!Number.isSafeInteger(body.number) || body.number < 1 || !isSha256Digest(body.registration_key) ||
             (action !== 'cancel-reservation' && (typeof body.headRefOid !== 'string' || body.headRefOid.length > 64 ||
               typeof body.method !== 'string' || typeof body.deleteBranch !== 'boolean'))))) {
         jsonResponse(response, 400, { error: 'Invalid request' });
@@ -740,7 +728,7 @@ function createRequestHandler(options) {
         return;
       }
       const sessionId = estimatePath[1];
-      if (!/^[A-Za-z0-9_-]{1,100}$/.test(sessionId)) {
+      if (!isShortSessionId(sessionId)) {
         jsonResponse(response, 404, { error: 'Session not found' });
         return;
       }
@@ -789,10 +777,10 @@ function createRequestHandler(options) {
         jsonResponse(response, 200, { cleared: state.clearHiddenSessions() });
         return;
       }
-      const validSessionId = (sessionId) => typeof sessionId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(sessionId);
+      const validHiddenSessionId = isShortSessionId;
       const isBatchUnhide = body.action === 'unhide' && keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
         Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
-        body.session_ids.every(validSessionId);
+        body.session_ids.every(validHiddenSessionId);
       if (body.action === 'unhide') {
         if (!isBatchUnhide) {
           jsonResponse(response, 400, { error: 'Invalid request' });
@@ -801,10 +789,10 @@ function createRequestHandler(options) {
         jsonResponse(response, 200, { unhidden: state.unhideSessions(body.session_ids) });
         return;
       }
-      const isSingleHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_id' && validSessionId(body.session_id);
+      const isSingleHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_id' && validHiddenSessionId(body.session_id);
       const isBatchHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
         Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
-        body.session_ids.every(validSessionId);
+        body.session_ids.every(validHiddenSessionId);
       if (body.action !== 'hide' || (!isSingleHide && !isBatchHide)) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
@@ -1155,14 +1143,13 @@ function createRequestHandler(options) {
         return;
       }
 
-      const mappedSessionId = Number.isInteger(body.ppid) ? await findSessionIdByPid(body.ppid) : null;
-      const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeSessionId;
-      const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
-      if (!validSessionId(sessionId)) {
+      const resolvedSession = await resolveWriterSessionId(routeSessionId, body);
+      const sessionId = resolvedSession.sessionId;
+      if (!sessionId) {
         jsonResponse(response, 400, { error: 'Session id unavailable' });
         return;
       }
-      if (!validSessionId(mappedSessionId) && typeof fallbackSessionId === 'string' && routeSessionId !== 'pending' && fallbackSessionId !== routeSessionId) {
+      if (resolvedSession.routeMismatch) {
         jsonResponse(response, 400, { error: 'Invalid session id' });
         return;
       }
@@ -1235,10 +1222,9 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const mappedSessionId = await findSessionIdByPid(body.ppid);
-      const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeSessionId;
-      const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
-      if (!validSessionId(sessionId) || (!validSessionId(mappedSessionId) && routeSessionId !== 'pending' && fallbackSessionId !== routeSessionId)) {
+      const resolvedSession = await resolveWriterSessionId(routeSessionId, body);
+      const sessionId = resolvedSession.sessionId;
+      if (!sessionId || resolvedSession.routeMismatch) {
         jsonResponse(response, 400, { error: 'Session id unavailable' });
         return;
       }
@@ -1253,31 +1239,16 @@ function createRequestHandler(options) {
           return;
         }
         try {
-          const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo);
-          const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
-          if (!candidate?.pullRequest) {
-            jsonResponse(response, 409, { error: 'Pull request is no longer open' });
+          if (!pullRequestMergeManager?.setReviewSkip) {
+            jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
             return;
           }
-          if (candidate.pullRequest.headRefOid.toLowerCase() !== body.headRefOid.toLowerCase()) {
-            jsonResponse(response, 409, { error: 'Pull request head has changed' });
+          const result = await pullRequestMergeManager.setReviewSkip(registration, body.headRefOid, body.reason);
+          if (!result.ok) {
+            jsonResponse(response, result.status, { error: result.error });
             return;
           }
-          const saved = state.setCrossReviewSkip({
-            owner: registration.owner,
-            repo: registration.repo,
-            number: registration.number,
-            headRefOid: candidate.pullRequest.headRefOid,
-            reason: body.reason,
-            recordedAt: new Date().toISOString(),
-          });
-          if (!saved) {
-            jsonResponse(response, 400, { error: 'Invalid review skip' });
-            return;
-          }
-          await state.waitForPersistence();
-          await pullRequestTracker.refreshReviewGroups(registration.owner, registration.repo);
-          jsonResponse(response, 200, { ...saved });
+          jsonResponse(response, 200, { ...result.saved });
         } catch {
           jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
         }

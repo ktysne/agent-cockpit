@@ -1,6 +1,15 @@
 'use strict';
 
 const COMPLETE_COMMIT_SHA_PATTERN = /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/;
+const SHA256_DIGEST_PATTERN = /^[a-fA-F0-9]{64}$/;
+
+function repositoryKey(owner, repo) {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+}
+
+function pullRequestKey(owner, repo, number) {
+  return `${repositoryKey(owner, repo)}#${number}`;
+}
 
 function validRepositoryPart(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(value);
@@ -8,6 +17,11 @@ function validRepositoryPart(value) {
 
 function isCompleteCommitSha(value) {
   return typeof value === 'string' && COMPLETE_COMMIT_SHA_PATTERN.test(value);
+}
+
+// 登録キーは SHA-256 固定長なので、コミット SHA と長さの条件を分ける。
+function isSha256Digest(value) {
+  return typeof value === 'string' && SHA256_DIGEST_PATTERN.test(value);
 }
 
 function validBranchName(value) {
@@ -164,9 +178,12 @@ module.exports = {
   findPullRequestUrl,
   firstPullRequestUrl,
   isCompleteCommitSha,
+  isSha256Digest,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   parsePullRequestUrl,
+  pullRequestKey,
+  repositoryKey,
   shouldRefreshPullRequests,
   validBranchName,
   validRepositoryPart,

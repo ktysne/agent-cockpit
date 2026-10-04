@@ -1,6 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { isCompleteCommitSha } = require('./pull-request-utils');
+const { findWorktreeRootSync } = require('./git-worktree');
 
 const HEAD_FILE_LIMIT_BYTES = 4096;
 const BRANCH_CACHE_TTL_MS = 10_000;
@@ -44,29 +45,15 @@ function gitDirectoryFromFile(gitFilePath, paths, fileSystem) {
 }
 
 function findBranchFromCwd(cwd, paths, fileSystem) {
-  let current = cwd;
-  while (true) {
-    const gitPath = paths.join(current, '.git');
-    let gitStats;
-    try {
-      gitStats = fileSystem.statSync(gitPath);
-    } catch (error) {
-      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return null;
-    }
-
-    if (gitStats) {
-      const gitDirectory = gitStats.isDirectory()
-        ? gitPath
-        : gitStats.isFile()
-          ? gitDirectoryFromFile(gitPath, paths, fileSystem)
-          : null;
-      return gitDirectory ? branchFromHead(paths.join(gitDirectory, 'HEAD'), fileSystem) : null;
-    }
-
-    const parent = paths.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
+  const worktree = findWorktreeRootSync(cwd, fileSystem, paths);
+  if (!worktree.root) return null;
+  const gitPath = paths.join(worktree.root, '.git');
+  const gitDirectory = worktree.marker.isDirectory()
+    ? gitPath
+    : worktree.marker.isFile()
+      ? gitDirectoryFromFile(gitPath, paths, fileSystem)
+      : null;
+  return gitDirectory ? branchFromHead(paths.join(gitDirectory, 'HEAD'), fileSystem) : null;
 }
 
 function branchFromCwd(cwd, options = {}) {
