@@ -1007,7 +1007,8 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
           decision.resolution = eventName === 'PostToolUse'
             ? event.decisionResolution || { chosen: [], note: '' }
             : null;
-          // 再起動の後に同じ呼び出しの開始が新しい時刻で届いても、重複と分かるように残す。
+          // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
+          // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
           decision.finishedByToolUseId = toolUseId;
         }
       }
