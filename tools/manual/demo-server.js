@@ -11,6 +11,7 @@ const { loadScenario, scenarioNames } = require('./demo');
 
 // 火曜日の 14:30 JST。曜日や月をまたがない平日の日中で、撮るたびに画像が変わらないよう固定する。
 const BASE_TIME_MS = Date.UTC(2026, 9, 6, 5, 30, 0);
+const DEMO_ASK_POLL_GAP_MS = 24 * 60 * 60 * 1000;
 const HOOK_PID_FOR_UNMAPPED_SESSION = 1;
 const DEFAULT_INTEGRATIONS = Object.freeze({ codexAgent: true, crossReview: true });
 
@@ -151,6 +152,8 @@ async function startDemoServer(options = {}) {
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,
       openExternalUrl: async () => {},
+      // デモには回答を待つフックが無く生存確認が届かないので、預かった質問を生存確認の途絶で解除しない。
+      answerDeliveryOptions: { maxAskPollGapMs: DEMO_ASK_POLL_GAP_MS },
     });
     const { port, secret, uiSecret } = runtime.info;
 
