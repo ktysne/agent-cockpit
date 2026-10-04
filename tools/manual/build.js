@@ -375,7 +375,12 @@ function buildManual(outDir = DEFAULT_OUT_DIR, manualRoot = MANUAL_ROOT, repoRoo
   const preparedManual = prepareManualPages(site, manualRoot);
   const layout = readText(path.join(manualRoot, 'layout.html'));
   const targetRoot = path.resolve(repoRoot, outDir);
-  if (isWithinPath(targetRoot, path.resolve(manualRoot))) throw new Error('出力先が原稿の manual/ を含むため組み立てを中止しました');
+  const resolvedManualRoot = path.resolve(manualRoot);
+  if (isWithinPath(targetRoot, resolvedManualRoot)) throw new Error('出力先が原稿の manual/ を含むため組み立てを中止しました');
+  // 出力先は組み立ての前に消すので、原稿の中では dist の下だけを許す。
+  if (isWithinPath(resolvedManualRoot, targetRoot) && !isWithinPath(path.join(resolvedManualRoot, 'dist'), targetRoot)) {
+    throw new Error('出力先が原稿の manual/ の中にあるため組み立てを中止しました');
+  }
   fs.rmSync(targetRoot, { recursive: true, force: true });
   fs.mkdirSync(path.join(targetRoot, 'assets'), { recursive: true });
   const generated = [];

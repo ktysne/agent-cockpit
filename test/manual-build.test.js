@@ -42,6 +42,21 @@ test('同じ原稿から同じ HTML と検索索引を生成し、矩形 JSON �
   assert.match(searchIndex, /"href":"index\.html#index-できること"/);
 });
 
+test('出力先が原稿の中の dist 以外なら、何も消さずに組み立てを止める', t => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-manual-out-'));
+  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
+  const manualRoot = path.join(temporaryRoot, 'manual');
+  fs.cpSync(path.join(ROOT, 'manual'), manualRoot, { recursive: true });
+  for (const outDir of ['assets', 'pages', 'img', '.']) {
+    const target = path.join(manualRoot, outDir);
+    const before = listFiles(manualRoot);
+    assert.throws(() => buildManual(target, manualRoot, ROOT), /組み立てを中止しました/, outDir);
+    assert.deepEqual(listFiles(manualRoot), before, outDir);
+  }
+  buildManual(path.join(manualRoot, 'dist'), manualRoot, ROOT);
+  assert.ok(fs.existsSync(path.join(manualRoot, 'assets', 'manual.css')));
+});
+
 test('ナビの区分は設計資料の順で表示する', () => {
   const pages = [
     { id: 'index', title: '入口' },
