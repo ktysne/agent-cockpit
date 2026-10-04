@@ -2,7 +2,8 @@
 
 Claude Code デスクトップアプリのセッション状態を、内部ブラウザに表示するローカルのダッシュボード。
 hooks が送るイベントと、メインセッションが MCP ツールで書く計画・判断事項を、127.0.0.1 の常駐サーバーが集めて表示する。
-ダッシュボードで書いた回答は、セッションの受付ソケット(cross-session messaging)でセッションへ届ける。
+ダッシュボードで書いた回答は、フック(`PreToolUse` の `updatedInput`、`PostToolBatch` の差し込み、`Stop` の `asyncRewake`)でセッションへ届ける。セッションの受付ソケット(cross-session messaging)は送信形式が公開されていないので使わない。
+導入の手順は [docs/setup.md](docs/setup.md)、開発の入口は [docs/development.md](docs/development.md) にある。
 
 ## 守ること
 

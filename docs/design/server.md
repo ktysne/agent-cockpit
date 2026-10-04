@@ -405,7 +405,7 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
 
 `PostToolBatch` と `Stop` は `agent_id` のあるサブエージェント内では何もしない。
 
-README のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop` を 3600 秒、AskUserQuestion の `PreToolUse` を 1830 秒にする。
+[導入手順](../setup.md) のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop` を 3600 秒、AskUserQuestion の `PreToolUse` を 1830 秒にする。
 
 配信済みで未反映の回答は、`UserPromptSubmit` の `additionalContext` で最大 3 回差し込み直す。
 
@@ -415,11 +415,11 @@ README のフック登録例では `PostToolBatch` の timeout を 2 秒、`Stop
 
 回答本文は常駐サーバーのメモリーとフックの出力にだけ置き、ファイルとログには書かない。
 
-フック設定の例は README に記載し、`~/.claude/settings.json` は自動で変更しない。
+フック設定の例は [導入手順](../setup.md) に記載し、`~/.claude/settings.json` は自動で変更しない。
 
 ## 登録
 
 フックの登録先の `~/.claude/settings.json` はリポジトリの外にあるので、自動では書き換えない。
-追記する内容は README に書き、開発者の確認を取ってから登録する。
+追記する内容は [導入手順](../setup.md) に書き、開発者の確認を取ってから登録する。
 登録は exec 形式(`command` と `args` を分ける)で書く。Windows ではフックのコマンドが PowerShell で解釈され、引用符付きの実行ファイルのパスが失敗するためである。
-MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~/.claude/skills/agent-cockpit/` にコピーする。手順は README に記載し、自動登録やコピーはしない。
+MCP サーバーは `claude mcp add --scope user` で登録し、スキルは `~/.claude/skills/agent-cockpit/` にコピーする。手順は [導入手順](../setup.md) に記載し、自動登録やコピーはしない。
