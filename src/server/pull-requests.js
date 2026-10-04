@@ -450,19 +450,20 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
   const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
   if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
-  if (tool.status !== 'present') return null;
+  if (tool.status !== 'present') return { unavailable: true };
   const { root } = tool;
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    return error.code === 'ENOENT' ? null : { unavailable: true };
   }
   try {
     const parsed = JSON.parse(contents);
     if (!branch) return null;
     const branchState = parsed?.branches?.[branch];
-    if (!branchState || !Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return null;
+    if (!branchState) return null;
+    if (!Number.isSafeInteger(branchState.round) || branchState.round < 0 || !Array.isArray(branchState.dismissed)) return { unavailable: true };
     const lastReviewedSha = branchState.lastReviewedSha;
     const lastTriage = branchState.lastTriage;
     const triageSha = lastTriage?.sha;
@@ -484,7 +485,7 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
       triage,
     };
   } catch {
-    return null;
+    return { unavailable: true };
   }
 }
 
@@ -530,8 +531,8 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
 
 // 記録のある worktree を優先し、同じ優先度なら今の head で収束した記録、次に今の head をレビューした記録を選ぶ。
 function shouldReplaceCrossReview(current, candidate, headSha) {
-  const priority = (review) => review?.source === 'recorded' ? 4 : review === undefined ? 0
-    : review?.notRequired === true ? 1 : review === null ? 2 : 3;
+  const priority = (review) => review?.source === 'recorded' ? 5 : review === undefined ? 0
+    : review?.notRequired === true ? 1 : review === null ? 2 : review?.unavailable === true ? 3 : 4;
   const currentPriority = priority(current);
   const candidatePriority = priority(candidate);
   if (candidatePriority !== currentPriority) return candidatePriority > currentPriority;
@@ -551,12 +552,32 @@ function crossReviewConvergedAtHead(pullRequest) {
     triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase();
 }
 
+function crossReviewWaitReason(review, headSha) {
+  if (review?.notRequired === true) return null;
+  if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
+  if (!review) return 'クロスレビュー未実施';
+
+  const triage = review.triage;
+  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
+  if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
+  if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
+  if (triage?.outcome === 'converged') {
+    if (SHA_PATTERN.test(headSha || '') && SHA_PATTERN.test(triage.sha || '') && triage.sha.toLowerCase() !== headSha.toLowerCase()) {
+      return 'クロスレビュー後に push あり';
+    }
+    if (crossReviewConvergedAtHead({ crossReview: review, headRefOid: headSha })) return null;
+  }
+  return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
+}
+
 function mergeConditionWaits(pullRequest, condition) {
   const waiting = [];
   if (condition !== 'operation' && pullRequest.ci !== 'pass') {
     waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
   }
-  if (condition === 'cross-review' && !crossReviewConvergedAtHead(pullRequest)) waiting.push('クロスレビュー未実施');
+  if (condition === 'cross-review' && !crossReviewConvergedAtHead(pullRequest)) {
+    waiting.push(crossReviewWaitReason(pullRequest.crossReview, pullRequest.headRefOid));
+  }
   return waiting;
 }
 
@@ -1035,6 +1056,8 @@ class PullRequestTracker {
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;
       crossReviewByNumber.set(registration.number, review && (review.notRequired
         ? { notRequired: true, source: review.source }
+        : review.unavailable
+          ? { unavailable: true }
         : {
           round: review.round,
           max: review.max,
@@ -1186,5 +1209,6 @@ module.exports = {
   readCrossReviewState,
   readCrossReviewStateAcrossWorktrees,
   crossReviewConvergedAtHead,
+  crossReviewWaitReason,
   runGh,
 };

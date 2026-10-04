@@ -966,7 +966,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 
 test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestKeys', 'pullRequestCrossReviewSettled', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
+  const functions = ['pullRequestKeys', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -2311,6 +2311,112 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
     assert.equal(replacementButton.focused, true, kind);
     assert.equal(activeElement, replacementButton, kind);
   }
+});
+
+test('レビュー不要の通信後は有効な同じPRの操作へフォーカスを戻す', async () => {
+  const render = pageHtml.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const runAction = pageHtml.match(/async function runCrossReviewSkipAction\(button\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(render && runAction);
+
+  const key = 'example/project/42';
+  async function runScenario({ result, availableAction, moveFocus }) {
+    const body = { dataset: {}, hasAttribute: () => false };
+    const inFlight = new Set();
+    let activeElement;
+    let buttons = [];
+    let focusedReviewButton = null;
+    let disabledFocusAttempts = 0;
+    let resolveRequest;
+    let rejectRequest;
+    let context;
+
+    const reviewButton = (action) => {
+      let disabled = inFlight.has(key);
+      return {
+        dataset: { mergeKey: key, reviewSkip: action },
+        hasAttribute: () => false,
+        get disabled() { return disabled; },
+        set disabled(value) {
+          disabled = value;
+          if (value && activeElement === this) activeElement = body;
+        },
+        focus() {
+          if (disabled) {
+            disabledFocusAttempts += 1;
+            return;
+          }
+          activeElement = this;
+          focusedReviewButton = this;
+        },
+      };
+    };
+    const filterButton = () => ({
+      dataset: { filter: 'prs' },
+      hasAttribute: () => false,
+      focus() { activeElement = this; },
+    });
+    const activeButton = reviewButton('set');
+    buttons = [activeButton, filterButton()];
+    activeElement = activeButton;
+
+    context = pageContext(pageHtml, {
+      answerNoteComposing: false,
+      lastState: { sessions: [{ session_id: 'session-ui' }], pullRequests: [] },
+      HTMLTextAreaElement: class FakeTextArea {},
+      document: {
+        body,
+        get activeElement() { return activeElement; },
+        querySelectorAll: (selector) => selector === 'button' ? buttons : [],
+      },
+      root: {
+        replaceChildren() {
+          buttons = [reviewButton(availableAction), filterButton()];
+          activeElement = body;
+        },
+        querySelectorAll: () => [],
+      },
+      displayPreferences: { mode: 'product', pinned: [] },
+      visibleSinceSeen: () => [],
+      renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, renderFinishedNote() {}, updateTitle() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      orderedProducts: () => [{ key: 'product-ui' }],
+      productSection: () => ({}),
+      findPullRequestMergeTarget: () => ({ pullRequest: { headRefOid: 'a'.repeat(40) }, number: 42 }),
+      pullRequestReviewSkipInFlight: inFlight,
+      liveStatus: { textContent: '' },
+      postUiAction: () => new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject; }),
+      refresh: async () => context.render(context.lastState),
+      showWriteError() {},
+    });
+    vm.runInContext(`${render}\n${runAction}`, context);
+
+    const pending = context.runCrossReviewSkipAction(activeButton);
+    if (moveFocus) activeElement = buttons.find((button) => button.dataset.filter === 'prs');
+    if (result instanceof Error) rejectRequest(result);
+    else resolveRequest(result);
+    await pending;
+
+    return { activeElement, focusedReviewButton, disabledFocusAttempts, body };
+  }
+
+  for (const scenario of [
+    { result: { ok: true, json: async () => ({}) }, availableAction: 'clear' },
+    { result: { ok: false, json: async () => ({ error: '操作できませんでした' }) }, availableAction: 'set' },
+    { result: new Error('network unavailable'), availableAction: 'set' },
+  ]) {
+    const outcome = await runScenario(scenario);
+    assert.equal(outcome.activeElement, outcome.focusedReviewButton);
+    assert.equal(outcome.focusedReviewButton.dataset.reviewSkip, scenario.availableAction);
+    assert.equal(outcome.disabledFocusAttempts, 0);
+  }
+
+  const movedFocus = await runScenario({
+    result: { ok: true, json: async () => ({}) },
+    availableAction: 'clear',
+    moveFocus: true,
+  });
+  assert.equal(movedFocus.activeElement.dataset.filter, 'prs');
+  assert.equal(movedFocus.focusedReviewButton, null);
 });
 
 test('古い PR の開閉ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {

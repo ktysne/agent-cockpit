@@ -1365,6 +1365,20 @@ function crossReviewSettled(p, pr) {
   return Boolean(triage && triage.round === pr.xr.round && triage.outcome === 'converged' && triage.sha === pr.sha);
 }
 
+function crossReviewWaitReason(p, pr) {
+  const review = pr.xr;
+  if (review?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return null;
+  if (review?.unavailable === true) return 'クロスレビューの状態を確認できない';
+  if (!review) return 'クロスレビュー未実施';
+
+  const triage = review.triage;
+  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
+  if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
+  if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
+  if (triage?.outcome === 'converged' && triage.sha !== pr.sha) return 'クロスレビュー後に push あり';
+  return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
+}
+
 function reservationWait(p, pr) {
   const triage = pr.xr?.triage;
   const convergedAtHead = Number.isSafeInteger(pr.xr?.round) && triage?.round === pr.xr.round &&
@@ -1383,7 +1397,7 @@ function mergeConditionWaits(p, pr) {
   if (ui.mergeableCondition === 'operation') return [];
   const waiting = [];
   if (pr.ci !== 'pass') waiting.push(pr.ci === 'pending' ? 'CI 実行中' : pr.ci === 'fail' ? 'CI が失敗' : 'CI 状態不明');
-  if (ui.mergeableCondition === 'cross-review' && !crossReviewSettled(p, pr)) waiting.push('クロスレビュー未実施');
+  if (ui.mergeableCondition === 'cross-review' && !crossReviewSettled(p, pr)) waiting.push(crossReviewWaitReason(p, pr));
   return waiting;
 }
 
@@ -1897,7 +1911,8 @@ function render() {
   const active = document.activeElement;
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusData = focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
-    : active?.dataset?.showFinished ? { kind: 'show-finished' }
+    : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
+      : active?.dataset?.showFinished ? { kind: 'show-finished' }
       : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
         : active?.dataset?.cancelCloseTask ? { kind: 'task-close', key: active.dataset.cancelCloseTask }
           : active?.dataset?.closeTask ? { kind: 'task-close', key: active.dataset.closeTask }
@@ -1921,6 +1936,10 @@ function render() {
       || document.querySelector(`[data-close-task="${CSS.escape(focusData.key)}"]`))?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'merge-go') {
     document.querySelector(`[data-merge-go="${CSS.escape(focusData.key)}"]`)?.focus({ preventScroll: true });
+  } else if (focusData?.kind === 'review-skip') {
+    const controls = [...document.querySelectorAll('[data-review-skip]')];
+    (controls.find(button => button.dataset.reviewKey === focusData.key && button.dataset.reviewSkip === focusData.action)
+      || controls.find(button => button.dataset.reviewKey === focusData.key && button.dataset.reviewSkip !== focusData.action))?.focus({ preventScroll: true });
   }
 }
 

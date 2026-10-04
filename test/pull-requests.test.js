@@ -501,7 +501,7 @@ test('マージ可能件数は選択した条件に従い、レビュー不要�
   }));
   await tracker.refreshReviewGroups('example', 'project');
   [group] = tracker.snapshot();
-  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー未実施']);
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー対応中']);
   assert.equal(group.mergeableCount, 0);
 
   await fs.writeFile(path.join(convergedRoot, '.cross-review-state.json'), JSON.stringify({
@@ -528,7 +528,7 @@ test('マージ可能件数は選択した条件に従い、レビュー不要�
   [group] = tracker.snapshot();
   assert.equal(state.crossReviewSkip('example', 'project', 31), null);
   assert.notDeepEqual(group.trees[0].crossReview, { notRequired: true, source: 'recorded', reason: '変更が文言だけのため' });
-  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー未実施']);
+  assert.deepEqual(group.trees[0].mergeConditionWaits, ['クロスレビュー後に push あり']);
 });
 
 test('閉じられた親のコミットは compare に残っていても積み直し待ちにしない', async (t) => {
@@ -929,17 +929,17 @@ test('tools/cross-review.js が無い worktree はレビュー不要として扱
   });
 });
 
-test('保存した cwd が消失した worktree はクロスレビュー未実施として扱う', async (t) => {
+test('保存した cwd が消失した worktree はクロスレビュー状態を確認できない', async (t) => {
   const root = await temporaryDirectory(t);
   const cwd = path.join(root, 'checkout');
   await fs.mkdir(path.join(root, '.git'));
   await fs.mkdir(cwd);
   await fs.rm(cwd, { recursive: true });
 
-  assert.equal(await readCrossReviewState({ number: 55, cwd }, { headRefName: 'feat/pr' }), null);
+  assert.deepEqual(await readCrossReviewState({ number: 55, cwd }, { headRefName: 'feat/pr' }), { unavailable: true });
 });
 
-test('保存した cwd を読み取れない worktree はクロスレビュー未実施として扱う', async (t) => {
+test('保存した cwd を読み取れない worktree はクロスレビュー状態を確認できない', async (t) => {
   const root = await temporaryDirectory(t);
   const cwd = path.join(root, 'src');
   await fs.mkdir(path.join(root, '.git'));
@@ -956,7 +956,7 @@ test('保存した cwd を読み取れない worktree はクロスレビュー�
     readFile: fs.readFile,
   };
 
-  assert.equal(await readCrossReviewState({ number: 55, cwd }, { headRefName: 'feat/pr' }, fileSystem), null);
+  assert.deepEqual(await readCrossReviewState({ number: 55, cwd }, { headRefName: 'feat/pr' }, fileSystem), { unavailable: true });
 });
 
 test('tools/cross-review.js はあるが状態ファイルがまだ無い worktree は null を返す', async (t) => {
@@ -971,7 +971,7 @@ test('JSON として読めないクロスレビュー状態ファイルは null 
   await fs.mkdir(path.join(root, '.git'));
   await installCrossReview(root);
   await fs.writeFile(path.join(root, '.cross-review-state.json'), '{invalid');
-  assert.equal(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), null);
+  assert.deepEqual(await readCrossReviewState({ number: 55, cwd: root }, { headRefName: 'feat/pr' }), { unavailable: true });
 });
 
 test('壊れた lastReviewedSha は null にする', async (t) => {
