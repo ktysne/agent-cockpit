@@ -689,7 +689,8 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   const idleSource = functionSource(web, 'isIdleHiddenSession');
   const countsSource = functionSource(web, 'idleHiddenSessions');
   const noteSource = functionSource(web, 'renderIdleNote');
-  assert.ok(idleSource && countsSource && noteSource);
+  const endedAgentSource = functionSource(web, 'isEndedAgent');
+  assert.ok(idleSource && countsSource && noteSource && endedAgentSource);
   const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
   let renders = 0;
   const context = pageContext(web, {
@@ -701,7 +702,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
     lastState: {},
     render: () => { renders += 1; },
   });
-  vm.runInContext(`${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
+  vm.runInContext(`${endedAgentSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
   const now = 2_000_000;
   const stale = {
     session_id: 'stale', status: '不明', lastUpdatedAt: new Date(now - 1_800_001).toISOString(),
@@ -718,6 +719,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
     { ...stale, decisions: [{ state: 'waiting' }] },
     { ...stale, decisions: [{ state: 'provisional' }] },
     { ...stale, agents: [{ active: true }] },
+    { ...stale, agents: [{ active: false, unconfirmed: true }] },
     { ...stale, status: '作業中' },
   ]) assert.equal(context.isIdle(exempt, now), false);
 
