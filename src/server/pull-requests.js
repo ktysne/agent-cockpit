@@ -558,9 +558,9 @@ function crossReviewWaitReason(review, headSha) {
   if (!review) return 'クロスレビュー未実施';
 
   const triage = review.triage;
+  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
   if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
   if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
-  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
   if (triage?.outcome === 'converged') {
     if (SHA_PATTERN.test(headSha || '') && SHA_PATTERN.test(triage.sha || '') && triage.sha.toLowerCase() !== headSha.toLowerCase()) {
       return 'クロスレビュー後に push あり';

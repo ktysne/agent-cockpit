@@ -1518,9 +1518,9 @@ function pullRequestCrossReviewWaitReason(pullRequest) {
   if (!review) return 'クロスレビュー未実施';
 
   const triage = review.triage;
+  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
   if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
   if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
-  if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
   if (triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)) {
     if (triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()) return 'クロスレビュー後に push あり';
     return null;
@@ -3582,6 +3582,7 @@ async function runCrossReviewSkipAction(button) {
   const action = button.dataset.reviewSkip;
   if (!['set', 'clear'].includes(action)) return;
   const { pullRequest, number } = target;
+  const focusTarget = { key, action };
   pullRequestReviewSkipInFlight.add(key);
   button.disabled = true;
   liveStatus.textContent = action === 'set' ? `PR #${number} のレビュー不要を記録しています。` : `PR #${number} のレビュー不要を取り消しています。`;
@@ -3604,8 +3605,17 @@ async function runCrossReviewSkipAction(button) {
     showWriteError('レビュー不要の記録を保存できませんでした');
     liveStatus.textContent = 'レビュー不要の記録を保存できませんでした。';
   } finally {
+    const active = document.activeElement;
+    const shouldRestoreFocus = active === document.body ||
+      (active?.dataset?.mergeKey === focusTarget.key && ['set', 'clear'].includes(active.dataset.reviewSkip));
     pullRequestReviewSkipInFlight.delete(key);
     if (lastState) render(lastState);
+    if (shouldRestoreFocus) {
+      const buttons = [...document.querySelectorAll('button')];
+      const focusButton = buttons.find((item) => item.dataset.mergeKey === focusTarget.key && item.dataset.reviewSkip === focusTarget.action) ||
+        buttons.find((item) => item.dataset.mergeKey === focusTarget.key && ['set', 'clear'].includes(item.dataset.reviewSkip));
+      focusButton?.focus({ preventScroll: true });
+    }
   }
 }
 
