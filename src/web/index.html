@@ -973,7 +973,7 @@ function applyAwayState(away) {
 
 function updateConnectionNote() {
   if (connectionLost) {
-    const time = `${String(lastStateAt.getHours()).padStart(2, '0')}:${String(lastStateAt.getMinutes()).padStart(2, '0')}`;
+    const time = absoluteTimeLabel(lastStateAt);
     connectionNote.textContent = `常駐サーバーに接続できません。表示は ${time} 時点のものです。`;
     connectionNote.hidden = false;
   } else if (Date.now() < writeErrorUntil) {
@@ -1846,12 +1846,13 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
 
   const effects = element('ul', 'effects');
   const review = crossReviewState(pullRequest);
+  const childNumbers = (pullRequest.children || []).map((child) => `#${child.number}`).join('、');
   const effectItems = [
     review.warn ? { text: review.warn, warn: true } : null,
     { headSha: true },
     pullRequest.isCrossRepository ? { text: 'fork の head ブランチは登録先リポジトリから削除しない。', warn: true } : null,
-    pullRequest.children.length && ['squash', 'rebase'].includes(options.method)
-      ? { text: 'スカッシュまたはリベースでは上の PR に元のコミットが残るため、セッションに積み直しを依頼する。', warn: true } : null,
+    childNumbers && ['squash', 'rebase'].includes(options.method)
+      ? { text: `スカッシュまたはリベースでは ${childNumbers} に #${pullRequest.number} のコミットが残るため、セッションに積み直しを依頼する。`, warn: true } : null,
   ].filter(Boolean);
   for (const effect of effectItems) {
     if (effect.headSha) {
@@ -1946,10 +1947,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
   if (pullRequest.conflictRequest) {
     const recipients = pullRequestConflictSessionNames(pullRequest.conflictRequest.sessionIds);
     const namesForStatus = recipients.length ? recipients : ['PR を登録したセッション'];
-    const requestedAt = Date.parse(pullRequest.conflictRequest.requestedAt || '');
-    const time = Number.isFinite(requestedAt)
-      ? `${String(new Date(requestedAt).getHours()).padStart(2, '0')}:${String(new Date(requestedAt).getMinutes()).padStart(2, '0')}`
-      : '時刻不明';
+    const time = absoluteTimeLabel(pullRequest.conflictRequest.requestedAt, Date.now(), '時刻不明');
     const status = element('div', 'badges');
     status.setAttribute('role', 'status');
     status.append(badge(`${time} に ${namesForStatus.join('、')} のセッションへ衝突の解消を依頼した`, 'accent long'));
@@ -2764,8 +2762,7 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(element('span', 'task-title', task.title));
   const met = task.criteria.filter((criterion) => criterion.met).length;
-  header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
-  if (task.closedByUser) header.append(element('span', 'meta', '画面で完了にした'));
+  header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}${task.closedByUser ? '、画面で完了にした' : ''}`));
   if (task.state !== 'done') {
     const closeKey = `${session.session_id}::${task.title}`;
     const pending = pendingTaskCloseActions.has(closeKey);

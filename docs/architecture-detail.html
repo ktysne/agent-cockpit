@@ -209,11 +209,12 @@ ul.points li { margin-bottom: 6px; }
       <text class="t2" x="56" y="106">メインセッション / サブエージェント</text>
       <text class="s" x="56" y="128">作業・AskUserQuestion・停止でフックが発火する</text>
 
-      <rect class="b-in" x="40" y="176" width="380" height="96" rx="8"/>
+      <rect class="b-in" x="40" y="176" width="380" height="112" rx="8"/>
       <text class="t2" x="56" y="200">MCP サーバー（src/mcp/server.js）</text>
       <text class="s" x="56" y="220">stdio で起動。セッション ID で記録先を決める</text>
       <text class="m" x="56" y="242">cockpit_set_tasks / cockpit_add_decision</text>
       <text class="m" x="56" y="260">cockpit_update_decision / cockpit_add_pr</text>
+      <text class="m" x="56" y="278">cockpit_skip_review</text>
       <path class="ln c-gray" d="M120,144 L120,176" marker-end="url(#a-gray)"/>
       <text class="s" x="128" y="164">ツール呼び出し</text>
 
@@ -286,7 +287,7 @@ ul.points li { margin-bottom: 6px; }
       <text class="s" x="762" y="410">PR・CI の状態取得（60 秒ごと）</text>
       <rect class="b-in" x="750" y="432" width="215" height="56" rx="7"/>
       <text class="t2" x="762" y="454">pull-request-merge.js</text>
-      <text class="s" x="762" y="474">マージと自動マージの予約</text>
+      <text class="s" x="762" y="474">マージとレビュー収束後マージの予約</text>
       <rect class="b-in" x="750" y="496" width="215" height="48" rx="7"/>
       <text class="t2" x="762" y="518">routing.js</text>
       <text class="s" x="842" y="518">経路の設定</text>
@@ -375,7 +376,7 @@ ul.points li { margin-bottom: 6px; }
       <text class="t" x="1256" y="826">GitHub（gh CLI）</text>
       <text class="m" x="1256" y="852">gh pr view / gh api</text><text class="s" x="1400" y="852">60 秒ごと</text>
       <text class="m" x="1256" y="876">gh pr merge</text><text class="s" x="1340" y="876">--match-head-commit</text>
-      <text class="s" x="1256" y="900">自動マージ予約の確認: 15 秒ごと</text>
+      <text class="s" x="1256" y="900">レビュー収束後マージの予約を 15 秒ごとに確認</text>
       <text class="s" x="1256" y="924">GH_TOKEN などの環境変数は消し、</text>
       <text class="s" x="1256" y="942">gh 自身のログインを使う</text>
 
@@ -478,19 +479,19 @@ ul.points li { margin-bottom: 6px; }
       <tr data-flow="1"><td class="no"><span class="dot" style="background:var(--blue)">1</span></td><td>イベントの送信</td><td>event.js → サーバー</td><td><code>POST /api/events</code></td><td>ツールの実行前後、通知、サブエージェントの開始と終了、停止、セッションの終了などを送る。ツールの入力は要約だけを送る。サーバーはここからセッションの状態を組み立て、<code>gh pr create</code> の結果から PR を自動で登録する。</td></tr>
       <tr data-flow="2"><td class="no"><span class="dot" style="background:var(--blue)">2</span></td><td>サーバーの起動確認</td><td>event.js・MCP → サーバー</td><td><code>server.json</code>、<code>GET /health</code></td><td><code>server.json</code> から port と secret を読み、<code>/health</code> で pid と起動時刻が一致するかを確かめる。応答が無ければロックを取ってサーバーを起動する。SessionStart では起動後のダッシュボードの URL を文脈に返す。</td></tr>
       <tr data-flow="3"><td class="no"><span class="dot" style="background:var(--green)">3</span></td><td>文脈の差し込み</td><td>away.js ⇄ サーバー</td><td><code>GET /api/away</code>、<code>GET /api/sessions/:id/context</code></td><td>離席中であれば「推奨で進める」指示を、入力のたびにタスク登録の決まりを文脈に足す。compact や resume の直後は、登録済みのタスクと未解決の判断事項の要約を取得して足す。</td></tr>
-      <tr data-flow="4"><td class="no"><span class="dot" style="background:var(--green)">4</span></td><td>質問の回答待ち</td><td>away.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（ask-*）</td><td>離席中に限り、AskUserQuestion をダッシュボードで最大 5 分待つ。流れは <a href="#s4">図 2</a> の ④。</td></tr>
+      <tr data-flow="4"><td class="no"><span class="dot" style="background:var(--green)">4</span></td><td>質問の回答待ち</td><td>away.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（ask-*）</td><td>離席中に限り、AskUserQuestion の回答を設定した時間(1〜30 分、既定 5 分)待つ。流れは <a href="#s4">図 2</a> の ④。</td></tr>
       <tr data-flow="5"><td class="no"><span class="dot" style="background:var(--green)">5</span></td><td>作業中・入力時の回答配信</td><td>answer.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（post-tool-batch、user-prompt-submit）</td><td>ツール実行の区切りごとに、届いている回答、PR の通知、タスク登録の促しを文脈へ差し込む。流れは <a href="#s4">図 2</a> の ⑤。</td></tr>
       <tr data-flow="6"><td class="no"><span class="dot" style="background:var(--green)">6</span></td><td>停止中の回答配信</td><td>answer.js ⇄ サーバー</td><td><code>POST /api/hooks/answers</code>（stop-*）</td><td>セッションが止まった後も回答を待ち続け、届いたらセッションを起こして渡す。流れは <a href="#s4">図 2</a> の ⑥。</td></tr>
       <tr data-flow="7"><td class="no"><span class="dot" style="background:var(--gray)">7</span></td><td>経路の差し込み</td><td>route.js ⇄ ファイル</td><td><code>routing.json</code>、<code>route-agents/</code></td><td>サーバーを介さず設定ファイルを直接読む。サブエージェントの開始時に経路（既定・Codex・Claude）を記録して文脈に足し、終了までその経路を使う。Claude 指定中に <code>codex-agent.sh</code> を呼ぶ Bash は拒否する。</td></tr>
-      <tr data-flow="8"><td class="no"><span class="dot" style="background:var(--blue)">8</span></td><td>計画・PR の登録</td><td>MCP → サーバー</td><td><code>POST /api/sessions/:id/plan</code>、<code>/prs</code></td><td>タスクと完了条件の置き換え、判断事項の追加と更新、PR の URL の登録。セッションは環境変数 <code>CLAUDE_CODE_SESSION_ID</code>、無ければ親プロセスの pid と <code>~/.claude/sessions</code> の対応から決める。</td></tr>
+      <tr data-flow="8"><td class="no"><span class="dot" style="background:var(--blue)">8</span></td><td>計画・PR の登録</td><td>MCP → サーバー</td><td><code>POST /api/sessions/:id/plan</code>、<code>/prs</code></td><td>タスクと完了条件の置き換え、判断事項の追加と更新、PR の URL の登録、クロスレビュー不要の記録。常駐サーバーは親プロセスの pid と <code>~/.claude/sessions</code> の対応からセッションを特定し、見つからない場合に環境変数 <code>CLAUDE_CODE_SESSION_ID</code> を使う。</td></tr>
       <tr data-flow="9"><td class="no"><span class="dot" style="background:var(--orange)">9</span></td><td>画面の配信</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /</code></td><td><code>index.html</code> を返す。画面用の秘密値 uiSecret を meta 要素に埋め込み、画面からの書き込みはこの値を添えて送る。</td></tr>
       <tr data-flow="10"><td class="no"><span class="dot" style="background:var(--orange)">10</span></td><td>状態の取得</td><td>ダッシュボード ⇄ サーバー</td><td><code>GET /api/state</code></td><td>2 秒ごとに全体の状態（セッション、タスク、判断事項、PR、離席中、経路の設定、連携の有無）を取得して描き直す。</td></tr>
       <tr data-flow="11"><td class="no"><span class="dot" style="background:var(--orange)">11</span></td><td>画面からの操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/decisions/:id/answer</code> ほか</td><td>判断事項への回答、離席中、経路の設定、表示設定、既読、セッションを一覧から外す、タスクやサブエージェントを閉じる、会話ログからの状態の推定。回答はサーバーの配信待ちに置かれ、③〜⑥ の経路で届く。</td></tr>
-      <tr data-flow="12"><td class="no"><span class="dot" style="background:var(--orange)">12</span></td><td>PR のマージ操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/pull-requests/merge</code>・<code>reserve</code>・<code>cancel-reservation</code></td><td>開発者が確認したマージ、自動マージの予約と取り消し。画面で見た head の SHA を添える。流れは <a href="#s5">図 3</a>。</td></tr>
+      <tr data-flow="12"><td class="no"><span class="dot" style="background:var(--orange)">12</span></td><td>PR のマージ操作</td><td>ダッシュボード → サーバー</td><td><code>POST /api/pull-requests/merge</code>・<code>reserve</code>・<code>cancel-reservation</code></td><td>開発者が確認した即時マージ、レビュー収束後マージの予約と取り消し。即時マージは画面で見た head、予約マージは収束記録の head の SHA を照合する。流れは <a href="#s5">図 3</a>。</td></tr>
       <tr data-flow="13"><td class="no"><span class="dot" style="background:var(--purple)">13</span></td><td>GitHub 連携</td><td>サーバー ⇄ GitHub</td><td><code>gh</code> CLI</td><td>登録された PR とその関連 PR、CI、レビューの状態を 60 秒ごとに取得する。マージは <code>gh pr merge --match-head-commit</code> で行う。</td></tr>
       <tr data-flow="14"><td class="no"><span class="dot" style="background:var(--gray)">14</span></td><td>Claude Code の情報の読み取り</td><td>ファイル → サーバー</td><td><code>~/.claude/</code></td><td>10 秒ごとに稼働中のセッションを検出し、消えたセッションは 60 秒後に終了扱いにする。サブエージェントの定義からモデルを読み、依頼があれば会話ログの末尾から状態を推定する。</td></tr>
       <tr data-flow="15"><td class="no"><span class="dot" style="background:var(--gray)">15</span></td><td>保存と復元</td><td>サーバー ⇄ ファイル</td><td><code>~/.agent-cockpit/</code></td><td>起動時に <code>store.json</code> などから復元し、変更は少し待ってまとめて書く。起動ごとに secret と uiSecret を作り <code>server.json</code> に書く。</td></tr>
-      <tr data-flow="16"><td class="no"><span class="dot" style="background:var(--gray)">16</span></td><td>クロスレビュー状態の読み取り</td><td>ファイル → サーバー</td><td>worktree の <code>.cross-review-state.json</code></td><td>PR を登録したセッションの worktree に ai-cross-review があれば、レビューの状態を読んで PR のカードに出す。無ければ何も出さない。</td></tr>
+      <tr data-flow="16"><td class="no"><span class="dot" style="background:var(--gray)">16</span></td><td>クロスレビュー状態の読み取り</td><td>ファイル → サーバー</td><td>worktree の <code>.cross-review-state.json</code></td><td>PR を登録したセッションの worktree に ai-cross-review があれば、レビューの状態を読んで PR のカードに出す。ツールが無い場合はレビュー不要として扱う。</td></tr>
       <tr data-flow="17"><td class="no"><span class="dot" style="background:var(--gray)">17</span></td><td>サーバーの起動・再起動</td><td>タスクトレイ → サーバー</td><td><code>ensure-server.js</code>、<code>/api/state</code>、<code>/api/away</code></td><td>起動時にサーバーを確かめて無ければ起動する。メニューの「再起動」は、<code>server.json</code> の pid がこのチェックアウトのサーバーである場合だけ止めて起動し直す。離席中の切り替えもここから送れる。</td></tr>
       <tr data-flow="18"><td class="no"><span class="dot" style="background:var(--gray)">18</span></td><td>画面を開く</td><td>タスクトレイ → ダッシュボード</td><td>Edge の <code>--app</code></td><td>ダッシュボードを独立したウィンドウで開く。ウィンドウを閉じてもトレイとサーバーは動き続ける。</td></tr>
     </tbody>
@@ -508,7 +509,7 @@ ul.points li { margin-bottom: 6px; }
       <tr><td><code>state.js</code></td><td>セッション、サブエージェント、タスク、判断事項、PR の登録、離席中の状態を持つ。AskUserQuestion から判断事項を作り、Codex の実行行も組み立てる。</td><td>① ⑧ ⑩ ⑭ ⑮</td></tr>
       <tr><td><code>decision-answers.js</code><br><code>task-nudges.js</code></td><td>画面で書かれた回答と PR の通知をセッションごとに配信待ちに置き、フックの問い合わせ（long-poll を含む）に応じて渡す。作業中のタスク登録が古ければ促しの文を足す。</td><td>④ ⑤ ⑥ ⑪</td></tr>
       <tr><td><code>pull-requests.js</code></td><td>登録された PR とスタックの関連 PR、CI、レビュー、クロスレビューの状態を集める。</td><td>⑬ ⑯</td></tr>
-      <tr><td><code>pull-request-merge.js</code></td><td>マージの実行と、自動マージの予約の監視。結果を作成元のセッションへ通知する。</td><td>⑫ ⑬</td></tr>
+      <tr><td><code>pull-request-merge.js</code></td><td>マージの実行と、レビュー収束後マージの予約の監視。結果を作成元のセッションへ通知する。</td><td>⑫ ⑬</td></tr>
       <tr><td><code>routing.js</code></td><td>経路の設定（サブエージェントとクロスレビュー）を保存する。</td><td>⑪ ⑮（読むのは ⑦ の route.js）</td></tr>
       <tr><td><code>session-files.js</code><br><code>transcript.js</code><br><code>identity.js</code></td><td>稼働中セッションの検出、エージェント定義の読み取り、会話ログからの状態の推定、作業ディレクトリからのプロダクトの判定（worktree は本体のリポジトリにまとめる）。</td><td>⑭</td></tr>
       <tr><td><code>json-storage.js</code></td><td>一時ファイルに書いてから置き換え、途中で止まっても壊れた JSON が残らないようにする。</td><td>⑮</td></tr>
@@ -616,14 +617,14 @@ ul.points li { margin-bottom: 6px; }
         <text class="t2" x="776" y="216">P4　開発者が確認する</text>
         <text class="s" x="776" y="240">方式とリモートブランチの削除を選び、</text>
         <text class="s" x="776" y="258">画面で見た head の SHA を添えて送る（⑫）</text>
-        <text class="s" x="776" y="276">CI 待ちだけなら自動マージを予約できる</text>
+        <text class="s" x="776" y="276">レビュー収束後マージを予約できる</text>
       </g>
       <g>
         <rect class="b-srv" x="390" y="190" width="320" height="120" rx="10"/>
         <text class="t2" x="406" y="216">P5　マージする</text>
         <text class="s" x="406" y="240">gh pr merge --match-head-commit（⑬）</text>
-        <text class="s" x="406" y="258">予約中に head が変われば予約を取り消す</text>
-        <text class="s" x="406" y="276">（15 秒ごとに確認）</text>
+        <text class="s" x="406" y="258">head が変わっても予約を保ち、新しい head の</text>
+        <text class="s" x="406" y="276">レビュー収束を待つ（15 秒ごとに確認）</text>
       </g>
       <g>
         <rect class="b-cc" x="20" y="190" width="320" height="120" rx="10"/>

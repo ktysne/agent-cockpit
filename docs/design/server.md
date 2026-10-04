@@ -1,28 +1,27 @@
-# 常駐サーバー、フック、画面の設計(段階 1)
+# 常駐サーバー、フック、画面の設計
 
-計画書 [docs/handover/2026-10-02.md](../handover/2026-10-02.md) の段階 1 の設計である。
-段階 2 以降も、ここで決めた置き場、識別子、通信の規約に乗せる。
+この資料は常駐サーバー、フック、画面の現在の構成と通信の仕様を定める。
 
 ## 構成
 
 - Node.js 22 以上で、外部の依存を持たない。テストは `node:test` で書く。
 - `src/server/` は常駐サーバー、`src/hooks/` はフックから呼ぶスクリプト、`src/web/` は画面である。
-- 画面の見た目は [mock/index.html](../../mock/index.html) を踏襲する。段階 1 で表示するのは、セッション、作業中の内容、サブエージェント、許可待ちである。
+- 画面の見た目は [mock/index.html](../../mock/index.html) とそろえる。画面にはセッション、判断事項、タスク、サブエージェント、許可待ち、プルリクエストなどの状態を表示する。
 
 ## 置き場
 
 常駐サーバーの置き場は `~/.agent-cockpit/` で、環境変数 `AGENT_COCKPIT_HOME` で差し替えられる。
 テストは必ず一時ディレクトリへ差し替え、ポートは 0 で待ち受ける。開発機で動いている本物の常駐サーバーに触れないためである。
 
-| ファイル | 中身 | 書く段階 |
-|---|---|---|
-| `server.json` | `{pid, port, secret, uiSecret, startedAt}` | 1 |
-| `away.json` | `{enabled, since, periods}` | 1c |
-| `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない | 1 |
-| `start.lock` | 再起動の排他。10 秒で失効する | 1 |
-| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、PR の記録 | 4、5 |
-| `routing.json` | 経路の設定 | 7 |
-| `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する | 7 |
+| ファイル | 中身 |
+|---|---|
+| `server.json` | `{pid, port, secret, uiSecret, startedAt}` |
+| `away.json` | `{enabled, since, periods}` |
+| `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない |
+| `start.lock` | 再起動の排他。10 秒で失効する |
+| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、PR の記録 |
+| `routing.json` | 経路の設定 |
+| `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する |
 
 ## 起動と寿命
 
@@ -38,9 +37,9 @@
 - 待ち受けるのは 127.0.0.1 だけにする。案内する URL も `http://127.0.0.1:<port>/` に統一する。
 - すべての要求で、`Host` が `127.0.0.1:<port>` か `localhost:<port>` であることを確かめる。DNS リバインディングで別のページから読まれないようにするためである。
 - 読み取りは `GET`、書き込みは `POST` にする。書き込みはすべて `X-Cockpit-Secret` の一致を求める。
-- 段階 2 の `POST /api/sessions/<session_id>/plan` も、`/api/events` と同じ `secret` と Origin 不在を求める。`session_id` は英数字と `-` だけを使い、128 文字までにする。
+- `POST /api/sessions/<session_id>/plan` は、`/api/events` と同じ `secret` と Origin 不在を求める。`session_id` は英数字と `-` だけを使い、128 文字までにする。
 - `GET /api/sessions/<session_id>/context` は Host を照合し、離席状態、タスクの題と状態、未解決判断事項の id、題、状態を返す。秘密値は求めない。
-- フックからの書き込みは、`Origin` ヘッダーが無く、`Sec-Fetch-Site` が `cross-site` でないことを求める。ブラウザは `POST` に必ず `Origin` を付けるので、別のページからの書き込みをこれで弾ける。`/api/away` は画面用秘密値を照合し、Origin が無いか待ち受け先の Origin と一致すること、および `Sec-Fetch-Site` が `cross-site` でないことを求める。それ以外の画面からの書き込み(段階 3 以降)は、`Origin` が自分の origin で、`Sec-Fetch-Site` が無いか `same-origin` であることを求める。
+- フックからの書き込みは、`Origin` ヘッダーが無く、`Sec-Fetch-Site` が `cross-site` でないことを求める。ブラウザは `POST` に必ず `Origin` を付けるので、別のページからの書き込みをこれで弾ける。`/api/away` は画面用秘密値を照合し、Origin が無いか待ち受け先の Origin と一致すること、および `Sec-Fetch-Site` が `cross-site` でないことを求める。ほかの画面からの書き込みは、`Origin` が自分の origin で、`Sec-Fetch-Site` が無いか `same-origin` であることを求める。
 - 秘密値は起動ごとに 2 つ作り、`server.json` に書く。`secret` はフックと MCP サーバー用で、`/api/events` だけが受け付ける。`uiSecret` は画面とトレイ用で、`/api/away` などの画面からの操作だけが受け付ける。画面には `uiSecret` だけを埋めるので、画面を読めてもイベントは偽造できない。
 - `POST /api/away` は `uiSecret` を先に照合し、`Origin` が無いか、待ち受けポートに対する `http://127.0.0.1:<port>` または `http://localhost:<port>` であることを確かめる。画面は同一オリジンのページだけが読めるよう、`uiSecret` を HTML の meta 属性へ埋め込み、CORS ヘッダーは返さない。DNS リバインディングは全要求の Host 照合で防ぐ。
 - 状態不明のセッションへの書き込み(`/api/sessions/<session_id>/estimate` と `/api/hidden-sessions`)も、ほかの画面からの書き込みと同じく `uiSecret` を照合し、`Origin` が自分の origin であることを求める。`Origin` が無い要求を通すのは、トレイが呼ぶ `/api/away` だけにする。画面は `401` のとき `/` を取り直し、新しい秘密値で 1 回だけ再送する。
@@ -48,7 +47,7 @@
 - 127.0.0.1 に接続できる同じマシンの他の利用者やプロセスは、`GET /` で `uiSecret` を得て画面と同じ操作ができる。単一の利用者の開発機で使う前提とし、画面からの操作はフックのイベントより狭い範囲に留める。
 - 開発用の口は `/api/dev/` の下に置き、`--dev` で起動したときだけ有効にする。
 - 書き込みの本文は 64KB を上限とし、超えたら拒否する。
-- 常駐サーバーへ書き込むもの(フック、段階 2 の MCP サーバー、段階 3 の待機フック)は、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。秘密値は常駐サーバーの起動ごとに変わるためである。
+- フックと MCP サーバーからの書き込みは、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。秘密値は常駐サーバーの起動ごとに変わるためである。
 - 画面は `uiSecret` を配信時に HTML の meta 属性から受け取る。`401` を受けたら常駐サーバーが再起動して秘密値が変わったとみなし、`GET /` を取り直して新しい値で 1 回だけ送り直す。
 
 ## 状態不明のセッション
@@ -96,12 +95,12 @@ PostToolUse の出力全文は送らない。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて既定の種類順で補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeResultHideMinutes` は警告のないマージ結果の行を隠すまでの時間で、既定は 5 分、範囲は 1〜60 分の整数とする。旧形式または範囲外の保存値は 5 分として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマはブラウザーごとの `localStorage` に残す。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
 - `display.mergeAfterReviewDefault` はマージ確認欄のレビュー収束後マージのチェックを既定でオンにする設定で、既定は `false`。旧形式で項目が無い場合も `false` として補う。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 30 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 30 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, away, routing, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` はセッション表示の状態が変わるたびに 1 増える。段階 3 で、`version` が変わったことだけを流す SSE を足す。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, routing, integrations, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存
 
-保存対象、書き込みの直列化と再試行、起動時の復元と期限切れの扱いは、計画書の「段階 4 の設計(保存と閉じる操作)」を正本とする。
+保存対象、書き込みの直列化と再試行、起動時の復元と期限切れの扱いは、この節と「表示設定」「マージ」の各節に記す。
 
 セッションごとに次を持つ。
 
@@ -131,7 +130,7 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 積み直し待ちは、GitHub のマージ済み PR の head SHA が各オープン PR の既定ブランチとの compare に残っているかで判定し、compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。レビュー収束後マージの予約では、クロスレビューの最後の `converged` 記録と現在の head を照合し、その記録の SHA を `--match-head-commit` に渡す。
-取得と判定の詳細は [計画書](../handover/2026-10-02.md) の「段階 5、6 の設計(PR の表示とマージ)」を正本とする。
+取得と判定の詳細は [計画書のマージ手順](../handover/2026-10-02.md#マージの手順常駐サーバー)に記す。
 
 ## 前回見てから
 
@@ -257,11 +256,10 @@ MCP で終えた判断事項は `finishedByToolUseId` を書き換えないの�
 MCP の `cockpit_set_tasks` は配列全体を置き換え、成功時に `tasksUpdatedAt` を更新する。
 題は 200 文字、本文は 2,000 文字、タスクは 50 件、完了条件は 20 件、選択肢は 6 件までに制限する。
 
-段階 2 の MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
-ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision` の 3 つにする。
-各ツール呼び出しは `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。
-送信する環境由来の値は `CLAUDE_CODE_SESSION_ID` だけとし、MCP の `ppid` から `~/.claude/sessions/*.json` の `pid` が一致する session ID を引けたときは、その ID を優先する。
-PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちらも無ければ書き込みを拒否する。
+MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
+ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_add_pr`、`cockpit_skip_review` の 5 つである。
+計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録は `/prs` に送る。
+MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバーはまず `ppid` から `~/.claude/sessions/*.json` に対応する session ID を探し、見つからない場合に環境変数の ID を使う。どちらも無ければ書き込みを拒否する。
 他の環境変数値や `CLAUDE_CODE_MESSAGING_TOKEN` は MCP の結果、ログ、常駐サーバーへの要求に含めない。
 `cockpit_add_decision` は質問を 1 つ持つ判断事項を作り、`cockpit_update_decision` は `provisional` または `resolved` と `resolution` を記録する。
 成功時の MCP 応答は、保存した後の一覧を短く示す。
@@ -311,10 +309,10 @@ PID から引けない場合は `CLAUDE_CODE_SESSION_ID` を使い、どちら�
 - ツール名は札にし、コマンドやファイルのパスは別に表示する。
 - サブエージェントの行には Agent ツールの説明を表示し、Claude と GPT のモデルを暖色と緑の札で矢印につなぐ。
 - GPT の札にマウスを重ねると `codex_home` を表示する。
-- 許可待ちのカードには待ち時間と「許可はデスクトップアプリの <プロダクト名> のセッションで出す。ダッシュボードからは出せない。」を表示する。
+- 許可待ちのカードには対象のメインまたはサブエージェント、待ち時間、ツール名と入力の要約を表示する。許可操作の案内文はカードに出さない。
 - 種類別では、許可待ちと判断事項を待ち時間の長い順に並べ、その後にタスクと完了条件、今やっていることを表示する。各項目にプロダクト名を付け、同じプロダクトに複数セッションがあるときはセッション名も付ける。
-- 上部の件数タグは許可待ち、止めて待っている判断事項、推奨案を仮適用した判断事項、稼働中のサブエージェントとする。タグで該当種類を隠せ、非表示の種類と件数を確認してすべて再表示できる。PR のタグは各データが加わる段階まで出さない。
-- プロダクト別では上下移動、最上部への固定、畳む・開くを使える。固定と通常の境界を越える移動はできない。表示操作の設定はブラウザーの `localStorage` に保存し、利用できない場合も画面操作は使える。
+- 上部の件数タグは許可待ち、止めて待っている判断事項、推奨案を仮適用した判断事項、稼働中のサブエージェントを示す。マージできる PR があれば、その件数も表示する。タグで該当種類を隠せ、非表示の種類と件数を一覧の最下部で確認してすべて再表示できる。
+- プロダクト別では上下移動、最上部への固定、畳む・開くを使える。固定と通常の境界を越える移動はできない。表示モード、並べ替え、固定、畳み、隠した種類、セクションの並び順などの表示設定は常駐サーバーに保存する。配色と「前回見てから」の表示モードはブラウザーの `localStorage` に保存する。利用できない場合も画面操作は使える。
 - 待ち時間は 1 分ごとに表示を更新し、設定した閾値(1〜120 分、既定 15 分)を超えたものを強調する。解決済みと取り下げの判断事項、終了済みサブエージェント、完了タスクは折りたためる。
 - 更新の無いセッションの判定は 1 分ごとの描き直し時点で行う。`display.idleHideMinutes` の既定値は 30 分で、5〜1440 分の整数を指定できる。
 - `display.mergeResultHideMinutes` の期限判定は、画面を描き直すたびに行う。2 秒ごとの状態取得で期限を越えたことを検出し、既存の描き直し経路で結果行を隠す。警告行は閉じる操作まで残す。
@@ -405,7 +403,7 @@ finish も常駐サーバーに届かなかった場合、フックは離席状�
 
 保留の回答では `PostToolUse` が届いても `provisional` を維持する。
 
-作業中は `PostToolBatch` が 1 秒以内に常駐サーバーへ尋ね、未配信の回答を `additionalContext` に入れて配信済みにする。タスク催促の条件に当たる場合は、催促の文も同じ `additionalContext` に続けて入れる(条件は [docs/handover/2026-10-02.md「段階 3a の設計」](../handover/2026-10-02.md)を参照)。
+作業中は `PostToolBatch` が 1 秒以内に常駐サーバーへ尋ね、未配信の回答を `additionalContext` に入れて配信済みにする。タスクが無いままメインツールを 5 回使ったか、タスク無しでサブエージェントを起動したときは登録を促す。タスク更新より後にサブエージェントが終了して 10 分経っても一覧が書き直されていないときも促す。同じセッションへの催促は 10 分間隔にし、催促の文は回答と同じ `additionalContext` に続けて入れる。
 
 停止中は `Stop` の `asyncRewake` フックが 1 回最大 25 秒の long-poll を繰り返す。
 回答が届いたら標準エラーへ書いて終了コード 2 でセッションを起こす。

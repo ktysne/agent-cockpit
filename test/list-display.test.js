@@ -242,6 +242,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   vm.runInContext(`${webResultLine}\n${webResults}\n${webBlock}`, webContext);
   const group = {
     owner: 'owner', repo: 'repo', product: { name: 'Product' }, fetchedAt: 'now',
+    reservationNotices: [],
     trees: [{ effectiveBase: 'main', children: [], stackPosition: { total: 1 } }],
     mergeHistory: [{ number: 2, url: '#2', title: 'Merged', mergedAt: 'now', method: 'squash', automatic: false }],
     merged: [{ number: 3, url: '#3', title: 'Closed', state: 'closed' }],
@@ -269,9 +270,10 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   ]);
 
   const mockPr = functionSource(mock, 'prBlock');
-  assert.ok(mockPr);
+  const mockReservationNotices = functionSource(mock, 'reservationNoticeRows');
+  assert.ok(mockPr && mockReservationNotices);
   const mockContext = pageContext(mock, {
-    ui: { hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [] },
+    ui: { hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
     pullRequestMergeResults: new Map(),
     openPrs: () => [{ number: 1 }],
     parentPr: () => null,
@@ -285,8 +287,9 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     METHOD_LABEL: { squash: 'スカッシュ' },
     esc: (value) => String(value ?? ''),
     absoluteTimeLabel: (value) => value,
+    transientMessageVisible: () => false,
   });
-  vm.runInContext(`${mockPr}\nthis.renderPr = prBlock;`, mockContext);
+  vm.runInContext(`${mockReservationNotices}\n${mockPr}\nthis.renderPr = prBlock;`, mockContext);
   const mockProduct = {
     id: 'product', name: 'Product', repo: { name: 'owner/repo', fetched: '少し前' },
     prs: [{ number: 2, state: 'merged' }, { number: 3, state: 'closed' }],
@@ -661,44 +664,45 @@ test('モックのマージ欄は即時マージと収束後マージの確認�
   assert.doesNotMatch(buttons, /data-merge-action="reserve"|CI が通ったらマージ/);
 });
 
-test('モックの予約取消と依頼失敗の知らせは1分で隠す', () => {
+test('モックの予約取消の知らせは PR が行から消えてもリポジトリ欄に1分表示する', () => {
   const expiration = functionSource(mock, 'transientNoticeExpired');
   const visible = functionSource(mock, 'transientMessageVisible');
-  const item = functionSource(mock, 'prItem');
-  assert.ok(expiration && visible && item);
+  const notices = functionSource(mock, 'reservationNoticeRows');
+  const block = functionSource(mock, 'prBlock');
+  assert.ok(expiration && visible && notices && block);
   let now = 1_800_000_000_000;
   const context = pageContext(mock, {
     TRANSIENT_NOTICE_MS: 60_000,
-    prKey: () => 'repo#1',
-    mergeOperationBlocker: () => null,
-    mergeConditionWaits: () => [],
-    stackPos: () => ({ total: 1, depth: 1 }),
-    effective: () => ({ base: 'main' }),
     ui: {
-      reserved: {}, confirm: null,
-      reservationNotices: { 'repo#1': { message: '予約を取り消しました。', shownAt: now } },
-      mergeErrors: { 'repo#1': { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: now } },
+      reservationNotices: { 'product-1#41': { message: '予約を取り消しました。', shownAt: now } },
     },
-    conflictButton: () => '',
-    prBadges: () => '',
-    crossReviewLine: () => '',
-    conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
   });
-  vm.runInContext(`let mockNow = ${now}; Date.now = () => mockNow; function setMockNow(value) { mockNow = value; }\n${expiration}\n${visible}\n${item}\nthis.renderPullRequest = prItem;`, context);
-  const product = { name: 'demo' };
-  const pullRequest = { number: 1, title: 'PR', head: 'feature', sha: 'abc', conflict: false };
+  vm.runInContext(`let mockNow = ${now}; Date.now = () => mockNow; function setMockNow(value) { mockNow = value; }\n${expiration}\n${visible}\n${notices}\nthis.renderNotices = reservationNoticeRows;`, context);
+  assert.match(block, /reservationNoticeRows\(p\).*\$\{stacks \|\| empty\}/);
+  const product = { id: 'product-1', repo: { name: 'example/repo' }, prs: [] };
 
-  let rendered = context.renderPullRequest(product, pullRequest);
-  assert.match(rendered, /class="merge-result"/);
-  assert.match(rendered, /class="merge-error"/);
+  let rendered = context.renderNotices(product);
+  assert.match(rendered, /href="https:\/\/github\.com\/example\/repo\/pull\/41"/);
+  assert.match(rendered, /予約を取り消しました/);
   context.setMockNow(now + 59_999);
-  rendered = context.renderPullRequest(product, pullRequest);
-  assert.match(rendered, /class="merge-result"/);
-  assert.match(rendered, /class="merge-error"/);
+  rendered = context.renderNotices(product);
+  assert.match(rendered, /予約を取り消しました/);
   context.setMockNow(now + 60_000);
-  rendered = context.renderPullRequest(product, pullRequest);
-  assert.doesNotMatch(rendered, /class="merge-result"|class="merge-error"/);
+  rendered = context.renderNotices(product);
+  assert.doesNotMatch(rendered, /予約を取り消しました/);
+  assert.doesNotMatch(context.renderNotices({ ...product, id: 'product-2' }), /予約を取り消しました/);
+});
+
+test('マージ確認欄の文言は実装とモックでそろえる', () => {
+  for (const text of ['リポジトリで許可されている方式です', 'マージ後にリモートブランチを削除する']) {
+    assert.ok(web.includes(text));
+    assert.ok(mock.includes(text));
+  }
+  assert.match(web, /スカッシュまたはリベースでは \$\{childNumbers\} に #\$\{pullRequest\.number\} のコミットが残るため/);
+  assert.match(mock, /スカッシュまたはリベースでは \$\{kidNames\} に #\$\{pr\.number\} のコミットが残るため/);
+  assert.match(web, /完了条件 \$\{met\}\/\$\{task\.criteria\.length\}\$\{task\.closedByUser \? '、画面で完了にした' : ''\}/);
+  assert.match(mock, /完了条件 \$\{met\}\/\$\{t\.criteria\.length\}\$\{closedHere \? '、画面で完了にした' : ''\}/);
 });
 
 test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {
