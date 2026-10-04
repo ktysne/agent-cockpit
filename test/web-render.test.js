@@ -494,12 +494,18 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.match(source, /\.now-row\s*>\s*\.detail,\s*\.agent-row\s*>\s*\.detail\s*\{[^}]*min-width:\s*0/);
   assert.match(source, /\.tool-line\s*\{[^}]*flex-wrap:\s*nowrap/);
   assert.match(source, /\.tool-name\s*\{[^}]*flex:\s*none/);
+  // 長い MCP のツール名でも行からはみ出さないよう、幅の上限を超えた分は省略記号で切る。
+  assert.match(source, /\.tool-name\s*\{[^}]*max-width:\s*60%/);
+  assert.match(source, /\.tool-name\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(source, /\.tool-name\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(mock, /\.tool-content\s*\{[^}]*text-overflow:\s*ellipsis/);
   assert.match(mock, /\.tool-content\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(mock, /\.tool-content\s*\{[^}]*overflow:\s*hidden/);
   assert.match(mock, /\.tool-content\s*\{[^}]*min-width:\s*0/);
   assert.match(mock, /\.tool-line\s*\{[^}]*flex-wrap:\s*nowrap/);
   assert.match(mock, /\.tool-name\s*\{[^}]*flex:\s*none/);
+  assert.match(mock, /\.tool-name\s*\{[^}]*max-width:\s*60%/);
+  assert.match(mock, /\.tool-name\s*\{[^}]*text-overflow:\s*ellipsis/);
   assert.doesNotMatch(mock, /\.meta\s*\{[^}]*text-overflow:\s*ellipsis/);
   assert.doesNotMatch(mock, /\.meta\s*\{[^}]*white-space:\s*nowrap/);
   assert.doesNotMatch(mock, /\.meta\s*\{[^}]*overflow:\s*hidden/);
@@ -2719,4 +2725,29 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
   assert.equal(await run('away', [false, true, false]), 3);
   assert.equal(await run('away', [false, false]), 1);
   assert.equal(await run('always', [false, true, false]), 1);
+});
+
+test('文や名前を差し込むバッジは折り返し、枠の外へはみ出さない', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
+
+  for (const html of [source, mock]) {
+    assert.match(html, /\.badge\.long\s*\{[^}]*white-space:\s*normal/);
+    assert.match(html, /\.badge\.long\s*\{[^}]*overflow-wrap:\s*anywhere/);
+    assert.match(html, /\.badge\.long\s*\{[^}]*max-width:\s*100%/);
+    // マージ履歴のバッジは子要素を複数持つ。inline-flex のままだと子ごとに縦へ細く割れるので、1 つの文として流す。
+    assert.match(html, /\.badge\.long\s*\{[^}]*display:\s*inline-block/);
+    // .session-tag の nowrap に上書きされないよう、2 つのクラスで詳細度を上げる。
+    assert.match(html, /\.session-tag\.session-context\s*\{[^}]*white-space:\s*normal/);
+    assert.match(html, /\.session-tag\.session-context\s*\{[^}]*max-width:\s*100%/);
+  }
+  // 予約中、衝突の解消の依頼、base の付け替え、マージ履歴は、時刻やセッション名やブランチ名が入って長くなる。
+  assert.match(source, /badge\(reservedText, 'accent long'\)/);
+  assert.match(source, /のセッションへ衝突の解消を依頼した`, 'accent long'\)/);
+  assert.match(source, /に付け替え済み`, 'accent long'\)/);
+  assert.match(source, /'badge long warn' : 'badge long mute'/);
+  assert.match(mock, /class="badge accent long">レビュー収束後にマージ予約中/);
+  assert.match(mock, /class="badge accent long">\$\{esc\(absoluteTimeLabel\(at/);
+  assert.match(mock, /class="badge accent long">base を/);
+  assert.match(mock, /class="badge long \$\{pr\.headMismatch/);
 });
