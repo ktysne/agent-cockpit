@@ -2272,7 +2272,17 @@ document.addEventListener('input', e => {
 });
 
 render();
-setInterval(render, 2_000);
+setInterval(render, 60_000);
+// 全体を描き直すと入力中の欄のフォーカスが外れるため、一時的な知らせの期限が来たときだけ描き直す。
+let renderedTransientNoticeSignature = '';
+setInterval(() => {
+  const signature = [...Object.entries(ui.reservationNotices), ...Object.entries(ui.mergeErrors)]
+    .filter(([, notice]) => notice && transientNoticeExpired(notice.shownAt))
+    .map(([key]) => key).sort().join('|');
+  if (signature === renderedTransientNoticeSignature) return;
+  renderedTransientNoticeSignature = signature;
+  render();
+}, 2_000);
 </script>
 </body>
 </html>

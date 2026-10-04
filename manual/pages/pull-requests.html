@@ -357,15 +357,14 @@
     <li>マージを実行して、PR がマージキューに入ったとき(以降は、方式を不明として扱い、ブランチは削除しません)</li>
   </ul>
   <p>取り消されると、リポジトリの枠に、PR へのリンクと取り消した理由が出ます。
-  PR を登録したセッションにも、同じ内容を知らせます。
-  画面の知らせは、記録時刻から 1 分で消えます。</p>
+  PR を登録したセッションにも、同じ内容を知らせます。</p>
   <figure class="guide-map" id="pr-reserve-cancelled-map" data-shot="pull-requests-reserve/cancelled" data-crop-y="60-500" data-alt="予約を取り消した後の PR の枠。上に、PR へのリンクと取り消した理由の一行がある。その下の PR の行は、予約中の表示が消え、マージするのボタンが戻っている">
     <ol class="guide-list">
       <li data-part="cancelled.notice" data-place="left"><b>取り消しの知らせ</b>：PR へのリンクに、取り消した理由が続きます。</li>
       <li data-part="cancelled.merge-button"><b><span class="ui">マージする</span></b>：予約が無くなったので、マージの操作に戻ります。</li>
     </ol>
   </figure>
-  <p>取り消しの知らせは、常駐サーバーを再起動するか、同じ PR を予約し直すまで残ります。
+  <p>取り消しの知らせは、記録時刻から 1 分たつか、同じ PR を予約し直すと消えます。
   取り消す前に PR が画面の外でマージされたときは、予約が消えるだけで、取り消しの知らせは出ません。</p>
 
   <h2 id="pr-skip">レビュー不要の記録</h2>

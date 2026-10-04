@@ -3634,10 +3634,11 @@ async function runPullRequestMergeAction(button, action) {
     const response = await postUiAction(endpoint, body);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      recordPullRequestTransientMessage(pullRequestMergeMessages, key, result.error || 'PR の状態が変わりました。表示を確認してください。');
+      const message = result.error || 'PR の状態が変わりました。表示を確認してください。';
+      recordPullRequestTransientMessage(pullRequestMergeMessages, key, message);
       await refresh();
       if (lastState) render(lastState);
-      liveStatus.textContent = pullRequestMergeMessages.get(key).message;
+      liveStatus.textContent = message;
       return;
     }
     pullRequestMergeConfirmations.delete(key);
@@ -3661,9 +3662,10 @@ async function runPullRequestMergeAction(button, action) {
       : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しました。`
         : `PR #${number} のマージ予約を取り消しました。`;
   } catch {
-    recordPullRequestTransientMessage(pullRequestMergeMessages, key, '操作結果を取得できませんでした。PR の状態を取り直してください。');
+    const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
+    recordPullRequestTransientMessage(pullRequestMergeMessages, key, message);
     if (lastState) render(lastState);
-    liveStatus.textContent = pullRequestMergeMessages.get(key).message;
+    liveStatus.textContent = message;
   } finally {
     pullRequestMergeInFlight.delete(key);
     if (lastState) render(lastState);
@@ -3775,10 +3777,11 @@ async function runPullRequestConflictRequest(button) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, result.error || 'PR の状態が変わりました。表示を確認してください。');
+      const message = result.error || 'PR の状態が変わりました。表示を確認してください。';
+      recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, message);
       await refresh();
       if (lastState) render(lastState);
-      liveStatus.textContent = pullRequestConflictMessages.get(uiKey).message;
+      liveStatus.textContent = message;
       return;
     }
     pullRequestConflictConfirmations.delete(uiKey);
@@ -3786,9 +3789,10 @@ async function runPullRequestConflictRequest(button) {
     await refresh();
     liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しました。`;
   } catch {
-    recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, '操作結果を取得できませんでした。PR の状態を取り直してください。');
+    const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
+    recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, message);
     if (lastState) render(lastState);
-    liveStatus.textContent = pullRequestConflictMessages.get(uiKey).message;
+    liveStatus.textContent = message;
   } finally {
     pullRequestConflictInFlight.delete(uiKey);
     if (lastState) render(lastState);
