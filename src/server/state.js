@@ -2427,7 +2427,7 @@ class DashboardState {
     delete next.provisionalAt;
     if (nextEffectiveState === 'provisional') {
       const provisionalAt = currentEffectiveState === 'provisional'
-        ? current.provisionalAt || (baseState === 'provisional' ? baseDecision.provisionalAt : null) || current.updatedAt || baseDecision.updatedAt
+        ? current.provisionalAt || (baseState === 'provisional' ? baseDecision.provisionalAt : null) || (current.state ? current.updatedAt : baseDecision.updatedAt) || baseDecision.updatedAt
         : isoTime(now);
       if (provisionalAt) next.provisionalAt = provisionalAt;
     }
