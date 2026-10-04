@@ -198,6 +198,8 @@ test('常駐サーバーの応答が無くてもタスク登録の決まりは�
   assert.ok(performance.now() - startedAt < 1300);
 });
 
-test('離席中の案内は、チャットで任されたマージや push まで禁止しない', () => {
-  assert.match(AWAY_CONTEXT, /PR のマージ、main への push は、開発者がチャットで任せていなければ行わず/);
+// マージと push の扱いは、案内ではなくセッション側の指示の優先順位に任せる。
+test('離席中の案内は、破壊的な操作だけを止め、マージや push を許しも禁じもしない', () => {
+  assert.match(AWAY_CONTEXT, /破壊的な操作は行わず/);
+  assert.doesNotMatch(AWAY_CONTEXT, /マージ|push/);
 });

@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const tray = fs.readFileSync(path.join(__dirname, '../src/tray/tray.ps1'), 'utf8');
+// 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
+const tray = fs.readFileSync(path.join(__dirname, '../src/tray/tray.ps1'), 'utf8').replace(/\r\n/g, '\n');
 
 function section(startMarker, endMarker) {
   const start = tray.indexOf(startMarker);
