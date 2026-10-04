@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>判断事項と回答 | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html" aria-current="page">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html" aria-current="page">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#decisions-source">判断事項の元</a></li>
+        <li><a href="#decisions-card">判断事項のカード</a></li>
+        <li class="level-3"><a href="#decisions-states">判断事項の状態</a></li>
+        <li class="level-3"><a href="#decisions-time">経過時間と強調</a></li>
+        <li class="level-3"><a href="#decisions-recommended">推奨の判定</a></li>
+        <li><a href="#decisions-desktop">デスクトップアプリで答える判断事項</a></li>
+        <li><a href="#decisions-answer">ダッシュボードから回答する</a></li>
+        <li><a href="#decisions-delivery">回答がセッションへ届くまで</a></li>
+        <li class="level-3"><a href="#decisions-status">送信済み、渡した、反映された</a></li>
+        <li class="level-3"><a href="#decisions-route">回答が届く経路</a></li></ol>
+      </details>
+<section class="section">
+  <h1>判断事項と回答</h1>
+  <p class="lead">判断事項は、セッションが開発者に決めてほしいと求めた事項です。
+  <span class="ui">あなたの判断が必要なこと</span> の欄に、カードとして並びます。
+  このページでは、カードの見方と状態、ダッシュボードからの回答の操作、回答がセッションへ届く経路を説明します。</p>
+
+  <h2 id="decisions-source">判断事項の元</h2>
+  <p>判断事項は、次の 2 つから作られます。</p>
+  <ul>
+    <li>メインセッションが、質問のツール(AskUserQuestion)で開発者に尋ねた質問。フックが自動で判断事項にします</li>
+    <li>メインセッションが、Agent Cockpit のツール(<code>cockpit_add_decision</code>)で記録した判断。開発者に確認中の判断と、推奨案を仮に適用して進めた判断を残すのに使います</li>
+  </ul>
+
+  <h2 id="decisions-card">判断事項のカード</h2>
+  <figure class="guide-map" id="decisions-card-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/526"><div class="gm-clip"><img src="img/decisions-card/dialog.png" width="762" height="263" alt="止めて待っている判断事項のカード。見出しに、新着の印、題、止めて待っているの札、待ち時間がある。その下に背景の説明と、推奨の札が付いた選択肢を含む 2 つの選択肢が並び、最下段にプロダクト名とセッション名がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#decisions-card-map-1" style="left:4.593%;top:8.365%" aria-label="1. 新着 の印">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#decisions-card-map-2" style="left:23.458%;top:7.985%" aria-label="2. 題">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#decisions-card-map-3" style="left:46.424%;top:4.183%" aria-label="3. 状態の札">3</a><a class="gm-badge gm-place-top" data-gm="4" href="#decisions-card-map-4" style="left:60.499%;top:8.745%" aria-label="4. 経過時間">4</a><a class="gm-badge gm-place-top" data-gm="5" href="#decisions-card-map-5" style="left:50.197%;top:26.046%" aria-label="5. 背景">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#decisions-card-map-6" style="left:50.197%;top:42.966%" aria-label="6. 選択肢">6</a><a class="gm-badge gm-place-left" data-gm="7" href="#decisions-card-map-7" style="left:3.412%;top:53.232%" aria-label="7. 推奨 の札">7</a><a class="gm-badge gm-place-right" data-gm="8" href="#decisions-card-map-8" style="left:98.294%;top:92.015%" aria-label="8. プロダクトとセッション">8</a></div></div></div><ol class="gm-list"><li id="decisions-card-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">新着</span> の印</b>：そのプロダクトを最後に既読にした時刻より後に作られた判断事項に付きます。既読にすると外れます(<a href="away.html#away-since-seen">前回見てから</a>)。</div></li><li id="decisions-card-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>題</b>：質問の文、または記録した判断の題です。</div></li><li id="decisions-card-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>状態の札</b>：<span class="ui">止めて待っている</span>、<span class="ui">仮に推奨案で進行中</span>、<span class="ui">解決済み</span>、<span class="ui">取り下げ</span> のどれかです(<a href="#decisions-states">判断事項の状態</a>)。</div></li><li id="decisions-card-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>経過時間</b>：待っている時間などです(<a href="#decisions-time">経過時間と強調</a>)。</div></li><li id="decisions-card-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>背景</b>：セッションが書いた、判断が必要になった状況の説明です。質問のツールから作った判断事項には、背景がありません。</div></li><li id="decisions-card-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b>選択肢</b>：選択肢の名前と説明です。複数の質問を持つ判断事項では、質問ごとに並びます。複数選択の質問には、<span class="ui">複数選択できます。</span> と出ます。</div></li><li id="decisions-card-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">推奨</span> の札</b>：推奨と判定した選択肢に付きます(<a href="#decisions-recommended">推奨の判定</a>)。</div></li><li id="decisions-card-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>プロダクトとセッション</b>：どのセッションの判断事項かを示します。</div></li></ol></figure>
+  <p>カードの左端の色は、状態を示します。
+  止めて待っているものは赤、仮に進めているものは琥珀色、解決済みは緑、取り下げは灰色です。
+  カードにマウスを載せると、判断事項の id が出ます。
+  id は、セッションが判断事項を更新するときに使う値です。</p>
+
+  <h3 id="decisions-states">判断事項の状態</h3>
+  <ul>
+    <li><span class="ui">止めて待っている</span>：開発者への質問が出ていて、回答を待っています。</li>
+    <li><span class="ui">仮に推奨案で進行中</span>：回答を待たず、推奨案を仮に適用して作業を進めています。離席中の質問が回答の無いまま締切を過ぎたときも、この状態になります(<a href="away.html#away-timeout">締切を過ぎたとき</a>)。</li>
+    <li><span class="ui">解決済み</span>：答えが決まりました。選んだ内容と理由が、カードの下に <span class="ui">選択:</span> の形で出ます。</li>
+    <li><span class="ui">取り下げ</span>：質問が答えられないまま終わりました。質問のツールが成功せずに終わったときです。</li>
+  </ul>
+  <p>解決済みと取り下げのカードは、設定の <span class="ui">終わったものを表示しない</span> がオフのときだけ、<span class="ui">解決済みと取り下げ</span> の開閉ボタンから開けます。
+  オン(既定)のときは出ません。</p>
+  <figure class="guide-map" id="decisions-ended-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/960"><div class="gm-clip"><img src="img/decisions-delivery/ended.png" width="788" height="480" alt="開いた取り下げと解決済みのカード。取り下げのカードは灰色の札が付き、解決済みのカードは緑の札が付いて、下に選んだ内容と理由が出ている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#decisions-ended-map-1" style="left:30.552%;top:2.604%" aria-label="1. 取り下げ">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#decisions-ended-map-2" style="left:37.437%;top:49.063%" aria-label="2. 解決済み">2</a><a class="gm-badge gm-place-right" data-gm="3" href="#decisions-ended-map-3" style="left:98.35%;top:93.958%" aria-label="3. 選んだ内容と理由">3</a></div></div></div><ol class="gm-list"><li id="decisions-ended-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b><span class="ui">取り下げ</span></b>：回答できないまま終わった質問です。</div></li><li id="decisions-ended-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">解決済み</span></b>：答えが決まった判断事項です。</div></li><li id="decisions-ended-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>選んだ内容と理由</b>：<span class="ui">選択:</span> に、選んだ選択肢が出ます。続けて、セッションが書いた理由が出ます。</div></li></ol></figure>
+
+  <h3 id="decisions-time">経過時間と強調</h3>
+  <p>経過時間の出し方は、状態で変わります。</p>
+  <ul>
+    <li>止めて待っている判断事項は、作られてからの時間が <span class="ui">待機中</span> の形で出ます。設定の時間(既定 15 分)を超えると、カードの背景が赤みを帯び、時間が太い赤の文字になります。時間は設定の <span class="ui">長く待たせているとみなす時間 (1〜120 分)</span> で決めます</li>
+    <li>離席中に出た質問には、続けて「あと 3 分で推奨に進む」の形で、推奨案で進むまでの残り時間が出ます(<a href="away.html#away-questions">離席中の質問</a>)</li>
+    <li>仮に進めている判断事項は、<span class="ui">仮適用から</span> の形で出ます。この状態の判断事項は、長く待っていても強調しません</li>
+  </ul>
+  <p>回答を送った判断事項は、強調しません。
+  また、画面上部の <span class="ui">止めて待っている</span> と <span class="ui">仮に推奨案で進行中</span> の件数と、プロダクトのカードの <span class="ui">判断待ち</span> の件数にも数えません(<a href="screen.html#screen-summary">件数の札</a>)。
+  セッションの見出しの <span class="ui">あなたの判断が必要なこと</span> の件数には、回答を送ったものも数えます。</p>
+  <details class="more">
+    <summary>仮適用からの時間の詳細</summary>
+    <p>仮に進めている判断事項の時間は、判断事項を最後に更新した時刻から数えます。
+    セッションが判断事項を更新したときのほか、回答を送ったときや、回答がセッションに渡ったときにも、数え直します。
+    回答を送ると、時間が送った時点からに変わるのは、このためです。</p>
+  </details>
+
+  <h3 id="decisions-recommended">推奨の判定</h3>
+  <p>推奨は、質問ごとに、次の条件をすべて満たすときに決まります。</p>
+  <ul>
+    <li>選択肢を 1 つだけ選ぶ質問である(複数選択の質問は、推奨なしです)</li>
+    <li>選択肢の名前に <code>(推奨)</code>、<code>（推奨）</code>、<code>(Recommended)</code>、<code>（Recommended）</code> のどれかを含むものか、判断の記録で推奨と明示したものが、ちょうど 1 つである</li>
+  </ul>
+  <p>括弧は、全角か半角のどちらかにそろえます。
+  英語の大文字と小文字は区別しません。
+  選択肢の説明は、判定に使いません。
+  推奨と判定した選択肢には <span class="ui">推奨</span> の札が付き、名前から <code>(推奨)</code> などの文字を取り除いて表示します。</p>
+
+  <h2 id="decisions-desktop">デスクトップアプリで答える判断事項</h2>
+  <p>回答欄が無く、選択肢を押せない判断事項は、デスクトップアプリで答えます。
+  上の図のカードが、その例です。
+  カードの最下段に書いてあるプロダクトとセッションを、デスクトップアプリで開きます。
+  質問のダイアログが出ていればダイアログで、出ていなければセッションの入力欄で答えます。</p>
+  <p>次の判断事項が、これに当たります。</p>
+  <ul>
+    <li>離席中でないときに出た質問。質問のダイアログは、デスクトップアプリに出ています</li>
+    <li>セッションが <span class="ui">止めて待っている</span> として記録した判断</li>
+    <li>同じ質問の文が 2 つ以上含まれる質問。回答を質問に対応づけられないためです</li>
+  </ul>
+  <p>ダッシュボードからは、これらの判断事項に回答を送れません。
+  質問のダイアログに答えると、質問のツールが終わり、判断事項は <span class="ui">解決済み</span> になります。
+  セッションが記録した判断は、セッションが解決済みに更新したときに <span class="ui">解決済み</span> になります。</p>
+
+  <h2 id="decisions-answer">ダッシュボードから回答する</h2>
+  <p>回答欄が出るのは、次の判断事項です。</p>
+  <ul>
+    <li><span class="ui">仮に推奨案で進行中</span> の判断事項</li>
+    <li>離席中に出た質問のうち、回答を待っているもの(<a href="away.html#away-questions">離席中の質問</a>)</li>
+  </ul>
+  <figure class="guide-map" id="decisions-answer-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/962"><div class="gm-clip"><img src="img/decisions-answer/initial.png" width="788" height="481" alt="仮に推奨案で進行中の判断事項の回答欄。選択肢が 2 つ並び、その下に推奨案で OK のチェック、送る答えの表示、指示の入力欄、回答を送るのボタンと送信の状態がある。最下段にセッションが書いた選択と理由がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-right" data-gm="1" href="#decisions-answer-map-1" style="left:97.081%;top:29.262%" aria-label="1. 選択肢">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#decisions-answer-map-2" style="left:3.299%;top:23.077%" aria-label="2. 推奨の選択肢">2</a><a class="gm-badge gm-place-top" data-gm="3" href="#decisions-answer-map-3" style="left:10.152%;top:45.01%" aria-label="3. 推奨案で OK">3</a><a class="gm-badge gm-place-right" data-gm="4" href="#decisions-answer-map-4" style="left:98.35%;top:57.069%" aria-label="4. 送る答え">4</a><a class="gm-badge gm-place-right" data-gm="5" href="#decisions-answer-map-5" style="left:98.35%;top:67.256%" aria-label="5. 指示">5</a><a class="gm-badge gm-place-bottom" data-gm="6" href="#decisions-answer-map-6" style="left:9.327%;top:85.447%" aria-label="6. 回答を送る">6</a><a class="gm-badge gm-place-top" data-gm="7" href="#decisions-answer-map-7" style="left:18.909%;top:79.21%" aria-label="7. 送信の状態">7</a><a class="gm-badge gm-place-top" data-gm="8" href="#decisions-answer-map-8" style="left:50.19%;top:90.437%" aria-label="8. セッションが書いた選択と理由">8</a></div></div></div><ol class="gm-list"><li id="decisions-answer-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>選択肢</b>：押して選びます。1 つだけ選ぶ質問では 1 つ、複数選択の質問では複数を選べます。</div></li><li id="decisions-answer-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>推奨の選択肢</b>：<span class="ui">推奨</span> の札が付いた選択肢です。</div></li><li id="decisions-answer-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">推奨案で OK</span></b>：推奨の選択肢で答えます。すべての質問に推奨があるときだけ押せます。選択肢を選ぶと外れ、これを入れると選んだ選択肢が外れます。</div></li><li id="decisions-answer-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>送る答え</b>：選んだ選択肢の名前を、<span class="ui">送る答え</span> として出します。何も選んでいないときは、すべての質問に推奨があれば、推奨の名前を <span class="ui">OK で送る答え</span> として出します。</div></li><li id="decisions-answer-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>指示</b>：セッションへの指示を、2000 文字まで書けます。選択肢や <span class="ui">推奨案で OK</span> に添えることも、指示だけで答えることもできます。</div></li><li id="decisions-answer-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">回答を送る</span></b>：回答を送ります。送れる状態になるまでは押せません。</div></li><li id="decisions-answer-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b>送信の状態</b>：送る前は <span class="ui">未送信</span> です。送った後は、送った時刻などが出ます(<a href="#decisions-status">送信済み、渡した、反映された</a>)。</div></li><li id="decisions-answer-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b>セッションが書いた選択と理由</b>：セッションが記録した、推奨案を仮に適用した理由です。回答の内容ではありません。</div></li></ol></figure>
+  <p>回答の組み合わせは、次のとおりです。</p>
+  <ul>
+    <li><span class="ui">推奨案で OK</span> だけを入れて送る。すべての質問に推奨があるときに使えます</li>
+    <li>選択肢を選んで送る。複数の質問がある判断事項で、選ばなかった質問は、推奨があれば推奨の選択肢で、無ければ指示で答えたことになります。推奨も指示も無い質問が残る間は、送れません</li>
+    <li>指示だけを書いて送る</li>
+    <li>上のどれかに、指示を添えて送る</li>
+  </ul>
+  <figure class="guide-map" id="decisions-answer-picked-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/720"><div class="gm-clip"><img src="img/decisions-answer/picked.png" width="788" height="481" alt="楽観ロックを選び、指示を書いた回答欄。選んだ選択肢が枠で囲まれ、送る答えに楽観ロックと出て、回答を送るのボタンが押せる状態になっている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-8.883%"></div><a class="gm-badge gm-place-right" data-gm="1" href="#decisions-answer-picked-map-1" style="left:97.081%;top:27.986%" aria-label="1. 選んだ選択肢">1</a><a class="gm-badge gm-place-right" data-gm="2" href="#decisions-answer-picked-map-2" style="left:98.35%;top:56.806%" aria-label="2. 送る答え">2</a><a class="gm-badge gm-place-right" data-gm="3" href="#decisions-answer-picked-map-3" style="left:98.35%;top:70.417%" aria-label="3. 指示">3</a><a class="gm-badge gm-place-bottom" data-gm="4" href="#decisions-answer-picked-map-4" style="left:9.327%;top:94.722%" aria-label="4. 回答を送る">4</a></div></div></div><ol class="gm-list"><li id="decisions-answer-picked-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>選んだ選択肢</b>：枠で囲まれます。</div></li><li id="decisions-answer-picked-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>送る答え</b>：<span class="ui">送る答え</span> に、選んだ選択肢が出ます。</div></li><li id="decisions-answer-picked-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>指示</b>：書いた指示です。</div></li><li id="decisions-answer-picked-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">回答を送る</span></b>：送れる状態になり、押せます。</div></li></ol></figure>
+  <p>回答は、送った後で変えて送り直せます。
+  最新の回答が有効になり、渡した時刻と反映された時刻はやり直しです。
+  送った回答から何も変えていないときは、<span class="ui">回答を送る</span> は押せません。
+  変えた内容を送っていないときは、送信の状態に <span class="ui">変更は未送信</span> と出ます。</p>
+  <p>入力の途中の内容は、ページを開き直すと消えます。
+  送った回答は、ページを開き直しても残ります。</p>
+  <details class="more">
+    <summary>回答欄のエラーの詳細</summary>
+    <p>送れなかったときは、回答欄の下に理由が出ます。</p>
+    <ul>
+      <li><span class="ui">判断事項の状態が変わりました。表示を確認してください。</span>：送る前に、判断事項が解決されたか、回答を受け付けない状態になっています</li>
+      <li><span class="ui">回答の選択内容と指示を確認してください。</span>：選択肢が質問に合っていないか、推奨も指示も無い質問が残っています</li>
+      <li><span class="ui">回答を送信できませんでした。</span>：常駐サーバーに送れませんでした</li>
+    </ul>
+    <p>日本語の入力で変換している間は、画面の描き直しを待ち、入力が確定してから描き直します。</p>
+  </details>
+
+  <h2 id="decisions-delivery">回答がセッションへ届くまで</h2>
+  <h3 id="decisions-status">送信済み、渡した、反映された</h3>
+  <p>回答を送ると、回答欄の下に、届き具合が時刻つきで増えていきます。
+  時刻は、同じ日なら「14:00」の形で、別の日なら日付が付きます。</p>
+  <p><b>1. 送信済み</b>：ダッシュボードが回答を受け付けると、<span class="ui">送信済み</span> と、回答の種類が出ます。
+  種類は、<span class="ui">推奨案で OK</span>、選んだ選択肢の名前に <span class="ui">を選択</span> を付けたもの、<span class="ui">指示のみ</span> のどれかです。
+  指示を添えたときは、<span class="ui">(指示あり)</span> が付きます。</p>
+  <figure class="guide-map" id="decisions-sent-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/874"><div class="gm-clip"><img src="img/decisions-delivery/sent.png" width="788" height="437" alt="回答を送った後の判断事項。送信の状態に、14 時 00 分に送信済みで、残さないを選択し、指示ありと出ている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#decisions-sent-map-1" style="left:43.909%;top:2.975%" aria-label="1. 経過時間">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#decisions-sent-map-2" style="left:31.313%;top:87.071%" aria-label="2. 送信の状態">2</a></div></div></div><ol class="gm-list"><li id="decisions-sent-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>経過時間</b>：回答を送った時点から数え直しています。</div></li><li id="decisions-sent-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>送信の状態</b>：送った時刻と、回答の種類です。</div></li></ol></figure>
+  <p><b>2. 渡した</b>：回答をセッションに渡すと、<span class="ui">に渡した</span> と、渡した時刻が続きます。</p>
+  <figure class="guide-map" id="decisions-delivered-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/874"><div class="gm-clip"><img src="img/decisions-delivery/delivered.png" width="788" height="437" alt="回答を渡した後の判断事項。送信の状態に、送信済みの後ろに、に渡したと時刻が続いている" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#decisions-delivered-map-1" style="left:35.152%;top:87.071%" aria-label="1. 送信の状態">1</a></div></div></div><ol class="gm-list"><li id="decisions-delivered-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>送信の状態</b>：送信済みの時刻に、渡した時刻が続きます。</div></li></ol></figure>
+  <p><b>3. 反映された</b>：セッションが回答を受けて判断事項を更新すると、<span class="ui">に反映された</span> と、反映された時刻が続きます。</p>
+  <figure class="guide-map" id="decisions-reflected-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/962"><div class="gm-clip"><img src="img/decisions-delivery/reflected.png" width="788" height="481" alt="回答が反映された判断事項。送信の状態に、送信済み、渡した、反映されたの 3 つの時刻が並び、下にセッションが書いた選択と理由がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#decisions-reflected-map-1" style="left:38.103%;top:79.21%" aria-label="1. 送信の状態">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#decisions-reflected-map-2" style="left:50.19%;top:90.437%" aria-label="2. セッションが書いた選択と理由">2</a></div></div></div><ol class="gm-list"><li id="decisions-reflected-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>送信の状態</b>：3 つの時刻がそろいます。</div></li><li id="decisions-reflected-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>セッションが書いた選択と理由</b>：反映した内容を、セッションが記録しています。</div></li></ol></figure>
+  <p>仮に進めている判断事項では、セッションが判断事項を更新したときに、反映されたことになります。
+  離席中の質問では、質問のツールが回答つきで終わったときです。</p>
+
+  <h3 id="decisions-route">回答が届く経路</h3>
+  <p>回答は、セッションの状態に合わせて、次のどれかの経路で届きます。
+  どの経路でも、渡した時点で <span class="ui">に渡した</span> が付きます。</p>
+  <ul>
+    <li>離席中に待っている質問への回答：質問を待っているフックが受け取り、質問の答えとして渡します。デスクトップアプリに質問のダイアログは出ません(<a href="away.html#away-questions">離席中の質問</a>)</li>
+    <li>セッションが作業中のとき：ツールの実行がひと区切りしたところで、回答の文をセッションに差し込みます</li>
+    <li>セッションが待機中のとき：待機中のセッションに回答を渡し、作業を再開させます</li>
+    <li>開発者が新しいプロンプトを送ったとき：渡した回答がまだ反映されていなければ、プロンプトに添えて渡し直します。渡し直しは最大 3 回までです</li>
+  </ul>
+  <details class="more">
+    <summary>回答が届く経路の詳細</summary>
+    <p>経路は、セッションのフックで実現しています。</p>
+    <ul>
+      <li>質問への答え：質問のツールを実行する直前のフック(<code>PreToolUse</code>)が、質問に答えを加えて返します。元の質問の内容は変えません</li>
+      <li>作業中の差し込み：ツールのまとまりが終わるときのフック(<code>PostToolBatch</code>)が、回答の文を渡します</li>
+      <li>待機中の起こし：ターンの終わりのフック(<code>Stop</code>)が、非同期で回答を待ちます。回答が届くと、標準エラーに書いて終了コード 2 で終わり、セッションを起こします。待つ間は、常駐サーバーに最大 25 秒ずつ尋ねます</li>
+      <li>渡し直し：プロンプトの送信のフック(<code>UserPromptSubmit</code>)が、反映されていない回答を渡し直します</li>
+    </ul>
+    <p>渡す回答の文には、判断事項の id と題、回答の種類、指示が入ります。
+    セッションは、回答に沿って作業を直し、判断事項を更新します。</p>
+    <p>回答の種類ごとに、質問への答えは次のとおりです。</p>
+    <ul>
+      <li><span class="ui">推奨案で OK</span>：推奨の選択肢の名前を答えにします。指示があれば、追加の文脈として添えます</li>
+      <li>選択肢を選ぶ：選んだ選択肢の名前を答えにします。複数選択で複数を選んだときは、名前を「, 」でつないだ 1 つの文字列にします。選ばなかった質問は、推奨の名前、無ければ指示の文を答えにします</li>
+      <li><span class="ui">指示のみ</span>：指示の文を答えにします</li>
+    </ul>
+    <p>離席中に待っている質問の回答は、質問を待つフックだけが受け取ります。
+    作業中の差し込み、待機中の起こし、渡し直しの対象にはなりません。</p>
+    <p>閉じたセッションには、回答は届きません。</p>
+  </details>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="permission.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">許可待ち</span></a><a class="next" href="away.html"><span class="page-navigation-label">次のページ</span><span class="page-navigation-title">離席中</span></a></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#decisions-source">判断事項の元</a></li>
+        <li><a href="#decisions-card">判断事項のカード</a></li>
+        <li class="level-3"><a href="#decisions-states">判断事項の状態</a></li>
+        <li class="level-3"><a href="#decisions-time">経過時間と強調</a></li>
+        <li class="level-3"><a href="#decisions-recommended">推奨の判定</a></li>
+        <li><a href="#decisions-desktop">デスクトップアプリで答える判断事項</a></li>
+        <li><a href="#decisions-answer">ダッシュボードから回答する</a></li>
+        <li><a href="#decisions-delivery">回答がセッションへ届くまで</a></li>
+        <li class="level-3"><a href="#decisions-status">送信済み、渡した、反映された</a></li>
+        <li class="level-3"><a href="#decisions-route">回答が届く経路</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

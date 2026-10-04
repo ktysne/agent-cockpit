@@ -206,6 +206,14 @@ async function startDemoServer(options = {}) {
       async ui(requestPath, body) {
         return ensureOk(await post(requestPath, body, { ui: true }), requestPath);
       },
+      /**
+       * 回答のフックが常駐サーバーへ送る形(ask-register、ask-finish、post-tool-batch など)を /api/hooks/answers へ送る。
+       * session_id は、セッションのキーから補う。
+       */
+      async hookAnswer(key, body) {
+        const session = sessionFor(key);
+        return ensureOk(await post('/api/hooks/answers', { session_id: session.id, ...body }), `${key} の ${body.action}`);
+      },
       async getState() {
         return ensureOk(await requestJson(port, 'GET', '/api/state'), '/api/state');
       },

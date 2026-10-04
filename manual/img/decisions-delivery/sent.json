@@ -1,0 +1,38 @@
+{
+  "name": "sent",
+  "target": ".decision-list > .decision-card:nth-child(2)",
+  "width": 1576,
+  "height": 874,
+  "parts": [
+    {
+      "key": "sent.state",
+      "bounds": {
+        "x": 352,
+        "y": 23,
+        "width": 238,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "sent.time",
+      "bounds": {
+        "x": 606,
+        "y": 26,
+        "width": 172,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "sent.status",
+      "bounds": {
+        "x": 262,
+        "y": 761,
+        "width": 463,
+        "height": 38
+      },
+      "visible": true
+    }
+  ]
+}

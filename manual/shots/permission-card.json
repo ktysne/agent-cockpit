@@ -1,0 +1,41 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "許可待ちのカード",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "waiting",
+      "target": "article.permission:not(.long-wait)",
+      "parts": {
+        "permission.card": "article.permission:not(.long-wait)",
+        "permission.who": "article.permission:not(.long-wait) .permission-head strong",
+        "permission.chip": "article.permission:not(.long-wait) .permission-chip",
+        "permission.time": "article.permission:not(.long-wait) .permission-head .wait",
+        "permission.tool": "article.permission:not(.long-wait) .permission-tool",
+        "permission.meta": "article.permission:not(.long-wait) > .meta"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "long",
+      "target": "article.permission.long-wait",
+      "parts": {
+        "permission.card": "article.permission.long-wait",
+        "permission.who": "article.permission.long-wait .permission-head strong",
+        "permission.chip": "article.permission.long-wait .permission-chip",
+        "permission.time": "article.permission.long-wait .permission-head .wait",
+        "permission.tool": "article.permission.long-wait .permission-tool",
+        "permission.meta": "article.permission.long-wait > .meta"
+      }
+    }
+  ]
+}

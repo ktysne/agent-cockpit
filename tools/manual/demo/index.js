@@ -2,6 +2,8 @@
 
 const scenarios = Object.freeze({
   basic: () => require('./basic'),
+  decisions: () => require('./decisions'),
+  states: () => require('./states'),
 });
 
 function scenarioNames() {

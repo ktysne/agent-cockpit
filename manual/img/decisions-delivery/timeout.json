@@ -1,0 +1,38 @@
+{
+  "name": "timeout",
+  "target": ".decision-list > .decision-card:nth-child(5)",
+  "width": 1576,
+  "height": 860,
+  "parts": [
+    {
+      "key": "timeout.state",
+      "bounds": {
+        "x": 189,
+        "y": 23,
+        "width": 238,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "timeout.time",
+      "bounds": {
+        "x": 443,
+        "y": 26,
+        "width": 246,
+        "height": 38
+      },
+      "visible": true
+    },
+    {
+      "key": "timeout.answer",
+      "bounds": {
+        "x": 32,
+        "y": 417,
+        "width": 1518,
+        "height": 421
+      },
+      "visible": true
+    }
+  ]
+}

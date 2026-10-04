@@ -1,0 +1,37 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "サブエージェントの特別な状態と状態不明",
+  "scenario": "states",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "agents",
+      "target": ".agent-list",
+      "parts": {
+        "agents.route": ".agent-list > .agent-row:nth-child(1) .route-tag",
+        "agents.unavailable": ".agent-list > .agent-row:nth-child(1) .model.off",
+        "agents.unconfirmed": ".agent-list > .agent-row:nth-child(2) .who",
+        "agents.close": ".agent-list > .agent-row:nth-child(2) [data-close-agent]",
+        "agents.gpt": ".agent-list > .agent-row:nth-child(2) .model.gpt"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "unknown",
+      "target": ".session-group:nth-child(2) .main-row",
+      "parts": {
+        "unknown.state": ".session-group:nth-child(2) .main-row .who strong",
+        "unknown.estimate": ".session-group:nth-child(2) .main-row [data-estimate-session]",
+        "unknown.hide": ".session-group:nth-child(2) .main-row [data-hide-session]"
+      }
+    }
+  ]
+}

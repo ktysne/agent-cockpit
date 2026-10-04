@@ -1,0 +1,92 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "回答の届き方と離席中の質問",
+  "scenario": "decisions",
+  "storage": {
+    "agent-cockpit.display": {
+      "hideFinished": false
+    }
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "awaiting",
+      "target": ".decision-list > .decision-card:nth-child(1)",
+      "parts": {
+        "awaiting.state": ".decision-list > .decision-card:nth-child(1) .decision-head .badge",
+        "awaiting.time": ".decision-list > .decision-card:nth-child(1) .decision-head time",
+        "awaiting.remaining": ".decision-list > .decision-card:nth-child(1) .awaiting-min",
+        "awaiting.options": ".decision-list > .decision-card:nth-child(1) .decision-options",
+        "awaiting.ok": ".decision-list > .decision-card:nth-child(1) .answer-choice.ok",
+        "awaiting.send": ".decision-list > .decision-card:nth-child(1) [data-send-answer]"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "sent",
+      "target": ".decision-list > .decision-card:nth-child(2)",
+      "parts": {
+        "sent.state": ".decision-list > .decision-card:nth-child(2) .decision-head .badge",
+        "sent.time": ".decision-list > .decision-card:nth-child(2) .decision-head time",
+        "sent.status": ".decision-list > .decision-card:nth-child(2) .answer-foot .answer-status"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "delivered",
+      "target": ".decision-list > .decision-card:nth-child(3)",
+      "parts": {
+        "delivered.state": ".decision-list > .decision-card:nth-child(3) .decision-head .badge",
+        "delivered.status": ".decision-list > .decision-card:nth-child(3) .answer-foot .answer-status"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "reflected",
+      "target": ".decision-list > .decision-card:nth-child(4)",
+      "parts": {
+        "reflected.status": ".decision-list > .decision-card:nth-child(4) .answer-foot .answer-status",
+        "reflected.summary": ".decision-list > .decision-card:nth-child(4) .decision-summary"
+      }
+    },
+    {
+      "do": "screenshot",
+      "name": "timeout",
+      "target": ".decision-list > .decision-card:nth-child(5)",
+      "parts": {
+        "timeout.state": ".decision-list > .decision-card:nth-child(5) .decision-head .badge",
+        "timeout.time": ".decision-list > .decision-card:nth-child(5) .decision-head time",
+        "timeout.answer": ".decision-list > .decision-card:nth-child(5) .decision-answer"
+      }
+    },
+    {
+      "do": "click",
+      "selector": "[data-plan-toggle^=\"decisions:\"]"
+    },
+    {
+      "do": "wait",
+      "selector": ".decision-card.withdrawn"
+    },
+    {
+      "do": "screenshot",
+      "name": "ended",
+      "target": [
+        ".decision-card.withdrawn",
+        ".decision-card.resolved"
+      ],
+      "parts": {
+        "ended.withdrawn-state": ".decision-card.withdrawn .decision-head .badge",
+        "ended.resolved-state": ".decision-card.resolved .decision-head .badge",
+        "ended.resolution": ".decision-card.resolved .decision-summary"
+      }
+    }
+  ]
+}

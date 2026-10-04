@@ -1,0 +1,25 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "前回見てから",
+  "scenario": "basic",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "box",
+      "target": ".news",
+      "parts": {
+        "since.head": ".news .news-head",
+        "since.seen": ".news [data-seen]",
+        "since.items": ".news ul"
+      }
+    }
+  ]
+}

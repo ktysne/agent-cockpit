@@ -1,0 +1,41 @@
+{
+  "name": "ended",
+  "target": [
+    ".decision-card.withdrawn",
+    ".decision-card.resolved"
+  ],
+  "width": 1576,
+  "height": 960,
+  "parts": [
+    {
+      "key": "ended.withdrawn-state",
+      "bounds": {
+        "x": 427,
+        "y": 25,
+        "width": 109,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "ended.resolved-state",
+      "bounds": {
+        "x": 531,
+        "y": 471,
+        "width": 118,
+        "height": 44
+      },
+      "visible": true
+    },
+    {
+      "key": "ended.resolution",
+      "bounds": {
+        "x": 32,
+        "y": 867,
+        "width": 1518,
+        "height": 70
+      },
+      "visible": true
+    }
+  ]
+}

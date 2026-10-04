@@ -1,0 +1,23 @@
+{
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "title": "離席中にしたヘッダ",
+  "scenario": "decisions",
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "on",
+      "target": "header.top",
+      "parts": {
+        "away.toggle": ".away-toggle"
+      }
+    }
+  ]
+}

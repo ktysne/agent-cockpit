@@ -1,0 +1,38 @@
+{
+  "name": "unknown",
+  "target": ".session-group:nth-child(2) .main-row",
+  "width": 1524,
+  "height": 198,
+  "parts": [
+    {
+      "key": "unknown.state",
+      "bounds": {
+        "x": 20,
+        "y": 51,
+        "width": 260,
+        "height": 42
+      },
+      "visible": true
+    },
+    {
+      "key": "unknown.estimate",
+      "bounds": {
+        "x": 20,
+        "y": 121,
+        "width": 158,
+        "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "unknown.hide",
+      "bounds": {
+        "x": 194,
+        "y": 121,
+        "width": 172,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}
