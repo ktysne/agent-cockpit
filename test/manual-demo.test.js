@@ -37,6 +37,17 @@ test('固定した時計は引数なしの Date だけを固定し、進めて�
   assert.throws(() => createFakeClock(Date, Number.NaN), /初期値/);
 });
 
+test('実時間に合わせた時計は、合わせた時点の値から単調な時間の経過だけ進み、手では動かせない', () => {
+  let monotonic = 1000;
+  const { FakeDate, clock } = createFakeClock(Date, Date.UTC(2026, 9, 6, 5, 30));
+  clock.followRealTime(() => monotonic);
+  assert.equal(FakeDate.now(), Date.UTC(2026, 9, 6, 5, 30));
+  monotonic += 61_000;
+  assert.equal(FakeDate.now(), Date.UTC(2026, 9, 6, 5, 31, 1));
+  assert.equal(new FakeDate().getTime(), Date.UTC(2026, 9, 6, 5, 31, 1));
+  assert.throws(() => clock.advance(1), /手で動かせません/);
+});
+
 test('固定した時計は取り外すと本物の Date に戻り、二重には入らない', () => {
   const real = globalThis.Date;
   const clock = installFakeClock(Date.UTC(2026, 9, 6, 5, 30));
@@ -117,6 +128,14 @@ test('デモの起動引数はシナリオ名とポートだけを受け付け�
   assert.throws(() => parseDemoArguments(['nothing']), /シナリオがありません/);
   assert.throws(() => parseDemoArguments(['--port', '99999']), /--port/);
   assert.throws(() => parseDemoArguments(['--unknown']), /不明な引数/);
+});
+
+test('画面で試すためのデモは、流し込みの後に時計を基準時刻から進める', async (t) => {
+  const demo = await startDemoServer({ followRealTime: true });
+  t.after(() => demo.close());
+  assert.ok(Date.now() >= BASE_TIME_MS);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.ok(Date.now() > BASE_TIME_MS);
 });
 
 test('基本のシナリオを流し込むと、全体図に要る状態が隔離した保存先の常駐サーバーに揃う', async () => {

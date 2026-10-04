@@ -223,6 +223,8 @@ async function startDemoServer(options = {}) {
 
     const unexpectedGh = gh.unexpectedCalls();
     if (unexpectedGh.length) throw new Error(`偽の gh が定義に無い呼び出しを受けました:\n${unexpectedGh.join('\n')}`);
+    // 画面で操作を試すときは、既読の後のマージのように時刻の前後で表示が変わるので、流し込みの後は時計を進める。
+    if (options.followRealTime) clock.followRealTime();
 
     return {
       ...demo,
@@ -260,7 +262,7 @@ function parseDemoArguments(argv) {
 async function main() {
   const options = parseDemoArguments(process.argv.slice(2));
   const baseTime = options.live ? Math.floor(Date.now() / 60_000) * 60_000 : BASE_TIME_MS;
-  const demo = await startDemoServer({ scenario: options.scenario, port: options.port, baseTime });
+  const demo = await startDemoServer({ scenario: options.scenario, port: options.port, baseTime, followRealTime: options.live });
   console.log(`デモのダッシュボード(${options.scenario}): ${demo.url}`);
   console.log('止めるには Ctrl+C を押します。');
   const stop = () => demo.close().then(() => process.exit(0), (error) => {

@@ -5,27 +5,35 @@
 function createFakeClock(RealDate, initialMilliseconds) {
   if (!Number.isFinite(initialMilliseconds)) throw new Error('時計の初期値が不正です');
   let current = initialMilliseconds;
+  let follow = null;
+  const read = () => (follow ? follow.from + (follow.monotonic() - follow.startedAt) : current);
 
   class FakeDate extends RealDate {
     constructor(...args) {
-      if (args.length === 0) super(current);
+      if (args.length === 0) super(read());
       else super(...args);
     }
 
     static now() {
-      return current;
+      return read();
     }
   }
 
   const clock = {
-    now: () => current,
+    now: read,
     set(milliseconds) {
+      if (follow) throw new Error('実時間に合わせて進めている時計は手で動かせません');
       if (!Number.isFinite(milliseconds)) throw new Error('時計の値が不正です');
       if (milliseconds < current) throw new Error('時計は戻せません');
       current = milliseconds;
     },
     advance(milliseconds) {
       clock.set(current + milliseconds);
+    },
+    // 今の値から実時間の経過だけ進める。壁時計ではなく単調な時間を使い、OS の時刻合わせで戻らないようにする。
+    followRealTime(monotonic = () => performance.now()) {
+      if (follow) return;
+      follow = { from: current, startedAt: monotonic(), monotonic };
     },
   };
   return { FakeDate, clock };
