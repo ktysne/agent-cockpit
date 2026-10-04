@@ -4,7 +4,7 @@ const { isRecord } = require('./value-utils');
 
 const SECTION_ORDER = Object.freeze(['sinceSeen', 'judgment', 'tasks', 'now', 'prs']);
 const DISPLAY_FILTERS = Object.freeze(['permission', 'blocking', 'provisional', 'agents', 'prs']);
-// 保存済みの旧「held」値は読み込み時に破棄し、更新要求では受け付けない。
+// 有効な表示フィルターではない held は保存値から除き、更新要求でも拒否する。
 const LEGACY_DISPLAY_FILTERS = Object.freeze(['held']);
 
 const DISPLAY_SCHEMA = Object.freeze({

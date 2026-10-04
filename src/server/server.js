@@ -376,7 +376,7 @@ function createRequestHandler(options) {
   }
 
   async function resolveWriterSessionId(routeId, body) {
-    // 計画口と PR 口の ppid 条件と ID 不一致時の応答を保つため、解決結果に理由を含める。
+    // 呼び出し元が ID 不一致を個別の応答へ変換できるよう、解決した ID と不一致状態を返す。
     const mappedSessionId = Number.isInteger(body.ppid) ? await findSessionIdByPid(body.ppid) : null;
     const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeId;
     const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;

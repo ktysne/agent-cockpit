@@ -50,7 +50,6 @@ async function postHookRequest(body, options = {}) {
     fileSystem: options.fileSystem,
     readServerInfo: options.readServerInfo,
     ensure: false,
-    reuseInfoOnConnectionFailure: true,
     now,
   });
   return result.ok ? result.json : null;

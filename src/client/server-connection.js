@@ -91,14 +91,17 @@ async function releaseStartLock(homeDir, token, fileSystem = fsp) {
   }
 }
 
-async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeoutMs, now = Date.now) {
+async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeoutMs, now = Date.now, readResponse) {
   const remaining = deadline - now();
   if (remaining <= 0) throw new Error('server request deadline elapsed');
   const controller = new AbortController();
   let timeout;
   try {
     return await Promise.race([
-      fetchImpl(url, { ...options, signal: controller.signal }),
+      (async () => {
+        const response = await fetchImpl(url, { ...options, signal: controller.signal });
+        return readResponse ? readResponse(response) : response;
+      })(),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
           controller.abort();
@@ -114,16 +117,17 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
 async function serverIsHealthy(info, { fetchImpl = fetch, deadline = Date.now() + 250, now = Date.now } = {}) {
   if (!info) return false;
   try {
-    const response = await fetchWithDeadline(
+    const result = await fetchWithDeadline(
       fetchImpl,
       `http://127.0.0.1:${info.port}/health`,
       { method: 'GET' },
       deadline,
       120,
       now,
+      async (response) => ({ ok: response.ok, json: response.ok ? await response.json() : null }),
     );
-    if (!response.ok) return false;
-    const health = await response.json();
+    if (!result.ok) return false;
+    const health = result.json;
     return health.app === 'agent-cockpit' && health.pid === info.pid && health.startedAt === info.startedAt;
   } catch {
     return false;
@@ -175,15 +179,20 @@ async function requestFromServer(info, requestPath, init, {
 } = {}) {
   if (!info) return { ok: false, status: null, json: null };
   try {
-    const response = await fetchWithDeadline(
+    const result = await fetchWithDeadline(
       fetchImpl,
       `http://127.0.0.1:${info.port}${requestPath}`,
       init,
       deadline,
       attemptTimeoutMs,
       now,
+      async (response) => ({
+        ok: response.ok,
+        status: response.status,
+        json: response.ok ? await response.json() : null,
+      }),
     );
-    return { ok: response.ok, status: response.status, json: response.ok ? await response.json() : null };
+    return result;
   } catch {
     return { ok: false, status: null, json: null };
   }
@@ -232,16 +241,20 @@ async function postToServer(requestPath, body, options = {}) {
         body: JSON.stringify(body),
       };
       if (options.cache) requestOptions.cache = options.cache;
-      const response = await fetchWithDeadline(
+      const result = await fetchWithDeadline(
         fetchImpl,
         `http://127.0.0.1:${info.port}${requestPath}`,
         requestOptions,
         deadline,
         Math.min(options.attemptTimeoutMs || remaining, remaining),
         now,
+        async (response) => ({
+          response,
+          json: response.ok && options.parseJson !== false ? await response.json() : undefined,
+        }),
       );
+      const { response, json } = result;
       if (response.ok) {
-        const json = options.parseJson === false ? undefined : await response.json();
         return { ok: true, status: response.status, json };
       }
       if (response.status !== 401 || attempt > 0) return { ok: false, status: response.status, json: null };
@@ -251,7 +264,7 @@ async function postToServer(requestPath, body, options = {}) {
       if (attempt > 0) return { ok: false, status: null, json: null };
       try {
         if (ensureServer) info = await ensureServer(ensureOptions);
-        else if (!options.reuseInfoOnConnectionFailure) info = await readInfo(homeDir, fileSystem);
+        else info = await readInfo(homeDir, fileSystem);
       } catch {
         return { ok: false, status: null, json: null };
       }
