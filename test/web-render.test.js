@@ -1588,6 +1588,12 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
   assert.ok(descendants(taskList).some((node) => node.className === 'badge done' && node.textContent === '完了'));
 
+  const manuallyClosedTaskList = new FakeElement('ul');
+  context.appendTaskItem(manuallyClosedTaskList, {
+    title: '画面で閉じたタスク', state: 'done', closedByUser: true, criteria: [{ met: true }],
+  }, {}, partial);
+  assert.ok(descendants(manuallyClosedTaskList).some((node) => node.className === 'meta' && node.textContent === '完了条件 1/1、画面で完了にした'));
+
   context.displayPreferences.hideFinished = false;
   const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, partial]);
   assert.deepEqual(JSON.parse(JSON.stringify(shownWhenDisabled.map((product) => product.key).sort())), ['finished', 'no-tasks', 'partial']);
@@ -1929,6 +1935,7 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
 
 test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼先を無効化し、依頼済みの状態を表示する', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const absoluteTimeSource = functionSource(html, 'absoluteTimeLabel');
   const helpersStart = html.indexOf('function element(tag, className, text)');
   const helpersEnd = html.indexOf('function durationLabel', helpersStart);
   const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
@@ -1938,6 +1945,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
   assert.ok(componentStart >= 0 && componentEnd > componentStart);
   assert.ok(actionStart >= 0 && actionEnd > actionStart);
+  assert.ok(absoluteTimeSource);
 
   class FakeElement {
     constructor(tagName) {
@@ -1977,8 +1985,10 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
     refresh: async () => {}, render() {}, liveStatus: { textContent: '' },
   });
   vm.runInContext([
+    absoluteTimeSource,
     html.slice(helpersStart, helpersEnd), html.slice(componentStart, componentEnd), html.slice(actionStart, actionEnd),
   ].join('\n'), context);
+  vm.runInContext("Date.now = () => new Date(2026, 9, 5).getTime()", context);
   const flatten = (node) => [node, ...(node.children || []).flatMap(flatten)];
   const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
   const renderPullRequest = (value) => {
@@ -2014,7 +2024,8 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   nodes = renderPullRequest(pullRequest);
   assert.equal(nodes.find((node) => node.dataset?.conflictOpen === uiKey).textContent, 'もう一度依頼する');
   assert.ok(nodes.some((node) => textOf(node).includes('Feature session のセッションへ衝突の解消を依頼した')));
-  assert.match(textOf(nodes.find((node) => node.attributes?.role === 'status')), /^\d{2}:\d{2} に Feature session/);
+  const expectedRequestTime = context.absoluteTimeLabel('2026-10-03T03:04:00.000Z', new Date(2026, 9, 5).getTime(), '時刻不明');
+  assert.ok(textOf(nodes.find((node) => node.attributes?.role === 'status')).startsWith(`${expectedRequestTime} に Feature session`));
   assert.ok(nodes.find((node) => node.dataset?.conflictConfirm === uiKey));
   assert.equal(nodes.filter((node) => node.tagName === 'li').length, 3);
   assert.ok(nodes.some((node) => node.dataset?.conflictGo === uiKey && node.textContent === '依頼を送る'));
@@ -2115,7 +2126,15 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
   assert.ok(mergeButton);
   assert.equal(mergeButton.textContent, 'マージを実行');
 
+  pullRequest.children = [{ number: 43 }, { number: 44 }];
+  context.pullRequestMergeOptions.set(key, { method: 'squash', deleteBranch: false, mergeAfterReview: false });
+  const restackRoot = new FakeElement('div');
+  context.appendPullRequestMergeConfirmation(restackRoot, group, pullRequest);
+  assert.ok(flatten(restackRoot).some((node) => node.textContent.includes('#43、#44 に #42 のコミットが残る')));
+
+  context.pullRequestMergeOptions.set(key, { method: 'merge', deleteBranch: true, mergeAfterReview: false });
   await context.runPullRequestMergeAction(mergeButton, 'merge');
+  context.pullRequestMergeOptions.delete(key);
   context.displayPreferences.mergeAfterReviewDefault = true;
   const reserveRoot = new FakeElement('div');
   context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest);
@@ -2298,6 +2317,24 @@ test('期限判定は描き直しの周期でマージ時刻を検出し、警�
   ]) {
     assert.equal(context.pullRequestMergeResultExpired(warning, now - 10 * 60_000, now), false);
   }
+});
+
+test('接続エラーの最終更新時刻は共通の絶対時刻表示を使う', () => {
+  const updateSource = functionSource(pageHtml, 'updateConnectionNote');
+  assert.ok(updateSource);
+  let formattedValue;
+  const connectionNote = { textContent: '', hidden: true };
+  const context = pageContext(pageHtml, {
+    connectionLost: true,
+    lastStateAt: '2026-10-03T03:04:00.000Z',
+    connectionNote,
+    absoluteTimeLabel: (value) => { formattedValue = value; return '10/3 12:04'; },
+  });
+  vm.runInContext(`${updateSource}\nthis.updateNote = updateConnectionNote;`, context);
+  context.updateNote();
+  assert.equal(formattedValue, '2026-10-03T03:04:00.000Z');
+  assert.equal(connectionNote.textContent, '常駐サーバーに接続できません。表示は 10/3 12:04 時点のものです。');
+  assert.equal(connectionNote.hidden, false);
 });
 
 test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操作ボタンを残す', () => {

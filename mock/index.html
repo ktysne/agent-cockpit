@@ -1582,16 +1582,16 @@ function mergeConfirm(p, pr) {
   const effects = [
     reviewWarning ? `<span>${esc(reviewWarning)}</span>` : '',
     `照合する head SHA: ${o.mergeAfterReview ? 'クロスレビューの収束記録' : shortShaLabel(pr.sha)}`,
-    kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する</span>` : '',
+    kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する。</span>` : '',
   ].filter(Boolean);
   return `<div class="merge-confirm ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
     <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へ${o.mergeAfterReview ? 'レビュー収束後に' : ''}マージする</div>
     ${waiting.length ? `<p class="merge-condition-warning" role="status">選択した条件の未達: ${waiting.map(esc).join('、')}</p>` : ''}
     <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
       `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
-      ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリの設定で許可されている方式だけを出す</span>' : ''}</div>
+    ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリで許可されている方式です</span>' : ''}</div>
     <label class="opt"><input type="checkbox" data-review-merge ${o.mergeAfterReview ? 'checked' : ''}>レビュー収束後マージ</label>
-    ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にブランチを削除する</label>`}
+    ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にリモートブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : o.mergeAfterReview ? '予約する' : 'マージを実行'}</button>
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
@@ -1668,7 +1668,6 @@ function prItem(p, pr) {
     ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
-    ${transientMessageVisible(ui.reservationNotices[k]) ? `<div class="merge-result" role="status">${esc(ui.reservationNotices[k].message)}</div>` : ''}
     ${transientMessageVisible(ui.mergeErrors[k]) ? `<div class="merge-error" role="status">${esc(ui.mergeErrors[k].message)}</div>` : ''}
     ${confirmManual && !operationBlocker && !rsv ? mergeConfirm(p, pr) : ''}
   </div>`;
@@ -1677,6 +1676,17 @@ function prItem(p, pr) {
 function prTree(p, pr) {
   const kids = childPrs(p, pr);
   return prItem(p, pr) + (kids.length ? `<div class="stack-level">${kids.map(k => prTree(p, k)).join('')}</div>` : '');
+}
+
+function reservationNoticeRows(p) {
+  const prefix = `${p.id}#`;
+  return Object.entries(ui.reservationNotices)
+    .filter(([key, notice]) => key.startsWith(prefix) && transientMessageVisible(notice))
+    .map(([key, notice]) => {
+      const number = Number(key.slice(prefix.length));
+      if (!Number.isSafeInteger(number) || number < 1) return '';
+      return `<div class="merge-result" role="status"><a href="https://github.com/${esc(p.repo.name)}/pull/${number}" target="_blank" rel="noopener noreferrer">PR #${number}</a>: ${esc(notice.message)}</div>`;
+    }).join('');
 }
 
 const MERGED_VISIBLE_COUNT = 5;
@@ -1704,7 +1714,7 @@ function prBlock(p, withTag) {
   const results = (pullRequestMergeResults.get(p.repo.name) || [])
     .filter(result => result.productId === p.id && pullRequestMergeResultVisible(result))
     .map(result => `<div class="merge-result" role="status"><span>PR #${result.number}: ${pullRequestMergeResultLine(result)}</span><button type="button" class="link-btn" data-close-merge-result="${esc(result.id)}">閉じる</button></div>`).join('');
-  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
+  return `<section class="group-frame pr-repo-group">${head}<div class="pr-repo-content">${reservationNoticeRows(p)}${stacks || empty}${mergedLine}${closedLine}${results}</div></section>`;
 }
 
 // 新しい順に並べた badges のうち MERGED_VISIBLE_COUNT 件を出し、古いものはボタンの下に畳む。
@@ -1982,7 +1992,7 @@ function renderKindMode() {
   const taskControls = todoTaskToggle || doneTaskToggle
     ? `<div class="kind-section-controls">${todoTaskToggle}${doneTaskToggle}</div>`
     : '';
-  const prs = ps.filter(p => ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length).map(p => prBlock(p, true)).join('');
+  const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news) : '',
     judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
