@@ -11,10 +11,12 @@ const SECTION_ORDER_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_IDLE_HIDE_MINUTES = 30;
+const DEFAULT_MERGE_RESULT_HIDE_MINUTES = 5;
 const DEFAULT_DISPLAY = Object.freeze({
   mode: 'product', order: [], pinned: [], collapsed: [], hidden: [], sectionOrder: DEFAULT_SECTION_ORDER,
   longWaitMinutes: DEFAULT_LONG_WAIT_MINUTES, awayAnswerWaitMinutes: DEFAULT_AWAY_ANSWER_WAIT_MINUTES, hideFinished: true,
   idleHideMinutes: DEFAULT_IDLE_HIDE_MINUTES,
+  mergeResultHideMinutes: DEFAULT_MERGE_RESULT_HIDE_MINUTES,
   mergeableCondition: 'cross-review', mergeAfterReviewDefault: false,
 });
 const SESSION_FILE_ABSENCE_END_MS = 60_000;
@@ -52,6 +54,7 @@ function cloneDisplay(display) {
     longWaitMinutes: display.longWaitMinutes,
     awayAnswerWaitMinutes: display.awayAnswerWaitMinutes,
     idleHideMinutes: display.idleHideMinutes,
+    mergeResultHideMinutes: display.mergeResultHideMinutes,
     hideFinished: display.hideFinished,
     mergeableCondition: display.mergeableCondition,
     mergeAfterReviewDefault: display.mergeAfterReviewDefault,
@@ -65,6 +68,7 @@ function defaultDisplay() {
     longWaitMinutes: DEFAULT_DISPLAY.longWaitMinutes,
     awayAnswerWaitMinutes: DEFAULT_DISPLAY.awayAnswerWaitMinutes,
     idleHideMinutes: DEFAULT_DISPLAY.idleHideMinutes,
+    mergeResultHideMinutes: DEFAULT_DISPLAY.mergeResultHideMinutes,
     hideFinished: DEFAULT_DISPLAY.hideFinished,
     mergeableCondition: DEFAULT_DISPLAY.mergeableCondition,
     mergeAfterReviewDefault: DEFAULT_DISPLAY.mergeAfterReviewDefault,
@@ -106,7 +110,7 @@ function stableStringify(value) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !['product', 'kind'].includes(value.mode)) throw new Error('Invalid display preferences');
-  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault']);
+  const allowed = new Set(['mode', 'order', 'pinned', 'collapsed', 'hidden', 'sectionOrder', 'longWaitMinutes', 'awayAnswerWaitMinutes', 'idleHideMinutes', 'mergeResultHideMinutes', 'hideFinished', 'mergeableCondition', 'mergeAfterReviewDefault']);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
   for (const key of ['order', 'pinned', 'collapsed']) {
@@ -132,6 +136,7 @@ function normalizeDisplay(value) {
     longWaitMinutes: normalizeDisplayMinutes(value.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
     awayAnswerWaitMinutes: normalizeDisplayMinutes(value.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
     idleHideMinutes: normalizeDisplayMinutes(value.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
+    mergeResultHideMinutes: normalizeDisplayMinutes(value.mergeResultHideMinutes, 1, 60, DEFAULT_MERGE_RESULT_HIDE_MINUTES),
     hideFinished: typeof value.hideFinished === 'boolean' ? value.hideFinished : DEFAULT_DISPLAY.hideFinished,
     mergeableCondition: MERGEABLE_CONDITIONS.has(value.mergeableCondition) ? value.mergeableCondition : DEFAULT_DISPLAY.mergeableCondition,
     mergeAfterReviewDefault: typeof value.mergeAfterReviewDefault === 'boolean' ? value.mergeAfterReviewDefault : DEFAULT_DISPLAY.mergeAfterReviewDefault,
@@ -278,6 +283,7 @@ function validMergedPullRequest(record) {
     (record.reservedHeadRefOid !== undefined && record.reservedHeadRefOid !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.reservedHeadRefOid)) ||
     (record.mergedHeadRefOid !== undefined && record.mergedHeadRefOid !== null && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.mergedHeadRefOid)) ||
     (record.headMismatch !== undefined && typeof record.headMismatch !== 'boolean') ||
+    (record.mergeResultClosedAt !== undefined && !validTimestamp(record.mergeResultClosedAt)) ||
     (record.automaticResult !== undefined && !validPullRequestMergeResult(record.automaticResult))) return false;
   const parsedUrl = parsePullRequestUrl(record.url);
   return Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number);
@@ -1561,6 +1567,9 @@ class DashboardState {
     if (!validMergedPullRequest(next)) return false;
     const key = relatedPullRequestRecordKey(next.owner, next.repo, next.number);
     const previous = this.mergedPullRequests.get(key);
+    if (previous?.mergedAt === next.mergedAt && previous.mergeResultClosedAt) {
+      next.mergeResultClosedAt = previous.mergeResultClosedAt;
+    }
     if (previous && stableStringify(previous) === stableStringify(next)) return false;
     this.mergedPullRequests.set(key, next);
     for (const registration of this.pullRequestRegistrationsForRepo(next.owner, next.repo).filter((item) => item.number === next.number)) {
@@ -1579,6 +1588,19 @@ class DashboardState {
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
       .map((record) => ({ ...record }));
+  }
+
+  closeAutomaticPullRequestMergeResult(owner, repo, number, now = Date.now()) {
+    const record = this.mergedPullRequests.get(relatedPullRequestRecordKey(owner, repo, number));
+    if (!record || record.automatic !== true || !record.automaticResult) return null;
+    if (record.mergeResultClosedAt) return false;
+    this.mergedPullRequests.set(relatedPullRequestRecordKey(owner, repo, number), {
+      ...record,
+      mergeResultClosedAt: isoTime(now),
+    });
+    this.touch();
+    this.requestStoreWrite();
+    return true;
   }
 
   setPullRequestMergeReservation(record) {

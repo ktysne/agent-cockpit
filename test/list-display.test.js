@@ -766,6 +766,7 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
     pullRequestMergeResults: new Map([[key, [{ id: 'result-1', number: 41, method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }]]]),
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}\0${group.product.key}`,
     hasPullRequestMergeResults: (group) => group.owner === 'example' && group.repo === 'project' && group.product.key === 'project-a',
+    pullRequestMergeResultVisible: (result) => result.number !== 54,
     element: fakeElement,
   });
   vm.runInContext(`${lineSource}\n${resultsSource}\n${visibleSource}\nthis.resultLine = pullRequestMergeResultLine; this.appendResults = appendPullRequestMergeResults; this.visibleGroups = visiblePullRequestGroups;`, context);
@@ -779,6 +780,9 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
   const finished = { owner: 'example', repo: 'project', product: { key: 'project-c' }, openCount: 0, mergeHistory: [{ number: 52 }] };
   const loading = { owner: 'example', repo: 'new-project', product: { key: 'project-d' }, openCount: 0, loading: true };
   assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([mismatch, finished, loading]))), [mismatch, loading]);
+  const automaticShown = { owner: 'example', repo: 'project', product: { key: 'project-e' }, openCount: 0, mergeHistory: [{ number: 53, automatic: true, automaticResult: {} }] };
+  const automaticHidden = { owner: 'example', repo: 'project', product: { key: 'project-f' }, openCount: 0, mergeHistory: [{ number: 54, automatic: true, automaticResult: {} }] };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.visibleGroups([automaticShown, automaticHidden]))), [automaticShown]);
   assert.match(web, /items\.filter\(\(item\) => item\.headMismatch === true\)/);
   assert.match(mock, /visibleMerged = ui\.hideFinished \? mergedNewestFirst\.filter\(\(\{ pr \}\) => pr\.headMismatch === true\)/);
   const mockLine = functionSource(mock, 'pullRequestMergeResultLine');
@@ -797,6 +801,7 @@ test('常駐サーバーが記録した予約マージの結果を一行で表�
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     pullRequestMergeResults: new Map(),
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
+    pullRequestMergeResultVisible: () => true,
     element: fakeElement,
   });
   vm.runInContext(`${resultLine}\n${appendResults}\nthis.appendResults = appendPullRequestMergeResults;`, context);

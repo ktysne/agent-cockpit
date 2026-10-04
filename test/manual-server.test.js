@@ -46,7 +46,7 @@ async function runningServer(t, { manualDir } = {}) {
   const runtime = await startServer(options);
   t.after(async () => {
     await runtime.close();
-    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    fs.rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   return runtime;
 }

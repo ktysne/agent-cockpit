@@ -49,6 +49,10 @@ test('更新の無いセッションを隠す時間は既定で30分', () => {
   assert.equal(new DashboardState().getDisplayPreferences().idleHideMinutes, 30);
 });
 
+test('マージ結果を隠す時間は既定で5分', () => {
+  assert.equal(new DashboardState().getDisplayPreferences().mergeResultHideMinutes, 5);
+});
+
 test('lastUpdatedAt はイベント、計画、判断事項の最新時刻を返す', () => {
   const state = new DashboardState();
   state.syncSessionFiles([{ session_id: 'last-updated', cwd: 'C:\\project', name: '更新時刻' }]);

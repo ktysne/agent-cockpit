@@ -8,7 +8,7 @@
       "key": "settings.theme",
       "bounds": {
         "x": 474,
-        "y": 305,
+        "y": 269,
         "width": 752,
         "height": 72
       },
@@ -18,7 +18,7 @@
       "key": "settings.since-seen",
       "bounds": {
         "x": 474,
-        "y": 377,
+        "y": 341,
         "width": 752,
         "height": 72
       },
@@ -28,7 +28,7 @@
       "key": "settings.mergeable",
       "bounds": {
         "x": 474,
-        "y": 539,
+        "y": 503,
         "width": 752,
         "height": 524
       },
@@ -38,7 +38,7 @@
       "key": "settings.merge-after",
       "bounds": {
         "x": 474,
-        "y": 1150,
+        "y": 1114,
         "width": 752,
         "height": 45
       },
@@ -48,7 +48,7 @@
       "key": "settings.hide-finished",
       "bounds": {
         "x": 474,
-        "y": 1194,
+        "y": 1158,
         "width": 752,
         "height": 45
       },
@@ -58,7 +58,7 @@
       "key": "settings.long-wait",
       "bounds": {
         "x": 474,
-        "y": 1239,
+        "y": 1203,
         "width": 752,
         "height": 72
       },
@@ -68,7 +68,7 @@
       "key": "settings.idle",
       "bounds": {
         "x": 474,
-        "y": 1311,
+        "y": 1275,
         "width": 752,
         "height": 72
       },
@@ -78,7 +78,17 @@
       "key": "settings.away-wait",
       "bounds": {
         "x": 474,
-        "y": 1383,
+        "y": 1347,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.merge-result-hide",
+      "bounds": {
+        "x": 474,
+        "y": 1419,
         "width": 752,
         "height": 72
       },
@@ -88,7 +98,7 @@
       "key": "settings.order",
       "bounds": {
         "x": 474,
-        "y": 1483,
+        "y": 1519,
         "width": 752,
         "height": 662
       },
@@ -98,7 +108,7 @@
       "key": "settings.manual",
       "bounds": {
         "x": 448,
-        "y": 2203,
+        "y": 2239,
         "width": 90,
         "height": 72
       },
@@ -108,7 +118,7 @@
       "key": "settings.close",
       "bounds": {
         "x": 1131,
-        "y": 2203,
+        "y": 2239,
         "width": 121,
         "height": 72
       },

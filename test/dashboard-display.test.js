@@ -364,6 +364,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
     DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
   vm.runInContext(`${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
@@ -375,6 +376,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     longWaitMinutes: 15,
     awayAnswerWaitMinutes: 5,
     idleHideMinutes: 30,
+    mergeResultHideMinutes: 5,
     hideFinished: true,
     mergeableCondition: 'cross-review',
     mergeAfterReviewDefault: false,
@@ -387,6 +389,12 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   }
   for (const idleHideMinutes of [5, 1440]) {
     assert.equal(context.normalizeDisplay({ ...base, idleHideMinutes }).idleHideMinutes, idleHideMinutes);
+  }
+  for (const mergeResultHideMinutes of [0, 61, 5.5]) {
+    assert.equal(context.normalizeDisplay({ ...base, mergeResultHideMinutes }).mergeResultHideMinutes, 5);
+  }
+  for (const mergeResultHideMinutes of [1, 60]) {
+    assert.equal(context.normalizeDisplay({ ...base, mergeResultHideMinutes }).mergeResultHideMinutes, mergeResultHideMinutes);
   }
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay({ ...base, hidden: ['held'] }).hidden)), []);
 });
@@ -975,6 +983,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
   const idleHideMinutesInput = { value: '90' };
+  const mergeResultHideMinutesInput = { value: '15' };
   const hideFinishedInput = { checked: false };
   const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
@@ -983,10 +992,11 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
+    mergeResultHideMinutesInput,
     hideFinishedInput,
     mergeAfterReviewDefaultInput,
     mergeableConditionInputs,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
   });
   vm.runInContext(render, context);
   context.renderDisplaySettings();
@@ -994,6 +1004,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(longWaitMinutesInput.value, '120');
   assert.equal(awayAnswerWaitMinutesInput.value, '5');
   assert.equal(idleHideMinutesInput.value, '30');
+  assert.equal(mergeResultHideMinutesInput.value, '5');
   assert.equal(hideFinishedInput.checked, false);
   assert.equal(mergeAfterReviewDefaultInput.checked, true);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
@@ -1007,16 +1018,18 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
   const longWaitMinutesInput = { value: '15' };
   const awayAnswerWaitMinutesInput = { value: '5' };
   const idleHideMinutesInput = { value: '30' };
+  const mergeResultHideMinutesInput = { value: '5' };
   const hideFinishedInput = { checked: true };
   const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { mergeableCondition: 'cross-review', mergeAfterReviewDefault: true };
+  const displayPreferences = { mergeableCondition: 'cross-review', mergeAfterReviewDefault: true, mergeResultHideMinutes: 5 };
   let activeElement = null;
   const context = pageContext(web, {
     document: { get activeElement() { return activeElement; } },
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
+    mergeResultHideMinutesInput,
     hideFinishedInput,
     mergeAfterReviewDefaultInput,
     displayPreferences,

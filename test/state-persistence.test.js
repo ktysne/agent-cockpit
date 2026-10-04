@@ -75,6 +75,7 @@ test('保存したタスク、判断事項、回答、完了記録、外した�
     collapsed: ['C:\\project'], hidden: ['agents', 'prs'],
     sectionOrder: ['now', 'judgment', 'tasks', 'prs', 'sinceSeen'],
     longWaitMinutes: 37, awayAnswerWaitMinutes: 12, idleHideMinutes: 45, hideFinished: true, mergeableCondition: 'ci', mergeAfterReviewDefault: true,
+    mergeResultHideMinutes: 5,
   };
   state.patchDisplayPreferences(display);
   state.registerPullRequest('restored-session', { url: 'https://github.com/example/project/pull/47' }, {
@@ -152,6 +153,53 @@ test('レビュー不要の記録は PR 登録と同じ保持期限で片付け�
 
   assert.equal(state.pullRequestRegistrations().some((record) => record.number === 48), false);
   assert.equal(state.crossReviewSkip('example', 'project', 48), null);
+});
+
+test('マージ結果を隠す時間は旧設定と不正値で既定を使う', async (t) => {
+  for (const [name, value, expected] of [
+    ['設定がない', undefined, 5],
+    ['整数の下限', 1, 1],
+    ['整数の上限', 60, 60],
+    ['下限未満', 0, 5],
+    ['上限超過', 61, 5],
+    ['整数でない', 5.5, 5],
+    ['数値でない', '5', 5],
+  ]) {
+    const homeDir = await temporaryHome(t);
+    const display = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
+    if (value !== undefined) display.mergeResultHideMinutes = value;
+    await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
+      version: 1, display, plans: {}, decisionLifecycles: {}, closedTasks: [], hiddenSessions: [],
+    }));
+
+    const restored = await DashboardState.load(homeDir);
+    assert.equal(restored.getDisplayPreferences().mergeResultHideMinutes, expected, name);
+    assert.equal((await fs.readdir(homeDir)).some((file) => file.startsWith('store.json.broken-')), false, name);
+  }
+});
+
+test('予約マージ結果の閉じた時刻を保存し、旧形式は未閉鎖として読む', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  state.recordMergedPullRequest({
+    owner: 'example', repo: 'project', number: 41, title: '予約結果',
+    url: 'https://github.com/example/project/pull/41', mergedAt: new Date(now).toISOString(),
+    method: 'squash', automatic: true,
+    automaticResult: { branchDeleted: false, autoDeleteBranch: false, retargetedBase: null, retargetedNumbers: [], warning: null },
+  }, now);
+  await state.flushPersistence();
+
+  const restoredLegacy = await DashboardState.load(homeDir, { now: now + 1 });
+  const legacyRecord = restoredLegacy.mergedPullRequestHistoryForRepo('example', 'project', now + 1)[0];
+  assert.equal(Object.hasOwn(legacyRecord, 'mergeResultClosedAt'), false);
+  assert.equal(restoredLegacy.closeAutomaticPullRequestMergeResult('example', 'project', 41, now + 2), true);
+  assert.equal(restoredLegacy.closeAutomaticPullRequestMergeResult('example', 'project', 41, now + 3), false);
+  await restoredLegacy.flushPersistence();
+
+  const restoredClosed = await DashboardState.load(homeDir, { now: now + 4 });
+  const closedRecord = restoredClosed.mergedPullRequestHistoryForRepo('example', 'project', now + 4)[0];
+  assert.equal(closedRecord.mergeResultClosedAt, new Date(now + 2).toISOString());
 });
 
 test('保存時刻の欠落や範囲外の値は表示設定の既定値で補う', async (t) => {

@@ -1341,6 +1341,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.longWaitMinutes, 15);
   assert.equal(jsonBody(mode).display.awayAnswerWaitMinutes, 5);
   assert.equal(jsonBody(mode).display.idleHideMinutes, 30);
+  assert.equal(jsonBody(mode).display.mergeResultHideMinutes, 5);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(jsonBody(mode).display.mergeAfterReviewDefault, false);
@@ -1366,6 +1367,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['longWaitMinutes', 0], ['longWaitMinutes', 121], ['longWaitMinutes', 1.5], ['longWaitMinutes', '15'],
     ['awayAnswerWaitMinutes', 0], ['awayAnswerWaitMinutes', 31], ['awayAnswerWaitMinutes', 2.5], ['awayAnswerWaitMinutes', null],
     ['idleHideMinutes', 4], ['idleHideMinutes', 1441], ['idleHideMinutes', 30.5], ['idleHideMinutes', '30'], ['idleHideMinutes', null],
+    ['mergeResultHideMinutes', 0], ['mergeResultHideMinutes', 61], ['mergeResultHideMinutes', 5.5], ['mergeResultHideMinutes', '5'], ['mergeResultHideMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
     ['mergeAfterReviewDefault', 1], ['mergeAfterReviewDefault', 'true'], ['mergeAfterReviewDefault', null],
@@ -1398,6 +1400,13 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(waitSettings).display.longWaitMinutes, 120);
   assert.equal(jsonBody(waitSettings).display.awayAnswerWaitMinutes, 30);
   assert.equal(runtime.answerDelivery.answerWaitMs(), 30 * 60_000);
+  for (const mergeResultHideMinutes of [1, 60]) {
+    const resultHideRange = await request(runtime.info.port, {
+      method: 'POST', path: endpoint, body: JSON.stringify({ mergeResultHideMinutes }), headers: validHeaders,
+    });
+    assert.equal(resultHideRange.status, 200);
+    assert.equal(jsonBody(resultHideRange).display.mergeResultHideMinutes, mergeResultHideMinutes);
+  }
   const hideFinished = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hideFinished: true }), headers: validHeaders,
   });
@@ -1419,7 +1428,48 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
     longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: true,
+    mergeResultHideMinutes: 60,
   });
+});
+
+test('予約マージ結果を閉じる API は秘密値と Origin を照合して閉鎖を保存する', async (t) => {
+  const runtime = await runningServer(t);
+  const endpoint = '/api/pull-requests/merge-result/close';
+  const payload = { owner: 'example', repo: 'project', number: 41 };
+  const body = JSON.stringify(payload);
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin };
+
+  const missingSecret = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', origin },
+  });
+  assert.equal(missingSecret.status, 401);
+  const foreignOrigin = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { ...headers, origin: 'https://other.example' },
+  });
+  assert.equal(foreignOrigin.status, 403);
+  const missingOrigin = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body, headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+  });
+  assert.equal(missingOrigin.status, 403);
+  const invalid = await request(runtime.info.port, {
+    method: 'POST', path: endpoint, body: JSON.stringify({ ...payload, number: 0 }), headers,
+  });
+  assert.equal(invalid.status, 400);
+
+  runtime.state.recordMergedPullRequest({
+    ...payload, title: '予約結果', url: 'https://github.com/example/project/pull/41',
+    mergedAt: new Date().toISOString(), method: 'squash', automatic: true,
+    automaticResult: { branchDeleted: false, autoDeleteBranch: false, retargetedBase: null, retargetedNumbers: [], warning: null },
+  });
+  const closed = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers });
+  assert.equal(closed.status, 200);
+  assert.equal(jsonBody(closed).closed, true);
+  const record = runtime.state.mergedPullRequestHistoryForRepo('example', 'project')[0];
+  assert.ok(Number.isFinite(Date.parse(record.mergeResultClosedAt)));
+  const repeated = await request(runtime.info.port, { method: 'POST', path: endpoint, body, headers });
+  assert.equal(repeated.status, 200);
+  assert.equal(jsonBody(repeated).closed, true);
 });
 
 test('既読 API は秘密値と Origin を照合し、初回表示後の変化と新しい判断を返す', async (t) => {
