@@ -245,3 +245,162 @@ for (const [finishEvent, finishedState] of [['PostToolUse', 'resolved'], ['PostT
     assert.deepEqual(saved.plans['session-finish'].decisions.map((decision) => decision.id), ['ask-original']);
   });
 }
+
+for (const [finishEvent, finishedState] of [['PostToolUse', 'resolved'], ['PostToolUseFailure', 'withdrawn']]) {
+  test(`再起動後に同じ呼び出しの古い PreToolUse が届いても、${finishedState} の判断事項は戻らない`, async (t) => {
+    const homeDir = await temporaryHome(t);
+    const resolution = { chosen: ['JSON (推奨)'], note: 'この形式で進める。' };
+    const state = await DashboardState.load(homeDir, { now: NOW });
+    state.addEvent(askEvent('session-late', 'ask-late', 'PreToolUse', NOW));
+    state.addEvent(askEvent('session-late', 'ask-late', finishEvent, NOW + 10, { decisionResolution: resolution }));
+    await state.flushPersistence();
+
+    const restored = await DashboardState.load(homeDir, { now: NOW + 20 });
+    const expected = restored.decisionFor('session-late', 'ask-late');
+    assert.equal(expected.state, finishedState);
+
+    // 遅れて届いた開始の知らせ(元の時刻)と、重複して届いた開始の知らせ(届いた時刻)の両方を確かめる。
+    restored.addEvent(askEvent('session-late', 'ask-late', 'PreToolUse', NOW));
+    assert.deepEqual(restored.decisionFor('session-late', 'ask-late'), expected);
+    restored.addEvent({ session_id: 'session-late', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 30 });
+    assert.deepEqual(restored.decisionFor('session-late', 'ask-late'), expected);
+    restored.addEvent(askEvent('session-late', 'ask-late', 'PreToolUse', NOW + 40));
+    restored.addEvent({ session_id: 'session-late', hook_event_name: 'Stop', hookAt: NOW + 50 });
+
+    const decisions = restored.snapshot().sessions.find((session) => session.session_id === 'session-late').decisions;
+    assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-late', finishedState]]);
+    assert.deepEqual(restored.decisionFor('session-late', 'ask-late'), expected);
+
+    await restored.flushPersistence();
+    const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+    assert.deepEqual(saved.plans['session-late'].decisions.map((decision) => [decision.id, decision.state]), [['ask-late', finishedState]]);
+    assert.deepEqual(saved.plans['session-late'].decisions[0].resolution, expected.resolution);
+  });
+}
+
+test('再起動後に古い PreToolUse の後で同じ呼び出しの終わりが届いたら、その終わりで解決する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-late-open', 'ask-open', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 10 });
+  restored.addEvent(askEvent('session-late-open', 'ask-open', 'PreToolUse', NOW));
+  assert.equal(restored.decisionFor('session-late-open', 'ask-open').state, 'waiting');
+  restored.addEvent(askEvent('session-late-open', 'ask-open', 'PostToolUse', NOW + 20, {
+    decisionResolution: { chosen: ['CSV'], note: '' },
+  }));
+  restored.addEvent({ session_id: 'session-late-open', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 30 });
+  const decision = restored.decisionFor('session-late-open', 'ask-open');
+  assert.equal(decision.state, 'resolved');
+  assert.deepEqual(decision.resolution, { chosen: ['CSV'], note: '' });
+});
+
+test('再起動後にイベントより先に MCP で解決した質問は、古い PreToolUse と出し直しの後も解決済みのまま', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-mcp', 'ask-mcp', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 10 });
+  restored.updateDecision('session-mcp', 'ask-mcp', 'resolved', ['CSV'], 'MCP で解決した。', NOW + 20);
+  restored.addEvent(askEvent('session-mcp', 'ask-mcp', 'PreToolUse', NOW));
+  restored.addEvent({ session_id: 'session-mcp', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 30 });
+  const resolved = restored.decisionFor('session-mcp', 'ask-mcp');
+  assert.equal(resolved.state, 'resolved');
+  assert.deepEqual(resolved.resolution, { chosen: ['CSV'], note: 'MCP で解決した。' });
+
+  restored.addEvent(askEvent('session-mcp', 'ask-again', 'PreToolUse', NOW + 40));
+  assert.deepEqual(restored.decisionFor('session-mcp', 'ask-mcp'), resolved);
+  assert.equal(restored.decisionFor('session-mcp', 'ask-again').state, 'waiting');
+
+  await restored.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  const savedDecision = saved.plans['session-mcp'].decisions.find((decision) => decision.id === 'ask-mcp');
+  assert.equal(savedDecision.state, 'resolved');
+  assert.deepEqual(savedDecision.resolution, resolved.resolution);
+});
+
+test('2 回の再起動の後に元の呼び出しの終わりが遅れて届いても、出し直しで解決した判断事項は戻らない', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-twice', 'ask-original', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const first = await DashboardState.load(homeDir, { now: NOW + 10 });
+  first.addEvent(askEvent('session-twice', 'ask-retry', 'PreToolUse', NOW + 20));
+  first.addEvent(askEvent('session-twice', 'ask-retry', 'PostToolUse', NOW + 30, {
+    decisionResolution: { chosen: ['JSON (推奨)'], note: '' },
+  }));
+  await first.flushPersistence();
+
+  const second = await DashboardState.load(homeDir, { now: NOW + 40 });
+  second.addEvent(askEvent('session-twice', 'ask-retry', 'PreToolUse', NOW + 20));
+  second.addEvent(askEvent('session-twice', 'ask-original', 'PreToolUse', NOW));
+  second.addEvent(askEvent('session-twice', 'ask-original', 'PostToolUseFailure', NOW + 5));
+  second.addEvent({ session_id: 'session-twice', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 50 });
+
+  const decisions = second.snapshot().sessions.find((session) => session.session_id === 'session-twice').decisions;
+  assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  await second.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(saved.plans['session-twice'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+});
+
+test('2 回の再起動の後に、開始の届いていない出し直しの終わりが重複して届いても、判断事項は戻らない', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-dup-post', 'ask-original', 'PreToolUse', NOW));
+  await state.flushPersistence();
+
+  const first = await DashboardState.load(homeDir, { now: NOW + 10 });
+  first.addEvent(askEvent('session-dup-post', 'ask-retry', 'PreToolUse', NOW + 20));
+  first.addEvent(askEvent('session-dup-post', 'ask-retry', 'PostToolUse', NOW + 30, {
+    decisionResolution: { chosen: ['JSON (推奨)'], note: '' },
+  }));
+  await first.flushPersistence();
+
+  const second = await DashboardState.load(homeDir, { now: NOW + 40 });
+  second.addEvent(askEvent('session-dup-post', 'ask-original', 'PreToolUse', NOW));
+  second.addEvent(askEvent('session-dup-post', 'ask-original', 'PostToolUseFailure', NOW + 5));
+  second.addEvent(askEvent('session-dup-post', 'ask-retry', 'PostToolUse', NOW + 30, {
+    decisionResolution: { chosen: ['JSON (推奨)'], note: '' },
+  }));
+  second.addEvent({ session_id: 'session-dup-post', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 50 });
+
+  const decisions = second.snapshot().sessions.find((session) => session.session_id === 'session-dup-post').decisions;
+  assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  await second.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(saved.plans['session-dup-post'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+});
+
+test('出し直しの呼び出しで解決した後に再起動し、同じ出し直しの PreToolUse が新しい時刻で届いても、判断事項は戻らない', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const resolution = { chosen: ['JSON (推奨)'], note: '出し直しで解決した。' };
+  const state = await DashboardState.load(homeDir, { now: NOW });
+  state.addEvent(askEvent('session-retry-dup', 'ask-original', 'PreToolUse', NOW));
+  state.addEvent(askEvent('session-retry-dup', 'ask-retry', 'PreToolUse', NOW + 10));
+  assert.equal(state.decisionIdForToolUse('session-retry-dup', 'ask-retry'), 'ask-original');
+  state.addEvent(askEvent('session-retry-dup', 'ask-retry', 'PostToolUse', NOW + 20, { decisionResolution: resolution }));
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: NOW + 30 });
+  const expected = restored.decisionFor('session-retry-dup', 'ask-original');
+  assert.equal(expected.state, 'resolved');
+  restored.addEvent(askEvent('session-retry-dup', 'ask-retry', 'PreToolUse', NOW + 40));
+  restored.addEvent({ session_id: 'session-retry-dup', hook_event_name: 'UserPromptSubmit', hookAt: NOW + 50 });
+
+  const decisions = restored.snapshot().sessions.find((session) => session.session_id === 'session-retry-dup').decisions;
+  assert.deepEqual(decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  assert.deepEqual(restored.decisionFor('session-retry-dup', 'ask-original').resolution, resolution);
+
+  // 最初の呼び出しの開始が新しい時刻で届いても、同じく戻らない。
+  restored.addEvent(askEvent('session-retry-dup', 'ask-original', 'PreToolUse', NOW + 60));
+  assert.equal(restored.decisionFor('session-retry-dup', 'ask-original').state, 'resolved');
+
+  await restored.flushPersistence();
+  const saved = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(saved.plans['session-retry-dup'].decisions.map((decision) => [decision.id, decision.state]), [['ask-original', 'resolved']]);
+  assert.deepEqual(saved.plans['session-retry-dup'].decisions[0].resolution, resolution);
+});

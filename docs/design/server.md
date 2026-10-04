@@ -234,6 +234,10 @@ AskUserQuestion は `tool_use_id` を id にし、1 回の呼び出しを質問�
 推奨は、単一選択の質問で label に「(推奨)」または「(Recommended)」(括弧は全角・半角を許容し、英語の大文字小文字は区別しない)を含む選択肢、または MCP の `cockpit_add_decision` で `recommended: true` を明示した選択肢がちょうど 1 つのときに付け、description は判定に使わない。
 同じセッションに未解決の同じ質問がある場合は、その id に後続の tool_use_id を結び付ける。
 PostToolUse は `resolved`、PostToolUseFailure は `withdrawn` にし、どちらも `resolvedAt` を記録する。
+終わった判断事項に、最初の呼び出しか判断事項を終えた呼び出し(`finishedByToolUseId` に保存し、waiting に戻っても残す)の PreToolUse か、終わった時刻より古い PreToolUse が届いても、状態と解決の内容を変えない(遅れて届いたか重複した開始の知らせのため)。
+常駐サーバーの再起動の前に終わった判断事項と、イベントから作る前に MCP で終えた判断事項は、終わりのイベントがメモリーに無いので、同じ呼び出しの PreToolUse から作り直さず保存済みの状態を保つ。
+ただし、開始と終わりがどちらもメモリーにある呼び出し(結び付いた出し直しの呼び出しを含む)で、終わりの時刻が保存済みの終わりの時刻以降のときは、イベントから作り直す。
+MCP で終えた判断事項は `finishedByToolUseId` を書き換えないので、終えた時刻より新しい時刻で、結び付いた別の呼び出しの開始が重複して届くと、waiting に戻りうる。
 サブエージェントの `agent_id` があるイベントは判断事項にしない。
 
 タスクは `[{title, state, criteria: [{text, met}]}]` の配列で持つ。

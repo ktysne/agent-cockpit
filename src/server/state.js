@@ -144,7 +144,8 @@ function validStoredPlan(plan) {
       typeof decision.id === 'string' && typeof decision.title === 'string' && typeof decision.state === 'string' &&
       Array.isArray(decision.questions) && decision.questions.every((question) => isRecord(question) && Array.isArray(question.options)) &&
       validTimestamp(decision.createdAt) && validTimestamp(decision.updatedAt) &&
-      (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)));
+      (decision.provisionalAt === undefined || validTimestamp(decision.provisionalAt)) &&
+      (decision.finishedByToolUseId === undefined || typeof decision.finishedByToolUseId === 'string'));
 }
 
 function pullRequestRecordKey(owner, repo, number) {
@@ -705,13 +706,39 @@ function latestWaitableCodex(session, parentAgentId, definition, runId) {
     .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))[0] || null;
 }
 
+function isFinishedAskDecision(decision) {
+  return ['resolved', 'withdrawn'].includes(decision?.state);
+}
+
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
+  // 判断事項ごとに、メモリーにある終わりのイベントの最も新しい時刻。出し直した呼び出しの終わりも数える。
+  // 開始がメモリーに無い呼び出しの終わりは、作り直しで再現できないので数えない。
+  const startedAskToolUseIds = new Set(entries.flatMap(({ event }) => (
+    event.hook_event_name === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && !event.agent_id && event.tool_use_id
+      ? [event.tool_use_id]
+      : []
+  )));
+  const latestAskFinishAt = new Map();
+  for (const { event } of entries) {
+    if (!['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) continue;
+    if (event.tool_name !== 'AskUserQuestion' || event.agent_id || !startedAskToolUseIds.has(event.tool_use_id)) continue;
+    const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
+    latestAskFinishAt.set(decisionId, Math.max(latestAskFinishAt.get(decisionId) ?? -Infinity, event.hookAt));
+  }
+  const storedAskDecisions = new Map((askDecisionState.decisions || []).map((decision) => [decision.id, decision]));
+  const finishedOutsideEventsIds = new Set(askDecisionState.finishedOutsideEventsIds || []);
+  // 再起動の前か MCP で終わった判断事項は、その終わりのイベントがメモリーに無いので、作り直すと巻き戻る。保存済みの状態を保つ。
+  // 保存済みの終わりより古い終わりのイベントは、遅れて届いた別の呼び出しの終わりなので、保存済みの状態を説明しない。
   const directlyRecreatedAskDecisionIds = new Set(entries.filter(({ sequence }) => sequence < beforeSequence).flatMap(({ event }) => {
     if (event.hook_event_name !== 'PreToolUse' || event.tool_name !== 'AskUserQuestion' || event.agent_id || !event.tool_use_id) return [];
     const decisionId = askDecisionState.bindings?.[event.tool_use_id] || event.tool_use_id;
-    return decisionId === event.tool_use_id ? [decisionId] : [];
+    if (decisionId !== event.tool_use_id) return [];
+    const stored = storedAskDecisions.get(decisionId);
+    const keepStored = isFinishedAskDecision(stored) && finishedOutsideEventsIds.has(decisionId) &&
+      !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt));
+    return keepStored ? [] : [decisionId];
   }));
   const initialAskDecisionState = {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
@@ -848,7 +875,15 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         const existing = boundDecision || session.decisions.find((decision) => (
           ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
         ));
-        if (existing) {
+        // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
+        // 遅れて届いたか重複なので、状態と解決の内容を変えない。
+        const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
+          existing.id === toolUseId || existing.finishedByToolUseId === toolUseId ||
+          event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
+        );
+        if (staleStart) {
+          session.decisionBindings[toolUseId] = existing.id;
+        } else if (existing) {
           existing.state = 'waiting';
           existing.updatedAt = isoTime(event.hookAt);
           existing.resolvedAt = null;
@@ -972,6 +1007,9 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
           decision.resolution = eventName === 'PostToolUse'
             ? event.decisionResolution || { chosen: [], note: '' }
             : null;
+          // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
+          // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
+          decision.finishedByToolUseId = toolUseId;
         }
       }
       if (!agentId) session.stopped = false;
@@ -1092,6 +1130,8 @@ class DashboardState {
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.askDecisionBindings = new Map();
+    // 読み込んだ時点で終わっていたか、イベントから作る前に MCP で終えた離席中の質問の判断事項。終わりのイベントはメモリーに無い。
+    this.finishedOutsideEventsAskDecisionIds = new Map();
     this.decisionOverrides = new Map();
     this.decisionLifecycles = new Map();
     this.estimates = new Map();
@@ -1157,6 +1197,11 @@ class DashboardState {
     this.display = store.display;
     this.plans = store.plans;
     this.askDecisionBindings = store.askDecisionBindings;
+    this.finishedOutsideEventsAskDecisionIds = new Map([...this.plans].flatMap(([sessionId, plan]) => {
+      const ids = (plan.decisions || [])
+        .filter((decision) => decision.source === 'ask' && isFinishedAskDecision(decision)).map((decision) => decision.id);
+      return ids.length ? [[sessionId, new Set(ids)]] : [];
+    }));
     this.seenAtByProduct = store.seenAtByProduct;
     this.ciFailures = store.ciFailures;
     this.decisionLifecycles = store.decisionLifecycles;
@@ -1300,6 +1345,7 @@ class DashboardState {
   deleteStoredSession(sessionId) {
     this.plans.delete(sessionId);
     this.askDecisionBindings.delete(sessionId);
+    this.finishedOutsideEventsAskDecisionIds.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
     this.pullRequests.delete(sessionId);
@@ -1928,6 +1974,7 @@ class DashboardState {
       decisions: (this.plans.get(sessionId)?.decisions || [])
         .filter((decision) => decision.source === 'ask').map(cloneDecision),
       bindings: Object.fromEntries(this.askDecisionBindings.get(sessionId) || []),
+      finishedOutsideEventsIds: [...(this.finishedOutsideEventsAskDecisionIds.get(sessionId) || [])],
     };
   }
 
@@ -2237,6 +2284,12 @@ class DashboardState {
     const stored = plan?.decisions.find((item) => item.id === decision.id);
     const hasEventDecision = this.sessions.get(sessionId)?.decisions.some((item) => item.id === decision.id) === true;
     if (stored) Object.assign(stored, updated);
+    if (stored?.source === 'ask' && !hasEventDecision && isFinishedAskDecision(updated)) {
+      // 上書きを残さないので、後から届いた古い開始の知らせで作り直して巻き戻さないよう覚えておく。
+      const ids = this.finishedOutsideEventsAskDecisionIds.get(sessionId) || new Set();
+      ids.add(decision.id);
+      this.finishedOutsideEventsAskDecisionIds.set(sessionId, ids);
+    }
     if (!stored || hasEventDecision) {
       const overrides = this.decisionOverrides.get(sessionId) || new Map();
       overrides.set(decision.id, {
