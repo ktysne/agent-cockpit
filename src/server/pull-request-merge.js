@@ -564,7 +564,10 @@ class PullRequestMergeManager {
       });
     }
     const stackedPullRequests = [...stackedByNumber.values()].sort((left, right) => left.number - right.number);
-    const retargetedNumbers = confirmedIntent?.retargetedNumbers || [];
+    // 予約は条件待ちに戻ってから再実行されることがあるので、前の実行で付け替えた記録も結果に含める。
+    const retargetedNumbers = confirmedIntent
+      ? [...new Set([...(confirmedIntent.retargetedNumbers || []), ...retargeted.map((record) => record.number)])].sort((left, right) => left - right)
+      : [];
     let warning = null;
     let branchDeleted = false;
     const deleteBranch = repositoryState?.autoDeleteBranch !== true

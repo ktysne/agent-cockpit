@@ -688,6 +688,16 @@ test('子 PR の付け替え後は同じ SHA の CI 再実行中を待って予�
   assert.equal(fixture.github.openPullRequests.find((pullRequest) => pullRequest.number === 2).baseRefName, 'main');
   assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+
+  // CI が通った後の再実行でマージしても、前の実行で付け替えた子 PR を結果に含める。
+  fixture.control.afterEdit = null;
+  fixture.github.openPullRequests.find((pullRequest) => pullRequest.number === 1).statusCheckRollup = [{ state: 'SUCCESS', status: 'COMPLETED', conclusion: 'SUCCESS' }];
+  await fixture.tracker.refreshRepo('example', 'project');
+
+  assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
+  const result = fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0].automaticResult;
+  assert.deepEqual(result.retargetedNumbers, [2]);
+  assert.equal(result.retargetedBase, 'main');
 });
 
 test('予約マージがキューに入ったら予約を消し、後のマージを方式不明として扱う', async (t) => {
