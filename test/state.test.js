@@ -1512,6 +1512,27 @@ test('Codex を起動した呼び出しの引数に別の背景タスクの出�
   assert.equal(agents.filter((agent) => agent.active === true).length, 1);
 });
 
+test('実行 ID の無い結果で失敗した Codex の起動が重複して届いても、背景で稼働中の別の Codex を終了にしない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  launchBackgroundCodexInMain(state, 'bg-fail', 'bash-a', 'taska', 1);
+  state.addEvent({
+    session_id: 'bg-fail', hook_event_name: 'PreToolUse', hookAt: 3,
+    tool_name: 'Bash', tool_use_id: 'bash-b', summary: 'npm run review:codex', codexReviewDefinition: 'codex-review',
+  }, { codexAgentDefinition: { model: 'gpt-review', effort: 'low' } });
+  for (const hookAt of [4, 4]) {
+    state.addEvent({
+      session_id: 'bg-fail', hook_event_name: 'PostToolUseFailure', hookAt,
+      tool_name: 'Bash', tool_use_id: 'bash-b', codexOutput: { resultLine: 'codex-agent: result=failed exit=3' },
+    });
+  }
+  const agents = state.snapshot().sessions[0].agents.filter((agent) => agent.agent_type === 'codex-review');
+  const running = agents.filter((agent) => agent.active === true);
+  assert.equal(agents.length, 2);
+  assert.equal(running.length, 1);
+  assert.equal(running[0].unavailable, '');
+});
+
 test('背景タスクの途中の出力に run= の行があれば、行に実行 ID を記録して後の結果行を実行 ID で照合する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
