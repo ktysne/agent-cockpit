@@ -1,0 +1,18 @@
+{
+  "name": "agents",
+  "target": "#routing",
+  "width": 1636,
+  "height": 64,
+  "parts": [
+    {
+      "key": "routing.agents",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 457,
+        "height": 64
+      },
+      "visible": true
+    }
+  ]
+}

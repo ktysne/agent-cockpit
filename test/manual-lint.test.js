@@ -134,7 +134,7 @@ test('manual/ の外を指す相対リンクを検出する', t => {
   const fixture = makeFixture(t);
   writeFile(fixture.manualRoot, 'pages/index.html', fixture.indexSource.replace(
     '<a href="#help-index">ページ内</a>',
-    '<a href="#help-index">ページ内</a><a href="../docs/usage.md">外部資料</a>',
+    '<a href="#help-index">ページ内</a><a href="../docs/setup.md">外部資料</a>',
   ));
   const errors = errorsFor(fixture);
   assert.ok(errors.some(error => error.includes('manual/pages/index.html') && error.includes('manual/ の外')));

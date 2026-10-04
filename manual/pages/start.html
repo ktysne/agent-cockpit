@@ -1,0 +1,83 @@
+<section class="section">
+  <h1>使い始める</h1>
+  <p class="lead">Agent Cockpit は、導入が済んでいれば、Claude Code のセッションを開くと自動で動き始めます。
+  このページでは、ダッシュボードの開き方、起動と終了、連携ツールの有無で変わる表示を説明します。
+  導入の手順は、<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>にあります。</p>
+
+  <h2 id="start-open">ダッシュボードを開く</h2>
+  <p>ダッシュボードは、次のどちらかで開きます。</p>
+  <ul>
+    <li>タスクトレイから開く。Windows では、デスクトップかスタートメニューの「Agent Cockpit」のショートカットで、専用のウィンドウが開きます(<a href="tray.html">タスクトレイ</a>)</li>
+    <li>ブラウザーで <code>http://127.0.0.1:47821/</code> を開く。ポートを変えているときは、変えた値を使います(<a href="server.html#server-config">ポートと保存先を変える</a>)</li>
+  </ul>
+  <p>セッションを開始したときにも、Claude Code に、ダッシュボードの URL が <code>Agent Cockpit: http://127.0.0.1:47821/</code> の形で伝わります。</p>
+  <p>ダッシュボードは、あなたの PC の中だけで開けます。
+  別の PC のブラウザーからは、開けません。</p>
+
+  <h2 id="start-first">最初に開いたとき</h2>
+  <p>導入した直後や、セッションを開いていないときは、一覧にセッションがありません。
+  Claude Code でセッションを開始すると、一覧に出ます。</p>
+  <figure class="guide-map" id="start-empty-map" data-shot="list-empty/empty" data-alt="セッションが無いときのダッシュボード。表示モードの切り替えの下に、表示するセッションがありません、Claude Code でセッションを開始すると、ここに表示されますと出ている">
+    <ol class="guide-list">
+      <li data-part="empty.mode"><b>表示モードの切り替え</b>：セッションが無くても出ます(<a href="screen.html#screen-modes">プロダクト別と種類別の違い</a>)。</li>
+      <li data-part="empty.message" data-mark="frame" data-place="left"><b>案内の文</b>：セッションが 1 つも無いときの表示です。</li>
+    </ol>
+  </figure>
+  <p>同じ場所に、<span class="ui">終わったものを隠しています。下の「表示する」から表示できます。</span> や、<span class="ui">更新の無いセッションを隠しています。下の「表示する」から表示できます。</span> と出ることもあります。
+  このときは、セッションはあるのに、隠しています(<a href="settings.html#settings-hide-finished">終わったものを表示しない</a>、<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
+  <p>導入の後に開いたセッションから、一覧に出ます。
+  導入の前から開いていたセッションは、フックの登録を読み込んでいないので、状態が分かりません(<a href="work.html#work-unknown">状態不明のセッション</a>)。新しく開き直してください。
+  それでも出ないときは、<a href="trouble.html#trouble-sessions">セッションが一覧に出ない</a>を見てください。</p>
+
+  <h2 id="start-run">起動と終了</h2>
+  <p>常駐サーバーは、セッションを開始するとき、フックが自動で起動します。
+  手で起動する必要はありません。</p>
+  <p>手で起動するときは、リポジトリのルートで次を実行します。</p>
+  <pre><code>npm start</code></pre>
+  <p>手で起動した常駐サーバーは、起動した端末で <code>Ctrl+C</code> を押すと終了します。
+  フックが起動した常駐サーバーは、セッションもダッシュボードも閉じたまま 30 分たつと、自動で終了します。
+  次にセッションを開くと、起動し直します(<a href="server.html#server-life">起動と寿命</a>)。</p>
+  <p>ダッシュボードのウィンドウやブラウザーのタブを閉じても、常駐サーバーは止まりません。
+  再起動するときは、タスクトレイのメニューを使います(<a href="tray.html#tray-restart">常駐サーバーを再起動する</a>)。</p>
+
+  <h2 id="start-integrations">連携ツールの有無で変わる表示</h2>
+  <p>Agent Cockpit は、単独で使えます。
+  次の 3 つのツールを入れていると、表示と操作が増えます。
+  入れていなくても、エラーや警告は出ません。
+  入れたり外したりした後は、画面を開き直さなくても、遅くとも 1 分ほどで表示が変わります。</p>
+  <ul>
+    <li><b>GitHub CLI(<code>gh</code>)</b>：セッションが作った PR を、スタックの形で、CI やレビューの状態と一緒に表示します。スタックの一番下の PR を、画面でマージできます。<code>gh</code> が使えないと、PR の状態を取得できず、登録した PR の欄に赤いエラーが出ます(<a href="pull-requests.html#pr-fetch-error">GitHub CLI が使えないとき</a>)</li>
+    <li><b>claude-codex-bridge</b>：サブエージェントを、Codex と Claude のどちらで動かすかを選べます。<span class="ui">サブエージェント</span> の経路の段と、サブエージェントの行の経路の札、Codex のモデルの表示が出ます(<a href="routing.html">経路の設定</a>、<a href="work.html#work-agent-route">経路の札</a>)</li>
+    <li><b>ai-cross-review</b>：PR のカードにクロスレビューの往復と結論が出て、レビュー収束後マージの予約と、レビュー不要の記録ができます。<span class="ui">クロスレビュー</span> の経路の段も出ます(<a href="pull-requests.html#pr-cross-review">クロスレビューの行</a>、<a href="routing.html">経路の設定</a>)</li>
+  </ul>
+  <p>連携ツールそのものの導入は、それぞれのツールのドキュメントに従ってください。
+  Agent Cockpit 側に必要な設定は、導入手順書に、ツールごとにまとめています。</p>
+  <details class="more">
+    <summary>連携ツールを見分ける方法の詳細</summary>
+    <ul>
+      <li>GitHub CLI：PR の取得のたびに <code>gh</code> を実行して、使えたかどうかが分かります。常駐サーバーを起動したプロセスの <code>PATH</code> から探します</li>
+      <li>claude-codex-bridge：Claude のホーム(<code>CLAUDE_CONFIG_DIR</code>、無ければ <code>~/.claude</code>)か <code>~/.claude</code> の <code>tools/</code> に、<code>codex-agent.sh</code> があるかで判断します</li>
+      <li>ai-cross-review：画面が知っているセッションの作業ディレクトリのどれかで、作業ツリーのルートに <code>tools/cross-review.js</code> があるかで判断します。リポジトリごとに入れるツールなので、入れていないリポジトリの PR は、クロスレビューを使っていないとみなして、レビュー不要と表示します</li>
+    </ul>
+  </details>
+
+  <h2 id="start-hooks">セッションとのつながり</h2>
+  <p>Agent Cockpit は、Claude Code のフックと、MCP サーバーと、スキルでセッションとつながります。
+  導入の手順書の手順で登録します。</p>
+  <ul>
+    <li>フック：セッションの出来事(ツールの実行、サブエージェントの開始と終了、許可待ちなど)を常駐サーバーへ送ります。回答や離席中の指示を、セッションへ届けるのもフックです</li>
+    <li>MCP サーバー(<code>agent-cockpit</code>)：メインセッションが、タスクと完了条件、判断事項、PR を、ダッシュボードに登録するためのツールを持ちます</li>
+    <li>スキル(<code>agent-cockpit</code>)：メインセッションに、これらのツールをいつ、どう使うかを教えます。<a href="https://github.com/ktysne/agent-cockpit/blob/main/skills/agent-cockpit/SKILL.md">スキルの本文</a>に書いてあります</li>
+  </ul>
+  <p>新しく登録したものは、新しく開いたセッションから効きます。
+  開いたままのセッションには、反映されません。</p>
+  <details class="more">
+    <summary>フックが伝えること、送る情報の詳細</summary>
+    <ul>
+      <li>セッションの開始時と、プロンプトを送るたびに、フックは、作業を始めるときにタスクと完了条件を <code>cockpit_set_tasks</code> で登録するよう、メインセッションへ伝えます</li>
+      <li>タスクが登録されないまま作業が進むと、ツールの実行がひと区切りしたところで、登録を促します(メインのツールの実行が 5 回に達したとき、またはタスクの無いままサブエージェントを起動したとき)。サブエージェントが終わった後、10 分以上タスクが書き直されていないときも促します。促すのは、10 分に 1 回までです</li>
+      <li>離席中は、開発者に尋ねずに推奨を適用して作業を続けるよう、フックがセッションに伝えます(<a href="away.html#away-toggle">離席中の切り替え</a>)</li>
+      <li>ツールの入力は、要約だけを送ります。コマンドとファイルのパスで、80 文字を超えるときは切ります(<a href="work.html#work-main">メインの作業行</a>)</li>
+    </ul>
+  </details>
+</section>

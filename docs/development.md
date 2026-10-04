@@ -1,6 +1,6 @@
 # agent-cockpit の開発
 
-agent-cockpit 自体を開発するときの入口です。利用者向けの導入は [setup.md](setup.md)、画面と機能は [usage.md](usage.md) にあります。
+agent-cockpit 自体を開発するときの入口です。利用者向けの導入は [setup.md](setup.md)、画面と機能は、常駐サーバーが `/manual/` で配る利用者向けマニュアルにあります。
 
 ## 最初に読むもの
 
@@ -105,5 +105,5 @@ powershell.exe -NoProfile -File ".\tools\make-icons.ps1"
 ## 文書を直すとき
 
 - 導入の手順(フック、MCP サーバー、スキル、連携ツールごとの設定と確認)を変えたら [setup.md](setup.md) を直します。
-- 画面や機能の挙動を変えたら [usage.md](usage.md) と [design/server.md](design/server.md) を直します。
+- 画面や機能の挙動を変えたら、マニュアルの原稿(`manual/pages/`)と [design/server.md](design/server.md) を直します。画面の見た目が変わるときは、撮影し直して `manual/dist/` も組み立て直します(上の「マニュアル」)。
 - 連携ツールや概要が変わったら [README.md](../README.md) を直します。

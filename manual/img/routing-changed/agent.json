@@ -1,0 +1,18 @@
+{
+  "name": "agent",
+  "target": ".agent-list > .agent-row:nth-child(1)",
+  "width": 1524,
+  "height": 126,
+  "parts": [
+    {
+      "key": "changed.tag",
+      "bounds": {
+        "x": 300,
+        "y": 69,
+        "width": 229,
+        "height": 40
+      },
+      "visible": true
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "title": "経路の設定(サブエージェントだけ)",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 900
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": false
+  },
+  "steps": [
+    {
+      "do": "screenshot",
+      "name": "agents",
+      "target": "#routing",
+      "parts": {
+        "routing.agents": [
+          "#routing .rgroup > .rrow:nth-child(1) .rlabel",
+          "#routing .rgroup > .rrow:nth-child(1) .seg"
+        ]
+      }
+    }
+  ]
+}

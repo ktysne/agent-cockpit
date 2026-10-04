@@ -1,0 +1,108 @@
+{
+  "name": "dialog",
+  "target": null,
+  "width": 1700,
+  "height": 2400,
+  "parts": [
+    {
+      "key": "settings.theme",
+      "bounds": {
+        "x": 474,
+        "y": 305,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.since-seen",
+      "bounds": {
+        "x": 474,
+        "y": 377,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.mergeable",
+      "bounds": {
+        "x": 474,
+        "y": 539,
+        "width": 752,
+        "height": 524
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.merge-after",
+      "bounds": {
+        "x": 474,
+        "y": 1150,
+        "width": 752,
+        "height": 45
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.hide-finished",
+      "bounds": {
+        "x": 474,
+        "y": 1194,
+        "width": 752,
+        "height": 45
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.long-wait",
+      "bounds": {
+        "x": 474,
+        "y": 1239,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.idle",
+      "bounds": {
+        "x": 474,
+        "y": 1311,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.away-wait",
+      "bounds": {
+        "x": 474,
+        "y": 1383,
+        "width": 752,
+        "height": 72
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.order",
+      "bounds": {
+        "x": 474,
+        "y": 1483,
+        "width": 752,
+        "height": 662
+      },
+      "visible": true
+    },
+    {
+      "key": "settings.close",
+      "bounds": {
+        "x": 1131,
+        "y": 2203,
+        "width": 121,
+        "height": 72
+      },
+      "visible": true
+    }
+  ]
+}

@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>タスクトレイ | Agent Cockpit マニュアル</title>
+<link rel="stylesheet" href="assets/manual.css">
+<script>window.manualHelpAnchors = {};</script>
+<script defer src="assets/search-index.js"></script>
+<script defer src="assets/manual.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main-content">本文へ</a>
+<header class="site-header">
+  <a class="brand" href="index.html">Agent Cockpit</a>
+  <span class="brand-sub">利用者向けマニュアル</span>
+  <search>
+  <form class="manual-search" autocomplete="off" data-site-root="./">
+    <label class="sr-only" for="manual-search-input">マニュアルを検索</label>
+    <input id="manual-search-input" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="manual-search-results" aria-describedby="manual-search-status" placeholder="マニュアルを検索">
+    <ul id="manual-search-results" class="manual-search-results" role="listbox" aria-label="検索結果" hidden></ul>
+    <div id="manual-search-status" class="sr-only" role="status" aria-live="polite"></div>
+  </form>
+  </search>
+</header>
+<div class="page-wrap">
+  <div class="page-columns">
+    <nav class="toc pages-toc" aria-label="ページ一覧">
+      <h2>ページ一覧</h2>
+      <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html" aria-current="page">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+      </ol>
+    </nav>
+    <main id="main-content" tabindex="-1">
+      <details class="toc mobile-pages-toc">
+        <summary>ページ一覧</summary>
+        <ol class="nav-groups">
+      <li class="nav-top"><a href="index.html">Agent Cockpit でできること</a></li>
+      <li class="nav-group"><h3 class="nav-group-title">はじめに</h3>
+        <ol class="nav-pages">
+        <li><a href="start.html">使い始める</a></li>
+        <li><a href="screen.html">画面の見方</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">状況を見る</h3>
+        <ol class="nav-pages">
+        <li><a href="work.html">タスクと今やっていること</a></li>
+        <li><a href="permission.html">許可待ち</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">判断と回答</h3>
+        <ol class="nav-pages">
+        <li><a href="decisions.html">判断事項と回答</a></li>
+        <li><a href="away.html">離席中</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">PR</h3>
+        <ol class="nav-pages">
+        <li><a href="pull-requests.html">PR とマージ</a></li>
+        </ol>
+      </li>
+      <li class="nav-group"><h3 class="nav-group-title">設定と運用</h3>
+        <ol class="nav-pages">
+        <li><a href="routing.html">経路の設定</a></li>
+        <li><a href="settings.html">表示の設定</a></li>
+        <li><a href="tray.html" aria-current="page">タスクトレイ</a></li>
+        <li><a href="server.html">常駐サーバーと保存されるもの</a></li>
+        <li><a href="trouble.html">困ったとき</a></li>
+        </ol>
+      </li>
+        </ol>
+      </details>
+      <details class="toc mobile-page-toc">
+        <summary>このページの内容</summary>
+        <ol>        <li><a href="#tray-start">タスクトレイを起動する</a></li>
+        <li><a href="#tray-dashboard">ダッシュボードのウィンドウ</a></li>
+        <li><a href="#tray-icon">アイコンと吹き出し</a></li>
+        <li><a href="#tray-notify">待ち件数の通知</a></li>
+        <li><a href="#tray-menu">メニュー</a></li>
+        <li><a href="#tray-shortcut">ショートカットの作成と自動起動</a></li>
+        <li><a href="#tray-restart">常駐サーバーを再起動する</a></li></ol>
+      </details>
+<section class="section">
+  <h1>タスクトレイ</h1>
+  <p class="lead">タスクトレイは、Windows で Agent Cockpit を使うための常駐アイコンです。
+  ダッシュボードを専用のウィンドウで開き、許可待ちと判断待ちの数をアイコンと通知で知らせます。
+  このページでは、起動、アイコンと通知、メニュー、ショートカットの作り方、常駐サーバーの再起動を説明します。</p>
+  <div class="note">メニューと通知は Windows 標準の表示で、ダッシュボードの画面とは別のものです。このページには画面の図を付けず、文章で説明します。</div>
+
+  <h2 id="tray-start">タスクトレイを起動する</h2>
+  <p>タスクトレイは、次のどれかで起動します。
+  どれも、PowerShell の実行ポリシーが <code>RemoteSigned</code> 以上であることが前提です。</p>
+  <ul>
+    <li>デスクトップかスタートメニューの「Agent Cockpit」のショートカット。タスクトレイを起動して、ダッシュボードも開きます。黒いウィンドウは出ません(<a href="#tray-shortcut">ショートカットの作成と自動起動</a>)</li>
+    <li>リポジトリ直下の <code>start-tray.cmd</code> をダブルクリックします。同じくダッシュボードも開きますが、起動の瞬間に黒いウィンドウが一瞬出ます</li>
+  </ul>
+  <p>すでにタスクトレイが動いているときは、2 つ目は作らずに、ダッシュボードのウィンドウを開くだけで終わります。
+  タスクトレイは 1 つしか動きません。</p>
+  <p>起動すると、タスクバーの通知領域にアイコンが出ます。
+  ダッシュボードを開くとき、常駐サーバーが動いていなければ、起動します(<a href="server.html#server-life">起動と寿命</a>)。
+  ダッシュボードを開かないスタートアップのショートカットで起動したときは、セッションを開くかダッシュボードを開くまで、アイコンは灰色の未接続です。</p>
+  <details class="more">
+    <summary>起動の詳細</summary>
+    <ul>
+      <li>ショートカットと <code>start-tray.cmd</code> は、<code>-OpenDashboard</code> を付けてタスクトレイを起動します。スタートアップに置くショートカットだけは、これを付けません(<a href="#tray-shortcut">ショートカットの作成と自動起動</a>)</li>
+      <li>タスクトレイの二重起動は、Windows のミューテックス(<code>Local\AgentCockpitTray</code>)で防いでいます</li>
+      <li>ダッシュボードを開くときに、常駐サーバーの起動を待つのは 5 秒までです。この間に起動できなければ、「常駐サーバーを起動できませんでした。」と通知します</li>
+    </ul>
+  </details>
+
+  <h2 id="tray-dashboard">ダッシュボードのウィンドウ</h2>
+  <p>ダッシュボードは、Microsoft Edge のアプリウィンドウで開きます。
+  アドレスバーの無い、専用のウィンドウです。
+  Edge は、このためのプロファイルを使います。保存先の <code>browser/</code> に置くので、普段の Edge の設定や拡張機能は混ざりません。</p>
+  <ul>
+    <li>ダッシュボードのウィンドウがすでに開いているときは、新しく作らず、そのウィンドウを前面に出します</li>
+    <li>ダッシュボードを閉じても、タスクトレイは動き続けます</li>
+    <li>ウィンドウの中の、PR や CI などの GitHub へのリンクは、OS の既定のブラウザーで開きます</li>
+  </ul>
+  <p>Edge が見つからないときは 「Microsoft Edge が見つかりません」と、Node.js が見つからないときは 「Node.js が見つかりません」と通知します。
+  普段のブラウザーでは、<code>http://127.0.0.1:47821/</code> からいつでも開けます(<a href="start.html#start-open">ダッシュボードを開く</a>)。</p>
+  <p>専用のプロファイルは、普段のブラウザーとは別なので、<span class="ui">配色</span> と <span class="ui">前回見てから</span> の設定は、別に持ちます(<a href="settings.html#settings-storage">設定の保存先</a>)。</p>
+
+  <h2 id="tray-icon">アイコンと吹き出し</h2>
+  <p>アイコンは、常駐サーバーの状態を 5 秒ごとに取り直して、見た目を変えます。</p>
+  <ul>
+    <li>灰色：常駐サーバーに接続できていません</li>
+    <li>右上の橙の点：許可待ちか、回答を待っている判断事項があります</li>
+    <li>左下の紫の点：離席中です</li>
+  </ul>
+  <p>アイコンにマウスを載せると、吹き出しに「許可待ち 2 件、判断待ち 1 件」の形で件数が出ます。
+  離席中のときは、続けて「(離席中)」が付きます。
+  常駐サーバーに接続できないときは、「サーバーに未接続」と出ます。</p>
+  <p>判断待ちの数は、画面の件数の札とは少し違います。
+  止めて待っている判断事項のうち、まだ回答を送っていないものだけを数えます。
+  回答を送った後のものと、仮に推奨案で進めているものは、数えません。</p>
+
+  <h2 id="tray-notify">待ち件数の通知</h2>
+  <p>許可待ちか判断待ちが新しく増えたとき、Windows の通知を出せます。
+  通知を押すと、ダッシュボードが開きます。</p>
+  <ul>
+    <li>初めて起動したときに、通知を出すかどうかを尋ねます。ダイアログの選択の初期値は「いいえ」です</li>
+    <li>あとからは、メニューの「待ち件数を通知する」のチェックで切り替えます。設定は、保存先の <code>tray.json</code> に保存します</li>
+    <li>通知するのは、新しく増えた許可待ちと判断待ちです。件数ではなく 1 件ずつ見分けるので、1 件が解消して別の 1 件が増えたときも通知します</li>
+    <li>タスクトレイを起動した時点で、すでにあったものは通知しません</li>
+  </ul>
+  <p>常駐サーバーやダッシュボードを開けなかったときの通知は、この設定にかかわらず出ます。
+  設定を保存できなかったときは、「トレイの設定を保存できませんでした。」と通知します。</p>
+  <p>Claude Code 自身の通知と重なることがあるので、最初の設定は通知しないにしています。</p>
+
+  <h2 id="tray-menu">メニュー</h2>
+  <p>アイコンを右クリックすると、メニューが開きます。
+  アイコンをダブルクリックしても、ダッシュボードが開きます。</p>
+  <ul>
+    <li>「ダッシュボードを開く」：ダッシュボードのウィンドウを開くか、開いていれば前面に出します</li>
+    <li>「待ち件数を通知する」：通知の入と切を切り替えます。チェックが入っているときが入です</li>
+    <li>「離席中」：離席中を切り替えます。ダッシュボードのヘッダの <span class="ui">離席中</span> と同じ状態です(<a href="away.html#away-toggle">離席中の切り替え</a>)。切り替えられなかったときは、「離席中を切り替えられませんでした。常駐サーバーの状態を確認してください。」と通知します</li>
+    <li>「常駐サーバーを再起動」：常駐サーバーを止めて、起動し直します(<a href="#tray-restart">常駐サーバーを再起動する</a>)</li>
+    <li>「終了」：ダッシュボードのウィンドウを閉じて、タスクトレイを終了します。常駐サーバーは動き続けます</li>
+  </ul>
+
+  <h2 id="tray-shortcut">ショートカットの作成と自動起動</h2>
+  <p>ショートカットは、リポジトリのルートで次のコマンドを実行すると作れます。
+  本体のチェックアウトから実行してください。ショートカットは、実行したチェックアウトの絶対パスを持つので、作業用の worktree から作ると、その worktree を消したときに起動できなくなります。</p>
+  <pre><code>powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1"</code></pre>
+  <p>デスクトップとスタートメニューに、「Agent Cockpit」の名前のショートカットができます。
+  アイコンは、保存先に書き出します。
+  すでにあるショートカットは、作り直して起動の引数を更新します。</p>
+  <p>Windows にログオンしたときに、タスクトレイだけを自動で起動するには、<code>-Startup</code> を付けて実行します。
+  この指定では、スタートアップのフォルダーのショートカットだけを作ります。
+  ログオンのたびにダッシュボードを開かないよう、このショートカットは <code>-OpenDashboard</code> を持ちません。</p>
+  <pre><code>powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Startup</code></pre>
+  <p>ログオン時の自動起動をやめるときは、<code>-Remove -Startup</code> を付けて実行します。</p>
+  <pre><code>powershell.exe -NoProfile -File ".\src\tray\install-shortcut.ps1" -Remove -Startup</code></pre>
+  <details class="more">
+    <summary>ショートカットの作成の詳細</summary>
+    <ul>
+      <li><code>-Desktop</code>、<code>-StartMenu</code>、<code>-Startup</code>、<code>-Directory &lt;パス&gt;</code> で、作る場所を選べます。何も指定しないと、デスクトップとスタートメニューに作ります</li>
+      <li><code>-Remove</code> は、同じ名前で、実行先が <code>powershell.exe</code> で、<code>tray.ps1</code> を指しているショートカットだけを消します。ほかのショートカットは消しません</li>
+      <li>ショートカットは Windows PowerShell 5.1 でタスクトレイを起動します。実行先は、最小化したウィンドウです</li>
+    </ul>
+  </details>
+
+  <h2 id="tray-restart">常駐サーバーを再起動する</h2>
+  <p>メニューの「常駐サーバーを再起動」を選ぶと、確認のダイアログが出ます。
+  「OK」を選ぶと、常駐サーバーを止めて、起動し直します。
+  ダッシュボードのウィンドウは閉じません。開いている画面は、自動でつなぎ直します。</p>
+  <p>確認のダイアログには、残るものと消えるものが書かれています。
+  許可待ちがあるときは、「許可待ち N 件は、再起動後に表示されません。」のように、その数も出ます。
+  何が残り、何が消えるかは、常駐サーバーのページにあります(<a href="server.html#server-restart">再起動で残るものと消えるもの</a>)。</p>
+  <p>再起動は、保存先の <code>server.json</code> が指すプロセスが、このチェックアウトの常駐サーバーのときだけ、止めます。
+  別のプログラムのプロセスや、別のチェックアウトの常駐サーバーのときは、止めません。起動の処理には進みますが、常駐サーバーが入れ替わらないので、再起動できなかったと通知します。
+  成功すると、「常駐サーバーを再起動しました」と通知します。
+  失敗したときは、「常駐サーバーを再起動できませんでした。」に、原因が続きます。</p>
+</section>
+
+      <nav class="page-navigation" aria-label="前後のページ"><a class="previous" href="settings.html"><span class="page-navigation-label">前のページ</span><span class="page-navigation-title">表示の設定</span></a><a class="next" href="server.html"><span class="page-navigation-label">次のページ</span><span class="page-navigation-title">常駐サーバーと保存されるもの</span></a></nav>
+    </main>
+    <nav class="toc page-toc" aria-label="このページの内容">
+      <h2>このページの内容</h2>
+      <ol>        <li><a href="#tray-start">タスクトレイを起動する</a></li>
+        <li><a href="#tray-dashboard">ダッシュボードのウィンドウ</a></li>
+        <li><a href="#tray-icon">アイコンと吹き出し</a></li>
+        <li><a href="#tray-notify">待ち件数の通知</a></li>
+        <li><a href="#tray-menu">メニュー</a></li>
+        <li><a href="#tray-shortcut">ショートカットの作成と自動起動</a></li>
+        <li><a href="#tray-restart">常駐サーバーを再起動する</a></li></ol>
+    </nav>
+  </div>
+</div>
+<footer>Agent Cockpit 利用者向けマニュアル</footer>
+</body>
+</html>

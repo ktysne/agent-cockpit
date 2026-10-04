@@ -1,0 +1,40 @@
+{
+  "title": "設定画面",
+  "scenario": "basic",
+  "window": {
+    "width": 850,
+    "height": 1200
+  },
+  "theme": "dark",
+  "integrations": {
+    "codexAgent": true,
+    "crossReview": true
+  },
+  "steps": [
+    {
+      "do": "click",
+      "selector": "#settings-button"
+    },
+    {
+      "do": "wait",
+      "selector": "#settings-dialog[open]"
+    },
+    {
+      "do": "screenshot",
+      "name": "dialog",
+      "parts": {
+        "settings.theme": ".settings-theme-row:has(#settings-theme-select)",
+        "settings.since-seen": ".settings-theme-row:has(#settings-since-seen-select)",
+        "settings.mergeable": ".settings-mergeable-condition",
+        "settings.merge-after": ".settings-theme-row:has(#settings-merge-after-review-default)",
+        "settings.hide-finished": ".settings-theme-row:has(#settings-hide-finished)",
+        "settings.long-wait": ".settings-theme-row:has(#settings-long-wait-minutes)",
+        "settings.idle": ".settings-theme-row:has(#settings-idle-hide-minutes)",
+        "settings.away-wait": ".settings-theme-row:has(#settings-away-answer-wait-minutes)",
+        "settings.order": ".settings-section-order",
+        "settings.close": "#settings-close"
+      },
+      "viewport": true
+    }
+  ]
+}
