@@ -268,7 +268,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
   <div class="grid">
     <div class="card"><h3>フック</h3><p>Claude Code の設定に登録するスクリプト群。イベントを送り、回答と知らせをセッションへ渡す。<code>route.js</code> は経路の設定をサブエージェントへ伝え、Claude を選んだ担当が Codex を起動しようとしたら止める。</p></div>
     <div class="card"><h3>MCP サーバー</h3><p>セッションが計画、判断事項、PR を書き込むための窓口。常駐サーバーへ HTTP で転送する。</p></div>
-    <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。30 分要求が無いと終了し、次のフックが起動し直す。</p></div>
+    <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。セッションが 1 つも無く、30 分要求も無いと終了し、次のフックが起動し直す。</p></div>
     <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。</p></div>
     <div class="card"><h3>タスクトレイ</h3><p>Windows 用の常駐アイコン。サーバーの起動と再起動、ダッシュボードを開く操作、離席中の切り替え、待ち件数の通知を担う。</p></div>
     <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。常駐サーバーが <code>/manual/</code> で配り、設定画面の入口から既定のブラウザーで開く。</p></div>
