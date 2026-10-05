@@ -2,7 +2,7 @@
   "name": "initial",
   "target": ".decision-card.provisional",
   "width": 1576,
-  "height": 962,
+  "height": 964,
   "parts": [
     {
       "key": "answer.options",
@@ -68,7 +68,7 @@
       "key": "answer.status",
       "bounds": {
         "x": 262,
-        "y": 762,
+        "y": 763,
         "width": 72,
         "height": 38
       },
