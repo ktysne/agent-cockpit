@@ -2,6 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { StringDecoder } = require('node:string_decoder');
 const { spawn } = require('node:child_process');
 const {
   assertNoSymlinkComponents,
@@ -129,16 +131,23 @@ function normalizeTrailingBlankLines(lines) {
   return normalized;
 }
 
-function removeFixtureConfig(configText) {
-  const { rootLines, tables } = splitConfigSections(configText);
-  const retainedRoot = normalizeTrailingBlankLines(rootLines.filter(line => !/^\s*(?:model|model_provider)\s*=/.test(line)));
-  const retainedTables = tables.filter(table => table.name !== 'model_providers.poc157_fixture')
-    .flatMap(table => table.lines);
-  return [...retainedRoot, ...retainedTables].join('\n');
-}
-
 function tomlString(value) {
   return JSON.stringify(value);
+}
+
+function replaceConfigAtomically(configPath, expectedContents, nextContents) {
+  const stat = fs.lstatSync(configPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Dedicated config must be a regular file');
+  if (fs.readFileSync(configPath, 'utf8') !== expectedContents) {
+    throw new Error('Dedicated config changed while the fixture was being prepared');
+  }
+  const temporaryPath = `${configPath}.poc157-${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, nextContents, { encoding: 'utf8', flag: 'wx', mode: stat.mode & 0o777 });
+    fs.renameSync(temporaryPath, configPath);
+  } finally {
+    try { fs.unlinkSync(temporaryPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
 }
 
 function configureFixture(layout, configPath, fixture) {
@@ -166,13 +175,25 @@ function configureFixture(layout, configPath, fixture) {
     '',
   ].join('\n');
   const contents = [...preservedRoot, ...provider.trimEnd().split('\n'), ...preservedTables].join('\n');
-  fs.writeFileSync(configPath, contents, { encoding: 'utf8', mode: 0o600 });
-  return { home: layout.home, repo: layout.repo };
+  replaceConfigAtomically(configPath, current, contents);
+  return {
+    home: layout.home,
+    repo: layout.repo,
+    configSnapshot: { originalConfig: current, appliedConfig: contents },
+  };
 }
 
-function clearFixtureConfig(configPath) {
+function clearFixtureConfig(configPath, configSnapshot) {
+  if (!configSnapshot || typeof configSnapshot.originalConfig !== 'string' || typeof configSnapshot.appliedConfig !== 'string') {
+    throw new Error('Fixture config snapshot is required for safe cleanup');
+  }
+  const stat = fs.lstatSync(configPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Dedicated config must be a regular file');
   const current = fs.readFileSync(configPath, 'utf8');
-  fs.writeFileSync(configPath, removeFixtureConfig(current), { encoding: 'utf8', mode: 0o600 });
+  if (current === configSnapshot.originalConfig) return true;
+  if (current !== configSnapshot.appliedConfig) return false;
+  replaceConfigAtomically(configPath, current, configSnapshot.originalConfig);
+  return true;
 }
 
 function safeLabel(value) {
@@ -277,6 +298,8 @@ function summarizeEvent(event) {
 }
 
 function createEventCollector() {
+  let decoder = new StringDecoder('utf8');
+  let finished = false;
   let pending = '';
   let discarding = false;
   let outputWarningMentions = 0;
@@ -314,9 +337,7 @@ function createEventCollector() {
     else omittedEvents += 1;
   };
 
-  return {
-    consume(chunk) {
-      const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+  const consumeText = (text) => {
       let start = 0;
       if (discarding) {
         const newline = text.indexOf('\n');
@@ -340,8 +361,26 @@ function createEventCollector() {
       } else {
         pending += tail;
       }
+  };
+
+  return {
+    consume(chunk) {
+      if (finished) return;
+      if (Buffer.isBuffer(chunk)) {
+        consumeText(decoder.write(chunk));
+      } else if (ArrayBuffer.isView(chunk)) {
+        consumeText(decoder.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)));
+      } else {
+        const bufferedText = decoder.end();
+        decoder = new StringDecoder('utf8');
+        consumeText(bufferedText + String(chunk));
+      }
     },
     finish() {
+      if (!finished) {
+        consumeText(decoder.end());
+        finished = true;
+      }
       if (pending && !discarding) addEventLine(pending.replace(/\r$/, ''));
       pending = '';
       return {
@@ -568,8 +607,8 @@ async function startFixture(outputDirectory, codexPath, options = {}) {
     startWith,
   }).start();
   try {
-    configureFixture(paths.layout, paths.configPath, fixture);
-    return { ...paths, version, fixture, startWith };
+    const configured = configureFixture(paths.layout, paths.configPath, fixture);
+    return { ...paths, version, fixture, startWith, configSnapshot: configured.configSnapshot };
   } catch (error) {
     await fixture.close();
     throw error;
@@ -594,9 +633,11 @@ async function holdServeMode(fixture, output, signalSource = process) {
 
 async function runExecProbe(options) {
   const started = await startFixture(options.outputDirectory, options.codexPath, options);
+  let result;
+  let configRestored = false;
   try {
     const childResult = await runExecChild(started.executable, started.layout, options);
-    const result = buildResult({
+    result = buildResult({
       run: 'exec',
       startWith: started.startWith,
       version: started.version,
@@ -605,17 +646,26 @@ async function runExecProbe(options) {
       eventResult: childResult.eventResult,
       stderrResult: childResult.stderrResult,
     });
-    const filePath = path.join(started.layout.output, resultsFileName());
-    fs.writeFileSync(filePath, `${JSON.stringify(result, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-    return { filePath, result };
   } finally {
-    await started.fixture.close();
-    clearFixtureConfig(started.configPath);
+    try {
+      await started.fixture.close();
+    } finally {
+      configRestored = clearFixtureConfig(started.configPath, started.configSnapshot);
+    }
   }
+  result.config_restored = configRestored;
+  if (!configRestored) {
+    result.success = false;
+    result.failure_reasons.push('fixture_config_changed_during_run');
+  }
+  const filePath = path.join(started.layout.output, resultsFileName());
+  fs.writeFileSync(filePath, `${JSON.stringify(result, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  return { filePath, result };
 }
 
 async function serveFixture(options) {
   const started = await startFixture(options.outputDirectory, options.codexPath, options);
+  let configRestored = false;
   try {
     await holdServeMode(started.fixture, {
       mode: 'serve',
@@ -629,9 +679,13 @@ async function serveFixture(options) {
       exec_started: false,
     });
   } finally {
-    await started.fixture.close();
-    clearFixtureConfig(started.configPath);
+    try {
+      await started.fixture.close();
+    } finally {
+      configRestored = clearFixtureConfig(started.configPath, started.configSnapshot);
+    }
   }
+  if (!configRestored) throw new Error('Dedicated fixture config changed while serving; it was left untouched');
 }
 
 if (require.main === module) {
@@ -644,7 +698,12 @@ if (require.main === module) {
   }
   if (args) {
     const task = args.serve ? serveFixture(args) : runExecProbe(args).then(({ filePath, result }) => {
-      process.stdout.write(`${JSON.stringify({ file: filePath, success: result.success, failure_reasons: result.failure_reasons })}\n`);
+      process.stdout.write(`${JSON.stringify({
+        file: filePath,
+        success: result.success,
+        config_restored: result.config_restored,
+        failure_reasons: result.failure_reasons,
+      })}\n`);
       if (!result.success) process.exitCode = 1;
     });
     task.catch(() => {
@@ -667,7 +726,6 @@ module.exports = {
   holdServeMode,
   makeChildEnvironment,
   parseArguments,
-  removeFixtureConfig,
   resultsFileName,
   startFixture,
   serveFixture,

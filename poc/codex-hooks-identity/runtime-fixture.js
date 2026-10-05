@@ -414,6 +414,13 @@ function textEvents(responseNumber, model, text) {
   ];
 }
 
+function setCommonResponseHeaders(response) {
+  response.setHeader('X-Frame-Options', 'DENY');
+  response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+}
+
 function createFixtureServer(scenario = {}) {
   if (!isRecord(scenario)) throw new TypeError('scenarioはobjectである必要があります');
   const startWith = scenario.startWith ?? 'command';
@@ -425,6 +432,7 @@ function createFixtureServer(scenario = {}) {
   let unsupported = null;
 
   const server = http.createServer(async (req, res) => {
+    setCommonResponseHeaders(res);
     let url;
     try {
       url = new URL(req.url, 'http://127.0.0.1');

@@ -10,18 +10,35 @@ const mcpName = 'mcp__poc157_identity.probe_identity';
 
 function postJson(url, body, headers = {}) {
   const data = Buffer.from(JSON.stringify(body));
+  return postBody(url, data, headers, true);
+}
+
+function postBody(url, data, headers = {}, isJson = false) {
+  const body = Buffer.isBuffer(data) ? data : Buffer.from(data);
   return new Promise((resolve, reject) => {
     const request = http.request(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': data.length, ...headers },
+      headers: {
+        ...(isJson ? { 'Content-Type': 'application/json' } : {}),
+        'Content-Length': body.length,
+        ...headers,
+      },
     }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks).toString('utf8') }));
     });
     request.on('error', reject);
-    request.end(data);
+    request.end(body);
   });
+}
+
+function assertSecurityHeaders(response) {
+  assert.equal(response.headers['x-frame-options'], 'DENY');
+  assert.equal(response.headers['content-security-policy'], "frame-ancestors 'none'");
+  assert.equal(response.headers['cross-origin-resource-policy'], 'same-origin');
+  assert.equal(response.headers['cross-origin-opener-policy'], 'same-origin');
+  assert.deepEqual(Object.keys(response.headers).filter((name) => name.startsWith('access-control-')), []);
 }
 
 function readEvents(body) {
@@ -77,6 +94,7 @@ test('fixture emits linked Responses tool calls and retains only allowlisted req
     'X-Codex-Thread-Id': 'thread-fixture-157',
   });
   assert.equal(first.status, 200);
+  assertSecurityHeaders(first);
   const events = readEvents(first.body);
   assert.deepEqual(events.map((event) => event.type), [
     'response.created',
@@ -121,6 +139,7 @@ test('fixture emits linked Responses tool calls and retains only allowlisted req
 
   const missingPath = await postJson(fixture.baseUrl + '/v1/chat/completions', { input: 'PRIVATE_PATH_BODY' });
   assert.equal(missingPath.status, 404);
+  assertSecurityHeaders(missingPath);
   assert.equal(fixture.requests.length, 3);
   assert.equal(JSON.stringify(fixture.requests).includes('PRIVATE_PATH_BODY'), false);
 });
@@ -177,7 +196,9 @@ test('fixture reports an absent MCP declaration and never guesses its call name'
 
   const commandOnly = { model: 'fixture-model', tools: [directTools()[0]] };
   await postJson(fixture.baseUrl + '/responses', commandOnly, fixture.requestHeaders);
-  const second = readEvents((await postJson(fixture.baseUrl + '/responses', commandOnly, fixture.requestHeaders)).body);
+  const unsupported = await postJson(fixture.baseUrl + '/responses', commandOnly, fixture.requestHeaders);
+  assertSecurityHeaders(unsupported);
+  const second = readEvents(unsupported.body);
 
   assert.equal(fixture.unsupported, '設定されたMCP probeツール ' + mcpName + ' はResponsesリクエストに宣言されていません。');
   assert.match(second.at(-1).response.output[0].content[0].text, /poc157_identity\.probe_identity/);
@@ -190,21 +211,32 @@ test('fixture rejects missing tokens, mismatched Host, and every Origin without 
   t.after(() => fixture.close());
   const body = { model: 'fixture-model', tools: directTools() };
 
-  assert.equal((await postJson(fixture.baseUrl + '/responses', body)).status, 403);
-  assert.equal((await postJson(fixture.baseUrl + '/responses', body, {
+  const missingToken = await postJson(fixture.baseUrl + '/responses', body);
+  assert.equal(missingToken.status, 403);
+  assertSecurityHeaders(missingToken);
+  const withOrigin = await postJson(fixture.baseUrl + '/responses', body, {
     ...fixture.requestHeaders,
     Origin: 'null',
-  })).status, 403);
-  assert.equal((await postJson(fixture.baseUrl + '/responses', body, {
+  });
+  assert.equal(withOrigin.status, 403);
+  assertSecurityHeaders(withOrigin);
+  const mismatchedHost = await postJson(fixture.baseUrl + '/responses', body, {
     ...fixture.requestHeaders,
     Host: 'localhost:1',
-  })).status, 403);
+  });
+  assert.equal(mismatchedHost.status, 403);
+  assertSecurityHeaders(mismatchedHost);
   assert.equal(fixture.requests.length, 0);
 
   const accepted = await postJson(fixture.baseUrl + '/responses', body, fixture.requestHeaders);
   assert.equal(accepted.status, 200);
+  assertSecurityHeaders(accepted);
   assert.equal(readEvents(accepted.body)[1].item.name, 'exec_command');
   assert.equal(fixture.requests.length, 1);
+
+  const malformed = await postBody(fixture.baseUrl + '/responses', '{', fixture.requestHeaders);
+  assert.equal(malformed.status, 400);
+  assertSecurityHeaders(malformed);
 });
 
 test('fixture can start with the namespaced MCP probe and preserves call identifiers', async (t) => {

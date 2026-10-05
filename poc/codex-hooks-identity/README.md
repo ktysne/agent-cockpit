@@ -19,7 +19,8 @@ node poc/codex-hooks-identity/setup.js --out poc/out/poc157-live --codex-version
 setupは指定した出力先の中に空のGitリポジトリと専用`CODEX_HOME`を作り、HooksとMCPの設定を生成する。
 既存のCodexホーム、認証情報、認証ファイルへのsymlinkは使わない。
 実モデルを使う場合は通常のCodex認証が必要になることがあるが、このPoCのfixture実行では認証を使わず、その可否も確認しない。
-ローカルResponses fixture用の設定は`run-exec.js`が実行中だけ専用`home/config.toml`へ加え、MCP設定を保ったまま停止時に取り除く。
+ローカルResponses fixture用の設定は`run-exec.js`が実行中だけ専用`home/config.toml`へ加え、MCP設定を保ったまま終了時に元の内容へ戻す。
+終了時の設定内容が適用済み設定から変わっていた場合は上書きせず、通常実行の結果に`config_restored: false`を記録して失敗扱いにする。
 
 ## CLIで確認する
 
@@ -48,8 +49,9 @@ node poc/codex-hooks-identity/run-exec.js --codex-path $codexExe --out poc/out/p
 ```
 
 別のPowerShellで同じ専用ホームとリポジトリを指定してCLIを開き、`/hooks`から生成した定義を読み、通常の信頼確認を行う。
-確認後にCLIを終了し、fixtureを起動した端末で`Ctrl+C`を押す。
-Runnerはfixtureを閉じ、専用設定から一時的なprovider設定を取り除く。
+確認後にCLIを終了し、fixtureを起動した端末へ`Ctrl+C`を送ってfixture runnerを停止する。
+非対話でのstdin Ctrl+Cやプロセスの強制終了では設定復元を保証しないため、停止後に専用設定を確認する。
+正常終了ではfixtureを閉じ、専用設定を元に戻す。
 
 ```powershell
 $env:CODEX_HOME = (Resolve-Path 'poc/out/poc157-live/home').Path
@@ -64,7 +66,8 @@ node poc/codex-hooks-identity/run-exec.js --codex-path $codexExe --out poc/out/p
 
 RunnerはCodex 0.160.0を確認してから、認証環境変数を引き継がず、`--no-daemon exec --json --ephemeral -C <repo> -s read-only`を40秒以内で実行する。
 信頼、承認、sandboxを迂回するフラグは付けない。
-一時fixture tokenは専用設定にだけ置き、結果JSONや標準出力には含めず、実行終了時に設定から取り除く。
+一時fixture tokenは専用設定にだけ置き、結果JSONや標準出力には含めない。
+cleanup時は設定内容が適用済みのままなら実行前の全内容を復元し、実行前へ戻っていれば何もせず、途中編集があれば上書きせず`config_restored: false`で失敗にする。
 結果JSONにはイベントの公開ID・型・状態、許可したMCP probe項目、固定fixtureメッセージ、stderrのwarning/error件数だけを保存する。
 fixture未対応またはtool errorがあれば、Codexの終了コードが0でも成功扱いにしない。
 
@@ -73,6 +76,11 @@ fixture未対応またはtool errorがあれば、Codexの終了コードが0で
 `--serve`は手動のHooks信頼確認を補助する準備モードであり、fixtureからの実行は開始しない。
 MCPだけをTUIで試すときは上記の`--serve --start-with mcp`でfixtureを準備し、別のCLIから`probe_identity`を呼び出す。
 通常の許可画面で一回限りのAllowを選び、承認や信頼を迂回する設定は使わない。
+
+`config_restored: false`が出た場合はrunnerが書いた専用`CODEX_HOME`を使わず、開発者が実行前に保存した設定から手動で復元する。
+プロセスを強制終了して結果ファイルがない場合もcleanup済みとは見なさず、専用`config.toml`にfixture tokenが残る可能性があるため、開発者が実行前の設定へ戻す。
+復元元を保持していない場合は新しい`poc/out/<slug>`でsetupをやり直し、前の専用HOMEを再利用しない。
+通常のCodex HOMEは変更されない。
 
 ## app-serverからMCPを確認する
 

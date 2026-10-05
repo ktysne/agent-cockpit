@@ -27,7 +27,6 @@ const {
   execArguments,
   makeChildEnvironment: makeExecChildEnvironment,
   parseArguments: parseExecArguments,
-  removeFixtureConfig,
   summarizeEvent,
 } = require('./run-exec');
 
@@ -319,16 +318,22 @@ test('fixture provider config is added and removed without changing the MCP tabl
   const configPath = path.join(os.tmpdir(), `poc157-exec-config-${process.pid}-${Date.now()}.toml`);
   const original = [
     'profile = "poc157"',
+    'model = "original-model"',
+    'model_provider = "original_provider"',
+    '',
+    '[model_providers.original_provider]',
+    'name = "Original provider"',
+    'base_url = "http://127.0.0.1:1"',
     '',
     '[mcp_servers.poc157_identity]',
     'command = "node"',
     'args = ["probe.js"]',
     '',
-  ].join('\n');
+  ].join('\r\n');
   const token = 'a'.repeat(64);
   fs.writeFileSync(configPath, original, { encoding: 'utf8', flag: 'wx' });
   try {
-    configureFixture({ home: path.dirname(configPath), repo: path.dirname(configPath) }, configPath, {
+    const snapshot = configureFixture({ home: path.dirname(configPath), repo: path.dirname(configPath) }, configPath, {
       baseUrl: 'http://127.0.0.1:12345',
       requestHeaders: { 'X-Poc157-Token': token },
     });
@@ -338,35 +343,34 @@ test('fixture provider config is added and removed without changing the MCP tabl
     assert.match(configured, /\[mcp_servers\.poc157_identity\]/);
     assert.match(configured, /args = \["probe\.js"\]/);
     assert.match(configured, new RegExp(token));
-    clearFixtureConfig(configPath);
+    assert.equal(clearFixtureConfig(configPath, snapshot.configSnapshot), true);
     assert.equal(fs.readFileSync(configPath, 'utf8'), original);
     assert.doesNotMatch(fs.readFileSync(configPath, 'utf8'), /X-Poc157-Token|poc157-fixture-model/);
+    assert.match(fs.readFileSync(configPath, 'utf8'), /model = "original-model"/);
+    assert.match(fs.readFileSync(configPath, 'utf8'), /model_provider = "original_provider"/);
   } finally {
     fs.unlinkSync(configPath);
   }
 });
 
-test('fixture config replacement preserves unrelated tables and removes only runner settings', () => {
-  const config = [
-    'profile = "poc157"',
-    'model = "old"',
-    'model_provider = "old_provider"',
-    '',
-    '[model_providers.poc157_fixture]',
-    'base_url = "http://127.0.0.1:1"',
-    '',
-    '[mcp_servers.poc157_identity]',
-    'command = "node"',
-    '',
-    '[notice]',
-    'enabled = true',
-  ].join('\n');
-  const result = removeFixtureConfig(config);
+test('fixture config cleanup preserves concurrent edits instead of restoring over them', () => {
+  const configPath = path.join(os.tmpdir(), `poc157-exec-edited-config-${process.pid}-${Date.now()}.toml`);
+  const original = 'model = "original-model"\nmodel_provider = "original_provider"\n[mcp_servers.poc157_identity]\ncommand = "node"\n';
+  fs.writeFileSync(configPath, original, { encoding: 'utf8', flag: 'wx' });
+  try {
+    const configured = configureFixture({ home: path.dirname(configPath), repo: path.dirname(configPath) }, configPath, {
+      baseUrl: 'http://127.0.0.1:12345',
+      requestHeaders: { 'X-Poc157-Token': 'b'.repeat(64) },
+    });
+    const interveningEdit = `${fs.readFileSync(configPath, 'utf8')}\n[notice]\nenabled = true\n`;
+    fs.writeFileSync(configPath, interveningEdit, 'utf8');
 
-  assert.match(result, /profile = "poc157"/);
-  assert.match(result, /\[mcp_servers\.poc157_identity\]/);
-  assert.match(result, /\[notice\]/);
-  assert.doesNotMatch(result, /model_provider|poc157_fixture/);
+    assert.equal(clearFixtureConfig(configPath, configured.configSnapshot), false);
+    assert.equal(fs.readFileSync(configPath, 'utf8'), interveningEdit);
+    assert.throws(() => clearFixtureConfig(configPath), /snapshot is required/);
+  } finally {
+    fs.unlinkSync(configPath);
+  }
 });
 
 test('exec event summaries keep public fields and the sanitized MCP probe only', () => {
@@ -411,6 +415,20 @@ test('exec event collector records only the fixed fixture message and safe error
   assert.equal(result.events[0].message, FIXTURE_FINAL_TEXT);
   assert.equal(result.events[1].api_error_code, 'fixture_error');
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_API_ERROR/);
+});
+
+test('exec event collector preserves Japanese fixture text when a UTF-8 character spans chunks', () => {
+  const collector = createEventCollector();
+  const payload = Buffer.from(`${JSON.stringify({ type: 'assistant_message', message: FIXTURE_FINAL_TEXT })}\n`, 'utf8');
+  const split = payload.indexOf(Buffer.from('ロ', 'utf8')) + 1;
+
+  collector.consume(payload.subarray(0, split));
+  collector.consume(payload.subarray(split));
+  const result = collector.finish();
+
+  assert.equal(result.fixture_message_seen, true);
+  assert.equal(result.events[0].message, FIXTURE_FINAL_TEXT);
+  assert.equal(result.malformed_line_count, 0);
 });
 
 test('exec success requires a completed fixture exchange without unsupported tools or tool errors', () => {
