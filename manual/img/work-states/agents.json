@@ -2,13 +2,13 @@
   "name": "agents",
   "target": ".agent-list",
   "width": 1524,
-  "height": 324,
+  "height": 384,
   "parts": [
     {
       "key": "agents.route",
       "bounds": {
-        "x": 300,
-        "y": 69,
+        "x": 20,
+        "y": 121,
         "width": 229,
         "height": 40
       },
@@ -17,8 +17,8 @@
     {
       "key": "agents.unavailable",
       "bounds": {
-        "x": 909,
-        "y": 66,
+        "x": 629,
+        "y": 118,
         "width": 257,
         "height": 46
       },
@@ -28,17 +28,17 @@
       "key": "agents.unconfirmed",
       "bounds": {
         "x": 20,
-        "y": 152,
-        "width": 260,
-        "height": 158
+        "y": 200,
+        "width": 1384,
+        "height": 64
       },
       "visible": true
     },
     {
       "key": "agents.close",
       "bounds": {
-        "x": 160,
-        "y": 247,
+        "x": 1283,
+        "y": 200,
         "width": 120,
         "height": 64
       },
@@ -47,8 +47,8 @@
     {
       "key": "agents.gpt",
       "bounds": {
-        "x": 673,
-        "y": 201,
+        "x": 393,
+        "y": 325,
         "width": 350,
         "height": 46
       },

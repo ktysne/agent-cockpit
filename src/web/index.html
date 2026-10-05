@@ -134,11 +134,12 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .agent-list, .permission-list { display: grid; gap: 6px; }
 .permission-list { gap: 0; }
-.now-row, .agent-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
-.now-row > .detail, .agent-row > .detail { min-width: 0; }
-.who { color: var(--text-2); font-size: 12px; }
-.who strong { color: var(--text); display: block; font-size: 13px; font-weight: 600; }
-.agent-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.now-row, .agent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; align-items: start; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.now-row > .detail, .agent-row > .detail { grid-column: 1 / -1; min-width: 0; }
+.who { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; min-width: 0; color: var(--text-2); font-size: 12px; }
+.who .dot { margin-right: 0; flex: none; }
+.who strong { color: var(--text); font-size: 13px; font-weight: 600; }
+.agent-name { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; flex-wrap: wrap; }
 .detail { overflow-wrap: anywhere; }
 .since { color: var(--text-2); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tool-line { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px; margin-top: 2px; }
@@ -213,7 +214,6 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 @media (max-width: 640px) {
   .top-inner { gap: 8px; }
   main { padding: 12px; }
-  .now-row, .agent-row { grid-template-columns: 1fr; gap: 2px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
 .app-icon { width: 28px; height: 28px; flex: none; }
@@ -254,7 +254,6 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 h3.sub { display: flex; align-items: center; gap: 6px; margin: 14px 0 6px; color: var(--text-2); font-size: 13px; }
 h3.sub .count { font-weight: normal; }
 .now, .agent-list { display: grid; gap: 6px; }
-.now-row .who .prod-tag { display: table; margin: 2px 0; }
 .dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--text-2); }
 .dot.busy { background: var(--ok); animation: pulse 1.6s infinite; }
 .dot.wait { background: var(--warn); }
@@ -2290,11 +2289,12 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) appendToolLine(detail, mainTool);
-  row.append(who, detail);
+  row.append(who);
   if (!isUnknown) {
     const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
     row.append(relativeTimeElement(elapsedAt, 'since', durationAgoLabel(elapsedAt)));
   }
+  if (detail.childNodes.length) row.append(detail);
   appendUnknownSessionControls(row, session);
   return row;
 }
@@ -2335,7 +2335,8 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     if (agent.description) detail.append(element('div', 'agent-description', agent.description));
     else if (agent.lastTool) appendToolLine(detail, agent.lastTool);
     appendModelLine(detail, agent);
-    row.append(who, detail, relativeTimeElement(agent.startedAt, 'since', agent.startedAt ? durationAgoLabel(agent.startedAt) : ''));
+    row.append(who, relativeTimeElement(agent.startedAt, 'since', agent.startedAt ? durationAgoLabel(agent.startedAt) : ''));
+    if (detail.childNodes.length) row.append(detail);
     list.append(row);
   }
   if (visibleAgents.length) body.append(list);

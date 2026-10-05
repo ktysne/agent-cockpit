@@ -5,7 +5,7 @@
     "#root > section.section:nth-child(2) .session-body > .ended-toggle[data-ended-toggle]"
   ],
   "width": 1576,
-  "height": 630,
+  "height": 742,
   "parts": [
     {
       "key": "rows.heading",
@@ -20,9 +20,9 @@
     {
       "key": "rows.main-state",
       "bounds": {
-        "x": 20,
-        "y": 109,
-        "width": 260,
+        "x": 120,
+        "y": 67,
+        "width": 78,
         "height": 42
       },
       "visible": true
@@ -30,9 +30,9 @@
     {
       "key": "rows.main-title",
       "bounds": {
-        "x": 300,
-        "y": 67,
-        "width": 1168,
+        "x": 20,
+        "y": 117,
+        "width": 1536,
         "height": 45
       },
       "visible": true
@@ -40,9 +40,9 @@
     {
       "key": "rows.main-tool",
       "bounds": {
-        "x": 300,
-        "y": 115,
-        "width": 1168,
+        "x": 20,
+        "y": 165,
+        "width": 1536,
         "height": 44
       },
       "visible": true
@@ -51,7 +51,7 @@
       "key": "rows.main-time",
       "bounds": {
         "x": 1488,
-        "y": 71,
+        "y": 67,
         "width": 68,
         "height": 38
       },
@@ -61,18 +61,18 @@
       "key": "rows.agent-who",
       "bounds": {
         "x": 20,
-        "y": 269,
-        "width": 260,
-        "height": 136
+        "y": 315,
+        "width": 1436,
+        "height": 44
       },
       "visible": true
     },
     {
       "key": "rows.agent-description",
       "bounds": {
-        "x": 300,
-        "y": 265,
-        "width": 1156,
+        "x": 20,
+        "y": 367,
+        "width": 1536,
         "height": 45
       },
       "visible": true
@@ -80,8 +80,8 @@
     {
       "key": "rows.route",
       "bounds": {
-        "x": 300,
-        "y": 321,
+        "x": 20,
+        "y": 423,
         "width": 127,
         "height": 40
       },
@@ -90,8 +90,8 @@
     {
       "key": "rows.models",
       "bounds": {
-        "x": 439,
-        "y": 318,
+        "x": 159,
+        "y": 420,
         "width": 380,
         "height": 46
       },
@@ -101,7 +101,7 @@
       "key": "rows.agent-time",
       "bounds": {
         "x": 1476,
-        "y": 269,
+        "y": 315,
         "width": 80,
         "height": 38
       },
@@ -111,9 +111,9 @@
       "key": "rows.ended",
       "bounds": {
         "x": 0,
-        "y": 429,
+        "y": 490,
         "width": 1576,
-        "height": 123
+        "height": 175
       },
       "visible": true
     },
@@ -121,7 +121,7 @@
       "key": "rows.toggle",
       "bounds": {
         "x": 0,
-        "y": 564,
+        "y": 677,
         "width": 264,
         "height": 64
       },
