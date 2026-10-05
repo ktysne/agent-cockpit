@@ -25,3 +25,9 @@ test('CSS 宣言は後の値を残し、指定時は重複と詳細セレクタ�
     ['color', 'red'], ['color', 'blue'], ['color', 'green'],
   ]);
 });
+
+test('CSS 宣言の既定は @media の中を外し、通常の画面幅で効く値を返す', () => {
+  const html = '<style>.order { margin-left: auto; } @media (max-width: 640px) { .order { margin-left: 0; } } .order { gap: 4px; }</style>';
+
+  assert.deepEqual(cssDeclarations(html, '.order'), [['margin-left', 'auto'], ['gap', '4px']]);
+});

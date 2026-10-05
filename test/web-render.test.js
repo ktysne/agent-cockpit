@@ -595,14 +595,13 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.equal(mockMeta['text-overflow'], undefined);
   assert.equal(mockMeta['white-space'], undefined);
   assert.equal(mockMeta.overflow, undefined);
-  assert.equal(cssDeclarations(mock, '.now-row', { includeRepeated: true })
-    .find(([property]) => property === 'grid-template-columns')?.[1], '130px minmax(0, 1fr) auto');
+  assert.equal(style(mock, '.now-row')['grid-template-columns'], '130px minmax(0, 1fr) auto');
   assert.equal(style(mock, '.now-row > :nth-child(2)')['min-width'], '0');
 });
 
 test('終了ボタンは状態と名前を含む flex 行の右端に置く', () => {
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-  const mobileRules = sourceBetween(pageHtml, '@media (max-width: 640px) {', '\n}', true);
+  const mobileRules = sourceBetween(pageHtml, '@media (max-width: 640px) {', '\n}')?.slice('@media (max-width: 640px) {'.length);
   assert.ok(mobileRules);
 
   assert.match(pageHtml, /if \(agent\.closable\) \{[\s\S]*?name\.append\(close\);/);
