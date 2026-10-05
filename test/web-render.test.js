@@ -1824,6 +1824,24 @@ test('タスクの有無にかかわらず終わったセッションと履歴�
     product: { key: 'idle', name: '更新なし' },
   };
   assert.deepEqual(JSON.parse(JSON.stringify(context.orderedProducts([stale]).map((product) => product.key))), []);
+
+  const now = Date.parse('2026-10-05T00:00:00.000Z');
+  const oldSessionFileTime = {
+    ...unknown, lastUpdatedAt: null, sessionFileUpdatedAt: new Date(now - 31 * 60_000).toISOString(),
+  };
+  const recentSessionFileTime = {
+    ...unknown, lastUpdatedAt: null, sessionFileUpdatedAt: new Date(now - 29 * 60_000).toISOString(),
+  };
+  const noUpdateTime = { ...unknown, lastUpdatedAt: null, sessionFileUpdatedAt: null };
+  const hookTimeTakesPrecedence = {
+    ...unknown, lastUpdatedAt: new Date(now - 29 * 60_000).toISOString(),
+    sessionFileUpdatedAt: new Date(now - 31 * 60_000).toISOString(),
+  };
+  assert.equal(context.isIdleHiddenSession(oldSessionFileTime, now), true);
+  assert.equal(context.isIdleHiddenSession(recentSessionFileTime, now), false);
+  assert.equal(context.isIdleHiddenSession(noUpdateTime, now), false);
+  assert.equal(context.isIdleHiddenSession(hookTimeTakesPrecedence, now), false);
+
   const staleWithNews = context.orderedProducts([stale], [], [{
     product: stale.product, items: [{ text: '前回見てからの変化' }],
   }]);
