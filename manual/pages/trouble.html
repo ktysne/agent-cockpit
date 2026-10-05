@@ -23,6 +23,7 @@
     <li>画面の中央に <span class="ui">状態を取得できません。常駐サーバーが起動しているか確認してください。</span> と出る</li>
     <li>ブラウザーが接続できない、または <code>Invalid Host</code> と出る</li>
   </ul>
+  <p>表示時点の日付が今日と異なる場合は、月日も付きます(例：<span class="ui">表示は</span> 10/4 14:30 <span class="ui">時点のものです。</span>)。</p>
   <p>まず、常駐サーバーが動いているかを確かめます。
   ブラウザーで <code>http://127.0.0.1:47821/health</code> を開き、<code>"app":"agent-cockpit"</code> を含む文字が出れば、動いています。
   ポートを変えているときは、変えた値で開きます。</p>
@@ -41,6 +42,7 @@
     <li>フックを正しく登録できているかを確かめます。<code>~/.claude/settings.json</code> の JSON が壊れていないか、フックのパスが本体のチェックアウトを指しているかを見ます(<a href="https://github.com/ktysne/agent-cockpit/blob/main/docs/setup.md">導入手順書</a>)</li>
     <li>常駐サーバーが動いているかを確かめます(<a href="#trouble-connect">画面がつながらない</a>)</li>
   </ul>
+  <p>Claude Code の記録ファイルの更新時刻を読み取れる状態不明のセッションは、その時刻から設定の時間を過ぎると、更新の無いセッションとして隠れます。初期値は 30 分です(<a href="work.html#work-idle">更新の無いセッションを隠す</a>)。</p>
   <p>セッションの状態は、フックが送る出来事から組み立てます。
   <code>~/.claude/sessions/*.json</code> は、Claude Code が公開している仕様ではありません。
   読めなくても、フックから組み立てた表示は動きます。</p>
@@ -77,7 +79,8 @@
   <ul>
     <li><span class="ui">マージする</span> のボタンが無いとき：マージできるのは、スタックの一番下の PR だけです。<span class="ui">マージできない理由</span> の行に、その理由が出ます(<a href="pull-requests.html#pr-reason">マージできない理由と待ち</a>)</li>
     <li><span class="ui">マージできます</span> と出ないとき：<span class="ui">待ち:</span> の行に、満たしていない条件が出ます。条件は、設定の <span class="ui">「マージできます」と出す条件</span> で選べます(<a href="settings.html#settings-mergeable">「マージできます」と出す条件</a>)</li>
-    <li><span class="ui">マージする</span> を押した後に失敗したとき：PR の行の下に、理由が出ます(<a href="pull-requests.html#pr-merge-check">マージの前に確かめること</a>)</li>
+    <li><span class="ui">マージする</span> を押した後に失敗したとき：PR の行の下に、理由が 1 分間出ます(<a href="pull-requests.html#pr-merge-check">マージの前に確かめること</a>)</li>
+    <li><span class="ui">コンフリクト解決</span> の依頼に失敗したとき：PR の行の下に、理由が 1 分間出ます(<a href="pull-requests.html#pr-conflict">衝突の解消の依頼</a>)</li>
   </ul>
 
   <h2 id="trouble-answer">回答がセッションに届かない</h2>
