@@ -2,13 +2,13 @@
   "name": "result",
   "target": "#root > section.section:nth-child(2) .pr-repo-group",
   "width": 1576,
-  "height": 1142,
+  "height": 1122,
   "parts": [
     {
       "key": "result.row",
       "bounds": {
         "x": 26,
-        "y": 1032,
+        "y": 1012,
         "width": 1524,
         "height": 88
       },
@@ -18,7 +18,7 @@
       "key": "result.close",
       "bounds": {
         "x": 989,
-        "y": 1044,
+        "y": 1024,
         "width": 72,
         "height": 64
       },
@@ -48,7 +48,7 @@
       "key": "result.reason",
       "bounds": {
         "x": 26,
-        "y": 348,
+        "y": 328,
         "width": 1524,
         "height": 38
       },
@@ -58,7 +58,7 @@
       "key": "result.merged-list",
       "bounds": {
         "x": 26,
-        "y": 984,
+        "y": 964,
         "width": 1524,
         "height": 47
       },

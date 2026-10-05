@@ -2,13 +2,13 @@
   "name": "confirm",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1760,
+  "height": 1740,
   "parts": [
     {
       "key": "conflict.heading",
       "bounds": {
         "x": 52,
-        "y": 1101,
+        "y": 1081,
         "width": 1472,
         "height": 42
       },
@@ -18,7 +18,7 @@
       "key": "conflict.effects",
       "bounds": {
         "x": 52,
-        "y": 1159,
+        "y": 1139,
         "width": 1472,
         "height": 119
       },
@@ -28,7 +28,7 @@
       "key": "conflict.go",
       "bounds": {
         "x": 52,
-        "y": 1294,
+        "y": 1274,
         "width": 197,
         "height": 80
       },
@@ -38,7 +38,7 @@
       "key": "conflict.cancel",
       "bounds": {
         "x": 265,
-        "y": 1294,
+        "y": 1274,
         "width": 140,
         "height": 80
       },

@@ -23,7 +23,7 @@
       "parts": {
         "row.heading": [
           "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > a.num",
-          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > span:not([class])"
+          "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > .ptitle"
         ],
         "row.state": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > .badge",
         "row.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline .merge-btn",
