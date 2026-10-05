@@ -8,7 +8,7 @@ const test = require('node:test');
 
 const { buildHookRecord, runHookLogger } = require('./hook-logger');
 const { buildIdentityProbe, handleRequest } = require('./mcp-probe');
-const { makeLayout, renderConfig, renderHooksConfig, resolveOutputDirectory, setup } = require('./setup');
+const { REPOSITORY_ROOT, makeLayout, renderConfig, renderHooksConfig, resolveOutputDirectory, setup } = require('./setup');
 const {
   buildRunMetadata,
   makeChildEnvironment,
@@ -24,11 +24,39 @@ const {
   configureFixture,
   createEventCollector,
   createFixtureRequestsSummary,
+  createRuntimeHome,
   execArguments,
   makeChildEnvironment: makeExecChildEnvironment,
   parseArguments: parseExecArguments,
   summarizeEvent,
 } = require('./run-exec');
+
+function createExecTestLayout(configText) {
+  const outputBase = path.join(REPOSITORY_ROOT, 'poc', 'out');
+  fs.mkdirSync(outputBase, { recursive: true });
+  const output = fs.mkdtempSync(path.join(outputBase, 'run-exec-test-'));
+  const layout = makeLayout(output);
+  fs.mkdirSync(layout.home, { recursive: true });
+  fs.mkdirSync(layout.hooks, { recursive: true });
+  fs.mkdirSync(layout.repo, { recursive: true });
+  fs.writeFileSync(path.join(layout.hooks, 'hook-logger.js'), 'module.exports = true;\n', { flag: 'wx' });
+  fs.writeFileSync(path.join(layout.home, 'config.toml'), configText, { encoding: 'utf8', flag: 'wx' });
+  const hooksText = JSON.stringify({ hooks: { SessionStart: [{ hooks: [{
+    type: 'command', command: `node "${path.join(layout.hooks, 'hook-logger.js')}"`,
+  }] }] } }, null, 2) + '\n';
+  fs.writeFileSync(path.join(layout.home, 'hooks.json'), hooksText, { encoding: 'utf8', flag: 'wx' });
+  fs.writeFileSync(path.join(layout.home, 'auth.json'), '{"secret":"PRIVATE_AUTH"}\n', { encoding: 'utf8', flag: 'wx' });
+  fs.writeFileSync(path.join(layout.home, 'state.sqlite'), 'PRIVATE_STATE', { encoding: 'utf8', flag: 'wx' });
+  fs.writeFileSync(path.join(layout.home, 'history.jsonl'), '{"secret":"PRIVATE_HISTORY"}\n', { encoding: 'utf8', flag: 'wx' });
+  return { output, layout, hooksText, configText };
+}
+
+function removeExecTestOutput(output) {
+  const outputBase = path.resolve(REPOSITORY_ROOT, 'poc', 'out');
+  const resolved = path.resolve(output);
+  assert.ok(resolved.startsWith(`${outputBase}${path.sep}`));
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
 
 test('hook records contain only bounded allowlisted identity and state fields', () => {
   const input = {
@@ -314,8 +342,7 @@ test('exec command uses the read-only fixture path without trust or approval byp
   assert.doesNotMatch(args.join(' '), /dangerously|bypass|approval|sandbox/);
 });
 
-test('fixture provider config is added and removed without changing the MCP table', () => {
-  const configPath = path.join(os.tmpdir(), `poc157-exec-config-${process.pid}-${Date.now()}.toml`);
+test('fixture provider uses a private home and source edits survive cleanup', () => {
   const original = [
     'profile = "poc157"',
     'model = "original-model"',
@@ -330,46 +357,72 @@ test('fixture provider config is added and removed without changing the MCP tabl
     'args = ["probe.js"]',
     '',
   ].join('\r\n');
+  const { output, layout, hooksText } = createExecTestLayout(original);
+  const sourceConfigPath = path.join(layout.home, 'config.toml');
   const token = 'a'.repeat(64);
-  fs.writeFileSync(configPath, original, { encoding: 'utf8', flag: 'wx' });
   try {
-    const snapshot = configureFixture({ home: path.dirname(configPath), repo: path.dirname(configPath) }, configPath, {
+    const runtimeLayout = createRuntimeHome(layout);
+    const snapshot = configureFixture(runtimeLayout, runtimeLayout.configPath, {
       baseUrl: 'http://127.0.0.1:12345',
       requestHeaders: { 'X-Poc157-Token': token },
     });
-    const configured = fs.readFileSync(configPath, 'utf8');
+    const configured = fs.readFileSync(runtimeLayout.configPath, 'utf8');
     assert.match(configured, /model = "poc157-fixture-model"/);
     assert.match(configured, /\[model_providers\.poc157_fixture\]/);
     assert.match(configured, /\[mcp_servers\.poc157_identity\]/);
     assert.match(configured, /args = \["probe\.js"\]/);
     assert.match(configured, new RegExp(token));
-    assert.equal(clearFixtureConfig(configPath, snapshot.configSnapshot), true);
-    assert.equal(fs.readFileSync(configPath, 'utf8'), original);
-    assert.doesNotMatch(fs.readFileSync(configPath, 'utf8'), /X-Poc157-Token|poc157-fixture-model/);
-    assert.match(fs.readFileSync(configPath, 'utf8'), /model = "original-model"/);
-    assert.match(fs.readFileSync(configPath, 'utf8'), /model_provider = "original_provider"/);
+    assert.equal(fs.readFileSync(path.join(runtimeLayout.home, 'hooks.json'), 'utf8'), hooksText);
+    const copiedHooks = JSON.parse(fs.readFileSync(path.join(runtimeLayout.home, 'hooks.json'), 'utf8'));
+    assert.ok(copiedHooks.hooks.SessionStart[0].hooks[0].command.includes(path.join(layout.hooks, 'hook-logger.js')));
+    assert.notEqual(path.resolve(runtimeLayout.home), path.resolve(layout.home));
+
+    const interveningSourceEdit = `${original}\n[notice]\nenabled = true\n`;
+    fs.writeFileSync(sourceConfigPath, interveningSourceEdit, 'utf8');
+    assert.equal(clearFixtureConfig(runtimeLayout.configPath, snapshot.configSnapshot), true);
+    assert.equal(fs.readFileSync(runtimeLayout.configPath, 'utf8'), original);
+    assert.equal(fs.readFileSync(sourceConfigPath, 'utf8'), interveningSourceEdit);
+    assert.doesNotMatch(fs.readFileSync(runtimeLayout.configPath, 'utf8'), /X-Poc157-Token|poc157-fixture-model/);
+    assert.match(fs.readFileSync(runtimeLayout.configPath, 'utf8'), /model = "original-model"/);
+    assert.match(fs.readFileSync(runtimeLayout.configPath, 'utf8'), /model_provider = "original_provider"/);
   } finally {
-    fs.unlinkSync(configPath);
+    removeExecTestOutput(output);
   }
 });
 
-test('fixture config cleanup preserves concurrent edits instead of restoring over them', () => {
-  const configPath = path.join(os.tmpdir(), `poc157-exec-edited-config-${process.pid}-${Date.now()}.toml`);
+test('independent fixture runs receive distinct homes with only config and hooks copied', () => {
   const original = 'model = "original-model"\nmodel_provider = "original_provider"\n[mcp_servers.poc157_identity]\ncommand = "node"\n';
-  fs.writeFileSync(configPath, original, { encoding: 'utf8', flag: 'wx' });
+  const { output, layout, hooksText } = createExecTestLayout(original);
   try {
-    const configured = configureFixture({ home: path.dirname(configPath), repo: path.dirname(configPath) }, configPath, {
+    assert.throws(() => createRuntimeHome({ ...layout, home: path.join(output, 'other-home') }), /selected PoC output directories/);
+    assert.throws(() => createRuntimeHome({ ...layout, repo: path.join(output, 'other-repo') }), /selected PoC output directories/);
+
+    const first = createRuntimeHome(layout);
+    const second = createRuntimeHome(layout);
+
+    assert.notEqual(first.home, second.home);
+    assert.equal(path.dirname(first.home), path.join(output, 'runtime-homes'));
+    assert.equal(path.dirname(second.home), path.join(output, 'runtime-homes'));
+    assert.deepEqual(fs.readdirSync(first.home).sort(), ['config.toml', 'hooks.json']);
+    assert.deepEqual(fs.readdirSync(second.home).sort(), ['config.toml', 'hooks.json']);
+    assert.equal(fs.readFileSync(path.join(first.home, 'hooks.json'), 'utf8'), hooksText);
+    assert.equal(fs.readFileSync(path.join(second.home, 'hooks.json'), 'utf8'), hooksText);
+    assert.equal(fs.existsSync(path.join(first.home, 'auth.json')), false);
+    assert.equal(fs.existsSync(path.join(first.home, 'state.sqlite')), false);
+    assert.equal(fs.existsSync(path.join(first.home, 'history.jsonl')), false);
+
+    const configured = configureFixture(first, first.configPath, {
       baseUrl: 'http://127.0.0.1:12345',
       requestHeaders: { 'X-Poc157-Token': 'b'.repeat(64) },
     });
-    const interveningEdit = `${fs.readFileSync(configPath, 'utf8')}\n[notice]\nenabled = true\n`;
-    fs.writeFileSync(configPath, interveningEdit, 'utf8');
+    const interveningEdit = `${fs.readFileSync(first.configPath, 'utf8')}\n[notice]\nenabled = true\n`;
+    fs.writeFileSync(first.configPath, interveningEdit, 'utf8');
 
-    assert.equal(clearFixtureConfig(configPath, configured.configSnapshot), false);
-    assert.equal(fs.readFileSync(configPath, 'utf8'), interveningEdit);
-    assert.throws(() => clearFixtureConfig(configPath), /snapshot is required/);
+    assert.equal(clearFixtureConfig(first.configPath, configured.configSnapshot), false);
+    assert.equal(fs.readFileSync(first.configPath, 'utf8'), interveningEdit);
+    assert.throws(() => clearFixtureConfig(first.configPath), /snapshot is required/);
   } finally {
-    fs.unlinkSync(configPath);
+    removeExecTestOutput(output);
   }
 });
 

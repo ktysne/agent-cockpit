@@ -3,8 +3,8 @@
 このPoCはCodex CLI 0.160.0のHooksとMCPから、セッションとサブエージェントを識別する値が得られるか確かめる。
 記録するのは識別情報と状態情報の許可リストだけで、prompt、tool入力、tool出力、transcript、認証環境変数は記録しない。
 Hooksのイベントと入力フィールドは[公式Hooks仕様](https://learn.chatgpt.com/docs/hooks)に合わせる。
-このPoCは通常のAgent Cockpit環境には書き込まない。
-既存MCP互換runnerだけは固定fixtureを専用の一時サーバーへ書き込み、終了後にその保存先を削除する。
+exec runnerは選択した`poc/out/<slug>`の中に実行ごとの専用`CODEX_HOME`を作る。
+既存MCP互換runnerは別の専用保存先へ固定fixtureを書き込む。
 
 ## 隔離環境を作る
 
@@ -19,8 +19,13 @@ node poc/codex-hooks-identity/setup.js --out poc/out/poc157-live --codex-version
 setupは指定した出力先の中に空のGitリポジトリと専用`CODEX_HOME`を作り、HooksとMCPの設定を生成する。
 既存のCodexホーム、認証情報、認証ファイルへのsymlinkは使わない。
 実モデルを使う場合は通常のCodex認証が必要になることがあるが、このPoCのfixture実行では認証を使わず、その可否も確認しない。
-ローカルResponses fixture用の設定は`run-exec.js`が実行中だけ専用`home/config.toml`へ加え、MCP設定を保ったまま終了時に元の内容へ戻す。
-終了時の設定内容が適用済み設定から変わっていた場合は上書きせず、通常実行の結果に`config_restored: false`を記録して失敗扱いにする。
+`run-exec.js`は実行ごとに`runtime-homes/<UUID>`を作り、元の`home/config.toml`と`home/hooks.json`だけをコピーする。
+fixture providerはコピーした`config.toml`へ加え、元HOMEには書き込まない。
+`hooks.json`は内容を保ったまま複製するため、Hook commandは元HOMEの`hooks/hook-logger.js`を実行し、記録先も元HOMEの`hooks/events.jsonl`になる。
+認証ファイル、状態DB、履歴はコピーしない。
+`config.toml`内に既存の`hooks.state`があれば原文のままコピーし、新しいcommand向けの信頼情報は生成・書換えしない。
+新HOMEでCodexが信頼確認を求めた場合は通常の画面操作で判断する。
+実行終了時に専用設定を復元できなかった場合は結果に`isolated_config_restored: false`を記録して失敗扱いにする。
 
 ## CLIで確認する
 
@@ -31,7 +36,7 @@ $env:CODEX_HOME = (Resolve-Path 'poc/out/poc157-live/home').Path
 codex --no-daemon --no-alt-screen -s read-only -C 'poc/out/poc157-live/repo'
 ```
 
-CLIで`/hooks`を開き、新しいHooks定義を読み、通常の信頼確認を行う。
+CLIで`/hooks`を開き、Hooks定義を読み、通常の信頼確認を行う。
 trustを迂回する起動フラグは使わない。
 短いpromptと安全なtool操作を行い、SessionStart、PreToolUse、PostToolUse、SubagentStart、SubagentStop、Stopなどの記録を確認する。
 SubagentStopとStopはCodexが要求するJSON出力として空オブジェクト`{}`を返す。
@@ -48,17 +53,23 @@ $codexExe = Join-Path $env:APPDATA 'npm/node_modules/@openai/codex/node_modules/
 node poc/codex-hooks-identity/run-exec.js --codex-path $codexExe --out poc/out/poc157-live --serve --start-with mcp
 ```
 
-別のPowerShellで同じ専用ホームとリポジトリを指定してCLIを開き、`/hooks`から生成した定義を読み、通常の信頼確認を行う。
-確認後にCLIを終了し、fixtureを起動した端末へ`Ctrl+C`を送ってfixture runnerを停止する。
-非対話でのstdin Ctrl+Cやプロセスの強制終了では設定復元を保証しないため、停止後に専用設定を確認する。
-正常終了ではfixtureを閉じ、専用設定を元に戻す。
+runnerが出力する`isolated_home`を使って別のPowerShellからCodex CLIを開き、`/hooks`で定義と通常の信頼確認を行う。
+既存の`hooks.state`は設定ファイルの一部として原文のまま複製するが、新しいcommand向けの信頼情報は追加しない。
+Codexが信頼確認を求めた場合は通常の画面操作で判断する。
+このCLIでMCPを試す間はfixture serverを起動した端末を開いたままにする。
+確認後にCLIを終了してからfixture runnerへ`Ctrl+C`を送り、専用設定の復元結果を確認する。
 
 ```powershell
-$env:CODEX_HOME = (Resolve-Path 'poc/out/poc157-live/home').Path
+$isolatedHome = '<runner出力のisolated_home>'
+$env:CODEX_HOME = $isolatedHome
 codex --no-daemon --no-alt-screen -s read-only -C 'poc/out/poc157-live/repo'
 ```
 
-通常の信頼確認を済ませた後、次のコマンドでfixture経由の`exec`を実行する。
+非対話や強制終了では専用設定の復元を保証しない。
+停止後に専用`config.toml`を確認し、`isolated_config_restored`が`false`または結果ファイルがない場合は、fixture tokenが残っていないか確認する。
+
+次のコマンドは新しい専用HOMEを作ってfixture経由の`exec`を実行する。
+既存の`hooks.state`は原文のまま複製するが、新しいcommand向けの信頼情報は追加しない。
 
 ```powershell
 node poc/codex-hooks-identity/run-exec.js --codex-path $codexExe --out poc/out/poc157-live
@@ -67,8 +78,10 @@ node poc/codex-hooks-identity/run-exec.js --codex-path $codexExe --out poc/out/p
 RunnerはCodex 0.160.0を確認してから、認証環境変数を引き継がず、`--no-daemon exec --json --ephemeral -C <repo> -s read-only`を40秒以内で実行する。
 信頼、承認、sandboxを迂回するフラグは付けない。
 一時fixture tokenは専用設定にだけ置き、結果JSONや標準出力には含めない。
-cleanup時は設定内容が適用済みのままなら実行前の全内容を復元し、実行前へ戻っていれば何もせず、途中編集があれば上書きせず`config_restored: false`で失敗にする。
-結果JSONにはイベントの公開ID・型・状態、許可したMCP probe項目、固定fixtureメッセージ、stderrのwarning/error件数だけを保存する。
+元HOMEの設定ファイルは読み取り専用で、fixture設定は実行ごとの`isolated_home`へ保存する。
+結果JSONには`source_home`と`isolated_home`のパスを記録するが、設定内容は記録しない。
+cleanup時に専用設定がfixture適用時の内容から変わっていた場合は上書きせず、`isolated_config_restored: false`で失敗にする。
+結果JSONにはこの実行情報に加え、イベントの公開ID・型・状態、許可したMCP probe項目、固定fixtureメッセージ、stderrのwarning/error件数を保存する。
 fixture未対応またはtool errorがあれば、Codexの終了コードが0でも成功扱いにしない。
 
 このResponses backendはローカルの決定的fixtureで、モデル名はfallback metadataである。
@@ -77,10 +90,10 @@ fixture未対応またはtool errorがあれば、Codexの終了コードが0で
 MCPだけをTUIで試すときは上記の`--serve --start-with mcp`でfixtureを準備し、別のCLIから`probe_identity`を呼び出す。
 通常の許可画面で一回限りのAllowを選び、承認や信頼を迂回する設定は使わない。
 
-`config_restored: false`が出た場合はrunnerが書いた専用`CODEX_HOME`を使わず、開発者が実行前に保存した設定から手動で復元する。
-プロセスを強制終了して結果ファイルがない場合もcleanup済みとは見なさず、専用`config.toml`にfixture tokenが残る可能性があるため、開発者が実行前の設定へ戻す。
-復元元を保持していない場合は新しい`poc/out/<slug>`でsetupをやり直し、前の専用HOMEを再利用しない。
-通常のCodex HOMEは変更されない。
+`isolated_config_restored: false`が出た場合は、対象の`isolated_home`を使わず、そのHOMEの`config.toml`を確認する。
+プロセスを強制終了して結果ファイルがない場合もcleanup済みとは見なさない。
+fixture tokenが残っている場合は専用HOME内の設定だけを復元するか、新しい`poc/out/<slug>`でsetupをやり直す。
+元HOMEの設定ファイルは読み取りだけなので、fixture設定やcleanupによる変更は受けない。
 
 ## app-serverからMCPを確認する
 

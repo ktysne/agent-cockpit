@@ -23,6 +23,7 @@ const VERSION_TIMEOUT_MS = 10000;
 const MAX_EVENT_LINE_CHARS = 2 * 1024 * 1024;
 const MAX_EVENT_SUMMARIES = 512;
 const MAX_PROBE_RESULTS = 16;
+const RUNTIME_HOME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OS_ENVIRONMENT = [
   'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'PROGRAMDATA',
   'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'COMSPEC',
@@ -107,6 +108,78 @@ function validatePaths(codexPath, outputDirectory) {
   return { executable, layout, configPath };
 }
 
+function readRegularFile(filePath, message) {
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(message);
+  return fs.readFileSync(filePath);
+}
+
+function assertRuntimeHome(output, home, configPath) {
+  const outputPath = resolveOutputDirectory(output);
+  const runtimeHomes = path.join(outputPath, 'runtime-homes');
+  const isolatedHome = path.resolve(home);
+  const relativeHome = path.relative(runtimeHomes, isolatedHome);
+  if (!RUNTIME_HOME_ID_PATTERN.test(relativeHome) || path.isAbsolute(relativeHome)) {
+    throw new Error('Isolated Codex home must be a direct runtime-homes child');
+  }
+  const repositoryRoot = fs.realpathSync(path.resolve(__dirname, '..', '..'));
+  assertNoSymlinkComponents(repositoryRoot, outputPath);
+  assertNoSymlinkComponents(outputPath, isolatedHome);
+  for (const directory of [runtimeHomes, isolatedHome]) {
+    const stat = fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Isolated Codex home path must contain real directories');
+  }
+  if (configPath && path.resolve(configPath) !== path.join(isolatedHome, 'config.toml')) {
+    throw new Error('Fixture config cleanup is restricted to the isolated Codex home');
+  }
+  return { output: outputPath, home: isolatedHome, configPath: path.join(isolatedHome, 'config.toml') };
+}
+
+function createRuntimeHome(sourceLayout) {
+  const output = resolveOutputDirectory(sourceLayout.output);
+  const repositoryRoot = fs.realpathSync(path.resolve(__dirname, '..', '..'));
+  assertNoSymlinkComponents(repositoryRoot, output);
+  if (path.resolve(sourceLayout.home) !== path.join(output, 'home') ||
+    path.resolve(sourceLayout.repo) !== path.join(output, 'repo')) {
+    throw new Error('Source home and repository must be the selected PoC output directories');
+  }
+  for (const directory of [sourceLayout.home, sourceLayout.repo]) {
+    const stat = fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('PoC home and repository must be real directories');
+  }
+  const sourceConfigPath = path.join(sourceLayout.home, 'config.toml');
+  const sourceHooksPath = path.join(sourceLayout.home, 'hooks.json');
+  const files = [
+    { name: 'config.toml', contents: readRegularFile(sourceConfigPath, 'Dedicated config must be a regular file') },
+    { name: 'hooks.json', contents: readRegularFile(sourceHooksPath, 'Dedicated hooks config must be a regular file') },
+  ];
+  const runtimeHomes = path.join(output, 'runtime-homes');
+  assertNoSymlinkComponents(repositoryRoot, runtimeHomes);
+  try {
+    fs.mkdirSync(runtimeHomes, { mode: 0o700 });
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  const runtimeHomesStat = fs.lstatSync(runtimeHomes);
+  if (!runtimeHomesStat.isDirectory() || runtimeHomesStat.isSymbolicLink()) {
+    throw new Error('Runtime homes directory must be a real directory');
+  }
+  const home = path.join(runtimeHomes, randomUUID());
+  fs.mkdirSync(home, { mode: 0o700 });
+  assertNoSymlinkComponents(output, home);
+  for (const file of files) {
+    fs.writeFileSync(path.join(home, file.name), file.contents, { flag: 'wx', mode: 0o600 });
+  }
+  return {
+    ...sourceLayout,
+    output,
+    sourceHome: sourceLayout.home,
+    home,
+    configPath: path.join(home, 'config.toml'),
+    hooksPath: path.join(home, 'hooks.json'),
+  };
+}
+
 function splitConfigSections(configText) {
   const rootLines = [];
   const tables = [];
@@ -151,6 +224,7 @@ function replaceConfigAtomically(configPath, expectedContents, nextContents) {
 }
 
 function configureFixture(layout, configPath, fixture) {
+  const isolated = assertRuntimeHome(layout.output, layout.home, configPath);
   const current = fs.readFileSync(configPath, 'utf8');
   if (!/^\[mcp_servers\.poc157_identity\]\s*$/m.test(current)) {
     throw new Error('Dedicated config is missing the poc157_identity MCP server table');
@@ -177,15 +251,28 @@ function configureFixture(layout, configPath, fixture) {
   const contents = [...preservedRoot, ...provider.trimEnd().split('\n'), ...preservedTables].join('\n');
   replaceConfigAtomically(configPath, current, contents);
   return {
-    home: layout.home,
+    sourceHome: layout.sourceHome,
+    home: isolated.home,
     repo: layout.repo,
-    configSnapshot: { originalConfig: current, appliedConfig: contents },
+    configSnapshot: {
+      output: isolated.output,
+      isolatedHome: isolated.home,
+      configPath: isolated.configPath,
+      originalConfig: current,
+      appliedConfig: contents,
+    },
   };
 }
 
 function clearFixtureConfig(configPath, configSnapshot) {
-  if (!configSnapshot || typeof configSnapshot.originalConfig !== 'string' || typeof configSnapshot.appliedConfig !== 'string') {
+  if (!configSnapshot || typeof configSnapshot.originalConfig !== 'string' || typeof configSnapshot.appliedConfig !== 'string' ||
+    typeof configSnapshot.output !== 'string' || typeof configSnapshot.isolatedHome !== 'string' ||
+    typeof configSnapshot.configPath !== 'string') {
     throw new Error('Fixture config snapshot is required for safe cleanup');
+  }
+  assertRuntimeHome(configSnapshot.output, configSnapshot.isolatedHome, configPath);
+  if (path.resolve(configSnapshot.configPath) !== path.resolve(configPath)) {
+    throw new Error('Fixture config snapshot does not match its isolated config path');
   }
   const stat = fs.lstatSync(configPath);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Dedicated config must be a regular file');
@@ -487,7 +574,8 @@ function createFixtureRequestsSummary(requests) {
   };
 }
 
-function buildResult({ run, version, fixture, childResult, eventResult, stderrResult, startWith = 'command' }) {
+function buildResult({ run, version, fixture, childResult, eventResult, stderrResult, startWith = 'command',
+  sourceHome = 'unknown', isolatedHome = 'unknown' }) {
   const unsupported = typeof fixture.unsupported === 'string';
   const fixtureRequests = createFixtureRequestsSummary(fixture.requests);
   const timedOut = childResult.timedOut;
@@ -513,6 +601,8 @@ function buildResult({ run, version, fixture, childResult, eventResult, stderrRe
     target_version: version.version,
     run_mode: run,
     start_with: startWith,
+    source_home: sourceHome,
+    isolated_home: isolatedHome,
     child: {
       exit_code: Number.isInteger(childResult.exitCode) ? childResult.exitCode : 'unknown',
       signal: childResult.signal || 'none',
@@ -596,9 +686,10 @@ function runExecChild(executable, layout, options = {}) {
 
 async function startFixture(outputDirectory, codexPath, options = {}) {
   const paths = validatePaths(codexPath, outputDirectory);
+  const layout = createRuntimeHome(paths.layout);
   const startWith = options.startWith || 'command';
-  const version = await runVersionCheck(paths.executable, paths.layout.home, {
-    cwd: paths.layout.repo,
+  const version = await runVersionCheck(paths.executable, layout.home, {
+    cwd: layout.repo,
     environment: options.environment,
   });
   const fixture = await createFixtureServer({
@@ -607,8 +698,18 @@ async function startFixture(outputDirectory, codexPath, options = {}) {
     startWith,
   }).start();
   try {
-    const configured = configureFixture(paths.layout, paths.configPath, fixture);
-    return { ...paths, version, fixture, startWith, configSnapshot: configured.configSnapshot };
+    const configured = configureFixture(layout, layout.configPath, fixture);
+    return {
+      ...paths,
+      layout,
+      configPath: layout.configPath,
+      sourceHome: paths.layout.home,
+      isolatedHome: layout.home,
+      version,
+      fixture,
+      startWith,
+      configSnapshot: configured.configSnapshot,
+    };
   } catch (error) {
     await fixture.close();
     throw error;
@@ -635,6 +736,7 @@ async function runExecProbe(options) {
   const started = await startFixture(options.outputDirectory, options.codexPath, options);
   let result;
   let configRestored = false;
+  let configCleanupFailed = false;
   try {
     const childResult = await runExecChild(started.executable, started.layout, options);
     result = buildResult({
@@ -642,6 +744,8 @@ async function runExecProbe(options) {
       startWith: started.startWith,
       version: started.version,
       fixture: started.fixture,
+      sourceHome: started.sourceHome,
+      isolatedHome: started.isolatedHome,
       childResult,
       eventResult: childResult.eventResult,
       stderrResult: childResult.stderrResult,
@@ -650,13 +754,17 @@ async function runExecProbe(options) {
     try {
       await started.fixture.close();
     } finally {
-      configRestored = clearFixtureConfig(started.configPath, started.configSnapshot);
+      try {
+        configRestored = clearFixtureConfig(started.configPath, started.configSnapshot);
+      } catch {
+        configCleanupFailed = true;
+      }
     }
   }
-  result.config_restored = configRestored;
+  result.isolated_config_restored = configRestored;
   if (!configRestored) {
     result.success = false;
-    result.failure_reasons.push('fixture_config_changed_during_run');
+    result.failure_reasons.push(configCleanupFailed ? 'isolated_config_cleanup_failed' : 'isolated_config_changed_during_run');
   }
   const filePath = path.join(started.layout.output, resultsFileName());
   fs.writeFileSync(filePath, `${JSON.stringify(result, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
@@ -666,6 +774,7 @@ async function runExecProbe(options) {
 async function serveFixture(options) {
   const started = await startFixture(options.outputDirectory, options.codexPath, options);
   let configRestored = false;
+  let configCleanupFailed = false;
   try {
     await holdServeMode(started.fixture, {
       mode: 'serve',
@@ -674,7 +783,9 @@ async function serveFixture(options) {
       real_model_observed: false,
       codex_version: started.version.version,
       start_with: started.startWith,
-      home: started.layout.home,
+      source_home: started.sourceHome,
+      isolated_home: started.isolatedHome,
+      home: started.isolatedHome,
       repo: started.layout.repo,
       exec_started: false,
     });
@@ -682,10 +793,18 @@ async function serveFixture(options) {
     try {
       await started.fixture.close();
     } finally {
-      configRestored = clearFixtureConfig(started.configPath, started.configSnapshot);
+      try {
+        configRestored = clearFixtureConfig(started.configPath, started.configSnapshot);
+      } catch {
+        configCleanupFailed = true;
+      }
     }
   }
-  if (!configRestored) throw new Error('Dedicated fixture config changed while serving; it was left untouched');
+  if (!configRestored) {
+    throw new Error(configCleanupFailed
+      ? 'Isolated fixture config cleanup failed; the source home was not modified'
+      : 'Isolated fixture config changed while serving; it was left untouched');
+  }
 }
 
 if (require.main === module) {
@@ -701,7 +820,7 @@ if (require.main === module) {
       process.stdout.write(`${JSON.stringify({
         file: filePath,
         success: result.success,
-        config_restored: result.config_restored,
+        isolated_config_restored: result.isolated_config_restored,
         failure_reasons: result.failure_reasons,
       })}\n`);
       if (!result.success) process.exitCode = 1;
@@ -721,6 +840,7 @@ module.exports = {
   clearFixtureConfig,
   configureFixture,
   createEventCollector,
+  createRuntimeHome,
   createFixtureRequestsSummary,
   execArguments,
   holdServeMode,
