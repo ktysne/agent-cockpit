@@ -822,6 +822,17 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   assert.equal(unverifiableBadge.className, 'badge mute');
   assert.ok(!textOf(unverifiable).includes('レビューの後に変更あり'));
 
+  const skipButtonOf = (crossReview, headRefOid = headSha) => allNodes(line({ headRefOid, mergeRecordKey: 'skip-key', crossReview }))
+    .find((node) => node.dataset?.reviewSkip === 'set');
+  assert.ok(skipButtonOf(null));
+  assert.ok(skipButtonOf({ unavailable: true }));
+  assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha }, 'b'.repeat(40)));
+  assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'fixing' } }));
+  assert.ok(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'converged' } }));
+  assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' } }), undefined);
+  assert.equal(skipButtonOf({ round: 2, max: 3, dismissed: 1, reviewedSha: headSha }), undefined);
+  assert.equal(skipButtonOf({ round: 1, max: 3, dismissed: 0, reviewedSha: null }), undefined);
+
   const changedAfter64DigitReview = context.crossReviewState({
     headRefOid: 'e'.repeat(64),
     crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: 'd'.repeat(64) },
