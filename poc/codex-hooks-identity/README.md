@@ -57,7 +57,8 @@ runnerが出力する`isolated_home`を使って別のPowerShellからCodex CLI�
 既存の`hooks.state`は設定ファイルの一部として原文のまま複製するが、新しいcommand向けの信頼情報は追加しない。
 Codexが信頼確認を求めた場合は通常の画面操作で判断する。
 このCLIでMCPを試す間はfixture serverを起動した端末を開いたままにする。
-確認後にCLIを終了してからfixture runnerへ`Ctrl+C`を送り、専用設定の復元結果を確認する。
+確認後にCLIを終了してからfixture runnerへ`Ctrl+C`を送る。
+runnerは終了時に`mode: "serve_cleanup"`、`isolated_home`、`isolated_config_restored`を出力する。
 
 ```powershell
 $isolatedHome = '<runner出力のisolated_home>'
@@ -66,7 +67,7 @@ codex --no-daemon --no-alt-screen -s read-only -C 'poc/out/poc157-live/repo'
 ```
 
 非対話や強制終了では専用設定の復元を保証しない。
-停止後に専用`config.toml`を確認し、`isolated_config_restored`が`false`または結果ファイルがない場合は、fixture tokenが残っていないか確認する。
+cleanup結果が出ない場合、または`isolated_config_restored`が`false`の場合は専用`config.toml`を確認し、fixture tokenが残っていないか調べる。
 
 次のコマンドは新しい専用HOMEを作ってfixture経由の`exec`を実行する。
 既存の`hooks.state`は原文のまま複製するが、新しいcommand向けの信頼情報は追加しない。
@@ -80,6 +81,7 @@ RunnerはCodex 0.160.0を確認してから、認証環境変数を引き継が�
 一時fixture tokenは専用設定にだけ置き、結果JSONや標準出力には含めない。
 元HOMEの設定ファイルは読み取り専用で、fixture設定は実行ごとの`isolated_home`へ保存する。
 結果JSONには`source_home`と`isolated_home`のパスを記録するが、設定内容は記録しない。
+結果ファイル名には実行時刻と`isolated_home`のUUIDを使い、同じ秒に並行実行しても別ファイルへ保存する。
 cleanup時に専用設定がfixture適用時の内容から変わっていた場合は上書きせず、`isolated_config_restored: false`で失敗にする。
 結果JSONにはこの実行情報に加え、イベントの公開ID・型・状態、許可したMCP probe項目、固定fixtureメッセージ、stderrのwarning/error件数を保存する。
 fixture未対応またはtool errorがあれば、Codexの終了コードが0でも成功扱いにしない。
@@ -147,7 +149,9 @@ MCP設定で`CLAUDE_CODE_SESSION_ID`を明示的に転送するとsynthetic値�
 呼出し側が別の`_meta.threadId`を指定しても実thread IDに置き換わり、明示引数に別thread IDを渡した試験でも照合結果は不一致になった。
 別の専用TUI fixture実測では、MCPだけを起動した後に通常の一回限りのAllowを選ぶと`probe_identity`が成功し、`_meta.threadId`はSessionStartのIDと一致した。
 4つの`CODEX_*`環境変数候補はMCPプロセスに渡らなかった。
-この観測は固定応答fixtureを使ったTUI経路に限り、実モデル応答やデスクトップアプリでは確認していない。
+このTUIの観測は固定応答fixtureによるもの。
+実モデルのデスクトップ親・ネイティブ子については、別の試験で各MCPの`_meta.threadId`とフックの親子識別を確認した。
+実測の範囲と未確認項目は[検証記録](../../docs/poc-codex-157.md)にある。
 実測結果は`poc/out/poc157-live/rpc-results-*.json`に出力される。
 
 既存MCP互換runnerでは、native threadを2件作り各3 tool callを行うと全呼出しが成功した。

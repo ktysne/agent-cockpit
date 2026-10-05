@@ -628,9 +628,11 @@ function buildResult({ run, version, fixture, childResult, eventResult, stderrRe
   };
 }
 
-function resultsFileName(date = new Date()) {
+function resultsFileName(date, runId) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) throw new Error('Result timestamp must be a valid date');
+  if (typeof runId !== 'string' || !RUNTIME_HOME_ID_PATTERN.test(runId)) throw new Error('Result run ID must be a UUID');
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-  return `exec-results-${stamp}.json`;
+  return `exec-results-${stamp}-${runId}.json`;
 }
 
 function runExecChild(executable, layout, options = {}) {
@@ -766,7 +768,7 @@ async function runExecProbe(options) {
     result.success = false;
     result.failure_reasons.push(configCleanupFailed ? 'isolated_config_cleanup_failed' : 'isolated_config_changed_during_run');
   }
-  const filePath = path.join(started.layout.output, resultsFileName());
+  const filePath = path.join(started.layout.output, resultsFileName(new Date(), path.basename(started.isolatedHome)));
   fs.writeFileSync(filePath, `${JSON.stringify(result, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   return { filePath, result };
 }
@@ -800,6 +802,11 @@ async function serveFixture(options) {
       }
     }
   }
+  process.stdout.write(`${JSON.stringify({
+    mode: 'serve_cleanup',
+    isolated_home: started.isolatedHome,
+    isolated_config_restored: configRestored,
+  })}\n`);
   if (!configRestored) {
     throw new Error(configCleanupFailed
       ? 'Isolated fixture config cleanup failed; the source home was not modified'

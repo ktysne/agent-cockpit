@@ -28,6 +28,7 @@ const {
   execArguments,
   makeChildEnvironment: makeExecChildEnvironment,
   parseArguments: parseExecArguments,
+  resultsFileName,
   summarizeEvent,
 } = require('./run-exec');
 
@@ -423,6 +424,30 @@ test('independent fixture runs receive distinct homes with only config and hooks
     assert.throws(() => clearFixtureConfig(first.configPath), /snapshot is required/);
   } finally {
     removeExecTestOutput(output);
+  }
+});
+
+test('result filenames include the private home UUID and preserve same-second runs', () => {
+  const date = new Date('2026-10-06T10:00:00.000Z');
+  const firstName = resultsFileName(date, '11111111-1111-4111-8111-111111111111');
+  const secondName = resultsFileName(date, '22222222-2222-4222-8222-222222222222');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'poc157-exec-results-'));
+
+  try {
+    assert.notEqual(firstName, secondName);
+    fs.writeFileSync(path.join(directory, firstName), '{}\n', { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(path.join(directory, secondName), '{}\n', { encoding: 'utf8', flag: 'wx' });
+    assert.deepEqual(fs.readdirSync(directory).sort(), [firstName, secondName].sort());
+    assert.throws(() => resultsFileName(date, 'not-a-uuid'), /UUID/);
+  } finally {
+    for (const fileName of [firstName, secondName]) {
+      try {
+        fs.unlinkSync(path.join(directory, fileName));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+    fs.rmdirSync(directory);
   }
 });
 
