@@ -5,22 +5,18 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { CLAUDE_ROUTE_CONTEXT, CODEX_ROUTE_CONTEXT, commandInvokesCodexAgent, outputForInputText, outputForRoute } = require('../src/hooks/route');
+const { temporaryDirectory } = require('./support/temp');
 
 async function temporaryHome(t, routing = { agents: 'default', review: 'default' }, withCodexAgent = true) {
-  const previousClaudeHome = process.env.CLAUDE_CONFIG_DIR;
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-route-hook-'));
-  process.env.CLAUDE_CONFIG_DIR = homeDir;
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-route-hook-', {
+    environment: { CLAUDE_CONFIG_DIR: (directory) => directory },
+  }).directory;
   await fs.writeFile(path.join(homeDir, 'routing.json'), JSON.stringify(routing));
   if (withCodexAgent) {
     const toolsDirectory = path.join(homeDir, 'tools');
     await fs.mkdir(toolsDirectory);
     await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');
   }
-  t.after(async () => {
-    if (previousClaudeHome === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-    else process.env.CLAUDE_CONFIG_DIR = previousClaudeHome;
-    await fs.rm(homeDir, { recursive: true, force: true });
-  });
   return homeDir;
 }
 
@@ -242,8 +238,7 @@ test('経路記録を書けない SubagentStart は応答を返さない', async
 });
 
 test('routing.json を読めない場合はフック出力を返さない', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-route-missing-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-route-missing-').directory;
   const toolsDirectory = path.join(homeDir, 'tools');
   await fs.mkdir(toolsDirectory);
   await fs.writeFile(path.join(toolsDirectory, 'codex-agent.sh'), '');

@@ -19,64 +19,11 @@ const {
   shouldRefreshPullRequests,
 } = require('../src/server/pull-request-utils');
 const { DashboardState } = require('../src/server/state');
+const { temporaryDirectory: createTemporaryDirectory } = require('./support/temp');
+const { ghPullRequest, pullRequest, pullRequestRegistration } = require('./support/github');
 
 async function temporaryDirectory(testContext) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-test-'));
-  testContext.after(() => fs.rm(directory, { recursive: true, force: true }));
-  return directory;
-}
-
-function pullRequest(number, headRefName, baseRefName, changes = {}) {
-  return {
-    number,
-    title: `PR ${number}`,
-    url: `https://github.com/example/project/pull/${number}`,
-    headRefName,
-    baseRefName,
-    headRefOid: String(number).padStart(40, '0'),
-    draft: false,
-    mergeable: 'MERGEABLE',
-    mergeStateStatus: 'CLEAN',
-    reviewDecision: '',
-    ci: 'pass',
-    review: 'none',
-    conflict: false,
-    state: 'open',
-    mergedAt: null,
-    ...changes,
-  };
-}
-
-function registration(number, state = 'open', lastOpen = null) {
-  return {
-    session_id: `session-${number}`,
-    owner: 'example',
-    repo: 'project',
-    number,
-    url: `https://github.com/example/project/pull/${number}`,
-    addedAt: '2026-10-03T00:00:00.000Z',
-    cwd: null,
-    product: { key: 'project', name: 'project' },
-    state,
-    mergedAt: null,
-    lastOpen,
-  };
-}
-
-function ghPullRequest(number, headRefName, baseRefName, sha) {
-  return {
-    number,
-    title: `PR ${number}`,
-    url: `https://github.com/example/project/pull/${number}`,
-    headRefName,
-    baseRefName,
-    headRefOid: sha,
-    isDraft: false,
-    mergeable: 'MERGEABLE',
-    mergeStateStatus: 'CLEAN',
-    reviewDecision: '',
-    statusCheckRollup: [{ state: 'SUCCESS', conclusion: 'SUCCESS' }],
-  };
+  return createTemporaryDirectory(testContext, 'agent-cockpit-pr-test-').directory;
 }
 
 function mergedPullRequest(number, headRefOid, mergedAt = '2026-10-03T11:00:00.000Z') {
@@ -201,7 +148,7 @@ test('gh の一覧 JSON から記録した PR の親と分岐した子を含め�
   const result = assemblePullRequestStacks({
     defaultBranch: 'main',
     openPullRequests,
-    registrations: [registration(11)],
+    registrations: [pullRequestRegistration(11)],
     restackResults: checkedRestackResults(openPullRequests),
   });
   assert.equal(result.openCount, 3);
@@ -216,14 +163,14 @@ test('gh の一覧 JSON から記録した PR の親と分岐した子を含め�
 
 test('merged parent の base をたどり、常駐サーバーの付け替え記録を維持する', () => {
   const child = pullRequest(33, 'feat/child', 'feat/merged');
-  const merged = registration(32, 'merged', {
+  const merged = pullRequestRegistration(32, { state: 'merged', lastOpen: {
     title: 'merged', url: 'https://github.com/example/project/pull/32',
     headRefName: 'feat/merged', baseRefName: 'main', headRefOid: 'a'.repeat(40),
     isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: '',
     ci: 'pass', review: 'none', conflict: false,
-  });
+  } });
   const withoutRetarget = assemblePullRequestStacks({
-    defaultBranch: 'main', openPullRequests: [child], registrations: [registration(33), merged],
+    defaultBranch: 'main', openPullRequests: [child], registrations: [pullRequestRegistration(33), merged],
     restackResults: checkedRestackResults([child]),
   }).trees[0];
   assert.equal(withoutRetarget.effectiveBase, 'main');
@@ -231,7 +178,7 @@ test('merged parent の base をたどり、常駐サーバーの付け替え記
   assert.equal(withoutRetarget.blocker, 'base を main に付け替える必要がある');
 
   const withRetarget = assemblePullRequestStacks({
-    defaultBranch: 'main', openPullRequests: [child], registrations: [registration(33), merged],
+    defaultBranch: 'main', openPullRequests: [child], registrations: [pullRequestRegistration(33), merged],
     retargetedPrs: [{ owner: 'example', repo: 'project', number: 33, base: 'main', fromNumber: 32 }],
     restackResults: checkedRestackResults([child]),
   }).trees[0];
@@ -278,7 +225,7 @@ test('マージできない理由は base、スタック、ドラフト、積み
     const result = assemblePullRequestStacks({
       defaultBranch: 'main',
       openPullRequests: item.pullRequests,
-      registrations: [registration(item.number), ...(item.number === 22 ? [registration(21)] : [])],
+      registrations: [pullRequestRegistration(item.number), ...(item.number === 22 ? [pullRequestRegistration(21)] : [])],
       retargetedPrs: item.retargetedPrs || [],
       restackResults,
     });
@@ -1217,10 +1164,10 @@ test('マージ済みの一覧を最古のオープン PR の作成日以降に�
 test('親だけを登録したスタックで、親がマージされ子の base が main に付け替わっても子を表示し続ける', () => {
   const parentSha = 'a'.repeat(40);
   const child = pullRequest(31, 'feat/child', 'main');
-  const parent = registration(30, 'merged', {
+  const parent = pullRequestRegistration(30, { state: 'merged', lastOpen: {
     title: 'PR 30', url: 'https://github.com/example/project/pull/30',
     headRefName: 'feat/parent', baseRefName: 'main', headRefOid: parentSha,
-  });
+  } });
   const result = assemblePullRequestStacks({
     defaultBranch: 'main',
     openPullRequests: [child],

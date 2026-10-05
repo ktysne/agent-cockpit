@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { DashboardState } = require('../src/server/state');
+const { temporaryDirectory } = require('./support/temp');
 
 const NOW = Date.UTC(2026, 9, 2, 1, 2, 3);
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -19,9 +20,7 @@ const QUESTIONS = [{
 }];
 
 async function temporaryHome(testContext) {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-ask-persistence-'));
-  testContext.after(() => fs.rm(homeDir, { recursive: true, force: true }));
-  return homeDir;
+  return temporaryDirectory(testContext, 'agent-cockpit-ask-persistence-').directory;
 }
 
 function askEvent(sessionId, toolUseId, hookEventName, hookAt, extra = {}) {

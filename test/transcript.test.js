@@ -4,14 +4,14 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { MAX_TRANSCRIPT_BYTES, estimateTranscript } = require('../src/server/transcript');
+const { temporaryDirectory } = require('./support/temp');
 
 async function transcriptFixture(testContext, sessionId = 'session_1') {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-transcript-'));
+  const home = temporaryDirectory(testContext, 'agent-cockpit-transcript-').directory;
   const cwd = path.join(home, 'workspace', 'project');
   const projectName = cwd.replace(/[^A-Za-z0-9]/g, '-');
   const projectDirectory = path.join(home, '.claude', 'projects', projectName);
   await fs.mkdir(projectDirectory, { recursive: true });
-  testContext.after(() => fs.rm(home, { recursive: true, force: true }));
   return {
     claudeHome: path.join(home, '.claude'),
     cwd,

@@ -5,9 +5,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 const { AWAY_CONTEXT, TASK_CONTEXT, runAwayHook, sessionSummary } = require('../src/hooks/away');
+const { temporaryDirectory } = require('./support/temp');
 
 async function temporaryHome(testContext, withServerInfo = true) {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-away-test-'));
+  const homeDir = temporaryDirectory(testContext, 'agent-cockpit-away-test-').directory;
   if (withServerInfo) {
     await fs.writeFile(path.join(homeDir, 'server.json'), JSON.stringify({
       pid: process.pid,
@@ -16,7 +17,6 @@ async function temporaryHome(testContext, withServerInfo = true) {
       startedAt: '2026-10-02T00:00:00.000Z',
     }));
   }
-  testContext.after(() => fs.rm(homeDir, { recursive: true, force: true }));
   return homeDir;
 }
 

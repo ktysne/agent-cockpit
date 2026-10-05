@@ -3,39 +3,18 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { cssDeclarations, functionSource } = require('./support/page-context');
 
 const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 
-function functionSource(source, name) {
-  return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
-}
-
-function styleSource(html) {
-  return html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || '';
-}
-
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function ruleBlocks(css, selector) {
-  const pattern = new RegExp(`${escapeRegex(selector)}\\s*\\{([^}]*)\\}`, 'g');
-  return [...css.matchAll(pattern)].map((match) => match[1]);
-}
-
-function property(block, name) {
-  return block.match(new RegExp(`(?:^|[;\\s])${escapeRegex(name)}:\\s*([^;]+)`))?.[1]?.trim();
-}
-
-function themeVariables(css, theme) {
-  const block = theme === 'light'
-    ? css.match(/:root\s*\{([^}]*)\}/)?.[1]
-    : css.match(/:root\[data-theme="dark"\]\s*\{([^}]*)\}/)?.[1];
-  assert.ok(block, `${theme} テーマの変数ブロックがある`);
+function themeVariables(html, theme) {
+  const selector = theme === 'light' ? ':root' : ':root[data-theme="dark"]';
+  const variables = Object.fromEntries(cssDeclarations(html, selector));
+  assert.ok(Object.keys(variables).length, `${theme} テーマの変数ブロックがある`);
   return (name) => {
-    const value = block.match(new RegExp(`(?:^|[;\\s])${escapeRegex(name)}:\\s*(#[\\da-f]{6})`, 'i'))?.[1];
-    assert.ok(value, `${theme} の ${name} が色として定義されている`);
+    const value = variables[name];
+    assert.match(value || '', /^#[\da-f]{6}$/i, `${theme} の ${name} が色として定義されている`);
     return value;
   };
 }
@@ -92,16 +71,14 @@ test('ライトとダークの状態色およびボタン文字のコントラ�
   ];
 
   for (const { html, statuses } of cases) {
-    const css = styleSource(html);
     for (const theme of ['light', 'dark']) {
-      const color = themeVariables(css, theme);
+      const color = themeVariables(html, theme);
       for (const [foregroundToken, backgroundToken, selectors] of statuses) {
         for (const selector of selectors) {
-          const blocks = ruleBlocks(css, selector);
-          assert.ok(blocks.length, `${selector} のルールがある`);
-          for (const block of blocks) {
-            assert.equal(property(block, 'color'), `var(${foregroundToken})`, `${selector} の文字色`);
-          }
+          const declarations = cssDeclarations(html, selector, { includeMoreSpecific: true, includeRepeated: true });
+          const colors = declarations.filter(([property]) => property === 'color');
+          assert.ok(colors.length, `${selector} のルールがある`);
+          assert.ok(colors.every(([, value]) => value === `var(${foregroundToken})`), `${selector} の文字色`);
         }
         const ratio = contrastRatio(color(foregroundToken), color(backgroundToken));
         assert.ok(ratio >= 4.5, `${theme} ${foregroundToken} / ${backgroundToken}: ${ratio.toFixed(2)}対1`);
@@ -118,11 +95,11 @@ test('ライトとダークの状態色およびボタン文字のコントラ�
       }
     }
 
-    const hiddenChip = ruleBlocks(css, 'button.chip[aria-pressed="false"]')[0];
-    assert.ok(hiddenChip);
-    assert.equal(property(hiddenChip, 'background'), 'transparent');
-    assert.equal(property(hiddenChip, 'text-decoration'), 'line-through');
-    assert.equal(property(hiddenChip, 'opacity'), undefined);
+    const hiddenChip = Object.fromEntries(cssDeclarations(html, 'button.chip[aria-pressed="false"]'));
+    assert.ok(Object.keys(hiddenChip).length);
+    assert.equal(hiddenChip.background, 'transparent');
+    assert.equal(hiddenChip['text-decoration'], 'line-through');
+    assert.equal(hiddenChip.opacity, undefined);
   }
 });
 

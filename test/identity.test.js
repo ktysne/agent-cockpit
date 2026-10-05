@@ -5,11 +5,10 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { branchFromCwd } = require('../src/server/identity');
+const { temporaryDirectory: createTemporaryDirectory } = require('./support/temp');
 
 async function temporaryDirectory(testContext) {
-  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-identity-'));
-  testContext.after(() => fsp.rm(directory, { recursive: true, force: true }));
-  return directory;
+  return createTemporaryDirectory(testContext, 'agent-cockpit-identity-').directory;
 }
 
 test('通常のリポジトリからブランチ名を取得する', async (t) => {

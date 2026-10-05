@@ -4,10 +4,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { expandGuideMaps } = require('../tools/manual/guide-map');
+const { temporaryDirectory } = require('./support/temp');
 
 function makeManual(t, parts = [{ key: 'button', bounds: { x: 20, y: 10, width: 60, height: 20 }, visible: true }]) {
-  const manualRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-guide-map-'));
-  t.after(() => fs.rmSync(manualRoot, { recursive: true, force: true }));
+  const manualRoot = temporaryDirectory(t, 'agent-cockpit-guide-map-').directory;
   const imageRoot = path.join(manualRoot, 'img', 'sample');
   fs.mkdirSync(imageRoot, { recursive: true });
   fs.writeFileSync(path.join(imageRoot, 'screen.png'), Buffer.from([137, 80, 78, 71]));

@@ -5,13 +5,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('../src/server/state');
 const { AtomicJsonWriter } = require('../src/server/json-storage');
+const { temporaryDirectory } = require('./support/temp');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function temporaryHome(testContext) {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-store-test-'));
-  testContext.after(() => fs.rm(homeDir, { recursive: true, force: true }));
-  return homeDir;
+  return temporaryDirectory(testContext, 'agent-cockpit-store-test-').directory;
 }
 
 function task(title, state = 'doing') {
@@ -495,6 +494,7 @@ test('実行中の prune でセッション記録を削除すると version を�
 });
 
 test('通常の保存は500msでまとめ、回答記録の変更は待たずに書く', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const homeDir = await temporaryHome(t);
   let writes = 0;
   const fileSystem = {
@@ -510,9 +510,10 @@ test('通常の保存は500msでまとめ、回答記録の変更は待たずに
   state.attachWriter(writer);
   state.setTasks('debounced', [task('最初の一覧')]);
   state.setTasks('debounced', [task('まとめた一覧')]);
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  t.mock.timers.tick(499);
   assert.equal(writes, 0);
-  await new Promise((resolve) => setTimeout(resolve, 450));
+  t.mock.timers.tick(1);
+  t.mock.timers.reset();
   await state.waitForPersistence();
   assert.equal(writes, 1);
 

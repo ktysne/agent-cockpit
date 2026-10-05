@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { globalGuardEvents, globalSettingsPath, isMostlyEnglish, output } = require('../.claude/hooks/japanese-guard');
+const { temporaryDirectory } = require('./support/temp');
 
 const SCRIPT = path.join(__dirname, '..', '.claude', 'hooks', 'japanese-guard.js');
 const ENGLISH = 'The build finished and all of the tests passed without any failures.';
@@ -96,8 +97,7 @@ test('ユーザー設定の場所は CLAUDE_CONFIG_DIR を優先する', () => {
 });
 
 test('スクリプトとして起動すると、グローバル版の登録の有無で出力を切り替える', (t) => {
-  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-japanese-guard-'));
-  t.after(() => fs.rmSync(claudeHome, { recursive: true, force: true }));
+  const claudeHome = temporaryDirectory(t, 'agent-cockpit-japanese-guard-').directory;
   fs.mkdirSync(path.join(claudeHome, 'hooks'));
   fs.writeFileSync(path.join(claudeHome, 'hooks', 'japanese-guard.js'), '');
   const run = () => spawnSync(process.execPath, [SCRIPT], {

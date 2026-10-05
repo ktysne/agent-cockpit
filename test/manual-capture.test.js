@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { temporaryDirectory } = require('./support/temp');
 const {
   validateShotDefinition,
   storageEntries,
@@ -160,8 +161,7 @@ test('画像の大きさは PNG のヘッダから読み、PNG でないもの�
 });
 
 test('中身が前と同じファイルは書き換えない', async (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-write-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const directory = temporaryDirectory(t, 'agent-cockpit-write-').directory;
   const file = path.join(directory, 'nested', 'a.json');
   assert.equal(await writeIfChanged(file, '{"a":1}\n'), true);
   const before = fs.statSync(file).mtimeMs;

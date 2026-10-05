@@ -6,11 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { RoutingState, readRouting, readRoutingSync } = require('../src/server/routing');
 const { atomicWriteJsonSync } = require('../src/server/json-storage');
+const { temporaryDirectory } = require('./support/temp');
 
 async function temporaryHome(t) {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-routing-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
-  return homeDir;
+  return temporaryDirectory(t, 'agent-cockpit-routing-').directory;
 }
 
 test('経路設定を保存し、読み戻す', async (t) => {

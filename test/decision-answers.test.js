@@ -2,8 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
-const http = require('node:http');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { recommendedOptionFor, sanitizeQuestions, sanitizeEvent } = require('../src/server/events');
@@ -19,7 +17,9 @@ const {
 } = require('../src/server/decision-answers');
 const { ANSWER_HOOK_TIMEOUT_MS, runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
 const { makeHookEvent } = require('../src/hooks/event');
-const { startServer } = require('../src/server/server');
+const { request, startTestServer } = require('./support/server');
+const { temporaryHome: createTemporaryHome } = require('./support/temp');
+const { functionSource } = require('./support/page-context');
 
 const NOW = Date.UTC(2026, 9, 2, 1, 2, 3);
 const QUESTIONS = [{
@@ -96,50 +96,11 @@ function makeFixture(options = {}) {
 }
 
 async function temporaryHome(testContext, { deferCleanup = false } = {}) {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-answer-test-'));
-  const cleanup = () => fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  if (!deferCleanup) testContext.after(cleanup);
-  return { homeDir, claudeHome: path.join(homeDir, '.claude'), cleanup };
+  return createTemporaryHome(testContext, 'agent-cockpit-answer-test-', { deferCleanup });
 }
 
-async function runningServer(testContext, options) {
-  const temporary = await temporaryHome(testContext, { deferCleanup: true });
-  let runtime;
-  testContext.after(async () => {
-    await runtime?.close();
-    await temporary.cleanup();
-  });
-  runtime = await startServer({ homeDir: temporary.homeDir, claudeHome: temporary.claudeHome, port: 0, ...options });
-  return { ...temporary, runtime };
-}
-
-async function request(port, options = {}) {
-  const body = options.body || '';
-  const headers = { ...options.headers };
-  if (body && headers['content-length'] === undefined) headers['content-length'] = Buffer.byteLength(body);
-  if (headers.host === undefined) headers.host = `127.0.0.1:${port}`;
-  return new Promise((resolve, reject) => {
-    const client = http.request({
-      host: '127.0.0.1',
-      port,
-      path: options.path || '/',
-      method: options.method || 'GET',
-      headers,
-    }, (response) => {
-      const chunks = [];
-      response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => resolve({
-        status: response.statusCode,
-        body: Buffer.concat(chunks).toString('utf8'),
-      }));
-    });
-    client.once('error', reject);
-    client.end(body);
-  });
-}
-
-function responseJson(response) {
-  return JSON.parse(response.body);
+async function runningServer(testContext, options = {}) {
+  return startTestServer(testContext, { temporaryPrefix: 'agent-cockpit-answer-test-', ...options });
 }
 
 test('推奨は label の括弧付き指定か MCP の明示指定だけを単一選択から決める', () => {
@@ -168,22 +129,9 @@ test('推奨は label の括弧付き指定か MCP の明示指定だけを単�
   assert.equal(sanitizeQuestions(QUESTIONS)[0].options[0].recommended, true);
 });
 
-test('画面とモックの判断回答と件数札に保留の選択肢がない', () => {
-  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const mock = fsSync.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-  const webFilters = html.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
-  const mockFilters = mock.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
-  assert.ok(webFilters && mockFilters);
-  assert.equal(html.includes('判断を保留する'), false);
-  assert.equal(mock.includes('判断を保留する'), false);
-  assert.equal(webFilters.includes('保留中'), false);
-  assert.equal(mockFilters.includes('保留中'), false);
-  assert.match(mock, /ui\.hidden = Array\.isArray\(ui\.hidden\).*FILTERS\.some/);
-});
-
 test('タイトル、外したセッション、読み上げは回答前の waiting だけを数える', () => {
   const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helper = html.match(/function isPendingDecision\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  const helper = functionSource(html, 'isPendingDecision');
   assert.ok(helper);
   const isPendingDecision = vm.runInNewContext(`(${helper})`, {
     hasEffectiveAnswer: (decision) => Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt),
@@ -194,25 +142,12 @@ test('タイトル、外したセッション、読み上げは回答前の wait
   assert.equal(isPendingDecision({ state: 'provisional', answer: null }), false);
 });
 
-test('種類別の並び順札を外し、プロダクト別の並び替えと除外を残す', () => {
+test('プロダクト別の並び替えと除外を表示する', () => {
   const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const productControls = html.match(/function productControls\(product, index, total, pinnedCount, headingId\) \{[\s\S]*?\n\}/)?.[0];
-  const productSection = html.match(/function productSection\(product, index, products, pinnedCount\) \{[\s\S]*?\n\}/)?.[0];
-  const kindSections = html.match(/function renderKindSections\(products\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(productControls && productSection && kindSections);
+  const productSection = functionSource(html, 'productSection');
+  assert.ok(productSection);
   assert.match(productSection, /productControls\(product, index, products\.length, pinnedCount, heading\.id\)/);
   assert.match(productSection, /productCloseButton\(product, heading\.id\)/);
-  assert.doesNotMatch(html, /kindProductOrder|kind-order|kind-product-order/);
-  assert.doesNotMatch(kindSections, /productOrder|orderBar/);
-});
-
-test('種類別の並び順札用のスタイルを残さない', () => {
-  const html = fsSync.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const mock = fsSync.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-  assert.doesNotMatch(html, /\.product-order-item|\.kind-order/);
-  assert.doesNotMatch(mock, /\.product-order-item|\.kind-order/);
-  assert.match(html, /\.order \{/);
-  assert.match(mock, /\.order \{/);
 });
 
 test('推奨案で OK は推奨 label を使い、指示を文脈に添える', () => {

@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildManual } = require('../tools/manual/build');
 const { lintManual } = require('../tools/manual/lint');
+const { temporaryDirectory } = require('./support/temp');
 
 function writeFile(root, relativePath, content) {
   const filePath = path.join(root, ...relativePath.split('/'));
@@ -14,8 +15,7 @@ function writeFile(root, relativePath, content) {
 }
 
 function makeFixture(t) {
-  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-manual-lint-'));
-  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
+  const fixtureRoot = temporaryDirectory(t, 'agent-cockpit-manual-lint-').directory;
   const repoRoot = path.join(fixtureRoot, 'repo');
   const manualRoot = path.join(repoRoot, 'manual');
   const distRoot = path.join(manualRoot, 'dist');
