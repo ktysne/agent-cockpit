@@ -185,7 +185,7 @@
       リポジトリで許可されている方式だけが出ます。
       ここでは <span class="ui">スカッシュ</span> を選びます。
       <span class="ui">マージ後にリモートブランチを削除する</span> は、入れておくと、マージのあとに PR のブランチを GitHub から削除します。
-      すぐにはマージせず、予約したいときは <span class="ui">レビュー収束後マージ</span> を入れます(<a href="#guide-stack-reserve">レビュー収束後マージを予約する</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-squash" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="700" style="max-width:350px;min-width:min(600px, 350px)"><div class="gm-segment" style="flex-grow:700;aspect-ratio:700/255"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="853" alt="PR #41 の確認欄の上半分。見出しは #41 を main へマージする。マージコミット、スカッシュ、リベースの 3 つの方式のうちスカッシュが選ばれ、その下にマージ後にリモートブランチを削除するチェックがある" loading="lazy" decoding="async" style="width:225.143%;margin-left:0%;margin-top:-52.857%"></div></div></div></div></figure></li>
+      レビューの収束を待ってマージしたいときは、確認欄を開かずに、PR の行の <span class="ui">レビュー収束後マージ</span> のチェックを入れます。条件がそろっていれば、その場でマージします(<a href="#guide-stack-reserve">レビュー収束後マージを予約する</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-confirm-squash" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="700" style="max-width:350px;min-width:min(600px, 350px)"><div class="gm-segment" style="flex-grow:700;aspect-ratio:700/255"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="853" alt="PR #41 の確認欄の上半分。見出しは #41 を main へマージする。マージコミット、スカッシュ、リベースの 3 つの方式のうちスカッシュが選ばれ、その下にマージ後にリモートブランチを削除するチェックがある" loading="lazy" decoding="async" style="width:225.143%;margin-left:0%;margin-top:-52.857%"></div></div></div></div></figure></li>
     <li><div class="step-body"><b>警告と照合する SHA を確かめて実行する</b>確認欄の下の方に、<span class="ui">照合する head SHA</span> の 7 桁が出ます。
       画面で見ている head のコミット以外は、マージしません。
       スカッシュかリベースで直上に PR #42 があるときは、<span class="ui">スカッシュまたはリベースでは </span>#42 に #41<span class="ui"> のコミットが残るため、セッションに積み直しを依頼する。</span> と出ます。
@@ -201,6 +201,7 @@
       画面で見た head、選ばれているマージ方式、ブランチ削除の設定を使います。
       チェックを入れた時点でサーバーが条件を取り直し、条件がすでにそろっていれば収束記録の SHA を照合してマージします。
       その場合は結果の行と「PR #118 をマージしました。」が出ます。条件が残っていれば予約として保存され、「PR #118 のレビュー収束後マージを予約しました。」と知らせます。
+      クロスレビューが止まっている(<code>halted</code>)など、予約できない状態なら、その場で取り消して理由を知らせます。
       予約は開発者が PR ごとに入れたときだけ作られます(<a href="pull-requests.html#pr-reserve">レビュー収束後マージ</a>)。</li>
     <li><div class="step-body"><b>予約中の表示を確かめる</b>予約中も <span class="ui">マージする</span> とチェックが表示されます。チェックは入った状態です。
       予約中の札に、方式、予約した時刻、まだ満たしていない条件が出ます。

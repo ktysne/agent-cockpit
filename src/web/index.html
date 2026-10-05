@@ -2008,7 +2008,8 @@ function appendPullRequestTree(target, group, pullRequest) {
     merge.dataset.mergeKey = mergeKey;
     merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
     line.append(merge);
-    const reservationDisabled = pullRequestMergeInFlight.has(mergeKey) || !(group.mergeMethods || []).length;
+    // 方式が取れないときに塞ぐのは新しい予約だけにする。既存の予約は方式が分からなくても取り消せる必要がある。
+    const reservationDisabled = pullRequestMergeInFlight.has(mergeKey) || (!reservation && !(group.mergeMethods || []).length);
     const reservationChoice = element('label', `reservation-toggle ${reservationDisabled ? 'disabled' : ''}`.trim());
     const reservationToggle = element('input');
     reservationToggle.type = 'checkbox';
@@ -3685,26 +3686,15 @@ async function runPullRequestReservationAction(input, reserve) {
         ? `PR #${number} のレビュー収束後マージを予約しています。`
         : `PR #${number} のマージ予約を取り消しています。`,
       request: () => postUiAction(`/api/pull-requests/${operation}`, body),
+      // 予約の口でのマージは常駐サーバーが自動マージの結果として記録して配るので、画面の記録には足さない。
       onSuccess: (result) => {
         pullRequestMergeConfirmations.delete(key);
         if (result.queued === true) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
-        if (result.merged === true) {
-          const retargetedNumbers = pullRequest.children.map((child) => child.number);
-          rememberPullRequestMergeResult(group, {
-            number,
-            method: options.method,
-            branchDeleted: result.branchDeleted === true,
-            isCrossRepository: pullRequest.isCrossRepository === true,
-            retargetedBase: retargetedNumbers.length ? group.defaultBranch : null,
-            retargetedNumbers,
-            warning: result.warning || null,
-          });
-        }
       },
       successMessage: (result) => {
         if (result.queued === true) return `PR #${number} をマージキューに追加しました。`;
         if (result.merged === true) return `PR #${number} をマージしました。`;
-        if (!reserve && result.cancelled === true) return result.message || `PR #${number} のマージ予約を取り消しました。`;
+        if (result.cancelled === true) return result.message || `PR #${number} のマージ予約を取り消しました。`;
         return reserve
           ? `PR #${number} のレビュー収束後マージを予約しました。`
           : `PR #${number} のマージ予約を取り消しました。`;

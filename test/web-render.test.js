@@ -2412,6 +2412,31 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
       body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
     },
   ]);
+
+  context.pullRequestMergeResults.clear();
+  delete pullRequest.reservation;
+  responses.push(
+    { ok: true, body: { merged: true, branchDeleted: false, warning: null } },
+    { ok: true, body: { ok: true, cancelled: true, message: 'PR #42 のクロスレビューが halted になったため、レビュー収束後マージの予約を取り消しました。' } },
+  );
+  const immediateRoot = new FakeElement('div');
+  context.appendPullRequestTree(immediateRoot, group, pullRequest);
+  const immediateToggle = flatten(immediateRoot).find((node) => node.dataset?.reservationToggle === key);
+  immediateToggle.checked = true;
+  await context.runPullRequestReservationAction(immediateToggle, true);
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージしました。');
+  assert.equal(context.pullRequestMergeResults.size, 0);
+  await context.runPullRequestReservationAction(immediateToggle, true);
+  assert.equal(context.liveStatus.textContent, 'PR #42 のクロスレビューが halted になったため、レビュー収束後マージの予約を取り消しました。');
+
+  const noMethodsGroup = { ...group, mergeMethods: [] };
+  const unreservedRoot = new FakeElement('div');
+  context.appendPullRequestTree(unreservedRoot, noMethodsGroup, pullRequest);
+  assert.equal(flatten(unreservedRoot).find((node) => node.dataset?.reservationToggle === key).disabled, true);
+  pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
+  const reservedNoMethodsRoot = new FakeElement('div');
+  context.appendPullRequestTree(reservedNoMethodsRoot, noMethodsGroup, pullRequest);
+  assert.equal(flatten(reservedNoMethodsRoot).find((node) => node.dataset?.reservationToggle === key).disabled, false);
 });
 
 test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
