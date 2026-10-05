@@ -178,8 +178,10 @@ h3.sub .count { font-weight: normal; }
 .kind-task-head .session-tag { color: var(--text); font-size: 13px; font-weight: 600; }
 .task { padding: 6px 10px; border-radius: 8px; }
 .task:hover { background: var(--surface-2); }
-.task .line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; min-width: 0; }
-.task .line .title { min-width: 0; overflow-wrap: anywhere; }
+/* 幅が足りないときは題の中で折り返し、状態の札、完了条件の数、完了にするを同じ行に残す。 */
+.task .line { display: flex; gap: 4px 8px; align-items: baseline; min-width: 0; }
+.task .line > * { flex: none; }
+.task .line > .title, .task .line > .prod-tag, .task .line > .session-tag { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .state { font-size: 11px; padding: 0 8px; border-radius: 999px; white-space: nowrap; }
 .state.done { background: var(--ok-soft); color: var(--ok-text); }
 .state.doing { background: var(--accent-soft); color: var(--accent-text); }
@@ -247,7 +249,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
-.pr .pline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+/* タスクの行と同じく、題の中で折り返して札と操作を同じ行に残す。 */
+.pr .pline { display: flex; gap: 8px; align-items: baseline; }
+.pr .pline > * { flex: none; }
+.pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
 .pr .num { font-weight: 600; }
 .pr .pos { font-size: 11px; color: var(--text-2); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
 .pr .branch { color: var(--text-2); font-size: 12px; }
@@ -332,6 +337,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 
 @media (max-width: 640px) {
   .order { margin-left: 0; }
+}
+/* これより狭いと、札と操作を同じ行に残したときに題が数文字の幅しか残らないため、要素ごとに折り返す。 */
+@media (max-width: 480px) {
+  .task .line, .pr .pline { flex-wrap: wrap; }
 }
 .app-icon { width: 28px; height: 28px; flex: none; }
 </style>
@@ -1696,7 +1705,7 @@ function prItem(p, pr) {
   return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
-      <span class="num">#${pr.number}</span><span>${esc(pr.title)}</span>
+      <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>
       ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
       ${!mergeIntent && conditionMet ? '<span class="badge ok">マージできます</span>' : !mergeIntent && !operationBlocker ? '<span class="badge mute">マージ操作は可能</span>' : ''}
       ${!mergeIntent && !operationBlocker ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual ? 'disabled' : ''}>マージする</button>` : ''}

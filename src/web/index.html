@@ -201,8 +201,11 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-item { min-width: 0; overflow-wrap: anywhere; padding: 6px 10px; border-radius: 8px; }
 .task-item:hover { background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
-.task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
-.task-title { min-width: 0; }
+/* 幅が足りないときは題の中で折り返し、状態の札、完了条件の数、完了にするを同じ行に残す。狭い画面での戻し方は @media (max-width: 480px) にある。 */
+.task-head { display: flex; align-items: baseline; gap: 6px 8px; }
+.task-head > * { flex: none; }
+.task-head > .prod-tag, .task-head > .session-tag { flex: 0 1 auto; min-width: 0; }
+.task-title { flex: 0 1 auto; min-width: 0; }
 .criteria-list { margin: 4px 0 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .criteria-list li.met { color: var(--ok); }
 .criteria-list li::marker { content: "・"; }
@@ -280,7 +283,10 @@ h3.sub .count { font-weight: normal; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
 .pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.pr .pline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+/* タスクの行と同じく、題の中で折り返して札と操作を同じ行に残す。 */
+.pr .pline { display: flex; gap: 8px; align-items: baseline; }
+.pr .pline > * { flex: none; }
+.pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
 .pr .num { font-weight: 600; }
 .pr .pos { padding: 0 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-2); font-size: 11px; }
@@ -349,6 +355,10 @@ h3.sub .count { font-weight: normal; }
 @media (max-width: 640px) {
   .order { margin-left: 0; }
   .session-head { align-items: flex-start; }
+}
+/* これより狭いと、札と操作を同じ行に残したときに題が数文字の幅しか残らないため、要素ごとに折り返す。 */
+@media (max-width: 480px) {
+  .task-head, .pr .pline { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 </style>
@@ -1974,7 +1984,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
-  line.append(link, element('span', '', pullRequest.title));
+  line.append(link, element('span', 'ptitle', pullRequest.title));
   if (!mergeIntent && conditionMet) line.append(badge('マージできます', 'ok'));
   else if (!mergeIntent && pullRequest.canMerge) line.append(badge('マージ操作は可能', 'mute'));
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
