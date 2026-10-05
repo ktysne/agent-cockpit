@@ -298,7 +298,6 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     pendingDisplayChanges: {},
     pendingDisplayRequests: 0,
     displayPreferenceSaveStates: new Map(),
-    pendingDisplaySettingSaves: new Map(),
     readDisplayPreferences: () => {
       legacyReads += 1;
       return { mode: 'kind', order: ['legacy'], pinned: [], collapsed: [], hidden: [], sectionOrder: ['now', 'judgment', 'tasks', 'sinceSeen', 'prs'] };
@@ -306,8 +305,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     normalizeDisplayPreferences: (value) => value,
     renderSectionOrder() {},
     renderDisplaySettings() {},
-    settleDisplaySettingSaves() {},
-    settleDisplayPreferenceSaves() {},
+    settleDisplaySaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -326,13 +324,11 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     pendingDisplayChanges: {},
     pendingDisplayRequests: 0,
     displayPreferenceSaveStates: new Map(),
-    pendingDisplaySettingSaves: new Map(),
     readDisplayPreferences: () => { throw new Error('旧設定は読み込まない'); },
     normalizeDisplayPreferences: (value) => value,
     renderSectionOrder() {},
     renderDisplaySettings() {},
-    settleDisplaySettingSaves() {},
-    settleDisplayPreferenceSaves() {},
+    settleDisplaySaves() {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
     clearLegacyDisplayPreferences() {},
   });
@@ -345,7 +341,7 @@ test('表示設定はサーバーの null のときだけ旧 localStorage から
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
     displayPreferenceSaveStates: new Map(),
-    settleDisplayPreferenceSaves: () => {},
+    settleDisplaySaves: () => {},
     enqueueDisplayPatch: async (patch) => { syncCalls.push(patch); return true; },
   });
   vm.runInContext(`${save}\nthis.saveDisplayPreferences = saveDisplayPreferences;`, saveContext);
@@ -359,7 +355,14 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
   const normalizeOrder = functionSource(web, 'normalizeSectionOrder');
   const normalizeMinutes = functionSource(web, 'normalizeDisplayMinutes');
   const normalizeDisplay = functionSource(web, 'normalizeDisplayPreferences');
+  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  assert.ok(settings);
+  const minuteInputs = {
+    longWaitMinutesInput: {}, awayAnswerWaitMinutesInput: {}, idleHideMinutesInput: {}, mergeResultHideMinutesInput: {},
+    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {}, mergeResultHideMinutesError: {},
+  };
   const context = pageContext(web, {
+    ...minuteInputs,
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
@@ -367,7 +370,7 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     FILTERS: ['permission', 'blocking', 'provisional', 'agents', 'prs'].map((key) => ({ key })),
   });
-  vm.runInContext(`${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
+  vm.runInContext(`${settings}\n${normalizeOrder}\n${normalizeMinutes}\n${normalizeDisplay}\nthis.normalizeDisplay = normalizeDisplayPreferences;`, context);
   const base = { mode: 'product', order: [], pinned: [], collapsed: [], hidden: [] };
 
   assert.deepEqual(JSON.parse(JSON.stringify(context.normalizeDisplay(base))), {
@@ -429,59 +432,88 @@ test('長い待ちの判定は設定値を使い、判断事項と許可待ち�
 });
 
 test('表示時間の保存に失敗した数値設定を元に戻す', async () => {
+  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   const setInput = functionSource(web, 'setDisplaySettingInput');
   const settingError = functionSource(web, 'displaySettingError');
   const change = functionSource(web, 'changeDisplaySetting');
+  const settle = functionSource(web, 'settleDisplaySaves');
+  const save = functionSource(web, 'saveDisplayPreferences');
+  assert.ok(settings && setInput && settingError && change && settle && save);
   const patches = [];
   let saveCount = 0;
+  const longWaitMinutesInput = { valueAsNumber: 15, value: '15' };
+  const awayAnswerWaitMinutesInput = {};
+  const idleHideMinutesInput = {};
+  const mergeResultHideMinutesInput = {};
+  const longWaitMinutesError = { hidden: true, textContent: '' };
+  const awayAnswerWaitMinutesError = { hidden: true, textContent: '' };
+  const idleHideMinutesError = { hidden: true, textContent: '' };
+  const mergeResultHideMinutesError = { hidden: true, textContent: '' };
   const context = pageContext(web, {
     displayPreferences: { longWaitMinutes: 15 },
+    DEFAULT_LONG_WAIT_MINUTES: 15,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     displayPreferencesReady: true,
-    pendingDisplaySettingSaves: new Map(),
+    displayPreferenceSaveStates: new Map(),
     pendingDisplayChanges: {},
-    longWaitMinutesInput: null,
-    longWaitMinutesError: { hidden: true, textContent: '' },
-    awayAnswerWaitMinutesError: { hidden: true, textContent: '' },
-    idleHideMinutesError: { hidden: true, textContent: '' },
+    longWaitMinutesInput, awayAnswerWaitMinutesInput, idleHideMinutesInput, mergeResultHideMinutesInput,
+    longWaitMinutesError, awayAnswerWaitMinutesError, idleHideMinutesError, mergeResultHideMinutesError,
     lastState: null,
     renderDisplaySettings() {},
+    renderSectionOrder() {},
     enqueueDisplayPatch: async (patch) => { patches.push(patch); saveCount += 1; return saveCount === 1; },
   });
-  context.longWaitMinutesInput = { valueAsNumber: 24, value: '24' };
-  vm.runInContext(`${setInput}\n${settingError}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  vm.runInContext(`${settings}\n${setInput}\n${settingError}\n${change}\n${settle}\n${save}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
   const savedInput = { valueAsNumber: 24, value: '24' };
   const failedInput = { valueAsNumber: 30, value: '30' };
 
-  assert.equal(await context.changeDisplaySetting('longWaitMinutes', savedInput, 1, 120), true);
+  assert.equal(await context.changeDisplaySetting('longWaitMinutes', savedInput), true);
   assert.equal(context.displayPreferences.longWaitMinutes, 24);
-  assert.equal(await context.changeDisplaySetting('longWaitMinutes', failedInput, 1, 120), false);
+  assert.equal(await context.changeDisplaySetting('longWaitMinutes', failedInput), false);
   assert.deepEqual(JSON.parse(JSON.stringify(patches)), [{ longWaitMinutes: 24 }, { longWaitMinutes: 30 }]);
   assert.equal(context.displayPreferences.longWaitMinutes, 24);
   assert.equal(failedInput.value, '24');
 });
 
 test('モックの待ち時間設定を localStorage の UI 状態へ保存する', () => {
+  const settings = mock.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const settingError = functionSource(mock, 'displaySettingError');
   const change = functionSource(mock, 'changeDisplaySetting');
+  assert.ok(settings && settingError && change);
   let saved = 0;
   let rendered = 0;
   const input = { valueAsNumber: 24, value: '24' };
+  const idleSettingInput = {};
+  const awaySettingInput = {};
+  const resultSettingInput = {};
+  const longError = { hidden: true, textContent: '' };
+  const awayError = { hidden: true, textContent: '' };
+  const idleError = { hidden: true, textContent: '' };
+  const resultError = { hidden: true, textContent: '' };
   const context = pageContext(mock, {
     ui: { longWaitMinutes: 15, idleHideMinutes: 30 },
     captureDisplayPreferences: () => ({}),
     saveDisplayPreferences: () => { saved += 1; return true; },
     longWaitMinutesInput: input,
-    longWaitMinutesError: { hidden: true, textContent: '' },
-    awayAnswerWaitMinutesError: { hidden: true, textContent: '' },
-    idleHideMinutesError: { hidden: true, textContent: '' },
     render: () => { rendered += 1; },
+    longWaitMinutesInput: input,
+    awayAnswerWaitMinutesInput: awaySettingInput,
+    idleHideMinutesInput: idleSettingInput,
+    mergeResultHideMinutesInput: resultSettingInput,
+    longWaitMinutesError: longError,
+    awayAnswerWaitMinutesError: awayError,
+    idleHideMinutesError: idleError,
+    mergeResultHideMinutesError: resultError,
   });
-  vm.runInContext(`${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
-  assert.equal(context.changeDisplaySetting('longWaitMinutes', input, 1, 120), true);
+  vm.runInContext(`${settings}\n${settingError}\n${change}\nthis.changeDisplaySetting = changeDisplaySetting;`, context);
+  assert.equal(context.changeDisplaySetting('longWaitMinutes', input), true);
   assert.equal(context.ui.longWaitMinutes, 24);
   assert.equal(saved, 1);
   assert.equal(rendered, 1);
   const idleInput = { valueAsNumber: 5, value: '5' };
-  assert.equal(context.changeDisplaySetting('idleHideMinutes', idleInput, 5, 1440), true);
+  assert.equal(context.changeDisplaySetting('idleHideMinutes', idleInput), true);
   assert.equal(context.ui.idleHideMinutes, 5);
   assert.equal(saved, 2);
   assert.equal(rendered, 2);
@@ -592,7 +624,8 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
   const visiblePullRequests = functionSource(web, 'visiblePullRequestGroups');
   const renderKinds = functionSource(web, 'renderKindSections');
   const renderSession = functionSource(web, 'sessionBlock');
-  assert.ok(constants && defaultOrder && normalize && ordered && visiblePullRequests && renderKinds && renderSession);
+  const endedDecision = functionSource(web, 'isEndedDecision');
+  assert.ok(constants && defaultOrder && normalize && ordered && visiblePullRequests && renderKinds && renderSession && endedDecision);
 
   function renderWithOrder(sectionOrder) {
     const element = (tag, className = '', textContent = '') => ({
@@ -623,7 +656,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendAgents(target) { target.append({ marker: 'agent' }); },
       mainRow: () => ({ marker: 'main' }),
     });
-    vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, renderKinds, renderSession].join('\n'), context);
+    vm.runInContext([constants, defaultOrder, normalize, ordered, visiblePullRequests, endedDecision, renderKinds, renderSession].join('\n'), context);
     const kindSections = JSON.parse(JSON.stringify(
       context.renderKindSections([{ pullRequestGroups: [] }]).map(({ label }) => label),
     ));
@@ -659,7 +692,7 @@ test('種類別のタスクにはタスクがあるセッションだけを含�
 
 test('許可待ちと判断事項のフィルターは非表示の行を検出する', () => {
   const context = pageContext(web, { displayPreferences: { hidden: [] } });
-  const helpers = ['isFilterShown', 'hasEffectiveAnswer', 'shownActiveDecisions', 'hasHiddenJudgmentItems']
+  const helpers = ['isFilterShown', 'hasEffectiveAnswer', 'isActiveDecision', 'shownActiveDecisions', 'hasHiddenJudgmentItems']
     .map((name) => functionSource(web, name));
   assert.ok(helpers.every(Boolean));
   vm.runInContext(`${helpers.join('\n')}\nthis.hasHidden = hasHiddenJudgmentItems;`, context);
@@ -681,6 +714,8 @@ test('許可待ちと判断事項のフィルターは非表示の行を検出�
 test('PRフィルターの札はマージできる件数を表示する', () => {
   const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
   const renderSummary = functionSource(web, 'renderSummary');
+  const judgmentHelpers = ['isActiveDecision', 'isAwaitingDecision', 'countJudgments', 'hasEffectiveAnswer']
+    .map((name) => functionSource(web, name));
   const summary = { children: [], replaceChildren(...children) { this.children = children; } };
   const filterNote = { replaceChildren() {} };
   const element = (tag, className, textContent = '') => ({
@@ -702,7 +737,7 @@ test('PRフィルターの札はマージできる件数を表示する', () => 
       getElementById: () => filterNote,
     },
   });
-  vm.runInContext(`${filters}\n${renderSummary}\nthis.renderSummary = renderSummary;`, context);
+  vm.runInContext(`${judgmentHelpers.join('\n')}\n${filters}\n${renderSummary}\nthis.renderSummary = renderSummary;`, context);
   context.renderSummary([], [{ mergeableCount: 2 }, { mergeableCount: 1 }]);
 
   const chip = summary.children.find((item) => item.dataset.filter === 'prs');
@@ -783,6 +818,7 @@ test('種類別の混在セクションは残し、隠した判断事項だけ�
 test('種類別の終了判断は新しい順に集約し、終了済みエージェントは件数を数える', () => {
   const webHelpers = [
     functionSource(web, 'itemTimestamp'),
+    functionSource(web, 'isEndedDecision'),
     functionSource(web, 'kindEndedDecisionEntries'),
     functionSource(web, 'kindEndedAgentCount'),
     functionSource(web, 'taskVisibility'),
@@ -837,6 +873,7 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
   });
 
   const mockHelpers = [
+    functionSource(mock, 'isEndedDecision'),
     functionSource(mock, 'kindEndedDecisionEntries'),
     functionSource(mock, 'kindEndedAgentCount'),
     functionSource(mock, 'taskVisibility'),
@@ -885,7 +922,9 @@ test('種類別の終了判断は新しい順に集約し、終了済みエー�
 
 test('種類別の折り畳み文言と状態はセクション単位で切り替わる', () => {
   const webToggle = functionSource(web, 'appendKindToggle');
+  const expandToggle = functionSource(web, 'appendExpandToggle');
   const labelSource = functionSource(web, 'kindToggleLabel');
+  assert.ok(webToggle && expandToggle && labelSource);
   const appended = [];
   const context = pageContext(web, {
     expandedKindSections: new Set(),
@@ -901,7 +940,7 @@ test('種類別の折り畳み文言と状態はセクション単位で切り�
       focus() {},
     }),
   });
-  vm.runInContext(`${labelSource}\n${webToggle}\nthis.label = kindToggleLabel; this.appendToggle = appendKindToggle;`, context);
+  vm.runInContext(`${labelSource}\n${expandToggle}\n${webToggle}\nthis.label = kindToggleLabel; this.appendToggle = appendKindToggle;`, context);
   const body = { append: (button) => appended.push(button) };
   context.appendToggle(body, 'decisions', false, 4, '解決済みと取り下げ');
   assert.equal(appended[0].textContent, '解決済みと取り下げを表示 (4 件)');
@@ -978,11 +1017,15 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
 
 test('定期の同期は入力中の待ち時間の欄を上書きせず、ほかの欄は保存値にそろえる', () => {
   const render = functionSource(web, 'renderDisplaySettings');
-  assert.ok(render);
+  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  assert.ok(render && settings);
   const longWaitMinutesInput = { value: '120' };
   const awayAnswerWaitMinutesInput = { value: '9' };
   const idleHideMinutesInput = { value: '90' };
   const mergeResultHideMinutesInput = { value: '15' };
+  const errors = {
+    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {}, mergeResultHideMinutesError: {},
+  };
   const hideFinishedInput = { checked: false };
   const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
@@ -992,12 +1035,17 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
     mergeResultHideMinutesInput,
+    ...errors,
+    DEFAULT_LONG_WAIT_MINUTES: 15,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     hideFinishedInput,
     mergeAfterReviewDefaultInput,
     mergeableConditionInputs,
     displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
   });
-  vm.runInContext(render, context);
+  vm.runInContext(`${settings}\n${render}`, context);
   context.renderDisplaySettings();
 
   assert.equal(longWaitMinutesInput.value, '120');
@@ -1011,7 +1059,7 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
 
 test('保存に失敗したラジオはフォーカスを保ったまま保存値へ戻す', async () => {
   const render = functionSource(web, 'renderDisplaySettings');
-  const settle = functionSource(web, 'settleDisplayPreferenceSaves');
+  const settle = functionSource(web, 'settleDisplaySaves');
   const save = functionSource(web, 'saveDisplayPreferences');
   assert.ok(render && settle && save);
   const longWaitMinutesInput = { value: '15' };
@@ -1034,6 +1082,12 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     displayPreferences,
     displayPreferenceSaveStates: new Map(),
     displayPreferencesReady: true,
+    DISPLAY_MINUTE_SETTINGS: [
+      { key: 'longWaitMinutes', input: longWaitMinutesInput, error: null, min: 1, max: 120, default: 15 },
+      { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: null, min: 1, max: 30, default: 5 },
+      { key: 'idleHideMinutes', input: idleHideMinutesInput, error: null, min: 5, max: 1440, default: 30 },
+      { key: 'mergeResultHideMinutes', input: mergeResultHideMinutesInput, error: null, min: 1, max: 60, default: 5 },
+    ],
     mergeableConditionInputs,
     lastState: null,
     enqueueDisplayPatch: async () => false,

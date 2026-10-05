@@ -123,10 +123,6 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 "Yu 
 .settings-input-error { flex: 1 1 100%; }
 main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
-.section-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.section-head h2 { font-size: 15px; margin: 0; }
-.section-body { padding: 10px 14px 14px; }
-.product-key { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
 .badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface-2); color: var(--text-2); }
 .badge.busy { background: var(--accent-soft); color: var(--accent-text); }
 .badge.wait { background: var(--warn-soft); color: var(--warn-text); }
@@ -136,7 +132,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 /* 文や名前を差し込むバッジは折り返す。nowrap のままだと、長いときに枠の外へはみ出す */
 .badge.long { display: inline-block; max-width: 100%; padding: 2px 8px; border-radius: 11px; white-space: normal; overflow-wrap: anywhere; }
 h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
-.now-list, .agent-list, .permission-list { display: grid; gap: 6px; }
+.agent-list, .permission-list { display: grid; gap: 6px; }
 .permission-list { gap: 0; }
 .now-row, .agent-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
 .now-row > .detail, .agent-row > .detail { min-width: 0; }
@@ -165,7 +161,7 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .decision-card.resolved { border-left-color: var(--ok); }
 .decision-card.withdrawn { border-left-color: var(--border); }
 .decision-card.long-wait { background: var(--danger-soft); }
-.decision-head, .decision-meta { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
+.decision-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
 .decision-title { min-width: 0; font-weight: 600; }
 .decision-context { margin: 4px 0 8px; color: var(--text-2); }
 .decision-question { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); min-width: 0; overflow-wrap: anywhere; }
@@ -206,14 +202,10 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-item.done .task-title { color: var(--text-2); }
 .task-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
 .task-title { min-width: 0; }
-.task-state { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; background: var(--surface); color: var(--text-2); }
-.task-state.doing { background: var(--accent-soft); color: var(--accent-text); }
-.task-state.done { background: var(--ok-soft); color: var(--ok-text); }
 .criteria-list { margin: 4px 0 0; padding-left: 20px; color: var(--text-2); font-size: 12px; }
 .criteria-list li.met { color: var(--ok); }
 .criteria-list li::marker { content: "・"; }
 .criteria-list li.met::marker { content: "✓ "; }
-.task-updated { margin-top: 6px; }
 .empty { color: var(--text-2); font-size: 13px; padding: 6px 10px; }
 .group-frame > .empty, .pr-repo-content > .empty, .pr-repo-content > .stack, .pr-repo-content > .merged-list { padding-inline: 0; }
 .error-box { border: 1px solid var(--danger); border-radius: var(--radius); padding: 12px 14px; color: var(--danger); background: var(--danger-soft); }
@@ -269,7 +261,7 @@ h3.sub .count { font-weight: normal; }
 .dot.unknown { border: 1px dashed var(--text-2); background: transparent; }
 .activity-title { font-weight: 600; }
 @keyframes pulse { 50% { opacity: .35; } }
-.badge.unknown, .task-state.unknown { border: 1px dashed var(--border); background: var(--surface-2); color: var(--text-2); }
+.badge.unknown { border: 1px dashed var(--border); background: var(--surface-2); color: var(--text-2); }
 .badge.done { background: var(--ok-soft); color: var(--ok-text); }
 .badge.accent { background: var(--accent-soft); color: var(--accent-text); }
 .badge.ok { background: var(--ok-soft); color: var(--ok-text); }
@@ -412,22 +404,22 @@ h3.sub .count { font-weight: normal; }
     </div>
     <div class="settings-theme-row">
       <label for="settings-long-wait-minutes">長く待たせているとみなす時間 (1〜120 分)</label>
-      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric" aria-describedby="settings-long-wait-error">
+      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-long-wait-error">
       <span class="settings-input-error" id="settings-long-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
       <label for="settings-idle-hide-minutes">更新の無いセッションを隠すまで (分)</label>
-      <input id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440" step="1" inputmode="numeric" aria-describedby="settings-idle-hide-error">
+      <input id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-idle-hide-error">
       <span class="settings-input-error" id="settings-idle-hide-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
       <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間 (1〜30 分)</label>
-      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
+      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
       <label for="settings-merge-result-hide-minutes">マージの結果を隠すまで (分)</label>
-      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" min="1" max="60" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
+      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
       <span class="settings-input-error" id="settings-merge-result-hide-error" role="alert" hidden></span>
     </div>
     <div class="settings-section-order">
@@ -479,6 +471,16 @@ const longWaitMinutesError = document.getElementById('settings-long-wait-error')
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
 const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
+const DISPLAY_MINUTE_SETTINGS = [
+  { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, default: DEFAULT_LONG_WAIT_MINUTES },
+  { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, default: DEFAULT_AWAY_ANSWER_WAIT_MINUTES },
+  { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, default: DEFAULT_IDLE_HIDE_MINUTES },
+  { key: 'mergeResultHideMinutes', input: mergeResultHideMinutesInput, error: mergeResultHideMinutesError, min: 1, max: 60, default: DEFAULT_MERGE_RESULT_HIDE_MINUTES },
+];
+for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
+  input.min = String(min);
+  input.max = String(max);
+}
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
@@ -633,10 +635,9 @@ function normalizeDisplayPreferences(value) {
     collapsed: uniqueStrings(value?.collapsed),
     hidden: [...new Set(Array.isArray(value?.hidden) ? value.hidden.filter((item) => FILTERS.some((filter) => filter.key === item)) : [])],
     sectionOrder: normalizeSectionOrder(value?.sectionOrder),
-    longWaitMinutes: normalizeDisplayMinutes(value?.longWaitMinutes, 1, 120, DEFAULT_LONG_WAIT_MINUTES),
-    awayAnswerWaitMinutes: normalizeDisplayMinutes(value?.awayAnswerWaitMinutes, 1, 30, DEFAULT_AWAY_ANSWER_WAIT_MINUTES),
-    idleHideMinutes: normalizeDisplayMinutes(value?.idleHideMinutes, 5, 1440, DEFAULT_IDLE_HIDE_MINUTES),
-    mergeResultHideMinutes: normalizeDisplayMinutes(value?.mergeResultHideMinutes, 1, 60, DEFAULT_MERGE_RESULT_HIDE_MINUTES),
+    ...Object.fromEntries(DISPLAY_MINUTE_SETTINGS.map(({ key, min, max, default: fallback }) => (
+      [key, normalizeDisplayMinutes(value?.[key], min, max, fallback)]
+    ))),
     hideFinished: value?.hideFinished !== false,
     mergeableCondition: ['operation', 'ci', 'cross-review'].includes(value?.mergeableCondition) ? value.mergeableCondition : 'cross-review',
     mergeAfterReviewDefault: value?.mergeAfterReviewDefault === true,
@@ -652,17 +653,11 @@ let displayMigrationData = null;
 let pendingDisplayChanges = {};
 let pendingDisplayRequests = 0;
 let displayWriteTail = Promise.resolve();
-const pendingDisplaySettingSaves = new Map();
 const displayPreferenceSaveStates = new Map();
 
 // 入力中の欄を定期の同期で上書きすると、確定前の値が消えるため、フォーカス中の欄は飛ばす。
 function renderDisplaySettings() {
-  for (const [input, key] of [
-    [longWaitMinutesInput, 'longWaitMinutes'],
-    [awayAnswerWaitMinutesInput, 'awayAnswerWaitMinutes'],
-    [idleHideMinutesInput, 'idleHideMinutes'],
-    [mergeResultHideMinutesInput, 'mergeResultHideMinutes'],
-  ]) {
+  for (const { input, key } of DISPLAY_MINUTE_SETTINGS) {
     if (document.activeElement === input) continue;
     input.value = String(displayPreferences[key]);
   }
@@ -678,18 +673,7 @@ function setDisplaySettingInput(input, value) {
   else input.value = String(value);
 }
 
-function settleDisplaySettingSaves(saves, saved) {
-  for (const { key, state, sequence, value } of saves) {
-    if (saved) state.savedValue = value;
-    if (state.sequence !== sequence) continue;
-    if (!saved) displayPreferences[key] = state.savedValue;
-    setDisplaySettingInput(state.input, displayPreferences[key]);
-    pendingDisplaySettingSaves.delete(key);
-  }
-  if (!saved && lastState) render(lastState);
-}
-
-function settleDisplayPreferenceSaves(saves, saved) {
+function settleDisplaySaves(saves, saved) {
   let sectionOrderWasRestored = false;
   for (const { key, state, sequence, value } of saves) {
     if (saved) state.savedValue = value;
@@ -698,6 +682,7 @@ function settleDisplayPreferenceSaves(saves, saved) {
       displayPreferences[key] = state.savedValue;
       sectionOrderWasRestored ||= key === 'sectionOrder';
     }
+    if (state.input) setDisplaySettingInput(state.input, displayPreferences[key]);
     displayPreferenceSaveStates.delete(key);
   }
   if (sectionOrderWasRestored) renderSectionOrder();
@@ -721,21 +706,26 @@ function enqueueDisplayPatch(changes) {
   return run;
 }
 
-function saveDisplayPreferences(changes) {
+function saveDisplayPreferences(changes, settingInput = null) {
   const saves = Object.entries(changes).map(([key, value]) => {
     const state = displayPreferenceSaveStates.get(key) || { savedValue: displayPreferences[key], sequence: 0 };
     state.sequence += 1;
     state.latestValue = value;
+    if (settingInput?.key === key) state.input = settingInput.input;
     displayPreferenceSaveStates.set(key, state);
     return { key, state, sequence: state.sequence, value };
   });
   Object.assign(displayPreferences, changes);
+  if (settingInput && settingInput.key in changes) {
+    setDisplaySettingInput(settingInput.input, changes[settingInput.key]);
+    if (lastState) render(lastState);
+  }
   if (!displayPreferencesReady) {
     Object.assign(pendingDisplayChanges, changes);
     return Promise.resolve(true);
   }
   return enqueueDisplayPatch(changes).then((saved) => {
-    settleDisplayPreferenceSaves(saves, saved);
+    settleDisplaySaves(saves, saved);
     if (!saved) {
       renderDisplaySettings();
       if (saves.some(({ key }) => key === 'mergeableCondition')) {
@@ -748,50 +738,26 @@ function saveDisplayPreferences(changes) {
 }
 
 function displaySettingError(key) {
-  if (key === 'longWaitMinutes') return longWaitMinutesError;
-  if (key === 'idleHideMinutes') return idleHideMinutesError;
-  if (key === 'mergeResultHideMinutes') return mergeResultHideMinutesError;
-  return awayAnswerWaitMinutesError;
+  return DISPLAY_MINUTE_SETTINGS.find((setting) => setting.key === key)?.error || null;
 }
 
-function changeDisplaySetting(key, input, minimum, maximum) {
+function changeDisplaySetting(key, input) {
+  const setting = DISPLAY_MINUTE_SETTINGS.find((item) => item.key === key);
   const value = input.type === 'checkbox' ? input.checked : input.valueAsNumber;
-  if (input.type !== 'checkbox' && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+  if (setting && input.type !== 'checkbox' && (!Number.isInteger(value) || value < setting.min || value > setting.max)) {
     const error = displaySettingError(key);
-    error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
+    error.textContent = `${setting.min}〜${setting.max} 分の値を入力してください。`;
     error.hidden = false;
     setDisplaySettingInput(input, displayPreferences[key]);
     return Promise.resolve(false);
   }
-  if (input.type !== 'checkbox') {
+  if (setting) {
     const error = displaySettingError(key);
     error.textContent = '';
     error.hidden = true;
   }
   if (value === displayPreferences[key]) return Promise.resolve(true);
-  const state = pendingDisplaySettingSaves.get(key) || { savedValue: displayPreferences[key], sequence: 0 };
-  state.sequence += 1;
-  state.latestValue = value;
-  state.input = input;
-  pendingDisplaySettingSaves.set(key, state);
-  displayPreferences[key] = value;
-  setDisplaySettingInput(input, value);
-  if (lastState) render(lastState);
-  if (!displayPreferencesReady) {
-    pendingDisplayChanges[key] = value;
-    return Promise.resolve(true);
-  }
-  const sequence = state.sequence;
-  return enqueueDisplayPatch({ [key]: value }).then((saved) => {
-    if (saved) state.savedValue = value;
-    if (state.sequence !== sequence) return saved;
-    if (!saved) displayPreferences[key] = state.savedValue;
-    setDisplaySettingInput(input, displayPreferences[key]);
-    pendingDisplaySettingSaves.delete(key);
-    if (!saved) renderDisplaySettings();
-    if (lastState) render(lastState);
-    return saved;
-  });
+  return saveDisplayPreferences({ [key]: value }, { key, input });
 }
 
 function clearLegacyDisplayPreferences() {
@@ -806,20 +772,17 @@ async function syncDisplayPreferences(serverDisplay) {
     const current = serverDisplay === null
       ? readDisplayPreferences()
       : normalizeDisplayPreferences(serverDisplay);
-    for (const [key, state] of pendingDisplaySettingSaves) state.savedValue = current[key] ?? state.savedValue;
     for (const [key, state] of displayPreferenceSaveStates) state.savedValue = current[key] ?? state.savedValue;
     displayPreferences = { ...current, ...pendingDisplayChanges };
     renderSectionOrder();
     renderDisplaySettings();
     displayPreferencesReady = true;
     const patch = serverDisplay === null ? displayPreferences : pendingDisplayChanges;
-    const pendingSaves = [...pendingDisplaySettingSaves].map(([key, state]) => ({ key, state, sequence: state.sequence, value: state.latestValue }));
-    const pendingPreferenceSaves = [...displayPreferenceSaveStates].map(([key, state]) => ({ key, state, sequence: state.sequence, value: state.latestValue }));
+    const pendingSaves = [...displayPreferenceSaveStates].map(([key, state]) => ({ key, state, sequence: state.sequence, value: state.latestValue }));
     pendingDisplayChanges = {};
     if (Object.keys(patch).length) {
       const saved = await enqueueDisplayPatch(patch);
-      settleDisplaySettingSaves(pendingSaves, saved);
-      settleDisplayPreferenceSaves(pendingPreferenceSaves, saved);
+      settleDisplaySaves(pendingSaves, saved);
       if (!saved) {
         renderDisplaySettings();
         if (lastState) render(lastState);
@@ -933,10 +896,9 @@ document.getElementById('settings-section-order-reset').addEventListener('click'
   if (lastState) render(lastState);
 });
 
-longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
-awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
-idleHideMinutesInput.addEventListener('change', () => changeDisplaySetting('idleHideMinutes', idleHideMinutesInput, 5, 1440));
-mergeResultHideMinutesInput.addEventListener('change', () => changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60));
+for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
+  input.addEventListener('change', () => changeDisplaySetting(key, input));
+}
 hideFinishedInput.addEventListener('change', () => changeDisplaySetting('hideFinished', hideFinishedInput));
 mergeAfterReviewDefaultInput.addEventListener('change', () => changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput));
 for (const input of mergeableConditionInputs) {
@@ -1243,10 +1205,17 @@ function appendModelLine(target, agent) {
 }
 
 function updateTitle(sessions) {
-  const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisionCount = sessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
-  const pendingCount = permissionCount + decisionCount;
+  const judgments = countJudgments(sessions);
+  const pendingCount = judgments.permission + judgments.blocking;
   document.title = pendingCount ? `(${pendingCount}) Agent Cockpit` : 'Agent Cockpit';
+}
+
+function isActiveDecision(decision) {
+  return decision.state === 'waiting' || decision.state === 'provisional';
+}
+
+function isEndedDecision(decision) {
+  return decision.state === 'resolved' || decision.state === 'withdrawn';
 }
 
 function isPendingDecision(decision) {
@@ -1255,27 +1224,39 @@ function isPendingDecision(decision) {
 
 // 回答を送ったものはセッションの反映を待つだけなので数えない。
 function isAwaitingDecision(decision) {
-  return ['waiting', 'provisional'].includes(decision.state) && !hasEffectiveAnswer(decision);
+  return isActiveDecision(decision) && !hasEffectiveAnswer(decision);
+}
+
+function countJudgments(sessions) {
+  const counts = { permission: 0, blocking: 0, provisional: 0 };
+  for (const session of sessions) {
+    counts.permission += session.permissionWaits.length;
+    for (const decision of session.decisions) {
+      if (!isAwaitingDecision(decision)) continue;
+      counts[isPendingDecision(decision) ? 'blocking' : 'provisional'] += 1;
+    }
+  }
+  counts.decisions = counts.blocking + counts.provisional;
+  counts.total = counts.permission + counts.decisions;
+  return counts;
 }
 
 function decisionCountTitle(decisions) {
+  const judgmentCounts = countJudgments([{ permissionWaits: [], decisions }]);
   const counts = [
-    ['止めて待っている', decisions.filter(isPendingDecision).length],
-    ['仮に推奨案で進行中', decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length],
+    ['止めて待っている', judgmentCounts.blocking],
+    ['仮に推奨案で進行中', judgmentCounts.provisional],
   ];
   return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
 
 function renderSummary(sessions, pullRequestGroups = []) {
-  const permissionCount = sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-  const decisions = sessions.flatMap((session) => session.decisions);
-  const blockingCount = decisions.filter(isPendingDecision).length;
-  const provisionalCount = decisions.filter((decision) => decision.state === 'provisional' && !hasEffectiveAnswer(decision)).length;
+  const judgmentCounts = countJudgments(sessions);
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
   const counts = {
-    permission: permissionCount,
-    blocking: blockingCount,
-    provisional: provisionalCount,
+    permission: judgmentCounts.permission,
+    blocking: judgmentCounts.blocking,
+    provisional: judgmentCounts.provisional,
     agents: agentCount,
     prs: pullRequestMergeableCount(pullRequestGroups),
   };
@@ -1333,11 +1314,10 @@ function renderExcludedNote(sessions) {
     const showAll = element('button', 'link-btn', '外したセッションを戻す');
     showAll.type = 'button';
     showAll.dataset.clearHiddenSessions = 'true';
-    const permissionCount = hiddenSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-    const decisionCount = hiddenSessions.reduce((total, session) => total + session.decisions.filter(isPendingDecision).length, 0);
+    const judgmentCounts = countJudgments(hiddenSessions);
     const pendingCounts = [
-      permissionCount ? `許可待ち ${permissionCount} 件` : '',
-      decisionCount ? `止めて待っている ${decisionCount} 件` : '',
+      judgmentCounts.permission ? `許可待ち ${judgmentCounts.permission} 件` : '',
+      judgmentCounts.blocking ? `止めて待っている ${judgmentCounts.blocking} 件` : '',
     ].filter(Boolean);
     const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
     children.push(element('span', '', `外したセッション (${hiddenCount} 件)${countNote}`), showAll);
@@ -1386,7 +1366,7 @@ function renderFinishedNote(counts) {
 
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
-  if ((session.decisions || []).some((decision) => ['waiting', 'provisional'].includes(decision.state))) return false;
+  if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
   const updatedAt = Date.parse(session.lastUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > displayPreferences.idleHideMinutes * 60_000;
@@ -1450,7 +1430,7 @@ function shownPermissions(session) {
 
 function shownActiveDecisions(session) {
   return session.decisions.filter((decision) => {
-    if (!['waiting', 'provisional'].includes(decision.state)) return false;
+    if (!isActiveDecision(decision)) return false;
     if (hasEffectiveAnswer(decision)) return true;
     return decision.state === 'waiting' ? isFilterShown('blocking') : isFilterShown('provisional');
   });
@@ -1459,7 +1439,7 @@ function shownActiveDecisions(session) {
 function hasHiddenJudgmentItems(session) {
   return (!isFilterShown('permission') && session.permissionWaits.length > 0)
     || session.decisions.some((decision) => (
-      ['waiting', 'provisional'].includes(decision.state) && !shownActiveDecisions(session).includes(decision)
+      isActiveDecision(decision) && !shownActiveDecisions(session).includes(decision)
     ));
 }
 
@@ -1594,11 +1574,7 @@ function decisionElapsedLabel(decision) {
 }
 
 function appendPullRequestBadges(target, pullRequest) {
-  const ci = {
-    pass: ['ok', 'CI 成功'],
-    pending: ['warn', 'CI 実行中'],
-    fail: ['danger', 'CI 失敗'],
-  }[pullRequest.ci] || ['mute', 'CI 状態不明'];
+  const ci = CI_LABELS[pullRequest.ci] || CI_LABELS.unknown;
   const review = {
     approved: ['ok', '承認済み'],
     required: ['mute', '承認待ち'],
@@ -1606,7 +1582,7 @@ function appendPullRequestBadges(target, pullRequest) {
     changes: ['danger', '変更要求'],
   }[pullRequest.review] || ['mute', 'レビュー状態不明'];
   if (pullRequest.draft) target.append(badge('ドラフト', 'mute'));
-  target.append(badge(ci[1], ci[0]), badge(review[1], review[0]));
+  target.append(badge(ci.badge, ci.tone), badge(review[1], review[0]));
   if (pullRequest.conflict) target.append(badge('コンフリクト', 'danger'));
   if (pullRequest.retargetedFrom) target.append(badge(`base を ${pullRequest.effectiveBase} に付け替え済み`, 'accent long'));
   if (pullRequest.needsRestack) target.append(badge('積み直しが必要', 'warn'));
@@ -1614,16 +1590,32 @@ function appendPullRequestBadges(target, pullRequest) {
 
 const MERGE_METHOD_LABELS = { merge: 'マージコミット', squash: 'スカッシュ', rebase: 'リベース' };
 const MERGED_VISIBLE_COUNT = 5;
+const CI_LABELS = {
+  pass: { tone: 'ok', badge: 'CI 成功', wait: 'CI 成功' },
+  pending: { tone: 'warn', badge: 'CI 実行中', wait: 'CI 実行中' },
+  fail: { tone: 'danger', badge: 'CI 失敗', wait: 'CI が失敗' },
+  unknown: { tone: 'mute', badge: 'CI 状態不明', wait: 'CI 状態不明' },
+};
+
+function convergedAtHead(pullRequest) {
+  const review = pullRequest.crossReview;
+  const triage = review?.triage;
+  const head = pullRequest.headRefOid;
+  return Number.isSafeInteger(review?.round) && triage?.round === review.round && triage.outcome === 'converged' &&
+    isCompleteCommitSha(triage.sha) && isCompleteCommitSha(head) && triage.sha.toLowerCase() === head.toLowerCase();
+}
+
+function pushedAfterConvergence(pullRequest) {
+  const triage = pullRequest.crossReview?.triage;
+  const head = pullRequest.headRefOid;
+  return triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(head) &&
+    triage.sha.toLowerCase() !== head.toLowerCase();
+}
 
 function pullRequestCrossReviewSettled(pullRequest) {
   const review = pullRequest.crossReview;
   if (review?.notRequired === true) return true;
-  const triage = review?.triage;
-  const head = pullRequest.headRefOid;
-  return Number.isSafeInteger(review?.round) && triage?.round === review.round && triage.outcome === 'converged' &&
-    isCompleteCommitSha(head) &&
-    isCompleteCommitSha(triage.sha) &&
-    triage.sha.toLowerCase() === head.toLowerCase();
+  return convergedAtHead(pullRequest);
 }
 
 function pullRequestCrossReviewWaitReason(pullRequest) {
@@ -1636,18 +1628,16 @@ function pullRequestCrossReviewWaitReason(pullRequest) {
   if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
   if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
   if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
-  if (triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid)) {
-    if (triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase()) return 'クロスレビュー後に push あり';
-    return null;
-  }
+  if (pushedAfterConvergence(pullRequest)) return 'クロスレビュー後に push あり';
+  if (convergedAtHead(pullRequest)) return null;
   return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
 }
 
 function pullRequestMergeConditionWaits(pullRequest) {
-  const condition = typeof displayPreferences === 'undefined' ? 'cross-review' : displayPreferences.mergeableCondition || 'cross-review';
+  const condition = displayPreferences.mergeableCondition;
   if (condition === 'operation') return [];
   const waiting = [];
-  if (pullRequest.ci !== 'pass') waiting.push(pullRequest.ci === 'fail' ? 'CI が失敗' : pullRequest.ci === 'pending' ? 'CI 実行中' : 'CI 状態不明');
+  if (pullRequest.ci !== 'pass') waiting.push((CI_LABELS[pullRequest.ci] || CI_LABELS.unknown).wait);
   if (condition === 'cross-review' && !pullRequestCrossReviewSettled(pullRequest)) {
     waiting.push(pullRequestCrossReviewWaitReason(pullRequest));
   }
@@ -1655,20 +1645,11 @@ function pullRequestMergeConditionWaits(pullRequest) {
 }
 
 function pullRequestReservationWaits(pullRequest) {
-  const review = pullRequest.crossReview;
-  const triage = review?.triage;
-  const convergedAtHead = Number.isSafeInteger(review?.round) && triage?.round === review.round &&
-    triage.outcome === 'converged' && isCompleteCommitSha(triage.sha) && isCompleteCommitSha(pullRequest.headRefOid) &&
-    triage.sha.toLowerCase() === pullRequest.headRefOid.toLowerCase();
   const waiting = [];
-  if (!convergedAtHead) {
-    const pushedAfterConvergence = triage?.outcome === 'converged' && isCompleteCommitSha(triage.sha) &&
-      isCompleteCommitSha(pullRequest.headRefOid) && triage.sha.toLowerCase() !== pullRequest.headRefOid.toLowerCase();
-    waiting.push(pushedAfterConvergence ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
+  if (!convergedAtHead(pullRequest)) {
+    waiting.push(pushedAfterConvergence(pullRequest) ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   }
-  if (pullRequest.ci !== 'pass') {
-    waiting.push(pullRequest.ci === 'pending' ? 'CI 待ち' : pullRequest.ci === 'fail' ? 'CI 失敗' : 'CI 状態不明');
-  }
+  if (pullRequest.ci !== 'pass') waiting.push((CI_LABELS[pullRequest.ci] || CI_LABELS.unknown).wait);
   if (pullRequest.review !== 'approved' && !['レビューの承認待ち', '変更を求められている'].includes(pullRequest.operationBlocker)) {
     waiting.push('GitHub のレビュー承認待ち');
   }
@@ -1699,10 +1680,13 @@ function crossReviewState(pullRequest) {
   if (triage && triage.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${triage.round} 往復目の指摘に対応している途中` };
   if (triage && triage.outcome === 'halted') return { cls: 'warn', text: '開発者の判断待ち', warn: 'クロスレビューは開発者の判断を待って止まっている' };
   if (triage && triage.outcome === 'converged') {
-    if (!isCompleteCommitSha(pullRequest.headRefOid)) return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
+    if (!isCompleteCommitSha(pullRequest.headRefOid) || !isCompleteCommitSha(triage.sha)) {
+      return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
+    }
     const triageSha = triage.sha.toLowerCase();
     const headSha = pullRequest.headRefOid.toLowerCase();
-    if (triageSha === headSha) return { cls: 'ok', text: 'レビュー済み', warn: null };
+    if (convergedAtHead(pullRequest)) return { cls: 'ok', text: 'レビュー済み', warn: null };
+    if (!pushedAfterConvergence(pullRequest)) return { cls: 'mute', text: 'head を確かめられない', warn: 'head を確かめられない' };
     const triageShortSha = triageSha.slice(0, 7);
     return {
       cls: 'warn',
@@ -2075,21 +2059,18 @@ function appendPullRequestMergeResults(content, group) {
     const row = element('div', 'merge-result');
     row.setAttribute('role', 'status');
     row.append(element('span', '', `PR #${result.number}: ${pullRequestMergeResultLine(result)}`));
+    const close = element('button', 'link-btn', '閉じる');
+    close.type = 'button';
     if (result.id) {
-      const close = element('button', 'link-btn', '閉じる');
-      close.type = 'button';
       close.dataset.closeMergeResult = result.id;
-      row.append(close);
     } else {
-      const close = element('button', 'link-btn', '閉じる');
-      close.type = 'button';
       close.dataset.closeAutomaticMergeResult = `${group.owner}/${group.repo}#${result.number}`;
       close.dataset.closeMergeResult = close.dataset.closeAutomaticMergeResult;
       close.dataset.owner = group.owner;
       close.dataset.repo = group.repo;
       close.dataset.number = String(result.number);
-      row.append(close);
     }
+    row.append(close);
     content.append(row);
   }
 }
@@ -2142,18 +2123,9 @@ function appendPullRequestBlock(target, group, withTag = false) {
     const olderCount = Math.max(0, visibleItems.length - MERGED_VISIBLE_COUNT);
     for (const item of expanded ? visibleItems : visibleItems.slice(0, MERGED_VISIBLE_COUNT)) appendItem(line, item);
     if (olderCount) {
-      const toggle = element('button', 'ended-toggle', `${expanded ? '古い' + label + 'を隠す' : '古い' + label + 'を表示'} (${olderCount} 件)`);
-      toggle.type = 'button';
-      toggle.setAttribute('aria-expanded', String(expanded));
-      toggle.dataset.olderPrLine = key;
-      line.append(toggle);
-      toggle.addEventListener('click', () => {
-        if (expanded) expandedPrLines.delete(key);
-        else expandedPrLines.add(key);
-        if (lastState) render(lastState);
-        [...root.querySelectorAll('[data-older-pr-line]')]
-          .find((button) => button.dataset.olderPrLine === key)?.focus({ preventScroll: true });
-      });
+      appendExpandToggle(line, expandedPrLines, key,
+        (isExpanded, count) => `${isExpanded ? `古い${label}を隠す` : `古い${label}を表示`} (${count} 件)`,
+        olderCount, 'data-older-pr-line');
     }
     content.append(line);
   };
@@ -2300,7 +2272,7 @@ function activityStatus(session) {
 function isFinishedSession(session) {
   return activityStatus(session).tone === 'wait'
     && session.tasks.every((task) => task.state === 'done')
-    && session.decisions.every((decision) => ['resolved', 'withdrawn'].includes(decision.state))
+    && session.decisions.every(isEndedDecision)
     && session.permissionWaits.length === 0
     && !session.agents.some((agent) => !isEndedAgent(agent));
 }
@@ -2369,17 +2341,9 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
   }
   if (visibleAgents.length) body.append(list);
   if (endedAgents.length && includeToggle) {
-    const toggle = element('button', 'ended-toggle', showEnded ? `終了済みを隠す (${endedAgents.length} 件)` : `終了済みを表示 (${endedAgents.length} 件)`);
-    toggle.type = 'button';
-    toggle.setAttribute('aria-expanded', String(showEnded));
-    toggle.addEventListener('click', () => {
-      if (showEnded) expandedEndedSessions.delete(session.session_id);
-      else expandedEndedSessions.add(session.session_id);
-      if (lastState) render(lastState);
-      root.querySelector(`[data-ended-toggle="${CSS.escape(session.session_id)}"]`)?.focus({ preventScroll: true });
-    });
-    toggle.dataset.endedToggle = session.session_id;
-    body.append(toggle);
+    appendExpandToggle(body, expandedEndedSessions, session.session_id,
+      (expanded, count) => `${expanded ? '終了済みを隠す' : '終了済みを表示'} (${count} 件)`,
+      endedAgents.length, 'data-ended-toggle');
   }
 }
 
@@ -2479,6 +2443,15 @@ function sameAnswerDraft(left, right) {
   return left.choice === right.choice && left.note === right.note && sameAnswerPicks(left.picks, right.picks);
 }
 
+function answerDraftChanged(decision, draft, ignoreEmptyUnsent = false) {
+  const answer = decision.answer?.sentAt ? decision.answer : {};
+  if (ignoreEmptyUnsent && (draft.choice ?? null) === null && (draft.note || '') === (answer.note || '')) return false;
+  const questionCount = (decision.questions || []).length;
+  return !decision.answer?.sentAt || (draft.choice ?? null) !== (answer.choice ?? null) ||
+    (draft.note || '') !== (answer.note || '') ||
+    !sameAnswerPicks(copyAnswerPicks(draft.picks, questionCount), copyAnswerPicks(answer.picks, questionCount));
+}
+
 function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
   if (sameAnswerDraft(previous, next)) return;
   answerErrors.delete(key);
@@ -2574,30 +2547,26 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
     return;
   }
 
-  const answer = decision.answer;
   const draft = answerDraftFor(decision, session);
-  const originalChoice = answer?.choice ?? null;
-  const originalNote = answer?.note || '';
-  const dirty = !answer?.sentAt || draft.choice !== originalChoice || draft.note !== originalNote || !sameAnswerPicks(draft.picks, copyAnswerPicks(answer?.picks, questions.length));
+  const answer = decision.answer;
+  const dirty = answerDraftChanged(decision, draft);
   const recommendations = recommendedOptionsForQuestions(questions);
   const canUseRecommendation = recommendations.length > 0 && recommendations.every(Boolean);
   const answerBox = element('div', 'decision-answer');
   answerBox.dataset.decisionId = decision.id;
   answerBox.dataset.sessionId = session.session_id;
   const choices = element('div', 'answer-choices');
-  for (const [choice, label, disabled] of [['ok', '推奨案で OK', !canUseRecommendation]]) {
-    const control = document.createElement('label');
-    control.className = `answer-choice ${choice}`;
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.dataset.answerChoice = choice;
-    checkbox.dataset.sessionId = session.session_id;
-    checkbox.dataset.decisionId = decision.id;
-    checkbox.checked = draft.choice === choice;
-    checkbox.disabled = disabled;
-    control.append(checkbox, document.createTextNode(label));
-    choices.append(control);
-  }
+  const control = document.createElement('label');
+  control.className = 'answer-choice ok';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.dataset.answerChoice = 'ok';
+  checkbox.dataset.sessionId = session.session_id;
+  checkbox.dataset.decisionId = decision.id;
+  checkbox.checked = draft.choice === 'ok';
+  checkbox.disabled = !canUseRecommendation;
+  control.append(checkbox, document.createTextNode('推奨案で OK'));
+  choices.append(control);
   answerBox.append(choices);
   const answerMeta = element('div', 'meta', answerMetaText(decision, draft));
   answerMeta.dataset.answerMeta = 'true';
@@ -2707,19 +2676,29 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   list.append(card);
 }
 
-function appendPlanToggle(body, kind, sessionId, expanded, count, label, expandedSet) {
-  const key = `${kind}:${sessionId}`;
-  const toggle = element('button', 'ended-toggle', `${expanded ? `${label}を隠す` : `${label}を表示`} (${count} 件)`);
+function appendExpandToggle(target, set, key, label, count, attr) {
+  const expanded = set.has(key);
+  const [attribute, value] = typeof attr === 'string' ? [attr, key] : [attr.name, attr.value];
+  const datasetKey = attribute.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+  const toggle = element('button', 'ended-toggle', label(expanded, count));
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.dataset.planToggle = key;
+  toggle.dataset[datasetKey] = value;
   toggle.addEventListener('click', () => {
-    if (expanded) expandedSet.delete(sessionId);
-    else expandedSet.add(sessionId);
+    if (expanded) set.delete(key);
+    else set.add(key);
     if (lastState) render(lastState);
-    [...root.querySelectorAll('[data-plan-toggle]')].find((button) => button.dataset.planToggle === key)?.focus({ preventScroll: true });
+    [...root.querySelectorAll(`[${attribute}]`)]
+      .find((button) => button.dataset[datasetKey] === value)?.focus({ preventScroll: true });
   });
-  body.append(toggle);
+  target.append(toggle);
+}
+
+function appendPlanToggle(body, kind, sessionId, count, label, expandedSet) {
+  const key = `${kind}:${sessionId}`;
+  appendExpandToggle(body, expandedSet, sessionId,
+    (expanded, itemCount) => `${expanded ? `${label}を隠す` : `${label}を表示`} (${itemCount} 件)`,
+    count, { name: 'data-plan-toggle', value: key });
 }
 
 function kindToggleLabel(label, expanded, count) {
@@ -2727,23 +2706,14 @@ function kindToggleLabel(label, expanded, count) {
 }
 
 function appendKindToggle(body, sectionKey, expanded, count, label) {
-  const toggle = element('button', 'ended-toggle', kindToggleLabel(label, expanded, count));
-  toggle.type = 'button';
-  toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.dataset.kindToggle = sectionKey;
-  toggle.addEventListener('click', () => {
-    if (expandedKindSections.has(sectionKey)) expandedKindSections.delete(sectionKey);
-    else expandedKindSections.add(sectionKey);
-    if (lastState) render(lastState);
-    [...root.querySelectorAll('[data-kind-toggle]')].find((button) => button.dataset.kindToggle === sectionKey)?.focus({ preventScroll: true });
-  });
-  body.append(toggle);
+  appendExpandToggle(body, expandedKindSections, sectionKey,
+    (isExpanded, itemCount) => kindToggleLabel(label, isExpanded, itemCount), count, 'data-kind-toggle');
 }
 
 function appendDecisions(body, session, product, withTags = false, multipleSessions = false) {
   const decisions = newestFirst(session.decisions);
   const active = newestFirst(shownActiveDecisions(session));
-  const ended = displayPreferences.hideFinished ? [] : decisions.filter((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const ended = displayPreferences.hideFinished ? [] : decisions.filter(isEndedDecision);
   const expanded = !displayPreferences.hideFinished && expandedEndedDecisions.has(session.session_id);
   const visible = expanded ? newestFirst([...active, ...ended]) : active;
   if (visible.length) {
@@ -2751,7 +2721,7 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
   } else if (!shownPermissions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
-  if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, expanded, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
+  if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
 function appendTaskItem(list, task, product, session, withTags = false, multipleSessions = false) {
@@ -2805,8 +2775,8 @@ function appendTasks(body, session, product, withTags = false, multipleSessions 
     for (const task of visible) appendTaskItem(list, task, product, session, withTags, multipleSessions);
     body.append(list);
   }
-  if (todoCount) appendPlanToggle(body, 'todoTasks', session.session_id, showTodo, todoCount, '未着手のタスク', expandedTodoTasks);
-  if (doneCount) appendPlanToggle(body, 'tasks', session.session_id, showDone, doneCount, '完了したタスク', expandedDoneTasks);
+  if (todoCount) appendPlanToggle(body, 'todoTasks', session.session_id, todoCount, '未着手のタスク', expandedTodoTasks);
+  if (doneCount) appendPlanToggle(body, 'tasks', session.session_id, doneCount, '完了したタスク', expandedDoneTasks);
 }
 
 // 作業中のタスクがあるときは未着手を畳み、今やっていることを先に見せる。未着手しか無ければ畳まない。
@@ -2894,7 +2864,7 @@ function sessionBlock(product, session, multipleSessions) {
   const body = element('div', 'session-body');
   if (!multipleSessions) body.append(element('div', 'session-tag session-context', sessionDisplayName(session)));
   const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
-  const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some((decision) => ['resolved', 'withdrawn'].includes(decision.state));
+  const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some(isEndedDecision);
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
   const sections = { judgment: [], tasks: [], now: [] };
   if (showJudgment) {
@@ -2984,11 +2954,11 @@ function productSection(product, index, products, pinnedCount) {
   const branch = sharedBranch(product);
   if (branch) head.append(element('span', 'meta branch', branch));
 
-  const permissionCount = product.sessions.reduce((total, session) => total + session.permissionWaits.length, 0);
+  const judgmentCounts = countJudgments(product.sessions);
   const awaitingDecisions = product.sessions.flatMap((session) => session.decisions).filter(isAwaitingDecision);
-  const decisionCount = awaitingDecisions.length;
+  const decisionCount = judgmentCounts.decisions;
   const pullRequestGroups = product.pullRequestGroups || [];
-  if (permissionCount) head.append(element('span', 'chip danger', `許可待ち (${permissionCount} 件)`));
+  if (judgmentCounts.permission) head.append(element('span', 'chip danger', `許可待ち (${judgmentCounts.permission} 件)`));
   if (decisionCount) {
     const decisionChip = element('span', 'chip danger', `判断待ち (${decisionCount} 件)`);
     decisionChip.title = decisionCountTitle(awaitingDecisions);
@@ -3074,7 +3044,7 @@ function sessionReferences(products) {
 function kindEndedDecisionEntries(references) {
   if (displayPreferences.hideFinished) return [];
   const entries = references.flatMap((reference) => reference.session.decisions
-    .filter((decision) => ['resolved', 'withdrawn'].includes(decision.state))
+    .filter(isEndedDecision)
     .map((decision) => ({ ...reference, decision })));
   return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
@@ -3365,7 +3335,7 @@ function updateAnswerSubmit(card) {
   if (!decision || !button) return;
   const draft = answerDraftFor(decision, { session_id: sessionId });
   const answer = decision.answer;
-  const changed = !answer?.sentAt || draft.choice !== (answer?.choice ?? null) || draft.note !== (answer?.note || '') || !sameAnswerPicks(draft.picks, copyAnswerPicks(answer?.picks, (decision.questions || []).length));
+  const changed = answerDraftChanged(decision, draft);
   const meta = card.querySelector('[data-answer-meta]');
   if (meta) {
     meta.textContent = answerMetaText(decision, draft);
@@ -3597,10 +3567,43 @@ function findPullRequestMergeTarget(key) {
   return null;
 }
 
+async function runPullRequestAction({ button, key, inFlight, messages, startedMessage, request, onSuccess, successMessage }) {
+  if (inFlight.has(key)) return;
+  inFlight.add(key);
+  messages.delete(key);
+  button.disabled = true;
+  liveStatus.textContent = startedMessage;
+  if (lastState) render(lastState);
+  try {
+    const response = await request();
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = result.error || 'PR の状態が変わりました。表示を確認してください。';
+      recordPullRequestTransientMessage(messages, key, message);
+      await refresh();
+      if (lastState) render(lastState);
+      liveStatus.textContent = message;
+      return;
+    }
+    await onSuccess(result);
+    messages.delete(key);
+    await refresh();
+    liveStatus.textContent = successMessage(result);
+  } catch {
+    const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
+    recordPullRequestTransientMessage(messages, key, message);
+    if (lastState) render(lastState);
+    liveStatus.textContent = message;
+  } finally {
+    inFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
+
 async function runPullRequestMergeAction(button, action) {
   const key = button.dataset.mergeGo || button.dataset.cancelReservation;
   const target = findPullRequestMergeTarget(key || '');
-  if (!target || pullRequestMergeInFlight.has(key)) return;
+  if (!target) return;
   const { group, pullRequest, number } = target;
   const options = pullRequestMergeOptionsFor(group, pullRequest);
   const operation = action === 'merge' && options.mergeAfterReview ? 'reserve' : action;
@@ -3613,53 +3616,40 @@ async function runPullRequestMergeAction(button, action) {
     method: options.method,
     deleteBranch: options.deleteBranch,
   });
-  pullRequestMergeInFlight.add(key);
-  pullRequestMergeMessages.delete(key);
-  button.disabled = true;
-  liveStatus.textContent = operation === 'merge' ? `PR #${number} の状態を確認してマージしています。`
+  const startedMessage = operation === 'merge' ? `PR #${number} の状態を確認してマージしています。`
     : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しています。`
       : `PR #${number} のマージ予約を取り消しています。`;
-  if (lastState) render(lastState);
-  try {
-    const response = await postUiAction(endpoint, body);
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message = result.error || 'PR の状態が変わりました。表示を確認してください。';
-      recordPullRequestTransientMessage(pullRequestMergeMessages, key, message);
-      await refresh();
-      if (lastState) render(lastState);
-      liveStatus.textContent = message;
-      return;
-    }
-    pullRequestMergeConfirmations.delete(key);
-    const queued = operation === 'merge' && result.queued;
-    if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
-    pullRequestMergeMessages.delete(key);
-    if (operation === 'merge' && result.merged === true) {
-      const retargetedNumbers = pullRequest.children.map((child) => child.number);
-      rememberPullRequestMergeResult(group, {
-        number,
-        method: options.method,
-        branchDeleted: result.branchDeleted === true,
-        isCrossRepository: pullRequest.isCrossRepository === true,
-        retargetedBase: retargetedNumbers.length ? group.defaultBranch : null,
-        retargetedNumbers,
-        warning: result.warning || null,
-      });
-    }
-    await refresh();
-    liveStatus.textContent = queued ? `PR #${number} をマージキューに追加しました。` : operation === 'merge' ? `PR #${number} をマージしました。`
+  return runPullRequestAction({
+    button,
+    key,
+    inFlight: pullRequestMergeInFlight,
+    messages: pullRequestMergeMessages,
+    startedMessage,
+    request: () => postUiAction(endpoint, body),
+    onSuccess: (result) => {
+      pullRequestMergeConfirmations.delete(key);
+      const queued = operation === 'merge' && result.queued;
+      if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
+      if (operation === 'merge' && result.merged === true) {
+        const retargetedNumbers = pullRequest.children.map((child) => child.number);
+        rememberPullRequestMergeResult(group, {
+          number,
+          method: options.method,
+          branchDeleted: result.branchDeleted === true,
+          isCrossRepository: pullRequest.isCrossRepository === true,
+          retargetedBase: retargetedNumbers.length ? group.defaultBranch : null,
+          retargetedNumbers,
+          warning: result.warning || null,
+        });
+      }
+    },
+    successMessage: (result) => {
+      const queued = operation === 'merge' && result.queued;
+      return queued ? `PR #${number} をマージキューに追加しました。` : operation === 'merge' ? `PR #${number} をマージしました。`
       : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しました。`
-        : `PR #${number} のマージ予約を取り消しました。`;
-  } catch {
-    const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
-    recordPullRequestTransientMessage(pullRequestMergeMessages, key, message);
-    if (lastState) render(lastState);
-    liveStatus.textContent = message;
-  } finally {
-    pullRequestMergeInFlight.delete(key);
-    if (lastState) render(lastState);
-  }
+      : `PR #${number} のマージ予約を取り消しました。`;
+    },
+  });
 }
 
 async function closeAutomaticPullRequestMergeResult(button) {
@@ -3749,44 +3739,27 @@ function findPullRequestConflictTarget(key) {
 async function runPullRequestConflictRequest(button) {
   const uiKey = button.dataset.conflictGo;
   const target = findPullRequestConflictTarget(uiKey || '');
-  if (!target || pullRequestConflictInFlight.has(uiKey)) return;
+  if (!target) return;
   const { pullRequest } = target;
   if (!pullRequest.conflictRequestKey || !pullRequest.conflict) return;
 
   const recipients = pullRequestConflictTargetNames(pullRequest, true);
   if (!recipients.length) return;
-  pullRequestConflictInFlight.add(uiKey);
-  pullRequestConflictMessages.delete(uiKey);
-  button.disabled = true;
-  liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しています。`;
-  if (lastState) render(lastState);
-  try {
-    const response = await postUiAction('/api/pull-requests/conflict-request', {
+  return runPullRequestAction({
+    button,
+    key: uiKey,
+    inFlight: pullRequestConflictInFlight,
+    messages: pullRequestConflictMessages,
+    startedMessage: `PR #${pullRequest.number} の衝突の解消を依頼しています。`,
+    request: () => postUiAction('/api/pull-requests/conflict-request', {
       key: pullRequest.conflictRequestKey,
       headRefOid: pullRequest.headRefOid,
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const message = result.error || 'PR の状態が変わりました。表示を確認してください。';
-      recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, message);
-      await refresh();
-      if (lastState) render(lastState);
-      liveStatus.textContent = message;
-      return;
-    }
-    pullRequestConflictConfirmations.delete(uiKey);
-    pullRequestConflictMessages.delete(uiKey);
-    await refresh();
-    liveStatus.textContent = `PR #${pullRequest.number} の衝突の解消を依頼しました。`;
-  } catch {
-    const message = '操作結果を取得できませんでした。PR の状態を取り直してください。';
-    recordPullRequestTransientMessage(pullRequestConflictMessages, uiKey, message);
-    if (lastState) render(lastState);
-    liveStatus.textContent = message;
-  } finally {
-    pullRequestConflictInFlight.delete(uiKey);
-    if (lastState) render(lastState);
-  }
+    }),
+    onSuccess: () => {
+      pullRequestConflictConfirmations.delete(uiKey);
+    },
+    successMessage: () => `PR #${pullRequest.number} の衝突の解消を依頼しました。`,
+  });
 }
 
 async function runSessionAction(button, url, body, errorMessage, focusExcludedNote = false, undoInfo = null) {
@@ -4050,12 +4023,7 @@ function hasUnsentAnswerDraft(state) {
     const session = state.sessions?.find((item) => item.session_id === sessionId);
     const decision = session?.decisions?.find((item) => item.id === decisionId);
     if (!decision || !decisionAnswerAvailability(decision).active) continue;
-    const questionCount = (decision.questions || []).length;
-    const sent = decision.answer?.sentAt ? decision.answer : {};
-    const cannotSend = (draft.choice ?? null) === null && (draft.note || '') === (sent.note || '');
-    if (cannotSend) continue;
-    if ((draft.choice ?? null) !== (sent.choice ?? null) || (draft.note || '') !== (sent.note || '')
-      || !sameAnswerPicks(copyAnswerPicks(draft.picks, questionCount), copyAnswerPicks(sent.picks, questionCount))) return true;
+    if (answerDraftChanged(decision, draft, true)) return true;
   }
   return false;
 }
@@ -4109,9 +4077,8 @@ async function refresh() {
       lastVersion = state.version;
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
-      const permissions = visibleSessions.reduce((total, session) => total + session.permissionWaits.length, 0);
-      const decisions = visibleSessions.reduce((total, session) => total + session.decisions.filter(isAwaitingDecision).length, 0);
-      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${permissions} 件)、判断待ち (${decisions} 件)。`;
+      const judgmentCounts = countJudgments(visibleSessions);
+      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions} 件)。`;
     }
   } catch {
     connectionLost = true;

@@ -314,7 +314,8 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
 test('プロダクト別の PR 欄はセッション群の外に区切って置く', () => {
   const productSection = functionSource(web, 'productSection');
   const sessionBlock = functionSource(web, 'sessionBlock');
-  assert.ok(productSection && sessionBlock);
+  const judgmentCounts = functionSource(web, 'countJudgments');
+  assert.ok(productSection && sessionBlock && judgmentCounts);
   const product = {
     key: 'product', name: 'Product', branches: new Set(),
     sessions: [{ session_id: 'one', permissionWaits: [], decisions: [] }, { session_id: 'two', permissionWaits: [], decisions: [] }],
@@ -334,7 +335,7 @@ test('プロダクト別の PR 欄はセッション群の外に区切って置�
     sessionBlock: (_product, _session, multiple) => fakeElement('section', `session-group ${multiple ? '' : 'single'}`.trim()),
     appendPullRequestBlock(target) { target.append(fakeElement('section', 'group-frame pr-repo-group')); },
   });
-  vm.runInContext(productSection, context);
+  vm.runInContext(`${judgmentCounts}\n${productSection}`, context);
   const section = context.productSection(product, 0, [product], 0);
   const body = section.children[1];
   const sessionIndexes = body.children.map((child, index) => child.className.startsWith('session-group') ? index : -1).filter((index) => index >= 0);
@@ -475,7 +476,7 @@ test('種類別の空欄は本文と枠を省き、件数付きの見出し一�
 });
 
 test('判断事項の解決内容と回答状態は余白のある一行にまとまる', () => {
-  const webFunctions = ['answerDraftKey', 'appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
+  const webFunctions = ['answerDraftKey', 'answerDraftChanged', 'appendDecisionCard', 'appendDecisionAnswer'].map((name) => functionSource(web, name));
   assert.ok(webFunctions.every(Boolean));
   const webContext = pageContext(web, {
     answerErrors: new Map(),
@@ -607,7 +608,8 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.doesNotMatch(mockText, /マージできない理由/);
 
   const action = web.match(/async function runPullRequestMergeAction\([^]*?\n\}/)?.[0];
-  assert.ok(action);
+  const actionHelper = functionSource(web, 'runPullRequestAction');
+  assert.ok(action && actionHelper);
   const actionContext = pageContext(web, {
     findPullRequestMergeTarget: () => ({ group: {}, pullRequest: {}, number: 1 }),
     pullRequestMergeInFlight: new Set(),
@@ -624,7 +626,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     render() {},
     refresh: async () => {},
   });
-  vm.runInContext(action, actionContext);
+  vm.runInContext(`async ${actionHelper}\n${action}`, actionContext);
   await actionContext.runPullRequestMergeAction({ dataset: { mergeGo: 'key' } }, 'merge');
   assert.equal(actionContext.pullRequestMergeMessages.size, 0);
   assert.ok(actionContext.queuedPullRequestMerges.has('key'));
@@ -747,7 +749,8 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   const countsSource = functionSource(web, 'idleHiddenSessions');
   const noteSource = functionSource(web, 'renderIdleNote');
   const endedAgentSource = functionSource(web, 'isEndedAgent');
-  assert.ok(idleSource && countsSource && noteSource && endedAgentSource);
+  const activeDecisionSource = functionSource(web, 'isActiveDecision');
+  assert.ok(idleSource && countsSource && noteSource && endedAgentSource && activeDecisionSource);
   const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
   let renders = 0;
   const context = pageContext(web, {
@@ -759,7 +762,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
     lastState: {},
     render: () => { renders += 1; },
   });
-  vm.runInContext(`${endedAgentSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
+  vm.runInContext(`${endedAgentSource}\n${activeDecisionSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
   const now = 2_000_000;
   const stale = {
     session_id: 'stale', status: '不明', lastUpdatedAt: new Date(now - 1_800_001).toISOString(),
@@ -799,11 +802,12 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences)), { idleHideMinutes: 30, hideFinished: true });
 
   const mockIdle = functionSource(mock, 'isIdleHiddenSession');
+  const mockActiveDecision = functionSource(mock, 'isActiveDecision');
   const mockContext = pageContext(mock, {
     ui: { idleHideMinutes: 30 },
     effectiveDecisionState: (decision) => decision.kind,
   });
-  vm.runInContext(`${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
+  vm.runInContext(`${mockActiveDecision}\n${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
   assert.equal(mockContext.isIdle({
     status: 'unknown', lastUpdatedAt: new Date(now - 45 * 60_000).toISOString(), perms: [], decisions: [], subagents: [],
   }, now), true);
@@ -890,7 +894,7 @@ test('予約中の PR は待ち条件と取消操作を出し、マージでき�
     pullRequestMergeInFlight: new Set(),
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '2026/10/04 10:00',
-    pullRequestReservationWaits: () => ['クロスレビューの収束待ち', 'CI 待ち', 'GitHub のレビュー承認待ち'],
+    pullRequestReservationWaits: () => ['クロスレビューの収束待ち', 'CI 実行中', 'GitHub のレビュー承認待ち'],
     crossReviewLine: () => null,
     pullRequestMergeMessages: new Map(),
     appendPullRequestConflictControls() {},
@@ -905,7 +909,7 @@ test('予約中の PR は待ち条件と取消操作を出し、マージでき�
     reservation: { method: 'squash', createdAt: '2026-10-04T01:00:00.000Z' }, children: [], mergeSessionId: 'session-a',
   });
   const rendered = target.children[0];
-  assert.match(rendered.textContent, /レビュー収束後にマージ予約中 \(スカッシュ、予約時 2026\/10\/04 10:00、クロスレビューの収束待ち、CI 待ち、GitHub のレビュー承認待ち\)/);
+  assert.match(rendered.textContent, /レビュー収束後にマージ予約中 \(スカッシュ、予約時 2026\/10\/04 10:00、クロスレビューの収束待ち、CI 実行中、GitHub のレビュー承認待ち\)/);
   assert.match(rendered.textContent, /予約を取り消す/);
   assert.doesNotMatch(rendered.textContent, /マージできない理由/);
   assert.equal(descendants(rendered).find((node) => node.dataset.cancelReservation === mergeKey).disabled, false);
@@ -915,8 +919,9 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
   const findTargetSource = functionSource(web, 'findPullRequestMergeTarget');
   const rememberSource = functionSource(web, 'rememberPullRequestMergeResult');
   const lineSource = functionSource(web, 'pullRequestMergeResultLine');
+  const actionHelperSource = `async ${functionSource(web, 'runPullRequestAction')}`;
   const actionSource = `async ${functionSource(web, 'runPullRequestMergeAction')}`;
-  assert.ok(findTargetSource && rememberSource && lineSource && actionSource);
+  assert.ok(findTargetSource && rememberSource && lineSource && actionHelperSource && actionSource);
   const key = 'a'.repeat(64);
   const pullRequest = { mergeRecordKey: key, mergeSessionId: 'session-a', number: 41, headRefOid: 'abcdef', children: [] };
   const group = {
@@ -934,7 +939,7 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
     liveStatus: { textContent: '' }, render() {}, refresh: async () => {},
     postUiAction: async () => ({ ok: true, json: async () => ({ merged: true, branchDeleted: false }) }),
   });
-  vm.runInContext(`${findTargetSource}\n${rememberSource}\n${lineSource}\n${actionSource}\nthis.merge = runPullRequestMergeAction; this.resultLine = pullRequestMergeResultLine;`, webContext);
+  vm.runInContext(`${findTargetSource}\n${rememberSource}\n${lineSource}\n${actionHelperSource}\n${actionSource}\nthis.merge = runPullRequestMergeAction; this.resultLine = pullRequestMergeResultLine;`, webContext);
   await webContext.merge({ dataset: { mergeGo: key } }, 'merge');
   const webResult = webResults.get('example/project\0project-a')[0];
   const expected = 'スカッシュ でマージしました。ブランチの削除は GitHub の自動削除の設定に任せた (結果は未確認)。';
@@ -974,9 +979,10 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
 test('回答の送信失敗は再描画後も残り、下書き変更後に送信済み状態を置き換える', () => {
   const keySource = functionSource(web, 'answerDraftKey');
   const sameSource = functionSource(web, 'sameAnswerDraft');
+  const changedSource = functionSource(web, 'answerDraftChanged');
   const clearSource = functionSource(web, 'clearAnswerErrorWhenDraftChanges');
   const appendSource = functionSource(web, 'appendDecisionAnswer');
-  assert.ok(keySource && sameSource && clearSource && appendSource);
+  assert.ok(keySource && sameSource && changedSource && clearSource && appendSource);
   const errors = new Map();
   const context = pageContext(web, {
     answerErrors: errors,
@@ -992,7 +998,7 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
     answerStatusText: () => '前回の回答を送信済み',
     sessionDisplayName: (session) => session.session_id,
   });
-  vm.runInContext(`${keySource}\n${sameSource}\n${clearSource}\n${appendSource}\nthis.key = answerDraftKey; this.clearError = clearAnswerErrorWhenDraftChanges; this.appendAnswer = appendDecisionAnswer;`, context);
+  vm.runInContext(`${keySource}\n${sameSource}\n${changedSource}\n${clearSource}\n${appendSource}\nthis.key = answerDraftKey; this.clearError = clearAnswerErrorWhenDraftChanges; this.appendAnswer = appendDecisionAnswer;`, context);
   const key = context.key('session-a', 'decision-a');
   errors.set(key, '回答を送信できませんでした。');
   const decision = { id: 'decision-a', questions: [], answer: { choice: 'ok', note: '以前の指示', picks: [], sentAt: '2026-10-04T00:00:00Z' } };
@@ -1007,8 +1013,9 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
 });
 
 test('回答の編集時に送信済み回答の状態表示も更新する', () => {
+  const changedSource = functionSource(web, 'answerDraftChanged');
   const updateSource = functionSource(web, 'updateAnswerSubmit');
-  assert.ok(updateSource);
+  assert.ok(changedSource && updateSource);
   const decision = {
     id: 'decision-a', questions: [],
     answer: { choice: 'ok', note: '保存済みの指示', picks: [], sentAt: '2026-10-04T00:00:00Z' },
@@ -1034,7 +1041,7 @@ test('回答の編集時に送信済み回答の状態表示も更新する', ()
     answerStatusText: () => '前回の回答を送信済み',
     canSendDecisionAnswer: () => true,
   });
-  vm.runInContext(`${updateSource}\nthis.update = updateAnswerSubmit;`, context);
+  vm.runInContext(`${changedSource}\n${updateSource}\nthis.update = updateAnswerSubmit;`, context);
   context.update(card);
   assert.equal(status.textContent, '変更は未送信');
   assert.equal(button.disabled, false);
@@ -1046,7 +1053,7 @@ test('回答の編集時に送信済み回答の状態表示も更新する', ()
 });
 
 test('表示設定の保存失敗は値を戻して設定ダイアログにも表示する', async () => {
-  const settleSource = functionSource(web, 'settleDisplayPreferenceSaves');
+  const settleSource = functionSource(web, 'settleDisplaySaves');
   const saveSource = functionSource(web, 'saveDisplayPreferences');
   const showErrorSource = functionSource(web, 'showWriteError');
   const sendPatchSource = `async ${functionSource(web, 'sendDisplayPatch')}`;
@@ -1061,14 +1068,14 @@ test('表示設定の保存失敗は値を戻して設定ダイアログにも�
     displayPreferenceSaveStates: new Map(),
     pendingDisplayChanges: {},
     enqueueDisplayPatch: async () => false,
-    settleDisplayPreferenceSaves: null,
+    settleDisplaySaves: null,
     renderSectionOrder: () => { orderRenders += 1; },
     renderDisplaySettings: () => { settingsRenders += 1; },
     lastState: {},
     render: () => { renders += 1; },
   });
   vm.runInContext(`${settleSource}\n${saveSource}\nthis.savePreferences = saveDisplayPreferences;`, context);
-  context.settleDisplayPreferenceSaves = context.settleDisplayPreferenceSaves;
+  context.settleDisplaySaves = context.settleDisplaySaves;
   await context.savePreferences({ sectionOrder: ['judgment', 'sinceSeen', 'tasks', 'now', 'prs'] });
   assert.deepEqual(JSON.parse(JSON.stringify(context.displayPreferences.sectionOrder)), savedOrder);
   assert.equal(orderRenders, 1);
@@ -1223,38 +1230,48 @@ test('PR の初回取得中は空一覧の代わりに取得中の案内を出�
 });
 
 test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲を示す', async () => {
+  const settings = web.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   const inputSource = functionSource(web, 'setDisplaySettingInput');
   const errorSource = functionSource(web, 'displaySettingError');
   const changeSource = functionSource(web, 'changeDisplaySetting');
-  assert.ok(inputSource && errorSource && changeSource);
+  assert.ok(settings && inputSource && errorSource && changeSource);
   const longError = { hidden: true, textContent: '' };
   const awayError = { hidden: true, textContent: '' };
   const idleError = { hidden: true, textContent: '' };
+  const resultError = { hidden: true, textContent: '' };
   const input = { type: 'number', valueAsNumber: 121, value: '121' };
   const context = pageContext(web, {
     longWaitMinutesInput: input, longWaitMinutesError: longError, awayAnswerWaitMinutesError: awayError,
     idleHideMinutesError: idleError,
+    mergeResultHideMinutesError: resultError,
+    awayAnswerWaitMinutesInput: { type: 'number', value: '' },
     idleHideMinutesInput: { type: 'number', valueAsNumber: 4, value: '4' },
+    mergeResultHideMinutesInput: { type: 'number', value: '' },
     displayPreferences: { longWaitMinutes: 15, idleHideMinutes: 30 },
+    DEFAULT_LONG_WAIT_MINUTES: 15,
+    DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
+    DEFAULT_IDLE_HIDE_MINUTES: 30,
+    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
   });
-  vm.runInContext(`${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
-  assert.equal(await context.changeSetting('longWaitMinutes', input, 1, 120), false);
+  vm.runInContext(`${settings}\n${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
+  assert.equal(await context.changeSetting('longWaitMinutes', input), false);
   assert.equal(longError.hidden, false);
   assert.equal(longError.textContent, '1〜120 分の値を入力してください。');
   assert.equal(input.value, '15');
-  assert.equal(await context.changeSetting('idleHideMinutes', context.idleHideMinutesInput, 5, 1440), false);
+  assert.equal(await context.changeSetting('idleHideMinutes', context.idleHideMinutesInput), false);
   assert.equal(idleError.hidden, false);
   assert.equal(idleError.textContent, '5〜1440 分の値を入力してください。');
   assert.equal(context.idleHideMinutesInput.value, '30');
   assert.match(web, /長く待たせているとみなす時間 \(1〜120 分\)/);
   assert.match(web, /更新の無いセッションを隠すまで \(分\)/);
-  assert.match(web, /id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440"/);
+  assert.match(settings, /key: 'idleHideMinutes'[^\n]*min: 5, max: 1440/);
   assert.match(web, /id="settings-idle-hide-error" role="alert"/);
   assert.match(web, /離席中に質問の回答を待つ時間 \(1〜30 分\)/);
   assert.match(web, /id="settings-long-wait-error" role="alert"/);
   assert.match(mock, /id="settings-away-answer-wait-error" role="alert"/);
   assert.match(mock, /更新の無いセッションを隠すまで \(分\)/);
-  assert.match(mock, /id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440"/);
+  const mockSettings = mock.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  assert.match(mockSettings, /key: 'idleHideMinutes'[^\n]*min: 5, max: 1440/);
 });
 
 test('更新の無いセッションの「表示する」「隠す」が描き直しで消えても、表示の切り替えへフォーカスを戻す', () => {

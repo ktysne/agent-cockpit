@@ -76,9 +76,9 @@ test('ライトとダークの状態色およびボタン文字のコントラ�
     {
       html: web,
       statuses: [
-        ['--ok-text', '--ok-soft', ['.badge.done', '.badge.ok', '.task-state.done', '.chip.ok', '.answer-choice.ok:has(input:checked)']],
+        ['--ok-text', '--ok-soft', ['.badge.done', '.badge.ok', '.chip.ok', '.answer-choice.ok:has(input:checked)']],
         ['--warn-text', '--warn-soft', ['.badge.wait', '.badge.warn', '.chip.warn']],
-        ['--accent-text', '--accent-soft', ['.badge.busy', '.badge.accent', '.task-state.doing', '.chip.accent', '.news-head']],
+        ['--accent-text', '--accent-soft', ['.badge.busy', '.badge.accent', '.chip.accent', '.news-head']],
       ],
     },
     {
