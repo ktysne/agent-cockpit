@@ -931,7 +931,7 @@ function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
-  const updatedAt = Date.parse(session.lastUpdatedAt || '');
+  const updatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
 }
 function idleHiddenSessions(sessions = allSessions(), now = Date.now()) {

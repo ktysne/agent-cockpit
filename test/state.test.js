@@ -84,8 +84,12 @@ test('lastUpdatedAt はイベント、計画、判断事項の最新時刻を返
   state.addEvent({ session_id: 'last-updated', hook_event_name: 'UserPromptSubmit', hookAt: 5_000 });
   assert.equal(session().lastUpdatedAt, timestamp(5_000));
 
-  state.syncSessionFiles([{ session_id: 'file-only', cwd: 'C:\\project', name: '時刻なし' }]);
-  assert.equal(state.snapshot().sessions.find((item) => item.session_id === 'file-only').lastUpdatedAt, null);
+  state.syncSessionFiles([{
+    session_id: 'file-only', cwd: 'C:\\project', name: '時刻なし', updatedAt: '2026-10-04T00:00:00.000Z',
+  }]);
+  const fileOnly = state.snapshot().sessions.find((item) => item.session_id === 'file-only');
+  assert.equal(fileOnly.sessionFileUpdatedAt, '2026-10-04T00:00:00.000Z');
+  assert.equal(fileOnly.lastUpdatedAt, null);
 });
 
 test('状態不明のセッションを外し、すべて表示する操作で戻す', async (t) => {
@@ -601,11 +605,36 @@ test('公開仕様でないセッション JSON の不正な項目を飛ばす',
   ]);
 
   assert.deepEqual(await listLiveSessionFiles(claudeHome), [{
-    session_id: 'session-valid', pid: process.pid, cwd: 'D:\\project', name: '正常なセッション',
+    session_id: 'session-valid', pid: process.pid, cwd: 'D:\\project', name: '正常なセッション', updatedAt: null,
   }]);
   assert.equal(await findLiveSessionIdByPid(process.pid, claudeHome), 'session-valid');
   assert.equal(await readSessionName('session-valid', claudeHome), '正常なセッション');
   assert.equal(await findLiveSessionIdByPid(Number.MAX_SAFE_INTEGER, claudeHome), null);
+});
+
+test('セッションファイルの更新時刻を ISO 形式にし、不正な値は null にする', async (t) => {
+  const { claudeHome } = await temporaryHome(t);
+  const sessionsDirectory = path.join(claudeHome, 'sessions');
+  await fs.mkdir(sessionsDirectory, { recursive: true });
+  const records = [
+    { session_id: 'numeric-time', updatedAt: 1791113430428 },
+    { session_id: 'missing-time' },
+    { session_id: 'string-time', updatedAt: '1791113430428' },
+    { session_id: 'out-of-range-time', updatedAt: Number.MAX_VALUE },
+  ];
+  await Promise.all(records.map((record) => fs.writeFile(
+    path.join(sessionsDirectory, `${record.session_id}.json`),
+    JSON.stringify({ ...record, pid: process.pid }),
+  )));
+
+  const sessions = await listLiveSessionFiles(claudeHome);
+  const updatedAtById = Object.fromEntries(sessions.map(({ session_id, updatedAt }) => [session_id, updatedAt]));
+  assert.deepEqual(updatedAtById, {
+    'numeric-time': new Date(1791113430428).toISOString(),
+    'missing-time': null,
+    'string-time': null,
+    'out-of-range-time': null,
+  });
 });
 
 test('サブエージェント定義から Claude と Codex のモデルおよび effort を読む', async (t) => {

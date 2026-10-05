@@ -2409,6 +2409,7 @@ class DashboardState {
         ...visible,
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
+        sessionFileUpdatedAt: file?.updatedAt || null,
         lastUpdatedAt,
         tools: base.tools.map((tool) => ({ ...tool })),
         agents: base.agents.map((agent) => {

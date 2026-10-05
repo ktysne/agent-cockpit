@@ -39,6 +39,12 @@ function processIsAlive(pid) {
   }
 }
 
+function sessionFileUpdatedAt(value) {
+  if (!Number.isFinite(value)) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
 // ~/.claude/sessions は公開仕様ではないので、読めない項目やファイルは黙って飛ばす。
 async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = processIsAlive } = {}) {
   const directory = path.join(claudeHome, 'sessions');
@@ -64,6 +70,7 @@ async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = pro
       pid: value.pid,
       cwd: typeof value.cwd === 'string' ? value.cwd : '',
       name: typeof value.name === 'string' ? value.name.slice(0, 200) : null,
+      updatedAt: sessionFileUpdatedAt(value.updatedAt),
     });
   }
   return sessions;
