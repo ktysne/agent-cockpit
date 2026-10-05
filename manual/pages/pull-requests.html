@@ -102,7 +102,7 @@
       <li data-part="row.badges" data-place="left"><b>CI の札と GitHub のレビューの札</b>：左が CI、右が GitHub のレビューです(<a href="#pr-ci-review">CI とレビューの札</a>)。</li>
       <li data-part="row.rounds"><b>往復の目盛りと数</b>：クロスレビューを何往復したかです。目盛りは上限の 3 往復で、済んだ往復が塗られます。数は「2 / 3 往復、非対応 1」の形で、往復の数と、指摘のうち対応しないと決めた数が出ます。</li>
       <li data-part="row.xr-state"><b>クロスレビューの状態</b>：結論と、head との関係です(<a href="#pr-cross-review">クロスレビューの行</a>)。</li>
-      <li data-part="row.skip"><b><span class="ui">レビュー不要にする</span></b>：この PR の今の head について、クロスレビューを不要と記録します(<a href="#pr-skip">レビュー不要の記録</a>)。</li>
+      <li data-part="row.skip"><b><span class="ui">レビュー不要にする</span></b>：この PR の今の head について、クロスレビューを不要と記録します(<a href="#pr-skip">レビュー不要の記録</a>)。クロスレビューの状態が黄の札のときだけ出ます。</li>
       <li data-part="row.wait" data-place="left"><b>待ち</b>：<span class="ui">待ち:</span> に、設定で選んだ条件のうち、まだ満たしていないものが出ます。</li>
     </ol>
   </figure>
@@ -373,7 +373,7 @@
   ただし、<span class="ui">レビュー収束後マージ</span> は、クロスレビューの収束記録が要るので、レビュー不要の記録だけでは実行されません。</p>
   <p>記録は、次の 2 つの方法で行います。</p>
   <ul>
-    <li>PR の行の <span class="ui">レビュー不要にする</span> を押す。記録する理由は、画面からの記録だと分かる文になります</li>
+    <li>PR の行の <span class="ui">レビュー不要にする</span> を押す。記録する理由は、画面からの記録だと分かる文になります。このボタンは、レビュー未実施や変更あり、対応中のように、クロスレビューの状態が黄の札のときだけ出ます。<span class="ui">レビュー済み</span> などレビューが要らない状態では、記録しても何も変わらないので出しません</li>
     <li>PR を登録したセッションが、Agent Cockpit のツール <code>cockpit_skip_review</code> に、リポジトリ、PR の番号、今の head のコミット、理由を渡す。そのセッションが登録した PR にだけ使えます</li>
   </ul>
   <p>記録すると、クロスレビューの状態の札が <span class="ui">レビュー不要</span> に変わり、ボタンは <span class="ui">レビュー不要を取り消す</span> になります。

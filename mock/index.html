@@ -1402,9 +1402,11 @@ function crossReviewLine(p, pr) {
   if (!pr.xr) return `<div class="xr">クロスレビュー <span class="badge ${state.cls}">${state.text}</span>
     <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
   const rounds = Array.from({ length: CROSS_REVIEW_MAX_ROUNDS }, (_, i) => `<span class="${i < pr.xr.round ? 'used' : ''}"></span>`).join('');
+  // 不要の記録はレビューが要る状態(warn)でだけ出す。
+  const skipAction = state.cls === 'warn'
+    ? `<button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button>` : '';
   return `<div class="xr">クロスレビュー <span class="rounds" aria-hidden="true">${rounds}</span>
-    <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span>
-    <button type="button" class="link-btn" data-review-skip="set" data-review-key="${esc(key)}">レビュー不要にする</button></div>`;
+    <span>${pr.xr.round} / ${CROSS_REVIEW_MAX_ROUNDS} 往復、非対応 ${pr.xr.dismissed}</span><span class="badge ${state.cls}">${esc(state.text)}</span>${skipAction}</div>`;
 }
 
 

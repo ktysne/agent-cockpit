@@ -1716,7 +1716,7 @@ function crossReviewLine(pullRequest) {
   line.append(document.createTextNode('クロスレビュー '));
   if (!review || review.unavailable === true) {
     line.append(badge(state.text, state.cls));
-    appendCrossReviewSkipControl(line, pullRequest, false);
+    if (state.cls === 'warn') appendCrossReviewSkipControl(line, pullRequest, false);
     return line;
   }
   if (review.notRequired === true) {
@@ -1737,7 +1737,8 @@ function crossReviewLine(pullRequest) {
     document.createTextNode(' '),
     badge(state.text, state.cls),
   );
-  appendCrossReviewSkipControl(line, pullRequest, false);
+  // 不要の記録はレビューが要る状態(warn)でだけ意味を持つ。済みや判定できない状態で記録しても表示もマージ条件も変わらない。
+  if (state.cls === 'warn') appendCrossReviewSkipControl(line, pullRequest, false);
   return line;
 }
 
