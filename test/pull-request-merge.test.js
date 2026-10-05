@@ -328,6 +328,49 @@ test('即時マージ条件が未達でも方式とブランチ削除の選択�
   assert.equal(fixture.calls.some((args) => args.includes('--auto')), false);
 });
 
+test('予約中の PR も即時マージでき、成功すると予約が消える', async (t) => {
+  const fixture = await mergeFixture(t);
+  const reservation = await fixture.manager.reserve(mergeInput(1));
+
+  assert.equal(reservation.reserved, true);
+  const result = await fixture.manager.merge(mergeInput(1));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.merged, true);
+  assert.equal(fixture.state.pullRequestMergeReservation('example', 'project', 1), null);
+  assert.deepEqual(fixture.calls.find((args) => args[0] === 'pr' && args[1] === 'merge'), [
+    'pr', 'merge', '1', '-R', 'example/project', '--squash', '--match-head-commit', sha(1),
+  ]);
+});
+
+test('予約中の PR の即時マージに失敗したら予約を保持する', async (t) => {
+  const fixture = await mergeFixture(t);
+  const reservation = await fixture.manager.reserve(mergeInput(1));
+  fixture.control.failMerge = true;
+
+  const result = await fixture.manager.merge(mergeInput(1));
+
+  assert.equal(reservation.reserved, true);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /マージできませんでした/);
+  assert.deepEqual(fixture.state.pullRequestMergeReservation('example', 'project', 1), reservation.reservation);
+});
+
+test('レビュー不要の記録だけでは予約を即時マージしない', async (t) => {
+  const fixture = await mergeFixture(t);
+  fixture.state.setCrossReviewSkip({
+    owner: 'example', repo: 'project', number: 1, headRefOid: sha(1),
+    reason: '変更が軽微なため', recordedAt: new Date(NOW).toISOString(),
+  });
+
+  const result = await fixture.manager.reserve(mergeInput(1));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reserved, true);
+  assert.ok(fixture.state.pullRequestMergeReservation('example', 'project', 1));
+  assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
+});
+
 test('条件がそろったレビュー収束後マージ予約はその場で収束 SHA を照合してマージする', async (t) => {
   const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pass', reviewDecision: 'APPROVED' })]);
   const triageSha = sha(1);

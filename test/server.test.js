@@ -1395,7 +1395,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.mergeResultHideMinutes, 5);
   assert.equal(jsonBody(mode).display.hideFinished, true);
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
-  assert.equal(jsonBody(mode).display.mergeAfterReviewDefault, false);
+  assert.equal(Object.hasOwn(jsonBody(mode).display, 'mergeAfterReviewDefault'), false);
   const hidden = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
   });
@@ -1421,7 +1421,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     ['mergeResultHideMinutes', 0], ['mergeResultHideMinutes', 61], ['mergeResultHideMinutes', 5.5], ['mergeResultHideMinutes', '5'], ['mergeResultHideMinutes', null],
     ['hideFinished', 1], ['hideFinished', 'true'], ['hideFinished', null],
     ['mergeableCondition', 'unknown'], ['mergeableCondition', null],
-    ['mergeAfterReviewDefault', 1], ['mergeAfterReviewDefault', 'true'], ['mergeAfterReviewDefault', null],
+    ['mergeAfterReviewDefault', true],
   ]) {
     const invalidMinutes = await request(runtime.info.port, {
       method: 'POST', path: endpoint, body: JSON.stringify({ [key]: invalidValue }), headers: validHeaders,
@@ -1470,15 +1470,14 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
     assert.equal(selected.status, 200);
     assert.equal(jsonBody(selected).display.mergeableCondition, mergeableCondition);
   }
-  const defaultReviewMerge = await request(runtime.info.port, {
+  const removedPreference = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ mergeAfterReviewDefault: true }), headers: validHeaders,
   });
-  assert.equal(defaultReviewMerge.status, 200);
-  assert.equal(jsonBody(defaultReviewMerge).display.mergeAfterReviewDefault, true);
+  assert.equal(removedPreference.status, 400);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
     mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
-    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review', mergeAfterReviewDefault: true,
+    longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review',
     mergeResultHideMinutes: 60,
   });
 });

@@ -8,7 +8,7 @@
       "key": "card.name",
       "bounds": {
         "x": 28,
-        "y": 33,
+        "y": 34,
         "width": 136,
         "height": 48
       },
@@ -18,7 +18,7 @@
       "key": "card.branch",
       "bounds": {
         "x": 184,
-        "y": 38,
+        "y": 39,
         "width": 185,
         "height": 38
       },
@@ -28,7 +28,7 @@
       "key": "card.permission",
       "bounds": {
         "x": 390,
-        "y": 32,
+        "y": 33,
         "width": 199,
         "height": 50
       },
@@ -38,7 +38,7 @@
       "key": "card.decision",
       "bounds": {
         "x": 608,
-        "y": 32,
+        "y": 33,
         "width": 199,
         "height": 50
       },
@@ -48,7 +48,7 @@
       "key": "card.pull-requests",
       "bounds": {
         "x": 827,
-        "y": 32,
+        "y": 33,
         "width": 252,
         "height": 50
       },
@@ -58,7 +58,7 @@
       "key": "card.collapse",
       "bounds": {
         "x": 1165,
-        "y": 25,
+        "y": 26,
         "width": 89,
         "height": 64
       },
@@ -68,7 +68,7 @@
       "key": "card.pin",
       "bounds": {
         "x": 1263,
-        "y": 25,
+        "y": 26,
         "width": 89,
         "height": 64
       },
@@ -78,7 +78,7 @@
       "key": "card.move-up",
       "bounds": {
         "x": 1360,
-        "y": 25,
+        "y": 26,
         "width": 64,
         "height": 64
       },
@@ -88,7 +88,7 @@
       "key": "card.move-down",
       "bounds": {
         "x": 1432,
-        "y": 25,
+        "y": 26,
         "width": 64,
         "height": 64
       },
@@ -98,7 +98,7 @@
       "key": "card.close",
       "bounds": {
         "x": 1540,
-        "y": 25,
+        "y": 26,
         "width": 64,
         "height": 64
       },

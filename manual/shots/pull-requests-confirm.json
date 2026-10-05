@@ -27,7 +27,6 @@
         "confirm.heading": "#root > section.section:nth-child(1) .merge-confirm > div:first-child",
         "confirm.warning": "#root > section.section:nth-child(1) .merge-condition-warning",
         "confirm.methods": "#root > section.section:nth-child(1) .merge-confirm .methods",
-        "confirm.review": "#root > section.section:nth-child(1) .merge-confirm label.opt:has([data-merge-after-review])",
         "confirm.delete": "#root > section.section:nth-child(1) .merge-confirm label.opt:has([data-merge-delete])",
         "confirm.effect-review": "#root > section.section:nth-child(1) .merge-confirm .effects li:nth-child(1)",
         "confirm.effect-head": "#root > section.section:nth-child(1) .merge-confirm .effects li:nth-child(2) code",

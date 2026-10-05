@@ -13,30 +13,7 @@
   "steps": [
     {
       "do": "click",
-      "selector": "#root > section.section:nth-child(1) .merge-btn"
-    },
-    {
-      "do": "wait",
-      "selector": "#root > section.section:nth-child(1) .merge-confirm"
-    },
-    {
-      "do": "click",
-      "selector": "#root > section.section:nth-child(1) .merge-confirm input[data-merge-after-review]"
-    },
-    {
-      "do": "screenshot",
-      "name": "confirm",
-      "target": "#root > section.section:nth-child(1) .pr-repo-group",
-      "parts": {
-        "reserve.heading": "#root > section.section:nth-child(1) .merge-confirm > div:first-child",
-        "reserve.review": "#root > section.section:nth-child(1) .merge-confirm label.opt:has([data-merge-after-review])",
-        "reserve.head": "#root > section.section:nth-child(1) .merge-confirm .effects li:last-child",
-        "reserve.go": "#root > section.section:nth-child(1) .merge-confirm .merge-go"
-      }
-    },
-    {
-      "do": "click",
-      "selector": "#root > section.section:nth-child(1) [data-merge-go]"
+      "selector": "#root > section.section:nth-child(1) .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]"
     },
     {
       "do": "wait",
@@ -49,12 +26,13 @@
       "parts": {
         "reserved.card": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pr.reserved",
         "reserved.badge": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .badges .badge.accent",
-        "reserved.cancel": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) [data-cancel-reservation]"
+        "reserved.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline .merge-btn",
+        "reserved.toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]"
       }
     },
     {
       "do": "click",
-      "selector": "#root > section.section:nth-child(1) [data-cancel-reservation]"
+      "selector": "#root > section.section:nth-child(1) .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]"
     },
     {
       "do": "wait",
@@ -67,7 +45,8 @@
       "target": "#root > section.section:nth-child(1) .pr-repo-group",
       "parts": {
         "cancelled.notice": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result",
-        "cancelled.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(2) .merge-btn"
+        "cancelled.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result + .stack .pline .merge-btn",
+        "cancelled.toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result + .stack .pline input[data-reservation-toggle]"
       }
     }
   ]

@@ -2,13 +2,13 @@
   "name": "skipped",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1408,
+  "height": 1414,
   "parts": [
     {
       "key": "skipped.state",
       "bounds": {
         "x": 26,
-        "y": 1259,
+        "y": 1266,
         "width": 1524,
         "height": 64
       },
@@ -18,7 +18,7 @@
       "key": "skipped.clear",
       "bounds": {
         "x": 316,
-        "y": 1259,
+        "y": 1266,
         "width": 264,
         "height": 64
       },
