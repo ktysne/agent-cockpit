@@ -911,6 +911,40 @@ test('予約中の PR は待ち条件と取消操作を出し、マージでき�
   assert.equal(descendants(rendered).find((node) => node.dataset.cancelReservation === mergeKey).disabled, false);
 });
 
+test('予約待ち条件は承認任意ならレビュー承認を待たない', () => {
+  const webWaitSource = functionSource(web, 'pullRequestReservationWaits');
+  const mockWaitSource = functionSource(mock, 'reservationWait');
+  assert.ok(webWaitSource && mockWaitSource);
+
+  const webContext = pageContext(web, {
+    CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
+    convergedAtHead: () => true,
+    pushedAfterConvergence: () => false,
+  });
+  const mockContext = pageContext(mock, {
+    CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
+    convergedAtHead: () => true,
+    mergeOperationBlocker: (_product, pullRequest) => pullRequest.operationBlocker,
+    pushedAfterConvergence: () => false,
+  });
+  vm.runInContext(`${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
+  vm.runInContext(`${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+
+  for (const scenario of [
+    { review: 'approved', shouldWaitForReview: false },
+    { review: 'none', shouldWaitForReview: false },
+    { review: 'required', shouldWaitForReview: true },
+    { review: 'changes', shouldWaitForReview: true },
+  ]) {
+    const pullRequest = { ci: 'pass', review: scenario.review, operationBlocker: 'ドラフト' };
+    const webWaits = webContext.reservationWaits(pullRequest);
+    const mockWaits = mockContext.reservationWaits({}, pullRequest);
+    const reviewWait = 'GitHub のレビュー承認待ち';
+    assert.equal(webWaits.includes(reviewWait), scenario.shouldWaitForReview, `画面: ${scenario.review}`);
+    assert.equal(mockWaits.includes(reviewWait), scenario.shouldWaitForReview, `モック: ${scenario.review}`);
+  }
+});
+
 test('GitHub の自動削除設定があるマージ結果はブランチ状態を断定しない', async () => {
   const findTargetSource = functionSource(web, 'findPullRequestMergeTarget');
   const rememberSource = functionSource(web, 'rememberPullRequestMergeResult');
