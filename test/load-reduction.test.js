@@ -25,7 +25,8 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
     isPendingDecision: (decision) => decision.state === 'waiting' && !decision.answer,
     hasEffectiveAnswer: (decision) => Boolean(decision.answer),
   };
-  vm.runInNewContext(`${functionSource(web, 'decisionCountTitle')}\nthis.title = decisionCountTitle;`, webContext);
+  const webFunctions = ['isActiveDecision', 'isAwaitingDecision', 'isPendingDecision', 'countJudgments', 'decisionCountTitle'].map((name) => functionSource(web, name));
+  vm.runInNewContext(`${functionSource(web, 'hasEffectiveAnswer')}\n${webFunctions.join('\n')}\nthis.title = decisionCountTitle;`, webContext);
   assert.equal(webContext.title(decisions), '止めて待っている 1 件、仮に推奨案で進行中 1 件');
 
   const mockAnswers = {};
@@ -33,7 +34,8 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
     effectiveDecisionState: (decision) => decision.kind,
     answerOf: (id) => mockAnswers[id] || {},
   };
-  vm.runInNewContext(`${functionSource(mock, 'decisionCountTitle')}\nthis.title = decisionCountTitle;`, mockContext);
+  const mockFunctions = ['isActiveDecision', 'isAwaitingDecision', 'countJudgments', 'decisionCountTitle'].map((name) => functionSource(mock, name));
+  vm.runInNewContext(`${mockFunctions.join('\n')}\nthis.title = decisionCountTitle;`, mockContext);
   assert.equal(mockContext.title([
     { id: 'waiting', kind: 'waiting' },
     { id: 'provisional', kind: 'provisional' },

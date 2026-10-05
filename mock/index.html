@@ -114,7 +114,6 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .filter-note[hidden] { display: none; }
 .link-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 4px 0; font-size: 12px; text-decoration: underline; }
-.spacer { flex: 1; }
 
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg button { border: 0; background: none; padding: 6px 12px; cursor: pointer; color: var(--text-2); }
@@ -293,7 +292,6 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .routing .rrow { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
 .routing .rlabel { font-size: 13px; font-weight: 600; justify-self: start; }
 .routing .seg button:disabled { cursor: default; opacity: .55; }
-.routing .seg .rstatus { display: inline-flex; align-items: center; padding: 0 8px; border-left: 1px solid var(--border); color: var(--text-2); font-size: 12px; white-space: nowrap; }
 .routing .seg button { padding: 4px 10px; font-size: 13px; min-height: 32px; }
 /* 上部のバーでは経路を枠で囲まず、離席中と同じ行の左に置く。 */
 .control-row { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
@@ -395,22 +393,22 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
     </div>
     <div class="settings-theme-row">
       <label for="settings-long-wait-minutes">長く待たせているとみなす時間 (1〜120 分)</label>
-      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" min="1" max="120" step="1" inputmode="numeric" aria-describedby="settings-long-wait-error">
+      <input id="settings-long-wait-minutes" name="longWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-long-wait-error">
       <span class="settings-input-error" id="settings-long-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
       <label for="settings-idle-hide-minutes">更新の無いセッションを隠すまで (分)</label>
-      <input id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" min="5" max="1440" step="1" inputmode="numeric" aria-describedby="settings-idle-hide-error">
+      <input id="settings-idle-hide-minutes" name="idleHideMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-idle-hide-error">
       <span class="settings-input-error" id="settings-idle-hide-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
       <label for="settings-away-answer-wait-minutes">離席中に質問の回答を待つ時間 (1〜30 分)</label>
-      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" min="1" max="30" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
+      <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
     <div class="settings-theme-row">
       <label for="settings-merge-result-hide-minutes">マージの結果を隠すまで (分)</label>
-      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" min="1" max="60" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
+      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
       <span class="settings-input-error" id="settings-merge-result-hide-error" role="alert" hidden></span>
     </div>
     <div class="settings-section-order">
@@ -652,10 +650,27 @@ function transientMessageVisible(notice, now = Date.now()) {
 function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
 }
-ui.longWaitMinutes = normalizeDisplayMinutes(ui.longWaitMinutes, 1, 120, 15);
-ui.awayAnswerWaitMinutes = normalizeDisplayMinutes(ui.awayAnswerWaitMinutes, 1, 30, 5);
-ui.idleHideMinutes = normalizeDisplayMinutes(ui.idleHideMinutes, 5, 1440, 30);
-ui.mergeResultHideMinutes = normalizeDisplayMinutes(ui.mergeResultHideMinutes, 1, 60, 5);
+const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
+const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
+const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
+const mergeResultHideMinutesInput = document.getElementById('settings-merge-result-hide-minutes');
+const longWaitMinutesError = document.getElementById('settings-long-wait-error');
+const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
+const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
+const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
+const DISPLAY_MINUTE_SETTINGS = [
+  { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, default: 15 },
+  { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, default: 5 },
+  { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, default: 30 },
+  { key: 'mergeResultHideMinutes', input: mergeResultHideMinutesInput, error: mergeResultHideMinutesError, min: 1, max: 60, default: 5 },
+];
+for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
+  input.min = String(min);
+  input.max = String(max);
+}
+for (const { key, min, max, default: fallback } of DISPLAY_MINUTE_SETTINGS) {
+  ui[key] = normalizeDisplayMinutes(ui[key], min, max, fallback);
+}
 ui.hideFinished = ui.hideFinished !== false;
 ui.mergeAfterReviewDefault = ui.mergeAfterReviewDefault === true;
 // 古い履歴の開閉は保存せず、読み込み直すと畳んだ状態に戻す。
@@ -699,14 +714,6 @@ function shortShaLabel(value) {
 }
 
 const themeSelect = document.getElementById('settings-theme-select');
-const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
-const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
-const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
-const mergeResultHideMinutesInput = document.getElementById('settings-merge-result-hide-minutes');
-const longWaitMinutesError = document.getElementById('settings-long-wait-error');
-const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
-const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
-const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
 const hideFinishedInput = document.getElementById('settings-hide-finished');
 const mergeAfterReviewDefaultInput = document.getElementById('settings-merge-after-review-default');
 const mergeableConditionInputs = [...document.querySelectorAll('input[name="mergeableCondition"]')];
@@ -762,29 +769,28 @@ function applySinceSeenMode(mode) {
 }
 
 function renderDisplaySettings() {
-  longWaitMinutesInput.value = String(ui.longWaitMinutes);
-  awayAnswerWaitMinutesInput.value = String(ui.awayAnswerWaitMinutes);
-  idleHideMinutesInput.value = String(ui.idleHideMinutes);
-  mergeResultHideMinutesInput.value = String(ui.mergeResultHideMinutes);
+  for (const { key, input } of DISPLAY_MINUTE_SETTINGS) input.value = String(ui[key]);
   hideFinishedInput.checked = ui.hideFinished;
   mergeAfterReviewDefaultInput.checked = ui.mergeAfterReviewDefault;
   for (const input of mergeableConditionInputs) input.checked = input.value === ui.mergeableCondition;
 }
 
-function changeDisplaySetting(key, input, minimum, maximum) {
+function displaySettingError(key) {
+  return DISPLAY_MINUTE_SETTINGS.find((setting) => setting.key === key)?.error || null;
+}
+
+function changeDisplaySetting(key, input) {
+  const setting = DISPLAY_MINUTE_SETTINGS.find((item) => item.key === key);
+  if (!setting) return false;
   const value = input.valueAsNumber;
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    const error = key === 'longWaitMinutes' ? longWaitMinutesError
-      : key === 'idleHideMinutes' ? idleHideMinutesError
-        : key === 'mergeResultHideMinutes' ? mergeResultHideMinutesError : awayAnswerWaitMinutesError;
-    error.textContent = `${minimum}〜${maximum} 分の値を入力してください。`;
+  if (!Number.isInteger(value) || value < setting.min || value > setting.max) {
+    const error = displaySettingError(key);
+    error.textContent = `${setting.min}〜${setting.max} 分の値を入力してください。`;
     error.hidden = false;
     input.value = String(ui[key]);
     return false;
   }
-  const error = key === 'longWaitMinutes' ? longWaitMinutesError
-    : key === 'idleHideMinutes' ? idleHideMinutesError
-      : key === 'mergeResultHideMinutes' ? mergeResultHideMinutesError : awayAnswerWaitMinutesError;
+  const error = displaySettingError(key);
   error.textContent = '';
   error.hidden = true;
   const previous = captureDisplayPreferences();
@@ -796,10 +802,9 @@ function changeDisplaySetting(key, input, minimum, maximum) {
 }
 
 renderDisplaySettings();
-longWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('longWaitMinutes', longWaitMinutesInput, 1, 120));
-awayAnswerWaitMinutesInput.addEventListener('change', () => changeDisplaySetting('awayAnswerWaitMinutes', awayAnswerWaitMinutesInput, 1, 30));
-mergeResultHideMinutesInput.addEventListener('change', () => changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60));
-idleHideMinutesInput.addEventListener('change', () => changeDisplaySetting('idleHideMinutes', idleHideMinutesInput, 5, 1440));
+for (const { key, input } of DISPLAY_MINUTE_SETTINGS) {
+  input.addEventListener('change', () => changeDisplaySetting(key, input));
+}
 hideFinishedInput.addEventListener('change', () => {
   const previous = captureDisplayPreferences();
   ui.hideFinished = hideFinishedInput.checked;
@@ -920,7 +925,7 @@ const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !=
 const allSessions = () => DATA.products.flatMap(p => p.sessions);
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.perms.length > 0) return false;
-  if (session.decisions.some(decision => ['waiting', 'provisional'].includes(effectiveDecisionState(decision)))) return false;
+  if (session.decisions.some(isActiveDecision)) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
   const updatedAt = Date.parse(session.lastUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
@@ -934,14 +939,41 @@ const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(
   && !(ui.hideFinished && isFinishedSession(s))
   && (showIdleSessions || !isIdleHiddenSession(s)));
 const effectiveDecisionState = d => d.kind;
-const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(d => {
-  const a = answerOf(d.id);
-  return ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !a.sent;
-});
+function isActiveDecision(decision) {
+  const state = effectiveDecisionState(decision);
+  return state === 'waiting' || state === 'provisional';
+}
+
+function isEndedDecision(decision) {
+  const state = effectiveDecisionState(decision);
+  return state === 'resolved' || state === 'withdrawn';
+}
+
+function isAwaitingDecision(decision) {
+  return isActiveDecision(decision) && !answerOf(decision.id).sent;
+}
+
+const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(isAwaitingDecision);
+
+function countJudgments(sessions) {
+  const counts = { permission: 0, blocking: 0, provisional: 0 };
+  for (const session of sessions) {
+    counts.permission += session.perms.length;
+    for (const decision of session.decisions) {
+      if (!isAwaitingDecision(decision)) continue;
+      counts[effectiveDecisionState(decision) === 'waiting' ? 'blocking' : 'provisional'] += 1;
+    }
+  }
+  counts.decisions = counts.blocking + counts.provisional;
+  counts.total = counts.permission + counts.decisions;
+  return counts;
+}
+
 function decisionCountTitle(decisions) {
+  const judgmentCounts = countJudgments([{ perms: [], decisions }]);
   const counts = [
-    ['止めて待っている', decisions.filter(d => effectiveDecisionState(d) === 'waiting' && !answerOf(d.id).sent).length],
-    ['仮に推奨案で進行中', decisions.filter(d => effectiveDecisionState(d) === 'provisional' && !answerOf(d.id).sent).length],
+    ['止めて待っている', judgmentCounts.blocking],
+    ['仮に推奨案で進行中', judgmentCounts.provisional],
   ];
   return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
@@ -958,20 +990,20 @@ ui.hidden = Array.isArray(ui.hidden) ? ui.hidden.filter(key => FILTERS.some(filt
 function decisionCategory(d) {
   const a = answerOf(d.id);
   const state = effectiveDecisionState(d);
-  if (state === 'resolved' || state === 'withdrawn') return state;
+  if (isEndedDecision(d)) return state;
   if (!a.sent) return state === 'waiting' ? 'blocking' : state;
   return 'answered';
 }
 const isShown = key => !ui.hidden.includes(key);
-const visibleDecisions = s => s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && isShown(decisionCategory(d)));
+const visibleDecisions = s => s.decisions.filter(d => isActiveDecision(d) && isShown(decisionCategory(d)));
 const visibleSubagents = s => s.subagents.filter(agent => !isBusyAgent(s, agent) || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms : [];
 const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
-  || s.decisions.some(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d)));
+  || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)));
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
-    + s.decisions.filter(d => ['waiting', 'provisional'].includes(effectiveDecisionState(d)) && !isShown(decisionCategory(d))).length
+    + s.decisions.filter(d => isActiveDecision(d) && !isShown(decisionCategory(d))).length
     + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
     + (isShown('permission') ? 0 : s.perms.length), 0);
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
@@ -994,15 +1026,12 @@ function finishedHiddenCounts() {
 
 function renderSummary() {
   const sessions = allSessions().filter(s => !ui.hiddenSessions.includes(s.id));
-  const all = sessions.flatMap(s => s.decisions.map(d => ({ d, a: answerOf(d.id) })));
-  const blocking = all.filter(x => effectiveDecisionState(x.d) === 'waiting' && !x.a.sent).length;
-  const provisional = all.filter(x => effectiveDecisionState(x.d) === 'provisional' && !x.a.sent).length;
+  const judgmentCounts = countJudgments(sessions);
   const agents = sessions.reduce((n, s) => n + s.subagents.filter(agent => isBusyAgent(s, agent)).length, 0);
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
-  const permission = sessions.reduce((n, s) => n + s.perms.length, 0);
-  const counts = { permission, blocking, provisional, agents, prs };
+  const counts = { ...judgmentCounts, agents, prs };
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
-  const need = permission + blocking;
+  const need = judgmentCounts.permission + judgmentCounts.blocking;
   document.title = need ? `(${need}) Agent Cockpit` : 'Agent Cockpit';
   document.getElementById('summary').innerHTML = FILTERS.map(x =>
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
@@ -1013,11 +1042,10 @@ function renderSummary() {
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
   excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo;
-  const hiddenPermissionCount = hiddenSessions.reduce((n, s) => n + s.perms.length, 0);
-  const hiddenDecisionCount = hiddenSessions.reduce((n, s) => n + s.decisions.filter(d => effectiveDecisionState(d) === 'waiting' && !answerOf(d.id).sent).length, 0);
+  const hiddenJudgmentCounts = countJudgments(hiddenSessions);
   const pendingCounts = [
-    hiddenPermissionCount ? `許可待ち ${hiddenPermissionCount} 件` : '',
-    hiddenDecisionCount ? `止めて待っている ${hiddenDecisionCount} 件` : '',
+    hiddenJudgmentCounts.permission ? `許可待ち ${hiddenJudgmentCounts.permission} 件` : '',
+    hiddenJudgmentCounts.blocking ? `止めて待っている ${hiddenJudgmentCounts.blocking} 件` : '',
   ].filter(Boolean);
   const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
   const undo = hiddenSessionsUndo
@@ -1160,7 +1188,7 @@ const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUs
 function isFinishedSession(session) {
   return session.status === 'wait'
     && session.tasks.every(task => taskState(session, task) === 'done')
-    && session.decisions.every(decision => ['resolved', 'withdrawn'].includes(effectiveDecisionState(decision)))
+    && session.decisions.every(isEndedDecision)
     && session.perms.length === 0
     && !session.subagents.some(agent => !isEndedAgent(session, agent));
 }
@@ -1326,8 +1354,20 @@ function decisionCard(p, session, d, withTag) {
 }
 
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-// 「レビュー済み」は、主セッションが記録した結論が converged で、その SHA が今の head のときだけ言う。
-// 結論の記録が無いか往復の数が合わなければ、最後にレビューに回した head との比較だけを出す。
+// モックの例示用 SHA は短縮形なので、完全 SHA の形式検証を行わない。
+function convergedAtHead(pr) {
+  const review = pr.xr;
+  const triage = review?.triage;
+  return Number.isSafeInteger(review?.round) && triage?.round === review.round &&
+    triage.outcome === 'converged' && triage.sha === pr.sha;
+}
+
+function pushedAfterConvergence(pr) {
+  const triage = pr.xr?.triage;
+  return triage?.outcome === 'converged' && triage.sha !== pr.sha;
+}
+
+// 未収束の往復状態を優先し、収束済みなら収束 SHA、それ以外の比較可能な記録なら reviewed SHA を現在の head と比べる。
 function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
   if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };
@@ -1337,8 +1377,10 @@ function crossReviewState(pr) {
   if (t && t.outcome === 'fixing') return { cls: 'warn', text: '指摘の対応中', warn: `クロスレビューの ${t.round} 往復目の指摘に対応している途中` };
   if (t && t.outcome === 'halted') return { cls: 'warn', text: '開発者の判断待ち', warn: 'クロスレビューは開発者の判断を待って止まっている' };
   if (t && t.outcome === 'converged') {
-    if (t.sha === pr.sha) return { cls: 'ok', text: 'レビュー済み', warn: null };
-    return { cls: 'warn', text: `収束の後に変更あり (収束 ${t.sha})`, warn: `head ${pr.sha} はクロスレビューの収束の後に変更されている (収束は ${t.sha})` };
+    if (convergedAtHead(pr)) return { cls: 'ok', text: 'レビュー済み', warn: null };
+    if (pushedAfterConvergence(pr)) {
+      return { cls: 'warn', text: `収束の後に変更あり (収束 ${t.sha})`, warn: `head ${pr.sha} はクロスレビューの収束の後に変更されている (収束は ${t.sha})` };
+    }
   }
   if (pr.xr.reviewedSha !== pr.sha) return { cls: 'warn', text: `レビューの後に変更あり (レビュー済み ${pr.xr.reviewedSha})`, warn: `head ${pr.sha} はクロスレビューの後に変更されている (レビュー済みは ${pr.xr.reviewedSha})` };
   return { cls: 'mute', text: 'この head をレビューに回した', warn: null };
@@ -1419,6 +1461,13 @@ function mergeReviewBlocker(pr) {
   return null;
 }
 
+const CI_LABELS = {
+  pass: { tone: 'ok', badge: 'CI 成功', wait: 'CI 成功' },
+  pending: { tone: 'warn', badge: 'CI 実行中', wait: 'CI 実行中' },
+  fail: { tone: 'danger', badge: 'CI 失敗', wait: 'CI が失敗' },
+  unknown: { tone: 'mute', badge: 'CI 状態不明', wait: 'CI 状態不明' },
+};
+
 function mergeOperationBlocker(p, pr) {
   return mergeBaseConflictBlocker(p, pr) || mergeReviewBlocker(pr);
 }
@@ -1426,15 +1475,14 @@ function mergeOperationBlocker(p, pr) {
 function mergeBlocker(p, pr) {
   const baseConflictBlocker = mergeBaseConflictBlocker(p, pr);
   if (baseConflictBlocker) return baseConflictBlocker;
-  if (pr.ci === 'fail') return 'CI が失敗';
-  if (pr.ci === 'pending') return 'CI 実行中';
+  if (pr.ci === 'fail') return CI_LABELS.fail.wait;
+  if (pr.ci === 'pending') return CI_LABELS.pending.wait;
   return mergeReviewBlocker(pr);
 }
 
 function crossReviewSettled(p, pr) {
   if (pr.xr?.notRequired === true || ui.reviewSkips[prKey(p, pr.number)]?.sha === pr.sha) return true;
-  const triage = pr.xr?.triage;
-  return Boolean(triage && triage.round === pr.xr.round && triage.outcome === 'converged' && triage.sha === pr.sha);
+  return convergedAtHead(pr);
 }
 
 function crossReviewWaitReason(p, pr) {
@@ -1447,18 +1495,15 @@ function crossReviewWaitReason(p, pr) {
   if (review.round > 0 && triage?.round !== review.round) return 'クロスレビュー対応中';
   if (triage?.outcome === 'halted') return 'クロスレビューが開発者の判断待ち';
   if (triage?.outcome === 'fixing') return 'クロスレビュー対応中';
-  if (triage?.outcome === 'converged' && triage.sha !== pr.sha) return 'クロスレビュー後に push あり';
+  if (pushedAfterConvergence(pr)) return 'クロスレビュー後に push あり';
   return review.round > 0 ? 'クロスレビュー対応中' : 'クロスレビュー未実施';
 }
 
 function reservationWait(p, pr) {
-  const triage = pr.xr?.triage;
-  const convergedAtHead = Number.isSafeInteger(pr.xr?.round) && triage?.round === pr.xr.round &&
-    triage.outcome === 'converged' && triage.sha === pr.sha;
   const waiting = [];
-  if (!convergedAtHead) waiting.push(triage?.outcome === 'converged' && triage.sha !== pr.sha
+  if (!convergedAtHead(pr)) waiting.push(pushedAfterConvergence(pr)
     ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
-  if (pr.ci !== 'pass') waiting.push(pr.ci === 'pending' ? 'CI 待ち' : pr.ci === 'fail' ? 'CI 失敗' : 'CI 状態不明');
+  if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
   const blocker = mergeOperationBlocker(p, pr);
   if (pr.review !== 'approved' && !['レビューの承認待ち', '変更を求められている'].includes(blocker)) waiting.push('GitHub のレビュー承認待ち');
   if (blocker) waiting.push(`マージ条件待ち: ${blocker}`);
@@ -1468,7 +1513,7 @@ function reservationWait(p, pr) {
 function mergeConditionWaits(p, pr) {
   if (ui.mergeableCondition === 'operation') return [];
   const waiting = [];
-  if (pr.ci !== 'pass') waiting.push(pr.ci === 'pending' ? 'CI 実行中' : pr.ci === 'fail' ? 'CI が失敗' : 'CI 状態不明');
+  if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
   if (ui.mergeableCondition === 'cross-review' && !crossReviewSettled(p, pr)) waiting.push(crossReviewWaitReason(p, pr));
   return waiting;
 }
@@ -1559,11 +1604,11 @@ function mergeOpts(p, pr) {
 
 function prBadges(p, pr) {
   const e = effective(p, pr);
-  const ci = { pass: ['ok', 'CI 成功'], pending: ['warn', 'CI 実行中'], fail: ['danger', 'CI 失敗'] }[pr.ci];
+  const ci = CI_LABELS[pr.ci] || CI_LABELS.unknown;
   const rv = { approved: ['ok', '承認済み'], required: ['mute', '承認待ち'], none: ['mute', '承認は任意'], changes: ['danger', '変更要求'] }[pr.review];
   return [
     pr.draft ? '<span class="badge mute">ドラフト</span>' : '',
-    `<span class="badge ${ci[0]}">${ci[1]}</span>`,
+    `<span class="badge ${ci.tone}">${ci.badge}</span>`,
     `<span class="badge ${rv[0]}">${rv[1]}</span>`,
     pr.conflict ? '<span class="badge danger">コンフリクト</span>' : '',
     e.retargetedFrom ? `<span class="badge accent long">base を ${esc(e.base)} に付け替え済み</span>` : '',
@@ -1732,7 +1777,7 @@ function foldedPrLine(p, kind, label, badges, visibleWhileHidden = false) {
 
 function endedDecisionToggle(session) {
   if (ui.hideFinished) return '';
-  const ended = session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
+  const ended = session.decisions.filter(isEndedDecision);
   if (!ended.length) return '';
   const expanded = ui.expandedEndedDecisions.includes(session.id);
   return `<button type="button" class="ended-toggle" data-ended-decisions="${esc(session.id)}" aria-expanded="${expanded}">${expanded ? '解決済みと取り下げを隠す' : '解決済みと取り下げを表示'} (${ended.length} 件)</button>`;
@@ -1740,7 +1785,7 @@ function endedDecisionToggle(session) {
 
 function decisionSessionBlock(p, session, withTag) {
   const active = visibleDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
-  const ended = ui.hideFinished ? [] : session.decisions.filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)));
+  const ended = ui.hideFinished ? [] : session.decisions.filter(isEndedDecision);
   const expanded = !ui.hideFinished && ui.expandedEndedDecisions.includes(session.id);
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
@@ -1800,7 +1845,7 @@ function kindToggle(key, label, count, expanded) {
 function kindEndedDecisionEntries(sessions) {
   if (ui.hideFinished) return [];
   return sessions.flatMap(({ p, session }) => session.decisions
-    .filter(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d)))
+    .filter(isEndedDecision)
     .map(decision => ({ p, session, decision })))
     .sort((a, b) => ageMinutes(a.decision) - ageMinutes(b.decision));
 }
@@ -1837,7 +1882,7 @@ function sessionBlock(p, session) {
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const showJudgment = decisions + permissions > 0
-    || (!ui.hideFinished && session.decisions.some(d => ['resolved', 'withdrawn'].includes(effectiveDecisionState(d))))
+    || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
     ${multiple ? `<div class="session-head"><h3>${esc(session.title)}</h3>${sharedBranch(p) || !session.branch ? '' : `<span class="meta">${esc(session.branch)}</span>`}</div>` : ''}
@@ -1913,11 +1958,11 @@ function renderProductMode() {
   return ps.map((p, i) => {
     const pend = pendingDecisions(p);
     const sessions = sessionsByActivity(p);
-    const permissionCount = sessions.reduce((total, session) => total + session.perms.length, 0);
+    const judgmentCounts = countJudgments(sessions);
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
         <h2 id="product-heading-${i}" tabindex="-1">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
-        ${permissionCount ? `<span class="chip danger">許可待ち (${permissionCount} 件)</span>` : ''}
+        ${judgmentCounts.permission ? `<span class="chip danger">許可待ち (${judgmentCounts.permission} 件)</span>` : ''}
         ${pend.length ? `<span class="chip danger" title="${esc(decisionCountTitle(pend))}">判断待ち (${pend.length} 件)</span>` : ''}
         ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length)}
         ${orderControls(p, i, ps.length, pinnedCount)}

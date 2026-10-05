@@ -27,13 +27,17 @@ test('クロスレビューの記録状態ごとに待ち理由を表示する',
   ];
 
   const webReason = functionSource(web, 'pullRequestCrossReviewWaitReason');
+  const webConverged = functionSource(web, 'convergedAtHead');
+  const webPushed = functionSource(web, 'pushedAfterConvergence');
   const completeSha = functionSource(web, 'isCompleteCommitSha');
   const mockReason = functionSource(mock, 'crossReviewWaitReason');
-  assert.ok(webReason && completeSha && mockReason);
+  const mockConverged = functionSource(mock, 'convergedAtHead');
+  const mockPushed = functionSource(mock, 'pushedAfterConvergence');
+  assert.ok(webReason && webConverged && webPushed && completeSha && mockReason && mockConverged && mockPushed);
   const webContext = vm.createContext({ isCompleteCommitSha: (value) => typeof value === 'string' && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value) });
-  vm.runInContext(`${completeSha}\n${webReason}\nthis.reason = pullRequestCrossReviewWaitReason;`, webContext);
+  vm.runInContext(`${completeSha}\n${webConverged}\n${webPushed}\n${webReason}\nthis.reason = pullRequestCrossReviewWaitReason;`, webContext);
   const mockContext = vm.createContext({ ui: { reviewSkips: {} }, prKey: () => 'repo/1' });
-  vm.runInContext(`${mockReason}\nthis.reason = crossReviewWaitReason;`, mockContext);
+  vm.runInContext(`${mockConverged}\n${mockPushed}\n${mockReason}\nthis.reason = crossReviewWaitReason;`, mockContext);
 
   for (const [review, sha, expected] of cases) {
     assert.equal(crossReviewWaitReason(review, sha), expected);

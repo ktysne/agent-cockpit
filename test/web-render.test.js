@@ -64,9 +64,15 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
 test('ブラウザーに残った旧形式の表示設定を読んでも、サーバーの設定と同じ項目がそろう', () => {
   const sources = ['readDisplayPreferences', 'normalizeDisplayPreferences', 'normalizeSectionOrder', 'normalizeDisplayMinutes']
     .map((name) => pageHtml.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
-  assert.ok(sources.every(Boolean));
+  const settings = pageHtml.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  assert.ok(sources.every(Boolean) && settings);
+  const minuteInputs = {
+    longWaitMinutesInput: {}, awayAnswerWaitMinutesInput: {}, idleHideMinutesInput: {}, mergeResultHideMinutesInput: {},
+    longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {}, mergeResultHideMinutesError: {},
+  };
   const storage = new Map();
   const context = pageContext(pageHtml, {
+    ...minuteInputs,
     localStorage: { getItem: (key) => storage.get(key) ?? null },
     DISPLAY_STORAGE_KEY: 'agent-cockpit.display',
     FILTERS: [],
@@ -76,7 +82,7 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
     DEFAULT_IDLE_HIDE_MINUTES: 30,
     DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
   });
-  vm.runInContext(sources.join('\n'), context);
+  vm.runInContext(`${settings}\n${sources.join('\n')}`, context);
   const expectedKeys = Object.keys(context.normalizeDisplayPreferences(null)).sort();
 
   storage.set('agent-cockpit.display', JSON.stringify({ mode: 'kind', longWaitMinutes: 20 }));
@@ -92,11 +98,12 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
 
 test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
   const endedAgent = pageHtml.match(/function isEndedAgent\(agent\) \{[\s\S]*?\n\}/)?.[0];
+  const endedDecision = functionSource(pageHtml, 'isEndedDecision');
   const isFinished = pageHtml.match(/function isFinishedSession\(session\) \{[\s\S]*?\n\}/)?.[0];
   const status = pageHtml.match(/function activityStatus\(session\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(endedAgent && isFinished && status);
+  assert.ok(endedAgent && endedDecision && isFinished && status);
   const context = pageContext(pageHtml, {});
-  vm.runInContext(`${endedAgent}\n${status}\n${isFinished}`, context);
+  vm.runInContext(`${endedAgent}\n${endedDecision}\n${status}\n${isFinished}`, context);
 
   const finished = {
     status: '待機中',
@@ -186,7 +193,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
 
 function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
+  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
     .map((name) => html.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
 
@@ -331,7 +338,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
 
 function taskRenderHarness() {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['element', 'appendPlanToggle', 'taskVisibility', 'appendTasks']
+  const functions = ['element', 'appendExpandToggle', 'appendPlanToggle', 'taskVisibility', 'appendTasks']
     .map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
 
@@ -954,8 +961,8 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
   const renderSummary = html.match(/function renderSummary\(sessions, pullRequestGroups = \[\]\) \{[\s\S]*?\n\}/)?.[0];
-  assert.ok(element);
-  assert.ok(renderSummary);
+  const judgments = functionSource(html, 'countJudgments');
+  assert.ok(element && judgments && renderSummary);
 
   class FakeElement {
     constructor(tagName) {
@@ -990,7 +997,7 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
     isPendingDecision: () => false,
     hasEffectiveAnswer: () => false,
   });
-  vm.runInContext(`${element}\n${renderSummary}`, context);
+  vm.runInContext(`${judgments}\n${element}\n${renderSummary}`, context);
   context.renderSummary([], []);
 
   const chip = summary.children[0];
@@ -1082,11 +1089,16 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 
 test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['pullRequestKeys', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
+  const functions = ['pullRequestKeys', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
-  const context = pageContext(pageHtml, { displayPreferences: { mergeableCondition: 'operation' } });
+  const context = pageContext(pageHtml, {
+    displayPreferences: { mergeableCondition: 'operation' },
+    CI_LABELS: {
+      pass: { wait: 'CI 成功' }, pending: { wait: 'CI 実行中' }, fail: { wait: 'CI が失敗' }, unknown: { wait: 'CI 状態不明' },
+    },
+  });
   vm.runInContext(functions.join('\n'), context);
 
   const headRefOid = 'a'.repeat(40);
@@ -1113,7 +1125,7 @@ test('マージできる PR は選択条件を満たし、登録セッション�
 
 test('見出しの判断待ちは有効な回答を数えず、無視された回答は数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['hasEffectiveAnswer', 'isAwaitingDecision'].map((name) => (
+  const functions = ['hasEffectiveAnswer', 'isActiveDecision', 'isAwaitingDecision'].map((name) => (
     source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
   ));
   assert.ok(functions.every(Boolean));
@@ -1208,7 +1220,9 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
 test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
   const names = ['normalizeDisplayMinutes', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'displaySettingError', 'changeDisplaySetting'];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
-  assert.ok(functions.every(Boolean));
+  const settings = pageHtml.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
+  const saveFunctions = ['settleDisplaySaves', 'saveDisplayPreferences'].map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  assert.ok(functions.every(Boolean) && saveFunctions.every(Boolean) && settings);
   assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
 
   let activeElement = null;
@@ -1219,6 +1233,9 @@ test('終わったもののチェックは表示設定として保存し、失�
   const awayAnswerWaitMinutesInput = { type: 'number', value: '' };
   const idleHideMinutesInput = { type: 'number', value: '' };
   const mergeResultHideMinutesInput = { type: 'number', value: '', valueAsNumber: 5 };
+  const longWaitMinutesError = { textContent: '', hidden: true };
+  const awayAnswerWaitMinutesError = { textContent: '', hidden: true };
+  const idleHideMinutesError = { textContent: '', hidden: true };
   const mergeResultHideMinutesError = { textContent: '', hidden: true };
   const mergeAfterReviewDefaultInput = { type: 'checkbox', checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
@@ -1233,7 +1250,9 @@ test('終わったもののチェックは表示設定として保存し、失�
     FILTERS: [],
     displayPreferencesReady: true,
     pendingDisplayChanges: {},
-    pendingDisplaySettingSaves: new Map(),
+    displayPreferenceSaveStates: new Map(),
+    renderSectionOrder() {},
+    render() {},
     hideFinishedInput,
     mergeAfterReviewDefaultInput,
     longWaitMinutesInput,
@@ -1241,6 +1260,9 @@ test('終わったもののチェックは表示設定として保存し、失�
     idleHideMinutesInput,
     mergeResultHideMinutesInput,
     mergeableConditionInputs,
+    longWaitMinutesError,
+    awayAnswerWaitMinutesError,
+    idleHideMinutesError,
     mergeResultHideMinutesError,
     lastState: null,
     document: { get activeElement() { return activeElement; } },
@@ -1249,7 +1271,7 @@ test('終わったもののチェックは表示設定として保存し、失�
       return new Promise((resolve) => { resolveSave = resolve; });
     },
   });
-  vm.runInContext(functions.join('\n'), context);
+  vm.runInContext(`${settings}\n${functions.join('\n')}\n${saveFunctions.join('\n')}`, context);
 
   assert.equal(context.normalizeDisplayPreferences(null).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences(null).idleHideMinutes, 30);
@@ -1294,13 +1316,13 @@ test('終わったもののチェックは表示設定として保存し、失�
   assert.equal(hideFinishedInput.checked, true);
 
   mergeResultHideMinutesInput.valueAsNumber = 61;
-  assert.equal(await context.changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60), false);
+  assert.equal(await context.changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput), false);
   assert.equal(mergeResultHideMinutesError.hidden, false);
   assert.equal(mergeResultHideMinutesError.textContent, '1〜60 分の値を入力してください。');
   assert.equal(mergeResultHideMinutesInput.value, '5');
   context.enqueueDisplayPatch = async (patch) => { savedPatch = patch; return true; };
   mergeResultHideMinutesInput.valueAsNumber = 60;
-  assert.equal(await context.changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput, 1, 60), true);
+  assert.equal(await context.changeDisplaySetting('mergeResultHideMinutes', mergeResultHideMinutesInput), true);
   assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { mergeResultHideMinutes: 60 });
   assert.equal(displayPreferences.mergeResultHideMinutes, 60);
 });
@@ -1502,7 +1524,8 @@ test('予約通知、予約マージ結果、PR 取得エラーがカードを�
 test('PR 群が無いプロダクトの空表示は完了表示の設定にかかわらずモックとそろう', () => {
   const productSection = functionSource(pageHtml, 'productSection');
   const element = functionSource(pageHtml, 'element');
-  assert.ok(productSection && element);
+  const judgments = functionSource(pageHtml, 'countJudgments');
+  assert.ok(productSection && element && judgments);
 
   class FakeElement {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.className = ''; this.textContent = ''; }
@@ -1529,7 +1552,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
     pullRequestOpenCount: () => 0,
     appendPullRequestBlock() {},
   });
-  vm.runInContext(`${element}\n${productSection}`, context);
+  vm.runInContext(`${judgments}\n${element}\n${productSection}`, context);
   const textOf = (node) => (node.textContent || '') + (node.children || []).map(textOf).join('');
   const product = { key: 'product', name: 'Project', branches: new Set(), sessions: [], pullRequestGroups: [] };
   const values = [];
@@ -1546,7 +1569,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
 
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'isEndedAgent', 'isEndedDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
@@ -1604,8 +1627,8 @@ test('終わったセッションはタスクの有無にかかわらず両方�
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
-    'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
+    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
@@ -1752,7 +1775,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functionNames = [
     'answerDraftKey', 'answerDraftFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
-    'sameAnswerDraft', 'clearAnswerErrorWhenDraftChanges',
+    'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
     'answerMetaText', 'canSendDecisionAnswer', 'updateAnswerSubmit',
   ];
@@ -2554,10 +2577,11 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
 test('マージ済み一覧は新しい順に5件を出し、古いPRをボタンで切り替える', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const expandToggle = functionSource(html, 'appendExpandToggle');
   const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
   const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
   const appendBlock = html.slice(appendStart, appendEnd);
-  assert.ok(element);
+  assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
   class FakeElement {
@@ -2602,7 +2626,7 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
       focusedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'merged:acme/widget');
     },
   });
-  vm.runInContext(`${element}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${expandToggle}\n${appendBlock}`, context);
 
   const group = {
     owner: 'Acme', repo: 'Widget', trees: [], merged: [], registeredCount: 1,
@@ -2649,10 +2673,11 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
 test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに開閉状態を分ける', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const expandToggle = functionSource(html, 'appendExpandToggle');
   const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
   const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
   const appendBlock = html.slice(appendStart, appendEnd);
-  assert.ok(element);
+  assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
   class FakeElement {
@@ -2709,7 +2734,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
       focusedClosedToggle = descendants(root).find((node) => node.dataset?.olderPrLine === 'closed:acme/widget');
     },
   });
-  vm.runInContext(`${element}\n${appendBlock}`, context);
+  vm.runInContext(`${element}\n${expandToggle}\n${appendBlock}`, context);
 
   const renderGroup = () => {
     root = new FakeElement('div');
@@ -3026,7 +3051,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount',
   ];
   const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
@@ -3090,7 +3115,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
 
 test('種類別では未着手の合計数を一つのボタンで切り替える', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['element', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
+  const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
     .map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
   assert.ok(functions.every(Boolean));
 
