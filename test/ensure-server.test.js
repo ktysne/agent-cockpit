@@ -2,25 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
-const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
+const { temporaryDirectory } = require('./support/temp');
 
 const ensureServerScript = path.join(__dirname, '..', 'src', 'tray', 'ensure-server.js');
-
-async function availablePort() {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const server = net.createServer();
-    await new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', resolve);
-    });
-    const { port } = server.address();
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    if (port !== 47821) return port;
-  }
-  assert.fail('A free port other than 47821 was not available.');
-}
 
 function runEnsureServer(environment) {
   return new Promise((resolve, reject) => {
@@ -52,37 +37,36 @@ async function waitForExit(pid, timeoutMs = 3000) {
 }
 
 async function stopServer(homeDir) {
-  try {
-    const contents = await fs.readFile(path.join(homeDir, 'server.json'), 'utf8');
-    const pidMatch = contents.match(/"pid"\s*:\s*(\d+)/);
-    if (pidMatch) {
-      const pid = Number(pidMatch[1]);
-      try { process.kill(pid); } catch (error) {
-        if (error.code !== 'ESRCH') throw error;
-      }
-      await waitForExit(pid);
+  const contents = await fs.readFile(path.join(homeDir, 'server.json'), 'utf8');
+  const pidMatch = contents.match(/"pid"\s*:\s*(\d+)/);
+  if (pidMatch) {
+    const pid = Number(pidMatch[1]);
+    try { process.kill(pid); } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
     }
-  } finally {
-    // 常駐サーバーは置き場を作業ディレクトリにするので、終わるまで Windows がフォルダーを掴む。
-    await fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await waitForExit(pid);
   }
 }
 
 test('ensure-server は空きポートでサーバーを起動し、ポートだけを出力する', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-tray-test-'));
-  const port = await availablePort();
+  const temporary = temporaryDirectory(t, 'agent-cockpit-tray-test-', { deferCleanup: true });
+  const homeDir = temporary.directory;
   const environment = {
     ...process.env,
     AGENT_COCKPIT_HOME: homeDir,
-    AGENT_COCKPIT_PORT: String(port),
+    AGENT_COCKPIT_PORT: '0',
   };
-  t.after(() => stopServer(homeDir));
+  t.after(async () => {
+    await stopServer(homeDir);
+    await temporary.cleanup();
+  });
 
   const result = await runEnsureServer(environment);
   assert.equal(result.code, 0);
   assert.equal(result.signal, null);
   assert.equal(result.stderr, '');
+  const { port } = JSON.parse(result.stdout);
+  assert.ok(port > 0);
   assert.equal(result.stdout, `${JSON.stringify({ port })}\n`);
-  assert.deepEqual(JSON.parse(result.stdout), { port });
   assert.ok(!result.stdout.includes('secret'));
 });

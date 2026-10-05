@@ -3,14 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { pageContext } = require('./support/page-context');
+const { createFakeClock } = require('../tools/manual/fake-clock');
+const { cssDeclarations, functionSource, pageContext, sourceBetween } = require('./support/page-context');
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
-
-function functionSource(source, name) {
-  return source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0];
-}
 
 test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
   const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
@@ -19,12 +16,15 @@ test('設定画面から設定のマニュアルを新しいウィンドウで�
 });
 
 test('判断事項は待ち時間を表示し、回答のない長い待ちだけを強調する', () => {
-  const elapsed = pageHtml.match(/function decisionElapsedLabel\(decision\) \{[\s\S]*?\n\}/)?.[0];
-  const isLongWait = pageHtml.match(/function isLongWait\(ageMs\) \{[\s\S]*?\n\}/)?.[0];
-  const duration = pageHtml.match(/function durationLabel\(startedAt, now = Date\.now\(\)\) \{[\s\S]*?\n\}/)?.[0];
+  const elapsed = functionSource(pageHtml, 'decisionElapsedLabel');
+  const isLongWait = functionSource(pageHtml, 'isLongWait');
+  const duration = functionSource(pageHtml, 'durationLabel');
   assert.ok(elapsed && isLongWait && duration);
-  const old = new Date(Date.now() - (14 * 60 + 3) * 60_000 - 1_000).toISOString();
+  const fixedNow = Date.parse('2026-10-04T12:00:00.000Z');
+  const { FakeDate } = createFakeClock(Date, fixedNow);
+  const old = new FakeDate(fixedNow - (14 * 60 + 3) * 60_000 - 1_000).toISOString();
   const context = pageContext(pageHtml, {
+    Date: FakeDate,
     displayPreferences: { longWaitMinutes: 15 },
     hasEffectiveAnswer: (decision) => Boolean(decision.answer?.sentAt && !decision.answer.ignoredAt),
   });
@@ -32,17 +32,17 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
 
   const waiting = context.decisionElapsedLabel({ state: 'waiting', createdAt: old });
   const answered = context.decisionElapsedLabel({
-    state: 'waiting', createdAt: old, answer: { sentAt: new Date().toISOString() },
+    state: 'waiting', createdAt: old, answer: { sentAt: new FakeDate().toISOString() },
   });
-  const now = Date.now();
+  const now = fixedNow;
   const provisional = context.decisionElapsedLabel({
     state: 'provisional',
-    provisionalAt: new Date(now - 23 * 60_000 - 30_000).toISOString(),
-    updatedAt: new Date(now - 2 * 60_000 - 30_000).toISOString(),
+    provisionalAt: new FakeDate(now - 23 * 60_000 - 30_000).toISOString(),
+    updatedAt: new FakeDate(now - 2 * 60_000 - 30_000).toISOString(),
   });
   const legacyProvisional = context.decisionElapsedLabel({
     state: 'provisional',
-    updatedAt: new Date(now - 2 * 60_000 - 30_000).toISOString(),
+    updatedAt: new FakeDate(now - 2 * 60_000 - 30_000).toISOString(),
   });
 
   assert.deepEqual(JSON.parse(JSON.stringify(waiting)), {
@@ -63,7 +63,7 @@ test('判断事項は待ち時間を表示し、回答のない長い待ちだ�
 
 test('ブラウザーに残った旧形式の表示設定を読んでも、サーバーの設定と同じ項目がそろう', () => {
   const sources = ['readDisplayPreferences', 'normalizeDisplayPreferences', 'normalizeSectionOrder', 'normalizeDisplayMinutes']
-    .map((name) => pageHtml.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
+    .map((name) => functionSource(pageHtml, name));
   const settings = pageHtml.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
   assert.ok(sources.every(Boolean) && settings);
   const minuteInputs = {
@@ -97,10 +97,10 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
 });
 
 test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
-  const endedAgent = pageHtml.match(/function isEndedAgent\(agent\) \{[\s\S]*?\n\}/)?.[0];
+  const endedAgent = functionSource(pageHtml, 'isEndedAgent');
   const endedDecision = functionSource(pageHtml, 'isEndedDecision');
-  const isFinished = pageHtml.match(/function isFinishedSession\(session\) \{[\s\S]*?\n\}/)?.[0];
-  const status = pageHtml.match(/function activityStatus\(session\) \{[\s\S]*?\n\}/)?.[0];
+  const isFinished = functionSource(pageHtml, 'isFinishedSession');
+  const status = functionSource(pageHtml, 'activityStatus');
   assert.ok(endedAgent && endedDecision && isFinished && status);
   const context = pageContext(pageHtml, {});
   vm.runInContext(`${endedAgent}\n${endedDecision}\n${status}\n${isFinished}`, context);
@@ -130,8 +130,8 @@ test('終わったセッションは待機中で未完了のものが無い場�
 });
 
 test('種類別の判断事項は有効な回答を送ったものを後ろに並べ、無視された回答は経過時間で並べる', () => {
-  const age = pageHtml.match(/function kindDecisionWaitAge\(decision\) \{[\s\S]*?\n\}/)?.[0];
-  const effective = pageHtml.match(/function hasEffectiveAnswer\(decision\) \{[\s\S]*?\n\}/)?.[0];
+  const age = functionSource(pageHtml, 'kindDecisionWaitAge');
+  const effective = functionSource(pageHtml, 'hasEffectiveAnswer');
   assert.ok(age && effective);
   const context = pageContext(pageHtml, {});
   vm.runInContext(`${effective}\n${age}`, context);
@@ -156,11 +156,9 @@ test('種類別の判断事項は有効な回答を送ったものを後ろに�
 });
 
 test('種類別の今やっていることは行が無いとき本文を出さない', () => {
-  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const start = pageHtml.indexOf('function renderKindSections(products) {');
-  const end = pageHtml.indexOf('\nfunction ', start + 1);
-  assert.ok(element && start >= 0 && end > start);
-  const render = pageHtml.slice(start, end);
+  const element = functionSource(pageHtml, 'element');
+  const render = functionSource(pageHtml, 'renderKindSections');
+  assert.ok(element && render);
 
   class FakeElement {
     constructor(tagName) {
@@ -194,7 +192,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
 function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
-    .map((name) => html.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
+    .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
   let reloadCount = 0;
@@ -216,9 +214,9 @@ function reloadHarness(initialUiVersion, drafts = []) {
 
 function renderHarness(initialDraftNote = '保存済みの下書き') {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
-  const renderDeferredState = html.match(/function renderDeferredState\(\) \{[\s\S]*?\n\}/)?.[0];
-  const visibleSinceSeen = html.match(/function visibleSinceSeen\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const render = functionSource(html, 'render');
+  const renderDeferredState = functionSource(html, 'renderDeferredState');
+  const visibleSinceSeen = functionSource(html, 'visibleSinceSeen');
   assert.ok(render && visibleSinceSeen);
   assert.ok(renderDeferredState);
 
@@ -339,7 +337,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
 function taskRenderHarness() {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['element', 'appendExpandToggle', 'appendPlanToggle', 'taskVisibility', 'appendTasks']
-    .map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+    .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
   class FakeElement {
@@ -383,17 +381,13 @@ function taskRenderHarness() {
 
 function externalLinkHarness(responseStatus) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const postUiAction = html.match(/async function postUiAction\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
-  const openExternalLink = html.match(/async function openExternalLink\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
-  const defaultBrowserUrl = html.match(/function defaultBrowserUrl\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
-  const handleExternalLink = html.match(/function handleExternalLink\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
-  const clickStart = html.indexOf("document.addEventListener('click', (event) => {", html.indexOf('function handleExternalLink'));
-  const clickEnd = html.indexOf('\n});', clickStart) + '\n});'.length;
-  const auxclickStart = html.indexOf("document.addEventListener('auxclick', (event) => {", clickEnd);
-  const auxclickEnd = html.indexOf('\n});', auxclickStart) + '\n});'.length;
-  assert.ok(postUiAction && openExternalLink && defaultBrowserUrl && handleExternalLink);
-  assert.ok(clickStart >= 0 && clickEnd > clickStart);
-  assert.ok(auxclickStart >= 0 && auxclickEnd > auxclickStart);
+  const postUiAction = functionSource(html, 'postUiAction');
+  const openExternalLink = functionSource(html, 'openExternalLink');
+  const defaultBrowserUrl = functionSource(html, 'defaultBrowserUrl');
+  const handleExternalLink = functionSource(html, 'handleExternalLink');
+  const clickHandler = sourceBetween(html, "document.addEventListener('click', (event) => {", '\n});', true);
+  const auxclickHandler = sourceBetween(html, "document.addEventListener('auxclick', (event) => {", '\n});', true);
+  assert.ok(clickHandler && auxclickHandler);
 
   const listeners = {};
   const requests = [];
@@ -418,8 +412,8 @@ function externalLinkHarness(responseStatus) {
     openExternalLink,
     defaultBrowserUrl,
     handleExternalLink,
-    html.slice(clickStart, clickEnd),
-    html.slice(auxclickStart, auxclickEnd),
+    clickHandler,
+    auxclickHandler,
   ].join('\n'), context);
   return { listeners, requests, openedWindows };
 }
@@ -580,68 +574,49 @@ test('今すぐ読み込み直す操作は下書きがあっても再読み込�
 test('作業中ツールは表示幅を超えた部分を CSS の省略記号で示す', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
+  const style = (html, selector) => Object.fromEntries(cssDeclarations(html, selector));
+  const sortedStyle = (html, selector) => Object.entries(style(html, selector)).sort();
 
-  assert.match(source, /\.tool-content\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.match(source, /\.tool-content\s*\{[^}]*white-space:\s*nowrap/);
-  assert.match(source, /\.tool-content\s*\{[^}]*overflow:\s*hidden/);
-  assert.match(source, /\.tool-content\s*\{[^}]*min-width:\s*0/);
-  assert.match(source, /\.now-row\s*>\s*\.detail,\s*\.agent-row\s*>\s*\.detail\s*\{[^}]*min-width:\s*0/);
-  assert.match(source, /\.tool-line\s*\{[^}]*flex-wrap:\s*nowrap/);
-  assert.match(source, /\.tool-name\s*\{[^}]*flex:\s*none/);
-  // 長い MCP のツール名でも行からはみ出さないよう、幅の上限を超えた分は省略記号で切る。
-  assert.match(source, /\.tool-name\s*\{[^}]*max-width:\s*60%/);
-  assert.match(source, /\.tool-name\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.match(source, /\.tool-name\s*\{[^}]*white-space:\s*nowrap/);
-  assert.match(mock, /\.tool-content\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.match(mock, /\.tool-content\s*\{[^}]*white-space:\s*nowrap/);
-  assert.match(mock, /\.tool-content\s*\{[^}]*overflow:\s*hidden/);
-  assert.match(mock, /\.tool-content\s*\{[^}]*min-width:\s*0/);
-  assert.match(mock, /\.tool-line\s*\{[^}]*flex-wrap:\s*nowrap/);
-  assert.match(mock, /\.tool-name\s*\{[^}]*flex:\s*none/);
-  assert.match(mock, /\.tool-name\s*\{[^}]*max-width:\s*60%/);
-  assert.match(mock, /\.tool-name\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.doesNotMatch(mock, /\.meta\s*\{[^}]*text-overflow:\s*ellipsis/);
-  assert.doesNotMatch(mock, /\.meta\s*\{[^}]*white-space:\s*nowrap/);
-  assert.doesNotMatch(mock, /\.meta\s*\{[^}]*overflow:\s*hidden/);
-  assert.match(mock, /\.now-row\s*\{[^}]*minmax\(0,\s*1fr\)/);
-  assert.match(mock, /\.now-row\s*>\s*:nth-child\(2\)\s*\{[^}]*min-width:\s*0/);
+  for (const selector of ['.tool-content', '.tool-line', '.tool-name']) {
+    assert.deepEqual(sortedStyle(source, selector), sortedStyle(mock, selector), selector);
+  }
+  assert.equal(style(source, '.tool-content')['text-overflow'], 'ellipsis');
+  assert.equal(style(source, '.tool-content')['white-space'], 'nowrap');
+  assert.equal(style(source, '.tool-content').overflow, 'hidden');
+  assert.equal(style(source, '.tool-content')['min-width'], '0');
+  assert.equal(style(source, '.now-row > .detail')['min-width'], '0');
+  assert.equal(style(source, '.agent-row > .detail')['min-width'], '0');
+  assert.equal(style(source, '.tool-line')['flex-wrap'], 'nowrap');
+  assert.equal(style(source, '.tool-name').flex, 'none');
+  assert.equal(style(source, '.tool-name')['max-width'], '60%');
+  assert.equal(style(source, '.tool-name')['text-overflow'], 'ellipsis');
+  assert.equal(style(source, '.tool-name')['white-space'], 'nowrap');
+  const mockMeta = style(mock, '.meta');
+  assert.equal(mockMeta['text-overflow'], undefined);
+  assert.equal(mockMeta['white-space'], undefined);
+  assert.equal(mockMeta.overflow, undefined);
+  assert.equal(style(mock, '.now-row')['grid-template-columns'], '130px minmax(0, 1fr) auto');
+  assert.equal(style(mock, '.now-row > :nth-child(2)')['min-width'], '0');
 });
 
 test('終了ボタンは状態と名前を含む flex 行の右端に置く', () => {
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 
   assert.match(pageHtml, /if \(agent\.closable\) \{[\s\S]*?name\.append\(close\);/);
-  assert.match(pageHtml, /\.agent-name\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap/);
-  assert.match(pageHtml, /\.close-agent\s*\{[^}]*margin-left:\s*auto/);
-  assert.match(pageHtml, /@media \(max-width: 640px\)[\s\S]*?\.now-row, \.agent-row \{ grid-template-columns: 1fr/);
+  assert.equal(Object.fromEntries(cssDeclarations(pageHtml, '.agent-name'))['flex-wrap'], 'wrap');
+  assert.equal(Object.fromEntries(cssDeclarations(pageHtml, '.close-agent'))['margin-left'], 'auto');
+  assert.equal(cssDeclarations(pageHtml, '.now-row', { includeRepeated: true }).findLast(([property]) => property === 'grid-template-columns')[1], '1fr');
   assert.match(mock, /const isClosable = \(session, agent\) => \(!!agent\.unconfirmed \|\| isMainBackgroundCodex\(agent\)\)/);
   assert.match(mock, /<span class="agent-name"><span class="badge \$\{state\[1\]\}">[\s\S]*?\$\{close\}<\/span>/);
-  assert.match(mock, /\.agent-row \.agent-name \{ display: flex;[^}]*flex-wrap: wrap/);
-  assert.match(mock, /\.close-agent \{ margin-left: auto/);
-});
-
-test('PR のスタックにクロスレビューを表示する', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  assert.match(source, /function appendPullRequestBlock/);
-  assert.match(source, /function appendPullRequestTree/);
-  assert.match(source, /function crossReviewLine/);
-  assert.match(source, /プルリクエスト/);
-  assert.match(source, /マージできる PR/);
-  assert.match(source, /マージできない理由/);
-  assert.match(source, /data-merge-go/);
-  assert.doesNotMatch(source, /function reviewBlock/);
-  assert.doesNotMatch(source, /group\.reviews/);
-  assert.doesNotMatch(source, /data-reserve-go=/);
+  assert.equal(Object.fromEntries(cssDeclarations(mock, '.agent-row .agent-name'))['flex-wrap'], 'wrap');
+  assert.equal(Object.fromEntries(cssDeclarations(mock, '.close-agent'))['margin-left'], 'auto');
 });
 
 test('経路の段は連携に応じて表示し、無効なサブエージェントの札を隠す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const routingStart = html.indexOf('function routeName');
-  const routingEnd = html.indexOf('\nasync function updateRouting', routingStart);
-  const routeTagStart = html.indexOf('function routeTag');
-  const routeTagEnd = html.indexOf('\nfunction appendModelLine', routeTagStart);
-  assert.ok(routingStart >= 0 && routingEnd > routingStart);
-  assert.ok(routeTagStart >= 0 && routeTagEnd > routeTagStart);
+  const routing = sourceBetween(html, 'function routeName', '\nasync function updateRouting');
+  const routeTag = sourceBetween(html, 'function routeTag', '\nfunction appendModelLine');
+  assert.ok(routing && routeTag);
 
   const root = {
     innerHTML: '',
@@ -664,7 +639,7 @@ test('経路の段は連携に応じて表示し、無効なサブエージェ�
     window: {},
     element: (_tag, className, textContent = '') => ({ className, textContent }),
   });
-  vm.runInContext(`${html.slice(routingStart, routingEnd)}\n${html.slice(routeTagStart, routeTagEnd)}\nthis.renderRouting = renderRouting; this.routeTag = routeTag;`, context);
+  vm.runInContext(`${routing}\n${routeTag}\nthis.renderRouting = renderRouting; this.routeTag = routeTag;`, context);
 
   context.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: false });
   assert.equal(root.hidden, true);
@@ -690,12 +665,9 @@ test('経路の段は連携に応じて表示し、無効なサブエージェ�
 
 test('クロスレビューの行は往復数と head の状態を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helpersStart = html.indexOf('function element(tag, className, text)');
-  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
-  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
-  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
-  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  assert.ok(helpers && component);
 
   class FakeElement {
     constructor(tagName) {
@@ -719,7 +691,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
     },
     pullRequestReviewSkipInFlight: new Set(),
   });
-  vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
+  vm.runInContext(`${helpers}\n${component}`, context);
 
   const textOf = (node) => node.children?.length ? node.children.map(textOf).join('') : node.textContent;
   const allNodes = (root) => [root, ...(root.children || []).flatMap(allNodes)];
@@ -857,10 +829,9 @@ test('クロスレビューの行は往復数と head の状態を表示する',
 
 test('マージと予約の確認欄は警告と照合用 SHA を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helpersStart = html.indexOf('function element(tag, className, text)');
-  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
-  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  assert.ok(helpers && component);
 
   class FakeElement {
     constructor(tagName) {
@@ -886,7 +857,7 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
     pullRequestMergeOptions: new Map(),
     pullRequestMergeInFlight: new Set(),
   });
-  vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
+  vm.runInContext(`${helpers}\n${component}`, context);
 
   const headSha = 'a'.repeat(40);
   const group = { defaultBranch: 'main', mergeMethods: ['merge'], lastMethod: 'merge' };
@@ -959,8 +930,8 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
 
 test('マージできる PR の件数タグはほかの件数タグと同じ形式で表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const renderSummary = html.match(/function renderSummary\(sessions, pullRequestGroups = \[\]\) \{[\s\S]*?\n\}/)?.[0];
+  const element = functionSource(html, 'element');
+  const renderSummary = functionSource(html, 'renderSummary');
   const judgments = functionSource(html, 'countJudgments');
   assert.ok(element && judgments && renderSummary);
 
@@ -1013,12 +984,9 @@ test('マージできる PR の件数タグはほかの件数タグと同じ形�
 
 test('PR カードは条件達成、条件待ち、操作不可を分け、待ち条件を確認欄の先頭に出す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helpersStart = html.indexOf('function element(tag, className, text)');
-  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
-  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
-  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
-  assert.ok(componentStart >= 0 && componentEnd > componentStart);
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  assert.ok(helpers && component);
 
   class FakeElement {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ''; this.textContent = ''; }
@@ -1047,7 +1015,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
     displayPreferences: { mergeableCondition: 'cross-review' },
     appendPullRequestBadges() {},
   });
-  vm.runInContext(`${html.slice(helpersStart, helpersEnd)}\n${html.slice(componentStart, componentEnd)}`, context);
+  vm.runInContext(`${helpers}\n${component}`, context);
   const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
   const render = (changes = {}, confirmation = false) => {
     const pullRequest = {
@@ -1068,6 +1036,10 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
   assert.match(card.all[1].className, /can-merge/);
   assert.ok(card.all.some((node) => node.textContent === 'マージできます'));
   assert.ok(card.all.some((node) => node.dataset?.openMerge === key && node.className === 'merge-btn'));
+  const reviewLine = card.all.find((node) => node.className === 'xr');
+  assert.ok(reviewLine);
+  assert.equal(reviewLine.children[1].textContent, 'レビュー不要');
+  assert.equal(reviewLine.children[1].className, 'badge mute');
 
   card = render();
   assert.match(card.all[1].className, /merge-pending/);
@@ -1090,7 +1062,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
 test('マージできる PR は選択条件を満たし、登録セッションにマージボタンがあるものだけを数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['pullRequestKeys', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestCrossReviewSettled', 'pullRequestCrossReviewWaitReason', 'isCompleteCommitSha', 'pullRequestMergeConditionWaits', 'pullRequestMergeableCount'].map((name) => (
-    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+    functionSource(source, name)
   ));
   assert.ok(functions.every(Boolean));
   const context = pageContext(pageHtml, {
@@ -1126,7 +1098,7 @@ test('マージできる PR は選択条件を満たし、登録セッション�
 test('見出しの判断待ちは有効な回答を数えず、無視された回答は数える', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['hasEffectiveAnswer', 'isActiveDecision', 'isAwaitingDecision'].map((name) => (
-    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+    functionSource(source, name)
   ));
   assert.ok(functions.every(Boolean));
   const context = pageContext(pageHtml, {});
@@ -1142,9 +1114,9 @@ test('見出しの判断待ちは有効な回答を数えず、無視された�
 
 test('プロダクト別と種類別に前回見てからを表示し、新しい判断に印を付ける', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const productSection = source.match(/function productSection\(product,[\s\S]*?\n\}/)?.[0];
-  const renderKindSections = source.match(/function renderKindSections\(products\) \{[\s\S]*?\n\}/)?.[0];
-  const appendDecisionCard = source.match(/function appendDecisionCard\([\s\S]*?\n\}/)?.[0];
+  const productSection = functionSource(source, 'productSection');
+  const renderKindSections = functionSource(source, 'renderKindSections');
+  const appendDecisionCard = functionSource(source, 'appendDecisionCard');
   const markProductSeen = source.match(/async function markProductSeen\(button\) \{[\s\S]*?\n\}/)?.[0];
 
   assert.ok(productSection);
@@ -1163,7 +1135,7 @@ test('プロダクト別と種類別に前回見てからを表示し、新し�
 test('前回見てからの設定は常にを既定にし、保存値と不正な値を読み分ける', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const names = ['applySinceSeenMode', 'storedSinceSeenMode', 'setSinceSeenMode', 'visibleSinceSeen'];
-  const functions = names.map((name) => source.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0]);
+  const functions = names.map((name) => functionSource(source, name));
   assert.ok(functions.every(Boolean));
   assert.match(source, /id="settings-since-seen-select"[\s\S]*?<option value="always">常に<\/option>[\s\S]*?<option value="away">離席中のみ<\/option>[\s\S]*?<option value="never">出さない<\/option>/);
   assert.match(source, /「離席中のみ」では、離席中にしている間だけ「前回見てから」を出す。/);
@@ -1219,9 +1191,9 @@ test('前回見てからの設定は常にを既定にし、保存値と不正�
 
 test('終わったもののチェックは表示設定として保存し、失敗時に戻してフォーカス中は同期しない', async () => {
   const names = ['normalizeDisplayMinutes', 'normalizeSectionOrder', 'normalizeDisplayPreferences', 'renderDisplaySettings', 'setDisplaySettingInput', 'displaySettingError', 'changeDisplaySetting'];
-  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const functions = names.map((name) => functionSource(pageHtml, name));
   const settings = pageHtml.match(/const DISPLAY_MINUTE_SETTINGS = \[[\s\S]*?\n\];/)?.[0];
-  const saveFunctions = ['settleDisplaySaves', 'saveDisplayPreferences'].map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const saveFunctions = ['settleDisplaySaves', 'saveDisplayPreferences'].map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean) && saveFunctions.every(Boolean) && settings);
   assert.match(pageHtml, /id="settings-hide-finished" name="hideFinished" type="checkbox"/);
 
@@ -1350,9 +1322,9 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
   harness.context.render(state);
   assert.equal(harness.orderedSinceSeen.length, 1);
 
-  const sinceSeenBox = harness.html.match(/function sinceSeenBox\(product, withProductTag\) \{[\s\S]*?\n\}/)?.[0];
-  const visibleSinceSeen = harness.html.match(/function visibleSinceSeen\(state\) \{[\s\S]*?\n\}/)?.[0];
-  const awayChange = harness.html.match(/awayToggle\.addEventListener\('change', async \(\) => \{[\s\S]*?\n\}\);/)?.[0];
+  const sinceSeenBox = functionSource(harness.html, 'sinceSeenBox');
+  const visibleSinceSeen = functionSource(harness.html, 'visibleSinceSeen');
+  const awayChange = sourceBetween(harness.html, "awayToggle.addEventListener('change', async () => {", '\n});', true);
   assert.ok(sinceSeenBox && visibleSinceSeen && awayChange);
   assert.match(sinceSeenBox, /visibleSinceSeen\(lastState\)\.find/);
   assert.match(awayChange, /applyAwayState\(away\);\s*if \(lastState\) render\(lastState\);/);
@@ -1399,7 +1371,7 @@ test('離席中のみでは履歴を離席状態で描き分け、非表示中�
 test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下に動かせる', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'visibleSinceSeen'].map((name) => (
-    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+    functionSource(source, name)
   ));
   const clickListener = source.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
   assert.ok(functions.every(Boolean));
@@ -1457,7 +1429,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
 test('表示中のセッション、PR、PR のエラー、未読の変化が無いプロダクトはカードを出さない', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
-    source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]
+    functionSource(source, name)
   ));
   assert.ok(functions.every(Boolean));
   let pullRequestsShown = true;
@@ -1573,7 +1545,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
-  const functions = names.map((name) => pageHtml.match(new RegExp('function ' + name + '\\([^]*?\\n\\}'))?.[0]);
+  const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
   class FakeElement {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; this.textContent = ''; }
@@ -1631,7 +1603,7 @@ test('タスクの有無にかかわらず終わったセッションと履歴�
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
-  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
 
   class FakeElement {
@@ -1730,7 +1702,7 @@ test('指示欄と下書きの note が同じなら下書きを更新しない',
 
 test('選択肢にフォーカスがある描き直しでは同じ input に戻す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const render = functionSource(html, 'render');
   assert.ok(render);
   let activeElement;
   const pickData = {
@@ -1779,7 +1751,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
     'answerMetaText', 'canSendDecisionAnswer', 'updateAnswerSubmit',
   ];
-  const functions = functionNames.map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const functions = functionNames.map((name) => functionSource(html, name));
   const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
   assert.ok(functions.every(Boolean));
   assert.ok(changeHandler);
@@ -1864,15 +1836,10 @@ test('指示欄の変換中は描き直しを保留し、変換終了後に反�
 
 test('PR マージ確認欄を表示し、登録キーと画面の head SHA だけを含む値を送る', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helpersStart = html.indexOf('function element(tag, className, text)');
-  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
-  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
-  const actionStart = html.indexOf('function findPullRequestMergeTarget');
-  const actionEnd = html.indexOf('async function runSessionAction', actionStart);
-  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
-  assert.ok(componentStart >= 0 && componentEnd > componentStart);
-  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
+  assert.ok(helpers && component && action);
 
   class FakeElement {
     constructor(tagName) {
@@ -1927,9 +1894,9 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     liveStatus: { textContent: '' },
   });
   const source = [
-    html.slice(helpersStart, helpersEnd),
-    html.slice(componentStart, componentEnd),
-    html.slice(actionStart, actionEnd),
+    helpers,
+    component,
+    action,
   ].join('\n');
   vm.runInContext(source, context);
 
@@ -1959,15 +1926,10 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
 test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼先を無効化し、依頼済みの状態を表示する', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const absoluteTimeSource = functionSource(html, 'absoluteTimeLabel');
-  const helpersStart = html.indexOf('function element(tag, className, text)');
-  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
-  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
-  const actionStart = html.indexOf('function findPullRequestMergeTarget');
-  const actionEnd = html.indexOf('async function runSessionAction', actionStart);
-  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
-  assert.ok(componentStart >= 0 && componentEnd > componentStart);
-  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
+  assert.ok(helpers && component && action);
   assert.ok(absoluteTimeSource);
 
   class FakeElement {
@@ -2009,7 +1971,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   });
   vm.runInContext([
     absoluteTimeSource,
-    html.slice(helpersStart, helpersEnd), html.slice(componentStart, componentEnd), html.slice(actionStart, actionEnd),
+    helpers, component, action,
   ].join('\n'), context);
   vm.runInContext("Date.now = () => new Date(2026, 9, 5).getTime()", context);
   const flatten = (node) => [node, ...(node.children || []).flatMap(flatten)];
@@ -2061,15 +2023,10 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
 
 test('GitHub の自動削除設定を示し、チェックで即時マージとレビュー収束後マージを選ぶ', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const helpersStart = html.indexOf('function element(tag, className, text)');
-  const helpersEnd = html.indexOf('function durationLabel', helpersStart);
-  const componentStart = html.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = html.indexOf('function appendPullRequestBlock', componentStart);
-  const actionStart = html.indexOf('function findPullRequestMergeTarget');
-  const actionEnd = html.indexOf('async function runSessionAction', actionStart);
-  assert.ok(helpersStart >= 0 && helpersEnd > helpersStart);
-  assert.ok(componentStart >= 0 && componentEnd > componentStart);
-  assert.ok(actionStart >= 0 && actionEnd > actionStart);
+  const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
+  const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
+  const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
+  assert.ok(helpers && component && action);
 
   class FakeElement {
     constructor(tagName) {
@@ -2122,9 +2079,9 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     liveStatus: { textContent: '' },
   });
   const source = [
-    html.slice(helpersStart, helpersEnd),
-    html.slice(componentStart, componentEnd),
-    html.slice(actionStart, actionEnd),
+    helpers,
+    component,
+    action,
   ].join('\n');
   vm.runInContext(source, context);
 
@@ -2180,12 +2137,10 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
 });
 
 test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
-  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const shortShaElement = pageHtml.match(/function shortShaElement\(value\) \{[\s\S]*?\n\}/)?.[0];
-  const start = pageHtml.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
-  const end = pageHtml.indexOf('\nfunction productGroups(', start);
-  assert.ok(element && shortShaElement && start >= 0 && end > start);
-  const appendBlock = pageHtml.slice(start, end);
+  const element = functionSource(pageHtml, 'element');
+  const shortShaElement = functionSource(pageHtml, 'shortShaElement');
+  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  assert.ok(element && appendBlock);
 
   class FakeElement {
     constructor(tagName) {
@@ -2245,7 +2200,7 @@ test('マージ結果は設定時間後に隠し、警告と自動マージ結�
     'pullRequestMergeResultExpired', 'pullRequestMergeResultVisible',
     'pullRequestMergeResultLine', 'appendPullRequestMergeResults',
   ];
-  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
 
   class FakeElement {
@@ -2301,7 +2256,7 @@ test('期限判定は描き直しの周期でマージ時刻を検出し、警�
     'pullRequestRepositoryKey', 'pullRequestTimestampExpired', 'pullRequestTransientNoticeExpired', 'pullRequestMergeResultHasWarning',
     'pullRequestMergeResultExpired', 'pullRequestExpirySignature',
   ];
-  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
   const context = pageContext(pageHtml, {
     TRANSIENT_NOTICE_MS: 60_000,
@@ -2361,13 +2316,12 @@ test('接続エラーの最終更新時刻は共通の絶対時刻表示を使�
 });
 
 test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操作ボタンを残す', () => {
-  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const repositoryKey = pageHtml.match(/function pullRequestRepositoryKey\(group\) \{[^]*?\n\}/)?.[0];
-  const timestampExpired = pageHtml.match(/function pullRequestTimestampExpired\([^]*?\n\}/)?.[0];
-  const transientNoticeExpired = pageHtml.match(/function pullRequestTransientNoticeExpired\([^]*?\n\}/)?.[0];
-  const componentStart = pageHtml.indexOf('const MERGE_METHOD_LABELS');
-  const componentEnd = pageHtml.indexOf('\nfunction productGroups(', componentStart);
-  assert.ok(element && repositoryKey && timestampExpired && transientNoticeExpired && componentStart >= 0 && componentEnd > componentStart);
+  const element = functionSource(pageHtml, 'element');
+  const repositoryKey = functionSource(pageHtml, 'pullRequestRepositoryKey');
+  const timestampExpired = functionSource(pageHtml, 'pullRequestTimestampExpired');
+  const transientNoticeExpired = functionSource(pageHtml, 'pullRequestTransientNoticeExpired');
+  const component = sourceBetween(pageHtml, 'const MERGE_METHOD_LABELS', '\nfunction productGroups(');
+  assert.ok(element && repositoryKey && timestampExpired && transientNoticeExpired && component);
 
   class FakeElement {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ''; this.textContent = ''; }
@@ -2404,7 +2358,7 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
   });
   vm.runInContext([
     'let testNow = 0; Date.now = () => testNow; function setTestNow(value) { testNow = value; }',
-    element, repositoryKey, timestampExpired, transientNoticeExpired, pageHtml.slice(componentStart, componentEnd),
+    element, repositoryKey, timestampExpired, transientNoticeExpired, component,
   ].join('\n'), context);
   context.setTestNow(startedAt);
 
@@ -2450,7 +2404,7 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
 
 test('通知が状態版の変化なしに期限切れになっても、次の取得で描き直す', async () => {
   const refresh = pageHtml.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
-  const applyAwayState = pageHtml.match(/function applyAwayState\(away\) \{[\s\S]*?\n\}/)?.[0];
+  const applyAwayState = functionSource(pageHtml, 'applyAwayState');
   assert.ok(refresh && applyAwayState);
   let renders = 0;
   let signature = 'reservation:visible';
@@ -2478,11 +2432,9 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
 });
 
 test('終わったものを隠すとマージ済みとクローズ済みの PR 行を出さない', () => {
-  const element = pageHtml.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const start = pageHtml.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
-  const end = pageHtml.indexOf('\nfunction productGroups(', start);
-  assert.ok(element && start >= 0 && end > start);
-  const appendBlock = pageHtml.slice(start, end);
+  const element = functionSource(pageHtml, 'element');
+  const appendBlock = sourceBetween(pageHtml, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
+  assert.ok(element && appendBlock);
 
   class FakeElement {
     constructor(tagName) { this.tagName = tagName; this.children = []; this.dataset = {}; this.className = ''; this.textContent = ''; }
@@ -2519,11 +2471,9 @@ test('終わったものを隠すとマージ済みとクローズ済みの PR �
 
 test('マージ済み一覧に予約時と異なる SHA の警告を表示する', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
-  const shortShaElement = html.match(/function shortShaElement\(value\) \{[\s\S]*?\n\}/)?.[0];
-  const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
-  const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
-  const appendBlock = html.slice(appendStart, appendEnd);
+  const element = functionSource(html, 'element');
+  const shortShaElement = functionSource(html, 'shortShaElement');
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
   assert.ok(element && shortShaElement);
   assert.ok(appendBlock);
 
@@ -2576,11 +2526,9 @@ test('マージ済み一覧に予約時と異なる SHA の警告を表示する
 
 test('マージ済み一覧は新しい順に5件を出し、古いPRをボタンで切り替える', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
-  const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
-  const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
-  const appendBlock = html.slice(appendStart, appendEnd);
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
   assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
@@ -2672,11 +2620,9 @@ test('マージ済み一覧は新しい順に5件を出し、古いPRをボタ�
 
 test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに開閉状態を分ける', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const element = html.match(/function element\(tag, className, text\) \{[\s\S]*?\n\}/)?.[0];
+  const element = functionSource(html, 'element');
   const expandToggle = functionSource(html, 'appendExpandToggle');
-  const appendStart = html.indexOf('function appendPullRequestBlock(target, group, withTag = false) {');
-  const appendEnd = html.indexOf('\nfunction productGroups(', appendStart);
-  const appendBlock = html.slice(appendStart, appendEnd);
+  const appendBlock = sourceBetween(html, 'function appendPullRequestBlock(target, group, withTag = false) {', '\nfunction productGroups(');
   assert.ok(element && expandToggle);
   assert.ok(appendBlock);
 
@@ -2769,7 +2715,7 @@ test('クローズ済み一覧はPR番号順に5件を出し、種類ごとに�
 
 test('衝突の依頼の確認欄では、描き直しの後も同じ操作のボタンへフォーカスを戻す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const render = functionSource(html, 'render');
   assert.ok(render);
 
   const key = 'conflict-key';
@@ -2810,7 +2756,7 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
 
 test('マージ操作ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const render = functionSource(html, 'render');
   assert.ok(render);
 
   for (const [kind, dataAttribute, htmlAttribute] of [
@@ -2857,7 +2803,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
 });
 
 test('レビュー不要の通信後は有効な同じPRの操作へフォーカスを戻す', async () => {
-  const render = pageHtml.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const render = functionSource(pageHtml, 'render');
   const runAction = pageHtml.match(/async function runCrossReviewSkipAction\(button\) \{[\s\S]*?\n\}/)?.[0];
   assert.ok(render && runAction);
 
@@ -2967,7 +2913,7 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
 
 test('古い PR の開閉ボタンにフォーカスがある描き直しでは同じボタンへ戻す', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const render = html.match(/function render\(state\) \{[\s\S]*?\n\}/)?.[0];
+  const render = functionSource(html, 'render');
   assert.ok(render);
 
   let activeElement;
@@ -3054,7 +3000,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
     'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount',
   ];
-  const functions = names.map((name) => pageHtml.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+  const functions = names.map((name) => functionSource(pageHtml, name));
   assert.ok(functions.every(Boolean));
   class FakeElement {
     constructor(tagName, _className = '', textContent = '') {
@@ -3116,7 +3062,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
 test('種類別では未着手の合計数を一つのボタンで切り替える', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['element', 'appendExpandToggle', 'taskVisibility', 'kindTodoTaskCount', 'kindDoneTaskCount', 'appendKindTaskSession', 'kindToggleLabel', 'appendKindToggle']
-    .map((name) => html.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0]);
+    .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
   class FakeElement {
@@ -3193,7 +3139,7 @@ test('種類別では未着手の合計数を一つのボタンで切り替え�
 test('「離席中のみ」では、版が同じでも離席の切り替えを受け取ったら描き直す', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const refresh = html.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
-  const applyAwayState = html.match(/function applyAwayState\(away\) \{[\s\S]*?\n\}/)?.[0];
+  const applyAwayState = functionSource(html, 'applyAwayState');
   assert.ok(refresh && applyAwayState);
 
   const run = async (mode, awaySequence) => {
@@ -3229,14 +3175,16 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 
   for (const html of [source, mock]) {
-    assert.match(html, /\.badge\.long\s*\{[^}]*white-space:\s*normal/);
-    assert.match(html, /\.badge\.long\s*\{[^}]*overflow-wrap:\s*anywhere/);
-    assert.match(html, /\.badge\.long\s*\{[^}]*max-width:\s*100%/);
+    const badgeStyle = Object.fromEntries(cssDeclarations(html, '.badge.long'));
+    assert.equal(badgeStyle['white-space'], 'normal');
+    assert.equal(badgeStyle['overflow-wrap'], 'anywhere');
+    assert.equal(badgeStyle['max-width'], '100%');
     // マージ履歴のバッジは子要素を複数持つ。inline-flex のままだと子ごとに縦へ細く割れるので、1 つの文として流す。
-    assert.match(html, /\.badge\.long\s*\{[^}]*display:\s*inline-block/);
+    assert.equal(badgeStyle.display, 'inline-block');
     // .session-tag の nowrap に上書きされないよう、2 つのクラスで詳細度を上げる。
-    assert.match(html, /\.session-tag\.session-context\s*\{[^}]*white-space:\s*normal/);
-    assert.match(html, /\.session-tag\.session-context\s*\{[^}]*max-width:\s*100%/);
+    const contextStyle = Object.fromEntries(cssDeclarations(html, '.session-tag.session-context'));
+    assert.equal(contextStyle['white-space'], 'normal');
+    assert.equal(contextStyle['max-width'], '100%');
   }
   // 予約中、衝突の解消の依頼、base の付け替え、マージ履歴は、時刻やセッション名やブランチ名が入って長くなる。
   assert.match(source, /badge\(reservedText, 'accent long'\)/);

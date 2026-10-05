@@ -10,12 +10,12 @@ const {
   listFiles,
   preparePageContent,
 } = require('../tools/manual/build');
+const { temporaryDirectory } = require('./support/temp');
 
 const ROOT = path.resolve(__dirname, '..');
 
 test('同じ原稿から同じ HTML と検索索引を生成し、矩形 JSON と画像を dist に含めない', t => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-manual-build-'));
-  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
+  const temporaryRoot = temporaryDirectory(t, 'agent-cockpit-manual-build-').directory;
   const firstOutput = path.join(temporaryRoot, 'first');
   const secondOutput = path.join(temporaryRoot, 'second');
 
@@ -43,8 +43,7 @@ test('同じ原稿から同じ HTML と検索索引を生成し、矩形 JSON �
 });
 
 test('出力先が原稿の中の dist 以外なら、何も消さずに組み立てを止める', t => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-manual-out-'));
-  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
+  const temporaryRoot = temporaryDirectory(t, 'agent-cockpit-manual-out-').directory;
   const manualRoot = path.join(temporaryRoot, 'manual');
   fs.cpSync(path.join(ROOT, 'manual'), manualRoot, { recursive: true });
   for (const outDir of ['assets', 'pages', 'img', '.']) {
@@ -86,8 +85,7 @@ test('見出しから節 ID を作り、節ごとの本文を検索索引に入�
 });
 
 test('原稿が CRLF でも LF の原稿と同じ結果を組み立てる', t => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-manual-eol-'));
-  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }));
+  const temporaryRoot = temporaryDirectory(t, 'agent-cockpit-manual-eol-').directory;
   const copyWithEol = (name, eol) => {
     const manualRoot = path.join(temporaryRoot, name);
     fs.cpSync(path.join(ROOT, 'manual'), manualRoot, { recursive: true, filter: source => !source.includes(`${path.sep}dist`) });

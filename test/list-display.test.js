@@ -3,14 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { pageContext } = require('./support/page-context');
+const { functionSource, pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-
-function functionSource(source, name) {
-  return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
-}
 
 function eventListenerSource(source, eventName) {
   return source.match(new RegExp(`document\\.addEventListener\\('${eventName}', (e => \\{[\\s\\S]*?\\n\\})\\);`))?.[1];
@@ -626,7 +622,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     render() {},
     refresh: async () => {},
   });
-  vm.runInContext(`async ${actionHelper}\n${action}`, actionContext);
+  vm.runInContext(`${actionHelper}\n${action}`, actionContext);
   await actionContext.runPullRequestMergeAction({ dataset: { mergeGo: 'key' } }, 'merge');
   assert.equal(actionContext.pullRequestMergeMessages.size, 0);
   assert.ok(actionContext.queuedPullRequestMerges.has('key'));
@@ -919,8 +915,8 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
   const findTargetSource = functionSource(web, 'findPullRequestMergeTarget');
   const rememberSource = functionSource(web, 'rememberPullRequestMergeResult');
   const lineSource = functionSource(web, 'pullRequestMergeResultLine');
-  const actionHelperSource = `async ${functionSource(web, 'runPullRequestAction')}`;
-  const actionSource = `async ${functionSource(web, 'runPullRequestMergeAction')}`;
+  const actionHelperSource = functionSource(web, 'runPullRequestAction');
+  const actionSource = functionSource(web, 'runPullRequestMergeAction');
   assert.ok(findTargetSource && rememberSource && lineSource && actionHelperSource && actionSource);
   const key = 'a'.repeat(64);
   const pullRequest = { mergeRecordKey: key, mergeSessionId: 'session-a', number: 41, headRefOid: 'abcdef', children: [] };
@@ -1056,7 +1052,7 @@ test('表示設定の保存失敗は値を戻して設定ダイアログにも�
   const settleSource = functionSource(web, 'settleDisplaySaves');
   const saveSource = functionSource(web, 'saveDisplayPreferences');
   const showErrorSource = functionSource(web, 'showWriteError');
-  const sendPatchSource = `async ${functionSource(web, 'sendDisplayPatch')}`;
+  const sendPatchSource = functionSource(web, 'sendDisplayPatch');
   assert.ok(settleSource && saveSource && showErrorSource && sendPatchSource);
   let renders = 0;
   let settingsRenders = 0;
@@ -1096,7 +1092,7 @@ test('表示設定の保存失敗は値を戻して設定ダイアログにも�
 });
 
 test('完了にする操作は 5 秒間取り消せ、再描画中も同じタスクに取り消しを出す', async () => {
-  const runSource = `async ${functionSource(web, 'runCloseAction')}`;
+  const runSource = functionSource(web, 'runCloseAction');
   const cancelSource = functionSource(web, 'cancelTaskClose');
   const itemSource = functionSource(web, 'appendTaskItem');
   assert.ok(runSource && cancelSource && itemSource);
@@ -1133,8 +1129,8 @@ test('完了にする操作は 5 秒間取り消せ、再描画中も同じタ�
 });
 
 test('完了操作の送信中はボタンを無効化し応答後に状態を解除する', async () => {
-  const sendSource = `async ${functionSource(web, 'sendCloseAction')}`;
-  const runSource = `async ${functionSource(web, 'runCloseAction')}`;
+  const sendSource = functionSource(web, 'sendCloseAction');
+  const runSource = functionSource(web, 'runCloseAction');
   const itemSource = functionSource(web, 'appendTaskItem');
   assert.ok(sendSource && runSource && itemSource);
 
@@ -1274,8 +1270,45 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   assert.match(mockSettings, /key: 'idleHideMinutes'[^\n]*min: 5, max: 1440/);
 });
 
-test('更新の無いセッションの「表示する」「隠す」が描き直しで消えても、表示の切り替えへフォーカスを戻す', () => {
-  assert.match(web, /\['show-finished', 'show-idle', 'merge-result-close'\]\.includes\(focusData\.kind\) && !button\s+\? document\.querySelector\('\[data-close-merge-result\]'\) \|\| document\.querySelector\('\[data-action="mode"\]/);
+test('更新の無いセッションの「表示する」「隠す」が描き直しで消えたら表示切り替えへフォーカスを戻す', () => {
+  const render = functionSource(web, 'render');
+  assert.ok(render);
+  const modeButton = {
+    dataset: { mode: 'product' },
+    setAttribute() {},
+    focus(options) { this.focusOptions = options; },
+  };
+  const root = { replaceChildren(...children) { this.children = children; } };
+  class FakeTextArea {}
+  const context = pageContext(web, {
+    answerNoteComposing: false,
+    renderRouting() {},
+    idleHiddenSessions: () => [{}],
+    sessionsAfterIdleFilter: () => [],
+    renderSummary() {},
+    renderExcludedNote() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    renderFinishedNote() {},
+    renderIdleNote() {},
+    updateTitle() {},
+    document: {
+      activeElement: { dataset: { showIdle: 'true' }, hasAttribute: () => false },
+      querySelectorAll: () => [modeButton],
+      querySelector: (selector) => selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
+    },
+    HTMLTextAreaElement: FakeTextArea,
+    displayPreferences: { mode: 'product' },
+    visibleSinceSeen: () => [],
+    orderedProducts: () => [],
+    root,
+    element: (tag, className, textContent) => ({ tag, className, textContent }),
+  });
+  vm.runInContext(`${render}\nthis.render = render;`, context);
+
+  context.render({ sessions: [{}], pullRequests: [] });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(modeButton.focusOptions)), { preventScroll: true });
+  assert.equal(root.children[0].textContent, '更新の無いセッションを隠しています。下の「表示する」から表示できます。');
 });
 
 test('モックの終わった項目の表示設定が保存できたら一覧を描き直す', () => {

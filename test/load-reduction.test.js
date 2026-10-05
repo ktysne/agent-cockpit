@@ -3,13 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { functionSource } = require('./support/page-context');
 
 const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
-
-function functionSource(source, name) {
-  return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
-}
 
 test('仮進行中の状態名と判断待ちの内訳を上部札とそろえる', () => {
   assert.match(web, /provisional: '仮に推奨案で進行中'/);

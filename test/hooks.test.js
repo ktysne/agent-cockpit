@@ -15,17 +15,12 @@ const {
 } = require('../src/hooks/event');
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
+const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
 async function temporaryHome(testContext) {
-  const previous = process.env.AGENT_COCKPIT_HOME;
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-test-'));
-  process.env.AGENT_COCKPIT_HOME = homeDir;
-  testContext.after(async () => {
-    if (previous === undefined) delete process.env.AGENT_COCKPIT_HOME;
-    else process.env.AGENT_COCKPIT_HOME = previous;
-    await fs.rm(homeDir, { recursive: true, force: true });
+  return createTemporaryHome(testContext, 'agent-cockpit-test-', {
+    environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
   });
-  return { homeDir, claudeHome: path.join(homeDir, '.claude') };
 }
 
 test('フックは入力全文を送らず、任意のツール出力から Codex の行だけを抽出する', async (t) => {

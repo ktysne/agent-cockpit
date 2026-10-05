@@ -9,47 +9,18 @@ const { DashboardState } = require('../src/server/state');
 const { PullRequestMergeManager } = require('../src/server/pull-request-merge');
 const { PullRequestTracker } = require('../src/server/pull-requests');
 const { DecisionAnswerDelivery } = require('../src/server/decision-answers');
+const { temporaryDirectory } = require('./support/temp');
+const { ghPullRequest: createGhPullRequest } = require('./support/github');
 
 const NOW = Date.parse('2026-10-03T12:00:00.000Z');
 const sha = (digit) => String(digit).repeat(40);
 
-function ghPullRequest(number, headRefName, baseRefName, changes = {}) {
-  const check = changes.ci === 'pending'
-    ? [{ state: 'IN_PROGRESS', status: 'IN_PROGRESS' }]
-    : changes.ci === 'fail'
-      ? [{ state: 'FAILURE', status: 'COMPLETED', conclusion: 'FAILURE' }]
-      : [{ state: 'SUCCESS', status: 'COMPLETED', conclusion: 'SUCCESS' }];
-  return {
-    number,
-    title: `PR ${number}`,
-    url: `https://github.com/example/project/pull/${number}`,
-    headRefName,
-    baseRefName,
-    headRefOid: sha(number),
+function ghPullRequest(number, headRefName, baseRefName, configuration = {}) {
+  const options = typeof configuration === 'string' ? { sha: configuration } : configuration;
+  return createGhPullRequest(number, headRefName, baseRefName, {
     createdAt: '2026-10-01T00:00:00.000Z',
-    isDraft: false,
-    mergeable: 'MERGEABLE',
-    mergeStateStatus: changes.ci === 'pending' ? 'BLOCKED' : 'CLEAN',
-    reviewDecision: changes.reviewDecision || '',
-    statusCheckRollup: check,
-    ...changes.fields,
-  };
-}
-
-function registration(number) {
-  return {
-    session_id: `session-${number}`,
-    owner: 'example',
-    repo: 'project',
-    number,
-    url: `https://github.com/example/project/pull/${number}`,
-    addedAt: new Date(NOW).toISOString(),
-    cwd: null,
-    product: { key: 'project', name: 'Project' },
-    state: 'unknown',
-    mergedAt: null,
-    lastOpen: null,
-  };
+    ...options,
+  });
 }
 
 function mergedView(pr, headRefOid = pr.headRefOid, mergedAt = new Date(NOW).toISOString()) {
@@ -57,13 +28,14 @@ function mergedView(pr, headRefOid = pr.headRefOid, mergedAt = new Date(NOW).toI
 }
 
 async function mergeFixture(testContext, pullRequests = [ghPullRequest(1, 'feature/one', 'main')]) {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-merge-'));
+  const temporary = temporaryDirectory(testContext, 'agent-cockpit-pr-merge-', { deferCleanup: true });
+  const homeDir = temporary.directory;
   let state;
   let tracker;
   testContext.after(async () => {
     tracker?.close();
     await state?.flushPersistence();
-    await fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await temporary.cleanup();
   });
   state = await DashboardState.load(homeDir, { now: NOW });
   for (const pr of pullRequests) state.registerPullRequest(`session-${pr.number}`, { url: pr.url }, {
@@ -836,8 +808,7 @@ test('マージコミットでは上の PR に積み直しを依頼しない', a
 });
 
 test('マージ履歴、予約、前回方式を保存し、履歴は24時間で消す', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-history-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-pr-history-').directory;
   const state = await DashboardState.load(homeDir, { now: NOW });
   const pr = ghPullRequest(7, 'feature/seven', 'main');
   state.registerPullRequest('session-7', { url: pr.url }, { product: { key: 'project', name: 'Project' } }, NOW);
@@ -877,8 +848,7 @@ test('マージ履歴、予約、前回方式を保存し、履歴は24時間で
 });
 
 test('古い store にマージ項目が無くても空として読み、退避しない', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-old-store-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-pr-old-store-').directory;
   await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
     version: 1, display: null, plans: {}, decisionLifecycles: {}, closedTasks: [], hiddenSessions: [],
     prs: [], relatedPrs: [], retargetedPrs: [],
@@ -893,8 +863,7 @@ test('古い store にマージ項目が無くても空として読み、退避�
 });
 
 test('旧形式の GitHub 自動マージ予約だけを読み捨てて store を退避しない', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-legacy-reservation-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-pr-legacy-reservation-').directory;
   await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify({
     version: 1, display: null, plans: {}, decisionLifecycles: {}, closedTasks: [], hiddenSessions: [],
     mergeReservations: [{
@@ -914,8 +883,7 @@ test('旧形式の GitHub 自動マージ予約だけを読み捨てて store �
 });
 
 test('古い store の24時間以内の merged PR を方式不明の履歴へ移す', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-old-merged-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-pr-old-merged-').directory;
   const source = new DashboardState();
   for (const [number, ageHours] of [[9, 2], [10, 25]]) {
     const pr = ghPullRequest(number, `feature/${number}`, 'main');
@@ -946,8 +914,7 @@ test('古い store の24時間以内の merged PR を方式不明の履歴へ移
 });
 
 test('同じセッションに同じ番号の別リポジトリ PR があれば記録キーで特定する', async (t) => {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-pr-key-'));
-  t.after(() => fs.rm(homeDir, { recursive: true, force: true }));
+  const homeDir = temporaryDirectory(t, 'agent-cockpit-pr-key-').directory;
   const state = await DashboardState.load(homeDir, { now: NOW });
   state.registerPullRequest('session-shared', { url: 'https://github.com/example/first/pull/1' }, {}, NOW);
   state.registerPullRequest('session-shared', { url: 'https://github.com/example/second/pull/1' }, {}, NOW + 1);

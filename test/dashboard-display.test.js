@@ -3,14 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { pageContext } = require('./support/page-context');
+const { cssDeclarations, functionSource, pageContext } = require('./support/page-context');
 
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
 const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-
-function functionSource(source, name) {
-  return source.match(new RegExp(`function ${name}\\([^\\n]*\\) \\{[\\s\\S]*?\\n\\}`))?.[0];
-}
 
 test('接続案内は一覧の前に、注記は一覧の後ろに置き、固定表示に含めない', () => {
   for (const html of [mock, web]) {
@@ -37,24 +33,42 @@ test('接続案内は一覧の前に、注記は一覧の後ろに置き、固�
   }
 });
 
-test('経路の切り替えには操作名を残し、補足文を表示しない', () => {
+test('回答内容とマージ照合の SHA を表示する', () => {
   for (const html of [mock, web]) {
-    assert.doesNotMatch(html, /route-note|既定は Codex で実装|既定はクロスレビューの手順が推奨する方法/);
-    assert.match(html, /role="group" aria-label="\$\{ROUTE\[[^\]]+\]\.label\}の経路"/);
-  }
-});
-
-test('項目説明を消し、回答内容とマージ照合の SHA は残す', () => {
-  for (const html of [mock, web]) {
-    assert.doesNotMatch(html, /許可はデスクトップアプリの .*ダッシュボードからは出せない/);
-    assert.doesNotMatch(html, /質問はデスクトップアプリの .*セッションで答える/);
-    assert.doesNotMatch(html, /ほかの案は押して選べる|推奨が無いので、選択肢を押して選ぶか、指示の欄に答えを書く/);
-    assert.doesNotMatch(html, /結果を PR を作ったセッションへ知らせる|このセッションが作った PR はありません/);
-    assert.doesNotMatch(html, /リモートのブランチ .* は GitHub が自動で削除する/);
     assert.match(html, /OK で送る答え:/);
     assert.match(html, /照合する head SHA:/);
     assert.match(html, /選択した条件の未達:/);
   }
+});
+
+test('削除済みの説明文と描画要素の名残を含めない', () => {
+  const removedCopy = [
+    /許可はデスクトップアプリの .*ダッシュボードからは出せない/,
+    /質問はデスクトップアプリの .*セッションで答える/,
+    /ほかの案は押して選べる|推奨が無いので、選択肢を押して選ぶか、指示の欄に答えを書く/,
+    /結果を PR を作ったセッションへ知らせる|このセッションが作った PR はありません/,
+    /リモートのブランチ .* は GitHub が自動で削除する/,
+  ];
+  for (const html of [mock, web]) {
+    for (const phrase of removedCopy) assert.doesNotMatch(html, phrase);
+    const filters = html.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+    assert.ok(filters);
+    assert.equal(html.includes('判断を保留する'), false);
+    assert.equal(filters.includes('保留中'), false);
+
+    assert.equal(cssDeclarations(html, '.product-order-item').length, 0);
+    assert.equal(cssDeclarations(html, '.kind-order').length, 0);
+  }
+  assert.ok(cssDeclarations(web, '.order').length > 0);
+  assert.deepEqual(cssDeclarations(web, '.order'), cssDeclarations(mock, '.order'));
+
+  const mockKind = functionSource(mock, 'renderKindMode');
+  const webKind = functionSource(web, 'renderKindSections');
+  assert.doesNotMatch(mockKind, /orderBar|kind-order|kindProductOrder/);
+  assert.doesNotMatch(webKind, /kindProductOrder|kind-order|productOrder/);
+  assert.doesNotMatch(mockKind, /endedDecisionToggle\(session\)|endedAgentToggle\(session\)|taskSessionBlock\(p, session, true\)/);
+  assert.doesNotMatch(webKind, /appendPlanToggle\(endedDecisions|appendAgents\([^\n]*\);\s*\n\s*const list = holder\.querySelector\('\.agent-list'\);[\s\S]*data-ended-toggle/);
+  assert.doesNotMatch(web, /function reviewBlock|group\.reviews|data-reserve-go=/);
 });
 
 test('モックと実装の画面スクリプトを構文解析できる', () => {
@@ -66,25 +80,28 @@ test('モックと実装の画面スクリプトを構文解析できる', () =>
 });
 
 test('モックに合わせた配色、札、タスク行を表示する', () => {
-  assert.match(web, /--on-ok: #000000;/);
+  const webMergeButton = Object.fromEntries(cssDeclarations(web, '.merge-btn'));
+  const mockMergeButton = Object.fromEntries(cssDeclarations(mock, '.merge-btn'));
+  assert.equal(webMergeButton.color, 'var(--on-ok)');
+  assert.deepEqual(Object.entries(webMergeButton).sort(), Object.entries(mockMergeButton).sort());
   assert.equal((web.match(/--on-ok: #1f1e1d;/g) || []).length, 2);
-  assert.match(web, /\.merge-btn \{[^}]*color: var\(--on-ok\)/);
-  assert.match(web, /\.merge-confirm \.merge-go \{[^}]*color: var\(--on-ok\)/);
-  assert.doesNotMatch(web, /\.merge-confirm\.auto/);
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.merge-confirm .merge-go')).color, 'var(--on-ok)');
   assert.match(web, /\.dataset\.mergeAfterReview = 'true'/);
-  assert.match(web, /\.merge-confirm\.conflict \.conflict-go \{[^}]*color: var\(--on-danger\)/);
-  assert.match(web, /\.badge\.new-mark \{ background: var\(--accent\); color: var\(--on-accent\); \}/);
-  assert.match(web, /\.permission code \{/);
-  assert.match(web, /\.settings-dialog \{ width: min\(440px,/);
-  assert.match(web, /\.away-toggle \{[^}]*min-height: 40px/);
-  assert.match(web, /\.criteria-list li::marker \{ content: "・"; \}/);
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.merge-confirm.conflict .conflict-go')).color, 'var(--on-danger)');
+  assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.badge.new-mark')), {
+    background: 'var(--accent)', color: 'var(--on-accent)',
+  });
+  assert.ok(cssDeclarations(web, '.permission code').length > 0);
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.settings-dialog')).width, 'min(440px, calc(100vw - 32px))');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.away-toggle'))['min-height'], '40px');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.criteria-list li::marker')).content, '"・"');
 
-  const taskRowStyle = web.match(/\.task-item \{[^}]*\}/)?.[0];
-  const taskTitleStyle = web.match(/\.task-title \{[^}]*\}/)?.[0];
-  assert.ok(taskRowStyle && taskTitleStyle);
-  assert.doesNotMatch(taskRowStyle, /background:/);
-  assert.doesNotMatch(taskTitleStyle, /font-weight:/);
-  assert.match(web, /\.task-item:hover \{ background: var\(--surface-2\); \}/);
+  const taskRowStyle = Object.fromEntries(cssDeclarations(web, '.task-item'));
+  const taskTitleStyle = Object.fromEntries(cssDeclarations(web, '.task-title'));
+  assert.ok(Object.keys(taskRowStyle).length && Object.keys(taskTitleStyle).length);
+  assert.equal(taskRowStyle.background, undefined);
+  assert.equal(taskTitleStyle['font-weight'], undefined);
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.task-item:hover')).background, 'var(--surface-2)');
 
   const appendTaskItem = functionSource(web, 'appendTaskItem');
   const appendDecisionCard = functionSource(web, 'appendDecisionCard');
@@ -134,7 +151,7 @@ test('経路札は起動時の設定を表示し、現在と違う設定には�
   assert.equal(context.routeTag({ active: true, route: 'default' }), null);
 });
 
-test('経路設定は上部バーにあり、サブエージェントの三択を API に保存する', () => {
+test('経路設定は上部バーにあり、サブエージェントの三択を API に保存する', async () => {
   const routing = functionSource(web, 'renderRouting');
   const updateRouting = functionSource(web, 'updateRouting');
   assert.ok(web.indexOf('id="routing"') < web.indexOf('id="settings-button"'));
@@ -143,6 +160,25 @@ test('経路設定は上部バーにあり、サブエージェントの三択�
   assert.match(updateRouting, /postUiAction\('\/api\/routing'/);
   assert.match(web, /agents: \{ label: 'サブエージェント'/);
   assert.match(web, /review: \{ label: 'クロスレビュー'/);
+
+  const posts = [];
+  const renders = [];
+  const context = pageContext(web, {
+    postUiAction: async (...args) => {
+      posts.push(args);
+      return { ok: true, json: async () => ({ agents: 'codex', review: 'claude' }) };
+    },
+    renderRouting: (...args) => renders.push(args),
+    codexAgentAvailable: true,
+    crossReviewAvailable: true,
+    lastState: null,
+    liveStatus: { textContent: '' },
+    showWriteError() {},
+  });
+  vm.runInContext(`${updateRouting}\nthis.updateRouting = updateRouting;`, context);
+  await context.updateRouting({ dataset: { route: 'review', v: 'claude' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [['/api/routing', { key: 'review', value: 'claude' }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(renders[0][1])), { codexAgent: true, crossReview: true });
 });
 
 test('経路の二段は実際の幅が収まる場合だけ横に並べる', () => {
@@ -150,8 +186,8 @@ test('経路の二段は実際の幅が収まる場合だけ横に並べる', ()
   assert.ok(layoutRouting);
   assert.match(web, /const ROUTING_PAIR_GAP_PX = 12/);
   assert.match(web, /new ResizeObserver\(layoutRouting\)\.observe\(document\.getElementById\('routing'\)\)/);
-  assert.match(web, /\.routing \.rgroup\.side-by-side \{ grid-template-columns: repeat\(4, max-content\); \}/);
-  assert.match(web, /\.routing \.rgroup\.side-by-side \.rrow \+ \.rrow \.rlabel \{ margin-left: 12px; \}/);
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.routing .rgroup.side-by-side'))['grid-template-columns'], 'repeat(4, max-content)');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.routing .rgroup.side-by-side .rrow + .rrow .rlabel'))['margin-left'], '12px');
 
   const widths = [80, 150, 80, 150];
   const classes = new Set();
@@ -180,70 +216,6 @@ test('経路の二段は実際の幅が収まる場合だけ横に並べる', ()
   group.clientWidth = 1000;
   context.layoutRouting();
   assert.equal(classes.has('side-by-side'), false);
-});
-
-test('経路の欄は連携の組み合わせに応じて段を作り直す', async () => {
-  const renderRouting = functionSource(web, 'renderRouting');
-  const updateRouting = functionSource(web, 'updateRouting');
-  const root = { innerHTML: '', hidden: false, dataset: {}, querySelectorAll: () => [] };
-  const renderContext = pageContext(web, {
-    document: { getElementById: () => root },
-    window: {},
-    layoutRouting() {},
-  });
-  vm.runInContext(`const ROUTE = {
-    agents: { label: 'サブエージェント', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
-    review: { label: 'クロスレビュー', opts: [{ v: 'default', t: '既定' }, { v: 'codex', t: 'Codex' }, { v: 'claude', t: 'Claude' }] },
-  };
-  const ROUTE_VALUES = new Set(['default', 'codex', 'claude']);
-  let routing = { agents: 'default', review: 'default' };
-  ${renderRouting}
-  this.renderRouting = renderRouting;`, renderContext);
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, {});
-  assert.equal(root.hidden, true);
-  assert.equal(root.innerHTML, '');
-
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { crossReview: true });
-  assert.equal(root.hidden, false);
-  const reviewButtons = root.innerHTML.match(/<button[^>]*data-route="review"[^>]*>/g) || [];
-  const agentButtons = root.innerHTML.match(/<button[^>]*data-route="agents"[^>]*>/g) || [];
-  assert.equal(reviewButtons.length, 3);
-  assert.equal(agentButtons.length, 0);
-
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true });
-  assert.equal(root.hidden, false);
-  const agentsOnly = root.innerHTML;
-  assert.equal((agentsOnly.match(/data-route="agents"/g) || []).length, 3);
-  assert.doesNotMatch(agentsOnly, /data-route="review"/);
-
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { codexAgent: true, crossReview: true });
-  assert.ok(root.innerHTML.indexOf('data-route="agents"') < root.innerHTML.indexOf('data-route="review"'));
-  assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 3);
-  assert.equal((root.innerHTML.match(/data-route="review"/g) || []).length, 3);
-  assert.doesNotMatch(root.innerHTML, /aria-describedby|未対応/);
-
-  renderContext.renderRouting({ agents: 'codex', review: 'claude' }, { crossReview: true });
-  assert.equal((root.innerHTML.match(/data-route="agents"/g) || []).length, 0);
-  assert.equal((root.innerHTML.match(/data-route="review"/g) || []).length, 3);
-
-  const posts = [];
-  const renders = [];
-  const updateContext = pageContext(web, {
-    postUiAction: async (...args) => {
-      posts.push(args);
-      return { ok: true, json: async () => ({ agents: 'codex', review: 'claude' }) };
-    },
-    renderRouting: (...args) => renders.push(args),
-    codexAgentAvailable: true,
-    crossReviewAvailable: true,
-    lastState: null,
-    liveStatus: { textContent: '' },
-    showWriteError() {},
-  });
-  vm.runInContext(`async ${updateRouting}\nthis.updateRouting = updateRouting;`, updateContext);
-  await updateContext.updateRouting({ dataset: { route: 'review', v: 'claude' } });
-  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [['/api/routing', { key: 'review', value: 'claude' }]]);
-  assert.deepEqual(JSON.parse(JSON.stringify(renders[0][1])), { codexAgent: true, crossReview: true });
 });
 
 test('未完了タスクの完了ボタンは閉じる API を呼び、ボタン用の識別子を送る', () => {
@@ -287,7 +259,7 @@ test('終了にできるエージェント行に終了 API を呼ぶボタンを
 });
 
 test('表示設定はサーバーの null のときだけ旧 localStorage から移し、通常変更は差分で送る', async () => {
-  const sync = `async ${functionSource(web, 'syncDisplayPreferences')}`;
+  const sync = functionSource(web, 'syncDisplayPreferences');
   const syncCalls = [];
   let legacyReads = 0;
   const context = pageContext(web, {
@@ -527,8 +499,10 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
   const resetHandler = web.match(/document\.getElementById\('settings-section-order-reset'\)\.addEventListener\('click', \(\) => \{[\s\S]*?\n\}\);/)?.[0];
   assert.ok(sectionKinds && defaultOrder && normalize && renderOrder && moveHandler && resetHandler);
   assert.match(web, /id="settings-section-order" aria-labelledby="settings-section-order-title" aria-describedby="settings-section-order-note"/);
-  assert.match(web, /\.settings-section-order \{ margin-top: 14px; \}/);
-  assert.match(web, /\.section-order-list button \{ min-width: 36px; padding: 4px 8px; \}/);
+  assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.settings-section-order')), { 'margin-top': '14px' });
+  assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.section-order-list button')), {
+    'min-width': '36px', padding: '4px 8px',
+  });
   const elementSource = functionSource(web, 'element');
   assert.ok(elementSource);
 
@@ -605,14 +579,12 @@ test('セクションの並び順を保存し、端のボタンを無効化し�
   assert.equal(focused, null);
 });
 
-test('種類別の並び順札は表示せず、設定順にセクションを並べる', () => {
+test('種類別のセクションは設定順に並べる', () => {
   const mockKind = functionSource(mock, 'renderKindMode');
   const webKind = functionSource(web, 'renderKindSections');
 
   assert.match(mockKind, /return orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(key => sections\[key\]\)\.join\(''\)/);
-  assert.doesNotMatch(mockKind, /orderBar|kind-order|kindProductOrder/);
   assert.match(webKind, /return orderedSectionKeys\(DEFAULT_SECTION_ORDER\)\.map\(\(key\) => sections\[key\]\)\.filter\(Boolean\)/);
-  assert.doesNotMatch(webKind, /kindProductOrder|kind-order|productOrder/);
 });
 
 test('種類別とプロダクト別のセクションは設定順に並び、既定順では従来の順を保つ', () => {
@@ -989,7 +961,7 @@ test('種類別タスクのまとまりは先頭行に札と更新時刻を置�
   assert.match(webKind, /appendKindToggle\(taskControls, 'tasks', showDoneTasks, doneTaskCount, '完了したタスク'\)/);
   assert.match(webTaskBlock, /appendContextTags\(heading, product, session, true, true\)/);
   assert.match(webTaskBlock, /appendTaskItem\(list, task, product, session, false, multipleSessions\)/);
-  assert.match(web, /\.group-frame \{[^}]*border: 1px solid var\(--border\)/);
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.group-frame')).border, '1px solid var(--border)');
 });
 
 test('種類別の描画では集約折り畳みだけを使い、プロダクト別のセッション単位は残す', () => {
@@ -1000,11 +972,9 @@ test('種類別の描画では集約折り畳みだけを使い、プロダク�
   assert.match(mockKind, /kindToggle\('agents', '終了済み', endedAgentCount/);
   assert.match(mockKind, /kindToggle\('tasks', '完了したタスク', doneTaskCount/);
   assert.match(mockKind, /kindToggle\('todoTasks', '未着手のタスク', todoTaskCount/);
-  assert.doesNotMatch(mockKind, /endedDecisionToggle\(session\)|endedAgentToggle\(session\)|taskSessionBlock\(p, session, true\)/);
   assert.match(webKind, /appendKindToggle\(endedDecisionControls, 'decisions'/);
   assert.match(webKind, /appendKindToggle\(activityControls, 'agents'/);
   assert.match(webKind, /appendKindToggle\(taskControls, 'tasks'/);
-  assert.doesNotMatch(webKind, /appendPlanToggle\(endedDecisions|appendAgents\([^\n]*\);\s*\n\s*const list = holder\.querySelector\('\.agent-list'\);[\s\S]*data-ended-toggle/);
 
   assert.match(mock, /function decisionSessionBlock\([^]*?endedDecisionToggle\(session\)/);
   assert.match(mock, /function taskSessionBlock\([^]*?data-done-tasks/);

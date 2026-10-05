@@ -4,13 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { crossReviewWaitReason } = require('../src/server/pull-requests');
+const { functionSource } = require('./support/page-context');
 
 const web = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
-
-function functionSource(source, name) {
-  return source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))?.[0];
-}
 
 test('クロスレビューの記録状態ごとに待ち理由を表示する', () => {
   const headSha = 'a'.repeat(40);

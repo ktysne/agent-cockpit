@@ -3,8 +3,6 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
-const http = require('node:http');
-const os = require('node:os');
 const path = require('node:path');
 const { runHook } = require('../src/hooks/event');
 const { DashboardState } = require('../src/server/state');
@@ -13,69 +11,42 @@ const {
   MAX_BODY_BYTES,
   escapeHtmlAttribute,
 } = require('../src/server/server');
+const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
+const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
 async function temporaryHome(testContext, { deferCleanup = false } = {}) {
-  const previous = process.env.AGENT_COCKPIT_HOME;
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-test-'));
-  process.env.AGENT_COCKPIT_HOME = homeDir;
-  const cleanup = async () => {
-    if (previous === undefined) delete process.env.AGENT_COCKPIT_HOME;
-    else process.env.AGENT_COCKPIT_HOME = previous;
-    await fs.rm(homeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-  };
-  if (!deferCleanup) testContext.after(cleanup);
-  return { homeDir, claudeHome: path.join(homeDir, '.claude'), cleanup };
-}
-
-async function request(port, options = {}) {
-  const method = options.method || 'GET';
-  const body = options.body || '';
-  const headers = { ...options.headers };
-  if (body && headers['content-length'] === undefined) headers['content-length'] = Buffer.byteLength(body);
-  if (headers.host === undefined) headers.host = `127.0.0.1:${port}`;
-  return new Promise((resolve, reject) => {
-    const client = http.request({ host: '127.0.0.1', port, path: options.path || '/', method, headers }, (response) => {
-      const chunks = [];
-      response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString('utf8'), headers: response.headers }));
-    });
-    client.once('error', reject);
-    client.end(body);
+  return createTemporaryHome(testContext, 'agent-cockpit-test-', {
+    deferCleanup,
+    environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
   });
-}
-
-function jsonBody(response) {
-  try {
-    return JSON.parse(response.body);
-  } catch {
-    assert.fail(`Expected JSON response, received: ${response.body}`);
-  }
 }
 
 test('離席中の切り替えは秘密値と Origin を照合し、状態を軽い応答で返す', async (t) => {
   const runtime = await runningServer(t);
   const body = JSON.stringify({ enabled: true });
+  const origin = `http://127.0.0.1:${runtime.info.port}`;
+  const jsonContent = { 'content-type': 'application/json' };
   const missingSecret = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
-    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${runtime.info.port}` },
+    headers: { ...jsonContent, origin },
   });
   assert.equal(missingSecret.status, 401);
 
   const hookSecret = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+    headers: hookHeaders(runtime.info.secret, jsonContent),
   });
   assert.equal(hookSecret.status, 401);
 
   const foreignOrigin = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret, origin: 'https://other.example' },
+    headers: uiHeaders(runtime.info, 'https://other.example', jsonContent),
   });
   assert.equal(foreignOrigin.status, 403);
 
   const enabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
-    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret },
+    headers: uiHeaders(runtime.info, undefined, jsonContent),
   });
   assert.equal(enabled.status, 200);
   const enabledState = jsonBody(enabled);
@@ -86,8 +57,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const enabledLocalhost = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
     headers: {
-      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
-      origin: `http://localhost:${runtime.info.port}`,
+      ...uiHeaders(runtime.info, `http://localhost:${runtime.info.port}`, jsonContent),
     },
   });
   assert.equal(enabledLocalhost.status, 200);
@@ -95,8 +65,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const enabledLoopback = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body,
     headers: {
-      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
-      origin: `http://127.0.0.1:${runtime.info.port}`,
+      ...uiHeaders(runtime.info, origin, jsonContent),
     },
   });
   assert.equal(enabledLoopback.status, 200);
@@ -104,8 +73,7 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   const disabled = await request(runtime.info.port, {
     method: 'POST', path: '/api/away', body: JSON.stringify({ enabled: false }),
     headers: {
-      'content-type': 'application/json', 'x-cockpit-secret': runtime.info.uiSecret,
-      origin: `http://localhost:${runtime.info.port}`,
+      ...uiHeaders(runtime.info, `http://localhost:${runtime.info.port}`, jsonContent),
     },
   });
   assert.equal(disabled.status, 200);
@@ -702,21 +670,13 @@ test('画面の版は配信した HTML と状態 API で一致し、ファイル
 });
 
 async function runningServer(t, options = {}) {
-  const temporary = await temporaryHome(t, { deferCleanup: true });
-  let runtime;
-  t.after(async () => {
-    await runtime?.close();
-    await temporary.cleanup();
-  });
-  runtime = await startServer({
-    homeDir: temporary.homeDir,
-    claudeHome: temporary.claudeHome,
-    userHome: temporary.homeDir,
-    port: 0,
+  const server = await startTestServer(t, {
+    temporaryPrefix: 'agent-cockpit-test-',
+    environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
     ...options,
   });
-  assert.equal(runtime.server.address().address, '127.0.0.1');
-  return runtime;
+  assert.equal(server.runtime.server.address().address, '127.0.0.1');
+  return server.runtime;
 }
 
 test('常駐サーバーの Host は state と POST の要求でも照合する', async (t) => {

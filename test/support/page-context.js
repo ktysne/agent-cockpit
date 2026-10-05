@@ -1,9 +1,51 @@
 const vm = require('node:vm');
 
+function functionSource(source, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return source.match(new RegExp(`(?:async\\s+)?function\\s+${escapedName}\\s*\\([^]*?\\n\\}`))?.[0];
+}
+
+function sourceBetween(source, startMarker, endMarker, includeEnd = false) {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return undefined;
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  if (end < 0) return undefined;
+  return source.slice(start, includeEnd ? end + endMarker.length : end);
+}
+
+function cssDeclarations(html, selector, options = {}) {
+  const css = [...html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)]
+    .map(([, contents]) => contents.replace(/\/\*[\s\S]*?\*\//g, ''))
+    .join('\n');
+  const declarations = [];
+  const rules = /([^{}]+)\{([^{}]*)\}/g;
+
+  for (const [, prelude, body] of css.matchAll(rules)) {
+    const selectors = prelude.split(',').map((value) => value.trim());
+    if (!selectors.includes(selector)) continue;
+    for (const declaration of body.split(';')) {
+      const separator = declaration.indexOf(':');
+      if (separator < 0) continue;
+      const property = declaration.slice(0, separator).trim();
+      const value = declaration.slice(separator + 1).trim();
+      if (property && value) declarations.push([property, value]);
+    }
+  }
+
+  const seenProperties = new Set();
+  return declarations.filter(([property]) => {
+    if (options.includeRepeated) return true;
+    if (seenProperties.has(property)) return false;
+    seenProperties.add(property);
+    return true;
+  });
+}
+
 const BROWSER_GLOBALS = new Set([
   'alert',
   'clearTimeout',
   'confirm',
+  'Date',
   'document',
   'fetch',
   'getComputedStyle',
@@ -53,4 +95,4 @@ function pageContext(html, sandbox = {}) {
   return vm.createContext(sandbox);
 }
 
-module.exports = { pageContext };
+module.exports = { cssDeclarations, functionSource, pageContext, sourceBetween };
