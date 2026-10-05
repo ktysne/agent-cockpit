@@ -1658,7 +1658,7 @@ function pullRequestReservationWaits(pullRequest) {
     waiting.push(pushedAfterConvergence(pullRequest) ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   }
   if (pullRequest.ci !== 'pass') waiting.push((CI_LABELS[pullRequest.ci] || CI_LABELS.unknown).wait);
-  if (pullRequest.review !== 'approved' && !['レビューの承認待ち', '変更を求められている'].includes(pullRequest.operationBlocker)) {
+  if (!['approved', 'none'].includes(pullRequest.review) && !['レビューの承認待ち', '変更を求められている'].includes(pullRequest.operationBlocker)) {
     waiting.push('GitHub のレビュー承認待ち');
   }
   if (pullRequest.operationBlocker) waiting.push(`マージ条件待ち: ${pullRequest.operationBlocker}`);

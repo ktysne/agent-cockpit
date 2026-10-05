@@ -603,6 +603,27 @@ test('レビュー承認、CI、ドラフト、コンフリクトが解決する
   assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge').length, 1);
 });
 
+test('承認任意の予約は実行し、承認待ちと変更要求中の予約は実行しない', async (t) => {
+  for (const scenario of [
+    { reviewDecision: '', shouldMerge: true },
+    { reviewDecision: 'REVIEW_REQUIRED', shouldMerge: false },
+    { reviewDecision: 'CHANGES_REQUESTED', shouldMerge: false },
+  ]) {
+    const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
+    await fixture.manager.reserve(mergeInput(1));
+    fixture.control.crossReviews.set(1, convergedReview(1));
+    fixture.github.openPullRequests[0] = ghPullRequest(1, 'feature/one', 'main', {
+      reviewDecision: scenario.reviewDecision,
+    });
+
+    await fixture.tracker.refreshRepo('example', 'project');
+
+    const mergeCalls = fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'merge');
+    assert.equal(mergeCalls.length, scenario.shouldMerge ? 1 : 0, scenario.reviewDecision || '承認任意');
+    assert.equal(Boolean(fixture.state.pullRequestMergeReservation('example', 'project', 1)), !scenario.shouldMerge);
+  }
+});
+
 test('起動後の最初の PR 取得で保存済み予約の条件を満たせばマージする', async (t) => {
   const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pending' })]);
   await fixture.manager.reserve(mergeInput(1, { method: 'rebase' }));

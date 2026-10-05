@@ -520,7 +520,7 @@ class PullRequestMergeManager {
     if (triage?.outcome === 'halted') return { halted: true };
     if (review?.notRequired === true || triage?.outcome !== 'converged' || triage.round !== review?.round ||
       !crossReviewConvergedAtHead(pullRequest) || !isCompleteCommitSha(triage.sha) || pullRequest.ci !== 'pass' ||
-      pullRequest.review !== 'approved') return null;
+      !['approved', 'none'].includes(pullRequest.review)) return null;
     const input = { headRefOid: triage.sha, method: reservation.method, deleteBranch: reservation.deleteBranch };
     if (mergeCandidateError(candidate, input, reservation.number)) return null;
     return { input };
