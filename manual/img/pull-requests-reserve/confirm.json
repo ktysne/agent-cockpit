@@ -2,13 +2,13 @@
   "name": "confirm",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 2040,
+  "height": 2038,
   "parts": [
     {
       "key": "reserve.heading",
       "bounds": {
         "x": 52,
-        "y": 444,
+        "y": 442,
         "width": 1472,
         "height": 42
       },
@@ -18,7 +18,7 @@
       "key": "reserve.review",
       "bounds": {
         "x": 52,
-        "y": 644,
+        "y": 643,
         "width": 1472,
         "height": 72
       },
@@ -28,7 +28,7 @@
       "key": "reserve.head",
       "bounds": {
         "x": 92,
-        "y": 859,
+        "y": 857,
         "width": 1432,
         "height": 38
       },
@@ -38,7 +38,7 @@
       "key": "reserve.go",
       "bounds": {
         "x": 52,
-        "y": 913,
+        "y": 912,
         "width": 175,
         "height": 80
       },

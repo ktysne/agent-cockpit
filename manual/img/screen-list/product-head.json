@@ -18,7 +18,7 @@
       "key": "card.branch",
       "bounds": {
         "x": 184,
-        "y": 37,
+        "y": 38,
         "width": 185,
         "height": 38
       },
@@ -28,7 +28,7 @@
       "key": "card.permission",
       "bounds": {
         "x": 390,
-        "y": 31,
+        "y": 32,
         "width": 199,
         "height": 50
       },
@@ -38,7 +38,7 @@
       "key": "card.decision",
       "bounds": {
         "x": 608,
-        "y": 31,
+        "y": 32,
         "width": 199,
         "height": 50
       },
@@ -48,7 +48,7 @@
       "key": "card.pull-requests",
       "bounds": {
         "x": 827,
-        "y": 31,
+        "y": 32,
         "width": 252,
         "height": 50
       },

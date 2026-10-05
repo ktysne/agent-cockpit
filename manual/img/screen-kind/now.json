@@ -5,7 +5,7 @@
     "#root > section.kind-section:nth-child(4) .now-row:nth-child(1)"
   ],
   "width": 1632,
-  "height": 314,
+  "height": 280,
   "parts": [
     {
       "key": "kind.now-head",
@@ -20,10 +20,10 @@
     {
       "key": "kind.row-tags",
       "bounds": {
-        "x": 48,
-        "y": 170,
-        "width": 196,
-        "height": 90
+        "x": 148,
+        "y": 124,
+        "width": 372,
+        "height": 43
       },
       "visible": true
     },
@@ -31,7 +31,7 @@
       "key": "kind.row-time",
       "bounds": {
         "x": 1516,
-        "y": 128,
+        "y": 124,
         "width": 68,
         "height": 38
       },

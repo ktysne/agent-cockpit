@@ -586,17 +586,28 @@ test('作業中ツールは表示幅を超えた部分を CSS の省略記号で
   assert.equal(style(source, '.tool-content')['min-width'], '0');
   assert.equal(style(source, '.now-row > .detail')['min-width'], '0');
   assert.equal(style(source, '.agent-row > .detail')['min-width'], '0');
+  assert.equal(style(source, '.now-row > .detail')['grid-column'], '1 / -1');
+  assert.equal(style(source, '.agent-row > .detail')['grid-column'], '1 / -1');
+  assert.equal(style(mock, '.now-row > .detail')['grid-column'], '1 / -1');
+  assert.equal(style(mock, '.agent-row > .detail')['grid-column'], '1 / -1');
+  assert.equal(style(source, '.session-extra')['grid-column'], '1 / -1');
+  assert.equal(style(mock, '.session-extra')['grid-column'], '1 / -1');
   assert.equal(style(source, '.tool-line')['flex-wrap'], 'nowrap');
   assert.equal(style(source, '.tool-name').flex, 'none');
   assert.equal(style(source, '.tool-name')['max-width'], '60%');
   assert.equal(style(source, '.tool-name')['text-overflow'], 'ellipsis');
   assert.equal(style(source, '.tool-name')['white-space'], 'nowrap');
+  assert.equal(style(source, '.now-row')['grid-template-columns'], 'minmax(0, 1fr) auto');
+  assert.equal(style(source, '.agent-row')['grid-template-columns'], 'minmax(0, 1fr) auto');
+  assert.equal(style(mock, '.now-row')['grid-template-columns'], 'minmax(0, 1fr) auto');
+  assert.equal(style(mock, '.agent-row')['grid-template-columns'], 'minmax(0, 1fr) auto');
+  assert.equal(style(source, '.who strong').display, undefined);
+  assert.equal(style(source, '.now-row .who .prod-tag').display, undefined);
   const mockMeta = style(mock, '.meta');
   assert.equal(mockMeta['text-overflow'], undefined);
   assert.equal(mockMeta['white-space'], undefined);
   assert.equal(mockMeta.overflow, undefined);
-  assert.equal(style(mock, '.now-row')['grid-template-columns'], '130px minmax(0, 1fr) auto');
-  assert.equal(style(mock, '.now-row > :nth-child(2)')['min-width'], '0');
+  assert.equal(style(mock, '.now-row > :nth-child(2)')['min-width'], undefined);
 });
 
 test('終了ボタンは状態と名前を含む flex 行の右端に置く', () => {
@@ -609,12 +620,163 @@ test('終了ボタンは状態と名前を含む flex 行の右端に置く', ()
   assert.equal(Object.fromEntries(cssDeclarations(pageHtml, '.close-agent'))['margin-left'], 'auto');
   const mobileHtml = `<style>${mobileRules}</style>`;
   for (const selector of ['.now-row', '.agent-row']) {
-    assert.equal(Object.fromEntries(cssDeclarations(mobileHtml, selector))['grid-template-columns'], '1fr');
+    assert.equal(Object.fromEntries(cssDeclarations(mobileHtml, selector))['grid-template-columns'], undefined);
   }
   assert.match(mock, /const isClosable = \(session, agent\) => \(!!agent\.unconfirmed \|\| isMainBackgroundCodex\(agent\)\)/);
   assert.match(mock, /<span class="agent-name"><span class="badge \$\{state\[1\]\}">[\s\S]*?\$\{close\}<\/span>/);
-  assert.equal(Object.fromEntries(cssDeclarations(mock, '.agent-row .agent-name'))['flex-wrap'], 'wrap');
+  assert.equal(Object.fromEntries(cssDeclarations(mock, '.agent-name'))['flex-wrap'], 'wrap');
   assert.equal(Object.fromEntries(cssDeclarations(mock, '.close-agent'))['margin-left'], 'auto');
+});
+
+test('作業行は先頭に名前と時刻を置き、詳細と状態不明の操作を全幅で続ける', () => {
+  const functions = ['element', 'appendToolLine', 'sessionDisplayName', 'appendContextTags', 'appendUnknownSessionControls', 'mainRow', 'appendAgents']
+    .map((name) => functionSource(pageHtml, name));
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.childNodes = this.children;
+      this.className = '';
+      this.dataset = {};
+    }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+
+  const context = pageContext(pageHtml, {
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => ({ nodeType: 'text', textContent: text }),
+    },
+    activityStatus: (session) => session.rowStatus,
+    durationAgoLabel: () => '1 分前',
+    relativeTimeElement: (value, className, label) => {
+      const time = new FakeElement('time');
+      time.className = className;
+      time.textContent = label;
+      return time;
+    },
+    badge: (text, className) => {
+      const tag = new FakeElement('span');
+      tag.className = `badge ${className}`;
+      tag.textContent = text;
+      return tag;
+    },
+    unknownSessionControls: (session) => session.controls || null,
+    expandedEndedSessions: new Set(),
+    displayPreferences: { hideFinished: true },
+    isFilterShown: () => true,
+    isEndedAgent: (agent) => !agent.active && !agent.unconfirmed,
+    newestFirst: (items) => items,
+    appendModelLine: (target, agent) => {
+      if (agent.model || agent.route) target.append(Object.assign(new FakeElement('div'), { className: 'models' }));
+    },
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const product = { name: 'agent-cockpit' };
+  const session = {
+    session_id: 'session-main',
+    title: 'メインセッション',
+    rowStatus: { tone: 'busy', label: '作業中' },
+    lastActivityAt: '2026-10-05T00:00:00.000Z',
+    tasks: [{ state: 'doing', title: 'タスクの題' }],
+    tools: [{ tool_name: 'Bash', summary: 'npm test', startedAt: '2026-10-05T00:00:00.000Z' }],
+  };
+  const main = context.mainRow(session, product, true, true);
+  assert.deepEqual(main.children.map((child) => child.className), ['who', 'since', 'detail']);
+  assert.deepEqual(main.children[2].children.map((child) => child.className), ['activity-title', 'tool-line']);
+  assert.deepEqual(main.children[0].children.map((child) => child.className || child.textContent), ['dot busy', 'メイン', 'prod-tag', 'session-tag', '作業中']);
+  assert.equal(main.children[0].children.at(-1).textContent, '作業中');
+
+  const waiting = context.mainRow({
+    ...session,
+    rowStatus: { tone: 'wait', label: '待機中' },
+    tasks: [],
+    tools: [],
+  }, product);
+  assert.deepEqual(waiting.children.map((child) => child.className), ['who', 'since']);
+
+  const controls = Object.assign(new FakeElement('div'), { className: 'session-extra' });
+  const unknown = context.mainRow({
+    ...session,
+    rowStatus: { tone: 'unknown', label: '状態不明' },
+    tasks: [],
+    tools: [],
+    controls,
+  }, product);
+  assert.deepEqual(unknown.children.map((child) => child.className), ['who', 'session-extra']);
+  assert.equal(unknown.children[0].children.at(-1).textContent, '状態不明 (1 分前)');
+
+  const body = new FakeElement('div');
+  context.appendAgents(body, {
+    ...session,
+    agents: [
+      { agent_id: 'with-description', agent_type: '実装', active: true, closable: true, description: '依頼の説明', model: 'Sonnet', route: 'Claude', startedAt: '2026-10-05T00:00:00.000Z' },
+      { agent_id: 'with-tool', agent_type: '確認', active: true, lastTool: { tool_name: 'Read', summary: 'src/web/index.html' }, startedAt: '2026-10-05T00:00:00.000Z' },
+    ],
+  }, product, true, true, false, false);
+  const [agentList] = body.children.filter((child) => child.className === 'agent-list');
+  const [described, toolOnly] = agentList.children;
+  assert.deepEqual(described.children.map((child) => child.className), ['who', 'since', 'detail']);
+  assert.deepEqual(described.children[2].children.map((child) => child.className), ['agent-description', 'models']);
+  assert.deepEqual(described.children[0].children.map((child) => child.className), ['dot busy', 'prod-tag', 'session-tag', 'agent-name']);
+  assert.deepEqual(described.children[0].children.at(-1).children.map((child) => child.className || child.textContent), ['badge busy', '実装', 'link-btn close-agent']);
+  assert.deepEqual(toolOnly.children[2].children.map((child) => child.className), ['tool-line']);
+});
+
+test('モックの作業行も名前と時刻の後に全幅の詳細を並べる', () => {
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const functions = ['mainRow', 'agentRow'].map((name) => functionSource(mock, name));
+  assert.ok(functions.every(Boolean));
+  const context = pageContext(mock, {
+    ui: { estimatedSessions: [] },
+    taskState: (session, task) => task.state,
+    esc: (value) => String(value),
+    sessionTag: () => '<span class="prod-tag">種類</span><span class="session-tag">セッション</span>',
+    renderToolLine: () => '<div class="tool-line"></div>',
+    unknownSessionControls: (session) => session.unknown ? '<div class="session-extra"></div>' : '',
+    isClosedByUser: () => false,
+    isBusyAgent: () => true,
+    isUnconfirmed: () => false,
+    isClosable: () => true,
+    closedAgentKey: () => 'session::agent',
+    modelLine: () => '<div class="models"></div>',
+    routeTag: () => '',
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const busyMain = context.mainRow({}, {
+    id: 'session', status: 'busy', tasks: [{ state: 'doing', title: 'タスクの題' }],
+    main: { tool: 'Bash: npm test', since: '1 分前' },
+  }, true);
+  assert.ok(busyMain.indexOf('class="who"') < busyMain.indexOf('class="since"'));
+  assert.ok(busyMain.indexOf('class="since"') < busyMain.indexOf('class="detail"'));
+  assert.ok(busyMain.indexOf('class="activity-title"') < busyMain.indexOf('class="tool-line"'));
+
+  const waitingMain = context.mainRow({}, {
+    id: 'session', status: 'wait', tasks: [], main: { tool: '—', since: '27 分前' },
+  }, false);
+  assert.ok(!waitingMain.includes('class="detail"'));
+
+  const unknownMain = context.mainRow({}, {
+    id: 'unknown', status: 'unknown', tasks: [], main: {}, unknown: true,
+  }, false);
+  assert.ok(!unknownMain.includes('class="since"'));
+  assert.ok(unknownMain.indexOf('class="who"') < unknownMain.indexOf('class="session-extra"'));
+
+  const describedAgent = context.agentRow({}, { id: 'session' }, {
+    id: 'agent', type: '実装', text: '依頼の説明', since: '1 分前',
+  }, true);
+  assert.ok(describedAgent.indexOf('class="who"') < describedAgent.indexOf('class="since"'));
+  assert.ok(describedAgent.indexOf('class="since"') < describedAgent.indexOf('class="detail"'));
+  assert.ok(describedAgent.indexOf('class="agent-description"') < describedAgent.indexOf('class="models"'));
+
+  const toolOnlyAgent = context.agentRow({}, { id: 'session' }, {
+    id: 'agent', type: '確認', text: '', tool: 'Read: src/web/index.html', since: '2 分前',
+  }, false);
+  assert.ok(toolOnlyAgent.indexOf('class="tool-line"') < toolOnlyAgent.indexOf('class="models"'));
 });
 
 test('経路の段は連携に応じて表示し、無効なサブエージェントの札を隠す', () => {
