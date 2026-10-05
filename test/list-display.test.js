@@ -540,7 +540,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     document: { createTextNode: (text) => fakeElement('#text', '', text) },
     pullRequestMergeKey: () => 'repo#1',
     pullRequestMergeConfirmations: new Map(),
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestMergeMessages: new Map(),
     queuedPullRequestMerges: new Map(),
     pullRequestMergeConditionWaits: (pullRequest) => pullRequest.ci === 'pending' ? ['CI 実行中'] : [],
@@ -608,7 +608,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.ok(action && actionHelper);
   const actionContext = pageContext(web, {
     findPullRequestMergeTarget: () => ({ group: {}, pullRequest: {}, number: 1 }),
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestMergeOptionsFor: () => ({ method: 'merge', deleteBranch: false }),
     postUiAction: async () => ({
       ok: true,
@@ -629,18 +629,23 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.equal(actionContext.liveStatus.textContent, 'PR #1 をマージキューに追加しました。');
 });
 
-test('モックのマージ欄は即時マージと収束後マージの確認欄を共用する', () => {
+test('モックの予約チェックは PR 行にあり、確認欄は即時マージのまま', () => {
   const setConfirmation = functionSource(mock, 'setMergeConfirmation');
   const item = functionSource(mock, 'prItem');
-  assert.ok(setConfirmation && item);
+  const confirmation = functionSource(mock, 'mergeConfirm');
+  assert.ok(setConfirmation && item && confirmation);
+  assert.doesNotMatch(confirmation, /data-review-merge|mergeAfterReview|予約する/);
+  assert.match(item, /data-reservation-toggle/);
+  assert.doesNotMatch(item, /data-unreserve/);
   const key = 'example/project#42';
   const context = pageContext(mock, {
+    pullRequestMergeInFlight: new Set(),
     prKey: () => key,
     mergeOperationBlocker: () => null,
     mergeConditionWaits: () => ['CI 実行中'],
     stackPos: () => ({ depth: 1, total: 1 }),
     effective: () => ({ base: 'main' }),
-    ui: { reserved: {}, reservationNotices: {}, mergeErrors: {}, confirm: null, mergeAfterReviewDefault: false, mergeOpts: {} },
+    ui: { reserved: {}, reservationNotices: {}, mergeErrors: {}, confirm: null, mergeOpts: {} },
     transientMessageVisible: () => false,
     mergeConfirm: () => '<div class="merge-confirm" data-action="shared"></div>',
     conflictButton: () => '',
@@ -656,6 +661,7 @@ test('モックのマージ欄は即時マージと収束後マージの確認�
   context.selectConfirmation(key, 'manual');
   const html = context.renderPullRequest(product, pullRequest);
   assert.deepEqual([...html.matchAll(/class="merge-confirm" data-action="(shared)"/g)].map((match) => match[1]), ['shared']);
+  assert.match(html, /data-reservation-toggle="example\/project#42"/);
 
   const buttons = context.renderPullRequest(product, pullRequest);
   assert.match(buttons, /data-merge-action="manual"/);
@@ -874,7 +880,7 @@ test('常駐サーバーが記録した予約マージの結果を一行で表�
   assert.match(content.textContent, /PR #43: スカッシュ でマージしました。ブランチを削除しました。#44 の base を main に付け替えました/);
 });
 
-test('予約中の PR は待ち条件と取消操作を出し、マージできない理由を隠す', () => {
+test('予約中の PR は状態チェックとマージ操作を出し、マージできない理由を隠す', () => {
   const treeSource = functionSource(web, 'appendPullRequestTree');
   assert.ok(treeSource);
   const mergeKey = 'reservation-key';
@@ -887,7 +893,7 @@ test('予約中の PR は待ち条件と取消操作を出し、マージでき�
     pullRequestMergeConditionWaits: () => ['CI 実行中', 'クロスレビュー未実施'],
     pullRequestMergeKey: () => mergeKey,
     pullRequestMergeConfirmations: new Map(),
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '2026/10/04 10:00',
     pullRequestReservationWaits: () => ['クロスレビューの収束待ち', 'CI 実行中', 'GitHub のレビュー承認待ち'],
@@ -899,22 +905,26 @@ test('予約中の PR は待ち条件と取消操作を出し、マージでき�
   });
   vm.runInContext(`${treeSource}\nthis.renderTree = appendPullRequestTree;`, context);
   const target = fakeElement('div');
-  context.renderTree(target, { defaultBranch: 'main' }, {
+  context.renderTree(target, { defaultBranch: 'main', mergeMethods: ['squash'] }, {
     number: 7, url: 'https://github.com/example/repo/pull/7', title: 'Feature', headRefName: 'feature', effectiveBase: 'main',
     canMerge: false, blocker: 'ドラフト', operationBlocker: 'ドラフト', ci: 'pending', review: 'required',
     reservation: { method: 'squash', createdAt: '2026-10-04T01:00:00.000Z' }, children: [], mergeSessionId: 'session-a',
   });
   const rendered = target.children[0];
   assert.match(rendered.textContent, /レビュー収束後にマージ予約中 \(スカッシュ、予約時 2026\/10\/04 10:00、クロスレビューの収束待ち、CI 実行中、GitHub のレビュー承認待ち\)/);
-  assert.match(rendered.textContent, /予約を取り消す/);
+  assert.doesNotMatch(rendered.textContent, /予約を取り消す/);
   assert.doesNotMatch(rendered.textContent, /マージできない理由/);
-  assert.equal(descendants(rendered).find((node) => node.dataset.cancelReservation === mergeKey).disabled, false);
+  assert.equal(descendants(rendered).find((node) => node.dataset.reservationToggle === mergeKey).checked, true);
+  assert.equal(descendants(rendered).find((node) => node.dataset.reservationToggle === mergeKey).disabled, false);
+  assert.equal(descendants(rendered).find((node) => node.dataset.openMerge === mergeKey).textContent, 'マージする');
 });
 
 test('予約待ち条件は承認任意ならレビュー承認を待たない', () => {
+  const webWaitReasonsSource = functionSource(web, 'pullRequestReservationWaitReasons');
   const webWaitSource = functionSource(web, 'pullRequestReservationWaits');
+  const mockWaitReasonsSource = functionSource(mock, 'reservationWaitReasons');
   const mockWaitSource = functionSource(mock, 'reservationWait');
-  assert.ok(webWaitSource && mockWaitSource);
+  assert.ok(webWaitReasonsSource && webWaitSource && mockWaitReasonsSource && mockWaitSource);
 
   const webContext = pageContext(web, {
     CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
@@ -925,10 +935,16 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
     CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
     convergedAtHead: () => true,
     mergeOperationBlocker: (_product, pullRequest) => pullRequest.operationBlocker,
+    effective: (_product, pullRequest) => ({ base: pullRequest.effectiveBase }),
+    prKey: () => 'product#1',
     pushedAfterConvergence: () => false,
+    ui: { reviewSkips: {} },
   });
-  vm.runInContext(`${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
-  vm.runInContext(`${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+  vm.runInContext(`${webWaitReasonsSource}\n${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
+  vm.runInContext(`${mockWaitReasonsSource}\n${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+
+  const group = { defaultBranch: 'main', mergeMethods: ['squash'] };
+  const product = { repo: { defaultBranch: 'main', methods: ['squash'] } };
 
   for (const scenario of [
     { review: 'approved', shouldWaitForReview: false },
@@ -936,12 +952,18 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
     { review: 'required', shouldWaitForReview: true },
     { review: 'changes', shouldWaitForReview: true },
   ]) {
-    const pullRequest = { ci: 'pass', review: scenario.review, operationBlocker: 'ドラフト' };
-    const webWaits = webContext.reservationWaits(pullRequest);
-    const mockWaits = mockContext.reservationWaits({}, pullRequest);
+    const operationBlocker = scenario.review === 'required' ? 'レビューの承認待ち'
+      : scenario.review === 'changes' ? '変更を求められている' : null;
+    const pullRequest = {
+      ci: 'pass', review: scenario.review, operationBlocker, blocker: operationBlocker,
+      canMerge: !operationBlocker, baseRefName: 'main', effectiveBase: 'main',
+    };
+    const webWaits = webContext.reservationWaits(pullRequest, group, 'squash');
+    const mockWaits = mockContext.reservationWaits(product, pullRequest, 'squash');
     const reviewWait = 'GitHub のレビュー承認待ち';
-    assert.equal(webWaits.includes(reviewWait), scenario.shouldWaitForReview, `画面: ${scenario.review}`);
-    assert.equal(mockWaits.includes(reviewWait), scenario.shouldWaitForReview, `モック: ${scenario.review}`);
+    const reportsReviewWait = (waiting) => waiting.includes(reviewWait) || Boolean(operationBlocker && waiting.includes(`マージ条件待ち: ${operationBlocker}`));
+    assert.equal(reportsReviewWait(webWaits), scenario.shouldWaitForReview, `画面: ${scenario.review}`);
+    assert.equal(reportsReviewWait(mockWaits), scenario.shouldWaitForReview, `モック: ${scenario.review}`);
   }
 });
 
@@ -961,7 +983,7 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
   const webResults = new Map();
   const webContext = pageContext(web, {
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
-    lastState: { pullRequests: [group] }, pullRequestMergeInFlight: new Set(),
+    lastState: { pullRequests: [group] }, pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestMergeOptionsFor: () => ({ method: 'squash', deleteBranch: false }),
     pullRequestMergeConfirmations: new Map(), queuedPullRequestMerges: new Map(), pullRequestMergeMessages: new Map(),
     pullRequestMergeResults: webResults, nextPullRequestMergeResultId: 0,

@@ -26,7 +26,6 @@
         "settings.theme": ".settings-theme-row:has(#settings-theme-select)",
         "settings.since-seen": ".settings-theme-row:has(#settings-since-seen-select)",
         "settings.mergeable": ".settings-mergeable-condition",
-        "settings.merge-after": ".settings-theme-row:has(#settings-merge-after-review-default)",
         "settings.hide-finished": ".settings-theme-row:has(#settings-hide-finished)",
         "settings.long-wait": ".settings-theme-row:has(#settings-long-wait-minutes)",
         "settings.idle": ".settings-theme-row:has(#settings-idle-hide-minutes)",

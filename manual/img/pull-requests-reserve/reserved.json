@@ -2,7 +2,7 @@
   "name": "reserved",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1370,
+  "height": 1376,
   "parts": [
     {
       "key": "reserved.card",
@@ -10,7 +10,7 @@
         "x": 14,
         "y": 129,
         "width": 1548,
-        "height": 248
+        "height": 255
       },
       "visible": true
     },
@@ -18,19 +18,29 @@
       "key": "reserved.badge",
       "bounds": {
         "x": 308,
-        "y": 258,
+        "y": 265,
         "width": 885,
         "height": 44
       },
       "visible": true
     },
     {
-      "key": "reserved.cancel",
+      "key": "reserved.merge-button",
       "bounds": {
-        "x": 639,
-        "y": 145,
-        "width": 168,
+        "x": 1111,
+        "y": 152,
+        "width": 185,
         "height": 64
+      },
+      "visible": true
+    },
+    {
+      "key": "reserved.toggle",
+      "bounds": {
+        "x": 1312,
+        "y": 159,
+        "width": 36,
+        "height": 36
       },
       "visible": true
     }

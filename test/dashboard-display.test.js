@@ -88,7 +88,8 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
   assert.deepEqual(Object.entries(webMergeButton).sort(), Object.entries(mockMergeButton).sort());
   assert.equal((web.match(/--on-ok: #1f1e1d;/g) || []).length, 2);
   assert.equal(Object.fromEntries(cssDeclarations(web, '.merge-confirm .merge-go')).color, 'var(--on-ok)');
-  assert.match(web, /\.dataset\.mergeAfterReview = 'true'/);
+  assert.match(web, /reservationToggle\.dataset\.reservationToggle = mergeKey/);
+  assert.doesNotMatch(web, /mergeAfterReviewDefault|data-merge-after-review/);
   assert.equal(Object.fromEntries(cssDeclarations(web, '.merge-confirm.conflict .conflict-go')).color, 'var(--on-danger)');
   assert.deepEqual(Object.fromEntries(cssDeclarations(web, '.badge.new-mark')), {
     background: 'var(--accent)', color: 'var(--on-accent)',
@@ -363,7 +364,6 @@ test('画面は未設定や不正なサーバー値を表示時間の既定値�
     mergeResultHideMinutes: 5,
     hideFinished: true,
     mergeableCondition: 'cross-review',
-    mergeAfterReviewDefault: false,
   });
   assert.equal(context.normalizeDisplay({ ...base, hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplay({ ...base, longWaitMinutes: 0, awayAnswerWaitMinutes: 31 }).longWaitMinutes, 15);
@@ -1005,7 +1005,6 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     longWaitMinutesError: {}, awayAnswerWaitMinutesError: {}, idleHideMinutesError: {}, mergeResultHideMinutesError: {},
   };
   const hideFinishedInput = { checked: false };
-  const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
   const context = pageContext(web, {
     document: { activeElement: longWaitMinutesInput },
@@ -1019,9 +1018,8 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
     DEFAULT_IDLE_HIDE_MINUTES: 30,
     DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
     hideFinishedInput,
-    mergeAfterReviewDefaultInput,
     mergeableConditionInputs,
-    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: false, mergeableCondition: 'ci', mergeAfterReviewDefault: true },
+    displayPreferences: { longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: false, mergeableCondition: 'ci' },
   });
   vm.runInContext(`${settings}\n${render}`, context);
   context.renderDisplaySettings();
@@ -1031,7 +1029,6 @@ test('定期の同期は入力中の待ち時間の欄を上書きせず、ほ�
   assert.equal(idleHideMinutesInput.value, '30');
   assert.equal(mergeResultHideMinutesInput.value, '5');
   assert.equal(hideFinishedInput.checked, false);
-  assert.equal(mergeAfterReviewDefaultInput.checked, true);
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, true, false]);
 });
 
@@ -1045,9 +1042,8 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
   const idleHideMinutesInput = { value: '30' };
   const mergeResultHideMinutesInput = { value: '5' };
   const hideFinishedInput = { checked: true };
-  const mergeAfterReviewDefaultInput = { checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { mergeableCondition: 'cross-review', mergeAfterReviewDefault: true, mergeResultHideMinutes: 5 };
+  const displayPreferences = { mergeableCondition: 'cross-review', mergeResultHideMinutes: 5 };
   let activeElement = null;
   const context = pageContext(web, {
     document: { get activeElement() { return activeElement; } },
@@ -1056,7 +1052,6 @@ test('保存に失敗したラジオはフォーカスを保ったまま保存�
     idleHideMinutesInput,
     mergeResultHideMinutesInput,
     hideFinishedInput,
-    mergeAfterReviewDefaultInput,
     displayPreferences,
     displayPreferenceSaveStates: new Map(),
     displayPreferencesReady: true,

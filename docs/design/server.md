@@ -93,7 +93,7 @@ PostToolUse の出力全文は送らない。
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
 - イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて既定の種類順で補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeResultHideMinutes` は警告のないマージ結果の行を隠すまでの時間で、既定は 5 分、範囲は 1〜60 分の整数とする。旧形式または範囲外の保存値は 5 分として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマはブラウザーごとの `localStorage` に残す。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
-- `display.mergeAfterReviewDefault` はマージ確認欄のレビュー収束後マージのチェックを既定でオンにする設定で、既定は `false`。旧形式で項目が無い場合も `false` として補う。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
+- 旧 `store.json` に残る `display.mergeAfterReviewDefault` は読み込み時に無視する。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 30 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 30 分へ戻し、書き込み時は拒む。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, routing, integrations, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
@@ -129,7 +129,7 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 登録が保持期限などで消えたプロダクトの PR 群は、次の取り直しで配らなくなる。登録と関連 PR が 1 件も無くなったリポジトリは、取得した状態ごと捨てる。
 積み直し待ちは、GitHub のマージ済み PR の head SHA が各オープン PR の既定ブランチとの compare に残っているかで判定し、compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
-ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。レビュー収束後マージの予約では、クロスレビューの最後の `converged` 記録と現在の head を照合し、その記録の SHA を `--match-head-commit` に渡す。
+ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。PR 行の予約チェックからは画面で見た head、方式、ブランチ削除の有無を予約口に送り、条件がそろっていればクロスレビューの最後の `converged` 記録の SHA を `--match-head-commit` に渡してその場でマージする。確認欄は予約状態にかかわらず即時マージ専用とする。
 取得と判定の詳細は [計画書のマージ手順](../handover/2026-10-02.md#マージの手順常駐サーバー)に記す。
 
 ## 前回見てから
@@ -148,8 +148,9 @@ MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り
 
 書き込み口は `POST /api/pull-requests/merge`、`/reserve`、`/cancel-reservation` とする。
 いずれも `uiSecret` と `validRequiredUiOrigin` を照合し、PR の記録キーから owner/repo を解決する。
-即時マージは画面の SHA、許可方式、スタック最下段、現在のマージ操作条件を gh で取り直して確かめる。予約は方式とブランチ削除の有無を保存し、GitHub の自動マージ予約 API は呼ばない。同じ PR への操作は同時に 1 件だけ実行する。
-リポジトリの状態を取り直すたびに予約を確認する。最後のクロスレビュー記録が現在の round の `converged` で SHA が現在の head と一致し、スタック最下段、ドラフトでない、コンフリクトなし、CI 成功を満たし、レビュー承認が必須のリポジトリでは GitHub レビューが承認済みの場合、通常のマージ手順でその収束 SHA を `--match-head-commit` に指定する。head が収束 SHA と違う場合は予約を維持し、新しい head の収束を待つ。サーバー停止中に条件がそろった場合は起動後最初の PR 状態取得で処理する。
+即時マージは画面の SHA、許可方式、スタック最下段、現在のマージ操作条件を gh で取り直して確かめる。予約は方式とブランチ削除の有無を保存し、GitHub の自動マージ予約 API は呼ばない。同じ PR への操作は同時に 1 件だけ実行する。予約中でも即時マージを拒まない。成功後はマージ検出処理が予約を消し、失敗した場合は予約を残す。
+`/reserve` は保存直後にも同じ PR の予約条件を確認する。条件がそろっていれば、クロスレビュー収束記録の SHA を `--match-head-commit` に指定してその場でマージし、即時マージと同じ結果(`merged`、`branchDeleted`、`queued`、`warning`)を応答する。条件がそろっていなければ `reserved: true` と予約を応答する。
+リポジトリの状態を取り直すたびに予約を確認する。最後のクロスレビュー記録が現在の round の `converged` で SHA が現在の head と一致し、スタック最下段、ドラフトでない、コンフリクトなし、CI 成功を満たし、レビュー承認が必須のリポジトリでは GitHub レビューが承認済みの場合、通常のマージ手順でその収束 SHA を `--match-head-commit` に指定する。`review.notRequired` だけでは予約によるマージを実行しない。head が収束 SHA と違う場合は予約を維持し、新しい head の収束を待つ。サーバー停止中に条件がそろった場合は起動後最初の PR 状態取得で処理する。
 画面からの予約取消、PR のクローズ、最後のクロスレビュー記録の `halted` ではローカル予約を消し、画面と作成元セッションへ知らせる。
 予約取消の知らせは記録時刻から 1 分で画面から隠し、常駐サーバーは期限を過ぎた知らせを配らない。
 旧形式の GitHub 自動マージ予約は読み込み時に捨て、GitHub 側の取消 API は呼ばない。

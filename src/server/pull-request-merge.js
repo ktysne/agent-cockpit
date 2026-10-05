@@ -265,9 +265,6 @@ class PullRequestMergeManager {
 
   async performMerge(registration, input, reserved = false) {
     const reservation = this.state.pullRequestMergeReservation(registration.owner, registration.repo, registration.number);
-    if (reservation && !reserved) {
-      return actionResult(409, 'この PR にはマージ予約があります。先に予約を取り消してください');
-    }
     if (reserved && (!reservation || reservation.method !== input.method || reservation.deleteBranch !== input.deleteBranch)) {
       return actionResult(409, 'マージ予約の状態が変わりました');
     }
@@ -461,7 +458,8 @@ class PullRequestMergeManager {
     }
     this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
     await this.state.waitForPersistence?.();
-    await this.checkReservations(registration.owner, registration.repo);
+    const immediateResult = await this.checkReservation(reservation);
+    if (immediateResult) return immediateResult;
     return { ok: true, reserved: true, reservation };
   }
 

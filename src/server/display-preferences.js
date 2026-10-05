@@ -20,7 +20,6 @@ const DISPLAY_SCHEMA = Object.freeze({
   mergeResultHideMinutes: Object.freeze({ type: 'integer', default: 5, minimum: 1, maximum: 60 }),
   hideFinished: Object.freeze({ type: 'boolean', default: true }),
   mergeableCondition: Object.freeze({ type: 'enum', default: 'cross-review', values: Object.freeze(['operation', 'ci', 'cross-review']) }),
-  mergeAfterReviewDefault: Object.freeze({ type: 'boolean', default: false }),
 });
 
 const DISPLAY_KEYS = new Set(Object.keys(DISPLAY_SCHEMA));
@@ -54,7 +53,7 @@ function normalizeSectionOrder(order) {
 function normalizeDisplay(value) {
   if (value === null) return null;
   if (!isRecord(value) || !DISPLAY_SCHEMA.mode.values.includes(value.mode)) throw new Error('Invalid display preferences');
-  if (Object.keys(value).some((key) => !DISPLAY_KEYS.has(key))) throw new Error('Invalid display preferences');
+  if (Object.keys(value).some((key) => key !== 'mergeAfterReviewDefault' && !DISPLAY_KEYS.has(key))) throw new Error('Invalid display preferences');
   if (Object.hasOwn(value, 'sectionOrder') && !Array.isArray(value.sectionOrder)) throw new Error('Invalid display preferences');
 
   for (const key of ['order', 'pinned', 'collapsed']) {

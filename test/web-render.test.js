@@ -85,12 +85,13 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
   vm.runInContext(`${settings}\n${sources.join('\n')}`, context);
   const expectedKeys = Object.keys(context.normalizeDisplayPreferences(null)).sort();
 
-  storage.set('agent-cockpit.display', JSON.stringify({ mode: 'kind', longWaitMinutes: 20 }));
+  storage.set('agent-cockpit.display', JSON.stringify({ mode: 'kind', longWaitMinutes: 20, mergeAfterReviewDefault: true }));
   const legacy = context.readDisplayPreferences();
   assert.deepEqual(Object.keys(legacy).sort(), expectedKeys);
   assert.equal(legacy.mode, 'kind');
   assert.equal(legacy.longWaitMinutes, 20);
   assert.equal(legacy.mergeResultHideMinutes, 5);
+  assert.equal(Object.hasOwn(legacy, 'mergeAfterReviewDefault'), false);
 
   storage.set('agent-cockpit.display', '{壊れた JSON');
   assert.deepEqual(Object.keys(context.readDisplayPreferences()).sort(), expectedKeys);
@@ -1031,9 +1032,9 @@ test('マージと予約の確認欄は警告と照合用 SHA を表示する', 
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
-    displayPreferences: { mergeAfterReviewDefault: false },
+    displayPreferences: {},
     pullRequestMergeOptions: new Map(),
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
   });
   vm.runInContext(`${helpers}\n${component}`, context);
 
@@ -1184,7 +1185,7 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
     pullRequestMergeMessages: new Map(),
     queuedPullRequestMerges: new Map(),
     queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestReviewSkipInFlight: new Set(),
     pullRequestConflictConfirmations: new Set(),
     pullRequestConflictMessages: new Map(),
@@ -1387,9 +1388,8 @@ test('終わったもののチェックは表示設定として保存し、失�
   const awayAnswerWaitMinutesError = { textContent: '', hidden: true };
   const idleHideMinutesError = { textContent: '', hidden: true };
   const mergeResultHideMinutesError = { textContent: '', hidden: true };
-  const mergeAfterReviewDefaultInput = { type: 'checkbox', checked: false };
   const mergeableConditionInputs = ['operation', 'ci', 'cross-review'].map((value) => ({ value, checked: false }));
-  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, mergeableCondition: 'cross-review', mergeAfterReviewDefault: false };
+  const displayPreferences = { hideFinished: false, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, mergeableCondition: 'cross-review' };
   const context = pageContext(pageHtml, {
     displayPreferences,
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
@@ -1404,7 +1404,6 @@ test('終わったもののチェックは表示設定として保存し、失�
     renderSectionOrder() {},
     render() {},
     hideFinishedInput,
-    mergeAfterReviewDefaultInput,
     longWaitMinutesInput,
     awayAnswerWaitMinutesInput,
     idleHideMinutesInput,
@@ -1429,17 +1428,10 @@ test('終わったもののチェックは表示設定として保存し、失�
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: false }).hideFinished, false);
   assert.equal(context.normalizeDisplayPreferences({ hideFinished: true }).hideFinished, true);
   assert.equal(context.normalizeDisplayPreferences({}).mergeableCondition, 'cross-review');
+  assert.equal(Object.hasOwn(context.normalizeDisplayPreferences({ mergeAfterReviewDefault: true }), 'mergeAfterReviewDefault'), false);
   context.renderDisplaySettings();
   assert.deepEqual(mergeableConditionInputs.map((input) => input.checked), [false, false, true]);
-  assert.equal(mergeAfterReviewDefaultInput.checked, false);
   assert.equal(mergeResultHideMinutesInput.value, '5');
-  mergeAfterReviewDefaultInput.checked = true;
-  const savingDefault = context.changeDisplaySetting('mergeAfterReviewDefault', mergeAfterReviewDefaultInput);
-  assert.deepEqual(JSON.parse(JSON.stringify(savedPatch)), { mergeAfterReviewDefault: true });
-  resolveSave(true);
-  assert.equal(await savingDefault, true);
-  assert.equal(displayPreferences.mergeAfterReviewDefault, true);
-  assert.equal(mergeAfterReviewDefaultInput.checked, true);
   activeElement = hideFinishedInput;
   hideFinishedInput.checked = true;
   context.renderDisplaySettings();
@@ -2075,8 +2067,8 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
     pullRequestMergeConfirmations: new Map([[key, 'merge']]),
     pullRequestMergeOptions: new Map([[key, { method: 'rebase', deleteBranch: false }]]),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(),
-    displayPreferences: { mergeAfterReviewDefault: false },
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    displayPreferences: {},
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '時刻不明',
@@ -2157,7 +2149,7 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
-    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(),
+    pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictInFlight: new Set(),
     lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }], pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -2217,12 +2209,16 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   }]);
 });
 
-test('GitHub の自動削除設定を示し、チェックで即時マージとレビュー収束後マージを選ぶ', async () => {
+test('PR 行のチェックで予約し、確認欄は常に即時マージする', async () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
-  assert.ok(helpers && component && action);
+  const reservationSources = ['isCompleteCommitSha', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestReservationWaitReasons', 'pullRequestReservationWaits']
+    .map((name) => functionSource(html, name));
+  const resultSources = ['pullRequestRepositoryKey', 'rememberPullRequestMergeResult', 'pullRequestTimestampExpired', 'pullRequestTransientNoticeExpired']
+    .map((name) => functionSource(html, name));
+  assert.ok(helpers && component && action && reservationSources.every(Boolean) && resultSources.every(Boolean));
 
   class FakeElement {
     constructor(tagName) {
@@ -2242,11 +2238,20 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     constructor(text) { this.textContent = text; }
   }
   const sent = [];
+  const responses = [
+    { ok: true, body: { merged: false } },
+    { ok: true, body: { reserved: true } },
+    { ok: true, body: { cancelled: true, message: 'PR #42 のマージ予約を取り消しました。' } },
+    { ok: true, body: { merged: true, branchDeleted: false, warning: null } },
+    { ok: true, body: { queued: true } },
+  ];
+  let holdReservation = false;
+  let releaseReservation;
   const key = 'e'.repeat(64);
   const pullRequest = {
     mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
     mergeRecordKey: key, headRefOid: 'abc123', headRefName: 'feature/pr-42', effectiveBase: 'main', canMerge: true,
-    isCrossRepository: false, blocker: null, review: 'approved', children: [], stackPosition: { depth: 1, total: 1 },
+    isCrossRepository: false, blocker: null, review: 'approved', ci: 'pass', children: [], stackPosition: { depth: 1, total: 1 },
   };
   const group = {
     owner: 'acme', repo: 'widget', defaultBranch: 'main', autoDeleteBranch: true,
@@ -2257,25 +2262,39 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
     },
+    TRANSIENT_NOTICE_MS: 60_000,
     pullRequestMergeOptions: new Map([[key, { method: 'merge', deleteBranch: true }]]),
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(),
-    displayPreferences: { mergeAfterReviewDefault: false },
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
+    pullRequestMergeResults: new Map(),
+    nextPullRequestMergeResultId: 0,
+    CI_LABELS: { pass: { wait: 'CI 成功' }, unknown: { wait: 'CI 状態不明' } },
+    displayPreferences: { mergeableCondition: 'cross-review' },
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
     absoluteTimeLabel: () => '時刻不明',
     durationAgoLabel: () => '時刻不明',
-    postUiAction: async (url, body) => {
+    postUiAction: (url, body) => {
       sent.push({ url, body });
-      return { ok: true, json: async () => ({}) };
+      if (holdReservation && url === '/api/pull-requests/reserve') {
+        holdReservation = false;
+        return new Promise((resolve) => {
+          releaseReservation = () => resolve({ ok: false, json: async () => ({ error: '表示していた head SHA と現在の head SHA が異なります。' }) });
+        });
+      }
+      const response = responses.shift();
+      return Promise.resolve({ ok: response.ok, json: async () => response.body });
     },
     refresh: async () => {},
     render() {},
     liveStatus: { textContent: '' },
+    recordPullRequestTransientMessage: (messages, messageKey, message) => messages.set(messageKey, { message, shownAt: Date.now() }),
   });
   const source = [
     helpers,
+    ...reservationSources,
+    ...resultSources,
     component,
     action,
   ].join('\n');
@@ -2286,6 +2305,7 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     for (const child of root.children || []) nodes.push(...flatten(child));
     return nodes;
   };
+  const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
   const mergeRoot = new FakeElement('div');
   context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest);
   const mergeNodes = flatten(mergeRoot);
@@ -2295,30 +2315,76 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
   assert.ok(mergeNodes.some((node) => node.className === 'merge-condition-warning'));
   const effectText = mergeNodes.map((node) => node.textContent).join(' ');
   assert.doesNotMatch(effectText, /GitHub が自動で削除する|結果を PR を作ったセッションへ知らせる/);
-  const reviewMerge = mergeNodes.find((node) => node.dataset?.mergeAfterReview === 'true');
-  assert.ok(reviewMerge);
-  assert.equal(reviewMerge.checked, false);
+  assert.doesNotMatch(mergeNodes.map(textOf).join(' '), /レビュー収束後マージ/);
+  assert.equal(mergeNodes.some((node) => node.dataset?.mergeAfterReview), false);
   const mergeButton = mergeNodes.find((node) => node.dataset?.mergeGo === key);
   assert.ok(mergeButton);
   assert.equal(mergeButton.textContent, 'マージを実行');
+  await context.runPullRequestMergeAction(mergeButton);
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージしました。');
 
-  pullRequest.children = [{ number: 43 }, { number: 44 }];
-  context.pullRequestMergeOptions.set(key, { method: 'squash', deleteBranch: false, mergeAfterReview: false });
+  pullRequest.children = [{ number: 43, children: [] }, { number: 44, children: [] }];
+  context.pullRequestMergeOptions.set(key, { method: 'squash', deleteBranch: false });
   const restackRoot = new FakeElement('div');
   context.appendPullRequestMergeConfirmation(restackRoot, group, pullRequest);
   assert.ok(flatten(restackRoot).some((node) => node.textContent.includes('#43、#44 に #42 のコミットが残る')));
 
-  context.pullRequestMergeOptions.set(key, { method: 'merge', deleteBranch: true, mergeAfterReview: false });
-  await context.runPullRequestMergeAction(mergeButton, 'merge');
-  context.pullRequestMergeOptions.delete(key);
-  context.displayPreferences.mergeAfterReviewDefault = true;
-  const reserveRoot = new FakeElement('div');
-  context.appendPullRequestMergeConfirmation(reserveRoot, group, pullRequest);
-  const reserveNodes = flatten(reserveRoot);
-  const reserveButton = reserveNodes.find((node) => node.dataset?.mergeGo === key);
-  assert.equal(reserveNodes.find((node) => node.dataset?.mergeAfterReview === 'true').checked, true);
-  assert.equal(reserveButton.textContent, '予約する');
-  await context.runPullRequestMergeAction(reserveButton, 'merge');
+  context.pullRequestMergeOptions.set(key, { method: 'merge', deleteBranch: true });
+  const rowRoot = new FakeElement('div');
+  context.appendPullRequestTree(rowRoot, group, pullRequest);
+  const rowNodes = flatten(rowRoot);
+  const line = rowNodes.find((node) => node.className === 'pline');
+  const reservationToggle = rowNodes.find((node) => node.dataset?.reservationToggle === key);
+  assert.ok(reservationToggle);
+  assert.equal(reservationToggle.checked, false);
+  assert.equal(line.children.includes(rowNodes.find((node) => node.dataset?.openMerge === key)), true);
+  const reservationLabel = line.children.find((node) => node.className === 'reservation-toggle');
+  assert.equal(line.children.includes(reservationLabel), true);
+  assert.equal(reservationLabel.children.includes(reservationToggle), true);
+  reservationToggle.checked = true;
+  holdReservation = true;
+  const failingReservation = context.runPullRequestReservationAction(reservationToggle, true);
+  assert.equal(reservationToggle.disabled, true);
+  assert.equal(reservationToggle.checked, true);
+  assert.equal(context.pullRequestReservationPending.get(key), true);
+  releaseReservation();
+  await failingReservation;
+  const restoredRoot = new FakeElement('div');
+  context.appendPullRequestTree(restoredRoot, group, pullRequest);
+  const restoredNodes = flatten(restoredRoot);
+  assert.equal(restoredNodes.find((node) => node.dataset?.reservationToggle === key).checked, false);
+  assert.ok(restoredNodes.some((node) => node.className === 'merge-error' && node.textContent.includes('表示していた head SHA')));
+
+  const reserveToggle = restoredNodes.find((node) => node.dataset?.reservationToggle === key);
+  reserveToggle.checked = true;
+  await context.runPullRequestReservationAction(reserveToggle, true);
+  assert.equal(context.liveStatus.textContent, 'PR #42 のレビュー収束後マージを予約しました。');
+  pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
+  const reservedRoot = new FakeElement('div');
+  context.pullRequestMergeConfirmations.set(key, 'merge');
+  context.appendPullRequestTree(reservedRoot, group, pullRequest);
+  const reservedNodes = flatten(reservedRoot);
+  const checkedReservation = reservedNodes.find((node) => node.dataset?.reservationToggle === key);
+  assert.equal(checkedReservation.checked, true);
+  assert.equal(reservedNodes.find((node) => node.dataset?.openMerge === key).textContent, 'マージする');
+  checkedReservation.checked = false;
+  await context.runPullRequestReservationAction(checkedReservation, false);
+  assert.equal(context.liveStatus.textContent, 'PR #42 のマージ予約を取り消しました。');
+
+  pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
+  const reservedMergeRoot = new FakeElement('div');
+  context.pullRequestMergeConfirmations.set(key, 'merge');
+  context.appendPullRequestTree(reservedMergeRoot, group, pullRequest);
+  const reservedMergeNodes = flatten(reservedMergeRoot);
+  const reservedMergeButton = reservedMergeNodes.find((node) => node.dataset?.mergeGo === key);
+  assert.ok(reservedMergeButton);
+  assert.equal(reservedMergeButton.textContent, 'マージを実行');
+  await context.runPullRequestMergeAction(reservedMergeButton);
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージしました。');
+  assert.equal(context.pullRequestMergeResults.get('acme/widget')[0].number, 42);
+  await context.runPullRequestMergeAction(reservedMergeButton);
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージキューに追加しました。');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.queuedPullRequestMerges.get(key))), { headRefOid: 'abc123' });
 
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
     {
@@ -2329,7 +2395,48 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
       url: '/api/pull-requests/reserve',
       body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
     },
+    {
+      url: '/api/pull-requests/reserve',
+      body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
+    },
+    {
+      url: '/api/pull-requests/cancel-reservation',
+      body: { number: 42, registration_key: key },
+    },
+    {
+      url: '/api/pull-requests/merge',
+      body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
+    },
+    {
+      url: '/api/pull-requests/merge',
+      body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
+    },
   ]);
+
+  context.pullRequestMergeResults.clear();
+  delete pullRequest.reservation;
+  responses.push(
+    { ok: true, body: { merged: true, branchDeleted: false, warning: null } },
+    { ok: true, body: { ok: true, cancelled: true, message: 'PR #42 のクロスレビューが halted になったため、レビュー収束後マージの予約を取り消しました。' } },
+  );
+  const immediateRoot = new FakeElement('div');
+  context.appendPullRequestTree(immediateRoot, group, pullRequest);
+  const immediateToggle = flatten(immediateRoot).find((node) => node.dataset?.reservationToggle === key);
+  immediateToggle.checked = true;
+  await context.runPullRequestReservationAction(immediateToggle, true);
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージしました。');
+  assert.equal(context.pullRequestMergeResults.size, 0);
+  await context.runPullRequestReservationAction(immediateToggle, true);
+  assert.equal(context.liveStatus.textContent, 'PR #42 のクロスレビューが halted になったため、レビュー収束後マージの予約を取り消しました。');
+
+  const noMethodsGroup = { ...group, mergeMethods: [] };
+  const unreservedRoot = new FakeElement('div');
+  context.appendPullRequestTree(unreservedRoot, noMethodsGroup, pullRequest);
+  assert.equal(flatten(unreservedRoot).find((node) => node.dataset?.reservationToggle === key).disabled, true);
+  pullRequest.reservation = { method: 'merge', deleteBranch: false, createdAt: '2026-10-05T00:00:00.000Z' };
+  const reservedNoMethodsRoot = new FakeElement('div');
+  context.appendPullRequestTree(reservedNoMethodsRoot, noMethodsGroup, pullRequest);
+  assert.equal(flatten(reservedNoMethodsRoot).find((node) => node.dataset?.reservationToggle === key).disabled, false);
 });
 
 test('マージ済みかクローズ済みの PR だけがあるときもオープンの欄を空表示する', () => {
@@ -2530,7 +2637,7 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
   const conflictKey = 'example/project#42';
   const context = pageContext(pageHtml, {
     TRANSIENT_NOTICE_MS: 60_000,
-    displayPreferences: { hideFinished: true, mergeAfterReviewDefault: false },
+    displayPreferences: { hideFinished: true },
     document: { createElement: (tagName) => new FakeElement(tagName), createTextNode: (text) => ({ textContent: text }) },
     pullRequestMergeResults: new Map(),
     pullRequestMergeConfirmations: new Map(),
@@ -2538,7 +2645,7 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
     pullRequestMergeMessages: new Map([[mergeKey, { message: 'PR の状態が変わりました。表示を確認してください。', shownAt: startedAt }]]),
     queuedPullRequestMerges: new Map(),
     queuedPullRequestMerge: () => null,
-    pullRequestMergeInFlight: new Set(),
+    pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
     pullRequestReviewSkipInFlight: new Set(),
     pullRequestConflictConfirmations: new Set(),
     pullRequestConflictMessages: new Map([[conflictKey, { message: '操作結果を取得できませんでした。PR の状態を取り直してください。', shownAt: startedAt }]]),
@@ -2583,8 +2690,8 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
   assert.ok(hasStatus(renderNotice(startedAt), 'merge-result'));
   let nodes = renderTree();
   assert.equal(nodes.filter((node) => node.className === 'merge-error').length, 2);
-  assert.ok(nodes.some((node) => node.dataset.openMerge === mergeKey));
-  assert.ok(nodes.some((node) => node.dataset.conflictOpen === conflictKey));
+  assert.ok(nodes.some((node) => node.dataset?.openMerge === mergeKey));
+  assert.ok(nodes.some((node) => node.dataset?.conflictOpen === conflictKey));
 
   context.setTestNow(startedAt + 59_999);
   assert.ok(hasStatus(renderNotice(startedAt), 'merge-result'));
@@ -2594,8 +2701,8 @@ test('予約取消とマージ・衝突依頼の失敗は1分後に隠し、操�
   assert.equal(hasStatus(renderNotice(startedAt), 'merge-result'), false);
   nodes = renderTree();
   assert.equal(nodes.some((node) => node.className === 'merge-error'), false);
-  assert.ok(nodes.some((node) => node.dataset.openMerge === mergeKey));
-  assert.ok(nodes.some((node) => node.dataset.conflictOpen === conflictKey));
+  assert.ok(nodes.some((node) => node.dataset?.openMerge === mergeKey));
+  assert.ok(nodes.some((node) => node.dataset?.conflictOpen === conflictKey));
 });
 
 test('通知が状態版の変化なしに期限切れになっても、次の取得で描き直す', async () => {
@@ -2958,8 +3065,7 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
   for (const [kind, dataAttribute, htmlAttribute] of [
     ['merge-go', 'mergeGo', 'data-merge-go'],
     ['merge-cancel', 'mergeCancel', 'data-merge-cancel'],
-    ['merge-after-review', 'mergeAfterReview', 'data-merge-after-review'],
-    ['merge-cancel-reservation', 'cancelReservation', 'data-cancel-reservation'],
+    ['merge-reservation-toggle', 'reservationToggle', 'data-reservation-toggle'],
     ['merge-open', 'openMerge', 'data-open-merge'],
     ['conflict-open', 'conflictOpen', 'data-conflict-open'],
   ]) {
