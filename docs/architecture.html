@@ -131,7 +131,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
   <p class="lead">Claude Code のセッション状態を、127.0.0.1 の常駐サーバーが集めてダッシュボードに表示する。ダッシュボードで書いた回答は、フック経由でセッションへ戻る。<a href="architecture-detail.html">詳細版</a></p>
 
   <div class="figure">
-    <svg viewBox="0 0 1100 640" role="img" aria-labelledby="fig-title">
+    <svg viewBox="0 0 1100 670" role="img" aria-labelledby="fig-title">
       <title id="fig-title">Agent Cockpit の構成とデータの流れ</title>
       <defs>
         <marker id="m-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-blue" d="M0,0 L10,5 L0,10 z"/></marker>
@@ -141,7 +141,7 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       </defs>
 
       <!-- Claude Code デスクトップアプリ -->
-      <rect class="b-cc" x="20" y="20" width="340" height="440" rx="12"/>
+      <rect class="b-cc" x="20" y="20" width="340" height="460" rx="12"/>
       <text class="title" x="40" y="48">Claude Code デスクトップアプリ</text>
       <text class="sub" x="40" y="66">各セッションごとに動く</text>
 
@@ -149,59 +149,64 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text class="title" x="76" y="110">メインセッション</text>
       <text class="sub" x="76" y="132">作業・AskUserQuestion・MCP 呼び出し</text>
 
-      <rect class="b-in" x="60" y="196" width="280" height="124" rx="8"/>
+      <rect class="b-in" x="60" y="196" width="280" height="148" rx="8"/>
       <text class="title" x="76" y="222">フック（src/hooks）</text>
-      <text x="76" y="246"><tspan font-weight="600">event.js</tspan><tspan class="sub">　ツール実行・通知などを送る</tspan></text>
-      <text x="76" y="270"><tspan font-weight="600">answer.js / away.js</tspan><tspan class="sub">　回答を受け取る</tspan></text>
-      <text x="76" y="294"><tspan font-weight="600">route.js</tspan><tspan class="sub">　経路の設定を差し込む</tspan></text>
+      <text x="76" y="246"><tspan font-weight="600">event.js</tspan><tspan class="sub">　イベントを送る・サーバー起動</tspan></text>
+      <text x="76" y="270"><tspan font-weight="600">answer.js</tspan><tspan class="sub">　回答と知らせを差し込む</tspan></text>
+      <text x="76" y="294"><tspan font-weight="600">away.js</tspan><tspan class="sub">　離席中の質問に回答を返す</tspan></text>
+      <text x="76" y="318"><tspan font-weight="600">route.js</tspan><tspan class="sub">　経路の設定を伝えて守らせる</tspan></text>
 
-      <rect class="b-in" x="60" y="360" width="280" height="80" rx="8"/>
-      <text class="title" x="76" y="386">MCP サーバー（src/mcp）</text>
-      <text class="sub" x="76" y="408">cockpit_set_tasks / add_decision</text>
-      <text class="sub" x="76" y="426">cockpit_add_pr（stdio で起動）</text>
+      <rect class="b-in" x="60" y="372" width="280" height="88" rx="8"/>
+      <text class="title" x="76" y="398">MCP サーバー（src/mcp・stdio）</text>
+      <text class="sub" x="76" y="420">cockpit_set_tasks / add_decision /</text>
+      <text class="sub" x="76" y="440">update_decision / add_pr / skip_review</text>
 
       <!-- セッション内のつながり -->
       <path class="ln gray" d="M200,152 L200,196" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
       <text class="label gray" x="208" y="179">発火 / 文脈・回答を返す</text>
-      <path class="ln gray" d="M60,118 L38,118 L38,400 L60,400" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="0" y="0" transform="translate(32,300) rotate(-90)">ツール呼び出し</text>
+      <path class="ln gray" d="M60,118 L38,118 L38,416 L60,416" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="0" y="0" transform="translate(32,310) rotate(-90)">ツール呼び出し</text>
 
       <!-- 常駐サーバー -->
-      <rect class="b-srv" x="440" y="150" width="270" height="250" rx="12"/>
+      <rect class="b-srv" x="440" y="150" width="270" height="290" rx="12"/>
       <text class="title" x="460" y="180">常駐サーバー（src/server）</text>
       <text class="sub" x="460" y="200">Node.js ・ 127.0.0.1:47821 のみ</text>
       <text x="460" y="232">・イベントからセッション状態を組み立て</text>
-      <text x="460" y="256">・タスク / 判断事項 / PR を保持</text>
-      <text x="460" y="280">・回答を配信待ちに置く</text>
-      <text x="460" y="304">・PR の状態取得とマージ</text>
-      <text x="460" y="328">・経路の設定を保存</text>
-      <text class="sub" x="460" y="362">書き込みは起動ごとの秘密値と</text>
-      <text class="sub" x="460" y="380">Origin を照合する</text>
+      <text x="460" y="254">・タスク / 判断事項 / PR を保持</text>
+      <text x="460" y="276">・回答と知らせを配信待ちに置く</text>
+      <text x="460" y="298">・PR の状態取得・マージ・予約</text>
+      <text x="460" y="320">・経路と表示の設定を保存</text>
+      <text x="460" y="342">・マニュアルを配信（/manual/）</text>
+      <text x="460" y="364">・URL を既定のブラウザーで開く</text>
+      <text class="sub" x="460" y="398">書き込みは起動ごとの秘密値と</text>
+      <text class="sub" x="460" y="416">Origin を照合する</text>
 
       <!-- タスクトレイ -->
-      <rect class="b-ext" x="790" y="20" width="290" height="76" rx="10"/>
+      <rect class="b-ext" x="790" y="20" width="290" height="92" rx="10"/>
       <text class="title" x="808" y="48">タスクトレイ（src/tray）</text>
-      <text class="sub" x="808" y="70">Windows ・ サーバー起動とダッシュボード表示</text>
+      <text class="sub" x="808" y="70">Windows ・ サーバーの起動と再起動、画面を開く</text>
+      <text class="sub" x="808" y="90">離席中の切り替え、待ち件数の通知</text>
 
       <!-- ダッシュボード -->
-      <rect class="b-web" x="790" y="150" width="290" height="250" rx="12"/>
+      <rect class="b-web" x="790" y="150" width="290" height="290" rx="12"/>
       <text class="title" x="808" y="180">ダッシュボード（src/web）</text>
-      <text class="sub" x="808" y="200">内部ブラウザで表示する 1 枚の HTML</text>
+      <text class="sub" x="808" y="200">内部ブラウザかトレイの画面で開く 1 枚の HTML</text>
       <text x="808" y="232">・セッション / タスク / 完了条件</text>
-      <text x="808" y="256">・サブエージェントの稼働</text>
-      <text x="808" y="280">・判断事項と回答欄</text>
-      <text x="808" y="304">・PR スタックとマージ確認</text>
-      <text x="808" y="328">・離席中 / 経路の設定</text>
+      <text x="808" y="254">・サブエージェントの稼働</text>
+      <text x="808" y="276">・判断事項と回答欄</text>
+      <text x="808" y="298">・PR スタックとマージ確認・予約</text>
+      <text x="808" y="320">・離席中 / 経路 / 表示の設定</text>
+      <text x="808" y="342">・マニュアルへの入口</text>
 
       <!-- ① イベント -->
       <path class="ln blue" d="M340,232 L440,232" marker-end="url(#m-blue)"/>
       <text class="label blue" x="350" y="224">① イベント</text>
       <!-- ② 回答 -->
       <path class="ln green" d="M440,282 L340,282" marker-end="url(#m-green)"/>
-      <text class="label green" x="350" y="300">② 回答・通知</text>
+      <text class="label green" x="350" y="300">② 回答・知らせ</text>
       <!-- ③ MCP -->
-      <path class="ln blue" d="M340,400 L390,400 L390,370 L440,370" marker-end="url(#m-blue)"/>
-      <text class="label blue" x="352" y="424">③ タスク・判断・PR</text>
+      <path class="ln blue" d="M340,416 L390,416 L390,400 L440,400" marker-end="url(#m-blue)"/>
+      <text class="label blue" x="352" y="472">③ タスク・判断・PR</text>
 
       <!-- ④ 状態取得 -->
       <path class="ln orange" d="M710,222 L790,222" marker-end="url(#m-orange)"/>
@@ -211,63 +216,65 @@ code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .9em; }
       <text class="label green" x="716" y="312">⑤ 回答・操作</text>
 
       <!-- トレイ -->
-      <path class="ln gray dash" d="M860,96 L860,120 L620,120 L620,150" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="640" y="114">起動・再起動</text>
-      <path class="ln gray dash" d="M990,96 L990,150" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="998" y="128">開く</text>
+      <path class="ln gray dash" d="M860,112 L860,130 L620,130 L620,150" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="560" y="124">起動・再起動・状態・離席中</text>
+      <path class="ln gray dash" d="M990,112 L990,150" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="998" y="136">開く</text>
 
       <!-- 下段：外部 -->
-      <rect class="b-ext" x="20" y="520" width="245" height="100" rx="10"/>
-      <text class="title" x="36" y="548">~/.claude（読み取り）</text>
-      <text class="sub" x="36" y="572">sessions/*.json（稼働中のセッション）</text>
-      <text class="sub" x="36" y="592">会話ログ（文脈量の見積もり）</text>
+      <rect class="b-ext" x="20" y="540" width="245" height="110" rx="10"/>
+      <text class="title" x="36" y="568">~/.claude（読み取り）</text>
+      <text class="sub" x="36" y="592">sessions/*.json（稼働中のセッション）</text>
+      <text class="sub" x="36" y="612">会話ログ（文脈量の見積もり）</text>
 
-      <rect class="b-ext" x="285" y="520" width="245" height="100" rx="10"/>
-      <text class="title" x="301" y="548">~/.agent-cockpit（保存）</text>
-      <text class="sub" x="301" y="572">タスク・判断事項・表示設定</text>
-      <text class="sub" x="301" y="592">server.json・routing.json</text>
+      <rect class="b-ext" x="285" y="540" width="245" height="110" rx="10"/>
+      <text class="title" x="301" y="568">~/.agent-cockpit（保存）</text>
+      <text class="sub" x="301" y="592">store.json：タスク・判断・表示設定</text>
+      <text class="sub" x="301" y="612">server.json・routing.json</text>
+      <text class="sub" x="301" y="632">away.json・tray.json</text>
 
-      <rect class="b-opt" x="550" y="520" width="245" height="100" rx="10"/>
-      <text class="title" x="566" y="548">連携（任意）</text>
-      <text class="sub" x="566" y="572">claude-codex-bridge の有無</text>
-      <text class="sub" x="566" y="592">ai-cross-review のレビュー状態</text>
+      <rect class="b-opt" x="550" y="540" width="245" height="110" rx="10"/>
+      <text class="title" x="566" y="568">連携（任意）</text>
+      <text class="sub" x="566" y="592">codex-agent.sh の有無と出力</text>
+      <text class="sub" x="566" y="612">ai-cross-review のレビュー状態</text>
 
-      <rect class="b-ext" x="815" y="520" width="265" height="100" rx="10"/>
-      <text class="title" x="831" y="548">GitHub</text>
-      <text class="sub" x="831" y="572">gh CLI で PR / CI の状態を取得</text>
-      <text class="sub" x="831" y="592">確認済みの最下段 PR だけマージ</text>
+      <rect class="b-ext" x="815" y="540" width="265" height="110" rx="10"/>
+      <text class="title" x="831" y="568">GitHub</text>
+      <text class="sub" x="831" y="592">gh で PR と CI の状態を 60 秒ごとに取得</text>
+      <text class="sub" x="831" y="612">確認済みの最下段の PR だけマージ</text>
 
-      <path class="ln gray" d="M142,520 L142,488 L455,488 L455,400" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="160" y="480">読み取り</text>
-      <path class="ln gray" d="M500,400 L500,520" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="508" y="470">保存・復元</text>
-      <path class="ln gray dash" d="M640,520 L640,400" marker-end="url(#m-gray)"/>
-      <text class="label gray" x="648" y="470">有無を確認</text>
-      <path class="ln orange" d="M690,400 L690,488 L947,488 L947,520" marker-start="url(#m-orange)" marker-end="url(#m-orange)"/>
-      <text class="label orange" x="760" y="480">⑥ gh pr view / merge</text>
+      <path class="ln gray" d="M142,540 L142,508 L455,508 L455,440" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="160" y="500">読み取り</text>
+      <path class="ln gray" d="M500,440 L500,540" marker-start="url(#m-gray)" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="508" y="490">保存・復元</text>
+      <path class="ln gray dash" d="M640,540 L640,440" marker-end="url(#m-gray)"/>
+      <text class="label gray" x="634" y="470" text-anchor="end">有無と状態を確認</text>
+      <path class="ln orange" d="M690,440 L690,508 L947,508 L947,540" marker-start="url(#m-orange)" marker-end="url(#m-orange)"/>
+      <text class="label orange" x="760" y="500">⑥ gh pr view / merge</text>
     </svg>
   </div>
 
   <h2>データの流れ</h2>
   <ol class="flows">
-    <li><b>イベント（フック → サーバー）</b>：<code>event.js</code> がツール実行、通知、サブエージェントの開始・終了などを <code>POST /api/events</code> で送る。サーバーはここからセッションの状態を組み立てる。</li>
-    <li><b>回答・通知（サーバー → フック → セッション）</b>：<code>answer.js</code> と <code>away.js</code> がサーバーに問い合わせ、ダッシュボードで書かれた回答や PR マージ結果の通知を受け取って、セッションの文脈（または <code>AskUserQuestion</code> の回答）として渡す。</li>
-    <li><b>タスク・判断・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）と PR を常駐サーバーへ登録する。</li>
-    <li><b>状態の表示（サーバー → ダッシュボード）</b>：ダッシュボードは <code>GET /api/state</code> を定期的に取得して画面を描き直す。</li>
-    <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路の設定、PR のマージ確認などを送る。回答はサーバーの配信待ちに置かれ、②で届く。</li>
-    <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を取得する。マージは開発者が画面で確認したスタック最下段の PR だけを、見た head の SHA で照合して行う。</li>
+    <li><b>イベント（フック → サーバー）</b>：<code>event.js</code> がツール実行、通知、サブエージェントの開始と終了などを <code>POST /api/events</code> で送る。サーバーはここからセッションの状態を組み立てる。常駐サーバーが動いていなければ、<code>SessionStart</code> の <code>event.js</code> が起動する。</li>
+    <li><b>回答・知らせ（サーバー → フック → セッション）</b>：<code>answer.js</code> がサーバーに問い合わせ、ダッシュボードで書かれた回答、PR のマージ結果の知らせ、衝突の解消の依頼、タスクの登録の催促をセッションの文脈として渡す。待機中のセッションは <code>Stop</code> のフックで起こす。離席中は、<code>away.js</code> が <code>AskUserQuestion</code> を止めてダッシュボードの回答を待ち、その回答を質問の答えとして返す。</li>
+    <li><b>タスク・判断・PR（MCP → サーバー）</b>：メインセッションが MCP ツールを呼ぶと、MCP サーバーが計画（タスク、完了条件、判断事項）、PR、クロスレビュー不要の記録を常駐サーバーへ送る。</li>
+    <li><b>状態の表示（サーバー → ダッシュボード）</b>：ダッシュボードは <code>GET /api/state</code> を 2 秒ごとに取得して画面を描き直す。</li>
+    <li><b>回答・操作（ダッシュボード → サーバー）</b>：回答、離席中の切り替え、経路と表示の設定、PR のマージ確認と予約、衝突の解消の依頼などを送る。回答と依頼はサーバーの配信待ちに置かれ、②で届く。マニュアルと外部のページ（PR など）は、サーバーに頼んで既定のブラウザーで開く。</li>
+    <li><b>GitHub（サーバー ⇄ GitHub）</b>：<code>gh</code> CLI で PR と CI の状態を 60 秒ごとに取得する。マージできるのは、開発者が画面で確認したスタック最下段の PR だけで、画面で見た head の SHA を照合する。レビュー収束後マージの予約は、クロスレビューの収束を記録した head の SHA で照合する。</li>
   </ol>
 
   <h2>構成要素</h2>
   <div class="grid">
-    <div class="card"><h3>フック</h3><p>Claude Code の設定に登録するスクリプト群。イベントを送り、回答を受け取ってセッションへ渡す。</p></div>
-    <div class="card"><h3>MCP サーバー</h3><p>セッションが計画・判断事項・PR を書き込むための窓口。常駐サーバーへ HTTP で転送する。</p></div>
-    <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。</p></div>
+    <div class="card"><h3>フック</h3><p>Claude Code の設定に登録するスクリプト群。イベントを送り、回答と知らせをセッションへ渡す。<code>route.js</code> は経路の設定をサブエージェントへ伝え、Claude を選んだ担当が Codex を起動しようとしたら止める。</p></div>
+    <div class="card"><h3>MCP サーバー</h3><p>セッションが計画、判断事項、PR を書き込むための窓口。常駐サーバーへ HTTP で転送する。</p></div>
+    <div class="card"><h3>常駐サーバー</h3><p>すべての情報が集まる中心。127.0.0.1 にだけ待ち受け、外部パッケージを使わず Node.js で動く。30 分要求が無いと終了し、次のフックが起動し直す。</p></div>
     <div class="card"><h3>ダッシュボード</h3><p>常駐サーバーが配信する画面。状態の表示と、回答やマージ確認の入力を担う。</p></div>
-    <div class="card"><h3>タスクトレイ</h3><p>Windows 用の常駐アイコン。サーバーの起動・再起動と、ダッシュボードを開く操作を担う。</p></div>
+    <div class="card"><h3>タスクトレイ</h3><p>Windows 用の常駐アイコン。サーバーの起動と再起動、ダッシュボードを開く操作、離席中の切り替え、待ち件数の通知を担う。</p></div>
+    <div class="card"><h3>マニュアル</h3><p><code>manual/</code> で組み立てた利用者向けの説明。常駐サーバーが <code>/manual/</code> で配り、設定画面の入口から既定のブラウザーで開く。</p></div>
   </div>
 
-  <p class="note">許可待ち（パーミッションのダイアログ）は表示するだけで、ダッシュボードから許可を出す経路は無い。連携（任意）の道具が無くても本体は動く。</p>
+  <p class="note">フック、MCP サーバー、トレイの起動処理は、共通の接続処理（<code>src/client</code>）で常駐サーバーを探し、動いていなければ起動する。許可待ち（パーミッションのダイアログ）は表示するだけで、ダッシュボードから許可を出す経路は無い。連携（任意）の道具が無くても本体は動く。</p>
 </main>
 </body>
 </html>
