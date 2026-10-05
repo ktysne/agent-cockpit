@@ -1507,7 +1507,7 @@ function reservationWait(p, pr) {
     ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   if (pr.ci !== 'pass') waiting.push((CI_LABELS[pr.ci] || CI_LABELS.unknown).wait);
   const blocker = mergeOperationBlocker(p, pr);
-  if (pr.review !== 'approved' && !['レビューの承認待ち', '変更を求められている'].includes(blocker)) waiting.push('GitHub のレビュー承認待ち');
+  if (!['approved', 'none'].includes(pr.review) && !['レビューの承認待ち', '変更を求められている'].includes(blocker)) waiting.push('GitHub のレビュー承認待ち');
   if (blocker) waiting.push(`マージ条件待ち: ${blocker}`);
   return waiting.length ? waiting : ['次の状態更新でマージ'];
 }
