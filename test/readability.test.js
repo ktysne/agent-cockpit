@@ -75,7 +75,7 @@ test('ライトとダークの状態色およびボタン文字のコントラ�
       const color = themeVariables(html, theme);
       for (const [foregroundToken, backgroundToken, selectors] of statuses) {
         for (const selector of selectors) {
-          const declarations = cssDeclarations(html, selector);
+          const declarations = cssDeclarations(html, selector, { includeMoreSpecific: true, includeRepeated: true });
           const colors = declarations.filter(([property]) => property === 'color');
           assert.ok(colors.length, `${selector} のルールがある`);
           assert.ok(colors.every(([, value]) => value === `var(${foregroundToken})`), `${selector} の文字色`);

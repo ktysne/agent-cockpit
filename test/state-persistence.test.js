@@ -513,6 +513,7 @@ test('通常の保存は500msでまとめ、回答記録の変更は待たずに
   t.mock.timers.tick(499);
   assert.equal(writes, 0);
   t.mock.timers.tick(1);
+  t.mock.timers.reset();
   await state.waitForPersistence();
   assert.equal(writes, 1);
 

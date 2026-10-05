@@ -22,7 +22,9 @@ function cssDeclarations(html, selector, options = {}) {
 
   for (const [, prelude, body] of css.matchAll(rules)) {
     const selectors = prelude.split(',').map((value) => value.trim());
-    if (!selectors.includes(selector)) continue;
+    if (!selectors.some((value) => value === selector || (
+      options.includeMoreSpecific && value.endsWith(` ${selector}`)
+    ))) continue;
     for (const declaration of body.split(';')) {
       const separator = declaration.indexOf(':');
       if (separator < 0) continue;
@@ -32,13 +34,10 @@ function cssDeclarations(html, selector, options = {}) {
     }
   }
 
-  const seenProperties = new Set();
-  return declarations.filter(([property]) => {
-    if (options.includeRepeated) return true;
-    if (seenProperties.has(property)) return false;
-    seenProperties.add(property);
-    return true;
-  });
+  if (options.includeRepeated) return declarations;
+  const lastValueByProperty = new Map();
+  for (const [property, value] of declarations) lastValueByProperty.set(property, value);
+  return [...lastValueByProperty];
 }
 
 const BROWSER_GLOBALS = new Set([

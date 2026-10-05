@@ -1311,6 +1311,65 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
   assert.equal(root.children[0].textContent, '更新の無いセッションを隠しています。下の「表示する」から表示できます。');
 });
 
+test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
+  const render = functionSource(web, 'render');
+  assert.ok(render);
+  assert.match(render, /\['show-finished', 'show-idle', 'merge-result-close'\]\.includes\(focusData\.kind\) && !button/);
+
+  const exercise = (hasMergeResult) => {
+    const modeButton = {
+      dataset: { mode: 'product' },
+      setAttribute() {},
+      hasAttribute() { return false; },
+      focus(options) { this.focusOptions = options; },
+    };
+    const mergeResultButton = {
+      focus(options) { this.focusOptions = options; },
+    };
+    const root = { replaceChildren(...children) { this.children = children; }, querySelectorAll: () => [] };
+    class FakeTextArea {}
+    const context = pageContext(web, {
+      answerNoteComposing: false,
+      renderRouting() {},
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: (sessions) => sessions,
+      renderSummary() {},
+      renderExcludedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      renderFinishedNote() {},
+      renderIdleNote() {},
+      updateTitle() {},
+      document: {
+        activeElement: { dataset: { showFinished: 'true' }, hasAttribute: () => false },
+        querySelectorAll: () => [modeButton],
+        querySelector: (selector) => selector === '[data-close-merge-result]'
+          ? (hasMergeResult ? mergeResultButton : null)
+          : selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
+      },
+      HTMLTextAreaElement: FakeTextArea,
+      displayPreferences: { mode: 'product', pinned: [] },
+      visibleSinceSeen: () => [],
+      orderedProducts: () => [{}],
+      productSection: () => fakeElement('section'),
+      root,
+      element: fakeElement,
+    });
+    vm.runInContext(`${render}\nthis.render = render;`, context);
+    context.render({ sessions: [{}], pullRequests: [] });
+    return { modeButton, mergeResultButton, root };
+  };
+
+  const withMergeResult = exercise(true);
+  assert.deepEqual(JSON.parse(JSON.stringify(withMergeResult.mergeResultButton.focusOptions)), { preventScroll: true });
+  assert.equal(withMergeResult.modeButton.focusOptions, undefined);
+  assert.equal(withMergeResult.root.children.length, 1);
+
+  const withoutMergeResult = exercise(false);
+  assert.deepEqual(JSON.parse(JSON.stringify(withoutMergeResult.modeButton.focusOptions)), { preventScroll: true });
+  assert.equal(withoutMergeResult.mergeResultButton.focusOptions, undefined);
+  assert.equal(withoutMergeResult.root.children.length, 1);
+});
+
 test('モックの終わった項目の表示設定が保存できたら一覧を描き直す', () => {
   const handlerSource = eventListenerSource(mock, 'click');
   assert.ok(handlerSource);

@@ -50,6 +50,7 @@ test('削除済みの説明文と描画要素の名残を含めない', () => {
     /リモートのブランチ .* は GitHub が自動で削除する/,
   ];
   for (const html of [mock, web]) {
+    assert.doesNotMatch(html, /kind-order|product-order-item|kind-product-order|kindProductOrder/);
     for (const phrase of removedCopy) assert.doesNotMatch(html, phrase);
     const filters = html.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
     assert.ok(filters);
@@ -59,6 +60,7 @@ test('削除済みの説明文と描画要素の名残を含めない', () => {
     assert.equal(cssDeclarations(html, '.product-order-item').length, 0);
     assert.equal(cssDeclarations(html, '.kind-order').length, 0);
   }
+  assert.match(mock, /ui\.hidden = Array\.isArray\(ui\.hidden\).*FILTERS\.some/);
   assert.ok(cssDeclarations(web, '.order').length > 0);
   assert.deepEqual(cssDeclarations(web, '.order'), cssDeclarations(mock, '.order'));
 

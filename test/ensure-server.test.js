@@ -57,8 +57,11 @@ test('ensure-server は空きポートでサーバーを起動し、ポートだ
     AGENT_COCKPIT_PORT: '0',
   };
   t.after(async () => {
-    await stopServer(homeDir);
-    await temporary.cleanup();
+    try {
+      await stopServer(homeDir);
+    } finally {
+      await temporary.cleanup();
+    }
   });
 
   const result = await runEnsureServer(environment);
@@ -67,6 +70,7 @@ test('ensure-server は空きポートでサーバーを起動し、ポートだ
   assert.equal(result.stderr, '');
   const { port } = JSON.parse(result.stdout);
   assert.ok(port > 0);
+  assert.notEqual(port, 47821);
   assert.equal(result.stdout, `${JSON.stringify({ port })}\n`);
   assert.ok(!result.stdout.includes('secret'));
 });
