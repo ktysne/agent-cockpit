@@ -2,7 +2,7 @@
   "name": "confirm",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 2038,
+  "height": 2018,
   "parts": [
     {
       "key": "reserve.heading",

@@ -2,7 +2,7 @@
   "name": "reserved",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1390,
+  "height": 1370,
   "parts": [
     {
       "key": "reserved.card",
@@ -19,7 +19,7 @@
       "bounds": {
         "x": 308,
         "y": 258,
-        "width": 1134,
+        "width": 885,
         "height": 44
       },
       "visible": true

@@ -2,7 +2,7 @@
   "name": "pending",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 2040,
+  "height": 2020,
   "parts": [
     {
       "key": "confirm.heading",

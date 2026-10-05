@@ -2,7 +2,7 @@
   "name": "cancelled",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1490,
+  "height": 1470,
   "parts": [
     {
       "key": "cancelled.notice",

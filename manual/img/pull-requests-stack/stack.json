@@ -2,7 +2,7 @@
   "name": "stack",
   "target": "#root > section.section:nth-child(2) .pr-repo-group",
   "width": 1576,
-  "height": 1264,
+  "height": 1224,
   "parts": [
     {
       "key": "stack.repo",
@@ -58,7 +58,7 @@
       "key": "stack.pos-middle",
       "bounds": {
         "x": 74,
-        "y": 395,
+        "y": 375,
         "width": 60,
         "height": 39
       },
@@ -68,7 +68,7 @@
       "key": "stack.pos-top",
       "bounds": {
         "x": 122,
-        "y": 650,
+        "y": 610,
         "width": 60,
         "height": 39
       },
@@ -98,7 +98,7 @@
       "key": "stack.branch-middle",
       "bounds": {
         "x": 74,
-        "y": 442,
+        "y": 422,
         "width": 499,
         "height": 28
       },
@@ -108,7 +108,7 @@
       "key": "stack.wait-middle",
       "bounds": {
         "x": 74,
-        "y": 592,
+        "y": 552,
         "width": 1476,
         "height": 38
       },
@@ -118,9 +118,9 @@
       "key": "stack.level",
       "bounds": {
         "x": 46,
-        "y": 375,
+        "y": 355,
         "width": 1504,
-        "height": 527
+        "height": 507
       },
       "visible": true
     },
@@ -128,7 +128,7 @@
       "key": "stack.single",
       "bounds": {
         "x": 26,
-        "y": 930,
+        "y": 890,
         "width": 1524,
         "height": 295
       },
