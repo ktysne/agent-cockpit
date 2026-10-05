@@ -321,10 +321,27 @@ test('即時マージ条件が未達でも方式とブランチ削除の選択�
   const reservation = fixture.state.pullRequestMergeReservation('example', 'project', 1);
 
   assert.equal(result.ok, true);
+  assert.equal(result.reserved, true);
   assert.deepEqual({ method: reservation.method, deleteBranch: reservation.deleteBranch }, { method: 'rebase', deleteBranch: true });
   assert.equal(Object.hasOwn(reservation, 'headRefOid'), false);
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
   assert.equal(fixture.calls.some((args) => args.includes('--auto')), false);
+});
+
+test('条件がそろったレビュー収束後マージ予約はその場で収束 SHA を照合してマージする', async (t) => {
+  const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pass', reviewDecision: 'APPROVED' })]);
+  const triageSha = sha(1);
+  fixture.control.crossReviews.set(1, convergedReview(1, triageSha));
+
+  const result = await fixture.manager.reserve(mergeInput(1));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.merged, true);
+  assert.equal(result.reserved, undefined);
+  assert.equal(fixture.state.pullRequestMergeReservation('example', 'project', 1), null);
+  assert.deepEqual(fixture.calls.find((args) => args[0] === 'pr' && args[1] === 'merge'), [
+    'pr', 'merge', '1', '-R', 'example/project', '--squash', '--match-head-commit', triageSha,
+  ]);
 });
 
 test('子 PR の base を付け替え、head SHA を照合してマージし、選択時だけ API でブランチを削除する', async (t) => {

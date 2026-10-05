@@ -461,7 +461,8 @@ class PullRequestMergeManager {
     }
     this.state.setLastPullRequestMethod(registration.owner, registration.repo, input.method);
     await this.state.waitForPersistence?.();
-    await this.checkReservations(registration.owner, registration.repo);
+    const immediateResult = await this.checkReservation(reservation);
+    if (immediateResult) return immediateResult;
     return { ok: true, reserved: true, reservation };
   }
 

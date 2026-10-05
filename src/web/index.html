@@ -1652,16 +1652,36 @@ function pullRequestMergeConditionWaits(pullRequest) {
   return waiting;
 }
 
-function pullRequestReservationWaits(pullRequest) {
+function pullRequestReservationWaitReasons(pullRequest, group = null, method = null) {
   const waiting = [];
-  if (!convergedAtHead(pullRequest)) {
+  if (pullRequest.crossReview?.notRequired === true || !convergedAtHead(pullRequest)) {
     waiting.push(pushedAfterConvergence(pullRequest) ? '収束後に push あり。現在の head の収束待ち' : 'クロスレビューの収束待ち');
   }
   if (pullRequest.ci !== 'pass') waiting.push((CI_LABELS[pullRequest.ci] || CI_LABELS.unknown).wait);
   if (!['approved', 'none'].includes(pullRequest.review) && !['レビューの承認待ち', '変更を求められている'].includes(pullRequest.operationBlocker)) {
     waiting.push('GitHub のレビュー承認待ち');
   }
-  if (pullRequest.operationBlocker) waiting.push(`マージ条件待ち: ${pullRequest.operationBlocker}`);
+  const mergeBlocker = pullRequest.operationBlocker;
+  if (mergeBlocker) waiting.push(`マージ条件待ち: ${mergeBlocker}`);
+  else if (pullRequest.canMerge !== true) waiting.push('マージできる状態を確認できない');
+  if (group) {
+    if (group.openStateUnknown === true) waiting.push('PR の状態を確認できない');
+    if (!group.defaultBranch) waiting.push('既定ブランチを確認できない');
+    else if (pullRequest.baseRefName !== group.defaultBranch || pullRequest.effectiveBase !== group.defaultBranch) {
+      waiting.push(`既定ブランチ ${group.defaultBranch} へのマージ待ち`);
+    }
+    if (!Array.isArray(group.mergeMethods) || !group.mergeMethods.length) waiting.push('リポジトリのマージ方式を確認できない');
+    else if (method && !group.mergeMethods.includes(method)) waiting.push('選んだマージ方式が許可されていない');
+  }
+  return waiting;
+}
+
+function pullRequestReservationReady(pullRequest, group, method) {
+  return pullRequestReservationWaitReasons(pullRequest, group, method).length === 0;
+}
+
+function pullRequestReservationWaits(pullRequest, group = null, method = null) {
+  const waiting = pullRequestReservationWaitReasons(pullRequest, group, method);
   return waiting.length ? waiting : ['次の状態更新でマージ'];
 }
 
@@ -1783,13 +1803,17 @@ function pullRequestMergeOptionsFor(group, pullRequest) {
 function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   const key = pullRequestMergeKey(pullRequest);
   const options = pullRequestMergeOptionsFor(group, pullRequest);
-  const waiting = pullRequestMergeConditionWaits(pullRequest);
+  const reservationWaits = options.mergeAfterReview
+    ? pullRequestReservationWaitReasons(pullRequest, group, options.method)
+    : [];
+  const reservationReady = options.mergeAfterReview && reservationWaits.length === 0;
+  const waiting = options.mergeAfterReview ? reservationWaits : pullRequestMergeConditionWaits(pullRequest);
   const conditionPending = waiting.length > 0;
   const panel = element('section', `merge-confirm ${conditionPending ? 'pending' : ''}`.trim());
   panel.dataset.mergeConfirm = key;
   panel.setAttribute('aria-label', `PR #${pullRequest.number} のマージ確認`);
   const heading = element('div');
-  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', group.defaultBranch || ''), document.createTextNode(options.mergeAfterReview ? ' へレビュー収束後にマージする' : ' へマージする'));
+  heading.append(element('strong', '', `#${pullRequest.number}`), document.createTextNode(` を `), element('code', '', group.defaultBranch || ''), document.createTextNode(options.mergeAfterReview && !reservationReady ? ' へレビュー収束後にマージする' : ' へマージする'));
   panel.append(heading);
   if (waiting.length) {
     const warning = element('p', 'merge-condition-warning', `選択した条件の未達: ${waiting.join('、')}`);
@@ -1822,6 +1846,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   reviewMerge.dataset.mergeAfterReview = 'true';
   reviewMerge.dataset.mergeKey = key;
   reviewMergeChoice.append(reviewMerge, document.createTextNode('レビュー収束後マージ'));
+  if (reservationReady) reviewMergeChoice.append(element('span', 'meta', '収束済みのため、すぐにマージします'));
   panel.append(reviewMergeChoice);
 
   if (group.autoDeleteBranch !== true) {
@@ -1851,7 +1876,8 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
     if (effect.headSha) {
       const item = element('li');
       item.append(document.createTextNode('照合する head SHA: '));
-      item.append(options.mergeAfterReview ? document.createTextNode('クロスレビューの収束記録') : shortShaElement(pullRequest.headRefOid));
+      item.append(reservationReady ? shortShaElement(pullRequest.crossReview.triage.sha)
+        : options.mergeAfterReview ? document.createTextNode('クロスレビューの収束記録') : shortShaElement(pullRequest.headRefOid));
       effects.append(item);
     } else {
       effects.append(element('li', effect.warn ? 'warn' : '', effect.text));
@@ -1861,7 +1887,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
 
   const row = element('div', 'row');
   const merging = pullRequestMergeInFlight.has(key);
-  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : options.mergeAfterReview ? '予約する' : 'マージを実行');
+  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : options.mergeAfterReview && !reservationReady ? '予約する' : 'マージを実行');
   go.type = 'button';
   go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
@@ -2020,7 +2046,7 @@ function appendPullRequestTree(target, group, pullRequest) {
   const badges = element('div', 'badges');
   appendPullRequestBadges(badges, pullRequest);
   if (reservation) {
-    const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest).join('、')})`;
+    const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest, group, reservation.method).join('、')})`;
     badges.append(badge(reservedText, 'accent long'));
   }
   item.append(badges);
@@ -3618,6 +3644,7 @@ async function runPullRequestMergeAction(button, action) {
   const { group, pullRequest, number } = target;
   const options = pullRequestMergeOptionsFor(group, pullRequest);
   const operation = action === 'merge' && options.mergeAfterReview ? 'reserve' : action;
+  const reservationReady = operation === 'reserve' && pullRequestReservationReady(pullRequest, group, options.method);
   const endpoint = operation === 'merge' ? '/api/pull-requests/merge'
     : operation === 'reserve' ? '/api/pull-requests/reserve'
       : '/api/pull-requests/cancel-reservation';
@@ -3628,7 +3655,8 @@ async function runPullRequestMergeAction(button, action) {
     deleteBranch: options.deleteBranch,
   });
   const startedMessage = operation === 'merge' ? `PR #${number} の状態を確認してマージしています。`
-    : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しています。`
+    : operation === 'reserve' && reservationReady ? `PR #${number} の条件を確認してマージしています。`
+      : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しています。`
       : `PR #${number} のマージ予約を取り消しています。`;
   return runPullRequestAction({
     button,
@@ -3639,9 +3667,9 @@ async function runPullRequestMergeAction(button, action) {
     request: () => postUiAction(endpoint, body),
     onSuccess: (result) => {
       pullRequestMergeConfirmations.delete(key);
-      const queued = operation === 'merge' && result.queued;
+      const queued = (operation === 'merge' || operation === 'reserve') && result.queued === true;
       if (queued) queuedPullRequestMerges.set(key, { headRefOid: pullRequest.headRefOid || '' });
-      if (operation === 'merge' && result.merged === true) {
+      if ((operation === 'merge' || operation === 'reserve') && result.merged === true) {
         const retargetedNumbers = pullRequest.children.map((child) => child.number);
         rememberPullRequestMergeResult(group, {
           number,
@@ -3655,10 +3683,13 @@ async function runPullRequestMergeAction(button, action) {
       }
     },
     successMessage: (result) => {
-      const queued = operation === 'merge' && result.queued;
-      return queued ? `PR #${number} をマージキューに追加しました。` : operation === 'merge' ? `PR #${number} をマージしました。`
-      : operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しました。`
-      : `PR #${number} のマージ予約を取り消しました。`;
+      if ((operation === 'merge' || operation === 'reserve') && result.queued === true) return `PR #${number} をマージキューに追加しました。`;
+      if ((operation === 'merge' || operation === 'reserve') && result.merged === true) return `PR #${number} をマージしました。`;
+      if (operation === 'reserve' && result.cancelled === true) return result.message || `PR #${number} のマージ予約を取り消しました。`;
+      if (operation === 'reserve' && result.reserved === true) return `条件がそろわなかったため、PR #${number} のレビュー収束後マージを予約しました。`;
+      return operation === 'reserve' ? `PR #${number} のレビュー収束後マージを予約しました。`
+        : operation === 'merge' ? `PR #${number} をマージしました。`
+          : `PR #${number} のマージ予約を取り消しました。`;
     },
   });
 }

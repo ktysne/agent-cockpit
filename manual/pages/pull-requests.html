@@ -324,20 +324,24 @@
   </figure>
 
   <h2 id="pr-reserve">レビュー収束後マージ</h2>
-  <p><span class="ui">レビュー収束後マージ</span> は、クロスレビューが収束し、条件がそろうまで待ち、そろった時点で常駐サーバーがマージする予約です。
-  クロスレビューの最中に、方式とブランチ削除を決めておけます。
+  <p><span class="ui">レビュー収束後マージ</span> を入れると、クロスレビューの収束記録を使ってマージ条件を確認します。
+  条件が残っているときは予約として保存し、そろった時点で常駐サーバーがマージします。
   予約はダッシュボードを開いていなくても実行されます。</p>
-  <p>確認欄で <span class="ui">レビュー収束後マージ</span> を入れると、ボタンが <span class="ui">予約する</span> に変わります。
-  <span class="ui">照合する head SHA</span> は、PR の今の head ではなく、クロスレビューの収束記録のコミットになります。</p>
+  <p>条件がすでにそろっているときは、見出しが「#N を main へマージする」になり、チェックの横に「収束済みのため、すぐにマージします」と出ます。
+  <span class="ui">照合する head SHA</span> には、クロスレビューの収束記録と現在の head に共通する SHA の先頭 7 桁を表示します。
+  ボタンは <span class="ui">マージを実行</span> になり、押すと予約の口で条件を取り直してから、その場でマージします。</p>
+  <p>条件が残っているときは、見出しに「レビュー収束後に」が付き、ボタンが <span class="ui">予約する</span> になります。
+  この場合も <span class="ui">照合する head SHA</span> はクロスレビューの収束記録です。
+  押した時点で条件が満たされていなければ予約が残り、条件がそろわなかったことを知らせます。</p>
   <figure class="guide-map" id="pr-reserve-confirm-map" data-shot="pull-requests-reserve/confirm" data-crop-y="420-1020" data-alt="レビュー収束後マージを入れた確認欄。見出しがレビュー収束後にマージするになり、レビュー収束後マージのチェックが入っている。照合する head の SHA の欄はクロスレビューの収束記録になり、ボタンが予約するになっている">
     <ol class="guide-list">
-      <li data-part="reserve.heading" data-place="left"><b>見出し</b>：「へレビュー収束後にマージする」に変わります。</li>
-      <li data-part="reserve.review" data-place="left"><b><span class="ui">レビュー収束後マージ</span></b>：入っています。</li>
-      <li data-part="reserve.head" data-place="left"><b><span class="ui">照合する head SHA</span></b>：<span class="ui">クロスレビューの収束記録</span> と出ます。</li>
-      <li data-part="reserve.go" data-place="left"><b><span class="ui">予約する</span></b>：予約を保存します。</li>
+      <li data-part="reserve.heading" data-place="left"><b>見出し</b>：条件が残っているときは「#N を main へレビュー収束後にマージする」になります。条件がそろっているときは「#N を main へマージする」になります。</li>
+      <li data-part="reserve.review" data-place="left"><b><span class="ui">レビュー収束後マージ</span></b>：入っています。条件がそろっているときは、横にすぐマージすることを示す注記が出ます。</li>
+      <li data-part="reserve.head" data-place="left"><b><span class="ui">照合する head SHA</span></b>：条件が残っているときは収束記録と表示し、そろっているときは収束記録の SHA の先頭 7 桁が出ます。</li>
+      <li data-part="reserve.go" data-place="left"><b>実行ボタン</b>：条件が残っているときは <span class="ui">予約する</span>、そろっているときは <span class="ui">マージを実行</span> です。どちらも予約の口へ送り、サーバーが条件を確認します。</li>
     </ol>
   </figure>
-  <p>予約すると、PR の行の <span class="ui">マージする</span> は <span class="ui">予約を取り消す</span> に変わり、行が予約中の背景になります。
+  <p>条件が残ったまま予約すると、PR の行の <span class="ui">マージする</span> は <span class="ui">予約を取り消す</span> に変わり、行が予約中の背景になります。
   予約中の札には、方式、予約した時刻、まだ満たしていない条件が出ます。</p>
   <figure class="guide-map" id="pr-reserved-map" data-shot="pull-requests-reserve/reserved" data-crop-y="110-400" data-alt="予約中の PR の行。マージ操作は可能の札の隣に予約を取り消すがある。CI と承認の札の隣に、レビュー収束後にマージ予約中の札があり、方式、予約した時刻、満たしていない条件が書かれている">
     <ol class="guide-list">

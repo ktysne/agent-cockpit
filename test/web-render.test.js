@@ -2222,7 +2222,11 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
-  assert.ok(helpers && component && action);
+  const reservationSources = ['isCompleteCommitSha', 'convergedAtHead', 'pushedAfterConvergence', 'pullRequestReservationWaitReasons', 'pullRequestReservationReady']
+    .map((name) => functionSource(html, name));
+  const resultSources = ['pullRequestRepositoryKey', 'rememberPullRequestMergeResult']
+    .map((name) => functionSource(html, name));
+  assert.ok(helpers && component && action && reservationSources.every(Boolean) && resultSources.every(Boolean));
 
   class FakeElement {
     constructor(tagName) {
@@ -2242,6 +2246,8 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     constructor(text) { this.textContent = text; }
   }
   const sent = [];
+  const responses = [{}, { reserved: true }, { merged: true, branchDeleted: false, warning: null }, { queued: true }];
+  let responseIndex = 0;
   const key = 'e'.repeat(64);
   const pullRequest = {
     mergeSessionId: 'session-pr', number: 42, title: 'Feature PR', url: 'https://github.com/acme/widget/pull/42',
@@ -2261,6 +2267,9 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     pullRequestMergeConfirmations: new Map(),
     pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null,
     pullRequestMergeInFlight: new Set(),
+    pullRequestMergeResults: new Map(),
+    nextPullRequestMergeResultId: 0,
+    CI_LABELS: { pass: { wait: 'CI 成功' }, unknown: { wait: 'CI 状態不明' } },
     displayPreferences: { mergeAfterReviewDefault: false },
     lastState: { pullRequests: [group] },
     appendPullRequestBadges() {},
@@ -2268,7 +2277,7 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     durationAgoLabel: () => '時刻不明',
     postUiAction: async (url, body) => {
       sent.push({ url, body });
-      return { ok: true, json: async () => ({}) };
+      return { ok: true, json: async () => responses[responseIndex++] };
     },
     refresh: async () => {},
     render() {},
@@ -2276,6 +2285,8 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
   });
   const source = [
     helpers,
+    ...reservationSources,
+    ...resultSources,
     component,
     action,
   ].join('\n');
@@ -2286,6 +2297,7 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     for (const child of root.children || []) nodes.push(...flatten(child));
     return nodes;
   };
+  const textOf = (node) => [node.textContent, ...(node.children || []).map(textOf)].join('');
   const mergeRoot = new FakeElement('div');
   context.appendPullRequestMergeConfirmation(mergeRoot, group, pullRequest);
   const mergeNodes = flatten(mergeRoot);
@@ -2319,6 +2331,33 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
   assert.equal(reserveNodes.find((node) => node.dataset?.mergeAfterReview === 'true').checked, true);
   assert.equal(reserveButton.textContent, '予約する');
   await context.runPullRequestMergeAction(reserveButton, 'merge');
+  assert.equal(context.liveStatus.textContent, '条件がそろわなかったため、PR #42 のレビュー収束後マージを予約しました。');
+
+  pullRequest.headRefOid = 'b'.repeat(40);
+  pullRequest.baseRefName = 'main';
+  pullRequest.effectiveBase = 'main';
+  pullRequest.crossReview = { round: 2, triage: { round: 2, sha: pullRequest.headRefOid, outcome: 'converged' } };
+  pullRequest.ci = 'pass';
+  pullRequest.review = 'approved';
+  pullRequest.blocker = null;
+  pullRequest.operationBlocker = null;
+  pullRequest.canMerge = true;
+  context.pullRequestMergeOptions.set(key, { method: 'merge', deleteBranch: false, mergeAfterReview: true });
+  const readyRoot = new FakeElement('div');
+  context.appendPullRequestMergeConfirmation(readyRoot, group, pullRequest);
+  const readyNodes = flatten(readyRoot);
+  const readyButton = readyNodes.find((node) => node.dataset?.mergeGo === key);
+  const readySha = readyNodes.find((node) => node.tagName === 'li' && node.children?.[0]?.textContent === '照合する head SHA: ');
+  assert.ok(readyNodes.some((node) => textOf(node) === '#42 を main へマージする'));
+  assert.ok(readyNodes.some((node) => node.textContent === '収束済みのため、すぐにマージします'));
+  assert.equal(readySha.children[1].textContent, 'b'.repeat(7));
+  assert.equal(readyButton.textContent, 'マージを実行');
+  await context.runPullRequestMergeAction(readyButton, 'merge');
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージしました。');
+  assert.equal(context.pullRequestMergeResults.get('acme/widget')[0].number, 42);
+  await context.runPullRequestMergeAction(readyButton, 'merge');
+  assert.equal(context.liveStatus.textContent, 'PR #42 をマージキューに追加しました。');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.queuedPullRequestMerges.get(key))), { headRefOid: 'b'.repeat(40) });
 
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
     {
@@ -2328,6 +2367,14 @@ test('GitHub の自動削除設定を示し、チェックで即時マージと�
     {
       url: '/api/pull-requests/reserve',
       body: { number: 42, registration_key: key, headRefOid: 'abc123', method: 'merge', deleteBranch: false },
+    },
+    {
+      url: '/api/pull-requests/reserve',
+      body: { number: 42, registration_key: key, headRefOid: 'b'.repeat(40), method: 'merge', deleteBranch: false },
+    },
+    {
+      url: '/api/pull-requests/reserve',
+      body: { number: 42, registration_key: key, headRefOid: 'b'.repeat(40), method: 'merge', deleteBranch: false },
     },
   ]);
 });

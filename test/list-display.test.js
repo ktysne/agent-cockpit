@@ -912,9 +912,12 @@ test('予約中の PR は待ち条件と取消操作を出し、マージでき�
 });
 
 test('予約待ち条件は承認任意ならレビュー承認を待たない', () => {
+  const webWaitReasonsSource = functionSource(web, 'pullRequestReservationWaitReasons');
+  const webReadySource = functionSource(web, 'pullRequestReservationReady');
   const webWaitSource = functionSource(web, 'pullRequestReservationWaits');
+  const mockWaitReasonsSource = functionSource(mock, 'reservationWaitReasons');
   const mockWaitSource = functionSource(mock, 'reservationWait');
-  assert.ok(webWaitSource && mockWaitSource);
+  assert.ok(webWaitReasonsSource && webReadySource && webWaitSource && mockWaitReasonsSource && mockWaitSource);
 
   const webContext = pageContext(web, {
     CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
@@ -925,10 +928,16 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
     CI_LABELS: { unknown: { wait: 'CI 状態不明' } },
     convergedAtHead: () => true,
     mergeOperationBlocker: (_product, pullRequest) => pullRequest.operationBlocker,
+    effective: (_product, pullRequest) => ({ base: pullRequest.effectiveBase }),
+    prKey: () => 'product#1',
     pushedAfterConvergence: () => false,
+    ui: { reviewSkips: {} },
   });
-  vm.runInContext(`${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
-  vm.runInContext(`${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+  vm.runInContext(`${webWaitReasonsSource}\n${webReadySource}\n${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits; this.reservationReady = pullRequestReservationReady;`, webContext);
+  vm.runInContext(`${mockWaitReasonsSource}\n${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+
+  const group = { defaultBranch: 'main', mergeMethods: ['squash'] };
+  const product = { repo: { defaultBranch: 'main', methods: ['squash'] } };
 
   for (const scenario of [
     { review: 'approved', shouldWaitForReview: false },
@@ -936,12 +945,19 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
     { review: 'required', shouldWaitForReview: true },
     { review: 'changes', shouldWaitForReview: true },
   ]) {
-    const pullRequest = { ci: 'pass', review: scenario.review, operationBlocker: 'ドラフト' };
-    const webWaits = webContext.reservationWaits(pullRequest);
-    const mockWaits = mockContext.reservationWaits({}, pullRequest);
+    const operationBlocker = scenario.review === 'required' ? 'レビューの承認待ち'
+      : scenario.review === 'changes' ? '変更を求められている' : null;
+    const pullRequest = {
+      ci: 'pass', review: scenario.review, operationBlocker, blocker: operationBlocker,
+      canMerge: !operationBlocker, baseRefName: 'main', effectiveBase: 'main',
+    };
+    const webWaits = webContext.reservationWaits(pullRequest, group, 'squash');
+    const mockWaits = mockContext.reservationWaits(product, pullRequest, 'squash');
     const reviewWait = 'GitHub のレビュー承認待ち';
-    assert.equal(webWaits.includes(reviewWait), scenario.shouldWaitForReview, `画面: ${scenario.review}`);
-    assert.equal(mockWaits.includes(reviewWait), scenario.shouldWaitForReview, `モック: ${scenario.review}`);
+    const reportsReviewWait = (waiting) => waiting.includes(reviewWait) || Boolean(operationBlocker && waiting.includes(`マージ条件待ち: ${operationBlocker}`));
+    assert.equal(reportsReviewWait(webWaits), scenario.shouldWaitForReview, `画面: ${scenario.review}`);
+    assert.equal(reportsReviewWait(mockWaits), scenario.shouldWaitForReview, `モック: ${scenario.review}`);
+    assert.equal(webContext.reservationReady(pullRequest, group, 'squash'), !scenario.shouldWaitForReview, `画面: ${scenario.review} の実行可否`);
   }
 });
 
