@@ -1354,8 +1354,6 @@ function decisionCard(p, session, d, withTag) {
 }
 
 const CROSS_REVIEW_MAX_ROUNDS = 3;
-// 「レビュー済み」は、主セッションが記録した結論が converged で、その SHA が今の head のときだけ言う。
-// 結論の記録が無いか往復の数が合わなければ、最後にレビューに回した head との比較だけを出す。
 // モックの例示用 SHA は短縮形なので、完全 SHA の形式検証を行わない。
 function convergedAtHead(pr) {
   const review = pr.xr;
@@ -1369,6 +1367,7 @@ function pushedAfterConvergence(pr) {
   return triage?.outcome === 'converged' && triage.sha !== pr.sha;
 }
 
+// 未収束の往復状態を優先し、収束済みなら収束 SHA、それ以外の比較可能な記録なら reviewed SHA を現在の head と比べる。
 function crossReviewState(pr) {
   if (pr.xr === undefined) return { cls: 'mute', text: '', warn: null };
   if (pr.xr?.notRequired === true) return { cls: 'mute', text: 'レビュー不要', warn: null };

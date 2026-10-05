@@ -496,7 +496,6 @@ test('モックの待ち時間設定を localStorage の UI 状態へ保存す�
     ui: { longWaitMinutes: 15, idleHideMinutes: 30 },
     captureDisplayPreferences: () => ({}),
     saveDisplayPreferences: () => { saved += 1; return true; },
-    longWaitMinutesInput: input,
     render: () => { rendered += 1; },
     longWaitMinutesInput: input,
     awayAnswerWaitMinutesInput: awaySettingInput,
