@@ -6,13 +6,15 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 
 | 文書 | 内容 |
 |---|---|
-| [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 開発で守ること(待ち受けと照合、秘匿、マージの条件、モックとの整合など)。2 つは同じ内容に保つ |
+| [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 開発で守ること。Claude Code向けとCodex向けの規約は独立して管理する |
 | [mock/index.html](../mock/index.html) | 開発者と合意した最終形の見た目と機能の正本。実装はモックにそろえる |
 | [docs/handover/2026-10-02.md](handover/2026-10-02.md) | 実装の計画書。決定済みの判断、対応順序、判断待ち、落とし穴 |
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |
 | [docs/design/manual.md](design/manual.md) | 利用者向けマニュアルの構成、デモ状態、画面の撮影、配信、検査の設計 |
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
 | [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は `poc/` にある |
+| [適合試験の設計](design/provider-conformance-testing.md) | Claude/Codex共通機能の適合シナリオ、検証層、結果の扱い |
+| [共有契約](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapterの適合証明ではない |
 | [docs/cross-review.md](cross-review.md) / [.cross-review.md](../.cross-review.md) | AI クロスレビューの手順と、このリポジトリのレビュー観点 |
 | [docs/japanese-guard.md](japanese-guard.md) | 開発者に見える文を日本語に保つフック(クラウドセッション向け) |
 

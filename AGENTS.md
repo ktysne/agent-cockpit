@@ -33,9 +33,16 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - 各機能を実装するときは、モックの該当箇所と照らし合わせて食い違いが無いかを確かめる
 - 検証の結果、実現できないことや表現を変える必要が出たら、計画書の決定済みの判断に記録したうえで、その場でモックにも反映する。モックと計画書と実装を食い違わせたままにしない
 
+## Claude/Codex適合試験
+
+ClaudeとCodexで同じ結果を期待するCockpit機能は、本実装に合わせて [docs/design/provider-conformance-testing.md](docs/design/provider-conformance-testing.md) の適合試験を機能単位で追加し、関連IssueとPRの完了条件にする。
+全機能の実装後に横断する実runtime統合試験を行う。
+未実装側や未実行runtimeは成功や同等と扱わず、PRに結果と未確認理由を記録する。
+
 ## AIクロスレビュー
 
 手順は [docs/cross-review.md](docs/cross-review.md) と cross-review スキルに従う。観点は [.cross-review.md](.cross-review.md)。
+通常のCodexレビューは既定のGPT-6.1 Sol、effort mediumを使う。Astraは、AGENTS.mdで相談が必要とされる困難な設計判断などに限って使う。
 
 ## テスト
 
