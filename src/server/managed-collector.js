@@ -184,7 +184,7 @@ function createNativeProviderAdapter(provider) {
       return { status: 'unknown', reason: 'actor_binding_unverified' };
     }
     try {
-      await transport.resumeLoadedThread(nativeId);
+      await transport.resumeLoadedThread(nativeId, isStillVerified);
       return { status: 'resumed', reason: null };
     } catch {
       return { status: 'unknown', reason: 'thread_resume_failed' };
@@ -330,6 +330,43 @@ function createManagedCollector(options = {}) {
   const proofHandles = new Map();
   const requestRecords = new Map();
   const periodTombstones = new Set();
+  const observationRevisions = new Map();
+  const activeObservationReads = new Map();
+
+  function trimObservationRevisions() {
+    const limit = OBSERVATION_LIMIT + activeObservationReads.size;
+    if (observationRevisions.size <= limit) return;
+    for (const nativeId of observationRevisions.keys()) {
+      if (!observations.has(nativeId) && !activeObservationReads.has(nativeId)) {
+        observationRevisions.delete(nativeId);
+        if (observationRevisions.size <= limit) break;
+      }
+    }
+  }
+
+  function advanceObservationRevision(nativeId) {
+    observationRevisions.set(nativeId, (observationRevisions.get(nativeId) || 0) + 1);
+    trimObservationRevisions();
+  }
+
+  function beginObservationRead(nativeId) {
+    if (!activeObservationReads.has(nativeId) && activeObservationReads.size >= OBSERVATION_LIMIT) return null;
+    const active = activeObservationReads.get(nativeId) || 0;
+    activeObservationReads.set(nativeId, active + 1);
+    if (!observationRevisions.has(nativeId)) observationRevisions.set(nativeId, 0);
+    return observationRevisions.get(nativeId);
+  }
+
+  function endObservationRead(nativeId) {
+    const active = activeObservationReads.get(nativeId) || 0;
+    if (active <= 1) activeObservationReads.delete(nativeId);
+    else activeObservationReads.set(nativeId, active - 1);
+    trimObservationRevisions();
+  }
+
+  function observationRevisionMatches(nativeId, revision) {
+    return observationRevisions.get(nativeId) === revision;
+  }
 
   function periodKey(conversationId, executionId, sessionId) {
     return JSON.stringify([conversationId, executionId, sessionId]);
@@ -399,8 +436,22 @@ function createManagedCollector(options = {}) {
       scope,
       connection: { state: connectionState, generation: connectionGeneration, providerVersion },
       capabilities: adapter.capabilities,
-      observations: [...observations.values()],
+      observations: [...observations.values()].map(observationForSnapshot),
     });
+  }
+
+  function observationForSnapshot(record) {
+    const projected = { ...record };
+    const currentPeriod = findRegisteredPeriod(record.nativeId);
+    const periodMatches = samePeriod(currentPeriod, record);
+    const proofLive = periodMatches && record.verifiedLaunchRef &&
+      record.verifiedGeneration === connectionGeneration && Boolean(resolveProof(record.verifiedLaunchRef));
+    if (!proofLive) {
+      if (record.verifiedLaunchRef) proofHandles.delete(record.verifiedLaunchRef);
+      if (projected.status !== 'unknown') projected.status = 'unknown';
+      projected.reason ||= periodMatches ? 'actor_binding_unverified' : 'registered_period_changed';
+    }
+    return projected;
   }
 
   function publicObservation(record) {
@@ -408,6 +459,7 @@ function createManagedCollector(options = {}) {
   }
 
   function notifyObservation(record) {
+    advanceObservationRevision(record.nativeId);
     if (!onObservation) return;
     try { onObservation(publicObservation(record)); } catch {}
   }
@@ -511,7 +563,7 @@ function createManagedCollector(options = {}) {
           return;
       }
       const verified = verifiedLaunchRef && Boolean(resolveProof(verifiedLaunchRef));
-      if (verified && ['completed', 'interrupted'].includes(event.turnState) && record.turnState === 'active' &&
+      if (provider === 'codex' && verified && ['completed', 'interrupted'].includes(event.turnState) && record.turnState === 'active' &&
           (!record.turnId || record.turnId !== event.turnId)) {
         record.status = 'unknown';
         record.reason = 'turn_identity_unverified';
@@ -520,11 +572,13 @@ function createManagedCollector(options = {}) {
         return;
       }
       if (verified) {
-          record.status = event.activity;
-          record.activity = event.activity;
-          record.turnState = event.turnState;
-          record.turnId = event.turnId;
-          record.reason = null;
+        record.status = event.activity;
+        record.activity = event.activity;
+        record.turnState = event.turnState;
+        record.turnId = event.turnId;
+        record.reason = null;
+        record.verifiedLaunchRef = verifiedLaunchRef;
+        record.verifiedGeneration = connectionGeneration;
         } else {
           record.status = 'unknown';
           record.reason ||= 'actor_binding_unverified';
@@ -822,50 +876,75 @@ function createManagedCollector(options = {}) {
       setUnknown(registered, nativeId, 'period_end_observed');
       return { status: 'unknown', observation: publicObservation(observations.get(nativeId)), reason: 'period_end_observed' };
     }
-    const result = await adapter.readKnownThread(transport, nativeId);
-    if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
-    if (result.status === 'unsupported') {
-      const record = setUnknown(registered, nativeId, result.reason);
-      return { status: 'unsupported', observation: record ? publicObservation(record) : null, reason: result.reason };
+    const revisionAtStart = beginObservationRead(nativeId);
+    if (revisionAtStart === null) return { status: 'unknown', reason: 'observation_capacity' };
+    try {
+      const result = await adapter.readKnownThread(transport, nativeId);
+      if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
+      if (!samePeriod(findRegisteredPeriod(nativeId), registered)) {
+        return { status: 'unknown', reason: 'registered_period_changed' };
+      }
+      if (!observationRevisionMatches(nativeId, revisionAtStart)) {
+        return { status: 'unknown', reason: 'observation_superseded' };
+      }
+      if (result.status === 'unsupported') {
+        const record = setUnknown(registered, nativeId, result.reason);
+        return { status: 'unsupported', observation: record ? publicObservation(record) : null, reason: result.reason };
+      }
+      if (result.status !== 'observed') {
+        invalidateProofsForPeriod(registered);
+        const record = setUnknown(registered, nativeId, result.reason || 'observation_unknown', null, true);
+        return { status: 'unknown', observation: record ? publicObservation(record) : null, reason: result.reason || 'observation_unknown' };
+      }
+      const candidates = findLaunchesForPeriod(registered);
+      let verified = false;
+      let verifiedLaunchRef = null;
+      if (candidates.length === 1) {
+        verified = await reconcileProof(candidates[0].launchRef);
+        if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
+        if (!samePeriod(findRegisteredPeriod(nativeId), registered)) {
+          return { status: 'unknown', reason: 'registered_period_changed' };
+        }
+        if (!observationRevisionMatches(nativeId, revisionAtStart)) {
+          return { status: 'unknown', reason: 'observation_superseded' };
+        }
+        if (verified && resolveProof(candidates[0].launchRef)) verifiedLaunchRef = candidates[0].launchRef;
+        else verified = false;
+      }
+      if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
+      if (!samePeriod(findRegisteredPeriod(nativeId), registered)) {
+        return { status: 'unknown', reason: 'registered_period_changed' };
+      }
+      if (!observationRevisionMatches(nativeId, revisionAtStart)) {
+        return { status: 'unknown', reason: 'observation_superseded' };
+      }
+      const previous = observations.get(nativeId);
+      const sameExecution = samePeriod(previous, registered);
+      const record = {
+        observationId: sameExecution
+          ? previous.observationId
+          : `${connectionGeneration}:${++observationSerial}`,
+        nativeId,
+        conversationId: registered.conversationId,
+        executionId: registered.executionId,
+        sessionId: registered.sessionId,
+        status: verified ? result.activity : 'unknown',
+        activity: verified ? result.activity : sameExecution ? previous.activity : 'unknown',
+        turnState: verified ? result.turnState : sameExecution ? previous.turnState : 'unknown',
+        turnId: verified ? result.turnId : sameExecution ? previous.turnId : null,
+        pendingRequests: sameExecution ? previous.pendingRequests : [],
+        reason: verified ? null : 'actor_binding_unverified',
+        verifiedLaunchRef,
+        verifiedGeneration: verified ? connectionGeneration : null,
+      };
+      observations.delete(nativeId);
+      observations.set(nativeId, record);
+      while (observations.size > OBSERVATION_LIMIT) observations.delete(observations.keys().next().value);
+      notifyObservation(record);
+      return { status: record.status === 'unknown' ? 'unknown' : 'observed', observation: publicObservation(record), reason: record.reason };
+    } finally {
+      endObservationRead(nativeId);
     }
-    if (result.status !== 'observed') {
-      invalidateProofsForPeriod(registered);
-      const record = setUnknown(registered, nativeId, result.reason || 'observation_unknown', null, true);
-      return { status: 'unknown', observation: record ? publicObservation(record) : null, reason: result.reason || 'observation_unknown' };
-    }
-    const candidates = findLaunchesForPeriod(registered);
-    let verified = false;
-    let verifiedLaunchRef = null;
-    if (candidates.length === 1) {
-      verified = await reconcileProof(candidates[0].launchRef);
-      if (verified && resolveProof(candidates[0].launchRef)) verifiedLaunchRef = candidates[0].launchRef;
-      else verified = false;
-    }
-    if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
-    const previous = observations.get(nativeId);
-    const sameExecution = samePeriod(previous, registered);
-    const record = {
-      observationId: sameExecution
-        ? previous.observationId
-        : `${connectionGeneration}:${++observationSerial}`,
-      nativeId,
-      conversationId: registered.conversationId,
-      executionId: registered.executionId,
-      sessionId: registered.sessionId,
-      status: verified ? result.activity : 'unknown',
-      activity: verified ? result.activity : sameExecution ? previous.activity : 'unknown',
-      turnState: verified ? result.turnState : sameExecution ? previous.turnState : 'unknown',
-      turnId: verified ? result.turnId : sameExecution ? previous.turnId : null,
-      pendingRequests: sameExecution ? previous.pendingRequests : [],
-      reason: verified ? null : 'actor_binding_unverified',
-      verifiedLaunchRef,
-      verifiedGeneration: verified ? connectionGeneration : null,
-    };
-    observations.delete(nativeId);
-    observations.set(nativeId, record);
-    while (observations.size > OBSERVATION_LIMIT) observations.delete(observations.keys().next().value);
-    notifyObservation(record);
-    return { status: record.status === 'unknown' ? 'unknown' : 'observed', observation: publicObservation(record), reason: record.reason };
   }
 
   async function resumeKnownThread(nativeId) {

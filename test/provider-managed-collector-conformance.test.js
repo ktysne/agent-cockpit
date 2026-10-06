@@ -210,6 +210,8 @@ function createProductionProofFixture(provider) {
     authority,
     authorityEndCalls,
     owner,
+    ownerActorHandle,
+    ownerRuntimeAdapter: ownerAdapter,
     execution,
     initialLaunch,
     launchesByRef,
@@ -239,6 +241,7 @@ function createTransportFixture(provider, options = {}) {
   const loadedIds = new Set(options.loadedIds || []);
   const readWaiters = [];
   let readMode = options.readMode || 'active';
+  let deferThreadRead = Boolean(options.deferThreadRead);
 
   async function transportFactory(callbacks) {
     const connection = { callbacks, closed: false };
@@ -254,7 +257,7 @@ function createTransportFixture(provider, options = {}) {
           };
         }
         if (method === 'thread/read') {
-          if (options.deferThreadRead) {
+          if (deferThreadRead) {
             return new Promise((resolve) => readWaiters.push(resolve));
           }
           if (readMode === 'failed') throw new Error('fixture read failure');
@@ -279,8 +282,8 @@ function createTransportFixture(provider, options = {}) {
     return transport;
   }
 
-  function releaseRead(nativeId, type = 'active') {
-    const resolve = readWaiters.shift();
+  function releaseRead(nativeId, type = 'active', index = 0) {
+    const [resolve] = readWaiters.splice(index, 1);
     assert.ok(resolve, 'a thread read should be waiting');
     resolve({ thread: { id: nativeId, status: { type } } });
   }
@@ -292,6 +295,7 @@ function createTransportFixture(provider, options = {}) {
     readWaiters,
     releaseRead,
     setReadMode(mode) { readMode = mode; },
+    setReadDeferred(value) { deferThreadRead = Boolean(value); },
     transportFactory,
   };
 }
@@ -318,12 +322,20 @@ function createCollectorFixture(proofFixture, transport, options = {}) {
     runtimeRegistry: proofFixture.runtimeKernel.registry,
     eventAdapter,
     trustedBindingResolver: options.trustedBindingResolver || proofFixture.trustedBindingResolver,
+    onObservation: options.onObservation,
   });
   return { collector, eventAdapter, projection, projected, productionEventAdapter };
 }
 
 function observationFor(collector, nativeId) {
   return collector.snapshot().observations.find((item) => item.nativeId === nativeId);
+}
+
+async function waitForReadWaiters(transport, count) {
+  for (let attempt = 0; attempt < 10 && transport.readWaiters.length < count; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(transport.readWaiters.length, count);
 }
 
 function sendKnownStart(provider, callbacks, nativeId) {
@@ -504,6 +516,13 @@ test('Claude Stop, Interrupt, and SessionEnd stay distinct, and a new period is 
     session_id: nativeId, hook_event_name, hook_at,
   });
 
+  sendHook('Interrupt', 150);
+  assert.deepEqual(
+    [observationFor(harness.collector, nativeId).status, observationFor(harness.collector, nativeId).activity,
+      observationFor(harness.collector, nativeId).turnState, observationFor(harness.collector, nativeId).turnId],
+    ['interrupted', 'interrupted', 'interrupted', null],
+  );
+  sendHook('UserPromptSubmit', 175);
   sendHook('Stop', 200);
   assert.equal(observationFor(harness.collector, nativeId).activity, 'waiting');
   sendHook('Interrupt', 300);
@@ -595,6 +614,124 @@ test('Codex read failures expire cached proof until a successful reread rechecks
     transport.setReadMode('active');
     assert.equal((await harness.collector.observeKnownThread(nativeId)).status, 'observed');
     assert.ok(harness.collector.resolveProof(launchRef));
+  }
+});
+
+test('Codex delayed read from an ended period cannot overwrite the newer period observation', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const observationCalls = [];
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId], deferThreadRead: true });
+  const harness = createCollectorFixture(proofFixture, transport, {
+    onObservation: (observation) => observationCalls.push(observation),
+  });
+  await harness.collector.connect();
+
+  const oldExecutionId = proofFixture.execution.registration.executionId;
+  const oldRead = harness.collector.observeKnownThread(nativeId);
+  await waitForReadWaiters(transport, 1);
+  proofFixture.authority.end(oldExecutionId);
+  const next = proofFixture.addExecutionLaunch('codex-next-period');
+
+  const newRead = harness.collector.observeKnownThread(nativeId);
+  await waitForReadWaiters(transport, 2);
+  transport.releaseRead(nativeId, 'active', 1);
+  assert.equal((await newRead).status, 'observed');
+  const newPeriodObservation = structuredClone(observationFor(harness.collector, nativeId));
+  assert.equal(newPeriodObservation.executionId, next.period.registration.executionId);
+  assert.equal(newPeriodObservation.sessionId, next.period.registration.sessionId);
+  const callbackCount = observationCalls.length;
+
+  transport.releaseRead(nativeId, 'active', 0);
+  const oldResult = await oldRead;
+  assert.notEqual(oldResult.status, 'observed');
+  assert.deepEqual(observationFor(harness.collector, nativeId), newPeriodObservation);
+  assert.equal(observationCalls.length, callbackCount);
+  assert.ok(harness.collector.resolveProof(next.launch.launchRef));
+  const executions = proofFixture.registrationKernel.registry.snapshot().executions;
+  assert.equal(executions.find((item) => item.executionId === oldExecutionId).state, 'ended');
+  assert.equal(executions.find((item) => item.executionId === next.period.registration.executionId).state, 'active');
+});
+
+test('Codex delayed same-period read cannot roll back newer native turn notifications', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const observationCalls = [];
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const harness = createCollectorFixture(proofFixture, transport, {
+    onObservation: (observation) => observationCalls.push(observation),
+  });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  transport.setReadDeferred(true);
+  const oldRead = harness.collector.observeKnownThread(nativeId);
+  await waitForReadWaiters(transport, 1);
+  const callbacks = transport.connections[0].callbacks;
+
+  callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-new' });
+  callbacks.onNotification('turn/completed', {
+    threadId: nativeId,
+    turnId: 'turn-new',
+    turn: { status: 'completed' },
+  });
+  const completedTurn = structuredClone(observationFor(harness.collector, nativeId));
+  assert.deepEqual(
+    [completedTurn.status, completedTurn.activity, completedTurn.turnState, completedTurn.turnId],
+    ['completed', 'completed', 'completed', 'turn-new'],
+  );
+  const callbackCount = observationCalls.length;
+
+  transport.releaseRead(nativeId, 'active');
+  await oldRead;
+  assert.deepEqual(observationFor(harness.collector, nativeId), completedTurn);
+  assert.equal(observationCalls.length, callbackCount);
+});
+
+test('snapshot marks revoked proof unknown while retaining the last confirmed turn without a callback', async () => {
+  for (const revocation of ['execution-period', 'owner-actor']) {
+    const proofFixture = createProductionProofFixture('codex');
+    const nativeId = proofFixture.execution.identity.nativeId;
+    const observationCalls = [];
+    const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+    const harness = createCollectorFixture(proofFixture, transport, {
+      onObservation: (observation) => observationCalls.push(observation),
+    });
+    await harness.collector.connect();
+    await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+    const callbacks = transport.connections[0].callbacks;
+    callbacks.onNotification('turn/started', {
+      threadId: nativeId,
+      turnId: 'turn-a',
+      token: 'proof-revocation-secret-marker',
+      rawMessage: 'private turn payload',
+    });
+    const live = harness.collector.snapshot();
+    const liveObservation = live.observations[0];
+    const liveProof = harness.collector.resolveProof(proofFixture.initialLaunch.launchRef);
+    assert.ok(liveProof);
+    assert.equal(liveObservation.status, 'active');
+    const callbackCount = observationCalls.length;
+
+    if (revocation === 'execution-period') {
+      proofFixture.authority.end(proofFixture.execution.registration.executionId);
+    } else {
+      assert.equal(proofFixture.ownerRuntimeAdapter.endActor(proofFixture.ownerActorHandle), true);
+    }
+
+    const revoked = harness.collector.snapshot();
+    const observation = revoked.observations[0];
+    assert.equal(observation.status, 'unknown', revocation);
+    assert.equal(typeof observation.reason, 'string', revocation);
+    assert.deepEqual(
+      [observation.activity, observation.turnState, observation.turnId],
+      [liveObservation.activity, liveObservation.turnState, liveObservation.turnId],
+      revocation,
+    );
+    assert.equal(harness.collector.resolveProof(proofFixture.initialLaunch.launchRef), null, revocation);
+    assert.equal(proofFixture.runtimeAdapter.checkCurrentProof(proofFixture.initialLaunch.launchRef, liveProof).ok, false, revocation);
+    assert.equal(observationCalls.length, callbackCount, revocation);
+    assert.equal(JSON.stringify(revoked).includes('proof-revocation-secret-marker'), false, revocation);
+    assert.equal(JSON.stringify(revoked).includes('private turn payload'), false, revocation);
   }
 });
 

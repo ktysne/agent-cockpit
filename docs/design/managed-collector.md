@@ -16,7 +16,7 @@ collectorは起動時に自動接続しない。
 Codexでは`expectedHome`を必須とし、initialize応答の`codexHome`を絶対pathとして比較する。
 
 `transportFactory({ onNotification, onServerRequest, onDisconnect })`は、認証済みclientの`request`、`notify`、`close`を返す。
-Codexのclientはさらに`confirmLoadedThread`、`resumeLoadedThread`を返す。
+Codexのclientはさらに`confirmLoadedThread`、`resumeLoadedThread(threadId, isStillVerified)`を返す。
 Codex adapterが同一接続上で`initialize`を一度だけ要求し、成功後に`initialized`を一度だけ通知する。
 `connect`はCodex HOME照合後にだけ`runtimeAdapter.openConnection`を呼ぶ。
 
@@ -31,7 +31,9 @@ Claudeの`SessionStart`と`UserPromptSubmit`はactive、`Stop`はwaiting、`Inte
 
 `observeKnownThread(nativeId)`は、provider固有の読取能力で登録済みnative identityを照合する。
 Codexはloaded listで対象threadの存在を確認した後に`thread/read`を行い、read応答のthread IDと登録snapshotを照合する。
-resumeはtransportの`resumeLoadedThread(nativeId)`だけを使い、呼出し引数はthread ID一つにする。
+resumeはtransportの`resumeLoadedThread(nativeId, isStillVerified)`だけを使う。
+transportはloaded確認をawaitした直後、送信前に同期guardを実行する。
+guardが省略、例外、thenable、またはliteral `true`以外を返す場合は拒否し、wireへ`{ threadId }`だけを送る。
 `thread/start`、登録authority、HOME設定の変更を呼ばない。
 
 `reconcileProof(launchRef)`はtrusted composition向けの非同期methodで、trusted issuerからfreshなproofを照合してbooleanを返し、handleはcollector内へcacheする。
@@ -106,6 +108,12 @@ snapshotの復元はproof、pending requestの解決、execution再登録に使�
 | ID-F04-P03 | 切断後に同一registered executionへ再接続し、resolverを再実行する。 | connection generationを増やす。新proofがlive確認されるまでunknown。execution数は変えない。 | snapshotからのproof復活、旧応答受理、新period作成は各0回。 |
 | ID-F04-P04 | active turn後に欠落statusのCodex `turn/completed`、または現在と異なるturn IDの終端通知を送る。 | statusはunknown qualityとなり、最後に確認したactive turn stateは維持する。 | 別turnの終端化とperiod mutationは各0回。 |
 | ID-F04-P05 | Codex pending request後に同じnative IDで新executionを開始し、旧request resolutionを送る。 | 新executionに旧pendingを引き継がず、旧resolutionを拒否する。 | 新period request rowへの付け替え、resolutionによる新period state更新は各0回。 |
+| ID-F04-P06 | Claudeでactive状態を確認した後、turn IDを持たない`Interrupt` hookを受け取る。 | explicit hookに基づいてstatus、activity、turnStateをinterruptedへ更新する。 | Codexのturn identity guardをClaudeへ適用すること、period mutationは各0回。 |
+| ID-F04-P07 | 登録済みperiodの`thread/read`待機中に同じnative IDを新しいexecutionへ切り替え、旧readを返す。 | 旧readとそのissuer結果を拒否し、新periodのobservationを保持する。 | 旧period結果によるobservation更新、callback通知、proof設定は各0回。 |
+| ID-F04-P08 | 同じperiodのread待機中に、より新しいnative notificationを適用してから旧readを返す。 | 旧readを`observation_superseded`として拒否し、新しいactivity/turnを保持する。 | 古いreadによるstate巻き戻しとcallback通知は各0回。 |
+| ID-F04-P09 | 既知observationのsnapshot生成前にactive periodまたはlive proofを失効させる。 | snapshotだけをunknown qualityへ下げ、最後に確認したactivity/turn値を保持する。 | onObservation通知、observation revision更新、period mutationは各0回。 |
+| ID-F04-P10 | Codexのloaded確認をawaitした後、resume直前にproof guardが省略、false、例外、またはthenableを返す。 | resumeを拒否し、確認済みthreadだけを扱う。 | `thread/resume`送信、権限や設定の上書き、period mutationは各0回。 |
+| ID-F04-P11 | connectionまたはremote CLI preflightのawait中にprocess managerをstopする。 | operation generationを失効させ、遅れて返ったtransportを登録せずcloseする。未spawnのCLIは起動せず、既にspawn済みのowned childは停止する。 | stop後の接続採用、所有外processの停止、未管理childの残存は各0回。 |
 
 ## 検証と採用境界
 
@@ -113,9 +121,11 @@ fixtureは両provider adapterとtransport callbackを通してscenarioを確認�
 
 fixtureのtrusted resolverはissuer境界とlive proof checkを確かめるものであり、実runtimeのnative binding証拠を実証しない。
 
-core/conformance testsは13/13、transport/process testsは11/11、HTTP snapshot testsは4/4で成功した。
+core/conformance testsは16/16、transport/process testsは14/14、HTTP snapshot testsは4/4で成功した。
 
-全体の`npm test`は1208/1208成功し、failure、cancel、skip、todoは0件だった。
+修正後の最初の統合実行では1,213件が成功し、既存で変更していない`poc/codex-pr-review-notifications/existing-probe.test.js`のファイル失敗が1件あったが、詳細な原因は出力されなかった。
+同ファイルの単独再実行は1/1で成功し、その後に単独実行した`npm test`は1,214件成功、失敗・キャンセル・スキップ・TODOは0件だった。
+このファイル失敗の根因は未確認であり、probeとの干渉も確認していない。
 
 Codex app-serverの公式protocolは[Codex repository](https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol)を参照する。
 
@@ -129,8 +139,8 @@ Codex runtime 0.160.1の隔離probeでは、認証、HOME照合、loaded listの
 
 初期接続開始の失敗は根因未特定のためbounded retryを追加し、最終probeでは上記条件を通過した。
 
+lifecycle修正後にCodex runtime 0.160.1の薄い隔離probeを再実行し、再度成功した。
 probeは通常HOME、外部repo、secret fileを変更せず、モデルturnは0回だった。
-
-remote環境の実turnとnative actor/currentProof bindingは未確認であり、production adoptionの根拠にしない。
+native actor bindingとremote CLIの実turnは未確認であり、production adoptionの根拠にしない。
 
 実runtimeのrunner binding、HOME導入、native actor/currentProof連携は#170/#171-B/#180-Aで確認する。

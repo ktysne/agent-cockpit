@@ -99,6 +99,15 @@ function minimalServerRequestParams(value) {
   return result;
 }
 
+function isThenable(value) {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  let then;
+  try { then = value.then; } catch { return true; }
+  if (typeof then !== 'function') return false;
+  try { Promise.resolve(value).catch(() => {}); } catch {}
+  return true;
+}
+
 function parseHttpHeaders(headerText) {
   const lines = headerText.split('\r\n');
   const status = lines.shift();
@@ -319,8 +328,12 @@ class WebSocketJsonRpcTransport {
     throw transportError('loaded_scan_limit');
   }
 
-  async resumeLoadedThread(threadId) {
+  async resumeLoadedThread(threadId, isStillVerified) {
+    if (typeof isStillVerified !== 'function') throw transportError('resume_proof_check_required');
     if (!await this.confirmLoadedThread(threadId)) throw transportError('thread_not_loaded');
+    let verified;
+    try { verified = isStillVerified(); } catch { throw transportError('resume_proof_unverified'); }
+    if (isThenable(verified) || verified !== true) throw transportError('resume_proof_unverified');
     return this.sendRequest('thread/resume', { threadId });
   }
 
@@ -663,7 +676,7 @@ async function createCodexManagedTransport(options = {}) {
     request: (method, params) => transport.request(method, params),
     notify: (method, params) => transport.notify(method, params),
     confirmLoadedThread: (threadId) => transport.confirmLoadedThread(threadId),
-    resumeLoadedThread: (threadId) => transport.resumeLoadedThread(threadId),
+    resumeLoadedThread: (threadId, isStillVerified) => transport.resumeLoadedThread(threadId, isStillVerified),
     close: () => transport.close(),
     snapshot: () => transport.safeSnapshot,
   });

@@ -30,7 +30,7 @@ test('managed transport authenticates loopback WebSocket and restricts outbound 
   assert.equal(initialize.codexHome, 'C:\\managed\\codex');
   await transport.notify('initialized', {});
   assert.deepEqual(await transport.request('thread/loaded/list', { limit: 100 }), { data: [THREAD_ID] });
-  await transport.resumeLoadedThread(THREAD_ID);
+  await transport.resumeLoadedThread(THREAD_ID, () => true);
 
   assert.deepEqual(fixture.requests.map(({ method }) => method), [
     'initialize', 'initialized', 'thread/loaded/list', 'thread/loaded/list', 'thread/resume',
@@ -181,11 +181,66 @@ test('loaded-thread confirmation is required before resume', async (t) => {
   await transport.request('initialize', { clientInfo: { name: 'test' }, capabilities: {} });
   await transport.notify('initialized', {});
   assert.equal(await transport.confirmLoadedThread(THREAD_ID), true);
-  await transport.resumeLoadedThread(THREAD_ID);
+  await transport.resumeLoadedThread(THREAD_ID, () => true);
   assert.deepEqual(fixture.requests.filter((request) => request.method === 'thread/loaded/list').map((request) => request.params), [
     { limit: 100 }, { limit: 100, cursor: 'cursor-1' },
     { limit: 100 }, { limit: 100, cursor: 'cursor-1' },
   ]);
+  await transport.close();
+});
+
+test('resume requires a synchronous live-proof check after its final loaded confirmation', async (t) => {
+  let holdNextLoadedList = false;
+  let pendingLoadedResponse = null;
+  const fixture = await createWebSocketFixture({
+    token: TOKEN,
+    respond(method, params, message, socket) {
+      if (method === 'thread/loaded/list' && holdNextLoadedList) {
+        holdNextLoadedList = false;
+        pendingLoadedResponse = { message, socket };
+        return null;
+      }
+      return undefined;
+    },
+  });
+  t.after(() => fixture.close());
+  const transport = await createCodexManagedTransport({
+    endpoint: fixture.endpoint,
+    capabilityToken: TOKEN,
+    onNotification() {},
+    onServerRequest() {},
+    onDisconnect() {},
+  });
+  await transport.request('initialize', { clientInfo: { name: 'test' }, capabilities: {} });
+  await transport.notify('initialized', {});
+  assert.equal(await transport.confirmLoadedThread(THREAD_ID), true);
+
+  let proofLive = true;
+  let proofCheckCount = 0;
+  holdNextLoadedList = true;
+  const staleResume = transport.resumeLoadedThread(THREAD_ID, () => {
+    proofCheckCount += 1;
+    return proofLive;
+  });
+  await fixture.waitFor(() => pendingLoadedResponse !== null);
+  proofLive = false;
+  writeServerMessage(pendingLoadedResponse.socket, {
+    id: pendingLoadedResponse.message.id,
+    result: { data: [THREAD_ID] },
+  });
+  await assert.rejects(staleResume, (error) => error.code === 'resume_proof_unverified');
+  assert.equal(proofCheckCount, 1);
+  assert.equal(fixture.requests.some((request) => request.method === 'thread/resume'), false);
+
+  await assert.rejects(
+    transport.resumeLoadedThread(THREAD_ID, () => Promise.resolve(true)),
+    (error) => error.code === 'resume_proof_unverified',
+  );
+  await assert.rejects(
+    transport.resumeLoadedThread(THREAD_ID),
+    (error) => error.code === 'resume_proof_check_required',
+  );
+  assert.equal(fixture.requests.some((request) => request.method === 'thread/resume'), false);
   await transport.close();
 });
 
@@ -242,7 +297,7 @@ async function createWebSocketFixture(options) {
           if (message.method === 'initialized' && options.afterInitialized) options.afterInitialized(socket);
           continue;
         }
-        const configured = options.respond && options.respond(message.method, message.params);
+        const configured = options.respond && options.respond(message.method, message.params, message, socket);
         if (configured === null) continue;
         let result;
         if (message.method === 'initialize') result = { codexHome: 'C:\\managed\\codex', userAgent: 'codex_cli/0.160.1' };

@@ -272,6 +272,13 @@ function publicTransportFailure(code) {
   return 'transport_connect_failed';
 }
 
+function closeLateTransport(transport) {
+  try {
+    const closing = transport?.close?.();
+    if (closing && typeof closing.then === 'function') Promise.resolve(closing).catch(() => {});
+  } catch {}
+}
+
 function registerOwnedChild(child, records, kind) {
   const record = { child, kind, exited: false, exitCode: null, signal: null, exitPromise: null, resolveExit: null };
   record.exitPromise = new Promise((resolve) => { record.resolveExit = resolve; });
@@ -368,12 +375,23 @@ function createCodexManagedProcessManager(options = {}) {
   const transports = new Set();
   const remoteCliRecords = new Set();
   let state = 'created';
+  let operationGeneration = 0;
+  let stopRequested = false;
   let endpoint = null;
   let capabilityToken = null;
   let serverRecord = null;
   let startPromise = null;
   let stopPromise = null;
   let failureCode = null;
+
+  function isCurrentOperation(generation) {
+    return !stopRequested && generation === operationGeneration && state === 'running' &&
+      !(serverRecord && serverRecord.exited);
+  }
+
+  function requireCurrentOperation(generation) {
+    if (!isCurrentOperation(generation)) throw processError('server_not_running');
+  }
 
   function safeSnapshot() {
     return Object.freeze({
@@ -444,14 +462,15 @@ function createCodexManagedProcessManager(options = {}) {
   }
 
   async function connect(callbacks = {}) {
-    if (state !== 'running' || !endpoint || !capabilityToken) throw processError('server_not_running');
+    const generation = operationGeneration;
+    if (!isCurrentOperation(generation) || !endpoint || !capabilityToken) throw processError('server_not_running');
     if (typeof callbacks.onNotification !== 'function' || typeof callbacks.onServerRequest !== 'function' ||
         typeof callbacks.onDisconnect !== 'function') {
       throw processError('transport_callbacks_required');
     }
     const deadline = Date.now() + connectTimeoutMs;
     let lastFailureCode = 'transport_connect_failed';
-    while (state === 'running' && Date.now() < deadline) {
+    while (isCurrentOperation(generation) && Date.now() < deadline) {
       let transport;
       let established = false;
       const remainingMs = deadline - Date.now();
@@ -463,7 +482,7 @@ function createCodexManagedProcessManager(options = {}) {
         try { callbacks.onDisconnect(event); } catch {}
       };
       try {
-        transport = await transportFactory({
+        const createdTransport = await transportFactory({
           endpoint,
           capabilityToken,
           timeoutMs: attemptTimeoutMs,
@@ -471,27 +490,35 @@ function createCodexManagedProcessManager(options = {}) {
           onServerRequest: callbacks.onServerRequest,
           onDisconnect,
         });
+        if (!isCurrentOperation(generation)) {
+          closeLateTransport(createdTransport);
+          throw processError('server_not_running');
+        }
+        transport = createdTransport;
+        requireCurrentOperation(generation);
         established = true;
         transports.add(transport);
         return transport;
       } catch (error) {
+        if (!isCurrentOperation(generation)) throw processError('server_not_running');
         lastFailureCode = error && typeof error.code === 'string' && /^[a-z0-9_]{1,64}$/.test(error.code)
           ? error.code
           : 'transport_connect_failed';
         if (lastFailureCode === 'handshake_rejected') throw processError('transport_auth_rejected');
-        if (state !== 'running' || (serverRecord && serverRecord.exited)) throw processError('server_not_running');
         await delay(Math.min(CONNECT_RETRY_DELAY_MS, Math.max(0, deadline - Date.now())));
+        requireCurrentOperation(generation);
       }
     }
     throw processError(publicTransportFailure(lastFailureCode));
   }
 
   async function launchRemoteCLI({ threadId } = {}) {
-    if (state !== 'running' || !endpoint || !capabilityToken) throw processError('server_not_running');
+    const generation = operationGeneration;
+    if (!isCurrentOperation(generation) || !endpoint || !capabilityToken) throw processError('server_not_running');
     if (!isIdentifier(threadId)) throw processError('invalid_thread_id');
     let preflightTransport;
     try {
-      preflightTransport = await transportFactory({
+      const createdTransport = await transportFactory({
         endpoint,
         capabilityToken,
         timeoutMs: options.transportTimeoutMs,
@@ -499,17 +526,27 @@ function createCodexManagedProcessManager(options = {}) {
         onServerRequest() {},
         onDisconnect() {},
       });
+      if (!isCurrentOperation(generation)) {
+        closeLateTransport(createdTransport);
+        throw processError('server_not_running');
+      }
+      preflightTransport = createdTransport;
+      requireCurrentOperation(generation);
       transports.add(preflightTransport);
       const initialize = await preflightTransport.request('initialize', {
         clientInfo: { name: 'agent-cockpit-remote-preflight', version: '0.1.0' },
         capabilities: { experimentalApi: false },
       });
+      requireCurrentOperation(generation);
       if (!isRecord(initialize) || !pathsEqual(initialize.codexHome, managedHomePath)) {
         throw processError('managed_home_mismatch');
       }
       await preflightTransport.notify('initialized', {});
+      requireCurrentOperation(generation);
       if (!await preflightTransport.confirmLoadedThread(threadId)) throw processError('thread_not_loaded');
+      requireCurrentOperation(generation);
     } catch (error) {
+      if (!isCurrentOperation(generation)) throw processError('server_not_running');
       throw error instanceof ManagedProcessError ? error : processError('remote_preflight_failed');
     } finally {
       if (preflightTransport) {
@@ -517,10 +554,12 @@ function createCodexManagedProcessManager(options = {}) {
         try { preflightTransport.close(); } catch {}
       }
     }
+    requireCurrentOperation(generation);
     const args = makeRemoteCliArguments(threadId, endpoint, tokenVariable);
     const childEnvironment = createChildEnvironment(environment, managedHomePath, tokenVariable, capabilityToken);
     let child;
     try {
+      requireCurrentOperation(generation);
       child = spawnImpl(executablePath, args, {
         cwd: managedHomePath,
         env: childEnvironment,
@@ -533,13 +572,23 @@ function createCodexManagedProcessManager(options = {}) {
     } finally {
       for (const key of Object.keys(childEnvironment)) childEnvironment[key] = '';
     }
+    if (!isCurrentOperation(generation)) {
+      const lateRecord = registerOwnedChild(child, ownedChildren, 'remote-cli');
+      remoteCliRecords.add(lateRecord);
+      lateRecord.exitPromise.finally(() => remoteCliRecords.delete(lateRecord));
+      await stopOwnedChild(lateRecord, stopTimeoutMs);
+      throw processError('server_not_running');
+    }
+    requireCurrentOperation(generation);
     const record = registerOwnedChild(child, ownedChildren, 'remote-cli');
     remoteCliRecords.add(record);
     record.exitPromise.finally(() => remoteCliRecords.delete(record));
     try {
       await waitForSpawn(child, startTimeoutMs, ownedChildren);
+      requireCurrentOperation(generation);
     } catch (error) {
       await stopOwnedChild(record, stopTimeoutMs);
+      if (!isCurrentOperation(generation)) throw processError('server_not_running');
       throw error instanceof ManagedProcessError ? error : processError('remote_cli_spawn_failed');
     }
     return Object.freeze({
@@ -550,6 +599,8 @@ function createCodexManagedProcessManager(options = {}) {
 
   function stop() {
     if (stopPromise) return stopPromise;
+    stopRequested = true;
+    operationGeneration += 1;
     stopPromise = (async () => {
       if (startPromise) {
         try { await startPromise; } catch {}

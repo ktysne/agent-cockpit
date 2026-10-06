@@ -133,6 +133,89 @@ test('managed process retries transient connection startup without reporting a d
   await manager.stop();
 });
 
+test('stop invalidates remote CLI launch while loaded-thread preflight is pending', async (t) => {
+  const fixture = createProcessFixture(t);
+  let markLoadedCheckStarted;
+  const loadedCheckStarted = new Promise((resolve) => { markLoadedCheckStarted = resolve; });
+  let resolveLoadedCheck;
+  const loadedCheck = new Promise((resolve) => { resolveLoadedCheck = resolve; });
+  let closeCount = 0;
+  let closed = false;
+  const manager = fixture.createManager({
+    transportFactory: async (options) => ({
+      request: async (method) => {
+        assert.equal(method, 'initialize');
+        return { codexHome: fixture.managedHomePath, userAgent: 'codex_cli/0.160.1' };
+      },
+      notify: async (method) => assert.equal(method, 'initialized'),
+      confirmLoadedThread: async (threadId) => {
+        assert.equal(threadId, THREAD_ID);
+        markLoadedCheckStarted();
+        return loadedCheck;
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        closeCount += 1;
+        options.onDisconnect({ code: 'closed' });
+      },
+    }),
+  });
+  await manager.start();
+
+  const launch = manager.launchRemoteCLI({ threadId: THREAD_ID });
+  await loadedCheckStarted;
+  await manager.stop();
+  assert.equal(manager.snapshot().state, 'stopped');
+  resolveLoadedCheck(true);
+  await assert.rejects(launch, (error) => error.code === 'server_not_running');
+
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(closeCount, 1);
+  assert.equal(fixture.calls[0].args[0], 'app-server');
+});
+
+test('stop closes a transport that finishes connecting after shutdown', async (t) => {
+  const fixture = createProcessFixture(t);
+  let markFactoryStarted;
+  const factoryStarted = new Promise((resolve) => { markFactoryStarted = resolve; });
+  let resolveTransport;
+  const pendingTransport = new Promise((resolve) => { resolveTransport = resolve; });
+  const manager = fixture.createManager({
+    transportFactory: () => {
+      markFactoryStarted();
+      return pendingTransport;
+    },
+  });
+  await manager.start();
+
+  let disconnectCount = 0;
+  const connecting = manager.connect({
+    onNotification() {},
+    onServerRequest() {},
+    onDisconnect() { disconnectCount += 1; },
+  });
+  await factoryStarted;
+  await manager.stop();
+  assert.equal(manager.snapshot().state, 'stopped');
+
+  let closed = false;
+  let closeCount = 0;
+  resolveTransport({
+    snapshot: () => ({ state: closed ? 'closed' : 'open' }),
+    close() {
+      if (closed) return;
+      closed = true;
+      closeCount += 1;
+    },
+  });
+  await assert.rejects(connecting, (error) => error.code === 'server_not_running');
+  assert.equal(closed, true);
+  assert.equal(closeCount, 1);
+  assert.equal(disconnectCount, 0);
+  assert.equal(fixture.calls.length, 1);
+});
+
 test('remote resume arguments contain no settings overrides', () => {
   const args = makeRemoteCliArguments(THREAD_ID, 'ws://127.0.0.1:12345', 'CODEX_REMOTE_AUTH_TOKEN_1234567890AB');
   assert.deepEqual(args, [
