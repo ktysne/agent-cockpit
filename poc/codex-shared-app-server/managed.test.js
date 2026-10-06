@@ -183,6 +183,26 @@ test('cleanup refuses to overwrite a changed fixture prefix and token file', asy
   assert.doesNotMatch(harness.resultJson, /node-edited|PRIVATE_TOKEN_EDIT/);
 });
 
+test('signals during startup and cleanup are recorded and all injected handlers are removed', async (t) => {
+  const harness = makeHarness({ signalDuringStartup: true, signalDuringCleanup: true });
+  t.after(() => removeTestOutput(harness.output.absolute));
+
+  const result = await harness.run();
+
+  assert.equal(result.success, false);
+  assert.equal(result.failure_code, 'interrupted_by_signal');
+  assert.equal(result.control_signal.requested, true);
+  assert.equal(result.control_signal.signal, 'SIGINT');
+  assert.equal(result.control_signal.count, 2);
+  assert.equal(result.control_signal.during_cleanup, true);
+  assert.equal(result.control_signal.handlers_removed, true);
+  assert.equal(harness.spawnState.spawnCount, 0);
+  assert.equal(result.cleanup.fixture_closed, true);
+  assert.equal(result.cleanup.token_file_removed, true);
+  assert.equal(harness.signalSource.listenerCount('SIGINT'), 0);
+  assert.equal(harness.signalSource.listenerCount('SIGTERM'), 0);
+});
+
 test('pending turn success requires resolved approvals, cleared wait state, and the same completed turn', async (t) => {
   const harness = makeHarness({ pendingTurn: true, includeForeignLoadedThread: true });
   t.after(() => removeTestOutput(harness.output.absolute));
@@ -255,12 +275,47 @@ test('pending cancel succeeds when both clients observe the same interrupted ter
   assert.equal(result.pending.turn.status_b, 'interrupted');
   assert.equal(result.pending.request_after_cli.correlation.approval_resolution_correlation_complete, true);
   assert.equal(result.pending.waiting_on_approval_transition_observed, true);
+  assert.equal(result.pending.settlement_observed, true);
+});
+
+test('pending success waits for both clients to observe a delayed approval-clear notification', async (t) => {
+  const harness = makeHarness({ pendingTurn: true, pendingOutcome: 'delayed_clear' });
+  t.after(() => removeTestOutput(harness.output.absolute));
+
+  const result = await harness.run();
+
+  assert.equal(result.success, true);
+  assert.equal(result.pending.request_after_cli.a.waiting_on_approval_seen, true);
+  assert.equal(result.pending.request_after_cli.a.waiting_on_approval_active, false);
+  assert.equal(result.pending.request_after_cli.b.waiting_on_approval_seen, true);
+  assert.equal(result.pending.request_after_cli.b.waiting_on_approval_cleared, true);
+  assert.equal(result.pending.request_after_cli.b.waiting_on_approval_active, false);
+  assert.equal(result.pending.settlement_observed, true);
+});
+
+test('matching failed terminal statuses are observed but never count as pending success', async (t) => {
+  const harness = makeHarness({
+    pendingTurn: true,
+    pendingStatusA: 'failed',
+    pendingStatusB: 'failed',
+  });
+  t.after(() => removeTestOutput(harness.output.absolute));
+
+  const result = await harness.run();
+
+  assert.equal(result.pending.turn.terminal_observed_by_both, true);
+  assert.equal(result.pending.turn.status_a, 'failed');
+  assert.equal(result.pending.turn.status_b, 'failed');
+  assert.equal(result.pending.settlement_observed, true);
+  assert.equal(result.success, false);
+  assert.equal(buildPendingSuccess(result), false);
 });
 
 test('pending run remains unsuccessful when approval, wait state, or terminal status is inconsistent', async (t) => {
   const scenarios = [
     { resolvedRequestId: 'unmatched-request' },
     { pendingOutcome: 'waiting_again' },
+    { pendingOutcome: 'b_still_active' },
     { pendingStatusB: 'failed' },
   ];
 
@@ -340,6 +395,7 @@ function makeHarness(scenario = {}) {
   const connectedObservers = [];
   const connectedOptions = [];
   const spawnState = { spawnCount: 0, killCount: 0, tokenPath: null };
+  const signalSource = new EventEmitter();
   const childProcesses = [];
   let startedFixture;
   let resultJson = '';
@@ -350,11 +406,13 @@ function makeHarness(scenario = {}) {
     prepareWorkspace: () => layout,
     startFixture: async (_output, _codexPath, options) => {
       assert.equal(options.startWith, scenario.pendingTurn ? 'command' : 'mcp');
+      if (scenario.signalDuringStartup) signalSource.emit('SIGINT');
       const fixture = {
         requests: [],
         unsupported: false,
         async close() {
           fixture.closed = true;
+          if (scenario.signalDuringCleanup) signalSource.emit('SIGTERM');
           return true;
         },
         closed: false,
@@ -426,6 +484,12 @@ function makeHarness(scenario = {}) {
               }
               if (scenario.pendingTurn) {
                 options.onServerRequest?.({ id: PENDING_REQUEST_ID, method: 'item/permissions/requestApproval' });
+                if (['b_still_active', 'delayed_clear'].includes(scenario.pendingOutcome) && label === 'b') {
+                  options.onNotification?.('thread/status/changed', {
+                    threadId: THREAD_ID,
+                    threadStatus: { type: 'active', activeFlags: ['waitingOnApproval'] },
+                  });
+                }
               }
               return effectiveThread(THREAD_ID, layout.repo, scenario.pendingTurn ? 'untrusted' : 'on-request');
             }
@@ -492,36 +556,57 @@ function makeHarness(scenario = {}) {
     },
     chooseLoopbackPort: async () => 49231,
     randomBytes: () => tokenBytes,
+    signalSource,
     waitForStopSignal: scenario.pendingTurn
       ? async () => {
-        for (const options of connectedOptions) {
-          if (scenario.pendingOutcome !== 'unresolved') {
-            options.onNotification?.('serverRequest/resolved', {
-              threadId: THREAD_ID,
-              requestId: scenario.resolvedRequestId || PENDING_REQUEST_ID,
-            });
+        const emitCliEvents = (sendTerminalTurn) => {
+          for (const options of connectedOptions) {
+            if (scenario.pendingOutcome !== 'unresolved') {
+              options.onNotification?.('serverRequest/resolved', {
+                threadId: THREAD_ID,
+                requestId: scenario.resolvedRequestId || PENDING_REQUEST_ID,
+              });
+            }
+            const bRemainsActive = scenario.pendingOutcome === 'b_still_active'
+              && options === connectedOptions[1];
+            if (scenario.pendingOutcome !== 'keep_waiting' && !bRemainsActive
+              && scenario.pendingOutcome !== 'delayed_clear') {
+              options.onNotification?.('thread/status/changed', {
+                threadId: THREAD_ID,
+                threadStatus: { type: 'active', activeFlags: [] },
+              });
+            }
+            if (scenario.pendingOutcome === 'waiting_again') {
+              options.onNotification?.('thread/status/changed', {
+                threadId: THREAD_ID,
+                threadStatus: { type: 'active', activeFlags: ['waitingOnApproval'] },
+              });
+            }
+            if (sendTerminalTurn) {
+              options.onNotification?.('turn/completed', {
+                threadId: THREAD_ID,
+                turnId: options === connectedOptions[1] && scenario.pendingTurnIdB
+                  ? scenario.pendingTurnIdB
+                  : PENDING_TURN_ID,
+                status: options === connectedOptions[1]
+                  ? scenario.pendingStatusB || 'completed'
+                  : scenario.pendingStatusA || 'completed',
+              });
+            }
           }
-          if (scenario.pendingOutcome !== 'keep_waiting') {
-            options.onNotification?.('thread/status/changed', {
-              threadId: THREAD_ID,
-              threadStatus: { type: 'active', activeFlags: [] },
-            });
-          }
-          if (scenario.pendingOutcome === 'waiting_again') {
-            options.onNotification?.('thread/status/changed', {
-              threadId: THREAD_ID,
-              threadStatus: { type: 'active', activeFlags: ['waitingOnApproval'] },
-            });
-          }
-          options.onNotification?.('turn/completed', {
-            threadId: THREAD_ID,
-            turnId: options === connectedOptions[1] && scenario.pendingTurnIdB
-              ? scenario.pendingTurnIdB
-              : PENDING_TURN_ID,
-            status: options === connectedOptions[1]
-              ? scenario.pendingStatusB || 'completed'
-              : scenario.pendingStatusA || 'completed',
-          });
+        };
+        if (scenario.pendingOutcome === 'delayed_clear') {
+          emitCliEvents(true);
+          setTimeout(() => {
+            for (const options of connectedOptions) {
+              options.onNotification?.('thread/status/changed', {
+                threadId: THREAD_ID,
+                threadStatus: { type: 'active', activeFlags: [] },
+              });
+            }
+          }, 50);
+        } else {
+          emitCliEvents(true);
         }
         return 'SIGINT';
       }
@@ -536,6 +621,7 @@ function makeHarness(scenario = {}) {
     output,
     calls,
     spawnState,
+    signalSource,
     fixturePaths,
     tokenValue,
     get resultJson() { return resultJson; },

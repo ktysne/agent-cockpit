@@ -49,6 +49,7 @@ const NOTIFICATION_METHODS = new Set([
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TURN_TERMINAL_STATUSES = new Set(['completed', 'interrupted', 'failed']);
+const PENDING_SUCCESS_TURN_STATUSES = new Set(['completed', 'interrupted']);
 const TURN_STATUS_METHODS = new Set(['turn/started', 'turn/status/changed', 'turn/completed']);
 const THREAD_STATUS_TYPES = new Set(['notLoaded', 'idle', 'systemError', 'active']);
 const THREAD_SOURCES = new Set(['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'custom', 'unknown']);
@@ -510,6 +511,7 @@ function createResultFileName(now = new Date(), runId = randomUUID()) {
 async function connectClient(connect, options, server, deadline) {
   let lastFailure = 'connection_error';
   while (Date.now() < deadline) {
+    throwIfStopRequested(options.signalController);
     if (server.state.closed) throw new ManagedRunError('server_exited_before_connect');
     try {
       return await connect({
@@ -579,19 +581,44 @@ async function readLoadedSnapshot(client, threadId) {
   return { count, containsThread, truncated: true };
 }
 
-async function waitForTerminalTurnStatuses(observers, turnId, timeoutMs) {
+async function waitForTerminalTurnStatuses(observers, turnId, timeoutMs, signalController) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (observers.every((observer) => observer.hasTerminalTurnStatus(turnId))) return true;
+    if (signalController && signalController.signal && !signalController.handled) return false;
     await delay(50);
   }
   return observers.every((observer) => observer.hasTerminalTurnStatus(turnId));
 }
 
-async function waitForApprovalRequest(observer, timeoutMs) {
+async function waitForPendingSettlement(observers, turnId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const [observerA, observerB] = observers;
+    const statusA = observerA.turnStatus(turnId);
+    const statusB = observerB.turnStatus(turnId);
+    const summaries = observers.map((observer) => observer.requestSummary());
+    const correlation = summarizeServerRequestCorrelation(observers);
+    const waitingCleared = summaries.some((summary) => summary.waiting_on_approval_seen
+      && summary.waiting_on_approval_cleared
+      && !summary.waiting_on_approval_active);
+    const bothWaitingInactive = summaries.every((summary) => !summary.waiting_on_approval_active);
+    if (TURN_TERMINAL_STATUSES.has(statusA)
+      && TURN_TERMINAL_STATUSES.has(statusB)
+      && statusA === statusB
+      && correlation.approval_resolution_correlation_complete
+      && waitingCleared
+      && bothWaitingInactive) return true;
+    await delay(50);
+  }
+  return false;
+}
+
+async function waitForApprovalRequest(observer, timeoutMs, signalController) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (observer.hasApprovalRequest()) return true;
+    if (signalController && signalController.signal && !signalController.handled) return false;
     await delay(50);
   }
   return observer.hasApprovalRequest();
@@ -820,11 +847,14 @@ function buildPendingSuccess(result) {
       && pending.stop_signal
       && pending.turn.same_turn_id
       && pending.turn.terminal_observed_by_both
-      && TURN_TERMINAL_STATUSES.has(pending.turn.status_a)
-      && TURN_TERMINAL_STATUSES.has(pending.turn.status_b)
+      && PENDING_SUCCESS_TURN_STATUSES.has(pending.turn.status_a)
+      && PENDING_SUCCESS_TURN_STATUSES.has(pending.turn.status_b)
       && pending.turn.status_a === pending.turn.status_b
+      && pending.settlement_observed
       && pending.request_after_cli.correlation?.approval_resolution_correlation_complete === true
       && pending.waiting_on_approval_transition_observed
+      && pending.request_after_cli.a?.waiting_on_approval_active === false
+      && pending.request_after_cli.b?.waiting_on_approval_active === false
       && result.reconnect.initialized
       && result.reconnect.contains_thread
       && result.cleanup.server_stopped
@@ -857,18 +887,103 @@ function writeServeReadyFile(output, ready) {
   return path.relative(REPOSITORY_ROOT, readyPath).split(path.sep).join('/');
 }
 
-function waitForStopSignal() {
-  return new Promise((resolveSignal) => {
-    const finish = (signal) => {
-      process.off('SIGINT', onInterrupt);
-      process.off('SIGTERM', onTerminate);
-      resolveSignal(signal);
-    };
-    const onInterrupt = () => finish('SIGINT');
-    const onTerminate = () => finish('SIGTERM');
-    process.once('SIGINT', onInterrupt);
-    process.once('SIGTERM', onTerminate);
-  });
+function createSignalController(signalSource = process) {
+  if (!signalSource || typeof signalSource.on !== 'function'
+    || (typeof signalSource.off !== 'function' && typeof signalSource.removeListener !== 'function')) {
+    throw new ManagedRunError('invalid_signal_source');
+  }
+  let firstSignal = null;
+  let signalCount = 0;
+  let cleanupStarted = false;
+  let signalDuringCleanup = false;
+  let handled = false;
+  let handlersInstalled = true;
+  const waiters = new Set();
+  const handlers = new Map();
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    const handler = () => record(signal);
+    handlers.set(signal, handler);
+    signalSource.on(signal, handler);
+  }
+
+  function record(signal) {
+    if (!['SIGINT', 'SIGTERM'].includes(signal)) return false;
+    firstSignal ||= signal;
+    signalCount = Math.min(signalCount + 1, 100);
+    if (cleanupStarted) signalDuringCleanup = true;
+    if (firstSignal) {
+      for (const resolveSignal of waiters) resolveSignal(firstSignal);
+      waiters.clear();
+    }
+    return true;
+  }
+
+  return {
+    record,
+    get signal() { return firstSignal; },
+    get handled() { return handled; },
+    markHandled() { handled = true; },
+    markCleanupStarted() { cleanupStarted = true; },
+    waitForSignal() {
+      if (firstSignal) {
+        handled = true;
+        return Promise.resolve(firstSignal);
+      }
+      return new Promise((resolveSignal) => {
+        waiters.add((signal) => {
+          handled = true;
+          resolveSignal(signal);
+        });
+      });
+    },
+    snapshot() {
+      return {
+        requested: firstSignal !== null,
+        signal: firstSignal,
+        count: signalCount,
+        during_cleanup: signalDuringCleanup,
+        handlers_removed: !handlersInstalled,
+      };
+    },
+    dispose() {
+      if (!handlersInstalled) return;
+      let removalSucceeded = true;
+      for (const [signal, handler] of handlers) {
+        try {
+          if (typeof signalSource.off === 'function') signalSource.off(signal, handler);
+          else signalSource.removeListener(signal, handler);
+        } catch {
+          try {
+            signalSource.removeListener(signal, handler);
+          } catch {
+            removalSucceeded = false;
+          }
+        }
+      }
+      handlersInstalled = !removalSucceeded;
+      waiters.clear();
+    },
+  };
+}
+
+function throwIfStopRequested(signalController) {
+  if (signalController && signalController.signal && !signalController.handled) {
+    throw new ManagedRunError('interrupted_by_signal');
+  }
+}
+
+async function waitForServeStopSignal(signalController, waitForStopSignal) {
+  if (signalController.signal) {
+    signalController.markHandled();
+    return signalController.signal;
+  }
+  if (typeof waitForStopSignal === 'function') {
+    const injectedSignal = await waitForStopSignal();
+    if (!signalController.signal) signalController.record(injectedSignal);
+    signalController.markHandled();
+    return signalController.signal;
+  }
+  return signalController.waitForSignal();
 }
 
 async function closeOwnedServer(server) {
@@ -964,13 +1079,14 @@ function cleanupFixtureConfigPreservingSuffix(configPath, configSnapshot) {
 async function runPendingTurn(options) {
   const {
     result, started, aInitialized, aStarted, threadId, port, tokenFile, timeoutMs, server,
-    connect, connections, observers, dependencies, output, runId, stage,
+    connect, connections, observers, dependencies, output, runId, stage, signalController,
   } = options;
   const pending = result.pending;
   const turnResponse = await aInitialized.client.request('turn/start', {
     threadId,
     input: [{ type: 'text', text: 'Run the configured harmless command once, then finish.' }],
   });
+  throwIfStopRequested(signalController);
   const turn = summarizeTurn(turnResponse && turnResponse.turn);
   pending.turn.started = Boolean(turn.id);
   pending.turn.id = turn.id;
@@ -978,9 +1094,11 @@ async function runPendingTurn(options) {
   if (!turn.id) throw new ManagedRunError('invalid_pending_turn_response');
 
   stage('pending_approval_wait');
-  pending.turn.approval_request_seen_a = await waitForApprovalRequest(observers.a, timeoutMs);
+  pending.turn.approval_request_seen_a = await waitForApprovalRequest(observers.a, timeoutMs, signalController);
+  throwIfStopRequested(signalController);
   pending.request_before_cli.a = observers.a.requestSummary();
   const persistedRead = await readThreadMetadataSnapshot(aInitialized.client, threadId);
+  throwIfStopRequested(signalController);
   pending.persisted_read_a = persistedRead;
   if (!persistedRead.thread_matches || persistedRead.turns_returned) {
     throw new ManagedRunError('pending_thread_read_mismatch');
@@ -992,16 +1110,20 @@ async function runPendingTurn(options) {
     token: tokenFile.token,
     timeoutMs,
     observer: observers.b,
+    signalController,
   }, server, Date.now() + timeoutMs);
   connections.push(bConnection);
+  throwIfStopRequested(signalController);
   stage('initialize_b');
   const bInitialized = await initializeClient(bConnection, started.isolatedHome);
+  throwIfStopRequested(signalController);
   result.clients.b.initialized = true;
   result.clients.b.private_home_match = bInitialized.privateHomeMatch;
   if (bInitialized.version !== result.native_version) throw new ManagedRunError('client_server_version_mismatch');
   observers.b.setTargetThreadId(threadId);
   stage('thread_resume');
   const resumed = await bInitialized.client.request('thread/resume', { threadId, excludeTurns: true });
+  throwIfStopRequested(signalController);
   const resumedThreadId = resumed && resumed.thread && resumed.thread.id;
   if (!isUuid(resumedThreadId)) throw new ManagedRunError('invalid_resumed_thread');
   result.clients.b.thread_resumed = true;
@@ -1013,7 +1135,9 @@ async function runPendingTurn(options) {
 
   stage('pending_loaded_list');
   const loadedA = await readLoadedSnapshot(aInitialized.client, threadId);
+  throwIfStopRequested(signalController);
   const loadedB = await readLoadedSnapshot(bInitialized.client, threadId);
+  throwIfStopRequested(signalController);
   result.loaded.a = { count: loadedA.count, contains_thread: loadedA.containsThread, truncated: loadedA.truncated };
   result.loaded.b = { count: loadedB.count, contains_thread: loadedB.containsThread, truncated: loadedB.truncated };
   result.loaded.counts_match = loadedA.count === loadedB.count;
@@ -1023,6 +1147,7 @@ async function runPendingTurn(options) {
   const baselineB = observers.b.summarize();
   result.fixture.baseline_request_count = started.fixture.requests.length;
   result.fixture.unsupported = Boolean(started.fixture.unsupported);
+  throwIfStopRequested(signalController);
 
   const ready = {
     schema: 'agent-cockpit-poc158-pending-turn-serve-v1',
@@ -1039,14 +1164,15 @@ async function runPendingTurn(options) {
   pending.ready_file = writeServeReadyFile(output, ready);
   if (typeof dependencies.onServeReady === 'function') dependencies.onServeReady(pending.ready_file);
   stage('pending_cli_wait');
-  const waitForStop = dependencies.waitForStopSignal || waitForStopSignal;
-  pending.stop_signal = await waitForStop();
+  pending.stop_signal = await waitForServeStopSignal(signalController, dependencies.waitForStopSignal);
 
-  pending.turn.terminal_observed_by_both = await waitForTerminalTurnStatuses(
+  pending.settlement_observed = await waitForPendingSettlement(
     [observers.a, observers.b], turn.id, timeoutMs,
   );
   pending.turn.status_a = observers.a.turnStatus(turn.id) || 'unknown';
   pending.turn.status_b = observers.b.turnStatus(turn.id) || 'unknown';
+  pending.turn.terminal_observed_by_both = observers.a.hasTerminalTurnStatus(turn.id)
+    && observers.b.hasTerminalTurnStatus(turn.id);
   pending.turn.client_a_saw_turn_id = observers.a.hasTurn(turn.id);
   pending.turn.client_b_saw_turn_id = observers.b.hasTurn(turn.id);
   pending.turn.same_turn_id = pending.turn.client_a_saw_turn_id && pending.turn.client_b_saw_turn_id;
@@ -1105,6 +1231,13 @@ async function runManagedServer(options, dependencies = {}) {
     schema: pendingMode ? 'agent-cockpit-poc158-pending-turn-v1' : 'agent-cockpit-poc158-managed-v2',
     run_id: runId,
     mode: pendingMode ? 'pending_turn' : options.serve === true ? 'serve' : 'one_shot',
+    control_signal: {
+      requested: false,
+      signal: null,
+      count: 0,
+      during_cleanup: false,
+      handlers_removed: false,
+    },
     native_version: null,
     transport: { type: 'loopback_websocket_capability_token', host: '127.0.0.1', port: null },
     clients: {
@@ -1174,6 +1307,7 @@ async function runManagedServer(options, dependencies = {}) {
       request_before_cli: { a: null, b: null, correlation: null },
       request_after_cli: { a: null, b: null, correlation: null },
       waiting_on_approval_transition_observed: false,
+      settlement_observed: false,
       ready_file: null,
       stop_signal: null,
       notification_delta: { a: null, b: null },
@@ -1214,12 +1348,15 @@ async function runManagedServer(options, dependencies = {}) {
   const connections = [];
   const observers = { a: createClientObserver(), b: createClientObserver(), reconnect: createClientObserver() };
   let threadId = null;
+  const signalController = createSignalController(dependencies.signalSource || process);
 
   try {
     layout = prepare(options.outputDirectory || DEFAULT_OUTPUT);
+    throwIfStopRequested(signalController);
     sourceConfigHash = sha256(readRegularFile(path.join(layout.home, 'config.toml')));
     stage = 'prepare_fixture';
     started = await startFixtureImpl(output, codexPath, { startWith: pendingMode ? 'command' : 'mcp' });
+    throwIfStopRequested(signalController);
     if (!started || !started.layout || !started.isolatedHome || !started.fixture) {
       throw new ManagedRunError('fixture_setup_invalid');
     }
@@ -1232,6 +1369,7 @@ async function runManagedServer(options, dependencies = {}) {
     tokenFile = createCapabilityTokenFile(output, runId, dependencies.randomBytes || randomBytes);
     stage = 'start_server';
     const port = await getPort();
+    throwIfStopRequested(signalController);
     result.transport.port = port;
     server = startServerProcess(codexPath, started.layout.repo, started.isolatedHome, port, tokenFile.tokenPath, {
       spawn: spawnImpl,
@@ -1243,10 +1381,13 @@ async function runManagedServer(options, dependencies = {}) {
       token: tokenFile.token,
       timeoutMs,
       observer: observers.a,
+      signalController,
     }, server, connectDeadline);
     connections.push(aConnection);
+    throwIfStopRequested(signalController);
     stage = 'initialize_a';
     const aInitialized = await initializeClient(aConnection, started.isolatedHome);
+    throwIfStopRequested(signalController);
     result.clients.a.initialized = true;
     result.clients.a.private_home_match = aInitialized.privateHomeMatch;
     result.native_version = aInitialized.version;
@@ -1257,6 +1398,7 @@ async function runManagedServer(options, dependencies = {}) {
       sandbox: 'read-only',
       ephemeral: false,
     });
+    throwIfStopRequested(signalController);
     threadId = aStarted && aStarted.thread && aStarted.thread.id;
     if (!isUuid(threadId)) throw new ManagedRunError('invalid_started_thread');
     result.clients.a.thread_started = true;
@@ -1281,6 +1423,7 @@ async function runManagedServer(options, dependencies = {}) {
         output,
         runId,
         stage(nextStage) { stage = nextStage; },
+        signalController,
       });
     } else {
       stage = 'warmup_turn_start';
@@ -1288,13 +1431,17 @@ async function runManagedServer(options, dependencies = {}) {
         threadId,
         input: [{ type: 'text', text: 'Run the available read-only MCP identity probe once, then finish.' }],
       });
+      throwIfStopRequested(signalController);
       const warmup = summarizeTurn(warmupResponse && warmupResponse.turn);
       result.turn.warmup.started = Boolean(warmup.id);
       result.turn.warmup.id = warmup.id;
       result.turn.warmup.start_status = warmup.status;
       if (!warmup.id) throw new ManagedRunError('invalid_warmup_turn_response');
       stage = 'warmup_turn_wait';
-      result.turn.warmup.terminal_observed = await waitForTerminalTurnStatuses([observers.a], warmup.id, timeoutMs);
+      result.turn.warmup.terminal_observed = await waitForTerminalTurnStatuses(
+        [observers.a], warmup.id, timeoutMs, signalController,
+      );
+      throwIfStopRequested(signalController);
       result.turn.warmup.status = observers.a.turnStatus(warmup.id) || 'unknown';
       result.turn.warmup.client_a_saw_turn_id = observers.a.hasTurn(warmup.id);
       if (!result.turn.warmup.terminal_observed) throw new ManagedRunError('warmup_turn_timeout');
@@ -1305,16 +1452,20 @@ async function runManagedServer(options, dependencies = {}) {
         token: tokenFile.token,
         timeoutMs,
         observer: observers.b,
+        signalController,
       }, server, Date.now() + timeoutMs);
       connections.push(bConnection);
+      throwIfStopRequested(signalController);
       stage = 'initialize_b';
       const bInitialized = await initializeClient(bConnection, started.isolatedHome);
+      throwIfStopRequested(signalController);
       result.clients.b.initialized = true;
       result.clients.b.private_home_match = bInitialized.privateHomeMatch;
       if (bInitialized.version !== result.native_version) throw new ManagedRunError('client_server_version_mismatch');
       stage = 'thread_resume';
       const resumeParams = { threadId, excludeTurns: true };
       const bResumed = await bInitialized.client.request('thread/resume', resumeParams);
+      throwIfStopRequested(signalController);
       const resumedThreadId = bResumed && bResumed.thread && bResumed.thread.id;
       if (!isUuid(resumedThreadId)) throw new ManagedRunError('invalid_resumed_thread');
       result.clients.b.thread_resumed = true;
@@ -1323,7 +1474,9 @@ async function runManagedServer(options, dependencies = {}) {
       result.clients.b.effective_settings_match = compareEffectiveSettings(aStarted, bResumed, started.layout.repo);
       stage = 'loaded_list';
       const loadedA = await readLoadedSnapshot(aInitialized.client, threadId);
+      throwIfStopRequested(signalController);
       const loadedB = await readLoadedSnapshot(bInitialized.client, threadId);
+      throwIfStopRequested(signalController);
       result.loaded.a = {
         count: loadedA.count,
         contains_thread: loadedA.containsThread,
@@ -1340,6 +1493,7 @@ async function runManagedServer(options, dependencies = {}) {
         threadId,
         input: [{ type: 'text', text: 'Confirm that the prior read-only probe turn is complete.' }],
       });
+      throwIfStopRequested(signalController);
       const observed = summarizeTurn(observedResponse && observedResponse.turn);
       result.turn.observed.started = Boolean(observed.id);
       result.turn.observed.id = observed.id;
@@ -1347,8 +1501,9 @@ async function runManagedServer(options, dependencies = {}) {
       if (!observed.id) throw new ManagedRunError('invalid_observed_turn_response');
       stage = 'observed_turn_wait';
       result.turn.observed.terminal_observed_by_both = await waitForTerminalTurnStatuses(
-        [observers.a, observers.b], observed.id, timeoutMs,
+        [observers.a, observers.b], observed.id, timeoutMs, signalController,
       );
+      throwIfStopRequested(signalController);
       result.turn.observed.status_a = observers.a.turnStatus(observed.id) || 'unknown';
       result.turn.observed.status_b = observers.b.turnStatus(observed.id) || 'unknown';
       result.turn.observed.client_a_saw_turn_id = observers.a.hasTurn(observed.id);
@@ -1373,6 +1528,7 @@ async function runManagedServer(options, dependencies = {}) {
       }
       if (options.serve) {
         if (!buildCoreSuccess(result)) throw new ManagedRunError('serve_precondition_failed');
+        throwIfStopRequested(signalController);
         const baselineA = observers.a.summarize();
         const baselineB = observers.b.summarize();
         const baselineTurnIdsA = new Set(observers.a.turnSnapshots().map((turnSummary) => turnSummary.id));
@@ -1392,8 +1548,7 @@ async function runManagedServer(options, dependencies = {}) {
           dependencies.onServeReady(result.serve.ready_file);
         }
         stage = 'serve_wait';
-        const waitForStop = dependencies.waitForStopSignal || waitForStopSignal;
-        result.serve.stop_signal = await waitForStop();
+        result.serve.stop_signal = await waitForServeStopSignal(signalController, dependencies.waitForStopSignal);
         const afterCliA = observers.a.summarize();
         const afterCliB = observers.b.summarize();
         result.serve.notification_delta.a = notificationSummaryDelta(baselineA, afterCliA);
@@ -1431,20 +1586,26 @@ async function runManagedServer(options, dependencies = {}) {
         if (!result.serve.after_cli_settings_match.all) throw new ManagedRunError('post_cli_settings_mismatch');
       }
     }
+    throwIfStopRequested(signalController);
     stage = 'disconnect_clients';
     for (const connection of connections.splice(0)) connection.close();
     await delay(300);
+    throwIfStopRequested(signalController);
     stage = 'reconnect';
     const reconnectConnection = await connectClient(connect, {
       port,
       token: tokenFile.token,
       timeoutMs,
       observer: observers.reconnect,
+      signalController,
     }, server, Date.now() + timeoutMs);
     connections.push(reconnectConnection);
+    throwIfStopRequested(signalController);
     const reconnectClient = await initializeClient(reconnectConnection, started.isolatedHome);
+    throwIfStopRequested(signalController);
     result.reconnect.initialized = reconnectClient.privateHomeMatch && reconnectClient.version === result.native_version;
     const reloaded = await readLoadedSnapshot(reconnectClient.client, threadId);
+    throwIfStopRequested(signalController);
     result.reconnect.loaded_count = reloaded.count;
     result.reconnect.contains_thread = reloaded.containsThread;
   } catch (error) {
@@ -1457,49 +1618,78 @@ async function runManagedServer(options, dependencies = {}) {
       ? rpcCategory
       : null;
   } finally {
-    stage = result.failure_stage ? stage : 'cleanup';
-    for (const connection of connections.splice(0)) {
-      try { connection.close(); } catch {}
-    }
-    if (started) {
-      result.fixture.request_count = started.fixture.requests.length;
-      result.fixture.unsupported = Boolean(started.fixture.unsupported);
-    }
-    result.serve.additional_fixture_requests = Math.max(
-      0, result.fixture.request_count - result.fixture.baseline_request_count,
-    );
-    result.notifications.a = observers.a.summarize();
-    result.notifications.b = observers.b.summarize();
-    result.server_requests.count = observers.a.serverRequestCount + observers.b.serverRequestCount;
-    result.server_requests.approval_count = observers.a.summarize().server_request_approval_count
-      + observers.b.summarize().server_request_approval_count;
-    result.server_requests.other_count = observers.a.summarize().server_request_other_count
-      + observers.b.summarize().server_request_other_count;
-    result.cleanup.server_stopped = await closeOwnedServer(server);
-    if (server) {
-      result.cleanup.server_exit_code = server.state.exitCode;
-      result.cleanup.server_spawn_error = server.state.spawnErrorCode;
-      result.cleanup.server_stderr_bytes = server.state.stderrBytes;
-      result.cleanup.server_stderr_class = classifyServerStderr(server.state.stderrText);
-    }
-    if (started) {
-      Object.assign(
-        result.cleanup,
-        cleanupFixtureConfigPreservingSuffix(started.configPath, started.configSnapshot),
-      );
-      result.cleanup.fixture_closed = await closeFixture(started.fixture);
-    }
-    if (layout && sourceConfigHash) {
-      try {
-        result.cleanup.source_config_hash_unchanged = sha256(readRegularFile(path.join(layout.home, 'config.toml'))) === sourceConfigHash;
-      } catch {
-        result.cleanup.source_config_hash_unchanged = false;
+    signalController.markCleanupStarted();
+    try {
+      stage = result.failure_stage ? stage : 'cleanup';
+      for (const connection of connections.splice(0)) {
+        try { connection.close(); } catch {}
       }
+      if (started) {
+        result.fixture.request_count = started.fixture.requests.length;
+        result.fixture.unsupported = Boolean(started.fixture.unsupported);
+      }
+      result.serve.additional_fixture_requests = Math.max(
+        0, result.fixture.request_count - result.fixture.baseline_request_count,
+      );
+      result.notifications.a = observers.a.summarize();
+      result.notifications.b = observers.b.summarize();
+      result.server_requests.count = observers.a.serverRequestCount + observers.b.serverRequestCount;
+      result.server_requests.approval_count = result.notifications.a.server_request_approval_count
+        + result.notifications.b.server_request_approval_count;
+      result.server_requests.other_count = result.notifications.a.server_request_other_count
+        + result.notifications.b.server_request_other_count;
+      try {
+        result.cleanup.server_stopped = await closeOwnedServer(server);
+      } catch {
+        result.cleanup.server_stopped = false;
+      }
+      if (server) {
+        result.cleanup.server_exit_code = server.state.exitCode;
+        result.cleanup.server_spawn_error = server.state.spawnErrorCode;
+        result.cleanup.server_stderr_bytes = server.state.stderrBytes;
+        result.cleanup.server_stderr_class = classifyServerStderr(server.state.stderrText);
+      }
+      if (started) {
+        try {
+          Object.assign(
+            result.cleanup,
+            cleanupFixtureConfigPreservingSuffix(started.configPath, started.configSnapshot),
+          );
+        } catch {
+          result.cleanup.fixture_config_removed = false;
+          result.cleanup.appended_config_preserved = false;
+        }
+        try {
+          result.cleanup.fixture_closed = await closeFixture(started.fixture);
+        } catch {
+          result.cleanup.fixture_closed = false;
+        }
+      }
+      if (layout && sourceConfigHash) {
+        try {
+          result.cleanup.source_config_hash_unchanged = sha256(readRegularFile(path.join(layout.home, 'config.toml'))) === sourceConfigHash;
+        } catch {
+          result.cleanup.source_config_hash_unchanged = false;
+        }
+      }
+      try {
+        result.cleanup.token_file_removed = removeCapabilityTokenFile(
+          tokenFile && tokenFile.tokenPath,
+          tokenFile && tokenFile.tokenHash,
+        );
+      } catch {
+        result.cleanup.token_file_removed = false;
+      }
+    } catch {
+      if (!result.failure_code) {
+        result.failure_stage = 'cleanup';
+        result.failure_code = 'cleanup_error';
+      }
+    } finally {
+      result.control_signal = signalController.snapshot();
+      signalController.dispose();
+      result.control_signal = signalController.snapshot();
     }
-    result.cleanup.token_file_removed = removeCapabilityTokenFile(
-      tokenFile && tokenFile.tokenPath,
-      tokenFile && tokenFile.tokenHash,
-    );
   }
   if (!result.failure_code && !result.cleanup.server_stopped) {
     result.failure_stage = 'cleanup';

@@ -65,12 +65,32 @@ CLIは `--remote` でWebSocketへ接続し、`--remote-auth-token-env` で指定
 token値を引数やログへ出さない。
 
 ```powershell
+$codexPath = 'C:\path\to\codex.exe'
 $ready = Get-Content -Raw '<ready-file-path>' | ConvertFrom-Json
-$env:CODEX_REMOTE_TOKEN = Get-Content -Raw $ready.token_file
-codex --remote ("ws://{0}:{1}" -f $ready.host, $ready.port) --remote-auth-token-env CODEX_REMOTE_TOKEN
-Remove-Item Env:CODEX_REMOTE_TOKEN
+$oldLocation = (Get-Location).Path
+$hadCodexHome = Test-Path Env:CODEX_HOME
+$oldCodexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', 'Process')
+$hadRemoteToken = Test-Path Env:POC158_REMOTE_TOKEN
+$oldRemoteToken = [Environment]::GetEnvironmentVariable('POC158_REMOTE_TOKEN', 'Process')
+try {
+  Set-Location -LiteralPath $ready.cwd
+  $env:CODEX_HOME = $ready.codex_home
+  $env:POC158_REMOTE_TOKEN = Get-Content -Raw -LiteralPath $ready.token_file
+  & $codexPath resume $ready.thread_id `
+    --remote ("ws://{0}:{1}" -f $ready.host, $ready.port) `
+    --remote-auth-token-env POC158_REMOTE_TOKEN
+} finally {
+  Set-Location -LiteralPath $oldLocation
+  if ($hadCodexHome) { $env:CODEX_HOME = $oldCodexHome } else { Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue }
+  if ($hadRemoteToken) { $env:POC158_REMOTE_TOKEN = $oldRemoteToken } else { Remove-Item Env:POC158_REMOTE_TOKEN -ErrorAction SilentlyContinue }
+}
 ```
 
+runnerの `--codex-path` と同じ絶対pathを `$codexPath` に指定する。
+runnerとremote TUIは同じCodex CLI 0.160.0を使う。
+`CODEX_HOME`、作業ディレクトリ、token環境変数は接続中だけ切り替え、終了時に元へ戻す。
+`resume` にはready fileのthread IDを渡すため、別homeで新しいthreadを開始しない。
+permission policyやsandboxを上書きするCLI optionは渡さず、管理serverのthread設定を使う。
 このPoCは `ws://127.0.0.1:<port>` にだけ接続し、`Authorization: Bearer` headerでcapability tokenを渡す。
 OpenAI Docsは、TUIの `--remote` 接続とWebSocketのtoken認証を説明している。[Codex App Server](https://learn.chatgpt.com/docs/app-server)
 serverのtoken fileはrunner終了時に削除されるため、runnerを止めてから接続を再開することはできない。
