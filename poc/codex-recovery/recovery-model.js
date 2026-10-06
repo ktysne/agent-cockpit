@@ -351,6 +351,7 @@ function normalizeCheckpoint(value) {
     }
     const events = [];
     const eventKeys = new Set();
+    const eventOrdinals = new Set();
     for (const row of value.events) {
       if (!hasOnlyKeys(row, new Set(['bindingKey', 'stream', 'generation', 'ordinal', 'eventId', 'fingerprint']))
         || !bindingKeys.has(row.bindingKey) || !STREAMS.has(row.stream)
@@ -360,6 +361,9 @@ function normalizeCheckpoint(value) {
       const key = JSON.stringify([row.bindingKey, row.stream, row.generation, row.eventId]);
       if (eventKeys.has(key)) return null;
       eventKeys.add(key);
+      const ordinalKey = JSON.stringify([row.bindingKey, row.stream, row.generation, row.ordinal]);
+      if (eventOrdinals.has(ordinalKey)) return null;
+      eventOrdinals.add(ordinalKey);
       const cursor = streams.find((item) => item.bindingKey === row.bindingKey && item.stream === row.stream);
       if (!cursor || row.generation > cursor.generation
         || row.generation === cursor.generation && row.ordinal > cursor.ordinal) return null;
@@ -553,11 +557,15 @@ class RecoveryModel {
     const streamKey = JSON.stringify([key, input.stream]);
     const cursor = this.streams.get(streamKey);
     if (cursor && input.generation < cursor.generation) return { accepted: false, reason: 'stale_generation' };
-    if (cursor && input.generation === cursor.generation && input.ordinal < cursor.ordinal) {
-      return { accepted: false, reason: 'stale_event_order' };
-    }
-    if (cursor && input.generation === cursor.generation && input.ordinal === cursor.ordinal) {
+    const ordinalKey = JSON.stringify([key, input.stream, input.generation, input.ordinal]);
+    if ([...this.events.values()].some((event) => JSON.stringify([event.bindingKey, event.stream,
+      event.generation, event.ordinal]) === ordinalKey)) {
       return { accepted: false, reason: 'event_order_conflict' };
+    }
+    const isOlderTerminal = cursor && input.generation === cursor.generation && input.ordinal < cursor.ordinal
+      && terminalState(input.recordType, normalizedRecord.state);
+    if (cursor && input.generation === cursor.generation && input.ordinal < cursor.ordinal && !isOlderTerminal) {
+      return { accepted: false, reason: 'stale_event_order' };
     }
     const before = this.captureRuntimeState();
     const applied = this.applyEventRecord(context, input.recordType, normalizedRecord);
@@ -565,7 +573,8 @@ class RecoveryModel {
     this.events.set(eventKey, { bindingKey: key, stream: input.stream, generation: input.generation,
       ordinal: input.ordinal, eventId: input.eventId, fingerprint });
     this.streams.set(streamKey, { bindingKey: key, stream: input.stream,
-      generation: input.generation, ordinal: input.ordinal });
+      generation: input.generation,
+      ordinal: cursor && input.generation === cursor.generation ? Math.max(cursor.ordinal, input.ordinal) : input.ordinal });
     if (!this.checkpoint() && this.rollback(before)) return { accepted: false, reason: 'checkpoint_capacity' };
     return { accepted: true, reason: applied.reason };
   }
@@ -720,6 +729,9 @@ class RecoveryModel {
       if (record.runState === value.state) return { accepted: true, reason: 'duplicate_state' };
       record.runState = value.state;
       record.restoredFromRunState = null;
+      if (value.state === 'unknown' || value.state === 'ended') {
+        this.unverified(record, value.state === 'ended' ? 'bridge_run_ended' : 'bridge_run_state_unknown');
+      }
       return { accepted: true, reason: 'updated' };
     }
     if (recordType === 'plan') return this.upsertPlan({ binding: record.binding, plan: value });
@@ -732,13 +744,16 @@ class RecoveryModel {
     if (delivery.state === 'applied' && !fromCurrentProof) return { accepted: false, reason: 'native_current_proof_required' };
     const existing = bindingRecord.deliveries.get(delivery.requestId);
     if (existing) {
-      if (existing.deliveryId && delivery.deliveryId && existing.deliveryId !== delivery.deliveryId) {
+      if (existing.state === 'accepted' && delivery.state === 'registered') {
+        return { accepted: false, reason: 'delivery_state_regression' };
+      }
+      if (existing.deliveryId && existing.deliveryId !== delivery.deliveryId) {
         return { accepted: false, reason: 'delivery_identity_conflict' };
       }
       if (existing.target !== delivery.target || existing.targetTurnId !== delivery.targetTurnId
         || existing.questionId !== delivery.questionId || existing.payloadDigest !== delivery.payloadDigest
         || !sameJson(existing.payload, delivery.payload)) return { accepted: false, reason: 'request_conflict' };
-      if (existing.acceptedTurnId && delivery.acceptedTurnId && existing.acceptedTurnId !== delivery.acceptedTurnId) {
+      if (existing.acceptedTurnId && existing.acceptedTurnId !== delivery.acceptedTurnId) {
         return { accepted: false, reason: 'accepted_turn_conflict' };
       }
       if (terminalState('delivery', existing.state)) {

@@ -200,6 +200,31 @@ test('accepted回答は同じrequest delivery digest turn itemの証拠だけで
   assert.equal(delivery.appliedEvidence.itemId, 'item-1');
 });
 
+test('accepted回答のreceiptと確定識別子は登録eventや不完全更新で失われない', () => {
+  const model = new RecoveryModel();
+  const binding = register(model);
+  const accepted = makeDelivery({ state: 'accepted', deliveryId: 'delivery-1', acceptedTurnId: 'turn-1' });
+  model.upsertDelivery({ binding, delivery: accepted });
+
+  assert.equal(model.upsertDelivery({ binding, delivery: makeDelivery() }).reason, 'delivery_state_regression');
+  assert.equal(model.upsertDelivery({ binding, delivery: makeDelivery({ state: 'unknown', deliveryId: null,
+    acceptedTurnId: 'turn-1' }) }).reason, 'invalid_delivery');
+  assert.equal(model.upsertDelivery({ binding, delivery: makeDelivery({ state: 'unknown', deliveryId: 'delivery-2',
+    acceptedTurnId: 'turn-1' }) }).reason, 'delivery_identity_conflict');
+  assert.equal(model.ingestEvent({ binding, stream: 'bridge', generation: 1, ordinal: 1, eventId: 'late-registration',
+    recordType: 'delivery', record: makeDelivery() }).reason, 'delivery_state_regression');
+
+  const beforeReconcile = model.project().rows[0].deliveries[0];
+  assert.equal(beforeReconcile.deliveryId, 'delivery-1');
+  assert.equal(beforeReconcile.acceptedTurnId, 'turn-1');
+  assert.equal(reconcile(model, binding).accepted, true);
+  const delivery = model.project().rows[0].deliveries[0];
+  assert.equal(delivery.state, 'accepted');
+  assert.equal(delivery.deliveryId, 'delivery-1');
+  assert.equal(delivery.acceptedTurnId, 'turn-1');
+  assert.equal(delivery.readyToDeliver, false);
+});
+
 test('wrong request digest turn or item type cannot apply a delivery', () => {
   const model = new RecoveryModel();
   const binding = register(model);
@@ -295,6 +320,32 @@ test('collector切断や不正な再照合は以前のready状態を解除する
   assert.equal(model.project().rows[0].deliveries[0].readyToDeliver, false);
 });
 
+test('unknownからactiveへ戻るeventは再照合まで以前のcurrent proofを復活させない', () => {
+  const model = new RecoveryModel();
+  const binding = register(model);
+  model.upsertDelivery({ binding, delivery: makeDelivery() });
+  const ingestRun = (ordinal, state) => model.ingestEvent({ binding, stream: 'bridge', generation: 1,
+    ordinal, eventId: `run-${state}-${ordinal}`, recordType: 'run', record: { state } });
+
+  assert.equal(ingestRun(1, 'active').accepted, true);
+  assert.equal(reconcile(model, binding).accepted, true);
+  assert.equal(model.project().rows[0].deliveries[0].readyToDeliver, true);
+  assert.equal(ingestRun(2, 'unknown').accepted, true);
+  assert.equal(model.project().rows[0].reconciliation.status, 'unknown');
+  assert.equal(ingestRun(3, 'active').accepted, true);
+  assert.equal(model.project().rows[0].runState, 'active');
+  assert.equal(model.project().rows[0].reconciliation.status, 'unknown');
+  assert.equal(model.project().rows[0].deliveries[0].readyToDeliver, false);
+
+  assert.equal(reconcile(model, binding).accepted, true);
+  assert.equal(model.project().rows[0].deliveries[0].readyToDeliver, true);
+  assert.equal(ingestRun(4, 'ended').accepted, true);
+  const row = model.project().rows[0];
+  assert.equal(row.runState, 'ended');
+  assert.equal(row.reconciliation.status, 'unknown');
+  assert.equal(row.deliveries[0].readyToDeliver, false);
+});
+
 test('nativeまたはbridgeの明示終了は後続のactive proofで復活しない', () => {
   const model = new RecoveryModel();
   const binding = register(model);
@@ -355,6 +406,58 @@ test('同一event IDはbinding scopeごとに分離しgeneration巻き戻しは�
   assert.equal(model.ingestEvent({ binding: first, stream: 'native', generation: 0, ordinal: 2, eventId: 'old-2',
     recordType: 'run', record: { state: 'active' } }).reason, 'stale_generation');
   assert.equal(model.project().counts.events, 2);
+});
+
+test('同generationの未処理終端eventは遅れて届いても保持しstream high-waterを戻さない', () => {
+  const model = new RecoveryModel();
+  const binding = register(model);
+  const ingest = (stream, ordinal, eventId, recordType, record, generation = 1) => model.ingestEvent({
+    binding, stream, generation, ordinal, eventId, recordType, record,
+  });
+
+  assert.equal(ingest('bridge', 1, 'question-pending', 'question', {
+    questionId: 'question-1', state: 'pending', data: { prompt: 'Choose' },
+  }).accepted, true);
+  assert.equal(ingest('bridge', 5, 'plan-update', 'plan', {
+    planId: 'plan-1', state: 'active', data: { title: 'Work' },
+  }).accepted, true);
+  assert.equal(ingest('bridge', 3, 'stale-plan', 'plan', {
+    planId: 'plan-2', state: 'active', data: { title: 'Older update' },
+  }).reason, 'stale_event_order');
+  assert.equal(ingest('bridge', 2, 'question-resolved', 'question', {
+    questionId: 'question-1', state: 'resolved', data: { answer: 'A' },
+  }).accepted, true);
+  assert.equal(ingest('bridge', 2, 'question-resolved-conflict', 'question', {
+    questionId: 'question-2', state: 'cancelled', data: { reason: 'closed' },
+  }).reason, 'event_order_conflict');
+  assert.equal(ingest('bridge', 100, 'old-generation', 'run', { state: 'ended' }, 0).reason, 'stale_generation');
+  assert.equal(ingest('bridge', 4, 'run-ended', 'run', { state: 'ended' }).accepted, true);
+
+  assert.equal(model.upsertDelivery({ binding, delivery: makeDelivery({ requestId: 'cancelled-request' }) }).accepted, true);
+  assert.equal(ingest('native', 8, 'native-high-water', 'plan', {
+    planId: 'native-plan', state: 'active', data: { title: 'Observed' },
+  }).accepted, true);
+  assert.equal(ingest('native', 2, 'delivery-cancelled', 'delivery', {
+    ...makeDelivery({ requestId: 'cancelled-request', state: 'cancelled' }),
+  }).accepted, true);
+
+  const checkpoint = model.checkpoint();
+  assert.equal(validateCheckpoint(checkpoint), true);
+  const collision = { ...checkpoint, events: [...checkpoint.events,
+    { ...checkpoint.events.find((event) => event.stream === 'bridge' && event.ordinal === 2),
+      eventId: 'checkpoint-ordinal-conflict' }] };
+  assert.equal(validateCheckpoint(collision), false);
+  const restored = RecoveryModel.restore(checkpoint);
+  const row = restored.project().rows[0];
+  assert.equal(row.runState, 'ended');
+  assert.equal(row.questions.find((question) => question.questionId === 'question-1').state, 'resolved');
+  assert.equal(row.deliveries.find((delivery) => delivery.requestId === 'cancelled-request').state, 'cancelled');
+  assert.equal(restored.ingestEvent({ binding, stream: 'bridge', generation: 1, ordinal: 3, eventId: 'restored-stale',
+    recordType: 'plan', record: { planId: 'plan-3', state: 'active', data: { title: 'Old' } } }).reason,
+  'stale_event_order');
+  assert.equal(restored.ingestEvent({ binding, stream: 'native', generation: 1, ordinal: 7, eventId: 'restored-native-stale',
+    recordType: 'plan', record: { planId: 'native-plan-2', state: 'active', data: { title: 'Old' } } }).reason,
+  'stale_event_order');
 });
 
 test('runやquestionの終端は遅延した開始eventや更新で復活しない', () => {
