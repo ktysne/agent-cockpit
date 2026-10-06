@@ -171,6 +171,10 @@ function createProductionProofFixture(provider) {
 
   const initialLaunch = addExecutionLaunch(execution, provider + '-execution');
   let resolverCalls = 0;
+  let proofAttemptSerial = 0;
+  let nextProofGate = null;
+  const proofAuthorityCalls = [];
+  const proofContexts = [];
   const trustedBindingResolver = {
     async resolveProof(launchRef, context) {
       const launch = launchesByRef.get(launchRef);
@@ -178,7 +182,20 @@ function createProductionProofFixture(provider) {
           context.sessionId !== launch.period.registration.sessionId || context.identity.nativeId !== launch.period.identity.nativeId) {
         return null;
       }
+      proofContexts.push(context);
+      const attemptId = ++proofAttemptSerial;
+      const gate = nextProofGate;
+      if (gate) {
+        nextProofGate = null;
+        gate.context = context;
+        gate.attemptId = attemptId;
+        gate.entered.resolve();
+        await gate.releasePromise;
+        if (typeof context.isCurrent !== 'function' || context.isCurrent() !== true) return null;
+      }
+      if (typeof context.isCurrent !== 'function' || context.isCurrent() !== true) return null;
       resolverCalls += 1;
+      proofAuthorityCalls.push({ attemptId, operation: 'attestActor' });
       const executionActorHandle = runtimeAdapters[provider].attestActor(context.connectionHandle, {
         identity: structuredClone(launch.period.identity),
         periodId: launch.period.registration.executionId,
@@ -187,7 +204,10 @@ function createProductionProofFixture(provider) {
         launchRef,
         immutableExecutionClaims: structuredClone(launch.claims),
       }, nextEvidence('execution-actor-' + resolverCalls)).actorHandle;
+      if (typeof context.isCurrent !== 'function' || context.isCurrent() !== true) return null;
       const current = runtimeAdapters[provider].get(launchRef);
+      if (typeof context.isCurrent !== 'function' || context.isCurrent() !== true) return null;
+      proofAuthorityCalls.push({ attemptId, operation: 'reconcileExecution' });
       return runtimeAdapters[provider].reconcileExecution(launchRef, {
         executionActorHandle,
         ownerActorHandle,
@@ -215,6 +235,17 @@ function createProductionProofFixture(provider) {
     execution,
     initialLaunch,
     launchesByRef,
+    proofAuthorityCalls,
+    proofContexts,
+    deferNextProofMint() {
+      assert.equal(nextProofGate, null);
+      const entered = createDeferred();
+      const release = createDeferred();
+      nextProofGate = { entered, releasePromise: release.promise, context: null, attemptId: null };
+      const gate = nextProofGate;
+      gate.release = release.resolve;
+      return gate;
+    },
     addExecutionLaunch: (suffix, identityOverride) => {
       const identity = identityOverride || structuredClone(execution.identity);
       const resumed = registerPeriod(provider, suffix, 'execution', identity);
@@ -240,6 +271,7 @@ function createTransportFixture(provider, options = {}) {
   const connections = [];
   const loadedIds = new Set(options.loadedIds || []);
   const readWaiters = [];
+  let nextLoadedConfirmation = null;
   let readMode = options.readMode || 'active';
   let deferThreadRead = Boolean(options.deferThreadRead);
 
@@ -271,6 +303,12 @@ function createTransportFixture(provider, options = {}) {
       async notify(method, params) { calls.push({ method, params }); },
       async confirmLoadedThread(nativeId) {
         calls.push({ method: 'confirmLoadedThread', nativeId });
+        const gate = nextLoadedConfirmation;
+        if (gate) {
+          nextLoadedConfirmation = null;
+          gate.entered.resolve();
+          return gate.result.promise;
+        }
         return loadedIds.has(nativeId);
       },
       async resumeLoadedThread(nativeId) { calls.push({ method: 'resumeLoadedThread', nativeId }); },
@@ -294,6 +332,13 @@ function createTransportFixture(provider, options = {}) {
     loadedIds,
     readWaiters,
     releaseRead,
+    deferNextLoadedConfirmation() {
+      assert.equal(nextLoadedConfirmation, null);
+      const entered = createDeferred();
+      const result = createDeferred();
+      nextLoadedConfirmation = { entered, result };
+      return { entered: entered.promise, release: result.resolve };
+    },
     setReadMode(mode) { readMode = mode; },
     setReadDeferred(value) { deferThreadRead = Boolean(value); },
     transportFactory,
@@ -728,6 +773,129 @@ test('Codex public proof reconciliation cannot restore proof after a read failur
   assert.deepEqual([current.status, current.activity, current.turnId], ['unknown', 'active', 'turn-a']);
   assert.equal(harness.projected.length, 0);
   await harness.collector.resumeKnownThread(nativeId);
+  assert.equal(transport.calls.some((call) => call.method === 'resumeLoadedThread'), false);
+});
+
+test('resume load failure invalidates a pending issuer before it can publish proof or state', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const observationCalls = [];
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const harness = createCollectorFixture(proofFixture, transport, {
+    onObservation: (observation) => observationCalls.push(observation),
+  });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  const launchRef = proofFixture.initialLaunch.launchRef;
+  const callbacks = transport.connections[0].callbacks;
+  callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-a' });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.projected.length = 0;
+
+  const loadedGate = transport.deferNextLoadedConfirmation();
+  const resume = harness.collector.resumeKnownThread(nativeId);
+  await loadedGate.entered;
+  const issuerGate = proofFixture.deferNextProofMint();
+  const readA = harness.collector.observeKnownThread(nativeId);
+  await issuerGate.entered.promise;
+  assert.equal(proofFixture.proofAuthorityCalls.some((call) => call.attemptId === issuerGate.attemptId), false);
+
+  loadedGate.release(false);
+  const resumeResult = await resume;
+  assert.equal(resumeResult.status, 'unknown');
+  assert.equal(harness.collector.resolveProof(launchRef), null);
+  const afterResume = structuredClone(observationFor(harness.collector, nativeId));
+  assert.deepEqual([afterResume.status, afterResume.activity, afterResume.turnId], ['unknown', 'active', 'turn-a']);
+  const callbackCountAfterResume = observationCalls.length;
+  assert.equal(issuerGate.context.isCurrent(), false);
+
+  issuerGate.release();
+  assert.notEqual((await readA).status, 'observed');
+  assert.equal(proofFixture.proofAuthorityCalls.some((call) => call.attemptId === issuerGate.attemptId), false);
+  assert.equal(harness.collector.resolveProof(launchRef), null);
+  assert.deepEqual(observationFor(harness.collector, nativeId), afterResume);
+  assert.equal(observationCalls.length, callbackCountAfterResume);
+  assert.equal(harness.projected.length, 0);
+  assert.equal(transport.calls.some((call) => call.method === 'resumeLoadedThread'), false);
+});
+
+test('public proof context turns stale before mint when a newer read publishes a production proof', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const observationCalls = [];
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const harness = createCollectorFixture(proofFixture, transport, {
+    onObservation: (observation) => observationCalls.push(observation),
+  });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  const launchRef = proofFixture.initialLaunch.launchRef;
+
+  const issuerGate = proofFixture.deferNextProofMint();
+  const oldReconciliation = harness.collector.reconcileProof(launchRef);
+  await issuerGate.entered.promise;
+  const authorityCallsBeforeA = proofFixture.proofAuthorityCalls.length;
+  assert.equal(proofFixture.proofAuthorityCalls.some((call) => call.attemptId === issuerGate.attemptId), false);
+
+  assert.equal((await harness.collector.observeKnownThread(nativeId)).status, 'observed');
+  const currentProof = harness.collector.resolveProof(launchRef);
+  assert.ok(currentProof);
+  assert.equal(proofFixture.runtimeAdapter.checkCurrentProof(launchRef, currentProof).ok, true);
+  const bObservation = structuredClone(observationFor(harness.collector, nativeId));
+  const callbacksAfterB = observationCalls.length;
+  const authorityCallsAfterB = proofFixture.proofAuthorityCalls.length;
+  assert.equal(issuerGate.context.isCurrent(), false);
+  assert.equal(authorityCallsAfterB, authorityCallsBeforeA + 2);
+
+  issuerGate.release();
+  assert.equal(await oldReconciliation, false);
+  assert.equal(proofFixture.proofAuthorityCalls.some((call) => call.attemptId === issuerGate.attemptId), false);
+  assert.equal(proofFixture.proofAuthorityCalls.length, authorityCallsAfterB);
+  assert.equal(harness.collector.resolveProof(launchRef), currentProof);
+  assert.equal(proofFixture.runtimeAdapter.checkCurrentProof(launchRef, currentProof).ok, true);
+  assert.deepEqual(observationFor(harness.collector, nativeId), bObservation);
+  assert.equal(observationCalls.length, callbacksAfterB);
+});
+
+test('old resume failure cannot mutate a newly registered and observed period', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const observationCalls = [];
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const harness = createCollectorFixture(proofFixture, transport, {
+    onObservation: (observation) => observationCalls.push(observation),
+  });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  const oldExecutionId = proofFixture.execution.registration.executionId;
+  const oldLaunchRef = proofFixture.initialLaunch.launchRef;
+  transport.connections[0].callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-old' });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.projected.length = 0;
+
+  const loadedGate = transport.deferNextLoadedConfirmation();
+  const oldResume = harness.collector.resumeKnownThread(nativeId);
+  await loadedGate.entered;
+  proofFixture.authority.end(oldExecutionId);
+  const next = proofFixture.addExecutionLaunch('codex-resume-new-period');
+  const newPeriodRead = await harness.collector.observeKnownThread(nativeId);
+  assert.equal(newPeriodRead.status, 'observed');
+  const newObservation = structuredClone(observationFor(harness.collector, nativeId));
+  const newProof = harness.collector.resolveProof(next.launch.launchRef);
+  assert.ok(newProof);
+  assert.equal(newObservation.executionId, next.period.registration.executionId);
+  assert.equal(proofFixture.runtimeAdapter.checkCurrentProof(next.launch.launchRef, newProof).ok, true);
+  assert.equal(proofFixture.proofContexts.at(-1).isCurrent(), false);
+  const callbackCountAfterNewPeriod = observationCalls.length;
+
+  loadedGate.release(false);
+  assert.equal((await oldResume).status, 'unknown');
+  assert.deepEqual(observationFor(harness.collector, nativeId), newObservation);
+  assert.equal(harness.collector.resolveProof(next.launch.launchRef), newProof);
+  assert.equal(proofFixture.runtimeAdapter.checkCurrentProof(next.launch.launchRef, newProof).ok, true);
+  assert.equal(harness.collector.resolveProof(oldLaunchRef), null);
+  assert.equal(observationCalls.length, callbackCountAfterNewPeriod);
+  assert.equal(harness.projected.length, 0);
   assert.equal(transport.calls.some((call) => call.method === 'resumeLoadedThread'), false);
 });
 

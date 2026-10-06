@@ -883,41 +883,48 @@ function createManagedCollector(options = {}) {
     const proofOperationCurrent = () => nativeReadStates.get(nativeId) === state &&
       state.proofOperationSequence === proofOperationSequence && guardAllows();
     if (!proofOperationCurrent()) return false;
-    proofHandles.delete(launchRef);
-    const resolver = trustedBindingResolver?.resolveProof;
-    if (typeof resolver !== 'function') return false;
-    const currentEpoch = epoch;
-    const expectedConnectionHandle = connectionHandle;
-    const context = Object.freeze({
-      provider,
-      scope: { ...scope },
-      identity: { ...registered.identity },
-      nativeId,
-      conversationId: registered.conversationId,
-      executionId: registered.executionId,
-      sessionId: registered.sessionId,
-      connectionGeneration,
-      connectionHandle: expectedConnectionHandle,
-    });
-    let handle;
-    try { handle = await resolver.call(trustedBindingResolver, launchRef, context); } catch { return false; }
-    if (!proofOperationCurrent() || (typeof handle !== 'object' && typeof handle !== 'function') || handle === null ||
-        currentEpoch !== epoch || expectedConnectionHandle !== connectionHandle) return false;
-    const latest = currentRegistrationForLaunch(launchRef);
-    if (!latest || !samePeriod(latest, registered) || !identitiesEqual(latest.identity, registered.identity) ||
-        !proofOperationCurrent()) return false;
-    let live;
-    try { live = runtimeAdapter.checkCurrentProof(launchRef, handle); } catch { return false; }
-    if (!proofOperationCurrent() || !proofMetadataMatches(latest.current, latest) ||
-        !isRecord(live) || live.ok !== true || live.then || currentEpoch !== epoch ||
-        expectedConnectionHandle !== connectionHandle) return false;
-    proofHandles.set(launchRef, {
-      handle,
-      generation: connectionGeneration,
-      connectionHandle: expectedConnectionHandle,
-    });
-    if (!proofOperationCurrent()) return false;
-    return Boolean(resolveProof(launchRef));
+    let resolverActive = true;
+    const resolverProofOperationCurrent = () => resolverActive && proofOperationCurrent();
+    try {
+      proofHandles.delete(launchRef);
+      const resolver = trustedBindingResolver?.resolveProof;
+      if (typeof resolver !== 'function') return false;
+      const currentEpoch = epoch;
+      const expectedConnectionHandle = connectionHandle;
+      const context = Object.freeze({
+        provider,
+        scope: { ...scope },
+        identity: { ...registered.identity },
+        nativeId,
+        conversationId: registered.conversationId,
+        executionId: registered.executionId,
+        sessionId: registered.sessionId,
+        connectionGeneration,
+        connectionHandle: expectedConnectionHandle,
+        isCurrent: resolverProofOperationCurrent,
+      });
+      let handle;
+      try { handle = await resolver.call(trustedBindingResolver, launchRef, context); } catch { return false; }
+      if (!proofOperationCurrent() || (typeof handle !== 'object' && typeof handle !== 'function') || handle === null ||
+          currentEpoch !== epoch || expectedConnectionHandle !== connectionHandle) return false;
+      const latest = currentRegistrationForLaunch(launchRef);
+      if (!latest || !samePeriod(latest, registered) || !identitiesEqual(latest.identity, registered.identity) ||
+          !proofOperationCurrent()) return false;
+      let live;
+      try { live = runtimeAdapter.checkCurrentProof(launchRef, handle); } catch { return false; }
+      if (!proofOperationCurrent() || !proofMetadataMatches(latest.current, latest) ||
+          !isRecord(live) || live.ok !== true || live.then || currentEpoch !== epoch ||
+          expectedConnectionHandle !== connectionHandle) return false;
+      proofHandles.set(launchRef, {
+        handle,
+        generation: connectionGeneration,
+        connectionHandle: expectedConnectionHandle,
+      });
+      if (!proofOperationCurrent()) return false;
+      return Boolean(resolveProof(launchRef));
+    } finally {
+      resolverActive = false;
+    }
   }
 
   async function reconcileProof(launchRef) {
@@ -1062,6 +1069,7 @@ function createManagedCollector(options = {}) {
     if (isPeriodTombstoned(registered)) return { status: 'unknown', reason: 'period_end_observed' };
     const candidates = findLaunchesForPeriod(registered);
     if (candidates.length !== 1 || !resolveProof(candidates[0].launchRef)) {
+      advanceNativeRevision(nativeId);
       invalidateProofsForPeriod(registered);
       const observation = setUnknown(registered, nativeId, 'actor_binding_unverified', null, true);
       return { status: 'unknown', observation: publicObservation(observation), reason: 'actor_binding_unverified' };
@@ -1070,8 +1078,14 @@ function createManagedCollector(options = {}) {
     const result = await adapter.resumeLoadedThread(transport, nativeId,
       () => currentEpoch === epoch && Boolean(resolveProof(launchRef)));
     if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
+    const latestPeriod = findRegisteredPeriod(nativeId);
+    if (!samePeriod(latestPeriod, registered) || !identitiesEqual(latestPeriod?.identity, registered.identity)) {
+      return { status: 'unknown', reason: 'registered_period_changed' };
+    }
+    if (isPeriodTombstoned(registered)) return { status: 'unknown', reason: 'period_end_observed' };
     if (result.status !== 'resumed') {
       if (result.status === 'unknown') {
+        advanceNativeRevision(nativeId);
         invalidateProofsForPeriod(registered);
         const observation = setUnknown(registered, nativeId, result.reason || 'resume_outcome_unknown', null, true);
         return { ...result, observation: publicObservation(observation) };

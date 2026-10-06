@@ -58,7 +58,11 @@ runtime binding核が検査するのはscope、identity、active period、handle
 `trustedBindingResolver`だけがtrusted in-process compositionからnative actor proofを発行できる。
 
 resolverにはcollectorの現connection handleを渡し、その世代にattest/reconcileしたopaque proof handleだけを受け取る。
-collectorは自身のproof cache採用をfenceするが、trusted issuer自身がawait後に行う外部authority mutationは取り消せず、そのruntime契約は未確認である。
+contextの`isCurrent()`は同期boolean callbackであり、proof reconciliationが終了するとfalseになる。
+resolverはawait後、各authority mutationの直前に`isCurrent()`を確認し、確認からmutationまでawaitを挟まない。
+callbackがfalseならauthority mutationもproof cleanupも行わない。
+collectorもresolverの復帰後に状態を再確認してcache採用をfenceする。
+issuerがこの契約を守らない場合、その外部authority mutationをcollectorが取り消すことはできず、実runtimeでの遵守は未確認である。
 
 collectorは`runtimeRegistry.snapshot()`からlaunchを読み、`runtimeAdapter.get(launchRef)`のcurrent proofがregistryのidentityとactive execution periodに一致し、`executionConnectionGeneration`が現在の接続世代と一致することも確認する。
 
@@ -120,6 +124,8 @@ read sequenceとproof operation sequenceはcollector内の競合制御用であ�
 | ID-F04-P13 | 同じnative revisionとperiodで開始したread A/Bのうち、Bの結果を先に採用してからAを返す。 | Bのobservationとproofを保持し、遅れたAを拒否する。 | Aによる状態上書き、B proofの削除、callback通知は各0回。 |
 | ID-F04-P14 | read Aがproof issuerを待つ間にread Bの失敗応答を採用し、その後Aのproof handleを返す。 | Bのunknown observationを保持し、Aのproofをcacheへ採用しない。 | stale proof復活、resume、native projectionは各0回。 |
 | ID-F04-P15 | public `reconcileProof` Aがissuerを待つ間に、read failureまたは新しいpublic proof operation Bを完了させてからAを返す。 | read failure後はproofをnullのまま保ち、新しいproof Bの後はB handleを保持する。 | Aの遅延結果によるcache設定、B proofの削除は各0回。 |
+| ID-F04-P16 | `resumeKnownThread`のloaded確認待機中にproof issuer Aを保留し、loaded確認がthread未loadedを返す。 | native revisionを進めてからproofを失効し、Aのissuer callbackをfalseにする。遅延Aはauthority mutationもcollector state mutationもしない。 | stale proofの復活、resume wire送信、callback通知は各0回。 |
+| ID-F04-P17 | `resumeKnownThread`のawait中に登録済みexecution periodを新しいperiodへ切り替え、旧resume結果を返す。 | periodとidentityを再照合し、旧結果をunknownとして返す。 | 新periodのrevision、proof、observation、callbackの変更は各0回。 |
 
 ## 検証と採用境界
 
@@ -128,9 +134,9 @@ fixtureは両provider adapterとtransport callbackを通してscenarioを確認�
 fixtureのtrusted resolverはissuer境界とlive proof checkを確かめるものであり、実runtimeのnative binding証拠を実証しない。
 public proof競合のfixtureに使うtest-only live-equivalent checkerはcollectorのcache採用順だけを検証し、native proof evidenceには数えない。
 
-core/conformance testsは20/20、transport/process testsは14/14、HTTP snapshot testsは4/4で成功した。
+core/conformance testsは23/23、transport/process testsは14/14、HTTP snapshot testsは4/4で成功した。
 
-全体の`npm test`は1218/1218成功し、failure、cancel、skip、todoは0件だった。
+全体の`npm test`は1221/1221成功し、failure、cancel、skip、todoは0件だった。
 
 修正後の最初の統合実行では1,213件が成功し、既存で変更していない`poc/codex-pr-review-notifications/existing-probe.test.js`のファイル失敗が1件あったが、詳細な原因は出力されなかった。
 同ファイルの単独再実行は1/1で成功し、その後に単独実行した`npm test`は1,214件成功、失敗・キャンセル・スキップ・TODOは0件だった。
