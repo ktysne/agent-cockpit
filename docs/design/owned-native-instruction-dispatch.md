@@ -94,4 +94,6 @@ owned childの終了とcloseを確認した。
 
 この実行は受付と次contextを確認したもので、Claude echoからappliedを認定していない。
 Claude working steer、真正inputの適用証拠、delegated、handoff、再接続の採用gateは未確認である。
-Codexの実client ID対応は本人ログイン後の実接続結果で別に記録する。
+Codex CLI 0.160.1は隔離app-serverの本人ログインを5分待機し、authentication_timeoutで終了した。
+owned childのexit/close、通常認証ファイル変更ゼロ、隔離認証artifactゼロを確認した。
+thread開始前に止まったため、Codex steer/startの受付とclient ID対応の実接続gateはunknownのままである。
