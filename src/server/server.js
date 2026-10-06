@@ -15,6 +15,7 @@ const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHom
 const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { createRegistrationKernel } = require('./conversation-registry');
 const { createProviderEventProjection, createProviderEventAdapter } = require('./provider-event-projection');
+const { sanitizeManagedCollectorSnapshot } = require('./managed-collector');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
@@ -368,6 +369,7 @@ function createRequestHandler(options) {
     getServerInfo,
     markRequest,
     registrationRegistry = createRegistrationKernel().registry,
+    managedCollectors = [],
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists = defaultCodexAgentScriptExists,
@@ -456,7 +458,16 @@ function createRequestHandler(options) {
           break;
         }
       }
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), uiVersion });
+      const managedCollectorSnapshots = Array.isArray(managedCollectors)
+        ? managedCollectors.map((collector) => {
+          try {
+            return typeof collector?.snapshot === 'function'
+              ? sanitizeManagedCollectorSnapshot(collector.snapshot())
+              : null;
+          } catch { return null; }
+        }).filter(Boolean)
+        : [];
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -1541,6 +1552,7 @@ async function startServer(options = {}) {
     registrationRegistry,
     providerEventProjection: options.providerEventProjection,
     resolveActorCorrelation: options.resolveActorCorrelation,
+    managedCollectors: options.managedCollectors,
   });
 
   try {
