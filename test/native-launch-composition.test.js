@@ -565,6 +565,35 @@ test('a #192 proof context from a different connection is rejected before runtim
   assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, true);
 });
 
+test('resolveProof rejects a synchronous reentry without invalidating the underlying proof', async () => {
+  const fixture = createFixture();
+  const { result } = await fixture.startStandalone('codex', 'reentrant-proof');
+  const runtime = fixture.runtimeKernel.registry.get(result.launchRef);
+  const launch = fixture.launchKernel.registry.get(result.launchRef);
+  const scope = fixture.openedConnections[0].scope;
+  const proof = fixture.composition.resolveProof(result.launchRef);
+  let reentrantProof = proof;
+  const context = {
+    launchRef: result.launchRef,
+    connectionHandle: fixture.openedConnections[0].connectionHandle,
+    connectionGeneration: runtime.currentProof.executionConnectionGeneration,
+    scope,
+    identity: launch.identity,
+    periodId: launch.executionBinding.periodId,
+    actor: launch.executionBinding.actor,
+    contextId: runtime.currentProof.executionContextId,
+    isCurrent() {
+      reentrantProof = fixture.composition.resolveProof(result.launchRef);
+      return true;
+    },
+  };
+
+  assert.equal(fixture.composition.resolveProof(result.launchRef, context), null);
+  assert.equal(reentrantProof, null);
+  assert.equal(fixture.composition.resolveProof(result.launchRef), proof);
+  assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, true);
+});
+
 test('repeated identity and context events for one launch do not duplicate registration or actor binding', async () => {
   const fixture = createFixture();
   const { result } = await fixture.startStandalone('claude', 'duplicate-callback');
@@ -658,6 +687,126 @@ test(`delegated ${parentProvider} ownership of ${childProvider} launch preserves
   assert.equal(fixture.composition.resolveProof(child.launchRef), null);
 });
 }
+
+test('an expired ancestor owner invalidates descendant proofs, writers, and new delegated admission', async () => {
+  const fixture = createFixture();
+  const parent = await fixture.startStandalone('claude', 'chain-parent');
+
+  fixture.plans.push(async (runner) => fixture.sendMainContext(runner, 'codex', 'chain-child-a'));
+  const childAReceipt = fixture.admission('codex', 'chain-child-a', {
+    origin: 'delegated', purpose: 'agent', originReceipt: parent.result.runReceipt,
+  });
+  const childA = await fixture.composition.start(childAReceipt, { inputText: 'child A' });
+
+  fixture.plans.push(async (runner) => fixture.sendMainContext(runner, 'claude', 'chain-child-b'));
+  const childBReceipt = fixture.admission('claude', 'chain-child-b', {
+    origin: 'delegated', purpose: 'agent', originReceipt: childA.runReceipt,
+  });
+  const childB = await fixture.composition.start(childBReceipt, { inputText: 'child B' });
+  const proofB = fixture.composition.resolveProof(childB.launchRef);
+  const writerB = fixture.composition.writerFor(childB.launchRef);
+  assert.ok(proofB);
+  assert.ok(writerB);
+
+  fixture.runners[0].options.onNative({
+    type: 'context_ended',
+    provider: 'claude',
+    identity: {
+      provider: 'claude', nativeIdKind: 'session', hostId: 'fixture-host',
+      homeScopeId: fixture.profiles.claude.homeScopeId, nativeId: 'claude-native-chain-parent',
+    },
+    context: { kind: 'assistant_message', nativeContextId: 'claude-context-chain-parent' },
+  });
+
+  assert.equal(fixture.composition.resolveProof(childA.launchRef), null);
+  assert.equal(fixture.composition.resolveProof(childB.launchRef), null);
+  assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(childB.launchRef, proofB).ok, true);
+  const authorizeCalls = fixture.registrationCalls.authorizeWriter;
+  assert.notEqual(fixture.composition.authorizeWriter(childB.launchRef, writerB).status, 'accepted');
+  assert.equal(fixture.registrationCalls.authorizeWriter, authorizeCalls);
+
+  const launchCount = fixture.launchKernel.registry.snapshot().launches.length;
+  const runnerCount = fixture.runners.length;
+  assert.throws(() => fixture.admission('codex', 'chain-child-c', {
+    origin: 'delegated', purpose: 'agent', originReceipt: childB.runReceipt,
+  }), (error) => error.code === 'origin_receipt_unavailable');
+  assert.equal(fixture.launchKernel.registry.snapshot().launches.length, launchCount);
+  assert.equal(fixture.runners.length, runnerCount);
+});
+
+test('an ancestor ended after a current-owner handoff does not invalidate descendants', async () => {
+  const fixture = createFixture();
+  const parent = await fixture.startStandalone('claude', 'rebound-parent');
+  const target = await fixture.startStandalone('codex', 'rebound-target');
+
+  fixture.plans.push(async (runner) => fixture.sendMainContext(runner, 'codex', 'rebound-child-a'));
+  const childAReceipt = fixture.admission('codex', 'rebound-child-a', {
+    origin: 'delegated', purpose: 'agent', originReceipt: parent.result.runReceipt,
+  });
+  const childA = await fixture.composition.start(childAReceipt, { inputText: 'child A' });
+
+  fixture.plans.push(async (runner) => fixture.sendMainContext(runner, 'claude', 'rebound-child-b'));
+  const childBReceipt = fixture.admission('claude', 'rebound-child-b', {
+    origin: 'delegated', purpose: 'agent', originReceipt: childA.runReceipt,
+  });
+  const childB = await fixture.composition.start(childBReceipt, { inputText: 'child B' });
+  const proofB = fixture.composition.resolveProof(childB.launchRef);
+  const writerB = fixture.composition.writerFor(childB.launchRef);
+  assert.ok(proofB);
+  assert.ok(writerB);
+
+  assert.ok(fixture.composition.handoff(
+    childA.runReceipt,
+    parent.result.runReceipt,
+    target.result.runReceipt,
+    { handoffId: 'rebind-ancestor', expectedOwnerGeneration: 0 },
+  ));
+  assert.ok(await fixture.composition.reconcileProof(childA.launchRef));
+  assert.ok(fixture.composition.resolveProof(childB.launchRef));
+
+  fixture.runners[0].options.onNative({
+    type: 'context_ended',
+    provider: 'claude',
+    identity: {
+      provider: 'claude', nativeIdKind: 'session', hostId: 'fixture-host',
+      homeScopeId: fixture.profiles.claude.homeScopeId, nativeId: 'claude-native-rebound-parent',
+    },
+    context: { kind: 'assistant_message', nativeContextId: 'claude-context-rebound-parent' },
+  });
+
+  assert.equal(fixture.composition.resolveProof(childA.launchRef) !== null, true);
+  assert.equal(fixture.composition.resolveProof(childB.launchRef) !== null, true);
+  assert.equal(fixture.composition.authorizeWriter(childB.launchRef, writerB).status, 'accepted');
+  assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(childB.launchRef, proofB).ok, true);
+});
+
+test('handoff rejects a target owner chain that reaches the execution', async () => {
+  const fixture = createFixture();
+  const execution = await fixture.startStandalone('claude', 'cycle-execution');
+  const target = await fixture.startStandalone('codex', 'cycle-target');
+
+  assert.ok(fixture.composition.handoff(
+    execution.result.runReceipt,
+    execution.result.runReceipt,
+    target.result.runReceipt,
+    { handoffId: 'cycle-first-edge', expectedOwnerGeneration: 0 },
+  ));
+  assert.ok(await fixture.composition.reconcileProof(execution.result.launchRef));
+  const handoffCalls = fixture.runtimeCalls.handoff;
+  const targetProof = fixture.composition.resolveProof(target.result.launchRef);
+
+  assertCode(() => fixture.composition.handoff(
+    target.result.runReceipt,
+    target.result.runReceipt,
+    execution.result.runReceipt,
+    { handoffId: 'cycle-closing-edge', expectedOwnerGeneration: 0 },
+  ), 'handoff_cycle');
+
+  assert.equal(fixture.runtimeCalls.handoff, handoffCalls);
+  assert.equal(fixture.composition.resolveProof(execution.result.launchRef) !== null, true);
+  assert.equal(fixture.composition.resolveProof(target.result.launchRef), targetProof);
+  assert.equal(fixture.runtimeKernel.registry.get(target.result.launchRef).ownerGeneration, 0);
+});
 
 test('a standalone launch can hand off to a live owner and rebind against the new current owner', async () => {
   const fixture = createFixture();
@@ -797,8 +946,11 @@ test('stop keeps proof revoked and reports an unconfirmed child until close is o
   assert.equal(fixture.nativeHarness.child.exited, false);
   assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, false);
   assert.equal(fixture.registrationKernel.registry.snapshot().executions[0].state, 'active');
-
-  t.after(() => fixture.nativeHarness.child?.emit('close'));
+  fixture.nativeHarness.child.emit('close');
+  assert.equal(fixture.nativeHarness.child.exited, false);
+  assert.equal(fixture.nativeHarness.runnerOptions.isCurrent(), false);
+  assert.equal(fixture.composition.snapshot().launches[0].processState, 'stopped');
+  assert.equal(fixture.composition.resolveProof(result.launchRef), null);
 });
 
 test('a native source identity conflict quarantines the connection and expires its proof', async () => {

@@ -14,6 +14,15 @@ const MAX_LINES = 100_000;
 const DEFAULT_TIMEOUTS = Object.freeze({ startupMs: 15_000, rpcMs: 10_000, loginMs: 5 * 60_000, stopMs: 2_000 });
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_LOGIN_TIMEOUT_MS = 15 * 60_000;
+const REQUIRED_HOME_DIRECTORIES = Object.freeze([
+  Object.freeze(['AppData', 'Roaming']),
+  Object.freeze(['AppData', 'Local']),
+  Object.freeze(['tmp']),
+  Object.freeze(['.config']),
+  Object.freeze(['.local', 'share']),
+  Object.freeze(['.cache']),
+]);
+const CODEX_HOME_DIRECTORY = Object.freeze(['.codex']);
 
 class OwnedNativeRunnerError extends Error {
   constructor(code) {
@@ -62,6 +71,46 @@ function validateAuthenticationUrl(value) {
 function normalizedPath(value) {
   const resolved = path.resolve(value);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function ensureIsolatedHomeDirectories(homePath, provider) {
+  const requiredDirectories = provider === 'codex'
+    ? [...REQUIRED_HOME_DIRECTORIES, CODEX_HOME_DIRECTORY]
+    : REQUIRED_HOME_DIRECTORIES;
+  for (const parts of requiredDirectories) {
+    let current = homePath;
+    for (const part of parts) {
+      current = path.join(current, part);
+      const relative = path.relative(homePath, current);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw runnerError('isolated_directory_unsafe');
+      }
+      let stat;
+      try {
+        stat = fs.lstatSync(current);
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw runnerError('isolated_directory_unavailable');
+        try {
+          fs.mkdirSync(current);
+        } catch (createError) {
+          if (createError?.code !== 'EEXIST') throw runnerError('isolated_directory_unavailable');
+        }
+        try {
+          stat = fs.lstatSync(current);
+        } catch {
+          throw runnerError('isolated_directory_unavailable');
+        }
+      }
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw runnerError('isolated_directory_unsafe');
+      let realPath;
+      try {
+        realPath = fs.realpathSync.native(current);
+      } catch {
+        throw runnerError('isolated_directory_unavailable');
+      }
+      if (normalizedPath(realPath) !== normalizedPath(current)) throw runnerError('isolated_directory_unsafe');
+    }
+  }
 }
 
 function validateDirectory(value, code) {
@@ -851,6 +900,9 @@ function createOwnedNativeRunner(options) {
         Buffer.byteLength(request.inputText, 'utf8') > MAX_INPUT_BYTES) throw runnerError('invalid_start_request');
     state = 'starting';
     const expectedGeneration = generation;
+    requireOwnerCurrent(expectedGeneration);
+    ensureIsolatedHomeDirectories(homePath, provider);
+    requireOwnerCurrent(expectedGeneration);
     let authentication = provider === 'claude' ? await loadAuthentication(expectedGeneration) : null;
     requireOwnerCurrent(expectedGeneration);
     await spawnOwnedProcess(authentication, expectedGeneration);

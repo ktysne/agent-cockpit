@@ -109,6 +109,18 @@ function baseOptions(workspace, provider, values = {}) {
   };
 }
 
+function requiredHomeDirectories(homePath) {
+  return [
+    path.join(homePath, 'AppData', 'Roaming'),
+    path.join(homePath, 'AppData', 'Local'),
+    path.join(homePath, 'tmp'),
+    path.join(homePath, '.config'),
+    path.join(homePath, '.local', 'share'),
+    path.join(homePath, '.cache'),
+    path.join(homePath, '.codex'),
+  ];
+}
+
 function codexResponse(id, result) {
   return { id, result };
 }
@@ -279,7 +291,12 @@ test('Codex presents same-process managed login once and waits for its matching 
       assert.deepEqual(methods, ['initialize', 'account/login/start']);
       harness.child.send(codexLoginCompleted(loginId));
     },
-    spawnImpl: harness.spawnImpl,
+    spawnImpl: (executable, args, options) => {
+      for (const directory of requiredHomeDirectories(workspace.homePath)) {
+        assert.equal(fs.statSync(directory).isDirectory(), true);
+      }
+      return harness.spawnImpl(executable, args, options);
+    },
     onNative: (event) => events.push(event),
   }));
   const snapshot = await runner.start({ inputText: 'private task prompt' });
@@ -315,6 +332,37 @@ test('Codex presents same-process managed login once and waits for its matching 
   assert.equal(runner.snapshot().terminalContextCount, 1);
   await assert.rejects(runner.start({ inputText: 'a second task' }), (error) => error.code === 'already_started');
   await runner.stop();
+});
+
+test('a symlinked HOME descendant is rejected before authentication or child spawn', async (t) => {
+  const workspace = createWorkspace(t);
+  const outside = path.join(workspace.root, 'outside-home');
+  const configPath = path.join(workspace.homePath, '.config');
+  fs.mkdirSync(outside);
+  try {
+    fs.symlinkSync(outside, configPath, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch {
+    t.skip('directory symlinks are unavailable in this environment');
+    return;
+  }
+  const harness = createSpawnHarness(workspace);
+  let authenticationCalls = 0;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    getAuthentication: () => {
+      authenticationCalls += 1;
+      return { oauthToken: 'oauth-secret' };
+    },
+    spawnImpl: harness.spawnImpl,
+    onNative() {},
+  }));
+
+  await assert.rejects(runner.start({ inputText: 'task' }),
+    (error) => error.code === 'isolated_directory_unsafe');
+  assert.equal(authenticationCalls, 0);
+  assert.equal(harness.calls, 0);
+  assert.equal(runner.snapshot().failureCode, 'isolated_directory_unsafe');
+  await runner.stop();
+  fs.rmSync(configPath, { recursive: false, force: true });
 });
 
 test('Codex reconciles a completion notification that arrives before turn/start response without activating context', async (t) => {
