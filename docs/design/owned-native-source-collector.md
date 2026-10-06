@@ -84,3 +84,16 @@ fresh前の再attachは送信開始前にdelivery_target_unavailableで拒否す
 runtime-binding.test.jsは任意guardのfalse/throw/thenable、canonical revision不足、最後metadata callbackのsource/context/period失効とlatest-proof再入を検証し、actor新規登録や拒否時の新proof置換を防ぐ。
 これらはfixtureの適合結果であり、実native model、認証、delegated/handoff/reconnectのlive結果を示さない。
 capability facadeとsource accessorはtrusted composition内に閉じ、HTTP、保存JSON、public observationへ公開しない。
+
+## 確認した実接続の範囲
+
+2026年10月7日、source commit `87d1d3ca3541689c3955a2bfa5f242023f6dc2fe`をClaude Code 2.1.291へ隔離HOMEから接続し、standalone owned sourceの初回collector結合を確認した。
+同physical sourceへのcollector接続と同opaque proofの借用はいずれも成功し、native spawnは1回、collector observationは5件、公開schemaも適合した。
+context終端後は旧proofとwriterを拒否し、actorとcanonical periodはactive、contextStateはendedとなった。
+collector detachはcanonical periodを維持し、owned stop後はchildのexitとcloseを確認した。
+通常HOMEのCodex/Claude認証ファイルは不変、隔離HOMEの認証関連artifactの新規作成は0件だった。
+
+結果区分は実Claudeのstandalone owned native runtime probeであり、fakepipe fixtureとは別の実接続証拠である。
+同commitの全体テストは1466/1466 PASSで、CodeGraph同期とdiffcheckも成功した。
+検証結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-e6c98bd1-fd88-4909-97f2-984c5a7961ba.json`に保持する。
+同sourceのpositive reconnect、delegated、handoff、およびCodexの実接続は未確認であり、後続の採用gateとして残す。
