@@ -12,7 +12,7 @@ runnerの実native protocol接続とreal runtimeでの証拠は、fake stdio fix
 
 ## 公開API
 
-`createNativeLaunchComposition({ registrationKernel, launchKernel, runtimeKernel, runnerFactory, getAuthentication, onAuthenticationRequired, hostId, profiles })`は、`admitLaunch`、`start`、`stop`、`handoff`、`reconcileProof`、`resolveProof`、`writerFor`、`authorizeWriter`、`snapshot`を返す。
+`createNativeLaunchComposition({ registrationKernel, launchKernel, runtimeKernel, runnerFactory, getAuthentication, onAuthenticationRequired, hostId, profiles })`は、`admitLaunch`、`start`、`stop`、`handoff`、`reconcileProof`、`resolveProof`、`checkCurrentProof`、`writerFor`、`authorizeWriter`、`snapshot`を返す。
 
 `profiles`は`provider`、絶対`executablePath`、絶対`homePath`、`homeScopeId`、絶対`cwd`を持つ固定allowlistであり、start inputから変更できない。
 
@@ -55,6 +55,18 @@ snapshotとnative eventには認証情報を出さず、Codex challenge callback
 login ID、URL、token、prompt、model outputはcomposition snapshotや一般HTTPへ出さない。
 
 runnerへ渡す同期`isCurrent()` callbackは、launch epoch、process state、登録period、現在ownerのproofが有効な間だけtrueを返す。
+同期`isSourceCurrent()` callbackは、binding後の自身のepoch、process、canonical期間、exact scopeと接続世代のowned sourceだけを検査する。
+公開snapshotのscopeを照合した後、private opaque connection handleを`checkCurrentConnection`で同期再検査し、最後にepochとhandle同一性を再確認する。
+literal true以外、例外、thenable、同期再入はfalseとして扱う。
+初回binding前は両callbackとも従来のowner認可を要求する。
+native書込み、認証、開始、待機中replyの受理は両callbackを独立に満たす必要がある。
+固定wait profileへ渡す同期`isContextCurrent()`は引数を取らず、現在epochとcontext、および保持するopaque proofの全owner chain認可を検査する。
+proof facadeの検査後にもepoch、context、opaque handleの同一性を確認し、同期再入、foreign handle、raw authorityのcontext終端ではfalseを返す。
+wait callback通知前と返信直前にはowner、source、contextの三つのgateを独立にliteral trueで満たす必要がある。
+v1 profileはcontext callbackを必須にせず、既存の開始と認証の契約を維持する。
+
+native観測はsource callbackで受けるため、親contextがidleでも子のmatching context終端とfresh contextのattestationを保持できる。
+親proofがない間は新proofとwriterを作らず、親復帰後にも子の明示reconcileを要求する。
 
 runnerはchallenge提示直前と認証await後のnative request前にこのcallbackを同期評価し、literal `true`以外では継続しない。
 
@@ -82,11 +94,13 @@ provider、native ID kind、host、HOME scope、native IDの完全tupleはbroker
 
 同一launchからの同じidentity/contextの再通知は登録、attestation、reconciliationを繰り返さない。
 
-context終端は現在のnative context IDに完全一致するときだけactor proofとwriterを失効し、canonical execution periodとowned processは終了しない。
+context終端は現在のnative context IDに完全一致するときだけ`endContext`を呼び、当該contextのproofとwriterを不可逆に失効する。
+main actor、canonical execution period、owned processは終了しない。
+trusted native contextの新しい開始を観測した場合だけ、同じ不変execution bindingへattestし、明示的なruntime reconcileで新proofを発行する。
+確定終了したcontextの再送、旧opaque proof、旧writer envelopeは認可へ戻さない。
 
-このprofileは一turnで終了するowned attemptを保守的に扱う。
-
-一般の長寿命main sessionやturn間でのwriter再活性化を保証しない。
+main actorの生存は同じowned pipeからのtrusted native attestationで確認し、active期間やPIDだけから推定しない。
+同じprocessのfresh contextを扱うfixture契約は、real runtimeの長寿命接続や複数turnの成功を保証しない。
 
 identity、scope、contextの矛盾や認証状態の失効はconnectionをquarantineし、既発行proofを無効化する。
 
@@ -130,6 +144,43 @@ proofのlive checkはrecordから`currentOwnerRecord`をたどり、standalone s
 
 write先は各書込み直前に`authorizeWriter`を必ず通し、runtime kernelの葉proofが単体でliveに見えることを配信認可に使わない。
 
+native context終端、stop、quarantine、disconnectを確定した時点で、そのrecordと現在のowner chainがそのrecordへ到達する子のcached proofとwriterを消す。
+子のactor、期間、raw runtime kernel proofをこの走査だけで終了させない。
+fresh親contextを再照合しても子の旧proofは復活せず、各子で`reconcileProof`を明示的に呼び、新しいopaque proofを得るまで配信を保留する。
+handoffでその祖先から外れた現行chainは失効させない。
+外部context guardのfalse、source guardのfalse、registryの一時的な読取不能だけで、recordやcached capabilityを破壊しない。
+認可に影響するnativeイベントを観測していない間は、全owner chainのsourceを同期検査できるまでproofとwriterの利用を保留する。
+同期payload gateは各nodeのconnection capabilityとepochの最終検査を含み、sink呼出しまでawaitを挟まない。
+nativeイベントがない一時的な読取不能から復帰した場合は同じproofを再検査できるが、確定context終端とsource世代失効は旧proofを復活させない。
+
+現在epochのowned callbackからcontext変更、context終端、identity矛盾を受けた時点でsourceを照合できない場合は、観測欠落をnative_observation_gapとして記録する。
+この場合だけ自身と現owner chainの子のcached proofとwriterを消し、kernelのactor、context、期間に終端tombstoneを作らない。
+当該context IDをbounded uncertainContextIdsへ保持し、同IDのreplayと単なるregistry復帰で旧認可を戻さない。
+freshな別contextをtrusted sourceからattestし、runtimeで明示reconcileするまで認可を保留する。
+子もそれぞれ明示reconcileを必要とする。
+照合できなかったnativeイベントを後からauthorityへ再生しない。
+
+owned runnerはsource照合不能時のpositive identity/contextを昇格させない。
+同じ内部native identityとcurrent contextへ対応するterminal-onlyのnegative観測だけをcompositionへ渡し、compositionが観測欠落を記録する。
+このcallbackだけでactorやcontextの終端権威を作らない。
+
+`checkCurrentProof(launchRef, proofHandle)`はtrusted in-processの同期facadeである。
+保持したopaque handleの同一性と`resolveProof`の全owner chainを同期再検査し、成功時だけ`{ok:true, reason:"accepted"}`を返す。
+JSON複製、旧handle、chain欠落、cycle、再入、接続失効、期間終了ではokをfalseにする。
+送信開始を保存した後のpayload gateにはこのfacadeを渡し、raw runtime kernel registryを配信認可へ直接渡さない。
+`createDurableDeliveryStore`にはget、snapshot、checkCurrentProofを持つ固定trusted facadeと同期resolverを渡す。
+
+```javascript
+const runtimeRegistry = Object.freeze({
+  get: (ref) => runtimeKernel.registry.get(ref),
+  snapshot: () => runtimeKernel.registry.snapshot(),
+  checkCurrentProof: (ref, handle) => composition.checkCurrentProof(ref, handle),
+});
+const resolveProof = (ref) => composition.resolveProof(ref);
+```
+
+getとsnapshotは既存保存schemaの読取りを維持し、checkCurrentProofだけが全owner chainとopaque handleを配信直前に検査する。
+
 祖先失効後のhandoff recoveryはこのcompositionの機能ではない。祖先が有効な間にfresh ownerへhandoffし、proofを再照合した場合だけ、その新current-owner chainを継承する。
 
 ## 検証境界
@@ -153,7 +204,7 @@ Codex production authorizationが実際のmanaged browser loginと同じowned ap
 | ID-F03-N03 | 両providerの実runner adapterをfake owned pipeで通し、native ID/contextの許可schemaだけを登録する。 | runner method trace、registration/runtime snapshots | JSON-RPC未使用version fieldやnested model contentからIDを合成しない。 |
 | ID-F03-N07 | 別launchが同じ完全native identity tupleを報告したら後続launchだけをquarantineする。 | active execution、proof check、adapter counters、writer authorization | 2つ目のregistration/bind/adopt/write 0回。 |
 | ID-F03-N08 | Claude→CodexとCodex→Claudeのfixture owner handoffで、child executionとimmutable originを分離する。 | launch/runtime adapter snapshots、proof check | ownerをchild claimから生成せず、origin bindingを変更しない。 |
-| ID-F04-N01-a | matching context終端はactor proofを失効するがcanonical periodはactiveのまま維持する。 | current-proof check、actor/execution snapshot | period end、新execution、再活性化0回。 |
+| ID-F04-N01-a | matching context終端はcontext認可を失効するがmain actorとcanonical periodはactiveのまま維持する。 | current-proof check、actor/context/execution snapshot | actor end、period end、新execution、旧proofの再活性化0回。 |
 | ID-F04-N01-b | 子のcloseを観測できない停止は`stopping`を経て`stop_unconfirmed`になり、proofは即時失効する。 | composition snapshot、runner snapshot、共有stop promise | 未確認中の`stopped`表示、proof利用、period終端0回。 |
 | ID-F04-N01-c | 遅れて`exit`または`close`を受信した後のsnapshotだけが停止確認を`stopped`へ戻す。 | runner flagsとcomposition snapshot | proof復活、period終端0回。 |
 | ID-F04-N02 | 別connection handleを持つ#192 contextは、同じnumeric generationでも拒否する。 | reconcile result、runtime authority counter、既存proof check | authority mutationとproof置換0回。 |
@@ -165,5 +216,16 @@ Codex production authorizationが実際のmanaged browser loginと同じowned ap
 | ID-F04-N05-b | Pが有効な間にAをfresh QへhandoffしAのproofを再照合すれば、その後Pが終端してもAとBはQ経由でliveを保つ。 | origin/current owner binding、proof check、writer authorization | immutable origin変更、旧P proof再利用0回。 |
 | ID-F04-N05-c | A→Bの後にB→Aをhandoffしてowner cycleを作る要求は拒否する。 | owner chainとhandoff authority counter | cycle edgeのauthority mutation、proof変更0回。 |
 | ID-F04-N05-d | `isCurrent` callbackが同じrecordのproof resolutionへ同期再入した場合、外側のresolutionもfail-closedし、その後の通常resolutionは変わらない。 | nested result、同じproof handleの確認 | reentrant proof返却、authority mutation0回。 |
+| ID-F04-N06 | Claude/Codex双方でcontext終端後もmain actorとperiodはactive。fresh native contextだけが同じbindingの新proofとwriterを作る。 | 両製品registration/launch/runtime adapter、actor/context state、private handle、writer認可。同期試験は1秒以内。 | actor/period end、重複registration、immutable変更、旧proof/旧writer/旧context replayの認可0回。 |
+| ID-F04-N07 | P→A→BでPのcontext終端後はA/Bとも保留。fresh P後もA/Bのそれぞれの明示reconcileまで旧proofを拒否する。 | composition facade、実adapterのwriter認可回数、raw kernel葉proof、A記録。同期試験は1秒以内。 | 旧opaque handleの復活、旧writer認可、子期間終了、raw葉proofの偽失効0回。 |
+| ID-F04-N08 | 両providerのstop、disconnect、quarantineは現chainの子のcached proof/writerを消し、子actorとperiodは終了しない。 | facade判定、reconcile結果、writer認可回数、execution snapshot。同期fixtureは1秒以内。 | 失効後のwriter認可、キャッシュ復活、子period終端0回。 |
+| ID-F04-N09 | 両providerのstale connectionは捕捉済みproofによるpayload認可を拒否し、actorとcontextをunknownにする。 | 同期facade、writer認可回数、runtime snapshot。同期試験は1秒以内。 | raw kernelだけを使う配送認可、失効後のwriter認可0回。 |
+| ID-F04-N10 | 両providerで親contextがidleでも子のtrusted native観測を保持する。子のfresh contextをattestするが親復帰と子の明示reconcileまではproof/writerなし。 | source/request callback、attestation回数、actor/context state、writer認可、固定binding。同期fixtureは1秒以内。 | 親idleだけによる子quarantine/stop、子period終端、未照合のproof/writer認可0回。 |
+| ID-F04-N11 | 両providerでsource callbackの再入、snapshot後raw disconnect、throw、thenable、読取不能を拒否する。一時障害の復帰時は同じproofを再検査できる。 | 初回delegated binding、source callback、同期facade、private handle、attestationとwriter認可回数。各ケース1秒以内。 | 再入の認可、snapshotだけのsource昇格、障害中attestation、guardfalseだけによるstop/cache破壊0回。 |
+| ID-F04-N12 | 両providerでsource照合不能中のnative context変更または終端を受けると観測欠落をfenceし、旧proofとwriterを拒否する。 | 実owned runner parserとfake pipe、composition gap理由、現chain、kernel actor/context、fresh contextと子の再照合。同期fixture1秒、owned pipe fixture5秒以内。 | registry復帰だけの旧認可、同context replay昇格、kernel tombstone、actor/period終端、子の自動復帰0回。 |
+| ID-F04-N13 | 両providerのcontext callbackはraw authorityのown、owner、ancestor context終端、periodまたはsource失効を同期拒否する。Codex固定waitは同じ失効後に返信しない。 | opaque proof全chain、現在epoch/context、同期再入、実Codex runnerとfake pipeの返信数。callback fixture1秒、owned pipe fixture5秒以内。 | native終端未到着による旧context認可、foreign handle、失効後wait返信0回。正常系返信は1回。Claude waitはunsupportedであり成功扱いしない。 |
+| ID-F05-N01 | 両providerの実durable storeでsend-start保存中にown、owner、ancestor contextを終了する。 | `native-payload-gate-conformance.test.js`のfile checkpoint、同期facade、実delivery adapter、sink回数、復元状態。各ケース5秒以内。 | payload sink呼出し、raw葉proofからの認可、source/target変更、保存payload漏えい、自動再送0回。保存後はunknown、fresh runtimeでもunknownを保つ。 |
 
-このfixtureはkernel、provider adapter、owned pipe parserの接続を検証するもので、real native runtimeの成功証拠としては数えない。
+これらのscenarioはfixtureと製品adapterの契約を検証する。
+ID-F05-N01は実file storeと製品delivery adapterを使うが、native transportへの配送はfixture sinkでありreal runtimeの配送成功には数えない。
+real runtimeの複数context、生存観測、context後の再照合、delegated chainの復帰は未確認であり、#171-Bと#180-Aの実接続採用条件として残す。

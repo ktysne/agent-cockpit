@@ -258,6 +258,9 @@ test('reconnection makes delayed disconnect and actor end harmless, then current
   assert.equal(second.connectionGeneration, 2);
   assert.equal(launch.adapter.disconnect(first.connectionHandle), false);
   assert.equal(launch.adapter.endActor(oldActor.actorHandle), false);
+  assert.equal(launch.adapter.endContext(oldActor.actorHandle), false);
+  assert.equal(env.runtime.registry.checkCurrentConnection(first.connectionHandle), false);
+  assert.equal(env.runtime.registry.checkCurrentConnection(second.connectionHandle), true);
   assert.equal(launch.adapter.checkCurrentProof(launch.launchRef, firstProof.proofHandle).ok, false);
   assert.equal(launch.adapter.get(launch.launchRef).currentProof, null);
   const newActor = env.attest(launch.adapter, child, second.connectionHandle, 'shared-context', launch, 'generation-actor-new');
@@ -454,4 +457,36 @@ test('same-provider adapter cannot claim an actor handle already owned by anothe
   assert.deepEqual(env.registration.registry.snapshot(), beforeRegistration);
   assert.equal(launch.adapter.checkCurrentProof(launch.launchRef, proof.proofHandle).ok, true);
   assertCode(() => sibling.endActor(existingActor.actorHandle), 'foreign_actor_handle');
+});
+
+test('context endings separate native identities and periods and reject foreign adapter handles', { timeout: 1000 }, () => {
+  const env = createEnvironment();
+  const child = env.register('codex', 'context-lifetime');
+  const launch = env.createLaunch(child);
+  launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+  const opened = env.openActorConnection(child, 'context-lifetime');
+  const first = env.attest(launch.adapter, child, opened.connectionHandle, 'same-context', launch);
+  const foreign = createProviderRuntimeAdapter('codex', env.runtime.registry, env.runtime.authority);
+  assertCode(() => foreign.endContext(first.actorHandle), 'foreign_actor_handle');
+  assertCode(() => launch.adapter.endContext(structuredClone(first.actorHandle)), 'foreign_actor_handle');
+  assert.equal(env.runtime.registry.checkCurrentConnection(opened.connectionHandle), true);
+  assert.equal(env.runtime.registry.checkCurrentConnection(structuredClone(opened.connectionHandle)), false);
+  assert.equal(env.runtime.registry.checkCurrentConnection(null), false);
+  assert.equal(env.runtime.registry.checkCurrentConnection('forged'), false);
+  assert.equal(launch.adapter.endContext(first.actorHandle), true);
+  assertCode(() => env.attest(launch.adapter, child, opened.connectionHandle, 'same-context', launch), 'context_ended');
+  const other = env.register('codex', 'context-other-identity');
+  const otherConnection = env.openActorConnection(other, 'context-other-identity');
+  assert.ok(env.attest(launch.adapter, other, otherConnection.connectionHandle, 'same-context', null,
+    'other-identity-context').actorHandle);
+  env.registration.authority.end(child.periodId);
+  const resumed = env.registrationAdapters.codex.register({
+    nativeIdKind: child.identity.nativeIdKind, hostId: child.identity.hostId,
+    homeScopeId: child.identity.homeScopeId, nativeId: child.identity.nativeId,
+  }, evidence('context-new-period'), { startId: 'context-new-period', resume: true });
+  assert.notEqual(resumed.executionId, child.periodId);
+  const nextPeriod = { ...child, periodId: resumed.executionId };
+  const nextConnection = env.openActorConnection(nextPeriod, 'context-next-period');
+  assert.ok(env.attest(launch.adapter, nextPeriod, nextConnection.connectionHandle, 'same-context', null,
+    'other-period-context').actorHandle);
 });

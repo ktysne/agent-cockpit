@@ -87,3 +87,18 @@ PRには対象シナリオID、関連Issue、ClaudeとCodexそれぞれの結果
 featureをmainへ提出する前に、採用対象の共通機能について両adapterの適合試験、必要な実runtime接点試験、横断runtime試験の成功を確認する。
 採用対象に残す機能の未確認項目は解消する。
 未確認項目を残す場合は、開発者が承認した対象範囲の縮小または代替仕様によって採用対象から外し、理由、担当Issue、確認条件を記録する。
+
+## actor生存とcontext認可の適合
+
+#171-Bと#180-Aでは、main actor、canonical period、owned processの生存とcontext認可を別々に観測する。
+共通scenario ID-F04-B04、ID-F04-N06〜N13は両製品registration、launch、runtime adapterを通し、context終端、fresh context、owner chain、確定source失効、unknown connectionを検証する。
+独立した期待値、観測点、期限、禁止副作用は[codex-runtime-binding-core.md](codex-runtime-binding-core.md)と[native-launch-composition.md](native-launch-composition.md)で定義する。
+fixtureの成功は、real runtimeでの長寿命main actorや同periodの複数contextの実証へ合算しない。
+送信開始保存後のpayload認可は、opaque handleとowner chainを同期検査するcomposition facadeを採用条件にする。
+送信開始保存中のcontext失効はID-F05-N01で、両providerの実file storeとdelivery adapterへ固定trusted facadeを注入して確認する。
+葉のraw kernel proofが単独で有効でも、ancestor chainが失効したときはpayload sinkを0回に保つ。
+復旧後のunknownは自動再送せず、追加のcontextStateを保存schemaへ取り込まない。
+
+ID-F04-N13のcontext callbackは両providerで同じraw authority失効を拒否する。
+固定wait返信はCodexの実owned runnerとfake pipeを通すfixtureであり、実modelやログイン後runtimeの能力を証明しない。
+Claude固定waitはunsupportedのままで、共通callback試験の成功をClaude wait能力へ拡張しない。

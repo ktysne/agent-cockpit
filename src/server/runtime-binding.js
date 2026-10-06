@@ -227,6 +227,7 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
   const evidenceClaims = new Map();
   const actorClaims = new Map();
   const actorTombstones = new Set();
+  const contextTombstones = new Set();
   const proofByLaunch = new Map();
   const proofHandles = new WeakMap();
   const connectionHandles = new WeakMap();
@@ -308,6 +309,10 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return JSON.stringify([scope.provider, scope.nativeIdKind, scope.hostId, scope.homeScopeId, scope.connectionSlotId]);
   }
   function actorKey(periodId, actor) { return JSON.stringify([periodId, actor.kind, actor.id]); }
+  function contextGroupKey(actor) {
+    return JSON.stringify([...IDENTITY_FIELDS.map((field) => actor.identity[field]),
+      actor.periodId, actor.actor.kind, actor.actor.id, actor.contextId]);
+  }
   function currentConnection(connection) {
     if (!connection || !connection.active) return false;
     const latest = slotStates.get(connection.slotKey);
@@ -328,6 +333,15 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return { ok: true, period };
   }
 
+  function currentContextState(actor, snapshot) {
+    const state = currentActorState(actor, snapshot);
+    if (!state.ok) return state;
+    if (contextTombstones.has(contextGroupKey(actor))) {
+      return { ok: false, reason: actor.isExecution ? 'execution_context_ended' : 'owner_context_ended' };
+    }
+    return state;
+  }
+
   function verifyChildPeriodForProof(snapshot, source, claims) {
     const period = activePeriod(snapshot, claims.executionBinding.periodId);
     return Boolean(period && identityEqual(period.identity, claims.identity) &&
@@ -344,9 +358,9 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     if (runtime.ownerGeneration !== proof.ownerGeneration || !bindingEqual(runtime.currentOwner, proof.owner)) {
       return { ok: false, reason: 'owner_generation_mismatch' };
     }
-    const execution = currentActorState({ ...proof.executionActor, isExecution: true }, snapshot);
+    const execution = currentContextState({ ...proof.executionActor, isExecution: true }, snapshot);
     if (!execution.ok) return execution;
-    const owner = currentActorState({ ...proof.ownerActor, isExecution: false }, snapshot);
+    const owner = currentContextState({ ...proof.ownerActor, isExecution: false }, snapshot);
     if (!owner.ok) return owner;
     if (!bindingEqual(runtime.currentOwner, { periodId: proof.ownerActor.periodId, actor: proof.ownerActor.actor })) {
       return { ok: false, reason: 'owner_conflict' };
@@ -453,6 +467,10 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return connection;
   }
 
+  function checkCurrentConnection(connectionHandle) {
+    return currentConnection(connectionHandles.get(connectionHandle));
+  }
+
   function disconnect(connectionHandle) {
     const connection = connectionHandles.get(connectionHandle);
     if (!connection || !currentConnection(connection)) return false;
@@ -481,6 +499,7 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
       }
     }
     if (actorTombstones.has(actorKey(claims.periodId, claims.actor))) throw runtimeError('actor_ended');
+    if (contextTombstones.has(contextGroupKey(claims))) throw runtimeError('context_ended');
     const contextKey = JSON.stringify([connection.connectionId, connection.generation,
       ...IDENTITY_FIELDS.map((field) => claims.identity[field]), claims.contextId]);
     const subject = { connectionId: connection.connectionId, connectionGeneration: connection.generation, claims };
@@ -518,14 +537,23 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return true;
   }
 
+  function endContext(actorHandle) {
+    const actor = actorHandles.get(actorHandle);
+    if (!actor) throw runtimeError('foreign_actor_handle');
+    if (!currentConnection(actor.connection)) return false;
+    contextTombstones.add(contextGroupKey(actor));
+    return true;
+  }
+
   function requireActor(actorHandle) {
     const actor = actorHandles.get(actorHandle);
     if (!actor) throw runtimeError('foreign_actor_handle');
-    const state = currentActorState(actor, readSnapshot());
+    const state = currentContextState(actor, readSnapshot());
     if (!state.ok) {
       const code = state.reason === 'execution_actor_ended' || state.reason === 'owner_actor_ended'
         ? 'actor_ended' : state.reason.includes('period_ended') ? 'stale_period' :
-          state.reason === 'stale_connection' ? 'stale_connection' : 'identity_mismatch';
+          state.reason === 'stale_connection' ? 'stale_connection' :
+          state.reason.includes('context_ended') ? 'context_ended' : 'identity_mismatch';
       throw runtimeError(code);
     }
     return actor;
@@ -676,14 +704,16 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
         connectionGeneration: actor.connection.generation,
         state: actorTombstones.has(actorKey(actor.periodId, actor.actor)) || !activePeriod(registrationSnapshot, actor.periodId)
         ? 'ended' : currentConnection(actor.connection) ? 'active' : 'unknown',
+        contextState: contextTombstones.has(contextGroupKey(actor)) ? 'ended' :
+          currentContextState(actor, registrationSnapshot).ok ? 'active' : 'unknown',
       evidence: cloneEvidence(actor.evidence) })),
       handoffs: [...handoffReceipts.values()].map(({ receipt }) => cloneReceipt(receipt)),
     };
   }
 
-  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof });
+  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof, checkCurrentConnection });
   const authority = Object.freeze({ adoptExecution, openConnection, disconnect, attestActor,
-    endActor, reconcileExecution, handoff });
+    endActor, endContext, reconcileExecution, handoff });
   return Object.freeze({ registry, authority });
 }
 
@@ -769,6 +799,11 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
     endActor(actorHandle) {
       if (!actorHandles.has(actorHandle)) throw runtimeError('foreign_actor_handle');
       return authority.endActor(actorHandle);
+    },
+    endContext(actorHandle) {
+      if (!actorHandles.has(actorHandle)) throw runtimeError('foreign_actor_handle');
+      if (typeof authority.endContext !== 'function') throw runtimeError('context_end_unavailable');
+      return authority.endContext(actorHandle);
     },
     reconcileExecution(launchRef, input) {
       requireLaunch(launchRef);

@@ -723,3 +723,451 @@ test('Codex cannot start through the runner without a trusted login presentation
   assert.throws(() => createOwnedNativeRunner(baseOptions(workspace, 'codex', { onNative() {} })),
     (error) => error.code === 'invalid_authentication_prompt');
 });
+
+
+test('source-current must be synchronous true before a native attempt starts', async (t) => {
+  const workspace = createWorkspace(t);
+  for (const sourceGuard of [
+    () => false,
+    () => { throw new Error('unavailable'); },
+    () => Promise.reject(new Error('unavailable')),
+    () => 'true',
+  ]) {
+    const harness = createSpawnHarness(workspace);
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      isCurrent: () => true,
+      isSourceCurrent: sourceGuard,
+      onAuthenticationRequired() {},
+      spawnImpl: harness.spawnImpl,
+      onNative() {},
+    }));
+    await assert.rejects(runner.start({ inputText: 'task' }), (error) => error.code === 'authority_expired');
+    assert.equal(harness.calls, 0);
+    await runner.stop();
+  }
+});
+
+test('native terminal is delivered while owner and source freshness are unavailable without ending the owned actor', async (t) => {
+  const workspace = createWorkspace(t);
+  const events = [];
+  let ownerCurrent = true;
+  let sourceCurrent = true;
+  const harness = codexResponder({ workspace });
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    isCurrent: () => ownerCurrent,
+    isSourceCurrent: () => sourceCurrent,
+    onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+    spawnImpl: harness.spawnImpl,
+    onNative: (event) => events.push(event),
+  }));
+
+  await runner.start({ inputText: 'fixed task' });
+  ownerCurrent = false;
+  sourceCurrent = false;
+  harness.child.send(codexTurnCompleted());
+
+  assert.deepEqual(events.map((event) => event.type), ['identity', 'context', 'context_ended']);
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().contextState, 'ended');
+  assert.equal(runner.snapshot().ownedChildActive, true);
+  await runner.stop();
+});
+function makeWaitRequest(params = {}, options = {}) {
+  const request = {
+    id: options.requestId || 'wait_request_1',
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread_native_1',
+      turnId: 'turn_native_1',
+      callId: 'call_native_1',
+      namespace: null,
+      tool: 'cockpit_wait',
+      arguments: {},
+      ...params,
+    },
+  };
+  if (options.includeJsonrpc) request.jsonrpc = options.jsonrpc || '2.0';
+  if (options.omitParams) delete request.params;
+  if (options.omitId) delete request.id;
+  return request;
+}
+
+function createWaitProfileHarness(workspace, options = {}) {
+  const requests = [];
+  const harness = createSpawnHarness(workspace, (line, child) => {
+    const request = JSON.parse(line);
+    if (!request.method || !Object.hasOwn(request, 'id')) return;
+    requests.push(request);
+    if (request.method === 'initialize') child.send(codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } }));
+    else if (request.method === 'account/login/start') {
+      child.send(codexResponse(request.id, { type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL }));
+    } else if (request.method === 'thread/start') {
+      child.send(codexResponse(request.id, { thread: { id: 'thread_native_1' } }));
+    } else if (request.method === 'turn/start') {
+      const before = options.waitCallsBeforeTurnResponse || [];
+      for (const call of before) child.send(call);
+      if (options.terminalBeforeTurnResponse) child.send(codexTurnCompleted());
+      child.send(codexResponse(request.id, { turn: { id: 'turn_native_1' } }));
+      const after = options.waitCallsAfterTurnResponse || [];
+      if (after.length) setImmediate(() => { for (const call of after) child.send(call); });
+    }
+  });
+  harness.requests = requests;
+  return harness;
+}
+
+function createWaitRunner(workspace, harness, values = {}) {
+  return createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    profile: 'cockpit-native-wait-v1',
+    isCurrent: values.isCurrent || (() => true),
+    isSourceCurrent: values.isSourceCurrent || (() => true),
+    isContextCurrent: values.isContextCurrent || (() => true),
+    onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+    onWaitRequired: values.onWaitRequired || (() => {}),
+    spawnImpl: harness.spawnImpl,
+    onNative: values.onNative || (() => {}),
+    onDisconnect: values.onDisconnect,
+  }));
+}
+
+function waitReplies(harness, requestId = 'wait_request_1') {
+  return harness.child.stdin.writes
+    .filter((line) => line.endsWith('\n'))
+    .map((line) => JSON.parse(line))
+    .filter((message) => message.id === requestId && Object.hasOwn(message, 'result'));
+}
+
+test('the fixed Codex wait profile queues one early native call and returns one static JSONL response', async (t) => {
+  const workspace = createWorkspace(t);
+  const events = [];
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsBeforeTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    onNative: (event) => events.push(event),
+    onWaitRequired: (value) => {
+      assert.deepEqual(events.map((event) => event.type), ['identity', 'context']);
+      receipt = value;
+    },
+  });
+
+  assert.equal(harness.calls, 0);
+  await runner.start({ inputText: 'fixed task' });
+  const initialize = harness.requests.find((request) => request.method === 'initialize');
+  const threadStart = harness.requests.find((request) => request.method === 'thread/start');
+  assert.equal(initialize.params.capabilities.experimentalApi, true);
+  assert.deepEqual(threadStart.params.dynamicTools, [{
+    type: 'function',
+    name: 'cockpit_wait',
+    description: 'Wait for the trusted host to resume this task.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  }]);
+  assert.equal(Object.isFrozen(receipt), true);
+  assert.deepEqual(Object.keys(receipt), []);
+  assert.equal(waitReplies(harness).length, 0);
+
+  assert.equal(runner.releaseWait(receipt), true);
+  const replies = waitReplies(harness);
+  assert.equal(replies.length, 1);
+  assert.deepEqual(replies[0], {
+    jsonrpc: '2.0',
+    id: 'wait_request_1',
+    result: { contentItems: [{ type: 'inputText', text: 'released' }], success: true },
+  });
+  assert.equal(harness.child.stdin.writes.at(-1).endsWith('\n'), true);
+  assert.equal(runner.releaseWait(receipt), false);
+  assert.equal(runner.cancelWait(receipt), false);
+  const snapshotText = JSON.stringify(runner.snapshot());
+  assert.equal(snapshotText.includes('wait_request_1'), false);
+  assert.equal(snapshotText.includes('call_native_1'), false);
+  await runner.stop();
+});
+
+test('a wait request without jsonrpc is accepted only with exact native correlation fields', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  assert.equal(runner.cancelWait(receipt), true);
+  assert.deepEqual(waitReplies(harness)[0], {
+    jsonrpc: '2.0',
+    id: 'wait_request_1',
+    result: { contentItems: [{ type: 'inputText', text: 'cancelled' }], success: false },
+  });
+  await runner.stop();
+});
+
+test('wait requests with missing or conflicting fields fail closed without a reply', async (t) => {
+  const invalidCalls = [
+    makeWaitRequest({ threadId: 'thread_other' }),
+    makeWaitRequest({ turnId: 'turn_other' }),
+    makeWaitRequest({ namespace: 'other_namespace' }),
+    makeWaitRequest({ tool: 'other_tool' }),
+    makeWaitRequest({ arguments: { command: 'private' } }),
+    makeWaitRequest({}, { includeJsonrpc: true, jsonrpc: '1.0' }),
+    (() => { const call = makeWaitRequest(); delete call.params.threadId; return call; })(),
+  ];
+  for (const call of invalidCalls) {
+    const workspace = createWorkspace(t);
+    let callbacks = 0;
+    const harness = createWaitProfileHarness(workspace, { waitCallsBeforeTurnResponse: [call] });
+    const runner = createWaitRunner(workspace, harness, { onWaitRequired: () => { callbacks += 1; } });
+
+    await assert.rejects(runner.start({ inputText: 'fixed task' }));
+    assert.equal(callbacks, 0);
+    assert.equal(waitReplies(harness).length, 0);
+    await runner.stop();
+  }
+});
+
+test('one queued wait request cannot be duplicated before turn start resolves', async (t) => {
+  const workspace = createWorkspace(t);
+  let callbacks = 0;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsBeforeTurnResponse: [makeWaitRequest(), makeWaitRequest({}, { requestId: 'wait_request_2' })],
+  });
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: () => { callbacks += 1; } });
+
+  await assert.rejects(runner.start({ inputText: 'fixed task' }));
+  assert.equal(callbacks, 0);
+  assert.equal(waitReplies(harness).length, 0);
+  assert.equal(waitReplies(harness, 'wait_request_2').length, 0);
+  await runner.stop();
+});
+
+test('turn completion invalidates the wait receipt without answering the native request', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  const events = [];
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    onNative: (event) => events.push(event),
+    onWaitRequired: (value) => { receipt = value; },
+  });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  harness.child.send(codexTurnCompleted());
+  assert.deepEqual(events.map((event) => event.type), ['identity', 'context', 'context_ended']);
+  assert.equal(runner.releaseWait(receipt), false);
+  assert.equal(waitReplies(harness).length, 0);
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().ownedChildActive, true);
+  await runner.stop();
+});
+
+test('a stale owner, source, or context guard suppresses the wait reply without ending the actor', async (t) => {
+  for (const staleGuard of ['owner', 'source', 'context']) {
+    const workspace = createWorkspace(t);
+    let current = true;
+    let receipt = null;
+    const harness = createWaitProfileHarness(workspace, {
+      waitCallsAfterTurnResponse: [makeWaitRequest()],
+    });
+    const runner = createWaitRunner(workspace, harness, {
+      isCurrent: () => staleGuard === 'owner' ? current : true,
+      isSourceCurrent: () => staleGuard === 'source' ? current : true,
+      isContextCurrent: () => staleGuard === 'context' ? current : true,
+      onWaitRequired: (value) => { receipt = value; },
+    });
+
+    await runner.start({ inputText: 'fixed task' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(receipt);
+    current = false;
+    assert.equal(runner.releaseWait(receipt), true);
+    assert.equal(waitReplies(harness).length, 0);
+    assert.equal(runner.snapshot().state, 'running');
+    assert.equal(runner.snapshot().contextState, 'active');
+    assert.equal(runner.snapshot().ownedChildActive, true);
+    current = true;
+    assert.equal(runner.releaseWait(receipt), false);
+    await runner.stop();
+  }
+});
+
+test('a reentrant owner change during source validation prevents the final wait write', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  let ownerCurrent = true;
+  let armed = false;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    isCurrent: () => ownerCurrent,
+    isSourceCurrent: () => {
+      if (armed) ownerCurrent = false;
+      return true;
+    },
+    onWaitRequired: (value) => { receipt = value; },
+  });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  armed = true;
+  assert.equal(runner.releaseWait(receipt), true);
+  assert.equal(waitReplies(harness).length, 0);
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().ownedChildActive, true);
+  await runner.stop();
+});
+
+test('a wait receipt cannot release a different runner and unknown approval requests get no response', async (t) => {
+  const firstWorkspace = createWorkspace(t);
+  const secondWorkspace = createWorkspace(t);
+  let firstReceipt = null;
+  let secondReceipt = null;
+  const firstHarness = createWaitProfileHarness(firstWorkspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const secondHarness = createWaitProfileHarness(secondWorkspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const first = createWaitRunner(firstWorkspace, firstHarness, { onWaitRequired: (value) => { firstReceipt = value; } });
+  const second = createWaitRunner(secondWorkspace, secondHarness, { onWaitRequired: (value) => { secondReceipt = value; } });
+
+  await Promise.all([
+    first.start({ inputText: 'fixed task' }),
+    second.start({ inputText: 'fixed task' }),
+  ]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(firstReceipt);
+  assert.ok(secondReceipt);
+  assert.equal(second.releaseWait(firstReceipt), false);
+  assert.equal(second.releaseWait(secondReceipt), true);
+  assert.equal(first.releaseWait(firstReceipt), true);
+  assert.equal(waitReplies(firstHarness).length, 1);
+  assert.equal(waitReplies(secondHarness).length, 1);
+  await Promise.all([first.stop(), second.stop()]);
+
+  const unknownWorkspace = createWorkspace(t);
+  const unknownHarness = createWaitProfileHarness(unknownWorkspace);
+  const unknownRunner = createWaitRunner(unknownWorkspace, unknownHarness);
+  await unknownRunner.start({ inputText: 'fixed task' });
+  unknownHarness.child.send({
+    id: 'permission_request_1',
+    method: 'item/commandExecution/requestApproval',
+    params: { command: 'private' },
+  });
+  assert.equal(unknownHarness.child.stdin.writes.some((line) => line.includes('permission_request_1')), false);
+  assert.equal(unknownRunner.snapshot().failureCode, 'unknown_server_request');
+  await unknownRunner.stop();
+});
+
+test('the wait profile requires a trusted context-current callback', (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createSpawnHarness(workspace);
+  assert.throws(() => createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    profile: 'cockpit-native-wait-v1',
+    isCurrent: () => true,
+    isSourceCurrent: () => true,
+    onAuthenticationRequired: () => {},
+    onWaitRequired: () => {},
+    spawnImpl: harness.spawnImpl,
+    onNative() {},
+  })), (error) => error.code === 'invalid_wait_callbacks');
+  assert.equal(harness.calls, 0);
+});
+
+test('context revocation during wait callback reentry invalidates its receipt without replying', async (t) => {
+  const workspace = createWorkspace(t);
+  let contextCurrent = true;
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    isContextCurrent: () => contextCurrent,
+    onWaitRequired: (value) => {
+      receipt = value;
+      contextCurrent = false;
+    },
+  });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  assert.equal(runner.releaseWait(receipt), false);
+  assert.equal(waitReplies(harness).length, 0);
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().ownedChildActive, true);
+  await runner.stop();
+});
+
+test('throwing or asynchronous context guards suppress wait replies without ending the actor', async (t) => {
+  for (const mode of ['throw', 'promise']) {
+    const workspace = createWorkspace(t);
+    let contextMode = 'current';
+    let receipt = null;
+    const harness = createWaitProfileHarness(workspace, {
+      waitCallsAfterTurnResponse: [makeWaitRequest()],
+    });
+    const runner = createWaitRunner(workspace, harness, {
+      isContextCurrent: () => {
+        if (contextMode === 'throw') throw new Error('guard unavailable');
+        if (contextMode === 'promise') return Promise.reject(new Error('async guard unsupported'));
+        return true;
+      },
+      onWaitRequired: (value) => { receipt = value; },
+    });
+
+    await runner.start({ inputText: 'fixed task' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(receipt);
+    contextMode = mode;
+    assert.equal(runner.releaseWait(receipt), true);
+    assert.equal(waitReplies(harness).length, 0);
+    assert.equal(runner.snapshot().state, 'running');
+    assert.equal(runner.snapshot().contextState, 'active');
+    assert.equal(runner.snapshot().ownedChildActive, true);
+    await runner.stop();
+  }
+});
+test('stopping reentrantly from the wait callback prevents a native reply', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  let stopPromise = null;
+  let runner;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  runner = createWaitRunner(workspace, harness, {
+    onWaitRequired: (value) => {
+      receipt = value;
+      stopPromise = runner.stop();
+    },
+  });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  assert.equal(waitReplies(harness).length, 0);
+  await stopPromise;
+  assert.equal(runner.snapshot().state, 'stopped');
+});
+test('Claude rejects the wait profile before creating a child process', (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createSpawnHarness(workspace);
+  assert.throws(() => createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    profile: 'cockpit-native-wait-v1',
+    isCurrent: () => true,
+    isSourceCurrent: () => true,
+    getAuthentication: () => ({ oauthToken: 'oauth-secret' }),
+    onWaitRequired() {},
+    spawnImpl: harness.spawnImpl,
+    onNative() {},
+  })), (error) => error.code === 'unsupported_profile');
+  assert.equal(harness.calls, 0);
+});

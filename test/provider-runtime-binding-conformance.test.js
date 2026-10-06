@@ -946,3 +946,45 @@ test('ID-F09-B03: 過去handoff再送とJSON snapshotは現在ownerやproofを�
     assert.equal(freshRecord.currentProof, null, provider);
   }
 });
+for (const provider of PROVIDERS) {
+  for (const role of ['execution', 'owner']) {
+    test(`ID-F04-B04 ${provider} ${role}: context end keeps actors alive and rejects old proofs and reconnect replay`, { timeout: 1000 }, () => {
+      const h = createHarness(provider);
+      const pair = attestPair(h);
+      const proof = reconcile(h, h.runtime, pair);
+      const before = captureA(h);
+      const original = role === 'execution' ? pair.childActor : pair.ownerActor;
+      const aliasConnection = openConnection(h, h.runtime, original.period, role,
+        `alias-${provider}-${role}`, `alias-slot-${provider}-${role}`);
+      const alias = attestActor(h, h.runtime, original.period, role, aliasConnection,
+        original.claims.contextId, `alias-evidence-${provider}-${role}`);
+      assert.equal(original.connection.adapter.endContext(original.actorHandle), true);
+      assert.equal(aliasConnection.adapter.endContext(alias.actorHandle), true);
+      assertProofRejected(h, h.runtime, proof.proofHandle);
+      assert.throws(() => reconcile(h, h.runtime, pair), { code: 'context_ended' });
+      const endedRows = h.runtime.registry.snapshot().actors.filter((row) =>
+        row.periodId === original.claims.periodId && row.contextId === original.claims.contextId);
+      assert.equal(endedRows.length, 2);
+      assert.ok(endedRows.every((row) => row.state === 'active' && row.contextState === 'ended'));
+      const reconnected = openConnection(h, h.runtime, original.period, role,
+        `reconnected-${provider}-${role}`, original.connection.scope.connectionSlotId);
+      assert.equal(original.connection.adapter.endContext(original.actorHandle), false);
+      assert.throws(() => attestActor(h, h.runtime, original.period, role, reconnected,
+        original.claims.contextId, `ended-replay-${provider}-${role}`), { code: 'context_ended' });
+      const fresh = attestActor(h, h.runtime, original.period, role, reconnected,
+        `fresh-${provider}-${role}`, `fresh-evidence-${provider}-${role}`);
+      const freshPair = { ...pair, [role === 'execution' ? 'childActor' : 'ownerActor']: fresh };
+      assertProofRejected(h, h.runtime, proof.proofHandle);
+      const current = reconcile(h, h.runtime, freshPair);
+      assertProofAccepted(h, h.runtime, current.proofHandle);
+      assertProofRejected(h, h.runtime, proof.proofHandle);
+      assertAUnchanged(h, before);
+      assert.equal(original.connection.adapter.endContext(original.actorHandle), false);
+      assertProofAccepted(h, h.runtime, current.proofHandle);
+      assert.equal(reconnected.adapter.endActor(fresh.actorHandle), true);
+      assertProofRejected(h, h.runtime, current.proofHandle);
+      assert.throws(() => attestActor(h, h.runtime, original.period, role, reconnected,
+        `after-actor-end-${role}`, `after-actor-end-${provider}-${role}`), { code: 'actor_ended' });
+    });
+  }
+}
