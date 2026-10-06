@@ -82,3 +82,16 @@ delegated/reviewの親だけはtrusted lifecycle fixtureであり、対象child�
 NI09の期限とglobal容量は別module instanceの制御clockでprivate APIを呼び、productionへtest専用clockを追加していない。
 service永続化は同期sink契約境界で検査し、実store/serviceの結合検証は別担当の採用gateとする。
 実native実行はこのfixture結果に含めない。
+
+## 実nativeで確認した範囲
+
+実装コミット3969d72でClaude CLI 2.1.291を隔離HOMEへ起動した。
+同じowned process/sessionでmatching terminal後のstandalone startが受け付けられ、同じidentityと実行期間のまま別contextへ進んだ。
+spawnは1回、writerのdispatchは1回、観測contextは2件だった。
+古いproofとwriterは拒否され、終了後もactorと実行期間はactive、各contextはendedだった。
+通常Codex/Claude認証ファイルの変化と、隔離HOMEの認証artifact作成はいずれもゼロだった。
+owned childの終了とcloseを確認した。
+
+この実行は受付と次contextを確認したもので、Claude echoからappliedを認定していない。
+Claude working steer、真正inputの適用証拠、delegated、handoff、再接続の採用gateは未確認である。
+Codexの実client ID対応は本人ログイン後の実接続結果で別に記録する。
