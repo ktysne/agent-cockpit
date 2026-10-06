@@ -27,6 +27,7 @@ const RESUMED_THREAD_ID = 'c0d7f5c5-740f-4a92-bfe4-9285f71d5002';
 const WARMUP_TURN_ID = 'f86e20d8-d9f3-4d4a-bdc9-19ea99781c80';
 const OBSERVED_TURN_ID = '9dc616d8-e98a-4b67-9db8-a92914841a7c';
 const PENDING_TURN_ID = '5530023a-c5b6-47ab-bf81-a19d4412b00d';
+const SERVE_TURN_ID = 'a1bcf163-6f09-4c3b-a609-29432d9aad32';
 const FOREIGN_THREAD_ID = 'd5f9a620-c90b-463e-97f5-2105fcb5f26c';
 const PENDING_REQUEST_ID = 'request-approval-42';
 const CODEX_VERSION = '0.160.0';
@@ -201,6 +202,99 @@ test('signals during startup and cleanup are recorded and all injected handlers 
   assert.equal(result.cleanup.token_file_removed, true);
   assert.equal(harness.signalSource.listenerCount('SIGINT'), 0);
   assert.equal(harness.signalSource.listenerCount('SIGTERM'), 0);
+});
+
+test('the first SIGINT stops normal serve and still allows successful post-processing', async (t) => {
+  const harness = makeHarness({ serve: true });
+  t.after(() => removeTestOutput(harness.output.absolute));
+
+  const result = await harness.run();
+
+  assert.equal(result.success, true);
+  assert.equal(result.mode, 'serve');
+  assert.equal(result.serve.stop_signal, 'SIGINT');
+  assert.equal(result.serve.cli_turns.shared_count, 1);
+  assert.equal(result.serve.cli_turns.shared_completed_count, 1);
+  assert.equal(result.control_signal.count, 1);
+  assert.equal(result.control_signal.handled_count, 1);
+  assert.equal(result.control_signal.pending_count, 0);
+  assert.equal(result.control_signal.signal, 'SIGINT');
+  assert.equal(result.control_signal.during_cleanup, false);
+  assert.equal(result.control_signal.handlers_removed, true);
+});
+
+test('a second signal during pending settlement interrupts follow-up work', async (t) => {
+  for (const followupSignal of ['SIGINT', 'SIGTERM']) {
+    const harness = makeHarness({
+      pendingTurn: true,
+      pendingOutcome: 'b_still_active',
+      followupSignal,
+    });
+    t.after(() => removeTestOutput(harness.output.absolute));
+
+    const result = await harness.run();
+
+    assert.equal(result.success, false);
+    assert.equal(result.failure_code, 'interrupted_by_signal');
+    assert.equal(result.failure_stage, 'pending_cli_wait');
+    assert.equal(result.control_signal.signal, 'SIGINT');
+    assert.equal(result.control_signal.count, 2);
+    assert.equal(result.control_signal.handled_count, 1);
+    assert.equal(result.control_signal.pending_count, 1);
+    assert.equal(result.control_signal.during_cleanup, false);
+    assert.equal(result.control_signal.handlers_removed, true);
+    assert.equal(result.cleanup.fixture_closed, true);
+    assert.equal(result.cleanup.token_file_removed, true);
+    assert.equal(result.pending.loaded_after_cli.a.count, 0);
+    assert.equal(harness.calls.filter((call) => call.method === 'thread/loaded/list').length, 2);
+  }
+});
+
+test('an additional signal during reconnect stops before reconnect RPCs and cleans up', async (t) => {
+  const harness = makeHarness({ serve: true, signalDuringReconnect: true });
+  t.after(() => removeTestOutput(harness.output.absolute));
+
+  const result = await harness.run();
+
+  assert.equal(result.success, false);
+  assert.equal(result.failure_code, 'interrupted_by_signal');
+  assert.equal(result.failure_stage, 'reconnect');
+  assert.equal(result.control_signal.signal, 'SIGINT');
+  assert.equal(result.control_signal.count, 2);
+  assert.equal(result.control_signal.handled_count, 1);
+  assert.equal(result.control_signal.pending_count, 1);
+  assert.equal(result.control_signal.during_cleanup, false);
+  assert.equal(result.control_signal.handlers_removed, true);
+  assert.equal(result.reconnect.initialized, false);
+  assert.equal(harness.calls.some((call) => call.label === 'reconnect'), false);
+  assert.equal(result.cleanup.server_stopped, true);
+  assert.equal(result.cleanup.fixture_closed, true);
+  assert.equal(result.cleanup.token_file_removed, true);
+});
+
+test('a second signal during page one of the post-serve loaded list prevents page two', async (t) => {
+  const harness = makeHarness({ serve: true, signalDuringPostServeLoadedPageOne: true });
+  t.after(() => removeTestOutput(harness.output.absolute));
+
+  const result = await harness.run();
+
+  assert.equal(result.success, false);
+  assert.equal(result.failure_code, 'interrupted_by_signal');
+  assert.equal(result.failure_stage, 'post_cli_loaded_list');
+  assert.equal(result.control_signal.signal, 'SIGINT');
+  assert.equal(result.control_signal.count, 2);
+  assert.equal(result.control_signal.handled_count, 1);
+  assert.equal(result.control_signal.pending_count, 1);
+  assert.deepEqual(harness.loadedListCalls.filter((call) => call.label === 'a'), [
+    { label: 'a', cursor: null },
+    { label: 'a', cursor: null },
+  ]);
+  assert.deepEqual(harness.loadedListCalls.filter((call) => call.label === 'b'), [
+    { label: 'b', cursor: null },
+  ]);
+  assert.equal(result.cleanup.server_stopped, true);
+  assert.equal(result.cleanup.fixture_closed, true);
+  assert.equal(result.cleanup.token_file_removed, true);
 });
 
 test('pending turn success requires resolved approvals, cleared wait state, and the same completed turn', async (t) => {
@@ -394,6 +488,8 @@ function makeHarness(scenario = {}) {
   const calls = [];
   const connectedObservers = [];
   const connectedOptions = [];
+  const loadedListCalls = [];
+  const loadedListPageCounts = new Map();
   const spawnState = { spawnCount: 0, killCount: 0, tokenPath: null };
   const signalSource = new EventEmitter();
   const childProcesses = [];
@@ -455,6 +551,12 @@ function makeHarness(scenario = {}) {
       assert.match(options.capabilityToken, /^[0-9a-f]{64}$/);
       const connectionIndex = connectedObservers.length;
       const label = ['a', 'b', 'reconnect'][connectionIndex];
+      if (label === 'reconnect' && scenario.signalDuringReconnect) {
+        await new Promise((resolve) => setImmediate(() => {
+          signalSource.emit('SIGTERM');
+          resolve();
+        }));
+      }
       connectedObservers.push(options.onNotification);
       connectedOptions.push(options);
       let turnStartCount = 0;
@@ -494,6 +596,14 @@ function makeHarness(scenario = {}) {
               return effectiveThread(THREAD_ID, layout.repo, scenario.pendingTurn ? 'untrusted' : 'on-request');
             }
             if (method === 'thread/loaded/list') {
+              const pageCount = (loadedListPageCounts.get(label) || 0) + 1;
+              loadedListPageCounts.set(label, pageCount);
+              loadedListCalls.push({ label, cursor: params.cursor || null });
+              if (scenario.signalDuringPostServeLoadedPageOne && label === 'a' && pageCount === 2) {
+                signalSource.emit('SIGTERM');
+                return { data: [THREAD_ID], nextCursor: 'fixture-page-two' };
+              }
+              if (params.cursor === 'fixture-page-two') return { data: [], nextCursor: null };
               return {
                 data: scenario.includeForeignLoadedThread ? [THREAD_ID, FOREIGN_THREAD_ID] : [THREAD_ID],
                 nextCursor: null,
@@ -557,8 +667,23 @@ function makeHarness(scenario = {}) {
     chooseLoopbackPort: async () => 49231,
     randomBytes: () => tokenBytes,
     signalSource,
-    waitForStopSignal: scenario.pendingTurn
+    waitForStopSignal: scenario.pendingTurn || scenario.serve
       ? async () => {
+        if (scenario.serve) {
+          startedFixture.fixture.requests.push({});
+          for (const options of connectedOptions) {
+            options.onNotification?.('turn/started', {
+              threadId: THREAD_ID,
+              turnId: SERVE_TURN_ID,
+              status: 'inProgress',
+            });
+            options.onNotification?.('turn/completed', {
+              threadId: THREAD_ID,
+              turnId: SERVE_TURN_ID,
+              status: 'completed',
+            });
+          }
+        }
         const emitCliEvents = (sendTerminalTurn) => {
           for (const options of connectedOptions) {
             if (scenario.pendingOutcome !== 'unresolved') {
@@ -595,7 +720,7 @@ function makeHarness(scenario = {}) {
             }
           }
         };
-        if (scenario.pendingOutcome === 'delayed_clear') {
+        if (scenario.pendingTurn && scenario.pendingOutcome === 'delayed_clear') {
           emitCliEvents(true);
           setTimeout(() => {
             for (const options of connectedOptions) {
@@ -605,9 +730,10 @@ function makeHarness(scenario = {}) {
               });
             }
           }, 50);
-        } else {
+        } else if (scenario.pendingTurn) {
           emitCliEvents(true);
         }
+        if (scenario.followupSignal) setImmediate(() => signalSource.emit(scenario.followupSignal));
         return 'SIGINT';
       }
       : undefined,
@@ -620,6 +746,7 @@ function makeHarness(scenario = {}) {
   return {
     output,
     calls,
+    loadedListCalls,
     spawnState,
     signalSource,
     fixturePaths,
@@ -634,6 +761,7 @@ function makeHarness(scenario = {}) {
         codexPath: fakeCodexPath,
         outputDirectory: output.relative,
         timeoutMs: 1000,
+        serve: scenario.serve === true,
         servePendingTurn: scenario.pendingTurn === true,
       }, dependencies);
     },

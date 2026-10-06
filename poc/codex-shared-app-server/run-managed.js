@@ -532,7 +532,7 @@ async function connectClient(connect, options, server, deadline) {
   throw new ManagedRunError(server.state.closed ? 'server_exited_before_connect' : `server_connect_${lastFailure}`);
 }
 
-async function initializeClient(connection, privateHome) {
+async function initializeClient(connection, privateHome, signalController) {
   const client = connection && connection.client;
   if (!client || typeof client.request !== 'function' || typeof client.notify !== 'function') {
     throw new ManagedRunError('invalid_client_connection');
@@ -545,8 +545,10 @@ async function initializeClient(connection, privateHome) {
     },
     capabilities: { experimentalApi: false },
   });
+  throwIfStopRequested(signalController);
   const metadata = validateInitializeResponse(response);
   await client.notify('initialized', {});
+  throwIfStopRequested(signalController);
   const expectedHome = normalizePathForMatch(privateHome);
   return {
     client,
@@ -555,7 +557,7 @@ async function initializeClient(connection, privateHome) {
   };
 }
 
-async function readLoadedSnapshot(client, threadId) {
+async function readLoadedSnapshot(client, threadId, signalController) {
   const seenCursors = new Set();
   let cursor = null;
   let count = 0;
@@ -564,7 +566,9 @@ async function readLoadedSnapshot(client, threadId) {
   for (let page = 0; page < MAX_LOADED_PAGES; page += 1) {
     const params = { limit: 100 };
     if (cursor) params.cursor = cursor;
+    throwIfStopRequested(signalController);
     const result = await client.request('thread/loaded/list', params);
+    throwIfStopRequested(signalController);
     if (!result || !Array.isArray(result.data) || result.data.some((id) => typeof id !== 'string')) {
       throw new ManagedRunError('invalid_loaded_list');
     }
@@ -591,9 +595,10 @@ async function waitForTerminalTurnStatuses(observers, turnId, timeoutMs, signalC
   return observers.every((observer) => observer.hasTerminalTurnStatus(turnId));
 }
 
-async function waitForPendingSettlement(observers, turnId, timeoutMs) {
+async function waitForPendingSettlement(observers, turnId, timeoutMs, signalController) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    throwIfStopRequested(signalController);
     const [observerA, observerB] = observers;
     const statusA = observerA.turnStatus(turnId);
     const statusB = observerB.turnStatus(turnId);
@@ -608,9 +613,13 @@ async function waitForPendingSettlement(observers, turnId, timeoutMs) {
       && statusA === statusB
       && correlation.approval_resolution_correlation_complete
       && waitingCleared
-      && bothWaitingInactive) return true;
+      && bothWaitingInactive) {
+      throwIfStopRequested(signalController);
+      return true;
+    }
     await delay(50);
   }
+  throwIfStopRequested(signalController);
   return false;
 }
 
@@ -624,8 +633,10 @@ async function waitForApprovalRequest(observer, timeoutMs, signalController) {
   return observer.hasApprovalRequest();
 }
 
-async function readThreadMetadataSnapshot(client, threadId) {
+async function readThreadMetadataSnapshot(client, threadId, signalController) {
+  throwIfStopRequested(signalController);
   const result = await client.request('thread/read', { threadId, includeTurns: false });
+  throwIfStopRequested(signalController);
   const thread = result && result.thread;
   const status = thread && thread.status && THREAD_STATUS_TYPES.has(thread.status.type)
     ? thread.status.type
@@ -637,7 +648,7 @@ async function readThreadMetadataSnapshot(client, threadId) {
   };
 }
 
-async function inspectAdditionalLoadedThreads(client, targetThreadId) {
+async function inspectAdditionalLoadedThreads(client, targetThreadId, signalController) {
   const loadedIds = new Set();
   const visitedCursors = new Set();
   let cursor = null;
@@ -646,7 +657,9 @@ async function inspectAdditionalLoadedThreads(client, targetThreadId) {
   for (let page = 0; page < MAX_LOADED_PAGES; page += 1) {
     const params = { limit: 100 };
     if (cursor) params.cursor = cursor;
+    throwIfStopRequested(signalController);
     const response = await client.request('thread/loaded/list', params);
+    throwIfStopRequested(signalController);
     if (!response || !Array.isArray(response.data) || response.data.some((id) => typeof id !== 'string')) {
       throw new ManagedRunError('invalid_loaded_list');
     }
@@ -675,7 +688,9 @@ async function inspectAdditionalLoadedThreads(client, targetThreadId) {
   let readFailures = 0;
   for (const extraId of inspectIds) {
     try {
+      throwIfStopRequested(signalController);
       const response = await client.request('thread/read', { threadId: extraId, includeTurns: false });
+      throwIfStopRequested(signalController);
       const thread = response && response.thread;
       if (!thread || thread.id !== extraId) {
         readFailures += 1;
@@ -702,6 +717,7 @@ async function inspectAdditionalLoadedThreads(client, targetThreadId) {
     } catch {
       readFailures += 1;
     }
+    throwIfStopRequested(signalController);
   }
   const allInspected = extraIds.length > 0 && inspectIds.length === extraIds.length && readMatches === extraIds.length;
   return {
@@ -719,9 +735,9 @@ async function inspectAdditionalLoadedThreads(client, targetThreadId) {
   };
 }
 
-async function readAdditionalLoadedSummary(client, targetThreadId) {
+async function readAdditionalLoadedSummary(client, targetThreadId, signalController) {
   try {
-    return await inspectAdditionalLoadedThreads(client, targetThreadId);
+    return await inspectAdditionalLoadedThreads(client, targetThreadId, signalController);
   } catch {
     return { available: false };
   }
@@ -894,11 +910,11 @@ function createSignalController(signalSource = process) {
   }
   let firstSignal = null;
   let signalCount = 0;
+  let handledCount = 0;
   let cleanupStarted = false;
   let signalDuringCleanup = false;
-  let handled = false;
   let handlersInstalled = true;
-  const waiters = new Set();
+  let resolveWaiting = null;
   const handlers = new Map();
   for (const signal of ['SIGINT', 'SIGTERM']) {
     const handler = () => record(signal);
@@ -909,31 +925,34 @@ function createSignalController(signalSource = process) {
   function record(signal) {
     if (!['SIGINT', 'SIGTERM'].includes(signal)) return false;
     firstSignal ||= signal;
-    signalCount = Math.min(signalCount + 1, 100);
+    signalCount += 1;
     if (cleanupStarted) signalDuringCleanup = true;
-    if (firstSignal) {
-      for (const resolveSignal of waiters) resolveSignal(firstSignal);
-      waiters.clear();
+    if (resolveWaiting) {
+      const resolveSignal = resolveWaiting;
+      resolveWaiting = null;
+      markHandled();
+      resolveSignal(firstSignal);
     }
     return true;
+  }
+
+  function markHandled() {
+    if (handledCount < signalCount) handledCount += 1;
   }
 
   return {
     record,
     get signal() { return firstSignal; },
-    get handled() { return handled; },
-    markHandled() { handled = true; },
+    get handled() { return signalCount <= handledCount; },
+    markHandled,
     markCleanupStarted() { cleanupStarted = true; },
     waitForSignal() {
-      if (firstSignal) {
-        handled = true;
+      if (signalCount > handledCount) {
+        markHandled();
         return Promise.resolve(firstSignal);
       }
       return new Promise((resolveSignal) => {
-        waiters.add((signal) => {
-          handled = true;
-          resolveSignal(signal);
-        });
+        resolveWaiting = resolveSignal;
       });
     },
     snapshot() {
@@ -941,6 +960,8 @@ function createSignalController(signalSource = process) {
         requested: firstSignal !== null,
         signal: firstSignal,
         count: signalCount,
+        handled_count: handledCount,
+        pending_count: Math.max(0, signalCount - handledCount),
         during_cleanup: signalDuringCleanup,
         handlers_removed: !handlersInstalled,
       };
@@ -961,7 +982,11 @@ function createSignalController(signalSource = process) {
         }
       }
       handlersInstalled = !removalSucceeded;
-      waiters.clear();
+      if (resolveWaiting) {
+        const resolveSignal = resolveWaiting;
+        resolveWaiting = null;
+        resolveSignal(firstSignal);
+      }
     },
   };
 }
@@ -1097,7 +1122,7 @@ async function runPendingTurn(options) {
   pending.turn.approval_request_seen_a = await waitForApprovalRequest(observers.a, timeoutMs, signalController);
   throwIfStopRequested(signalController);
   pending.request_before_cli.a = observers.a.requestSummary();
-  const persistedRead = await readThreadMetadataSnapshot(aInitialized.client, threadId);
+  const persistedRead = await readThreadMetadataSnapshot(aInitialized.client, threadId, signalController);
   throwIfStopRequested(signalController);
   pending.persisted_read_a = persistedRead;
   if (!persistedRead.thread_matches || persistedRead.turns_returned) {
@@ -1115,7 +1140,7 @@ async function runPendingTurn(options) {
   connections.push(bConnection);
   throwIfStopRequested(signalController);
   stage('initialize_b');
-  const bInitialized = await initializeClient(bConnection, started.isolatedHome);
+  const bInitialized = await initializeClient(bConnection, started.isolatedHome, signalController);
   throwIfStopRequested(signalController);
   result.clients.b.initialized = true;
   result.clients.b.private_home_match = bInitialized.privateHomeMatch;
@@ -1134,9 +1159,9 @@ async function runPendingTurn(options) {
   );
 
   stage('pending_loaded_list');
-  const loadedA = await readLoadedSnapshot(aInitialized.client, threadId);
+  const loadedA = await readLoadedSnapshot(aInitialized.client, threadId, signalController);
   throwIfStopRequested(signalController);
-  const loadedB = await readLoadedSnapshot(bInitialized.client, threadId);
+  const loadedB = await readLoadedSnapshot(bInitialized.client, threadId, signalController);
   throwIfStopRequested(signalController);
   result.loaded.a = { count: loadedA.count, contains_thread: loadedA.containsThread, truncated: loadedA.truncated };
   result.loaded.b = { count: loadedB.count, contains_thread: loadedB.containsThread, truncated: loadedB.truncated };
@@ -1167,7 +1192,7 @@ async function runPendingTurn(options) {
   pending.stop_signal = await waitForServeStopSignal(signalController, dependencies.waitForStopSignal);
 
   pending.settlement_observed = await waitForPendingSettlement(
-    [observers.a, observers.b], turn.id, timeoutMs,
+    [observers.a, observers.b], turn.id, timeoutMs, signalController,
   );
   pending.turn.status_a = observers.a.turnStatus(turn.id) || 'unknown';
   pending.turn.status_b = observers.b.turnStatus(turn.id) || 'unknown';
@@ -1190,8 +1215,10 @@ async function runPendingTurn(options) {
   pending.fixture_requests_after_cli = Math.max(0, started.fixture.requests.length - result.fixture.baseline_request_count);
 
   stage('pending_loaded_after_cli');
-  const afterCliA = await readLoadedSnapshot(aInitialized.client, threadId);
-  const afterCliB = await readLoadedSnapshot(bInitialized.client, threadId);
+  const afterCliA = await readLoadedSnapshot(aInitialized.client, threadId, signalController);
+  throwIfStopRequested(signalController);
+  const afterCliB = await readLoadedSnapshot(bInitialized.client, threadId, signalController);
+  throwIfStopRequested(signalController);
   pending.loaded_after_cli.a = {
     count: afterCliA.count,
     contains_thread: afterCliA.containsThread,
@@ -1203,8 +1230,10 @@ async function runPendingTurn(options) {
     truncated: afterCliB.truncated,
   };
   pending.loaded_after_cli.counts_match = afterCliA.count === afterCliB.count;
-  pending.additional_loaded_threads.a = await readAdditionalLoadedSummary(aInitialized.client, threadId);
-  pending.additional_loaded_threads.b = await readAdditionalLoadedSummary(bInitialized.client, threadId);
+  pending.additional_loaded_threads.a = await readAdditionalLoadedSummary(aInitialized.client, threadId, signalController);
+  throwIfStopRequested(signalController);
+  pending.additional_loaded_threads.b = await readAdditionalLoadedSummary(bInitialized.client, threadId, signalController);
+  throwIfStopRequested(signalController);
   if (!pending.turn.terminal_observed_by_both) throw new ManagedRunError('pending_turn_terminal_timeout');
 }
 
@@ -1235,6 +1264,8 @@ async function runManagedServer(options, dependencies = {}) {
       requested: false,
       signal: null,
       count: 0,
+      handled_count: 0,
+      pending_count: 0,
       during_cleanup: false,
       handlers_removed: false,
     },
@@ -1386,7 +1417,7 @@ async function runManagedServer(options, dependencies = {}) {
     connections.push(aConnection);
     throwIfStopRequested(signalController);
     stage = 'initialize_a';
-    const aInitialized = await initializeClient(aConnection, started.isolatedHome);
+    const aInitialized = await initializeClient(aConnection, started.isolatedHome, signalController);
     throwIfStopRequested(signalController);
     result.clients.a.initialized = true;
     result.clients.a.private_home_match = aInitialized.privateHomeMatch;
@@ -1457,7 +1488,7 @@ async function runManagedServer(options, dependencies = {}) {
       connections.push(bConnection);
       throwIfStopRequested(signalController);
       stage = 'initialize_b';
-      const bInitialized = await initializeClient(bConnection, started.isolatedHome);
+      const bInitialized = await initializeClient(bConnection, started.isolatedHome, signalController);
       throwIfStopRequested(signalController);
       result.clients.b.initialized = true;
       result.clients.b.private_home_match = bInitialized.privateHomeMatch;
@@ -1473,9 +1504,9 @@ async function runManagedServer(options, dependencies = {}) {
       result.clients.b.same_thread_id = resumedThreadId === threadId;
       result.clients.b.effective_settings_match = compareEffectiveSettings(aStarted, bResumed, started.layout.repo);
       stage = 'loaded_list';
-      const loadedA = await readLoadedSnapshot(aInitialized.client, threadId);
+      const loadedA = await readLoadedSnapshot(aInitialized.client, threadId, signalController);
       throwIfStopRequested(signalController);
-      const loadedB = await readLoadedSnapshot(bInitialized.client, threadId);
+      const loadedB = await readLoadedSnapshot(bInitialized.client, threadId, signalController);
       throwIfStopRequested(signalController);
       result.loaded.a = {
         count: loadedA.count,
@@ -1549,6 +1580,7 @@ async function runManagedServer(options, dependencies = {}) {
         }
         stage = 'serve_wait';
         result.serve.stop_signal = await waitForServeStopSignal(signalController, dependencies.waitForStopSignal);
+        throwIfStopRequested(signalController);
         const afterCliA = observers.a.summarize();
         const afterCliB = observers.b.summarize();
         result.serve.notification_delta.a = notificationSummaryDelta(baselineA, afterCliA);
@@ -1562,8 +1594,10 @@ async function runManagedServer(options, dependencies = {}) {
           throw new ManagedRunError('serve_fixture_request_missing');
         }
         stage = 'post_cli_loaded_list';
-        const loadedAfterCliA = await readLoadedSnapshot(aInitialized.client, threadId);
-        const loadedAfterCliB = await readLoadedSnapshot(bInitialized.client, threadId);
+        const loadedAfterCliA = await readLoadedSnapshot(aInitialized.client, threadId, signalController);
+        throwIfStopRequested(signalController);
+        const loadedAfterCliB = await readLoadedSnapshot(bInitialized.client, threadId, signalController);
+        throwIfStopRequested(signalController);
         result.serve.loaded_after_cli.a = {
           count: loadedAfterCliA.count,
           contains_thread: loadedAfterCliA.containsThread,
@@ -1578,10 +1612,13 @@ async function runManagedServer(options, dependencies = {}) {
         if (!loadedAfterCliA.containsThread || !loadedAfterCliB.containsThread) {
           throw new ManagedRunError('post_cli_thread_unloaded');
         }
-        result.serve.additional_loaded_threads.a = await readAdditionalLoadedSummary(aInitialized.client, threadId);
-        result.serve.additional_loaded_threads.b = await readAdditionalLoadedSummary(bInitialized.client, threadId);
+        result.serve.additional_loaded_threads.a = await readAdditionalLoadedSummary(aInitialized.client, threadId, signalController);
+        throwIfStopRequested(signalController);
+        result.serve.additional_loaded_threads.b = await readAdditionalLoadedSummary(bInitialized.client, threadId, signalController);
+        throwIfStopRequested(signalController);
         stage = 'post_cli_resume';
         const afterCliResume = await bInitialized.client.request('thread/resume', resumeParams);
+        throwIfStopRequested(signalController);
         result.serve.after_cli_settings_match = compareEffectiveSettings(aStarted, afterCliResume, started.layout.repo);
         if (!result.serve.after_cli_settings_match.all) throw new ManagedRunError('post_cli_settings_mismatch');
       }
@@ -1601,10 +1638,10 @@ async function runManagedServer(options, dependencies = {}) {
     }, server, Date.now() + timeoutMs);
     connections.push(reconnectConnection);
     throwIfStopRequested(signalController);
-    const reconnectClient = await initializeClient(reconnectConnection, started.isolatedHome);
+    const reconnectClient = await initializeClient(reconnectConnection, started.isolatedHome, signalController);
     throwIfStopRequested(signalController);
     result.reconnect.initialized = reconnectClient.privateHomeMatch && reconnectClient.version === result.native_version;
-    const reloaded = await readLoadedSnapshot(reconnectClient.client, threadId);
+    const reloaded = await readLoadedSnapshot(reconnectClient.client, threadId, signalController);
     throwIfStopRequested(signalController);
     result.reconnect.loaded_count = reloaded.count;
     result.reconnect.contains_thread = reloaded.containsThread;
