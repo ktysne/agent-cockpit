@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createOwnedNativeRunner } = require('../src/server/owned-native-runner');
+const { createOwnedNativeRunner, getOwnedSource } = require('../src/server/owned-native-runner');
 
 const LOGIN_ID = 'login_test_1';
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=test';
@@ -1170,4 +1170,179 @@ test('Claude rejects the wait profile before creating a child process', (t) => {
     onNative() {},
   })), (error) => error.code === 'unsupported_profile');
   assert.equal(harness.calls, 0);
+});
+
+function createOwnedCodexHarness(workspace, values = {}) {
+  const methods = [];
+  let heldOnce = false;
+  let heldRead = null;
+  const harness = createSpawnHarness(workspace, (line, child) => {
+    const request = JSON.parse(line);
+    if (!request.method || !Object.hasOwn(request, 'id')) return;
+    methods.push(request.method);
+    const respond = (result) => child.send(codexResponse(request.id, result));
+    if (request.method === 'initialize') {
+      respond({
+        serverInfo: { name: 'codex', version: 'test' },
+        codexHome: values.reportedCodexHome || path.join(workspace.homePath, '.codex'),
+      });
+    } else if (request.method === 'account/login/start') {
+      respond({ type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL });
+    } else if (request.method === 'thread/start') {
+      respond({ thread: { id: 'thread_native_1' } });
+    } else if (request.method === 'turn/start') {
+      respond({ turn: { id: 'turn_native_1' } });
+    } else if (request.method === 'thread/loaded/list') {
+      respond({ data: values.loadedThreads || ['thread_native_1'], nextCursor: null });
+    } else if (request.method === 'thread/read') {
+      const result = {
+        thread: {
+          id: 'thread_native_1',
+          status: { type: 'active' },
+          turns: [{
+            id: 'turn_native_1',
+            status: values.turnStatus || 'inProgress',
+            items: [{ content: 'private native history body' }],
+          }],
+        },
+      };
+      if (values.holdRead && !heldOnce) {
+        heldOnce = true;
+        heldRead = () => respond(result);
+      }
+      else respond(result);
+    }
+  });
+  harness.methods = methods;
+  harness.completeHeldRead = () => { const finish = heldRead; heldRead = null; finish?.(); };
+  harness.hasHeldRead = () => typeof heldRead === 'function';
+  return harness;
+}
+
+function createOwnedCodexRunner(workspace, harness, claim, callbacks = {}) {
+  return createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    ownedSourceClaim: claim,
+    onSourceReady: callbacks.onSourceReady || (() => {}),
+    isCurrent: callbacks.isCurrent || (() => true),
+    isSourceCurrent: callbacks.isSourceCurrent || (() => true),
+    onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+    spawnImpl: harness.spawnImpl,
+    timeouts: callbacks.timeouts || { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 100 },
+    onNative: callbacks.onNative || (() => {}),
+  }));
+}
+
+test('owned Codex source reads only its current loaded turn over the existing pipe', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const methods = [];
+  let capability = null;
+  let runner;
+  const harness = createOwnedCodexHarness(workspace);
+  runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => {
+      assert.equal(methods.length, 0);
+      capability = value;
+    },
+    onNative: (event) => methods.push(event.type),
+  });
+
+  await runner.start({ inputText: 'private task text' });
+  const source = getOwnedSource(capability);
+  assert.ok(source);
+  assert.equal(source.bindOwner(claim), true);
+  assert.equal(source.checkSource(), true);
+  const terminalEvents = [];
+  source.subscribeTerminal(claim, (event) => terminalEvents.push(event));
+  const lease = source.acquireReadLease(Object.freeze({}));
+  const result = await source.readCurrent(lease);
+
+  assert.equal(result.status, 'attested');
+  assert.equal(result.identity.nativeId, 'thread_native_1');
+  assert.equal(result.context.nativeContextId, 'turn_native_1');
+  assert.equal(source.consumeReadReceipt(lease, result.receipt), true);
+  assert.equal(source.consumeReadReceipt(lease, result.receipt), false);
+  assert.deepEqual(harness.methods, [
+    'initialize', 'account/login/start', 'thread/start', 'turn/start',
+    'thread/loaded/list', 'thread/read',
+  ]);
+  assert.equal(harness.methods.filter((method) => method === 'initialize').length, 1);
+  assert.equal(JSON.stringify({ result, snapshot: runner.snapshot() }).includes('private native history body'), false);
+  assert.equal(JSON.stringify({ result, snapshot: runner.snapshot() }).includes('private task text'), false);
+
+  assert.equal(source.releaseReadLease(lease), true);
+  harness.child.send(codexTurnCompleted());
+  assert.equal(terminalEvents.length, 1);
+  assert.equal(terminalEvents[0].type, 'context_ended');
+  const replayedTerminals = [];
+  source.subscribeTerminal(claim, (event) => replayedTerminals.push(event));
+  assert.equal(replayedTerminals.length, 1);
+  const reattachedLease = source.acquireReadLease(Object.freeze({}));
+  assert.equal((await source.readCurrent(reattachedLease)).status, 'unknown');
+  assert.equal(harness.methods.filter((method) => method === 'thread/read').length, 1);
+  await runner.stop();
+  assert.equal(source.checkSource(), false);
+});
+
+test('owned Codex source rejects a reported HOME mismatch before login or thread requests', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace, { reportedCodexHome: path.join(workspace.root, 'other-home') });
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, { onSourceReady: (value) => { capability = value; } });
+
+  await assert.rejects(runner.start({ inputText: 'fixed task' }), (error) => error.code === 'codex_home_mismatch');
+  assert.equal(getOwnedSource(capability).checkSource(), false);
+  assert.deepEqual(harness.methods, ['initialize']);
+  await runner.stop();
+});
+
+test('owned Codex source accepts only exact inProgress turn status', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace, { turnStatus: 'active' });
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, { onSourceReady: (value) => { capability = value; } });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  source.bindOwner(claim);
+  const lease = source.acquireReadLease(Object.freeze({}));
+
+  const result = await source.readCurrent(lease);
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.receipt, null);
+  await runner.stop();
+});
+
+test('a detached read drains its late response without killing or mutating the owned source', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace, { holdRead: true });
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    timeouts: { startupMs: 1000, rpcMs: 60, loginMs: 1000, stopMs: 100 },
+  });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  source.bindOwner(claim);
+  const oldLease = source.acquireReadLease(Object.freeze({}));
+  const oldRead = source.readCurrent(oldLease);
+  while (!harness.hasHeldRead()) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(source.releaseReadLease(oldLease), true);
+  const newLease = source.acquireReadLease(Object.freeze({}));
+  const unknownWhileReadPending = await source.readCurrent(newLease);
+  assert.equal(unknownWhileReadPending.status, 'unknown');
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  assert.equal((await oldRead).status, 'unknown');
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(harness.child.killCalls.length, 0);
+
+  harness.completeHeldRead();
+  await new Promise((resolve) => setImmediate(resolve));
+  const fresh = await source.readCurrent(newLease);
+  assert.equal(fresh.status, 'attested');
+  assert.equal(source.consumeReadReceipt(newLease, fresh.receipt), true);
+  assert.equal(harness.child.killCalls.length, 0);
+  await runner.stop();
 });

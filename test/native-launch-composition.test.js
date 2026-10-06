@@ -321,7 +321,7 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
       }
       harness.methods.push(request.method);
       if (request.method === 'initialize') {
-        child.send({ id: request.id, result: { serverInfo: { name: 'fixture', version: '1' } } });
+        child.send({ id: request.id, result: { serverInfo: { name: 'fixture', version: '1' }, codexHome: path.join(workspace.homePath, '.codex') } });
       } else if (request.method === 'account/login/start') {
         child.send({ id: request.id, result: {
           type: 'chatgpt', loginId: 'login-integration', authUrl: 'https://auth.example.test/device',

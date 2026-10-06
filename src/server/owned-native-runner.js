@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const { createOwnedNativeWaitLatch } = require('./owned-native-wait');
+const { createOwnedNativeSource, getOwnedSource } = require('./owned-native-source');
 
 const PROFILE = 'cockpit-native-v1';
 const WAIT_PROFILE = 'cockpit-native-wait-v1';
@@ -242,7 +243,7 @@ function createOwnedNativeRunner(options) {
   assertOnlyKeys(options, [
     'provider', 'executablePath', 'hostId', 'homeScopeId', 'homePath', 'cwd', 'profile',
     'getAuthentication', 'onAuthenticationRequired', 'isCurrent', 'isSourceCurrent', 'isContextCurrent', 'onWaitRequired',
-    'spawnImpl', 'timeouts', 'onNative', 'onDisconnect',
+    'spawnImpl', 'timeouts', 'onNative', 'onDisconnect', 'ownedSourceClaim', 'onSourceReady',
   ], 'invalid_configuration');
   if (options.provider !== 'codex' && options.provider !== 'claude') throw runnerError('invalid_provider');
   if (options.profile !== PROFILE && options.profile !== WAIT_PROFILE) throw runnerError('invalid_profile');
@@ -270,6 +271,13 @@ function createOwnedNativeRunner(options) {
   if (options.onAuthenticationRequired !== undefined && options.provider !== 'codex') {
     throw runnerError('invalid_authentication_prompt');
   }
+  const ownedSourceEnabled = options.ownedSourceClaim !== undefined || options.onSourceReady !== undefined;
+  if (ownedSourceEnabled &&
+      (options.ownedSourceClaim === undefined || options.ownedSourceClaim === null ||
+       !['object', 'function'].includes(typeof options.ownedSourceClaim) ||
+       typeof options.onSourceReady !== 'function')) {
+    throw runnerError('invalid_owned_source_callbacks');
+  }
 
   const executablePath = validateExecutable(options.executablePath);
   const homePath = validateDirectory(options.homePath, 'invalid_isolated_home');
@@ -291,6 +299,18 @@ function createOwnedNativeRunner(options) {
   const spawnImpl = options.spawnImpl === undefined ? spawn : options.spawnImpl;
   if (typeof spawnImpl !== 'function') throw runnerError('invalid_spawn_adapter');
   const timeouts = normalizeTimeouts(options.timeouts);
+  let sourceController = null;
+  const ownedSource = ownedSourceEnabled
+    ? createOwnedNativeSource({
+      provider,
+      hostId,
+      homeScopeId,
+      ownedSourceClaim: options.ownedSourceClaim,
+      readNativeCurrent,
+    })
+    : null;
+  if (ownedSource) sourceController = ownedSource.controller;
+  let sourceReadyNotified = false;
 
   let state = 'idle';
   let generation = 0;
@@ -309,10 +329,13 @@ function createOwnedNativeRunner(options) {
   let lineCount = 0;
   let ignoredMessageCount = 0;
   let pendingRpc = null;
+  const pendingReadRpcs = new Map();
+  const MAX_PENDING_READ_RPCS = 1;
   let nextRpcId = 1;
   let nativeIdentity = null;
   let nativeContext = null;
   let terminalContextId = null;
+  let initializeHomeConfirmed = false;
   let turnStartPending = false;
   let earlyTurnCompletion = null;
   let earlyWaitCall = null;
@@ -339,7 +362,7 @@ function createOwnedNativeRunner(options) {
       ownedChildActive: Boolean(child && !childExited && !childClosed),
       lineCount,
       ignoredMessageCount,
-      pendingRpcCount: pendingRpc ? 1 : 0,
+      pendingRpcCount: (pendingRpc ? 1 : 0) + pendingReadRpcs.size,
       contextState: terminalContextId ? 'ended' : nativeContext ? 'active' : 'none',
       terminalContextCount,
       loginPromptCount,
@@ -481,12 +504,17 @@ function createOwnedNativeRunner(options) {
     failureCode = code;
     state = 'failed';
     generation += 1;
+    if (sourceController) sourceController.invalidate();
     invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
       const pending = pendingRpc;
       pendingRpc = null;
       pending.reject(runnerError(code));
+    }
+    for (const [id, pending] of pendingReadRpcs) {
+      pendingReadRpcs.delete(id);
+      if (typeof pending.reject === 'function') pending.reject(runnerError(code));
     }
     clearActiveLogin(code);
     reportDisconnect(code);
@@ -523,7 +551,11 @@ function createOwnedNativeRunner(options) {
       nativeId,
     });
     nativeIdentity = identity;
-    notifyNative(Object.freeze({ type: 'identity', provider, identity }));
+    if (sourceController && !sourceController.observeIdentity(identity)) {
+      throw runnerError('owned_source_identity_conflict');
+    }
+    const delivered = notifyNative(Object.freeze({ type: 'identity', provider, identity }));
+    if (sourceController && delivered && isSynchronousTrue(isSourceCurrent)) sourceController.deliverIdentity(identity);
   }
 
   function emitContext(nativeContextId) {
@@ -540,7 +572,13 @@ function createOwnedNativeRunner(options) {
       parentToolUseId: null,
     });
     nativeContext = context;
-    notifyNative(Object.freeze({ type: 'context', provider, identity: nativeIdentity, context }));
+    if (sourceController && !sourceController.observeContext(nativeIdentity, context)) {
+      throw runnerError('owned_source_context_conflict');
+    }
+    const delivered = notifyNative(Object.freeze({ type: 'context', provider, identity: nativeIdentity, context }));
+    if (sourceController && delivered && isSynchronousTrue(isSourceCurrent)) {
+      sourceController.deliverContext(nativeIdentity, context);
+    }
     if (resolveContext) resolveContext();
   }
 
@@ -558,6 +596,9 @@ function createOwnedNativeRunner(options) {
       kind: provider === 'codex' ? 'turn' : 'assistant_message',
       nativeContextId,
     });
+    if (sourceController && !sourceController.observeTerminal(nativeIdentity, context)) {
+      throw runnerError('owned_source_terminal_conflict');
+    }
     notifyNative(Object.freeze({ type: 'context_ended', provider, identity: nativeIdentity, context }), true);
   }
 
@@ -823,6 +864,135 @@ function createOwnedNativeRunner(options) {
     })();
   }
 
+  function isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) {
+    return isCurrent(expectedGeneration) && state === 'running' && sourceController &&
+      initializeHomeConfirmed &&
+      sourceController.isLeaseTokenCurrent(leaseToken) && nativeIdentity && nativeContext &&
+      nativeIdentity.nativeId === identity.nativeId &&
+      nativeContext.nativeContextId === context.nativeContextId &&
+      terminalContextId !== context.nativeContextId;
+  }
+
+  function awaitOwnedRead(value, expectedGeneration, leaseToken, identity, context) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        cancellations.delete(cancel);
+        callback(result);
+      };
+      const cancel = () => finish(reject, runnerError('operation_stopped'));
+      const timer = setTimeout(() => finish(reject, runnerError('rpc_timeout')), timeouts.rpcMs);
+      if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+        finish(reject, runnerError('operation_stopped'));
+        return;
+      }
+      cancellations.add(cancel);
+      Promise.resolve(value).then(
+        (result) => {
+          if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+            finish(reject, runnerError('operation_stopped'));
+          } else {
+            finish(resolve, result);
+          }
+        },
+        () => finish(reject, runnerError('rpc_rejected')),
+      );
+    });
+  }
+
+  function sendOwnedReadRpc(method, params, expectedGeneration, leaseToken, identity, context) {
+    if (!['thread/loaded/list', 'thread/read'].includes(method) ||
+        pendingReadRpcs.size >= MAX_PENDING_READ_RPCS ||
+        !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+      throw runnerError('owned_read_unavailable');
+    }
+    const id = nextRpcId;
+    if (!Number.isSafeInteger(id)) throw runnerError('rpc_id_exhausted');
+    nextRpcId += 1;
+    let resolveResponse;
+    let rejectResponse;
+    const response = new Promise((resolve, reject) => {
+      resolveResponse = resolve;
+      rejectResponse = reject;
+    });
+    response.catch(() => {});
+    pendingReadRpcs.set(id, { id, resolve: resolveResponse, reject: rejectResponse, abandoned: false });
+    let writeAttempted = false;
+    const writeResponse = new Promise((resolve, reject) => {
+      try {
+        if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
+            !child || !child.stdin || typeof child.stdin.write !== 'function') {
+          throw runnerError('owned_read_unavailable');
+        }
+        writeAttempted = true;
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', (error) => {
+          if (error) reject(runnerError('stdin_write_failed'));
+          else resolve();
+        });
+      } catch (error) {
+        reject(error instanceof OwnedNativeRunnerError ? error : runnerError('stdin_write_failed'));
+      }
+    });
+    return (async () => {
+      try {
+        await awaitOwnedRead(writeResponse, expectedGeneration, leaseToken, identity, context);
+        return await awaitOwnedRead(response, expectedGeneration, leaseToken, identity, context);
+      } catch (error) {
+        if (pendingReadRpcs.has(id)) {
+          const leaseStillCurrent = sourceController.isLeaseTokenCurrent(leaseToken);
+          if (writeAttempted && !leaseStillCurrent && ['operation_stopped', 'rpc_timeout'].includes(error.code)) {
+            const pending = pendingReadRpcs.get(id);
+            pending.abandoned = true;
+            pending.resolve = null;
+            pending.reject = null;
+            throw error;
+          }
+          pendingReadRpcs.delete(id);
+          if (error.code === 'rpc_timeout' || error.code === 'stdin_write_failed') {
+            fail(error.code === 'rpc_timeout' ? 'owned_read_timeout' : 'stdin_write_failed');
+          }
+        }
+        throw error instanceof OwnedNativeRunnerError ? error : runnerError('owned_read_failed');
+      }
+    })();
+  }
+
+  async function readNativeCurrent({ leaseToken, requestToken }) {
+    if (provider !== 'codex' || !sourceController || !requestToken || !isCurrent(generation) ||
+        state !== 'running' || !startPromise) return null;
+    const expectedGeneration = generation;
+    const identity = nativeIdentity;
+    const context = nativeContext;
+    if (!identity || !context || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) return null;
+
+    const loadedResult = await sendOwnedReadRpc('thread/loaded/list', { limit: 100 },
+      expectedGeneration, leaseToken, identity, context);
+    if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
+        !isRecord(loadedResult) || !Array.isArray(loadedResult.data) ||
+        loadedResult.data.some((threadId) => !isIdentifier(threadId)) ||
+        !loadedResult.data.includes(identity.nativeId)) return null;
+
+    const readResult = await sendOwnedReadRpc('thread/read', {
+      threadId: identity.nativeId,
+      includeTurns: true,
+    }, expectedGeneration, leaseToken, identity, context);
+    if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
+        !isRecord(readResult) || !isRecord(readResult.thread) ||
+        readResult.thread.id !== identity.nativeId || !Array.isArray(readResult.thread.turns)) return null;
+    const matchingTurns = readResult.thread.turns.filter((turn) => isRecord(turn) && turn.id === context.nativeContextId);
+    if (matchingTurns.length !== 1 || matchingTurns[0].status !== 'inProgress' ||
+        !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) return null;
+    return Object.freeze({
+      requestToken,
+      identity,
+      context,
+      activity: 'inProgress',
+    });
+  }
+
   function handleCodexMessage(message) {
     if (!isRecord(message) || (Object.hasOwn(message, 'jsonrpc') && message.jsonrpc !== '2.0')) {
       throw runnerError('codex_message_invalid');
@@ -854,11 +1024,19 @@ function createOwnedNativeRunner(options) {
     const hasResult = Object.prototype.hasOwnProperty.call(message, 'result');
     const hasError = Object.prototype.hasOwnProperty.call(message, 'error');
     if (!Object.prototype.hasOwnProperty.call(message, 'id') || hasResult === hasError) throw runnerError('codex_message_invalid');
-    const pending = pendingRpc;
-    if (!pending || message.id !== pending.id) throw runnerError('rpc_response_unexpected');
-    pendingRpc = null;
-    if (hasError) pending.reject(runnerError('rpc_rejected'));
-    else pending.resolve(message.result);
+    const pending = pendingRpc && message.id === pendingRpc.id ? pendingRpc : null;
+    if (pending) {
+      pendingRpc = null;
+      if (hasError) pending.reject(runnerError('rpc_rejected'));
+      else pending.resolve(message.result);
+      return;
+    }
+    const pendingRead = pendingReadRpcs.get(message.id);
+    if (!pendingRead) throw runnerError('rpc_response_unexpected');
+    pendingReadRpcs.delete(message.id);
+    if (pendingRead.abandoned) return;
+    if (hasError) pendingRead.reject(runnerError('rpc_rejected'));
+    else pendingRead.resolve(message.result);
   }
 
   function handleClaudeMessage(message) {
@@ -956,12 +1134,14 @@ function createOwnedNativeRunner(options) {
     });
     child.once('exit', () => {
       childExited = true;
+      if (sourceController) sourceController.invalidate();
       if (childTerminationResolve) childTerminationResolve();
       restoreStateAfterLateTermination();
       if (isCurrent(expectedGeneration)) fail('process_exited');
     });
     child.once('close', () => {
       childClosed = true;
+      if (sourceController) sourceController.invalidate();
       if (childTerminationResolve) childTerminationResolve();
       restoreStateAfterLateTermination();
       if (isCurrent(expectedGeneration)) fail('process_exited');
@@ -992,6 +1172,29 @@ function createOwnedNativeRunner(options) {
       child.once('error', onError);
     }), expectedGeneration, timeouts.startupMs, 'spawn_timeout');
     childSpawned = true;
+    requireOwnerCurrent(expectedGeneration);
+  }
+
+  function notifySourceReady(expectedGeneration) {
+    if (!sourceController) return;
+    requireOwnerCurrent(expectedGeneration);
+    if (sourceReadyNotified || !sourceController.markReady()) throw runnerError('owned_source_unavailable');
+    sourceReadyNotified = true;
+    let result;
+    try {
+      result = options.onSourceReady(ownedSource.capability);
+    } catch {
+      throw runnerError('owned_source_callback_failed');
+    }
+    try {
+      if (result && typeof result.then === 'function') {
+        Promise.resolve(result).catch(() => {});
+        throw runnerError('owned_source_callback_async');
+      }
+    } catch (error) {
+      if (error instanceof OwnedNativeRunnerError) throw error;
+      throw runnerError('owned_source_callback_async');
+    }
     requireOwnerCurrent(expectedGeneration);
   }
 
@@ -1028,6 +1231,7 @@ function createOwnedNativeRunner(options) {
     attachChild(childProcess, expectedGeneration);
     await waitForSpawn(expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
+    notifySourceReady(expectedGeneration);
   }
 
   async function startCodex(inputText, expectedGeneration) {
@@ -1037,6 +1241,15 @@ function createOwnedNativeRunner(options) {
     }, expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
     if (!isRecord(initialize)) throw runnerError('initialize_result_invalid');
+    if (ownedSourceEnabled) {
+      const reportedHome = initialize.codexHome;
+      const expectedHome = path.join(homePath, '.codex');
+      if (typeof reportedHome !== 'string' || !path.isAbsolute(reportedHome) ||
+          normalizedPath(path.resolve(reportedHome)) !== normalizedPath(path.resolve(expectedHome))) {
+        throw runnerError('codex_home_mismatch');
+      }
+      initializeHomeConfirmed = true;
+    }
     requireCurrent(expectedGeneration);
     await writeLine(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }), expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
@@ -1143,12 +1356,17 @@ function createOwnedNativeRunner(options) {
     if (state === 'stopped') return Promise.resolve(safeSnapshot());
     generation += 1;
     state = 'stopping';
+    if (sourceController) sourceController.invalidate();
     invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
       const pending = pendingRpc;
       pendingRpc = null;
       pending.reject(runnerError('operation_stopped'));
+    }
+    for (const [id, pending] of pendingReadRpcs) {
+      pendingReadRpcs.delete(id);
+      if (typeof pending.reject === 'function') pending.reject(runnerError('operation_stopped'));
     }
     stopPromise = stopChild(child).then((confirmed) => {
       if (confirmed || state !== 'stop_unconfirmed') state = 'stopped';
@@ -1168,4 +1386,4 @@ function createOwnedNativeRunner(options) {
   return Object.freeze(runner);
 }
 
-module.exports = { OwnedNativeRunnerError, createOwnedNativeRunner };
+module.exports = { OwnedNativeRunnerError, createOwnedNativeRunner, getOwnedSource };

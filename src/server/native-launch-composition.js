@@ -5,9 +5,13 @@ const path = require('node:path');
 const { createProviderRegistrationAdapter } = require('./provider-registration');
 const { createProviderLaunchAdapter } = require('./launch-binding');
 const { createProviderRuntimeAdapter } = require('./runtime-binding');
+const { getOwnedSource } = require('./owned-native-runner');
+const { createManagedCollector, sanitizeManagedCollectorSnapshot } = require('./managed-collector');
+const { createOwnedSourceAccessor } = require('./owned-native-source-collector');
 
 const PROVIDER_NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
 const MAX_PROFILES = 16;
+const OWNED_SOURCE_ATTACH_TIMEOUT_MS = 5000;
 const MAX_ATTEMPTS = 256;
 const MAX_PENDING_CONTEXTS = 16;
 const MAX_ENDED_CONTEXT_IDS = 8;
@@ -485,7 +489,18 @@ function createNativeLaunchComposition(options = {}) {
     }
   }
 
+  function releaseOwnedLoan(record) {
+    const loan = record.ownedLoan;
+    if (!loan?.active) return null;
+    loan.active = false;
+    record.ownedLoan = null;
+    try { record.sourceFacade.releaseReadLease(loan.lease); } catch {}
+    try { loan.unsubscribe?.(); } catch {}
+    return () => loan.onDetach(loan.opaque, 'owned_source_unavailable');
+  }
+
   function disconnectRuntime(record) {
+    const notifyDetach = releaseOwnedLoan(record);
     invalidateOwnedProofs(record);
     if (record.connectionHandle && !record.runtimeDisconnected) {
       record.runtimeDisconnected = true;
@@ -494,6 +509,8 @@ function createNativeLaunchComposition(options = {}) {
     record.proofHandle = null;
     record.executionActorHandle = null;
     record.writerEnvelope = null;
+    notifyDetach?.();
+    for (const wake of record.sourceWaiters) wake();
   }
 
   function markDisconnected(record, epoch, reason) {
@@ -620,6 +637,7 @@ function createNativeLaunchComposition(options = {}) {
     record.status = 'registered';
     record.reason = null;
     record.processState = 'running';
+    for (const wake of record.sourceWaiters) wake();
     const pending = record.pendingContexts;
     record.pendingContexts = [];
     for (const item of pending) {
@@ -642,12 +660,12 @@ function createNativeLaunchComposition(options = {}) {
     return ownerChainReaches(owner, target, visited);
   }
 
-  function reconcileExecution(record, executionActorHandle, ownerActorHandle, expectedOwnerGeneration, ownerRecord) {
+  function reconcileExecution(record, executionActorHandle, ownerActorHandle, expectedOwnerGeneration, ownerRecord, mutationGuard) {
     const input = { executionActorHandle, ownerActorHandle, expectedOwnerGeneration };
     if (ownerRecord && ownerRecord.profile.provider === record.profile.provider) {
-      return runtimeAdapters[record.profile.provider].reconcileExecution(record.launchRef, input);
+      return runtimeAdapters[record.profile.provider].reconcileExecution(record.launchRef, input, mutationGuard);
     }
-    return runtimeKernel.authority.reconcileExecution(record.launchRef, input);
+    return runtimeKernel.authority.reconcileExecution(record.launchRef, input, mutationGuard);
   }
 
   function nativeContextFor(record) {
@@ -661,12 +679,16 @@ function createNativeLaunchComposition(options = {}) {
     };
   }
 
-  function bindNativeContext(record, context, epoch) {
+  function bindNativeContext(record, context, epoch, mutationGuard) {
+    const mutationAllowed = () => mutationGuard === undefined || mutationGuard() === true;
     if (record.activeEpoch !== epoch || record.epoch !== epoch || !record.identity || !record.connectionHandle) return false;
-    if (!periodMatches(record)) {
+    const verifiedPeriod = periodMatches(record);
+    if (!mutationAllowed()) return false;
+    if (!verifiedPeriod) {
       quarantine(record, epoch, 'registered_period_unverified');
       return false;
     }
+    if (!mutationAllowed()) return false;
     const expectedKind = record.profile.provider === 'codex' ? 'turn' : 'assistant_message';
     if (!hasExactKeys(context, ['kind', 'nativeContextId', 'parentToolUseId']) ||
         context.kind !== expectedKind || !isIdentifier(context.nativeContextId) || context.parentToolUseId !== null) {
@@ -681,27 +703,39 @@ function createNativeLaunchComposition(options = {}) {
       if (!record.currentContextId) setUnknown(record, 'native_context_ended');
       return false;
     }
+    let knownActorHandle = null;
     if (record.currentContextId) {
-      if (record.currentContextId === context.nativeContextId) return resolveProof(record.launchRef) !== null;
-      quarantine(record, epoch, 'native_context_conflict');
-      return false;
+      if (record.currentContextId === context.nativeContextId) {
+        const existing = resolveProof(record.launchRef);
+        if (existing !== null) return mutationAllowed();
+        if (!mutationGuard || !mutationAllowed() || !record.executionActorHandle) return false;
+        knownActorHandle = record.executionActorHandle;
+      }
+      else {
+        quarantine(record, epoch, 'native_context_conflict');
+        return false;
+      }
     }
 
     const currentOwner = ownerRecordFor(record);
     const claims = immutableClaims(record);
     if (!claims || !periodMatches(record) || record.activeEpoch !== epoch) {
+      if (!mutationAllowed()) return false;
       setUnknown(record, 'binding_unavailable');
       return false;
     }
-    const executionActor = runtimeAdapters[record.profile.provider].attestActor(record.connectionHandle, {
+    if (!mutationAllowed()) return false;
+    const capturedConnection = record.connectionHandle;
+    const executionActor = knownActorHandle ? { actorHandle: knownActorHandle } : runtimeAdapters[record.profile.provider].attestActor(capturedConnection, {
       identity: record.identity,
       periodId: record.executionBinding.periodId,
       actor: record.executionBinding.actor,
       contextId: context.nativeContextId,
       launchRef: record.launchRef,
       immutableExecutionClaims: claims,
-    }, stageEvidence(record, 'execution-actor', context.nativeContextId));
-    if (record.activeEpoch !== epoch || !periodMatches(record)) {
+    }, stageEvidence(record, 'execution-actor', context.nativeContextId), mutationGuard);
+    if (record.activeEpoch !== epoch || !periodMatches(record) || !mutationAllowed()) {
+      if (!mutationAllowed()) return false;
       setUnknown(record, 'registration_changed');
       return false;
     }
@@ -713,17 +747,21 @@ function createNativeLaunchComposition(options = {}) {
     record.writerContextId = null;
     const ownerActorHandle = currentOwner === record ? executionActor.actorHandle : currentOwner?.executionActorHandle;
     if (!ownerActorHandle || (currentOwner !== record && !receiptIsLive(currentOwner))) {
+      if (!mutationAllowed()) return false;
       setUnknown(record, 'current_proof_unavailable');
       return false;
     }
     const runtime = runtimeRecord(record);
     if (!runtime || runtime.state !== 'bound' || !bindingEquals(runtime.currentOwner,
       currentOwner.executionBinding)) {
+      if (!mutationAllowed()) return false;
       setUnknown(record, 'owner_binding_mismatch');
       return false;
     }
-    const reconciled = reconcileExecution(record, executionActor.actorHandle, ownerActorHandle, runtime.ownerGeneration, currentOwner);
-    if (record.activeEpoch !== epoch || !periodMatches(record)) {
+    if (!mutationAllowed()) return false;
+    const reconciled = reconcileExecution(record, executionActor.actorHandle, ownerActorHandle, runtime.ownerGeneration, currentOwner, mutationGuard);
+    if (record.activeEpoch !== epoch || !periodMatches(record) || !mutationAllowed()) {
+      if (!mutationAllowed()) return false;
       setUnknown(record, 'registration_changed');
       return false;
     }
@@ -812,6 +850,10 @@ function createNativeLaunchComposition(options = {}) {
   }
 
   function processNativeEvent(record, event, epoch) {
+    if (record.logicalDetached && physicalSourceCurrent(record, epoch)) {
+      if (event?.type === 'context_ended') endNativeContext(record, event, epoch);
+      return;
+    }
     if (record.activeEpoch !== epoch || record.epoch !== epoch || record.processState !== 'running') return;
     if (!sourceCanObserve(record, epoch)) {
       fenceNativeObservationGap(record, event);
@@ -965,6 +1007,14 @@ function createNativeLaunchComposition(options = {}) {
     });
     const launchRef = launchRegistration.launchRef;
     const record = {
+      sourceClaim: Object.freeze({}),
+      sourceCapability: null,
+      sourceFacade: null,
+      sourceWaiters: new Set(),
+      ownedCollector: null,
+      ownedLoan: null,
+      ownedLoanSerial: 0,
+      logicalDetached: false,
       receiptId: crypto.randomUUID(),
       launchRef,
       claims: Object.freeze({ ...claims }),
@@ -1041,6 +1091,8 @@ function createNativeLaunchComposition(options = {}) {
         homePath: record.profile.homePath,
         cwd: record.profile.cwd,
         profile: 'cockpit-native-v1',
+        ownedSourceClaim: record.sourceClaim,
+        onSourceReady: (capability) => bindOwnedSource(record, capability, epoch),
         ...(record.profile.provider === 'claude' ? {
           getAuthentication: () => getAuthentication({ provider: record.profile.provider, profileId: record.profile.profileId }),
         } : {}),
@@ -1261,6 +1313,177 @@ function createNativeLaunchComposition(options = {}) {
     return receipt;
   }
 
+  function physicalSourceCurrent(record, epoch = record.epoch) {
+    if (!record.sourceFacade || record.epoch !== epoch || record.activeEpoch !== epoch ||
+        !['starting', 'running'].includes(record.processState)) return false;
+    try { return record.sourceFacade.checkSource() === true; } catch { return false; }
+  }
+
+  function bindOwnedSource(record, capability, epoch) {
+    if (record.sourceCapability || record.epoch !== epoch || record.activeEpoch !== epoch) throw compositionError('owned_source_conflict');
+    const source = getOwnedSource(capability);
+    if (!source || source.provider !== record.profile.provider || source.hostId !== hostId ||
+        source.homeScopeId !== record.profile.homeScopeId || source.bindOwner(record.sourceClaim) !== true ||
+        source.checkSource() !== true) throw compositionError('owned_source_unverified');
+    record.sourceCapability = capability;
+    record.sourceFacade = source;
+    source.subscribeTerminal(record.sourceClaim, (event) => {
+      if (!physicalSourceCurrent(record, epoch)) return;
+      if (record.logicalDetached || sourceCanObserve(record, epoch)) endNativeContext(record, event, epoch);
+      else if (record.logicalDetached && physicalSourceCurrent(record, epoch)) endNativeContext(record, event, epoch);
+      else fenceNativeObservationGap(record, event);
+      if (record.ownedLoan?.active) record.ownedLoan.onNative(event);
+    });
+    for (const wake of record.sourceWaiters) wake();
+  }
+
+  function createOwnedCollector(admissionReceipt, options = {}) {
+    const record = admissionRecords.get(admissionReceipt);
+    if (!record || !hasExactKeys(options, Object.hasOwn(options, 'onObservation') ? ['onObservation'] : []) ||
+        (options.onObservation !== undefined && typeof options.onObservation !== 'function')) throw compositionError('owned_collector_invalid');
+    if (record.ownedCollector) return record.ownedCollector;
+    const loans = new WeakMap();
+    let reserved = false;
+    let pendingCancelled = false;
+    let attaching = false;
+
+    function current(opaque) {
+      const loan = loans.get(opaque);
+      if (!loan || !loan.active || record.ownedLoan !== loan || record.epoch !== loan.epoch ||
+          record.connectionHandle !== loan.connectionHandle || record.connectionGeneration !== loan.connectionGeneration ||
+          record.runtimeDisconnected || record.logicalDetached || !physicalSourceCurrent(record, loan.epoch)) return false;
+      try {
+        return runtimeKernel.registry.checkCurrentConnection(loan.connectionHandle) === true &&
+          record.sourceFacade.checkLease(loan.lease) === true && record.ownedLoan === loan && loan.active &&
+          record.connectionHandle === loan.connectionHandle && record.epoch === loan.epoch;
+      } catch { return false; }
+    }
+
+    function proof(opaque) {
+      if (!current(opaque)) return null;
+      const handle = resolveProof(record.launchRef);
+      return handle && current(opaque) ? handle : null;
+    }
+
+    function detach(opaque) {
+      const loan = loans.get(opaque);
+      if (!loan || !loan.active || record.ownedLoan !== loan) return false;
+      loan.active = false;
+      record.ownedLoan = null;
+      record.logicalDetached = true;
+      try { record.sourceFacade.releaseReadLease(loan.lease); } catch {}
+      try { loan.unsubscribe?.(); } catch {}
+      if (record.connectionHandle === loan.connectionHandle) disconnectRuntime(record);
+      setUnknown(record, 'owned_source_detached');
+      loan.onDetach(loan.opaque);
+      return true;
+    }
+
+    function attachNow(onNative, onDetach) {
+      if (attaching) return null;
+      attaching = true;
+      let openedHandle = null;
+      try {
+        if (!physicalSourceCurrent(record) || !record.registration || !record.identity || !periodMatches(record)) return null;
+        if (!physicalSourceCurrent(record) || record.ownedLoan?.active) return null;
+        let reattached = false;
+        if (record.logicalDetached) {
+          record.ownedLoanSerial += 1;
+          const opened = runtimeAdapters[record.profile.provider].openConnection(record.runtimeScope,
+            `owned-reattach-${digest([brokerId, record.launchRef, record.ownedLoanSerial]).slice(0, 48)}`,
+            stageEvidence(record, 'owned-source-reattach', record.ownedLoanSerial));
+          openedHandle = opened.connectionHandle;
+          record.connectionHandle = opened.connectionHandle;
+          record.connectionGeneration = opened.connectionGeneration;
+          record.runtimeDisconnected = false;
+          record.logicalDetached = false;
+          reattached = true;
+        }
+        if (!sourceCanObserve(record, record.epoch)) return null;
+        const opaque = Object.freeze({});
+        const connectionReceipt = Object.freeze({});
+        const lease = record.sourceFacade.acquireReadLease(connectionReceipt);
+        if (!lease || record.sourceFacade.checkLease(lease) !== true) return null;
+        const loan = { opaque, lease, connectionReceipt, connectionHandle: record.connectionHandle,
+          connectionGeneration: record.connectionGeneration, epoch: record.epoch, active: true,
+          needsFreshContext: reattached, onNative, onDetach, unsubscribe: null };
+        loans.set(opaque, loan);
+        record.ownedLoan = loan;
+        loan.unsubscribe = record.sourceFacade.subscribe(lease, (event) => { if (current(opaque)) onNative(event); });
+        if (!current(opaque)) { detach(opaque); return null; }
+        return opaque;
+      } finally {
+        attaching = false;
+        if (openedHandle && record.connectionHandle === openedHandle && !record.ownedLoan?.active) {
+          record.logicalDetached = true;
+          disconnectRuntime(record);
+          setUnknown(record, 'owned_source_unavailable');
+        }
+      }
+    }
+
+
+    function attach(onNative, onDetach) {
+      pendingCancelled = false;
+      const attached = attachNow(onNative, onDetach);
+      if (attached) return attached;
+      if (record.sourceFacade && record.registration || !['not_started', 'starting', 'running'].includes(record.processState)) return null;
+      const expectedEpoch = record.epoch;
+      return new Promise((resolve) => {
+        const wake = () => {
+          if (pendingCancelled || record.explicitStop || record.epoch !== expectedEpoch || !['not_started', 'starting', 'running'].includes(record.processState)) { done(null); return; }
+          const result = attachNow(onNative, onDetach);
+          if (result) done(result);
+        };
+        const timer = setTimeout(() => done(null), OWNED_SOURCE_ATTACH_TIMEOUT_MS);
+        const done = (result) => { clearTimeout(timer); record.sourceWaiters.delete(wake); resolve(result); };
+        record.sourceWaiters.add(wake);
+      });
+    }
+
+    async function read(opaque) {
+      const loan = loans.get(opaque);
+      if (!current(opaque) || !periodMatches(record)) return { status: 'unknown', reason: 'owned_source_unavailable' };
+      let result;
+      try { result = await record.sourceFacade.readCurrent(loan.lease); } catch { return { status: 'unknown', reason: 'owned_source_read_failed' }; }
+      if (!current(opaque) || !periodMatches(record)) return { status: 'unknown', reason: 'owned_source_unavailable' };
+      if (result?.status === 'unsupported') return { status: 'unsupported', reason: 'provider_read_unsupported' };
+      if (result?.status !== 'attested' || !identityEquals(result.identity, record.identity) ||
+          !hasExactKeys(result.context, ['kind', 'nativeContextId', 'parentToolUseId']) || record.terminalContextIds.has(result.context.nativeContextId) ||
+          record.uncertainContextIds.has(result.context.nativeContextId)) return { status: 'unknown', reason: 'native_context_unavailable' };
+      let consumed;
+      try { consumed = record.sourceFacade.consumeReadReceipt(loan.lease, result.receipt); } catch { consumed = false; }
+      if (consumed !== true || !current(opaque)) return { status: 'unknown', reason: 'owned_source_receipt_unavailable' };
+      if (loan.needsFreshContext) {
+        record.currentContextId = null;
+        record.currentContextKind = null;
+        record.executionActorHandle = null;
+        record.proofHandle = null;
+        record.writerEnvelope = null;
+        record.writerContextId = null;
+      }
+      try { bindNativeContext(record, result.context, loan.epoch, () => current(opaque)); }
+      catch { return { status: 'unknown', reason: 'owned_source_reconciliation_failed' }; }
+      if (!current(opaque)) return { status: 'unknown', reason: 'owned_source_unavailable' };
+      if (record.executionActorHandle) loan.needsFreshContext = false;
+      return proof(opaque) ? { status: 'observed', activity: 'active', reason: null } : { status: 'unknown', reason: 'current_proof_unavailable' };
+    }
+
+    const accessor = createOwnedSourceAccessor({
+      launchRef: record.launchRef,
+      reserve() { if (reserved) return false; reserved = true; return true; },
+      attach, detach, current, proof, read,
+      cancelPending() { pendingCancelled = true; for (const wake of record.sourceWaiters) wake(); },
+      metadata() { return { provider: record.profile.provider,
+        scope: record.runtimeScope ? { ...record.runtimeScope } : { provider: record.profile.provider, nativeIdKind: record.profile.nativeIdKind, hostId, homeScopeId: record.profile.homeScopeId, connectionSlotId: `owned-${digest([brokerId, record.launchRef]).slice(0, 48)}` },
+        identity: cloneIdentity(record.identity), registration: record.registration ? { ...record.registration } : null,
+        contextId: record.currentContextId }; },
+    });
+    const collector = createManagedCollector({ ownedSourceAccessor: accessor, ...options });
+    record.ownedCollector = Object.freeze({ ...collector, snapshot: () => sanitizeManagedCollectorSnapshot(collector.snapshot()) });
+    return record.ownedCollector;
+  }
+
   function snapshot() {
     return deepFreeze({
       schemaVersion: 'native-launch-composition-v1',
@@ -1270,6 +1493,7 @@ function createNativeLaunchComposition(options = {}) {
 
   return Object.freeze({
     admitLaunch,
+    createOwnedCollector,
     start,
     stop,
     handoff,

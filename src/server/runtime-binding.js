@@ -241,6 +241,27 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
   const handoffReceipts = new Map();
   const connectionIdClaims = new Map();
 
+  function captureMutationGuard(guard) {
+    if (guard === undefined) return null;
+    if (typeof guard !== 'function' ||
+        typeof registrationRegistry.captureAuthorityRevision !== 'function' ||
+        typeof registrationRegistry.checkAuthorityRevision !== 'function' ||
+        typeof launchRegistry.captureAuthorityRevision !== 'function' ||
+        typeof launchRegistry.checkAuthorityRevision !== 'function') throw runtimeError('source_guard_unavailable');
+    try {
+      return { guard, registration: registrationRegistry.captureAuthorityRevision(), launch: launchRegistry.captureAuthorityRevision() };
+    } catch { throw runtimeError('source_guard_unavailable'); }
+  }
+
+  function checkMutationGuard(captured) {
+    if (!captured) return;
+    try {
+      if (captured.guard() !== true ||
+          registrationRegistry.checkAuthorityRevision(captured.registration) !== true ||
+          launchRegistry.checkAuthorityRevision(captured.launch) !== true) throw runtimeError('source_guard_unavailable');
+    } catch { throw runtimeError('source_guard_unavailable'); }
+  }
+
   function readSnapshot() {
     let snapshot;
     try { snapshot = registrationRegistry.snapshot(); } catch { throw runtimeError('registry_unavailable'); }
@@ -484,7 +505,8 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return true;
   }
 
-  function attestActor(connectionHandle, claimsInput, evidenceInput) {
+  function attestActor(connectionHandle, claimsInput, evidenceInput, mutationGuard) {
+    const guarded = captureMutationGuard(mutationGuard);
     const connection = getConnection(connectionHandle);
     const claims = normalizeActorClaims(claimsInput);
     const evidence = normalizeEvidence(evidenceInput);
@@ -519,6 +541,9 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
           ? 'actor_ended' : fresh.reason.includes('period_ended') ? 'stale_period' : fresh.reason;
         throw runtimeError(code);
       }
+      checkMutationGuard(guarded);
+      if (!currentConnection(connection) || actorTombstones.has(previous.actor.actorLifeKey) ||
+          contextTombstones.has(previous.actor.contextLifeKey)) throw runtimeError('stale_connection');
       return { actorHandle: previous.handle };
     }
     const evidenceClaim = assertEvidenceAvailable(evidence, 'actor', subject);
@@ -529,6 +554,9 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
       connection, evidence: cloneEvidence(evidence),
       actorLifeKey: actorKey(claims.periodId, claims.actor), contextLifeKey: contextGroupKey(claims) };
     const handle = Object.freeze({});
+    checkMutationGuard(guarded);
+    if (!currentConnection(connection) || actorTombstones.has(actor.actorLifeKey) ||
+        contextTombstones.has(actor.contextLifeKey)) throw runtimeError('stale_connection');
     actorHandles.set(handle, actor);
     actorClaims.set(contextKey, { fingerprint, actor, handle });
     commitEvidence(evidence, evidenceClaim.fingerprint, contextKey);
@@ -566,7 +594,9 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return actor;
   }
 
-  function reconcileExecution(launchRef, input) {
+  function reconcileExecution(launchRef, input, mutationGuard) {
+    const guarded = captureMutationGuard(mutationGuard);
+    const expectedLatestProof = proofByLaunch.get(launchRef);
     if (!isRecord(input) || !hasExactKeys(input,
         ['executionActorHandle', 'ownerActorHandle', 'expectedOwnerGeneration']) ||
         !Number.isSafeInteger(input.expectedOwnerGeneration) || input.expectedOwnerGeneration < 0) {
@@ -593,6 +623,12 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     if (!status.ok) throw runtimeError(status.reason === 'execution_period_ended' ? 'stale_period' :
       status.reason === 'stale_launch' ? 'stale_launch' : status.reason === 'registry_unavailable' ? 'registry_unavailable' : 'stale_connection');
     const proofHandle = Object.freeze({});
+    checkMutationGuard(guarded);
+    if ((guarded && proofByLaunch.get(launchRef) !== expectedLatestProof) ||
+        !immutableClaimsEqual(runtime.claims, claims) || runtime.ownerGeneration !== proof.ownerGeneration ||
+        !bindingEqual(runtime.currentOwner, proof.owner) || ![executionActor, ownerActor].every((actor) =>
+          currentConnection(actor.connection) && !actorTombstones.has(actor.actorLifeKey) &&
+          !contextTombstones.has(actor.contextLifeKey))) throw runtimeError('stale_connection');
     proofHandles.set(proofHandle, proof);
     proofByLaunch.set(launchRef, proof);
     runtime.currentProof = publicProof(proof);
@@ -810,14 +846,14 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
       if (!connectionHandles.has(connectionHandle)) return false;
       return authority.disconnect(connectionHandle);
     },
-    attestActor(connectionHandle, claims, evidence) {
+    attestActor(connectionHandle, claims, evidence, mutationGuard) {
       if (!connectionHandles.has(connectionHandle)) throw runtimeError('foreign_connection_handle');
       const normalized = normalizeActorClaims(claims);
       if (!normalized || normalized.identity.provider !== provider || normalized.identity.nativeIdKind !== expectedKind ||
           (normalized.immutableExecutionClaims &&
            (normalized.immutableExecutionClaims.provider !== provider ||
             normalized.immutableExecutionClaims.nativeIdKind !== expectedKind))) throw runtimeError('provider_mismatch');
-      const attested = authority.attestActor(connectionHandle, claims, evidence);
+      const attested = authority.attestActor(connectionHandle, claims, evidence, mutationGuard);
       claimAdapterHandle(attested.actorHandle, ACTOR_HANDLE_ADAPTER_OWNERS, adapterOwner, 'foreign_actor_handle');
       actorHandles.add(attested.actorHandle);
       return attested;
@@ -831,10 +867,10 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
       if (typeof authority.endContext !== 'function') throw runtimeError('context_end_unavailable');
       return authority.endContext(actorHandle);
     },
-    reconcileExecution(launchRef, input) {
+    reconcileExecution(launchRef, input, mutationGuard) {
       requireLaunch(launchRef);
       if (!isRecord(input) || !actorHandles.has(input.executionActorHandle)) throw runtimeError('foreign_actor_handle');
-      const reconciled = authority.reconcileExecution(launchRef, input);
+      const reconciled = authority.reconcileExecution(launchRef, input, mutationGuard);
       return reconciled;
     },
     handoff(launchRef, transition, newOwnerActorHandle) {
