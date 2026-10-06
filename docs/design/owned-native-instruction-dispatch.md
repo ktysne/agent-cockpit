@@ -88,6 +88,7 @@ UUIDはcontext相関IDではない。
 初期検証では専用fixture46件を含むrunner/source/collector/composition/runtime関連251件が通過した。
 実装コミット3969d72の全体npm testは1530件すべてが成功し、失敗、skip、cancelはなかった。
 追加の終了履歴/共有budget/prepare期限/Claude UUID再送guardは専用fixture60件を含む関連265件すべてで通過した。
+修正後の全体npm testは1544件すべてが成功し、失敗、skip、cancelはなかった。
 この追加修正後の全体・実nativeの再確認は未実施であり、pre-fixの記録と分けて更新する。
 専用fixtureは両providerの実runnerと実kernelをfake stdioへ接続し、NI01..NI08のwrite/actor/proof/evidenceを直接観測する。
 delegated/reviewの親だけはtrusted lifecycle fixtureであり、対象childは実runnerである。
@@ -110,3 +111,9 @@ Claude working steer、真正inputの適用証拠、delegated、handoff、再接
 Codex CLI 0.160.1は隔離app-serverの本人ログインを5分待機し、authentication_timeoutで終了した。
 owned childのexit/close、通常認証ファイル変更ゼロ、隔離認証artifactゼロを確認した。
 thread開始前に止まったため、Codex steer/startの受付とclient ID対応の実接続gateはunknownのままである。
+修正コミット047a314でClaude CLI 2.1.291を再確認した。
+spawn1回、dispatch1回、同session/identity/periodのままdistinct context2件を観測した。
+2件のnative resultに有効なUUIDがあり、UUIDも2件で異なることを確認した。
+旧proof/writerの拒否、owned childのexit/close、通常認証ファイル変更ゼロと隔離認証artifactゼロを再確認した。
+実機の正常列とUUID存在を確認した結果であり、重複resultの拒否はfixtureで検証した。
+Claudeのapplied、working steer、delegated/handoff/reconnect、およびCodexの実接続gateは、この結果では認定しない。
