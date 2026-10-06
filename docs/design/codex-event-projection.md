@@ -102,7 +102,7 @@ fixture evidenceによる成功は認証済みruntimeやnative actor bindingの�
 ## 検証結果
 
 共通コアはClaude/Codex各19件、計38件、HTTP適合は両providerの共通26件と互換・相関比較2件の計28件がpassし、skipはない。
-全体のnpm testは1,162件がpassし、failとskipは0件だった。
+最新featureのruntime-bindingコアを含む全体のnpm testは1,180件がpassし、failとskipは0件だった。
 manual-demo局所試験も16件がpassし、failとskipは0件だった。
 隔離デモはdemo.hookから発行したexecutionIdとagent_idをin-processで記録し、デモ専用resolverで照合する。
 外部HTTPのagent_idだけではこのfixture recordを作らない。
