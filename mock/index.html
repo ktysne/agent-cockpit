@@ -1102,7 +1102,7 @@ function commonQuestionLabels(question) {
 function commonQuestionStatus(question) {
   if (question.cancelled) return '質問は取り下げ済みです。';
   if (question.cancelRequested) return '取消要求済みです。送信開始後の回答は止められない場合があります。';
-  if (question.lateAnswerCount > 0) return `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`;
+  if (question.externalResolution && question.deliveryState === 'cancelled_before_send') return '外部で解決済みのため、元の回答の配送を停止しました。';
   if (question.deliveryState === 'available') return '回答を保存済みです。配送待ちです。';
   if (question.deliveryState === 'sending') return '送信開始済みです。返却結果を確認しています。';
   if (question.deliveryState === 'accepted') return '受付済みです。適用は未確認です。';

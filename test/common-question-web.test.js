@@ -315,8 +315,11 @@ test('外部解決済みで配送取消済みの質問は後続回答を保存�
     questionId: 'choice', optionIds: ['alternate'], freeText: null,
   }]);
   card = renderQuestion(context, savedQuestion);
-  assert.equal(card.querySelector('.common-question-status').textContent, '後続の回答を 1 件保存しました。配送は保留しています。');
+  assert.equal(card.querySelector('.common-question-status').textContent, '外部で解決済みのため、元の回答の配送を停止しました。');
+  assert.ok(card.querySelectorAll('.common-question-note').some((note) => note.textContent === '後続の回答を 1 件保存しました。配送は保留しています。'));
   assert.equal(findData(card, 'commonSubmit').disabled, true);
+  assert.equal(context.commonQuestionDeliveryText({ ...savedQuestion, cancelled: true }), '質問は取り下げ済みです。');
+  assert.equal(context.commonQuestionDeliveryText({ ...savedQuestion, cancelRequested: true }), '取消を要求しました。送信済みの回答は止められない場合があります。');
 });
 
 test('取消結果は返却された取消要求状態に沿った案内を表示する', async () => {
@@ -338,6 +341,107 @@ test('取消結果は返却された取消要求状態に沿った案内を表�
     else assert.doesNotMatch(notice, /要求として記録しました/);
     assert.equal(context.nativeConfirmCalls(), 0);
   }
+});
+
+test('期限と同じ推奨回答の重複は追加回答として数えず同じ送信を防ぐ', async () => {
+  const question = commonQuestion();
+  const duplicateQuestion = commonQuestion({
+    selectionSource: 'away-default',
+    selectedOptionIds: [{ questionId: 'choice', optionIds: ['recommended'] }],
+    deliveryState: 'unknown',
+    lateAnswerCount: 0,
+  });
+  const context = createUiContext({ postUiAction: async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ outcome: 'duplicate', question: duplicateQuestion }),
+  }) });
+  context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+  context.refresh = async () => { context.lastState.sessions[0].commonQuestions[0] = duplicateQuestion; };
+
+  const card = renderQuestion(context, question);
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'recommended').checked = true;
+  context.updateCommonQuestionSubmit(card);
+  await context.runCommonQuestionAction(findData(card, 'commonSubmit'), 'answer');
+
+  const key = context.commonQuestionKey(question);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.commonQuestionSubmittedDrafts.get(key))), [{
+    questionId: 'choice', optionIds: ['recommended'], freeText: '',
+  }]);
+  assert.equal(context.commonQuestionNotices.get(key), '同じ回答は保存済みです。追加の回答は保存していません。');
+  const refreshedCard = renderQuestion(context, duplicateQuestion);
+  assert.equal(refreshedCard.querySelector('.common-question-status').textContent, '配送結果が不明です。自動再送はしません。');
+  assert.equal(findData(refreshedCard, 'commonSubmit').disabled, true);
+  assert.equal(refreshedCard.querySelectorAll('.common-question-note').some((note) => note.textContent === '後続の回答を 0 件保存しました。配送は保留しています。'), false);
+});
+
+test('遅い別案の後の重複回答は件数と配送状態を保ち重複通知を出す', async () => {
+  const question = commonQuestion({
+    selectionSource: 'away-default',
+    selectedOptionIds: [{ questionId: 'choice', optionIds: ['recommended'] }],
+    deliveryState: 'applied',
+  });
+  const lateQuestion = { ...question, deliveryState: 'unknown', lateAnswerCount: 1 };
+  let requestCount = 0;
+  const context = createUiContext({ postUiAction: async () => {
+    requestCount += 1;
+    return { ok: true, status: 200, json: async () => ({
+      outcome: requestCount === 1 ? 'late' : 'duplicate', question: lateQuestion,
+    }) };
+  } });
+  context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+  context.refresh = async () => { context.lastState.sessions[0].commonQuestions[0] = lateQuestion; };
+
+  let card = renderQuestion(context, question);
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'alternate').checked = true;
+  context.updateCommonQuestionSubmit(card);
+  await context.runCommonQuestionAction(findData(card, 'commonSubmit'), 'answer');
+
+  card = renderQuestion(context, lateQuestion);
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'alternate').checked = false;
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'recommended').checked = true;
+  context.updateCommonQuestionSubmit(card);
+  await context.runCommonQuestionAction(findData(card, 'commonSubmit'), 'answer');
+
+  const key = context.commonQuestionKey(question);
+  assert.equal(requestCount, 2);
+  assert.equal(lateQuestion.lateAnswerCount, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.commonQuestionSubmittedDrafts.get(key))), [{
+    questionId: 'choice', optionIds: ['recommended'], freeText: '',
+  }]);
+  assert.equal(context.commonQuestionNotices.get(key), '同じ回答は保存済みです。追加の回答は保存していません。');
+  card = renderQuestion(context, lateQuestion);
+  assert.equal(card.querySelector('.common-question-status').textContent, '配送結果が不明です。自動再送はしません。');
+  assert.ok(card.querySelectorAll('.common-question-note').some((note) => note.textContent === '後続の回答を 1 件保存しました。配送は保留しています。'));
+  assert.ok(card.querySelectorAll('.common-question-note').some((note) => note.textContent === '同じ回答は保存済みです。追加の回答は保存していません。'));
+  assert.equal(findData(card, 'commonSubmit').disabled, true);
+});
+
+test('送信中と結果不明の配送状態をlate件数と別に表示する', () => {
+  for (const [deliveryState, status] of [
+    ['sending', '送信開始済みです。返却結果を確認しています。'],
+    ['unknown', '配送結果が不明です。自動再送はしません。'],
+  ]) {
+    const question = commonQuestion({ selectionSource: 'away-default', deliveryState, lateAnswerCount: 1 });
+    const card = renderQuestion(createUiContext(), question);
+    assert.equal(card.querySelector('.common-question-status').textContent, status);
+    assert.ok(card.querySelectorAll('.common-question-note').some((note) => note.textContent === '後続の回答を 1 件保存しました。配送は保留しています。'));
+  }
+});
+
+test('selectedの回答保存は下書きと再送防止用回答を消す', async () => {
+  const question = commonQuestion();
+  const context = createUiContext();
+  context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+  const card = renderQuestion(context, question);
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'alternate').checked = true;
+  context.updateCommonQuestionSubmit(card);
+  const key = context.commonQuestionKey(question);
+  assert.equal(context.commonQuestionDrafts.has(key), true);
+
+  await context.runCommonQuestionAction(findData(card, 'commonSubmit'), 'answer');
+  assert.equal(context.commonQuestionDrafts.has(key), false);
+  assert.equal(context.commonQuestionSubmittedDrafts.has(key), false);
 });
 
 test('期限後に自動選択と競合した回答は下書きを保ち同じ回答の再保存を無効にする', async () => {

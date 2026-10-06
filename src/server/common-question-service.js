@@ -631,11 +631,14 @@ function createCommonQuestionService(options = {}) {
       if (record.cancelledAt !== null) return { outcome: 'cancelled', question: await projectRecord(record) };
       if (record.deliveryIntent) {
         const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
-        if (current && ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(current.state)) {
+        const alreadyStoppedForExternalResolution = record.externalResolution !== null &&
+          current?.state === 'cancelled_before_send';
+        if (current && ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(current.state) &&
+            !alreadyStoppedForExternalResolution) {
           return { outcome: current.state === 'cancelled_before_send' ? 'cancelled' : 'too_late',
             question: projection(record, current) };
         }
-        if (current) {
+        if (current && !alreadyStoppedForExternalResolution) {
           const updated = await options.deliveryStore.cancel(record.deliveryIntent.deliveryAttemptId);
           if (['sending', 'accepted', 'applied', 'unknown'].includes(updated.state)) {
             return { outcome: updated.state === 'cancelled_before_send' ? 'cancelled' : 'too_late',

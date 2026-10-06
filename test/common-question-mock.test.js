@@ -164,9 +164,29 @@ test('外部解決後に保存した回答は配送保留中と表示し後続�
     cancelled: false, lateAnswerCount: 1,
   };
   const html = context.commonQuestionCard(product, session, question);
-  assert.match(html, /class="common-question-status">後続の回答を 1 件保存しました。配送は保留しています。/);
+  assert.match(html, /class="common-question-status">外部で解決済みのため、元の回答の配送を停止しました。/);
+  assert.match(html, /後続の回答を 1 件保存しました。配送は保留しています。/);
   assert.match(html, /元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。/);
+  assert.equal(context.commonQuestionStatus({ ...question, cancelled: true }), '質問は取り下げ済みです。');
+  assert.equal(context.commonQuestionStatus({ ...question, cancelRequested: true }), '取消要求済みです。送信開始後の回答は止められない場合があります。');
   assert.match(html, /data-common-submit="question-open"/);
+});
+
+test('モックはlate件数と送信中・結果不明の配送状態を別に表示する', () => {
+  const { context, session, product } = createHarness();
+  for (const [deliveryState, status] of [
+    ['sending', '送信開始済みです。返却結果を確認しています。'],
+    ['unknown', '配送結果が不明です。自動再送はしません。'],
+  ]) {
+    const question = {
+      ...session.commonQuestions[1],
+      deliveryState,
+      lateAnswerCount: 1,
+    };
+    const html = context.commonQuestionCard(product, session, question);
+    assert.ok(html.includes(`class="common-question-status">${status}</p>`));
+    assert.match(html, /後続の回答を 1 件保存しました。配送は保留しています。/);
+  }
 });
 
 test('質問フィルターと仮選択フィルターは両方のモック表示で該当カードだけを切り替える', () => {

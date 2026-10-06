@@ -439,6 +439,46 @@ test('external resolution preserves a late answer without marking the question m
   assert.deepEqual(dashboard.questions[0].selectedOptionIds, [{ questionId: 'decision', optionIds: ['continue'] }]);
 });
 
+test('manual cancellation after external resolution persists without retrying the stopped delivery', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'common-question-service-external-cancel-'));
+  const harness = await createCommonQuestionProductHarness({ provider: 'claude', directory,
+    questionServiceOptions: { verifyNativeQuestion: () => true } });
+  t.after(async () => {
+    await harness.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const created = await harness.questionService.register(harness.writer, question('question-external-cancel'));
+  const chosen = await harness.questionService.submitAnswer(created.question.internalQuestionId, answers('continue'));
+  assert.equal(chosen.question.deliveryState, 'available');
+  const resolved = await harness.questionService.resolveExternal(created.question.internalQuestionId, { source: 'trusted' });
+  assert.equal(resolved.question.externalResolution, true);
+  assert.equal(resolved.question.deliveryState, 'cancelled_before_send');
+  assert.equal(resolved.question.cancelled, false);
+
+  const cancelled = await harness.questionService.cancel(created.question.internalQuestionId);
+  assert.equal(cancelled.outcome, 'cancelled');
+  assert.equal(cancelled.question.externalResolution, true);
+  assert.equal(cancelled.question.cancelled, true);
+  assert.equal(cancelled.question.cancelHistoryMissing, false);
+  await harness.reopen();
+
+  const status = await harness.questionService.status(harness.writer, 'question-external-cancel');
+  assert.equal(status.externalResolution, true);
+  assert.equal(status.cancelled, true);
+  assert.equal(status.deliveryState, 'cancelled_before_send');
+  assert.equal(status.cancelHistoryMissing, false);
+  await assert.rejects(harness.questionService.submitAnswer(created.question.internalQuestionId, answers('stop')),
+    errorCode('question_cancelled'));
+  let sinkCalls = 0;
+  const poll = await harness.questionService.answerPoll(harness.writer, 'question-external-cancel', () => { sinkCalls += 1; });
+  assert.equal(poll.outcome, 'unavailable');
+  assert.equal(sinkCalls, 0);
+  const repeated = await harness.questionService.cancel(created.question.internalQuestionId);
+  assert.equal(repeated.outcome, 'cancelled');
+  assert.equal(repeated.question.externalResolution, true);
+  assert.equal(repeated.question.cancelled, true);
+});
+
 test('cancelling unknown persists a request in the file-backed delivery store without retrying', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'common-question-service-file-backed-'));
   const harness = await createCommonQuestionProductHarness({ provider: 'claude', directory });
