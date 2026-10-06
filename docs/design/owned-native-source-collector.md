@@ -110,7 +110,8 @@ matching terminalはこの待機中もnegative channelで保持する。
 periodまたはphysical source自体の失効時は起動継続を拒否する。
 
 readonly readのactive timeoutはその観測をunknownにし、native childを維持する。
-旧leaseの未応答RPCはactive read枠から外し、遅延応答を拒否する上限付きretired記録へ移す。
+旧leaseの未応答RPCはactive read枠から外す。
+startup後にreadだけへ発行した連続ID範囲を2個のscalarで保持し、O(1)の記憶量で遅延応答を識別して破棄する。
 新leaseのfresh readは旧応答を待たずに開始できる。
 pipeの破損やprocess終了はread timeoutと区別して失効させる。
 
@@ -119,3 +120,7 @@ context通知前の再attachを含め、late contextによるactor/proof/writer�
 Codexのfresh read後だけ復旧し、Claudeはunsupportedを維持する。
 periodまたはphysical sourceの失効と、private-only contextのmatching terminalは同じfixtureで拒否を確認する。
 この起動継続のfixture結果は、上記commitのstandalone実Claude probeと区別する。
+
+修正後のsource commit `66e271477c177472fc8db2fb2e8debc86da5ba5a`は全体テスト1484/1484 PASS、CodeGraph同期・diffcheckも成功した。
+同commitのClaude Code 2.1.291実standalone probeは再実行PASSとなり、同opaque proof、spawn1回・observation5件、終端後の旧proof/writer拒否、actor/period維持・context終了、child停止、通常認証不変・隔離認証artifact0を再確認した。
+結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-4dac914c-8c10-4b32-8000-2114023657ef.json`に保持し、positive reconnect、delegated、handoff、Codex実接続の未確認範囲を維持する。
