@@ -65,7 +65,8 @@ function safeModelIdentifier(value) {
 }
 
 function normalizeTimeout(timeoutMs) {
-  const value = Number.isSafeInteger(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const value = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : timeoutMs;
+  if (!Number.isSafeInteger(value)) throw new NativeClaudeError('invalid_timeout');
   if (value < 1_000 || value > MAX_TIMEOUT_MS) throw new NativeClaudeError('invalid_timeout');
   return value;
 }
@@ -244,22 +245,76 @@ function createOwnedProcessRegistry(spawnImpl = spawn, controller = null) {
       started: false,
       startFailed: false,
       closeObserved: false,
+      observationFinalized: false,
+      finalizedExitObserved: null,
       exitCode: null,
       signal: null,
       errorCode: null,
       killRequested: false,
+      killAttempted: false,
+      killSucceeded: false,
+      terminationSignalRequested: false,
+      terminationSignalSucceeded: false,
+      forceKillSignalRequested: false,
+      forceKillSignalSucceeded: false,
+      stdoutPipeDestroyAttempted: false,
+      stdoutPipeDestroySucceeded: false,
+      stderrPipeDestroyAttempted: false,
+      stderrPipeDestroySucceeded: false,
+      childUnreferenceAttempted: false,
+      childUnreferenceSucceeded: false,
     };
     const closed = new Promise((resolve) => { resolveClosed = resolve; });
+    function sendSignal(signal, requestedField, succeededField) {
+      if (state.closeObserved || state.startFailed || state.observationFinalized) return false;
+      if (state[requestedField]) return state[succeededField];
+      state[requestedField] = true;
+      state.killAttempted = true;
+      try {
+        state[succeededField] = child.kill(signal) === true;
+      } catch {}
+      if (state[succeededField]) {
+        state.killRequested = true;
+        state.killSucceeded = true;
+      }
+      return state[succeededField];
+    }
     const record = {
       child,
       state,
       closed,
-      requestStop() {
-        if (state.closeObserved || state.startFailed) return false;
-        try {
-          state.killRequested = child.kill('SIGTERM') === true || state.killRequested;
-        } catch {}
-        return state.killRequested;
+      requestStop() { return sendSignal('SIGTERM', 'terminationSignalRequested', 'terminationSignalSucceeded'); },
+      requestForceKill() { return sendSignal('SIGKILL', 'forceKillSignalRequested', 'forceKillSignalSucceeded'); },
+      finalizeUnknownExit(stdoutListener, stderrListener) {
+        if (state.closeObserved || state.startFailed || state.observationFinalized) return false;
+        state.observationFinalized = true;
+        state.finalizedExitObserved = false;
+        const releasePipe = (stream, listener, attemptedField, succeededField) => {
+          if (!stream) return;
+          if (listener && typeof stream.removeListener === 'function') {
+            try { stream.removeListener('data', listener); } catch {}
+          }
+          if (typeof stream.destroy === 'function') {
+            state[attemptedField] = true;
+            try {
+              stream.destroy();
+              state[succeededField] = true;
+            } catch {}
+          }
+          if (typeof stream.unref === 'function') {
+            try { stream.unref(); } catch {}
+          }
+        };
+        releasePipe(child.stdout, stdoutListener, 'stdoutPipeDestroyAttempted', 'stdoutPipeDestroySucceeded');
+        releasePipe(child.stderr, stderrListener, 'stderrPipeDestroyAttempted', 'stderrPipeDestroySucceeded');
+        if (typeof child.unref === 'function') {
+          state.childUnreferenceAttempted = true;
+          try {
+            child.unref();
+            state.childUnreferenceSucceeded = true;
+          } catch {}
+        }
+        return true;
       },
     };
     records.push(record);
@@ -273,6 +328,10 @@ function createOwnedProcessRegistry(spawnImpl = spawn, controller = null) {
       }
     });
     child.once('close', (code, signal) => {
+      if (state.observationFinalized) {
+        resolveClosed(state);
+        return;
+      }
       state.closeObserved = true;
       state.exitCode = Number.isSafeInteger(code) ? code : null;
       state.signal = safeSignal(signal);
@@ -285,10 +344,26 @@ function createOwnedProcessRegistry(spawnImpl = spawn, controller = null) {
     start,
     requestStopAll() { return records.map((record) => record.requestStop()); },
     snapshot() {
+      const observedExit = (record) => record.state.observationFinalized
+        ? record.state.finalizedExitObserved === true
+        : record.state.closeObserved || record.state.startFailed;
+      const any = (field) => records.some((record) => record.state[field]);
       return {
         count: records.length,
-        allExitObserved: records.every((record) => record.state.closeObserved || record.state.startFailed),
+        allExitObserved: records.every(observedExit),
         killRequestedCount: records.filter((record) => record.state.killRequested).length,
+        killAttemptedCount: records.filter((record) => record.state.killAttempted).length,
+        killSucceededCount: records.filter((record) => record.state.killSucceeded).length,
+        terminationSignalRequested: any('terminationSignalRequested'),
+        terminationSignalSucceeded: any('terminationSignalSucceeded'),
+        forceKillSignalRequested: any('forceKillSignalRequested'),
+        forceKillSignalSucceeded: any('forceKillSignalSucceeded'),
+        childUnreferenceAttempted: any('childUnreferenceAttempted'),
+        childUnreferenceSucceeded: any('childUnreferenceSucceeded'),
+        stdoutPipeDestroyAttempted: any('stdoutPipeDestroyAttempted'),
+        stdoutPipeDestroySucceeded: any('stdoutPipeDestroySucceeded'),
+        stderrPipeDestroyAttempted: any('stderrPipeDestroyAttempted'),
+        stderrPipeDestroySucceeded: any('stderrPipeDestroySucceeded'),
       };
     },
     records,
@@ -326,6 +401,8 @@ function runOwnedCommand(registry, controller, command, args, options) {
   let overflow = false;
   let timedOut = false;
   let stopTimer = null;
+  let forceKillTimer = null;
+  let stopStarted = false;
   let done = false;
   let unsubscribeController = () => {};
   const maxBytes = options.maxOutputBytes;
@@ -338,29 +415,48 @@ function runOwnedCommand(registry, controller, command, args, options) {
   }, options.timeoutMs);
   const finish = (exitObserved) => {
     if (done) return;
+    const state = record.state;
+    const confirmedExit = exitObserved && (state.closeObserved || state.startFailed);
     done = true;
     clearTimeout(timeoutTimer);
     clearTimeout(stopTimer);
+    clearTimeout(forceKillTimer);
     unsubscribeController();
-    const state = record.state;
+    if (!confirmedExit) record.finalizeUnknownExit(onData, onStderr);
     resolveOutcome({
       record,
-      stdout: exitObserved && !overflow ? Buffer.concat(chunks).toString('utf8') : null,
+      stdout: confirmedExit && !overflow ? Buffer.concat(chunks).toString('utf8') : null,
       stdoutBytes,
       stderrBytes,
       overflow,
       timeout: timedOut,
-      exitObserved,
-      exitCode: state.exitCode,
-      signal: state.signal,
+      exitObserved: confirmedExit,
+      exitCode: confirmedExit ? state.exitCode : null,
+      signal: confirmedExit ? state.signal : null,
       spawnErrorKind: state.startFailed ? errorKindFromSpawn('spawn_error', state.errorCode) : null,
       spawnErrorCode: state.errorCode,
       killRequested: state.killRequested,
+      killSucceeded: state.killSucceeded,
+      terminationSignalRequested: state.terminationSignalRequested,
+      terminationSignalSucceeded: state.terminationSignalSucceeded,
+      forceKillSignalRequested: state.forceKillSignalRequested,
+      forceKillSignalSucceeded: state.forceKillSignalSucceeded,
     });
   };
   function beginStop() {
+    if (done || stopStarted) return;
+    stopStarted = true;
     record.requestStop();
-    if (stopTimer === null) stopTimer = setTimeout(() => finish(record.state.closeObserved), graceMs);
+    stopTimer = setTimeout(() => {
+      if (record.state.closeObserved || record.state.startFailed) {
+        finish(true);
+        return;
+      }
+      record.requestForceKill();
+      forceKillTimer = setTimeout(() => {
+        finish(record.state.closeObserved || record.state.startFailed);
+      }, graceMs);
+    }, graceMs);
   }
   const onData = (chunk) => {
     if (done || overflow) return;
@@ -533,6 +629,12 @@ function createBaseReport(outputDirectory, mode = 'claude_probe') {
       requested: false,
       reason: null,
       kill_requested: false,
+      kill_attempted: false,
+      kill_succeeded: false,
+      termination_signal_requested: false,
+      termination_signal_succeeded: false,
+      force_kill_signal_requested: false,
+      force_kill_signal_succeeded: false,
       exit_observed: true,
     },
     failure_category: null,
@@ -543,6 +645,12 @@ function createBaseReport(outputDirectory, mode = 'claude_probe') {
       report_written: false,
       owned_child_count: 0,
       all_child_exits_observed: true,
+      child_unreference_attempted: false,
+      child_unreference_call_succeeded: false,
+      stdout_pipe_destroy_attempted: false,
+      stdout_pipe_destroy_call_succeeded: false,
+      stderr_pipe_destroy_attempted: false,
+      stderr_pipe_destroy_call_succeeded: false,
       descendant_process_tree_exit_observed: false,
     },
   };
@@ -717,14 +825,32 @@ async function executeClaudeProbe(rawOptions, dependencies, controller, onRegist
     }
   } finally {
     const cancellation = controller.snapshot();
-    const registryStatus = registry ? registry.snapshot() : { count: 0, allExitObserved: true, killRequestedCount: 0 };
+    const registryStatus = registry ? registry.snapshot() : {
+      count: 0,
+      allExitObserved: true,
+      killRequestedCount: 0,
+      killAttemptedCount: 0,
+      killSucceededCount: 0,
+    };
     report.cancel.requested = cancellation.requested;
     report.cancel.reason = cancellation.reason;
     report.cancel.kill_requested = registryStatus.killRequestedCount > 0;
+    report.cancel.kill_attempted = registryStatus.killAttemptedCount > 0;
+    report.cancel.kill_succeeded = registryStatus.killSucceededCount > 0;
+    report.cancel.termination_signal_requested = registryStatus.terminationSignalRequested === true;
+    report.cancel.termination_signal_succeeded = registryStatus.terminationSignalSucceeded === true;
+    report.cancel.force_kill_signal_requested = registryStatus.forceKillSignalRequested === true;
+    report.cancel.force_kill_signal_succeeded = registryStatus.forceKillSignalSucceeded === true;
     report.cancel.exit_observed = registryStatus.allExitObserved;
     report.cleanup.owned_child_count = registryStatus.count;
     report.cleanup.all_child_exits_observed = registryStatus.allExitObserved;
     report.cleanup.retained_for_unconfirmed_child = !registryStatus.allExitObserved;
+    report.cleanup.child_unreference_attempted = registryStatus.childUnreferenceAttempted === true;
+    report.cleanup.child_unreference_call_succeeded = registryStatus.childUnreferenceSucceeded === true;
+    report.cleanup.stdout_pipe_destroy_attempted = registryStatus.stdoutPipeDestroyAttempted === true;
+    report.cleanup.stdout_pipe_destroy_call_succeeded = registryStatus.stdoutPipeDestroySucceeded === true;
+    report.cleanup.stderr_pipe_destroy_attempted = registryStatus.stderrPipeDestroyAttempted === true;
+    report.cleanup.stderr_pipe_destroy_call_succeeded = registryStatus.stderrPipeDestroySucceeded === true;
     if (output) {
       report.cleanup.output_owned = true;
       report.cleanup.output_retained = true;
@@ -791,7 +917,7 @@ async function runCancellationFixture(options = {}, dependencies = {}) {
   report.process.fixture_child_spawn_requested = true;
   const command = runOwnedCommand(registry, controller, executable, args, {
     spawnOptions,
-    timeoutMs: normalizeTimeout(options.timeoutMs || 10_000),
+    timeoutMs: normalizeTimeout(options.timeoutMs === undefined ? 10_000 : options.timeoutMs),
     killGraceMs: dependencies.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
     maxOutputBytes: 1024,
   });
@@ -812,12 +938,24 @@ async function runCancellationFixture(options = {}, dependencies = {}) {
   report.cancel.requested = true;
   report.cancel.reason = 'fixture_cancel';
   report.cancel.kill_requested = snapshot.killRequestedCount > 0;
+  report.cancel.kill_attempted = snapshot.killAttemptedCount > 0;
+  report.cancel.kill_succeeded = snapshot.killSucceededCount > 0;
+  report.cancel.termination_signal_requested = snapshot.terminationSignalRequested;
+  report.cancel.termination_signal_succeeded = snapshot.terminationSignalSucceeded;
+  report.cancel.force_kill_signal_requested = snapshot.forceKillSignalRequested;
+  report.cancel.force_kill_signal_succeeded = snapshot.forceKillSignalSucceeded;
   report.cancel.exit_observed = snapshot.allExitObserved;
   report.cleanup.output_owned = true;
   report.cleanup.output_retained = true;
   report.cleanup.retained_for_unconfirmed_child = !snapshot.allExitObserved;
   report.cleanup.owned_child_count = snapshot.count;
   report.cleanup.all_child_exits_observed = snapshot.allExitObserved;
+  report.cleanup.child_unreference_attempted = snapshot.childUnreferenceAttempted;
+  report.cleanup.child_unreference_call_succeeded = snapshot.childUnreferenceSucceeded;
+  report.cleanup.stdout_pipe_destroy_attempted = snapshot.stdoutPipeDestroyAttempted;
+  report.cleanup.stdout_pipe_destroy_call_succeeded = snapshot.stdoutPipeDestroySucceeded;
+  report.cleanup.stderr_pipe_destroy_attempted = snapshot.stderrPipeDestroyAttempted;
+  report.cleanup.stderr_pipe_destroy_call_succeeded = snapshot.stderrPipeDestroySucceeded;
   report.cleanup.report_written = true;
   try {
     writeSafeReport(output, report, fileSystem);
@@ -840,7 +978,10 @@ function parseArguments(argv) {
   }
   const mode = values.get('--mode') || 'claude';
   if (!['claude', 'cancel-fixture', 'failure-fixture'].includes(mode)) throw new NativeClaudeError('invalid_mode');
-  const timeoutMs = values.has('--timeout-ms') ? Number(values.get('--timeout-ms')) : DEFAULT_TIMEOUT_MS;
+  const timeoutText = values.get('--timeout-ms');
+  const timeoutMs = values.has('--timeout-ms')
+    ? (/^\d+$/.test(timeoutText) ? Number(timeoutText) : Number.NaN)
+    : DEFAULT_TIMEOUT_MS;
   normalizeTimeout(timeoutMs);
   const fixtureChild = values.get('--fixture-child') || 'node';
   if (!['node', 'mock'].includes(fixtureChild)) throw new NativeClaudeError('invalid_fixture_mode');
@@ -857,20 +998,24 @@ function parseArguments(argv) {
   return { mode, outputDirectory, timeoutMs, fixtureChild, cancelAfterMs, fixtureCategory };
 }
 
-async function main(argv = process.argv.slice(2)) {
+function writeStdoutLine(value) {
+  return new Promise((resolve) => process.stdout.write(value + '\n', resolve));
+}
+
+async function main(argv = process.argv.slice(2), dependencies = {}) {
   let options;
   try {
     options = parseArguments(argv);
   } catch (error) {
-    process.stdout.write(JSON.stringify({ failure_category: safeErrorKind(error, 'invalid_arguments') }) + '\n');
+    await writeStdoutLine(JSON.stringify({ failure_category: safeErrorKind(error, 'invalid_arguments') }));
     process.exitCode = 2;
     return;
   }
   if (options.mode === 'failure-fixture') {
-    process.stdout.write(JSON.stringify({
+    await writeStdoutLine(JSON.stringify({
       mode: 'failure_fixture',
       failure_category: fixtureFailureCategory(options.fixtureCategory),
-    }) + '\n');
+    }));
     return;
   }
   if (options.mode === 'cancel-fixture') {
@@ -879,17 +1024,17 @@ async function main(argv = process.argv.slice(2)) {
       timeoutMs: options.timeoutMs,
       childMode: options.fixtureChild,
       cancelAfterMs: options.cancelAfterMs,
-    });
-    process.stdout.write(JSON.stringify(report) + '\n');
+    }, dependencies);
+    await writeStdoutLine(JSON.stringify(report));
     return;
   }
-  const run = startClaudeProbe({ outputDirectory: options.outputDirectory, timeoutMs: options.timeoutMs });
+  const run = startClaudeProbe({ outputDirectory: options.outputDirectory, timeoutMs: options.timeoutMs }, dependencies);
   const onSignal = () => { run.requestCancel('parent_signal'); };
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
   try {
     const report = await run.completion;
-    process.stdout.write(JSON.stringify(report) + '\n');
+    await writeStdoutLine(JSON.stringify(report));
   } finally {
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
@@ -935,4 +1080,5 @@ module.exports = {
   startClaudeProbe,
   validateExecutable,
   validateOutputPath,
+  main,
 };

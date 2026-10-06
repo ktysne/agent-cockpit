@@ -615,10 +615,10 @@ test('a result that races with cancellation is preserved and does not imply canc
   assert.equal(row.ownedChildExit.observed, true);
 });
 
-test('parent end blocks new reservations, unstarted reservations, and result return while retaining late results', () => {
+test('parent session end blocks new reservations, unstarted reservations, and result return while retaining late results', () => {
   const model = new RoutingModel();
   const launch = reserve(model);
-  assert.equal(model.markParentEnded({ parent: PARENT_CODEX }).accepted, true);
+  assert.equal(model.markParentSessionEnded({ provider: 'codex', sessionId: PARENT_CODEX.sessionId }).accepted, true);
   assert.equal(begin(model, launch).reason, 'parent_ended');
   assert.equal(model.reserveLaunch(reservation({
     launchId: 'launch-late', runId: 'run-late', attemptId: 'attempt-late',
@@ -627,7 +627,7 @@ test('parent end blocks new reservations, unstarted reservations, and result ret
   const activeModel = new RoutingModel();
   const active = reserve(activeModel);
   assert.equal(begin(activeModel, active).accepted, true);
-  assert.equal(activeModel.markParentEnded({ parent: PARENT_CODEX }).accepted, true);
+  assert.equal(activeModel.markParentSessionEnded({ provider: 'codex', sessionId: PARENT_CODEX.sessionId }).accepted, true);
   assert.equal(result(activeModel, active).accepted, true);
   assert.equal(shellExit(activeModel, active).accepted, true);
   assert.equal(activeModel.markParentReturned({
@@ -637,11 +637,11 @@ test('parent end blocks new reservations, unstarted reservations, and result ret
   assert.equal(rowFor(activeModel, active.launchId).result.classification, 'ok');
 });
 
-test('beginLaunch rejects after parent end, cancel request, or child exit before its duplicate path', () => {
+test('beginLaunch rejects after parent session end, cancel request, or child exit before its duplicate path', () => {
   const endedModel = new RoutingModel();
   const ended = reserve(endedModel);
   assert.equal(begin(endedModel, ended).accepted, true);
-  assert.equal(endedModel.markParentEnded({ parent: PARENT_CODEX }).accepted, true);
+  assert.equal(endedModel.markParentSessionEnded({ provider: 'codex', sessionId: PARENT_CODEX.sessionId }).accepted, true);
   assert.equal(begin(endedModel, ended).reason, 'parent_ended');
 
   const cancelledModel = new RoutingModel();
@@ -657,6 +657,43 @@ test('beginLaunch rejects after parent end, cancel request, or child exit before
   assert.equal(begin(exitedModel, exited).accepted, true);
   assert.equal(shellExit(exitedModel, exited).accepted, true);
   assert.equal(begin(exitedModel, exited).reason, 'child_already_exited');
+});
+
+test('parent session termination applies to every agent in that session and rejects agent-scoped input', () => {
+  const model = new RoutingModel();
+  const agentA = reserve(model, {
+    launchId: 'launch-parent-agent-a', runId: 'run-parent-agent-a', attemptId: 'attempt-parent-agent-a',
+    parent: { provider: 'codex', sessionId: 'shared-session', agentId: 'agent-a' },
+  });
+  const agentB = reserve(model, {
+    launchId: 'launch-parent-agent-b', runId: 'run-parent-agent-b', attemptId: 'attempt-parent-agent-b',
+    parent: { provider: 'codex', sessionId: 'shared-session', agentId: 'agent-b' },
+  });
+  const otherSession = reserve(model, {
+    launchId: 'launch-other-session', runId: 'run-other-session', attemptId: 'attempt-other-session',
+    parent: { provider: 'codex', sessionId: 'separate-session', agentId: 'agent-a' },
+  });
+  for (const launch of [agentA, agentB, otherSession]) assert.equal(begin(model, launch).accepted, true);
+
+  assert.deepEqual(model.markParentSessionEnded({
+    provider: 'codex', sessionId: 'shared-session',
+  }), { accepted: true, reason: 'parent_ended' });
+  assert.equal(rowFor(model, agentA.launchId).parentEnded, true);
+  assert.equal(rowFor(model, agentB.launchId).parentEnded, true);
+  assert.equal(rowFor(model, otherSession.launchId).parentEnded, false);
+  assert.equal(begin(model, agentA).reason, 'parent_ended');
+  assert.equal(begin(model, agentB).reason, 'parent_ended');
+  assert.equal(begin(model, otherSession).reason, 'duplicate');
+  assert.equal(model.reserveLaunch(reservation({
+    launchId: 'launch-same-ended-session', runId: 'run-same-ended-session',
+    attemptId: 'attempt-same-ended-session',
+    parent: { provider: 'codex', sessionId: 'shared-session', toolUseId: 'tool-new' },
+  })).reason, 'parent_ended');
+
+  assert.equal(model.markParentSessionEnded({
+    provider: 'codex', sessionId: 'shared-session', agentId: 'agent-a',
+  }).reason, 'invalid_input');
+  assert.equal(model.markParentSessionEnded({ parent: agentA.parent }).reason, 'invalid_input');
 });
 
 test('failure classifications remain distinct and do not imply a child exit', () => {

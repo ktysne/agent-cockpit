@@ -1,7 +1,7 @@
 # ベンダーをまたぐ委譲経路のPoC
 
 [Issue #163](https://github.com/ktysne/agent-cockpit/issues/163)で、CodexとClaudeの間で次に起動する担当を切り替え、結果を親へ返す方式を調べる。
-共通routing modelの31テストとnative runnerの12テストは成功した。固定課題によるClaude CLIの実測も完了した。実runtimeの共有routing、本番bridge統合、Claudeの稼働中cancelは未確認であり、モデル、runner、実vendor、本番動作の証拠を分けて記録する。
+共通routing modelのreview1修正後32テストとnative runnerの16テスト、計48テストは成功した。固定課題によるClaude CLIの実測も完了した。実runtimeの共有routing、本番bridge統合、Claudeの稼働中cancelは未確認であり、モデル、runner、実vendor、本番動作の証拠を分けて記録する。
 
 ## 開始時点の情報
 
@@ -21,18 +21,20 @@
 | ケース | 判定 | 根拠と残る確認 |
 | --- | --- | --- |
 | 1. Codexネイティブ子と外部Claude runnerが固定目的の結果を親へ返す | 条件付き | 両方から固定JSONの63を得た。Claudeは実測modelが`claude-sonnet-5-5`、effort不明。Codexはruntime model/native thread ID不明のため、同一profileの比較や一般的な能力同等性は確認していない。 |
-| 2. 共通routingをClaudeとCodexの両方から読み、default/claude/codexを選ぶ | 条件付き | `RoutingModel`の31テストに専用ファイルを使ったrouting read/write試験を含み、合成Claude/Codex callerのdefault/claude/codex予約を確認した。実probeではCodex childへの自動routing適用はfalse。通常runtime双方の共通設定読取りは未確認。 |
-| 3. 実行中の設定変更を既存runへ適用せず、次の起動に反映する | 条件付き | modelと専用shared-routing file fixtureで、既存launchのsnapshotを保ち、新しい予約に更新後のrouteを反映することを検証した。実runtime dispatcherでの固定は未確認。 |
-| 4. model、effort、親子ID、終了、失敗、上限、未導入、cancelを共通契約へ表す | 条件付き | 31 model + 12 native runnerの関連43テストが成功。Claude実測では要求`sonnet`/`low`に対し実model`claude-sonnet-5-5`、実effort null、version/model child exit 0。実vendorでのlimit・多様な失敗・Claude中cancelは未確認。 |
+| 2. 共通routingをClaudeとCodexの両方から読み、default/claude/codexを選ぶ | 条件付き | `RoutingModel`の32テストに専用ファイルを使ったrouting read/write試験を含み、合成Claude/Codex callerのdefault/claude/codex予約を確認した。実probeではCodex childへの自動routing適用はfalse。通常runtime双方の共通設定読取りは未確認。 |
+| 3. 実行中の設定変更を既存runへ適用せず、次の起動に反映する | 条件付き | modelと専用shared-routing file fixtureで、既存launchのsnapshotを保ち、新しい予約に更新後のrouteを反映することを検証した。`markParentSessionEnded`はprovider/sessionId単位で親セッション全体を終了し、同一sessionに属するagentの新規起動も拒否する。実runtime dispatcherでの固定は未確認。 |
+| 4. model、effort、親子ID、終了、失敗、上限、未導入、cancelを共通契約へ表す | 条件付き | 32 model + 16 native runnerの関連48テストが成功。Claude実測では要求`sonnet`/`low`に対し実model`claude-sonnet-5-5`、実effort null、version/model child exit 0。実vendorでのlimit・多様な失敗・Claude中cancelは未確認。 |
 | 5. 外部ClaudeとCodexのshell/native観測を一つのrunとして表示する | 条件付き | modelはcanonical launchとvendor別IDの照合を検証した。Claude session IDは取得したが、Codex native IDは未取得。production `state.js`の照合はCodex固有であり、モデル成功は本番の重複排除を証明しない。 |
 | 6. 認証・sandboxを保ち、子の再委譲ループを防ぐ | 条件付き | Claudeは通常のユーザー認証contextで、tools空、customization無効、MCP空指定、session保存無効、permission bypassなしで実行した。tool count、実permission mode、OS sandbox継承、子孫processは未観測。Codex認証はコピーしていない。 |
 | 7. bridgeの許可コマンド、起動、状態観測、結果返却の分担を決める | 条件付き | Cockpitとbridgeの責任境界を整理して本番Issue #180へ引き継いだ。外部bridge実装のコード監査、collector、dashboardとの接続試験は未実施。 |
 
 ## 共通モデルで確認した契約
 
-`RoutingModel`と関連テスト31件、native runnerの12件、計43件が成功した。これはPoCの個別検証であり、実runtimeの共有routingや本番統合の成功を意味しない。
+review1修正後の`RoutingModel`関連テスト32件とnative runnerの16件、計48件が成功した。focused aggregateは48/48（[検証ログ](../poc/out/poc163-review-fix-final-verify.log)）。モデル試験はPoC個別の状態契約であり、実runtime共有routingや本番統合を意味しない。
 
-`reserveLaunch`は検証済みrouting snapshot、vendor別固定profile、親、workspace、depthと祖先列からlaunchを作る。`default`は親providerへ解決し、launch後に同じ識別子でrouteやprofileを変えた要求は拒否する。予約だけでは起動せず、`beginLaunch`の成功後に観測や結果を受け付ける。終了済みまたは終了状態が不明な子、cancel済みlaunch、終了済みparentは開始できない。
+`reserveLaunch`は検証済みrouting snapshot、vendor別固定profile、親、workspace、depthと祖先列からlaunchを作る。`default`は親providerへ解決し、launch後に同じ識別子でrouteやprofileを変えた要求は拒否する。予約だけでは起動せず、`beginLaunch`の成功後に観測や結果を受け付ける。終了済みまたは終了状態が不明な子、cancel済みlaunch、終了済みparent sessionは開始できない。
+
+`markParentSessionEnded({ provider, sessionId })`は親セッション全体を終了扱いにする。入力にagentIdやtoolUseIdがある場合は拒否する。session終了後は同じprovider/sessionIdに属する全agentのlaunch予約と開始を拒否し、個別agentの終了通知として扱わない。
 
 結果受領、owned childのexit、親へのresult返却は別状態である。unknown exitは未確認として保持し、親への返却を止めるが、後から根拠のあるknown exitを記録できる。known exitの後に初めて届いたresultは拒否する。exit不明でもowned childへのcancel要求は記録でき、cancel完了には終了証拠が必要となる。
 
@@ -41,6 +43,10 @@ native identityのsource名はvendor固有IDの観測を表し、Codex native tr
 Claude runnerは要求`sonnet`/`low`に対して実model`claude-sonnet-5-5`を返し、固定JSONを完全一致で出力した。実effortはnullで、tool call countは未観測のまま保存されている。version probeとmodel processは両方exit 0、owned process 2件は終了を確認した。descendant process tree、OS sandbox inheritance、admin policyは観測していない。raw stdout/stderrは保存せず、許可された識別情報と固定結果だけをJSONへ記録した。
 
 別fixtureでNode childへのcancel要求とkill要求を記録し、SIGTERMでのcloseとowned child終了を確認した。これはprocess ownershipと後始末の試験であり、Claude runnerが応答中のcancel挙動ではない。
+
+最終native runnerのfixtureでは、実child processの自然終了と有限時間内のcleanupを確認した。停止要求後に有限grace待ち、close未観測ならSIGKILLを要求してもう一度有限grace待ちする。stop/kill要求、signal送信成功、終了観測を別々に記録する。二段階の待機後もclose未観測ならexitをunknownのまま確定し、stdout/stderr pipeを破棄してchildをunrefする。main handlerはcleanupとresult stdout write callbackが終わるまで処理を保持する。不正なtimeoutは拒否する。
+
+SIGTERM handlerのfixtureは`process.emit`でイベントを呼ぶだけで、OSからのsignal配送は確認していない。保存済みのClaude実測とNode cancel実測はcleanup改修前のrunnerであり、最終cleanup fieldや実OS signal動作の証拠ではない。
 
 ## runtimeおよび本番側の残作業
 
@@ -54,7 +60,7 @@ bridge資料上の責任分担案は、Cockpit側が共有routing、launch識別
 
 ## #164への仮契約引継ぎ
 
-[Issue #164](https://github.com/ktysne/agent-cockpit/issues/164)は#163の作業中モジュールをimportせず、仮契約をfixtureへ明示する。照合対象はlaunch/run/attemptと親provider/session/agent/tool-use、vendor固有native ID、起動時に固定したvendor/model/effort/transportである。result受領、子exit、親への返却、cancel要求/確定を分け、PID/cwd/時刻の近さで結合しない。unknown exitや親終了後を成功/再開扱いにしない。この契約はmodelで確認したもので、Cockpit/bridge間の実連携ではない。
+[Issue #164](https://github.com/ktysne/agent-cockpit/issues/164)は#163の作業中モジュールをimportせず、仮契約をfixtureへ明示する。launch照合には親provider/sessionとagent/tool-use IDを保持する一方、親セッション終了はprovider/sessionIdだけで記録し、そのsessionに属する全agentを終了扱いにする。vendor固有native ID、起動時固定vendor/model/effort/transport、result/exit/parent return/cancelの分離も仮契約へ含める。PID/cwd/時刻の近さで結合せず、unknown exitや終了済みparent sessionを成功/再開扱いにしない。この契約はmodelで確認したもので、Cockpit/bridge間の実連携ではない。
 
 ## 検証方針
 
@@ -88,7 +94,7 @@ Claude runnerはJSONに許可された識別・結果フィールドのみを保
 
 ## テスト結果と残る制約
 
-関連テストはRoutingModel 31件とnative runner 12件の計43件が成功した。全体`npm test`は963件中961件成功、2件失敗。2件は既知の時計依存Issue #168（`test/pull-requests.test.js:617`、`test/server.test.js:184`）で、新しいPoCテストの失敗ではない。
+review1修正後、RoutingModelの32テストとnative runnerの16テスト、計48件が成功した。全体`npm test`の初回実行はレビュー修正前に963件中961件成功、2件失敗だった。2件は既知の時計依存Issue #168（`test/pull-requests.test.js:617`、`test/server.test.js:184`）であり、レビュー修正後の全体テストは再実行していない。
 
 Claudeの固定課題とowned Node cancel fixtureは完了した。Claude稼働中cancel、Codex native runtime ID/実profile、両親からの実runtime共通routing、実runの本番重複排除、sandbox継承、bridge/collector接続は未確認であり、本番改修をIssue #180へ引き継いだ。Issue #164では上記の仮契約をfixtureへ明示し、実連携と区別する。
 

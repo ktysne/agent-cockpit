@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -9,6 +10,7 @@ const { PassThrough } = require('node:stream');
 const test = require('node:test');
 const {
   CLAUDE_EXECUTABLE,
+  DEFAULT_TIMEOUT_MS,
   FIXED_PROMPT,
   MAX_OUTPUT_BYTES,
   NativeClaudeError,
@@ -17,11 +19,14 @@ const {
   createChildEnvironment,
   createOutputPath,
   createOwnedOutputDirectory,
+  createOwnedProcessRegistry,
+  createRunController,
   fixtureFailureCategory,
   parseArguments,
   parseClaudeJson,
   runCancellationFixture,
   runClaudeProbe,
+  runOwnedCommand,
   startClaudeProbe,
 } = require('./native-runner');
 
@@ -49,13 +54,15 @@ function fakeChild(onKill = null) {
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.once('close', () => {
-    if (!child.stdout.writableEnded) child.stdout.end();
-    if (!child.stderr.writableEnded) child.stderr.end();
+    if (!child.stdout.destroyed && !child.stdout.writableEnded) child.stdout.end();
+    if (!child.stderr.destroyed && !child.stderr.writableEnded) child.stderr.end();
   });
   child.kill = (signal) => {
     if (onKill) onKill(child, signal);
     return true;
   };
+  child.unrefCalls = 0;
+  child.unref = () => { child.unrefCalls += 1; };
   return child;
 }
 
@@ -119,6 +126,17 @@ test('CLI arguments fix the vendor, prompt, model, effort, tool set, and permiss
   assert.equal(args[args.indexOf('--print') + 1], '--output-format');
   assert.equal(CLAUDE_EXECUTABLE, 'C:\\Users\\mss02968\\.local\\bin\\claude.exe');
   assert.throws(() => parseArguments(['--out', '../outside']), (error) => error.kind === 'output_directory_invalid');
+});
+
+test('timeout defaults only when omitted and rejects malformed or out-of-range values', () => {
+  assert.equal(parseArguments([]).timeoutMs, DEFAULT_TIMEOUT_MS);
+  assert.equal(parseArguments(['--timeout-ms', '1000']).timeoutMs, 1000);
+  for (const timeoutText of ['abc', '1000.5', '1e3', '999', '300001']) {
+    assert.throws(
+      () => parseArguments(['--timeout-ms', timeoutText]),
+      (error) => error.kind === 'invalid_timeout',
+    );
+  }
 });
 
 test('child environment preserves Claude home authentication and filters inherited session and bridge secrets', () => {
@@ -340,6 +358,71 @@ test('timeout records the stop request and confirms the child close separately',
   assert.equal(report.cleanup.all_child_exits_observed, true);
 });
 
+test('owned stop escalates from SIGTERM to SIGKILL and records the observed close', async () => {
+  const signals = [];
+  const child = fakeChild((target, signal) => {
+    signals.push(signal);
+    if (signal === 'SIGKILL') setImmediate(() => target.emit('close', null, 'SIGKILL'));
+  });
+  setImmediate(() => child.emit('spawn'));
+  const controller = createRunController();
+  const registry = createOwnedProcessRegistry(() => child, controller);
+  const pending = runOwnedCommand(registry, controller, 'fake', [], {
+    spawnOptions: {},
+    timeoutMs: 10_000,
+    killGraceMs: 10,
+    maxOutputBytes: 1024,
+  });
+  controller.requestCancel('escalation_test');
+  const outcome = await pending;
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(outcome.exitObserved, true);
+  assert.equal(outcome.signal, 'SIGKILL');
+  assert.equal(outcome.terminationSignalRequested, true);
+  assert.equal(outcome.terminationSignalSucceeded, true);
+  assert.equal(outcome.forceKillSignalRequested, true);
+  assert.equal(outcome.forceKillSignalSucceeded, true);
+  assert.equal(registry.snapshot().allExitObserved, true);
+});
+
+test('failed signal sends still reach bounded pipe and child reference release', async () => {
+  for (const failureMode of ['false', 'throw']) {
+    const signals = [];
+    const child = fakeChild();
+    child.kill = (signal) => {
+      signals.push(signal);
+      if (failureMode === 'throw') throw new Error('signal rejected');
+      return false;
+    };
+    setImmediate(() => child.emit('spawn'));
+    const controller = createRunController();
+    const registry = createOwnedProcessRegistry(() => child, controller);
+    const pending = runOwnedCommand(registry, controller, 'fake', [], {
+      spawnOptions: {},
+      timeoutMs: 10_000,
+      killGraceMs: 10,
+      maxOutputBytes: 1024,
+    });
+    controller.requestCancel('failed_signal_test');
+    const outcome = await pending;
+    const state = registry.records[0].state;
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+    assert.equal(outcome.exitObserved, false);
+    assert.equal(outcome.exitCode, null);
+    assert.equal(outcome.signal, null);
+    assert.equal(state.observationFinalized, true);
+    assert.equal(state.finalizedExitObserved, false);
+    assert.equal(state.childUnreferenceAttempted, true);
+    assert.equal(state.childUnreferenceSucceeded, true);
+    assert.equal(state.stdoutPipeDestroySucceeded, true);
+    assert.equal(state.stderrPipeDestroySucceeded, true);
+    assert.equal(child.unrefCalls, 1);
+    assert.equal(child.stdout.destroyed, true);
+    assert.equal(child.stderr.destroyed, true);
+    assert.equal(registry.snapshot().allExitObserved, false);
+  }
+});
+
 test('cancel discards a valid late result and keeps the cancellation outcome terminal', async (t) => {
   const output = freshOutputPath();
   cleanupAfter(t, output);
@@ -394,9 +477,15 @@ test('unobserved child exit keeps the owned output and records the unknown end s
   cleanupAfter(t, output);
   let modelStarted;
   let modelChild;
+  const modelSignals = [];
   const started = new Promise((resolve) => { modelStarted = resolve; });
   const spawnImpl = (command, args) => {
-    const child = fakeChild(() => {});
+    const child = fakeChild((target, signal) => {
+      if (args[0] !== '--version') {
+        modelSignals.push(signal);
+        if (signal === 'SIGKILL') setTimeout(() => target.emit('close', 0, null), 50);
+      }
+    });
     if (args[0] === '--version') {
       setImmediate(() => {
         child.emit('spawn');
@@ -425,9 +514,134 @@ test('unobserved child exit keeps the owned output and records the unknown end s
   assert.equal(report.cleanup.retained_for_unconfirmed_child, true);
   assert.equal(report.cleanup.all_child_exits_observed, false);
   assert.equal(report.cleanup.output_retained, true);
+  assert.equal(report.cancel.termination_signal_requested, true);
+  assert.equal(report.cancel.termination_signal_succeeded, true);
+  assert.equal(report.cancel.force_kill_signal_requested, true);
+  assert.equal(report.cancel.force_kill_signal_succeeded, true);
+  assert.equal(report.cleanup.child_unreference_attempted, true);
+  assert.equal(report.cleanup.child_unreference_call_succeeded, true);
+  assert.equal(report.cleanup.stdout_pipe_destroy_call_succeeded, true);
+  assert.equal(report.cleanup.stderr_pipe_destroy_call_succeeded, true);
+  assert.deepEqual(modelSignals, ['SIGTERM', 'SIGKILL']);
   assert.equal(fs.existsSync(path.join(output, 'result.json')), true);
-  modelChild.stdout.destroy();
-  modelChild.stderr.destroy();
+  const saved = JSON.parse(fs.readFileSync(path.join(output, 'result.json'), 'utf8'));
+  assert.equal(saved.process.model_exit_observed, false);
+  assert.equal(saved.cleanup.all_child_exits_observed, false);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'result.json'), 'utf8')), saved);
+  assert.equal(modelChild.unrefCalls, 1);
+});
+
+test('CLI main exits naturally after detaching a child and pipes that never close', async (t) => {
+  const output = freshOutputPath();
+  cleanupAfter(t, output);
+  const runnerPath = JSON.stringify(path.join(__dirname, 'native-runner.js'));
+  const outputPath = JSON.stringify(output);
+  const source = `
+    const runner = require(${runnerPath});
+    const { EventEmitter } = require('node:events');
+    const { PassThrough } = require('node:stream');
+    function trackedStream() {
+      const stream = new PassThrough();
+      const reference = setInterval(() => {}, 1000);
+      const destroy = stream.destroy.bind(stream);
+      stream.destroy = (...args) => {
+        clearInterval(reference);
+        return destroy(...args);
+      };
+      return stream;
+    }
+    function fakeSpawn() {
+      const child = new EventEmitter();
+      child.stdout = trackedStream();
+      child.stderr = trackedStream();
+      const reference = setInterval(() => {}, 1000);
+      child.unref = () => reference.unref();
+      child.kill = () => true;
+      setImmediate(() => {
+        child.emit('spawn');
+        setTimeout(() => process.emit('SIGTERM'), 0);
+        setTimeout(() => process.emit('SIGTERM'), 25);
+      });
+      return child;
+    }
+    runner.main(['--out', ${outputPath}, '--timeout-ms', '1000'], {
+      spawn: fakeSpawn,
+      validateExecutable: () => 'fake-claude',
+      killGraceMs: 15,
+      environment: {},
+    }).catch(() => { process.exitCode = 1; });
+  `;
+  const result = await new Promise((resolve, reject) => {
+    let stdout = '';
+    const stderrChunks = [];
+    let stderrBytes = 0;
+    let capturedStderrBytes = 0;
+    let settled = false;
+    const child = spawn(process.execPath, ['-e', source], {
+      cwd: path.resolve(__dirname, '../..'),
+      env: createChildEnvironment(process.env, { includeAuth: false }),
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const finish = (resultValue) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolve(resultValue);
+    };
+    const deadline = setTimeout(() => {
+      child.kill('SIGKILL');
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      finish({ timedOut: true, code: null, signal: null, stdout, stderrBytes, stderr: Buffer.concat(stderrChunks).toString('utf8') });
+    }, 1500);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      stderrBytes += buffer.length;
+      if (capturedStderrBytes < 4096) {
+        const captured = buffer.subarray(0, 4096 - capturedStderrBytes);
+        stderrChunks.push(captured);
+        capturedStderrBytes += captured.length;
+      }
+    });
+    child.once('error', (error) => {
+      clearTimeout(deadline);
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    child.once('close', (code, signal) => finish({
+      timedOut: false,
+      code,
+      signal,
+      stdout,
+      stderrBytes,
+      stderr: Buffer.concat(stderrChunks).toString('utf8'),
+    }));
+  });
+  const safeStderr = result.stderr
+    .replaceAll(path.resolve(__dirname, '../..'), '<repo>')
+    .replaceAll(output, '<run>')
+    .replace(/[^\x09\x0a\x0d\x20-\x7e]/g, '?')
+    .slice(0, 4096);
+  assert.equal(result.timedOut, false, `CLI fixture did not exit naturally; stderr=${safeStderr}`);
+  assert.equal(result.code, 0, `CLI fixture exited with ${result.code}; stderr=${safeStderr || '(empty)'}`);
+  assert.equal(result.stderrBytes, 0, `CLI fixture wrote stderr: ${safeStderr}`);
+  const report = JSON.parse(result.stdout.trim());
+  assert.equal(report.failure_category, 'cancelled');
+  assert.equal(report.process.version_exit_observed, false);
+  assert.equal(report.cancel.termination_signal_requested, true);
+  assert.equal(report.cancel.force_kill_signal_requested, true);
+  assert.equal(report.cleanup.child_unreference_call_succeeded, true);
+  assert.equal(report.cleanup.stdout_pipe_destroy_call_succeeded, true);
+  assert.equal(report.cleanup.stderr_pipe_destroy_call_succeeded, true);
+  assert.equal(report.cleanup.all_child_exits_observed, false);
 });
 
 test('owned cancellation fixture exposes mock and real-node modes without invoking Claude', async (t) => {

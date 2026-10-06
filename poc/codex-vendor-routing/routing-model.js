@@ -66,8 +66,8 @@ function tupleKey(launchId, runId, attemptId) {
   return JSON.stringify([launchId, runId, attemptId]);
 }
 
-function parentKey(parent) {
-  return JSON.stringify([parent.provider, parent.sessionId]);
+function parentSessionKey(parentSession) {
+  return JSON.stringify([parentSession.provider, parentSession.sessionId]);
 }
 
 function nativeIdentityKey(identity) {
@@ -209,7 +209,7 @@ class RoutingModel {
     this.nativeIdentities = new Map();
     this.resultIds = new Map();
     this.cancelIds = new Map();
-    this.endedParents = new Set();
+    this.endedParentSessions = new Set();
   }
 
   reserveLaunch(input) {
@@ -240,7 +240,7 @@ class RoutingModel {
         : action(false, 'launch_conflict');
     }
     if (sameAttempt) return action(false, 'attempt_conflict');
-    if (this.endedParents.has(parentKey(reservation.parent))) return action(false, 'parent_ended');
+    if (this.endedParentSessions.has(parentSessionKey(reservation.parent))) return action(false, 'parent_ended');
 
     const launch = {
       snapshot: freeze(snapshot),
@@ -264,7 +264,7 @@ class RoutingModel {
     const found = this.resolveLaunch(input);
     if (!found.launch) return action(false, found.reason);
     const launch = found.launch;
-    if (this.endedParents.has(parentKey(launch.snapshot.parent))) return action(false, 'parent_ended');
+    if (this.endedParentSessions.has(parentSessionKey(launch.snapshot.parent))) return action(false, 'parent_ended');
     if (launch.cancelRequest) return action(false, 'cancel_requested');
     if (launch.exit) return action(false, 'child_already_exited');
     if (launch.unknownExit) return action(false, 'child_end_unknown');
@@ -437,7 +437,8 @@ class RoutingModel {
     const launch = found.launch;
     if (!launch.startAuthorized) return action(false, 'start_not_authorized');
     if (launch.exit) return action(false, 'child_already_exited');
-    if (input.reason === 'parent_ended' && !this.endedParents.has(parentKey(launch.snapshot.parent))) {
+    if (input.reason === 'parent_ended'
+      && !this.endedParentSessions.has(parentSessionKey(launch.snapshot.parent))) {
       return action(false, 'parent_not_ended');
     }
     const cancelRequest = { requestId: input.requestId, reason: input.reason };
@@ -455,13 +456,14 @@ class RoutingModel {
     return action(true, 'cancel_requested');
   }
 
-  markParentEnded(input) {
-    if (!hasKeys(input, ['parent'])) return action(false, 'invalid_input');
-    const parent = normalizeParent(input.parent);
-    if (!parent) return action(false, 'invalid_input');
-    const key = parentKey(parent);
-    if (this.endedParents.has(key)) return action(true, 'duplicate');
-    this.endedParents.add(key);
+  markParentSessionEnded(input) {
+    if (!hasKeys(input, ['provider', 'sessionId'])
+      || !PROVIDERS.has(input.provider) || !safeIdentifier(input.sessionId)) {
+      return action(false, 'invalid_input');
+    }
+    const key = parentSessionKey(input);
+    if (this.endedParentSessions.has(key)) return action(true, 'duplicate');
+    this.endedParentSessions.add(key);
     return action(true, 'parent_ended');
   }
 
@@ -478,7 +480,7 @@ class RoutingModel {
         ? action(true, 'duplicate')
         : action(false, 'parent_return_conflict');
     }
-    if (this.endedParents.has(parentKey(launch.snapshot.parent))) return action(false, 'parent_ended');
+    if (this.endedParentSessions.has(parentSessionKey(launch.snapshot.parent))) return action(false, 'parent_ended');
     if (!launch.result || launch.result.resultId !== input.resultId) return action(false, 'result_or_exit_unobserved');
     if (!launch.exit) {
       return action(false, launch.unknownExit ? 'child_exit_unconfirmed' : 'result_or_exit_unobserved');
@@ -560,7 +562,7 @@ class RoutingModel {
   }
 
   projectLaunch(launch) {
-    const parentEnded = this.endedParents.has(parentKey(launch.snapshot.parent));
+    const parentEnded = this.endedParentSessions.has(parentSessionKey(launch.snapshot.parent));
     const parentReturn = launch.parentReturnedResultId
       ? 'returned'
       : (parentEnded && launch.result && launch.exit
