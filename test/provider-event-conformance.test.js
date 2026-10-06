@@ -485,6 +485,49 @@ for (const provider of PROVIDERS) {
     await assertChildEnded('after-post-tool-batch-rederive');
   });
 
+  test(`${provider} HTTP activity watermarks stay monotonic across an older trusted child hook`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-http-activity-watermark` });
+    const server = await startTestServer(t, {
+      registrationRegistry: fixture.registry,
+      resolveActorCorrelation: trustedActorCorrelation(fixture),
+    });
+    const sessionId = fixture.registration.sessionId;
+    const expectedAt300 = new Date(300).toISOString();
+    const expectedAt400 = new Date(400).toISOString();
+
+    async function send(name, eventId, sequence, hookAt, agentId) {
+      const response = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, name, {
+        nativeEventId: `${provider}-activity-${eventId}`,
+        sequence_number: sequence,
+        hook_at: hookAt,
+        ...(agentId ? { agent_id: agentId, agent_type: 'Explore' } : {}),
+      })));
+      assert.equal(response.status, 202, `${provider}/${eventId}`);
+      assert.deepEqual(jsonBody(response), { accepted: true }, `${provider}/${eventId}`);
+    }
+
+    async function activityTimestamps(stage) {
+      const session = (await readState(server)).sessions.find((item) => item.session_id === sessionId);
+      assert.ok(session, `${provider}/${stage}/session`);
+      return { lastActivityAt: session.lastActivityAt, lastUpdatedAt: session.lastUpdatedAt };
+    }
+
+    await send('UserPromptSubmit', 'parent-prompt', 1, 300);
+    const promptTimestamps = { lastActivityAt: expectedAt300, lastUpdatedAt: expectedAt300 };
+    assert.deepEqual(await activityTimestamps('parent-prompt'), promptTimestamps, provider);
+
+    await send('SubagentStart', 'older-child', 2, 200, `${provider}-older-child`);
+    assert.deepEqual(await activityTimestamps('older-child'), promptTimestamps, provider);
+
+    server.runtime.state.reopenAbsentSession(sessionId);
+    assert.deepEqual(await activityTimestamps('after-rederive'), promptTimestamps, provider);
+
+    await send('SubagentStart', 'new-child', 3, 400, `${provider}-new-child`);
+    assert.deepEqual(await activityTimestamps('new-child'), {
+      lastActivityAt: expectedAt400,
+      lastUpdatedAt: expectedAt400,
+    }, provider);
+  });
   test(`${provider} HTTP adapter keeps an older unsequenced Stop from rewinding a newer prompt`, async (t) => {
     const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-http-missing-sequence-order` });
     const server = await startTestServer(t, { registrationRegistry: fixture.registry });

@@ -680,7 +680,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     if (session.ended) continue;
     if (event.product) session.product = event.product;
     if (event.sessionName) session.title = event.sessionName;
-    session.lastActivityAt = isoTime(event.hookAt);
+    const previousActivityAt = Date.parse(session.lastActivityAt);
+    session.lastActivityAt = isoTime(Number.isFinite(previousActivityAt)
+      ? Math.max(previousActivityAt, event.hookAt)
+      : event.hookAt);
 
     const eventName = event.hook_event_name;
     const agentId = event.agent_id || null;
