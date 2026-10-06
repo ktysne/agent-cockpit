@@ -89,7 +89,8 @@ UUIDはcontext相関IDではない。
 実装コミット3969d72の全体npm testは1530件すべてが成功し、失敗、skip、cancelはなかった。
 追加の終了履歴/共有budget/prepare期限/Claude UUID再送guardは専用fixture60件を含む関連265件すべてで通過した。
 修正後の全体npm testは1544件すべてが成功し、失敗、skip、cancelはなかった。
-この追加修正後の全体・実nativeの再確認は未実施であり、pre-fixの記録と分けて更新する。
+修正コミット047a314の全体テストとClaude実native正常列は確認済みである。
+Codex実接続などの未確認gateは、末尾の実native検証記録に記載する。
 専用fixtureは両providerの実runnerと実kernelをfake stdioへ接続し、NI01..NI08のwrite/actor/proof/evidenceを直接観測する。
 delegated/reviewの親だけはtrusted lifecycle fixtureであり、対象childは実runnerである。
 NI09/NI12/NI13の期限・全source容量・冪等予約解放は、同じ別module instanceの複数writerを制御clockで呼んで確認した。
