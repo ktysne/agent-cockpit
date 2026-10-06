@@ -13,6 +13,7 @@ const UNKNOWN_REASONS = new Set([
   'event_sequence_missing',
   'event_sequence_gap',
   'event_sequence_regressed',
+  'event_order_unverified',
   'event_id_content_conflict',
   'period_end_observed',
   'permission_unresolved',
@@ -30,7 +31,8 @@ const NATIVE_COMMON_FIELDS = Object.freeze([
   'agent_type', 'route', 'description', 'questions', 'decisionResolution',
   'decision_resolution', 'ghPrCreateCommand', 'refreshPullRequestsCommand',
   'refreshPullRequests', 'pullRequest', 'backgroundTaskId', 'backgroundOutputTaskId',
-  'resolvedModel', 'codexOutput', 'cwd', 'notification_type', 'message',
+  'resolvedModel', 'codexOutput', 'codexReviewDefinition', 'codexWaitRunId',
+  'cwd', 'notification_type', 'message',
 ]);
 const COMMON_EVENT_FIELDS = new Set(NATIVE_COMMON_FIELDS.filter((name) => name !== 'hook_at' && name !== 'decision_resolution'));
 
@@ -167,6 +169,7 @@ function createProviderEventProjection({ registry, resolveActorCorrelation = nul
         orderingQuality: 'unknown',
         reasons: new Set(),
         lastSequence: null,
+        lastHookAtByActor: new Map(),
         orderingBlocked: false,
         sequenceGapBlocked: false,
         stateRecoveryBlocked: false,
@@ -196,6 +199,18 @@ function createProviderEventProjection({ registry, resolveActorCorrelation = nul
       reason,
       observation: markUnknown(registration, reason),
     };
+  }
+
+  function recordUnknownEvent(registration, dedupKeys, fingerprint, reason) {
+    const result = unknown(registration, reason);
+    for (const key of dedupKeys) {
+      projectionFor(registration).events.set(key, {
+        fingerprint,
+        action: 'unknown',
+        reason: result.reason,
+      });
+    }
+    return result;
   }
 
   function updateKnownState(projection, event, actorId) {
@@ -252,8 +267,8 @@ function createProviderEventProjection({ registry, resolveActorCorrelation = nul
       return unknown(registration, 'event_name_mismatch');
     }
     const hookEventName = outerEventName || nativeEventName;
-    if (hookEventName === 'PermissionRequest') return unknown(registration, 'permission_unresolved');
-    if (typeof hookEventName !== 'string' || !EVENT_NAMES.has(hookEventName)) {
+    const semanticUnknownReason = hookEventName === 'PermissionRequest' ? 'permission_unresolved' : null;
+    if (typeof hookEventName !== 'string' || (!EVENT_NAMES.has(hookEventName) && !semanticUnknownReason)) {
       return unknown(registration, 'unsupported_event');
     }
 
@@ -318,10 +333,6 @@ function createProviderEventProjection({ registry, resolveActorCorrelation = nul
 
     if (projection.periodState === 'ended_observed') return unknown(registration, 'period_end_observed');
     if (projection.stateRecoveryBlocked) return unknown(registration, projection.recoveryReason || 'observation_unavailable');
-    if (actorId && projection.actorStates.get(actorId)?.terminal) {
-      return unknown(registration, 'actor_reactivation_unverified');
-    }
-
     if (validEventId || validSequence) projection.dedupQuality = 'confirmed';
     else {
       projection.dedupQuality = 'unknown';
@@ -368,14 +379,27 @@ function createProviderEventProjection({ registry, resolveActorCorrelation = nul
       projection.lastSequence = sequence;
     }
 
+    const actorWatermarkKey = actorId || '';
+    const hookAt = normalizedEvent.hookAt;
+    const actorWatermark = projection.lastHookAtByActor.get(actorWatermarkKey);
+    if (!validSequence && typeof hookAt === 'number' && Number.isFinite(hookAt) &&
+        typeof actorWatermark === 'number' && hookAt < actorWatermark) {
+      return recordUnknownEvent(registration, dedupKeys, fingerprint, 'event_order_unverified');
+    }
+    if (typeof hookAt === 'number' && Number.isFinite(hookAt) &&
+        (typeof actorWatermark !== 'number' || hookAt > actorWatermark)) {
+      projection.lastHookAtByActor.set(actorWatermarkKey, hookAt);
+    }
+
+    if (actorId && projection.actorStates.get(actorId)?.terminal) {
+      return recordUnknownEvent(registration, dedupKeys, fingerprint, 'actor_reactivation_unverified');
+    }
+    if (semanticUnknownReason) {
+      return recordUnknownEvent(registration, dedupKeys, fingerprint, semanticUnknownReason);
+    }
+
     if (['PostToolUse', 'PostToolUseFailure'].includes(hookEventName) && !safeIdentifier(normalizedEvent.tool_use_id)) {
-      const result = unknown(registration, 'tool_result_missing');
-      for (const key of dedupKeys) projection.events.set(key, {
-        fingerprint,
-        action: 'unknown',
-        reason: result.reason,
-      });
-      return result;
+      return recordUnknownEvent(registration, dedupKeys, fingerprint, 'tool_result_missing');
     }
 
     for (const key of dedupKeys) projection.events.set(key, { fingerprint, action: 'apply' });

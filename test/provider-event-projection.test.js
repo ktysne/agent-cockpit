@@ -241,6 +241,41 @@ for (const provider of PROVIDERS) {
     assert.equal(foreignSession.status, 'mismatch');
   });
 
+  test(`${provider}: the native adapter preserves Codex review and wait context like flat events`, () => {
+    const codexReviewDefinition = 'codex-review';
+    const codexWaitRunId = 'codex-review-20261007-120000-1';
+    const project = (fieldsInNativeEvent) => {
+      const { fixture, projection } = createHarness(provider);
+      const adapter = createProviderEventAdapter(provider, projection);
+      const fields = { codexReviewDefinition, codexWaitRunId };
+      const native = nativeEvent(fixture, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        nativeEventId: fieldsInNativeEvent ? 'native-codex-context' : 'flat-codex-context',
+        sequence_number: 1,
+        ...(fieldsInNativeEvent ? fields : {}),
+      });
+      const event = {
+        ...(fieldsInNativeEvent ? {} : fields),
+        ...(!fieldsInNativeEvent ? { hook_event_name: 'PreToolUse', tool_name: 'Bash' } : {}),
+        nativeEvent: native,
+      };
+      return adapter.project({ writer: fixture.writer, sessionId: fixture.registration.sessionId, event });
+    };
+
+    const nested = project(true);
+    const flat = project(false);
+    const context = (result) => ({
+      codexReviewDefinition: result.event.codexReviewDefinition,
+      codexWaitRunId: result.event.codexWaitRunId,
+    });
+
+    assert.equal(nested.action, 'apply');
+    assert.equal(flat.action, 'apply');
+    assert.deepEqual(context(nested), context(flat));
+    assert.deepEqual(context(nested), { codexReviewDefinition, codexWaitRunId });
+  });
+
   test(`${provider}: conflicting outer and native event names are not applied`, () => {
     const { fixture, projection } = createHarness(provider);
     const result = projection.project({
@@ -325,6 +360,145 @@ for (const provider of PROVIDERS) {
     assert.equal(result.observation.lastKnownState.period, 'active');
     assert.equal(result.observation.lastKnownState.rootTurn, 'unknown');
     assert.equal(fixture.registry.snapshot().executions[0].state, 'active');
+  });
+
+  test(`${provider}: a sequenced PermissionRequest stays unknown on replay without creating a sequence gap`, () => {
+    const { fixture, projection } = createHarness(provider);
+    const send = (hookEventName, nativeEventId, sequence) => projection.project({
+      writer: fixture.writer,
+      sessionId: fixture.registration.sessionId,
+      event: commonEvent(fixture, {
+        hook_event_name: hookEventName,
+        nativeEvent: nativeEvent(fixture, {
+          hook_event_name: hookEventName,
+          nativeEventId,
+          sequence_number: sequence,
+        }),
+      }),
+    });
+
+    const prompt = send('UserPromptSubmit', 'permission-sequence-1', 1);
+    const permission = send('PermissionRequest', 'permission-sequence-2', 2);
+    const replay = send('PermissionRequest', 'permission-sequence-2', 2);
+    assert.equal(prompt.action, 'apply');
+    assert.equal(permission.action, 'unknown');
+    assert.equal(permission.reason, 'permission_unresolved');
+    assert.equal(permission.event, undefined);
+    assert.equal(permission.observation.lastKnownState.rootTurn, 'working');
+    assert.equal(replay.action, 'unknown');
+    assert.equal(replay.reason, 'permission_unresolved');
+    assert.equal(replay.observation.lastKnownState.rootTurn, 'working');
+
+    const stop = send('Stop', 'permission-sequence-3', 3);
+    const sessionEnd = send('SessionEnd', 'permission-sequence-4', 4);
+    assert.equal(stop.action, 'apply');
+    assert.equal(stop.observation.lastKnownState.rootTurn, 'waiting');
+    assert.equal(sessionEnd.action, 'apply');
+    assert.equal(sessionEnd.observation.lastKnownState.period, 'ended_observed');
+    assert.equal(fixture.registry.snapshot().executions[0].state, 'active');
+  });
+
+  test(`${provider}: a trusted actor's semantic unknown event still advances its sequence`, () => {
+    const childId = 'agent-sequence-unknown';
+    const correlatedActors = [];
+    const { fixture, projection } = createHarness(provider, {
+      resolveActorCorrelation: ({ registration, event }) => {
+        correlatedActors.push(event.agent_id);
+        return authorizeChild(registration, event.agent_id);
+      },
+    });
+    const send = (hookEventName, nativeEventId, sequence, toolUseId = 'tool-use-1') => projection.project({
+      writer: fixture.writer,
+      sessionId: fixture.registration.sessionId,
+      event: commonEvent(fixture, {
+        hook_event_name: hookEventName,
+        agent_id: childId,
+        tool_use_id: toolUseId,
+        nativeEvent: nativeEvent(fixture, {
+          hook_event_name: hookEventName,
+          nativeEventId,
+          sequence_number: sequence,
+          agent_id: childId,
+        }),
+      }),
+    });
+
+    const prompt = send('UserPromptSubmit', 'actor-sequence-1', 1);
+    const unknownResult = send('PostToolUse', 'actor-sequence-2', 2, null);
+    const replay = send('PostToolUse', 'actor-sequence-2', 2, null);
+    const stop = send('Stop', 'actor-sequence-3', 3);
+
+    assert.equal(prompt.action, 'apply');
+    assert.equal(unknownResult.action, 'unknown');
+    assert.equal(unknownResult.reason, 'tool_result_missing');
+    assert.equal(unknownResult.event, undefined);
+    assert.equal(unknownResult.observation.orderingQuality, 'confirmed');
+    assert.equal(replay.action, 'unknown');
+    assert.equal(replay.reason, 'tool_result_missing');
+    assert.equal(stop.action, 'apply');
+    assert.equal(stop.observation.lastKnownState.actors.find((actor) => actor.id === childId).turn, 'waiting');
+    assert.deepEqual(correlatedActors, [childId, childId, childId, childId]);
+  });
+
+  test(`${provider}: an older sequence-less actor event cannot replace its known working state`, () => {
+    const childId = 'agent-timestamp-order';
+    const { fixture, projection } = createHarness(provider, {
+      resolveActorCorrelation: ({ registration, event }) => authorizeChild(registration, event.agent_id),
+    });
+    const send = (hookEventName, nativeEventId, hookAt, sequence) => projection.project({
+      writer: fixture.writer,
+      sessionId: fixture.registration.sessionId,
+      event: commonEvent(fixture, {
+        hook_event_name: hookEventName,
+        hookAt,
+        agent_id: childId,
+        nativeEvent: nativeEvent(fixture, {
+          hook_event_name: hookEventName,
+          nativeEventId,
+          sequence_number: sequence,
+          agent_id: childId,
+        }),
+      }),
+    });
+
+    const currentPrompt = send('UserPromptSubmit', 'timestamp-new-prompt', 200, undefined);
+    const oldStop = send('Stop', 'timestamp-old-stop', 100, undefined);
+
+    assert.equal(currentPrompt.action, 'apply');
+    assert.equal(currentPrompt.observation.lastKnownState.actors.find((actor) => actor.id === childId).turn, 'working');
+    assert.equal(oldStop.action, 'unknown');
+    assert.equal(oldStop.reason, 'event_order_unverified');
+    assert.equal(oldStop.observation.lastKnownState.actors.find((actor) => actor.id === childId).turn, 'working');
+  });
+
+  test(`${provider}: sequence order accepts a later event with an earlier timestamp`, () => {
+    const childId = 'agent-sequence-authoritative';
+    const { fixture, projection } = createHarness(provider, {
+      resolveActorCorrelation: ({ registration, event }) => authorizeChild(registration, event.agent_id),
+    });
+    const send = (hookEventName, nativeEventId, hookAt, sequence) => projection.project({
+      writer: fixture.writer,
+      sessionId: fixture.registration.sessionId,
+      event: commonEvent(fixture, {
+        hook_event_name: hookEventName,
+        hookAt,
+        agent_id: childId,
+        nativeEvent: nativeEvent(fixture, {
+          hook_event_name: hookEventName,
+          nativeEventId,
+          sequence_number: sequence,
+          agent_id: childId,
+        }),
+      }),
+    });
+
+    const prompt = send('UserPromptSubmit', 'ordered-prompt', 200, 1);
+    const stop = send('Stop', 'ordered-stop', 100, 2);
+
+    assert.equal(prompt.action, 'apply');
+    assert.equal(stop.action, 'apply');
+    assert.equal(stop.observation.lastKnownState.actors.find((actor) => actor.id === childId).turn, 'waiting');
+    assert.equal(stop.observation.orderingQuality, 'confirmed');
   });
 
   test(`${provider}: sequence gaps and regressions stay unknown without inferring a period transition`, () => {
@@ -473,16 +647,6 @@ for (const provider of PROVIDERS) {
       event: commonEvent(fixture),
     });
     assert.equal(applied.action, 'apply');
-    const unknown = projection.observeUnknown({
-      writer: fixture.writer,
-      sessionId: fixture.registration.sessionId,
-      reason: 'collector_disconnected',
-    });
-    const missingResult = projection.observeUnknown({
-      writer: fixture.writer,
-      sessionId: fixture.registration.sessionId,
-      reason: 'tool_result_missing',
-    });
     const permission = projection.project({
       writer: fixture.writer,
       sessionId: fixture.registration.sessionId,
@@ -494,6 +658,16 @@ for (const provider of PROVIDERS) {
           sequence_number: 2,
         }),
       }),
+    });
+    const unknown = projection.observeUnknown({
+      writer: fixture.writer,
+      sessionId: fixture.registration.sessionId,
+      reason: 'collector_disconnected',
+    });
+    const missingResult = projection.observeUnknown({
+      writer: fixture.writer,
+      sessionId: fixture.registration.sessionId,
+      reason: 'tool_result_missing',
     });
     assert.equal(unknown.ok, true);
     assert.equal(missingResult.ok, true);

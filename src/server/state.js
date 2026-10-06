@@ -658,7 +658,9 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
   };
+  const preserveProjectionOrder = entries.some((entry) => entry.preserveProjectionOrder === true);
   const ordered = [...entries].sort((left, right) => {
+    if (preserveProjectionOrder) return left.sequence - right.sequence;
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
   });
@@ -2055,7 +2057,11 @@ class DashboardState {
 
     const entries = this.entries.get(event.session_id) || [];
     const eventSequence = this.sequence++;
-    entries.push({ event, sequence: eventSequence });
+    entries.push({
+      event,
+      sequence: eventSequence,
+      ...(metadata.preserveProjectionOrder === true ? { preserveProjectionOrder: true } : {}),
+    });
     this.entries.set(event.session_id, entries);
     const nextSessions = deriveSessions(entries, this.askDecisionStateFor(event.session_id), eventSequence);
     let askDecisionStateChanged = false;

@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const { test } = require('node:test');
 const { hookHeaders, jsonBody, request, startTestServer } = require('./support/server');
 const { createRegistrationFixture } = require('./support/registration');
@@ -86,10 +88,153 @@ async function postEvent(server, body) {
   });
 }
 
+test('unregistered Claude HTTP events keep hookAt ordering when callers forge projection-order metadata', async (t) => {
+  const server = await startTestServer(t);
+  const sessionId = 'legacy-projection-order';
+  const send = (hook_event_name, hookAt) => request(server.info.port, {
+    method: 'POST',
+    path: '/api/events',
+    headers: hookHeaders(server.info.secret, { 'content-type': 'application/json' }),
+    body: JSON.stringify({ session_id: sessionId, hook_event_name, hookAt, preserveProjectionOrder: true }),
+  });
+  assert.equal((await send('UserPromptSubmit', 300)).status, 202);
+  assert.equal((await send('Stop', 200)).status, 202);
+  const session = server.runtime.state.snapshot().sessions.find((item) => item.session_id === sessionId);
+  assert.equal(session.turnState, 'working');
+});
+
+test('Codex HTTP adapter preserves flat and nested hook metadata for a background review wait', async (t) => {
+  const results = [];
+  for (const shape of ['flat', 'nested']) {
+    const fixture = createRegistrationFixture('codex', { nativeId: `codex-metadata-${shape}` });
+    const server = await startTestServer(t, {
+      registrationRegistry: fixture.registry,
+      resolveActorCorrelation: trustedActorCorrelation(fixture),
+    });
+    const runs = [
+      { definition: 'codex-review', runId: 'codex-review-20261006-123456-1', model: 'gpt-review-first', effort: 'high' },
+      { definition: 'codex-subagent', runId: 'codex-subagent-20261006-123457-2', model: 'gpt-subagent-second', effort: 'xhigh' },
+    ];
+    await fs.mkdir(path.join(server.claudeHome, 'gpt-agents'), { recursive: true });
+    for (const run of runs) {
+      const definitionPath = path.join(server.claudeHome, 'gpt-agents', `${run.definition}.md`);
+      await fs.writeFile(definitionPath, `---\ncodex_model: ${run.model}\ncodex_reasoning_effort: ${run.effort}\n---\n`);
+    }
+    const parentId = 'review-parent-agent';
+    const send = async (name, eventId, sequence, fields = {}, toolMetadata = null) => {
+      const native = nativeEvent(fixture, name, {
+        nativeEventId: `codex-${shape}-${eventId}`,
+        sequence_number: sequence,
+        hook_at: 1_800_000_000_000 + sequence,
+        ...fields,
+      });
+      const body = eventRequestBody(fixture, native);
+      if (toolMetadata) setCodexFields(body, shape, toolMetadata);
+      const response = await postEvent(server, body);
+      assert.equal(response.status, 202, `${shape}/${eventId}`);
+      assert.deepEqual(jsonBody(response), { accepted: true }, `${shape}/${eventId}`);
+    };
+
+    await send('SubagentStart', 'parent-start', 1, { agent_id: parentId, agent_type: 'Explore' });
+    for (let index = 0; index < runs.length; index += 1) {
+      const run = runs[index];
+      const launchToolId = `${shape}-review-launch-${index}`;
+      const sequence = 2 + index * 2;
+      await send('PreToolUse', `review-launch-${index}`, sequence, {
+        agent_id: parentId,
+        tool_name: 'Bash',
+        tool_use_id: launchToolId,
+        summary: 'npm run review:codex',
+      }, { codexReviewDefinition: run.definition });
+      await send('PostToolUse', `review-launch-result-${index}`, sequence + 1, {
+        agent_id: parentId,
+        tool_name: 'Bash',
+        tool_use_id: launchToolId,
+        codexOutput: { runLine: `codex-agent: run=${run.runId}` },
+      });
+    }
+
+    async function parentReviewRow() {
+      const state = await readState(server);
+      const session = state.sessions.find((item) => item.session_id === fixture.registration.sessionId);
+      return session.agents.find((agent) => agent.agent_id === parentId);
+    }
+
+    for (let index = 0; index < runs.length; index += 1) {
+      const run = runs[index];
+      const waitToolId = `${shape}-review-wait-${index}`;
+      const sequence = 6 + index * 2;
+      await send('PreToolUse', `review-wait-${index}`, sequence, {
+        agent_id: parentId,
+        tool_name: 'Bash',
+        tool_use_id: waitToolId,
+        summary: `bash ~/.claude/tools/codex-agent.sh --wait ${run.runId}`,
+      }, { codexWaitRunId: run.runId });
+      await send('PostToolUse', `review-wait-result-${index}`, sequence + 1, {
+        agent_id: parentId,
+        tool_name: 'Bash',
+        tool_use_id: waitToolId,
+        codexOutput: { resultLine: 'codex-agent: result=ok' },
+      });
+      const parent = await parentReviewRow();
+      assert.ok(parent, `${shape}/parent agent row`);
+      if (index === 0) {
+        assert.deepEqual([parent.gpt.model, parent.gpt.effort, parent.gpt.active], [
+          runs[1].model, runs[1].effort, true,
+        ], `${shape}/only the matching background run completes`);
+      }
+    }
+
+    const parent = await parentReviewRow();
+    assert.ok(parent, `${shape}/parent agent row`);
+    const outcome = {
+      parentAgentId: parent.agent_id,
+      model: parent.gpt.model,
+      effort: parent.gpt.effort,
+      active: parent.gpt.active,
+    };
+    assert.deepEqual(outcome, {
+      parentAgentId: parentId,
+      model: runs[1].model,
+      effort: runs[1].effort,
+      active: false,
+    }, shape);
+
+    const storedEvents = server.runtime.state.entries.get(fixture.registration.sessionId).map(({ event }) => event);
+    assert.deepEqual(storedEvents.filter((event) => event.codexDefinition).map((event) => event.codexDefinition), runs.map((run) => run.definition), shape);
+    assert.deepEqual(storedEvents.filter((event) => event.codexWaitRunId).map((event) => event.codexWaitRunId), runs.map((run) => run.runId), shape);
+    assert.deepEqual(storedEvents.filter((event) => event.codexRunId).map((event) => event.codexRunId), runs.map((run) => run.runId), shape);
+    assert.equal(storedEvents.filter((event) => event.codexResult?.status === 'ok').length, runs.length, shape);
+    results.push(outcome);
+  }
+  assert.deepEqual(results[0], results[1]);
+});
+
 async function readState(server) {
   const response = await request(server.info.port, { path: '/api/state' });
   assert.equal(response.status, 200);
   return jsonBody(response);
+}
+
+async function postToolBatch(server, fixture) {
+  return request(server.info.port, {
+    method: 'POST',
+    path: '/api/hooks/answers',
+    headers: hookHeaders(server.info.secret, { 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      action: 'post-tool-batch',
+      event_name: 'PostToolBatch',
+      session_id: fixture.registration.sessionId,
+      id: 'post-tool-batch-fixture',
+      writer: fixture.writer,
+    }),
+  });
+}
+
+function setCodexFields(body, shape, fields) {
+  if (shape === 'flat') Object.assign(body, fields);
+  else Object.assign(body.nativeEvent, fields);
+  return body;
 }
 
 function providerEvent(snapshot, executionId) {
@@ -247,6 +392,119 @@ for (const provider of PROVIDERS) {
     assert.equal(projection.dedupQuality, 'unknown', provider);
     assert.ok(projection.reasons.includes('event_id_missing'), provider);
     assert.ok(projection.reasons.includes('event_sequence_missing'), provider);
+  });
+
+  test(`${provider} HTTP adapter does not let an unknown PermissionRequest block later sequenced events`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-http-permission-gap` });
+    const effects = createEffects();
+    const server = await startTestServer(t, {
+      registrationRegistry: fixture.registry,
+      ...trackedPullRequestOptions(),
+    });
+    attachEffectSpy(server, effects);
+
+    const first = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'UserPromptSubmit', {
+      nativeEventId: `${provider}-gap-prompt`, sequence_number: 1, hook_at: 100,
+    })));
+    assert.equal(first.status, 202, provider);
+    const beforeUnknownState = JSON.stringify(server.runtime.state.snapshot());
+    const beforeUnknownEffects = structuredClone(effects);
+    const permission = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'PermissionRequest', {
+      nativeEventId: `${provider}-gap-permission`, sequence_number: 2, hook_at: 200,
+      tool_name: 'Bash', tool_use_id: `${provider}-permission-tool`,
+    })));
+    assert.equal(permission.status, 202, provider);
+    assert.deepEqual(jsonBody(permission), {
+      accepted: false, status: 'unknown', reason: 'permission_unresolved',
+    }, provider);
+    assert.equal(JSON.stringify(server.runtime.state.snapshot()), beforeUnknownState, provider);
+    assert.deepEqual(effects, beforeUnknownEffects, provider);
+    assert.equal(server.runtime.state.pullRequestRegistrations().length, 0, provider);
+
+    const stop = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'Stop', {
+      nativeEventId: `${provider}-gap-stop`, sequence_number: 3, hook_at: 300,
+    })));
+    assert.equal(stop.status, 202, provider);
+    assert.deepEqual(jsonBody(stop), { accepted: true }, provider);
+    let observation = providerEvent(await readState(server), fixture.registration.executionId);
+    assert.equal(observation.lastKnownState.rootTurn, 'waiting', provider);
+    assert.equal(server.runtime.state.snapshot().sessions.find((session) => session.session_id === fixture.registration.sessionId).turnState, 'waiting', provider);
+
+    const end = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'SessionEnd', {
+      nativeEventId: `${provider}-gap-end`, sequence_number: 4, hook_at: 400,
+    })));
+    assert.equal(end.status, 202, provider);
+    assert.deepEqual(jsonBody(end), { accepted: true }, provider);
+    observation = providerEvent(await readState(server), fixture.registration.executionId);
+    assert.equal(observation.lastKnownState.period, 'ended_observed', provider);
+    assert.equal(observation.lastKnownState.rootTurn, 'ended', provider);
+    assert.equal(fixture.registry.snapshot().executions.find((item) => item.executionId === fixture.registration.executionId).state, 'active', provider);
+    assert.equal(effects.addEvent, 3, provider);
+    assert.equal(effects.sessionEnded, 1, provider);
+  });
+
+  test(`${provider} HTTP projection preserves receipt order through rederive and ignores caller ordering flags`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-http-receipt-order` });
+    const server = await startTestServer(t, {
+      registrationRegistry: fixture.registry,
+      resolveActorCorrelation: trustedActorCorrelation(fixture),
+    });
+    const childId = `${provider}-receipt-child`;
+    const childStart = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'SubagentStart', {
+      nativeEventId: `${provider}-receipt-child-start`, sequence_number: 1, hook_at: 300,
+      agent_id: childId, agent_type: 'Explore', preserveProjectionOrder: false,
+    }), { preserveProjectionOrder: false }));
+    assert.equal(childStart.status, 202, provider);
+    const childEnd = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'SessionEnd', {
+      nativeEventId: `${provider}-receipt-child-end`, sequence_number: 2, hook_at: 200,
+      agent_id: childId, preserveProjectionOrder: false,
+    }), { preserveProjectionOrder: false }));
+    assert.equal(childEnd.status, 202, provider);
+
+    async function assertChildEnded(stage) {
+      const observation = providerEvent(await readState(server), fixture.registration.executionId);
+      const projectedChild = observation.lastKnownState.actors.find((actor) => actor.id === childId);
+      assert.equal(projectedChild?.active, false, `${provider}/${stage}/projection`);
+      assert.equal(projectedChild?.turn, 'session_ended', `${provider}/${stage}/projection`);
+      const session = server.runtime.state.snapshot().sessions.find((item) => item.session_id === fixture.registration.sessionId);
+      const child = session.agents.find((agent) => agent.agent_id === childId);
+      assert.ok(child, `${provider}/${stage}/child row`);
+      assert.equal(child.active, false, `${provider}/${stage}/dashboard`);
+    }
+
+    await assertChildEnded('child-end');
+    const unrelated = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'UserPromptSubmit', {
+      nativeEventId: `${provider}-receipt-parent-prompt`, sequence_number: 3, hook_at: 250,
+      preserveProjectionOrder: false,
+    }), { preserveProjectionOrder: false }));
+    assert.equal(unrelated.status, 202, provider);
+    await assertChildEnded('after-parent-event');
+
+    const batch = await postToolBatch(server, fixture);
+    assert.equal(batch.status, 200, provider);
+    await assertChildEnded('after-post-tool-batch-rederive');
+  });
+
+  test(`${provider} HTTP adapter keeps an older unsequenced Stop from rewinding a newer prompt`, async (t) => {
+    const fixture = createRegistrationFixture(provider, { nativeId: `${provider}-http-missing-sequence-order` });
+    const server = await startTestServer(t, { registrationRegistry: fixture.registry });
+    const prompt = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'UserPromptSubmit', {
+      nativeEventId: `${provider}-missing-sequence-prompt`, sequence_number: undefined, hook_at: 200,
+    })));
+    assert.equal(prompt.status, 202, provider);
+    assert.deepEqual(jsonBody(prompt), { accepted: true }, provider);
+    const beforeStop = JSON.stringify(server.runtime.state.snapshot());
+    const stop = await postEvent(server, eventRequestBody(fixture, nativeEvent(fixture, 'Stop', {
+      nativeEventId: `${provider}-missing-sequence-old-stop`, sequence_number: undefined, hook_at: 100,
+    })));
+    assert.equal(stop.status, 202, provider);
+    const stopResult = jsonBody(stop);
+    assert.equal(stopResult.accepted, false, provider);
+    assert.equal(stopResult.status, 'unknown', provider);
+    assert.equal(JSON.stringify(server.runtime.state.snapshot()), beforeStop, provider);
+    const observation = providerEvent(await readState(server), fixture.registration.executionId);
+    assert.equal(observation.lastKnownState.rootTurn, 'working', provider);
+    assert.equal(server.runtime.state.snapshot().sessions.find((session) => session.session_id === fixture.registration.sessionId).turnState, 'working', provider);
   });
 
   test(`${provider} HTTP adapter applies a PR event and refresh once across duplicate delivery`, async (t) => {

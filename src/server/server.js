@@ -1193,6 +1193,7 @@ function createRequestHandler(options) {
       }
 
       let stateEventBody = eventBody;
+      let preserveProjectionOrder = false;
       if (writerEnvelope) {
         const authorization = registrationRegistry.authorizeEvent(writerEnvelope);
         const checked = providerEventProjection.inspect(writerEnvelope, eventBody.session_id, registration.provider);
@@ -1213,6 +1214,7 @@ function createRequestHandler(options) {
           jsonResponse(response, 202, { accepted: false, status: 'unknown', reason: result.reason });
           return;
         }
+        preserveProjectionOrder = true;
         stateEventBody = { ...result.event };
         delete stateEventBody.nativeEvent;
         delete stateEventBody.nativeEventId;
@@ -1221,7 +1223,13 @@ function createRequestHandler(options) {
         return;
       }
       state.captureFieldNames(stateEventBody);
-      const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
+      const eventMetadata = {
+        product,
+        sessionName,
+        agentDefinition,
+        codexAgentDefinition: codexDefinitionMetadata,
+        ...(preserveProjectionOrder ? { preserveProjectionOrder: true } : {}),
+      };
       state.addEvent(stateEventBody, eventMetadata);
       const event = sanitizeEvent(stateEventBody, eventMetadata);
       if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
