@@ -280,31 +280,49 @@ function summarizeFixtureResponse(response, expectedThreadId, expectedPrKey) {
   };
 }
 
-function connectAppServer(executable, layout, environment, timeoutMs = RPC_TIMEOUT_MS) {
-  const child = spawn(executable, ['app-server', '--stdio'], {
+function connectAppServer(executable, layout, environment, timeoutMs = RPC_TIMEOUT_MS, spawnImpl = spawn) {
+  const child = spawnImpl(executable, ['app-server', '--stdio'], {
     cwd: layout.repo,
     env: environment,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
   const pending = new Map();
+  const writeWaiters = new Set();
   let nextId = 0;
   let malformedOutputCount = 0;
   let stdoutByteCount = 0;
   let stderrByteCount = 0;
   let outputLimitExceeded = false;
+  let inputFailure = null;
   let closed = false;
   let closeInfo = null;
+
+  function rejectPending(error) {
+    for (const entry of pending.values()) entry.reject(error);
+    pending.clear();
+    for (const waiter of writeWaiters) waiter.reject(error);
+    writeWaiters.clear();
+  }
+
+  function failInput(code) {
+    if (!inputFailure) inputFailure = new ProbeFailure(code);
+    rejectPending(inputFailure);
+    return inputFailure;
+  }
+
   const closedPromise = new Promise(resolve => {
     child.once('close', (code, signal) => {
       closed = true;
       closeInfo = { code, signal };
-      for (const entry of pending.values()) entry.reject(new ProbeFailure('app_server_exited'));
-      pending.clear();
+      rejectPending(new ProbeFailure('app_server_exited'));
       resolve(closeInfo);
     });
   });
   const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+  child.stdin.on('error', () => {
+    failInput('app_server_stdin_error');
+  });
   child.stdout.on('data', chunk => {
     stdoutByteCount += chunk.length;
     if (stdoutByteCount > MAX_STDOUT_BYTES) stopForOutputLimit();
@@ -316,13 +334,50 @@ function connectAppServer(executable, layout, environment, timeoutMs = RPC_TIMEO
   function stopForOutputLimit() {
     if (outputLimitExceeded) return;
     outputLimitExceeded = true;
-    for (const entry of pending.values()) entry.reject(new ProbeFailure('app_server_output_limit_exceeded'));
-    pending.clear();
+    rejectPending(new ProbeFailure('app_server_output_limit_exceeded'));
     try {
       child.kill();
     } catch {
       outputLimitExceeded = true;
     }
+  }
+
+  function writeMessage(message) {
+    if (inputFailure) return Promise.reject(inputFailure);
+    if (closed) return Promise.reject(new ProbeFailure('app_server_exited'));
+    if (child.stdin.destroyed || child.stdin.writableEnded) {
+      return Promise.reject(failInput('app_server_stdin_closed'));
+    }
+    let serialized;
+    try {
+      serialized = JSON.stringify(message) + '\n';
+    } catch {
+      return Promise.reject(new ProbeFailure('rpc_serialization_failed'));
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        resolve() {
+          writeWaiters.delete(waiter);
+          resolve();
+        },
+        reject(error) {
+          writeWaiters.delete(waiter);
+          reject(error);
+        },
+      };
+      writeWaiters.add(waiter);
+      try {
+        child.stdin.write(serialized, error => {
+          if (error) {
+            failInput('app_server_stdin_error');
+            return;
+          }
+          waiter.resolve();
+        });
+      } catch {
+        failInput('app_server_stdin_error');
+      }
+    });
   }
 
   lines.on('line', line => {
@@ -345,8 +400,7 @@ function connectAppServer(executable, layout, environment, timeoutMs = RPC_TIMEO
     }
   });
   child.on('error', () => {
-    for (const entry of pending.values()) entry.reject(new ProbeFailure('app_server_spawn_failed'));
-    pending.clear();
+    rejectPending(new ProbeFailure('app_server_spawn_failed'));
   });
 
   return {
@@ -360,6 +414,7 @@ function connectAppServer(executable, layout, environment, timeoutMs = RPC_TIMEO
     closedPromise,
     rpc(method, params) {
       if (closed) return Promise.reject(new ProbeFailure('app_server_exited'));
+      if (inputFailure) return Promise.reject(inputFailure);
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -376,26 +431,19 @@ function connectAppServer(executable, layout, environment, timeoutMs = RPC_TIMEO
             reject(error);
           },
         });
-        try {
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', error => {
-            if (!error || !pending.has(id)) return;
-            const entry = pending.get(id);
-            pending.delete(id);
-            entry.reject(new ProbeFailure('rpc_write_failed'));
-          });
-        } catch {
-          clearTimeout(timer);
+        writeMessage({ jsonrpc: '2.0', id, method, params }).catch(error => {
+          const entry = pending.get(id);
+          if (!entry) return;
           pending.delete(id);
-          reject(new ProbeFailure('rpc_write_failed'));
-        }
+          entry.reject(error);
+        });
       });
     },
     notify(method, params) {
-      if (!closed) child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+      return writeMessage({ jsonrpc: '2.0', method, params });
     },
   };
 }
-
 function parseCaptureFile(capturePath, repositoryRoot, outputDirectory) {
   assertNoSymlinkComponents(repositoryRoot, outputDirectory);
   assertNoSymlinkComponents(repositoryRoot, capturePath);
@@ -737,12 +785,19 @@ function writeResult(result, filePath) {
 
 async function runNativeProbe(options) {
   const paths = validatePaths(options.codexPath, options.outputDirectory);
-  const { layout, childEnvironment } = initializeLayout(paths, options.environment || process.env);
+  const prepareLayout = options.initializeLayoutForTest || initializeLayout;
+  const { layout, childEnvironment } = prepareLayout(paths, options.environment || process.env);
   const output = makeInitialResult(paths, layout);
   let app = null;
   let failureCode = null;
   try {
-    app = connectAppServer(paths.executable, layout, childEnvironment, options.timeoutMs || RPC_TIMEOUT_MS);
+    app = connectAppServer(
+      paths.executable,
+      layout,
+      childEnvironment,
+      options.timeoutMs || RPC_TIMEOUT_MS,
+      options.spawnForTest || spawn,
+    );
     const initialized = await app.rpc('initialize', {
       clientInfo: { name: 'agent_cockpit_poc164_native', version: '0.1.0' },
       capabilities: { experimentalApi: true },
@@ -750,7 +805,7 @@ async function runNativeProbe(options) {
     if (initialized.error || !initialized.result) throw new ProbeFailure('app_server_initialize_failed');
     output.app_server_initialize_succeeded = true;
     output.app_server_version = safeVersion(initialized.result.userAgent);
-    app.notify('initialized', {});
+    await app.notify('initialized', {});
 
     const fixturePullRequest = parseFixturePullRequestUrl(FIXTURE_URL);
     if (!fixturePullRequest) throw new ProbeFailure('fixture_url_invalid');
@@ -894,12 +949,14 @@ if (require.main === module) {
 module.exports = {
   assertNoSymlinkComponents,
   buildMcpConfig,
+  connectAppServer,
   isWithinDirectory,
   makeChildEnvironment,
   makeLayout,
   parseArguments,
   parseCaptureFile,
   safeVersion,
+  runNativeProbe,
   summarizeCapture,
   summarizeRun,
   summarizeFixtureResponse,

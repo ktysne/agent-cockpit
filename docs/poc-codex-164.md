@@ -170,6 +170,7 @@ MCPへの直接RPCを実行しても、本番MCPを導入したことにはな�
 
 最初の照合時点（2026-10-06 17:04、日本時間）は#163の結論が未共有だった。
 その後、[Draft PR #181](https://github.com/ktysne/agent-cockpit/pull/181)の公開文書をcommit `66f89395b010e5aeddb5565ce1b1eba4b8a8af50`で読み、仮契約と照合した。
+さらに最終commit `84ef60e2ae2bdff10956181a147703ced7e65df8`の変更文書と2往復目の収束コメントを読み、#163が調査完了として閉じられたことを確認した。
 作業中モジュールのimportと#163のファイル変更は行っていない。
 
 | 照合対象 | 確認結果と#164側の扱い |
@@ -182,13 +183,15 @@ MCPへの直接RPCを実行しても、本番MCPを導入したことにはな�
 
 #163の共有結果は固定課題のClaude実測とCodex native子の結果受領を含むが、#164のPR登録または通知適用を測った証拠ではない。
 #163の本番改修[Issue #180](https://github.com/ktysne/agent-cockpit/issues/180)と#179でlaunch登録とexit/cancel証拠を接続する。
-予約と起動許可、vendor別native schema、session全体の終了更新は#163側の責務で、#164のfixtureはその完了を仮定しない。
+予約と起動許可、vendor別native schemaは#163側の責務で、#164のfixtureは本番の完了を仮定しない。
+親session終了はprovider/sessionId単位で全agentへ反映し、子登録前の終了も保持する最小fixtureを#164へ追加した。親終了を子終了やcancel確定の証拠に置き換えない。
+実行providerと起動時vendorは一致を要求する。externalは合成した第三providerで、Claude外部runnerの実providerをexternalへ書き換える意味ではない。
 実イベントの写像、実review起動と通知先の受付/適用は引き続き未確認。
 独立したPR境界、HTTP、実runtimeのMCP metadataの調査は完了できる。
 
 ## 試作の保存とgh出力境界
 
-モデルのsnapshotは実行と通知台帳だけを保存し、PR一覧、レビュー台帳、予約の永続復旧を実装しない。
+モデルのsnapshotは実行、通知台帳と親session終了台帳を保存し、PR一覧、レビュー台帳、予約の永続復旧を実装しない。
 結果はresult IDとdigestで照合し、終了後の初回結果を拒否する。終了前に受領した同一結果の再通知だけを冪等として保持する。
 受付不明の通知はunknownへ固定し、再起動後の稼働確認まで配送しない。
 終了済み親と実行を稼働中へ戻さず、再起動を繰り返しても終了状態を保持する。
@@ -213,7 +216,7 @@ PRのGitHub処理とマージ前の照合は共用する方式を条件付きの
 既存設定を変えず、実際のmodel、effort、CLI版、対象head、指摘と対応、収束は本PRの往復別コメントに記録する。
 調査の結論を本番機能のレビュー収束または本番PRのマージ許可とは扱わない。
 
-## 最終コードの検証集計
+## レビュー前の検証集計
 
 コード確定後の関連試験は51件すべて成功（model 30、gh output 11、native 9、existing probe 1）。
 existing probeの1テストは18ケースの観測結果をまとめて検査する。
@@ -225,3 +228,50 @@ existing probeの1テストは18ケースの観測結果をまとめて検査す
 `poc164-focused-final.log`はその途中試行であり、合否の根拠には使わない。
 確定後の関連結果は`poc/out/poc164-focused-frozen.log`、全体結果は`poc/out/poc164-full-final-test.log`。
 raw記録はコミットせず、文書の集計とPRの検証記録で共有する。
+
+## クロスレビューの実測
+
+今回の実装者はCodexで、指定により同ベンダーCodex経路を実行した。
+レビュー開始直前のrouteはcodex。
+既定のcodex-agent.sh bridgeはbashが見つからず起動できなかったため、スキルの`--no-codex-agent`で直接起動した。
+既存route、model定義、通常ホームの設定は変更していない。
+実レビュアーはCLI`0.160.0`、`gpt-6.1-sol`、effort`medium`、read-only。
+専用app-server測定のruntime`0.160.1`とは用途を分ける。
+
+1往復目の対象headは`477534c88fa9d4103efaed6abe8e1de9e5f59e9c`。
+PRのbase `origin/codex/poc-162-recovery-reconciliation`からの差分187.1 KiBを省略せず確認し、要修正3件と提案1件を受領した。
+指摘は複数上位PRのrestack通知ID衝突、app-server stdin errorの未処理、応答待ちのbase変更見落とし、MCP設定見出しの検査だった。
+通常hookのPostToolUse/Stop警告を伴ったが、CLIは終了コード0で指摘を保存した。
+この警告を専用runtimeの故障またはレビュー収束とは扱わない。
+
+[Draft PR #182](https://github.com/ktysne/agent-cockpit/pull/182)のスキル生成コメントへ指摘、裏取り、対応、関連検証、各往復の結論を記録する。
+収束headはPRの最後のconvergedコメントと状態記録を参照する。
+
+## 指摘対応後の実runtime再測定
+
+stdin error対応後のnative probeを新規出力`poc/out/poc164-native-final/`で再実行した。
+app-server `0.160.1`、2 RPC成功、同一PRキー1件、異なるnative thread ID2件、両threadとMCP metadataの一致、欠落0件を再確認した。
+app-serverは強制終了なしのexit 0、MCPの所有PID2件は終了後に不在、専用HOMEのauth.jsonなし、temp後処理成功。
+stdoutは8,027 bytes、stderrは420 bytes、出力上限超過なし。
+本番Cockpitの重複排除、モデル呼出し、Claude起源、親子関係、通知適用の未確認は維持する。
+
+入力切断の単体試験は模擬した子とpipeの異常系を含む。
+通常経路の実Codex再測定と、模擬のstdin error伝播を別の証拠として扱う。
+
+## 1往復目の対応後の検証
+
+restack通知IDへ上位PRの正規キーを含め、同じrunが複数上位PRを担当しても通知を欠落させない。
+merge呼出前のbaseとheadを固定し、応答後の不一致はunknownとして完了と積み直し通知を抑止する。
+stdinのerrorをRPCと通知の共通失敗へ接続し、通常の結果保存とcleanupへ進める。
+provider/vendor一致、親session全体の不可逆な終了、登録前終了、復元後の通知/再開拒否は#163最終契約と照合した。
+
+修正後の関連60件はすべて成功、skipは0件（model 35、gh output 11、native 13、existing probe 1）。
+結果は`poc/out/poc164-review-1-fixed-test.log`。
+レビュー修正は専用PoCだけなので関連試験を再実行し、既存本番テストを含む全体集計はレビュー前の971件中969件成功を参照する。
+
+追加の実Node子はstdin pipeを先に閉じ、READY後のRPC書込1回を確認してから制御pipeで終了させた。
+保留RPCはapp_server_exitedで拒否され、finallyで所有する子のcloseを確認した。
+実EPIPEは観測できず、stdin error伝播は模擬pipe試験と区別する。
+初回の追加fixtureは子スクリプトの改行エスケープ不備でREADY未到達だった。
+続くfd0閉鎖だけの試行はWindowsのwriterへ切断が伝わらずtimeoutとなり、実EPIPE成功の証拠には使わない。
+READYと書込を観測した後のtimeoutや未分類をskipで隠さない試験にした。

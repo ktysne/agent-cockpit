@@ -22,13 +22,15 @@ function identity(name, provider = 'codex') {
 }
 
 function addRun(model, name, options = {}) {
-  const run = identity(name, options.provider || 'codex');
+  const run = identity(name, options.provider || model.routing.vendor);
+  const configuration = options.configuration || (model.routing.vendor === run.provider
+    ? model.routing : { ...model.routing, vendor: run.provider });
   const value = model.registerExecution({
     ...run,
     origin: options.origin || 'independent',
     purpose: options.purpose || 'work',
     ...(options.parent ? { parent: options.parent } : {}),
-    ...(options.configuration ? { configuration: options.configuration } : {}),
+    configuration,
   });
   assert.deepEqual(value, run);
   return run;
@@ -189,6 +191,38 @@ test('a head change during a pending fake gh call leaves the merge result unknow
   assert.equal(model.project().notifications.some((row) => row.payload?.status === 'merged'), false);
 });
 
+test('a base change while fake gh is pending makes the merge result unknown without restacking', async () => {
+  const model = newModel();
+  const owner = addRun(model, 'base-change-owner');
+  addPr(model, { createdBy: owner });
+  const stackedPr = { owner: PR.owner, repo: PR.repo, number: 165 };
+  const stackedOwner = addRun(model, 'base-change-stacked-owner');
+  model.registerPr({ ...stackedPr, source: 'claude_mcp', createdBy: stackedOwner });
+  assert.equal(model.registerStackedPr({ lowerPr: PR, stackedPr }), true);
+  setPrState(model, HEAD_A, 'main');
+
+  let resolveMerge;
+  const response = new Promise((resolve) => { resolveMerge = resolve; });
+  const gh = {
+    kind: 'fixture',
+    calls: [],
+    merge(request) { this.calls.push(request); return response; },
+  };
+  const attempt = model.attemptMerge({
+    pr: PR, defaultBranch: 'main', mode: 'manual', screenHead: HEAD_A,
+  }, gh);
+  assert.equal(model.project().pullRequests.find((row) => row.number === PR.number).mergeState, 'in_flight');
+  setPrState(model, HEAD_A, 'feature-base');
+  resolveMerge({ status: 'MERGED', method: 'squash' });
+
+  assert.equal((await attempt).reason, 'merge_unknown');
+  assert.equal(gh.calls.length, 1);
+  assert.equal(gh.calls[0].base, 'main');
+  assert.equal(model.project().pullRequests.find((row) => row.number === PR.number).mergeState, 'unknown');
+  assert.equal(model.project().notifications.some((row) => row.payload?.status === 'merged'), false);
+  assert.equal(model.project().notifications.some((row) => row.type === 'restack'), false);
+});
+
 test('a conflict can be retried only after an explicit head change and restack goes to the stacked PR', async () => {
   const model = newModel();
   const lowerOwner = addRun(model, 'conflict-lower-owner');
@@ -216,6 +250,30 @@ test('a conflict can be retried only after an explicit head change and restack g
   assert.deepEqual(restack.target, upperOwner);
 });
 
+test('restack notifications to multiple stacked PRs owned by one run keep distinct stable IDs', async () => {
+  const model = newModel();
+  addPr(model);
+  const owner = addRun(model, 'shared-stacked-owner');
+  for (const number of [165, 166]) {
+    const stackedPr = { owner: PR.owner, repo: PR.repo, number };
+    model.registerPr({ ...stackedPr, source: 'claude_mcp', createdBy: owner });
+    assert.equal(model.registerStackedPr({ lowerPr: PR, stackedPr }), true);
+  }
+  setPrState(model, HEAD_A);
+  assert.equal((await model.attemptMerge({
+    pr: PR, defaultBranch: 'main', mode: 'manual', screenHead: HEAD_A,
+  }, fakeGh('MERGED', 'squash'))).reason, 'merged');
+
+  const restacks = model.project().notifications.filter((row) => row.type === 'restack');
+  assert.equal(restacks.length, 2);
+  assert.deepEqual(restacks.map((row) => row.pr.number).sort(), [165, 166]);
+  assert.notEqual(restacks[0].eventId, restacks[1].eventId);
+  for (const row of restacks) {
+    assert.equal(model.enqueueNotification(row).reason, 'duplicate');
+  }
+  assert.equal(model.project().notifications.length, 2);
+});
+
 test('generated notification IDs stay within the safe identifier bound for long PR names', async () => {
   const model = newModel();
   const longPr = { owner: 'owner' + 'x'.repeat(220), repo: 'repo' + 'y'.repeat(220), number: 9 };
@@ -233,6 +291,7 @@ test('generated notification IDs stay within the safe identifier bound for long 
 test('contract labels every model result as fixture evidence and disallows inference fields', () => {
   assert.equal(CONTRACT.evidenceKind, 'synthetic-fixture-only');
   assert.deepEqual(CONTRACT.prohibitedInferenceInputs, ['pid', 'cwd', 'timestamp']);
+  assert.deepEqual(CONTRACT.parentSessionTerminationKey, ['provider', 'sessionId']);
   const model = newModel();
   const first = addRun(model, 'explicit-one');
   const second = addRun(model, 'explicit-two');
@@ -329,15 +388,135 @@ test('parent tool-use identity is required for delegated registration and cannot
   assert.equal(model.project().executions[0].purpose, 'review');
 });
 
-test('routing changes apply to the next execution and existing attempts keep their launch configuration', () => {
+test('ending a parent session affects every agent and tool use but preserves other provider/session identities', () => {
+  const model = newModel();
+  const first = addRun(model, 'shared-parent-first', {
+    origin: 'delegated',
+    parent: { provider: 'claude', sessionId: 'shared-session', agentId: 'agent-one', toolUseId: 'tool-one' },
+  });
+  const sibling = addRun(model, 'shared-parent-sibling', {
+    origin: 'delegated',
+    parent: { provider: 'claude', sessionId: 'shared-session', agentId: 'agent-two', toolUseId: 'tool-two' },
+  });
+  const otherProvider = addRun(model, 'other-parent-provider', {
+    origin: 'delegated',
+    parent: { provider: 'codex', sessionId: 'shared-session', agentId: 'agent-one', toolUseId: 'tool-one' },
+  });
+  const otherSession = addRun(model, 'other-parent-session', {
+    origin: 'delegated',
+    parent: { provider: 'claude', sessionId: 'different-session', agentId: 'agent-one', toolUseId: 'tool-one' },
+  });
+  const notice = { eventId: 'parent-ended-notice', type: 'merge', pr: PR, target: sibling };
+  assert.equal(model.enqueueNotification(notice).accepted, true);
+
+  assert.equal(model.setParentState(first, 'ended'), true);
+  assert.equal(model.lifecycle(first).parentState, 'ended');
+  assert.equal(model.lifecycle(sibling).parentState, 'ended');
+  assert.equal(model.lifecycle(sibling).childEnded, false);
+  assert.equal(model.lifecycle(sibling).cancelState, 'none');
+  assert.equal(model.lifecycle(otherProvider).parentState, 'running');
+  assert.equal(model.lifecycle(otherSession).parentState, 'running');
+  assert.equal(model.notificationHandoff(notice), false);
+  assert.equal(model.receiveResult(sibling, RESULT), true);
+  assert.equal(model.confirmChildEnded(sibling), true);
+  assert.equal(model.returnResult(sibling), false);
+  assert.equal(model.lifecycle(sibling).successfulReturn, false);
+  assert.equal(model.markParentSessionEnded({
+    provider: 'claude', sessionId: 'different-session', agentId: 'must-not-be-accepted',
+  }), false);
+});
+
+test('a session ended before child registration blocks every origin with that parent', () => {
+  const model = newModel();
+  const ended = { provider: 'claude', sessionId: 'ended-before-launch' };
+  assert.equal(model.markParentSessionEnded(ended), true);
+  assert.equal(model.markParentSessionEnded(ended), true);
+  const restoredWithoutChildren = PrReviewModel.restore(model.snapshot());
+  assert.ok(restoredWithoutChildren);
+  assert.equal(restoredWithoutChildren.registerExecution({
+    ...identity('blocked-after-empty-restore'), origin: 'independent', purpose: 'work',
+    parent: { ...ended, agentId: 'agent', toolUseId: 'tool' },
+    configuration: CONFIG_A,
+  }), null);
+  for (const origin of ['independent', 'delegated']) {
+    assert.equal(model.registerExecution({
+      ...identity('blocked-' + origin), origin, purpose: 'work',
+      parent: { ...ended, agentId: 'agent', toolUseId: 'tool' }, configuration: CONFIG_A,
+    }), null);
+  }
+  assert.ok(model.registerExecution({
+    ...identity('same-id-other-provider'), origin: 'independent', purpose: 'work',
+    parent: { provider: 'codex', sessionId: ended.sessionId, agentId: 'agent', toolUseId: 'tool' },
+    configuration: CONFIG_A,
+  }));
+  assert.ok(model.registerExecution({
+    ...identity('same-provider-other-session', 'claude'), origin: 'independent', purpose: 'work',
+    parent: { provider: 'claude', sessionId: 'other-session', agentId: 'agent', toolUseId: 'tool' },
+    configuration: CONFIG_B,
+  }));
+});
+
+test('parent session termination survives restore and blocks resumption while late evidence remains recordable', () => {
+  const model = newModel();
+  const parent = { provider: 'claude', sessionId: 'restored-ended-session' };
+  const target = addRun(model, 'restore-ended-target', {
+    origin: 'delegated',
+    parent: { ...parent, agentId: 'agent', toolUseId: 'tool' },
+  });
+  const sibling = addRun(model, 'restore-ended-sibling', {
+    origin: 'independent',
+    parent: { ...parent, agentId: 'another-agent', toolUseId: 'another-tool' },
+  });
+  const notice = { eventId: 'restore-ended-notice', type: 'conflict', pr: PR, target };
+  assert.equal(model.enqueueNotification(notice).accepted, true);
+  assert.equal(model.markParentSessionEnded(parent), true);
+
+  const snapshot = model.snapshot();
+  assert.deepEqual(snapshot.endedParentSessions, [parent]);
+  const restored = PrReviewModel.restore(snapshot);
+  assert.ok(restored);
+  assert.deepEqual(restored.project().endedParentSessions, [parent]);
+  assert.equal(restored.lifecycle(target).parentState, 'ended');
+  assert.equal(restored.lifecycle(sibling).parentState, 'ended');
+  assert.equal(restored.setParentState(target, 'running'), false);
+  assert.equal(restored.setExecutionState(target, 'running'), false);
+  assert.equal(restored.registerExecution({
+    ...identity('post-restore-child'), origin: 'independent', purpose: 'work',
+    parent: { ...parent, agentId: 'new-agent', toolUseId: 'new-tool' }, configuration: CONFIG_A,
+  }), null);
+  assert.equal(restored.notificationHandoff(notice), false);
+  assert.equal(restored.receiveResult(target, RESULT), true);
+  assert.equal(restored.confirmChildEnded(target), true);
+  assert.equal(restored.returnResult(target), false);
+  assert.equal(restored.lifecycle(target).successfulReturn, false);
+
+  const legacySnapshot = JSON.parse(JSON.stringify(snapshot));
+  delete legacySnapshot.endedParentSessions;
+  const legacyRestored = PrReviewModel.restore(legacySnapshot);
+  assert.ok(legacyRestored);
+  assert.equal(legacyRestored.lifecycle(target).parentState, 'ended');
+  assert.equal(legacyRestored.setParentState(target, 'running'), false);
+  assert.equal(legacyRestored.registerExecution({
+    ...identity('legacy-post-restore-child'), origin: 'independent', purpose: 'work',
+    parent: { ...parent, agentId: 'new-agent', toolUseId: 'new-tool' }, configuration: CONFIG_A,
+  }), null);
+});
+
+test('routing changes apply to the next matching provider and each attempt keeps its launch configuration', () => {
   const model = newModel();
   const first = addRun(model, 'fixed-before-change');
   assert.equal(model.updateRouting(CONFIG_B), true);
   const second = addRun(model, 'fixed-after-change');
+  const external = addRun(model, 'external-provider', { provider: 'external' });
 
   const rows = model.project().executions;
   assert.deepEqual(rows.find((row) => execKey(row.identity) === execKey(first)).routing, CONFIG_A);
   assert.deepEqual(rows.find((row) => execKey(row.identity) === execKey(second)).routing, CONFIG_B);
+  assert.equal(second.provider, 'claude');
+  assert.equal(rows.find((row) => execKey(row.identity) === execKey(external)).routing.vendor, 'external');
+  assert.equal(model.registerExecution({
+    ...identity('provider-vendor-mismatch'), origin: 'independent', purpose: 'work', configuration: CONFIG_B,
+  }), null);
   assert.equal(model.updateRouting({ vendor: 'claude' }), false);
 });
 

@@ -14,6 +14,7 @@ const obj = (value) => value !== null && typeof value === 'object' && !Array.isA
   && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const clone = (value) => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 const execKey = (run) => key([run.provider, run.launchId, run.runId, run.attemptId]);
+const parentSessionKey = (session) => key([session.provider, session.sessionId]);
 const prKey = (pr) => key([pr.owner, pr.repo, pr.number]);
 
 function identity(value) {
@@ -29,10 +30,18 @@ function parentIdentity(value) {
     || !CONTRACT.providers.includes(value.provider)) return null;
   return Object.fromEntries(PARENT_FIELDS.map((field) => [field, value[field]]));
 }
+function parentSessionIdentity(value) {
+  const fields = ['provider', 'sessionId'];
+  if (!obj(value) || Object.keys(value).length !== fields.length
+    || !fields.every((field) => Object.hasOwn(value, field) && validId(value[field]))
+    || !CONTRACT.providers.includes(value.provider)) return null;
+  return Object.fromEntries(fields.map((field) => [field, value[field]]));
+}
 function config(value) {
   if (!obj(value) || Object.keys(value).length !== CONFIG.length
     || !CONFIG.every((field) => typeof value[field] === 'string' && value[field].trim() === value[field]
-      && value[field].length > 0 && value[field].length <= 128)) return null;
+      && value[field].length > 0 && value[field].length <= 128)
+    || !CONTRACT.providers.includes(value.vendor)) return null;
   return Object.fromEntries(CONFIG.map((field) => [field, value[field]]));
 }
 function pullRequest(value) {
@@ -66,6 +75,7 @@ class PrReviewModel {
     });
     if (!this.routing) throw new TypeError('invalid routing configuration');
     this.runs = new Map();
+    this.endedParentSessions = new Map();
     this.native = new Map();
     this.observations = new Set();
     this.prs = new Map();
@@ -88,9 +98,11 @@ class PrReviewModel {
     const run = identity(Object.fromEntries(EXEC_FIELDS.map((field) => [field, input[field]])));
     const parent = parentIdentity(input.parent);
     const route = config(input.configuration || this.routing);
-    if (!run || !route || !CONTRACT.origins.includes(input.origin) || !CONTRACT.purposes.includes(input.purpose)
+    if (!run || !route || run.provider !== route.vendor
+      || !CONTRACT.origins.includes(input.origin) || !CONTRACT.purposes.includes(input.purpose)
       || input.parent !== undefined && input.parent !== null && !parent
-      || input.origin === 'delegated' && !parent) return null;
+      || input.origin === 'delegated' && !parent
+      || parent && this.endedParentSessions.has(parentSessionKey(parent))) return null;
     const runKey = execKey(run);
     const record = {
       identity: run, origin: input.origin, purpose: input.purpose, parent, routing: route,
@@ -144,7 +156,8 @@ class PrReviewModel {
     const record = this.getRun(runInput);
     if (!record || !['running', 'stopped', 'ended'].includes(state)
       || record.runState === 'ended' && state !== 'ended'
-      || state === 'running' && record.parentState === 'ended') return false;
+      || state === 'running' && (record.parentState === 'ended'
+        || record.parent && this.endedParentSessions.has(parentSessionKey(record.parent)))) return false;
     record.runState = state;
     return true;
   }
@@ -152,9 +165,26 @@ class PrReviewModel {
   setParentState(runInput, state) {
     const run = identity(runInput);
     const record = run && this.runs.get(execKey(run));
-    if (!record || !record.parent || !['running', 'stopped', 'ended'].includes(state)
-      || record.parentState === 'ended' && state !== 'ended') return false;
+    if (!record || !record.parent || !['running', 'stopped', 'ended'].includes(state)) return false;
+    if (state === 'ended') {
+      return this.markParentSessionEnded({
+        provider: record.parent.provider, sessionId: record.parent.sessionId,
+      });
+    }
+    if (record.parentState === 'ended'
+      || this.endedParentSessions.has(parentSessionKey(record.parent))) return false;
     record.parentState = state;
+    return true;
+  }
+  markParentSessionEnded(input) {
+    const session = parentSessionIdentity(input);
+    if (!session) return false;
+    this.endedParentSessions.set(parentSessionKey(session), session);
+    for (const record of this.runs.values()) {
+      if (record.parent && parentSessionKey(record.parent) === parentSessionKey(session)) {
+        record.parentState = 'ended';
+      }
+    }
     return true;
   }
   receiveResult(runInput, evidence) {
@@ -179,7 +209,8 @@ class PrReviewModel {
   }
   returnResult(runInput) {
     const record = this.getRun(runInput);
-    if (!record || !record.parent || record.parentState !== 'running' || !record.childEnded
+    if (!record || !record.parent || record.parentState !== 'running'
+      || this.endedParentSessions.has(parentSessionKey(record.parent)) || !record.childEnded
       || !record.resultReceived || record.cancelState !== 'none') return false;
     record.parentReturned = true;
     return true;
@@ -339,6 +370,7 @@ class PrReviewModel {
     if (!record || !branch(input.defaultBranch)) return result(false, 'invalid_input');
     if (record.base !== input.defaultBranch) return result(false, 'not_lowest_pr');
     if (!record.head || ['merged', 'unknown', 'queued', 'in_flight', 'conflict'].includes(record.mergeState)) return result(false, 'state_unavailable');
+    const expectedBase = record.base;
     let expectedHead;
     let suffix;
     if (input.mode === 'manual') {
@@ -365,14 +397,14 @@ class PrReviewModel {
     try {
       response = await gh.merge({
         owner: pr.owner, repo: pr.repo, number: pr.number,
-        expectedHead, base: record.base, mode: input.mode,
+        expectedHead, base: expectedBase, mode: input.mode,
       });
     } catch {
       response = { status: 'READ_FAILED' };
     }
     const digest = createHash('sha256').update(JSON.stringify([prKey(pr), suffix, expectedHead])).digest('hex');
     const eventId = 'pr-' + digest;
-    if (record.head !== expectedHead) {
+    if (record.head !== expectedHead || record.base !== expectedBase) {
       record.mergeState = 'unknown';
       this.notifyPr(pr, { eventId: eventId + '-unknown', type: 'merge', payload: { status: 'unknown' } });
       return result(true, 'merge_unknown');
@@ -398,8 +430,10 @@ class PrReviewModel {
     this.notifyPr(pr, { eventId: eventId + '-merged', type: 'merge', payload: { status: 'merged' } });
     if (method === 'squash' || method === 'rebase') {
       for (const stackedPr of (this.stacked.get(prKey(pr)) || new Map()).values()) {
+        const restackDigest = createHash('sha256')
+          .update(JSON.stringify([eventId, prKey(stackedPr), method])).digest('hex');
         this.notifyPr(stackedPr, {
-          eventId: eventId + '-restack-' + method,
+          eventId: 'pr-' + restackDigest + '-restack-' + method,
           type: 'restack',
           payload: { method, mergedPr: pr },
         });
@@ -438,7 +472,8 @@ class PrReviewModel {
     if (!entry || entry.state !== 'queued') return false;
     const target = this.runs.get(execKey(entry.target));
     if (!target || target.runState !== 'running' || target.childEnded || target.cancelState !== 'none'
-      || target.parent && target.parentState !== 'running') return false;
+      || target.parent && (target.parentState !== 'running'
+        || this.endedParentSessions.has(parentSessionKey(target.parent)))) return false;
     entry.state = 'handed_off';
     return true;
   }
@@ -468,6 +503,8 @@ class PrReviewModel {
       schema: CONTRACT.schema,
       version: 1,
       routing: clone(this.routing),
+      endedParentSessions: [...this.endedParentSessions.values()]
+        .sort((left, right) => parentSessionKey(left).localeCompare(parentSessionKey(right))).map(clone),
       runs: [...this.runs.values()].map((run) => ({
         identity: clone(run.identity), origin: run.origin, purpose: run.purpose,
         parent: clone(run.parent), routing: clone(run.routing), parentState: run.parentState,
@@ -481,7 +518,14 @@ class PrReviewModel {
 
   static restore(snapshot) {
     if (!obj(snapshot) || snapshot.schema !== CONTRACT.schema || snapshot.version !== 1
-      || !Array.isArray(snapshot.runs) || !Array.isArray(snapshot.outbox)) return null;
+      || !Array.isArray(snapshot.runs) || !Array.isArray(snapshot.outbox)
+      || snapshot.endedParentSessions !== undefined && !Array.isArray(snapshot.endedParentSessions)) return null;
+    const endedSessions = new Map();
+    for (const item of snapshot.endedParentSessions || []) {
+      const session = parentSessionIdentity(item);
+      if (!session) return null;
+      endedSessions.set(parentSessionKey(session), session);
+    }
     let model;
     try { model = new PrReviewModel({ configuration: snapshot.routing }); } catch { return null; }
     for (const row of snapshot.runs) {
@@ -509,6 +553,15 @@ class PrReviewModel {
       stored.resultDigest = row.resultDigest === null ? null : row.resultDigest.toLowerCase();
       stored.sources = new Set(row.sources);
     }
+    for (const row of snapshot.runs) {
+      if (row.parent && row.parentState === 'ended') {
+        const session = { provider: row.parent.provider, sessionId: row.parent.sessionId };
+        endedSessions.set(parentSessionKey(session), session);
+      }
+    }
+    for (const session of endedSessions.values()) {
+      model.markParentSessionEnded(session);
+    }
     for (const row of snapshot.outbox) {
       if (!obj(row) || !CONTRACT.notificationStates.includes(row.state)) return null;
       const enqueued = model.enqueueNotification(row);
@@ -521,6 +574,8 @@ class PrReviewModel {
   project() {
     return {
       evidenceKind: CONTRACT.evidenceKind,
+      endedParentSessions: [...this.endedParentSessions.values()]
+        .sort((left, right) => parentSessionKey(left).localeCompare(parentSessionKey(right))).map(clone),
       executions: [...this.runs.values()].map((run) => ({
         identity: clone(run.identity), origin: run.origin, purpose: run.purpose,
         parent: clone(run.parent), routing: clone(run.routing), runState: run.runState,

@@ -4,6 +4,7 @@ module.exports = Object.freeze({
   schema: 'agent-cockpit-poc164-pr-review-notifications-v1',
   evidenceKind: 'synthetic-fixture-only',
   providers: Object.freeze(['claude', 'codex', 'external']),
+  parentSessionTerminationKey: Object.freeze(['provider', 'sessionId']),
   origins: Object.freeze(['independent', 'delegated']),
   purposes: Object.freeze(['work', 'review']),
   observationSources: Object.freeze(['shell', 'native', 'external']),
