@@ -140,7 +140,7 @@ write先は各書込み直前に`authorizeWriter`を必ず通し、runtime kerne
 
 Claude standalone native identity、proof/writer、context終端後のproof失効とperiod維持、owned child closeは隔離runtime probeで確認済みである。
 
-Codex managed login後のstandalone bindingはprobe継続中であり、real delegated/handoff positive flowと同period reconnectは未確認とする。
+Codex managed loginは隔離app-serverで提示まで到達したが、5分の認証待ちで期限終了し、owned childのexit/closeを確認した。認証情報のファイル保存は検出されず、standalone bindingは未確認である。real delegated/handoff positive flowと同period reconnectも未確認とする。
 
 Codex production authorizationが実際のmanaged browser loginと同じowned app-server connectionで成立すること、Claude OAuth getterの実環境接続、native tool/MCP writer correlationもこのfixtureだけでは実証しない。
 
