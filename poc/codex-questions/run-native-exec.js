@@ -477,6 +477,7 @@ function classifyObservation(fixture, child) {
 
   let availability = 'unknown';
   let outcome = 'unverified';
+  let questionsSupported = null;
   const unsupportedReason = fixtureSummary.unsupported_reason;
   if (fixtureSummary.request_count === 0) {
     availability = 'unknown';
@@ -490,9 +491,25 @@ function classifyObservation(fixture, child) {
   } else if (!fixtureSummary.request_user_input_declared || unsupportedReason === 'request_user_input_unavailable') {
     availability = 'unavailable';
     outcome = 'tool_unavailable';
+    questionsSupported = false;
   } else if (!fixtureSummary.fixture_function_call_emitted) {
     availability = 'declared';
     outcome = errorKind === 'none' ? 'question_call_not_emitted' : 'exec_failed_before_question_call';
+  } else if (fixtureSummary.response_output_seen
+    && fixtureSummary.tool_output_error_kind === 'default_mode_unavailable') {
+    availability = 'unavailable';
+    outcome = 'default_mode_unavailable';
+    questionsSupported = false;
+  } else if (fixtureSummary.response_output_seen
+    && fixtureSummary.tool_output_error_kind === 'question_tool_unrecognized') {
+    availability = 'unavailable';
+    outcome = 'question_tool_unrecognized';
+    questionsSupported = false;
+  } else if (fixtureSummary.response_output_seen
+    && fixtureSummary.tool_output_error_kind === 'question_tool_unavailable') {
+    availability = 'unavailable';
+    outcome = 'question_tool_unavailable';
+    questionsSupported = false;
   } else if (childSummary.events.request_user_input_item_count > 0) {
     availability = 'native_item_observed';
     outcome = 'native_question_item_observed';
@@ -512,7 +529,10 @@ function classifyObservation(fixture, child) {
     availability = 'call_emitted_unresolved';
     outcome = 'question_call_unresolved';
   }
-  return { availability, outcome, error_kind: errorKind, fixture: fixtureSummary, native: childSummary };
+  return {
+    availability, outcome, error_kind: errorKind, questions_supported: questionsSupported,
+    fixture: fixtureSummary, native: childSummary,
+  };
 }
 
 function resultTemplate(outputDirectory, questionProfile = 'full') {
@@ -526,6 +546,7 @@ function resultTemplate(outputDirectory, questionProfile = 'full') {
     availability: 'unknown',
     outcome: 'unverified',
     error_kind: 'none',
+    questions_supported: null,
     fixture: safeFixtureSummary(null),
     native: safeChildSummary(null),
     cleanup: {
@@ -638,6 +659,7 @@ async function runNativeExecProbe(options, dependencies = {}) {
     result.native = classified.native;
     result.availability = classified.availability;
     result.outcome = classified.outcome;
+    result.questions_supported = classified.questions_supported;
     result.error_kind = result.error_kind === 'none' ? classified.error_kind : result.error_kind;
   } else {
     result.outcome = controller.signal ? 'interrupted_during_startup' : 'fixture_not_started';

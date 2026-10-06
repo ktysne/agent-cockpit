@@ -295,13 +295,19 @@ class DecisionQuestionsBroker {
       || !ANSWER_SOURCES.has(input.source) || !safeId(input.operationId)) return rejected('invalid_input');
     const request = this.requests.get(requestKey(input.hostId, input.homeScope, input.threadId, input.requestId));
     if (!request) return rejected('not_found');
-    if (request.state !== 'pending') return rejected('terminal_request');
+    const canCancelPending = request.state === 'pending';
+    const canCancelUnreceivedAnswer = ['chosen', 'provisional'].includes(request.state)
+      && ['available', 'claimed'].includes(request.delivery.state);
+    if (!canCancelPending && !canCancelUnreceivedAnswer) return rejected('terminal_request');
     if (request.cancelIds.has(input.operationId)) return rejected('duplicate_operation');
     const now = this.readTime();
     if (now === null) return rejected('invalid_clock');
     request.cancelIds.add(input.operationId);
     request.state = 'cancelled';
     request.cancelledAt = now;
+    if (request.delivery.state === 'available' || request.delivery.state === 'claimed') {
+      request.delivery.state = 'invalidated';
+    }
     request.version += 1;
     return { accepted: true, reason: 'cancelled', request: this.snapshot(request, now) };
   }

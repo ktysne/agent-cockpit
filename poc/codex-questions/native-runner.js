@@ -158,6 +158,7 @@ function projectQuestionRequest(params, expected) {
     question_count: 0,
     question_ids: [],
     questions: [],
+    answer_kind_eligible: false,
     origin: 'unknown',
     rejection: 'request_schema_unsupported',
   };
@@ -222,10 +223,12 @@ function projectQuestionRequest(params, expected) {
     && result.correlated_id_kind !== 'unknown' && result.origin === 'fixture_call_correlated';
   const freeTextAvailable = result.questions.length > 0
     && result.questions.every((question) => question.free_form_enabled === true && !question.secret);
-  result.rejection = questionShapeMatches && result.turn_matches
-    ? expected.answerKind === 'free-text' && !freeTextAvailable ? 'free_text_not_enabled' : null
+  result.answer_kind_eligible = (expected.answerKind || 'choice') !== 'free-text' || freeTextAvailable;
+  result.rejection = questionShapeMatches
+    ? !result.turn_matches ? 'turn_identity_unverified'
+      : !result.answer_kind_eligible ? 'free_text_not_enabled' : null
     : result.questions.some((question) => question.secret) ? 'secret_question_unsupported'
-      : questionShapeMatches ? 'turn_identity_unverified' : 'origin_or_identity_unverified';
+      : 'origin_or_identity_unverified';
   return result;
 }
 
@@ -351,7 +354,7 @@ function createQuestionRpcLedger(client, fixture, expected = {}) {
         state.question = projection;
         if (requestKey && projection.schema_supported && projection.thread_matches
           && projection.correlated_id_kind !== 'unknown' && projection.turn_matches
-          && projection.origin === 'fixture_call_correlated') {
+          && projection.answer_kind_eligible && projection.origin === 'fixture_call_correlated') {
           state.questionRequestIds.add(requestKey);
         }
         if (projection.rejection === null) {
@@ -429,11 +432,13 @@ function bindQuestionTurn(state, client, turnId) {
   if (!pending) return true;
   state.pendingQuestion = null;
   pending.projection.turn_matches = pending.turnId === expectedTurnId;
-  pending.projection.rejection = pending.projection.turn_matches ? null : 'turn_identity_mismatch';
+  pending.projection.rejection = !pending.projection.turn_matches ? 'turn_identity_mismatch'
+    : !pending.projection.answer_kind_eligible ? 'free_text_not_enabled' : null;
   state.question = pending.projection;
   if (pending.projection.rejection === null) {
     if (pending.projection.schema_supported && pending.projection.thread_matches
       && pending.projection.correlated_id_kind !== 'unknown'
+      && pending.projection.answer_kind_eligible
       && pending.projection.origin === 'fixture_call_correlated') {
       state.questionRequestIds.add(pending.key);
     }
@@ -471,6 +476,7 @@ function summarizeRpcLedger(state, fixtureCall, turnId) {
     model_tool_is_blocking: fixtureCall?.model_tool_schema_is_blocking_declared ? fixtureCall.is_blocking : null,
     native_is_blocking: question?.is_blocking ?? null,
     question_count: question?.question_count || 0,
+    answer_kind_eligible: question?.answer_kind_eligible ?? null,
     question_ids: question?.question_ids || [],
     questions: question?.questions || [],
     response_sent_count: state.responseSentCount,
@@ -640,6 +646,7 @@ function emptyResult(options) {
       model_tool_is_blocking: null,
       native_is_blocking: null,
       question_count: 0,
+      answer_kind_eligible: null,
       question_ids: [],
       questions: [],
       response_sent_count: 0,

@@ -14,7 +14,14 @@ const {
   toolDefinitions,
 } = require('./mcp-server');
 const { DecisionQuestionsBroker } = require('./decision-model');
-const { callOutputHasTimeout, callOutputSummary, createChildCollector, summarizeRun } = require('./run-common-mcp');
+const {
+  callOutputHasTimeout,
+  callOutputSummary,
+  createChildCollector,
+  createResponsesFixture,
+  SERVER_LABEL,
+  summarizeRun,
+} = require('./run-common-mcp');
 
 const QUESTION = {
   id: 'format',
@@ -84,6 +91,48 @@ function parseToolResult(response) {
   assert.equal(response.jsonrpc, '2.0');
   return JSON.parse(response.result.content[0].text);
 }
+
+test('Responses fixture applies frame-isolation headers to SSE and rejected authentication responses', async () => {
+  const fixture = createResponsesFixture('selected');
+  const expectedHeaders = {
+    'x-frame-options': 'DENY',
+    'content-security-policy': "frame-ancestors 'none'",
+    'cross-origin-resource-policy': 'same-origin',
+    'cross-origin-opener-policy': 'same-origin',
+  };
+  const assertHeaders = response => {
+    for (const [name, value] of Object.entries(expectedHeaders)) {
+      assert.equal(response.headers.get(name), value, `${name} must isolate fixture responses`);
+    }
+  };
+
+  try {
+    await fixture.start();
+    const denied = await fetch(`${fixture.baseUrl}/responses`, {
+      method: 'POST',
+      headers: { 'x-poc160-token': 'invalid-token' },
+      body: '{}',
+    });
+    assert.equal(denied.status, 403);
+    assertHeaders(denied);
+
+    const accepted = await fetch(`${fixture.baseUrl}/responses`, {
+      method: 'POST',
+      headers: { 'x-poc160-token': fixture.token, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        tools: [{ server_label: SERVER_LABEL, allowed_tools: [REGISTER_TOOL, POLL_TOOL] }],
+      }),
+    });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.headers.get('content-type'), 'text/event-stream; charset=utf-8');
+    assertHeaders(accepted);
+    const events = await accepted.text();
+    assert.match(events, /event: response\.created/);
+    assert.match(events, /event: response\.completed/);
+  } finally {
+    await fixture.close();
+  }
+});
 
 test('tool inventory exposes only ordinary register and immediate poll tools with truthful mutation hints', async () => {
   const server = createMcpServer({ broker: createBroker(), hostId: 'host-1', homeScope: 'scope-1' });

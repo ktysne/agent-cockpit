@@ -64,6 +64,32 @@ test('exec observation distinguishes an unavailable tool from an unsupported dec
   assert.equal(unsupported.fixture.unsupported_reason, 'question_schema_unsupported');
 });
 
+test('known matching tool-output refusals report exec support while missing output stays unknown', () => {
+  const completedChild = child({
+    events: { ...createJsonlCollector().finish(), turn_status: 'completed' },
+  });
+  for (const [toolOutputErrorKind, outcome] of [
+    ['default_mode_unavailable', 'default_mode_unavailable'],
+    ['question_tool_unrecognized', 'question_tool_unrecognized'],
+    ['question_tool_unavailable', 'question_tool_unavailable'],
+  ]) {
+    const observed = classifyObservation(fixture({
+      answerOutput: { call_output_seen: true, tool_output_error_kind: toolOutputErrorKind },
+    }), completedChild);
+    assert.equal(observed.availability, 'unavailable');
+    assert.equal(observed.outcome, outcome);
+    assert.equal(observed.questions_supported, false);
+    assert.equal(observed.native.events.request_user_input_item_count, 0);
+  }
+
+  const unresolved = classifyObservation(fixture({
+    answerOutput: { call_output_seen: false, tool_output_error_kind: 'not_seen' },
+  }), completedChild);
+  assert.equal(unresolved.availability, 'call_emitted_unresolved');
+  assert.equal(unresolved.outcome, 'question_call_not_observed_in_exec');
+  assert.equal(unresolved.questions_supported, null);
+});
+
 test('a fixture-generated question function call that times out stays unresolved', () => {
   const observed = classifyObservation(fixture(), child({
     timed_out: true,

@@ -302,6 +302,63 @@ test('cancel and unknown-content external resolution are terminal and do not reo
   assert.equal(externallyResolved.broker.project().rows[0].state, 'external_resolved');
 });
 
+test('chosen and provisional answers can be cancelled until acknowledged while preserving answer history', () => {
+  const makeChosen = () => {
+    const context = setup();
+    context.broker.register(registration());
+    context.broker.submitAnswer(answerInput());
+    return context;
+  };
+  const makeProvisional = () => {
+    const context = setup({ awayEnabled: true });
+    context.broker.register(registration({ questions: [makeQuestion({ recommendedOptionId: 'no' })] }));
+    context.setNow(context.getNow() + 5 * MINUTE);
+    assert.equal(context.broker.poll(requestInput()).request.state, 'provisional');
+    return context;
+  };
+
+  for (const [answerKind, makeContext] of [['chosen', makeChosen], ['provisional', makeProvisional]]) {
+    for (const deliveryPhase of ['available', 'claimed']) {
+      const { broker } = makeContext();
+      const prior = broker.project().rows[0];
+      let claim = null;
+      if (deliveryPhase === 'claimed') {
+        claim = broker.claimDelivery({ ...requestInput(), deliveryId: 'delivery-a' });
+        assert.equal(claim.accepted, true);
+      }
+
+      const cancelled = broker.cancel({
+        ...requestInput(), source: 'dashboard', operationId: `cancel-${answerKind}-${deliveryPhase}`,
+      });
+      assert.equal(cancelled.reason, 'cancelled');
+      assert.equal(cancelled.request.state, 'cancelled');
+      assert.equal(cancelled.request.deliveryState, 'invalidated');
+      assert.deepEqual(cancelled.request.applied, prior.applied);
+      assert.deepEqual(cancelled.request.chosen, prior.chosen);
+      assert.equal(broker.claimDelivery({ ...requestInput(), deliveryId: 'delivery-b' }).reason, 'delivery_unavailable');
+      if (claim) {
+        assert.equal(broker.acknowledgeDelivery({
+          ...requestInput(), deliveryId: claim.delivery.deliveryId, claimId: claim.delivery.claimId,
+        }).reason, 'claim_not_active');
+      }
+    }
+  }
+
+  const acknowledged = makeChosen();
+  const acknowledgedClaim = acknowledged.broker.claimDelivery({ ...requestInput(), deliveryId: 'delivery-a' });
+  assert.equal(acknowledged.broker.acknowledgeDelivery({
+    ...requestInput(), deliveryId: acknowledgedClaim.delivery.deliveryId, claimId: acknowledgedClaim.delivery.claimId,
+  }).reason, 'acknowledged');
+  const appliedBeforeCancellation = acknowledged.broker.poll(requestInput()).request.applied;
+  assert.equal(acknowledged.broker.cancel({
+    ...requestInput(), source: 'dashboard', operationId: 'cancel-acknowledged',
+  }).reason, 'terminal_request');
+  const retained = acknowledged.broker.poll(requestInput()).request;
+  assert.equal(retained.state, 'chosen');
+  assert.equal(retained.deliveryState, 'acknowledged');
+  assert.deepEqual(retained.applied, appliedBeforeCancellation);
+});
+
 test('delivery claim and receipt acknowledgment are separate one-time operations', () => {
   const { broker } = setup();
   broker.register(registration());

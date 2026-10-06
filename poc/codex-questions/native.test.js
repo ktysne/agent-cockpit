@@ -385,6 +385,46 @@ test('free-text answers require observed native isOther and match the exact ques
   assert.equal(answer.answers_structurally_match, true);
 });
 
+test('binding a late turn does not enable free-text answers unless native isOther was true', async () => {
+  const fixture = makeSingleFixtureSummary();
+  for (const [label, isOther] of [['false', false], ['absent', undefined]]) {
+    const client = makeFakeClient();
+    const ledger = createQuestionRpcLedger(client, fixture, {
+      threadId: THREAD_ID,
+      answerKind: 'free-text',
+    });
+    const params = makeQuestionParams({ itemId: fixture.callSummary.call_id });
+    params.questions = params.questions.slice(0, 1);
+    if (isOther === undefined) delete params.questions[0].isOther;
+    else params.questions[0].isOther = isOther;
+    client.dispatchText(rpc('item/tool/requestUserInput', params, `question-${label}`));
+    assert.ok(ledger.pendingQuestion, label);
+    assert.equal(ledger.pendingQuestion.projection.answer_kind_eligible, false, label);
+    assert.equal(ledger.pendingQuestion.projection.rejection, 'turn_identity_unverified', label);
+    assert.equal(bindQuestionTurn(ledger, client, TURN_ID), false, label);
+    await new Promise(setImmediate);
+    assert.equal(client.sent.length, 0, label);
+    assert.equal(ledger.question.rejection, 'free_text_not_enabled', label);
+    assert.equal(ledger.question.answer_kind_eligible, false, label);
+    assert.equal(ledger.questionRequestIds.size, 0, label);
+  }
+
+  const client = makeFakeClient();
+  const ledger = createQuestionRpcLedger(client, fixture, {
+    threadId: THREAD_ID,
+    answerKind: 'free-text',
+  });
+  const params = makeQuestionParams({ itemId: fixture.callSummary.call_id });
+  params.questions = params.questions.slice(0, 1);
+  params.questions[0].isOther = true;
+  client.dispatchText(rpc('item/tool/requestUserInput', params, 'question-enabled'));
+  assert.equal(ledger.pendingQuestion.projection.answer_kind_eligible, true);
+  assert.equal(bindQuestionTurn(ledger, client, TURN_ID), true);
+  await new Promise(setImmediate);
+  assert.deepEqual(client.sent[0].result, { answers: fixedAnswerPayload(['poc160_choice'], 'free-text') });
+  assert.equal(ledger.responseSentCount, 1);
+});
+
 test('secret, mismatched, and malformed questions never receive a fixture answer', async () => {
   for (const [label, params] of [
     ['secret', makeQuestionParams({ isSecret: true })],

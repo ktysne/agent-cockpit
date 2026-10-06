@@ -343,6 +343,10 @@ function createResponsesFixture(mode) {
   let pollToNextRequestMs = null;
   let serverFailure = null;
   const server = http.createServer(async (request, response) => {
+    response.setHeader('X-Frame-Options', 'DENY');
+    response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+    response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     let url;
     try {
       url = new URL(request.url, 'http://127.0.0.1');
