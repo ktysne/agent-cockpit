@@ -1,6 +1,7 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
+const { types: utilTypes } = require('node:util');
 const {
   DELIVERY_LEDGER_LIMITS,
   createEmptyLedger,
@@ -244,7 +245,8 @@ function createDurableDeliveryStore(options = {}) {
       !options.runtimeRegistry || typeof options.runtimeRegistry.get !== 'function' ||
       typeof options.runtimeRegistry.snapshot !== 'function' ||
       typeof options.runtimeRegistry.checkCurrentProof !== 'function' || typeof options.resolveProof !== 'function' ||
-      (options.verifyResultOwner !== undefined && typeof options.verifyResultOwner !== 'function')) {
+      (options.verifyResultOwner !== undefined && typeof options.verifyResultOwner !== 'function') ||
+      (options.verifyInstructionTarget !== undefined && typeof options.verifyInstructionTarget !== 'function')) {
     throw storeError('invalid_store_dependencies');
   }
   const limits = options.limits ?? {};
@@ -303,7 +305,7 @@ function createDurableDeliveryStore(options = {}) {
     return mergeRegistrationHistory(currentCheckpoint.registrations, incoming, limits.maxRecords);
   }
 
-  async function persist(registrations, ledger) {
+  function checkpointCandidate(registrations, ledger) {
     const candidate = {
       schemaVersion: currentCheckpoint.schemaVersion,
       revision: currentCheckpoint.revision + 1,
@@ -311,6 +313,10 @@ function createDurableDeliveryStore(options = {}) {
       ledger: validateLedger(ledger),
     };
     assertCheckpointCapacityReserved(candidate, maxCheckpointBytes);
+    return candidate;
+  }
+
+  async function persistCandidate(candidate) {
     try {
       const saved = await checkpointStore.save(candidate);
       currentCheckpoint = saved;
@@ -321,6 +327,10 @@ function createDurableDeliveryStore(options = {}) {
       }
       throw error;
     }
+  }
+
+  async function persist(registrations, ledger) {
+    return persistCandidate(checkpointCandidate(registrations, ledger));
   }
 
   function launchRecord(launchRef, provider) {
@@ -406,6 +416,24 @@ function createDurableDeliveryStore(options = {}) {
     }
   }
 
+  function freshInstructionTarget(delivery) {
+    if (typeof options.verifyInstructionTarget !== 'function') return false;
+    try {
+      const publicDelivery = getDelivery(currentCheckpoint.ledger, delivery.deliveryAttemptId);
+      if (!publicDelivery || publicDelivery.kind !== 'instruction') return false;
+      const result = options.verifyInstructionTarget(publicDelivery);
+      if (result instanceof Promise) {
+        result.catch(() => {});
+        return false;
+      }
+      if (result !== null && (typeof result === 'object' || typeof result === 'function') &&
+          typeof result.then === 'function') return false;
+      return result === true || result?.ok === true;
+    } catch {
+      return false;
+    }
+  }
+
   function freshAuthorization(delivery) {
     try {
       const source = launchRecord(delivery.source.launchRef);
@@ -414,6 +442,7 @@ function createDurableDeliveryStore(options = {}) {
       return false;
     }
     if (delivery.kind === 'result') return freshResultOwner(delivery);
+    if (delivery.kind === 'instruction') return freshInstructionTarget(delivery);
     return freshExecutionProof(delivery);
   }
 
@@ -481,6 +510,26 @@ function createDurableDeliveryStore(options = {}) {
     return result.delivery;
   }
 
+  async function recordAppliedInstructionNow(id, correlation, beginCommit, provider) {
+    const delivery = getDelivery(currentCheckpoint.ledger, id);
+    if (!delivery) throw storeError('delivery_not_found');
+    if (delivery.kind !== 'instruction') throw storeError('delivery_kind_mismatch');
+    if (!deliveryMatchesProvider(delivery, provider)) throw storeError('provider_mismatch');
+    const registrations = mergeCurrentRegistrations();
+    const transition = transitionDelivery(currentCheckpoint.ledger, id, 'applied', correlation);
+    if (!transition.changed) return transition.delivery;
+    const candidate = checkpointCandidate(registrations, transition.ledger);
+    let guardResult;
+    try { guardResult = beginCommit(); } catch { throw storeError('instruction_apply_commit_rejected'); }
+    if (utilTypes.isPromise(guardResult)) {
+      Promise.prototype.then.call(guardResult, undefined, () => {});
+      throw storeError('instruction_apply_commit_rejected');
+    }
+    if (guardResult !== true) throw storeError('instruction_apply_commit_rejected');
+    const write = persistCandidate(candidate);
+    await write;
+    return transition.delivery;
+  }
   async function markUnknownNow(id) {
     const result = transitionDelivery(currentCheckpoint.ledger, id, 'unknown');
     if (result.changed) await persist(currentCheckpoint.registrations, result.ledger);
@@ -572,6 +621,15 @@ function createDurableDeliveryStore(options = {}) {
     return createQuestionDeliveryForProvider(input, undefined);
   }
 
+  function createInstructionDeliveryForProvider(input, provider) {
+    const captured = captureDeliveryInput(input, 'instruction');
+    return enqueue(() => createDeliveryNow('instruction', captured, provider));
+  }
+
+  function createInstructionDelivery(input) {
+    return createInstructionDeliveryForProvider(input, undefined);
+  }
+
   function createResultDeliveryForProvider(input, provider) {
     const captured = captureDeliveryInput(input, 'result');
     return enqueue(() => createDeliveryNow('result', captured, provider));
@@ -622,6 +680,13 @@ function createDurableDeliveryStore(options = {}) {
     });
   }
 
+  function scopedRecordAppliedInstruction(id, correlation, beginCommit, provider) {
+    if (!isIdentifier(id) || typeof beginCommit !== 'function') {
+      throw storeError('invalid_instruction_apply_commit');
+    }
+    const captured = captureCorrelation(correlation);
+    return enqueue(() => recordAppliedInstructionNow(id, captured, beginCommit, provider));
+  }
   function scopedSendStart(id, sink, provider) {
     if (!isIdentifier(id) || typeof sink !== 'function') throw storeError('invalid_send_start');
     const trustedSink = sink;
@@ -732,6 +797,7 @@ function createDurableDeliveryStore(options = {}) {
   const store = Object.freeze({
     ready,
     createQuestionDelivery,
+    createInstructionDelivery,
     createResultDelivery,
     registerPrNotificationTarget,
     createPrNotification,
@@ -749,11 +815,13 @@ function createDurableDeliveryStore(options = {}) {
     flush,
     close,
   });
-  STORE_INTERNALS.set(store, { createQuestionDelivery: createQuestionDeliveryForProvider,
+  STORE_INTERNALS.set(store, {
+    createQuestionDelivery: createQuestionDeliveryForProvider,
+    createInstructionDelivery: createInstructionDeliveryForProvider,
     createResultDelivery: createResultDeliveryForProvider,
     registerPrNotificationTarget: registerPrNotificationTargetForProvider,
     createPrNotification: createPrNotificationForProvider, scopedTransition, scopedSendStart,
-    recordAcceptedForProvider, recordAppliedForProvider, markUnknownForProvider,
+    recordAcceptedForProvider, recordAppliedForProvider, recordAppliedInstruction: scopedRecordAppliedInstruction, markUnknownForProvider,
     scopedRehydratePayload, scopedGet });
   return store;
 }
@@ -767,6 +835,7 @@ function createProviderDeliveryAdapter(provider, store) {
     provider,
     ready: store.ready,
     createQuestionDelivery: (input) => internal.createQuestionDelivery(input, provider),
+    createInstructionDelivery: (input) => internal.createInstructionDelivery(input, provider),
     createResultDelivery: (input) => internal.createResultDelivery(input, provider),
     registerPrNotificationTarget: (input) => internal.registerPrNotificationTarget(input, provider),
     createPrNotification: (input) => internal.createPrNotification(input, provider),
@@ -776,6 +845,8 @@ function createProviderDeliveryAdapter(provider, store) {
     sendStart: (id, sink) => internal.scopedSendStart(id, sink, provider),
     recordAccepted: (id, correlation) => internal.recordAcceptedForProvider(id, correlation, provider),
     recordApplied: (id, correlation) => internal.recordAppliedForProvider(id, correlation, provider),
+    recordAppliedInstructionGuarded: (id, correlation, beginCommit) =>
+      internal.recordAppliedInstruction(id, correlation, beginCommit, provider),
     markUnknown: (id) => internal.markUnknownForProvider(id, provider),
     rehydratePayload: (id, payload) => internal.scopedRehydratePayload(id, payload, provider),
     captureRegistrations: store.captureRegistrations,

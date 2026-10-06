@@ -4,10 +4,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createFakeClock } = require('../tools/manual/fake-clock');
-const { cssDeclarations, functionSource, pageContext, sourceBetween } = require('./support/page-context');
+const { cssDeclarations, functionSource, pageContext: createPageContext, sourceBetween } = require('./support/page-context');
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+
+function pageContext(html, sandbox = {}) {
+  const instructionState = html.includes('let instructionComposing = false;')
+    ? { instructionComposing: false, instructionDiagnosticsNotice: () => null }
+    : {};
+  return createPageContext(html, { ...instructionState, ...sandbox });
+}
 
 test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
   const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
@@ -101,11 +108,12 @@ test('終わったセッションは待機中で未完了のものが無い場�
   const endedAgent = functionSource(pageHtml, 'isEndedAgent');
   const endedDecision = functionSource(pageHtml, 'isEndedDecision');
   const finishedQuestion = functionSource(pageHtml, 'isFinishedCommonQuestion');
+  const finishedInstruction = functionSource(pageHtml, 'isFinishedInstruction');
   const isFinished = functionSource(pageHtml, 'isFinishedSession');
   const status = functionSource(pageHtml, 'activityStatus');
-  assert.ok(endedAgent && endedDecision && finishedQuestion && isFinished && status);
+  assert.ok(endedAgent && endedDecision && finishedQuestion && finishedInstruction && isFinished && status);
   const context = pageContext(pageHtml, {});
-  vm.runInContext(`${endedAgent}\n${endedDecision}\n${finishedQuestion}\n${status}\n${isFinished}`, context);
+  vm.runInContext(`${endedAgent}\n${endedDecision}\n${finishedQuestion}\n${finishedInstruction}\n${status}\n${isFinished}`, context);
 
   const finished = {
     status: '待機中',
@@ -1716,7 +1724,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
 
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
@@ -1774,7 +1782,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'isFinishedCommonQuestion', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
@@ -2724,6 +2732,11 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     checkUiVersion: () => false,
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
+    observeInstructionStates: () => null,
+    instructionProjectionSignature: () => '',
+    renderedInstructionSignature: '',
+    deferredRenderPending: false,
+    countJudgments: () => ({ permission: 0, decisions: 0, questions: 0, questionProvisional: 0 }),
     renderedPullRequestExpirySignature: 'reservation:visible',
     updateConnectionNote() {},
     isAwaitingDecision: () => false,
@@ -3319,7 +3332,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'activityStatus', 'isEndedAgent', 'isFinishedCommonQuestion', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
@@ -3473,6 +3486,11 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
+      observeInstructionStates: () => null,
+      instructionProjectionSignature: () => '',
+      renderedInstructionSignature: '',
+      deferredRenderPending: false,
+      countJudgments: () => ({ permission: 0, decisions: 0, questions: 0, questionProvisional: 0 }),
       renderedPullRequestExpirySignature: '',
       updateConnectionNote() {},
       isPendingDecision: () => false,

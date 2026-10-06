@@ -696,3 +696,26 @@ test('registration does not report success when its writer expires during journa
   const dashboard = await fixture.service.dashboardSnapshot();
   assert.equal(dashboard.questions.length, 1);
 });
+
+test('late answer refs expose only a digest-bound index and drafts require the matching reference', async (t) => {
+  const fixture = await createFixture(t, { verifyNativeQuestion: () => true });
+  const created = await register(fixture);
+  await fixture.service.resolveExternal(created.question.internalQuestionId, { source: 'trusted' });
+  await fixture.service.submitAnswer(created.question.internalQuestionId, answers('continue'));
+
+  const dashboard = await fixture.service.dashboardSnapshot();
+  const questionView = dashboard.questions[0];
+  assert.deepEqual(questionView.lateAnswerRefs, [{ index: 0,
+    digest: kernel.sha256Json(answers('continue').answers), submittedAt: 1_000 }]);
+  for (const key of ['answers', 'text', 'freeText']) assert.equal(Object.hasOwn(questionView, key), false);
+  const ref = questionView.lateAnswerRefs[0];
+  const draft = await fixture.service.readLateAnswerDraft(created.question.internalQuestionId, ref.index, ref.digest);
+  assert.deepEqual(draft, {
+    launchRef: fixture.launchRef,
+    logicalMessageId: `common-question-${created.question.internalQuestionId}`,
+    revision: 0,
+    text: 'Choose a course of action\n- Continue',
+  });
+  assert.equal(await fixture.service.readLateAnswerDraft(created.question.internalQuestionId, 0, '0'.repeat(64)), null);
+  assert.equal(await fixture.service.readLateAnswerDraft(created.question.internalQuestionId, 1, ref.digest), null);
+});

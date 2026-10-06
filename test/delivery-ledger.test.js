@@ -87,6 +87,9 @@ function makeInput(deliveryAttemptId, logicalMessageId, payload = ('payload:' + 
 function createQuestion(ledger, launch, input) {
   return createDelivery(ledger, 'question', input, launch);
 }
+function createInstruction(ledger, launch, input) {
+  return createDelivery(ledger, 'instruction', input, launch);
+}
 
 function step(ledger, id, operation, correlation = undefined) {
   return transitionDelivery(ledger, id, operation, correlation);
@@ -218,6 +221,43 @@ test('creates detached payload-free routes for questions, results, and PR target
   assert.equal(Object.isFrozen(question.delivery.source.claims.originBinding), true);
 });
 
+test('instruction deliveries retain the v1 shape and bind the source execution as target', () => {
+  const launch = makeLaunch();
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'Continue with the next task.', text_elements: [] }] });
+  const input = makeInput('instruction-attempt', 'instruction-logical', payload);
+  const created = createInstruction(createEmptyLedger(), launch, input);
+  assert.equal(created.delivery.kind, 'instruction');
+  assert.equal(created.delivery.ownerGeneration, null);
+  assert.equal(created.delivery.sourceExecutionId, launch.executionBinding.periodId);
+  assert.deepEqual(created.delivery.target, {
+    kind: 'execution', launchRef: launch.launchRef,
+    claims: {
+      launchId: launch.launchId, runId: launch.runId, attemptId: launch.attemptId,
+      provider: launch.provider, nativeIdKind: launch.nativeIdKind, hostId: launch.hostId,
+      homeScopeId: launch.homeScopeId, origin: launch.origin, purpose: launch.purpose,
+      originBinding: null,
+    },
+    identity: launch.identity, periodId: launch.executionBinding.periodId,
+    actor: launch.executionBinding.actor, conversationId: launch.conversationId,
+    sessionId: launch.sessionId,
+  });
+  assert.equal(created.delivery.payloadDigest, createHash('sha256').update(payload, 'utf8').digest('hex'));
+  const replay = createInstruction(created.ledger, launch, input);
+  assert.equal(replay.created, false);
+  assert.deepEqual(replay.delivery, created.delivery);
+  assertCode(() => createInstruction(created.ledger, launch, { ...input, payload: payload + ' ' }), 'delivery_conflict');
+  const changedLaunch = { ...launch, launchRef: 'changed-launch-ref' };
+  assertCode(() => createInstruction(created.ledger, changedLaunch, input), 'delivery_conflict');
+  assertCode(() => createDelivery(created.ledger, 'instruction', input, launch, makePeriodRecord(
+    launch.executionBinding.periodId, launch.identity)), 'invalid_delivery');
+  const changedTarget = structuredClone(created.ledger);
+  changedTarget.deliveries[0].target.actor.id = 'other-actor';
+  assertCode(() => validateLedger(changedTarget), 'invalid_ledger');
+  const questionWithSameLogicalKey = createQuestion(created.ledger, launch,
+    makeInput('different-kind-attempt', 'instruction-logical', payload));
+  assert.equal(questionWithSameLogicalKey.created, true);
+});
 test('same attempt replays idempotently and only a superseded unsent key permits a replacement', () => {
   const launch = makeLaunch();
   const original = makeInput('attempt-1', 'logical-1', 'same payload');
@@ -512,4 +552,24 @@ test('sending and unknown attempts keep the logical key locked against retry', (
   assertCode(() => createQuestion(unknown.ledger, launch,
     makeInput('locked-retry-after-unknown', 'locked-logical', 'fixed content')), 'logical_conflict');
   assert.equal(getDelivery(recoverLedger(unknown.ledger), 'locked-attempt').state, 'unknown');
+});
+
+test('instruction native items cannot be reused by another instruction or question in the same execution', () => {
+  const launch = makeLaunch();
+  const first = createInstruction(createEmptyLedger(), launch,
+    makeInput('instruction-item-first', 'instruction-item-logical-first'));
+  const started = step(first.ledger, first.delivery.deliveryAttemptId, 'sendStart');
+  const applied = step(started.ledger, started.delivery.deliveryAttemptId, 'applied',
+    correlationFor(started.delivery, { nativeTurnId: 'instruction-turn', nativeItemId: 'instruction-item' }));
+  for (const kind of ['instruction', 'question']) {
+    const id = 'instruction-item-reuse-' + kind;
+    const created = createDelivery(applied.ledger, kind, makeInput(id, id + '-logical'), launch);
+    const sending = step(created.ledger, id, 'sendStart');
+    const before = snapshotLedger(sending.ledger);
+    assertCode(() => step(sending.ledger, id, 'applied', correlationFor(sending.delivery, {
+      nativeTurnId: 'instruction-turn', nativeItemId: 'instruction-item',
+    })), 'correlation_reused');
+    assert.deepEqual(snapshotLedger(sending.ledger), before);
+    assert.equal(getDelivery(sending.ledger, id).state, 'sending');
+  }
 });

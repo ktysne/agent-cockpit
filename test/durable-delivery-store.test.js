@@ -139,6 +139,9 @@ function createFixture(options = {}) {
   const verifyResultOwner = options.verifyResultOwner || (() => true);
   const dependencies = { registrationRegistry, launchRegistry, runtimeRegistry,
     resolveProof: (launchRef) => proofHandles.get(launchRef), verifyResultOwner };
+  if (Object.hasOwn(options, 'verifyInstructionTarget')) {
+    dependencies.verifyInstructionTarget = options.verifyInstructionTarget;
+  }
   return {
     source, target, sourceBinding, ownerBinding, targetBinding, ownerIdentity, sourceIdentity, targetIdentity,
     conversations, executions, connections, runtimeActors, launches, runtimeLaunches, proofLive,
@@ -226,6 +229,265 @@ test('provider adapters scope lifecycle IDs to the delivery target kind', async 
   assert.deepEqual(sent, ['cross-provider-notification']);
 });
 
+test('instruction delivery is idempotent, source-bound, provider-scoped, and cancellable before send', async (t) => {
+  const directory = await temporaryDirectory(t);
+  let verifierCalls = 0;
+  const fixture = createFixture({ sourceProvider: 'claude', verifyInstructionTarget: (delivery) => {
+    verifierCalls += 1;
+    return delivery.kind === 'instruction' && delivery.target.periodId === fixture.sourceBinding.periodId;
+  } });
+  const filePath = path.join(directory, 'ledger.json');
+  const store = createDurableDeliveryStore({ filePath, ...fixture.dependencies });
+  t.after(() => store.close());
+  await store.ready;
+  const claude = createProviderDeliveryAdapter('claude', store);
+  const codex = createProviderDeliveryAdapter('codex', store);
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'Continue the task.', text_elements: [] }] });
+  const input = deliveryInput(fixture.source.launchRef, 'instruction-cancel-before-send', payload);
+  fixture.proofLive.set(fixture.source.launchRef, false);
+  const delivery = await claude.createInstructionDelivery(input);
+  assert.equal(delivery.kind, 'instruction');
+  assert.equal(delivery.sourceExecutionId, fixture.sourceBinding.periodId);
+  assert.equal(delivery.target.kind, 'execution');
+  assert.equal(delivery.target.launchRef, delivery.source.launchRef);
+  assert.deepEqual(delivery.target.claims, delivery.source.claims);
+  assert.deepEqual(delivery.target.identity, delivery.source.identity);
+  assert.equal(delivery.target.periodId, delivery.source.executionBinding.periodId);
+  assert.deepEqual(delivery.target.actor, delivery.source.executionBinding.actor);
+  assert.equal(delivery.ownerGeneration, null);
+  assert.equal(verifierCalls, 0);
+  const revision = (await claude.snapshot()).revision;
+  const replay = await claude.createInstructionDelivery(input);
+  assert.equal(replay.deliveryAttemptId, delivery.deliveryAttemptId);
+  assert.equal((await claude.snapshot()).revision, revision);
+  await assert.rejects(codex.createInstructionDelivery(input), errorCode('provider_mismatch'));
+  await assert.rejects(codex.cancel(delivery.deliveryAttemptId), errorCode('provider_mismatch'));
+  await assert.rejects(claude.createInstructionDelivery({ ...input, payload: payload + ' ' }),
+    errorCode('delivery_conflict'));
+
+  const cancelled = await claude.cancel(delivery.deliveryAttemptId);
+  assert.equal(cancelled.state, 'cancelled_before_send');
+  let sinkCalls = 0;
+  await assert.rejects(claude.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+    errorCode('payload_unavailable'));
+  assert.equal(sinkCalls, 0);
+  await store.close();
+  const persistedText = await fs.readFile(filePath, 'utf8');
+  const persisted = JSON.parse(persistedText);
+  assert.equal(persisted.ledger.deliveries[0].state, 'cancelled_before_send');
+  assert.equal(Object.hasOwn(persisted.ledger.deliveries[0], 'payload'), false);
+  assert.equal(persistedText.includes(payload), false);
+
+  const reopened = createDurableDeliveryStore({ filePath, ...fixture.dependencies });
+  t.after(() => reopened.close());
+  await reopened.ready;
+  assert.equal((await createProviderDeliveryAdapter('claude', reopened).get(delivery.deliveryAttemptId)).state,
+    'cancelled_before_send');
+});
+
+test('instruction send and rehydration fail closed without a synchronous target verifier', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'missing-verifier.json');
+  const fixture = createFixture();
+  const store = createDurableDeliveryStore({ filePath, ...fixture.dependencies });
+  t.after(() => store.close());
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'Private instruction.', text_elements: [] }] });
+  const delivery = await adapter.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-missing-verifier', payload));
+  let sinkCalls = 0;
+  await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+    errorCode('delivery_target_unavailable'));
+  assert.equal((await adapter.get(delivery.deliveryAttemptId)).state, 'available');
+  assert.equal(sinkCalls, 0);
+  await assert.rejects(adapter.rehydratePayload(delivery.deliveryAttemptId, payload),
+    errorCode('delivery_target_unavailable'));
+  await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+    errorCode('delivery_target_unavailable'));
+  assert.equal(sinkCalls, 0);
+
+  for (const [suffix, verifyInstructionTarget] of [
+    ['promise', () => Promise.reject(new Error('asynchronous verifier'))],
+    ['thenable', () => ({ ok: true, then() { throw new Error('must not be called'); } })],
+    ['throw', () => { throw new Error('verifier failure'); }],
+  ]) {
+    const invalidFixture = createFixture({ verifyInstructionTarget });
+    const invalidStore = createDurableDeliveryStore({
+      filePath: path.join(directory, `invalid-${suffix}.json`), ...invalidFixture.dependencies,
+    });
+    t.after(() => invalidStore.close());
+    await invalidStore.ready;
+    const invalidAdapter = createProviderDeliveryAdapter('claude', invalidStore);
+    const invalid = await invalidAdapter.createInstructionDelivery(
+      deliveryInput(invalidFixture.source.launchRef, `instruction-${suffix}`, payload));
+    await assert.rejects(invalidAdapter.sendStart(invalid.deliveryAttemptId, () => { sinkCalls += 1; }),
+      errorCode('delivery_target_unavailable'));
+    assert.equal((await invalidAdapter.get(invalid.deliveryAttemptId)).state, 'available');
+  }
+  assert.equal(sinkCalls, 0);
+});
+
+test('instruction authorization is rechecked after send-start persistence before exposing payload', async (t) => {
+  const directory = await temporaryDirectory(t);
+  let capabilityLive = true;
+  let writeCount = 0;
+  let releaseSendingWrite;
+  let startedSendingWrite;
+  const started = new Promise((resolve) => { startedSendingWrite = resolve; });
+  const gate = new Promise((resolve) => { releaseSendingWrite = resolve; });
+  const fixture = createFixture({ verifyInstructionTarget: (delivery) => capabilityLive &&
+    delivery.kind === 'instruction' && delivery.target.periodId === fixture.sourceBinding.periodId });
+  const filePath = path.join(directory, 'instruction-expiry.json');
+  const store = createDurableDeliveryStore({
+    filePath, ...fixture.dependencies,
+    atomicWrite: async (target, value) => {
+      writeCount += 1;
+      if (writeCount === 2) {
+        startedSendingWrite();
+        await gate;
+      }
+      await atomicWriteJson(path.dirname(target), path.basename(target), value);
+    },
+  });
+  t.after(() => store.close());
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'Private instruction.', text_elements: [] }] });
+  const delivery = await adapter.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-capability-expiry', payload));
+  let sinkCalls = 0;
+  const sending = adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; });
+  await started;
+  capabilityLive = false;
+  releaseSendingWrite();
+  const result = await sending;
+  assert.equal(result.state, 'unknown');
+  assert.equal(sinkCalls, 0);
+  assert.equal(JSON.parse(await fs.readFile(filePath, 'utf8')).ledger.deliveries[0].state, 'unknown');
+});
+
+test('instruction send-start save failure preserves the prior checkpoint and never exposes payload', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const fixture = createFixture({ verifyInstructionTarget: () => true });
+  const filePath = path.join(directory, 'instruction-send-write-failure.json');
+  let writeCount = 0;
+  const store = createDurableDeliveryStore({
+    filePath, ...fixture.dependencies,
+    atomicWrite: async (target, value) => {
+      writeCount += 1;
+      if (writeCount === 2) throw new Error('sending save failed');
+      await atomicWriteJson(path.dirname(target), path.basename(target), value);
+    },
+  });
+  t.after(() => store.close());
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'Private instruction.', text_elements: [] }] });
+  const delivery = await adapter.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-write-failure', payload));
+  const before = await fs.readFile(filePath, 'utf8');
+  let sinkCalls = 0;
+  await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+    errorCode('checkpoint_write_failed'));
+  assert.equal(await fs.readFile(filePath, 'utf8'), before);
+  assert.equal((await adapter.get(delivery.deliveryAttemptId)).state, 'available');
+  assert.equal(sinkCalls, 0);
+});
+test('instruction checkpoint reservation retains maximum correlations through restore', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'instruction-capacity.json');
+  const maxBytes = 40_000;
+  const fixture = createFixture({ verifyInstructionTarget: () => true });
+  const store = createDurableDeliveryStore({ filePath, limits: { maxBytes }, ...fixture.dependencies });
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const deliveries = [];
+  let overflowIndex = 0;
+  for (; overflowIndex < 20; overflowIndex += 1) {
+    try {
+      deliveries.push(await adapter.createInstructionDelivery(
+        deliveryInput(fixture.source.launchRef, `instruction-reserved-${overflowIndex}`, 'opaque-envelope')));
+    } catch (error) {
+      if (error.code !== 'checkpoint_capacity_reserved') throw error;
+      break;
+    }
+  }
+  assert.ok(deliveries.length > 0);
+  assert.ok(overflowIndex < 20);
+  const beforeOverflow = await fs.readFile(filePath, 'utf8');
+  await assert.rejects(adapter.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-reserved-overflow', 'opaque-envelope')),
+  errorCode('checkpoint_capacity_reserved'));
+  assert.equal(await fs.readFile(filePath, 'utf8'), beforeOverflow);
+
+  const delivery = deliveries[0];
+  let sinkCalls = 0;
+  await adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; });
+  const base = appliedCorrelation(delivery);
+  await adapter.recordAccepted(delivery.deliveryAttemptId, { ...base, nativeTurnId: null, nativeItemId: null });
+  const escapedNativeId = '\uD800'.repeat(512);
+  const maximumCorrelation = { ...base, nativeTurnId: escapedNativeId, nativeItemId: escapedNativeId };
+  await adapter.recordApplied(delivery.deliveryAttemptId, maximumCorrelation);
+  await adapter.recordAccepted(delivery.deliveryAttemptId, maximumCorrelation);
+  await store.close();
+  const persistedText = await fs.readFile(filePath, 'utf8');
+  const persisted = JSON.parse(persistedText);
+  const persistedDelivery = persisted.ledger.deliveries.find((item) =>
+    item.deliveryAttemptId === delivery.deliveryAttemptId);
+  assert.equal(persistedDelivery.appliedCorrelation.nativeTurnId.length, 512);
+  assert.equal(persistedDelivery.acceptedCorrelation.nativeItemId.length, 512);
+  assert.equal(Object.hasOwn(persistedDelivery, 'payload'), false);
+  assert.ok(Buffer.byteLength(persistedText, 'utf8') <= maxBytes);
+
+  const reopened = createDurableDeliveryStore({ filePath, limits: { maxBytes }, ...fixture.dependencies });
+  t.after(() => reopened.close());
+  await reopened.ready;
+  const reopenedAdapter = createProviderDeliveryAdapter('claude', reopened);
+  const restored = await reopenedAdapter.get(delivery.deliveryAttemptId);
+  assert.equal(restored.state, 'applied');
+  assert.equal(restored.acceptedCorrelation.nativeItemId, escapedNativeId);
+  assert.equal(restored.appliedCorrelation.nativeTurnId, escapedNativeId);
+  for (const connection of fixture.connections) connection.state = 'inactive';
+  for (const actor of fixture.runtimeActors) actor.state = 'unknown';
+  await assert.rejects(reopenedAdapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+    errorCode('payload_unavailable'));
+  assert.equal(sinkCalls, 1);
+});
+test('instruction send-start restores as unknown and never sends again automatically', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'instruction-unknown.json');
+  const fixture = createFixture({ verifyInstructionTarget: () => true });
+  const store = createDurableDeliveryStore({ filePath, ...fixture.dependencies });
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'Private instruction.', text_elements: [] }] });
+  const delivery = await adapter.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-unknown-restore', payload));
+  let sinkCalls = 0;
+  await adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; });
+  assert.equal((await adapter.get(delivery.deliveryAttemptId)).state, 'sending');
+  await store.close();
+
+  const reopened = createDurableDeliveryStore({ filePath, ...fixture.dependencies });
+  t.after(() => reopened.close());
+  await reopened.ready;
+  const restoredAdapter = createProviderDeliveryAdapter('claude', reopened);
+  assert.equal((await restoredAdapter.get(delivery.deliveryAttemptId)).state, 'unknown');
+  for (const connection of fixture.connections) connection.state = 'inactive';
+  for (const actor of fixture.runtimeActors) actor.state = 'unknown';
+  await assert.rejects(restoredAdapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+    errorCode('payload_unavailable'));
+  await assert.rejects(restoredAdapter.rehydratePayload(delivery.deliveryAttemptId, payload),
+    errorCode('payload_rehydrate_forbidden'));
+  assert.equal(sinkCalls, 1);
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(filePath, 'utf8')).ledger.deliveries[0], 'payload'), false);
+});
 test('result delivery uses its captured cross-provider owner verifier after the child ends', async (t) => {
   const directory = await temporaryDirectory(t);
   let verifierCalls = 0;
@@ -560,4 +822,139 @@ test('cancel and supersede release each unsent payload after their checkpoint co
   assert.equal((await adapter.supersedeUnsentDelivery(superseded.deliveryAttemptId)).state,
     'superseded_before_send');
   await assert.rejects(adapter.sendStart(superseded.deliveryAttemptId, () => {}), errorCode('payload_unavailable'));
+});
+
+async function prepareAcceptedInstruction(t, { atomicWrite = undefined, deliveryAttemptId = 'guarded-instruction' } = {}) {
+  const directory = await temporaryDirectory(t);
+  const fixture = createFixture({ sourceProvider: 'claude', verifyInstructionTarget: () => true });
+  const filePath = path.join(directory, 'guarded-instruction.json');
+  const store = createDurableDeliveryStore({
+    filePath,
+    ...(atomicWrite ? { atomicWrite } : {}),
+    ...fixture.dependencies,
+  });
+  t.after(() => store.close());
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const payload = JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+    input: [{ type: 'text', text: 'guarded instruction', text_elements: [] }] });
+  const delivery = await adapter.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, deliveryAttemptId, payload));
+  await adapter.sendStart(deliveryAttemptId, () => {});
+  const correlation = appliedCorrelation(delivery);
+  await adapter.recordAccepted(deliveryAttemptId, { ...correlation, nativeItemId: null });
+  return { directory, fixture, filePath, store, adapter, delivery, correlation };
+}
+
+test('instruction guarded applied requires a synchronous true commit before saving', async (t) => {
+  let writeCount = 0;
+  const state = await prepareAcceptedInstruction(t, {
+    atomicWrite: async (target, value) => {
+      writeCount += 1;
+      await atomicWriteJson(path.dirname(target), path.basename(target), value);
+    },
+  });
+  const before = writeCount;
+  let guardCalls = 0;
+  await assert.rejects(state.adapter.recordAppliedInstructionGuarded(
+    state.delivery.deliveryAttemptId,
+    state.correlation,
+    () => { guardCalls += 1; return false; },
+  ), errorCode('instruction_apply_commit_rejected'));
+  assert.equal(guardCalls, 1);
+  assert.equal(writeCount, before);
+  assert.equal((await state.adapter.get(state.delivery.deliveryAttemptId)).state, 'accepted');
+
+  await assert.rejects(state.adapter.recordAppliedInstructionGuarded(
+    state.delivery.deliveryAttemptId,
+    state.correlation,
+    () => Promise.reject(new Error('commit was not synchronous')),
+  ), errorCode('instruction_apply_commit_rejected'));
+  assert.equal(writeCount, before);
+  assert.equal((await state.adapter.get(state.delivery.deliveryAttemptId)).state, 'accepted');
+});
+
+test('instruction guarded applied waits for the store writer before entering the commit boundary', async (t) => {
+  let blockCancel = false;
+  let writeCount = 0;
+  let startBlockedWrite;
+  const blockedWriteStarted = new Promise((resolve) => { startBlockedWrite = resolve; });
+  let releaseBlockedWrite;
+  const writeGate = new Promise((resolve) => { releaseBlockedWrite = resolve; });
+  const state = await prepareAcceptedInstruction(t, {
+    deliveryAttemptId: 'guarded-writer-wait',
+    atomicWrite: async (target, value) => {
+      writeCount += 1;
+      const current = value.ledger.deliveries.find((item) => item.deliveryAttemptId === 'guarded-writer-wait');
+      if (blockCancel && current?.cancelRequested) {
+        blockCancel = false;
+        startBlockedWrite();
+        await writeGate;
+      }
+      await atomicWriteJson(path.dirname(target), path.basename(target), value);
+    },
+  });
+  blockCancel = true;
+  const beforeCancel = writeCount;
+  const canceling = state.adapter.cancel(state.delivery.deliveryAttemptId);
+  await blockedWriteStarted;
+  let guardCalls = 0;
+  const applying = state.adapter.recordAppliedInstructionGuarded(
+    state.delivery.deliveryAttemptId,
+    state.correlation,
+    () => { guardCalls += 1; return false; },
+  );
+  assert.equal(guardCalls, 0);
+  releaseBlockedWrite();
+  await canceling;
+  await assert.rejects(applying, errorCode('instruction_apply_commit_rejected'));
+  assert.equal(guardCalls, 1);
+  assert.equal(writeCount, beforeCancel + 1);
+  const current = await state.adapter.get(state.delivery.deliveryAttemptId);
+  assert.equal(current.state, 'accepted');
+  assert.equal(current.cancelRequested, true);
+});
+
+test('instruction guarded applied persists before success, rejects save failure, and does not reconsume a committed guard', async (t) => {
+  let failAppliedWrite = false;
+  let writeCount = 0;
+  const state = await prepareAcceptedInstruction(t, {
+    deliveryAttemptId: 'guarded-write-failure',
+    atomicWrite: async (target, value) => {
+      writeCount += 1;
+      const applied = value.ledger.deliveries.some((item) =>
+        item.deliveryAttemptId === 'guarded-write-failure' && item.state === 'applied');
+      if (failAppliedWrite && applied) throw new Error('fixture checkpoint failure');
+      await atomicWriteJson(path.dirname(target), path.basename(target), value);
+    },
+  });
+  failAppliedWrite = true;
+  let failedGuardCalls = 0;
+  await assert.rejects(state.adapter.recordAppliedInstructionGuarded(
+    state.delivery.deliveryAttemptId,
+    state.correlation,
+    () => { failedGuardCalls += 1; return true; },
+  ), errorCode('checkpoint_write_failed'));
+  assert.equal(failedGuardCalls, 1);
+  assert.equal((await state.adapter.get(state.delivery.deliveryAttemptId)).state, 'accepted');
+  assert.equal(writeCount, 4);
+  await state.adapter.close?.();
+});
+
+test('instruction guarded applied commit token is used once after persistence', async (t) => {
+  const state = await prepareAcceptedInstruction(t, { deliveryAttemptId: 'guarded-one-shot' });
+  let guardCalls = 0;
+  const applied = await state.adapter.recordAppliedInstructionGuarded(
+    state.delivery.deliveryAttemptId,
+    state.correlation,
+    () => { guardCalls += 1; return true; },
+  );
+  assert.equal(applied.state, 'applied');
+  const duplicate = await state.adapter.recordAppliedInstructionGuarded(
+    state.delivery.deliveryAttemptId,
+    state.correlation,
+    () => { guardCalls += 1; return true; },
+  );
+  assert.equal(duplicate.state, 'applied');
+  assert.equal(guardCalls, 1);
 });

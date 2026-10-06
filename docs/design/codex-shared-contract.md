@@ -135,24 +135,27 @@ Eが終了した場合はD宛通知を保留し、Dの終了や別targetへの�
 認証済みhandoff後にDと新ownerを再照合できた場合は同じD宛の未送信通知だけを再開し、送信開始済み通知は再送しない。
 | 種別 | 固定する宛先 | 照合条件 |
 |---|---|---|
+| instruction | 指示を届ける実行自身の`executionBinding` | 完全宛先と同attemptの専用送信能力が現行である |
 | question | 質問を発行した子自身の`executionBinding` | 子の`currentProof`とcurrentOwnerが再照合済みであり、対象native質問が特定できる |
 | result | 記録時点の`currentOwner`と`ownerGeneration` | 現在ownerがliveとして再照合済みである |
 | PR notification | `targetId`が指す`targetExecution={launchId, runId, attemptId}` | 通知先自身の`executionBinding`と`currentProof`が現行である |
-配送台帳は`question`、`result`、`pr-notification`の種別を持ち、各deliveryの宛先を作成時に固定する。
+配送台帳は`instruction`、`question`、`result`、`pr-notification`の種別を持ち、各deliveryの宛先を作成時に固定する。
 子の結果返却とPRイベント通知は異なる配送として管理する。
 通知先を変更するときは、送信前の明示的な再登録と、旧宛先への未送信証明を必要とする。
+
+通常指示の送信方針、停止standaloneの専用認可、受付と入力適用の相関は[通常指示の配信契約](instruction-delivery.md)に従う。
 
 ## 論理メッセージと配送試行
 
 `logicalMessageId`とrevisionは一つの内容を識別し、`deliveryAttemptId`はその宛先への個別配送試行を識別する。
 
-配送台帳の主キーは`deliveryAttemptId`であり、questionとresultは種別、`executionId`、`logicalMessageId`、revisionの組で重複を調べる。
+配送台帳の主キーは`deliveryAttemptId`であり、instruction、question、resultは種別、`executionId`、`logicalMessageId`、revisionの組で重複を調べる。
 
 別executionの同名messageは互いに干渉しない。
 
-登録APIは`createQuestionDelivery`、`createResultDelivery`、`createPrNotification`を使い、各記録に`executionId`を結び付ける。
+登録APIは`createInstructionDelivery`、`createQuestionDelivery`、`createResultDelivery`、`createPrNotification`を使い、各記録に`executionId`を結び付ける。
 
-同じquestionまたはresultのrevisionに`sending`、`accepted`、`unknown`、`applied`の記録が一つでもあれば、新しい`deliveryAttemptId`を発行して再送しない。
+同じinstruction、question、resultのrevisionに`sending`、`accepted`、`unknown`、`applied`の記録が一つでもあれば、新しい`deliveryAttemptId`を発行して再送しない。
 
 `available`または`claimed`を未送信として確認できる場合に限り、`supersedeUnsentDelivery(deliveryAttemptId)`でpayloadを破棄し、旧記録を`superseded_before_send`として永続化した後、同じlogical keyに新しい宛先への明示的な試行を作成できる。
 

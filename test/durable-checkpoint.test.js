@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createEmptyLedger, createDelivery } = require('../src/server/delivery-ledger');
+const { createEmptyLedger, createDelivery, registerPrTarget } = require('../src/server/delivery-ledger');
 const {
   createDurableCheckpointStore,
   makeEmptyCheckpoint,
@@ -33,10 +33,106 @@ function sourceLaunch() {
   };
 }
 
+function checkpointWithLegacyDeliveryKinds(includeInstruction = false) {
+  const launch = sourceLaunch();
+  const runtimeLaunch = { ...launch, currentOwner: launch.executionBinding, ownerGeneration: 0 };
+  const targetPeriod = {
+    executionId: launch.executionBinding.periodId,
+    conversationId: launch.conversationId,
+    sessionId: launch.sessionId,
+    identity: launch.identity,
+  };
+  let ledger = createEmptyLedger();
+  for (const kind of ['question', 'result']) {
+    ledger = createDelivery(ledger, kind, {
+      deliveryAttemptId: 'legacy-' + kind,
+      logicalMessageId: 'legacy-' + kind + '-logical',
+      revision: 0,
+      payload: 'opaque-' + kind,
+    }, runtimeLaunch, kind === 'result' ? targetPeriod : undefined).ledger;
+  }
+  const registeredTarget = registerPrTarget(ledger, 'legacy-pr-target', launch);
+  ledger = createDelivery(registeredTarget.ledger, 'pr-notification', {
+    deliveryAttemptId: 'legacy-pr-notification',
+    logicalMessageId: 'legacy-pr-logical',
+    revision: 0,
+    payload: 'opaque-pr',
+    targetId: 'legacy-pr-target',
+  }, runtimeLaunch).ledger;
+  if (includeInstruction) {
+    ledger = createDelivery(ledger, 'instruction', {
+      deliveryAttemptId: 'instruction-delivery',
+      logicalMessageId: 'instruction-logical',
+      revision: 0,
+      payload: JSON.stringify({ schemaVersion: 1, mode: 'start', expectedTurnId: null,
+        input: [{ type: 'text', text: 'opaque instruction text', text_elements: [] }] }),
+    }, runtimeLaunch).ledger;
+  }
+  const claims = {
+    launchId: launch.launchId,
+    runId: launch.runId,
+    attemptId: launch.attemptId,
+    provider: launch.provider,
+    nativeIdKind: launch.nativeIdKind,
+    hostId: launch.hostId,
+    homeScopeId: launch.homeScopeId,
+    origin: launch.origin,
+    purpose: launch.purpose,
+    originBinding: launch.originBinding,
+  };
+  const immutableExecutionClaims = { ...claims, identity: launch.identity,
+    executionBinding: launch.executionBinding };
+  const scope = {
+    provider: launch.provider,
+    nativeIdKind: launch.nativeIdKind,
+    hostId: launch.hostId,
+    homeScopeId: launch.homeScopeId,
+    connectionSlotId: 'source-slot',
+  };
+  const checkpoint = makeEmptyCheckpoint();
+  checkpoint.revision = 1;
+  checkpoint.registrations.conversations = [{ conversationId: launch.conversationId, identity: launch.identity }];
+  checkpoint.registrations.executions = [{ conversationId: launch.conversationId,
+    executionId: launch.executionBinding.periodId, sessionId: launch.sessionId, state: 'active' }];
+  checkpoint.registrations.launches = [{ launchRef: launch.launchRef, claims, state: 'bound',
+    identity: launch.identity, executionBinding: launch.executionBinding,
+    conversationId: launch.conversationId, sessionId: launch.sessionId }];
+  checkpoint.registrations.runtimeLaunches = [{ launchRef: launch.launchRef,
+    claims: immutableExecutionClaims, state: 'bound', conversationId: launch.conversationId,
+    sessionId: launch.sessionId, currentOwner: launch.executionBinding, ownerGeneration: 0 }];
+  checkpoint.registrations.connections = [{ scope, generation: 1, state: 'active' }];
+  checkpoint.registrations.actors = [{ identity: launch.identity,
+    periodId: launch.executionBinding.periodId, actor: launch.executionBinding.actor,
+    contextId: 'source-context', launchRef: launch.launchRef, immutableExecutionClaims,
+    connectionScope: scope, connectionGeneration: 1, state: 'active' }];
+  checkpoint.ledger = ledger;
+  return checkpoint;
+}
 function errorCode(code) {
   return (error) => error?.code === code;
 }
 
+test('checkpoint reads v1 ledgers without instruction and validates same-target instruction records', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'legacy-v1.json');
+  const legacy = checkpointWithLegacyDeliveryKinds();
+  await fs.writeFile(filePath, JSON.stringify(legacy, null, 2) + '\n', 'utf8');
+  const reader = createDurableCheckpointStore({ filePath });
+  t.after(() => reader.close());
+  const restoredLegacy = await reader.load();
+  assert.deepEqual(restoredLegacy.ledger.deliveries.map((item) => item.kind).sort(),
+    ['pr-notification', 'question', 'result']);
+  assert.equal(restoredLegacy.schemaVersion, 1);
+
+  const withInstruction = checkpointWithLegacyDeliveryKinds(true);
+  const normalized = normalizeCheckpoint(withInstruction);
+  assert.equal(normalized.schemaVersion, 1);
+  assert.deepEqual(normalized.ledger.deliveries.map((item) => item.kind).sort(),
+    ['instruction', 'pr-notification', 'question', 'result']);
+  const wrongInstructionTarget = structuredClone(withInstruction);
+  wrongInstructionTarget.ledger.deliveries.find((item) => item.kind === 'instruction').target.actor.id = 'other-actor';
+  assert.throws(() => normalizeCheckpoint(wrongInstructionTarget), errorCode('invalid_ledger'));
+});
 test('checkpoint rejects ledger references absent from captured registrations', () => {
   const created = createDelivery(createEmptyLedger(), 'question', {
     deliveryAttemptId: 'delivery-a', logicalMessageId: 'question-a', revision: 0, payload: 'private payload',

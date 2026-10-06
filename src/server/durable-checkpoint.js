@@ -612,7 +612,7 @@ function validateLedgerRegistrationReferences(ledger, registrations) {
       identity: sourceLaunch.identity,
       executionBinding: sourceLaunch.executionBinding,
     })) throw checkpointError('checkpoint_ledger_source_runtime_mismatch');
-    if (delivery.kind === 'question' && !runtimeSource) {
+    if (['question', 'instruction'].includes(delivery.kind) && !runtimeSource) {
       throw checkpointError('checkpoint_ledger_source_runtime_missing');
     }
     if (delivery.kind === 'result') {
@@ -647,12 +647,14 @@ function validateLedgerRegistrationReferences(ledger, registrations) {
           JSON.stringify(delivery.target.identity)) {
       throw checkpointError('checkpoint_ledger_target_binding_mismatch');
     }
-    if (delivery.kind === 'question' &&
+    if (['question', 'instruction'].includes(delivery.kind) &&
         (targetLaunch.launchRef !== sourceLaunch.launchRef ||
          JSON.stringify(delivery.target.claims) !== JSON.stringify(delivery.source.claims) ||
          delivery.target.periodId !== delivery.source.executionBinding.periodId ||
          JSON.stringify(delivery.target.actor) !== JSON.stringify(delivery.source.executionBinding.actor))) {
-      throw checkpointError('checkpoint_ledger_question_target_mismatch');
+      throw checkpointError(delivery.kind === 'instruction'
+        ? 'checkpoint_ledger_instruction_target_mismatch'
+        : 'checkpoint_ledger_question_target_mismatch');
     }
     if (delivery.kind === 'pr-notification' &&
         !ledger.notificationTargets.some((item) => item.launch.launchRef === targetLaunch.launchRef &&

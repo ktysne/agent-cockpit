@@ -316,6 +316,9 @@ function createCommonQuestionService(options = {}) {
       deliveryState: delivery?.state || null,
       externalResolution: record.externalResolution !== null,
       lateAnswerCount: record.lateAnswers.length,
+      ...(dashboard ? { lateAnswerRefs: record.lateAnswers.map((late, index) => ({
+        index, digest: late.digest, submittedAt: late.submittedAt,
+      })) } : {}),
       cancelled: record.cancelledAt !== null || (record.externalResolution === null && delivery?.state === 'cancelled_before_send'),
       cancelRequested: delivery?.cancelRequested === true,
       cancelHistoryMissing: record.externalResolution === null && delivery?.state === 'cancelled_before_send' && record.cancelledAt === null,
@@ -744,6 +747,32 @@ function createCommonQuestionService(options = {}) {
     }, true);
   }
 
+  async function readLateAnswerDraft(internalQuestionId, index, digest) {
+    if (!kernel.isIdentifier(internalQuestionId) || !Number.isSafeInteger(index) || index < 0 ||
+        typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) {
+      throw serviceError('invalid_late_answer_ref');
+    }
+    return enqueue(() => {
+      const record = currentQuestion(internalQuestionId);
+      const late = record?.lateAnswers[index];
+      if (!record || late?.digest !== digest) return null;
+      const answers = new Map(late.answers.map((answer) => [answer.questionId, answer]));
+      const text = record.questions.map((question) => {
+        const answer = answers.get(question.id);
+        if (!answer) throw serviceError('invalid_late_answer_ref');
+        const values = answer.optionIds.map((id) => question.options.find((option) => option.id === id)?.label);
+        if (answer.freeText !== null) values.push(answer.freeText);
+        return `${question.text}\n${values.map((value) => `- ${value}`).join('\n')}`;
+      }).join('\n\n');
+      return {
+        launchRef: record.launchRef,
+        logicalMessageId: `common-question-${record.internalQuestionId}`,
+        revision: record.revision,
+        text,
+      };
+    }, true);
+  }
+
   function tick() {
     return enqueue(tickNow);
   }
@@ -773,7 +802,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   return Object.freeze({ ready, register, status, answerPoll, submitAnswer, hold, cancel, tick,
-    resolveExternal, reportResponseLost, dashboardSnapshot, flush, close });
+    resolveExternal, reportResponseLost, dashboardSnapshot, readLateAnswerDraft, flush, close });
 }
 
 module.exports = { createCommonQuestionService };

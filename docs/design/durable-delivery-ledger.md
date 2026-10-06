@@ -28,12 +28,12 @@ resolverは同期で、Promise、欠落、例外は配信保留とする。
 ## 宛先と論理key
 
 executionIdは#166のperiodIdであり、launch/run/attemptとは別に保持する。
-questionとresultのkeyは種別、source executionId、logicalMessageId、revisionである。
+instruction、question、resultのkeyは種別、source executionId、logicalMessageId、revisionである。
 PR通知のkeyはlogicalMessageId、revision、正規target launch/run/attemptであり、aliasによって重複できない。
 deliveryAttemptIdは個別試行の主キーであり、同ID同内容の再登録だけを冪等として扱う。
 内容はUTF-8文字列のSHA-256 digestで固定し、同revisionの内容すり替えを拒否する。
 
-questionは発行した実行自身のexecutionBindingへ固定する。
+instructionとquestionは発行した実行自身のexecutionBindingへ固定する。
 resultは作成時点のcurrentOwnerとownerGenerationへ固定する。
 PR通知は明示登録したtargetIdから正規targetExecutionとexecutionBindingへ固定する。
 起動元、不変executionBinding、現在ownerを混同せず、handoffによる自動転送を作らない。
@@ -49,20 +49,21 @@ cancelled_before_sendの同revisionを復活させない。
 ## APIの境界
 
 台帳moduleは純粋な検証と遷移関数を提供し、payloadとprivate handleを返さない。
-製品storeの入口は`createDurableDeliveryStore({filePath, registrationRegistry, launchRegistry, runtimeRegistry, resolveProof, verifyResultOwner, atomicWrite?, limits?})`とする。
+製品storeの入口は`createDurableDeliveryStore({filePath, registrationRegistry, launchRegistry, runtimeRegistry, resolveProof, verifyResultOwner, verifyInstructionTarget, atomicWrite?, limits?})`とする。
 `ready`が復元を完了し、`flush()`はqueueの完了を待ち、`close()`は同じ保存先の所有を解放する。
 provider入口は`createProviderDeliveryAdapter(provider, store)`とする。
-question/resultの作成入力は`{launchRef, deliveryAttemptId, logicalMessageId, revision, payload}`とする。
+instruction/question/resultの作成入力は`{launchRef, deliveryAttemptId, logicalMessageId, revision, payload}`とする。
 PR通知の作成入力は`{sourceLaunchRef, targetId, deliveryAttemptId, logicalMessageId, revision, payload}`とし、作成元と通知先を別に解決する。
 PR target登録入力は`{targetId, launchRef}`とする。
 送信は`sendStart(deliveryAttemptId, trustedSink)`、相関保存は`recordAccepted(id, correlation)`と`recordApplied(id, correlation)`とする。
+通常指示の適用保存はprovider adapterの`recordAppliedInstructionGuarded(id, correlation, beginCommit)`を使い、台帳writer内で同期採用を確定してから保存する。採用境界は[通常指示の配信契約](instruction-delivery.md)に従う。
 保存入口は`createDurableCheckpointStore({filePath, atomicWrite?, maxBytes?, maxRecords?})`の`load()`と`save(checkpoint)`とする。
 checkpoint v1は`{schemaVersion, revision, registrations:{conversations,executions,launches,runtimeLaunches,connections,actors,handoffs}, ledger:{schemaVersion,revision,deliveries,notificationTargets,logicalTombstones}}`である。
 pure台帳は`createEmptyLedger`、`validateLedger`、`createDelivery`、`registerPrTarget`、`transitionDelivery`、`recoverLedger`、`getDelivery`、`snapshotLedger`を提供する。
-storeはcreateQuestionDelivery、createResultDelivery、registerPrNotificationTarget、createPrNotification、claim、cancel、supersedeUnsentDelivery、sendStart、recordAccepted、recordApplied、markUnknown、rehydratePayload、captureRegistrations、get、snapshotを提供する。
+storeはcreateInstructionDelivery、createQuestionDelivery、createResultDelivery、registerPrNotificationTarget、createPrNotification、claim、cancel、supersedeUnsentDelivery、sendStart、recordAccepted、recordApplied、markUnknown、rehydratePayload、captureRegistrations、get、snapshotを提供する。
 全mutationを同じwriterへ通し、保存成功後にだけ状態を公開する。
 getとsnapshotはpayloadを含めず、private handleも含めない。
-provider adapterはquestion/resultでsource、PR通知でtargetの完全identityのprovider/nativeIdKindを検査する。
+provider adapterはinstruction/question/resultでsource、PR通知でtargetの完全identityのprovider/nativeIdKindを検査する。
 作成後のclaim、取消、送信、受付、適用、unknown化、payload再取得も同じprovider境界を要求する。
 PR作成元は通知先と異なるproviderを許し、通知先を作成元へ自動変換しない。
 ownerは異providerも許し、子providerの制約を結果宛先へ誤適用しない。
@@ -164,3 +165,14 @@ G3は両adapterと製品storeを通す上記scenarioで確認する。
 公開read recordやcheckpointからverifiedを復活させず、実runtimeの使用直前proof確認を各統合で追加する。
 通常HOMEと外部bridgeの変更、merge、mainへのpushは含めない。
 先行部分だけで#175または#177全体を閉じない。
+
+## 通常指示の専用認可
+
+instructionは質問と同じ不変executionTargetを使い、専用のcreateInstructionDeliveryで作成する。
+既存三種別の保存形式とschemaVersionは維持する。
+同じcheckpointへinstructionを保存できるが、instructionを知らない旧バイナリーへのdowngrade互換は保証しない。
+
+instructionのsend-startとpayload復元では、信頼済み組立が注入した同期verifyInstructionTarget(delivery)を呼ぶ。
+欠落、例外、Promise、falseは配信を保留する。
+保存後にも同じ認可を検証し、通常のcurrentProofを緩めずに停止standalone専用能力を扱う。
+送信方針、指示ジャーナル、native入力digestと受付の相関は[通常指示の配信契約](instruction-delivery.md)で定める。

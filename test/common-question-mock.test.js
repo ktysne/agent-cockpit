@@ -97,6 +97,7 @@ function createHarness() {
     mainRow: () => '',
     agentSection: () => '',
     sessionDisplayName: candidate => candidate.title,
+    instructionComposer: () => '',
     orderedSectionKeys: keys => keys,
     isBusyAgent: () => false,
     visibleSubagents: () => [],

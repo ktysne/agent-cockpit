@@ -615,6 +615,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
     });
     const context = pageContext(web, {
       displayPreferences: { sectionOrder },
+      lastState: null,
       element,
       sessionReferences: () => [],
       kindEndedDecisionEntries: () => [],
@@ -631,6 +632,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       shownPermissions: () => [{}],
       shownActiveDecisions: () => [],
       shownCommonQuestions: () => [],
+      instructionComposer: () => null,
       appendPermissionWaits(target) { target.append({ marker: 'permission' }); },
       appendCommonQuestions() {},
       appendDecisions(target) { target.append({ marker: 'decision' }); },

@@ -369,6 +369,66 @@ function questionErrorStatus(error) {
   return 503;
 }
 
+const INSTRUCTION_MODES = new Set(['steer', 'start', 'next-user-input']);
+const INSTRUCTION_STATES = new Set(['available', 'claimed', 'sending', 'accepted', 'applied', 'unknown', 'unavailable', 'cancelled_before_send', 'superseded_before_send']);
+
+function validScopedIdentifier(value, maxLength = 512) {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength &&
+    value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function validInstructionIdentity(value) {
+  const fields = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
+  return hasExactKeys(value, fields) && ['claude', 'codex'].includes(value.provider) &&
+    fields.slice(1).every((field) => validScopedIdentifier(value[field]));
+}
+
+function instructionProjection(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      !validScopedIdentifier(value.deliveryAttemptId) || !validScopedIdentifier(value.logicalMessageId) ||
+      !validScopedIdentifier(value.launchRef) || !validSessionId(value.sessionId) ||
+      !validScopedIdentifier(value.executionId) || !validInstructionIdentity(value.identity) ||
+      !['standalone', 'delegated', 'review'].includes(value.origin) || !INSTRUCTION_STATES.has(value.state) ||
+      !INSTRUCTION_MODES.has(value.mode) || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
+      (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId)) ||
+      (value.heldReason !== null && value.heldReason !== undefined && !validText(value.heldReason, 512, true)) ||
+      !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) return null;
+  return {
+    deliveryAttemptId: value.deliveryAttemptId,
+    logicalMessageId: value.logicalMessageId,
+    revision: value.revision,
+    launchRef: value.launchRef,
+    sessionId: value.sessionId,
+    executionId: value.executionId,
+    identity: { ...value.identity },
+    origin: value.origin,
+    state: value.state,
+    mode: value.mode,
+    nativeTurnId: value.nativeTurnId,
+    heldReason: value.heldReason ?? null,
+    createdAt: value.createdAt ?? null,
+  };
+}
+
+function instructionErrorStatus(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (code === 'instruction_not_found' || code === 'delivery_not_found') return 404;
+  if (['instruction_scope_mismatch', 'instruction_launch_unavailable'].includes(code)) return 403;
+  if (code.startsWith('invalid_') || code.startsWith('expected_turn_') ||
+      code.startsWith('instruction_invalid_') || code.startsWith('instruction_expected_turn_') ||
+      code === 'unexpected_turn' || code === 'instruction_envelope_too_large') return 400;
+  if (['instruction_not_sendable', 'instruction_not_supersedable', 'instruction_mode_requires_supersede'].includes(code) ||
+      code.includes('conflict') || code.includes('mismatch') || code.includes('unavailable') ||
+      code.includes('unverified') || code.includes('forbidden') || code.includes('unsupported') ||
+      code.includes('timeout') || code.includes('requires_supersede')) return 409;
+  return 503;
+}
+
+function lateInstructionIds(internalQuestionId, index, digest) {
+  const key = crypto.createHash("sha256").update(JSON.stringify([internalQuestionId, index, digest])).digest("hex");
+  return { deliveryAttemptId: 'late-delivery-' + key, logicalMessageId: 'late-message-' + key, revision: 0 };
+}
+
 function decisionSummaries(state, sessionId) {
   return state.decisionsFor(sessionId)
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
@@ -392,6 +452,11 @@ function createRequestHandler(options) {
     questionServiceReady = true,
     pendingQuestionLosses = new Set(),
     managedCollectors = [],
+    launchRegistry = null,
+    instructionService = null,
+    instructionServiceReady = false,
+    instructionTargetState = null,
+    pendingInstructionLosses = new Set(),
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists = defaultCodexAgentScriptExists,
@@ -443,6 +508,357 @@ function createRequestHandler(options) {
     const conversation = snapshot.conversations.find((item) => item.conversationId === question.conversationId);
     if (!execution || !conversation || !sameQuestionIdentity(question.identity, conversation.identity)) return null;
     return { execution, conversation, sessionId: execution.sessionId };
+  }
+
+  function registrationSnapshotForInstructions() {
+    if (!registrationRegistry || typeof registrationRegistry.snapshot !== "function") return null;
+    try {
+      const snapshot = registrationRegistry.snapshot();
+      if (snapshot instanceof Promise) { snapshot.catch(() => {}); return null; }
+      if (!snapshot || typeof snapshot !== "object" || typeof snapshot.then === "function" ||
+          !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.executions)) return null;
+      return snapshot;
+    } catch { return null; }
+  }
+
+  function linkInstructionLaunchRecord(launch, snapshot, requireActive = false) {
+    if (!launch || typeof launch !== "object" || !snapshot ||
+        !validScopedIdentifier(launch.launchRef) || !["bound", "ended"].includes(launch.state) ||
+        !sameQuestionIdentity(launch.identity, launch.identity) ||
+        !validScopedIdentifier(launch.conversationId) || !validSessionId(launch.sessionId) ||
+        !validScopedIdentifier(launch.origin, 64) || !validScopedIdentifier(launch.purpose, 64) ||
+        !launch.executionBinding || typeof launch.executionBinding !== "object" ||
+        !hasExactKeys(launch.executionBinding, ["periodId", "actor"]) ||
+        !validScopedIdentifier(launch.executionBinding.periodId) ||
+        !launch.executionBinding.actor || typeof launch.executionBinding.actor !== "object" ||
+        !hasExactKeys(launch.executionBinding.actor, ["kind", "id"]) ||
+        !validScopedIdentifier(launch.executionBinding.actor.kind, 64) ||
+        !validScopedIdentifier(launch.executionBinding.actor.id)) return null;
+    const conversations = snapshot.conversations.filter((item) => item &&
+      item.conversationId === launch.conversationId && sameQuestionIdentity(item.identity, launch.identity));
+    const executions = snapshot.executions.filter((item) => item &&
+      item.conversationId === launch.conversationId &&
+      item.executionId === launch.executionBinding.periodId && item.sessionId === launch.sessionId &&
+      ["active", "ended"].includes(item.state) && (!requireActive || item.state === "active"));
+    if (conversations.length !== 1 || executions.length !== 1) return null;
+    return { launch, conversation: conversations[0], execution: executions[0] };
+  }
+
+  function linkInstructionLaunch(launchRef, snapshot, requireActive = false) {
+    if (!launchRegistry || typeof launchRegistry.get !== "function" || !validScopedIdentifier(launchRef)) return null;
+    try { return linkInstructionLaunchRecord(launchRegistry.get(launchRef), snapshot, requireActive); }
+    catch { return null; }
+  }
+
+  function instructionTargetProjection(launchRef) {
+    const unavailable = { status: "unverified", nativeTurnId: null, reason: "instruction_dispatch_unavailable" };
+    if (typeof instructionTargetState !== "function") return unavailable;
+    try {
+      const value = instructionTargetState(launchRef);
+      if (value instanceof Promise) { value.catch(() => {}); return unavailable; }
+      if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.then === "function" ||
+          !hasExactKeys(value, ["status", "nativeTurnId", "reason"]) ||
+          !["working", "stopped", "waiting", "unverified"].includes(value.status) ||
+          (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId)) ||
+          (value.reason !== null && !validText(value.reason, 512, true))) return unavailable;
+      return { status: value.status, nativeTurnId: value.nativeTurnId, reason: value.reason };
+    } catch { return unavailable; }
+  }
+
+  function instructionModeAllowed(launch, target, mode, expectedTurnId, allowNextUserInput = false) {
+    if (!launch || !target || launch.origin === "review" || launch.purpose === "review") return false;
+    if (mode === "steer") return ["standalone", "delegated"].includes(launch.origin) && target.status === "working" &&
+      validScopedIdentifier(expectedTurnId) && target.nativeTurnId === expectedTurnId;
+    if (mode === "start") return launch.origin === "standalone" && target.status === "stopped" && expectedTurnId === null;
+    return allowNextUserInput && mode === "next-user-input" && launch.origin === "standalone" &&
+      target.status === "stopped" && expectedTurnId === null;
+  }
+
+  function instructionTargetList(snapshot) {
+    if (!launchRegistry || typeof launchRegistry.snapshot !== "function" || !snapshot) return [];
+    try {
+      const launchSnapshot = launchRegistry.snapshot();
+      if (launchSnapshot instanceof Promise) { launchSnapshot.catch(() => {}); return []; }
+      if (!launchSnapshot || typeof launchSnapshot !== "object" || typeof launchSnapshot.then === "function" ||
+          !Array.isArray(launchSnapshot.launches)) return [];
+      return launchSnapshot.launches.flatMap((candidate) => {
+        const link = candidate?.state === "bound" ? linkInstructionLaunchRecord(candidate, snapshot, true) : null;
+        if (!link) return [];
+        const target = instructionTargetProjection(link.launch.launchRef);
+        return [{ launchRef: link.launch.launchRef, sessionId: link.execution.sessionId,
+          executionId: link.execution.executionId, identity: { ...link.launch.identity },
+          origin: link.launch.origin, purpose: link.launch.purpose,
+          status: target.status, nativeTurnId: target.nativeTurnId, reason: target.reason }];
+      });
+    } catch { return []; }
+  }
+
+  function instructionMatchesLaunch(instruction, link) {
+    return Boolean(instruction && link && instruction.launchRef === link.launch.launchRef &&
+      instruction.sessionId === link.execution.sessionId &&
+      instruction.executionId === link.launch.executionBinding.periodId &&
+      instruction.origin === link.launch.origin && sameQuestionIdentity(instruction.identity, link.launch.identity));
+  }
+
+  function safeInstructionRecovery(recovery) {
+    if (!recovery || typeof recovery !== "object" || Array.isArray(recovery)) return undefined;
+    const result = {};
+    if (typeof recovery.status === "string" && validScopedIdentifier(recovery.status, 64)) result.status = recovery.status;
+    if (typeof recovery.blocked === "boolean") result.blocked = recovery.blocked;
+    if (typeof recovery.errorCode === "string" && /^[a-z0-9_]{1,80}$/.test(recovery.errorCode)) result.errorCode = recovery.errorCode;
+    if (Number.isSafeInteger(recovery.unmatchedCount) && recovery.unmatchedCount >= 0) result.unmatchedCount = recovery.unmatchedCount;
+    return Object.keys(result).length ? result : undefined;
+  }
+
+  function queueInstructionResponseLost(deliveryAttemptId) {
+    if (!instructionService?.reportResponseLost || !validScopedIdentifier(deliveryAttemptId)) return;
+    const operation = Promise.resolve().then(() => instructionService.reportResponseLost(deliveryAttemptId)).catch(() => {});
+    pendingInstructionLosses.add(operation);
+    void operation.finally(() => pendingInstructionLosses.delete(operation));
+  }
+
+  async function flushInstructionLosses() {
+    await Promise.allSettled([...pendingInstructionLosses]);
+  }
+
+  async function readInstructionBody(request, response) {
+    try {
+      const body = JSON.parse(await readJsonBody(request));
+      if (body && typeof body === 'object' && !Array.isArray(body)) return body;
+    } catch (error) {
+      jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+      return null;
+    }
+    jsonResponse(response, 400, { error: 'Invalid request' });
+    return null;
+  }
+
+  function instructionScopeMatches(body, link) {
+    return Boolean(link && body.session_id === link.execution.sessionId &&
+      body.execution_id === link.execution.executionId);
+  }
+
+  function instructionServiceResult(result) {
+    const instruction = instructionProjection(result?.instruction);
+    if (!instruction || !['created', 'existing', 'sending', 'cancelled', 'superseded', 'unknown', 'unchanged'].includes(result?.outcome)) {
+      return null;
+    }
+    return { outcome: result.outcome, instruction };
+  }
+
+  function sendInstructionError(response, error) {
+    const code = typeof error?.code === 'string' && /^[a-z0-9_]{1,80}$/.test(error.code)
+      ? error.code : 'instruction_unavailable';
+    jsonResponse(response, instructionErrorStatus(error), { error: code });
+  }
+
+  async function loadScopedInstruction(deliveryAttemptId, body) {
+    const stored = await instructionService.get(deliveryAttemptId);
+    if (!stored) return { missing: true };
+    const instruction = instructionProjection(stored.instruction);
+    const snapshot = registrationSnapshotForInstructions();
+    const link = instruction && snapshot ? linkInstructionLaunch(instruction.launchRef, snapshot) : null;
+    if (!instruction || !link || !instructionMatchesLaunch(instruction, link)) return { forbidden: true };
+    if (!instructionScopeMatches(body, link)) return { forbidden: true };
+    return { instruction, link };
+  }
+
+  async function handleInstructionRequest(request, response, requestUrl, info) {
+    const createPath = request.method === 'POST' && requestUrl.pathname === '/api/instructions/create';
+    const actionPath = request.method === 'POST' && requestUrl.pathname.match(/^\/api\/instructions\/([^/]+)\/(send|cancel|alternative)$/);
+    const latePath = request.method === 'POST' && requestUrl.pathname.match(/^\/api\/decisions\/([^/]+)\/late-instruction$/);
+    if (!createPath && !actionPath && !latePath) return false;
+    if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+      jsonResponse(response, 401, { error: 'Unauthorized' });
+      return true;
+    }
+    if (!validRequiredUiOrigin(request, info.port)) {
+      jsonResponse(response, 403, { error: 'Forbidden' });
+      return true;
+    }
+    if (!instructionService || !instructionServiceReady) {
+      jsonResponse(response, 503, { error: 'Instruction service is unavailable' });
+      return true;
+    }
+    const body = await readInstructionBody(request, response);
+    if (!body) return true;
+
+    try {
+      if (createPath) {
+        const fields = ['session_id', 'execution_id', 'launch_ref', 'delivery_attempt_id',
+          'logical_message_id', 'revision', 'text', 'mode', 'expected_turn_id'];
+        if (!hasExactKeys(body, fields) || !validSessionId(body.session_id) ||
+            !validScopedIdentifier(body.execution_id) || !validScopedIdentifier(body.launch_ref) ||
+            !validScopedIdentifier(body.delivery_attempt_id) || !validScopedIdentifier(body.logical_message_id) ||
+            !Number.isSafeInteger(body.revision) || body.revision < 0 ||
+            typeof body.text !== 'string' || !body.text.trim() || Buffer.byteLength(body.text, 'utf8') > 64 * 1024 ||
+            !INSTRUCTION_MODES.has(body.mode) ||
+            (body.expected_turn_id !== null && !validScopedIdentifier(body.expected_turn_id))) {
+          jsonResponse(response, 400, { error: 'instruction_invalid_request' });
+          return true;
+        }
+        const snapshot = registrationSnapshotForInstructions();
+        const link = snapshot ? linkInstructionLaunch(body.launch_ref, snapshot, true) : null;
+        if (!link || link.launch.state !== 'bound' || !instructionScopeMatches(body, link)) {
+          jsonResponse(response, 403, { error: 'instruction_scope_mismatch' });
+          return true;
+        }
+        const target = instructionTargetProjection(body.launch_ref);
+        if (!instructionModeAllowed(link.launch, target, body.mode, body.expected_turn_id)) {
+          jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
+          return true;
+        }
+        const result = await instructionService.create({
+          deliveryAttemptId: body.delivery_attempt_id,
+          launchRef: body.launch_ref,
+          logicalMessageId: body.logical_message_id,
+          revision: body.revision,
+          text: body.text,
+          mode: body.mode,
+          expectedTurnId: body.expected_turn_id,
+        });
+        const safe = instructionServiceResult(result);
+        if (!safe) {
+          jsonResponse(response, 503, { error: 'instruction_projection_unavailable' });
+          return true;
+        }
+        jsonResponse(response, 200, safe);
+        return true;
+      }
+
+      if (actionPath) {
+        let deliveryAttemptId;
+        try { deliveryAttemptId = decodeURIComponent(actionPath[1]); }
+        catch { jsonResponse(response, 400, { error: 'instruction_invalid_request' }); return true; }
+        if (!validScopedIdentifier(deliveryAttemptId) || !hasExactKeys(body,
+          actionPath[2] === 'alternative'
+            ? ['session_id', 'execution_id', 'new_delivery_attempt_id', 'logical_message_id', 'revision', 'text', 'mode', 'expected_turn_id']
+            : ['session_id', 'execution_id']) ||
+            !validSessionId(body.session_id) || !validScopedIdentifier(body.execution_id)) {
+          jsonResponse(response, 400, { error: 'instruction_invalid_request' });
+          return true;
+        }
+        const scoped = await loadScopedInstruction(deliveryAttemptId, body);
+        if (scoped.missing) { jsonResponse(response, 404, { error: 'instruction_not_found' }); return true; }
+        if (scoped.forbidden) { jsonResponse(response, 403, { error: 'instruction_scope_mismatch' }); return true; }
+        if (actionPath[2] === 'send') {
+          const { launch } = scoped.link;
+          const target = instructionTargetProjection(launch.launchRef);
+          const expectedTurnId = scoped.instruction.mode === 'steer' ? scoped.instruction.nativeTurnId : null;
+          const allowNext = scoped.instruction.mode === 'next-user-input';
+          if (launch.state !== 'bound' || scoped.link.execution.state !== 'active' ||
+              !instructionModeAllowed(launch, target, scoped.instruction.mode, expectedTurnId, allowNext)) {
+            jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
+            return true;
+          }
+          response.once('close', () => {
+            if (!response.writableFinished) queueInstructionResponseLost(deliveryAttemptId);
+          });
+          const result = await instructionService.send(deliveryAttemptId);
+          if (response.destroyed) return true;
+          const safe = instructionServiceResult(result);
+          if (!safe) {
+            queueInstructionResponseLost(deliveryAttemptId);
+            jsonResponse(response, 503, { error: 'instruction_projection_unavailable' });
+            return true;
+          }
+          jsonResponse(response, 200, safe);
+          return true;
+        }
+        if (actionPath[2] === 'cancel') {
+          const result = await instructionService.cancel(deliveryAttemptId);
+          const safe = instructionServiceResult(result);
+          if (!safe) { jsonResponse(response, 503, { error: 'instruction_projection_unavailable' }); return true; }
+          jsonResponse(response, 200, safe);
+          return true;
+        }
+        if (!validScopedIdentifier(body.new_delivery_attempt_id) || !validScopedIdentifier(body.logical_message_id) ||
+            !Number.isSafeInteger(body.revision) || body.revision < 0 || typeof body.text !== 'string' ||
+            !body.text.trim() || Buffer.byteLength(body.text, 'utf8') > 64 * 1024 ||
+            !INSTRUCTION_MODES.has(body.mode) ||
+            (body.expected_turn_id !== null && !validScopedIdentifier(body.expected_turn_id))) {
+          jsonResponse(response, 400, { error: 'instruction_invalid_request' });
+          return true;
+        }
+        const { launch, execution } = scoped.link;
+        const target = instructionTargetProjection(launch.launchRef);
+        if (launch.state !== 'bound' || execution.state !== 'active' ||
+            !instructionModeAllowed(launch, target, body.mode, body.expected_turn_id, true)) {
+          jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
+          return true;
+        }
+        const result = await instructionService.supersedeUnsent(deliveryAttemptId, {
+          newDeliveryAttemptId: body.new_delivery_attempt_id,
+          logicalMessageId: body.logical_message_id,
+          revision: body.revision,
+          text: body.text,
+          mode: body.mode,
+          expectedTurnId: body.expected_turn_id,
+        });
+        const safe = instructionServiceResult(result);
+        if (!safe) { jsonResponse(response, 503, { error: 'instruction_projection_unavailable' }); return true; }
+        jsonResponse(response, 200, safe);
+        return true;
+      }
+
+      let internalQuestionId;
+      try { internalQuestionId = decodeURIComponent(latePath[1]); }
+      catch { jsonResponse(response, 400, { error: 'instruction_invalid_request' }); return true; }
+      const lateFields = ['session_id', 'execution_id', 'index', 'digest', 'mode', 'expected_turn_id'];
+      if (!hasExactKeys(body, lateFields) || !validSessionId(body.session_id) ||
+          !validScopedIdentifier(body.execution_id) || !Number.isSafeInteger(body.index) || body.index < 0 ||
+          typeof body.digest !== 'string' || !/^[a-f0-9]{64}$/.test(body.digest) ||
+          !INSTRUCTION_MODES.has(body.mode) ||
+          (body.expected_turn_id !== null && !validScopedIdentifier(body.expected_turn_id))) {
+        jsonResponse(response, 400, { error: 'instruction_invalid_request' });
+        return true;
+      }
+      if (!questionService || !questionServiceReady || typeof questionService.readLateAnswerDraft !== 'function') {
+        jsonResponse(response, 503, { error: 'Late answer conversion is unavailable' });
+        return true;
+      }
+      const questionSnapshot = await questionService.dashboardSnapshot();
+      const question = questionSnapshot?.questions?.find((item) => item.internalQuestionId === internalQuestionId);
+      const questionLink = question && questionRegistrationLink(question);
+      if (!question || !questionLink || questionLink.sessionId !== body.session_id ||
+          questionLink.execution.executionId !== body.execution_id ||
+          !question.lateAnswerRefs?.some((ref) => ref.index === body.index && ref.digest === body.digest)) {
+        jsonResponse(response, 404, { error: 'late_answer_not_found' });
+        return true;
+      }
+      const launchSnapshot = registrationSnapshotForInstructions();
+      const launchLink = launchSnapshot ? linkInstructionLaunch(question.launchRef, launchSnapshot, true) : null;
+      if (!launchLink || launchLink.launch.state !== 'bound' || launchLink.execution.sessionId !== body.session_id ||
+          launchLink.execution.executionId !== body.execution_id) {
+        jsonResponse(response, 403, { error: 'instruction_scope_mismatch' });
+        return true;
+      }
+      const target = instructionTargetProjection(question.launchRef);
+      if (!instructionModeAllowed(launchLink.launch, target, body.mode, body.expected_turn_id)) {
+        jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
+        return true;
+      }
+      const draft = await questionService.readLateAnswerDraft(internalQuestionId, body.index, body.digest);
+      if (!draft || draft.launchRef !== question.launchRef || typeof draft.text !== 'string') {
+        jsonResponse(response, 404, { error: 'late_answer_not_found' });
+        return true;
+      }
+      const ids = lateInstructionIds(internalQuestionId, body.index, body.digest);
+      const result = await instructionService.create({
+        ...ids,
+        launchRef: draft.launchRef,
+        text: draft.text,
+        mode: body.mode,
+        expectedTurnId: body.expected_turn_id,
+      });
+      const safe = instructionServiceResult(result);
+      if (!safe) { jsonResponse(response, 503, { error: 'instruction_projection_unavailable' }); return true; }
+      jsonResponse(response, 200, safe);
+      return true;
+    } catch (error) {
+      sendInstructionError(response, error);
+      return true;
+    }
   }
 
   async function dashboardQuestion(internalQuestionId) {
@@ -519,6 +935,26 @@ function createRequestHandler(options) {
           return;
         }
       }
+      let instructionDashboard = null;
+      let instructionRegistrationSnapshot = null;
+      let instructionTargets = [];
+      let instructionDashboardUnavailable = !instructionService || !instructionServiceReady;
+      let instructionTargetsUnavailable = !launchRegistry;
+      if (launchRegistry) {
+        instructionRegistrationSnapshot = registrationSnapshotForInstructions();
+        if (instructionRegistrationSnapshot) {
+          instructionTargets = instructionTargetList(instructionRegistrationSnapshot);
+          instructionTargetsUnavailable = false;
+        } else instructionTargetsUnavailable = true;
+      }
+      if (instructionService && instructionServiceReady) {
+        try {
+          instructionDashboard = await instructionService.dashboardSnapshot();
+          if (!instructionDashboard || typeof instructionDashboard !== "object" ||
+              !Array.isArray(instructionDashboard.instructions)) throw new Error();
+          instructionDashboardUnavailable = false;
+        } catch { instructionDashboardUnavailable = true; }
+      }
       const pullRequests = pullRequestTracker?.snapshot() || [];
       const now = Date.now();
       const awayState = away.snapshot();
@@ -573,6 +1009,31 @@ function createRequestHandler(options) {
           isNew: Number.isFinite(seenMilliseconds) && question.createdAt > seenMilliseconds,
         });
       }
+      let unmatchedInstructions = 0;
+      for (const rawInstruction of instructionDashboard?.instructions || []) {
+        const instruction = instructionProjection(rawInstruction);
+        if (!instruction || !instructionRegistrationSnapshot) { unmatchedInstructions += 1; continue; }
+        const link = linkInstructionLaunch(instruction.launchRef, instructionRegistrationSnapshot, false);
+        if (!link || !instructionMatchesLaunch(instruction, link)) { unmatchedInstructions += 1; continue; }
+        let session = sessionsById.get(link.execution.sessionId);
+        if (!session) {
+          session = { session_id: link.execution.sessionId, title: instruction.identity.nativeId, product: null,
+            status: "待機中", tools: [], agents: [], permissionWaits: [], decisions: [], tasks: [], tasksUpdatedAt: null };
+          sessionsById.set(link.execution.sessionId, session);
+          sessions.push(session);
+        }
+        if (!Array.isArray(session.instructions)) session.instructions = [];
+        session.instructions.push({ ...instruction, registrationExecutionId: link.execution.executionId,
+          executionState: link.execution.state });
+      }
+      const instructionRecovery = safeInstructionRecovery(instructionDashboard?.recovery);
+      const instructionDiagnostics = {
+        service: instructionDashboardUnavailable ? "unavailable" : instructionRecovery?.status || "ready",
+        targets: instructionTargetsUnavailable ? "unavailable" : "available",
+        ...(instructionRecovery?.blocked === true ? { blocked: true } : {}),
+        ...(instructionRecovery?.errorCode ? { errorCode: instructionRecovery.errorCode } : {}),
+        ...(unmatchedInstructions ? { unmatchedCount: unmatchedInstructions } : {}),
+      };
       const uiVersion = await currentUiVersion();
       let codexAgent = false;
       for (const scriptPath of codexAgentScriptPaths(claudeHome, userHome)) {
@@ -601,9 +1062,10 @@ function createRequestHandler(options) {
         ? { ...(commonQuestionSnapshot?.recovery ? { recovery: commonQuestionSnapshot.recovery } : {}),
           ...(orphanedCommonQuestions.length ? { orphanedQuestions: orphanedCommonQuestions } : {}) }
         : undefined;
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion, ...(commonQuestionDiagnostics ? { commonQuestionDiagnostics } : {}) });
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion, instructionTargets, instructionDiagnostics, ...(commonQuestionDiagnostics ? { commonQuestionDiagnostics } : {}) });
       return;
     }
+    if (await handleInstructionRequest(request, response, requestUrl, info)) return;
     const commonQuestionRoute = requestUrl.pathname.match(/^\/api\/sessions\/pending\/questions\/(register|status|answer-poll|response-lost)$/);
     if (request.method === 'POST' && commonQuestionRoute) {
       if (request.headers['x-cockpit-secret'] !== info.secret) {
@@ -1727,6 +2189,7 @@ function createRequestHandler(options) {
     textResponse(response, 404, 'Not Found');
   };
   handler.flushQuestionLosses = async () => { await Promise.all([...pendingQuestionLosses]); };
+  handler.flushInstructionLosses = flushInstructionLosses;
   return handler;
 }
 
@@ -1781,7 +2244,10 @@ async function startServer(options = {}) {
   away.attachWriter?.(storageWriter);
   const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
   const registrationRegistry = options.registrationRegistry || createRegistrationKernel().registry;
+  const launchRegistry = options.launchRegistry || null;
   const questionService = options.questionService || null;
+  const instructionService = options.instructionService || null;
+  const pendingInstructionLosses = new Set();
   const pendingQuestionLosses = new Set();
   let questionServiceReady = false;
   if (questionService) {
@@ -1790,6 +2256,15 @@ async function startServer(options = {}) {
       questionServiceReady = true;
     } catch {
       questionServiceReady = false;
+    }
+  }
+  let instructionServiceReady = false;
+  if (instructionService) {
+    try {
+      await instructionService.ready();
+      instructionServiceReady = true;
+    } catch {
+      instructionServiceReady = false;
     }
   }
   state.isSessionAbsenceProtected = (sessionId) => registrationRegistry.isRegisteredSessionId(sessionId);
@@ -1843,9 +2318,14 @@ async function startServer(options = {}) {
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
     registrationRegistry,
+    launchRegistry,
     questionService,
     questionServiceReady,
     pendingQuestionLosses,
+    instructionService,
+    instructionServiceReady,
+    instructionTargetState: options.instructionTargetState,
+    pendingInstructionLosses,
     providerEventProjection: options.providerEventProjection,
     resolveActorCorrelation: options.resolveActorCorrelation,
     managedCollectors: options.managedCollectors,
@@ -1867,6 +2347,7 @@ async function startServer(options = {}) {
   } catch (error) {
     if (server.listening) await new Promise((resolve) => server.close(resolve));
     try { await questionService?.close?.(); } catch {}
+    try { await instructionService?.close?.(); } catch {}
     throw error;
   }
 
@@ -1902,6 +2383,9 @@ async function startServer(options = {}) {
       pullRequestTracker.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
       await handler.flushQuestionLosses();
+      await handler.flushInstructionLosses();
+      try { await instructionService?.flush?.(); } catch {}
+      try { await instructionService?.close?.(); } catch {}
       try { await questionService?.close?.(); } catch {}
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
@@ -1910,7 +2394,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, questionService, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, questionService, instructionService, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
 }
 
 function parseArguments(argv) {
