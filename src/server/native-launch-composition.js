@@ -6,6 +6,8 @@ const { createProviderRegistrationAdapter } = require('./provider-registration')
 const { createProviderLaunchAdapter } = require('./launch-binding');
 const { createProviderRuntimeAdapter } = require('./runtime-binding');
 const { getOwnedSource } = require('./owned-native-runner');
+const { createOwnedInstructionDispatch } = require('./owned-native-instruction-dispatch');
+const { getOwnedInstructionWriter } = require('./owned-native-instruction-writer');
 const { createManagedCollector, sanitizeManagedCollectorSnapshot } = require('./managed-collector');
 const { createOwnedSourceAccessor } = require('./owned-native-source-collector');
 
@@ -540,6 +542,7 @@ function createNativeLaunchComposition(options = {}) {
     }
     record.proofHandle = null;
     record.executionActorHandle = null;
+    record.actorLifeHandle = null;
     record.writerEnvelope = null;
     notifyDetach?.();
     for (const wake of record.sourceWaiters) wake();
@@ -774,6 +777,8 @@ function createNativeLaunchComposition(options = {}) {
     record.currentContextKind = context.kind;
     record.currentContextId = context.nativeContextId;
     record.executionActorHandle = executionActor.actorHandle;
+    record.actorLifeHandle = executionActor.actorHandle;
+    record.actorLifeContextId = record.currentContextId;
     record.proofHandle = null;
     record.writerEnvelope = null;
     record.writerContextId = null;
@@ -800,6 +805,8 @@ function createNativeLaunchComposition(options = {}) {
     record.currentContextKind = context.kind;
     record.currentContextId = context.nativeContextId;
     record.executionActorHandle = executionActor.actorHandle;
+    record.actorLifeHandle = executionActor.actorHandle;
+    record.actorLifeContextId = record.currentContextId;
     record.proofHandle = reconciled.proofHandle;
     record.ownerGeneration = reconciled.currentProof.ownerGeneration;
     record.writerEnvelope = null;
@@ -835,6 +842,7 @@ function createNativeLaunchComposition(options = {}) {
       return false;
     }
     record.terminalContextIds.add(context.nativeContextId);
+    record.lastTerminalContextId = context.nativeContextId;
     if (!record.identity || !record.currentContextId) {
       setUnknown(record, 'native_context_ended');
       return true;
@@ -877,6 +885,7 @@ function createNativeLaunchComposition(options = {}) {
     record.currentContextId = null;
     record.currentContextKind = null;
     record.executionActorHandle = null;
+    record.actorLifeHandle = null;
     record.pendingContexts = [];
     setUnknown(record, 'native_observation_gap');
   }
@@ -1077,6 +1086,10 @@ function createNativeLaunchComposition(options = {}) {
       uncertainContextIds: new Set(),
       pendingContexts: [],
       executionActorHandle: null,
+      actorLifeHandle: null,
+      actorLifeContextId: null,
+      lastTerminalContextId: null,
+      instructionOwner: null,
       proofHandle: null,
       writerEnvelope: null,
       writerContextId: null,
@@ -1518,6 +1531,104 @@ function createNativeLaunchComposition(options = {}) {
     return record.ownedCollector;
   }
 
+  function createInstructionOwner(admissionReceipt) {
+    const record = admissionRecords.get(admissionReceipt);
+    if (!record) throw compositionError('admission_receipt_unavailable');
+    if (record.instructionOwner) return record.instructionOwner;
+    function writer() { return record.sourceCapability ? getOwnedInstructionWriter(record.sourceCapability) : null; }
+    function loanCurrent(loan) {
+      try {
+        return Boolean(loan?.active && record.ownedLoan === loan && !loan.needsFreshContext &&
+          record.epoch === loan.epoch && record.activeEpoch === loan.epoch && !record.logicalDetached &&
+          !record.runtimeDisconnected && record.connectionHandle === loan.connectionHandle &&
+          record.connectionGeneration === loan.connectionGeneration && physicalSourceCurrent(record, loan.epoch) &&
+          runtimeKernel.registry.checkCurrentConnection(loan.connectionHandle) === true &&
+          record.sourceFacade.checkLease(loan.lease) === true);
+      } catch { return false; }
+    }
+    function projection() {
+      if (!record.identity || !record.registration || !record.executionBinding) return null;
+      const claims = {};
+      for (const field of CLAIM_FIELDS.slice(0, 10)) claims[field] = field === 'originBinding' ? cloneBinding(record.claims[field]) : record.claims[field];
+      return { launchRef: record.launchRef, claims, identity: cloneIdentity(record.identity),
+        executionBinding: cloneBinding(record.executionBinding), conversationId: record.registration.conversationId, sessionId: record.registration.sessionId };
+    }
+    function capture(metadata, evidenceTurn = null) {
+      const loan = record.ownedLoan;
+      if (!loanCurrent(loan) || record.claims.origin === 'review' || record.claims.purpose !== 'agent' ||
+          JSON.stringify(metadata.source) !== JSON.stringify(projection())) return null;
+      const registrationStamp = registrationKernel.registry.captureAuthorityRevision();
+      const launchStamp = launchKernel.registry.captureAuthorityRevision();
+      const sourceCapability = record.sourceCapability;
+      const owner = record.currentOwnerRecord;
+      const ownerGeneration = record.ownerGeneration;
+      const actorHandle = record.actorLifeHandle;
+      const terminal = record.lastTerminalContextId;
+      let proof = null;
+      const lifeOnly = !evidenceTurn && metadata.mode === 'start';
+      if (lifeOnly) {
+        if (record.claims.origin !== 'standalone' || owner !== record || record.currentContextId || !terminal || terminal !== record.actorLifeContextId || !actorHandle ||
+            typeof runtimeKernel.registry.checkActorLifeCapability !== 'function' || !periodMatches(record)) return null;
+        const bound = launchKernel.registry.get(record.launchRef);
+        const runtime = runtimeRecord(record);
+        if (!bound || bound.state !== 'bound' || JSON.stringify(immutableClaims({ ...record, launchRecord: bound })) !== JSON.stringify(immutableClaims(record)) ||
+            !runtime || runtime.ownerGeneration !== ownerGeneration || !bindingEquals(runtime.currentOwner, record.executionBinding)) return null;
+      } else {
+        const expectedTurn = evidenceTurn || metadata.expectedTurnId;
+        if (record.profile.provider !== 'codex' && !evidenceTurn || !expectedTurn || record.currentContextId !== expectedTurn) return null;
+        proof = resolveProof(record.launchRef);
+        if (!proof) return null;
+      }
+      const contextId = record.currentContextId;
+      return { checkEvidenceScope() {
+        try {
+          return loanCurrent(loan) && record.sourceCapability === sourceCapability &&
+            record.currentOwnerRecord === owner && record.ownerGeneration === ownerGeneration;
+        } catch { return false; }
+      }, checkFinal() {
+        try {
+          return registrationKernel.registry.checkAuthorityRevision(registrationStamp) === true &&
+            launchKernel.registry.checkAuthorityRevision(launchStamp) === true && loanCurrent(loan) &&
+            record.sourceCapability === sourceCapability && record.currentOwnerRecord === owner &&
+            record.ownerGeneration === ownerGeneration && record.currentContextId === contextId &&
+            record.actorLifeHandle === actorHandle && record.lastTerminalContextId === terminal &&
+            (lifeOnly ? runtimeKernel.registry.checkActorLifeCapability(record.launchRef, actorHandle, ownerGeneration) === true :
+              record.proofHandle === proof && runtimeKernel.registry.checkProofCapability(record.launchRef, proof) === true) &&
+            registrationKernel.registry.checkAuthorityRevision(registrationStamp) === true &&
+            launchKernel.registry.checkAuthorityRevision(launchStamp) === true;
+        } catch { return false; }
+      } };
+    }
+    const pendingSubscribers = new Set();
+    let subscribedWriter = null;
+    function ensureEvidenceSubscription() {
+      const currentWriter = writer();
+      if (currentWriter && currentWriter !== subscribedWriter) {
+        subscribedWriter = currentWriter;
+        currentWriter.subscribeEvidence((token, receipt) => { for (const callback of [...pendingSubscribers]) callback(token, receipt); });
+      }
+      return currentWriter;
+    }
+    record.instructionOwner = createOwnedInstructionDispatch({
+      capture,
+      prepareNative(metadata) { return ensureEvidenceSubscription()?.prepare(metadata) || null; },
+      checkNative(token) { return writer()?.check(token) === true; },
+      dispatchNative(token, command, finalGuard) {
+        const native = writer(); if (!native) throw compositionError('instruction_dispatch_unavailable');
+        return native.dispatchNow(token, command, finalGuard);
+      },
+      subscribeNative(callback) { pendingSubscribers.add(callback); return () => pendingSubscribers.delete(callback); },
+      consumeEvidence(token, receipt) {
+        const native = writer(); const observation = native?.inspectEvidence(token, receipt);
+        if (!observation) return null;
+        const authorization = capture(observation.metadata, observation.nativeTurnId);
+        if (!authorization || authorization.checkFinal() !== true) return null;
+        return native.consumeEvidence(token, receipt);
+      },
+    });
+    return record.instructionOwner;
+  }
+
   function snapshot() {
     return deepFreeze({
       schemaVersion: 'native-launch-composition-v1',
@@ -1528,6 +1639,7 @@ function createNativeLaunchComposition(options = {}) {
   return Object.freeze({
     admitLaunch,
     createOwnedCollector,
+    createInstructionOwner,
     start,
     stop,
     handoff,

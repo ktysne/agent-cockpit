@@ -355,6 +355,14 @@ function createOwnedNativeSource(options) {
       const context = freezeContext(value, source.provider, true);
       return recordTerminal(identity, context, true);
     },
+    beginInstructionContext(terminalId) {
+      if (!checkSource() || !source.currentIdentity || !source.currentContext ||
+          source.currentContext.nativeContextId !== terminalId ||
+          !source.terminals.has(source.currentIdentity.nativeId + '\u0000' + terminalId)) return false;
+      source.currentContext = null;
+      return true;
+    },
+    captureInstructionLease() { return source.activeLease; },
     isLeaseTokenCurrent(leaseToken) {
       return Boolean(leaseToken && leaseToken.source === source && isLeaseRecordCurrent(leaseToken));
     },
