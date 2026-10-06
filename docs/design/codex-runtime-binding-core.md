@@ -26,7 +26,7 @@ AのbindExecutionを再照合時に呼ぶと終了済みの起動元親を再要
 ## API
 
 製品ファイルはsrc/server/runtime-binding.jsとする。
-既存の登録核、launch核、state、events、store、server、MCP入口は変更しない。
+登録核とlaunch核にはcallbackなしのreadonly authority revisionを追加し、既存の保存schemaを維持する。
 
 `createRuntimeBindingKernel({registrationRegistry,launchRegistry})`はregistryとauthorityを返す。
 以下の入力は完全なschemaとして検査し、不明なclaimsキーを拒否する。
@@ -43,6 +43,7 @@ metadataの不明キーは捨てる。
 | authority.reconcileExecution(launchRef, {executionActorHandle,ownerActorHandle,expectedOwnerGeneration}) | 子と現行ownerの新鮮なactor証明を照合して{proofHandle,currentProof}を返す。実行側claimの省略やowner世代不一致は拒否 |
 | authority.handoff(launchRef, transition, newOwnerActorHandle) | 認証済みtransitionのCASを実行し、proofをnullにする。新ownerのfresh actor証明を要求。旧ownerの生存は要求しない |
 | registry.checkCurrentConnection(connectionHandle) | private opaque handleの現在の接続世代とslotを同期検査しbooleanを返す。JSON複製、他kernel、旧接続はfalse。metadataからcapabilityを復元しない |
+| registry.checkProofCapability(launchRef, opaqueHandle) | callbackなしの同期boolean検査。private proof所属、latest、immutable claims、owner世代、execution/owner接続、actor/context tombstoneを確認する。foreign handleはfalse。canonical period/launchの現状態は別のrevision検査を必要とする。 |
 | registry.checkCurrentProof(launchRef, proofHandle) | A state、固定値、子とownerの#166期間、actor終了、両接続世代、現行owner世代、最新proofを使用直前に再検査し、okと理由を返す |
 | registry.observe(identity, metadata) | 未確認観測を保持するだけ。取り込み、接続登録、actor証明、writer発行を行わない |
 | registry.get(launchRef), registry.snapshot() | 深いコピーの公開情報。capabilityを含めず、失効したcurrentProofはnull |
@@ -154,3 +155,17 @@ collectorのwire証拠が未確定なので、ここでは配置する差分や�
 
 専用worktreeでCodeGraph init、sync、exploreを実行し、変更後も索引を同期してproof検査の影響範囲を確認した。
 担当サンドボックスのexploreはunable to open database fileで失敗したため、主担当が権限を拡張した同worktreeで実行し、現行ソースと照合した。
+
+## canonical authorityのrevision
+
+registrationとlaunchのregistryは`captureAuthorityRevision()`と`checkAuthorityRevision(opaqueStamp)`を持つ。
+stampはkernelごとのprivate frozen objectで、認可に影響するauthorityの実変更ごとに新しいobjectへ置き換える。
+新規登録、period終了、writerの作成と置換、launch bindingと終了はstampを更新する。
+途中で変更した後に例外が出ても、変更前のstampを有効に戻さない。
+拒否して変更しなかった操作と完全同一の冪等操作はstampを維持し、unverifiedなobserveや読取りでは更新しない。
+両methodはsnapshot、外部getter、clock、callbackを呼ばない。
+foreign kernel、JSON複製、復旧前のstampはfalseとなり、stampを保存schemaへ追加しない。
+現kernelには直接restore/reset/eviction APIがなく、復旧時は新kernelの初期stampとauthority replayで別の寿命を持つ。
+
+`checkProofCapability`はcanonical periodの生存やlaunch状態を単独では認可しない。
+compositionはmetadata検査前にcanonical stampを捕捉し、callbackを含む検査がすべて終わった後に両stampと全nodeのprivate proof capabilityを確認する。

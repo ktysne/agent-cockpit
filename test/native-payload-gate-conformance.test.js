@@ -12,16 +12,23 @@ const { createNativeLaunchComposition } = require('../src/server/native-launch-c
 const { createDurableDeliveryStore, createProviderDeliveryAdapter } = require('../src/server/durable-delivery-store');
 const { atomicWriteJson } = require('../src/server/json-storage');
 
-function createFixture(provider) {
+function createFixture(provider, options = {}) {
   const registration = createRegistrationKernel();
   const launch = createLaunchBindingKernel({ registrationRegistry: registration.registry });
   const runtime = createRuntimeBindingKernel({ registrationRegistry: registration.registry, launchRegistry: launch.registry });
+  const connections = [];
+  const actors = new Map();
+  const guardedRuntime = { registry: { ...runtime.registry, snapshot() { const value = runtime.registry.snapshot(); options.onRuntimeSnapshot?.(); return value; } }, authority: {
+    ...runtime.authority,
+    openConnection(...args) { const opened = runtime.authority.openConnection(...args); connections.push(opened.connectionHandle); return opened; },
+    attestActor(handle, claims, evidence) { const result = runtime.authority.attestActor(handle, claims, evidence); actors.set(claims.launchRef, result.actorHandle); return result; },
+  } };
   const runners = [];
   const home = path.resolve(os.tmpdir(), `native-payload-home-${provider}`);
   const composition = createNativeLaunchComposition({
     registrationKernel: registration,
     launchKernel: launch,
-    runtimeKernel: runtime,
+    runtimeKernel: guardedRuntime,
     hostId: 'native-payload-host',
     profiles: { main: { provider, executablePath: path.join(home, 'fixture.exe'), homePath: home,
       homeScopeId: `native-payload-scope-${provider}`, cwd: home } },
@@ -47,7 +54,7 @@ function createFixture(provider) {
   const runtimeRegistry = Object.freeze({
     get: (ref) => runtime.registry.get(ref),
     snapshot: () => runtime.registry.snapshot(),
-    checkCurrentProof: (ref, handle) => composition.checkCurrentProof(ref, handle),
+    checkCurrentProof: (ref, handle) => { options.beforeGate?.(); return composition.checkCurrentProof(ref, handle); },
   });
   async function start(suffix, originReceipt) {
     const receipt = composition.admitLaunch({ launchId: `launch-${suffix}`, runId: `run-${suffix}`,
@@ -67,7 +74,7 @@ function createFixture(provider) {
     runner.options.onNative({ type: 'context', provider, identity: runner.identity,
       context: { ...runner.context, nativeContextId: `fresh-context-${index}` } });
   }
-  return { registration, launch, runtime, composition, runtimeRegistry, start, end, fresh };
+  return { registration, launch, runtime, composition, runtimeRegistry, start, end, fresh, connections, actors };
 }
 
 for (const provider of ['claude', 'codex']) {
@@ -158,6 +165,58 @@ for (const provider of ['claude', 'codex']) {
       assert.equal((await restoredAdapter.get(delivery.deliveryAttemptId)).state, 'unknown');
       await assert.rejects(restoredAdapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
         { code: 'payload_unavailable' });
+      assert.equal(sinkCalls, 0);
+    });
+  }
+}
+
+for (const provider of ['claude', 'codex']) {
+  for (const invalidation of ['connection', 'context', 'period', 'launch']) {
+    test(`ID-F05-N02 ${provider} ${invalidation}: final ancestor callback cannot admit a payload sink`, { timeout: 5000 }, async (t) => {
+      let armGate = false;
+      let duringCapture = false;
+      let count = 0;
+      let invalidate;
+      const fixture = createFixture(provider, {
+        beforeGate() { if (armGate) { armGate = false; duringCapture = true; count = 0; } },
+        onRuntimeSnapshot() { if (duringCapture && ++count === 4) { duringCapture = false; invalidate(); } },
+      });
+      const parent = await fixture.start('late-parent');
+      const leaf = await fixture.start('late-leaf', parent.runReceipt);
+      const captured = fixture.composition.resolveProof(leaf.launchRef);
+      invalidate = () => {
+        if (invalidation === 'connection') fixture.runtime.authority.disconnect(fixture.connections.at(-1));
+        else if (invalidation === 'context') fixture.runtime.authority.endContext(fixture.actors.get(leaf.launchRef));
+        else if (invalidation === 'period') fixture.registration.authority.end(fixture.launch.registry.get(leaf.launchRef).executionBinding.periodId);
+        else fixture.launch.authority.endLaunch(leaf.launchRef);
+      };
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-payload-gate-'));
+      const filePath = path.join(directory, 'checkpoint.json');
+      let store;
+      t.after(async () => {
+        await store?.close();
+        assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
+        assert.ok(path.basename(directory).startsWith('native-payload-gate-'));
+        await fs.rm(directory, { recursive: true, force: true });
+      });
+      store = createDurableDeliveryStore({ filePath, registrationRegistry: fixture.registration.registry,
+        launchRegistry: fixture.launch.registry, runtimeRegistry: fixture.runtimeRegistry, resolveProof: () => captured,
+        atomicWrite: async (target, value) => {
+          await atomicWriteJson(path.dirname(target), path.basename(target), value);
+          if (value.ledger.deliveries.some((row) => row.state === 'sending')) armGate = true;
+        },
+      });
+      await store.ready;
+      const adapter = createProviderDeliveryAdapter(provider, store);
+      const delivery = await adapter.createQuestionDelivery({ launchRef: leaf.launchRef,
+        deliveryAttemptId: `late-${provider}-${invalidation}`, logicalMessageId: 'late-proof', revision: 1, payload: 'private-late-payload' });
+      let sinkCalls = 0;
+      const result = await adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; });
+      assert.equal(result.state, 'unknown');
+      assert.equal(sinkCalls, 0);
+      assert.equal(count, 4);
+      assert.equal(fixture.runtime.registry.checkCurrentProof(leaf.launchRef, captured).ok, false);
+      await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; }), { code: 'payload_unavailable' });
       assert.equal(sinkCalls, 0);
     });
   }

@@ -13,6 +13,8 @@ runnerの実native protocol接続とreal runtimeでの証拠は、fake stdio fix
 ## 公開API
 
 `createNativeLaunchComposition({ registrationKernel, launchKernel, runtimeKernel, runnerFactory, getAuthentication, onAuthenticationRequired, hostId, profiles })`は、`admitLaunch`、`start`、`stop`、`handoff`、`reconcileProof`、`resolveProof`、`checkCurrentProof`、`writerFor`、`authorizeWriter`、`snapshot`を返す。
+registrationとlaunchのregistryにはcaptureAuthorityRevisionとcheckAuthorityRevision、runtimeのregistryにはcheckProofCapabilityを必須とする。
+これらはtrusted kernelのcallbackなしmethodを渡し、公開metadataで代替しない。
 
 `profiles`は`provider`、絶対`executablePath`、絶対`homePath`、`homeScopeId`、絶対`cwd`を持つ固定allowlistであり、start inputから変更できない。
 
@@ -167,6 +169,12 @@ owned runnerはsource照合不能時のpositive identity/contextを昇格させ�
 `checkCurrentProof(launchRef, proofHandle)`はtrusted in-processの同期facadeである。
 保持したopaque handleの同一性と`resolveProof`の全owner chainを同期再検査し、成功時だけ`{ok:true, reason:"accepted"}`を返す。
 JSON複製、旧handle、chain欠落、cycle、再入、接続失効、期間終了ではokをfalseにする。
+検査開始時にregistrationとlaunchのopaque authority revisionを捕捉する。
+全chainの二回のmetadata、period、kernel proof、外部guardと比較を終えてから、両revisionが変わっていないことを同期検査する。
+その後は外部registryを呼ばず、各nodeの`checkProofCapability`とcaptured private handle、epoch、context、immutable参照、owner世代の同一性だけを検査する。
+最後のancestor callbackが既に検査済みの葉を失効させても、canonical revisionまたはprivate proof capabilityで拒否する。
+revision照合不能だけではcached proofとwriterを破壊せず、操作を保留する。
+返却後にawaitを挟む消費者は、sinkまたは返信の直前に再びfacadeを検査する。
 送信開始を保存した後のpayload gateにはこのfacadeを渡し、raw runtime kernel registryを配信認可へ直接渡さない。
 `createDurableDeliveryStore`にはget、snapshot、checkCurrentProofを持つ固定trusted facadeと同期resolverを渡す。
 
@@ -224,6 +232,7 @@ Codex production authorizationが実際のmanaged browser loginと同じowned ap
 | ID-F04-N11 | 両providerでsource callbackの再入、snapshot後raw disconnect、throw、thenable、読取不能を拒否する。一時障害の復帰時は同じproofを再検査できる。 | 初回delegated binding、source callback、同期facade、private handle、attestationとwriter認可回数。各ケース1秒以内。 | 再入の認可、snapshotだけのsource昇格、障害中attestation、guardfalseだけによるstop/cache破壊0回。 |
 | ID-F04-N12 | 両providerでsource照合不能中のnative context変更または終端を受けると観測欠落をfenceし、旧proofとwriterを拒否する。 | 実owned runner parserとfake pipe、composition gap理由、現chain、kernel actor/context、fresh contextと子の再照合。同期fixture1秒、owned pipe fixture5秒以内。 | registry復帰だけの旧認可、同context replay昇格、kernel tombstone、actor/period終端、子の自動復帰0回。 |
 | ID-F04-N13 | 両providerのcontext callbackはraw authorityのown、owner、ancestor context終端、periodまたはsource失効を同期拒否する。Codex固定waitは同じ失効後に返信しない。 | opaque proof全chain、現在epoch/context、同期再入、実Codex runnerとfake pipeの返信数。callback fixture1秒、owned pipe fixture5秒以内。 | native終端未到着による旧context認可、foreign handle、失効後wait返信0回。正常系返信は1回。Claude waitはunsupportedであり成功扱いしない。 |
+| ID-F04-N14 | 最後のancestor callbackによる葉のraw connection、context、period、actor、launch、handoff、latest proof失効を両providerで拒否する。 | canonical revision、全node private proof capability、opaque handle、callback後のprivate比較。同期fixture1秒以内。 | 失効proof返却、clone/stampのJSON復旧、revision拒否時のcache破壊0回。 |
 | ID-F05-N01 | 両providerの実durable storeでsend-start保存中にown、owner、ancestor contextを終了する。 | `native-payload-gate-conformance.test.js`のfile checkpoint、同期facade、実delivery adapter、sink回数、復元状態。各ケース5秒以内。 | payload sink呼出し、raw葉proofからの認可、source/target変更、保存payload漏えい、自動再送0回。保存後はunknown、fresh runtimeでもunknownを保つ。 |
 
 これらのscenarioはfixtureと製品adapterの契約を検証する。
@@ -235,3 +244,7 @@ real runtimeの複数context、生存観測、context後の再照合、delegated
 context終端後はactor stateとcanonical期間がactiveのまま、contextStateがendedとなり、旧opaque proofとwriterの認可が拒否された。
 owned stop後は実childのexitとcloseを確認し、通常HOMEのCodex/Claude認証ファイルは不変、隔離HOMEの認証関連ファイルの新規作成は0件だった。
 この結果は複数context、delegated、handoff、reconnect、Codex waitの実接続成功を示さない。
+
+ID-F05-N02は両providerの実durable storeへ固定facadeを注入し、送信開始保存後の最後のancestor callbackによる葉のconnection、context、period、launch失効でsinkを0回に保つ。
+状態はunknownとなり、自動再送しない。
+これはfake native sourceを使う実adapter/store fixtureで、live runtimeの能力検証とは区別する。

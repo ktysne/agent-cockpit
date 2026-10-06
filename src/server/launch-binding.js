@@ -172,6 +172,10 @@ function createLaunchBindingKernel({ registrationRegistry } = {}) {
   const launches = new Map();
   const attemptRefs = new Map();
   const evidenceClaims = new Map();
+  let authorityRevision = Object.freeze({});
+  const captureAuthorityRevision = () => authorityRevision;
+  const checkAuthorityRevision = (stamp) => stamp === authorityRevision;
+  const advanceAuthorityRevision = () => { authorityRevision = Object.freeze({}); };
   const executionBindings = new Map();
   const observations = new Map();
 
@@ -286,6 +290,7 @@ function createLaunchBindingKernel({ registrationRegistry } = {}) {
       registrationFingerprint: fingerprint,
       bindingFingerprint: null,
     };
+    advanceAuthorityRevision();
     launches.set(launchRef, record);
     attemptRefs.set(key, launchRef);
     evidenceClaims.set(evidence.evidenceId, { launchRef, stage: 'registration' });
@@ -338,6 +343,7 @@ function createLaunchBindingKernel({ registrationRegistry } = {}) {
     }
     if (record.state === 'bound') return cloneRecord(record);
 
+    advanceAuthorityRevision();
     record.identity = identity;
     record.executionBinding = executionBinding;
     record.conversationId = period.conversationId;
@@ -359,13 +365,15 @@ function createLaunchBindingKernel({ registrationRegistry } = {}) {
     if (!isIdentifier(launchRef)) return false;
     const record = launches.get(launchRef);
     if (!record) return false;
+    if (record.state === 'ended') return true;
+    advanceAuthorityRevision();
     record.state = 'ended';
     record.currentProof = null;
     return true;
   }
 
   return Object.freeze({
-    registry: Object.freeze({ observe, get, snapshot }),
+    registry: Object.freeze({ observe, get, snapshot, captureAuthorityRevision, checkAuthorityRevision }),
     authority: Object.freeze({ registerLaunch, bindExecution, endLaunch }),
   });
 }

@@ -165,6 +165,12 @@ function actorEqual(left, right) {
 function bindingEqual(left, right) {
   return Boolean(left && right) && left.periodId === right.periodId && actorEqual(left.actor, right.actor);
 }
+function immutableClaimsEqual(left, right) {
+  return Boolean(left && right) && ['launchId', 'runId', 'attemptId', 'provider', 'nativeIdKind',
+    'hostId', 'homeScopeId', 'origin', 'purpose'].every((field) => left[field] === right[field]) &&
+    (left.originBinding === null && right.originBinding === null || bindingEqual(left.originBinding, right.originBinding)) &&
+    identityEqual(left.identity, right.identity) && bindingEqual(left.executionBinding, right.executionBinding);
+}
 function scopeMatchesIdentity(scope, identity) {
   return Boolean(scope && identity) && scope.provider === identity.provider &&
     scope.nativeIdKind === identity.nativeIdKind && scope.hostId === identity.hostId &&
@@ -520,7 +526,8 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     const actor = { identity: cloneIdentity(claims.identity), periodId: claims.periodId,
       actor: cloneActor(claims.actor), contextId: claims.contextId, launchRef: claims.launchRef,
       immutableExecutionClaims: launchClaims ? cloneClaims(launchClaims) : null,
-      connection, evidence: cloneEvidence(evidence) };
+      connection, evidence: cloneEvidence(evidence),
+      actorLifeKey: actorKey(claims.periodId, claims.actor), contextLifeKey: contextGroupKey(claims) };
     const handle = Object.freeze({});
     actorHandles.set(handle, actor);
     actorClaims.set(contextKey, { fingerprint, actor, handle });
@@ -673,6 +680,25 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return { ok: true, reason: 'accepted' };
   }
 
+  function checkProofCapability(launchRef, proofHandle) {
+    const runtime = launches.get(launchRef);
+    const proof = proofHandles.get(proofHandle);
+    if (!runtime || !proof || proof.launchRef !== launchRef || proofByLaunch.get(launchRef) !== proof ||
+        !immutableClaimsEqual(runtime.claims, proof.claims) ||
+        runtime.ownerGeneration !== proof.ownerGeneration || !bindingEqual(runtime.currentOwner, proof.owner)) return false;
+    const execution = proof.executionActor;
+    const owner = proof.ownerActor;
+    if (!execution || !owner || execution.launchRef !== launchRef ||
+        !immutableClaimsEqual(execution.immutableExecutionClaims, runtime.claims) ||
+        !identityEqual(execution.identity, runtime.claims.identity) ||
+        !bindingEqual({ periodId: execution.periodId, actor: execution.actor }, runtime.claims.executionBinding) ||
+        !bindingEqual({ periodId: owner.periodId, actor: owner.actor }, runtime.currentOwner)) return false;
+    return [execution, owner].every((actor) => currentConnection(actor.connection) &&
+      scopeMatchesIdentity(actor.connection.scope, actor.identity) &&
+      !actorTombstones.has(actor.actorLifeKey) &&
+      !contextTombstones.has(actor.contextLifeKey));
+  }
+
   function observe(identityInput, metadataInput) {
     const identity = normalizeIdentity(identityInput);
     const metadata = normalizeEvidence(metadataInput, false);
@@ -711,7 +737,7 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     };
   }
 
-  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof, checkCurrentConnection });
+  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof, checkCurrentConnection, checkProofCapability });
   const authority = Object.freeze({ adoptExecution, openConnection, disconnect, attestActor,
     endActor, endContext, reconcileExecution, handoff });
   return Object.freeze({ registry, authority });

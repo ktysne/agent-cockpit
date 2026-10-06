@@ -44,6 +44,9 @@ function createFixture(options = {}) {
   });
   const registrationRegistry = Object.freeze({
     ...actualRegistrationKernel.registry,
+    checkAuthorityRevision(stamp) {
+      return options.revisionCheck ? options.revisionCheck(stamp, actualRegistrationKernel.registry.checkAuthorityRevision) : actualRegistrationKernel.registry.checkAuthorityRevision(stamp);
+    },
     authorizeWriter(...args) {
       registrationCalls.authorizeWriter += 1;
       return actualRegistrationKernel.registry.authorizeWriter(...args);
@@ -1626,4 +1629,88 @@ for (const invalidation of ['none', 'own', 'owner', 'ancestor', 'period', 'sourc
     assert.equal(owned.harness.responses.length, invalidation === 'none' ? 1 : 0);
     assert.equal(owned.harness.child.exited, false);
   });
+}
+
+for (const provider of PROVIDERS) {
+  for (const invalidation of ['connection', 'context', 'period', 'actor', 'launch', 'latest-proof', 'handoff']) {
+    test(`ID-F04-N14 ${provider} ${invalidation}: final ancestor snapshot must reject a raw-invalidated leaf`, async () => {
+      let action;
+      let snapshots = 0;
+      const fixture = createFixture({ onRuntimeSnapshot() {
+        if (action && ++snapshots === 4) { const current = action; action = null; current(); }
+      } });
+      const root = await fixture.startStandalone(provider, 'late-leaf-root');
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, 'late-leaf'));
+      const receipt = fixture.admission(provider, 'late-leaf', { origin: 'delegated', originReceipt: root.result.runReceipt });
+      const leaf = await fixture.composition.start(receipt, { inputText: 'leaf' });
+      const proof = fixture.composition.resolveProof(leaf.launchRef);
+      const runtimeBefore = fixture.runtimeKernel.registry.get(leaf.launchRef);
+      const immutable = Object.fromEntries(['launchId', 'runId', 'attemptId', 'provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'origin', 'purpose', 'originBinding', 'identity', 'executionBinding'].map((key) => [key, runtimeBefore[key]]));
+      action = () => {
+        if (invalidation === 'connection') fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections.at(-1).connectionHandle);
+        else if (invalidation === 'context') fixture.actualRuntimeKernel.authority.endContext(fixture.attestedActors.get(leaf.launchRef).at(-1));
+        else if (invalidation === 'period') fixture.actualRegistrationKernel.authority.end(fixture.launchKernel.registry.get(leaf.launchRef).executionBinding.periodId);
+        else if (invalidation === 'actor') fixture.actualRuntimeKernel.authority.endActor(fixture.attestedActors.get(leaf.launchRef).at(-1));
+        else if (invalidation === 'launch') fixture.launchKernel.authority.endLaunch(leaf.launchRef);
+        else if (invalidation === 'latest-proof') fixture.actualRuntimeKernel.authority.reconcileExecution(leaf.launchRef, {
+          executionActorHandle: fixture.attestedActors.get(leaf.launchRef).at(-1), ownerActorHandle: fixture.attestedActors.get(root.result.launchRef).at(-1), expectedOwnerGeneration: 0,
+        });
+        else fixture.actualRuntimeKernel.authority.handoff(leaf.launchRef, { handoffId: 'late-handoff', expectedOwner: runtimeBefore.currentOwner, expectedOwnerGeneration: 0,
+          newOwner: runtimeBefore.executionBinding, newOwnerGeneration: 1, immutableExecutionClaims: immutable, evidence: fixture.nextEvidence('late-handoff'),
+        }, fixture.attestedActors.get(leaf.launchRef).at(-1));
+      };
+      assert.equal(fixture.composition.checkCurrentProof(leaf.launchRef, proof).ok, false);
+      assert.equal(snapshots, 4);
+      assert.equal(action, null);
+      assert.equal(fixture.actualRuntimeKernel.registry.checkCurrentProof(leaf.launchRef, proof).ok, false);
+    });
+  }
+}
+
+for (const provider of PROVIDERS) {
+  test(`ID-F04-N14 ${provider}: revision denial fails closed without destroying cached proof or writer`, async () => {
+    let verdict;
+    const fixture = createFixture({ revisionCheck(stamp, actual) { if (verdict === 'throw') throw new Error('unavailable'); return verdict === undefined ? actual(stamp) : verdict; } });
+    const { result } = await fixture.startStandalone(provider, 'revision-denial');
+    const proof = fixture.composition.resolveProof(result.launchRef);
+    const writer = fixture.composition.writerFor(result.launchRef);
+    for (const invalid of [false, null, {}, Promise.resolve(true), 'throw']) {
+      verdict = invalid;
+      assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+      assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+      assert.equal(fixture.runners[0].stopCalls, 0);
+    }
+    verdict = undefined;
+    assert.equal(fixture.composition.resolveProof(result.launchRef), proof);
+    assert.equal(fixture.composition.writerFor(result.launchRef).token, writer.token);
+  });
+}
+
+for (const provider of PROVIDERS) {
+  for (const stage of ['admission', 'start-auth']) {
+    test(`ID-F04-N14 ${provider} ${stage}: a last-ancestor callback cannot admit an invalidated owner`, async () => {
+      let action;
+      let snapshots = 0;
+      let authCalls = 0;
+      const fixture = createFixture({ onAuthenticationRequired() { authCalls += 1; }, onRuntimeSnapshot() {
+        if (action && ++snapshots === 4) { const current = action; action = null; current(); }
+      } });
+      const parent = await fixture.startStandalone(provider, 'admission-ancestor');
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, 'admission-owner'));
+      const ownerReceipt = fixture.admission(provider, 'admission-owner', { origin: 'delegated', originReceipt: parent.result.runReceipt });
+      const owner = await fixture.composition.start(ownerReceipt, { inputText: 'owner' });
+      const makeAdmission = () => fixture.admission(provider, 'admission-child', { origin: 'delegated', originReceipt: owner.runReceipt });
+      const childReceipt = stage === 'start-auth' ? makeAdmission() : null;
+      const registered = fixture.registrationCalls.register;
+      const attested = fixture.runtimeCalls.attestActor;
+      action = () => fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections.at(-1).connectionHandle);
+      if (stage === 'admission') assertCode(makeAdmission, 'origin_receipt_unavailable');
+      else await assert.rejects(fixture.composition.start(childReceipt, { inputText: 'child' }), { code: 'origin_receipt_unavailable' });
+      assert.equal(snapshots, 4);
+      assert.equal(fixture.runners.length, 2);
+      assert.equal(authCalls, 0);
+      assert.equal(fixture.registrationCalls.register, registered);
+      assert.equal(fixture.runtimeCalls.attestActor, attested);
+    });
+  }
 }

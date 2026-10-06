@@ -139,9 +139,9 @@ function createNativeLaunchComposition(options = {}) {
     hostId,
     profiles: profileInput,
   } = options;
-  requireKernelSurface(registrationKernel, ['snapshot', 'authorizeWriter'], ['register', 'bindWriter'], 'registrationKernel');
-  requireKernelSurface(launchKernel, ['get', 'snapshot'], ['registerLaunch', 'bindExecution'], 'launchKernel');
-  requireKernelSurface(runtimeKernel, ['get', 'checkCurrentProof', 'checkCurrentConnection', 'snapshot'], [
+  requireKernelSurface(registrationKernel, ['captureAuthorityRevision', 'checkAuthorityRevision', 'snapshot', 'authorizeWriter'], ['register', 'bindWriter'], 'registrationKernel');
+  requireKernelSurface(launchKernel, ['captureAuthorityRevision', 'checkAuthorityRevision', 'get', 'snapshot'], ['registerLaunch', 'bindExecution'], 'launchKernel');
+  requireKernelSurface(runtimeKernel, ['get', 'checkCurrentProof', 'checkCurrentConnection', 'checkProofCapability', 'snapshot'], [
     'adoptExecution', 'openConnection', 'disconnect', 'attestActor', 'endActor', 'endContext', 'reconcileExecution', 'handoff',
   ], 'runtimeKernel');
   if (!isIdentifier(hostId) || typeof runnerFactory !== 'function' || typeof getAuthentication !== 'function' ||
@@ -260,6 +260,10 @@ function createNativeLaunchComposition(options = {}) {
     if (!owner) return null;
     const node = {
       record,
+      processState: record.processState,
+      identity: record.identity,
+      runtimeScope: record.runtimeScope,
+      claims: record.claims,
       proofHandle: record.proofHandle,
       epoch: record.epoch,
       activeEpoch: record.activeEpoch,
@@ -300,7 +304,7 @@ function createNativeLaunchComposition(options = {}) {
   }
 
   function receiptIsLive(receiptRecord) {
-    return Boolean(captureLiveOwnerChain(receiptRecord));
+    return Boolean(receiptRecord && resolveProof(receiptRecord.launchRef));
   }
 
   function launchCanContinue(record, epoch) {
@@ -387,6 +391,15 @@ function createNativeLaunchComposition(options = {}) {
       record.currentContextId && periodMatches(record) && guardContext(record, context);
   }
 
+  function finalChainCurrent(chain) {
+    const fields = ['proofHandle', 'epoch', 'activeEpoch', 'status', 'processState', 'identity',
+      'runtimeScope', 'claims', 'connectionHandle', 'connectionGeneration', 'executionActorHandle',
+      'registration', 'executionBinding', 'currentContextId', 'ownerGeneration', 'currentOwnerRecord'];
+    return chain.every((node) => fields.every((field) => node.record[field] === node[field]) &&
+      !node.record.runtimeDisconnected && !sourceObservationReentered.has(node.record) &&
+      !proofResolutionReentered.has(node.record));
+  }
+
   function resolveProof(launchRef, context) {
     const record = launchRecords.get(launchRef);
     if (!record) return null;
@@ -396,12 +409,22 @@ function createNativeLaunchComposition(options = {}) {
     }
     proofResolutionInProgress.add(record);
     try {
+      const registrationRevision = registrationKernel.registry.captureAuthorityRevision();
+      const launchRevision = launchKernel.registry.captureAuthorityRevision();
       if (!internalCurrent(record)) return null;
       const before = captureLiveOwnerChain(record);
       if (!before || !guardContext(record, context) || proofResolutionReentered.has(record)) return null;
       const after = captureLiveOwnerChain(record);
       if (!after || !sameLiveOwnerChain(before, after) || proofResolutionReentered.has(record)) return null;
+      if (registrationKernel.registry.checkAuthorityRevision(registrationRevision) !== true ||
+          launchKernel.registry.checkAuthorityRevision(launchRevision) !== true) return null;
+      for (const node of after) {
+        if (runtimeKernel.registry.checkProofCapability(node.record.launchRef, node.proofHandle) !== true) return null;
+      }
+      if (!finalChainCurrent(after) || proofResolutionReentered.has(record)) return null;
       return before[0].proofHandle;
+    } catch {
+      return null;
     } finally {
       proofResolutionInProgress.delete(record);
       proofResolutionReentered.delete(record);

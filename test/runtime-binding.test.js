@@ -22,7 +22,7 @@ function evidence(evidenceId, extra = {}) {
   return { evidenceId, source: 'fixture', method: 'test-issuer', adapterVersion: 'test-1', ...extra };
 }
 
-function createEnvironment() {
+function createEnvironment(options = {}) {
   const registration = createRegistrationKernel();
   const registrationAdapters = {
     claude: createProviderRegistrationAdapter('claude', registration.registry, registration.authority),
@@ -33,7 +33,8 @@ function createEnvironment() {
     claude: createProviderLaunchAdapter('claude', launch.registry, launch.authority),
     codex: createProviderLaunchAdapter('codex', launch.registry, launch.authority),
   };
-  const runtime = createRuntimeBindingKernel({ registrationRegistry: registration.registry, launchRegistry: launch.registry });
+  const runtime = createRuntimeBindingKernel({ registrationRegistry: { ...registration.registry, snapshot() { options.onExternalRead?.(); return registration.registry.snapshot(); } },
+    launchRegistry: { ...launch.registry, get(ref) { options.onExternalRead?.(); return launch.registry.get(ref); } } });
   const runtimeAdapters = {
     claude: createProviderRuntimeAdapter('claude', runtime.registry, runtime.authority),
     codex: createProviderRuntimeAdapter('codex', runtime.registry, runtime.authority),
@@ -490,3 +491,32 @@ test('context endings separate native identities and periods and reject foreign 
   assert.ok(env.attest(launch.adapter, nextPeriod, nextConnection.connectionHandle, 'same-context', null,
     'other-period-context').actorHandle);
 });
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider} private proof capability reads no external registry and rejects stale or foreign opaque proofs`, (t) => {
+    let unavailable = false;
+    let reads = 0;
+    const env = createEnvironment({ onExternalRead() { reads += 1; if (unavailable) throw new Error('fixture-unavailable'); } });
+    const child = env.register(provider, 'private-proof');
+    const launch = env.createLaunch(child);
+    launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+    const connection = env.openActorConnection(child, 'private-proof');
+    const actor = env.attest(launch.adapter, child, connection.connectionHandle, 'private-context', launch);
+    const request = { executionActorHandle: actor.actorHandle, ownerActorHandle: actor.actorHandle, expectedOwnerGeneration: 0 };
+    const proof = launch.adapter.reconcileExecution(launch.launchRef, request).proofHandle;
+    unavailable = true;
+    const before = reads;
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, proof), true);
+    for (const foreign of [undefined, {}, structuredClone(proof), JSON.parse(JSON.stringify(proof))]) assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, foreign), false);
+    assert.equal(reads, before);
+    const serializer = t.mock.method(JSON, 'stringify', () => { throw new Error('serializer-callback-forbidden'); });
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, proof), true);
+    serializer.mock.restore();
+    unavailable = false;
+    const latest = launch.adapter.reconcileExecution(launch.launchRef, request).proofHandle;
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, proof), false);
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, latest), true);
+    env.runtime.authority.endContext(actor.actorHandle);
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, latest), false);
+  });
+}
