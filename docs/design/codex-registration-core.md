@@ -94,6 +94,10 @@ nonce、token、capability、機密payloadはmetadataやログに含めない。
 kernelへ未登録のClaude aliasでは、既存hookの観測経路を維持する。
 この経路は認証済み正規登録ではなく、両adapterの適合成功へ数えない。
 登録済みaliasへのwriter欠落eventは拒否し、旧期間や期間不明eventで現行期間のstate、PR、回答を変更しない。
+回答と通知の取得は、取得直前の認可と同期した状態変更を確定点とする。
+確定前の待機中にwriterが失効した要求は、回答や通知を消費せず拒否する。
+確定済みの取得は保存待ち中のwriter交代や期間終了で取り消さず、取得時の期間に固定した結果を元の要求へ返す。
+新期間から結果を組み直さない。
 未登録MCPはPIDやClaude IDが一致しても拒否する。
 このため通常HOMEへの旧MCP設定だけでは新しい認証済み書込みを開始できない。
 
@@ -120,7 +124,7 @@ PIDまたはClaude ID fallbackを使った既存経路、参照モデルだけ�
 HTTPの回答pollとレビュー不要記録は、待機中の失効と副作用0回を各入口の試験でも確認する。
 
 共通試験の8シナリオでは、模擬証拠を使った両製品adapterの対象分岐が成功した。
-2026-10-06の全体検証では`npm test`の1077件が成功し、失敗、skip、todoは各0件だった。
+2026-10-06の全体検証では`npm test`の1083件が成功し、失敗、skip、todoは各0件だった。
 ID-F02-A02で確認したのは、同じactive identityの二重開始、開始証拠の再利用、identityを差し替えたbindingの拒否である。
 物理actorとexecutionBindingが本当に同じ実宛先を指すことの検証は#171へ残る。
 ID-F02-A05は旧Claude保存内容の読取と、再起動後に旧writerが復活しないことを確認し、canonical履歴の保存復旧は#177-Aへ残る。
@@ -146,3 +150,4 @@ CLIの版取得だけではnative binding、`_meta.threadId`の実供給、scope
 既存storeのschemaは変更しない。
 同じnative会話に対するdaemon再起動後の期間履歴とaliasの復旧は#177-Aで結合し、今回の期間分離試験は同じkernelの寿命内を対象にする。
 再起動した空のkernelでは旧tokenを認可しない。
+回答の永続化失敗や通信断後の再配信保証は既存経路から推定せず、#175と#177の配送台帳・復旧契約で検証する。

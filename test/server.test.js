@@ -683,6 +683,20 @@ async function runningServer(t, options = {}) {
   return server.runtime;
 }
 
+function holdPersistence(state) {
+  const originalWaitForPersistence = state.waitForPersistence.bind(state);
+  let release;
+  let notifyStarted;
+  const started = new Promise((resolve) => { notifyStarted = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  state.waitForPersistence = async () => {
+    notifyStarted();
+    await gate;
+    await originalWaitForPersistence();
+  };
+  return { started, release };
+}
+
 test('常駐サーバーの Host は state と POST の要求でも照合する', async (t) => {
   const runtime = await runningServer(t);
   const host = `example.test:${runtime.info.port}`;
@@ -1133,6 +1147,129 @@ test('legacy Stop poll が待機中に同じaliasを登録されると回答と�
   assert.equal(notificationReads, 0);
   assert.equal(runtime.state.decisionFor(sessionId, decision.id).answer.deliveredAt, null);
   assert.deepEqual(runtime.answerDelivery.sessionNotifications.get(sessionId), ['次の実行へ渡す通知']);
+});
+
+test('回答消費を確定したHTTP要求は保存待ち中のwriter更新後も旧payloadを返し新期間を消費しない', async (t) => {
+  const scenarios = [
+    { action: 'post-tool-batch', transition: 'rotate' },
+    { action: 'user-prompt-submit', transition: 'rotate' },
+    { action: 'stop-poll', transition: 'resume' },
+    { action: 'ask-finish', transition: 'resume' },
+  ];
+
+  for (const [index, scenario] of scenarios.entries()) {
+    await t.test(`${scenario.action}: ${scenario.transition}`, async (subtest) => {
+      const fixture = createRegistrationFixture('claude', { nativeId: `answer-persist-${index}` });
+      const runtime = await runningServer(subtest, { registrationRegistry: fixture.registry });
+      const sessionId = fixture.registration.sessionId;
+      const oldAnswerText = `旧期間の回答${index}`;
+      const oldNotification = `旧期間の通知${index}`;
+      let oldDecision;
+      let askRegistration;
+      let stopGeneration;
+
+      if (scenario.action === 'ask-finish') {
+        runtime.answerDelivery.away.snapshot = () => ({ enabled: true });
+        askRegistration = runtime.answerDelivery.registerAsk({
+          sessionId,
+          toolUseId: `ask-${index}`,
+          questions: [{
+            question: 'どの形式にしますか。', header: '形式', multiSelect: false,
+            options: [{ label: 'JSON (推奨)', description: '' }],
+          }],
+        });
+        assert.equal(askRegistration.awaiting, true);
+        runtime.answerDelivery.submitAnswer(sessionId, askRegistration.decisionId, 'ok', oldAnswerText);
+        oldDecision = runtime.state.decisionFor(sessionId, askRegistration.decisionId);
+      } else {
+        oldDecision = runtime.state.addDecision(sessionId, {
+          title: '保存待ち中の回答', context: '', state: 'provisional', options: [],
+        }, Date.now());
+        runtime.answerDelivery.submitAnswer(sessionId, oldDecision.id, null, oldAnswerText);
+        runtime.answerDelivery.notifySessions([sessionId], oldNotification);
+        if (scenario.action === 'stop-poll') {
+          stopGeneration = runtime.answerDelivery.startStop(sessionId, `stop-${index}`, Date.now());
+        }
+      }
+
+      const body = scenario.action === 'ask-finish'
+        ? {
+          action: scenario.action, event_name: 'PreToolUse', session_id: sessionId,
+          id: `ask-${index}`, decision_id: askRegistration.decisionId, outcome: 'answered', writer: fixture.writer,
+        }
+        : {
+          action: scenario.action,
+          event_name: scenario.action === 'post-tool-batch' ? 'PostToolBatch'
+            : scenario.action === 'user-prompt-submit' ? 'UserPromptSubmit' : 'Stop',
+          session_id: sessionId,
+          id: `${scenario.action}-${index}`,
+          ...(scenario.action === 'stop-poll' ? { generation: stopGeneration, parent_alive: true } : {}),
+          writer: fixture.writer,
+        };
+      const barrier = holdPersistence(runtime.state);
+      const pendingResponse = request(runtime.info.port, {
+        method: 'POST', path: '/api/hooks/answers',
+        headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+        body: JSON.stringify(body),
+      });
+      const barrierResult = await Promise.race([
+        barrier.started.then(() => ({ type: 'started' })),
+        pendingResponse.then((response) => ({ type: 'response', response })),
+      ]);
+      let newSessionId = sessionId;
+      let newDecision;
+      let newPeriodAnswerBeforeResponse;
+      let newPeriodNotificationsBeforeResponse;
+      let setupError;
+      try {
+        assert.equal(barrierResult.type, 'started', barrierResult.response?.body);
+        assert.ok(runtime.state.decisionFor(sessionId, oldDecision.id).answer.deliveredAt);
+
+        if (scenario.transition === 'rotate') {
+          fixture.adapter.bindWriter(fixture.registration.executionId, {
+            identity: fixture.identity,
+            contextId: fixture.writer.contextId,
+            evidence: { ...fixture.evidence, evidenceId: `reissued-${index}` },
+          });
+        } else {
+          fixture.authority.end(fixture.registration.executionId);
+          const resumed = fixture.adapter.register(fixture.nativeIdentity, {
+            ...fixture.evidence, evidenceId: `resumed-${index}`,
+          }, { startId: `resume-${index}`, resume: true });
+          const resumedWriter = fixture.adapter.bindWriter(resumed.executionId, {
+            identity: fixture.identity,
+            contextId: `resume-context-${index}`,
+            evidence: { ...fixture.evidence, evidenceId: `resume-binding-${index}` },
+          });
+          assert.equal(fixture.registry.authorizeWriter(resumedWriter).ok, true);
+          newSessionId = resumed.sessionId;
+        }
+
+        newDecision = runtime.state.addDecision(newSessionId, {
+          title: '新期間の回答', context: '', state: 'provisional', options: [],
+        }, Date.now());
+        runtime.answerDelivery.submitAnswer(newSessionId, newDecision.id, null, `新期間の回答${index}`);
+        runtime.answerDelivery.notifySessions([newSessionId], `新期間の通知${index}`);
+        newPeriodAnswerBeforeResponse = runtime.state.decisionFor(newSessionId, newDecision.id).answer;
+        newPeriodNotificationsBeforeResponse = [...runtime.answerDelivery.sessionNotifications.get(newSessionId)];
+      } catch (error) {
+        setupError = error;
+      } finally {
+        barrier.release();
+      }
+      const response = await pendingResponse;
+      if (setupError) throw setupError;
+      assert.equal(response.status, 200);
+      const result = jsonBody(response);
+      const resultText = JSON.stringify(result);
+      assert.match(resultText, new RegExp(oldAnswerText));
+      assert.doesNotMatch(resultText, new RegExp(`新期間の回答${index}`));
+      if (scenario.action !== 'ask-finish') assert.match(resultText, new RegExp(oldNotification));
+      assert.deepEqual(runtime.state.decisionFor(newSessionId, newDecision.id).answer, newPeriodAnswerBeforeResponse);
+      assert.deepEqual([...runtime.answerDelivery.sessionNotifications.get(newSessionId)], newPeriodNotificationsBeforeResponse);
+      assert.equal(runtime.state.decisionFor(newSessionId, newDecision.id).answer.deliveredAt, null);
+    });
+  }
 });
 
 test('SubagentStart の経路をサブエージェントのスナップショットに記録する', () => {

@@ -494,6 +494,7 @@ function createRequestHandler(options) {
         return;
       }
       const answerRequest = { ...body };
+      let authorizationDenied = false;
       let authorizeAnswer;
       if (Object.hasOwn(body, 'writer')) {
         const authorization = registrationRegistry.authorizeEvent(body.writer);
@@ -506,14 +507,20 @@ function createRequestHandler(options) {
         delete answerRequest.writer;
         authorizeAnswer = () => {
           const current = registrationRegistry.authorizeEvent(body.writer);
-          return current.ok && current.sessionId === body.session_id;
+          const authorized = current.ok && current.sessionId === body.session_id;
+          if (!authorized) authorizationDenied = true;
+          return authorized;
         };
       } else if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
           registrationRegistry.isRegisteredSessionId(body.session_id)) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
       } else {
-        authorizeAnswer = () => !registrationRegistry.isRegisteredSessionId(body.session_id);
+        authorizeAnswer = () => {
+          const authorized = !registrationRegistry.isRegisteredSessionId(body.session_id);
+          if (!authorized) authorizationDenied = true;
+          return authorized;
+        };
       }
       try {
         let result;
@@ -542,11 +549,11 @@ function createRequestHandler(options) {
           jsonResponse(response, 400, { error: 'Invalid request' });
           return;
         }
-        await state.waitForPersistence();
-        if (authorizeAnswer && !authorizeAnswer()) {
+        if (authorizationDenied) {
           jsonResponse(response, 403, { error: 'Writer unavailable' });
           return;
         }
+        await state.waitForPersistence();
         jsonResponse(response, 200, result);
       } catch {
         jsonResponse(response, 500, { error: 'Internal Server Error' });

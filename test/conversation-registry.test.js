@@ -83,6 +83,27 @@ test('unsupported or incomplete identities cannot create verified conversations'
   assert.equal(registry.snapshot().conversations.length, 0);
 });
 
+test('provider values must be own string enum members, not coerced or inherited object properties', () => {
+  const { registry, authority } = createRegistrationKernel();
+  const invalidIdentities = [
+    { provider: ['claude'], ...claudeNative() },
+    { provider: 'constructor', nativeIdKind: Object.prototype.constructor, hostId: 'host-a', homeScopeId: 'home-a', nativeId: 'native-a' },
+    { provider: 'toString', nativeIdKind: Object.prototype.toString, hostId: 'host-a', homeScopeId: 'home-a', nativeId: 'native-a' },
+    { provider: '__proto__', nativeIdKind: Object.prototype, hostId: 'host-a', homeScopeId: 'home-a', nativeId: 'native-a' },
+  ];
+
+  invalidIdentities.forEach((identity, index) => {
+    assert.throws(() => authority.register(identity, evidence(`invalid-provider-${index}`), {
+      startId: `invalid-provider-start-${index}`,
+    }));
+  });
+  for (const provider of [['claude'], 'constructor', 'toString', '__proto__']) {
+    assert.throws(() => createProviderRegistrationAdapter(provider, registry, authority));
+  }
+  assert.deepEqual(registry.snapshot().conversations, []);
+  assert.deepEqual(registry.snapshot().executions, []);
+});
+
 test('observations remain unverified and metadata stores only allowlisted fields', () => {
   const { registry } = createRegistrationKernel();
   const identity = identityFrom('claude', claudeNative());

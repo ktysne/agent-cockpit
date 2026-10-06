@@ -39,8 +39,10 @@ function isBoundedIdentifier(value, maxLength = MAX_IDENTITY_VALUE_LENGTH) {
 
 function normalizeIdentity(identity) {
   if (!hasExactKeys(identity, IDENTITY_FIELDS)) return null;
+  if (typeof identity.provider !== 'string' || !Object.hasOwn(PROVIDER_NATIVE_ID_KINDS, identity.provider) ||
+      typeof identity.nativeIdKind !== 'string') return null;
   const expectedKind = PROVIDER_NATIVE_ID_KINDS[identity.provider];
-  if (!expectedKind || identity.nativeIdKind !== expectedKind) return null;
+  if (identity.nativeIdKind !== expectedKind) return null;
   if (!isBoundedIdentifier(identity.hostId) || !isBoundedIdentifier(identity.homeScopeId) ||
       !isBoundedIdentifier(identity.nativeId)) return null;
   return {

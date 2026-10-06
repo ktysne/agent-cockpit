@@ -26,6 +26,8 @@ function isBoundedIdentifier(value) {
 
 function normalizeIdentity(identity) {
   if (!hasExactKeys(identity, IDENTITY_FIELDS)) return null;
+  if (typeof identity.provider !== 'string' || !Object.hasOwn(PROVIDER_NATIVE_ID_KINDS, identity.provider) ||
+      typeof identity.nativeIdKind !== 'string') return null;
   if (PROVIDER_NATIVE_ID_KINDS[identity.provider] !== identity.nativeIdKind) return null;
   if (!isBoundedIdentifier(identity.hostId) || !isBoundedIdentifier(identity.homeScopeId) ||
       !isBoundedIdentifier(identity.nativeId)) return null;
@@ -53,10 +55,10 @@ function rejected(status, executionId = null) {
 }
 
 function createProviderRegistrationAdapter(provider, registry, authority) {
-  const expectedKind = PROVIDER_NATIVE_ID_KINDS[provider];
-  if (!expectedKind || !registry || !authority) {
+  if (typeof provider !== 'string' || !Object.hasOwn(PROVIDER_NATIVE_ID_KINDS, provider) || !registry || !authority) {
     throw new TypeError('provider registration adapter requires a supported provider, registry, and authority');
   }
+  const expectedKind = PROVIDER_NATIVE_ID_KINDS[provider];
 
   function identityFromNative(nativeIdentity) {
     if (!hasExactKeys(nativeIdentity, NATIVE_IDENTITY_FIELDS)) return null;
