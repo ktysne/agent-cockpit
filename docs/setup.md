@@ -122,6 +122,8 @@ git clone https://github.com/ktysne/agent-cockpit.git
 
 Codex対応featureの登録核は、認証済みwriter bindingを要求します。
 以下の旧stdio設定だけではwriterを供給できず、タスク、判断事項、PRのMCP書込みは拒否されます。
+共通質問の3ツールも同じ認証済みwriterを要求し、旧stdio設定だけでは登録や回答pollを利用できません。
+正式ログインと製品MCPの組立、実nativeでの確認条件は[共通質問の設計](design/common-questions.md#実native接続の採用条件)に記載しています。
 外部起動からの認証済みbinding供給は#171と#166-Bで接続するため、現段階のfeatureを通常HOMEへ導入する手順は未完成です。
 旧保存データと未登録Claude hookの観測表示は保持します。
 登録核の契約と残る採用条件は[正規会話の登録核](design/codex-registration-core.md)を参照してください。

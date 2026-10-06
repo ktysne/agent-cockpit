@@ -2,6 +2,8 @@
 
 この資料は常駐サーバー、フック、画面の現在の構成と通信の仕様を定める。
 正規登録済みのClaude/Codexイベントを共通状態へ変換する契約は[イベント投影の設計](codex-event-projection.md)に定める。
+共通質問の登録、回答poll、離席時の仮選択と復旧の契約は[共通質問の設計](common-questions.md)に定める。
+回答のjournalと配信台帳を分け、画面には選択の保存と配送状態を別に表示する。
 managed runtimeの読取専用collectorは、trusted compositionが`startServer({ managedCollectors })`へ明示して渡した場合だけ動く。詳細と採用境界は[managed collectorの設計](managed-collector.md)に定める。
 
 ## 構成

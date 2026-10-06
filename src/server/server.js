@@ -350,6 +350,25 @@ function hasOnlyKeys(value, fields) {
     Object.keys(value).every((field) => fields.includes(field));
 }
 
+function hasExactKeys(value, fields) {
+  return hasOnlyKeys(value, fields) && Object.keys(value).length === fields.length;
+}
+
+function sameQuestionIdentity(left, right) {
+  const fields = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
+  return hasExactKeys(left, fields) && hasExactKeys(right, fields) &&
+    fields.every((field) => left[field] === right[field]);
+}
+
+function questionErrorStatus(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (code.startsWith('invalid_') || code === 'question_category_forbidden') return 400;
+  if (['question_writer_unverified', 'question_writer_binding_mismatch'].includes(code)) return 403;
+  if (code === 'question_not_found') return 404;
+  if (['question_conflict', 'question_cancelled', 'question_delivery_mismatch', 'question_delivery_digest_mismatch'].includes(code)) return 409;
+  return 503;
+}
+
 function decisionSummaries(state, sessionId) {
   return state.decisionsFor(sessionId)
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
@@ -369,6 +388,9 @@ function createRequestHandler(options) {
     getServerInfo,
     markRequest,
     registrationRegistry = createRegistrationKernel().registry,
+    questionService = null,
+    questionServiceReady = true,
+    pendingQuestionLosses = new Set(),
     managedCollectors = [],
     pullRequestTracker,
     pullRequestMergeManager,
@@ -408,7 +430,68 @@ function createRequestHandler(options) {
     return authorization.sessionId;
   }
 
-  return async (request, response) => {
+  function queueQuestionResponseLost(internalQuestionId) {
+    if (!questionService?.reportResponseLost || !internalQuestionId) return;
+    const operation = Promise.resolve().then(() => questionService.reportResponseLost(internalQuestionId)).catch(() => {});
+    pendingQuestionLosses.add(operation);
+    void operation.finally(() => pendingQuestionLosses.delete(operation));
+  }
+
+  function questionRegistrationLink(question, snapshot = registrationRegistry.snapshot()) {
+    const execution = snapshot.executions.find((item) =>
+      item.executionId === question.executionId && item.conversationId === question.conversationId);
+    const conversation = snapshot.conversations.find((item) => item.conversationId === question.conversationId);
+    if (!execution || !conversation || !sameQuestionIdentity(question.identity, conversation.identity)) return null;
+    return { execution, conversation, sessionId: execution.sessionId };
+  }
+
+  async function dashboardQuestion(internalQuestionId) {
+    const snapshot = await questionService.dashboardSnapshot();
+    const question = snapshot.questions.find((item) => item.internalQuestionId === internalQuestionId);
+    if (!question) return null;
+    return { question, link: questionRegistrationLink(question) };
+  }
+
+  async function mutateCommonQuestion(response, internalQuestionId, body, operation) {
+    if (!questionService || !questionServiceReady) {
+      jsonResponse(response, 503, { error: 'Question service is unavailable' });
+      return;
+    }
+    const fields = operation === 'answer'
+      ? ['session_id', 'execution_id', 'answers']
+      : operation === 'hold' ? ['session_id', 'execution_id', 'held'] : ['session_id', 'execution_id'];
+    if (!hasExactKeys(body, fields) || !validSessionId(body.session_id) ||
+        !validText(body.execution_id, 256) || (operation === 'hold' && typeof body.held !== 'boolean')) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    try {
+      const found = await dashboardQuestion(internalQuestionId);
+      if (!found) {
+        jsonResponse(response, 404, { error: 'Question not found' });
+        return;
+      }
+      const { question, link } = found;
+      if (!link || link.execution.state !== 'active') {
+        jsonResponse(response, 409, { error: 'Question execution is unavailable' });
+        return;
+      }
+      if (body.session_id !== link.sessionId || body.execution_id !== question.executionId) {
+        jsonResponse(response, 403, { error: 'Question scope mismatch' });
+        return;
+      }
+      const result = operation === 'answer'
+        ? await questionService.submitAnswer(internalQuestionId, { answers: body.answers })
+        : operation === 'hold'
+          ? await questionService.hold(internalQuestionId, body.held)
+          : await questionService.cancel(internalQuestionId);
+      jsonResponse(response, 200, { outcome: result.outcome, question: result.question });
+    } catch (error) {
+      jsonResponse(response, questionErrorStatus(error), { error: 'Question request is unavailable' });
+    }
+  }
+
+  const handler = async (request, response) => {
     const info = getServerInfo();
     if (!info || !requestHostIsLocal(request, info.port)) {
       textResponse(response, 400, 'Invalid Host');
@@ -424,6 +507,18 @@ function createRequestHandler(options) {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/state') {
       const snapshot = state.snapshot();
+      let commonQuestionSnapshot = null;
+      let questionRegistrationSnapshot = null;
+      if (questionService) {
+        try {
+          commonQuestionSnapshot = await questionService.dashboardSnapshot();
+          if (!commonQuestionSnapshot || !Array.isArray(commonQuestionSnapshot.questions)) throw new Error();
+          questionRegistrationSnapshot = registrationRegistry.snapshot();
+        } catch {
+          jsonResponse(response, 503, { error: 'Question state is unavailable' });
+          return;
+        }
+      }
       const pullRequests = pullRequestTracker?.snapshot() || [];
       const now = Date.now();
       const awayState = away.snapshot();
@@ -443,6 +538,41 @@ function createRequestHandler(options) {
           })),
         };
       });
+      const sessionsById = new Map(sessions.map((session) => [session.session_id, session]));
+      const orphanedCommonQuestions = [];
+      for (const question of commonQuestionSnapshot?.questions || []) {
+        const link = questionRegistrationLink(question, questionRegistrationSnapshot);
+        if (!link) {
+          orphanedCommonQuestions.push({ ...question, orphaned: true });
+          continue;
+        }
+        let session = sessionsById.get(link.sessionId);
+        if (!session) {
+          session = {
+            session_id: link.sessionId,
+            title: question.identity.nativeId,
+            product: null,
+            status: '待機中',
+            tools: [],
+            agents: [],
+            permissionWaits: [],
+            decisions: [],
+            tasks: [],
+            tasksUpdatedAt: null,
+          };
+          sessionsById.set(link.sessionId, session);
+          sessions.push(session);
+        }
+        if (!Array.isArray(session.commonQuestions)) session.commonQuestions = [];
+        const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
+        const seenMilliseconds = Date.parse(seenAt || '');
+        session.commonQuestions.push({
+          ...question,
+          sessionId: link.sessionId,
+          executionState: link.execution.state,
+          isNew: Number.isFinite(seenMilliseconds) && question.createdAt > seenMilliseconds,
+        });
+      }
       const uiVersion = await currentUiVersion();
       let codexAgent = false;
       for (const scriptPath of codexAgentScriptPaths(claudeHome, userHome)) {
@@ -467,7 +597,124 @@ function createRequestHandler(options) {
           } catch { return null; }
         }).filter(Boolean)
         : [];
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion });
+      const commonQuestionDiagnostics = commonQuestionSnapshot?.recovery || orphanedCommonQuestions.length
+        ? { ...(commonQuestionSnapshot?.recovery ? { recovery: commonQuestionSnapshot.recovery } : {}),
+          ...(orphanedCommonQuestions.length ? { orphanedQuestions: orphanedCommonQuestions } : {}) }
+        : undefined;
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion, ...(commonQuestionDiagnostics ? { commonQuestionDiagnostics } : {}) });
+      return;
+    }
+    const commonQuestionRoute = requestUrl.pathname.match(/^\/api\/sessions\/pending\/questions\/(register|status|answer-poll|response-lost)$/);
+    if (request.method === 'POST' && commonQuestionRoute) {
+      if (request.headers['x-cockpit-secret'] !== info.secret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!questionService || !questionServiceReady) {
+        jsonResponse(response, 503, { error: 'Question service is unavailable' });
+        return;
+      }
+      let body;
+      try { body = JSON.parse(await readJsonBody(request)); }
+      catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      const operation = commonQuestionRoute[1];
+      const expectedFields = operation === 'register'
+        ? ['writer', 'questionId', 'questions', 'timeoutMinutes']
+        : ['writer', 'questionId'];
+      if (!hasExactKeys(body, expectedFields)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      let writerSessionId = null;
+      try { writerSessionId = resolveWriterSessionId('pending', body); } catch {}
+      if (!writerSessionId) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
+        return;
+      }
+      try {
+        if (operation === 'register') {
+          const result = await questionService.register(body.writer, {
+            questionId: body.questionId, questions: body.questions,
+            timeoutMinutes: body.timeoutMinutes, category: 'ordinary',
+          });
+          jsonResponse(response, 200, result);
+          return;
+        }
+        if (operation === 'status') {
+          const result = await questionService.status(body.writer, body.questionId);
+          jsonResponse(response, 200, result);
+          return;
+        }
+        const registeredQuestion = await questionService.status(body.writer, body.questionId);
+        if (!registeredQuestion) {
+          if (operation === 'response-lost') {
+            jsonResponse(response, 404, { error: 'Question not found' });
+          } else {
+            jsonResponse(response, 200, {
+              status: { outcome: 'not_found', questionId: body.questionId, deliveryAttemptId: null, state: null },
+              delivery: null,
+            });
+          }
+          return;
+        }
+        if (operation === 'response-lost') {
+          const result = await questionService.reportResponseLost(registeredQuestion.internalQuestionId);
+          jsonResponse(response, 200, result);
+          return;
+        }
+        let responseClosed = false;
+        let responseLostQueued = false;
+        let sinkResponded = false;
+        const reportLost = () => {
+          if (!sinkResponded || !responseClosed || responseLostQueued) return;
+          responseLostQueued = true;
+          queueQuestionResponseLost(registeredQuestion.internalQuestionId);
+        };
+        response.once('close', () => {
+          if (!response.writableFinished) {
+            responseClosed = true;
+            reportLost();
+          }
+        });
+        try {
+          const result = await questionService.answerPoll(body.writer, body.questionId, (answers, metadata) => {
+            if (sinkResponded || responseClosed || response.destroyed || response.writableEnded ||
+                !metadata || !Array.isArray(answers)) throw new Error();
+            sinkResponded = true;
+            jsonResponse(response, 200, {
+              status: { outcome: 'sent', questionId: metadata.questionId,
+                deliveryAttemptId: metadata.deliveryAttemptId, state: 'sending' },
+              delivery: {
+                questionId: metadata.questionId,
+                revision: metadata.revision,
+                deliveryAttemptId: metadata.deliveryAttemptId,
+                answers: structuredClone(answers),
+              },
+            });
+          });
+          if (!sinkResponded && !response.destroyed && !response.writableEnded) {
+            jsonResponse(response, 200, { status: result, delivery: null });
+          }
+        } catch (error) {
+          if (sinkResponded) {
+            if (responseClosed || response.destroyed || !response.writableFinished) {
+              responseClosed = true;
+              reportLost();
+            }
+            return;
+          }
+          throw error;
+        }
+      } catch (error) {
+        jsonResponse(response, questionErrorStatus(error), { error: 'Question request is unavailable' });
+      }
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -603,6 +850,10 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid decision id' });
         return;
       }
+      if (decisionId.startsWith('cq-')) {
+        await mutateCommonQuestion(response, decisionId, body, 'answer');
+        return;
+      }
       if (
         !body || typeof body !== 'object' || Array.isArray(body) ||
         !validSessionId(body.session_id) || body.choice !== null && !['ok', 'pick'].includes(body.choice) ||
@@ -636,6 +887,35 @@ function createRequestHandler(options) {
       }
       await state.waitForPersistence();
       jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
+      return;
+    }
+    const commonQuestionMutationPath = requestUrl.pathname.match(/^\/api\/decisions\/([^/]+)\/(hold|cancel)$/);
+    if (request.method === 'POST' && commonQuestionMutationPath) {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try { body = JSON.parse(await readJsonBody(request)); }
+      catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      let internalQuestionId;
+      try { internalQuestionId = decodeURIComponent(commonQuestionMutationPath[1]); }
+      catch {
+        jsonResponse(response, 400, { error: 'Invalid question id' });
+        return;
+      }
+      if (!internalQuestionId.startsWith('cq-')) {
+        jsonResponse(response, 404, { error: 'Question not found' });
+        return;
+      }
+      await mutateCommonQuestion(response, internalQuestionId, body, commonQuestionMutationPath[2]);
       return;
     }
     if (request.method === 'POST' && requestUrl.pathname === '/api/pull-requests/review-skip') {
@@ -1446,6 +1726,8 @@ function createRequestHandler(options) {
     }
     textResponse(response, 404, 'Not Found');
   };
+  handler.flushQuestionLosses = async () => { await Promise.all([...pendingQuestionLosses]); };
+  return handler;
 }
 
 function logLine(homeDir, message) {
@@ -1499,6 +1781,17 @@ async function startServer(options = {}) {
   away.attachWriter?.(storageWriter);
   const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
   const registrationRegistry = options.registrationRegistry || createRegistrationKernel().registry;
+  const questionService = options.questionService || null;
+  const pendingQuestionLosses = new Set();
+  let questionServiceReady = false;
+  if (questionService) {
+    try {
+      await questionService.ready();
+      questionServiceReady = true;
+    } catch {
+      questionServiceReady = false;
+    }
+  }
   state.isSessionAbsenceProtected = (sessionId) => registrationRegistry.isRegisteredSessionId(sessionId);
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
@@ -1550,6 +1843,9 @@ async function startServer(options = {}) {
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
     registrationRegistry,
+    questionService,
+    questionServiceReady,
+    pendingQuestionLosses,
     providerEventProjection: options.providerEventProjection,
     resolveActorCorrelation: options.resolveActorCorrelation,
     managedCollectors: options.managedCollectors,
@@ -1570,6 +1866,7 @@ async function startServer(options = {}) {
     await atomicWriteServerInfo(homeDir, info);
   } catch (error) {
     if (server.listening) await new Promise((resolve) => server.close(resolve));
+    try { await questionService?.close?.(); } catch {}
     throw error;
   }
 
@@ -1604,6 +1901,8 @@ async function startServer(options = {}) {
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
+      await handler.flushQuestionLosses();
+      try { await questionService?.close?.(); } catch {}
       await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
       await removeServerInfoIfOwned(homeDir, info);
       logLine(homeDir, 'stopped');
@@ -1611,7 +1910,7 @@ async function startServer(options = {}) {
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, questionService, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
 }
 
 function parseArguments(argv) {

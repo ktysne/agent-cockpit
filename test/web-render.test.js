@@ -100,11 +100,12 @@ test('ブラウザーに残った旧形式の表示設定を読んでも、サ�
 test('終わったセッションは待機中で未完了のものが無い場合だけと判定する', () => {
   const endedAgent = functionSource(pageHtml, 'isEndedAgent');
   const endedDecision = functionSource(pageHtml, 'isEndedDecision');
+  const finishedQuestion = functionSource(pageHtml, 'isFinishedCommonQuestion');
   const isFinished = functionSource(pageHtml, 'isFinishedSession');
   const status = functionSource(pageHtml, 'activityStatus');
-  assert.ok(endedAgent && endedDecision && isFinished && status);
+  assert.ok(endedAgent && endedDecision && finishedQuestion && isFinished && status);
   const context = pageContext(pageHtml, {});
-  vm.runInContext(`${endedAgent}\n${endedDecision}\n${status}\n${isFinished}`, context);
+  vm.runInContext(`${endedAgent}\n${endedDecision}\n${finishedQuestion}\n${status}\n${isFinished}`, context);
 
   const finished = {
     status: '待機中',
@@ -279,6 +280,9 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
   let updatedAnswerCard = null;
   const context = pageContext(pageHtml, {
     answerNoteComposing: false,
+    commonQuestionComposing: false,
+    HTMLElement: class FakeHTMLElement {},
+    commonQuestionDiagnosticsNotice: () => null,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     sinceSeenMode: 'always',
@@ -1711,7 +1715,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
 
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
@@ -1769,7 +1773,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'isFinishedCommonQuestion', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
@@ -1902,6 +1906,9 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
   activeElement = activePick;
   const context = pageContext(pageHtml, {
     answerNoteComposing: false,
+    commonQuestionComposing: false,
+    HTMLElement: class FakeHTMLElement {},
+    commonQuestionDiagnosticsNotice: () => null,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     HTMLTextAreaElement: class FakeTextArea {},
     document: {
@@ -3033,6 +3040,9 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
     const cancel = makeButton('conflictCancel');
     const context = pageContext(pageHtml, {
       answerNoteComposing: false,
+      commonQuestionComposing: false,
+      HTMLElement: class FakeHTMLElement {},
+      commonQuestionDiagnosticsNotice: () => null,
       lastState: { sessions: [{ session_id: 'session-ui' }] },
       HTMLTextAreaElement: class FakeTextArea {},
       document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
@@ -3081,6 +3091,9 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
     activeElement = activeButton;
     const context = pageContext(pageHtml, {
       answerNoteComposing: false,
+      commonQuestionComposing: false,
+      HTMLElement: class FakeHTMLElement {},
+      commonQuestionDiagnosticsNotice: () => null,
       lastState: { sessions: [{ session_id: 'session-ui' }] },
       HTMLTextAreaElement: class FakeTextArea {},
       document: { get activeElement() { return activeElement; }, querySelectorAll: () => [] },
@@ -3152,6 +3165,9 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
 
     context = pageContext(pageHtml, {
       answerNoteComposing: false,
+      commonQuestionComposing: false,
+      HTMLElement: class FakeHTMLElement {},
+      commonQuestionDiagnosticsNotice: () => null,
       lastState: { sessions: [{ session_id: 'session-ui' }], pullRequests: [] },
       HTMLTextAreaElement: class FakeTextArea {},
       document: {
@@ -3236,6 +3252,9 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
   activeElement = activeButton;
   const context = pageContext(pageHtml, {
     answerNoteComposing: false,
+    commonQuestionComposing: false,
+    HTMLElement: class FakeHTMLElement {},
+    commonQuestionDiagnosticsNotice: () => null,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     HTMLTextAreaElement: class FakeTextArea {},
     document: { get activeElement() { return activeElement; }, querySelectorAll: (selector) => (selector === 'button' ? [otherButton, replacementButton] : []) },
@@ -3299,7 +3318,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'activityStatus', 'isEndedAgent', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'isFinishedCommonQuestion', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
@@ -3321,6 +3340,7 @@ test('一部完了のセッションでは完了タスクを表示できる', ()
     expandedTodoTasks: new Set(),
     newestFirst: (items) => [...items],
     isFilterShown: () => true,
+    shownCommonQuestions: () => [],
     shownActiveDecisions: () => [],
     shownPermissions: () => [],
     hasHiddenJudgmentItems: () => false,

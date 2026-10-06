@@ -228,6 +228,12 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .primary { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 8px; padding: 8px 16px; cursor: pointer; min-height: 40px; }
 .primary:disabled { opacity: .4; cursor: default; }
+.common-question-confirmation { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--danger); border-radius: 8px; background: var(--surface-2); }
+.common-question-confirmation p { margin: 0; }
+.common-question-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.common-question-confirm-actions button { min-height: 40px; padding: 7px 12px; cursor: pointer; }
+.common-question-confirm-actions .confirm { border: 1px solid var(--danger); border-radius: 8px; background: var(--surface); color: var(--danger); }
+.common-question-confirm-actions .back { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 .sent { font-size: 12px; color: var(--text-2); }
 .merge-result { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; color: var(--text-2); font-size: 12px; }
 .merge-error { color: var(--danger); font-size: 12px; }
@@ -612,7 +618,31 @@ for (const p of DATA.products) {
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
-  p.sessions = [mainSession, ...(p.extraSessions || []).map(session => ({
+  if (p.id === 'agent-cockpit') mainSession.commonQuestions = [
+    {
+      internalQuestionId: 'cq-mock-formats', questionId: '回答形式の確認', createdAt: new Date(Date.now() - 3 * 60_000).toISOString(),
+      deadlineAt: new Date(Date.now() + 7 * 60_000).toISOString(), revision: 0, held: false, selectionSource: null, selectedAt: null,
+      selectedOptionIds: [], deliveryState: null, externalResolution: false, lateAnswerCount: 0, cancelled: false, cancelRequested: false,
+      questions: [
+        { id: 'priority', text: '先に表示する内容を選んでください', mode: 'single', allowFreeText: false, recommendedOptionId: 'summary', options: [
+          { id: 'summary', label: '要点', description: '短いまとめを先に表示' }, { id: 'detail', label: '詳細', description: '説明を先に表示' },
+        ] },
+        { id: 'channels', text: '必要な出力形式を選んでください', mode: 'multi', allowFreeText: true, recommendedOptionId: null, options: [
+          { id: 'html', label: 'HTML', description: 'ブラウザで確認' }, { id: 'markdown', label: 'Markdown', description: '差分を確認' },
+        ] },
+        { id: 'extra', text: '追加の条件があれば記入してください', mode: 'single', allowFreeText: true, recommendedOptionId: null, options: [] },
+      ],
+    },
+    {
+      internalQuestionId: 'cq-mock-late', questionId: '離席中に決めた項目', createdAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      deadlineAt: new Date(Date.now() - 2 * 60_000).toISOString(), revision: 1, held: false, selectionSource: 'away-default', selectedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+      selectedOptionIds: [{ questionId: 'choice', optionIds: ['recommended'] }], deliveryState: 'applied', externalResolution: false,
+      lateAnswerCount: 0, cancelled: false, cancelRequested: false,
+      questions: [{ id: 'choice', text: '通知をどうしますか', mode: 'single', allowFreeText: true, recommendedOptionId: 'recommended', options: [
+        { id: 'recommended', label: '要点のみ', description: '離席中の推奨' }, { id: 'all', label: 'すべて表示', description: '詳細も含める' },
+      ] }],
+    },
+  ];  p.sessions = [mainSession, ...(p.extraSessions || []).map(session => ({
     ...session, lastUpdatedAt: updatedAt(session.lastUpdatedMin ?? 2),
   }))];
   for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
@@ -637,6 +667,15 @@ ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.
 let hiddenSessionsUndo = null;
 let showIdleSessions = false;
 const answerErrors = new Map();
+const commonQuestionDrafts = new Map();
+const commonQuestionErrors = new Map();
+const commonQuestionNotices = new Map();
+const commonQuestionSubmittedDrafts = new Map();
+const commonQuestionInFlight = new Set();
+const commonQuestionCancelConfirmations = new Set();
+const commonQuestionStateFields = ['selectedOptionIds', 'selectionSource', 'selectedAt', 'deliveryState', 'held', 'cancelled', 'cancelRequested', 'lateAnswerCount', 'revision'];
+ui.commonQuestionStates = Object.fromEntries(Object.entries(ui.commonQuestionStates && typeof ui.commonQuestionStates === 'object' && !Array.isArray(ui.commonQuestionStates) ? ui.commonQuestionStates : {})
+  .map(([id, state]) => [id, Object.fromEntries(commonQuestionStateFields.filter(key => Object.hasOwn(state || {}, key)).map(key => [key, state[key]]))]));
 const pendingClosedTasks = new Map();
 const pullRequestMergeResults = new Map();
 const pullRequestMergeInFlight = new Set();
@@ -919,6 +958,7 @@ const allSessions = () => DATA.products.flatMap(p => p.sessions);
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
+  if (commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question))) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
   const updatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
@@ -949,24 +989,31 @@ function isAwaitingDecision(decision) {
 const pendingDecisions = p => visibleSessions(p).flatMap(s => s.decisions).filter(isAwaitingDecision);
 
 function countJudgments(sessions) {
-  const counts = { permission: 0, blocking: 0, provisional: 0 };
+  const counts = { permission: 0, blocking: 0, provisional: 0, questions: 0, questionProvisional: 0 };
   for (const session of sessions) {
     counts.permission += session.perms.length;
     for (const decision of session.decisions) {
       if (!isAwaitingDecision(decision)) continue;
       counts[effectiveDecisionState(decision) === 'waiting' ? 'blocking' : 'provisional'] += 1;
     }
+    for (const question of commonQuestionsOf(session)) {
+      if (isFinishedCommonQuestion(question)) continue;
+      if (question.selectionSource === 'away-default') counts.questionProvisional += 1;
+      else counts.questions += 1;
+    }
   }
-  counts.decisions = counts.blocking + counts.provisional;
-  counts.total = counts.permission + counts.decisions;
+  counts.provisional += counts.questionProvisional;
+  counts.decisions = counts.blocking + counts.provisional - counts.questionProvisional;
+  counts.total = counts.permission + counts.decisions + counts.questions + counts.questionProvisional;
   return counts;
 }
 
-function decisionCountTitle(decisions) {
-  const judgmentCounts = countJudgments([{ perms: [], decisions }]);
+function decisionCountTitle(decisions, commonQuestions = []) {
+  const judgmentCounts = countJudgments([{ perms: [], decisions, commonQuestions }]);
   const counts = [
     ['止めて待っている', judgmentCounts.blocking],
     ['仮に推奨案で進行中', judgmentCounts.provisional],
+    ['質問対応', judgmentCounts.questions],
   ];
   return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
@@ -975,6 +1022,7 @@ const FILTERS = [
   { key: 'permission', label: '許可待ち', cls: 'danger' },
   { key: 'blocking', label: '止めて待っている', cls: 'danger' },
   { key: 'provisional', label: '仮に推奨案で進行中', cls: 'warn' },
+  { key: 'questions', label: '質問対応', cls: 'warn' },
   { key: 'agents', label: '稼働中のサブエージェント', cls: 'accent' },
   { key: 'prs', label: 'マージできる PR', cls: 'ok' },
 ];
@@ -991,13 +1039,128 @@ const isShown = key => !ui.hidden.includes(key);
 const visibleDecisions = s => s.decisions.filter(d => isActiveDecision(d) && isShown(decisionCategory(d)));
 const visibleSubagents = s => s.subagents.filter(agent => !isBusyAgent(s, agent) || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms : [];
+const commonQuestionView = question => ({ ...question, ...(ui.commonQuestionStates[question.internalQuestionId] || {}) });
+const commonQuestionsOf = session => (session.commonQuestions || []).map(commonQuestionView);
+const isFinishedCommonQuestion = question => question.cancelled === true
+  || (question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
+const visibleCommonQuestions = session => commonQuestionsOf(session).filter(question => (!ui.hideFinished || !isFinishedCommonQuestion(question))
+  && isShown(question.selectionSource === 'away-default' ? 'provisional' : 'questions'));
+const commonQuestionDraftKey = id => `common:${id}`;
+function commonQuestionDraft(question) {
+  const key = commonQuestionDraftKey(question.internalQuestionId);
+  if (!commonQuestionDrafts.has(key)) {
+    const selected = question.selectionSource ? new Map() : new Map((question.selectedOptionIds || []).map(answer => [answer.questionId, answer.optionIds]));
+    commonQuestionDrafts.set(key, question.questions.map(item => ({ questionId: item.id, optionIds: [...(selected.get(item.id) || [])], freeText: '' })));
+  }
+  return commonQuestionDrafts.get(key).map(answer => ({ ...answer, optionIds: [...answer.optionIds] }));
+}
+function commonQuestionAnswersValid(questions, answers) {
+  return questions.every(question => {
+    const answer = answers.find(item => item.questionId === question.id);
+    const selectedCount = answer?.optionIds.length || 0;
+    const hasFreeText = question.allowFreeText && Boolean(answer?.freeText.trim());
+    if (!question.options.length) return hasFreeText;
+    if (question.mode === 'single' && selectedCount > 1) return false;
+    return selectedCount > 0 || hasFreeText;
+  });
+}
+function readCommonQuestionDraft(card) {
+  const question = commonQuestionsOf(allSessions().find(session => session.id === card.dataset.sessionId) || { commonQuestions: [] })
+    .find(item => item.internalQuestionId === card.dataset.questionId);
+  return question ? question.questions.map(item => ({
+    questionId: item.id,
+    optionIds: [...card.querySelectorAll('[data-common-option]')].filter(input => input.dataset.questionId === item.id && input.checked).map(input => input.dataset.optionId),
+    freeText: [...card.querySelectorAll('[data-common-free-text]')].find(input => input.dataset.commonFreeText === item.id)?.value || '',
+  })) : [];
+}
+function updateCommonQuestionSubmit(card) {
+  const question = commonQuestionsOf(allSessions().find(session => session.id === card.dataset.sessionId) || { commonQuestions: [] })
+    .find(item => item.internalQuestionId === card.dataset.questionId);
+  if (!question) return;
+  const answers = readCommonQuestionDraft(card);
+  commonQuestionDrafts.set(commonQuestionDraftKey(question.internalQuestionId), answers.map(answer => ({ ...answer, optionIds: [...answer.optionIds] })));
+  const button = card.querySelector('[data-common-submit]');
+  const key = commonQuestionDraftKey(question.internalQuestionId);
+  const submitted = commonQuestionSubmittedDrafts.get(key);
+  if (button) button.disabled = commonQuestionInFlight.has(key)
+    || !commonQuestionAnswersValid(question.questions, answers)
+    || Boolean(submitted && sameCommonQuestionAnswers(answers, submitted));
+}
+function sameCommonQuestionAnswers(left, right) {
+  return left.length === right.length && left.every((answer, index) => answer.questionId === right[index].questionId
+    && answer.freeText === right[index].freeText && answer.optionIds.length === right[index].optionIds.length
+    && answer.optionIds.every(id => right[index].optionIds.includes(id)));
+}
+function commonQuestionLabels(question) {
+  const selected = new Map((question.selectedOptionIds || []).map(answer => [answer.questionId, new Set(answer.optionIds)]));
+  return question.questions.flatMap(item => item.options.filter(option => selected.get(item.id)?.has(option.id)).map(option => option.label));
+}
+function commonQuestionStatus(question) {
+  if (question.cancelled) return '質問は取り下げ済みです。';
+  if (question.cancelRequested) return '取消要求済みです。送信開始後の回答は止められない場合があります。';
+  if (question.deliveryState === 'available') return '回答を保存済みです。配送待ちです。';
+  if (question.deliveryState === 'sending') return '送信開始済みです。返却結果を確認しています。';
+  if (question.deliveryState === 'accepted') return '受付済みです。適用は未確認です。';
+  if (question.deliveryState === 'applied') return '適用が確認されています。';
+  if (question.deliveryState === 'unknown') return '配送結果が不明です。自動再送はしません。';
+  return question.selectionSource ? '回答は保存済みです。配送状態を確認しています。' : '回答はまだ保存されていません。';
+}
+function findCommonQuestion(sessionId, internalQuestionId) {
+  const session = allSessions().find(item => item.id === sessionId);
+  return commonQuestionsOf(session || { commonQuestions: [] }).find(item => item.internalQuestionId === internalQuestionId);
+}
+function commonQuestionCancelControl(question, session, key) {
+  if (question.cancelled || question.deliveryState === 'applied') return '';
+  const id = esc(question.internalQuestionId);
+  const sessionId = esc(session.id);
+  if (!commonQuestionCancelConfirmations.has(question.internalQuestionId)) {
+    return '<button type="button" class="ghost" data-common-cancel="' + id + '" data-session-id="' + sessionId + '">' +
+      (question.cancelRequested ? '取消要求済み' : '質問を取り下げる') + '</button>';
+  }
+  const sent = ['sending', 'accepted', 'unknown', 'applied'].includes(question.deliveryState);
+  const topics = question.questions.map(item => esc(item.text)).join(' / ');
+  return '<div class="common-question-confirmation" role="group" aria-label="質問の取り下げ確認">' +
+    '<p>質問「' + esc(question.questionId) + '」を取り下げますか。</p>' +
+    '<p>対象: ' + topics + '。質問履歴は削除しません。</p>' +
+    '<p>' + (sent ? '送信開始後のため配送を止められず、取消要求のみを記録します。' : '送信前のため、未送信回答の配送を止めます。') + '</p>' +
+    '<div class="common-question-confirm-actions">' +
+    '<button type="button" class="confirm" data-common-cancel-confirm="' + id + '" data-session-id="' + sessionId + '">取り下げる</button>' +
+    '<button type="button" class="back" data-common-cancel-dismiss="' + id + '" data-session-id="' + sessionId + '">戻る</button>' +
+    '</div></div>';
+}
+function commonQuestionCard(p, session, record) {
+  const question = commonQuestionView(record);
+  const key = commonQuestionDraftKey(question.internalQuestionId);
+  const draft = commonQuestionDraft(question);
+  const selectedLabels = commonQuestionLabels(question);
+  const formAvailable = !question.cancelled && !(question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
+  const topics = question.questions.map(item => `<fieldset class="common-question-fieldset"><legend>${esc(item.text)}</legend>${item.options.length ? `<small class="common-question-help">${item.allowFreeText ? item.mode === 'multi' ? '複数選択するか、自由記入で回答してください。' : '1つ選択するか、自由記入で回答してください。' : item.mode === 'multi' ? '複数選択できます。' : '1つ選択してください。'}</small>` : ''}${item.options.map(option => {
+    const answer = draft.find(entry => entry.questionId === item.id);
+    const type = item.mode === 'multi' ? 'checkbox' : 'radio';
+    const selected = answer.optionIds.includes(option.id);
+    return `<label class="common-question-option"><input type="${type}" name="${esc(question.internalQuestionId)}-${esc(item.id)}" data-common-option="true" data-question-id="${esc(item.id)}" data-option-id="${esc(option.id)}" ${selected ? 'checked' : ''}><span>${esc(option.label)}${option.description ? `<small>${esc(option.description)}</small>` : ''}</span>${option.id === item.recommendedOptionId ? '<small class="common-question-recommended">推奨</small>' : ''}</label>`;
+  }).join('')}${item.allowFreeText ? `<label class="common-question-free-label">自由記入<textarea rows="2" maxlength="2000" data-common-free-text="${esc(item.id)}" aria-label="${esc(item.text)}の自由記入">${esc(draft.find(entry => entry.questionId === item.id).freeText)}</textarea></label><small class="common-question-help">下書きはこのページを開いている間だけ保持します。</small>` : ''}</fieldset>`).join('');
+  const canSubmit = commonQuestionAnswersValid(question.questions, draft);
+  const submitted = commonQuestionSubmittedDrafts.get(key);
+  const isRepeated = Boolean(submitted && sameCommonQuestionAnswers(draft, submitted));
+  const deadline = absoluteTimeLabel(question.deadlineAt);
+  const deadlineNote = !question.selectionSource && !question.cancelled
+    ? `<p class="common-question-note">${question.held ? '保留中です。' : ''}回答期限 ${esc(deadline)}。${question.held ? '保留を解除するまで自動選択しません。' : '離席中は期限後、すべての質問が単一選択で推奨案を持つ場合だけ仮選択します。'}</p>`
+    : '';
+  const lateNote = question.lateAnswerCount > 0 ? `<p class="common-question-note">後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。</p>` : '';
+  const selection = question.selectionSource ? `<p class="common-question-selection">${selectedLabels.length ? question.selectionSource === 'away-default' ? '離席時の推奨で仮選択: ' : '保存した選択: ' + selectedLabels.join('、') : '自由記入を含む回答を保存しました。'}${question.selectionSource === 'away-default' && selectedLabels.length ? selectedLabels.join('、') : ''}</p>` : '';
+  const actions = formAvailable ? `<div class="common-question-form">${topics}<small class="common-question-help">すべての質問に回答すると保存できます。</small><p class="common-question-error" role="alert">${esc(commonQuestionErrors.get(key) || '')}</p><p class="common-question-note">${esc(commonQuestionNotices.get(key) || '')}</p><div class="common-question-actions"><button type="button" class="primary" data-common-submit="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" ${commonQuestionInFlight.has(key) || !canSubmit || isRepeated ? 'disabled' : ''}>${question.selectionSource ? '後続の回答を保存' : '回答を保存'}</button>${!question.selectionSource ? `<button type="button" class="secondary" data-common-hold="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-held="${!question.held}" ${commonQuestionInFlight.has(key) ? 'disabled' : ''}>${question.held ? '保留を解除' : '質問を保留'}</button>` : ''}${commonQuestionCancelControl(question, session, key)}</div></div>` : '';
+  return `<article class="common-question" data-question-id="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}"><div class="common-question-head"><h4>${esc(question.questionId)}</h4>${sessionTag(p, session, true)}</div><p class="common-question-status">${esc(commonQuestionStatus(question))}</p>${selection}${deadlineNote}${question.externalResolution ? '<p class="common-question-note">元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。</p>' : ''}${lateNote}${actions}</article>`;
+}
 const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
-  || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)));
+  || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)))
+  || commonQuestionsOf(s).some(question => !visibleCommonQuestions(s).includes(question));
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
     + s.decisions.filter(d => isActiveDecision(d) && !isShown(decisionCategory(d))).length
     + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
+    + commonQuestionsOf(s).filter(question => !isFinishedCommonQuestion(question) && !visibleCommonQuestions(s).includes(question)).length
     + (isShown('permission') ? 0 : s.perms.length), 0);
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }
@@ -1023,8 +1186,7 @@ function renderSummary() {
   const agents = sessions.reduce((n, s) => n + s.subagents.filter(agent => isBusyAgent(s, agent)).length, 0);
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
   const counts = { ...judgmentCounts, agents, prs };
-  // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
-  const need = judgmentCounts.permission + judgmentCounts.blocking;
+  const need = judgmentCounts.permission + judgmentCounts.blocking + judgmentCounts.questions + judgmentCounts.questionProvisional;
   document.title = need ? `(${need}) Agent Cockpit` : 'Agent Cockpit';
   document.getElementById('summary').innerHTML = FILTERS.map(x =>
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
@@ -1039,6 +1201,8 @@ function renderSummary() {
   const pendingCounts = [
     hiddenJudgmentCounts.permission ? `許可待ち ${hiddenJudgmentCounts.permission} 件` : '',
     hiddenJudgmentCounts.blocking ? `止めて待っている ${hiddenJudgmentCounts.blocking} 件` : '',
+    hiddenJudgmentCounts.questions ? `質問対応 ${hiddenJudgmentCounts.questions} 件` : '',
+    hiddenJudgmentCounts.questionProvisional ? `仮に推奨案で進行中 ${hiddenJudgmentCounts.questionProvisional} 件` : '',
   ].filter(Boolean);
   const countNote = pendingCounts.length ? `、うち${pendingCounts.join('、')}` : '';
   const undo = hiddenSessionsUndo
@@ -1184,7 +1348,8 @@ function isFinishedSession(session) {
     && session.tasks.every(task => taskState(session, task) === 'done')
     && session.decisions.every(isEndedDecision)
     && session.perms.length === 0
-    && !session.subagents.some(agent => !isEndedAgent(session, agent));
+    && !session.subagents.some(agent => !isEndedAgent(session, agent))
+    && commonQuestionsOf(session).every(isFinishedCommonQuestion);
 }
 
 function agentRow(p, session, agent, withTag) {
@@ -1793,14 +1958,16 @@ function endedDecisionToggle(session) {
 
 function decisionSessionBlock(p, session, withTag) {
   const active = visibleDecisions(session).sort((a, b) => ageMinutes(a) - ageMinutes(b));
+  const commonQuestions = visibleCommonQuestions(session);
   const ended = ui.hideFinished ? [] : session.decisions.filter(isEndedDecision);
   const expanded = !ui.hideFinished && ui.expandedEndedDecisions.includes(session.id);
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
+  const questionCards = commonQuestions.map(question => commonQuestionCard(p, session, question)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
   // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
-  const showEmpty = !cards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
-  return `${cards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
+  const showEmpty = !cards && !questionCards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
+  return `${cards}${questionCards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
 // 作業中のタスクがあるときは未着手を畳み、作業中だけを先に見せる。未着手しか無ければ畳まない。
@@ -1889,7 +2056,8 @@ function sessionBlock(p, session) {
   const groupTag = multiple ? 'section' : 'div';
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
-  const showJudgment = decisions + permissions > 0
+  const commonQuestions = visibleCommonQuestions(session);
+  const showJudgment = decisions + permissions + commonQuestions.length > 0
     || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
@@ -1897,7 +2065,7 @@ function sessionBlock(p, session) {
     <div class="session-body">
       ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
       ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
-        judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions} 件)</span></h3>
+        judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions + commonQuestions.length} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
       ${decisionSessionBlock(p, session, false)}` : '',
         tasks: taskSessionBlock(p, session, false),
@@ -1967,11 +2135,14 @@ function renderProductMode() {
     const pend = pendingDecisions(p);
     const sessions = sessionsByActivity(p);
     const judgmentCounts = countJudgments(sessions);
+    const judgmentTitle = decisionCountTitle(pend, sessions.flatMap(commonQuestionsOf));
     return `<section class="section ${ui.pinned.includes(p.id) ? 'pinned' : ''}">
       <div class="head">
         <h2 id="product-heading-${i}" tabindex="-1">${esc(p.name)}</h2>${sharedBranch(p) ? `<span class="meta">${esc(sharedBranch(p))}</span>` : ''}
         ${judgmentCounts.permission ? `<span class="chip danger">許可待ち (${judgmentCounts.permission} 件)</span>` : ''}
-        ${pend.length ? `<span class="chip danger" title="${esc(decisionCountTitle(pend))}">判断待ち (${pend.length} 件)</span>` : ''}
+        ${judgmentCounts.questions ? `<span class="chip warn" title="${esc(judgmentTitle)}">質問対応 (${judgmentCounts.questions} 件)</span>` : ''}
+        ${judgmentCounts.questionProvisional ? `<span class="chip warn" title="${esc(judgmentTitle)}">仮に推奨案で進行中 (${judgmentCounts.questionProvisional} 件)</span>` : ''}
+        ${pend.length ? `<span class="chip danger" title="${esc(judgmentTitle)}">判断待ち (${pend.length} 件)</span>` : ''}
         ${(n => n ? `<span class="chip ok">マージできる PR (${n} 件)</span>` : '')(openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length)}
         ${orderControls(p, i, ps.length, pinnedCount)}
         ${productCloseButton(p, `product-heading-${i}`) ? `<div class="product-remove">${productCloseButton(p, `product-heading-${i}`)}</div>` : ''}
@@ -1995,13 +2166,18 @@ function renderKindMode() {
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。'}</div>`;
   }
   const sessions = ps.flatMap(p => sessionsByActivity(p).map(session => ({ p, session })));
-  const section = (title, body, extra = '', emptyCount = 0) => body
-    ? `<section class="section"><div class="head"><h2>${title}</h2>${extra}</div><div class="body">${body}</div></section>`
+  const section = (title, body, extra = '', emptyCount = 0, showCount = false) => body
+    ? `<section class="section"><div class="head"><h2>${title}${showCount ? `<span class="count">(${emptyCount} 件)</span>` : ''}</h2>${extra}</div><div class="body">${body}</div></section>`
     : `<section class="kind-empty"><h2>${title}<span class="count">${emptyCount ? `(${emptyCount} 件)` : '（なし）'}</span></h2>${extra}</section>`;
   // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
   const waits = sessions.flatMap(({ p, session }) => [
     ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
     ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
+    ...visibleCommonQuestions(session).map(question => {
+      const createdAt = typeof question.createdAt === 'number' ? question.createdAt : Date.parse(question.createdAt || '');
+      const age = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 60_000) : Number.POSITIVE_INFINITY;
+      return { age, html: commonQuestionCard(p, session, question) };
+    }),
   ]).sort((a, b) => b.age - a.age);
   const visibleDecisionItems = waits.map(x => x.html).join('');
   const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
@@ -2048,7 +2224,7 @@ function renderKindMode() {
   const prs = ps.filter(p => reservationNoticeRows(p) || (ui.hideFinished ? openPrs(p).length > 0 : p.prs.length || (p.closedPrs || []).length)).map(p => prBlock(p, true)).join('');
   const sections = {
     sinceSeen: news ? section('前回見てから', news) : '',
-    judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length) : '',
+    judgment: showJudgment ? section('あなたの判断が必要なこと', decisions, decisionControls, waits.length + endedDecisionEntries.length, true) : '',
     tasks: section('タスクと完了条件', tasks, taskControls, todoTaskCount + doneTaskCount),
     now: section('今やっていること', now, activityControls, nowRowsByAge.length + endedAgentCount),
     prs: isShown('prs') ? section('プルリクエスト', prs) : '',
@@ -2098,6 +2274,34 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.dataset.commonCancel) {
+    if (!findCommonQuestion(t.dataset.sessionId, t.dataset.commonCancel)) return;
+    commonQuestionCancelConfirmations.add(t.dataset.commonCancel);
+    render();
+    [...document.querySelectorAll('[data-common-cancel-confirm]')]
+      .find(button => button.dataset.commonCancelConfirm === t.dataset.commonCancel)?.focus({ preventScroll: true });
+    return;
+  }
+  if (t.dataset.commonCancelDismiss) {
+    commonQuestionCancelConfirmations.delete(t.dataset.commonCancelDismiss);
+    render();
+    [...document.querySelectorAll('[data-common-cancel]')]
+      .find(button => button.dataset.commonCancel === t.dataset.commonCancelDismiss)?.focus({ preventScroll: true });
+    return;
+  }
+  if (t.dataset.commonCancelConfirm) {
+    const id = t.dataset.commonCancelConfirm;
+    const question = findCommonQuestion(t.dataset.sessionId, id);
+    if (!question || !commonQuestionCancelConfirmations.has(id)) return;
+    const sent = ['sending', 'accepted', 'unknown', 'applied'].includes(question.deliveryState);
+    const current = ui.commonQuestionStates[id] || {};
+    ui.commonQuestionStates[id] = { ...current, ...(sent ? { cancelRequested: true } : { cancelled: true }) };
+    commonQuestionCancelConfirmations.delete(id);
+    save();
+    render();
+    return;
+  }
+
   if (t.dataset.mode) { ui.mode = t.dataset.mode; }
   else if (t.hasAttribute('data-show-idle')) {
     showIdleSessions = !showIdleSessions;

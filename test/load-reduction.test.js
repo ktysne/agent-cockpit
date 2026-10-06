@@ -21,6 +21,7 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   const webContext = {
     isPendingDecision: (decision) => decision.state === 'waiting' && !decision.answer,
     hasEffectiveAnswer: (decision) => Boolean(decision.answer),
+    commonQuestionsOf: (session) => session.commonQuestions || [],
   };
   const webFunctions = ['isActiveDecision', 'isAwaitingDecision', 'isPendingDecision', 'countJudgments', 'decisionCountTitle'].map((name) => functionSource(web, name));
   vm.runInNewContext(`${functionSource(web, 'hasEffectiveAnswer')}\n${webFunctions.join('\n')}\nthis.title = decisionCountTitle;`, webContext);
@@ -30,6 +31,7 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
   const mockContext = {
     effectiveDecisionState: (decision) => decision.kind,
     answerOf: (id) => mockAnswers[id] || {},
+    commonQuestionsOf: (session) => session.commonQuestions || [],
   };
   const mockFunctions = ['isActiveDecision', 'isAwaitingDecision', 'countJudgments', 'decisionCountTitle'].map((name) => functionSource(mock, name));
   vm.runInNewContext(`${mockFunctions.join('\n')}\nthis.title = decisionCountTitle;`, mockContext);
@@ -38,7 +40,7 @@ test('仮進行中の状態名と判断待ちの内訳を上部札とそろえ�
     { id: 'provisional', kind: 'provisional' },
   ]), '止めて待っている 1 件、仮に推奨案で進行中 1 件');
   assert.match(functionSource(web, 'productSection'), /decisionChip\.title = decisionCountTitle\(awaitingDecisions\)/);
-  assert.match(functionSource(mock, 'renderProductMode'), /title="\$\{esc\(decisionCountTitle\(pend\)\)\}"/);
+  assert.match(functionSource(mock, 'renderProductMode'), /title="\$\{esc\(judgmentTitle\)\}"/);
 });
 
 test('許可待ちと質問はセッションを示し、操作の説明文を出さない', () => {
