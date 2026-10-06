@@ -4,6 +4,7 @@ Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
 再現に使った一式は `poc/` にある。
 
 CodexのフックとMCP識別の検証は[poc-codex-157.md](poc-codex-157.md)に記録する。
+Codexの共有app-server接続の検証は[poc-codex-158.md](poc-codex-158.md)に記録する。
 Claudeの検証結果をCodexの実測結果へ読み替えない。
 
 ## 確かめたこと
