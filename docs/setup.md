@@ -2,6 +2,15 @@
 
 この文書は、agent-cockpit を導入する AI(Claude Code など)が読む手順書です。人が読んで手で進めることもできます。
 
+## 実験用managed collector
+
+managed collectorは通常の導入では有効にならず、`npm start`もruntimeへ接続しません。
+隔離probeで使う場合は、明示的なtrusted compositionから`startServer({ managedCollectors })`へcollectorを渡します。
+probe専用のHOME、接続先、資格情報を用意し、通常のClaude HOME、Codex HOME、MCP登録、外部hook設定は変更しません。
+remote実行環境では、loopback外へtransportを公開せず、認証済みの接続とHOME scopeを検証できる環境だけを使います。
+native actorと登録済みexecutionを結ぶ証拠が確認されるまでは、観測はunknownとして扱い、production bindingとして採用しません。
+通常HOMEへの導入案を検討するときは、対象、差分、復旧手順を先に示し、個別の承認後にだけ進めます。
+
 ## 進め方の決まり
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。

@@ -2,6 +2,7 @@
 
 この資料は常駐サーバー、フック、画面の現在の構成と通信の仕様を定める。
 正規登録済みのClaude/Codexイベントを共通状態へ変換する契約は[イベント投影の設計](codex-event-projection.md)に定める。
+managed runtimeの読取専用collectorは、trusted compositionが`startServer({ managedCollectors })`へ明示して渡した場合だけ動く。詳細と採用境界は[managed collectorの設計](managed-collector.md)に定める。
 
 ## 構成
 
@@ -25,6 +26,8 @@
 | `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する |
 
 ## 起動と寿命
+
+managed collectorはserverの通常起動では作成・接続しない。注入されたcollectorのallowlist済みsnapshotだけを`GET /api/state`の`managedCollectors`として返し、HTTP経路から接続、resume、登録、proof照会は行わない。
 
 - SessionStart フックが常駐サーバーの生存を確かめ、動いていなければ起動する。生存は `GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で、`server.json` と一致することで判定する。Windows は pid の再利用が速いので、pid だけで判定しない。
 - 起動は `detached`、`windowsHide: true`、`stdio` は `server.log` の fd、`unref()` で行う。`cwd` は常駐サーバーの置き場にする。worktree を `cwd` にすると Windows がそのディレクトリをロックし、worktree を消せなくなるためである。
