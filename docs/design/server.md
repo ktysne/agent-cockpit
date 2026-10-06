@@ -40,7 +40,7 @@
 - `POST /api/sessions/<session_id>/plan` は、`/api/events` と同じ `secret` と Origin 不在を求める。`session_id` は英数字と `-` だけを使い、128 文字までにする。
 - `GET /api/sessions/<session_id>/context` は Host を照合し、離席状態、タスクの題と状態、未解決判断事項の id、題、状態を返す。秘密値は求めない。
 - フックからの書き込みは、`Origin` ヘッダーが無く、`Sec-Fetch-Site` が `cross-site` でないことを求める。ブラウザは `POST` に必ず `Origin` を付けるので、別のページからの書き込みをこれで弾ける。`/api/away` は画面用秘密値を照合し、Origin が無いか待ち受け先の Origin と一致すること、および `Sec-Fetch-Site` が `cross-site` でないことを求める。ほかの画面からの書き込みは、`Origin` が自分の origin で、`Sec-Fetch-Site` が無いか `same-origin` であることを求める。
-- 秘密値は起動ごとに 2 つ作り、`server.json` に書く。`secret` はフックと MCP サーバー用で、`/api/events` だけが受け付ける。`uiSecret` は画面とトレイ用で、`/api/away` などの画面からの操作だけが受け付ける。画面には `uiSecret` だけを埋めるので、画面を読めてもイベントは偽造できない。
+- 秘密値は起動ごとに 2 つ作り、`server.json` に書く。`secret` はフックと MCP サーバー用で、`/api/events` とMCP書込みの入口が受け付ける。`uiSecret` は画面とトレイ用で、`/api/away` などの画面からの操作だけが受け付ける。画面には `uiSecret` だけを埋めるので、画面を読めてもイベントは偽造できない。正規登録された宛先への書込みには、共通secretとは別にwriterの照合も求める。
 - `POST /api/away` は `uiSecret` を先に照合し、`Origin` が無いか、待ち受けポートに対する `http://127.0.0.1:<port>` または `http://localhost:<port>` であることを確かめる。画面は同一オリジンのページだけが読めるよう、`uiSecret` を HTML の meta 属性へ埋め込み、CORS ヘッダーは返さない。DNS リバインディングは全要求の Host 照合で防ぐ。
 - 状態不明のセッションへの書き込み(`/api/sessions/<session_id>/estimate` と `/api/hidden-sessions`)も、ほかの画面からの書き込みと同じく `uiSecret` を照合し、`Origin` が自分の origin であることを求める。`Origin` が無い要求を通すのは、トレイが呼ぶ `/api/away` だけにする。画面は `401` のとき `/` を取り直し、新しい秘密値で 1 回だけ再送する。
 - 全応答に `X-Frame-Options: DENY` と `Content-Security-Policy: frame-ancestors 'none'` を付け、別のページが画面を iframe に埋めて操作させる経路を塞ぐ。
@@ -260,7 +260,11 @@ MCP の `cockpit_set_tasks` は配列全体を置き換え、成功時に `tasks
 MCP サーバーは `src/mcp/server.js` で、JSON-RPC を stdio の行単位で扱う。
 ツールは `cockpit_set_tasks`、`cockpit_add_decision`、`cockpit_update_decision`、`cockpit_add_pr`、`cockpit_skip_review` の 5 つである。
 計画の変更は `ensureServerRunning` で常駐サーバーを確かめ、`secret` 付きで `/plan` に送る。PR の登録とクロスレビュー不要の記録は `/prs` に送る。
-MCP が渡す `ppid` と `CLAUDE_CODE_SESSION_ID` のうち、常駐サーバーはまず `ppid` から `~/.claude/sessions/*.json` に対応する session ID を探し、見つからない場合に環境変数の ID を使う。どちらも無ければ書き込みを拒否する。
+MCP書込みは登録核が発行したwriterのtoken、provider、native ID種別、host、HOME scope、native ID、contextと実行期間を照合する。
+`ppid`と`CLAUDE_CODE_SESSION_ID`は書込み権限の根拠にしない。
+MCPは`pending`宛てに認証済みwriterを渡し、常駐サーバーがprojection用session IDを内部で解決する。
+未確認、不一致、終了済み期間を副作用なしで拒否する。
+登録主体、旧Claude観測の互換境界と後続へのinterfaceは[正規会話の登録核](codex-registration-core.md)に定める。
 他の環境変数値や `CLAUDE_CODE_MESSAGING_TOKEN` は MCP の結果、ログ、常駐サーバーへの要求に含めない。
 `cockpit_add_decision` は質問を 1 つ持つ判断事項を作り、`cockpit_update_decision` は `provisional` または `resolved` と `resolution` を記録する。
 成功時の MCP 応答は、保存した後の一覧を短く示す。

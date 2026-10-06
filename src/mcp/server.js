@@ -2,13 +2,13 @@ const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { postToServer } = require('../client/server-connection');
 const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
-const { isHookSessionId } = require('../server/session-ids');
 
 const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
 const PROTOCOL_VERSION = '2025-06-18';
 const MCP_TIMEOUT_MS = 5000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
+const WRITER_REQUIRED_MESSAGE = 'このセッションの認証済み登録情報を確認できませんでした。';
 const MAX_RESULT_ITEMS = 10;
 const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
@@ -169,6 +169,54 @@ function shortSavedList(toolName, saved) {
   return `${action}: ${summary}${remainder}`;
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function resolveMcpWriter(options = {}) {
+  const writer = options.writer;
+  if (!isRecord(writer) || !isRecord(writer.identity)) return null;
+
+  const { provider, nativeIdKind, hostId, homeScopeId, nativeId } = writer.identity;
+  if (typeof writer.token !== 'string' || writer.token.length === 0 ||
+    typeof writer.contextId !== 'string' || writer.contextId.length === 0 ||
+    typeof writer.executionId !== 'string' || writer.executionId.length === 0 ||
+    ![provider, nativeIdKind, hostId, homeScopeId, nativeId].every((value) => typeof value === 'string' && value.length > 0)) {
+    return null;
+  }
+
+  const meta = options.runtimeMeta;
+  if (meta !== undefined && meta !== null && !isRecord(meta)) return null;
+  if (isRecord(meta) && Object.hasOwn(meta, 'provider') &&
+    (!['claude', 'codex'].includes(meta.provider) || meta.provider !== provider)) {
+    return null;
+  }
+
+  if (provider === 'codex') {
+    if (nativeIdKind !== 'thread' || !isRecord(meta) ||
+      typeof meta.threadId !== 'string' || meta.threadId !== nativeId) {
+      return null;
+    }
+  } else if (provider === 'claude') {
+    if (nativeIdKind !== 'session' || (isRecord(meta) && meta.threadId !== undefined)) return null;
+    const sessionId = (options.environment || process.env).CLAUDE_CODE_SESSION_ID;
+    if (typeof sessionId === 'string' && sessionId.length > 0 && sessionId !== nativeId) return null;
+  } else {
+    return null;
+  }
+
+  return {
+    token: writer.token,
+    identity: { provider, nativeIdKind, hostId, homeScopeId, nativeId },
+    contextId: writer.contextId,
+    executionId: writer.executionId,
+  };
+}
+
+function writerError() {
+  return { errorMessage: WRITER_REQUIRED_MESSAGE };
+}
+
 function postMcpRequest(requestPath, body, options, deadline) {
   return postToServer(requestPath, body, {
     homeDir: options.homeDir || cockpitHomeFromOptions(options),
@@ -184,54 +232,45 @@ function postMcpRequest(requestPath, body, options, deadline) {
 }
 
 async function postPlan(toolName, args, options = {}) {
-  const environment = options.environment || process.env;
+  const writer = resolveMcpWriter(options);
+  if (!writer) return writerError();
   const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
-  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
-    ? environment.CLAUDE_CODE_SESSION_ID
-    : '';
-  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
     ...planArguments(toolName, args),
-    ppid: options.ppid === undefined ? process.ppid : options.ppid,
-    claudeCodeSessionId: sessionId || null,
+    writer,
   };
-  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
+  const result = await postMcpRequest('/api/sessions/pending/plan', body, options, deadline);
   if (result.ok) return result.json;
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
 
 async function postPullRequest(args, options = {}) {
+  const writer = resolveMcpWriter(options);
+  if (!writer) return writerError();
   const pullRequest = parsePullRequestUrl(args.url);
   if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
-  const environment = options.environment || process.env;
   const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
-  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
-    ? environment.CLAUDE_CODE_SESSION_ID
-    : '';
-  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
     kind: 'add_pr',
     url: pullRequest.url,
-    ppid: options.ppid === undefined ? process.ppid : options.ppid,
-    claudeCodeSessionId: sessionId || null,
     cwd: options.cwd === undefined ? process.cwd() : options.cwd,
+    writer,
   };
-  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
+  const result = await postMcpRequest('/api/sessions/pending/prs', body, options, deadline);
   if (result.ok) return result.json;
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
 
 async function postCrossReviewSkip(args, options = {}) {
+  const writer = resolveMcpWriter(options);
+  if (!writer) return writerError();
   if (!validRepositoryPart(args.owner) || !validRepositoryPart(args.repo) || !Number.isSafeInteger(args.number) || args.number < 1 ||
     !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
     return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
-  const environment = options.environment || process.env;
   const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
-  const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string' ? environment.CLAUDE_CODE_SESSION_ID : '';
-  const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
     kind: 'skip_review',
     owner: args.owner,
@@ -239,10 +278,9 @@ async function postCrossReviewSkip(args, options = {}) {
     number: args.number,
     headRefOid: args.headRefOid,
     reason: args.reason,
-    ppid: options.ppid === undefined ? process.ppid : options.ppid,
-    claudeCodeSessionId: sessionId || null,
+    writer,
   };
-  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
+  const result = await postMcpRequest('/api/sessions/pending/prs', body, options, deadline);
   if (result.ok) return result.json;
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
@@ -252,6 +290,9 @@ async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
+  if (!Object.keys(args).every((key) => Object.hasOwn(tool.inputSchema.properties, key))) {
+    return toolResult('入力が正しくありません。', true);
+  }
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
@@ -292,7 +333,8 @@ async function handleRequest(request, options = {}) {
   }
   if (request.method === 'tools/call') {
     const name = request.params?.name;
-    const result = await callTool(name, request.params?.arguments || {}, options);
+    const callOptions = { ...options, runtimeMeta: request.params?._meta };
+    const result = await callTool(name, request.params?.arguments || {}, callOptions);
     return { jsonrpc: '2.0', id: request.id, result };
   }
   return { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } };
@@ -342,6 +384,7 @@ module.exports = {
   PROTOCOL_VERSION,
   MCP_TIMEOUT_MS,
   UNREACHABLE_MESSAGE,
+  WRITER_REQUIRED_MESSAGE,
   TOOL_DEFINITIONS,
   PR_ERROR_MESSAGES,
   REVIEW_SKIP_ERROR_MESSAGES,

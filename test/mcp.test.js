@@ -1,7 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
-const { startMcpServer, UNREACHABLE_MESSAGE } = require('../src/mcp/server');
+const { startMcpServer, UNREACHABLE_MESSAGE, WRITER_REQUIRED_MESSAGE } = require('../src/mcp/server');
+
+function makeWriter(provider = 'claude', nativeId = 'mcp-session') {
+  return {
+    token: 'registered-writer-token',
+    identity: {
+      provider,
+      nativeIdKind: provider === 'codex' ? 'thread' : 'session',
+      hostId: 'host-fixture',
+      homeScopeId: 'home-fixture',
+      nativeId,
+    },
+    contextId: 'context-fixture',
+    executionId: 'execution-fixture',
+  };
+}
 
 async function exchange(requests, options = {}) {
   const input = new PassThrough();
@@ -16,6 +31,7 @@ async function exchange(requests, options = {}) {
 
 test('MCP stdio は initialize、tools/list、tools/call に応答する', async () => {
   let sent = null;
+  const writer = makeWriter();
   const responses = await exchange([
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
@@ -30,7 +46,7 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
       CLAUDE_CODE_MESSAGING_TOKEN: 'must-not-be-sent',
       PRIVATE_ENV_VALUE: 'also-must-not-be-sent',
     },
-    ppid: 321,
+    writer,
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
     fetchImpl: async (url, init) => {
       sent = { url, headers: init.headers, body: JSON.parse(init.body) };
@@ -45,28 +61,31 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   ]);
   assert.equal(responses[2].id, 3);
   assert.match(responses[2].result.content[0].text, /テストを書く \(doing\)/);
-  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/mcp-session/plan');
+  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/pending/plan');
   assert.equal(sent.headers['x-cockpit-secret'], 'test-secret');
-  assert.deepEqual(
-    [sent.body.kind, sent.body.ppid, sent.body.claudeCodeSessionId],
-    ['tasks', 321, 'mcp-session'],
-  );
+  assert.equal(sent.body.kind, 'tasks');
+  assert.deepEqual(sent.body.writer, writer);
+  assert.equal('ppid' in sent.body, false);
+  assert.equal('claudeCodeSessionId' in sent.body, false);
   assert.ok(!JSON.stringify(sent).includes('must-not-be-sent'));
   assert.ok(!JSON.stringify(sent).includes('also-must-not-be-sent'));
   assert.ok(!JSON.stringify(responses).includes('also-must-not-be-sent'));
   assert.ok(!JSON.stringify(responses).includes('test-secret'));
+  assert.ok(!JSON.stringify(responses).includes(writer.token));
 });
 
 test('cockpit_add_pr は PR URL を秘密値付きで常駐サーバーへ登録する', async () => {
   let sent = null;
+  const writer = makeWriter();
+  const cwd = 'D:\\project\\.claude\\worktrees\\mcp-session';
   const responses = await exchange([{
     jsonrpc: '2.0', id: 1, method: 'tools/call',
     params: { name: 'cockpit_add_pr', arguments: { url: 'https://github.com/example/project/pull/45' } },
   }], {
     homeDir: 'C:\\temporary-cockpit',
     environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
-    ppid: 321,
-    cwd: 'D:\\project\\.claude\\worktrees\\mcp-session',
+    cwd,
+    writer,
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
     fetchImpl: async (url, init) => {
       sent = { url, headers: init.headers, body: JSON.parse(init.body) };
@@ -75,18 +94,19 @@ test('cockpit_add_pr は PR URL を秘密値付きで常駐サーバーへ登録
   });
   assert.equal(responses[0].result.isError, undefined);
   assert.match(responses[0].result.content[0].text, /PR #45/);
-  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/mcp-session/prs');
+  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/pending/prs');
   assert.equal(sent.headers['x-cockpit-secret'], 'test-secret');
   assert.equal(sent.headers.origin, undefined);
-  assert.deepEqual([sent.body.kind, sent.body.url, sent.body.ppid], [
-    'add_pr', 'https://github.com/example/project/pull/45', 321,
+  assert.deepEqual([sent.body.kind, sent.body.url, sent.body.cwd, sent.body.writer], [
+    'add_pr', 'https://github.com/example/project/pull/45', cwd, writer,
   ]);
-  assert.equal(sent.body.claudeCodeSessionId, 'mcp-session');
+  assert.equal('claudeCodeSessionId' in sent.body, false);
 });
 
 test('cockpit_skip_review は理由と指定 head を秘密値付きで常駐サーバーへ記録する', async () => {
   let sent = null;
   const headRefOid = 'a'.repeat(40);
+  const writer = makeWriter();
   const responses = await exchange([{
     jsonrpc: '2.0', id: 1, method: 'tools/call',
     params: { name: 'cockpit_skip_review', arguments: {
@@ -95,7 +115,7 @@ test('cockpit_skip_review は理由と指定 head を秘密値付きで常駐サ
   }], {
     homeDir: 'C:\\temporary-cockpit',
     environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
-    ppid: 321,
+    writer,
     ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
     fetchImpl: async (url, init) => {
       sent = { url, headers: init.headers, body: JSON.parse(init.body) };
@@ -105,13 +125,138 @@ test('cockpit_skip_review は理由と指定 head を秘密値付きで常駐サ
 
   assert.equal(responses[0].result.isError, undefined);
   assert.match(responses[0].result.content[0].text, /クロスレビュー不要として記録しました/);
-  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/mcp-session/prs');
+  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/pending/prs');
   assert.equal(sent.headers['x-cockpit-secret'], 'test-secret');
   assert.equal(sent.headers.origin, undefined);
   assert.deepEqual([
     sent.body.kind, sent.body.owner, sent.body.repo, sent.body.number,
-    sent.body.headRefOid, sent.body.reason, sent.body.ppid, sent.body.claudeCodeSessionId,
-  ], ['skip_review', 'example', 'project', 45, headRefOid, '変更が説明文だけのため', 321, 'mcp-session']);
+    sent.body.headRefOid, sent.body.reason, sent.body.writer,
+  ], ['skip_review', 'example', 'project', 45, headRefOid, '変更が説明文だけのため', writer]);
+});
+
+test('MCPは旧Claude IDだけでは書き込まず、未binding入力をHTTP送信しない', async () => {
+  const calls = [
+    ['cockpit_set_tasks', { tasks: [] }],
+    ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
+    ['cockpit_skip_review', {
+      owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '確認済み',
+    }],
+  ];
+
+  for (const [name, argumentsValue] of calls) {
+    let fetchCount = 0;
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: name, method: 'tools/call', params: { name, arguments: argumentsValue },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async () => { fetchCount += 1; return new Response('{}', { status: 200 }); },
+    });
+    assert.equal(responses[0].result.isError, true, name);
+    assert.equal(responses[0].result.content[0].text, WRITER_REQUIRED_MESSAGE, name);
+    assert.equal(fetchCount, 0, name);
+  }
+});
+
+test('Codex MCPは一致するthread metadataだけを書き込み、並行呼び出しのmetadataを共有しない', async () => {
+  let fetchCount = 0;
+  let sent = null;
+  const writer = makeWriter('codex', 'codex-thread');
+  const responses = await exchange([
+    {
+      jsonrpc: '2.0', id: 'matching', method: 'tools/call',
+      params: {
+        name: 'cockpit_set_tasks', arguments: { tasks: [] },
+        _meta: { provider: 'codex', threadId: 'codex-thread' },
+      },
+    },
+    {
+      jsonrpc: '2.0', id: 'mismatching', method: 'tools/call',
+      params: {
+        name: 'cockpit_set_tasks', arguments: { tasks: [] },
+        _meta: { provider: 'codex', threadId: 'other-thread' },
+      },
+    },
+  ], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'inherited-claude-session' },
+    writer,
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      fetchCount += 1;
+      sent = { url, body: JSON.parse(init.body) };
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+    },
+  });
+  const byId = new Map(responses.map((response) => [response.id, response]));
+
+  assert.equal(byId.get('matching').result.isError, undefined);
+  assert.equal(byId.get('mismatching').result.isError, true);
+  assert.equal(fetchCount, 1);
+  assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/pending/plan');
+  assert.deepEqual(sent.body.writer, writer);
+  assert.equal('claudeCodeSessionId' in sent.body, false);
+});
+
+test('unknown metadata provider、異なるClaude metadata、未対応writer providerを拒否する', async () => {
+  const cases = [
+    { writer: makeWriter(), meta: { provider: 'future-provider' } },
+    { writer: makeWriter(), meta: { provider: 'codex', threadId: 'codex-thread' } },
+    { writer: makeWriter('openai', 'openai-thread'), meta: { provider: 'openai', threadId: 'openai-thread' } },
+  ];
+
+  for (const [index, { writer, meta }] of cases.entries()) {
+    let fetchCount = 0;
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: index, method: 'tools/call',
+      params: { name: 'cockpit_set_tasks', arguments: { tasks: [] }, _meta: meta },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer,
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async () => { fetchCount += 1; return new Response('{}', { status: 200 }); },
+    });
+    assert.equal(responses[0].result.isError, true, String(index));
+    assert.equal(fetchCount, 0, String(index));
+  }
+});
+
+test('MCP tools/call は呼出し元の宛先claimをHTTP送信前に拒否する', async () => {
+  const destinationClaims = [
+    'session_id', 'sessionId', 'threadId', 'conversationId', 'conversation_id',
+    'executionId', 'execution_id', 'provider', 'nativeId', 'nativeIdKind',
+    'hostId', 'homeScopeId', 'contextId', 'contextToken', 'token', 'writer',
+  ];
+  const responsesExpected = destinationClaims.map((claim, index) => ({
+    jsonrpc: '2.0', id: index, method: 'tools/call',
+    params: {
+      name: 'cockpit_set_tasks',
+      arguments: { tasks: [], [claim]: 'caller-selected-destination' },
+    },
+  }));
+  let ensureCount = 0;
+  let fetchCount = 0;
+  const responses = await exchange(responsesExpected, {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer: makeWriter(),
+    ensureServerRunning: async () => {
+      ensureCount += 1;
+      return { port: 49124, secret: 'test-secret' };
+    },
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response('{}', { status: 200 });
+    },
+  });
+
+  assert.equal(responses.length, destinationClaims.length);
+  assert.ok(responses.every((response) => response.result.isError === true));
+  assert.ok(responses.every((response) => response.result.content[0].text === '入力が正しくありません。'));
+  assert.equal(ensureCount, 0);
+  assert.equal(fetchCount, 0);
 });
 
 test('400 と 404 は理由を示す固定文を isError で返す', async () => {
@@ -125,6 +270,7 @@ test('400 と 404 は理由を示す固定文を isError で返す', async () =>
     }], {
       homeDir: 'C:\\temporary-cockpit',
       environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer: makeWriter(),
       ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
       fetchImpl: async () => new Response('{}', { status }),
     });
@@ -139,7 +285,8 @@ test('常駐サーバーに届かない tools/call は isError で継続可能�
     params: { name: 'cockpit_set_tasks', arguments: { tasks: [] } },
   }], {
     homeDir: 'C:\\temporary-cockpit',
-    environment: {},
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer: makeWriter(),
     ensureServerRunning: async () => null,
   });
   assert.equal(responses[0].result.isError, true);
@@ -164,6 +311,7 @@ test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を�
       }], {
         homeDir: 'C:\\temporary-cockpit',
         environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+        writer: makeWriter(),
         ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
         readServerInfo: async () => ({ port: 49125, secret: 'updated-secret' }),
         fetchImpl: async () => {

@@ -10,6 +10,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [mock/index.html](../mock/index.html) | 開発者と合意した最終形の見た目と機能の正本。実装はモックにそろえる |
 | [docs/handover/2026-10-02.md](handover/2026-10-02.md) | 実装の計画書。決定済みの判断、対応順序、判断待ち、落とし穴 |
 | [Codex本実装計画](design/codex-implementation-plan.md) | Claude/Codex共通機能の段階実装、依存関係、統合ゲート |
+| [正規会話の登録核](design/codex-registration-core.md) | #166-Aの信頼境界、実行期間、後続interfaceと適合シナリオ |
 | [Claude/Codex適合試験方針](https://github.com/ktysne/agent-cockpit/blob/f4460762641d9eef6c0eb0c2c9c55df4f625532e/docs/design/provider-conformance-testing.md) | 共通適合試験のscenario定義、検証層、結果の扱い |
 | [Codex共有契約](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapter適合の証明ではない |
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |

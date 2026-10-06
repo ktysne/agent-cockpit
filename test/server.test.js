@@ -11,7 +11,10 @@ const {
   MAX_BODY_BYTES,
   escapeHtmlAttribute,
 } = require('../src/server/server');
+const { createRegistrationKernel } = require('../src/server/conversation-registry');
+const { createProviderRegistrationAdapter } = require('../src/server/provider-registration');
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
+const { createRegistrationFixture } = require('./support/registration');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
 async function temporaryHome(testContext, { deferCleanup = false } = {}) {
@@ -879,13 +882,15 @@ test('/api/state のクロスレビュー判定を差し替え、両方の cwd �
 });
 
 test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク登録後は返さない', async (t) => {
-  const runtime = await runningServer(t);
   const sessionId = 'task-nudge-integration';
+  const registration = createRegistrationFixture('claude', { nativeId: sessionId });
+  const runtime = await runningServer(t, { registrationRegistry: registration.registry });
   const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
   const eventResponse = await request(runtime.info.port, {
     method: 'POST', path: '/api/events',
     body: JSON.stringify({
-      session_id: sessionId, hook_event_name: 'PreToolUse', hookAt: Date.now(), tool_name: 'Agent',
+      session_id: sessionId, writer: registration.writer,
+      hook_event_name: 'PreToolUse', hookAt: Date.now(), tool_name: 'Agent',
     }),
     headers,
   });
@@ -894,7 +899,8 @@ test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク�
   const postToolBatch = () => request(runtime.info.port, {
     method: 'POST', path: '/api/hooks/answers',
     body: JSON.stringify({
-      action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: sessionId, id: 'batch-1',
+      action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: sessionId,
+      id: 'batch-1', writer: registration.writer,
     }),
     headers,
   });
@@ -902,8 +908,8 @@ test('Agent 起動後の PostToolBatch はタスク催促を返し、タスク�
   assert.match(reminded.hookOutput.hookSpecificOutput.additionalContext, /タスクが登録されていない/);
 
   const planResponse = await request(runtime.info.port, {
-    method: 'POST', path: `/api/sessions/${sessionId}/plan`,
-    body: JSON.stringify({ kind: 'tasks', tasks: [{ title: '検証する', state: 'doing', criteria: [] }] }),
+    method: 'POST', path: '/api/sessions/pending/plan',
+    body: JSON.stringify({ kind: 'tasks', writer: registration.writer, tasks: [{ title: '検証する', state: 'doing', criteria: [] }] }),
     headers,
   });
   assert.equal(planResponse.status, 200);
@@ -939,6 +945,194 @@ test('Host、秘密値、Origin を照合して書き込みを制限する', asy
 
   const devDisabled = await request(runtime.info.port, { path: '/api/dev/fields' });
   assert.equal(devDisabled.status, 404);
+});
+
+test('/events は登録済みaliasへの未認証eventと期限切れeventを副作用前に拒否する', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'event-registration-boundary' });
+  const effects = { addEvent: 0, captureFields: 0, answerDelivery: 0, deliveries: 0, registerPullRequest: 0, refreshRepo: 0 };
+  const state = new DashboardState();
+  const originalAddEvent = state.addEvent.bind(state);
+  const originalCaptureFieldNames = state.captureFieldNames.bind(state);
+  const originalRegisterPullRequest = state.registerPullRequest.bind(state);
+  state.addEvent = (...args) => { effects.addEvent += 1; return originalAddEvent(...args); };
+  state.captureFieldNames = (...args) => { effects.captureFields += 1; return originalCaptureFieldNames(...args); };
+  state.registerPullRequest = (...args) => { effects.registerPullRequest += 1; return originalRegisterPullRequest(...args); };
+  const answerDelivery = {
+    close() {},
+    afterEvent() { effects.answerDelivery += 1; },
+    afterTasksWrite() {},
+    afterDecisionUpdate() {},
+    deliverPostToolBatch() { effects.deliveries += 1; return null; },
+  };
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    refreshRepo() { effects.refreshRepo += 1; return Promise.resolve(); },
+    refreshAll() { return Promise.resolve(); },
+  };
+  const runtime = await runningServer(t, {
+    state,
+    answerDelivery,
+    pullRequestTracker,
+    registrationRegistry: fixture.registry,
+  });
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const postEvent = (event) => request(runtime.info.port, {
+    method: 'POST', path: '/api/events', headers, body: JSON.stringify(event),
+  });
+  const counts = () => ({ ...effects });
+
+  const unauthenticatedRegisteredAlias = await postEvent({
+    session_id: fixture.registration.sessionId, hook_event_name: 'SessionStart', hookAt: Date.now(),
+  });
+  assert.equal(unauthenticatedRegisteredAlias.status, 403);
+  const untrustedVerifiedClaim = await postEvent({
+    session_id: 'unregistered-spoof', hook_event_name: 'SessionStart', hookAt: Date.now(), verified: true,
+  });
+  assert.equal(untrustedVerifiedClaim.status, 403);
+  assert.deepEqual(effects, { addEvent: 0, captureFields: 0, answerDelivery: 0, deliveries: 0, registerPullRequest: 0, refreshRepo: 0 });
+
+  const legacyObservation = await postEvent({
+    session_id: 'unregistered-legacy-hook', hook_event_name: 'SessionStart', hookAt: Date.now(),
+  });
+  assert.equal(legacyObservation.status, 202);
+  assert.deepEqual(effects, { addEvent: 1, captureFields: 1, answerDelivery: 1, deliveries: 0, registerPullRequest: 0, refreshRepo: 0 });
+
+  const answerPath = '/api/hooks/answers';
+  const answerRequest = (extra = {}) => request(runtime.info.port, {
+    method: 'POST', path: answerPath, headers,
+    body: JSON.stringify({
+      action: 'post-tool-batch', event_name: 'PostToolBatch',
+      session_id: fixture.registration.sessionId, id: 'batch-boundary', ...extra,
+    }),
+  });
+  const unauthenticatedAnswer = await answerRequest();
+  assert.equal(unauthenticatedAnswer.status, 403);
+  assert.equal(effects.deliveries, 0);
+  const authenticatedAnswer = await answerRequest({ writer: fixture.writer });
+  assert.equal(authenticatedAnswer.status, 200);
+  assert.equal(effects.deliveries, 1);
+
+  const authenticatedStart = await postEvent({
+    session_id: fixture.registration.sessionId,
+    writer: fixture.writer,
+    hook_event_name: 'PreToolUse', hookAt: Date.now(), tool_name: 'Bash',
+    tool_use_id: 'late-pr', ghPrCreateCommand: true,
+  });
+  assert.equal(authenticatedStart.status, 202);
+  const beforeStaleEvent = counts();
+  fixture.authority.end(fixture.registration.executionId);
+  const staleAnswer = await answerRequest({ writer: fixture.writer });
+  assert.equal(staleAnswer.status, 403);
+  const stalePullRequestEvent = await postEvent({
+    session_id: fixture.registration.sessionId,
+    writer: fixture.writer,
+    hook_event_name: 'PostToolUse', hookAt: Date.now(), tool_name: 'Bash', tool_use_id: 'late-pr',
+    pullRequest: { owner: 'example', repo: 'project', number: 52, url: 'https://github.com/example/project/pull/52' },
+  });
+  assert.equal(stalePullRequestEvent.status, 403);
+  assert.deepEqual(effects, beforeStaleEvent);
+  assert.deepEqual(runtime.state.pullRequestRegistrations(), []);
+});
+
+test('Stop回答の待機中にwriter期間が終わると回答と通知を消費せず403を返す', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'answer-poll-expiry' });
+  const runtime = await runningServer(t, { registrationRegistry: fixture.registry });
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const start = await request(runtime.info.port, {
+    method: 'POST', path: '/api/hooks/answers', headers,
+    body: JSON.stringify({ action: 'stop-start', event_name: 'Stop', session_id: fixture.registration.sessionId, id: 'stop-expiry', writer: fixture.writer }),
+  });
+  assert.equal(start.status, 200);
+  const generation = jsonBody(start).generation;
+
+  let releaseWait;
+  let signalStartedResolve;
+  const signalStarted = new Promise((resolve) => { signalStartedResolve = resolve; });
+  runtime.answerDelivery.waitForSignal = async () => {
+    signalStartedResolve();
+    await new Promise((resolve) => { releaseWait = resolve; });
+  };
+  const polling = request(runtime.info.port, {
+    method: 'POST', path: '/api/hooks/answers', headers,
+    body: JSON.stringify({
+      action: 'stop-poll', event_name: 'Stop', session_id: fixture.registration.sessionId,
+      id: 'stop-expiry', generation, parent_alive: true, writer: fixture.writer,
+    }),
+  });
+  await signalStarted;
+
+  const decision = runtime.state.addDecision(fixture.registration.sessionId, {
+    title: '回答を次の実行へ渡すか。', context: '', state: 'provisional', options: [],
+  }, Date.now());
+  runtime.answerDelivery.submitAnswer(fixture.registration.sessionId, decision.id, null, '次の実行へ渡す回答');
+  runtime.answerDelivery.notifySessions([fixture.registration.sessionId], '次の実行へ渡す通知');
+  fixture.authority.end(fixture.registration.executionId);
+  releaseWait();
+
+  const response = await polling;
+  assert.equal(response.status, 403);
+  assert.equal(runtime.state.decisionFor(fixture.registration.sessionId, decision.id).answer.deliveredAt, null);
+  assert.deepEqual(runtime.answerDelivery.sessionNotifications.get(fixture.registration.sessionId), ['次の実行へ渡す通知']);
+});
+
+test('legacy Stop poll が待機中に同じaliasを登録されると回答と通知を消費せず403を返す', async (t) => {
+  const kernel = createRegistrationKernel();
+  const sessionId = 'legacy-stop-poll-race';
+  const runtime = await runningServer(t, { registrationRegistry: kernel.registry });
+  const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const start = await request(runtime.info.port, {
+    method: 'POST', path: '/api/hooks/answers', headers,
+    body: JSON.stringify({ action: 'stop-start', event_name: 'Stop', session_id: sessionId, id: 'legacy-stop-race' }),
+  });
+  assert.equal(start.status, 200);
+  const generation = jsonBody(start).generation;
+
+  let releaseWait;
+  let signalStartedResolve;
+  const signalStarted = new Promise((resolve) => { signalStartedResolve = resolve; });
+  runtime.answerDelivery.waitForSignal = async () => {
+    signalStartedResolve();
+    await new Promise((resolve) => { releaseWait = resolve; });
+  };
+  let pendingReads = 0;
+  let notificationReads = 0;
+  const deliverPending = runtime.answerDelivery.deliverPending.bind(runtime.answerDelivery);
+  const deliverNotifications = runtime.answerDelivery.deliverSessionNotifications.bind(runtime.answerDelivery);
+  runtime.answerDelivery.deliverPending = (...args) => { pendingReads += 1; return deliverPending(...args); };
+  runtime.answerDelivery.deliverSessionNotifications = (...args) => { notificationReads += 1; return deliverNotifications(...args); };
+  const polling = request(runtime.info.port, {
+    method: 'POST', path: '/api/hooks/answers', headers,
+    body: JSON.stringify({
+      action: 'stop-poll', event_name: 'Stop', session_id: sessionId,
+      id: 'legacy-stop-race', generation, parent_alive: true,
+    }),
+  });
+  await signalStarted;
+  pendingReads = 0;
+  notificationReads = 0;
+
+  const adapter = createProviderRegistrationAdapter('claude', kernel.registry, kernel.authority);
+  const nativeIdentity = { nativeIdKind: 'session', hostId: 'test-host', homeScopeId: 'test-home', nativeId: sessionId };
+  const registrationEvidence = {
+    evidenceId: 'legacy-stop-race-evidence', source: 'test-verifier', method: 'authenticated-fixture',
+    adapterVersion: 'test', runtimeVersion: 'test', capabilities: ['native-binding'],
+  };
+  adapter.register(nativeIdentity, registrationEvidence, { startId: 'legacy-stop-race-start', projectionId: sessionId });
+  const decision = runtime.state.addDecision(sessionId, {
+    title: '回答を次の実行へ渡すか。', context: '', state: 'provisional', options: [],
+  }, Date.now());
+  runtime.answerDelivery.submitAnswer(sessionId, decision.id, null, '次の実行へ渡す回答');
+  runtime.answerDelivery.notifySessions([sessionId], '次の実行へ渡す通知');
+  releaseWait();
+
+  const response = await polling;
+  assert.equal(response.status, 403);
+  assert.equal(pendingReads, 0);
+  assert.equal(notificationReads, 0);
+  assert.equal(runtime.state.decisionFor(sessionId, decision.id).answer.deliveredAt, null);
+  assert.deepEqual(runtime.answerDelivery.sessionNotifications.get(sessionId), ['次の実行へ渡す通知']);
 });
 
 test('SubagentStart の経路をサブエージェントのスナップショットに記録する', () => {
@@ -1145,26 +1339,27 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
     refreshRepo(owner, repo) { calls.repos.push(`${owner}/${repo}`); return Promise.resolve(); },
     refreshAll() { calls.all += 1; return Promise.resolve(); },
   };
+  const registration = createRegistrationFixture('claude', { nativeId: 'pr-session' });
   const runtime = await runningServer(t, {
     pullRequestTracker,
-    findSessionIdByPid: async () => null,
+    registrationRegistry: registration.registry,
   });
   const body = JSON.stringify({
     kind: 'add_pr', url: 'https://github.com/example/project/pull/46',
-    ppid: 123, claudeCodeSessionId: 'pr-session', cwd: process.cwd(),
+    writer: registration.writer,
   });
   const missingSecret = await request(runtime.info.port, {
-    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    method: 'POST', path: '/api/sessions/pending/prs', body,
     headers: { 'content-type': 'application/json' },
   });
   assert.equal(missingSecret.status, 401);
   const foreignOrigin = await request(runtime.info.port, {
-    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    method: 'POST', path: '/api/sessions/pending/prs', body,
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin: 'https://other.example' },
   });
   assert.equal(foreignOrigin.status, 403);
   const added = await request(runtime.info.port, {
-    method: 'POST', path: '/api/sessions/pr-session/prs', body,
+    method: 'POST', path: '/api/sessions/pending/prs', body,
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
   });
   assert.equal(added.status, 200);
@@ -1175,46 +1370,47 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   assert.equal(runtime.state.pullRequestRegistrations()[0].number, 46);
 
   const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const authenticatedEvent = (event) => ({ ...event, writer: registration.writer });
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
-    body: JSON.stringify({
+    body: JSON.stringify(authenticatedEvent({
       session_id: 'pr-session', hook_event_name: 'PreToolUse', hookAt: Date.now(),
       tool_name: 'Bash', tool_use_id: 'create-47', ghPrCreateCommand: true,
-    }),
+    })),
   });
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
-    body: JSON.stringify({
+    body: JSON.stringify(authenticatedEvent({
       session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
       tool_name: 'Bash', tool_use_id: 'create-47',
       pullRequest: { owner: 'example', repo: 'project', number: 47, url: 'https://github.com/example/project/pull/47' },
-    }),
+    })),
   });
   assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 47));
 
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
-    body: JSON.stringify({
+    body: JSON.stringify(authenticatedEvent({
       session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
       tool_name: 'Bash', tool_use_id: 'unrelated',
       pullRequest: { owner: 'example', repo: 'project', number: 48, url: 'https://github.com/example/project/pull/48' },
-    }),
+    })),
   });
   assert.ok(!runtime.state.pullRequestRegistrations().some((record) => record.number === 48));
 
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
-    body: JSON.stringify({
+    body: JSON.stringify(authenticatedEvent({
       session_id: 'pr-session', hook_event_name: 'PreToolUse', hookAt: Date.now(),
       tool_name: 'Bash', tool_use_id: 'push-1', refreshPullRequestsCommand: true,
-    }),
+    })),
   });
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
-    body: JSON.stringify({
+    body: JSON.stringify(authenticatedEvent({
       session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
       tool_name: 'Bash', tool_use_id: 'push-1',
-    }),
+    })),
   });
   assert.equal(calls.all, 1);
   assert.ok(calls.repos.includes('example/project'));
@@ -1232,9 +1428,10 @@ test('レビュー不要は画面から設定と取消ができ、MCP は秘密�
     mergeCandidate() { return { pullRequest: { headRefOid } }; },
     async refreshReviewGroups() {},
   };
+  const writerFixture = createRegistrationFixture('claude', { nativeId: 'review-session' });
   const runtime = await runningServer(t, {
     pullRequestTracker,
-    findSessionIdByPid: async () => null,
+    registrationRegistry: writerFixture.registry,
   });
   runtime.state.registerPullRequest('review-session', {
     url: 'https://github.com/example/project/pull/49',
@@ -1274,9 +1471,9 @@ test('レビュー不要は画面から設定と取消ができ、MCP は秘密�
 
   const mcpBody = JSON.stringify({
     kind: 'skip_review', owner: 'example', repo: 'project', number: 49, headRefOid,
-    reason: 'この差分は設定ファイルの空白だけのため', ppid: 321, claudeCodeSessionId: 'review-session',
+    reason: 'この差分は設定ファイルの空白だけのため', writer: writerFixture.writer,
   });
-  const mcpPath = '/api/sessions/review-session/prs';
+  const mcpPath = '/api/sessions/pending/prs';
   const mcpWrite = await request(runtime.info.port, {
     method: 'POST', path: mcpPath, body: mcpBody,
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
@@ -1293,13 +1490,68 @@ test('レビュー不要は画面から設定と取消ができ、MCP は秘密�
   assert.equal(staleHead.status, 409);
 });
 
+test('MCP のレビュー不要書き込みは GitHub 更新待ちの間に実行期間が終わると拒否する', async (t) => {
+  const writerFixture = createRegistrationFixture('claude', { nativeId: 'skip-review-race' });
+  let releaseRefresh;
+  let refreshStartedResolve;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  const refreshStarted = new Promise((resolve) => { refreshStartedResolve = resolve; });
+  let refreshReviewGroupsCalls = 0;
+  const headRefOid = 'c'.repeat(40);
+  const pullRequestTracker = {
+    start() {},
+    close() {},
+    snapshot: () => [],
+    async refreshRepoFresh() {
+      refreshStartedResolve();
+      await refreshGate;
+      return {};
+    },
+    mergeCandidate() { return { pullRequest: { headRefOid } }; },
+    async refreshReviewGroups() { refreshReviewGroupsCalls += 1; },
+  };
+  const runtime = await runningServer(t, {
+    registrationRegistry: writerFixture.registry,
+    pullRequestTracker,
+  });
+  runtime.state.registerPullRequest(writerFixture.registration.sessionId, {
+    url: 'https://github.com/example/project/pull/51',
+  }, { cwd: process.cwd(), product: { key: 'project', name: 'project' } });
+  let skipWrites = 0;
+  const originalSetCrossReviewSkip = runtime.state.setCrossReviewSkip.bind(runtime.state);
+  runtime.state.setCrossReviewSkip = (...args) => {
+    skipWrites += 1;
+    return originalSetCrossReviewSkip(...args);
+  };
+
+  const writing = request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pending/prs',
+    body: JSON.stringify({
+      kind: 'skip_review', owner: 'example', repo: 'project', number: 51, headRefOid,
+      reason: '実行期間の失効確認', writer: writerFixture.writer,
+    }),
+    headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
+  });
+  await refreshStarted;
+  writerFixture.authority.end(writerFixture.registration.executionId);
+  releaseRefresh();
+
+  const response = await writing;
+  assert.equal(response.status, 403);
+  assert.equal(skipWrites, 0);
+  assert.equal(refreshReviewGroupsCalls, 0);
+  assert.equal(runtime.state.crossReviewSkip('example', 'project', 51), null);
+});
+
 test('/plan はタスクと判断事項を記録し、読み取り用の要約を返す', async (t) => {
-  const runtime = await runningServer(t);
-  const path = '/api/sessions/plan-session/plan';
+  const registration = createRegistrationFixture('claude', { nativeId: 'plan-session' });
+  const runtime = await runningServer(t, { registrationRegistry: registration.registry });
+  const path = '/api/sessions/pending/plan';
   const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
   const tasksResponse = await request(runtime.info.port, {
     method: 'POST', path,
     body: JSON.stringify({
+      writer: registration.writer,
       kind: 'tasks',
       tasks: [{ title: 'API を追加する', state: 'doing', criteria: [{ text: '一覧に出る', met: true }] }],
     }),
@@ -1311,6 +1563,7 @@ test('/plan はタスクと判断事項を記録し、読み取り用の要約�
   const added = await request(runtime.info.port, {
     method: 'POST', path,
     body: JSON.stringify({
+      writer: registration.writer,
       kind: 'add_decision', title: '状態を選ぶ', context: '運用上の理由を記録する。', state: 'waiting',
       options: [{ label: '(推奨) waiting', description: '利用者の確認を待つ。', recommended: true }],
     }),
@@ -1323,7 +1576,7 @@ test('/plan はタスクと判断事項を記録し、読み取り用の要約�
 
   const updated = await request(runtime.info.port, {
     method: 'POST', path,
-    body: JSON.stringify({ kind: 'update_decision', id: decision.id, state: 'provisional', chosen: 'waiting', note: '確認後に進める。' }),
+    body: JSON.stringify({ writer: registration.writer, kind: 'update_decision', id: decision.id, state: 'provisional', chosen: 'waiting', note: '確認後に進める。' }),
     headers,
   });
   assert.equal(updated.status, 200);
@@ -1663,28 +1916,31 @@ test('画面からタスクと終了可能なエージェントを終了にで�
   assert.equal(closedRootSession.status, '待機中');
 });
 
-test('/plan は ppid に一致するセッションファイルの ID を優先する', async (t) => {
+test('/plan は ppid とセッションファイルだけでは書き込みを認証しない', async (t) => {
   const { homeDir, claudeHome } = await temporaryHome(t);
   const sessionDirectory = path.join(claudeHome, 'sessions');
   await fs.mkdir(sessionDirectory, { recursive: true });
   await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({
     pid: process.pid, sessionId: 'pid-session', name: 'PID から解決したセッション',
   }));
-  const runtime = await startServer({ homeDir, claudeHome, port: 0 });
+  let pidLookups = 0;
+  const runtime = await startServer({
+    homeDir, claudeHome, port: 0,
+    findSessionIdByPid: async () => { pidLookups += 1; return 'pid-session'; },
+  });
   t.after(() => runtime.close());
   const response = await request(runtime.info.port, {
-    method: 'POST', path: '/api/sessions/fallback-session/plan',
+    method: 'POST', path: '/api/sessions/pending/plan',
     body: JSON.stringify({
       kind: 'tasks', tasks: [{ title: 'PID のセッションに保存', state: 'todo', criteria: [] }],
       ppid: process.pid, claudeCodeSessionId: 'fallback-session',
     }),
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
   });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 403);
+  assert.equal(pidLookups, 0);
   const state = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
-  const pidSession = state.sessions.find((session) => session.session_id === 'pid-session');
-  assert.deepEqual(pidSession.tasks.map(({ title }) => title), ['PID のセッションに保存']);
-  assert.ok(!state.sessions.some((session) => session.session_id === 'fallback-session'));
+  assert.ok(!state.sessions.some((session) => session.tasks.some(({ title }) => title === 'PID のセッションに保存')));
 });
 
 test('64 KB を超える本文を拒否する', async (t) => {

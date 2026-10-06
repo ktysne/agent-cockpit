@@ -9,11 +9,11 @@ const { installFakeClock } = require('./fake-clock');
 const { removeDirectory } = require('./fs-utils');
 const { createFakeGh } = require('./fake-gh');
 const { loadScenario, scenarioNames } = require('./demo');
+const { createRegistrationKernel, createProviderRegistrationAdapter } = require('../../src/server/conversation-registry');
 
 // 火曜日の 14:30 JST。曜日や月をまたがない平日の日中で、撮るたびに画像が変わらないよう固定する。
 const BASE_TIME_MS = Date.UTC(2026, 9, 6, 5, 30, 0);
 const DEMO_ASK_POLL_GAP_MS = 24 * 60 * 60 * 1000;
-const HOOK_PID_FOR_UNMAPPED_SESSION = 1;
 const DEFAULT_INTEGRATIONS = Object.freeze({ codexAgent: true, crossReview: true });
 
 function runGit(args, directory, environment) {
@@ -84,9 +84,14 @@ async function startDemoServer(options = {}) {
   const clock = installFakeClock(baseTime - scenario.startMinutesAgo * 60_000);
   let temporaryRoot = null;
   let runtime = null;
+  let registrationAuthority = null;
+  const registrations = new Map();
 
   async function close() {
     try {
+      for (const { registration } of registrations.values()) {
+        registrationAuthority?.end(registration.executionId);
+      }
       await runtime?.close();
     } finally {
       clock.uninstall();
@@ -127,6 +132,43 @@ async function startDemoServer(options = {}) {
         sessionId: session.id, pid: process.pid, cwd, name: session.title,
       });
     }
+
+    const registrationKernel = createRegistrationKernel();
+    registrationAuthority = registrationKernel.authority;
+    const claudeAdapter = createProviderRegistrationAdapter('claude', registrationKernel.registry, registrationKernel.authority);
+    const homeScopeId = `manual-demo-home-${path.basename(temporaryRoot)}`;
+    for (const session of sessions.values()) {
+      const nativeIdentity = {
+        nativeIdKind: 'session',
+        hostId: 'manual-demo-host',
+        homeScopeId,
+        nativeId: session.id,
+      };
+      const identity = { provider: 'claude', ...nativeIdentity };
+      const startEvidence = {
+        evidenceId: `manual-demo-start-${session.key}`,
+        source: 'manual-demo',
+        method: 'isolated-scenario-bootstrap',
+        adapterVersion: 'manual-demo',
+        runtimeVersion: process.version,
+        registrationRef: session.key,
+        capabilities: ['scenario-playback'],
+      };
+      const registration = claudeAdapter.register(nativeIdentity, startEvidence, {
+        startId: `manual-demo-start-${session.key}`,
+        projectionId: session.id,
+      });
+      const writer = claudeAdapter.bindWriter(registration.executionId, {
+        identity,
+        contextId: `manual-demo-context-${session.key}`,
+        evidence: {
+          ...startEvidence,
+          evidenceId: `manual-demo-writer-${session.key}`,
+          method: 'isolated-scenario-writer-binding',
+        },
+      });
+      registrations.set(session.key, { registration, writer });
+    }
     for (const agent of scenario.claudeAgents || []) {
       await fs.mkdir(path.join(claudeHome, 'agents'), { recursive: true });
       await fs.writeFile(path.join(claudeHome, 'agents', `${agent.name}.md`), agentDefinitionText({ name: agent.name, model: agent.model, effort: agent.effort }));
@@ -145,6 +187,7 @@ async function startDemoServer(options = {}) {
       claudeHome,
       userHome,
       port: options.port ?? 0,
+      registrationRegistry: registrationKernel.registry,
       pullRequestOptions: { execFileImpl: gh.execFileImpl },
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,
@@ -165,6 +208,7 @@ async function startDemoServer(options = {}) {
       return response.json;
     };
     const sessionFor = (key) => sessions.get(key) || (() => { throw new Error(`シナリオに無いセッションです: ${key}`); })();
+    const registrationFor = (key) => registrations.get(key) || (() => { throw new Error(`登録されていないシナリオセッションです: ${key}`); })();
     const { makeHookEvent } = require('../../src/hooks/event');
 
     const demo = {
@@ -182,25 +226,26 @@ async function startDemoServer(options = {}) {
         const event = makeHookEvent({ cwd: session.cwd, ...input, session_id: session.id }, clock.now());
         if (!event) throw new Error(`フックの入力が不正です: ${JSON.stringify(input)}`);
         if (event.hook_event_name === 'SubagentStart' && input.route) event.route = input.route;
+        event.writer = registrationFor(key).writer;
         ensureOk(await post('/api/events', event), `${key} の ${input.hook_event_name}`);
+        if (event.hook_event_name === 'SessionEnd') registrationAuthority.end(registrationFor(key).registration.executionId);
       },
       /** MCP サーバーが送る形(tasks、add_decision、update_decision)を /api/sessions/<id>/plan へ送る。 */
       async plan(key, body) {
         const session = sessionFor(key);
-        return ensureOk(await post(`/api/sessions/${session.id}/plan`, body), `${key} の ${body.kind}`);
+        return ensureOk(await post(`/api/sessions/${session.id}/plan`, {
+          ...body,
+          writer: registrationFor(key).writer,
+        }), `${key} の ${body.kind}`);
       },
-      /**
-       * MCP サーバーが送る形(add_pr、skip_review)を /api/sessions/<id>/prs へ送る。
-       * 全セッションが撮影のプロセスの pid を共有するので、ppid は生きたセッションに対応しない値にして、claudeCodeSessionId で特定させる。
-       */
       async prs(key, body) {
         const session = sessionFor(key);
-        return ensureOk(await post(`/api/sessions/${session.id}/prs`, {
-          ppid: HOOK_PID_FOR_UNMAPPED_SESSION,
-          claudeCodeSessionId: session.id,
+        const requestBody = {
           ...(body.kind === 'add_pr' ? { cwd: session.cwd } : {}),
           ...body,
-        }), `${key} の ${body.kind}`);
+          writer: registrationFor(key).writer,
+        };
+        return ensureOk(await post(`/api/sessions/${session.id}/prs`, requestBody), `${key} の ${body.kind}`);
       },
       /** 画面から送る操作(離席、外す、表示の設定など)を、画面と同じ秘密値と Origin で送る。 */
       async ui(requestPath, body) {
@@ -212,7 +257,11 @@ async function startDemoServer(options = {}) {
        */
       async hookAnswer(key, body) {
         const session = sessionFor(key);
-        return ensureOk(await post('/api/hooks/answers', { session_id: session.id, ...body }), `${key} の ${body.action}`);
+        return ensureOk(await post('/api/hooks/answers', {
+          ...body,
+          session_id: session.id,
+          writer: registrationFor(key).writer,
+        }), `${key} の ${body.action}`);
       },
       async getState() {
         return ensureOk(await requestJson(port, 'GET', '/api/state'), '/api/state');

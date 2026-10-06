@@ -12,7 +12,8 @@ const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decisi
 const { sanitizeEvent } = require('./events');
 const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
-const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
+const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
+const { createRegistrationKernel } = require('./conversation-registry');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
@@ -25,6 +26,16 @@ const MAX_BODY_BYTES = 64 * 1024;
 const MAX_EXTERNAL_URL_LENGTH = 2048;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
+const WRITER_CLAIM_FIELDS = Object.freeze([
+  'provider', 'nativeIdKind', 'native_id_kind', 'hostId', 'host_id',
+  'homeScopeId', 'home_scope_id', 'nativeId', 'native_id', 'identity',
+  'sessionId', 'conversationId', 'conversation_id', 'executionId', 'execution_id',
+  'periodId', 'period_id', 'contextId', 'context_id', 'evidence', 'evidenceId',
+  'evidence_id', 'evidenceMetadata', 'evidence_metadata', 'observationId',
+  'observation_id', 'registration', 'registrationId', 'registration_id',
+  'verified', 'verification', 'writerToken', 'writer_token', 'claudeCodeSessionId',
+  'claude_code_session_id', 'originBinding', 'executionBinding', 'actorId', 'launchId', 'runId',
+]);
 const MANUAL_CONTENT_TYPES = Object.freeze({
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -332,6 +343,11 @@ function validPlanInput(body) {
   return false;
 }
 
+function hasOnlyKeys(value, fields) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value)) &&
+    Object.keys(value).every((field) => fields.includes(field));
+}
+
 function decisionSummaries(state, sessionId) {
   return state.decisionsFor(sessionId)
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
@@ -350,7 +366,7 @@ function createRequestHandler(options) {
     dev,
     getServerInfo,
     markRequest,
-    findSessionIdByPid = (pid) => findLiveSessionIdByPid(pid, claudeHome),
+    registrationRegistry = createRegistrationKernel().registry,
     pullRequestTracker,
     pullRequestMergeManager,
     codexAgentScriptExists = defaultCodexAgentScriptExists,
@@ -375,14 +391,11 @@ function createRequestHandler(options) {
     return uiVersion;
   }
 
-  async function resolveWriterSessionId(routeId, body) {
-    // 呼び出し元が ID 不一致を個別の応答へ変換できるよう、解決した ID と不一致状態を返す。
-    const mappedSessionId = Number.isInteger(body.ppid) ? await findSessionIdByPid(body.ppid) : null;
-    const fallbackSessionId = Object.hasOwn(body, 'claudeCodeSessionId') ? body.claudeCodeSessionId : routeId;
-    const sessionId = validSessionId(mappedSessionId) ? mappedSessionId : fallbackSessionId;
-    const routeMismatch = !validSessionId(mappedSessionId) && typeof fallbackSessionId === 'string' &&
-      routeId !== 'pending' && fallbackSessionId !== routeId;
-    return { sessionId: validSessionId(sessionId) ? sessionId : null, routeMismatch };
+  function resolveWriterSessionId(routeId, body) {
+    const authorization = registrationRegistry.authorizeWriter(body.writer);
+    if (!authorization.ok || !validSessionId(authorization.sessionId)) return null;
+    if (routeId !== 'pending' && authorization.sessionId !== routeId) return null;
+    return authorization.sessionId;
   }
 
   return async (request, response) => {
@@ -480,34 +493,60 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
+      const answerRequest = { ...body };
+      let authorizeAnswer;
+      if (Object.hasOwn(body, 'writer')) {
+        const authorization = registrationRegistry.authorizeEvent(body.writer);
+        if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
+            !authorization.ok || body.session_id !== authorization.sessionId) {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
+        answerRequest.session_id = authorization.sessionId;
+        delete answerRequest.writer;
+        authorizeAnswer = () => {
+          const current = registrationRegistry.authorizeEvent(body.writer);
+          return current.ok && current.sessionId === body.session_id;
+        };
+      } else if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
+          registrationRegistry.isRegisteredSessionId(body.session_id)) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
+        return;
+      } else {
+        authorizeAnswer = () => !registrationRegistry.isRegisteredSessionId(body.session_id);
+      }
       try {
         let result;
-        if (body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions)) {
-          result = answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id });
-        } else if (body.action === 'ask-poll' && body.event_name === 'PreToolUse') {
-          result = await answerDelivery.waitForAsk({ sessionId: body.session_id, toolUseId: body.id });
-        } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
-          result = answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome });
-        } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch') {
+        if (answerRequest.action === 'ask-register' && answerRequest.event_name === 'PreToolUse' && Array.isArray(answerRequest.questions)) {
+          result = answerDelivery.registerAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, questions: answerRequest.questions, agentId: answerRequest.agent_id });
+        } else if (answerRequest.action === 'ask-poll' && answerRequest.event_name === 'PreToolUse') {
+          result = await answerDelivery.waitForAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, authorize: authorizeAnswer });
+        } else if (answerRequest.action === 'ask-finish' && answerRequest.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(answerRequest.outcome)) {
+          result = answerDelivery.finishAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, decisionId: answerRequest.decision_id, outcome: answerRequest.outcome });
+        } else if (answerRequest.action === 'post-tool-batch' && answerRequest.event_name === 'PostToolBatch') {
           state.addEvent({
-            session_id: body.session_id,
+            session_id: answerRequest.session_id,
             hook_event_name: 'PostToolBatch',
             hookAt: Date.now(),
           });
-          const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id);
+          const additionalContext = answerDelivery.deliverPostToolBatch(answerRequest.session_id);
           result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
-        } else if (body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit') {
-          const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
+        } else if (answerRequest.action === 'user-prompt-submit' && answerRequest.event_name === 'UserPromptSubmit') {
+          const additionalContext = answerDelivery.deliverPrompt(answerRequest.session_id, answerRequest.id, Number.isFinite(answerRequest.hook_at) ? answerRequest.hook_at : undefined);
           result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
-        } else if (body.action === 'stop-start' && body.event_name === 'Stop') {
-          result = { generation: answerDelivery.startStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined) };
-        } else if (body.action === 'stop-poll' && body.event_name === 'Stop' && Number.isInteger(body.generation) && typeof body.parent_alive === 'boolean') {
-          result = await answerDelivery.waitForStopAnswer(body.session_id, body.generation, body.parent_alive);
+        } else if (answerRequest.action === 'stop-start' && answerRequest.event_name === 'Stop') {
+          result = { generation: answerDelivery.startStop(answerRequest.session_id, answerRequest.id, Number.isFinite(answerRequest.hook_at) ? answerRequest.hook_at : undefined) };
+        } else if (answerRequest.action === 'stop-poll' && answerRequest.event_name === 'Stop' && Number.isInteger(answerRequest.generation) && typeof answerRequest.parent_alive === 'boolean') {
+          result = await answerDelivery.waitForStopAnswer(answerRequest.session_id, answerRequest.generation, answerRequest.parent_alive, authorizeAnswer);
         } else {
           jsonResponse(response, 400, { error: 'Invalid request' });
           return;
         }
         await state.waitForPersistence();
+        if (authorizeAnswer && !authorizeAnswer()) {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
         jsonResponse(response, 200, result);
       } catch {
         jsonResponse(response, 500, { error: 'Internal Server Error' });
@@ -1070,36 +1109,69 @@ function createRequestHandler(options) {
         return;
       }
 
-      state.captureFieldNames(body);
-      const product = productFromCwd(body.cwd);
-      const sessionId = typeof body.session_id === 'string' ? body.session_id : '';
-      const eventName = body.hook_event_name;
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const eventBody = { ...body };
+      const writerEnvelope = Object.hasOwn(body, 'writer') ? body.writer : null;
+      if (Object.hasOwn(body, 'writer')) {
+        const authorization = registrationRegistry.authorizeEvent(writerEnvelope);
+        if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
+            !authorization.ok || body.session_id !== authorization.sessionId) {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
+        eventBody.session_id = authorization.sessionId;
+        delete eventBody.writer;
+      } else {
+        if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
+            registrationRegistry.isRegisteredSessionId(body.session_id)) {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
+      }
+
+      const product = productFromCwd(eventBody.cwd);
+      const sessionId = typeof eventBody.session_id === 'string' ? eventBody.session_id : '';
+      const eventName = eventBody.hook_event_name;
       const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
       let agentDefinition = null;
       let codexDefinitionMetadata = null;
 
       if (
-        body.agent_id && body.agent_type && eventName !== 'SubagentStop' &&
-        (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, body.agent_id))
+        eventBody.agent_id && eventBody.agent_type && eventName !== 'SubagentStop' &&
+        (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, eventBody.agent_id))
       ) {
-        agentDefinition = await claudeAgentDefinition(body.agent_type, claudeHome);
+        agentDefinition = await claudeAgentDefinition(eventBody.agent_type, claudeHome);
       }
       if (eventName === 'PreToolUse') {
-        const preliminary = sanitizeEvent(body, { product });
+        const preliminary = sanitizeEvent(eventBody, { product });
         const codexAgentName = preliminary?.codexDefinition || preliminary?.codexWaitDefinition;
         if (codexAgentName) {
           codexDefinitionMetadata = await codexAgentDefinition(codexAgentName, claudeHome);
         }
       }
 
+      if (writerEnvelope) {
+        const authorization = registrationRegistry.authorizeEvent(writerEnvelope);
+        if (!authorization.ok || eventBody.session_id !== authorization.sessionId) {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
+      } else if (registrationRegistry.isRegisteredSessionId(eventBody.session_id)) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
+        return;
+      }
+      state.captureFieldNames(eventBody);
       const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
-      state.addEvent(body, eventMetadata);
-      const event = sanitizeEvent(body, eventMetadata);
+      state.addEvent(eventBody, eventMetadata);
+      const event = sanitizeEvent(eventBody, eventMetadata);
       if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
         (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
         isGithubCreatePullRequestTool(event.tool_name)
       )) {
-        const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: body.cwd, product }, event.hookAt);
+        const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: eventBody.cwd, product }, event.hookAt);
         if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
       }
       if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
@@ -1143,14 +1215,26 @@ function createRequestHandler(options) {
         return;
       }
 
-      const resolvedSession = await resolveWriterSessionId(routeSessionId, body);
-      const sessionId = resolvedSession.sessionId;
-      if (!sessionId) {
-        jsonResponse(response, 400, { error: 'Session id unavailable' });
+      if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'writer')) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
       }
-      if (resolvedSession.routeMismatch) {
-        jsonResponse(response, 400, { error: 'Invalid session id' });
+      if (Object.hasOwn(body, 'session_id') || WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field))) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const sessionId = resolveWriterSessionId(routeSessionId, body);
+      if (!sessionId) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
+        return;
+      }
+      const planFields = {
+        tasks: ['kind', 'tasks', 'writer', 'ppid'],
+        add_decision: ['kind', 'title', 'context', 'state', 'options', 'writer', 'ppid'],
+        update_decision: ['kind', 'id', 'state', 'chosen', 'note', 'writer', 'ppid'],
+      }[body.kind];
+      if (!hasOnlyKeys(body, planFields)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
 
@@ -1212,20 +1296,33 @@ function createRequestHandler(options) {
       const isAddPullRequest = body?.kind === 'add_pr';
       const isSkipReview = body?.kind === 'skip_review';
       const pullRequest = isAddPullRequest ? parsePullRequestUrl(body.url) : null;
-      const skipReviewKeys = ['claudeCodeSessionId', 'headRefOid', 'kind', 'number', 'owner', 'ppid', 'reason', 'repo'];
+      const skipReviewKeys = ['headRefOid', 'kind', 'number', 'owner', 'reason', 'repo', 'writer'];
       const validSkipReview = isSkipReview && Object.keys(body).sort().join(',') === skipReviewKeys.join(',') &&
         validRepositoryPart(body.owner) && validRepositoryPart(body.repo) && Number.isSafeInteger(body.number) && body.number > 0 &&
         isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000);
-      if ((!pullRequest && !validSkipReview) || !Number.isInteger(body.ppid) || body.ppid < 1 ||
+      if ((!pullRequest && !validSkipReview) ||
+        (body.ppid !== undefined && (!Number.isInteger(body.ppid) || body.ppid < 1)) ||
         (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
         (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const resolvedSession = await resolveWriterSessionId(routeSessionId, body);
-      const sessionId = resolvedSession.sessionId;
-      if (!sessionId || resolvedSession.routeMismatch) {
-        jsonResponse(response, 400, { error: 'Session id unavailable' });
+      if (!Object.hasOwn(body, 'writer')) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
+        return;
+      }
+      if (Object.hasOwn(body, 'session_id') || WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field))) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const addPullRequestFields = ['kind', 'url', 'writer', 'cwd', 'ppid'];
+      if (!isSkipReview && !hasOnlyKeys(body, addPullRequestFields)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const sessionId = resolveWriterSessionId(routeSessionId, body);
+      if (!sessionId) {
+        jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
       }
       if (isSkipReview) {
@@ -1243,7 +1340,9 @@ function createRequestHandler(options) {
             jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
             return;
           }
-          const result = await pullRequestMergeManager.setReviewSkip(registration, body.headRefOid, body.reason);
+          const result = await pullRequestMergeManager.setReviewSkip(registration, body.headRefOid, body.reason, {
+            authorize: () => resolveWriterSessionId(routeSessionId, body) === sessionId,
+          });
           if (!result.ok) {
             jsonResponse(response, result.status, { error: result.error });
             return;
@@ -1323,6 +1422,7 @@ async function startServer(options = {}) {
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
   const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
+  const registrationRegistry = options.registrationRegistry || createRegistrationKernel().registry;
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
@@ -1372,6 +1472,7 @@ async function startServer(options = {}) {
     dev,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
+    registrationRegistry,
   });
 
   try {

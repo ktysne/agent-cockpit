@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { createFakeClock, installFakeClock } = require('../tools/manual/fake-clock');
 const { createFakeGh, sha } = require('../tools/manual/fake-gh');
 const { startDemoServer, parseDemoArguments, BASE_TIME_MS } = require('../tools/manual/demo-server');
+const { request } = require('./support/server');
 
 function run(gh, args, file = 'gh') {
   return new Promise((resolve) => gh.execFileImpl(file, args, {}, (error, stdout) => resolve({ error, stdout })));
@@ -167,6 +168,33 @@ test('デモで預かった質問は、生存確認の途絶を調べるタイ�
   assert.ok((await awaiting()).length > 0);
   for (const record of [...demo.runtime.answerDelivery.askWaits.values()]) demo.runtime.answerDelivery.releaseStaleAsk(record);
   assert.ok((await awaiting()).length > 0);
+});
+
+test('デモのSessionEnd後は同じwriterでイベントを書き込めない', async (t) => {
+  const demo = await startDemoServer({ scenario: 'no-gh' });
+  t.after(() => demo.close());
+  await demo.hook('parcel-main', { hook_event_name: 'SessionEnd' });
+  await assert.rejects(
+    demo.hook('parcel-main', { hook_event_name: 'Stop' }),
+    /403 で失敗しました/,
+  );
+});
+
+test('登録済みデモsessionへのwriterなしplanは通常のHTTP認可で拒否する', async (t) => {
+  const demo = await startDemoServer({ scenario: 'no-gh' });
+  t.after(() => demo.close());
+  const session = demo.sessions.get('parcel-main');
+  const before = demo.runtime.state.planSummary(session.id);
+  const response = await request(demo.port, {
+    method: 'POST', path: `/api/sessions/${session.id}/plan`,
+    headers: {
+      'content-type': 'application/json',
+      'x-cockpit-secret': demo.runtime.info.secret,
+    },
+    body: JSON.stringify({ kind: 'tasks', tasks: [] }),
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(demo.runtime.state.planSummary(session.id), before);
 });
 
 test('基本のシナリオを流し込むと、全体図に要る状態が隔離した保存先の常駐サーバーに揃う', async () => {

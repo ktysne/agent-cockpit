@@ -111,6 +111,12 @@ git clone https://github.com/ktysne/agent-cockpit.git
 
 ### 3. MCP サーバーを登録する
 
+Codex対応featureの登録核は、認証済みwriter bindingを要求します。
+以下の旧stdio設定だけではwriterを供給できず、タスク、判断事項、PRのMCP書込みは拒否されます。
+外部起動からの認証済みbinding供給は#171と#166-Bで接続するため、現段階のfeatureを通常HOMEへ導入する手順は未完成です。
+旧保存データと未登録Claude hookの観測表示は保持します。
+登録核の契約と残る採用条件は[正規会話の登録核](design/codex-registration-core.md)を参照してください。
+
 メインセッションがタスクと判断事項を書き込むための MCP サーバーを、ユーザーのスコープで登録します。リポジトリのルートで実行します。
 
 PowerShell:
