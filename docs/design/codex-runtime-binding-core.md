@@ -64,6 +64,8 @@ handoff transitionはhandoffId、expectedOwner、expectedOwnerGeneration、newOw
 createProviderRuntimeAdapter(provider,registry,authority)は完全なscopeとidentityを受け、固定provider/nativeIdKindと一致させる。
 launchRef操作と子actorはadapterのproviderに限定し、disconnect/endActorはhandle自身のproviderに限定する。
 adapterのdisconnect/endActorと実行側actorは、そのadapter instanceが発行したhandleに限定する。
+handleの初回発行instanceを共有private WeakMapへ記録し、公開snapshotからの同内容再送でも別instanceへ再発行しない。
+同じinstanceでの接続とactorの同内容再送は同じhandleへ解決する。
 ownerは子と異なるproviderやHOMEを許すため、reconcileとhandoffのownerHandleには子providerの制限をかけない。
 
 公開currentProofには固定宛先、owner、ownerGeneration、両connectionGenerationとcontextIdの非秘密な要約だけを含める。
@@ -133,9 +135,9 @@ collectorのwire証拠が未確定なので、ここでは配置する差分や�
 
 ## コア検証結果
 
-専用単体試験8件と、Claude/Codex双方を通す共通scenario8件が通過した。
+専用単体試験10件と、Claude/Codex双方を通す共通scenario8件が通過した。
 共通scenarioにはstandalone self-owner、異provider owner、接続失効のunknown表示、現在owner終了、起動元終了後のhandoff、過去receipt再送を含む。
-全体のnpm testは1111件通過し、fail、cancelled、skipped、todoは0件だった。
+全体のnpm testは1113件通過し、fail、cancelled、skipped、todoは0件だった。
 この結果はfixture issuerを使ったコアと製品adapterの適合であり、実native認証や配送の成功件数へ合算しない。
 
 専用worktreeでCodeGraph init、sync、exploreを実行し、変更後も索引を同期してproof検査の影響範囲を確認した。

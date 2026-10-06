@@ -3,6 +3,8 @@
 const crypto = require('node:crypto');
 
 const PROVIDER_NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
+const CONNECTION_HANDLE_ADAPTER_OWNERS = new WeakMap();
+const ACTOR_HANDLE_ADAPTER_OWNERS = new WeakMap();
 const IDENTITY_FIELDS = Object.freeze(['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId']);
 const CLAIM_FIELDS = Object.freeze([
   'launchId', 'runId', 'attemptId', 'provider', 'nativeIdKind', 'hostId', 'homeScopeId',
@@ -32,6 +34,12 @@ function runtimeError(code) {
   return error;
 }
 
+function claimAdapterHandle(handle, owners, adapterOwner, errorCode) {
+  if (!handle || (typeof handle !== 'object' && typeof handle !== 'function')) throw runtimeError(errorCode);
+  const existingOwner = owners.get(handle);
+  if (existingOwner && existingOwner !== adapterOwner) throw runtimeError(errorCode);
+  if (!existingOwner) owners.set(handle, adapterOwner);
+}
 function isRecord(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -690,6 +698,7 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
     throw new TypeError('provider runtime adapter requires a supported provider, registry, and authority');
   }
   const expectedKind = PROVIDER_NATIVE_ID_KINDS[provider];
+  const adapterOwner = Object.freeze({});
   const connectionHandles = new WeakSet();
   const actorHandles = new WeakSet();
 
@@ -737,6 +746,7 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
         throw runtimeError('provider_mismatch');
       }
       const opened = authority.openConnection(scope, connectionId, evidence);
+      claimAdapterHandle(opened.connectionHandle, CONNECTION_HANDLE_ADAPTER_OWNERS, adapterOwner, 'foreign_connection_handle');
       connectionHandles.add(opened.connectionHandle);
       return opened;
     },
@@ -752,6 +762,7 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
            (normalized.immutableExecutionClaims.provider !== provider ||
             normalized.immutableExecutionClaims.nativeIdKind !== expectedKind))) throw runtimeError('provider_mismatch');
       const attested = authority.attestActor(connectionHandle, claims, evidence);
+      claimAdapterHandle(attested.actorHandle, ACTOR_HANDLE_ADAPTER_OWNERS, adapterOwner, 'foreign_actor_handle');
       actorHandles.add(attested.actorHandle);
       return attested;
     },

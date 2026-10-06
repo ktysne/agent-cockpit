@@ -394,3 +394,64 @@ test('a failed final launch-registry read cannot replace or clear the previous p
   assert.deepEqual(env.registration.registry.snapshot(), beforeRegistration);
   assert.equal(adapter.checkCurrentProof(launch.launchRef, priorProof.proofHandle).ok, true);
 });
+
+test('same-provider adapter cannot reclaim a connection handle through public snapshot replay', { timeout: 1000 }, () => {
+  const env = createEnvironment();
+  const child = env.register('claude', 'connection-reclaim');
+  const launch = env.createLaunch(child);
+  launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+  const scope = { provider: 'claude', nativeIdKind: 'session', hostId: child.identity.hostId,
+    homeScopeId: child.identity.homeScopeId, connectionSlotId: 'reclaim-slot' };
+  const connectionEvidence = evidence('reclaim-connection-evidence');
+  const opened = launch.adapter.openConnection(scope, 'reclaim-connection', connectionEvidence);
+  const actorResult = env.attest(launch.adapter, child, opened.connectionHandle,
+    'reclaim-context', launch, 'reclaim-actor-evidence');
+  const proof = launch.adapter.reconcileExecution(launch.launchRef, {
+    executionActorHandle: actorResult.actorHandle, ownerActorHandle: actorResult.actorHandle,
+    expectedOwnerGeneration: 0,
+  });
+  const beforeRuntime = env.runtime.registry.snapshot();
+  const beforeRegistration = env.registration.registry.snapshot();
+  const publicConnection = JSON.parse(JSON.stringify(
+    beforeRuntime.connections.find((item) => item.connectionId === 'reclaim-connection')));
+  const sibling = createProviderRuntimeAdapter('claude', env.runtime.registry, env.runtime.authority);
+  assertCode(() => sibling.openConnection(publicConnection.scope, publicConnection.connectionId,
+    publicConnection.evidence), 'foreign_connection_handle');
+  assert.deepEqual(env.runtime.registry.snapshot(), beforeRuntime);
+  assert.deepEqual(env.registration.registry.snapshot(), beforeRegistration);
+  assert.equal(launch.adapter.checkCurrentProof(launch.launchRef, proof.proofHandle).ok, true);
+});
+
+test('same-provider adapter cannot claim an actor handle already owned by another adapter', { timeout: 1000 }, () => {
+  const env = createEnvironment();
+  const child = env.register('claude', 'actor-reclaim');
+  const launch = env.createLaunch(child);
+  launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+  const connection = env.openActorConnection(child, 'actor-reclaim-owner');
+  const existingActor = env.attest(launch.adapter, child, connection.connectionHandle,
+    'actor-reclaim-context', launch, 'actor-reclaim-evidence');
+  const proof = launch.adapter.reconcileExecution(launch.launchRef, {
+    executionActorHandle: existingActor.actorHandle, ownerActorHandle: existingActor.actorHandle,
+    expectedOwnerGeneration: 0,
+  });
+  const siblingAuthority = {
+    ...env.runtime.authority,
+    attestActor() { return { actorHandle: existingActor.actorHandle }; },
+  };
+  const sibling = createProviderRuntimeAdapter('claude', env.runtime.registry, siblingAuthority);
+  const siblingConnection = sibling.openConnection({ provider: 'claude', nativeIdKind: 'session',
+    hostId: child.identity.hostId, homeScopeId: child.identity.homeScopeId,
+    connectionSlotId: 'actor-reclaim-sibling-slot' }, 'actor-reclaim-sibling-connection',
+  evidence('actor-reclaim-sibling-connection-evidence'));
+  const beforeRuntime = env.runtime.registry.snapshot();
+  const beforeRegistration = env.registration.registry.snapshot();
+  assertCode(() => sibling.attestActor(siblingConnection.connectionHandle, {
+    identity: structuredClone(child.identity), periodId: child.periodId, actor: structuredClone(child.actor),
+    contextId: 'other-attested-context', launchRef: launch.launchRef,
+    immutableExecutionClaims: structuredClone(launch.claims),
+  }, evidence('actor-reclaim-sibling-actor-evidence')), 'foreign_actor_handle');
+  assert.deepEqual(env.runtime.registry.snapshot(), beforeRuntime);
+  assert.deepEqual(env.registration.registry.snapshot(), beforeRegistration);
+  assert.equal(launch.adapter.checkCurrentProof(launch.launchRef, proof.proofHandle).ok, true);
+  assertCode(() => sibling.endActor(existingActor.actorHandle), 'foreign_actor_handle');
+});
