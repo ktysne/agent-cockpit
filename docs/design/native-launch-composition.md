@@ -240,9 +240,12 @@ ID-F05-N01は実file storeと製品delivery adapterを使うが、native transpo
 real runtimeの複数context、生存観測、context後の再照合、delegated chainの復帰は未確認であり、#171-Bと#180-Aの実接続採用条件として残す。
 ## 確認した実接続の範囲
 
-2026年10月7日、commit `0d5f5e254028dae4456fee6f0ce128f6599f95ee`のv1経路をClaude Code 2.1.291へ隔離HOMEから接続し、standaloneの一回のassistant contextを確認した。
+2026年10月7日、commit `6151af8f3b557db4c99e20a5a077e55927b0f3a2`のv1経路をClaude Code 2.1.291へ隔離HOMEから接続し、standaloneの一回のassistant contextを確認した。
 context終端後はactor stateとcanonical期間がactiveのまま、contextStateがendedとなり、旧opaque proofとwriterの認可が拒否された。
 owned stop後は実childのexitとcloseを確認し、通常HOMEのCodex/Claude認証ファイルは不変、隔離HOMEの認証関連ファイルの新規作成は0件だった。
+canonical revisionsとcallbackなしの最終proof guardを含む同commitで、実Claudeのstandalone正常認可とcontext終端後の拒否を回帰確認した。
+最後のancestor callbackからの失効注入はID-F04-N14とID-F05-N02のfixtureで検証しており、この実probeでは注入していない。
+検証結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-8fa31cf9-e215-4ede-a087-39e2ae17bc68.json`に保持する。
 この結果は複数context、delegated、handoff、reconnect、Codex waitの実接続成功を示さない。
 
 ID-F05-N02は両providerの実durable storeへ固定facadeを注入し、送信開始保存後の最後のancestor callbackによる葉のconnection、context、period、launch失効でsinkを0回に保つ。

@@ -105,3 +105,12 @@ Claude固定waitはunsupportedのままで、共通callback試験の成功をCla
 
 ID-F04-N14とID-F05-N02では最後のancestor callbackからのraw葉失効を両providerで検査する。
 canonical revisionとprivate proof capabilityの最終検査はcallbackを呼ばず、失効後のproof返却とpayload sinkを0回に保つ。
+
+## 実runtimeの回帰記録
+
+sourceSHA `6151af8f3b557db4c99e20a5a077e55927b0f3a2`で全体npm testは1421/1421件が通過し、fail、cancelled、skipped、todoは0件だった。
+2026年10月7日、同sourceSHAのcanonical revisionsとcallbackなしの最終proof guardを含むv1経路をClaude Code 2.1.291の隔離HOMEで回帰確認した。
+standaloneの一回のassistant contextでproofとwriterの認可を確認し、終端後はactorとcanonical periodがactive、contextStateがendedとなり、旧proofとwriterを拒否した。
+owned stop後のchild exitとclose、通常Codex/Claude認証ファイルの不変、隔離認証artifactの新規作成0件を確認した。
+結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-8fa31cf9-e215-4ede-a087-39e2ae17bc68.json`に保持する。
+実probeはstandaloneだけであり、最後のancestor callbackからの失効注入、複数context、delegated、handoff、reconnect、Codex waitはこの結果で実証していない。

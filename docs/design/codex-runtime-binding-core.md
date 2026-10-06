@@ -150,7 +150,7 @@ collectorのwire証拠が未確定なので、ここでは配置する差分や�
 
 専用単体試験10件と、Claude/Codex双方を通す共通scenario8件が通過した。
 共通scenarioにはstandalone self-owner、異provider owner、接続失効のunknown表示、現在owner終了、起動元終了後のhandoff、過去receipt再送を含む。
-全体のnpm testは1113件通過し、fail、cancelled、skipped、todoは0件だった。
+sourceSHA `6151af8f3b557db4c99e20a5a077e55927b0f3a2`の全体npm testは1421件通過し、fail、cancelled、skipped、todoは0件だった。
 この結果はfixture issuerを使ったコアと製品adapterの適合であり、実native認証や配送の成功件数へ合算しない。
 
 専用worktreeでCodeGraph init、sync、exploreを実行し、変更後も索引を同期してproof検査の影響範囲を確認した。
@@ -169,3 +169,6 @@ foreign kernel、JSON複製、復旧前のstampはfalseとなり、stampを保�
 
 `checkProofCapability`はcanonical periodの生存やlaunch状態を単独では認可しない。
 compositionはmetadata検査前にcanonical stampを捕捉し、callbackを含む検査がすべて終わった後に両stampと全nodeのprivate proof capabilityを確認する。
+
+同sourceSHAのcanonical revisionsとcallbackなしの最終proof guardを含むstandalone v1 lifecycleは、実Claude Code 2.1.291でも回帰確認した。
+実証した正常認可、context終端後の拒否、認証ファイルとchild終了の範囲は[provider-conformance-testing.md](provider-conformance-testing.md)の実runtime回帰記録に記載する。
