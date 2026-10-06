@@ -70,7 +70,7 @@ function createHarness() {
     constSource('allSessions'),
     mock.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0],
     ...['answerOf', 'isActiveDecision', 'isEndedDecision', 'isAwaitingDecision', 'decisionCategory', 'ageMinutes',
-      'countJudgments', 'decisionCountTitle', 'commonQuestionDraft', 'commonQuestionAnswersValid',
+      'countJudgments', 'countHidden', 'hiddenCommonQuestionsOf', 'decisionCountTitle', 'commonQuestionDraft', 'commonQuestionAnswersValid',
       'commonQuestionStatus', 'commonQuestionLabels', 'commonQuestionCancelControl', 'commonQuestionCard',
       'decisionSessionBlock', 'sessionBlock', 'renderProductMode', 'renderKindMode', 'renderSummary'].map(codeFor),
   ];
@@ -107,7 +107,6 @@ function createHarness() {
     kindToggle: () => '',
     reservationNoticeRows: () => '',
     prBlock: () => '',
-    countHidden: () => 0,
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
     idleHiddenSessions: () => [],
     absoluteTimeLabel: () => '2026年10月7日 12:00',
@@ -120,6 +119,7 @@ function createHarness() {
     hiddenSessionsUndo: null,
   });
   vm.runInContext(sources.join('\n'), context);
+  context.hasHiddenJudgmentItems = vm.runInContext('hasHiddenJudgmentItems', context);
   return { context, session, product, summaryNodes };
 }
 
@@ -141,6 +141,32 @@ test('モックのプロダクト表示と種類別表示は実際の共通質�
   assert.equal(context.document.title, '(3) Agent Cockpit');
   assert.match(summaryNodes.summary.innerHTML, /data-filter="questions"[^>]*>質問対応 <strong>1<\/strong>/);
   assert.match(summaryNodes.summary.innerHTML, /data-filter="provisional"[^>]*>仮に推奨案で進行中 <strong>1<\/strong>/);
+});
+
+test('モックの隠れた質問件数は表示中の共通質問を除外する', () => {
+  const { context, session } = createHarness();
+  assert.equal(context.hasHiddenJudgmentItems(session), false);
+  assert.equal(context.countHidden(), 0);
+
+  context.ui.hidden = ['questions'];
+  assert.equal(context.hasHiddenJudgmentItems(session), true);
+  assert.equal(context.countHidden(), 1);
+
+  context.ui.hidden = ['provisional'];
+  assert.equal(context.hasHiddenJudgmentItems(session), true);
+  assert.equal(context.countHidden(), 1);
+});
+
+test('外部解決後に保存した回答は配送保留中と表示し後続フォームを残す', () => {
+  const { context, session, product } = createHarness();
+  const question = {
+    ...session.commonQuestions[0], externalResolution: true, deliveryState: 'cancelled_before_send',
+    cancelled: false, lateAnswerCount: 1,
+  };
+  const html = context.commonQuestionCard(product, session, question);
+  assert.match(html, /class="common-question-status">後続の回答を 1 件保存しました。配送は保留しています。/);
+  assert.match(html, /元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。/);
+  assert.match(html, /data-common-submit="question-open"/);
 });
 
 test('質問フィルターと仮選択フィルターは両方のモック表示で該当カードだけを切り替える', () => {

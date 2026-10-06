@@ -610,7 +610,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
         return;
       }
-      if (!validUiOrigin(request, info.port)) {
+      if (!validOriginForWrite(request)) {
         jsonResponse(response, 403, { error: 'Forbidden' });
         return;
       }

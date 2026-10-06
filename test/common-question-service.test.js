@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const kernel = require('../src/server/common-question-kernel');
 const { createCommonQuestionService } = require('../src/server/common-question-service');
+const { createCommonQuestionProductHarness } = require('./support/common-question-product-harness');
 const { atomicWriteJson } = require('../src/server/json-storage');
 
 function clone(value) {
@@ -407,6 +408,71 @@ test('a trusted external resolution suppresses a sink while send-start is paused
   assert.equal(resolved.outcome, 'resolved');
   assert.equal(sinkCalls, 0);
   assert.equal(resolved.question.deliveryState, 'unknown');
+});
+
+test('external resolution preserves a late answer without marking the question manually cancelled', async (t) => {
+  const fixture = await createFixture(t, { verifyNativeQuestion: () => true });
+  const created = await register(fixture);
+  const chosen = await select(fixture, created, answers('continue'));
+  const id = chosen.question.deliveryAttemptId;
+  assert.equal(fixture.delivery.payloads.has(id), true);
+
+  const resolved = await fixture.service.resolveExternal(created.question.internalQuestionId, { source: 'trusted' });
+  assert.equal(resolved.question.externalResolution, true);
+  assert.equal(resolved.question.deliveryState, 'cancelled_before_send');
+  assert.equal(resolved.question.cancelled, false);
+  assert.equal(resolved.question.cancelHistoryMissing, false);
+  assert.equal(fixture.delivery.payloads.has(id), false);
+
+  let sinkCalls = 0;
+  const poll = await fixture.service.answerPoll(fixture.writer, 'question-1', () => { sinkCalls += 1; });
+  assert.equal(poll.outcome, 'unavailable');
+  assert.equal(poll.cancelled, false);
+  assert.equal(sinkCalls, 0);
+
+  const late = await fixture.service.submitAnswer(created.question.internalQuestionId, answers('stop'));
+  assert.equal(late.outcome, 'late');
+  const dashboard = await fixture.service.dashboardSnapshot();
+  assert.equal(dashboard.questions[0].cancelled, false);
+  assert.equal(dashboard.questions[0].cancelHistoryMissing, false);
+  assert.equal(dashboard.questions[0].lateAnswerCount, 1);
+  assert.deepEqual(dashboard.questions[0].selectedOptionIds, [{ questionId: 'decision', optionIds: ['continue'] }]);
+});
+
+test('cancelling unknown persists a request in the file-backed delivery store without retrying', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'common-question-service-file-backed-'));
+  const harness = await createCommonQuestionProductHarness({ provider: 'claude', directory });
+  t.after(async () => {
+    await harness.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const created = await harness.questionService.register(harness.writer, question('question-unknown-cancel'));
+  const chosen = await harness.questionService.submitAnswer(created.question.internalQuestionId, answers());
+  const deliveryId = chosen.question.deliveryAttemptId;
+  let initialCalls = 0;
+  const sent = await harness.questionService.answerPoll(harness.writer, 'question-unknown-cancel', () => {
+    initialCalls += 1;
+    throw new Error('sink failed');
+  });
+  assert.equal(sent.outcome, 'unknown');
+  assert.equal(initialCalls, 1);
+
+  const cancelled = await harness.questionService.cancel(created.question.internalQuestionId);
+  assert.equal(cancelled.outcome, 'too_late');
+  assert.equal(cancelled.question.deliveryState, 'unknown');
+  assert.equal(cancelled.question.cancelRequested, true);
+  await harness.reopen();
+
+  const status = await harness.questionService.status(harness.writer, 'question-unknown-cancel');
+  assert.equal(status.deliveryState, 'unknown');
+  assert.equal(status.cancelRequested, true);
+  const persistedDelivery = await harness.deliveryStore.get(deliveryId);
+  assert.equal(persistedDelivery.state, 'unknown');
+  assert.equal(persistedDelivery.cancelRequested, true);
+  let retryCalls = 0;
+  const retry = await harness.questionService.answerPoll(harness.writer, 'question-unknown-cancel', () => { retryCalls += 1; });
+  assert.equal(retry.outcome, 'already_started');
+  assert.equal(retryCalls, 0);
 });
 
 test('journal write failure after durable cancellation is diagnosed without claiming history saved', async (t) => {

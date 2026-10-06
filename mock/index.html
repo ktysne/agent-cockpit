@@ -1045,6 +1045,10 @@ const isFinishedCommonQuestion = question => question.cancelled === true
   || (question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
 const visibleCommonQuestions = session => commonQuestionsOf(session).filter(question => (!ui.hideFinished || !isFinishedCommonQuestion(question))
   && isShown(question.selectionSource === 'away-default' ? 'provisional' : 'questions'));
+function hiddenCommonQuestionsOf(session) {
+  const visibleIds = new Set(visibleCommonQuestions(session).map(question => question.internalQuestionId));
+  return commonQuestionsOf(session).filter(question => !visibleIds.has(question.internalQuestionId));
+}
 const commonQuestionDraftKey = id => `common:${id}`;
 function commonQuestionDraft(question) {
   const key = commonQuestionDraftKey(question.internalQuestionId);
@@ -1098,6 +1102,7 @@ function commonQuestionLabels(question) {
 function commonQuestionStatus(question) {
   if (question.cancelled) return '質問は取り下げ済みです。';
   if (question.cancelRequested) return '取消要求済みです。送信開始後の回答は止められない場合があります。';
+  if (question.lateAnswerCount > 0) return `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`;
   if (question.deliveryState === 'available') return '回答を保存済みです。配送待ちです。';
   if (question.deliveryState === 'sending') return '送信開始済みです。返却結果を確認しています。';
   if (question.deliveryState === 'accepted') return '受付済みです。適用は未確認です。';
@@ -1154,13 +1159,13 @@ function commonQuestionCard(p, session, record) {
 }
 const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 0)
   || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)))
-  || commonQuestionsOf(s).some(question => !visibleCommonQuestions(s).includes(question));
+  || hiddenCommonQuestionsOf(s).length > 0;
 
 function countHidden() {
   const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
     + s.decisions.filter(d => isActiveDecision(d) && !isShown(decisionCategory(d))).length
     + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
-    + commonQuestionsOf(s).filter(question => !isFinishedCommonQuestion(question) && !visibleCommonQuestions(s).includes(question)).length
+    + hiddenCommonQuestionsOf(s).filter(question => !isFinishedCommonQuestion(question)).length
     + (isShown('permission') ? 0 : s.perms.length), 0);
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }

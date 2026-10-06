@@ -30,6 +30,8 @@ class FakeElement {
     }
   }
 
+  get firstElementChild() { return this.children[0] || null; }
+
   replaceChildren(...nodes) {
     this.children = [];
     this.append(...nodes);
@@ -213,6 +215,47 @@ test('共通質問の仮選択件数と質問フィルターは既存判断事�
   assert.deepEqual(context.shownCommonQuestions(session).map((item) => item.internalQuestionId), ['regular']);
 });
 
+test('種類別表示は数値時刻の共通質問と既存判断事項を待ち時間の長い順に描画する', () => {
+  const functionNames = ['element', 'hasEffectiveAnswer', 'kindWaitTimestamp', 'kindDecisionWaitAge', 'renderKindSections'];
+  const sources = functionNames.map((name) => functionSource(pageHtml, name));
+  assert.ok(sources.every(Boolean));
+  const now = Date.now();
+  const question = { internalQuestionId: 'numeric-question', createdAt: now - 90 * 60_000 };
+  const decision = { id: 'iso-decision', state: 'waiting', createdAt: new Date(now - 60 * 60_000).toISOString() };
+  const session = { permissionWaits: [], decisions: [decision], commonQuestions: [question], agents: [], tasks: [] };
+  const context = pageContext(pageHtml, {
+    document: { createElement: (tagName) => new FakeElement(tagName) },
+    displayPreferences: { hidden: [], hideFinished: true },
+    expandedKindSections: new Set(),
+    DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
+    sessionReferences: (products) => products.flatMap((product) => product.sessions.map((item) => ({ product, session: item, multipleSessions: false }))),
+    shownPermissions: () => [],
+    appendPermissionWaits() {},
+    shownActiveDecisions: (item) => item.decisions,
+    appendDecisionCard: (list, item) => { const card = new FakeElement('article'); card.dataset.itemId = item.id; list.append(card); },
+    shownCommonQuestions: (item) => item.commonQuestions,
+    appendCommonQuestions: (holder, item) => { const card = new FakeElement('article'); card.className = 'common-question'; card.dataset.itemId = item.commonQuestions[0].internalQuestionId; holder.append(card); },
+    kindEndedDecisionEntries: () => [],
+    kindEndedAgentCount: () => 0,
+    hasHiddenJudgmentItems: () => false,
+    sessionActivityTime: () => 0,
+    mainRow: () => new FakeElement('div'),
+    appendAgents() {},
+    kindTodoTaskCount: () => 0,
+    kindDoneTaskCount: () => 0,
+    kindSection: (title, body) => ({ title, body }),
+    orderedSectionKeys: (keys) => keys,
+    sinceSeenBox: () => null,
+    visiblePullRequestGroups: () => [],
+    isFilterShown: () => false,
+  });
+  require('node:vm').runInContext(sources.join('\n'), context);
+
+  const product = { sessions: [session], pullRequestGroups: [] };
+  const judgment = context.renderKindSections([product]).find((section) => section.title === 'あなたの判断が必要なこと');
+  assert.deepEqual(judgment.body.children.map((card) => card.dataset.itemId), ['numeric-question', 'iso-decision']);
+});
+
 test('質問取消の最初のクリックは確認だけで、戻るは送信せず、明示確定だけ取消を送る', async () => {
   const requests = [];
   const context = createUiContext({ postUiAction: async (url, body) => {
@@ -240,6 +283,95 @@ test('質問取消の最初のクリックは確認だけで、戻るは送信�
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, '/api/decisions/cq-internal-1/cancel');
   assert.deepEqual(JSON.parse(JSON.stringify(requests[0].body)), { session_id: 'session-question', execution_id: 'execution-1' });
+  assert.equal(context.nativeConfirmCalls(), 0);
+});
+
+test('外部解決済みで配送取消済みの質問は後続回答を保存し保留状態を示す', async () => {
+  const requests = [];
+  const savedQuestion = commonQuestion({
+    externalResolution: true,
+    deliveryState: 'cancelled_before_send',
+    cancelled: false,
+    lateAnswerCount: 1,
+  });
+  const context = createUiContext({ postUiAction: async (url, body) => {
+    requests.push({ url, body });
+    return { ok: true, status: 200, json: async () => ({ outcome: 'late', question: savedQuestion }) };
+  } });
+  const question = commonQuestion({ externalResolution: true, deliveryState: 'cancelled_before_send', cancelled: false });
+  context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+  context.refresh = async () => { context.lastState.sessions[0].commonQuestions[0] = savedQuestion; };
+
+  let card = renderQuestion(context, question);
+  assert.ok(card.querySelectorAll('.common-question-note').some((note) => note.textContent === '元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。'));
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'alternate').checked = true;
+  context.updateCommonQuestionSubmit(card);
+  assert.equal(findData(card, 'commonSubmit').disabled, false);
+  await context.runCommonQuestionAction(findData(card, 'commonSubmit'), 'answer');
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/decisions/cq-internal-1/answer');
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0].body.answers)), [{
+    questionId: 'choice', optionIds: ['alternate'], freeText: null,
+  }]);
+  card = renderQuestion(context, savedQuestion);
+  assert.equal(card.querySelector('.common-question-status').textContent, '後続の回答を 1 件保存しました。配送は保留しています。');
+  assert.equal(findData(card, 'commonSubmit').disabled, true);
+});
+
+test('取消結果は返却された取消要求状態に沿った案内を表示する', async () => {
+  for (const cancelRequested of [false, true]) {
+    const question = commonQuestion();
+    const context = createUiContext({ postUiAction: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ outcome: 'too_late', question: { ...question, cancelRequested } }),
+    }) });
+    context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+    const card = renderQuestion(context, question);
+    await context.runCommonQuestionAction(findData(card, 'commonCancel'), 'cancel');
+    const confirmationCard = renderQuestion(context, question);
+    await context.runCommonQuestionAction(findData(confirmationCard, 'commonCancelConfirm'), 'cancel-confirm');
+
+    const notice = context.commonQuestionNotices.get(context.commonQuestionKey(question));
+    if (cancelRequested) assert.match(notice, /取消要求として記録しました/);
+    else assert.doesNotMatch(notice, /要求として記録しました/);
+    assert.equal(context.nativeConfirmCalls(), 0);
+  }
+});
+
+test('期限後に自動選択と競合した回答は下書きを保ち同じ回答の再保存を無効にする', async () => {
+  const appliedQuestion = commonQuestion({
+    selectionSource: 'away-default',
+    selectedOptionIds: [{ questionId: 'choice', optionIds: ['recommended'] }],
+    deliveryState: 'applied',
+    lateAnswerCount: 1,
+  });
+  const context = createUiContext({ postUiAction: async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ outcome: 'late', question: appliedQuestion }),
+  }) });
+  const question = commonQuestion();
+  context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+  context.refresh = async () => { context.lastState.sessions[0].commonQuestions[0] = appliedQuestion; };
+
+  let card = renderQuestion(context, question);
+  card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'alternate').checked = true;
+  card.querySelector('[data-common-free-text]').value = 'a later instruction';
+  context.updateCommonQuestionSubmit(card);
+  await context.runCommonQuestionAction(findData(card, 'commonSubmit'), 'answer');
+
+  const key = context.commonQuestionKey(question);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.commonQuestionSubmittedDrafts.get(key))), [{
+    questionId: 'choice', optionIds: ['alternate'], freeText: 'a later instruction',
+  }]);
+  assert.match(context.commonQuestionNotices.get(key), /後続の回答/);
+  card = renderQuestion(context, appliedQuestion);
+  assert.equal(card.querySelectorAll('[data-common-option]').find((item) => item.dataset.optionId === 'alternate').checked, true);
+  assert.equal(card.querySelector('[data-common-free-text]').value, 'a later instruction');
+  assert.equal(findData(card, 'commonSubmit').disabled, true);
+
   assert.equal(context.nativeConfirmCalls(), 0);
 });
 

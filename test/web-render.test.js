@@ -133,10 +133,11 @@ test('終わったセッションは待機中で未完了のものが無い場�
 
 test('種類別の判断事項は有効な回答を送ったものを後ろに並べ、無視された回答は経過時間で並べる', () => {
   const age = functionSource(pageHtml, 'kindDecisionWaitAge');
+  const waitTimestamp = functionSource(pageHtml, 'kindWaitTimestamp');
   const effective = functionSource(pageHtml, 'hasEffectiveAnswer');
-  assert.ok(age && effective);
+  assert.ok(age && waitTimestamp && effective);
   const context = pageContext(pageHtml, {});
-  vm.runInContext(`${effective}\n${age}`, context);
+  vm.runInContext(`${effective}\n${waitTimestamp}\n${age}`, context);
 
   const now = Date.now();
   const decisions = [

@@ -1296,6 +1296,7 @@ function commonQuestionDraft(question) {
 function commonQuestionDeliveryText(question) {
   if (question.cancelled) return question.cancelHistoryMissing ? '質問は取り下げ済みです。記録時刻はありません。' : '質問は取り下げ済みです。';
   if (question.cancelRequested) return '取消を要求しました。送信済みの回答は止められない場合があります。';
+  if (question.lateAnswerCount > 0) return `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`;
   if (question.deliveryState === 'available') return '回答を保存済みです。配送待ちです。';
   if (question.deliveryState === 'claimed') return '配送を準備しています。';
   if (question.deliveryState === 'sending') return '送信開始済みです。返却結果を確認しています。';
@@ -3348,9 +3349,13 @@ function kindEndedDecisionEntries(references) {
   return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
 
+function kindWaitTimestamp(value) {
+  return typeof value === 'number' ? value : Date.parse(value || '');
+}
+
 function kindDecisionWaitAge(decision) {
   if (hasEffectiveAnswer(decision)) return -1;
-  const timestamp = Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
+  const timestamp = kindWaitTimestamp(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
   return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : 0;
 }
 
@@ -3368,7 +3373,8 @@ function renderKindSections(products) {
       const holder = element('div');
       appendPermissionWaits(holder, { ...session, permissionWaits: [wait] }, product, true, multipleSessions);
       const card = holder.firstElementChild?.firstElementChild;
-      if (card) waitingItems.push({ age: Date.now() - Date.parse(wait.startedAt), card });
+      const timestamp = kindWaitTimestamp(wait.startedAt);
+      if (card) waitingItems.push({ age: Number.isFinite(timestamp) ? Date.now() - timestamp : 0, card });
     }
     for (const decision of shownActiveDecisions(session)) {
       const list = element('div', 'decision-list');
@@ -3378,7 +3384,7 @@ function renderKindSections(products) {
     for (const question of shownCommonQuestions(session)) {
       const holder = element('div');
       appendCommonQuestions(holder, { ...session, commonQuestions: [question] }, product, true, multipleSessions);
-      const timestamp = Date.parse(question.createdAt);
+      const timestamp = kindWaitTimestamp(question.createdAt);
       waitingItems.push({ age: Number.isFinite(timestamp) ? Date.now() - timestamp : 0, card: holder.querySelector('.common-question') });
     }
 
@@ -3883,18 +3889,21 @@ async function runCommonQuestionAction(button, action) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json().catch(() => ({}));
     if (action === 'answer') {
-      if (question.selectionSource) commonQuestionSubmittedDrafts.set(key, submittedDraft);
+      const lateAnswer = result.outcome === 'late'
+        || Number(result.question?.lateAnswerCount || 0) > Number(question.lateAnswerCount || 0)
+        || Boolean(result.question?.selectionSource && result.outcome !== 'selected');
+      if (question.selectionSource || lateAnswer) commonQuestionSubmittedDrafts.set(key, submittedDraft);
       else commonQuestionDrafts.delete(key);
-      commonQuestionNotices.set(key, result.outcome === 'late'
+      commonQuestionNotices.set(key, lateAnswer
         ? '後続の回答を保存しました。配送は保留しています。'
         : '回答を保存しました。配送状態は別に表示します。');
     } else if (action === 'hold') {
       commonQuestionNotices.set(key, body.held ? '質問を保留しました。' : '質問の保留を解除しました。');
     } else {
       commonQuestionCancelConfirmations.delete(key);
-      commonQuestionNotices.set(key, result.outcome === 'too_late'
+      commonQuestionNotices.set(key, result.outcome === 'too_late' && result.question?.cancelRequested === true
         ? '送信開始後のため、取り下げできず取消要求として記録しました。'
-        : '質問を取り下げました。');
+        : result.outcome === 'too_late' ? '送信開始後のため、質問を取り下げできませんでした。' : '質問を取り下げました。');
     }
     await refresh();
     liveStatus.textContent = action === 'answer' ? '回答を保存しました。' : action === 'hold' ? '質問の状態を保存しました。' : '取り下げ状態を保存しました。';

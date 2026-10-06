@@ -114,8 +114,12 @@ async function stopProductServer(context) {
   if (runtime) await runtime.close();
 }
 
-function requestHeaders(runtime, origin = `http://127.0.0.1:${runtime.info.port}`) {
-  return { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret, origin };
+function requestHeaders(runtime, origin = undefined) {
+  return {
+    'content-type': 'application/json',
+    'x-cockpit-secret': runtime.info.secret,
+    ...(origin === undefined ? {} : { origin }),
+  };
 }
 
 function uiHeaders(runtime, origin = `http://127.0.0.1:${runtime.info.port}`) {
@@ -218,6 +222,10 @@ for (const provider of PROVIDERS) {
     assert.equal(registered.status, 200, registered.body);
     assert.equal(jsonBody(registered).outcome, 'created');
     const firstInternalId = jsonBody(registered).question.internalQuestionId;
+    const pendingPoll = await postProduct(context, QUESTION_ROUTE + '/answer-poll', { writer, questionId });
+    assert.equal(pendingPoll.status, 200);
+    assert.equal(jsonBody(pendingPoll).delivery, null);
+    assert.equal((await postProduct(context, QUESTION_ROUTE + '/response-lost', { writer, questionId })).status, 404);
     const replay = await postProduct(context, QUESTION_ROUTE + '/register', body);
     assert.equal(jsonBody(replay).outcome, 'existing');
     assert.equal(jsonBody(replay).question.internalQuestionId, firstInternalId);
@@ -298,6 +306,25 @@ for (const provider of PROVIDERS) {
     }, uiHeaders(context.runtime));
     assert.equal(saved.status, 200);
     assert.equal(jsonBody(saved).outcome, 'selected');
+
+    const beforeOriginRequests = { ...context.calls };
+    const selfOriginHeaders = requestHeaders(context.runtime, `http://127.0.0.1:${context.runtime.info.port}`);
+    const selfOriginRequests = [
+      [QUESTION_ROUTE + '/register', questionRegistration(
+        resumed.child.writer, 'self-origin-' + provider, [question('private-origin-question')],
+      )],
+      [QUESTION_ROUTE + '/status', { writer: resumed.child.writer, questionId }],
+      [QUESTION_ROUTE + '/answer-poll', { writer: resumed.child.writer, questionId }],
+      [QUESTION_ROUTE + '/response-lost', { writer: resumed.child.writer, questionId }],
+    ];
+    for (const [route, body] of selfOriginRequests) {
+      const response = await postProduct(context, route, body, selfOriginHeaders);
+      assert.equal(response.status, 403, route);
+      assert.equal(JSON.stringify(response).includes('private-choice-value'), false, route);
+      assert.equal(JSON.stringify(response).includes('private-origin-question'), false, route);
+    }
+    assert.deepEqual(context.calls, beforeOriginRequests);
+
     const status = await postProduct(context, QUESTION_ROUTE + '/status', {
       writer: resumed.child.writer, questionId,
     });

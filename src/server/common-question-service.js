@@ -316,9 +316,9 @@ function createCommonQuestionService(options = {}) {
       deliveryState: delivery?.state || null,
       externalResolution: record.externalResolution !== null,
       lateAnswerCount: record.lateAnswers.length,
-      cancelled: record.cancelledAt !== null || delivery?.state === 'cancelled_before_send',
+      cancelled: record.cancelledAt !== null || (record.externalResolution === null && delivery?.state === 'cancelled_before_send'),
       cancelRequested: delivery?.cancelRequested === true,
-      cancelHistoryMissing: delivery?.state === 'cancelled_before_send' && record.cancelledAt === null,
+      cancelHistoryMissing: record.externalResolution === null && delivery?.state === 'cancelled_before_send' && record.cancelledAt === null,
     };
     return result;
   }
@@ -631,7 +631,7 @@ function createCommonQuestionService(options = {}) {
       if (record.cancelledAt !== null) return { outcome: 'cancelled', question: await projectRecord(record) };
       if (record.deliveryIntent) {
         const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
-        if (current && ['applied', 'unknown', 'cancelled_before_send', 'superseded_before_send'].includes(current.state)) {
+        if (current && ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(current.state)) {
           return { outcome: current.state === 'cancelled_before_send' ? 'cancelled' : 'too_late',
             question: projection(record, current) };
         }
