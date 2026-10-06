@@ -302,6 +302,7 @@ class InstructionDeliveryModel {
         state: 'registered', deliveryId: null, acceptedTurnId: null, sendStartedAt: null,
         acceptedAt: null, appliedAt: null, appliedEvidence: null, unknownReason: null,
         staleReason: null, cancelRequested: false, cancelRequestedAt: null, cancelledAt: null,
+        preAcceptanceEvidence: null, preAcceptanceEvidenceAmbiguous: false,
       },
       fallback: null,
       cancelOperationIds: new Set(),
@@ -411,11 +412,31 @@ class InstructionDeliveryModel {
     if (expectedTurnId && input.turnId !== expectedTurnId) {
       attempt.state = 'stale';
       attempt.staleReason = 'accepted_turn_mismatch';
+      attempt.preAcceptanceEvidence = null;
       request.version += 1;
       return rejected('stale_expected_turn', this.snapshot(request));
     }
     attempt.state = 'accepted';
+    const candidate = !attempt.preAcceptanceEvidenceAmbiguous
+      && attempt.preAcceptanceEvidence?.turnId === input.turnId ? attempt.preAcceptanceEvidence : null;
+    attempt.preAcceptanceEvidence = null;
     request.version += 1;
+    if (candidate) {
+      this.applyNativeEvidence({
+        ...request.identity,
+        requestId: request.requestId,
+        deliveryId: input.deliveryId,
+        turnId: candidate.turnId,
+        itemId: candidate.itemId,
+        itemType: candidate.itemType,
+        payloadDigest: candidate.payloadDigest,
+        ...(channel === 'next_user_input' ? {
+          channel,
+          claimId: attempt.claimId,
+          inputItemId: candidate.inputItemId,
+        } : {}),
+      }, new Set(['accepted']));
+    }
     return { accepted: true, reason: 'accepted', request: this.snapshot(request) };
   }
 
@@ -459,11 +480,43 @@ class InstructionDeliveryModel {
       return rejected('evidence_mismatch', this.snapshot(request));
     }
     if (channel === 'primary' && request.fallback) return rejected('fallback_claimed', this.snapshot(request));
+    if (attempt.deliveryId !== input.deliveryId) return rejected('evidence_not_expected', this.snapshot(request));
     if (attempt.state === 'applied') {
       const same = attempt.deliveryId === input.deliveryId && attempt.acceptedTurnId === input.turnId
         && attempt.appliedEvidence?.itemId === input.itemId && request.payloadDigest === input.payloadDigest;
       return same ? { accepted: true, reason: 'duplicate_applied_evidence', request: this.snapshot(request) }
         : rejected('already_applied', this.snapshot(request));
+    }
+    if (attempt.state === 'sending' && !allowedStates.has('accepted')) {
+      return rejected('evidence_not_expected', this.snapshot(request));
+    }
+    if (attempt.preAcceptanceEvidenceAmbiguous) {
+      return rejected('pre_acceptance_evidence_ambiguous', this.snapshot(request));
+    }
+    if (attempt.state === 'sending') {
+      if (request.payloadDigest !== input.payloadDigest
+        || (attempt.targetTurnId && attempt.targetTurnId !== input.turnId)) {
+        return rejected('evidence_mismatch', this.snapshot(request));
+      }
+      const candidate = {
+        turnId: input.turnId,
+        itemId: input.itemId,
+        itemType: input.itemType,
+        payloadDigest: input.payloadDigest,
+        ...(channel === 'next_user_input' ? { inputItemId: input.inputItemId } : {}),
+      };
+      if (attempt.preAcceptanceEvidence) {
+        if (JSON.stringify(attempt.preAcceptanceEvidence) === JSON.stringify(candidate)) {
+          return { accepted: true, reason: 'duplicate_buffered_evidence', request: this.snapshot(request) };
+        }
+        attempt.preAcceptanceEvidence = null;
+        attempt.preAcceptanceEvidenceAmbiguous = true;
+        request.version += 1;
+        return rejected('pre_acceptance_evidence_ambiguous', this.snapshot(request));
+      }
+      attempt.preAcceptanceEvidence = candidate;
+      request.version += 1;
+      return { accepted: true, reason: 'evidence_buffered', request: this.snapshot(request) };
     }
     if (!allowedStates.has(attempt.state) || attempt.deliveryId !== input.deliveryId) {
       return rejected('evidence_not_expected', this.snapshot(request));
@@ -495,6 +548,7 @@ class InstructionDeliveryModel {
     attempt.acceptedTurnId ||= input.turnId;
     attempt.appliedAt = now;
     attempt.appliedEvidence = { itemId: input.itemId, turnId: input.turnId, itemType: input.itemType, channel };
+    attempt.preAcceptanceEvidence = null;
     request.version += 1;
     return { accepted: true, reason: 'applied', request: this.snapshot(request) };
   }
@@ -553,6 +607,8 @@ class InstructionDeliveryModel {
       cancelRequested: false,
       cancelRequestedAt: null,
       cancelledAt: null,
+      preAcceptanceEvidence: null,
+      preAcceptanceEvidenceAmbiguous: false,
     };
     request.primary.supersededByFallback = true;
     request.version += 1;
@@ -659,6 +715,8 @@ class InstructionDeliveryModel {
       cancelRequested: attempt.cancelRequested,
       cancelRequestedAt: attempt.cancelRequestedAt,
       cancelledAt: attempt.cancelledAt,
+      preAcceptanceEvidenceCount: attempt.preAcceptanceEvidence ? 1 : 0,
+      preAcceptanceEvidenceAmbiguous: attempt.preAcceptanceEvidenceAmbiguous,
       fallback: request.fallback ? {
         state: request.fallback.state,
         claimId: request.fallback.claimId,
@@ -676,6 +734,8 @@ class InstructionDeliveryModel {
         cancelRequested: request.fallback.cancelRequested,
         cancelRequestedAt: request.fallback.cancelRequestedAt,
         cancelledAt: request.fallback.cancelledAt,
+        preAcceptanceEvidenceCount: request.fallback.preAcceptanceEvidence ? 1 : 0,
+        preAcceptanceEvidenceAmbiguous: request.fallback.preAcceptanceEvidenceAmbiguous,
       } : null,
       createdAt: request.createdAt,
       version: request.version,

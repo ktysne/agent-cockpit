@@ -138,6 +138,178 @@ test('native receipt is accepted but only exact item, turn, identity, and payloa
   assert.equal(broker.observeApplied(evidence()).reason, 'duplicate_applied_evidence');
 });
 
+test('native evidence arriving during send is bounded and revalidated against the accepted turn', () => {
+  const { broker } = model();
+  broker.register(registration());
+  begin(broker);
+
+  assert.equal(broker.reconcileUnknown(evidence({ itemId: 'wrong-entry-point' })).reason, 'evidence_not_expected');
+  assert.equal(broker.project().rows[0].preAcceptanceEvidenceCount, 0);
+  assert.equal(broker.observeApplied(evidence({ payloadDigest: '0'.repeat(64) })).reason, 'evidence_mismatch');
+  assert.equal(broker.observeApplied(evidence({ turnId: 'turn-b' })).reason, 'evidence_mismatch');
+  assert.equal(broker.observeApplied(evidence({ itemId: 'early-item' })).reason, 'evidence_buffered');
+  assert.equal(broker.observeApplied(evidence({ itemId: 'early-item' })).reason, 'duplicate_buffered_evidence');
+  const sending = broker.project().rows[0];
+  assert.equal(sending.state, 'sending');
+  assert.equal(sending.preAcceptanceEvidenceCount, 1);
+  assert.equal(sending.preAcceptanceEvidenceAmbiguous, false);
+  assert.equal(JSON.stringify(sending).includes('early-item'), false);
+  assert.equal(JSON.stringify(sending).includes(payloadDigest), false);
+
+  const accepted = broker.recordAccepted({
+    ...identity,
+    requestId: 'request-a',
+    deliveryId: 'delivery-a',
+    turnId: 'turn-a',
+  });
+  assert.equal(accepted.reason, 'accepted');
+  assert.equal(accepted.request.state, 'applied');
+  assert.deepEqual(accepted.request.appliedEvidence, {
+    itemId: 'early-item', turnId: 'turn-a', itemType: 'user_input', channel: 'primary',
+  });
+  assert.equal(accepted.request.preAcceptanceEvidenceCount, 0);
+});
+
+test('distinct pre-acceptance evidence remains ambiguous after receipt and cannot be selected later', () => {
+  const { broker } = model();
+  broker.register(registration());
+  begin(broker);
+
+  assert.equal(broker.observeApplied(evidence({ itemId: 'candidate-a' })).reason, 'evidence_buffered');
+  assert.equal(broker.observeApplied(evidence({ itemId: 'candidate-b' })).reason, 'pre_acceptance_evidence_ambiguous');
+  assert.equal(broker.reconcileUnknown(evidence({ itemId: 'candidate-a' })).reason, 'evidence_not_expected');
+  const receipt = broker.recordAccepted({
+    ...identity,
+    requestId: 'request-a',
+    deliveryId: 'delivery-a',
+    turnId: 'turn-a',
+  });
+  assert.equal(receipt.reason, 'accepted');
+  assert.equal(receipt.request.state, 'accepted');
+  assert.equal(receipt.request.preAcceptanceEvidenceCount, 0);
+  assert.equal(receipt.request.preAcceptanceEvidenceAmbiguous, true);
+  assert.equal(broker.observeApplied(evidence({ itemId: 'candidate-a' })).reason, 'pre_acceptance_evidence_ambiguous');
+  assert.equal(broker.beginDelivery({
+    ...identity,
+    requestId: 'request-a',
+    deliveryId: 'retry-delivery',
+    observedThread: observed(),
+  }).reason, 'delivery_not_registered');
+  assert.equal(broker.project().rows[0].state, 'accepted');
+});
+
+test('buffered native items become uniquely owned only when one accepted delivery applies them', () => {
+  const { broker } = model();
+  const secondIdentity = { ...identity, runId: 'run-b', attemptId: 'attempt-b' };
+  broker.register(registration());
+  broker.register(registration({ ...secondIdentity, requestId: 'request-b' }));
+  begin(broker);
+  begin(broker, {
+    ...secondIdentity,
+    requestId: 'request-b',
+    deliveryId: 'delivery-b',
+  });
+  assert.equal(broker.observeApplied(evidence({ itemId: 'shared-early-item' })).reason, 'evidence_buffered');
+  assert.equal(broker.observeApplied(evidence({
+    ...secondIdentity,
+    requestId: 'request-b',
+    deliveryId: 'delivery-b',
+    itemId: 'shared-early-item',
+  })).reason, 'evidence_buffered');
+
+  assert.equal(broker.recordAccepted({ ...identity, requestId: 'request-a', deliveryId: 'delivery-a', turnId: 'turn-a' }).request.state, 'applied');
+  const secondReceipt = broker.recordAccepted({
+    ...secondIdentity,
+    requestId: 'request-b',
+    deliveryId: 'delivery-b',
+    turnId: 'turn-a',
+  });
+  assert.equal(secondReceipt.reason, 'accepted');
+  assert.equal(secondReceipt.request.state, 'accepted');
+  assert.equal(secondReceipt.request.appliedEvidence, null);
+  assert.equal(broker.observeApplied(evidence({
+    ...secondIdentity,
+    requestId: 'request-b',
+    deliveryId: 'delivery-b',
+    itemId: 'shared-early-item',
+  })).reason, 'native_item_already_owned');
+});
+
+test('unaccepted turn-start evidence stays unknown when its receipt is lost', () => {
+  const { broker } = model();
+  broker.register(registration({ requestId: 'start-request', threadState: 'idle', expectedTurnId: null }));
+  broker.beginDelivery({
+    ...identity,
+    requestId: 'start-request',
+    deliveryId: 'start-delivery',
+    observedThread: observed({ state: 'idle', activeTurnId: null }),
+  });
+  const earlyEvidence = evidence({ requestId: 'start-request', deliveryId: 'start-delivery', turnId: 'created-turn' });
+  assert.equal(broker.observeApplied(earlyEvidence).reason, 'evidence_buffered');
+  assert.equal(broker.markUnknown({
+    ...identity,
+    requestId: 'start-request',
+    deliveryId: 'start-delivery',
+    reason: 'disconnect',
+  }).reason, 'unknown');
+  assert.equal(broker.recordAccepted({
+    ...identity,
+    requestId: 'start-request',
+    deliveryId: 'start-delivery',
+    turnId: 'created-turn',
+  }).reason, 'delivery_not_sending');
+  assert.equal(broker.reconcileUnknown(earlyEvidence).reason, 'evidence_mismatch');
+  const row = broker.project().rows[0];
+  assert.equal(row.state, 'unknown');
+  assert.equal(row.preAcceptanceEvidenceCount, 1);
+  assert.equal(row.appliedEvidence, null);
+});
+
+test('fallback evidence arriving before its receipt applies only after exact fallback acceptance', () => {
+  const { broker } = model();
+  broker.register(registration());
+  const claim = {
+    ...identity,
+    requestId: 'request-a',
+    claimId: 'claim-a',
+    inputItemId: 'input-item',
+    inputItemType: 'user_input',
+    inputTurnId: 'turn-b',
+    observedThread: observed({ activeTurnId: 'turn-b' }),
+  };
+  assert.equal(broker.claimNextUserInputFallback(claim).reason, 'fallback_claimed');
+  assert.equal(broker.beginDelivery({
+    ...identity,
+    requestId: 'request-a',
+    deliveryId: 'fallback-delivery',
+    channel: 'next_user_input',
+    claimId: 'claim-a',
+    observedThread: observed({ activeTurnId: 'turn-b' }),
+  }).reason, 'sending');
+  assert.equal(broker.observeApplied(evidence({
+    deliveryId: 'fallback-delivery',
+    turnId: 'turn-b',
+    itemId: 'fallback-native-item',
+    channel: 'next_user_input',
+    claimId: 'claim-a',
+    inputItemId: 'input-item',
+  })).reason, 'evidence_buffered');
+
+  const accepted = broker.recordAccepted({
+    ...identity,
+    requestId: 'request-a',
+    deliveryId: 'fallback-delivery',
+    channel: 'next_user_input',
+    claimId: 'claim-a',
+    turnId: 'turn-b',
+  });
+  assert.equal(accepted.reason, 'accepted');
+  assert.equal(accepted.request.state, 'applied');
+  assert.equal(accepted.request.appliedEvidence.itemId, 'fallback-native-item');
+  assert.equal(accepted.request.appliedEvidence.channel, 'next_user_input');
+  assert.equal(accepted.request.primarySupersededByFallback, true);
+});
+
 test('a native input item has one delivery owner per host, HOME, thread, and turn', () => {
   const { broker } = model();
   const otherRunIdentity = { ...identity, runId: 'run-b', attemptId: 'attempt-b' };
@@ -216,6 +388,7 @@ test('ambiguous known-turn delivery can reconcile with exact evidence while an u
   const { broker } = model();
   broker.register(registration());
   begin(broker);
+  assert.equal(broker.observeApplied(evidence()).reason, 'evidence_buffered');
   assert.equal(broker.markUnknown({ ...identity, requestId: 'request-a', deliveryId: 'delivery-a', reason: 'disconnect' }).reason, 'unknown');
   assert.equal(broker.reconcileUnknown(evidence()).reason, 'applied');
 

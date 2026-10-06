@@ -20,6 +20,7 @@ const {
   parseArguments,
   parseControlLine,
   runNativeProbe,
+  specialWaitingFlags,
 } = require('./native-runner');
 
 const OUTPUT_PARENT = path.join(REPOSITORY_ROOT, 'poc', 'out');
@@ -232,6 +233,73 @@ test('observer counts question and approval requests without retaining request c
   assert.deepEqual(summary.waiting_on_approval, { seen: true, active: false, cleared: true });
   assert.deepEqual(summary.waiting_on_user_input, { seen: true, active: false, cleared: true });
   assert.equal(JSON.stringify(summary).includes('private'), false);
+});
+
+test('item completion does not end its turn and only turn completion is terminal', () => {
+  const observer = createObserver();
+  const turn = { threadId: UUID_A, turnId: UUID_B };
+  observer.onNotification('turn/started', { ...turn, status: 'inProgress' });
+  observer.onNotification('item/completed', { ...turn, status: 'completed', itemType: 'agentMessage' });
+  assert.equal(observer.turnStatuses.get(UUID_B), 'inProgress');
+
+  observer.onNotification('turn/completed', { ...turn, status: 'completed' });
+  assert.equal(observer.turnStatuses.get(UUID_B), 'completed');
+});
+
+test('遅延startedとunknown turn statusは終端turnを復活させない', () => {
+  const observer = createObserver();
+  const turn = { threadId: UUID_A, turnId: UUID_B };
+  observer.onNotification('turn/completed', { ...turn, status: 'completed' });
+  observer.onNotification('turn/started', { ...turn, status: 'inProgress' });
+  observer.onNotification('turn/status/changed', { ...turn, status: 'futureStatus' });
+  assert.equal(observer.turnStatuses.get(UUID_B), 'completed');
+});
+
+test('active waiting flags clear when the thread becomes idle', () => {
+  const observer = createObserver();
+  const thread = { threadId: UUID_A, turnId: UUID_B };
+  observer.onNotification('thread/status/changed', {
+    ...thread,
+    threadStatus: { type: 'active', activeFlags: ['waitingOnApproval', 'waitingOnUserInput'] },
+  });
+  assert.equal(observer.summary().waiting_on_approval.active, true);
+  assert.equal(observer.summary().waiting_on_user_input.active, true);
+
+  observer.onNotification('thread/status/changed', {
+    ...thread,
+    threadStatus: { type: 'idle' },
+  });
+  assert.deepEqual(observer.summary().waiting_on_approval, { seen: true, active: false, cleared: true });
+  assert.deepEqual(observer.summary().waiting_on_user_input, { seen: true, active: false, cleared: true });
+});
+
+test('unknown thread and turn statuses do not clear active waiting flags or overwrite known turn state', () => {
+  const observer = createObserver();
+  const turn = { threadId: UUID_A, turnId: UUID_B };
+  observer.onNotification('turn/started', { ...turn, status: 'inProgress' });
+  observer.onNotification('thread/status/changed', {
+    ...turn,
+    threadStatus: { type: 'active', activeFlags: ['waitingOnApproval', 'waitingOnUserInput'] },
+  });
+  observer.onNotification('turn/status/changed', { ...turn, status: 'futureStatus' });
+  observer.onNotification('thread/status/changed', {
+    ...turn,
+    threadStatus: { type: 'futureState', activeFlags: [] },
+  });
+
+  assert.equal(observer.turnStatuses.get(UUID_B), 'inProgress');
+  assert.deepEqual(observer.summary().waiting_on_approval, { seen: true, active: true, cleared: false });
+  assert.deepEqual(observer.summary().waiting_on_user_input, { seen: true, active: true, cleared: false });
+});
+
+test('approval and question special cases record their matching waiting flags', () => {
+  const approval = { seen: true, active: true, cleared: false };
+  const question = { seen: true, active: false, cleared: true };
+  const summary = { waiting_on_approval: approval, waiting_on_user_input: question };
+
+  assert.equal(specialWaitingFlags('approval', summary), approval);
+  assert.equal(specialWaitingFlags('question', summary), question);
+  assert.equal(specialWaitingFlags('other', summary), null);
 });
 
 test('measurement, state-probe, and actual instruction delivery remain separate results', () => {

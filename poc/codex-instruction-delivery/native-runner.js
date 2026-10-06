@@ -42,7 +42,10 @@ const NOTIFICATION_METHODS = new Set([
   'turn/started', 'turn/completed', 'turn/status/changed', 'item/started', 'item/completed',
   'serverRequest/resolved',
 ]);
+const TURN_STATUS_NOTIFICATION_METHODS = new Set(['turn/started', 'turn/status/changed', 'turn/completed']);
 const TURN_STATUSES = new Set(['queued', 'inProgress', 'completed', 'failed', 'interrupted', 'cancelling']);
+const TERMINAL_TURN_STATUSES = new Set(['completed', 'failed', 'interrupted']);
+const INACTIVE_THREAD_STATUSES = new Set(['notLoaded', 'idle', 'systemError']);
 const ITEM_TYPES = new Set([
   'userMessage', 'agentMessage', 'functionCallOutput', 'dynamicToolCall', 'mcpToolCall',
   'commandExecution', 'fileChange', 'reasoning', 'plan', 'collabAgentToolCall', 'subAgentActivity',
@@ -169,18 +172,27 @@ function createObserver() {
     if (threadId) threadIds.add(threadId);
     if (turnId) {
       turnIds.add(turnId);
-      const status = safeTurnStatus(metadata.status);
-      if (status !== 'unknown') turnStatuses.set(turnId, status);
+      const previousStatus = turnStatuses.get(turnId);
+      if (TURN_STATUS_NOTIFICATION_METHODS.has(projectedMethod)
+        && !TERMINAL_TURN_STATUSES.has(previousStatus)) {
+        const status = safeTurnStatus(metadata.status);
+        if (status !== 'unknown') turnStatuses.set(turnId, status);
+      }
     }
     if (projectedMethod === 'item/started' || projectedMethod === 'item/completed') {
       const type = ITEM_TYPES.has(metadata.itemType) ? metadata.itemType : 'unknown';
       itemCounts.set(`${projectedMethod}:${type}`, (itemCounts.get(`${projectedMethod}:${type}`) || 0) + 1);
     }
     if (projectedMethod === 'serverRequest/resolved') resolvedCount += 1;
-    if (projectedMethod === 'thread/status/changed' && metadata.threadStatus?.type === 'active') {
-      const flags = Array.isArray(metadata.threadStatus.activeFlags) ? metadata.threadStatus.activeFlags : [];
+    if (projectedMethod === 'thread/status/changed' && metadata.threadStatus?.type === 'active'
+      && Array.isArray(metadata.threadStatus.activeFlags)) {
+      const flags = metadata.threadStatus.activeFlags;
       updateFlag(waiting.approval, flags.includes('waitingOnApproval'));
       updateFlag(waiting.question, flags.includes('waitingOnUserInput'));
+    } else if (projectedMethod === 'thread/status/changed'
+      && INACTIVE_THREAD_STATUSES.has(metadata.threadStatus?.type)) {
+      updateFlag(waiting.approval, false);
+      updateFlag(waiting.question, false);
     }
   }
 
@@ -214,6 +226,12 @@ function updateFlag(state, active) {
   if (active) state.seen = true;
   if (state.active && !active) state.cleared = true;
   state.active = active;
+}
+
+function specialWaitingFlags(category, summary) {
+  if (category === 'approval') return summary.waiting_on_approval;
+  if (category === 'question') return summary.waiting_on_user_input;
+  return null;
 }
 
 function safeRpcCode(error) {
@@ -1020,7 +1038,7 @@ async function runSpecialCase(session) {
       pending_request_observed: observerA.summary().server_requests[category] > 0,
       runner_replied_to_server_request: false,
       stop_requested: interrupted.accepted,
-      waiting_flags: observerA.summary().waiting_on_user_input,
+      waiting_flags: specialWaitingFlags(category, observerA.summary()),
     });
     result.turns.at(-1).fixture_gate_observed = gateObserved;
     return;
@@ -1497,5 +1515,6 @@ module.exports = {
   safeRpcCategory,
   safeRpcCode,
   safeTurnStatus,
+  specialWaitingFlags,
   stopServer,
 };
