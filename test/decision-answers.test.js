@@ -18,6 +18,7 @@ const {
 const { ANSWER_HOOK_TIMEOUT_MS, runAnswerHook, runAskQuestion, runStop } = require('../src/hooks/answer');
 const { makeHookEvent } = require('../src/hooks/event');
 const { request, startTestServer } = require('./support/server');
+const { createRegistrationFixture } = require('./support/registration');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 const { functionSource } = require('./support/page-context');
 
@@ -593,6 +594,32 @@ test('後続の Stop、UserPromptSubmit、SessionEnd、親の終了で Stop の�
     state: new DashboardState(), away: { snapshot: () => ({ enabled: false }) }, now: () => NOW,
   });
   assert.deepEqual(await delivery.waitForStopAnswer('session-parent', 0, false), { stderrText: null, done: true });
+});
+
+test('Stop 待機中に認可が失効すると回答と通知を消費しない', async () => {
+  const sessionId = 'session-stop-expired-writer';
+  const state = new DashboardState();
+  const delivery = new DecisionAnswerDelivery({
+    state,
+    away: { snapshot: () => ({ enabled: false }) },
+    now: () => NOW,
+  });
+  const decision = state.addDecision(sessionId, {
+    title: '回答を伝えるか。', context: '', state: 'provisional', options: [],
+  }, NOW);
+  const generation = delivery.startStop(sessionId, 'stop-expired-writer', NOW);
+  let releaseWait;
+  delivery.waitForSignal = () => new Promise((resolve) => { releaseWait = resolve; });
+  let checks = 0;
+  const waiting = delivery.waitForStopAnswer(sessionId, generation, true, () => ++checks === 1);
+
+  delivery.submitAnswer(sessionId, decision.id, null, '次の実行へ渡す回答');
+  delivery.notifySessions([sessionId], '次の実行へ渡す通知');
+  releaseWait();
+
+  assert.deepEqual(await waiting, { stderrText: null, done: true });
+  assert.equal(state.decisionFor(sessionId, decision.id).answer.deliveredAt, null);
+  assert.deepEqual(delivery.sessionNotifications.get(sessionId), ['次の実行へ渡す通知']);
 });
 
 test('セッションファイル不在で終了すると質問待ち、通知、催促の記録を片付ける', async () => {
@@ -1203,7 +1230,10 @@ test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を�
     snapshot: () => ({ enabled: false, since: null }),
     setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
   };
-  const { homeDir, runtime } = await runningServer(t, { state, away });
+  const updateWriter = createRegistrationFixture('claude', { nativeId: 'session-update' });
+  const { homeDir, runtime } = await runningServer(t, {
+    state, away, registrationRegistry: updateWriter.registry,
+  });
 
   const batchDecision = state.addDecision('session-delivery', {
     title: '期限をどうしますか。', context: '', state: 'provisional', options: [],
@@ -1233,8 +1263,10 @@ test('PostToolBatch、Stop asyncRewake、MCP 更新が配信と反映の印を�
   runtime.answerDelivery.submitAnswer('session-update', updateDecision.id, null, '状態を固定する。');
   assert.match(runtime.answerDelivery.deliverPending('session-update'), /状態を固定する。/);
   const update = await request(runtime.info.port, {
-    method: 'POST', path: '/api/sessions/session-update/plan',
-    body: JSON.stringify({ kind: 'update_decision', id: updateDecision.id, state: 'resolved', chosen: [], note: '' }),
+    method: 'POST', path: '/api/sessions/pending/plan',
+    body: JSON.stringify({
+      kind: 'update_decision', id: updateDecision.id, state: 'resolved', chosen: [], note: '', writer: updateWriter.writer,
+    }),
     headers: { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret },
   });
   assert.equal(update.status, 200);

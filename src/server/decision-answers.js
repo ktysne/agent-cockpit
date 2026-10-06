@@ -13,6 +13,16 @@ function keyFor(sessionId, id) {
   return `${sessionId}\0${id}`;
 }
 
+function authorized(authorize) {
+  if (authorize === undefined) return true;
+  if (typeof authorize !== 'function') return false;
+  try {
+    return authorize() === true;
+  } catch {
+    return false;
+  }
+}
+
 function hasDuplicateQuestions(decision) {
   const questions = decision.questions || [];
   return new Set(questions.map((question) => question.question)).size !== questions.length;
@@ -180,7 +190,8 @@ class DecisionAnswerDelivery {
     return { awaiting: true, decisionId, deadline, fallbackOutput: denyAnswerOutput(decisionId) };
   }
 
-  async waitForAsk({ sessionId, toolUseId }) {
+  async waitForAsk({ sessionId, toolUseId, authorize }) {
+    if (!authorized(authorize)) return { outcome: 'server-lost' };
     const record = this.askWaits.get(keyFor(sessionId, toolUseId));
     if (!record) return { outcome: 'server-lost' };
     if (record.result) return { outcome: record.result.outcome };
@@ -195,6 +206,7 @@ class DecisionAnswerDelivery {
     if (outcome !== 'waiting') return { outcome };
     const remaining = record.deadline - this.now();
     await this.waitForSignal(sessionId, Math.min(this.maxLongPollMs, Math.max(0, remaining)));
+    if (!authorized(authorize)) return { outcome: 'server-lost' };
     if (record.result) return { outcome: record.result.outcome };
     return { outcome: this.closed ? 'server-lost' : this.askOutcome(record) };
   }
@@ -348,11 +360,13 @@ class DecisionAnswerDelivery {
     return generation;
   }
 
-  async waitForStopAnswer(sessionId, generation, parentAlive = true) {
+  async waitForStopAnswer(sessionId, generation, parentAlive = true, authorize) {
+    if (!authorized(authorize)) return { stderrText: null, done: true };
     if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
     const text = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     if (text) return { stderrText: text, done: true };
     await this.waitForSignal(sessionId, this.maxLongPollMs);
+    if (!authorized(authorize)) return { stderrText: null, done: true };
     if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
     const nextText = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     return nextText ? { stderrText: nextText, done: true } : { stderrText: null, done: false };

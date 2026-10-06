@@ -371,6 +371,88 @@ test('レビュー不要の記録だけでは予約を即時マージしない',
   assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'merge'), false);
 });
 
+test('PR状態の再取得中にwriter期間が終了したらレビューskipを保存しない', async (t) => {
+  const fixture = await mergeFixture(t);
+  let releaseRefresh;
+  let markRefreshStarted;
+  const refreshStarted = new Promise((resolve) => { markRefreshStarted = resolve; });
+  fixture.tracker.refreshRepoFresh = async () => {
+    markRefreshStarted();
+    await new Promise((resolve) => { releaseRefresh = resolve; });
+    return {};
+  };
+  fixture.tracker.mergeCandidate = () => ({ pullRequest: { headRefOid: sha(1) } });
+  let savedSkipCalls = 0;
+  let reviewGroupRefreshCalls = 0;
+  const setCrossReviewSkip = fixture.state.setCrossReviewSkip.bind(fixture.state);
+  fixture.state.setCrossReviewSkip = (...args) => {
+    savedSkipCalls += 1;
+    return setCrossReviewSkip(...args);
+  };
+  fixture.tracker.refreshReviewGroups = async () => { reviewGroupRefreshCalls += 1; };
+  let writerAvailable = true;
+  let authorizationChecks = 0;
+  const operation = fixture.manager.setReviewSkip(
+    fixture.state.pullRequestRegistration(1),
+    sha(1),
+    '変更が軽微なため',
+    { authorize: () => { authorizationChecks += 1; return writerAvailable; } },
+  );
+
+  await refreshStarted;
+  writerAvailable = false;
+  releaseRefresh();
+  const result = await operation;
+
+  assert.deepEqual(result, { ok: false, status: 403, error: 'Writer unavailable' });
+  assert.equal(authorizationChecks, 2);
+  assert.equal(savedSkipCalls, 0);
+  assert.equal(reviewGroupRefreshCalls, 0);
+  assert.equal(fixture.state.crossReviewSkip('example', 'project', 1), null);
+});
+
+test('writer認可callbackの例外は秘密値を返さず拒否する', async (t) => {
+  const fixture = await mergeFixture(t);
+  let refreshCalls = 0;
+  let savedSkipCalls = 0;
+  const refreshRepoFresh = fixture.tracker.refreshRepoFresh.bind(fixture.tracker);
+  const setCrossReviewSkip = fixture.state.setCrossReviewSkip.bind(fixture.state);
+  fixture.tracker.refreshRepoFresh = (...args) => {
+    refreshCalls += 1;
+    return refreshRepoFresh(...args);
+  };
+  fixture.state.setCrossReviewSkip = (...args) => {
+    savedSkipCalls += 1;
+    return setCrossReviewSkip(...args);
+  };
+
+  const result = await fixture.manager.setReviewSkip(
+    fixture.state.pullRequestRegistration(1),
+    sha(1),
+    '変更が軽微なため',
+    { authorize: () => { throw new Error('writer-token-secret'); } },
+  );
+
+  assert.deepEqual(result, { ok: false, status: 403, error: 'Writer unavailable' });
+  assert.equal(JSON.stringify(result).includes('writer-token-secret'), false);
+  assert.equal(refreshCalls, 0);
+  assert.equal(savedSkipCalls, 0);
+});
+
+test('writer guardを省略したダッシュボード操作はレビューskipを保存する', async (t) => {
+  const fixture = await mergeFixture(t);
+
+  const result = await fixture.manager.setReviewSkip(
+    fixture.state.pullRequestRegistration(1),
+    sha(1),
+    '変更が軽微なため',
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.saved.headRefOid, sha(1));
+  assert.equal(fixture.state.crossReviewSkip('example', 'project', 1).reason, '変更が軽微なため');
+});
+
 test('条件がそろったレビュー収束後マージ予約はその場で収束 SHA を照合してマージする', async (t) => {
   const fixture = await mergeFixture(t, [ghPullRequest(1, 'feature/one', 'main', { ci: 'pass', reviewDecision: 'APPROVED' })]);
   const triageSha = sha(1);

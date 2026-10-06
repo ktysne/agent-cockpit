@@ -10,6 +10,16 @@ function actionResult(status, error) {
   return { ok: false, status, error };
 }
 
+function writerAuthorized(options) {
+  if (options.authorize === undefined) return true;
+  if (typeof options.authorize !== 'function') return false;
+  try {
+    return options.authorize() === true;
+  } catch {
+    return false;
+  }
+}
+
 function unique(values) {
   return [...new Set(values.filter((value) => typeof value === 'string' && value))];
 }
@@ -171,14 +181,16 @@ class PullRequestMergeManager {
     return { ok: true, requestedAt };
   }
 
-  async setReviewSkip(registration, headRefOid, reason) {
+  async setReviewSkip(registration, headRefOid, reason, options = {}) {
     try {
+      if (!writerAuthorized(options)) return actionResult(403, 'Writer unavailable');
       const candidate = await this.refreshedCandidate(registration);
       if (candidate.refreshFailed) return actionResult(502, 'Pull request state could not be refreshed');
       if (candidate.error) return actionResult(409, 'Pull request is no longer open');
       if (candidate.pullRequest.headRefOid.toLowerCase() !== headRefOid.toLowerCase()) {
         return actionResult(409, 'Pull request head has changed');
       }
+      if (!writerAuthorized(options)) return actionResult(403, 'Writer unavailable');
       const saved = this.state.setCrossReviewSkip({
         owner: registration.owner,
         repo: registration.repo,
