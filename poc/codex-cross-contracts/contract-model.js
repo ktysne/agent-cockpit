@@ -129,6 +129,35 @@ function normalizeOriginBinding(value, origin) {
   return normalizeOwner(value);
 }
 
+function normalizeExecutionIdentity(value) {
+  requireKeys(
+    value,
+    ['launchId', 'runId', 'attemptId', 'provider', 'origin', 'purpose', 'originBinding', 'executionBinding'],
+    'invalid_execution_identity',
+  );
+  const origin = normalizeOrigin(value.origin);
+  const purpose = normalizePurpose(value.purpose);
+  validateOriginPurpose(origin, purpose);
+  return {
+    launchId: identifier(value.launchId, 'invalid_launch_id'),
+    runId: identifier(value.runId, 'invalid_run_id'),
+    attemptId: identifier(value.attemptId, 'invalid_attempt_id'),
+    provider: normalizeProvider(value.provider),
+    origin,
+    purpose,
+    originBinding: normalizeOriginBinding(value.originBinding, origin),
+    executionBinding: normalizeOwner(value.executionBinding),
+  };
+}
+
+function sameExecutionIdentity(value, execution) {
+  try {
+    return JSON.stringify(normalizeExecutionIdentity(value)) === JSON.stringify(executionOrigin(execution));
+  } catch {
+    return false;
+  }
+}
+
 function clone(value) {
   return structuredClone(value);
 }
@@ -142,25 +171,56 @@ function executionOrigin(execution) {
     origin: execution.origin,
     purpose: execution.purpose,
     originBinding: clone(execution.originBinding),
+    executionBinding: clone(execution.executionBinding),
   };
 }
 
-function makeExecutionProof(execution, connectionGeneration) {
+function makeExecutionProof(execution, ownerConnectionGeneration, executionConnectionGeneration) {
   return {
     origin: executionOrigin(execution),
     currentOwner: clone(execution.currentOwner),
     ownerGeneration: execution.ownerGeneration,
-    connectionGeneration,
+    ownerConnectionGeneration,
+    executionConnectionGeneration,
   };
 }
+
+function executionAttempt(execution) {
+  return {
+    launchId: execution.launchId,
+    runId: execution.runId,
+    attemptId: execution.attemptId,
+  };
+}
+
+function executionAttemptKey(execution) {
+  return JSON.stringify([execution.launchId, execution.runId, execution.attemptId]);
+}
+
+function handoffFingerprint(executionIdentity, expectedOldOwner, expectedOwnerGeneration, newOwner, newOwnerGeneration) {
+  return JSON.stringify([
+    executionIdentity,
+    ownerKey(expectedOldOwner),
+    expectedOwnerGeneration,
+    ownerKey(newOwner),
+    newOwnerGeneration,
+  ]);
+}
+
 function logicalDeliveryKey(delivery) {
   if (delivery.kind === 'pr-notification') {
-    return JSON.stringify([delivery.kind, delivery.logicalMessageId, delivery.revision, delivery.targetId]);
+    return JSON.stringify([
+      delivery.kind,
+      delivery.logicalMessageId,
+      delivery.revision,
+      executionAttemptKey(delivery.targetExecution),
+    ]);
   }
   return JSON.stringify([
     delivery.kind, delivery.executionId, delivery.logicalMessageId, delivery.revision,
   ]);
 }
+
 function normalizeEvidence(value, delivery) {
   requireKeys(
     value,
@@ -170,13 +230,13 @@ function normalizeEvidence(value, delivery) {
   const evidence = {
     periodId: identifier(value.periodId, 'invalid_period_id'),
     actor: normalizeActor(value.actor),
-    ownerGeneration: value.ownerGeneration === null ? null : nonNegativeInteger(value.ownerGeneration),
+    ownerGeneration: nonNegativeInteger(value.ownerGeneration),
     revision: positiveInteger(value.revision),
   };
   requireThat(
     evidence.periodId === delivery.recipient.periodId
       && actorKey(evidence.actor) === actorKey(delivery.recipient.actor)
-      && evidence.ownerGeneration === delivery.recipient.ownerGeneration
+      && evidence.ownerGeneration === delivery.routeOwnerGeneration
       && evidence.revision === delivery.revision,
     'delivery_evidence_mismatch',
   );
@@ -281,98 +341,122 @@ function validateCheckpoint(serialized) {
       );
     }
   }
+  const executionBindings = new Set();
   for (const [key, execution] of Object.entries(state.executions)) {
     requireKeys(
       execution,
       [
         'launchId', 'runId', 'attemptId', 'provider', 'origin', 'purpose', 'originBinding',
-        'currentOwner', 'ownerGeneration', 'currentProof', 'status', 'handoffs',
+        'executionBinding', 'initialOwner', 'currentOwner', 'ownerGeneration', 'currentProof', 'status', 'handoffs',
       ],
       'invalid_checkpoint_execution',
     );
     requireThat(key === execution.runId, 'invalid_checkpoint_execution_id');
-    identifier(execution.launchId, 'invalid_launch_id');
-    identifier(execution.runId, 'invalid_run_id');
-    identifier(execution.attemptId, 'invalid_attempt_id');
-    normalizeProvider(execution.provider);
-    const origin = normalizeOrigin(execution.origin);
-    const purpose = normalizePurpose(execution.purpose);
-    validateOriginPurpose(origin, purpose);
-    const binding = normalizeOriginBinding(execution.originBinding, origin);
-    const owner = normalizeOwner(execution.currentOwner);
+    const identity = normalizeExecutionIdentity({
+      launchId: execution.launchId,
+      runId: execution.runId,
+      attemptId: execution.attemptId,
+      provider: execution.provider,
+      origin: execution.origin,
+      purpose: execution.purpose,
+      originBinding: execution.originBinding,
+      executionBinding: execution.executionBinding,
+    });
+    const initialOwner = normalizeOwner(execution.initialOwner);
+    const currentOwner = normalizeOwner(execution.currentOwner);
     nonNegativeInteger(execution.ownerGeneration);
-    requireThat(
-      execution.status === 'active' || execution.status === 'ended',
-      'invalid_execution_status',
-    );
+    requireThat(execution.status === 'active' || execution.status === 'ended', 'invalid_execution_status');
     requireThat(isRecord(execution.handoffs), 'invalid_checkpoint_handoffs');
-    for (const reference of [binding, owner]) {
+    for (const reference of [identity.originBinding, initialOwner, currentOwner, identity.executionBinding]) {
       if (reference !== null) {
         const period = state.periods[reference.periodId];
-        requireThat(
-          period && period.actors[actorKey(reference.actor)],
-          'invalid_execution_period_reference',
-        );
+        requireThat(period && period.actors[actorKey(reference.actor)], 'invalid_execution_period_reference');
       }
+    }
+    const bindingPeriod = state.periods[identity.executionBinding.periodId];
+    const bindingConversation = state.conversations[bindingPeriod.conversationKey];
+    requireThat(bindingConversation.identity.provider === identity.provider, 'execution_binding_provider_mismatch');
+    const bindingKey = ownerKey(identity.executionBinding);
+    requireThat(!executionBindings.has(bindingKey), 'duplicate_execution_binding');
+    executionBindings.add(bindingKey);
+    const bindingActor = bindingPeriod.actors[actorKey(identity.executionBinding.actor)];
+    if (execution.status === 'active') {
+      requireThat(bindingPeriod.status === 'active' && bindingActor.status === 'active', 'invalid_active_execution_binding');
     }
     if (execution.currentProof !== null) {
       const proof = execution.currentProof;
       requireKeys(
         proof,
-        ['origin', 'currentOwner', 'ownerGeneration', 'connectionGeneration'],
+        ['origin', 'currentOwner', 'ownerGeneration', 'ownerConnectionGeneration', 'executionConnectionGeneration'],
         'invalid_checkpoint_execution_proof',
       );
-      requireKeys(
-        proof.origin,
-        ['launchId', 'runId', 'attemptId', 'provider', 'origin', 'purpose', 'originBinding'],
-        'invalid_checkpoint_execution_origin',
-      );
-      requireThat(
-        proof.origin.launchId === execution.launchId
-          && proof.origin.runId === execution.runId
-          && proof.origin.attemptId === execution.attemptId
-          && proof.origin.provider === execution.provider
-          && proof.origin.origin === execution.origin
-          && proof.origin.purpose === execution.purpose
-          && JSON.stringify(proof.origin.originBinding) === JSON.stringify(execution.originBinding),
-        'invalid_checkpoint_execution_origin',
-      );
-      requireThat(
-        ownerKey(normalizeOwner(proof.currentOwner)) === ownerKey(owner)
-          && proof.ownerGeneration === execution.ownerGeneration,
-        'invalid_checkpoint_execution_owner',
-      );
-      nonNegativeInteger(proof.connectionGeneration);
-      const ownerPeriod = state.periods[owner.periodId];
+      requireThat(sameExecutionIdentity(proof.origin, execution), 'invalid_checkpoint_execution_origin');
+      const proofOwner = normalizeOwner(proof.currentOwner);
+      requireThat(ownerKey(proofOwner) === ownerKey(currentOwner) && proof.ownerGeneration === execution.ownerGeneration, 'invalid_checkpoint_execution_owner');
+      const ownerPeriod = state.periods[currentOwner.periodId];
       const ownerConversation = state.conversations[ownerPeriod.conversationKey];
+      requireThat(proof.ownerConnectionGeneration === ownerConversation.connectionGeneration, 'stale_checkpoint_owner_proof');
+      requireThat(proof.executionConnectionGeneration === bindingConversation.connectionGeneration, 'stale_checkpoint_execution_proof');
       requireThat(
-        proof.connectionGeneration === ownerConversation.connectionGeneration,
+        execution.status === 'active'
+          && ownerPeriod.status === 'active'
+          && state.periods[identity.executionBinding.periodId].status === 'active'
+          && ownerPeriod.reconciledConnectionGeneration === ownerConversation.connectionGeneration
+          && bindingPeriod.reconciledConnectionGeneration === bindingConversation.connectionGeneration,
         'stale_checkpoint_execution_proof',
       );
-    }    for (const [handoffId, handoff] of Object.entries(execution.handoffs)) {
+    }
+    const transitions = [];
+    for (const [handoffId, handoff] of Object.entries(execution.handoffs)) {
       identifier(handoffId, 'invalid_handoff_id');
-      requireKeys(handoff, ['fingerprint', 'result'], 'invalid_checkpoint_handoff');
+      requireKeys(handoff, ['fingerprint', 'transition', 'result'], 'invalid_checkpoint_handoff');
+      requireThat(typeof handoff.fingerprint === 'string' && handoff.fingerprint.length <= 2048, 'invalid_handoff_fingerprint');
+      const transition = handoff.transition;
+      requireKeys(
+        transition,
+        ['executionIdentity', 'expectedOldOwner', 'expectedOwnerGeneration', 'newOwner', 'newOwnerGeneration'],
+        'invalid_checkpoint_handoff_transition',
+      );
+      requireThat(sameExecutionIdentity(transition.executionIdentity, execution), 'invalid_checkpoint_handoff_identity');
+      const expectedOldOwner = normalizeOwner(transition.expectedOldOwner);
+      const newOwner = normalizeOwner(transition.newOwner);
+      nonNegativeInteger(transition.expectedOwnerGeneration);
+      nonNegativeInteger(transition.newOwnerGeneration);
+      requireThat(transition.newOwnerGeneration === transition.expectedOwnerGeneration + 1, 'invalid_checkpoint_handoff_generation');
       requireThat(
-        typeof handoff.fingerprint === 'string' && handoff.fingerprint.length <= 2048,
+        handoff.fingerprint === handoffFingerprint(identity, expectedOldOwner, transition.expectedOwnerGeneration, newOwner, transition.newOwnerGeneration),
         'invalid_handoff_fingerprint',
       );
-      requireKeys(
-        handoff.result,
-        ['executionId', 'currentOwner', 'ownerGeneration'],
+      requireKeys(handoff.result, ['executionId', 'currentOwner', 'ownerGeneration'], 'invalid_handoff_result');
+      requireThat(
+        handoff.result.executionId === execution.runId
+          && ownerKey(normalizeOwner(handoff.result.currentOwner)) === ownerKey(newOwner)
+          && handoff.result.ownerGeneration === transition.newOwnerGeneration,
         'invalid_handoff_result',
       );
-      requireThat(handoff.result.executionId === execution.runId, 'invalid_handoff_result');
-      normalizeOwner(handoff.result.currentOwner);
-      nonNegativeInteger(handoff.result.ownerGeneration);
+      transitions.push({ expectedOldOwner, newOwner, transition });
     }
+    transitions.sort((left, right) => left.transition.expectedOwnerGeneration - right.transition.expectedOwnerGeneration);
+    let chainOwner = initialOwner;
+    let chainGeneration = 0;
+    for (const { expectedOldOwner, newOwner, transition } of transitions) {
+      requireThat(transition.expectedOwnerGeneration === chainGeneration, 'invalid_checkpoint_handoff_chain');
+      requireThat(ownerKey(expectedOldOwner) === ownerKey(chainOwner), 'invalid_checkpoint_handoff_chain');
+      chainOwner = newOwner;
+      chainGeneration = transition.newOwnerGeneration;
+    }
+    requireThat(
+      chainGeneration === execution.ownerGeneration && ownerKey(chainOwner) === ownerKey(currentOwner),
+      'invalid_checkpoint_handoff_chain',
+    );
   }
   for (const [key, target] of Object.entries(state.prTargets)) {
     requireThat(key === target.id, 'invalid_checkpoint_pr_target_id');
-    requireKeys(target, ['id', 'periodId', 'actor'], 'invalid_checkpoint_pr_target');
+    requireKeys(target, ['id', 'targetExecution'], 'invalid_checkpoint_pr_target');
     identifier(target.id, 'invalid_target_id');
-    const owner = normalizeOwner({ periodId: target.periodId, actor: target.actor });
-    const period = state.periods[owner.periodId];
-    requireThat(period && period.actors[actorKey(owner.actor)], 'invalid_pr_target_owner');
+    requireKeys(target.targetExecution, ['launchId', 'runId', 'attemptId'], 'invalid_checkpoint_pr_target_execution');
+    const execution = state.executions[target.targetExecution.runId];
+    requireThat(execution && executionAttemptKey(execution) === executionAttemptKey(target.targetExecution), 'invalid_pr_target_execution');
   }
   const logicalDeliveries = new Set();
   for (const [key, delivery] of Object.entries(state.deliveryLedger)) {
@@ -380,7 +464,7 @@ function validateCheckpoint(serialized) {
       delivery,
       [
         'deliveryAttemptId', 'logicalMessageId', 'kind', 'executionId', 'revision',
-        'recipient', 'targetId', 'status',
+        'recipient', 'targetId', 'targetExecution', 'routeOwnerGeneration', 'status',
         'decision', 'decisionState', 'cancelRequested', 'claimId', 'acceptedEvidence',
         'appliedEvidence',
       ],
@@ -389,47 +473,39 @@ function validateCheckpoint(serialized) {
     requireThat(key === delivery.deliveryAttemptId, 'invalid_checkpoint_delivery_id');
     identifier(delivery.deliveryAttemptId, 'invalid_delivery_id');
     identifier(delivery.logicalMessageId, 'invalid_logical_message_id');
+    requireThat(DELIVERY_KINDS.has(delivery.kind), 'invalid_delivery_kind');
+    const sourceExecution = state.executions[delivery.executionId];
+    requireThat(sourceExecution, 'invalid_delivery_execution');
+    positiveInteger(delivery.revision);
+    nonNegativeInteger(delivery.routeOwnerGeneration, 'invalid_recipient_generation');
     requireThat(
       delivery.status === 'superseded_before_send' || !logicalDeliveries.has(logicalDeliveryKey(delivery)),
       'duplicate_logical_delivery',
     );
-    if (delivery.status !== 'superseded_before_send') {
-      logicalDeliveries.add(logicalDeliveryKey(delivery));
-    }
-    requireThat(DELIVERY_KINDS.has(delivery.kind), 'invalid_delivery_kind');
-    requireThat(state.executions[delivery.executionId], 'invalid_delivery_execution');
-    positiveInteger(delivery.revision);
-    requireKeys(
-      delivery.recipient,
-      ['periodId', 'actor', 'ownerGeneration'],
-      'invalid_delivery_recipient',
-    );
-    const recipient = normalizeOwner({
-      periodId: delivery.recipient.periodId,
-      actor: delivery.recipient.actor,
-    });
-    requireThat(
-      delivery.recipient.ownerGeneration === null
-        || Number.isSafeInteger(delivery.recipient.ownerGeneration),
-      'invalid_recipient_generation',
-    );
-    requireThat(
-      delivery.kind === 'pr-notification'
-        ? delivery.recipient.ownerGeneration === null
-        : Number.isSafeInteger(delivery.recipient.ownerGeneration)
-          && delivery.recipient.ownerGeneration >= 0,
-      'invalid_recipient_generation',
-    );
+    if (delivery.status !== 'superseded_before_send') logicalDeliveries.add(logicalDeliveryKey(delivery));
+    requireKeys(delivery.recipient, ['periodId', 'actor'], 'invalid_delivery_recipient');
+    const recipient = normalizeOwner(delivery.recipient);
     const recipientPeriod = state.periods[recipient.periodId];
-    requireThat(
-      recipientPeriod && recipientPeriod.actors[actorKey(recipient.actor)],
-      'invalid_delivery_recipient',
-    );
+    requireThat(recipientPeriod && recipientPeriod.actors[actorKey(recipient.actor)], 'invalid_delivery_recipient');
+    if (delivery.kind === 'question') {
+      requireThat(delivery.targetId === null && delivery.targetExecution === null, 'invalid_delivery_target');
+      requireThat(ownerKey(recipient) === ownerKey(sourceExecution.executionBinding), 'invalid_question_recipient');
+    } else if (delivery.kind === 'result') {
+      requireThat(delivery.targetId === null && delivery.targetExecution === null, 'invalid_delivery_target');
+    } else {
+      requireThat(delivery.targetId !== null && state.prTargets[delivery.targetId], 'invalid_delivery_target');
+      const target = state.prTargets[delivery.targetId];
+      requireKeys(delivery.targetExecution, ['launchId', 'runId', 'attemptId'], 'invalid_delivery_target_execution');
+      requireThat(
+        executionAttemptKey(delivery.targetExecution) === executionAttemptKey(target.targetExecution),
+        'invalid_delivery_target_execution',
+      );
+      const targetExecution = state.executions[target.targetExecution.runId];
+      requireThat(ownerKey(recipient) === ownerKey(targetExecution.executionBinding), 'invalid_pr_recipient');
+    }
     requireThat(DELIVERY_STATES.has(delivery.status), 'invalid_delivery_status');
     requireThat(
-      delivery.decision === null
-        || delivery.decision === 'chosen'
-        || delivery.decision === 'provisional',
+      delivery.decision === null || delivery.decision === 'chosen' || delivery.decision === 'provisional',
       'invalid_delivery_decision',
     );
     requireThat(
@@ -440,10 +516,7 @@ function validateCheckpoint(serialized) {
       'invalid_delivery_decision_state',
     );
     requireThat(typeof delivery.cancelRequested === 'boolean', 'invalid_cancel_flag');
-    requireThat(
-      delivery.claimId === null || IDENTIFIER.test(delivery.claimId),
-      'invalid_claim_id',
-    );
+    requireThat(delivery.claimId === null || IDENTIFIER.test(delivery.claimId), 'invalid_claim_id');
     requireThat(
       delivery.kind === 'question'
         ? delivery.decision !== null && delivery.decisionState !== null
@@ -451,14 +524,8 @@ function validateCheckpoint(serialized) {
       'invalid_delivery_decision_kind',
     );
     requireThat(
-      delivery.kind === 'pr-notification'
-        ? delivery.targetId !== null && state.prTargets[delivery.targetId]
-        : delivery.targetId === null,
-      'invalid_delivery_target',
-    );
-    requireThat(
       delivery.status === 'cancelled_before_send'
-        ? delivery.decisionState === 'cancelled'
+        ? delivery.kind === 'question' && delivery.decisionState === 'cancelled'
           && delivery.acceptedEvidence === null && delivery.appliedEvidence === null
         : delivery.decisionState !== 'cancelled',
       'invalid_cancelled_delivery',
@@ -467,25 +534,14 @@ function validateCheckpoint(serialized) {
       if (delivery[field] !== null) normalizeEvidence(delivery[field], delivery);
     }
     if (delivery.status === 'sending') {
-      requireThat(
-        delivery.acceptedEvidence === null && delivery.appliedEvidence === null,
-        'invalid_sending_delivery',
-      );
+      requireThat(delivery.acceptedEvidence === null && delivery.appliedEvidence === null, 'invalid_sending_delivery');
     }
     if (delivery.status === 'accepted') {
-      requireThat(
-        delivery.acceptedEvidence !== null && delivery.appliedEvidence === null,
-        'invalid_accepted_delivery',
-      );
+      requireThat(delivery.acceptedEvidence !== null && delivery.appliedEvidence === null, 'invalid_accepted_delivery');
     }
-    if (delivery.status === 'applied') {
-      requireThat(delivery.appliedEvidence !== null, 'invalid_applied_delivery');
-    }
+    if (delivery.status === 'applied') requireThat(delivery.appliedEvidence !== null, 'invalid_applied_delivery');
     if (delivery.status === 'available' || delivery.status === 'claimed') {
-      requireThat(
-        delivery.acceptedEvidence === null && delivery.appliedEvidence === null,
-        'invalid_unsent_delivery',
-      );
+      requireThat(delivery.acceptedEvidence === null && delivery.appliedEvidence === null, 'invalid_unsent_delivery');
     }
   }
   return state;
@@ -593,20 +649,51 @@ class ContractModel {
     const proof = execution.currentProof;
     if (proof === null) return false;
     const owner = execution.currentOwner;
-    const period = state.periods[owner.periodId];
-    const conversation = state.conversations[period.conversationKey];
+    const ownerPeriod = state.periods[owner.periodId];
+    const ownerConversation = state.conversations[ownerPeriod.conversationKey];
+    const binding = execution.executionBinding;
+    const bindingPeriod = state.periods[binding.periodId];
+    const bindingConversation = state.conversations[bindingPeriod.conversationKey];
     return JSON.stringify(proof.origin) === JSON.stringify(executionOrigin(execution))
       && ownerKey(normalizeOwner(proof.currentOwner)) === ownerKey(owner)
       && proof.ownerGeneration === execution.ownerGeneration
-      && proof.connectionGeneration === conversation.connectionGeneration
-      && this.#periodIsFresh(period, state);
+      && proof.ownerConnectionGeneration === ownerConversation.connectionGeneration
+      && proof.executionConnectionGeneration === bindingConversation.connectionGeneration
+      && this.#periodIsFresh(ownerPeriod, state)
+      && this.#periodIsFresh(bindingPeriod, state);
+  }
+
+  #bindingPeriod(bindingValue, state = this.#state) {
+    const binding = normalizeOwner(bindingValue);
+    const period = this.#period(binding.periodId, state);
+    const actor = period.actors[actorKey(binding.actor)];
+    requireThat(actor, 'unknown_execution_actor');
+    const conversation = state.conversations[period.conversationKey];
+    return { binding, period, actor, conversation };
+  }
+
+  #requireActiveExecutionBinding(bindingValue, state = this.#state) {
+    const current = this.#bindingPeriod(bindingValue, state);
+    requireThat(
+      current.period.status === 'active'
+        && current.conversation.activePeriodId === current.period.id
+        && current.actor.status === 'active',
+      'execution_binding_not_active',
+    );
+    requireThat(
+      current.period.reconciledConnectionGeneration === current.conversation.connectionGeneration,
+      'execution_binding_not_reconciled',
+    );
+    return current.binding;
   }
 
   #requireActiveExecution(execution, state = this.#state) {
     requireThat(execution.status === 'active', 'execution_ended');
     this.#requireActiveOwner(execution.currentOwner, state);
+    this.#requireActiveExecutionBinding(execution.executionBinding, state);
     requireThat(this.#executionProofMatches(execution, state), 'execution_not_reconciled');
   }
+
   #requireActiveOwner(owner, state = this.#state) {
     const normalized = normalizeOwner(owner);
     const period = this.#period(normalized.periodId, state);
@@ -701,7 +788,10 @@ class ContractModel {
     record.connectionGeneration += 1;
     for (const execution of Object.values(next.executions)) {
       const ownerPeriod = next.periods[execution.currentOwner.periodId];
-      if (ownerPeriod.conversationKey === key) execution.currentProof = null;
+      const bindingPeriod = next.periods[execution.executionBinding.periodId];
+      if (ownerPeriod.conversationKey === key || bindingPeriod.conversationKey === key) {
+        execution.currentProof = null;
+      }
     }
     this.#commit(next);
     return {
@@ -718,6 +808,14 @@ class ContractModel {
     if (period.actors[key].status === 'ended') return;
     const next = clone(this.#state);
     next.periods[period.id].actors[key].status = 'ended';
+    for (const execution of Object.values(next.executions)) {
+      const ownsActor = execution.executionBinding.periodId === period.id
+        && actorKey(execution.executionBinding.actor) === key;
+      const routesThroughActor = execution.currentOwner.periodId === period.id
+        && actorKey(execution.currentOwner.actor) === key;
+      if (ownsActor) execution.status = 'ended';
+      if (ownsActor || routesThroughActor) execution.currentProof = null;
+    }
     this.#commit(next);
   }
 
@@ -732,6 +830,12 @@ class ContractModel {
     if (conversation.activePeriodId === period.id) {
       conversation.activePeriodId = null;
       conversation.lastEndedPeriodId = period.id;
+    }
+    for (const execution of Object.values(next.executions)) {
+      const ownsPeriod = execution.executionBinding.periodId === period.id;
+      const ownerPeriod = execution.currentOwner.periodId === period.id;
+      if (ownsPeriod) execution.status = 'ended';
+      if (ownsPeriod || ownerPeriod) execution.currentProof = null;
     }
     this.#commit(next);
   }
@@ -783,6 +887,7 @@ class ContractModel {
       id: period.id,
       status: period.status,
       conversationKey: period.conversationKey,
+      conversationIdentity: clone(this.#state.conversations[period.conversationKey].identity),
       actors: clone(period.actors),
     };
   }
@@ -792,7 +897,7 @@ class ContractModel {
       input,
       [
         'launchId', 'runId', 'attemptId', 'provider', 'origin', 'purpose',
-        'originBinding', 'currentOwner',
+        'originBinding', 'executionBinding', 'currentOwner',
       ],
       'invalid_execution',
     );
@@ -804,11 +909,20 @@ class ContractModel {
     const purpose = normalizePurpose(input.purpose);
     validateOriginPurpose(origin, purpose);
     const originBinding = normalizeOriginBinding(input.originBinding, origin);
+    const executionBinding = normalizeOwner(input.executionBinding);
     const currentOwner = this.#requireActiveOwner(input.currentOwner);
+    this.#requireActiveExecutionBinding(executionBinding);
+    const binding = this.#bindingPeriod(executionBinding);
+    requireThat(binding.conversation.identity.provider === provider, 'execution_binding_provider_mismatch');
     if (originBinding !== null) {
       requireThat(ownerKey(originBinding) === ownerKey(currentOwner), 'origin_owner_mismatch');
     }
     requireThat(!this.#state.executions[runId], 'execution_already_registered');
+    requireThat(
+      !Object.values(this.#state.executions).some((record) =>
+        ownerKey(record.executionBinding) === ownerKey(executionBinding)),
+      'duplicate_execution_binding',
+    );
     const next = clone(this.#state);
     const execution = {
       launchId,
@@ -818,6 +932,8 @@ class ContractModel {
       origin,
       purpose,
       originBinding,
+      executionBinding,
+      initialOwner: clone(currentOwner),
       currentOwner,
       ownerGeneration: 0,
       currentProof: null,
@@ -825,8 +941,13 @@ class ContractModel {
       handoffs: {},
     };
     const ownerPeriod = next.periods[currentOwner.periodId];
-    const connectionGeneration = next.conversations[ownerPeriod.conversationKey].connectionGeneration;
-    execution.currentProof = makeExecutionProof(execution, connectionGeneration);
+    const ownerConnectionGeneration = next.conversations[ownerPeriod.conversationKey].connectionGeneration;
+    const executionConnectionGeneration = binding.conversation.connectionGeneration;
+    execution.currentProof = makeExecutionProof(
+      execution,
+      ownerConnectionGeneration,
+      executionConnectionGeneration,
+    );
     next.executions[runId] = execution;
     this.#commit(next);
     return runId;
@@ -846,11 +967,16 @@ class ContractModel {
     const expectedGeneration = nonNegativeInteger(request.expectedOwnerGeneration);
     const newGeneration = nonNegativeInteger(request.newOwnerGeneration);
     const newOwner = normalizeOwner(request.newOwner);
-    const fingerprint = JSON.stringify([
-      expectedGeneration, newGeneration, newOwner.periodId, newOwner.actor.kind, newOwner.actor.id,
-    ]);
     const prior = execution.handoffs[handoffId];
     if (prior) {
+      const transition = prior.transition;
+      const fingerprint = handoffFingerprint(
+        executionOrigin(execution),
+        transition.expectedOldOwner,
+        expectedGeneration,
+        newOwner,
+        newGeneration,
+      );
       requireThat(prior.fingerprint === fingerprint, 'handoff_id_conflict');
       return clone(prior.result);
     }
@@ -860,7 +986,20 @@ class ContractModel {
     this.#requireActiveExecution(execution);
     requireThat(ownerKey(newOwner) !== ownerKey(execution.currentOwner), 'same_owner_handoff');
     this.#requireActiveOwner(newOwner);
-
+    const transition = {
+      executionIdentity: executionOrigin(execution),
+      expectedOldOwner: clone(execution.currentOwner),
+      expectedOwnerGeneration: expectedGeneration,
+      newOwner: clone(newOwner),
+      newOwnerGeneration: newGeneration,
+    };
+    const fingerprint = handoffFingerprint(
+      transition.executionIdentity,
+      transition.expectedOldOwner,
+      transition.expectedOwnerGeneration,
+      transition.newOwner,
+      transition.newOwnerGeneration,
+    );
     const next = clone(this.#state);
     const updated = next.executions[execution.runId];
     updated.currentOwner = newOwner;
@@ -871,7 +1010,90 @@ class ContractModel {
       currentOwner: clone(newOwner),
       ownerGeneration: newGeneration,
     };
-    updated.handoffs[handoffId] = { fingerprint, result };
+    updated.handoffs[handoffId] = { fingerprint, transition, result };
+    this.#commit(next);
+    return clone(result);
+  }
+
+  reconcileHandoff(runId, request) {
+    requireKeys(
+      request,
+      [
+        'handoffId', 'expectedOldOwner', 'expectedOwnerGeneration', 'newOwner',
+        'newOwnerGeneration', 'executionIdentity', 'executionConnectionGeneration',
+        'newOwnerConnectionGeneration', 'verified',
+      ],
+      'invalid_handoff_reconciliation',
+    );
+    requireThat(request.verified === true, 'handoff_reconciliation_unverified');
+    const execution = this.#execution(runId);
+    const handoffId = identifier(request.handoffId, 'invalid_handoff_id');
+    const expectedOldOwner = normalizeOwner(request.expectedOldOwner);
+    const newOwner = normalizeOwner(request.newOwner);
+    const expectedGeneration = nonNegativeInteger(request.expectedOwnerGeneration);
+    const newGeneration = nonNegativeInteger(request.newOwnerGeneration);
+    requireThat(sameExecutionIdentity(request.executionIdentity, execution), 'origin_proof_mismatch');
+    const executionIdentity = executionOrigin(execution);
+    requireThat(newGeneration === expectedGeneration + 1, 'invalid_owner_generation');
+    const fingerprint = handoffFingerprint(
+      executionIdentity,
+      expectedOldOwner,
+      expectedGeneration,
+      newOwner,
+      newGeneration,
+    );
+    const prior = execution.handoffs[handoffId];
+    if (prior) {
+      requireThat(prior.fingerprint === fingerprint, 'handoff_id_conflict');
+      return clone(prior.result);
+    }
+    requireThat(execution.status === 'active', 'execution_ended');
+    requireThat(
+      ownerKey(expectedOldOwner) === ownerKey(execution.currentOwner)
+        && expectedGeneration === execution.ownerGeneration,
+      'stale_owner_generation',
+    );
+    requireThat(ownerKey(newOwner) !== ownerKey(expectedOldOwner), 'same_owner_handoff');
+    const own = this.#bindingPeriod(execution.executionBinding);
+    const nextOwner = this.#bindingPeriod(newOwner);
+    requireThat(
+      own.period.status === 'active' && own.conversation.activePeriodId === own.period.id
+        && own.actor.status === 'active',
+      'execution_binding_not_active',
+    );
+    requireThat(
+      nextOwner.period.status === 'active' && nextOwner.conversation.activePeriodId === nextOwner.period.id
+        && nextOwner.actor.status === 'active',
+      'owner_not_active',
+    );
+    requireThat(
+      request.executionConnectionGeneration === own.conversation.connectionGeneration,
+      'stale_execution_connection_proof',
+    );
+    requireThat(
+      request.newOwnerConnectionGeneration === nextOwner.conversation.connectionGeneration,
+      'stale_owner_connection_proof',
+    );
+    const transition = {
+      executionIdentity,
+      expectedOldOwner,
+      expectedOwnerGeneration: expectedGeneration,
+      newOwner,
+      newOwnerGeneration: newGeneration,
+    };
+    const next = clone(this.#state);
+    next.periods[own.period.id].reconciledConnectionGeneration = own.conversation.connectionGeneration;
+    next.periods[nextOwner.period.id].reconciledConnectionGeneration = nextOwner.conversation.connectionGeneration;
+    const updated = next.executions[execution.runId];
+    updated.currentOwner = newOwner;
+    updated.ownerGeneration = newGeneration;
+    updated.currentProof = null;
+    const result = {
+      executionId: execution.runId,
+      currentOwner: clone(newOwner),
+      ownerGeneration: newGeneration,
+    };
+    updated.handoffs[handoffId] = { fingerprint, transition, result };
     this.#commit(next);
     return clone(result);
   }
@@ -882,62 +1104,75 @@ class ContractModel {
       evidence,
       [
         'launchId', 'runId', 'attemptId', 'provider', 'origin', 'purpose', 'originBinding',
-        'currentOwner', 'ownerGeneration', 'connectionGeneration', 'verified',
+        'executionBinding', 'currentOwner', 'ownerGeneration', 'ownerConnectionGeneration',
+        'executionConnectionGeneration', 'verified',
       ],
       'invalid_execution_reconciliation',
     );
     requireThat(evidence.verified === true, 'reconciliation_unverified');
-    requireThat(
-      evidence.launchId === execution.launchId
-        && evidence.runId === execution.runId
-        && evidence.attemptId === execution.attemptId
-        && evidence.provider === execution.provider
-        && evidence.origin === execution.origin
-        && evidence.purpose === execution.purpose
-        && JSON.stringify(evidence.originBinding) === JSON.stringify(execution.originBinding),
-      'origin_proof_mismatch',
-    );
+    const identity = {
+      launchId: evidence.launchId,
+      runId: evidence.runId,
+      attemptId: evidence.attemptId,
+      provider: evidence.provider,
+      origin: evidence.origin,
+      purpose: evidence.purpose,
+      originBinding: evidence.originBinding,
+      executionBinding: evidence.executionBinding,
+    };
+    requireThat(sameExecutionIdentity(identity, execution), 'origin_proof_mismatch');
     const owner = normalizeOwner(evidence.currentOwner);
     requireThat(ownerKey(owner) === ownerKey(execution.currentOwner), 'owner_proof_mismatch');
+    requireThat(evidence.ownerGeneration === execution.ownerGeneration, 'owner_generation_proof_mismatch');
+    const ownerState = this.#bindingPeriod(owner);
+    const ownState = this.#bindingPeriod(execution.executionBinding);
     requireThat(
-      evidence.ownerGeneration === execution.ownerGeneration,
-      'owner_generation_proof_mismatch',
+      evidence.ownerConnectionGeneration === ownerState.conversation.connectionGeneration,
+      'stale_owner_connection_proof',
     );
-    const period = this.#period(owner.periodId);
-    const conversation = this.#state.conversations[period.conversationKey];
     requireThat(
-      evidence.connectionGeneration === conversation.connectionGeneration,
-      'stale_connection_proof',
+      evidence.executionConnectionGeneration === ownState.conversation.connectionGeneration,
+      'stale_execution_connection_proof',
     );
-    const actor = period.actors[actorKey(owner.actor)];
     requireThat(
-      period.status === 'active' && actor && actor.status === 'active',
+      ownerState.period.status === 'active' && ownerState.conversation.activePeriodId === ownerState.period.id
+        && ownerState.actor.status === 'active',
       'owner_not_active',
     );
+    requireThat(
+      ownState.period.status === 'active' && ownState.conversation.activePeriodId === ownState.period.id
+        && ownState.actor.status === 'active',
+      'execution_binding_not_active',
+    );
     const next = clone(this.#state);
-    next.periods[period.id].reconciledConnectionGeneration = conversation.connectionGeneration;
+    next.periods[ownerState.period.id].reconciledConnectionGeneration = ownerState.conversation.connectionGeneration;
+    next.periods[ownState.period.id].reconciledConnectionGeneration = ownState.conversation.connectionGeneration;
     next.executions[execution.runId].currentProof = makeExecutionProof(
       next.executions[execution.runId],
-      conversation.connectionGeneration,
+      ownerState.conversation.connectionGeneration,
+      ownState.conversation.connectionGeneration,
     );
     this.#commit(next);
     return { runId: execution.runId, ownerGeneration: execution.ownerGeneration };
   }
 
-  registerPrNotificationTarget({ targetId, periodId, actor }) {
-    const id = identifier(targetId, 'invalid_target_id');
-    const owner = this.#requireActiveOwner({ periodId, actor });
+  registerPrNotificationTarget(input) {
+    requireKeys(input, ['targetId', 'targetExecutionId'], 'invalid_notification_target');
+    const id = identifier(input.targetId, 'invalid_target_id');
+    const executionId = identifier(input.targetExecutionId, 'invalid_run_id');
+    const execution = this.#execution(executionId);
+    this.#requireActiveExecution(execution);
+    const targetExecution = executionAttempt(execution);
     const existing = this.#state.prTargets[id];
     if (existing) {
       requireThat(
-        existing.periodId === owner.periodId
-          && actorKey(existing.actor) === actorKey(owner.actor),
+        executionAttemptKey(existing.targetExecution) === executionAttemptKey(targetExecution),
         'notification_target_conflict',
       );
       return id;
     }
     const next = clone(this.#state);
-    next.prTargets[id] = { id, periodId: owner.periodId, actor: owner.actor };
+    next.prTargets[id] = { id, targetExecution };
     this.#commit(next);
     return id;
   }
@@ -950,6 +1185,8 @@ class ContractModel {
     revision,
     recipient,
     targetId,
+    targetExecution,
+    routeOwnerGeneration,
     decision,
     payload,
   }) {
@@ -957,7 +1194,11 @@ class ContractModel {
     const messageId = identifier(logicalMessageId, 'invalid_logical_message_id');
     requireThat(!this.#state.deliveryLedger[attemptId], 'delivery_already_registered');
     const execution = this.#execution(executionId);
-    requireThat(execution.status === 'active', 'execution_ended');
+    const normalizedRecipient = normalizeOwner(recipient);
+    const normalizedTargetExecution = targetExecution === null
+      ? null
+      : executionAttempt(targetExecution);
+    const ownerGeneration = nonNegativeInteger(routeOwnerGeneration, 'invalid_recipient_generation');
     positiveInteger(revision, 'invalid_revision');
     requireThat(
       typeof payload === 'string'
@@ -969,7 +1210,7 @@ class ContractModel {
       executionId: execution.runId,
       logicalMessageId: messageId,
       revision,
-      targetId,
+      targetExecution: normalizedTargetExecution,
     };
     const logicalKey = logicalDeliveryKey(candidate);
     requireThat(
@@ -977,7 +1218,6 @@ class ContractModel {
         record.status !== 'superseded_before_send' && logicalDeliveryKey(record) === logicalKey),
       'duplicate_logical_delivery',
     );
-
     const next = clone(this.#state);
     next.deliveryLedger[attemptId] = {
       deliveryAttemptId: attemptId,
@@ -985,12 +1225,10 @@ class ContractModel {
       kind,
       executionId: execution.runId,
       revision,
-      recipient: {
-        periodId: recipient.periodId,
-        actor: clone(recipient.actor),
-        ownerGeneration: recipient.ownerGeneration,
-      },
+      recipient: normalizedRecipient,
       targetId,
+      targetExecution: normalizedTargetExecution,
+      routeOwnerGeneration: ownerGeneration,
       status: 'available',
       decision,
       decisionState: decision,
@@ -1020,8 +1258,10 @@ class ContractModel {
       kind: 'question',
       executionId,
       revision,
-      recipient: { ...execution.currentOwner, ownerGeneration: execution.ownerGeneration },
+      recipient: execution.executionBinding,
       targetId: null,
+      targetExecution: null,
+      routeOwnerGeneration: execution.ownerGeneration,
       decision,
       payload,
     });
@@ -1042,8 +1282,10 @@ class ContractModel {
       kind: 'result',
       executionId,
       revision,
-      recipient: { ...execution.currentOwner, ownerGeneration: execution.ownerGeneration },
+      recipient: execution.currentOwner,
       targetId: null,
+      targetExecution: null,
+      routeOwnerGeneration: execution.ownerGeneration,
       decision: null,
       payload,
     });
@@ -1058,20 +1300,25 @@ class ContractModel {
       'invalid_pr_notification',
     );
     const { deliveryAttemptId, logicalMessageId, executionId, revision, targetId, payload } = input;
-    const execution = this.#execution(executionId);
-    this.#requireActiveExecution(execution);
+    this.#execution(executionId);
     const key = identifier(targetId, 'invalid_target_id');
     const target = this.#state.prTargets[key];
     requireThat(target, 'unknown_notification_target');
-    this.#requireActiveOwner({ periodId: target.periodId, actor: target.actor });
+    const targetExecution = this.#execution(target.targetExecution.runId);
+    requireThat(
+      executionAttemptKey(targetExecution) === executionAttemptKey(target.targetExecution),
+      'notification_target_changed',
+    );
     return this.#createDelivery({
       deliveryAttemptId,
       logicalMessageId,
       kind: 'pr-notification',
       executionId,
       revision,
-      recipient: { periodId: target.periodId, actor: clone(target.actor), ownerGeneration: null },
+      recipient: targetExecution.executionBinding,
       targetId: key,
+      targetExecution: target.targetExecution,
+      routeOwnerGeneration: targetExecution.ownerGeneration,
       decision: null,
       payload,
     });
@@ -1086,6 +1333,8 @@ class ContractModel {
       revision: delivery.revision,
       recipient: clone(delivery.recipient),
       targetId: delivery.targetId,
+      targetExecution: clone(delivery.targetExecution),
+      routeOwnerGeneration: delivery.routeOwnerGeneration,
       status: delivery.status,
       decision: delivery.decision,
       decisionState: delivery.decisionState,
@@ -1145,29 +1394,35 @@ class ContractModel {
     return this.#deliveryMetadata(next.deliveryLedger[delivery.deliveryAttemptId]);
   }
   #requireDeliveryRoute(delivery, state = this.#state) {
-    const execution = this.#execution(delivery.executionId, state);
-    this.#requireActiveExecution(execution, state);
-    const recipient = normalizeOwner({
-      periodId: delivery.recipient.periodId,
-      actor: delivery.recipient.actor,
-    });
+    const source = this.#execution(delivery.executionId, state);
+    const recipient = normalizeOwner(delivery.recipient);
     if (delivery.kind === 'pr-notification') {
       const target = state.prTargets[delivery.targetId];
+      requireThat(target, 'unknown_notification_target');
       requireThat(
-        target
-          && target.periodId === recipient.periodId
-          && actorKey(target.actor) === actorKey(recipient.actor),
+        executionAttemptKey(target.targetExecution) === executionAttemptKey(delivery.targetExecution),
         'notification_target_changed',
       );
-      return this.#requireActiveOwner(recipient, state);
+      const targetExecution = this.#execution(target.targetExecution.runId, state);
+      requireThat(
+        executionAttemptKey(targetExecution) === executionAttemptKey(delivery.targetExecution)
+          && ownerKey(targetExecution.executionBinding) === ownerKey(recipient),
+        'notification_target_changed',
+      );
+      this.#requireActiveExecution(targetExecution, state);
+      return targetExecution.ownerGeneration;
+    }
+    this.#requireActiveExecution(source, state);
+    if (delivery.kind === 'question') {
+      requireThat(ownerKey(source.executionBinding) === ownerKey(recipient), 'question_recipient_changed');
+      return source.ownerGeneration;
     }
     requireThat(
-      execution.currentOwner.periodId === recipient.periodId
-        && actorKey(execution.currentOwner.actor) === actorKey(recipient.actor)
-        && execution.ownerGeneration === delivery.recipient.ownerGeneration,
+      ownerKey(source.currentOwner) === ownerKey(recipient)
+        && source.ownerGeneration === delivery.routeOwnerGeneration,
       'delivery_owner_changed',
     );
-    return this.#requireActiveOwner(recipient, state);
+    return source.ownerGeneration;
   }
 
   sendStart(deliveryAttemptId) {
@@ -1176,10 +1431,12 @@ class ContractModel {
       delivery.status === 'available' || delivery.status === 'claimed',
       'delivery_not_sendable',
     );
-    this.#requireDeliveryRoute(delivery);
+    const routeOwnerGeneration = this.#requireDeliveryRoute(delivery);
     requireThat(this.#payloads.has(delivery.deliveryAttemptId), 'delivery_payload_unavailable');
     const next = clone(this.#state);
-    next.deliveryLedger[delivery.deliveryAttemptId].status = 'sending';
+    const updated = next.deliveryLedger[delivery.deliveryAttemptId];
+    updated.routeOwnerGeneration = routeOwnerGeneration;
+    updated.status = 'sending';
     this.#commit(next);
     const payload = this.#payloads.get(delivery.deliveryAttemptId);
     this.#payloads.delete(delivery.deliveryAttemptId);
@@ -1187,6 +1444,8 @@ class ContractModel {
       deliveryAttemptId: delivery.deliveryAttemptId,
       kind: delivery.kind,
       recipient: clone(delivery.recipient),
+      targetExecution: clone(delivery.targetExecution),
+      routeOwnerGeneration,
       payload,
     };
   }

@@ -24,18 +24,21 @@ observerによるresume、compaction、collector再接続は実行期間を作�
 
 ## 起動帰属と現在の所有者
 
-executionの不変欄はlaunchId、runId、attemptId、provider、起動分類origin、目的purpose、originBindingである。
+executionの不変欄はlaunchId、runId、attemptId、provider、起動分類origin、目的purpose、originBinding、executionBindingである。
 originはstandalone、delegated、reviewのいずれかであり、purposeはagent、cross-review、pr-creatorのいずれかである。
 組合せはstandaloneとagentまたはpr-creator、delegatedとagent、reviewとcross-reviewに限る。
 standaloneのoriginBindingはnullとし、delegatedとreviewは起動元の期間IDとactorを固定する。
-handoff後も起動元とPR作成元の履歴を書き換えない。
+executionBindingは子自身の不変宛先であり、そのperiodのconversation providerはexecution providerと一致しなければならない。
+同じexecutionBindingを複数executionへ登録せず、起動元とPR作成元の履歴もhandoff後に書き換えない。
 
 現在の所有者はcurrentOwnerに期間IDとagentまたはtool-useを保持し、単調増加するownerGenerationで変更を識別する。
 handoffにはhandoff ID、期待する世代、新しい世代、明示した新所有者を要求する。
 同じIDと同じ内容は冪等であり、同IDの異内容、古い世代、期待世代の不一致を拒否する。
 新所有者は稼働中の期間として照合できなければならない。
+切断中のhandoffはreconcileHandoffでのみ取り込む。保存済みowner/generationに対するCAS、immutable identity、現行のexecution/new-owner接続世代、新ownerの認証済みlive projectionを照合し、generationを1つずつ進める。
+この復旧経路は旧ownerのactive状態やproofを要求しないが、取り込み後はcurrentProofを失効させ、子と新ownerをreconcileExecutionで再照合するまで配信を保留する。
 
-配信を許可するcurrentProofは、immutable origin、currentOwner、ownerGeneration、connectionGenerationを一組として照合する。
+配信を許可するcurrentProofは、immutable originとexecutionBinding、currentOwner、ownerGeneration、ownerConnectionGeneration、executionConnectionGenerationを一組として照合する。
 新規execution登録時にproofを作り、handoff、再接続、復元時に無効化する。
 reconcileExecutionは起動元と現在の所有者および世代が一致した場合だけproofを再発行する。
 conversationやperiodだけの照合、別executionの照合では配信を許可しない。
@@ -44,8 +47,10 @@ conversationやperiodだけの照合、別executionの照合では配信を許�
 
 質問、結果、PR通知は一つの台帳へ記録する。
 論理メッセージIDと配送試行IDは別の値として扱い、質問と結果の重複範囲はexecution、論理ID、revisionで決める。
-PRイベントの重複範囲は論理event ID、revision、明示登録されたtarget IDで決める。
-同じPR eventを複数の登録先へ通知できるが、終了した登録先から現在ownerへ自動転送しない。
+質問は発行した子のexecutionBindingへ固定し、送信前はcurrentOwnerもactive/freshである必要がある。handoff後の再照合で同じ子宛の未送信質問を再開できる。
+結果は作成時のcurrentOwnerとownerGenerationへ固定し、owner変更後は旧記録をsuperseded_before_sendとして保存してから新しい試行を作る。
+PR通知のtargetIdは正規execution/attemptへのaliasであり、重複範囲は論理event ID、revision、canonical target execution/attemptで決める。同じ宛先への別aliasで重複させず、異なる明示targetへの通知は許可する。
+PR送信は通知先execution自身のcurrentProofを要求する。作成元executionのlive proofは要求しない。終了したtargetから他のownerへ自動転送しない。
 
 claimはローカル予約だけを行い、metadataだけを返す。
 send-startは台帳にsendingを保存した後に初めてpayloadを返す。
@@ -56,7 +61,7 @@ sending、accepted、unknown、appliedはhandoffを理由に新しい宛先へ�
 acceptedは輸送受付を表し、appliedは入力適用の相関証拠を表す。
 send-start前に質問取消が確定した場合はpayloadを返さない。
 send-start後の取消はcancelRequestedとして記録し、遅れて届く適用証拠を保持する。
-復元時はsendingとacceptedをunknownへ変え、適用を確認できない配送を自動再送しない。
+復元時はsendingとacceptedをunknownへ変え、適用を確認できない配送を自動再送しない。unknown/appliedを含む同一論理revisionは別deliveryAttemptIdでも重複登録しない。
 
 ## 固定済みPoCとの関係
 
@@ -81,6 +86,6 @@ send-start後の取消はcancelRequestedとして記録し、遅れて届く適�
 ```sh
 node --test --test-isolation=none poc/codex-cross-contracts/contract-model.test.js
 ```
-試験は状態snapshotを経由したhandoff復旧、遅延終了、再送抑止、質問取消との競合、保存失敗、revision照合、PR通知先の固定を確認する。
+試験はchild質問とresultの宛先分離、切断中handoffのsnapshot復旧、二つの接続世代の再照合、遅延終了、restore後のunknown再送抑止、質問取消との競合、保存失敗、PR aliasのcanonical重複排除とtarget固定を確認する。
 試験合格は新しい契約モデルの内部整合だけを示す。
 実認証、実collectorやbridge、native runtimeの相関、UI競合、本番storeの耐障害性は本番Issueで別に検証する。
