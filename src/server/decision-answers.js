@@ -407,12 +407,12 @@ class DecisionAnswerDelivery {
 
   afterEvent(event) {
     const { session_id: sessionId, hook_event_name: eventName, tool_use_id: toolUseId } = event;
-    if (eventName === 'SessionEnd') {
+    if (!event.agent_id && eventName === 'SessionEnd') {
       this.sessionEnded(sessionId, event.hookAt);
       return;
     }
     this.taskNudges.afterEvent(event);
-    if (eventName === 'SessionStart') {
+    if (!event.agent_id && eventName === 'SessionStart') {
       this.sessionReopened(sessionId);
       if (['startup', 'resume', 'clear'].includes(event.source)) this.lastLifecycleAt.delete(sessionId);
     }
@@ -424,7 +424,7 @@ class DecisionAnswerDelivery {
       this.stopGenerations.set(sessionId, (this.stopGenerations.get(sessionId) || 0) + 1);
       this.signal(sessionId);
     }
-    if (eventName === 'UserPromptSubmit') {
+    if (!event.agent_id && eventName === 'UserPromptSubmit') {
       this.handleLifecycleEvent(sessionId, eventName, `${eventName}:${event.hookAt}`, event.hookAt);
     }
     if (eventName === 'PreToolUse' && event.tool_name === 'AskUserQuestion' && toolUseId && !event.agent_id) {

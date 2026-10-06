@@ -86,6 +86,21 @@ async function startDemoServer(options = {}) {
   let runtime = null;
   let registrationAuthority = null;
   const registrations = new Map();
+  const demoActorsByExecution = new Map();
+  const resolveDemoActorCorrelation = ({ provider, registration, event }) => {
+    if (provider !== 'claude' || !event?.agent_id ||
+        !demoActorsByExecution.get(registration.executionId)?.has(event.agent_id)) return null;
+    return {
+      status: 'verified',
+      actor: { kind: 'agent', id: event.agent_id },
+      binding: {
+        identity: { ...registration.identity },
+        conversationId: registration.conversationId,
+        executionId: registration.executionId,
+        sessionId: registration.sessionId,
+      },
+    };
+  };
 
   async function close() {
     try {
@@ -188,6 +203,7 @@ async function startDemoServer(options = {}) {
       userHome,
       port: options.port ?? 0,
       registrationRegistry: registrationKernel.registry,
+      resolveActorCorrelation: resolveDemoActorCorrelation,
       pullRequestOptions: { execFileImpl: gh.execFileImpl },
       codexAgentScriptExists: async () => integrations.codexAgent,
       crossReviewToolExists: async () => integrations.crossReview,
@@ -221,14 +237,27 @@ async function startDemoServer(options = {}) {
       /** 時計を「基準時刻の何分前」に進める。戻すことはできない。 */
       at: (minutesAgo) => clock.set(baseTime - minutesAgo * 60_000),
       /** フックが送る形の入力を、そのセッションの cwd と ID を足して /api/events へ送る。 */
-      async hook(key, input) {
+      async hook(key, input, { bindActorFixture = true, requireApply = true } = {}) {
         const session = sessionFor(key);
         const event = makeHookEvent({ cwd: session.cwd, ...input, session_id: session.id }, clock.now());
         if (!event) throw new Error(`フックの入力が不正です: ${JSON.stringify(input)}`);
         if (event.hook_event_name === 'SubagentStart' && input.route) event.route = input.route;
-        event.writer = registrationFor(key).writer;
-        ensureOk(await post('/api/events', event), `${key} の ${input.hook_event_name}`);
-        if (event.hook_event_name === 'SessionEnd') registrationAuthority.end(registrationFor(key).registration.executionId);
+        const registration = registrationFor(key);
+        if (event.agent_id && bindActorFixture) {
+          const actors = demoActorsByExecution.get(registration.registration.executionId) || new Set();
+          actors.add(event.agent_id);
+          demoActorsByExecution.set(registration.registration.executionId, actors);
+        }
+        event.writer = registration.writer;
+        const result = ensureOk(await post('/api/events', event), key + ' の ' + input.hook_event_name);
+        if (requireApply && (result?.accepted !== true || result.duplicate === true)) {
+          throw new Error('demo event が投影へ適用されませんでした: ' + key + ' ' + input.hook_event_name);
+        }
+        if (event.hook_event_name === 'SessionEnd' && !event.agent_id) {
+          registrationAuthority.end(registration.registration.executionId);
+          demoActorsByExecution.delete(registration.registration.executionId);
+        }
+        return result;
       },
       /** MCP サーバーが送る形(tasks、add_decision、update_decision)を /api/sessions/<id>/plan へ送る。 */
       async plan(key, body) {

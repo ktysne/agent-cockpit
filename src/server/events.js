@@ -9,6 +9,7 @@ const EVENT_NAMES = new Set([
   'SubagentStart',
   'SubagentStop',
   'Stop',
+  'Interrupt',
   'SessionEnd',
   'UserPromptSubmit',
   'PostToolBatch',

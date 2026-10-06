@@ -180,6 +180,34 @@ test('デモのSessionEnd後は同じwriterでイベントを書き込めない'
   );
 });
 
+test('demo HTTPの未束縛childは適用せず、child SessionEndは親writerを終了しない', async (t) => {
+  const demo = await startDemoServer({ scenario: 'no-gh' });
+  t.after(() => demo.close());
+  const key = 'parcel-main';
+  const unboundId = 'http-only-demo-child';
+  const unknown = await demo.hook(key, {
+    hook_event_name: 'SubagentStart',
+    agent_id: unboundId,
+    agent_type: 'Explore',
+  }, { bindActorFixture: false, requireApply: false });
+  assert.deepEqual(unknown, { accepted: false, status: 'unknown', reason: 'actor_binding_mismatch' });
+  assert.equal(demo.runtime.state.snapshot().sessions.flatMap((session) => session.agents).some((agent) => agent.agent_id === unboundId), false);
+
+  const childId = 'trusted-demo-child-session-end';
+  const started = await demo.hook(key, { hook_event_name: 'SubagentStart', agent_id: childId, agent_type: 'Explore' });
+  assert.deepEqual(started, { accepted: true });
+  const ended = await demo.hook(key, { hook_event_name: 'SessionEnd', agent_id: childId });
+  assert.deepEqual(ended, { accepted: true });
+  const parentEvent = await demo.hook(key, { hook_event_name: 'Stop' });
+  assert.deepEqual(parentEvent, { accepted: true });
+  const parent = demo.runtime.state.snapshot().sessions.find((session) => session.session_id === demo.sessions.get(key).id);
+  assert.ok(parent);
+  const child = parent.agents.find((agent) => agent.agent_id === childId);
+  assert.ok(child);
+  assert.equal(child.active, false);
+  assert.equal(child.turnState, 'session_ended');
+});
+
 test('登録済みデモsessionへのwriterなしplanは通常のHTTP認可で拒否する', async (t) => {
   const demo = await startDemoServer({ scenario: 'no-gh' });
   t.after(() => demo.close());

@@ -14,6 +14,7 @@ const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { createRegistrationKernel } = require('./conversation-registry');
+const { createProviderEventProjection, createProviderEventAdapter } = require('./provider-event-projection');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
 const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
@@ -375,6 +376,13 @@ function createRequestHandler(options) {
   } = options;
   const webPath = options.webPath || path.join(__dirname, '..', 'web', 'index.html');
   const manualDir = options.manualDir || DEFAULT_MANUAL_DIR;
+  const providerEventProjection = options.providerEventProjection || createProviderEventProjection({
+    registry: registrationRegistry,
+    resolveActorCorrelation: options.resolveActorCorrelation || null,
+  });
+  const providerEventAdapters = new Map(['claude', 'codex'].map((provider) => [
+    provider, createProviderEventAdapter(provider, providerEventProjection),
+  ]));
   let cachedUiFileStamp = null;
   let uiVersion = null;
 
@@ -448,7 +456,7 @@ function createRequestHandler(options) {
           break;
         }
       }
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, uiVersion });
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), uiVersion });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
@@ -1139,18 +1147,42 @@ function createRequestHandler(options) {
         }
       }
 
-      const product = productFromCwd(eventBody.cwd);
+      let eventAdapter = null;
+      let registration = null;
+      if (writerEnvelope) {
+        const checked = providerEventProjection.inspect(writerEnvelope, eventBody.session_id);
+        if (!checked.ok) {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
+        registration = checked.registration;
+        eventAdapter = providerEventAdapters.get(registration.provider);
+        const normalized = eventAdapter.normalize(eventBody);
+        if (!normalized.ok) {
+          const result = eventAdapter.project({ writer: writerEnvelope, sessionId: eventBody.session_id, event: eventBody });
+          if (result.action === 'reject') {
+            jsonResponse(response, 403, { error: 'Writer unavailable' });
+          } else {
+            jsonResponse(response, 202, { accepted: false, status: 'unknown', reason: result.reason });
+          }
+          return;
+        }
+        Object.assign(eventBody, normalized.event);
+      }
+      const product = productFromCwd(eventBody.cwd || eventBody.nativeEvent?.cwd);
       const sessionId = typeof eventBody.session_id === 'string' ? eventBody.session_id : '';
       const eventName = eventBody.hook_event_name;
+      const agentId = eventBody.agent_id || eventBody.nativeEvent?.agent_id;
+      const agentType = eventBody.agent_type || eventBody.nativeEvent?.agent_type;
       const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
       let agentDefinition = null;
       let codexDefinitionMetadata = null;
 
       if (
-        eventBody.agent_id && eventBody.agent_type && eventName !== 'SubagentStop' &&
-        (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, eventBody.agent_id))
+        (registration?.provider === 'claude' || !registration) && agentId && agentType && eventName !== 'SubagentStop' &&
+        (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, agentId))
       ) {
-        agentDefinition = await claudeAgentDefinition(eventBody.agent_type, claudeHome);
+        agentDefinition = await claudeAgentDefinition(agentType, claudeHome);
       }
       if (eventName === 'PreToolUse') {
         const preliminary = sanitizeEvent(eventBody, { product });
@@ -1160,25 +1192,43 @@ function createRequestHandler(options) {
         }
       }
 
+      let stateEventBody = eventBody;
       if (writerEnvelope) {
         const authorization = registrationRegistry.authorizeEvent(writerEnvelope);
-        if (!authorization.ok || eventBody.session_id !== authorization.sessionId) {
+        const checked = providerEventProjection.inspect(writerEnvelope, eventBody.session_id, registration.provider);
+        if (!authorization.ok || eventBody.session_id !== authorization.sessionId || !checked.ok) {
           jsonResponse(response, 403, { error: 'Writer unavailable' });
           return;
         }
+        const result = eventAdapter.project({ writer: writerEnvelope, sessionId: eventBody.session_id, event: eventBody });
+        if (result.action === 'reject') {
+          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          return;
+        }
+        if (result.action === 'duplicate') {
+          jsonResponse(response, 202, { accepted: true, duplicate: true });
+          return;
+        }
+        if (result.action === 'unknown') {
+          jsonResponse(response, 202, { accepted: false, status: 'unknown', reason: result.reason });
+          return;
+        }
+        stateEventBody = { ...result.event };
+        delete stateEventBody.nativeEvent;
+        delete stateEventBody.nativeEventId;
       } else if (registrationRegistry.isRegisteredSessionId(eventBody.session_id)) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
       }
-      state.captureFieldNames(eventBody);
+      state.captureFieldNames(stateEventBody);
       const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
-      state.addEvent(eventBody, eventMetadata);
-      const event = sanitizeEvent(eventBody, eventMetadata);
+      state.addEvent(stateEventBody, eventMetadata);
+      const event = sanitizeEvent(stateEventBody, eventMetadata);
       if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
         (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
         isGithubCreatePullRequestTool(event.tool_name)
       )) {
-        const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: eventBody.cwd, product }, event.hookAt);
+        const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: stateEventBody.cwd, product }, event.hookAt);
         if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
       }
       if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
@@ -1430,6 +1480,7 @@ async function startServer(options = {}) {
   away.attachWriter?.(storageWriter);
   const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
   const registrationRegistry = options.registrationRegistry || createRegistrationKernel().registry;
+  state.isSessionAbsenceProtected = (sessionId) => registrationRegistry.isRegisteredSessionId(sessionId);
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
@@ -1480,6 +1531,8 @@ async function startServer(options = {}) {
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
     registrationRegistry,
+    providerEventProjection: options.providerEventProjection,
+    resolveActorCorrelation: options.resolveActorCorrelation,
   });
 
   try {

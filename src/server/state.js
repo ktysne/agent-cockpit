@@ -529,6 +529,7 @@ function newSession(event, askDecisionState = {}) {
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     stopped: false,
+    interrupted: false,
     ended: false,
     pendingCodex: Object.create(null),
     pendingCodexWait: Object.create(null),
@@ -824,7 +825,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
           session.decisionBindings[toolUseId] = decision.id;
         }
       }
-      if (!agentId) session.stopped = false;
+      if (!agentId) {
+        session.stopped = false;
+        session.interrupted = false;
+      }
     }
 
     if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
@@ -832,10 +836,12 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       const definition = event.agentDefinition || {};
       if (agent) {
         agent.active = true;
+        agent.turnState = 'working';
         agent.agent_type = event.agent_type || agent.agent_type;
         if (event.route) agent.route = event.route;
       } else {
         agent = agentModelFromDefinition(event.agent_type, definition);
+        agent.turnState = 'working';
         agent.agent_id = agentId;
         agent.startedAt = isoTime(event.hookAt);
         if (event.route) agent.route = event.route;
@@ -851,7 +857,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
     if (eventName === 'SubagentStop' && agentId) {
       const agent = agentFor(session, agentId);
-      if (agent) agent.active = false;
+      if (agent) {
+        agent.active = false;
+        agent.turnState = 'stopped';
+      }
       deactivateBackgroundedCodex(session, agentId);
     }
 
@@ -936,7 +945,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
           decision.finishedByToolUseId = toolUseId;
         }
       }
-      if (!agentId) session.stopped = false;
+      if (!agentId) {
+        session.stopped = false;
+        session.interrupted = false;
+      }
     }
 
     if (eventName === 'PostToolBatch' && !agentId) {
@@ -969,17 +981,44 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     }
 
     // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
-    const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
+    const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source) && !agentId;
     if (startsIdle) {
       session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
       session.tools = session.tools.filter((tool) => tool.agent_id);
       session.stopped = true;
     }
-    if (eventName === 'UserPromptSubmit') session.stopped = false;
-    if (eventName === 'Stop') {
-      session.stopped = true;
+    if (eventName === 'UserPromptSubmit' && !agentId) {
+      session.stopped = false;
+      session.interrupted = false;
     }
-    if (eventName === 'SessionEnd') session.ended = true;
+    if (
+      agentId && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit'].includes(eventName)
+    ) {
+      const agent = agentFor(session, agentId);
+      if (agent && agent.active !== false) agent.turnState = 'working';
+    }
+    if (eventName === 'Stop' && agentId) {
+      const agent = agentFor(session, agentId);
+      if (agent) agent.turnState = 'waiting';
+    } else if (eventName === 'Stop') {
+      session.stopped = true;
+      session.interrupted = false;
+    }
+    if (eventName === 'Interrupt' && agentId) {
+      const agent = agentFor(session, agentId);
+      if (agent) agent.turnState = 'interrupted';
+    } else if (eventName === 'Interrupt') {
+      session.stopped = false;
+      session.interrupted = true;
+    }
+    if (eventName === 'SessionEnd' && agentId) {
+      const agent = agentFor(session, agentId);
+      if (agent) {
+        agent.active = false;
+        agent.turnState = 'session_ended';
+      }
+    }
+    if (eventName === 'SessionEnd' && !agentId) session.ended = true;
   }
 
   return [...sessions.values()]
@@ -1014,7 +1053,9 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
       const status = permissionWaits.length
         ? '許可待ち'
-        : session.stopped && session.agents.some((agent) => agent.active)
+        : session.interrupted
+          ? '中断'
+          : session.stopped && session.agents.some((agent) => agent.active)
           ? '待機中(サブエージェント稼働中)'
           : session.stopped
             ? '待機中'
@@ -1026,6 +1067,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         title: session.title,
         lastActivityAt: session.lastActivityAt,
         status,
+        turnState: session.interrupted ? 'interrupted' : session.stopped ? 'waiting' : 'working',
         tools,
         agents,
         permissionWaits,
@@ -1047,6 +1089,7 @@ class DashboardState {
     this.sessions = new Map();
     this.endedAt = new Map();
     this.endedByAbsence = new Map();
+    this.isSessionAbsenceProtected = options.isSessionAbsenceProtected || (() => false);
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
@@ -1867,7 +1910,7 @@ class DashboardState {
       }
     }
     for (const [sessionId, lastSeenAt] of this.sessionFileLastSeenAt) {
-      if (!next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId)) {
+      if (!next.has(sessionId) && this.sessions.has(sessionId) && !this.endedAt.has(sessionId) && !this.isSessionAbsenceProtected(sessionId)) {
         if (now - lastSeenAt >= SESSION_FILE_ABSENCE_END_MS) {
           this.endSessionByAbsence(sessionId, now);
           changed = true;
@@ -2022,7 +2065,7 @@ class DashboardState {
     }
     else this.sessions.delete(event.session_id);
 
-    if (event.hook_event_name === 'SessionEnd') {
+    if (event.hook_event_name === 'SessionEnd' && !event.agent_id) {
       this.endSession(event.session_id, event.hookAt);
     }
 
