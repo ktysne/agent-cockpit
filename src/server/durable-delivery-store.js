@@ -12,6 +12,7 @@ const {
   snapshotLedger,
 } = require('./delivery-ledger');
 const {
+  DEFAULT_MAX_CHECKPOINT_BYTES,
   DEFAULT_MAX_RECORDS,
   MAX_CONFIGURABLE_CHECKPOINT_BYTES,
   createDurableCheckpointStore,
@@ -97,6 +98,74 @@ function cloneFrozen(value) {
   const result = {};
   for (const key of Object.keys(value)) result[key] = cloneFrozen(value[key]);
   return Object.freeze(result);
+}
+
+const MAX_SAFE_REVISION = Number.MAX_SAFE_INTEGER;
+const MAX_ESCAPED_NATIVE_ID = '\uD800'.repeat(512);
+const MAX_RESERVED_DELIVERY_STATE = [
+  'available', 'claimed', 'sending', 'accepted', 'applied', 'unknown',
+  'cancelled_before_send', 'superseded_before_send',
+].reduce((longest, state) => state.length > longest.length ? state : longest, '');
+
+function serializedCheckpointBytes(checkpoint) {
+  return Buffer.byteLength(`${JSON.stringify(checkpoint, null, 2)}\n`, 'utf8');
+}
+
+function reserveRegistrationStateGrowthForSizing(registrations) {
+  const keepLongerState = (record, restoredState) => {
+    if (restoredState.length > record.state.length) record.state = restoredState;
+  };
+  for (const execution of registrations.executions) {
+    keepLongerState(execution, execution.state === 'ended' ? 'ended' : 'unknown');
+  }
+  for (const launch of registrations.launches) {
+    keepLongerState(launch, launch.state === 'ended' ? 'ended' : 'unknown');
+  }
+  for (const launch of registrations.runtimeLaunches) {
+    keepLongerState(launch, launch.state === 'ended' ? 'ended' : 'unknown');
+  }
+  for (const connection of registrations.connections) keepLongerState(connection, 'inactive');
+  for (const actor of registrations.actors) {
+    keepLongerState(actor, actor.state === 'ended' ? 'ended' : 'unknown');
+  }
+}
+
+function reserveCheckpointBytes(checkpoint) {
+  const sized = structuredClone(checkpoint);
+  sized.revision = MAX_SAFE_REVISION;
+  sized.ledger.revision = MAX_SAFE_REVISION;
+  for (const delivery of sized.ledger.deliveries) {
+    if (['cancelled_before_send', 'superseded_before_send'].includes(delivery.state)) continue;
+    const nativeTurnId = delivery.appliedCorrelation?.nativeTurnId ??
+      delivery.acceptedCorrelation?.nativeTurnId ?? MAX_ESCAPED_NATIVE_ID;
+    const nativeItemId = delivery.appliedCorrelation?.nativeItemId ??
+      delivery.acceptedCorrelation?.nativeItemId ?? MAX_ESCAPED_NATIVE_ID;
+    const correlation = {
+      deliveryAttemptId: delivery.deliveryAttemptId,
+      revision: delivery.revision,
+      payloadDigest: delivery.payloadDigest,
+      targetPeriodId: delivery.target.periodId,
+      nativeTurnId,
+      nativeItemId,
+      clientRequestId: delivery.deliveryAttemptId,
+    };
+    delivery.state = MAX_RESERVED_DELIVERY_STATE;
+    delivery.cancelRequested = false;
+    delivery.acceptedCorrelation = correlation;
+    delivery.appliedCorrelation = { ...correlation };
+  }
+  reserveRegistrationStateGrowthForSizing(sized.registrations);
+  return serializedCheckpointBytes(sized);
+}
+
+function assertCheckpointCapacityReserved(checkpoint, maxBytes) {
+  let reservedBytes;
+  try {
+    reservedBytes = reserveCheckpointBytes(checkpoint);
+  } catch {
+    throw storeError('checkpoint_capacity_reserved');
+  }
+  if (reservedBytes > maxBytes) throw storeError('checkpoint_capacity_reserved');
 }
 
 function digestPayload(payload) {
@@ -186,6 +255,7 @@ function createDurableDeliveryStore(options = {}) {
        limits.maxRecords < 1 || limits.maxRecords > DEFAULT_MAX_RECORDS))) {
     throw storeError('invalid_store_limits');
   }
+  const maxCheckpointBytes = limits.maxBytes ?? DEFAULT_MAX_CHECKPOINT_BYTES;
   const checkpointOptions = { filePath: options.filePath };
   if (options.atomicWrite !== undefined) checkpointOptions.atomicWrite = options.atomicWrite;
   if (limits.maxBytes !== undefined) checkpointOptions.maxBytes = limits.maxBytes;
@@ -200,6 +270,7 @@ function createDurableDeliveryStore(options = {}) {
   let closePromise = null;
 
   const ready = checkpointStore.load().then((checkpoint) => {
+    assertCheckpointCapacityReserved(checkpoint, maxCheckpointBytes);
     currentCheckpoint = checkpoint;
     return Object.freeze({ ready: true, revision: checkpoint.revision });
   }).catch(async (error) => {
@@ -239,6 +310,7 @@ function createDurableDeliveryStore(options = {}) {
       registrations,
       ledger: validateLedger(ledger),
     };
+    assertCheckpointCapacityReserved(candidate, maxCheckpointBytes);
     try {
       const saved = await checkpointStore.save(candidate);
       currentCheckpoint = saved;
@@ -400,7 +472,12 @@ function createDurableDeliveryStore(options = {}) {
 
   async function transitionNow(id, operation, correlation) {
     const result = transitionDelivery(currentCheckpoint.ledger, id, operation, correlation);
-    if (result.changed) await persist(currentCheckpoint.registrations, result.ledger);
+    if (result.changed) {
+      await persist(currentCheckpoint.registrations, result.ledger);
+      if (['cancelled_before_send', 'superseded_before_send'].includes(result.delivery.state)) {
+        payloads.delete(id);
+      }
+    }
     return result.delivery;
   }
 

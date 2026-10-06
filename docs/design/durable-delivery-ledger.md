@@ -75,6 +75,8 @@ unknownの追加保存が失敗してもsendingの保存が残るため自動再
 sending保存の失敗では状態を進めずpayload露出と送信を0回にする。
 
 取消が先ならcancelled_before_sendを保存し、sendStartを拒否する。
+cancelled_before_sendまたはsuperseded_before_sendの保存成功後に、使用できなくなったpayloadをメモリーから解放する。
+保存失敗時は未送信状態とpayloadを保持する。
 send-startが先なら取消要求だけを保存し、未送信確定を作らない。
 appliedの取消でも適用終端を保持し、取消要求履歴を残す。
 受付応答とpipe書込み成功を適用証拠とみなさない。
@@ -99,6 +101,9 @@ actor履歴の欠落をlive証拠として補完せず、送信時はkind別の�
 byte上限は既定1MiB、設定上限16MiBとし、登録projectionは合計50,000件までとする。
 台帳は配信20,000件、PR alias10,000件、論理墓標20,000件までとし、保存byte上限も同時に適用する。
 上限到達時は送信済みkeyや終端を間引かず、新規登録を拒否する。
+製品storeは登録と復元時に、既存配信の取消・最大長の受付/適用相関・遅延受付・復元状態・revision桁数が必要とするserialized容量を予約する。
+未知のnative IDはJSONエスケープの最大byte数で測り、計測用cloneだけを使うため保存schemaに予約値は追加しない。
+実ファイルがハード上限内でも将来の確定操作の容量を確保できない場合は、明示した容量エラーで復元を拒否する。
 
 保存結果が不明なI/O失敗ではstoreを書込み停止にし、旧メモリーからsending墓標を消す後続保存を拒否する。
 同じ保存先は一つのstore instanceが所有する。
@@ -140,14 +145,15 @@ canonical period終了後の実adapter配信は未確認とし、保存層のend
 | ID-F06-A04 | 別period/delivery/revision/digestまたは再利用itemのack | 状態と保存に変化0。正しく相関した遅延適用証拠だけ取消要求とともに保持 |
 | ID-F11-A01 | snapshotへbinding変更、未知キー/版、破損、上限超過を投入 | validationで拒否、既存有効保存保持。private handle/writer発行0 |
 | ID-F11-A02 | handoff後のbinding履歴と、adopt直後でactor未attestの実行を保存/load | 固定値とowner履歴保持、現行proof失効、unknown投影。未attest履歴や古いowner/接続から資格発行0 |
+| ID-F11-A03 | 最大長相関を予約できる最小容量で新規登録と既存確定を試す | 新規登録は拒否してbyte/状態を保持。既存applied・遅延accepted・取消・再読取りは上限内で成功 |
 
 handoff後の固定値とowner/genの保存・復元はID-F05-A05でも観測する。
 
 ## 確認結果
 
-純台帳10件、保存層16件、両provider共通scenario11件が成功した。
-全体のnpm testは1,217件成功、失敗・skip・todoは0件だった。
-全体試験後にF06-A01の保存直後障害とF11-A01の破損file読取りを追補し、製品sourceを変えずに共通11件を再実行して成功した。
+純台帳10件、保存層19件、両provider共通scenario12件が成功した。
+全体のnpm testは1,221件成功、失敗・skip・todoは0件だった。
+F06-A01はsendingの実保存後かつsink露出前の障害、F11-A01は破損・未知版・実byte過大fileの読取り拒否を確認した。
 F05/F06の送信回数は製品storeが同期呼出しするsinkで観測し、F11では実fileのbyte一致とwriter呼出し回数を観測した。
 認証入力とsinkはfixtureであり、native transportの適用成功を確認した結果ではない。
 canonical period終了後の実adapter経路は未確認で、actor終了の結果と分けて扱う。

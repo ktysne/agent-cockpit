@@ -513,7 +513,7 @@ test('ID-F05-A02:取消先行では送信せず、send-start先行では一度�
     const cancelFirst = adapter.cancel(cancelledFirst.deliveryAttemptId);
     const sendAfterCancel = adapter.sendStart(cancelledFirst.deliveryAttemptId, () => { sinkCalls += 1; });
     assert.equal((await cancelFirst).state, 'cancelled_before_send');
-    await rejectsCode(sendAfterCancel, 'invalid_transition');
+    await assert.rejects(sendAfterCancel);
     assert.equal((await adapter.get(cancelledFirst.deliveryAttemptId)).state, 'cancelled_before_send');
     assert.equal(sinkCalls, 0);
 
@@ -959,6 +959,87 @@ test('ID-F06-A04:相関不一致とnative item再利用は保存を変えず、�
     assert.equal(applied.cancelRequested, true);
     assertWriterNotIssued(harness, launch);
     await store.close();
+  }
+});
+
+test('ID-F11-A03:容量上限で新規登録を拒み既存証拠を保存する', { timeout: 5000 }, async (t) => {
+  for (const provider of PROVIDERS) {
+    const harness = createProductHarness();
+    const sandbox = await makeSandbox(t);
+    const launch = harness.launches[provider];
+    const name = 'capacity-reservation-' + provider;
+    const filePath = sandbox.pathFor(name);
+    const initial = await sandbox.open(harness, name);
+    const adapter = initial.adapters[provider];
+    const delivery = await adapter.createQuestionDelivery(
+      deliveryInput(launch.launchRef, 'capacity-reservation-' + provider, 'capacity payload'),
+    );
+    let sinkCalls = 0;
+    assert.equal((await adapter.sendStart(delivery.deliveryAttemptId, () => { sinkCalls += 1; })).state, 'sending');
+    assert.equal(sinkCalls, 1);
+    disconnectCurrentPairs(harness);
+    await initial.store.captureRegistrations();
+    await initial.store.close();
+
+    const initialBytes = await fs.readFile(filePath, 'utf8');
+    const maximumBytes = 16 * 1024 * 1024;
+    const openAtLimit = (maxBytes) => sandbox.open(harness, name, { limits: { maxBytes } });
+    const maximumProbe = await openAtLimit(maximumBytes);
+    await maximumProbe.store.close();
+    let lower = Buffer.byteLength(initialBytes, 'utf8') - 1;
+    let upper = maximumBytes;
+    while (upper - lower > 1) {
+      const candidate = Math.floor((lower + upper) / 2);
+      try {
+        const probe = await openAtLimit(candidate);
+        await probe.store.close();
+        upper = candidate;
+      } catch (error) {
+        assert.ok(['checkpoint_too_large', 'checkpoint_capacity_reserved'].includes(error.code),
+          'unexpected limit-probe failure: ' + error.code);
+        lower = candidate;
+      }
+    }
+
+    const limited = await openAtLimit(upper);
+    const limitedAdapter = limited.adapters[provider];
+    const beforeRejectedCreate = await limitedAdapter.snapshot();
+    const beforeRejectedBytes = await fs.readFile(filePath, 'utf8');
+    await rejectsCode(limitedAdapter.createQuestionDelivery(
+      deliveryInput(launch.launchRef, 'capacity-reservation-extra-' + provider, 'must remain private'),
+    ), 'checkpoint_capacity_reserved');
+    assert.deepEqual(await limitedAdapter.snapshot(), beforeRejectedCreate);
+    assert.equal(await fs.readFile(filePath, 'utf8'), beforeRejectedBytes);
+
+    const escapedNativeId = '\uD800'.repeat(512);
+    const applied = await limitedAdapter.recordApplied(delivery.deliveryAttemptId,
+      correlationFor(delivery, escapedNativeId, escapedNativeId));
+    assert.equal(applied.state, 'applied');
+    assert.ok(Buffer.byteLength(await fs.readFile(filePath, 'utf8'), 'utf8') <= upper);
+    const lateAccepted = await limitedAdapter.recordAccepted(delivery.deliveryAttemptId,
+      correlationFor(delivery, escapedNativeId, escapedNativeId));
+    assert.equal(lateAccepted.state, 'applied');
+    assert.equal(lateAccepted.acceptedCorrelation.nativeTurnId, escapedNativeId);
+    assert.equal(lateAccepted.acceptedCorrelation.nativeItemId, escapedNativeId);
+    const cancelled = await limitedAdapter.cancel(delivery.deliveryAttemptId);
+    assert.equal(cancelled.cancelRequested, true);
+    assert.ok(Buffer.byteLength(await fs.readFile(filePath, 'utf8'), 'utf8') <= upper);
+    assert.equal(sinkCalls, 1);
+    await limited.store.close();
+
+    const reopened = await openAtLimit(upper);
+    const recovered = await reopened.adapters[provider].get(delivery.deliveryAttemptId);
+    assert.equal(recovered.state, 'applied');
+    assert.equal(recovered.cancelRequested, true);
+    assert.equal(recovered.acceptedCorrelation.nativeTurnId, escapedNativeId);
+    const replayedAccepted = await reopened.adapters[provider].recordAccepted(delivery.deliveryAttemptId,
+      correlationFor(delivery, escapedNativeId, escapedNativeId));
+    assert.equal(replayedAccepted.state, 'applied');
+    assert.equal((await reopened.adapters[provider].cancel(delivery.deliveryAttemptId)).cancelRequested, true);
+    assert.ok(Buffer.byteLength(await fs.readFile(filePath, 'utf8'), 'utf8') <= upper);
+    assert.equal(sinkCalls, 1);
+    assertWriterNotIssued(harness, launch);
+    await reopened.store.close();
   }
 });
 

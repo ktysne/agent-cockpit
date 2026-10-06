@@ -452,3 +452,112 @@ test('result owner generation change during sending persistence holds the fixed 
   assert.equal(sent.length, 0);
   assert.equal(result.state, 'unknown');
 });
+
+test('delivery checkpoint reservation rejects the next create and retains maximum correlations through restore', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'ledger.json');
+  const maxBytes = 40_000;
+  const fixture = createFixture();
+  const store = createDurableDeliveryStore({ filePath, limits: { maxBytes }, ...fixture.dependencies });
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const deliveries = [];
+  let overflowIndex = 0;
+  for (; overflowIndex < 20; overflowIndex += 1) {
+    try {
+      deliveries.push(await adapter.createQuestionDelivery(
+        deliveryInput(fixture.source.launchRef, `reserved-${overflowIndex}`)));
+    } catch (error) {
+      if (error.code !== 'checkpoint_capacity_reserved') throw error;
+      break;
+    }
+  }
+  assert.ok(deliveries.length > 0);
+  assert.ok(overflowIndex < 20);
+  const beforeRejectedCreate = await fs.readFile(filePath, 'utf8');
+  assert.ok(Buffer.byteLength(beforeRejectedCreate, 'utf8') <= maxBytes);
+  await assert.rejects(adapter.createQuestionDelivery(
+    deliveryInput(fixture.source.launchRef, 'reserved-overflow')),
+  errorCode('checkpoint_capacity_reserved'));
+  assert.equal(await fs.readFile(filePath, 'utf8'), beforeRejectedCreate);
+
+  const delivery = deliveries[0];
+  await adapter.sendStart(delivery.deliveryAttemptId, () => {});
+  const base = appliedCorrelation(delivery);
+  await adapter.recordAccepted(delivery.deliveryAttemptId, {
+    ...base, nativeTurnId: null, nativeItemId: null,
+  });
+  const escapedNativeId = '\uD800'.repeat(512);
+  const maximumCorrelation = {
+    ...base, nativeTurnId: escapedNativeId, nativeItemId: escapedNativeId,
+  };
+  await adapter.recordApplied(delivery.deliveryAttemptId, maximumCorrelation);
+  await adapter.recordAccepted(delivery.deliveryAttemptId, maximumCorrelation);
+  const cancelled = await adapter.cancel(delivery.deliveryAttemptId);
+  assert.equal(cancelled.state, 'applied');
+  assert.equal(cancelled.cancelRequested, true);
+  await store.close();
+
+  const persisted = JSON.parse(await fs.readFile(filePath, 'utf8'));
+  const persistedDelivery = persisted.ledger.deliveries.find((item) =>
+    item.deliveryAttemptId === delivery.deliveryAttemptId);
+  assert.equal(persistedDelivery.acceptedCorrelation.nativeTurnId.length, 512);
+  assert.equal(persistedDelivery.appliedCorrelation.nativeItemId.length, 512);
+  assert.equal(Object.hasOwn(persistedDelivery, 'payload'), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(persisted, null, 2) + '\n', 'utf8') <= maxBytes);
+
+  const reopened = createDurableDeliveryStore({ filePath, limits: { maxBytes }, ...fixture.dependencies });
+  t.after(() => reopened.close());
+  await reopened.ready;
+  const reopenedAdapter = createProviderDeliveryAdapter('claude', reopened);
+  const afterRestore = await reopenedAdapter.get(delivery.deliveryAttemptId);
+  assert.equal(afterRestore.state, 'applied');
+  assert.equal(afterRestore.cancelRequested, true);
+  assert.equal(afterRestore.acceptedCorrelation.nativeItemId, escapedNativeId);
+  assert.equal(afterRestore.appliedCorrelation.nativeTurnId, escapedNativeId);
+  for (const connection of fixture.connections) connection.state = 'inactive';
+  for (const actor of fixture.runtimeActors) actor.state = 'unknown';
+  await assert.rejects(reopenedAdapter.sendStart(delivery.deliveryAttemptId, () => {}),
+    errorCode('payload_unavailable'));
+});
+
+test('store rejects insufficient restored reservation while bare checkpoint reader honors the hard cap', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, 'ledger.json');
+  const fixture = createFixture();
+  const seedStore = createDurableDeliveryStore({ filePath, ...fixture.dependencies });
+  await seedStore.ready;
+  await seedStore.createQuestionDelivery(deliveryInput(fixture.source.launchRef, 'old-checkpoint'));
+  await seedStore.close();
+  const persistedBytes = Buffer.byteLength(await fs.readFile(filePath), 'utf8');
+  const before = await fs.readFile(filePath);
+
+  const limitedStore = createDurableDeliveryStore({
+    filePath, limits: { maxBytes: persistedBytes }, ...fixture.dependencies,
+  });
+  await assert.rejects(limitedStore.ready, errorCode('checkpoint_capacity_reserved'));
+  await limitedStore.close();
+  assert.deepEqual(await fs.readFile(filePath), before);
+
+  const bareReader = createDurableCheckpointStore({ filePath, maxBytes: persistedBytes });
+  const loaded = await bareReader.load();
+  assert.equal(loaded.ledger.deliveries[0].state, 'available');
+  await bareReader.close();
+});
+
+test('cancel and supersede release each unsent payload after their checkpoint commits', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const fixture = createFixture();
+  const store = createDurableDeliveryStore({ filePath: path.join(directory, 'ledger.json'), ...fixture.dependencies });
+  t.after(() => store.close());
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  const cancelled = await adapter.createQuestionDelivery(deliveryInput(fixture.source.launchRef, 'payload-cancelled'));
+  assert.equal((await adapter.cancel(cancelled.deliveryAttemptId)).state, 'cancelled_before_send');
+  await assert.rejects(adapter.sendStart(cancelled.deliveryAttemptId, () => {}), errorCode('payload_unavailable'));
+
+  const superseded = await adapter.createQuestionDelivery(deliveryInput(fixture.source.launchRef, 'payload-superseded'));
+  assert.equal((await adapter.supersedeUnsentDelivery(superseded.deliveryAttemptId)).state,
+    'superseded_before_send');
+  await assert.rejects(adapter.sendStart(superseded.deliveryAttemptId, () => {}), errorCode('payload_unavailable'));
+});
