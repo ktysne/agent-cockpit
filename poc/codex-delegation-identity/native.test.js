@@ -15,6 +15,7 @@ const {
   createNativeEventCollector,
   makeSlots,
   runNativeProbe,
+  summarizeModelProject,
 } = require('./run-native');
 
 function probeFor(slot, threadId) {
@@ -122,7 +123,6 @@ function successfulBuildResult() {
       session_ids: [],
       agent_ids: [],
       overflow: false,
-      available: true,
     });
   }
   for (const slot of slots) tracker.ended(slot.launchId);
@@ -228,7 +228,7 @@ test('multiple native thread IDs prevent binding even when one matches MCP metad
     slots: [slot],
     startedBySlot: [{ slot, started, childEnvironment: { POC159_NONCE: slot.bindingNonce, POC159_EXPECTED_NONCE: slot.bindingNonce } }],
     childBySlot: new Map([[slot.launchId, child]]),
-    hooksBySlot: new Map([[slot.launchId, { count: 0, registration_mismatch_count: 0, event_counts: {}, session_ids: [], agent_ids: [], overflow: false, available: true }]]),
+    hooksBySlot: new Map([[slot.launchId, { count: 0, registration_mismatch_count: 0, event_counts: {}, session_ids: [], agent_ids: [], overflow: false }]]),
     model,
     tracker,
     outputDirectory: path.join(REPOSITORY_ROOT, 'poc', 'out', 'poc159-native-result'),
@@ -240,6 +240,14 @@ test('multiple native thread IDs prevent binding even when one matches MCP metad
   assert.equal(result.jobs[0].native.binding_attempted, false);
   assert.equal(result.jobs[0].native.binding_accepted, false);
   assert.equal(model.project().counts.related_unknown, 3);
+});
+
+test('model projection records execution_status as the public status', () => {
+  const model = modelWithRegisteredSlots([makeSlots()[0]]);
+  const projection = summarizeModelProject(model.project());
+
+  assert.equal(projection.rows.length, 1);
+  assert.equal(projection.rows[0].status, 'registered');
 });
 
 test('post-fixture hook setup failure closes every fixture and preserves a failed result', async t => {

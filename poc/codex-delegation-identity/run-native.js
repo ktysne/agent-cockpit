@@ -533,8 +533,8 @@ function summarizeHookCapture(filePath, slot) {
       agent_ids: [...agentIds],
       overflow: false,
     };
-  } catch (error) {
-    return { ...empty, overflow: false, available: error.code !== 'ENOENT' };
+  } catch {
+    return { ...empty, overflow: false };
   }
 }
 
@@ -552,7 +552,7 @@ function summarizeModelProject(project) {
     run_id: safeIdentifier(row.runId || row.run_id),
     attempt_id: safeIdentifier(row.attemptId || row.attempt_id),
     parent_agent_id: safeIdentifier(row.parent && row.parent.agentId || row.parent_agent_id),
-    status: safeIdentifier(row.status) || 'unknown',
+    status: safeIdentifier(row.execution_status) || 'unknown',
   })) : [];
   return { counts: safeCounts, rows };
 }
@@ -676,7 +676,7 @@ function buildResult({ slots, startedBySlot, childBySlot, hooksBySlot, model, tr
   const jobs = slots.map(slot => {
     const entry = startedBySlot.find(item => item.slot.launchId === slot.launchId);
     const child = childBySlot.get(slot.launchId) || emptyChildResult();
-    const hooks = hooksBySlot.get(slot.launchId) || { count: 0, registration_mismatch_count: 0, event_counts: {}, session_ids: [], agent_ids: [], overflow: false, available: false };
+    const hooks = hooksBySlot.get(slot.launchId) || { count: 0, registration_mismatch_count: 0, event_counts: {}, session_ids: [], agent_ids: [], overflow: false };
     if (!entry) return { label: slot.label, launch_id: slot.launchId, run_id: slot.runId, attempt_id: slot.attemptId, origin: slot.origin, started: false };
     const summary = buildJobSummary(slot, { ...entry.started, childEnvironment: entry.childEnvironment }, child, hooks, model);
     return { ...summary, started: true };
@@ -871,9 +871,6 @@ async function runNativeProbe(options, dependencies = {}) {
     }
   } catch (error) {
     setupFailure = errorCategory(error);
-    for (const childResult of childBySlot.values()) {
-      if (!childResult || !childResult.exit_code) continue;
-    }
   } finally {
     for (const entry of startedBySlot) {
       try { await entry.started.fixture.close(); } catch { setupFailure = setupFailure || 'fixture_cleanup_failed'; }

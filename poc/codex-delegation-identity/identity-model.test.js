@@ -240,6 +240,16 @@ test('run-only audit data is not attached to a registered launch', () => {
   assert.equal(auditRow.execution_status, 'running');
 });
 
+test('native and audit ingestors reject non-record inputs without changing model state', () => {
+  const model = createModel();
+  const before = model.project();
+  for (const input of [null, undefined, [], 'event', 7]) {
+    assert.equal(model.ingestNative(input), false);
+    assert.equal(model.ingestAudit(input), false);
+  }
+  assert.deepEqual(model.project(), before);
+});
+
 test('pre-registration result audit joins its native candidate once and resists a delayed start', () => {
   const model = createModel();
   const launchInput = {
@@ -326,6 +336,34 @@ test('unknown end may be refined by a result but cannot be revived by a late sta
   assert.equal(rowFor(model, (row) => row.launch_id === safe.launchId).execution_status, 'unknown_end');
   assert.equal(model.ingestAudit(auditEvent({ eventId: 'result', launchId: safe.launchId, kind: 'result', status: 'completed' })), true);
   assert.equal(rowFor(model, (row) => row.launch_id === safe.launchId).execution_status, 'completed');
+});
+
+test('the first confirmed result fixes its status and exit code for the attempt', () => {
+  const model = createModel();
+  const { safe } = register(model, { origin: 'standalone' });
+  assert.equal(model.ingestAudit(auditEvent({
+    eventId: 'first-result', launchId: safe.launchId, kind: 'result',
+    status: 'completed', exitCode: 0,
+  })), true);
+
+  assert.equal(model.ingestAudit(auditEvent({
+    eventId: 'conflicting-exit-code', launchId: safe.launchId, kind: 'result',
+    status: 'completed', exitCode: 9,
+  })), false);
+  assert.equal(model.ingestAudit(auditEvent({
+    eventId: 'conflicting-status', launchId: safe.launchId, kind: 'result',
+    status: 'failed', exitCode: 1,
+  })), false);
+  assert.equal(model.ingestAudit(auditEvent({
+    eventId: 'late-start', launchId: safe.launchId, kind: 'run_started',
+  })), true);
+
+  const stored = model.launches.get(safe.launchId);
+  const row = rowFor(model, (candidate) => candidate.launch_id === safe.launchId);
+  assert.equal(stored.resultStatus, 'completed');
+  assert.equal(stored.resultExitCode, 0);
+  assert.equal(row.execution_status, 'completed');
+  assert.equal(row.audit.event_count, 2);
 });
 
 test('handoff generations prevent delayed ownership events from restoring an old parent', () => {

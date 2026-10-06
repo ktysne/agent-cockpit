@@ -235,6 +235,7 @@ class DelegationIdentityModel {
   }
 
   ingestNative(input) {
+    if (!isRecord(input)) return false;
     const allowed = new Set([
       'eventId', 'notificationId', 'hostId', 'homeScope', 'threadId', 'turnId', 'type', 'status',
       'launchId', 'runId', 'attemptId',
@@ -299,6 +300,7 @@ class DelegationIdentityModel {
   }
 
   ingestAudit(input) {
+    if (!isRecord(input)) return false;
     const allowed = new Set([
       'eventId', 'notificationId', 'launchId', 'runId', 'attemptId', 'kind', 'status', 'exitCode',
       'generation', 'parent',
@@ -346,7 +348,9 @@ class DelegationIdentityModel {
     const attempt = hasLaunch ? this.launches.get(input.launchId) : null;
     const matches = attempt && attempt.runId === input.runId && attempt.attemptId === input.attemptId;
     const resultStatus = input.kind === 'result' ? mappedResultStatus(input.status) : null;
-    if (matches && resultStatus && attempt.resultStatus && attempt.resultStatus !== resultStatus) return false;
+    const resultExitCode = input.exitCode === undefined ? null : input.exitCode;
+    if (matches && resultStatus && attempt.resultStatus
+      && (attempt.resultStatus !== resultStatus || attempt.resultExitCode !== resultExitCode)) return false;
     if (matches && input.kind === 'handoff') {
       if (input.generation < attempt.ownerGeneration) return false;
       if (input.generation === attempt.ownerGeneration) {
@@ -543,7 +547,7 @@ class DelegationIdentityModel {
       launch.waitStatus = event.status || launch.waitStatus;
     } else if (event.kind === 'result') {
       const status = mappedResultStatus(event.status);
-      if (launch.resultStatus && launch.resultStatus !== status) return;
+      if (launch.resultStatus) return;
       launch.resultStatus = status;
       launch.resultExitCode = event.exitCode === undefined ? null : event.exitCode;
       launch.runStatus = status;
