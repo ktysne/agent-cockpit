@@ -399,6 +399,47 @@ test('a confirmed result never gains or loses an exit code from a later result',
   }
 });
 
+test('pre-registration results keep the first exit code when orphan audits attach to a launch', () => {
+  const scenarios = [
+    { launchId: 'orphan-code-missing', firstExitCode: undefined, laterExitCode: 0, expectedExitCode: null },
+    { launchId: 'orphan-code-present', firstExitCode: 0, laterExitCode: undefined, expectedExitCode: 0 },
+  ];
+
+  for (const [index, scenario] of scenarios.entries()) {
+    const model = createModel();
+    const launchInput = {
+      launchId: scenario.launchId,
+      runId: `orphan-run-${index}`,
+      attemptId: `orphan-attempt-${index}`,
+      origin: 'delegated',
+      hostId: 'host-one',
+      homeScope: 'scope-one',
+      parent: PARENT_A,
+      bindingNonce: NONCE_A,
+    };
+
+    assert.equal(model.ingestAudit(auditEvent({
+      eventId: `orphan-result-first-${index}`, launchId: launchInput.launchId,
+      runId: launchInput.runId, attemptId: launchInput.attemptId,
+      kind: 'result', status: 'completed', exitCode: scenario.firstExitCode,
+    })), true);
+    assert.equal(model.ingestAudit(auditEvent({
+      eventId: `orphan-result-later-${index}`, launchId: launchInput.launchId,
+      runId: launchInput.runId, attemptId: launchInput.attemptId,
+      kind: 'result', status: 'completed', exitCode: scenario.laterExitCode,
+    })), true);
+    assert.equal(model.project().counts.audit_only, 1);
+
+    const safe = model.registerLaunch(launchInput);
+    assert.ok(safe);
+    const row = rowFor(model, (candidate) => candidate.launch_id === safe.launchId);
+    assert.equal(model.launches.get(safe.launchId).resultExitCode, scenario.expectedExitCode);
+    assert.equal(row.execution_status, 'completed');
+    assert.equal(row.audit.event_count, 2);
+    assert.equal(model.project().rows.length, 1);
+  }
+});
+
 test('handoff generations prevent delayed ownership events from restoring an old parent', () => {
   const model = createModel();
   const { safe } = register(model);
