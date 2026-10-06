@@ -317,7 +317,7 @@ function createCollectorFixture(proofFixture, transport, options = {}) {
     scope: proofFixture.scope,
     expectedHome: EXPECTED_HOME,
     transportFactory: transport.transportFactory,
-    runtimeAdapter: proofFixture.runtimeAdapter,
+    runtimeAdapter: options.runtimeAdapter || proofFixture.runtimeAdapter,
     registrationRegistry: proofFixture.registrationKernel.registry,
     runtimeRegistry: proofFixture.runtimeKernel.registry,
     eventAdapter,
@@ -336,6 +336,39 @@ async function waitForReadWaiters(transport, count) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(transport.readWaiters.length, count);
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function createDeferrableTrustedResolver(proofFixture, onResolvedHandle = () => {}) {
+  let nextGate = null;
+  const resolver = {
+    async resolveProof(launchRef, context) {
+      const handle = await proofFixture.trustedBindingResolver.resolveProof(launchRef, context);
+      onResolvedHandle(launchRef, handle);
+      const gate = nextGate;
+      if (!gate) return handle;
+      nextGate = null;
+      gate.handle = handle;
+      gate.entered.resolve();
+      return new Promise((resolve) => { gate.release = () => resolve(handle); });
+    },
+    resolveEventWriter(launchRef, context) {
+      return proofFixture.trustedBindingResolver.resolveEventWriter(launchRef, context);
+    },
+  };
+  return {
+    resolver,
+    deferNext() {
+      assert.equal(nextGate, null);
+      nextGate = { entered: createDeferred(), handle: null, release: null };
+      return nextGate;
+    },
+  };
 }
 
 function sendKnownStart(provider, callbacks, nativeId) {
@@ -614,6 +647,171 @@ test('Codex read failures expire cached proof until a successful reread rechecks
     transport.setReadMode('active');
     assert.equal((await harness.collector.observeKnownThread(nativeId)).status, 'observed');
     assert.ok(harness.collector.resolveProof(launchRef));
+  }
+});
+
+test('Codex read failure invalidates an in-flight trusted proof reconciliation', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const deferrableIssuer = createDeferrableTrustedResolver(proofFixture);
+  const harness = createCollectorFixture(proofFixture, transport, { trustedBindingResolver: deferrableIssuer.resolver });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  const launchRef = proofFixture.initialLaunch.launchRef;
+  const callbacks = transport.connections[0].callbacks;
+  callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-a' });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.projected.length = 0;
+  assert.ok(harness.collector.resolveProof(launchRef));
+
+  const issuerGate = deferrableIssuer.deferNext();
+  const readA = harness.collector.observeKnownThread(nativeId);
+  await issuerGate.entered.promise;
+  assert.ok(issuerGate.handle);
+
+  transport.setReadMode('failed');
+  const readB = await harness.collector.observeKnownThread(nativeId);
+  assert.equal(readB.status, 'unknown');
+  assert.equal(readB.reason, 'thread_read_failed');
+  assert.equal(harness.collector.resolveProof(launchRef), null);
+  assert.deepEqual(
+    [observationFor(harness.collector, nativeId).status,
+      observationFor(harness.collector, nativeId).activity,
+      observationFor(harness.collector, nativeId).turnId],
+    ['unknown', 'active', 'turn-a'],
+  );
+
+  issuerGate.release();
+  assert.notEqual((await readA).status, 'observed');
+  assert.equal(harness.collector.resolveProof(launchRef), null);
+  callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-late' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const afterLateIssuer = observationFor(harness.collector, nativeId);
+  assert.deepEqual([afterLateIssuer.status, afterLateIssuer.activity, afterLateIssuer.turnId],
+    ['unknown', 'active', 'turn-a']);
+  assert.equal(harness.projected.length, 0);
+
+  await harness.collector.resumeKnownThread(nativeId);
+  assert.equal(transport.calls.some((call) => call.method === 'resumeLoadedThread'), false);
+});
+
+test('Codex public proof reconciliation cannot restore proof after a read failure', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const deferrableIssuer = createDeferrableTrustedResolver(proofFixture);
+  const harness = createCollectorFixture(proofFixture, transport, { trustedBindingResolver: deferrableIssuer.resolver });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  const launchRef = proofFixture.initialLaunch.launchRef;
+  const callbacks = transport.connections[0].callbacks;
+  callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-a' });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.projected.length = 0;
+
+  const issuerGate = deferrableIssuer.deferNext();
+  const oldReconciliation = harness.collector.reconcileProof(launchRef);
+  await issuerGate.entered.promise;
+  assert.ok(issuerGate.handle);
+  transport.setReadMode('failed');
+  const failedRead = await harness.collector.observeKnownThread(nativeId);
+  assert.equal(failedRead.status, 'unknown');
+  assert.equal(harness.collector.resolveProof(launchRef), null);
+
+  issuerGate.release();
+  assert.equal(await oldReconciliation, false);
+  assert.equal(harness.collector.resolveProof(launchRef), null);
+  callbacks.onNotification('turn/started', { threadId: nativeId, turnId: 'turn-after-failure' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const current = observationFor(harness.collector, nativeId);
+  assert.deepEqual([current.status, current.activity, current.turnId], ['unknown', 'active', 'turn-a']);
+  assert.equal(harness.projected.length, 0);
+  await harness.collector.resumeKnownThread(nativeId);
+  assert.equal(transport.calls.some((call) => call.method === 'resumeLoadedThread'), false);
+});
+
+test('collector sequence fencing preserves newer cache under a simulated live-equivalent proof checker', async () => {
+  const proofFixture = createProductionProofFixture('codex');
+  const nativeId = proofFixture.execution.identity.nativeId;
+  const transport = createTransportFixture('codex', { loadedIds: [nativeId] });
+  const liveFixtureHandles = new WeakSet();
+  const runtimeAdapter = {
+    ...proofFixture.runtimeAdapter,
+    checkCurrentProof(launchRef, handle) {
+      if (launchRef === proofFixture.initialLaunch.launchRef && liveFixtureHandles.has(handle)) {
+        return { ok: true, reason: 'fixture_live' };
+      }
+      return proofFixture.runtimeAdapter.checkCurrentProof(launchRef, handle);
+    },
+  };
+  const deferrableIssuer = createDeferrableTrustedResolver(proofFixture, (launchRef, handle) => {
+    if (launchRef === proofFixture.initialLaunch.launchRef) liveFixtureHandles.add(handle);
+  });
+  const harness = createCollectorFixture(proofFixture, transport, {
+    trustedBindingResolver: deferrableIssuer.resolver,
+    runtimeAdapter,
+  });
+  await harness.collector.connect();
+  await acquireCollectorProof('codex', proofFixture, harness.collector, transport);
+  const launchRef = proofFixture.initialLaunch.launchRef;
+
+  const issuerGate = deferrableIssuer.deferNext();
+  const oldReconciliation = harness.collector.reconcileProof(launchRef);
+  await issuerGate.entered.promise;
+  assert.ok(issuerGate.handle);
+  assert.equal((await harness.collector.observeKnownThread(nativeId)).status, 'observed');
+  const newerProof = harness.collector.resolveProof(launchRef);
+  assert.ok(newerProof);
+  assert.notEqual(newerProof, issuerGate.handle);
+  assert.equal(runtimeAdapter.checkCurrentProof(launchRef, issuerGate.handle).ok, true);
+
+  issuerGate.release();
+  await oldReconciliation;
+  assert.equal(harness.collector.resolveProof(launchRef), newerProof);
+});
+
+test('Codex concurrent reads retain the newer read result regardless of response order', async () => {
+  for (const completionOrder of ['older-first', 'newer-first']) {
+    const proofFixture = createProductionProofFixture('codex');
+    const nativeId = proofFixture.execution.identity.nativeId;
+    const observationCalls = [];
+    const transport = createTransportFixture('codex', { loadedIds: [nativeId], deferThreadRead: true });
+    const harness = createCollectorFixture(proofFixture, transport, {
+      onObservation: (observation) => observationCalls.push(observation),
+    });
+    await harness.collector.connect();
+    const readA = harness.collector.observeKnownThread(nativeId);
+    const readB = harness.collector.observeKnownThread(nativeId);
+    await waitForReadWaiters(transport, 2);
+
+    if (completionOrder === 'older-first') {
+      transport.releaseRead(nativeId, 'active', 0);
+      assert.equal((await readA).status, 'observed');
+      assert.deepEqual([observationFor(harness.collector, nativeId).activity,
+        observationFor(harness.collector, nativeId).turnState], ['active', 'active']);
+      transport.releaseRead(nativeId, 'idle', 0);
+      assert.equal((await readB).status, 'observed');
+    } else {
+      transport.releaseRead(nativeId, 'idle', 1);
+      assert.equal((await readB).status, 'observed');
+      const newerObservation = structuredClone(observationFor(harness.collector, nativeId));
+      const newerProof = harness.collector.resolveProof(proofFixture.initialLaunch.launchRef);
+      const callbackCount = observationCalls.length;
+      assert.ok(newerProof);
+      transport.releaseRead(nativeId, 'active', 0);
+      await readA;
+      assert.deepEqual(observationFor(harness.collector, nativeId), newerObservation);
+      assert.equal(observationCalls.length, callbackCount);
+      assert.equal(harness.collector.resolveProof(proofFixture.initialLaunch.launchRef), newerProof);
+    }
+
+    const adopted = observationFor(harness.collector, nativeId);
+    assert.deepEqual([adopted.status, adopted.activity, adopted.turnState], ['waiting', 'waiting', 'waiting'], completionOrder);
+    assert.ok(harness.collector.resolveProof(proofFixture.initialLaunch.launchRef), completionOrder);
+    if (completionOrder === 'newer-first') {
+      assert.equal(observationCalls.at(-1).activity, 'waiting');
+    }
   }
 });
 

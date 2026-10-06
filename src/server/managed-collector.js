@@ -330,42 +330,119 @@ function createManagedCollector(options = {}) {
   const proofHandles = new Map();
   const requestRecords = new Map();
   const periodTombstones = new Set();
-  const observationRevisions = new Map();
-  const activeObservationReads = new Map();
+  const nativeReadStates = new Map();
 
-  function trimObservationRevisions() {
-    const limit = OBSERVATION_LIMIT + activeObservationReads.size;
-    if (observationRevisions.size <= limit) return;
-    for (const nativeId of observationRevisions.keys()) {
-      if (!observations.has(nativeId) && !activeObservationReads.has(nativeId)) {
-        observationRevisions.delete(nativeId);
-        if (observationRevisions.size <= limit) break;
-      }
+  function activeNativeStateCount() {
+    let count = 0;
+    for (const state of nativeReadStates.values()) {
+      if (state.activeCount > 0) count += 1;
+    }
+    return count;
+  }
+
+  function trimNativeReadStates() {
+    const limit = OBSERVATION_LIMIT + activeNativeStateCount();
+    if (nativeReadStates.size <= limit) return;
+    for (const [nativeId, state] of nativeReadStates) {
+      if (!observations.has(nativeId) && state.activeCount === 0) nativeReadStates.delete(nativeId);
+      if (nativeReadStates.size <= limit) break;
     }
   }
 
-  function advanceObservationRevision(nativeId) {
-    observationRevisions.set(nativeId, (observationRevisions.get(nativeId) || 0) + 1);
-    trimObservationRevisions();
+  function nativeReadStateFor(nativeId, create = false) {
+    let state = nativeReadStates.get(nativeId);
+    if (state || !create) return state || null;
+    trimNativeReadStates();
+    if (nativeReadStates.size >= OBSERVATION_LIMIT * 2 + 1) return null;
+    state = {
+      nativeRevision: 0,
+      nextReadSequence: 0,
+      adoptedReadSequence: 0,
+      proofOperationSequence: 0,
+      activeCount: 0,
+    };
+    nativeReadStates.set(nativeId, state);
+    return state;
   }
 
-  function beginObservationRead(nativeId) {
-    if (!activeObservationReads.has(nativeId) && activeObservationReads.size >= OBSERVATION_LIMIT) return null;
-    const active = activeObservationReads.get(nativeId) || 0;
-    activeObservationReads.set(nativeId, active + 1);
-    if (!observationRevisions.has(nativeId)) observationRevisions.set(nativeId, 0);
-    return observationRevisions.get(nativeId);
+  function beginNativeStateLease(nativeId) {
+    const state = nativeReadStateFor(nativeId, true);
+    if (!state) return null;
+    if (state.activeCount === 0 && activeNativeStateCount() >= OBSERVATION_LIMIT) return null;
+    state.activeCount += 1;
+    return { nativeId, state };
   }
 
-  function endObservationRead(nativeId) {
-    const active = activeObservationReads.get(nativeId) || 0;
-    if (active <= 1) activeObservationReads.delete(nativeId);
-    else activeObservationReads.set(nativeId, active - 1);
-    trimObservationRevisions();
+  function releaseNativeStateLease(lease) {
+    if (!lease || nativeReadStates.get(lease.nativeId) !== lease.state) return;
+    lease.state.activeCount = Math.max(0, lease.state.activeCount - 1);
+    trimNativeReadStates();
   }
 
-  function observationRevisionMatches(nativeId, revision) {
-    return observationRevisions.get(nativeId) === revision;
+  function advanceNativeRevision(nativeId) {
+    const state = nativeReadStateFor(nativeId);
+    if (state) state.nativeRevision += 1;
+  }
+
+  function captureNativeStateToken(lease, period) {
+    const { nativeId, state } = lease;
+    return {
+      nativeId,
+      state,
+      period,
+      epoch,
+      connectionGeneration,
+      connectionHandle,
+      nativeRevision: state.nativeRevision,
+      adoptedReadSequence: state.adoptedReadSequence,
+    };
+  }
+
+  function nativeStateBaseCurrent(token) {
+    const currentPeriod = findRegisteredPeriod(token.nativeId);
+    return nativeReadStates.get(token.nativeId) === token.state &&
+      token.epoch === epoch && token.connectionGeneration === connectionGeneration &&
+      token.connectionHandle === connectionHandle && connectionState === 'connected' &&
+      token.state.nativeRevision === token.nativeRevision &&
+      samePeriod(currentPeriod, token.period) &&
+      identitiesEqual(currentPeriod?.identity, token.period.identity) && !isPeriodTombstoned(token.period);
+  }
+
+  function nativeStateTokenCurrent(token) {
+    return nativeStateBaseCurrent(token) && token.state.adoptedReadSequence === token.adoptedReadSequence;
+  }
+
+  function beginObservationRead(nativeId, period) {
+    const lease = beginNativeStateLease(nativeId);
+    if (!lease) return null;
+    lease.state.nextReadSequence += 1;
+    return { ...lease, token: captureNativeStateToken(lease, period), readSequence: lease.state.nextReadSequence };
+  }
+
+  function canAdoptObservationRead(read) {
+    const { token, state, readSequence } = read;
+    return nativeStateBaseCurrent(token) && readSequence > state.adoptedReadSequence;
+  }
+
+  function adoptObservationRead(read) {
+    if (!canAdoptObservationRead(read)) return false;
+    read.state.adoptedReadSequence = read.readSequence;
+    return true;
+  }
+
+  function adoptedObservationReadCurrent(read) {
+    const { token, state, readSequence } = read;
+    return nativeStateBaseCurrent(token) && state.adoptedReadSequence === readSequence;
+  }
+
+  function observationReadUnavailableReason(read) {
+    const { token } = read;
+    const currentPeriod = findRegisteredPeriod(token.nativeId);
+    if (token.epoch !== epoch || token.connectionHandle !== connectionHandle) return 'connection_epoch_changed';
+    if (!samePeriod(currentPeriod, token.period) || !identitiesEqual(currentPeriod?.identity, token.period.identity)) {
+      return 'registered_period_changed';
+    }
+    return 'observation_superseded';
   }
 
   function periodKey(conversationId, executionId, sessionId) {
@@ -459,7 +536,8 @@ function createManagedCollector(options = {}) {
   }
 
   function notifyObservation(record) {
-    advanceObservationRevision(record.nativeId);
+    nativeReadStateFor(record.nativeId, true);
+    trimNativeReadStates();
     if (!onObservation) return;
     try { onObservation(publicObservation(record)); } catch {}
   }
@@ -489,6 +567,7 @@ function createManagedCollector(options = {}) {
     observations.delete(key);
     observations.set(key, record);
     while (observations.size > OBSERVATION_LIMIT) observations.delete(observations.keys().next().value);
+    trimNativeReadStates();
     notifyObservation(record);
     return record;
   }
@@ -533,6 +612,7 @@ function createManagedCollector(options = {}) {
           });
           if (matchingRequests.length !== 1) return;
           const [requestKey, record] = matchingRequests[0];
+          advanceNativeRevision(record.nativeId);
           const observation = observations.get(record.nativeId);
           const verified = samePeriod(observation, record) && observation.verifiedLaunchRef &&
             Boolean(resolveProof(observation.verifiedLaunchRef));
@@ -542,43 +622,44 @@ function createManagedCollector(options = {}) {
           return;
         }
         if (!event.nativeId) return;
-      const period = findRegisteredPeriod(event.nativeId);
-      if (!period) return;
-      if (isPeriodTombstoned(period)) {
-        setUnknown(period, event.nativeId, 'period_end_observed');
-        return;
-      }
+        const period = findRegisteredPeriod(event.nativeId);
+        if (!period) return;
+        advanceNativeRevision(event.nativeId);
+        if (isPeriodTombstoned(period)) {
+          setUnknown(period, event.nativeId, 'period_end_observed');
+          return;
+        }
         let record = observations.get(event.nativeId);
         if (!samePeriod(record, period)) record = setUnknown(period, event.nativeId, 'actor_binding_unverified');
-      if (!record || currentEpoch !== epoch) return;
-      const verifiedLaunchRef = verifiedLaunchForPeriod(period, record);
-      if (event.kind === 'period-end') {
-        tombstonePeriod(period);
-        setUnknown(period, event.nativeId, event.reason || 'period_end_observed');
-        return;
-      }
-      if (event.kind === 'uncertain') {
-        setUnknown(period, event.nativeId, event.reason, verifiedLaunchRef, true);
+        if (!record || currentEpoch !== epoch) return;
+        const verifiedLaunchRef = verifiedLaunchForPeriod(period, record);
+        if (event.kind === 'period-end') {
+          tombstonePeriod(period);
+          setUnknown(period, event.nativeId, event.reason || 'period_end_observed');
+          return;
+        }
+        if (event.kind === 'uncertain') {
+          setUnknown(period, event.nativeId, event.reason, verifiedLaunchRef, true);
           if (verifiedLaunchRef) void projectNativeUnknown(verifiedLaunchRef, period, currentEpoch);
           return;
-      }
-      const verified = verifiedLaunchRef && Boolean(resolveProof(verifiedLaunchRef));
-      if (provider === 'codex' && verified && ['completed', 'interrupted'].includes(event.turnState) && record.turnState === 'active' &&
+        }
+        const verified = verifiedLaunchRef && Boolean(resolveProof(verifiedLaunchRef));
+        if (provider === 'codex' && verified && ['completed', 'interrupted'].includes(event.turnState) && record.turnState === 'active' &&
           (!record.turnId || record.turnId !== event.turnId)) {
-        record.status = 'unknown';
-        record.reason = 'turn_identity_unverified';
-        notifyObservation(record);
-        void projectNativeUnknown(verifiedLaunchRef, period, currentEpoch);
-        return;
-      }
-      if (verified) {
-        record.status = event.activity;
-        record.activity = event.activity;
-        record.turnState = event.turnState;
-        record.turnId = event.turnId;
-        record.reason = null;
-        record.verifiedLaunchRef = verifiedLaunchRef;
-        record.verifiedGeneration = connectionGeneration;
+          record.status = 'unknown';
+          record.reason = 'turn_identity_unverified';
+          notifyObservation(record);
+          void projectNativeUnknown(verifiedLaunchRef, period, currentEpoch);
+          return;
+        }
+        if (verified) {
+          record.status = event.activity;
+          record.activity = event.activity;
+          record.turnState = event.turnState;
+          record.turnId = event.turnId;
+          record.reason = null;
+          record.verifiedLaunchRef = verifiedLaunchRef;
+          record.verifiedGeneration = connectionGeneration;
         } else {
           record.status = 'unknown';
           record.reason ||= 'actor_binding_unverified';
@@ -594,6 +675,7 @@ function createManagedCollector(options = {}) {
         if (!normalized) return;
         const period = findRegisteredPeriod(normalized.nativeId);
         if (!period || isPeriodTombstoned(period)) return;
+        advanceNativeRevision(normalized.nativeId);
         const requestKey = JSON.stringify([currentEpoch, period.executionId, normalized.requestId]);
         if (!requestRecords.has(requestKey) && requestRecords.size >= REQUEST_LIMIT) {
           requestRecords.delete(requestRecords.keys().next().value);
@@ -784,18 +866,33 @@ function createManagedCollector(options = {}) {
     return cached.handle;
   }
 
-  async function reconcileProof(launchRef) {
-    proofHandles.delete(launchRef);
+  async function reconcileProofGuarded(launchRef, isCurrent) {
+    const guardAllows = () => {
+      try {
+        const result = isCurrent();
+        return result === true && !(result && typeof result.then === 'function');
+      } catch { return false; }
+    };
+    if (!guardAllows()) return false;
     const registered = currentRegistrationForLaunch(launchRef);
+    if (!registered || isPeriodTombstoned(registered)) return false;
+    const nativeId = registered.identity.nativeId;
+    const state = nativeReadStateFor(nativeId, true);
+    if (!state || !guardAllows()) return false;
+    const proofOperationSequence = ++state.proofOperationSequence;
+    const proofOperationCurrent = () => nativeReadStates.get(nativeId) === state &&
+      state.proofOperationSequence === proofOperationSequence && guardAllows();
+    if (!proofOperationCurrent()) return false;
+    proofHandles.delete(launchRef);
     const resolver = trustedBindingResolver?.resolveProof;
-    if (!registered || typeof resolver !== 'function') return false;
+    if (typeof resolver !== 'function') return false;
     const currentEpoch = epoch;
     const expectedConnectionHandle = connectionHandle;
     const context = Object.freeze({
       provider,
       scope: { ...scope },
       identity: { ...registered.identity },
-      nativeId: registered.identity.nativeId,
+      nativeId,
       conversationId: registered.conversationId,
       executionId: registered.executionId,
       sessionId: registered.sessionId,
@@ -804,19 +901,37 @@ function createManagedCollector(options = {}) {
     });
     let handle;
     try { handle = await resolver.call(trustedBindingResolver, launchRef, context); } catch { return false; }
-    if ((typeof handle !== 'object' && typeof handle !== 'function') || handle === null || currentEpoch !== epoch ||
-        expectedConnectionHandle !== connectionHandle) return false;
+    if (!proofOperationCurrent() || (typeof handle !== 'object' && typeof handle !== 'function') || handle === null ||
+        currentEpoch !== epoch || expectedConnectionHandle !== connectionHandle) return false;
     const latest = currentRegistrationForLaunch(launchRef);
+    if (!latest || !samePeriod(latest, registered) || !identitiesEqual(latest.identity, registered.identity) ||
+        !proofOperationCurrent()) return false;
     let live;
     try { live = runtimeAdapter.checkCurrentProof(launchRef, handle); } catch { return false; }
-    if (!latest || !proofMetadataMatches(latest.current, latest) || !isRecord(live) || live.ok !== true || live.then ||
-        currentEpoch !== epoch || expectedConnectionHandle !== connectionHandle) return false;
+    if (!proofOperationCurrent() || !proofMetadataMatches(latest.current, latest) ||
+        !isRecord(live) || live.ok !== true || live.then || currentEpoch !== epoch ||
+        expectedConnectionHandle !== connectionHandle) return false;
     proofHandles.set(launchRef, {
       handle,
       generation: connectionGeneration,
       connectionHandle: expectedConnectionHandle,
     });
+    if (!proofOperationCurrent()) return false;
     return Boolean(resolveProof(launchRef));
+  }
+
+  async function reconcileProof(launchRef) {
+    const registered = currentRegistrationForLaunch(launchRef);
+    if (!registered || isPeriodTombstoned(registered)) return false;
+    const nativeId = registered.identity.nativeId;
+    const lease = beginNativeStateLease(nativeId);
+    if (!lease) return false;
+    const token = captureNativeStateToken(lease, registered);
+    try {
+      return await reconcileProofGuarded(launchRef, () => nativeStateTokenCurrent(token));
+    } finally {
+      releaseNativeStateLease(lease);
+    }
   }
 
   function findLaunchesForPeriod(period) {
@@ -867,7 +982,6 @@ function createManagedCollector(options = {}) {
   async function observeKnownThread(nativeId) {
     if (!isIdentifier(nativeId)) return { status: 'rejected', reason: 'invalid_native_id' };
     if (connectionState !== 'connected' || !transport) return { status: 'unknown', reason: 'not_connected' };
-    const currentEpoch = epoch;
     const registered = findRegisteredPeriod(nativeId);
     if (!registered) {
       return { status: 'unknown', reason: 'registration_unavailable' };
@@ -876,17 +990,14 @@ function createManagedCollector(options = {}) {
       setUnknown(registered, nativeId, 'period_end_observed');
       return { status: 'unknown', observation: publicObservation(observations.get(nativeId)), reason: 'period_end_observed' };
     }
-    const revisionAtStart = beginObservationRead(nativeId);
-    if (revisionAtStart === null) return { status: 'unknown', reason: 'observation_capacity' };
+    const read = beginObservationRead(nativeId, registered);
+    if (!read) return { status: 'unknown', reason: 'observation_capacity' };
     try {
       const result = await adapter.readKnownThread(transport, nativeId);
-      if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
-      if (!samePeriod(findRegisteredPeriod(nativeId), registered)) {
-        return { status: 'unknown', reason: 'registered_period_changed' };
+      if (!canAdoptObservationRead(read)) {
+        return { status: 'unknown', reason: observationReadUnavailableReason(read) };
       }
-      if (!observationRevisionMatches(nativeId, revisionAtStart)) {
-        return { status: 'unknown', reason: 'observation_superseded' };
-      }
+      if (!adoptObservationRead(read)) return { status: 'unknown', reason: observationReadUnavailableReason(read) };
       if (result.status === 'unsupported') {
         const record = setUnknown(registered, nativeId, result.reason);
         return { status: 'unsupported', observation: record ? publicObservation(record) : null, reason: result.reason };
@@ -900,23 +1011,17 @@ function createManagedCollector(options = {}) {
       let verified = false;
       let verifiedLaunchRef = null;
       if (candidates.length === 1) {
-        verified = await reconcileProof(candidates[0].launchRef);
-        if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
-        if (!samePeriod(findRegisteredPeriod(nativeId), registered)) {
-          return { status: 'unknown', reason: 'registered_period_changed' };
+        verified = await reconcileProofGuarded(candidates[0].launchRef, () => adoptedObservationReadCurrent(read));
+        if (!adoptedObservationReadCurrent(read)) {
+          return { status: 'unknown', reason: observationReadUnavailableReason(read) };
         }
-        if (!observationRevisionMatches(nativeId, revisionAtStart)) {
-          return { status: 'unknown', reason: 'observation_superseded' };
+        if (verified && adoptedObservationReadCurrent(read) && resolveProof(candidates[0].launchRef)) {
+          verifiedLaunchRef = candidates[0].launchRef;
         }
-        if (verified && resolveProof(candidates[0].launchRef)) verifiedLaunchRef = candidates[0].launchRef;
         else verified = false;
       }
-      if (currentEpoch !== epoch) return { status: 'unknown', reason: 'connection_epoch_changed' };
-      if (!samePeriod(findRegisteredPeriod(nativeId), registered)) {
-        return { status: 'unknown', reason: 'registered_period_changed' };
-      }
-      if (!observationRevisionMatches(nativeId, revisionAtStart)) {
-        return { status: 'unknown', reason: 'observation_superseded' };
+      if (!adoptedObservationReadCurrent(read)) {
+        return { status: 'unknown', reason: observationReadUnavailableReason(read) };
       }
       const previous = observations.get(nativeId);
       const sameExecution = samePeriod(previous, registered);
@@ -940,10 +1045,11 @@ function createManagedCollector(options = {}) {
       observations.delete(nativeId);
       observations.set(nativeId, record);
       while (observations.size > OBSERVATION_LIMIT) observations.delete(observations.keys().next().value);
+      trimNativeReadStates();
       notifyObservation(record);
       return { status: record.status === 'unknown' ? 'unknown' : 'observed', observation: publicObservation(record), reason: record.reason };
     } finally {
-      endObservationRead(nativeId);
+      releaseNativeStateLease(read);
     }
   }
 

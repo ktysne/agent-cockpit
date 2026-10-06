@@ -58,6 +58,7 @@ runtime binding核が検査するのはscope、identity、active period、handle
 `trustedBindingResolver`だけがtrusted in-process compositionからnative actor proofを発行できる。
 
 resolverにはcollectorの現connection handleを渡し、その世代にattest/reconcileしたopaque proof handleだけを受け取る。
+collectorは自身のproof cache採用をfenceするが、trusted issuer自身がawait後に行う外部authority mutationは取り消せず、そのruntime契約は未確認である。
 
 collectorは`runtimeRegistry.snapshot()`からlaunchを読み、`runtimeAdapter.get(launchRef)`のcurrent proofがregistryのidentityとactive execution periodに一致し、`executionConnectionGeneration`が現在の接続世代と一致することも確認する。
 
@@ -92,6 +93,7 @@ await中の処理はepochを再確認し、切断後に戻った応答や通知�
 snapshotの復元はproof、pending requestの解決、execution再登録に使わない。
 
 `observationId`はcollector内の記録識別子であり、native event ID、native sequence、dedup keyではない。
+read sequenceとproof operation sequenceはcollector内の競合制御用であり、native sequenceやbinding証拠には使わない。
 
 ## scenario
 
@@ -114,14 +116,21 @@ snapshotの復元はproof、pending requestの解決、execution再登録に使�
 | ID-F04-P09 | 既知observationのsnapshot生成前にactive periodまたはlive proofを失効させる。 | snapshotだけをunknown qualityへ下げ、最後に確認したactivity/turn値を保持する。 | onObservation通知、observation revision更新、period mutationは各0回。 |
 | ID-F04-P10 | Codexのloaded確認をawaitした後、resume直前にproof guardが省略、false、例外、またはthenableを返す。 | resumeを拒否し、確認済みthreadだけを扱う。 | `thread/resume`送信、権限や設定の上書き、period mutationは各0回。 |
 | ID-F04-P11 | connectionまたはremote CLI preflightのawait中にprocess managerをstopする。 | operation generationを失効させ、遅れて返ったtransportを登録せずcloseする。未spawnのCLIは起動せず、既にspawn済みのowned childは停止する。 | stop後の接続採用、所有外processの停止、未管理childの残存は各0回。 |
+| ID-F04-P12 | 同じnative revisionとperiodで開始したread A/Bのうち、Aの結果とproofを先に採用してからBを採用する。 | Bのidle結果を最終observationとして保持する。read開始だけでは先行readを失効させない。 | A結果だけを理由にBを拒否すること、Bの観測巻き戻しは各0回。 |
+| ID-F04-P13 | 同じnative revisionとperiodで開始したread A/Bのうち、Bの結果を先に採用してからAを返す。 | Bのobservationとproofを保持し、遅れたAを拒否する。 | Aによる状態上書き、B proofの削除、callback通知は各0回。 |
+| ID-F04-P14 | read Aがproof issuerを待つ間にread Bの失敗応答を採用し、その後Aのproof handleを返す。 | Bのunknown observationを保持し、Aのproofをcacheへ採用しない。 | stale proof復活、resume、native projectionは各0回。 |
+| ID-F04-P15 | public `reconcileProof` Aがissuerを待つ間に、read failureまたは新しいpublic proof operation Bを完了させてからAを返す。 | read failure後はproofをnullのまま保ち、新しいproof Bの後はB handleを保持する。 | Aの遅延結果によるcache設定、B proofの削除は各0回。 |
 
 ## 検証と採用境界
 
 fixtureは両provider adapterとtransport callbackを通してscenarioを確認する。
 
 fixtureのtrusted resolverはissuer境界とlive proof checkを確かめるものであり、実runtimeのnative binding証拠を実証しない。
+public proof競合のfixtureに使うtest-only live-equivalent checkerはcollectorのcache採用順だけを検証し、native proof evidenceには数えない。
 
-core/conformance testsは16/16、transport/process testsは14/14、HTTP snapshot testsは4/4で成功した。
+core/conformance testsは20/20、transport/process testsは14/14、HTTP snapshot testsは4/4で成功した。
+
+全体の`npm test`は1218/1218成功し、failure、cancel、skip、todoは0件だった。
 
 修正後の最初の統合実行では1,213件が成功し、既存で変更していない`poc/codex-pr-review-notifications/existing-probe.test.js`のファイル失敗が1件あったが、詳細な原因は出力されなかった。
 同ファイルの単独再実行は1/1で成功し、その後に単独実行した`npm test`は1,214件成功、失敗・キャンセル・スキップ・TODOは0件だった。
