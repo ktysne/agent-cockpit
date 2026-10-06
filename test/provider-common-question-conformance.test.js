@@ -660,6 +660,85 @@ for (const provider of PROVIDERS) {
     assert.equal((await context.harness.deliveryStore.get(selected.deliveryAttemptId)).state, 'available');
   });
 
+  test('ID-F08-A06: ' + provider + ' は初回HTTP応答の結果を使わず再試行し、late 回答を永続履歴で重複排除する', { timeout: 5000 }, async (t) => {
+    const context = await createProductContext(t, provider, {
+      harnessOptions: { questionServiceOptions: {
+        verifyNativeQuestion: (evidence) => evidence?.source === 'trusted-original-ui-fixture',
+      } },
+    });
+    const form = [question('choice', { allowFreeText: true, options: [
+      { id: 'a', label: 'Option A', description: '' },
+      { id: 'b', label: 'Option B', description: '' },
+    ] })];
+    const questionId = 'external-unanswered-' + provider;
+    const privateAnswer = 'late-private-' + provider;
+    await registerOverMcp(context, questionId, form);
+    const original = await getDashboardQuestion(context, questionId);
+    assert.equal(original.selectionSource, null);
+    assert.equal(original.deliveryAttemptId, null);
+    await context.harness.questionService.resolveExternal(original.internalQuestionId, {
+      source: 'trusted-original-ui-fixture', evidenceId: 'external-unanswered-' + provider,
+    });
+    const resolved = await getDashboardQuestion(context, questionId);
+    assert.equal(resolved.externalResolution, true);
+    assert.equal(resolved.selectionSource, null);
+    assert.equal(resolved.deliveryAttemptId, null);
+
+    const readJournal = async () => JSON.parse(await fs.readFile(context.harness.journalPath, 'utf8'));
+    const findRecord = (journal, id) => journal.questions.find((item) => item.questionId === id);
+    await answerOverUi(context, questionId, [questionAnswer('choice', ['b'], privateAnswer)]);
+    const firstJournal = await readJournal();
+    const firstRecord = findRecord(firstJournal, questionId);
+    assert.equal(firstRecord.revision, 0);
+    assert.equal(firstRecord.selection, null);
+    assert.equal(firstRecord.deliveryIntent, null);
+    assert.equal(firstRecord.lateAnswers.length, 1);
+    const firstJournalRevision = firstJournal.revision;
+
+    const retry = await answerOverUi(context, questionId, [questionAnswer('choice', ['b'], privateAnswer)]);
+    assert.equal(retry.response.status, 200, retry.response.body);
+    assert.equal(jsonBody(retry.response).outcome, 'duplicate');
+    assert.equal(retry.response.body.includes(privateAnswer), false);
+    assert.equal((await readJournal()).revision, firstJournalRevision);
+
+    await stopProductServer(context);
+    await context.harness.reopen();
+    await startProductServer(context);
+    const recoveredRetry = await answerOverUi(context, questionId, [questionAnswer('choice', ['b'], privateAnswer)]);
+    assert.equal(recoveredRetry.response.status, 200, recoveredRetry.response.body);
+    assert.equal(jsonBody(recoveredRetry.response).outcome, 'duplicate');
+    assert.equal(recoveredRetry.response.body.includes(privateAnswer), false);
+    assert.equal((await readJournal()).revision, firstJournalRevision);
+
+    const different = await answerOverUi(context, questionId, [questionAnswer('choice', ['a'], 'late-distinct-' + provider)]);
+    assert.equal(different.response.status, 200, different.response.body);
+    assert.equal(jsonBody(different.response).outcome, 'late');
+    const afterDifferent = await readJournal();
+    assert.equal(findRecord(afterDifferent, questionId).lateAnswers.length, 2);
+    assert.equal(findRecord(afterDifferent, questionId).selection, null);
+    assert.equal(findRecord(afterDifferent, questionId).deliveryIntent, null);
+
+    const otherQuestionId = 'external-unanswered-independent-' + provider;
+    await registerOverMcp(context, otherQuestionId, form);
+    const other = await getDashboardQuestion(context, otherQuestionId);
+    await context.harness.questionService.resolveExternal(other.internalQuestionId, {
+      source: 'trusted-original-ui-fixture', evidenceId: 'external-unanswered-independent-' + provider,
+    });
+    const independent = await answerOverUi(context, otherQuestionId, [questionAnswer('choice', ['b'], privateAnswer)]);
+    assert.equal(independent.response.status, 200, independent.response.body);
+    assert.equal(jsonBody(independent.response).outcome, 'late');
+    const finalJournal = await readJournal();
+    assert.equal(findRecord(finalJournal, questionId).revision, 0);
+    assert.equal(findRecord(finalJournal, otherQuestionId).revision, 0);
+    assert.equal(findRecord(finalJournal, otherQuestionId).lateAnswers.length, 1);
+    assert.equal((await context.harness.deliveryStore.snapshot()).deliveries.length, 0);
+    let sinkCalls = 0;
+    const poll = await context.harness.questionService.answerPoll(context.harness.writer, questionId, () => { sinkCalls += 1; });
+    assert.equal(poll.outcome, 'unavailable');
+    assert.equal(Object.hasOwn(poll, 'answers'), false);
+    assert.equal(sinkCalls, 0);
+  });
+
   test('ID-F08-A03: ' + provider + ' はowner終了後のfresh handoff proofで同じ子宛deliveryを再開する', { timeout: 5000 }, async (t) => {
     const context = await createProductContext(t, provider);
     const execution = context.harness.primary;

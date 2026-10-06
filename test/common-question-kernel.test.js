@@ -26,6 +26,13 @@ function record(overrides = {}) {
 
 const manualAnswers = [{ questionId: 'choice', optionIds: ['no'], freeText: null }];
 
+function withExternalResolution(questionRecord) {
+  return kernel.normalizeQuestionRecord({
+    ...questionRecord,
+    externalResolution: { resolvedAt: questionRecord.createdAt + 1, evidenceDigest: 'e'.repeat(64) },
+  });
+}
+
 test('question normalization rejects unknown fields, accessors, and sparse arrays', () => {
   assert.throws(() => kernel.normalizeQuestions([{ ...questions()[0], extra: true }]), { code: 'invalid_question' });
   const accessor = questions()[0];
@@ -74,6 +81,48 @@ test('answers before registration and canceled questions cannot create a selecti
   const canceled = { ...original, cancelledAt: original.createdAt };
   assert.throws(() => kernel.selectionFor(canceled, manualAnswers, 'manual', 1_001, 'delivery-3'),
     { code: 'question_cancelled' });
+});
+
+test('unselected externally resolved answers deduplicate before bounded-history rejection', () => {
+  const original = withExternalResolution(record());
+  const first = kernel.selectionFor(original, manualAnswers, 'manual', 1_002, 'late-1');
+  assert.equal(first.outcome, 'late');
+  assert.equal(first.record.revision, original.revision);
+  assert.equal(first.record.selection, null);
+  assert.equal(first.record.deliveryIntent, null);
+  assert.equal(first.record.lateAnswers.length, 1);
+
+  const duplicate = kernel.selectionFor(first.record, manualAnswers, 'manual', 1_003, 'late-2');
+  assert.equal(duplicate.outcome, 'duplicate');
+  assert.equal(duplicate.record, first.record);
+
+  const different = kernel.selectionFor(first.record, [{ questionId: 'choice', optionIds: ['yes'], freeText: null }],
+    'manual', 1_004, 'late-3');
+  assert.equal(different.outcome, 'late');
+  assert.equal(different.record.lateAnswers.length, 2);
+  assert.equal(different.record.selection, null);
+  assert.equal(different.record.deliveryIntent, null);
+
+  const independent = kernel.selectionFor(withExternalResolution(record({ questionId: 'q-other' })),
+    manualAnswers, 'manual', 1_002, 'late-other');
+  assert.equal(independent.outcome, 'late');
+  assert.equal(independent.record.lateAnswers.length, 1);
+
+  const freeTextQuestions = questions().map((item) => ({ ...item, allowFreeText: true }));
+  let full = withExternalResolution(record({ questionId: 'q-full', questions: freeTextQuestions }));
+  let lastAnswers;
+  for (let index = 0; index < 10; index += 1) {
+    lastAnswers = [{ questionId: 'choice', optionIds: ['no'], freeText: `reply-${index}` }];
+    const late = kernel.selectionFor(full, lastAnswers, 'manual', 1_010 + index, `full-${index}`);
+    assert.equal(late.outcome, 'late');
+    full = late.record;
+  }
+  assert.equal(full.lateAnswers.length, 10);
+  assert.throws(() => kernel.selectionFor(full, [{ questionId: 'choice', optionIds: ['no'], freeText: 'reply-overflow' }],
+    'manual', 1_030, 'overflow'), { code: 'late_answer_capacity' });
+  const fullDuplicate = kernel.selectionFor(full, lastAnswers, 'manual', 1_031, 'full-duplicate');
+  assert.equal(fullDuplicate.outcome, 'duplicate');
+  assert.equal(fullDuplicate.record, full);
 });
 
 test('late answers preserve the original selection and are bounded history', () => {
