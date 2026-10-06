@@ -1,13 +1,14 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const { createOwnedNativeWaitLatch } = require('./owned-native-wait');
 const { createOwnedNativeSource, getOwnedSource } = require('./owned-native-source');
-const { createOwnedInstructionWriter } = require('./owned-native-instruction-writer');
+const { createOwnedInstructionWriter, MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
 
 const PROFILE = 'cockpit-native-v1';
 const WAIT_PROFILE = 'cockpit-native-wait-v1';
@@ -27,6 +28,7 @@ const ENVIRONMENT_ALLOWLIST = Object.freeze(['PATH', 'PATHEXT', 'SYSTEMROOT', 'W
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_LINES = 100_000;
+const MAX_NATIVE_TERMINALS = MAX_INSTRUCTION_DISPATCHES + 1;
 const READ_RPC_ID_START = 2 ** 32;
 const INSTRUCTION_RPC_ID_START = 2 ** 48;
 const DEFAULT_TIMEOUTS = Object.freeze({ startupMs: 15_000, rpcMs: 10_000, loginMs: 5 * 60_000, stopMs: 2_000 });
@@ -341,6 +343,7 @@ function createOwnedNativeRunner(options) {
   let nextInstructionRpcId = INSTRUCTION_RPC_ID_START;
   const instructionRpcs = new Map();
   const knownInstructionTerminals = new Set();
+  const claudeTerminalResults = new Map();
   let instructionStart = null;
   let instructionUncertain = false;
   const instructionController = ownedSource ? createOwnedInstructionWriter(ownedSource.capability, {
@@ -613,7 +616,10 @@ function createOwnedNativeRunner(options) {
     invalidateWait();
     terminalContextId = nativeContextId;
     terminalContextCount = Math.min(Number.MAX_SAFE_INTEGER, terminalContextCount + 1);
-    if (instructionController) knownInstructionTerminals.add(nativeContextId);
+    if (instructionController) {
+      if (knownInstructionTerminals.size >= MAX_NATIVE_TERMINALS) throw runnerError('native_context_end_limit');
+      knownInstructionTerminals.add(nativeContextId);
+    }
     const context = Object.freeze({
       kind: provider === 'codex' ? 'turn' : 'assistant_message',
       nativeContextId,
@@ -1212,6 +1218,14 @@ function createOwnedNativeRunner(options) {
     throw runnerError('rpc_response_unexpected');
   }
 
+  function claudeResultFingerprint(value) {
+    function canonical(item) {
+      if (Array.isArray(item)) return item.map(canonical);
+      if (item && typeof item === 'object') return Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical(item[key])]));
+      return item;
+    }
+    return crypto.createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+  }
   function handleClaudeMessage(message) {
     if (!isRecord(message) || typeof message.type !== 'string') throw runnerError('claude_message_invalid');
     if (message.type === 'system' && message.subtype === 'init') {
@@ -1223,7 +1237,19 @@ function createOwnedNativeRunner(options) {
       if (!nativeIdentity || !isIdentifier(message.session_id) || message.session_id !== nativeIdentity.nativeId) {
         throw runnerError('claude_result_identity_invalid');
       }
-      if (!nativeContext) throw runnerError('claude_result_before_context');
+      if (typeof message.uuid !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.uuid)) {
+        throw runnerError('claude_result_uuid_invalid');
+      }
+      const uuid = message.uuid.toLowerCase();
+      const fingerprint = claudeResultFingerprint({ ...message, uuid });
+      const known = claudeTerminalResults.get(uuid);
+      if (known) {
+        if (known !== fingerprint) throw runnerError('claude_result_uuid_conflict');
+        return;
+      }
+      if (claudeTerminalResults.size >= MAX_NATIVE_TERMINALS) throw runnerError('claude_result_uuid_limit');
+      claudeTerminalResults.set(uuid, fingerprint);
+      if (!nativeContext || terminalContextId || instructionStart) throw runnerError('claude_result_before_context');
       emitContextEnded(nativeContext.nativeContextId);
       return;
     }

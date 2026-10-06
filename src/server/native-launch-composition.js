@@ -7,7 +7,7 @@ const { createProviderLaunchAdapter } = require('./launch-binding');
 const { createProviderRuntimeAdapter } = require('./runtime-binding');
 const { getOwnedSource } = require('./owned-native-runner');
 const { createOwnedInstructionDispatch } = require('./owned-native-instruction-dispatch');
-const { getOwnedInstructionWriter } = require('./owned-native-instruction-writer');
+const { getOwnedInstructionWriter, MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
 const { createManagedCollector, sanitizeManagedCollectorSnapshot } = require('./managed-collector');
 const { createOwnedSourceAccessor } = require('./owned-native-source-collector');
 
@@ -16,7 +16,7 @@ const MAX_PROFILES = 16;
 const OWNED_SOURCE_ATTACH_TIMEOUT_MS = 5000;
 const MAX_ATTEMPTS = 256;
 const MAX_PENDING_CONTEXTS = 16;
-const MAX_ENDED_CONTEXT_IDS = 8;
+const MAX_ENDED_CONTEXT_IDS = MAX_INSTRUCTION_DISPATCHES + 1;
 const MAX_INPUT_TEXT_BYTES = 1024 * 1024;
 const IDENTIFIER_MAX = 512;
 const PROFILE_FIELDS = Object.freeze(['provider', 'executablePath', 'homePath', 'homeScopeId', 'cwd']);
@@ -1567,7 +1567,7 @@ function createNativeLaunchComposition(options = {}) {
       let proof = null;
       const lifeOnly = !evidenceTurn && metadata.mode === 'start';
       if (lifeOnly) {
-        if (record.claims.origin !== 'standalone' || owner !== record || record.currentContextId || !terminal || terminal !== record.actorLifeContextId || !actorHandle ||
+        if (record.terminalContextIds.size >= MAX_ENDED_CONTEXT_IDS || record.claims.origin !== 'standalone' || owner !== record || record.currentContextId || !terminal || terminal !== record.actorLifeContextId || !actorHandle ||
             typeof runtimeKernel.registry.checkActorLifeCapability !== 'function' || !periodMatches(record)) return null;
         const bound = launchKernel.registry.get(record.launchRef);
         const runtime = runtimeRecord(record);
@@ -1592,7 +1592,7 @@ function createNativeLaunchComposition(options = {}) {
             record.sourceCapability === sourceCapability && record.currentOwnerRecord === owner &&
             record.ownerGeneration === ownerGeneration && record.currentContextId === contextId &&
             record.actorLifeHandle === actorHandle && record.lastTerminalContextId === terminal &&
-            (lifeOnly ? runtimeKernel.registry.checkActorLifeCapability(record.launchRef, actorHandle, ownerGeneration) === true :
+            (lifeOnly ? record.terminalContextIds.size < MAX_ENDED_CONTEXT_IDS && runtimeKernel.registry.checkActorLifeCapability(record.launchRef, actorHandle, ownerGeneration) === true :
               record.proofHandle === proof && runtimeKernel.registry.checkProofCapability(record.launchRef, proof) === true) &&
             registrationKernel.registry.checkAuthorityRevision(registrationStamp) === true &&
             launchKernel.registry.checkAuthorityRevision(launchStamp) === true;

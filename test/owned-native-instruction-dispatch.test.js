@@ -33,7 +33,9 @@ function fixture(t, provider, options = {}) {
   const methods = []; const requests = [];
   const observations = [];
   const children = [];
-  let instructionWrites = 0, instructionRequest = null, parentCreated = false;
+  let instructionWrites = 0, instructionRequest = null, parentCreated = false, nativeTurnCount = 0;
+  let currentNativeContext = 'native-context';
+  let terminalCount = 0;
   let collector, capability, runnerOptionsCaptured;
   let resolveHeldContext;
   const heldContextReady = new Promise((resolve) => { resolveHeldContext = resolve; });
@@ -49,13 +51,15 @@ function fixture(t, provider, options = {}) {
         instructionWrites += 1; instructionRequest = request;
         if (options.writeThrow) throw new Error('fixture write failure');
         if (options.writeError) { callback?.(new Error('fixture write failure')); return true; }
+        nativeTurnCount += 1; currentNativeContext = nativeTurnCount === 1 ? 'next-context' : 'next-context-' + nativeTurnCount;
         if (!options.holdAck) child.send({ type: 'stream_event', session_id: 'native-id', parent_tool_use_id: null,
-          event: { type: 'message_start', message: { id: 'next-context', role: 'assistant' } } });
+          event: { type: 'message_start', message: { id: currentNativeContext, role: 'assistant' } } });
       } else if (request.method === 'turn/steer' || request.method === 'turn/start' && request.params.clientUserMessageId) {
         methods.push(request.method); instructionWrites += 1; instructionRequest = request;
         if (options.writeThrow) throw new Error('fixture write failure');
         if (options.writeError) { callback?.(new Error('fixture write failure')); return true; }
-        const turnId = request.method === 'turn/steer' ? 'native-context' : 'next-context';
+        if (request.method === 'turn/start') { nativeTurnCount += 1; currentNativeContext = nativeTurnCount === 1 ? 'next-context' : 'next-context-' + nativeTurnCount; }
+        const turnId = currentNativeContext;
         if (options.earlyItem) child.send({ method: 'item/started', params: { threadId: 'native-id', turnId,
           item: { type: 'userMessage', id: 'native-item', clientId: request.params.clientUserMessageId, content: request.params.input } } });
         if (options.earlyTerminal) child.send({ method: 'turn/completed', params: { threadId: 'native-id', turn: { id: turnId, status: 'completed' } } });
@@ -79,7 +83,7 @@ function fixture(t, provider, options = {}) {
         }
         else if (request.method === 'thread/loaded/list') send({ data: ['native-id'], nextCursor: null });
         else if (request.method === 'thread/read') {
-          const result = { thread: { id: 'native-id', status: { type: 'active' }, turns: [{ id: 'native-context', status: 'inProgress', items: [] }] } };
+          const result = { thread: { id: 'native-id', status: { type: 'active' }, turns: [{ id: currentNativeContext, status: 'inProgress', items: [] }] } };
           send(result);
         }
       }
@@ -123,9 +127,10 @@ function fixture(t, provider, options = {}) {
     runnerOptions: () => runnerOptionsCaptured,
     capability: () => capability,
     actorHandles, connectionHandles, actualRuntime, instructionWrites: () => instructionWrites, instructionRequest: () => instructionRequest,
-    terminal() {
-      if (provider === 'codex') child.send({ method: 'turn/completed', params: { threadId: 'native-id', turn: { id: 'native-context', status: 'completed' } } });
-      else child.send({ type: 'result', session_id: 'native-id' });
+    terminal(uuid = undefined, extra = {}) {
+      terminalCount += 1;
+      if (provider === 'codex') child.send({ method: 'turn/completed', params: { threadId: 'native-id', turn: { id: currentNativeContext, status: 'completed' } } });
+      else child.send({ type: 'result', session_id: 'native-id', ...(uuid === null ? {} : { uuid: uuid || '11111111-1111-4111-8111-' + String(terminalCount).padStart(12, '0') }), ...extra });
     },
     start: async () => {
       if (options.childOrigin) {
@@ -406,17 +411,20 @@ function isolatedWriterHarness() {
   const isolated = { exports: {} };
   let now = 1000;
   const jobs = new Set();
-  const timer = (callback, delay) => { const job = { callback, delay, unref() {} }; jobs.add(job); return job; };
+  const timer = (callback, delay) => { const job = { callback, delay, dueAt: now + delay, unref() {} }; jobs.add(job); return job; };
   const cancel = job => jobs.delete(job);
   new Function('require', 'module', 'exports', 'Date', 'Buffer', 'setTimeout', 'clearTimeout', fs.readFileSync(file, 'utf8'))(
     require('node:module').createRequire(file), isolated, isolated.exports, { now: () => now }, Buffer, timer, cancel);
-  const sourceCap = Object.freeze({}); let currentToken;
-  const controller = isolated.exports.createOwnedInstructionWriter(sourceCap, {
-    capture: () => ({}), check: () => true, checkEvidence: () => true,
-    prepareWrite: () => ({ write() {}, line: '{}\n' }), register(token) { currentToken = token; }, unregister() {}, complete() {},
-  });
-  return { writer: isolated.exports.getOwnedInstructionWriter(sourceCap), controller, token: () => currentToken,
-    advance(milliseconds) { now += milliseconds; for (const job of [...jobs]) if (job.delay <= milliseconds) { jobs.delete(job); job.callback(); } },
+  function newWriter(options = {}) {
+    const sourceCap = Object.freeze({}); let currentToken;
+    const controller = isolated.exports.createOwnedInstructionWriter(sourceCap, {
+      capture: () => ({}), check: () => true, checkEvidence: () => true,
+      prepareWrite: () => ({ write() {}, line: '{}\n' }), register(token) { currentToken = token; if (options.registerThrows) throw new Error('fixture register failure'); }, unregister() {}, complete() {},
+    });
+    return { writer: isolated.exports.getOwnedInstructionWriter(sourceCap), controller, token: () => currentToken };
+  }
+  return { ...newWriter(), newWriter,
+    advance(milliseconds) { now += milliseconds; for (const job of [...jobs]) if (job.dueAt <= now) { jobs.delete(job); job.callback(); } },
   };
 }
 
@@ -505,4 +513,176 @@ test('ID-F08-NI08 read IDs remain exact after instruction interleaving and uniss
   f.child.send({ id: reads[0].id, result: {} }); assert.equal(f.child.killCalls, 0);
   f.child.send({ id: 2 ** 32 + 100, result: {} });
   assert.equal(f.composition.resolveProof(started.launchRef), null); assert.equal(f.child.killCalls, 1);
+});
+
+for (const provider of ['claude', 'codex']) {
+  test(`ID-F08-NI10 ${provider}: nine normal contexts preserve the same source and refuse stopped start while working`, async t => {
+    const f = fixture(t, provider); const started = await f.start(); const owner = f.composition.createInstructionOwner(f.receipt);
+    for (let index = 0; index < 9; index += 1) {
+      assert.ok(f.composition.resolveProof(started.launchRef)); f.terminal();
+      assert.equal(f.composition.resolveProof(started.launchRef), null);
+      if (index < 8) {
+        const pair = commandFor(f, started.launchRef, 'start', 'continued-' + index);
+        const token = owner.prepareInstructionDispatch(pair.metadata); assert.ok(token);
+        await owner.dispatchInstructionNow(token, pair.command);
+        assert.equal(owner.prepareInstructionDispatch(commandFor(f, started.launchRef, 'start', 'working-' + index).metadata), null);
+      }
+      assert.equal(f.child.killCalls, 0);
+    }
+    assert.equal(f.instructionWrites(), 8); assert.equal(f.registrationKernel.registry.snapshot().executions[0].state, 'active');
+    assert.equal(f.children.length, 1);
+  });
+  test(`ID-F08-NI10 ${provider}: initial plus 128 dispatched terminal tombstones fit and the next start writes zero`, async t => {
+    const f = fixture(t, provider); const started = await f.start(); const owner = f.composition.createInstructionOwner(f.receipt);
+    f.terminal();
+    for (let index = 0; index < 128; index += 1) {
+      const pair = commandFor(f, started.launchRef, 'start', 'capacity-' + index);
+      const token = owner.prepareInstructionDispatch(pair.metadata); assert.ok(token, String(index));
+      await owner.dispatchInstructionNow(token, pair.command); f.terminal();
+      assert.equal(f.child.killCalls, 0, String(index));
+    }
+    const overflow = commandFor(f, started.launchRef, 'start', 'over-capacity');
+    assert.equal(owner.prepareInstructionDispatch(overflow.metadata), null);
+    assert.equal(f.instructionWrites(), 128); assert.equal(f.runtimeKernel.registry.snapshot().actors.length, 129);
+    assert.equal(f.registrationKernel.registry.snapshot().executions[0].state, 'active');
+    if (provider === 'claude') {
+      f.terminal('ffffffff-ffff-4fff-8fff-ffffffffffff');
+      assert.equal(f.child.killCalls, 1); assert.equal(f.composition.resolveProof(started.launchRef), null);
+      assert.equal(owner.prepareInstructionDispatch(overflow.metadata), null);
+    }
+  });
+}
+
+const RESULT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const RESULT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+test('ID-F08-NI11 Claude result A replay leaves B proof active and normal result B permits one next input', async t => {
+  const f = fixture(t, 'claude'); const started = await f.start(); f.terminal(RESULT_A);
+  const owner = f.composition.createInstructionOwner(f.receipt); const pair = commandFor(f, started.launchRef, 'start', 'B');
+  await owner.dispatchInstructionNow(owner.prepareInstructionDispatch(pair.metadata), pair.command);
+  const proofB = f.composition.resolveProof(started.launchRef); assert.ok(proofB);
+  f.child.send({ uuid: RESULT_A, session_id: 'native-id', type: 'result' });
+  assert.equal(f.composition.resolveProof(started.launchRef), proofB); assert.equal(f.child.killCalls, 0);
+  const next = commandFor(f, started.launchRef, 'start', 'C'); assert.equal(owner.prepareInstructionDispatch(next.metadata), null);
+  f.terminal(RESULT_B); assert.equal(f.composition.resolveProof(started.launchRef), null);
+  await owner.dispatchInstructionNow(owner.prepareInstructionDispatch(next.metadata), next.command);
+  assert.ok(f.composition.resolveProof(started.launchRef)); assert.equal(f.instructionWrites(), 2);
+});
+
+test('ID-F08-NI11 Claude duplicate result before B context is harmless', async t => {
+  const f = fixture(t, 'claude', { holdAck: true }); const started = await f.start(); f.terminal(RESULT_A);
+  const owner = f.composition.createInstructionOwner(f.receipt); const pair = commandFor(f, started.launchRef, 'start', 'B');
+  const pending = owner.dispatchInstructionNow(owner.prepareInstructionDispatch(pair.metadata), pair.command);
+  f.child.send({ type: 'result', session_id: 'native-id', uuid: RESULT_A });
+  assert.equal(f.child.killCalls, 0); assert.equal(f.composition.resolveProof(started.launchRef), null);
+  f.child.send({ type: 'stream_event', session_id: 'native-id', parent_tool_use_id: null,
+    event: { type: 'message_start', message: { role: 'assistant', id: 'next-context' } } });
+  await pending; assert.ok(f.composition.resolveProof(started.launchRef));
+});
+
+for (const variant of ['missing', 'invalid', 'conflict']) {
+  test(`ID-F08-NI11 Claude ${variant} terminal UUID closes proof and actor-only start without positive terminal`, async t => {
+    const f = fixture(t, 'claude'); const started = await f.start();
+    const owner = f.composition.createInstructionOwner(f.receipt);
+    if (variant === 'conflict') {
+      f.terminal(RESULT_A); const pair = commandFor(f, started.launchRef, 'start', 'B');
+      await owner.dispatchInstructionNow(owner.prepareInstructionDispatch(pair.metadata), pair.command);
+      f.child.send({ type: 'result', session_id: 'native-id', uuid: RESULT_A, subtype: 'contradiction' });
+    } else f.terminal(variant === 'missing' ? null : 'not-a-uuid');
+    assert.equal(f.composition.resolveProof(started.launchRef), null);
+    assert.equal(owner.prepareInstructionDispatch(commandFor(f, started.launchRef, 'start', 'blocked').metadata), null);
+    assert.equal(f.child.killCalls, 1);
+    const actors = f.runtimeKernel.registry.snapshot().actors;
+    assert.equal(actors.at(-1).contextState, 'unknown');
+  });
+}
+
+function withText(pair, text) {
+  const input = [{ type: 'text', text, text_elements: [] }];
+  pair.metadata.nativeContentDigest = sha256(JSON.stringify(input));
+  pair.metadata.payloadDigest = sha256(JSON.stringify({ schemaVersion: 1, mode: pair.metadata.mode, expectedTurnId: pair.metadata.expectedTurnId, input }));
+  pair.command = { ...pair.metadata, input }; return pair;
+}
+
+test('ID-F08-NI12 separate source writers share the payload byte budget and release it on invalidate', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness(); const second = h.newWriter();
+  const firstPair = withText(commandFor(f, started.launchRef, 'steer', 'source-one'), 'a'.repeat(180000));
+  const firstToken = h.writer.prepare(firstPair.metadata); const first = h.writer.dispatchNow(firstToken, firstPair.command, () => true);
+  h.controller.acknowledge(firstToken, 'native-context'); await first;
+  const secondPair = withText(commandFor(f, started.launchRef, 'steer', 'source-two'), 'b'.repeat(180000));
+  const secondToken = second.writer.prepare(secondPair.metadata);
+  assert.throws(() => second.writer.dispatchNow(secondToken, secondPair.command, () => true));
+  h.controller.invalidate();
+  const pending = second.writer.dispatchNow(secondToken, secondPair.command, () => true);
+  second.controller.acknowledge(secondToken, 'native-context'); await pending; second.controller.invalidate();
+});
+
+test('ID-F08-NI12 separate source writers share candidate count and free reservations on invalidate', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness(); const second = h.newWriter();
+  const drivers = [h, second]; const pending = [];
+  for (let source = 0; source < 2; source += 1) {
+    const pair = commandFor(f, started.launchRef, 'steer', 'source-' + source); const driver = drivers[source];
+    const token = driver.writer.prepare(pair.metadata); pending.push(driver.writer.dispatchNow(token, pair.command, () => true));
+    for (let index = 0; index < 64; index += 1) assert.equal(driver.controller.observeItem('native-id', 'native-context', {
+      type: 'userMessage', id: 'item-' + index, clientId: pair.metadata.deliveryAttemptId, content: pair.command.input }), true);
+    driver.controller.acknowledge(token, 'native-context');
+  }
+  await Promise.all(pending);
+  const extra = commandFor(f, started.launchRef, 'steer', 'extra'); const token = second.writer.prepare(extra.metadata);
+  const dispatch = second.writer.dispatchNow(token, extra.command, () => true);
+  assert.equal(second.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'extra', clientId: 'extra', content: extra.command.input }), false);
+  second.controller.acknowledge(token, 'native-context'); await dispatch;
+  h.controller.invalidate();
+  const restored = commandFor(f, started.launchRef, 'steer', 'restored'); const restoredToken = second.writer.prepare(restored.metadata);
+  const restoredPending = second.writer.dispatchNow(restoredToken, restored.command, () => true);
+  assert.equal(second.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'restored', clientId: 'restored', content: restored.command.input }), true);
+  second.controller.acknowledge(restoredToken, 'native-context'); await restoredPending; second.controller.invalidate();
+});
+
+test('ID-F08-NI13 prepare at zero then dispatch at fifty releases payload at sixty without source access', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness(); const second = h.newWriter();
+  const pair = withText(commandFor(f, started.launchRef, 'steer', 'delayed'), 'a'.repeat(90000));
+  const token = h.writer.prepare(pair.metadata); let receipt;
+  h.writer.subscribeEvidence((cap, observed) => { receipt = observed; });
+  h.advance(50000);
+  const dispatched = h.writer.dispatchNow(token, pair.command, () => true);
+  h.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'expires-at-sixty', clientId: 'delayed', content: pair.command.input });
+  h.controller.acknowledge(token, 'native-context'); await dispatched; assert.ok(receipt);
+  const next = withText(commandFor(f, started.launchRef, 'steer', 'other-source'), 'b'.repeat(180000));
+  const nextToken = second.writer.prepare(next.metadata);
+  assert.throws(() => second.writer.dispatchNow(nextToken, next.command, () => true));
+  h.advance(10000);
+  const resumed = second.writer.dispatchNow(nextToken, next.command, () => true);
+  second.controller.acknowledge(nextToken, 'native-context'); await resumed;
+  assert.equal(h.writer.inspectEvidence(token, receipt), null);
+  assert.equal(h.writer.prepare(pair.metadata), null); second.controller.invalidate(); h.controller.invalidate();
+});
+
+test('ID-F08-NI12 final guard invalidate releases each reservation once and never permits over-budget sources', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  const second = h.newWriter(); const third = h.newWriter();
+  const firstPair = withText(commandFor(f, started.launchRef, 'steer', 'invalidated'), 'a'.repeat(180000));
+  const firstToken = h.writer.prepare(firstPair.metadata);
+  assert.throws(() => h.writer.dispatchNow(firstToken, firstPair.command, () => { h.controller.invalidate(); return false; }));
+  const secondPair = withText(commandFor(f, started.launchRef, 'steer', 'second-source'), 'b'.repeat(180000));
+  const secondToken = second.writer.prepare(secondPair.metadata);
+  const accepted = second.writer.dispatchNow(secondToken, secondPair.command, () => true);
+  second.controller.acknowledge(secondToken, 'native-context'); await accepted;
+  const thirdPair = withText(commandFor(f, started.launchRef, 'steer', 'third-source'), 'c'.repeat(180000));
+  const thirdToken = third.writer.prepare(thirdPair.metadata);
+  assert.throws(() => third.writer.dispatchNow(thirdToken, thirdPair.command, () => true));
+  second.controller.invalidate();
+  const afterRelease = third.writer.dispatchNow(thirdToken, thirdPair.command, () => true);
+  third.controller.acknowledge(thirdToken, 'native-context'); await afterRelease; third.controller.invalidate();
+});
+
+test('ID-F08-NI12 register exception releases a reserved payload before another source dispatches', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  const failing = h.newWriter({ registerThrows: true }); const working = h.newWriter();
+  const first = withText(commandFor(f, started.launchRef, 'steer', 'register-throws'), 'a'.repeat(180000));
+  assert.throws(() => failing.writer.dispatchNow(failing.writer.prepare(first.metadata), first.command, () => true));
+  const second = withText(commandFor(f, started.launchRef, 'steer', 'after-exception'), 'b'.repeat(180000));
+  const token = working.writer.prepare(second.metadata);
+  const pending = working.writer.dispatchNow(token, second.command, () => true);
+  working.controller.acknowledge(token, 'native-context'); await pending;
+  failing.controller.invalidate(); working.controller.invalidate(); h.controller.invalidate();
 });

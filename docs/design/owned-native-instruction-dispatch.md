@@ -69,17 +69,30 @@ RPC IDはlifecycleを小整数、readを2^32以上2^48未満、instructionを2^4
 発行していないresponseは成功扱いにせず、既存protocolのfail-closedを維持する。
 
 capability、消費済みdelivery ID、native item帰属はsource lifetimeで128件に制限し、上限後はfail-closedにする。
-本文と候補receiptは全source合計256KiB/候補128件/TTL60秒に制限し、期限後に本文・候補・receiptを解放する。
+本文と候補receiptは同writer moduleの全sourceで共有するprivate budgetへ、保持前にバイト数/候補数を予約する。
+合計256KiB/候補128件を超える予約を拒否し、invalidate/最終guard拒否/期限到達で解放する。
+解放期限はprepare起点60秒であり、dispatchまでの経過時間を差し引いたtimerで本文・候補・receiptを解放する。
 IDとitemの帰属tombstoneは期限後も保持し、同delivery retryやitemの別requestへの再帰属を認可しない。
 ack timeoutやwrite errorの後着responseはpositive contextへ昇格させず、早期terminalはnegativeだけを採用する。
+終了済みcontext履歴は初回と128 dispatchを収容する129件に制限し、削除せず保持する。
+残容量がないstopped startはprepareと同期最終guardで拒否する。
+
+Claude resultはsource寿命でUUIDと全metadataのcanonical fingerprintを129件まで保持し、detachや新contextで消さない。
+既知UUIDの一致する再送は現在のcontextの有無より先に無視する。
+UUID欠損/invalid、同UUIDのmetadata矛盾、容量上限はsourceをfail-closedにし、proofとactor-only writerの両方を閉じる。
+UUIDはcontext相関IDではない。
+初見resultのcontext終端は、入力が一つだけin-flightでnative protocolが順序を保持する前提に依存する。
 
 ## Fixture検証記録
 
-専用fixture 46件を含むrunner/source/collector/composition/runtime関連251件が通過した。
-全体のnpm testは1530件すべてが成功し、失敗、skip、cancelはなかった。
+初期検証では専用fixture46件を含むrunner/source/collector/composition/runtime関連251件が通過した。
+実装コミット3969d72の全体npm testは1530件すべてが成功し、失敗、skip、cancelはなかった。
+追加の終了履歴/共有budget/prepare期限/Claude UUID再送guardは専用fixture60件を含む関連265件すべてで通過した。
+この追加修正後の全体・実nativeの再確認は未実施であり、pre-fixの記録と分けて更新する。
 専用fixtureは両providerの実runnerと実kernelをfake stdioへ接続し、NI01..NI08のwrite/actor/proof/evidenceを直接観測する。
 delegated/reviewの親だけはtrusted lifecycle fixtureであり、対象childは実runnerである。
-NI09の期限とglobal容量は別module instanceの制御clockでprivate APIを呼び、productionへtest専用clockを追加していない。
+NI09/NI12/NI13の期限・全source容量・冪等予約解放は、同じ別module instanceの複数writerを制御clockで呼んで確認した。
+productionへtest専用clockを追加していない。
 service永続化は同期sink契約境界で検査し、実store/serviceの結合検証は別担当の採用gateとする。
 実native実行はこのfixture結果に含めない。
 
