@@ -229,3 +229,9 @@ Codex production authorizationが実際のmanaged browser loginと同じowned ap
 これらのscenarioはfixtureと製品adapterの契約を検証する。
 ID-F05-N01は実file storeと製品delivery adapterを使うが、native transportへの配送はfixture sinkでありreal runtimeの配送成功には数えない。
 real runtimeの複数context、生存観測、context後の再照合、delegated chainの復帰は未確認であり、#171-Bと#180-Aの実接続採用条件として残す。
+## 確認した実接続の範囲
+
+2026年10月7日、commit `0d5f5e254028dae4456fee6f0ce128f6599f95ee`のv1経路をClaude Code 2.1.291へ隔離HOMEから接続し、standaloneの一回のassistant contextを確認した。
+context終端後はactor stateとcanonical期間がactiveのまま、contextStateがendedとなり、旧opaque proofとwriterの認可が拒否された。
+owned stop後は実childのexitとcloseを確認し、通常HOMEのCodex/Claude認証ファイルは不変、隔離HOMEの認証関連ファイルの新規作成は0件だった。
+この結果は複数context、delegated、handoff、reconnect、Codex waitの実接続成功を示さない。
