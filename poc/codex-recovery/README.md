@@ -2,7 +2,7 @@
 
 [Issue #162](https://github.com/ktysne/agent-cockpit/issues/162)で、切断と再起動後の状態照合を調べるための試作。
 実測の条件と制限は[検証記録](../../docs/poc-codex-162.md)に記載する。
-現在は検証中で、本番対応の完了を示すものではない。
+調査は完了したが、採用方式の合格と本番実装は未完了である。制約、代替、追加試験を含む調査結果は[検証記録](../../docs/poc-codex-162.md)を参照する。PRは未マージ。
 
 ## 保存と復旧
 
@@ -58,6 +58,14 @@ node poc/codex-recovery/native-runner.js --codex-path $CodexPath --out "poc/out/
 node poc/codex-recovery/native-runner.js --codex-path $CodexPath --out "poc/out/poc162-approval-$RunId" --mode approval --timeout-ms 20000
 node poc/codex-recovery/native-runner.js --codex-path $CodexPath --out "poc/out/poc162-cockpit-$RunId" --mode cockpit --timeout-ms 20000
 ```
+
+Codex正式レビューは2往復で収束した。
+round 1の3件の要修正をcommit `4240d49`で解消し、round 2では要修正0件だった。
+改善提案にあったacceptedTurnId欠落の拒否と識別子保持もテストで補強した。
+round 1修正後のRecoveryModel 27件とcheckpoint store 5件は成功した。
+native runnerは変更しておらず、関連テスト18件は直前の実行で成功しているため、PoC関連テストは計50件成功している。
+`npm test`全体の917件中915件成功、2件失敗という結果はレビュー修正前の実行であり、修正後は再実行していない。
+2件は[Issue #168](https://github.com/ktysne/agent-cockpit/issues/168)に記録された期待値不一致である。
 
 現時点でCockpitの合成データ再起動、Codex metadata復旧、approval requestの観測と割り込み試験は成功した。
 steer入力itemの適用は確認できず、元の実行が継続したとも判定していない。

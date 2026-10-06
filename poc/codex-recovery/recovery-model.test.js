@@ -211,6 +211,8 @@ test('accepted回答のreceiptと確定識別子は登録eventや不完全更新
     acceptedTurnId: 'turn-1' }) }).reason, 'invalid_delivery');
   assert.equal(model.upsertDelivery({ binding, delivery: makeDelivery({ state: 'unknown', deliveryId: 'delivery-2',
     acceptedTurnId: 'turn-1' }) }).reason, 'delivery_identity_conflict');
+  assert.equal(model.upsertDelivery({ binding, delivery: makeDelivery({ state: 'unknown', deliveryId: 'delivery-1' }) }).reason,
+    'accepted_turn_conflict');
   assert.equal(model.ingestEvent({ binding, stream: 'bridge', generation: 1, ordinal: 1, eventId: 'late-registration',
     recordType: 'delivery', record: makeDelivery() }).reason, 'delivery_state_regression');
 
