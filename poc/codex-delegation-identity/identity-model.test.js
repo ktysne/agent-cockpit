@@ -366,6 +366,39 @@ test('the first confirmed result fixes its status and exit code for the attempt'
   assert.equal(row.audit.event_count, 2);
 });
 
+test('a confirmed result never gains or loses an exit code from a later result', () => {
+  const cases = [
+    { launchId: 'code-present-first', firstExitCode: 0, laterExitCode: undefined, expectedExitCode: 0 },
+    { launchId: 'code-missing-first', firstExitCode: undefined, laterExitCode: 0, expectedExitCode: null },
+  ];
+
+  for (const [index, scenario] of cases.entries()) {
+    const model = createModel();
+    const { safe } = register(model, {
+      launchId: scenario.launchId,
+      runId: `run-exit-${index}`,
+      attemptId: `attempt-exit-${index}`,
+      origin: 'standalone',
+    });
+    assert.ok(safe);
+    assert.equal(model.ingestAudit(auditEvent({
+      eventId: `first-result-${index}`, launchId: safe.launchId,
+      runId: safe.runId, attemptId: safe.attemptId, kind: 'result',
+      status: 'completed', exitCode: scenario.firstExitCode,
+    })), true);
+    const before = model.project();
+
+    assert.equal(model.ingestAudit(auditEvent({
+      eventId: `later-result-${index}`, launchId: safe.launchId,
+      runId: safe.runId, attemptId: safe.attemptId, kind: 'result',
+      status: 'completed', exitCode: scenario.laterExitCode,
+    })), false);
+    assert.deepEqual(model.project(), before);
+    assert.equal(model.launches.get(safe.launchId).resultExitCode, scenario.expectedExitCode);
+    assert.equal(rowFor(model, (row) => row.launch_id === safe.launchId).audit.event_count, 1);
+  }
+});
+
 test('handoff generations prevent delayed ownership events from restoring an old parent', () => {
   const model = createModel();
   const { safe } = register(model);
