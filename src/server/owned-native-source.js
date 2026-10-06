@@ -122,6 +122,22 @@ function createOwnedNativeSource(options) {
     return Object.freeze({ type, provider: source.provider, identity, context });
   }
 
+  function recordTerminal(identity, context, allowMissingCurrentContext) {
+    if (!identity || !context || source.invalidated || !sameIdentity(source.currentIdentity, identity)) return false;
+    if (allowMissingCurrentContext) {
+      if (source.currentContext !== null) return false;
+    } else if (!source.currentContext || source.currentContext.nativeContextId !== context.nativeContextId) {
+      return false;
+    }
+    const key = identity.nativeId + '\u0000' + context.nativeContextId;
+    if (source.terminals.has(key)) return false;
+    const event = makeEvent('context_ended', identity, context);
+    source.terminals.set(key, event);
+    deliver(source.terminalSubscribers, event, (subscription) =>
+      subscription.active && subscription.ownerToken === source.owner);
+    return true;
+  }
+
   function deliver(subscribers, event, stillCurrent) {
     for (const subscription of [...subscribers]) {
       if (!stillCurrent(subscription)) continue;
@@ -314,7 +330,8 @@ function createOwnedNativeSource(options) {
       const context = freezeContext(value, source.provider);
       if (!identity || !context || source.invalidated ||
           !sameIdentity(source.currentIdentity, identity) ||
-          (source.currentContext && !sameContext(source.currentContext, context))) return false;
+          (source.currentContext && !sameContext(source.currentContext, context)) ||
+          source.terminals.has(identity.nativeId + '\u0000' + context.nativeContextId)) return false;
       source.currentContext = context;
       return true;
     },
@@ -331,16 +348,12 @@ function createOwnedNativeSource(options) {
     observeTerminal(identityValue, value) {
       const identity = freezeIdentity(identityValue, source.provider, source.hostId, source.homeScopeId);
       const context = freezeContext(value, source.provider, true);
-      if (!identity || !context || source.invalidated ||
-          !sameIdentity(source.currentIdentity, identity) ||
-          !source.currentContext || source.currentContext.nativeContextId !== context.nativeContextId) return false;
-      const key = identity.nativeId + '\u0000' + context.nativeContextId;
-      if (source.terminals.has(key)) return false;
-      const event = makeEvent('context_ended', identity, context);
-      source.terminals.set(key, event);
-      deliver(source.terminalSubscribers, event, (subscription) =>
-        subscription.active && subscription.ownerToken === source.owner);
-      return true;
+      return recordTerminal(identity, context, false);
+    },
+    observeEarlyTerminal(identityValue, value) {
+      const identity = freezeIdentity(identityValue, source.provider, source.hostId, source.homeScopeId);
+      const context = freezeContext(value, source.provider, true);
+      return recordTerminal(identity, context, true);
     },
     isLeaseTokenCurrent(leaseToken) {
       return Boolean(leaseToken && leaseToken.source === source && isLeaseRecordCurrent(leaseToken));

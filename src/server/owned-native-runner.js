@@ -242,7 +242,7 @@ function isSynchronousTrue(callback) {
 function createOwnedNativeRunner(options) {
   assertOnlyKeys(options, [
     'provider', 'executablePath', 'hostId', 'homeScopeId', 'homePath', 'cwd', 'profile',
-    'getAuthentication', 'onAuthenticationRequired', 'isCurrent', 'isSourceCurrent', 'isContextCurrent', 'onWaitRequired',
+    'getAuthentication', 'onAuthenticationRequired', 'isCurrent', 'isSourceCurrent', 'isObservationCurrent', 'isContextCurrent', 'onWaitRequired',
     'spawnImpl', 'timeouts', 'onNative', 'onDisconnect', 'ownedSourceClaim', 'onSourceReady',
   ], 'invalid_configuration');
   if (options.provider !== 'codex' && options.provider !== 'claude') throw runnerError('invalid_provider');
@@ -267,6 +267,7 @@ function createOwnedNativeRunner(options) {
   if (!waitProfile && options.onWaitRequired !== undefined) throw runnerError('invalid_profile');
   if (options.isCurrent !== undefined && typeof options.isCurrent !== 'function') throw runnerError('invalid_current_callback');
   if (options.isSourceCurrent !== undefined && typeof options.isSourceCurrent !== 'function') throw runnerError('invalid_current_callback');
+  if (options.isObservationCurrent !== undefined && typeof options.isObservationCurrent !== 'function') throw runnerError('invalid_current_callback');
   if (options.isContextCurrent !== undefined && typeof options.isContextCurrent !== 'function') throw runnerError('invalid_current_callback');
   if (options.onAuthenticationRequired !== undefined && options.provider !== 'codex') {
     throw runnerError('invalid_authentication_prompt');
@@ -295,6 +296,7 @@ function createOwnedNativeRunner(options) {
   const onWaitRequired = options.onWaitRequired;
   const isOwnerCurrent = options.isCurrent || (() => true);
   const isSourceCurrent = options.isSourceCurrent || isOwnerCurrent;
+  const isObservationCurrent = options.isObservationCurrent || isSourceCurrent;
   const isContextCurrent = options.isContextCurrent || (() => true);
   const spawnImpl = options.spawnImpl === undefined ? spawn : options.spawnImpl;
   if (typeof spawnImpl !== 'function') throw runnerError('invalid_spawn_adapter');
@@ -332,6 +334,9 @@ function createOwnedNativeRunner(options) {
   const pendingReadRpcs = new Map();
   const MAX_PENDING_READ_RPCS = 1;
   let nextRpcId = 1;
+  let firstIssuedReadRpcId = null;
+  let lastIssuedReadRpcId = null;
+  let pendingReadWrite = null;
   let nativeIdentity = null;
   let nativeContext = null;
   let terminalContextId = null;
@@ -516,6 +521,7 @@ function createOwnedNativeRunner(options) {
       pendingReadRpcs.delete(id);
       if (typeof pending.reject === 'function') pending.reject(runnerError(code));
     }
+    pendingReadWrite = null;
     clearActiveLogin(code);
     reportDisconnect(code);
     stopChild(child).catch(() => {});
@@ -523,7 +529,7 @@ function createOwnedNativeRunner(options) {
 
   function notifyNative(event, terminal = false) {
     if (!isCurrent(generation)) return false;
-    if (!terminal && !isSynchronousTrue(isSourceCurrent)) return false;
+    if (!terminal && !isSynchronousTrue(isObservationCurrent)) return false;
     try {
       const result = options.onNative(event);
       if (result && typeof result.then === 'function') {
@@ -534,7 +540,7 @@ function createOwnedNativeRunner(options) {
       if (error instanceof OwnedNativeRunnerError) throw error;
       throw runnerError('native_callback_failed');
     }
-    return isCurrent(generation) && (terminal || isSynchronousTrue(isSourceCurrent));
+    return isCurrent(generation) && (terminal || isSynchronousTrue(isObservationCurrent));
   }
 
   function emitIdentity(nativeId) {
@@ -555,7 +561,7 @@ function createOwnedNativeRunner(options) {
       throw runnerError('owned_source_identity_conflict');
     }
     const delivered = notifyNative(Object.freeze({ type: 'identity', provider, identity }));
-    if (sourceController && delivered && isSynchronousTrue(isSourceCurrent)) sourceController.deliverIdentity(identity);
+    if (sourceController && delivered && isSynchronousTrue(isObservationCurrent)) sourceController.deliverIdentity(identity);
   }
 
   function emitContext(nativeContextId) {
@@ -576,19 +582,20 @@ function createOwnedNativeRunner(options) {
       throw runnerError('owned_source_context_conflict');
     }
     const delivered = notifyNative(Object.freeze({ type: 'context', provider, identity: nativeIdentity, context }));
-    if (sourceController && delivered && isSynchronousTrue(isSourceCurrent)) {
+    if (sourceController && delivered && isSynchronousTrue(isObservationCurrent)) {
       sourceController.deliverContext(nativeIdentity, context);
     }
     if (resolveContext) resolveContext();
   }
 
-  function emitContextEnded(nativeContextId) {
+  function emitContextEnded(nativeContextId, matchedEarlyTurnStart = false) {
     if (!nativeIdentity || !isIdentifier(nativeContextId)) throw runnerError('native_context_terminal_invalid');
     if (terminalContextId) {
       if (terminalContextId !== nativeContextId) throw runnerError('native_context_conflict');
       throw runnerError('native_context_terminal_duplicate');
     }
     if (nativeContext && nativeContext.nativeContextId !== nativeContextId) throw runnerError('native_context_conflict');
+    if (!nativeContext && !matchedEarlyTurnStart) throw runnerError('native_context_conflict');
     invalidateWait();
     terminalContextId = nativeContextId;
     terminalContextCount = 1;
@@ -596,7 +603,10 @@ function createOwnedNativeRunner(options) {
       kind: provider === 'codex' ? 'turn' : 'assistant_message',
       nativeContextId,
     });
-    if (sourceController && !sourceController.observeTerminal(nativeIdentity, context)) {
+    const observed = sourceController && (matchedEarlyTurnStart
+      ? sourceController.observeEarlyTerminal(nativeIdentity, context)
+      : sourceController.observeTerminal(nativeIdentity, context));
+    if (sourceController && !observed) {
       throw runnerError('owned_source_terminal_conflict');
     }
     notifyNative(Object.freeze({ type: 'context_ended', provider, identity: nativeIdentity, context }), true);
@@ -841,6 +851,7 @@ function createOwnedNativeRunner(options) {
   function sendRpc(method, params, expectedGeneration) {
     requireCurrent(expectedGeneration);
     if (pendingRpc) throw runnerError('rpc_overlap');
+    if (firstIssuedReadRpcId !== null) throw runnerError('rpc_id_sequence_invalid');
     const id = nextRpcId;
     nextRpcId += 1;
     let resolveResponse;
@@ -871,6 +882,34 @@ function createOwnedNativeRunner(options) {
       nativeIdentity.nativeId === identity.nativeId &&
       nativeContext.nativeContextId === context.nativeContextId &&
       terminalContextId !== context.nativeContextId;
+  }
+
+  function isIssuedOwnedReadRpcId(id) {
+    return Number.isSafeInteger(id) && firstIssuedReadRpcId !== null &&
+      id >= firstIssuedReadRpcId && id <= lastIssuedReadRpcId;
+  }
+
+  function retireReadWriteState(writeState) {
+    if (!writeState) return;
+    writeState.retired = true;
+    if (pendingReadWrite === writeState) pendingReadWrite = null;
+  }
+
+  function retirePendingRead(id, pending, reason) {
+    if (pendingReadRpcs.get(id) === pending) pendingReadRpcs.delete(id);
+    retireReadWriteState(pending.writeState);
+    const reject = pending.reject;
+    pending.resolve = null;
+    pending.reject = null;
+    if (typeof reject === 'function') reject(reason);
+  }
+
+  function retireStaleReadRpcs() {
+    for (const [id, pending] of pendingReadRpcs) {
+      if (!isCurrentOwnedRead(pending.expectedGeneration, pending.leaseToken, pending.identity, pending.context)) {
+        retirePendingRead(id, pending, runnerError('operation_stopped'));
+      }
+    }
   }
 
   function awaitOwnedRead(value, expectedGeneration, leaseToken, identity, context) {
@@ -904,6 +943,7 @@ function createOwnedNativeRunner(options) {
   }
 
   function sendOwnedReadRpc(method, params, expectedGeneration, leaseToken, identity, context) {
+    retireStaleReadRpcs();
     if (!['thread/loaded/list', 'thread/read'].includes(method) ||
         pendingReadRpcs.size >= MAX_PENDING_READ_RPCS ||
         !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
@@ -911,7 +951,6 @@ function createOwnedNativeRunner(options) {
     }
     const id = nextRpcId;
     if (!Number.isSafeInteger(id)) throw runnerError('rpc_id_exhausted');
-    nextRpcId += 1;
     let resolveResponse;
     let rejectResponse;
     const response = new Promise((resolve, reject) => {
@@ -919,20 +958,45 @@ function createOwnedNativeRunner(options) {
       rejectResponse = reject;
     });
     response.catch(() => {});
-    pendingReadRpcs.set(id, { id, resolve: resolveResponse, reject: rejectResponse, abandoned: false });
+    const pending = {
+      id,
+      expectedGeneration,
+      leaseToken,
+      identity,
+      context,
+      resolve: resolveResponse,
+      reject: rejectResponse,
+    };
+    const writeState = { id, settled: false, retired: false };
+    pending.writeState = writeState;
     let writeAttempted = false;
     const writeResponse = new Promise((resolve, reject) => {
       try {
-        if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
-            !child || !child.stdin || typeof child.stdin.write !== 'function') {
+        const stdin = child && child.stdin;
+        const write = stdin && stdin.write;
+        if (!stdin || typeof write !== 'function' ||
+            !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
           throw runnerError('owned_read_unavailable');
         }
+        if (firstIssuedReadRpcId === null) firstIssuedReadRpcId = id;
+        else if (id !== lastIssuedReadRpcId + 1) throw runnerError('rpc_id_sequence_invalid');
+        lastIssuedReadRpcId = id;
+        nextRpcId += 1;
+        pendingReadRpcs.set(id, pending);
+        pendingReadWrite = writeState;
         writeAttempted = true;
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', (error) => {
-          if (error) reject(runnerError('stdin_write_failed'));
+        write.call(stdin, JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', (error) => {
+          writeState.settled = true;
+          if (pendingReadWrite === writeState) pendingReadWrite = null;
+          if (error) {
+            if (writeState.retired && isCurrent(expectedGeneration)) fail('stdin_write_failed');
+            reject(runnerError('stdin_write_failed'));
+          }
           else resolve();
         });
       } catch (error) {
+        writeState.settled = true;
+        if (pendingReadWrite === writeState) pendingReadWrite = null;
         reject(error instanceof OwnedNativeRunnerError ? error : runnerError('stdin_write_failed'));
       }
     });
@@ -941,20 +1005,9 @@ function createOwnedNativeRunner(options) {
         await awaitOwnedRead(writeResponse, expectedGeneration, leaseToken, identity, context);
         return await awaitOwnedRead(response, expectedGeneration, leaseToken, identity, context);
       } catch (error) {
-        if (pendingReadRpcs.has(id)) {
-          const leaseStillCurrent = sourceController.isLeaseTokenCurrent(leaseToken);
-          if (writeAttempted && !leaseStillCurrent && ['operation_stopped', 'rpc_timeout'].includes(error.code)) {
-            const pending = pendingReadRpcs.get(id);
-            pending.abandoned = true;
-            pending.resolve = null;
-            pending.reject = null;
-            throw error;
-          }
-          pendingReadRpcs.delete(id);
-          if (error.code === 'rpc_timeout' || error.code === 'stdin_write_failed') {
-            fail(error.code === 'rpc_timeout' ? 'owned_read_timeout' : 'stdin_write_failed');
-          }
-        }
+        if (pendingReadRpcs.get(id) === pending) retirePendingRead(id, pending, error);
+        else retireReadWriteState(writeState);
+        if (writeAttempted && error.code === 'stdin_write_failed') fail('stdin_write_failed');
         throw error instanceof OwnedNativeRunnerError ? error : runnerError('owned_read_failed');
       }
     })();
@@ -1032,11 +1085,14 @@ function createOwnedNativeRunner(options) {
       return;
     }
     const pendingRead = pendingReadRpcs.get(message.id);
-    if (!pendingRead) throw runnerError('rpc_response_unexpected');
-    pendingReadRpcs.delete(message.id);
-    if (pendingRead.abandoned) return;
-    if (hasError) pendingRead.reject(runnerError('rpc_rejected'));
-    else pendingRead.resolve(message.result);
+    if (pendingRead) {
+      pendingReadRpcs.delete(message.id);
+      const callback = hasError ? pendingRead.reject : pendingRead.resolve;
+      if (typeof callback === 'function') callback(hasError ? runnerError('rpc_rejected') : message.result);
+      return;
+    }
+    if (isIssuedOwnedReadRpcId(message.id)) return;
+    throw runnerError('rpc_response_unexpected');
   }
 
   function handleClaudeMessage(message) {
@@ -1301,7 +1357,7 @@ function createOwnedNativeRunner(options) {
         throw runnerError('native_context_conflict');
       }
       earlyTurnCompletion = null;
-      emitContextEnded(turnResult.turn.id);
+      emitContextEnded(turnResult.turn.id, true);
     } else {
       emitContext(turnResult.turn.id);
       const queuedWaitCall = earlyWaitCall;
@@ -1368,6 +1424,7 @@ function createOwnedNativeRunner(options) {
       pendingReadRpcs.delete(id);
       if (typeof pending.reject === 'function') pending.reject(runnerError('operation_stopped'));
     }
+    pendingReadWrite = null;
     stopPromise = stopChild(child).then((confirmed) => {
       if (confirmed || state !== 'stop_unconfirmed') state = 'stopped';
       return safeSnapshot();

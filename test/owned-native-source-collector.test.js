@@ -31,7 +31,9 @@ function fixture(t, provider, options = {}) {
   const methods = [];
   const observations = [];
   const children = [];
-  let collector, capability, holdRead = false, pendingRead;
+  let collector, capability, holdRead = false, pendingRead, heldContext, runnerOptionsCaptured;
+  let resolveHeldContext;
+  const heldContextReady = new Promise((resolve) => { resolveHeldContext = resolve; });
   const child = new EventEmitter();
   child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
   child.killCalls = 0;
@@ -41,16 +43,20 @@ function fixture(t, provider, options = {}) {
     write(line, callback) {
       const request = JSON.parse(line);
       if (provider === 'claude' && request.type === 'user') {
-        child.send({ type: 'system', subtype: 'init', session_id: 'native-id' },
-          { type: 'stream_event', session_id: 'native-id', parent_tool_use_id: null,
-            event: { type: 'message_start', message: { id: 'native-context', role: 'assistant' } } });
+        child.send({ type: 'system', subtype: 'init', session_id: 'native-id' });
+        const sendContext = () => child.send({ type: 'stream_event', session_id: 'native-id', parent_tool_use_id: null,
+          event: { type: 'message_start', message: { id: 'native-context', role: 'assistant' } } });
+        if (options.holdContext) { heldContext = sendContext; resolveHeldContext(); } else sendContext();
       } else if (request.method && Object.hasOwn(request, 'id')) {
         methods.push(request.method);
         const send = (result) => child.send({ id: request.id, result });
         if (request.method === 'initialize') send({ serverInfo: { name: 'fixture', version: '1' }, codexHome: path.join(homePath, '.codex') });
         else if (request.method === 'account/login/start') send({ type: 'chatgpt', loginId: 'login-id', authUrl: 'https://auth.example.test/device' });
         else if (request.method === 'thread/start') send({ thread: { id: 'native-id' } });
-        else if (request.method === 'turn/start') send({ turn: { id: 'native-context' } });
+        else if (request.method === 'turn/start') {
+          const sendContext = () => send({ turn: { id: 'native-context' } });
+          if (options.holdContext) { heldContext = sendContext; resolveHeldContext(); } else sendContext();
+        }
         else if (request.method === 'thread/loaded/list') send({ data: ['native-id'], nextCursor: null });
         else if (request.method === 'thread/read') {
           const result = { thread: { id: 'native-id', status: { type: 'active' }, turns: [{ id: 'native-context', status: 'inProgress', items: [] }] } };
@@ -65,6 +71,7 @@ function fixture(t, provider, options = {}) {
     getAuthentication: () => ({ oauthToken: 'fixture-token' }),
     onAuthenticationRequired: ({ loginId }) => child.send({ method: 'account/login/completed', params: { loginId, success: true } }),
     runnerFactory(runnerOptions) {
+      runnerOptionsCaptured = runnerOptions;
       return createOwnedNativeRunner({ ...runnerOptions,
         onSourceReady(cap) { capability = cap; runnerOptions.onSourceReady(cap); },
         onNative(event) {
@@ -81,6 +88,7 @@ function fixture(t, provider, options = {}) {
   t.after(() => composition.stop(receipt));
   return { composition, collector, receipt, registrationKernel, launchKernel, runtimeKernel, child, children, methods, observations, directory,
     onKernelRead(callback) { onKernelRead = callback; },
+    runnerOptions: () => runnerOptionsCaptured, contextHeld: () => Boolean(heldContext), heldContextReady: () => heldContextReady, releaseContext: () => heldContext?.(),
     capability: () => capability, holdRead: () => { holdRead = true; }, releaseRead: () => pendingRead?.(), pendingRead: () => Boolean(pendingRead),
     start: () => composition.start(receipt, { inputText: 'fixture input' }),
   };
@@ -277,5 +285,83 @@ for (const provider of ['claude', 'codex']) {
     t.mock.timers.tick(5000);
     assert.equal(f.children.length, 0);
     assert.equal(f.runtimeKernel.registry.snapshot().connections.length, 0);
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  for (const attachBeforeContext of [false, true]) {
+    test(`${provider}: startup detach with reattach-before-context=${attachBeforeContext} keeps the child and requires a fresh read before proof`, async (t) => {
+      const f = fixture(t, provider, { holdContext: true });
+      const starting = f.start();
+      await Promise.race([f.heldContextReady(), starting.then(() => { throw new Error('native context was not held'); })]);
+      await f.collector.disconnect();
+      assert.equal(f.runnerOptions().isSourceCurrent(), true);
+      assert.equal(f.runnerOptions().isObservationCurrent(), false);
+      assert.equal(f.runtimeKernel.registry.snapshot().actors.length, 0);
+      if (attachBeforeContext) await f.collector.connect();
+      assert.equal(f.runnerOptions().isObservationCurrent(), false);
+      f.releaseContext();
+      const started = await starting;
+      assert.equal(started.accepted, false);
+      assert.equal(f.composition.snapshot().launches[0].processState, 'running');
+      assert.equal(f.child.killCalls, 0);
+      assert.equal(f.runtimeKernel.registry.snapshot().actors.length, 0);
+      assert.equal(f.composition.resolveProof(started.launchRef), null);
+      assert.equal(f.composition.writerFor(started.launchRef), null);
+      assert.equal(f.registrationKernel.registry.snapshot().executions[0].state, 'active');
+      if (!attachBeforeContext) await f.collector.connect();
+      assert.equal(f.runnerOptions().isObservationCurrent(), false);
+      assert.equal(f.composition.resolveProof(started.launchRef), null);
+      const read = await f.collector.observeKnownThread('native-id');
+      assert.equal(read.status, provider === 'codex' ? 'observed' : 'unsupported');
+      assert.equal(Boolean(f.composition.resolveProof(started.launchRef)), provider === 'codex');
+      assert.equal(f.runtimeKernel.registry.snapshot().actors.length, provider === 'codex' ? 1 : 0);
+      assert.equal(f.child.killCalls, 0);
+    });
+  }
+
+  test(`${provider}: a detached startup still fails closed when its canonical period expires`, async (t) => {
+    const f = fixture(t, provider, { holdContext: true });
+    const starting = f.start();
+    await Promise.race([f.heldContextReady(), starting.then(() => { throw new Error('native context was not held'); })]);
+    await f.collector.disconnect();
+    f.registrationKernel.authority.end(f.registrationKernel.registry.snapshot().executions[0].executionId);
+    assert.equal(f.runnerOptions().isSourceCurrent(), false);
+    f.releaseContext();
+    await assert.rejects(starting);
+    assert.ok(f.child.killCalls > 0);
+    assert.equal(f.runtimeKernel.registry.snapshot().actors.length, 0);
+    assert.equal(f.collector.snapshot().observations[0].status, 'unknown');
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: physical source expiry during detached startup cannot continue or issue an actor`, async (t) => {
+    const f = fixture(t, provider, { holdContext: true });
+    const starting = f.start();
+    await Promise.race([f.heldContextReady(), starting.then(() => { throw new Error('native context was not held'); })]);
+    await f.collector.disconnect();
+    f.child.emit('exit', 0);
+    assert.equal(f.runnerOptions().isSourceCurrent(), false);
+    await assert.rejects(starting);
+    assert.equal(f.runtimeKernel.registry.snapshot().actors.length, 0);
+    assert.equal(f.registrationKernel.registry.snapshot().executions[0].state, 'active');
+    assert.equal(f.collector.snapshot().connection.state, 'disconnected');
+  });
+
+  test(`${provider}: a terminal for the private-only detached startup context prevents any later proof`, async (t) => {
+    const f = fixture(t, provider, { holdContext: true });
+    const starting = f.start();
+    await Promise.race([f.heldContextReady(), starting.then(() => { throw new Error('native context was not held'); })]);
+    await f.collector.disconnect(); f.releaseContext();
+    const started = await starting;
+    if (provider === 'codex') f.child.send({ method: 'turn/completed', params: { threadId: 'native-id', turn: { id: 'native-context', status: 'completed' } } });
+    else f.child.send({ type: 'stream_event', session_id: 'native-id', parent_tool_use_id: null, event: { type: 'message_stop' } });
+    await f.collector.connect();
+    assert.notEqual((await f.collector.observeKnownThread('native-id')).status, 'observed');
+    assert.equal(f.composition.resolveProof(started.launchRef), null);
+    assert.equal(f.runtimeKernel.registry.snapshot().actors.length, 0);
+    assert.equal(f.child.killCalls, 0);
+    assert.equal(f.registrationKernel.registry.snapshot().executions[0].state, 'active');
   });
 }

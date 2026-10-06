@@ -171,6 +171,8 @@ function createNativeLaunchComposition(options = {}) {
   const proofResolutionInProgress = new Set();
   const proofResolutionReentered = new Set();
   const sourceObservationInProgress = new Set();
+  const sourceContinuationInProgress = new Set();
+  const sourceContinuationReentered = new Set();
   const sourceObservationReentered = new Set();
   const admissionByAttempt = new Map();
   const launchRecords = new Map();
@@ -355,6 +357,36 @@ function createNativeLaunchComposition(options = {}) {
       sourceObservationInProgress.delete(record);
       sourceObservationReentered.delete(record);
     }
+  }
+
+  function sourceCanContinue(record, epoch) {
+    if (!record?.logicalDetached) return sourceCanObserve(record, epoch);
+    if (sourceContinuationInProgress.has(record)) {
+      sourceContinuationReentered.add(record);
+      return false;
+    }
+    sourceContinuationInProgress.add(record);
+    try {
+      if (!physicalSourceCurrent(record, epoch)) return false;
+      const handle = record.connectionHandle;
+      const generation = record.connectionGeneration;
+      const owner = record.currentOwnerRecord;
+      const ownerGeneration = record.ownerGeneration;
+      const stamp = registrationKernel.registry.captureAuthorityRevision();
+      const allowed = launchCanContinue(record, epoch);
+      return allowed && registrationKernel.registry.checkAuthorityRevision(stamp) === true &&
+        !sourceContinuationReentered.has(record) && physicalSourceCurrent(record, epoch) &&
+        record.logicalDetached && record.connectionHandle === handle && record.connectionGeneration === generation &&
+        record.currentOwnerRecord === owner && record.ownerGeneration === ownerGeneration;
+    } catch { return false; }
+    finally {
+      sourceContinuationInProgress.delete(record);
+      sourceContinuationReentered.delete(record);
+    }
+  }
+
+  function sourceObservationAllowed(record, epoch) {
+    return !record.logicalDetached && !record.ownedLoan?.needsFreshContext && sourceCanObserve(record, epoch);
   }
 
   function guardContext(record, context) {
@@ -850,7 +882,7 @@ function createNativeLaunchComposition(options = {}) {
   }
 
   function processNativeEvent(record, event, epoch) {
-    if (record.logicalDetached && physicalSourceCurrent(record, epoch)) {
+    if ((record.logicalDetached || record.ownedLoan?.needsFreshContext) && physicalSourceCurrent(record, epoch)) {
       if (event?.type === 'context_ended') endNativeContext(record, event, epoch);
       return;
     }
@@ -1114,7 +1146,8 @@ function createNativeLaunchComposition(options = {}) {
           },
         } : {}),
         isCurrent: () => launchCanContinue(record, epoch),
-        isSourceCurrent: () => sourceCanObserve(record, epoch),
+        isSourceCurrent: () => sourceCanContinue(record, epoch),
+        isObservationCurrent: () => sourceObservationAllowed(record, epoch),
         isContextCurrent: () => contextCanContinue(record, epoch),
         onNative: (event) => {
           try { processNativeEvent(record, event, epoch); }
@@ -1465,8 +1498,9 @@ function createNativeLaunchComposition(options = {}) {
       try { bindNativeContext(record, result.context, loan.epoch, () => current(opaque)); }
       catch { return { status: 'unknown', reason: 'owned_source_reconciliation_failed' }; }
       if (!current(opaque)) return { status: 'unknown', reason: 'owned_source_unavailable' };
-      if (record.executionActorHandle) loan.needsFreshContext = false;
-      return proof(opaque) ? { status: 'observed', activity: 'active', reason: null } : { status: 'unknown', reason: 'current_proof_unavailable' };
+      const verified = proof(opaque);
+      if (verified) loan.needsFreshContext = false;
+      return verified ? { status: 'observed', activity: 'active', reason: null } : { status: 'unknown', reason: 'current_proof_unavailable' };
     }
 
     const accessor = createOwnedSourceAccessor({

@@ -126,6 +126,21 @@ test('a context terminal survives lease detach and blocks the old context after 
   assert.equal(unsubscribe(), true);
 });
 
+test('only the matched early-terminal path can retain an end before positive context', (t) => {
+  const source = createSource(t);
+  source.controller.observeIdentity(IDENTITY, false);
+  const terminal = Object.freeze({ kind: 'turn', nativeContextId: CONTEXT.nativeContextId });
+  const events = [];
+  source.facade.subscribeTerminal(source.owner, (event) => events.push(event));
+
+  assert.equal(source.controller.observeTerminal(IDENTITY, terminal), false);
+  assert.equal(source.controller.observeEarlyTerminal(IDENTITY, terminal), true);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'context_ended');
+  assert.equal(source.controller.observeContext(IDENTITY, CONTEXT), false);
+  assert.equal(source.controller.observeEarlyTerminal(IDENTITY, terminal), false);
+});
+
 test('a read released during an in-flight native response cannot mint for a new lease', async (t) => {
   let finishRead;
   const source = createSource(t, {

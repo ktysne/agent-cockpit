@@ -97,3 +97,25 @@ collector detachはcanonical periodを維持し、owned stop後はchildのexit�
 同commitの全体テストは1466/1466 PASSで、CodeGraph同期とdiffcheckも成功した。
 検証結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-e6c98bd1-fd88-4909-97f2-984c5a7961ba.json`に保持する。
 同sourceのpositive reconnect、delegated、handoff、およびCodexの実接続は未確認であり、後続の採用gateとして残す。
+
+## 起動継続とreadonly timeout
+
+runnerのisSourceCurrentは起動継続を確認し、positive native eventの配送は任意のisObservationCurrentで別に認可する。
+isObservationCurrent未指定の既存runnerはisSourceCurrentを使う。
+logical detach中は同physical source、epoch、active canonical period、current ownerを確認して起動を継続する。
+runtime connectionの失効はこの継続証拠をpositive context、actor、proof、writerの認可へ昇格させない。
+初回context前にdetachした場合もsource-private tupleだけを保持し、actor/proofを作らない。
+再attach後のneedsFreshContext中は通常native context通知を採用せず、fresh same-pipe read receiptのconsumeとguarded attest/reconcileが成功してから認可する。
+matching terminalはこの待機中もnegative channelで保持する。
+periodまたはphysical source自体の失効時は起動継続を拒否する。
+
+readonly readのactive timeoutはその観測をunknownにし、native childを維持する。
+旧leaseの未応答RPCはactive read枠から外し、遅延応答を拒否する上限付きretired記録へ移す。
+新leaseのfresh readは旧応答を待たずに開始できる。
+pipeの破損やprocess終了はread timeoutと区別して失効させる。
+
+起動途中のdetach適合は両providerの実runner fakepipeで検証する。
+context通知前の再attachを含め、late contextによるactor/proof/writer発行は0回、child停止は0回、canonical periodはactiveを保つ。
+Codexのfresh read後だけ復旧し、Claudeはunsupportedを維持する。
+periodまたはphysical sourceの失効と、private-only contextのmatching terminalは同じfixtureで拒否を確認する。
+この起動継続のfixture結果は、上記commitのstandalone実Claude probeと区別する。

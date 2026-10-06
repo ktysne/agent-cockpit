@@ -1174,12 +1174,14 @@ test('Claude rejects the wait profile before creating a child process', (t) => {
 
 function createOwnedCodexHarness(workspace, values = {}) {
   const methods = [];
+  const requests = [];
   let heldOnce = false;
   let heldRead = null;
   const harness = createSpawnHarness(workspace, (line, child) => {
     const request = JSON.parse(line);
     if (!request.method || !Object.hasOwn(request, 'id')) return;
     methods.push(request.method);
+    requests.push(Object.freeze({ method: request.method, id: request.id }));
     const respond = (result) => child.send(codexResponse(request.id, result));
     if (request.method === 'initialize') {
       respond({
@@ -1191,9 +1193,12 @@ function createOwnedCodexHarness(workspace, values = {}) {
     } else if (request.method === 'thread/start') {
       respond({ thread: { id: 'thread_native_1' } });
     } else if (request.method === 'turn/start') {
+      if (values.earlyTurnCompletion) child.send(codexTurnCompleted());
       respond({ turn: { id: 'turn_native_1' } });
     } else if (request.method === 'thread/loaded/list') {
-      respond({ data: values.loadedThreads || ['thread_native_1'], nextCursor: null });
+      if (values.rejectReadMethod === request.method) {
+        child.send({ id: request.id, error: { code: -32603, message: 'read unavailable' } });
+      } else respond({ data: values.loadedThreads || ['thread_native_1'], nextCursor: null });
     } else if (request.method === 'thread/read') {
       const result = {
         thread: {
@@ -1206,7 +1211,9 @@ function createOwnedCodexHarness(workspace, values = {}) {
           }],
         },
       };
-      if (values.holdRead && !heldOnce) {
+      if (values.rejectReadMethod === request.method) {
+        child.send({ id: request.id, error: { code: -32603, message: 'read unavailable' } });
+      } else if (values.holdRead && !heldOnce) {
         heldOnce = true;
         heldRead = () => respond(result);
       }
@@ -1214,6 +1221,7 @@ function createOwnedCodexHarness(workspace, values = {}) {
     }
   });
   harness.methods = methods;
+  harness.requests = requests;
   harness.completeHeldRead = () => { const finish = heldRead; heldRead = null; finish?.(); };
   harness.hasHeldRead = () => typeof heldRead === 'function';
   return harness;
@@ -1314,7 +1322,37 @@ test('owned Codex source accepts only exact inProgress turn status', async (t) =
   await runner.stop();
 });
 
-test('a detached read drains its late response without killing or mutating the owned source', async (t) => {
+test('an early matched turn completion is retained without creating context or stopping the source', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace, { earlyTurnCompletion: true });
+  let capability = null;
+  const events = [];
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    onNative: (event) => events.push(event),
+  });
+
+  const snapshot = await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  source.bindOwner(claim);
+  const terminalEvents = [];
+  source.subscribeTerminal(claim, (event) => terminalEvents.push(event));
+  const lease = source.acquireReadLease(Object.freeze({}));
+
+  assert.deepEqual(events.map((event) => event.type), ['identity', 'context_ended']);
+  assert.equal(snapshot.state, 'running');
+  assert.equal(snapshot.contextState, 'ended');
+  assert.equal(snapshot.terminalContextCount, 1);
+  assert.equal(terminalEvents.length, 1);
+  assert.equal(terminalEvents[0].context.nativeContextId, 'turn_native_1');
+  assert.equal((await source.readCurrent(lease)).status, 'unknown');
+  assert.equal(harness.methods.includes('thread/read'), false);
+  assert.equal(harness.child.killCalls.length, 0);
+  await runner.stop();
+});
+
+test('an active owned read timeout returns unknown and leaves the native process running', async (t) => {
   const workspace = createWorkspace(t);
   const claim = Object.freeze({});
   const harness = createOwnedCodexHarness(workspace, { holdRead: true });
@@ -1326,23 +1364,185 @@ test('a detached read drains its late response without killing or mutating the o
   await runner.start({ inputText: 'fixed task' });
   const source = getOwnedSource(capability);
   source.bindOwner(claim);
+  const lease = source.acquireReadLease(Object.freeze({}));
+
+  const timedOut = await source.readCurrent(lease);
+  assert.equal(timedOut.status, 'unknown');
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(harness.child.killCalls.length, 0);
+  harness.completeHeldRead();
+  await new Promise((resolve) => setImmediate(resolve));
+  const fresh = await source.readCurrent(lease);
+  assert.equal(fresh.status, 'attested');
+  assert.equal(source.consumeReadReceipt(lease, fresh.receipt), true);
+  assert.equal(harness.child.killCalls.length, 0);
+  await runner.stop();
+});
+
+test('a refused readonly source RPC returns unknown without stopping the native process', async (t) => {
+  for (const rejectReadMethod of ['thread/loaded/list', 'thread/read']) {
+    const workspace = createWorkspace(t);
+    const claim = Object.freeze({});
+    const harness = createOwnedCodexHarness(workspace, { rejectReadMethod });
+    let capability = null;
+    const runner = createOwnedCodexRunner(workspace, harness, claim, {
+      onSourceReady: (value) => { capability = value; },
+    });
+    await runner.start({ inputText: 'fixed task' });
+    const source = getOwnedSource(capability);
+    source.bindOwner(claim);
+    const lease = source.acquireReadLease(Object.freeze({}));
+
+    assert.equal((await source.readCurrent(lease)).status, 'unknown');
+    assert.equal(runner.snapshot().state, 'running');
+    assert.equal(harness.child.killCalls.length, 0);
+    await runner.stop();
+  }
+});
+
+test('a delayed stdin callback times out without killing the source and does not block a later read', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace);
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    timeouts: { startupMs: 1000, rpcMs: 60, loginMs: 1000, stopMs: 100 },
+  });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  source.bindOwner(claim);
+  const lease = source.acquireReadLease(Object.freeze({}));
+  const stdin = harness.child.stdin;
+  const originalWrite = stdin.write.bind(stdin);
+  let heldCallback = null;
+  let heldOnce = false;
+  stdin.write = (line, callback) => {
+    const request = JSON.parse(line.toString());
+    if (request.method === 'thread/loaded/list' && !heldOnce) {
+      heldOnce = true;
+      heldCallback = callback;
+      return originalWrite(line, null);
+    }
+    return originalWrite(line, callback);
+  };
+
+  assert.equal((await source.readCurrent(lease)).status, 'unknown');
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(harness.child.killCalls.length, 0);
+  heldCallback(null);
+  const fresh = await source.readCurrent(lease);
+  assert.equal(fresh.status, 'attested');
+  assert.equal(source.consumeReadReceipt(lease, fresh.receipt), true);
+  assert.equal(harness.child.killCalls.length, 0);
+  await runner.stop();
+});
+
+test('a late read-write callback error is handled as a physical pipe failure', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace);
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    timeouts: { startupMs: 1000, rpcMs: 60, loginMs: 1000, stopMs: 100 },
+  });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  source.bindOwner(claim);
+  const lease = source.acquireReadLease(Object.freeze({}));
+  const stdin = harness.child.stdin;
+  const originalWrite = stdin.write.bind(stdin);
+  let heldCallback = null;
+  let heldOnce = false;
+  stdin.write = (line, callback) => {
+    const request = JSON.parse(line.toString());
+    if (request.method === 'thread/loaded/list' && !heldOnce) {
+      heldOnce = true;
+      heldCallback = callback;
+      return originalWrite(line, null);
+    }
+    return originalWrite(line, callback);
+  };
+
+  assert.equal((await source.readCurrent(lease)).status, 'unknown');
+  assert.equal(runner.snapshot().state, 'running');
+  heldCallback(new Error('physical write failure'));
+  assert.equal(runner.snapshot().failureCode, 'stdin_write_failed');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harness.child.killCalls.length, 1);
+  await runner.stop();
+});
+
+test('a detached read is retired so a new lease can read before the old response arrives', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace, { holdRead: true });
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 100 },
+  });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  source.bindOwner(claim);
   const oldLease = source.acquireReadLease(Object.freeze({}));
   const oldRead = source.readCurrent(oldLease);
   while (!harness.hasHeldRead()) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(source.releaseReadLease(oldLease), true);
   const newLease = source.acquireReadLease(Object.freeze({}));
-  const unknownWhileReadPending = await source.readCurrent(newLease);
-  assert.equal(unknownWhileReadPending.status, 'unknown');
-  await new Promise((resolve) => setTimeout(resolve, 90));
+  const fresh = await source.readCurrent(newLease);
+  assert.equal(fresh.status, 'attested');
   assert.equal((await oldRead).status, 'unknown');
+  assert.equal(source.consumeReadReceipt(newLease, fresh.receipt), true);
+  assert.equal(harness.methods.filter((method) => method === 'thread/read').length, 2);
   assert.equal(runner.snapshot().state, 'running');
   assert.equal(harness.child.killCalls.length, 0);
 
   harness.completeHeldRead();
   await new Promise((resolve) => setImmediate(resolve));
-  const fresh = await source.readCurrent(newLease);
-  assert.equal(fresh.status, 'attested');
-  assert.equal(source.consumeReadReceipt(newLease, fresh.receipt), true);
   assert.equal(harness.child.killCalls.length, 0);
   await runner.stop();
+});
+
+test('observation freshness suppresses positive events without suppressing a matched terminal', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = codexResponder({ workspace });
+  const events = [];
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+    isSourceCurrent: () => true,
+    isObservationCurrent: () => false,
+    spawnImpl: harness.spawnImpl,
+    onNative: (event) => events.push(event),
+  }));
+  await runner.start({ inputText: 'fixed task' });
+  assert.deepEqual(events, []);
+  harness.child.send(codexTurnCompleted());
+  assert.deepEqual(events.map((event) => event.type), ['context_ended']);
+  assert.equal(runner.snapshot().state, 'running');
+  await runner.stop();
+});
+
+test('unissued and startup RPC response IDs remain protocol errors after owned reads', async (t) => {
+  for (const responseId of [1, 999]) {
+    const workspace = createWorkspace(t);
+    const claim = Object.freeze({});
+    const harness = createOwnedCodexHarness(workspace);
+    let capability = null;
+    const runner = createOwnedCodexRunner(workspace, harness, claim, {
+      onSourceReady: (value) => { capability = value; },
+    });
+    await runner.start({ inputText: 'fixed task' });
+    const source = getOwnedSource(capability);
+    source.bindOwner(claim);
+    const lease = source.acquireReadLease(Object.freeze({}));
+    const read = await source.readCurrent(lease);
+    assert.equal(read.status, 'attested');
+    harness.child.send(codexResponse(responseId, {}));
+    assert.equal(runner.snapshot().failureCode, 'rpc_response_unexpected');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.child.killCalls.length, 1);
+    await runner.stop();
+  }
 });
