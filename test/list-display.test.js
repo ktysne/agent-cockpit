@@ -1386,6 +1386,7 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
       renderSummary() {},
       renderExcludedNote() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
       renderFinishedNote() {},
       renderIdleNote() {},
       updateTitle() {},
