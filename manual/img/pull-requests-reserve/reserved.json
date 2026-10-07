@@ -8,7 +8,7 @@
       "key": "reserved.card",
       "bounds": {
         "x": 14,
-        "y": 129,
+        "y": 130,
         "width": 1548,
         "height": 245
       },
@@ -18,7 +18,7 @@
       "key": "reserved.badge",
       "bounds": {
         "x": 308,
-        "y": 246,
+        "y": 247,
         "width": 885,
         "height": 44
       },
@@ -27,9 +27,9 @@
     {
       "key": "reserved.merge-button",
       "bounds": {
-        "x": 1280,
-        "y": 207,
-        "width": 270,
+        "x": 1368,
+        "y": 208,
+        "width": 182,
         "height": 64
       },
       "visible": true
@@ -37,8 +37,8 @@
     {
       "key": "reserved.toggle",
       "bounds": {
-        "x": 1280,
-        "y": 297,
+        "x": 1368,
+        "y": 298,
         "width": 36,
         "height": 36
       },
