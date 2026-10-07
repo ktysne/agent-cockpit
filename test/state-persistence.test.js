@@ -32,6 +32,26 @@ test('削除印を保存して復元し、旧形式は空として読む', async
   await old.flushPersistence();
 });
 
+for (const branchKept of [true, false]) {
+  test(`mergedHead の branchKept=${branchKept} を登録と関連の保存と復元で保持する`, async (t) => {
+    const homeDir = await temporaryHome(t);
+    const now = Date.parse('2026-10-03T12:00:00.000Z');
+    const state = new DashboardState({ homeDir });
+    const url = 'https://github.com/example/project/pull/30';
+    const mergedAt = new Date(now).toISOString();
+    const mergedHead = { headRefOid: 'a'.repeat(40), headRefName: 'feat/parent', baseRefName: 'main', branchKept };
+    state.registerPullRequest('session-30', { url }, { product: { key: 'project', name: 'project' } }, now);
+    state.updatePullRequest('session-30', 'example', 'project', 30, { state: 'merged', mergedAt, mergedHead });
+    state.rememberRelatedPullRequest({ owner: 'example', repo: 'project', number: 30, url, lastOpen: { title: 'Parent', url, headRefName: 'feat/parent', baseRefName: 'main', headRefOid: 'a'.repeat(40) } }, now);
+    state.updateRelatedPullRequest('example', 'project', 30, { state: 'merged', mergedAt, mergedHead });
+    state.recordMergedPullRequest({ owner: 'example', repo: 'project', number: 30, title: 'Parent', url, mergedAt, mergedHead }, now);
+    await state.flushPersistence();
+    const restored = await DashboardState.load(homeDir, { now });
+    assert.deepEqual(restored.pullRequestRegistrationForSession('session-30', 'example', 'project', 30).mergedHead, mergedHead);
+    assert.deepEqual(restored.relatedPullRequestRegistrationsForRepo('example', 'project')[0].mergedHead, mergedHead);
+  });
+}
+
 async function temporaryHome(testContext) {
   return temporaryDirectory(testContext, 'agent-cockpit-store-test-').directory;
 }

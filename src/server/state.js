@@ -101,7 +101,8 @@ function validPullRequestLastOpen(value) {
 
 function validMergedPullRequestHead(value) {
   return isRecord(value) && isCompleteCommitSha(value.headRefOid) &&
-    validBranchName(value.headRefName) && validBranchName(value.baseRefName);
+    validBranchName(value.headRefName) && validBranchName(value.baseRefName) &&
+    (value.branchKept === undefined || typeof value.branchKept === 'boolean');
 }
 
 function normalizeMergedPullRequestHead(value) {
@@ -110,6 +111,7 @@ function normalizeMergedPullRequestHead(value) {
     headRefOid: value.headRefOid.toLowerCase(),
     headRefName: value.headRefName,
     baseRefName: value.baseRefName,
+    ...(value.branchKept !== undefined ? { branchKept: value.branchKept } : {}),
   };
 }
 

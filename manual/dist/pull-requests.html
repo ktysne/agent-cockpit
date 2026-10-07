@@ -250,12 +250,15 @@
   この状態の PR に <span class="ui">積み直しが必要</span> が付き、積み直し待ちとしてマージできなくなります。</p>
   <p>積み直しは、セッションが行います。
   上の PR を既定ブランチの上に積み直して push すると、札が消えます。
-  ダッシュボードからマージしたときは、積み直しの依頼をセッションに送ります(<a href="#pr-result">マージの結果</a>)。</p>
+  ブランチの削除を選んでダッシュボードからマージしたときは、積み直しの依頼をセッションに送ります(<a href="#pr-result">マージの結果</a>)。</p>
+  <p>ブランチを残すと、上の PR の base は付け替えません。
+  残したブランチが実在する間は、そのブランチとの差分で判定します。
+  スカッシュかリベースでマージしたブランチを次に既定ブランチへマージするときは、同じ変更が再び差分に入らないよう、マージコミットを推奨します。</p>
   <details class="more">
     <summary>積み直しの判定の詳細</summary>
     <p>オープンの PR ごとに base からたどって compare の base を決め、差分に含まれるコミットを取得し、マージ済みの PR の head のコミットが含まれているかを調べます。
     既定ブランチに行き着かない PR は、行き着いたブランチ（集約ブランチなど）との差分で判定します。
-    マージ済み PR と同じ名前のブランチが残り、現在の head がマージ時の head と異なる場合は、そのブランチで追跡を止めて比較します。
+    マージ済み PR と同じ名前のブランチが残り、現在の head がマージ時の head と異なる場合、またはダッシュボードで残す選択を記録した場合は、そのブランチで追跡を止めて比較します。
     含まれていれば、積み直しが必要です。</p>
     <p>差分やマージ済みの PR の一覧を取得できないとき、結果が取得の上限で切れて全件を確かめられないときは、確かめられない扱いにします。
     この PR には「積み直しが必要か確かめられない」と出て、マージできません。</p>
@@ -346,6 +349,9 @@
   確認欄は、PR の行の下に出ます。
   <span class="ui">やめる</span> を押すと、何もせずに閉じます。</p>
   <figure class="guide-map" id="pr-confirm-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/525"><div class="gm-clip"><img src="img/pull-requests-confirm/pending.png" width="788" height="995" alt="マージの確認欄。見出しに PR の番号と main へマージするとある。その下に、条件の未達の警告、3 つのマージの方式、ブランチ削除のチェック、クロスレビューの警告と画面で見た head SHA、マージを実行とやめるのボタンが並ぶ" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-26.65%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-confirm-map-1" style="left:3.299%;top:9.333%" aria-label="1. 見出し">1</a><a class="gm-badge gm-place-left" data-gm="2" href="#pr-confirm-map-2" style="left:3.299%;top:20%" aria-label="2. 未達条件の警告">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-confirm-map-3" style="left:3.299%;top:33.524%" aria-label="3. マージの方式">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-confirm-map-4" style="left:3.299%;top:50.286%" aria-label="4. マージ後にリモートブランチを削除する">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-confirm-map-5" style="left:5.838%;top:63.81%" aria-label="5. クロスレビューの警告">5</a><a class="gm-badge gm-place-right" data-gm="6" href="#pr-confirm-map-6" style="left:24.937%;top:71.429%" aria-label="6. 照合する head SHA">6</a><a class="gm-badge gm-place-left" data-gm="7" href="#pr-confirm-map-7" style="left:3.299%;top:85.905%" aria-label="7. マージを実行">7</a><a class="gm-badge gm-place-right" data-gm="8" href="#pr-confirm-map-8" style="left:27.602%;top:85.905%" aria-label="8. やめる">8</a></div></div></div><ol class="gm-list"><li id="pr-confirm-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>見出し</b>：マージする PR と、マージ先の既定ブランチです。</div></li><li id="pr-confirm-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b>未達条件の警告</b>：<span class="ui">選択した条件の未達</span> に、設定で選んだ条件のうち、満たしていないものが出ます。条件が残っていないときは出ません。</div></li><li id="pr-confirm-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>マージの方式</b>：<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> のうち、リポジトリで許可されているものだけが出ます。</div></li><li id="pr-confirm-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">マージ後にリモートブランチを削除する</span></b>：入れると、マージの後に PR の head のブランチを GitHub から削除します。</div></li><li id="pr-confirm-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>クロスレビューの警告</b>：クロスレビューが <span class="ui">レビュー済み</span> でないとき、その理由が出ます。</div></li><li id="pr-confirm-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">照合する head SHA</span></b>：画面で見ている PR の head のコミットの先頭 7 桁です。このコミット以外はマージしません。</div></li><li id="pr-confirm-map-7" data-gm="7"><span class="gm-num" aria-hidden="true">7</span><div class="gm-body"><b><span class="ui">マージを実行</span></b>：マージを実行します。実行中は <span class="ui">処理中…</span> に変わります。</div></li><li id="pr-confirm-map-8" data-gm="8"><span class="gm-num" aria-hidden="true">8</span><div class="gm-body"><b><span class="ui">やめる</span></b>：確認欄を閉じます。</div></li></ol></figure>
+  <p>直上の PR があるときは、確認欄に base の扱いも表示します。
+  ブランチを削除する場合は既定ブランチへ付け替え、残す場合は現在の base のまま付け替えません。
+  削除のチェックを変えると、この表示も切り替わります。</p>
   <p>確認欄の既定は、次のとおりです。</p>
   <ul>
     <li>方式：同じリポジトリで最後にマージまたは予約した方式です。初めてのリポジトリでは、許可された方式のうち、<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> の順で最初のものです。方式が 1 つしか許可されていないときは、<span class="ui">リポジトリで許可されている方式です</span> と出ます</li>
@@ -382,7 +388,7 @@
     <p>実行を押すと、常駐サーバーは次の順に進めます。</p>
     <ol>
       <li>GitHub から PR の状態を取り直し、上の条件を確かめます</li>
-      <li>直上の PR があれば、その base を既定ブランチに付け替えます。方式にかかわらず行い、1 件でも失敗したらマージしません</li>
+      <li>ブランチを削除する場合だけ、直上の PR の base を既定ブランチに付け替えます。リポジトリの自動削除も含み、1 件でも付け替えに失敗したらマージしません。fork の PR は付け替えません</li>
       <li>もう一度取り直して、条件を確かめます</li>
       <li><code>gh pr merge</code> を実行します</li>
       <li>PR の状態を読み、マージ済みであることを確かめます</li>
@@ -401,8 +407,8 @@
   </details>
 
   <h3 id="pr-merge-stack">スタックの途中をマージする</h3>
-  <p>直上に PR のあるスタックの一番下を、<span class="ui">スカッシュ</span> か <span class="ui">リベース</span> でマージするときは、確認欄に、たとえば <span class="ui">スカッシュまたはリベースでは </span>#42 に #41<span class="ui"> のコミットが残るため、セッションに積み直しを依頼する。</span> と表示されます。</p>
-  <figure class="guide-map" id="pr-confirm-squash-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/467"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="867" alt="スカッシュを選んだ確認欄。方式の行でスカッシュが選ばれ、その下に照合する head の SHA と、スカッシュまたはリベースでは #42 に #41 のコミットが残るため、セッションに積み直しを依頼するという警告が出ている。マージを実行のボタンは緑になっている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-22.589%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-confirm-squash-map-1" style="left:3.299%;top:27.409%" aria-label="1. マージの方式">1</a><a class="gm-badge gm-place-right" data-gm="2" href="#pr-confirm-squash-map-2" style="left:24.937%;top:61.67%" aria-label="2. 照合する head SHA">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-confirm-squash-map-3" style="left:5.838%;top:70.021%" aria-label="3. 積み直しの案内">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-confirm-squash-map-4" style="left:3.299%;top:86.081%" aria-label="4. マージを実行">4</a></div></div></div><ol class="gm-list"><li id="pr-confirm-squash-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>マージの方式</b>：<span class="ui">スカッシュ</span> を選んでいます。</div></li><li id="pr-confirm-squash-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">照合する head SHA</span></b>：条件が残っていないので、クロスレビューの警告は出ません。</div></li><li id="pr-confirm-squash-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>積み直しの案内</b>：直上の PR があるときだけ出ます。</div></li><li id="pr-confirm-squash-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">マージを実行</span></b>：条件がそろっているので、緑のボタンです。条件が残っているときは、枠だけのボタンです。</div></li></ol></figure>
+  <p>ブランチを削除する場合、直上に PR のあるスタックの一番下を、<span class="ui">スカッシュ</span> か <span class="ui">リベース</span> でマージするときは、確認欄に、たとえば <span class="ui">スカッシュまたはリベースでは </span>#42 に #41<span class="ui"> のコミットが残るため、セッションに積み直しを依頼する。</span> と表示されます。</p>
+  <figure class="guide-map" id="pr-confirm-squash-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/467"><div class="gm-clip"><img src="img/pull-requests-confirm/squash.png" width="788" height="867" alt="スカッシュを選んだ確認欄。方式の行でスカッシュが選ばれ、その下に照合する head の SHA と、スカッシュまたはリベースでは #42 に #41 のコミットが残るため、セッションに積み直しを依頼するという警告が出ている。マージを実行のボタンは緑になっている" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-22.589%"></div><a class="gm-badge gm-place-left" data-gm="1" href="#pr-confirm-squash-map-1" style="left:3.299%;top:27.409%" aria-label="1. マージの方式">1</a><a class="gm-badge gm-place-right" data-gm="2" href="#pr-confirm-squash-map-2" style="left:24.937%;top:61.67%" aria-label="2. 照合する head SHA">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-confirm-squash-map-3" style="left:5.838%;top:70.021%" aria-label="3. 積み直しの案内">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-confirm-squash-map-4" style="left:3.299%;top:86.081%" aria-label="4. マージを実行">4</a></div></div></div><ol class="gm-list"><li id="pr-confirm-squash-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>マージの方式</b>：<span class="ui">スカッシュ</span> を選んでいます。</div></li><li id="pr-confirm-squash-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">照合する head SHA</span></b>：条件が残っていないので、クロスレビューの警告は出ません。</div></li><li id="pr-confirm-squash-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>積み直しの案内</b>：直上の PR があり、ブランチを削除するときに出ます。残す場合は、次のマージにマージコミットを推奨する案内に替わります。</div></li><li id="pr-confirm-squash-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b><span class="ui">マージを実行</span></b>：条件がそろっているので、緑のボタンです。条件が残っているときは、枠だけのボタンです。</div></li></ol></figure>
 
   <h2 id="pr-reserve">レビュー収束後マージ</h2>
   <p>PR の行の右の列にある <span class="ui">収束後マージ</span> のチェックで、その PR の予約を切り替えます。
@@ -503,7 +509,8 @@
 
   <h2 id="pr-result">マージの結果</h2>
   <p>マージが済むと、PR の枠に結果の行が出ます。
-  スタックの直上の PR は、base が既定ブランチに付け替わり、一番下の PR になります。</p>
+  ブランチを削除した場合、スタックの直上の PR は、base が既定ブランチに付け替わり、一番下の PR になります。
+  ブランチを残した場合は、base を付け替えません。</p>
   <figure class="guide-map" id="pr-result-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/1166"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="583" alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、マージの結果の行がある" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#pr-result-map-1" style="left:27.57%;top:21.098%" aria-label="1. 付け替え済みの札">1</a><a class="gm-badge gm-place-top" data-gm="2" href="#pr-result-map-2" style="left:42.989%;top:21.098%" aria-label="2. 積み直しが必要">2</a><a class="gm-badge gm-place-left" data-gm="3" href="#pr-result-map-3" style="left:1.65%;top:31.647%" aria-label="3. マージできない理由">3</a><a class="gm-badge gm-place-left" data-gm="4" href="#pr-result-map-4" style="left:1.65%;top:88.465%" aria-label="4. マージ済みの一覧">4</a><a class="gm-badge gm-place-left" data-gm="5" href="#pr-result-map-5" style="left:1.65%;top:94.254%" aria-label="5. 結果の行">5</a><a class="gm-badge gm-place-top" data-gm="6" href="#pr-result-map-6" style="left:65.038%;top:91.509%" aria-label="6. 閉じる">6</a></div></div></div><ol class="gm-list"><li id="pr-result-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base を既定ブランチに付け替えました。</div></li><li id="pr-result-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">積み直しが必要</span></b>：スカッシュでマージしたので、この PR の差分に、下の PR のコミットが残っています(<a href="#pr-restack">積み直し</a>)。</div></li><li id="pr-result-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</div></li><li id="pr-result-map-4" data-gm="4"><span class="gm-num" aria-hidden="true">4</span><div class="gm-body"><b>マージ済みの一覧</b>：マージした PR が、時刻と方式つきで加わります。</div></li><li id="pr-result-map-5" data-gm="5"><span class="gm-num" aria-hidden="true">5</span><div class="gm-body"><b>結果の行</b>：マージした PR の番号に、方式、ブランチの扱い、付け替えた PR が続きます。</div></li><li id="pr-result-map-6" data-gm="6"><span class="gm-num" aria-hidden="true">6</span><div class="gm-body"><b><span class="ui">閉じる</span></b>：結果の行を消します。</div></li></ol></figure>
   <p>結果の行には、次の内容が出ます。</p>
   <ul>
@@ -522,8 +529,9 @@
   <p>マージを検出すると、常駐サーバーは、PR を登録したセッションと、直上の PR を登録したセッションに知らせます。
   「PR #41 が main に入りました。方式: スカッシュ。」のような文です。
   届く経路は、判断事項への回答と同じです(<a href="decisions.html#decisions-route">回答が届く経路</a>)。</p>
-  <p>スカッシュかリベースでマージしたときは、直上の PR ごとに、<code>git rebase --onto</code> で積み直して push する依頼が続きます。
-  <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません。</p>
+  <p>ブランチを削除してスカッシュかリベースでマージしたときは、直上の PR ごとに、<code>git rebase --onto</code> で積み直して push する依頼が続きます。
+  <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません。
+  ブランチを残した場合は、子の base を付け替えなかったことを知らせ、スカッシュかリベースなら次のマージにマージコミットを推奨します。</p>
   <p>ダッシュボード以外でマージした PR も、取得の中で検出して知らせます。
   この場合は方式が分からないので、「方式は取得できませんでした」と書き、積み直しの依頼とブランチの削除は行いません。</p>
 

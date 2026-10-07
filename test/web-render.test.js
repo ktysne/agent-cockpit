@@ -2390,6 +2390,36 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   assert.ok(nodes.some((node) => node.type === 'checkbox' && node.checked === false && node.disabled));
   assert.ok(nodes.some((node) => node.textContent === 'fork のブランチは登録先から削除できません'));
 
+  const confirmationText = () => {
+    const target = new FakeElement('div');
+    context.appendPullRequestMergeConfirmation(target, group, pullRequest);
+    const texts = [];
+    const collect = (node) => {
+      texts.push(node.textContent);
+      for (const child of node.children || []) collect(child);
+    };
+    collect(target);
+    return texts.join('\n');
+  };
+  pullRequest.children = [];
+  assert.doesNotMatch(confirmationText(), /マージコミットを推奨/);
+  pullRequest.children = [{ number: 43 }];
+  assert.match(confirmationText(), /ブランチを残すので、#43 の base は feature\/pr-42 のまま付け替えない/);
+  assert.match(confirmationText(), /マージコミットを推奨/);
+  pullRequest.isCrossRepository = false;
+  context.pullRequestMergeOptions.set(key, { method: 'rebase', deleteBranch: true });
+  assert.match(confirmationText(), /#43 の base を main に付け替える/);
+  assert.match(confirmationText(), /セッションに積み直しを依頼する/);
+  assert.doesNotMatch(confirmationText(), /マージコミットを推奨/);
+  context.pullRequestMergeOptions.set(key, { method: 'rebase', deleteBranch: false });
+  assert.match(confirmationText(), /ブランチを残すので/);
+  assert.doesNotMatch(confirmationText(), /セッションに積み直しを依頼する/);
+  group.autoDeleteBranch = true;
+  assert.match(confirmationText(), /#43 の base を main に付け替える/);
+  pullRequest.isCrossRepository = true;
+  assert.match(confirmationText(), /ブランチを残すので/);
+  group.autoDeleteBranch = false;
+
   await context.runPullRequestMergeAction({ dataset: { mergeGo: key } }, 'merge');
   assert.equal(JSON.stringify(sent), JSON.stringify([{
     url: '/api/pull-requests/merge',

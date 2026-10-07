@@ -99,6 +99,7 @@ function confirmedMergedHead(value) {
     headRefOid: value.headRefOid.toLowerCase(),
     headRefName: value.headRefName,
     baseRefName: value.baseRefName,
+    ...(typeof value.branchKept === 'boolean' ? { branchKept: value.branchKept } : {}),
   };
 }
 
@@ -218,7 +219,10 @@ function historicalMergedPullRequests(registrations, relatedPullRequests, openPu
 
 function mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests) {
   const byNumber = new Map(historicalPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]));
-  for (const pullRequest of mergedPullRequests || []) byNumber.set(pullRequest.number, pullRequest);
+  for (const pullRequest of mergedPullRequests || []) {
+    const historical = byNumber.get(pullRequest.number);
+    byNumber.set(pullRequest.number, { ...pullRequest, ...(historical?.branchKept === true ? { branchKept: true } : {}) });
+  }
   return [...byNumber.values()].sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
 }
 
@@ -239,8 +243,8 @@ async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defa
     const mergedParent = mergedPullRequests.findLast((candidate) => candidate.headRefName === compareBase);
     if (!mergedParent) break;
     const currentHead = await readBranchHead(compareBase);
-    // 積んだ親はマージ後に head が進まないため、異なる head は同名の現行ブランチとして扱う。
-    if (currentHead && currentHead !== mergedParent.headRefOid) {
+    // 残す選択をしたブランチは、同じ head でも引き続き base として使う。
+    if (currentHead && (mergedParent.branchKept === true || currentHead !== mergedParent.headRefOid)) {
       liveMergedBranches.add(compareBase);
       break;
     }
@@ -682,6 +686,8 @@ class PullRequestTracker {
     this.crossReviewByRepository = new Map();
     this.inFlight = new Map();
     this.initialFetchCompleted = new Set();
+    this.mergedHeadBackfillAttempts = new Set();
+    this.mergedHeadBackfillRetries = new Set();
     this.timer = null;
     this.onMerged = options.onMerged || null;
     this.onClosed = options.onClosed || null;
@@ -895,8 +901,20 @@ class PullRequestTracker {
         tracked.record ||= record;
       }
       const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
+      const backfill = [...trackedByNumber.entries()]
+        .filter(([number, tracked]) => !openNumbers.has(number) && tracked.record.state === 'merged'
+          && !confirmedMergedHead(tracked.record.mergedHead)
+          && !this.mergedHeadBackfillRetries.has(`${repository}#${number}`))
+        .slice(0, 5);
+      const backfillNumbers = new Set(backfill.map(([number]) => number));
+      for (const [number] of backfill) {
+        const key = `${repository}#${number}`;
+        if (this.mergedHeadBackfillAttempts.has(key)) this.mergedHeadBackfillRetries.add(key);
+        this.mergedHeadBackfillAttempts.add(key);
+      }
       const toInspect = [...trackedByNumber.entries()]
-        .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state));
+        .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state))
+        .concat(backfill);
       const viewFields = `${PULL_REQUEST_FIELDS},state,mergedAt`;
       const inspected = await Promise.all(toInspect.map(async ([number, tracked]) => {
         try {
@@ -907,6 +925,8 @@ class PullRequestTracker {
         }
       }));
       for (const result of inspected) {
+        if (backfillNumbers.has(result.number) && (result.error || result.value?.state !== 'MERGED'
+          || !confirmedMergedHead(result.value))) continue;
         if (result.error) {
           errors.push(`#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}`);
           uninspectedNumbers.add(result.number);
