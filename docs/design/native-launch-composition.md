@@ -251,3 +251,10 @@ canonical revisionsとcallbackなしの最終proof guardを含む同commitで、
 ID-F05-N02は両providerの実durable storeへ固定facadeを注入し、送信開始保存後の最後のancestor callbackによる葉のconnection、context、period、launch失効でsinkを0回に保つ。
 状態はunknownとなり、自動再送しない。
 これはfake native sourceを使う実adapter/store fixtureで、live runtimeの能力検証とは区別する。
+
+## 同owned sourceへのcollector結合
+
+createOwnedCollector(admissionReceipt, {onObservation})は同owned runnerのprivate process/pipe capabilityを借りる。
+compositionだけがruntime接続を開き、collectorの初回attachは同opaque handleを借用する。
+logical detach、one-use read receipt、再attachのguardとprovider別適合範囲は[同owned sourceのcollector結合](owned-native-source-collector.md)を正本とする。
+公開snapshotと数値generationだけではsource所属やproofを認可しない。

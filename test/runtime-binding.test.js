@@ -520,3 +520,140 @@ for (const provider of ['claude', 'codex']) {
     assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, latest), false);
   });
 }
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: guarded actor and proof mutations reject nonboolean callbacks without consuming evidence or replacing proof`, () => {
+    const env = createEnvironment();
+    const child = env.register(provider, `guard-${provider}`);
+    const launch = env.createLaunch(child);
+    launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+    const connection = env.openActorConnection(child, `guard-${provider}`);
+    const claims = { identity: child.identity, periodId: child.periodId, actor: child.actor,
+      contextId: 'guarded-context', launchRef: launch.launchRef, immutableExecutionClaims: launch.claims };
+    for (const guard of [() => false, () => undefined, () => Promise.resolve(true), () => { throw new Error('fixture'); }]) {
+      assertCode(() => launch.adapter.attestActor(connection.connectionHandle, claims, evidence('guarded-evidence'), guard), 'source_guard_unavailable');
+      assert.equal(env.runtime.registry.snapshot().actors.length, 0);
+    }
+    const actor = launch.adapter.attestActor(connection.connectionHandle, claims, evidence('guarded-evidence'), () => true);
+    const input = { executionActorHandle: actor.actorHandle, ownerActorHandle: actor.actorHandle, expectedOwnerGeneration: 0 };
+    const original = launch.adapter.reconcileExecution(launch.launchRef, input, () => true);
+    for (const guard of [() => false, () => Promise.resolve(true), () => { throw new Error('fixture'); }]) {
+      assertCode(() => launch.adapter.reconcileExecution(launch.launchRef, input, guard), 'source_guard_unavailable');
+      assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, original.proofHandle), true);
+      assert.equal(env.runtime.registry.snapshot().actors.length, 1);
+    }
+  });
+
+  test(`${provider}: a final metadata callback cannot create a guarded actor on a disconnected pipe or ended period`, () => {
+    for (const invalidation of ['connection', 'period']) {
+      let mutation = null;
+      const env = createEnvironment({ onExternalRead() { if (mutation) { const perform = mutation; mutation = null; perform(); } } });
+      const child = env.register(provider, `guard-final-${provider}-${invalidation}`);
+      const launch = env.createLaunch(child);
+      launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+      const connection = env.openActorConnection(child, `guard-final-${provider}-${invalidation}`);
+      const before = env.runtime.registry.snapshot();
+      mutation = () => invalidation === 'connection' ? env.runtime.authority.disconnect(connection.connectionHandle) : env.registration.authority.end(child.periodId);
+      assert.throws(() => launch.adapter.attestActor(connection.connectionHandle, {
+        identity: child.identity, periodId: child.periodId, actor: child.actor, contextId: 'guard-final-context',
+        launchRef: launch.launchRef, immutableExecutionClaims: launch.claims,
+      }, evidence(`guard-final-evidence-${invalidation}`), () => true));
+      const after = env.runtime.registry.snapshot();
+      assert.equal(after.actors.length, before.actors.length);
+      assert.equal(after.launches[0].currentProof, null);
+    }
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: the last kernel callback is fenced before any guarded actor or proof Map mutation`, () => {
+    let readCount = 0, target = 0, mutation = null;
+    const env = createEnvironment({ onExternalRead() { readCount += 1; if (readCount === target && mutation) mutation(); } });
+    const child = env.register(provider, `guard-last-${provider}`);
+    const launch = env.createLaunch(child);
+    launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+    const connection = env.openActorConnection(child, `guard-last-${provider}`);
+    const claims = { identity: child.identity, periodId: child.periodId, actor: child.actor,
+      contextId: 'last-context', launchRef: launch.launchRef, immutableExecutionClaims: launch.claims };
+    readCount = 0;
+    assertCode(() => launch.adapter.attestActor(connection.connectionHandle, claims, evidence('last-evidence'), () => false), 'source_guard_unavailable');
+    target = readCount;
+    assert.ok(target > 1);
+    readCount = 0;
+    mutation = () => env.runtime.authority.disconnect(connection.connectionHandle);
+    assert.throws(() => launch.adapter.attestActor(connection.connectionHandle, claims, evidence('last-evidence'), () => true));
+    mutation = null;
+    assert.equal(env.runtime.registry.snapshot().actors.length, 0);
+    const fresh = env.openActorConnection(child, `guard-last-fresh-${provider}`);
+    const actor = launch.adapter.attestActor(fresh.connectionHandle, claims, evidence('last-evidence'), () => true);
+    const input = { executionActorHandle: actor.actorHandle, ownerActorHandle: actor.actorHandle, expectedOwnerGeneration: 0 };
+    const original = launch.adapter.reconcileExecution(launch.launchRef, input, () => true);
+    readCount = 0; target = 0;
+    assertCode(() => launch.adapter.reconcileExecution(launch.launchRef, input, () => false), 'source_guard_unavailable');
+    target = readCount;
+    assert.ok(target > 1);
+    readCount = 0;
+    mutation = () => env.runtime.authority.endContext(actor.actorHandle);
+    assert.throws(() => launch.adapter.reconcileExecution(launch.launchRef, input, () => true));
+    mutation = null;
+    assert.equal(env.runtime.registry.get(launch.launchRef).currentProof, null);
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, original.proofHandle), false);
+    assert.equal(env.runtime.registry.snapshot().actors.length, 1);
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: a denied guarded reconciliation preserves a newer proof issued during synchronous reentry`, () => {
+    const env = createEnvironment();
+    const child = env.register(provider, `guard-reentry-${provider}`);
+    const launch = env.createLaunch(child);
+    launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+    const opened = env.openActorConnection(child, `guard-reentry-${provider}`);
+    const actor = env.attest(launch.adapter, child, opened.connectionHandle, 'reentry-context', launch);
+    const input = { executionActorHandle: actor.actorHandle, ownerActorHandle: actor.actorHandle, expectedOwnerGeneration: 0 };
+    const before = launch.adapter.reconcileExecution(launch.launchRef, input);
+    let newer;
+    assertCode(() => launch.adapter.reconcileExecution(launch.launchRef, input, () => {
+      newer = launch.adapter.reconcileExecution(launch.launchRef, input);
+      return false;
+    }), 'source_guard_unavailable');
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, newer.proofHandle), true);
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, before.proofHandle), false);
+    assert.equal(env.runtime.registry.snapshot().actors.length, 1);
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider}: even a true source guard cannot overwrite a latest proof changed during its callback`, () => {
+    const env = createEnvironment();
+    const child = env.register(provider, `guard-latest-${provider}`);
+    const launch = env.createLaunch(child);
+    launch.adapter.adoptExecution(launch.launchRef, launch.claims);
+    const opened = env.openActorConnection(child, `guard-latest-${provider}`);
+    const actor = env.attest(launch.adapter, child, opened.connectionHandle, 'latest-context', launch);
+    const input = { executionActorHandle: actor.actorHandle, ownerActorHandle: actor.actorHandle, expectedOwnerGeneration: 0 };
+    let newer;
+    assertCode(() => launch.adapter.reconcileExecution(launch.launchRef, input, () => {
+      newer = launch.adapter.reconcileExecution(launch.launchRef, input);
+      return true;
+    }), 'stale_connection');
+    assert.equal(env.runtime.registry.checkProofCapability(launch.launchRef, newer.proofHandle), true);
+    assert.equal(env.runtime.registry.snapshot().actors.length, 1);
+  });
+
+  test(`${provider}: guarded issuance refuses registries without canonical revision capabilities`, () => {
+    const env = createEnvironment();
+    const child = env.register(provider, `guard-no-caps-${provider}`);
+    const launch = env.createLaunch(child);
+    const runtime = createRuntimeBindingKernel({ registrationRegistry: { snapshot: env.registration.registry.snapshot },
+      launchRegistry: { get: env.launch.registry.get } });
+    const adapter = createProviderRuntimeAdapter(provider, runtime.registry, runtime.authority);
+    adapter.adoptExecution(launch.launchRef, launch.claims);
+    const opened = adapter.openConnection({ provider, nativeIdKind: child.identity.nativeIdKind, hostId: child.identity.hostId,
+      homeScopeId: child.identity.homeScopeId, connectionSlotId: 'no-caps' }, 'no-caps-connection', evidence('no-caps-connection'));
+    assertCode(() => adapter.attestActor(opened.connectionHandle, { identity: child.identity, periodId: child.periodId,
+      actor: child.actor, contextId: 'no-caps-context', launchRef: launch.launchRef, immutableExecutionClaims: launch.claims },
+    evidence('no-caps-actor'), () => true), 'source_guard_unavailable');
+    assert.equal(runtime.registry.snapshot().actors.length, 0);
+  });
+}

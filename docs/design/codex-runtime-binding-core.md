@@ -37,10 +37,10 @@ metadataの不明キーは捨てる。
 | authority.adoptExecution(launchRef, immutableExecutionClaims) | Aのbound記録と完全一致した固定値を取り込み、初期owner、generation 0、proof nullを保持。同内容再送は冪等。native検証への昇格はしない |
 | authority.openConnection(scope, connectionId, evidence) | scopeはprovider/nativeIdKind/hostId/homeScopeId/connectionSlotId。返却値は{connectionHandle,connectionGeneration}。同slotの新しいconnectionIdで内部世代を1増やし、旧接続を失効。同じlive接続と同証拠は冪等。切断済みIDを再使用しない |
 | authority.disconnect(connectionHandle) | 当該接続を失効。旧接続の遅延disconnectは新接続に影響しない |
-| authority.attestActor(connectionHandle, claims, evidence) | claimsはidentity/periodId/actor/contextId/launchRef/immutableExecutionClaims。owner単独の証明では末尾2項をnull。子証明はlaunchRefと完全な固定値を明示。返却値は{actorHandle}。接続scope、同じ#166のactive期間、A bindingを照合 |
+| authority.attestActor(connectionHandle, claims, evidence, mutationGuard?) | claimsはidentity/periodId/actor/contextId/launchRef/immutableExecutionClaims。owner単独の証明では末尾2項をnull。子証明はlaunchRefと完全な固定値を明示。返却値は{actorHandle}。接続scope、同じ#166のactive期間、A bindingを照合 |
 | authority.endContext(actorHandle) | 現接続の当該identity、period、actor、contextだけを不可逆に終了。同じcontextのalias handleと旧proofを失効し、actorと期間は終了しない。旧接続の遅延終了はfalse |
 | authority.endActor(actorHandle) | 当該period/actorを不可逆に終了。別contextの同actorも失効。同じ期間での再attestを拒否 |
-| authority.reconcileExecution(launchRef, {executionActorHandle,ownerActorHandle,expectedOwnerGeneration}) | 子と現行ownerの新鮮なactor証明を照合して{proofHandle,currentProof}を返す。実行側claimの省略やowner世代不一致は拒否 |
+| authority.reconcileExecution(launchRef, {executionActorHandle,ownerActorHandle,expectedOwnerGeneration}, mutationGuard?) | 子と現行ownerの新鮮なactor証明を照合して{proofHandle,currentProof}を返す。実行側claimの省略やowner世代不一致は拒否 |
 | authority.handoff(launchRef, transition, newOwnerActorHandle) | 認証済みtransitionのCASを実行し、proofをnullにする。新ownerのfresh actor証明を要求。旧ownerの生存は要求しない |
 | registry.checkCurrentConnection(connectionHandle) | private opaque handleの現在の接続世代とslotを同期検査しbooleanを返す。JSON複製、他kernel、旧接続はfalse。metadataからcapabilityを復元しない |
 | registry.checkProofCapability(launchRef, opaqueHandle) | callbackなしの同期boolean検査。private proof所属、latest、immutable claims、owner世代、execution/owner接続、actor/context tombstoneを確認する。foreign handleはfalse。canonical period/launchの現状態は別のrevision検査を必要とする。 |
@@ -172,3 +172,8 @@ compositionはmetadata検査前にcanonical stampを捕捉し、callbackを含�
 
 同sourceSHAのcanonical revisionsとcallbackなしの最終proof guardを含むstandalone v1 lifecycleは、実Claude Code 2.1.291でも回帰確認した。
 実証した正常認可、context終端後の拒否、認証ファイルとchild終了の範囲は[provider-conformance-testing.md](provider-conformance-testing.md)の実runtime回帰記録に記載する。
+
+owned sourceのattest/reconcileは任意のtrusted同期mutationGuardを渡す。
+guard指定時はcanonical registration/launch revision capabilitiesを必須とし、metadata callback完了後のguard exact true、両revision、private接続/context/actorとimmutable owner世代、latest proof同一性を確認してからMapを変更する。
+未指定の既存APIは同じ入力形式を維持する。
+具体的なloan/read receiptの寿命とfixtureは[同owned sourceのcollector結合](owned-native-source-collector.md)に記載する。
