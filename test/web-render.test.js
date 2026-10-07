@@ -1757,7 +1757,8 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   context.appendTaskItem(manuallyClosedTaskList, {
     title: '画面で閉じたタスク', state: 'done', closedByUser: true, criteria: [{ met: true }],
   }, {}, partial);
-  assert.ok(descendants(manuallyClosedTaskList).some((node) => node.className === 'meta' && node.textContent === '完了条件 1/1、画面で完了にした'));
+  const closedActions = descendants(manuallyClosedTaskList).find((node) => node.className === 'task-actions');
+  assert.deepEqual(closedActions.children.map((node) => node.textContent), ['完了条件 1/1', '画面で完了にした']);
 
   context.displayPreferences.hideFinished = false;
   const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, partial]);
