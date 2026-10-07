@@ -137,7 +137,9 @@ async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs
       const status = block.match(/<status>(completed|killed|failed|stopped)<\/status>/)?.[1];
       if (!status) continue;
       const recordedAt = typeof record.timestamp === 'string' ? record.timestamp : null;
-      for (const [, taskId] of block.matchAll(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>/g)) {
+      // <status> より後の <result> には報告の本文が入り、ほかのエージェントの task-id が写ることがある。
+      const header = block.split('<status>')[0];
+      for (const [, taskId] of header.matchAll(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>/g)) {
         notifications.set(taskId, { status, recordedAt });
       }
     }

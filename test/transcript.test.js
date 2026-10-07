@@ -33,6 +33,13 @@ test('前のプロセスから引き継いだ stopped の通知に並ぶ task-id
   ]));
 });
 
+test('通知の result に写ったほかの task-id は読まない', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const content = '<task-notification>\n<task-id>reporter</task-id>\n<status>completed</status>\n<result>記録の引用 <task-id>other-agent</task-id></result>\n</task-notification>';
+  await fs.writeFile(fixture.filePath, JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content }));
+  assert.deepEqual([...(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)).keys()], ['reporter']);
+});
+
 test('ツールの入出力や本文に写った終了通知と取り出しの行は読まない', async (t) => {
   const fixture = await transcriptFixture(t);
   await fs.writeFile(fixture.filePath, [
