@@ -28,7 +28,7 @@
 
 未実装、未実行、失敗、skipは成功に含めないでください。
 Codex対応PRでは、head、base、headの起点を確認してください。
-詳細は Claude/Codex適合試験の設計（`docs/design/provider-conformance-testing.md`） と [共有契約](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md) を参照してください。
+詳細は [Claude/Codex適合試験の設計](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/provider-conformance-testing.md) と [共有契約](https://github.com/ktysne/agent-cockpit/blob/codex/feature-codex-support/docs/design/codex-shared-contract.md) を参照してください。
 
 ## 確認して欲しいポイント
 

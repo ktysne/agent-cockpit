@@ -14,7 +14,7 @@ runtime更新後は、代表的な接点を再試験する。
 
 Issue #184の共有契約文書は状態遷移の参照モデルである。
 参照モデルの合格は、実adapterや実runtimeの適合を証明しない。
-[共有契約の固定版](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md)を参照する。
+[共有契約](codex-shared-contract.md)を参照する。
 
 ## 機能ごとのシナリオ定義
 
@@ -116,8 +116,9 @@ fixtureの成功は、real runtimeでの長寿命main actorや同periodの複数
 復旧後のunknownは自動再送せず、追加のcontextStateを保存schemaへ取り込まない。
 
 ID-F04-N13のcontext callbackは両providerで同じraw authority失効を拒否する。
-固定wait返信はCodexの実owned runnerとfake pipeを通すfixtureであり、実modelやログイン後runtimeの能力を証明しない。
-Claude固定waitはunsupportedのままで、共通callback試験の成功をClaude wait能力へ拡張しない。
+固定wait返信はCodexのowned runnerとfake pipeを通すfixtureであり、実modelやログイン後runtimeの能力を証明しない。
+Claude waitは明示された`claudeWaitProfile`と`ownedSourceClaim`を持つowned経路に限り、[Claude wait契約](owned-native-claude-wait.md)の境界に従う。
+owned sourceのないgeneric profileはunsupportedのままであり、共通callback試験の成功だけでClaude wait能力を主張しない。
 
 ID-F04-N14とID-F05-N02では最後のancestor callbackからのraw葉失効を両providerで検査する。
 canonical revisionとprivate proof capabilityの最終検査はcallbackを呼ばず、失効後のproof返却とpayload sinkを0回に保つ。
