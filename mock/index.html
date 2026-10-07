@@ -340,6 +340,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .top-inner .routing .seg button { padding: 3px 7px; font-size: 12px; min-height: 30px; }
 .route-tag { font-size: 11px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
 .route-tag.stale { border-style: dashed; color: var(--warn); }
+.lineage-tag { font-size: 11px; padding: 0 6px; border-radius: 6px; background: var(--warn-soft); color: var(--warn-text); white-space: nowrap; cursor: help; }
 .kind-empty { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .kind-empty h2 { margin: 0; color: var(--text-2); font-size: 15px; }
 .badge.unknown, .state.unknown { background: var(--surface-2); color: var(--text-2); border: 1px dashed var(--border); }
@@ -669,6 +670,8 @@ for (const p of DATA.products) {
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
+  // 常駐サーバーは、直近のフックの照合の失敗を覚え、照合が通ったら消す。
+  if (p.id === 'agent-cockpit') mainSession.claudeLineageIssue = { reason: 'claude_parent_unverified', at: updatedAt(5) };
   if (p.id === 'agent-cockpit') mainSession.commonQuestions = [
     {
       internalQuestionId: 'cq-mock-formats', questionId: '回答形式の確認', createdAt: new Date(Date.now() - 3 * 60_000).toISOString(),
@@ -1637,6 +1640,24 @@ function sessionTag(p, session, withTag, includeSession = false) {
   return `${product}${title}`;
 }
 
+// フックの照合に失敗した理由ごとの直し方。session_mismatch は /clear の直後に一時的に起きうるので、続いたときだけ札を出す。
+const LINEAGE_ISSUES = {
+  claude_parent_unverified: { transient: false, hint: '親プロセスを Claude と確認できません。フックを exec 形式(command と args)で設定し、node を絶対パスで指定してください。シムやシェルを挟まない形にします。' },
+  claude_session_mismatch: { transient: true, hint: 'フックの session_id が親の Claude のセッションファイルと合いません。/clear の直後は一時的に起きます。続く場合は Claude を起動し直してください。' },
+  claude_sessions_unreadable: { transient: false, hint: '~/.claude/sessions のセッションファイルを読めません。ファイルの権限と置き場所を確認してください。' },
+  claude_registration_failed: { transient: false, hint: 'フックからのセッションの登録に失敗しました。常駐サーバーのログ (server.log) で原因を確認してください。' },
+};
+const LINEAGE_TRANSIENT_MS = 60_000;
+
+function lineageNotice(session, now = Date.now()) {
+  const issue = session.claudeLineageIssue;
+  const info = issue && LINEAGE_ISSUES[issue.reason];
+  if (!info) return '';
+  const at = new Date(issue.at).getTime();
+  if (info.transient && !(now - at >= LINEAGE_TRANSIENT_MS)) return '';
+  return `<span class="lineage-tag" tabindex="0" title="${esc(info.hint)}" data-lineage-reason="${esc(issue.reason)}">フックを照合できません</span>`;
+}
+
 function mainRow(p, session, withTag) {
   const unknown = session.status === 'unknown';
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
@@ -1648,7 +1669,7 @@ function mainRow(p, session, withTag) {
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}`;
   return `<div class="now-row main-row">
-      <div class="who"><span class="dot ${stateClass}"></span>${session.codex ? 'Codex' : 'メイン'}${sessionTag(p, session, withTag)}<strong${statusTitle}>${status}</strong>${conversation}</div>
+      <div class="who"><span class="dot ${stateClass}"></span>${session.codex ? 'Codex' : 'メイン'}${sessionTag(p, session, withTag)}<strong${statusTitle}>${status}</strong>${conversation}${lineageNotice(session)}</div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
       ${detail ? `<div class="detail">${detail}</div>` : ''}
       ${unknownSessionControls(session)}</div>`;
