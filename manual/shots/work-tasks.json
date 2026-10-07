@@ -40,7 +40,7 @@
     {
       "do": "screenshot",
       "name": "closing",
-      "target": ".session-body > ul.task-list > .task-item:nth-child(1) .task-body",
+      "target": ".session-body > ul.task-list > .task-item:nth-child(1)",
       "parts": {
         "closing.cancel": ".session-body > ul.task-list > .task-item:nth-child(1) [data-cancel-close-task]",
         "closing.note": ".session-body > ul.task-list > .task-item:nth-child(1) .task-actions > .meta:last-child"
