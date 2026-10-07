@@ -925,14 +925,21 @@ function createRequestHandler(options) {
       const snapshot = state.snapshot();
       let commonQuestionSnapshot = null;
       let questionRegistrationSnapshot = null;
+      let commonQuestionSnapshotUnavailable = false;
       if (questionService) {
         try {
+          const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
           commonQuestionSnapshot = await questionService.dashboardSnapshot();
-          if (!commonQuestionSnapshot || !Array.isArray(commonQuestionSnapshot.questions)) throw new Error();
-          questionRegistrationSnapshot = registrationRegistry.snapshot();
+          if (!isRecord(commonQuestionSnapshot) || !Array.isArray(commonQuestionSnapshot.questions) ||
+              commonQuestionSnapshot.questions.some((question) => !isRecord(question))) throw new Error();
+          questionRegistrationSnapshot = registrationSnapshotForInstructions();
+          if (!questionRegistrationSnapshot ||
+              questionRegistrationSnapshot.conversations.some((conversation) => !isRecord(conversation)) ||
+              questionRegistrationSnapshot.executions.some((execution) => !isRecord(execution))) throw new Error();
         } catch {
-          jsonResponse(response, 503, { error: 'Question state is unavailable' });
-          return;
+          commonQuestionSnapshot = null;
+          questionRegistrationSnapshot = null;
+          commonQuestionSnapshotUnavailable = true;
         }
       }
       let instructionDashboard = null;
@@ -1060,7 +1067,9 @@ function createRequestHandler(options) {
           } catch { return null; }
         }).filter(Boolean)
         : [];
-      const commonQuestionDiagnostics = commonQuestionSnapshot?.recovery || orphanedCommonQuestions.length
+      const commonQuestionDiagnostics = commonQuestionSnapshotUnavailable
+        ? { recovery: { status: 'unavailable', errorCode: 'common_question_state_unavailable' } }
+        : commonQuestionSnapshot?.recovery || orphanedCommonQuestions.length
         ? { ...(commonQuestionSnapshot?.recovery ? { recovery: commonQuestionSnapshot.recovery } : {}),
           ...(orphanedCommonQuestions.length ? { orphanedQuestions: orphanedCommonQuestions } : {}) }
         : undefined;
