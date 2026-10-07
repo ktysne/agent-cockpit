@@ -1717,6 +1717,8 @@ function prItem(p, pr) {
   const operationBlocker = mergeOperationBlocker(p, pr);
   const waiting = operationBlocker ? [] : mergeConditionWaits(p, pr);
   const conditionMet = !operationBlocker && waiting.length === 0;
+  // クロスレビューの行が黄の札で同じ待ちを示すときは、待ちの行から外して二重に出さない。
+  const shownWaits = crossReviewState(pr).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
   const mergeIntent = Boolean(pr.mergeIntent);
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
@@ -1740,7 +1742,7 @@ function prItem(p, pr) {
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
     ${operationBlocker && !rsv && !mergeIntent ? `<div class="why-not">マージできない理由: ${esc(operationBlocker)}
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
-    ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
+    ${shownWaits.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${shownWaits.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
     </div>${actions ? `<div class="pr-actions">${actions}</div>` : ''}</div>
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
