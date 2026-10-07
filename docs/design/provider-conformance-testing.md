@@ -81,7 +81,7 @@ ID-F12-D01は、共通質問と指示の検証済みprojectionに対する表示
 
 古い・unknown event、session fileの再走査、projection取得中の失敗は削除tombstoneを解除しない。snapshotまたはregistryを取得できない間のhide/unhide/deleteは503で状態を変えず、GETは200を返して他の表示を維持する。新しい検証済みstate writeだけが、同providerのtombstoneを解除する。
 
-HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-projection-display.test.js)で17件、保存形式と旧store復元は[test/state-persistence.test.js](../../test/state-persistence.test.js)の対象テスト1件が成功した。実Claude/Codex runtimeでの表示・削除動作は未確認である。
+HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-projection-display.test.js)で19件、保存形式と旧store復元は[test/state-persistence.test.js](../../test/state-persistence.test.js)の対象テスト1件が成功した。実Claude/Codex runtimeでの表示・削除動作は未確認である。
 
 ## Codex native pendingの表示
 

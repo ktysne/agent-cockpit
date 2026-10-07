@@ -2337,14 +2337,6 @@ function createRequestHandler(options) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
       }
-      if (registration) {
-        const display = state.projectionDisplayFor(registration.provider, stateEventBody.session_id);
-        if (display?.deletedAt && (typeof stateEventBody.hookAt !== 'number' || !Number.isFinite(stateEventBody.hookAt) ||
-            stateEventBody.hookAt <= Date.parse(display.deletedAt))) {
-          jsonResponse(response, 202, { accepted: true });
-          return;
-        }
-      }
       state.captureFieldNames(stateEventBody);
       const eventMetadata = {
         product,
