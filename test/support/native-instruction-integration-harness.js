@@ -30,8 +30,9 @@ class FakeInput extends EventEmitter {
     if (this.destroyed || this.ended) throw new Error('fake_pipe_closed');
     const line = value.toString();
     this.writes.push(line);
-    this.onWrite?.(line);
-    queueMicrotask(() => callback?.(null));
+    const outcome = this.onWrite?.(line);
+    const error = outcome === 'write-error' ? Object.assign(new Error('fixture stdin write failure'), { code: 'fixture_stdin_write_failure' }) : null;
+    queueMicrotask(() => callback?.(error));
     return true;
   }
 
@@ -127,12 +128,19 @@ function createFakeNativeProcess(provider, homePath, options = {}) {
         const turnId = isInstruction ? `codex-instruction-turn-${state.nextTurn++ - 1}` : state.turnId;
         if (isInstruction) {
           state.instructionWrites.push(request);
+          if (options.instructionWriteError) return 'write-error';
           emitInstructionItem(request);
         }
         state.child.send(rpcResponse(request.id, { turn: { id: turnId } }));
         if (isInstruction) state.turnId = turnId;
+        else if (options.waitOnStart) setImmediate(() => state.child?.send({
+          jsonrpc: '2.0', id: 'fixture-wait-request', method: 'item/tool/call',
+          params: { threadId: state.threadId, turnId, callId: 'fixture-wait-call', namespace: null,
+            tool: 'cockpit_wait', arguments: {} },
+        }));
       } else if (request.method === 'turn/steer') {
         state.instructionWrites.push(request);
+        if (options.instructionWriteError) return 'write-error';
         emitInstructionItem(request);
         state.child.send(rpcResponse(request.id, { turnId: request.params.expectedTurnId }));
       } else if (request.method === 'thread/loaded/list') {
@@ -178,7 +186,7 @@ function createFakeNativeProcess(provider, homePath, options = {}) {
     state.child = new FakeNativeChild((line) => {
       let request;
       try { request = JSON.parse(line); } catch { return; }
-      respond(request);
+      return respond(request);
     });
     state.environment = {
       home: spawnOptions.env.HOME,
@@ -403,6 +411,8 @@ async function createTemporaryNativeInstructionHarness(options = {}) {
 module.exports = {
   createNativeInstructionIntegrationHarness,
   createTemporaryNativeInstructionHarness,
+  createFakeNativeProcess,
+  defaultProfiles,
   FakeNativeChild,
   NATIVE_ID_KINDS,
   PROVIDERS,

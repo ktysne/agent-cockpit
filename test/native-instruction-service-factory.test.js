@@ -124,3 +124,18 @@ test('native server startup failure closes the integration and releases its jour
   const reopened = await createNativeInstructionServiceIntegration(options);
   await reopened.close();
 });
+
+test('target projection becomes unverified as integration cleanup begins', async (t) => {
+  const directory = await createDirectory();
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const integration = await createNativeInstructionServiceIntegration(integrationOptions(directory));
+  assert.deepEqual(integration.instructionTargetState('unknown-launch'), {
+    status: 'unverified', nativeTurnId: null, reason: 'instruction_target_unverified',
+  });
+
+  const closing = integration.close();
+  assert.deepEqual(integration.instructionTargetState('unknown-launch'), {
+    status: 'unverified', nativeTurnId: null, reason: 'native_instruction_integration_closed',
+  });
+  await closing;
+});

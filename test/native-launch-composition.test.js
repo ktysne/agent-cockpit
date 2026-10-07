@@ -11,6 +11,8 @@ const { createLaunchBindingKernel } = require('../src/server/launch-binding');
 const { createRuntimeBindingKernel } = require('../src/server/runtime-binding');
 const { createNativeLaunchComposition } = require('../src/server/native-launch-composition');
 const { createOwnedNativeRunner } = require('../src/server/owned-native-runner');
+const { createFakeNativeProcess } = require('./support/native-instruction-integration-harness');
+const { createNativeInstructionOwnerRouter } = require('../src/server/native-instruction-service-integration');
 
 const PROVIDERS = ['claude', 'codex'];
 const NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
@@ -1714,3 +1716,82 @@ for (const provider of PROVIDERS) {
     });
   }
 }
+
+test('native target projection becomes unverified after owner handoff', async (t) => {
+  const executionWorkspace = createOwnedWorkspace(t);
+  const ownerWorkspace = createOwnedWorkspace(t);
+  const processes = [];
+  const fixture = createFixture({
+    profileOverrides: {
+      codex: {
+        executablePath: executionWorkspace.executablePath,
+        homePath: executionWorkspace.homePath,
+        cwd: executionWorkspace.cwd,
+      },
+      'codex-alt': {
+        executablePath: ownerWorkspace.executablePath,
+        homePath: ownerWorkspace.homePath,
+        cwd: ownerWorkspace.cwd,
+      },
+    },
+    getAuthentication: () => ({ oauthToken: 'fixture-oauth-token' }),
+    onAuthenticationRequired: ({ loginId }) => {
+      const processHarness = processes.at(-1);
+      if (!processHarness?.completeLogin(loginId)) throw new Error('fixture_login_unavailable');
+    },
+    runnerFactory(runnerOptions) {
+      const processHarness = createFakeNativeProcess(runnerOptions.provider, runnerOptions.homePath, {
+        nativeIdSuffix: processes.length + 1,
+      });
+      processes.push(processHarness);
+      return createOwnedNativeRunner({
+        ...runnerOptions,
+        spawnImpl: processHarness.spawnImpl,
+        timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 250 },
+      });
+    },
+  });
+  let executionReceipt;
+  let ownerReceipt;
+  let executionCollector;
+  let ownerCollector;
+  const router = createNativeInstructionOwnerRouter({ provider: 'codex', composition: fixture.composition });
+  t.after(async () => {
+    router.close();
+    await executionCollector?.disconnect().catch(() => {});
+    await ownerCollector?.disconnect().catch(() => {});
+    if (ownerReceipt) await fixture.composition.stop(ownerReceipt).catch(() => {});
+    if (executionReceipt) await fixture.composition.stop(executionReceipt).catch(() => {});
+  });
+
+  async function startObserved(profileId, suffix, inputText) {
+    const receipt = fixture.admission('codex', suffix, { profileId });
+    router.attachAdmission(receipt);
+    const collector = fixture.composition.createOwnedCollector(receipt);
+    const connected = Promise.resolve(collector.connect());
+    const starting = fixture.composition.start(receipt, { inputText });
+    const [result] = await Promise.all([starting, connected]);
+    const processHarness = processes.at(-1);
+    assert.equal((await collector.observeKnownThread(processHarness.state.threadId)).status, 'observed');
+    return { receipt, result, collector };
+  }
+
+  const execution = await startObserved('codex', 'projection-handoff-execution', 'execution prompt');
+  executionReceipt = execution.receipt;
+  executionCollector = execution.collector;
+  const owner = await startObserved('codex-alt', 'projection-handoff-owner', 'owner prompt');
+  ownerReceipt = owner.receipt;
+  ownerCollector = owner.collector;
+
+  assert.equal(fixture.composition.instructionTargetState(execution.result.launchRef).status, 'working');
+  fixture.composition.handoff(
+    execution.result.runReceipt,
+    execution.result.runReceipt,
+    owner.result.runReceipt,
+    { handoffId: 'projection-handoff', expectedOwnerGeneration: 0 },
+  );
+  assert.deepEqual(fixture.composition.instructionTargetState(execution.result.launchRef), {
+    status: 'unverified', nativeTurnId: null, reason: 'instruction_target_unverified',
+  });
+  assert.equal(processes[0].state.instructionWrites.length, 0);
+});

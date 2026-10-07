@@ -58,6 +58,22 @@ adapterの準備前にはverifierがfalseを返す。
 HTTP requestにはnative profile allowlist、receipt、writer capabilityによる認可を追加しない。
 起動は明示opt-inであり、既定daemonや恒久HOMEへprofileを追加しない。
 
+## HTTPのtarget projection
+
+`/api/state`の`instructionTargets`は、native integrationがlaunchRefごとに返す安全な状態だけを表示する。
+`startNativeInstructionServer`は呼び出し元の`serverOptions.instructionTargetState`を上書きし、登録状態を確認する内部callbackを必ず渡す。
+`instructionTargetState` callbackは`{status, nativeTurnId, reason}`だけを返し、serverはこれを既存launch metadataへ重ねて表示する。HTTP requestからreceiptやprofileを受け取らない。
+
+compositionは通常writerと同じ`capture`と`checkFinal`を使い、runnerの物理writer適格性も副作用なしで確認する。
+この照会は`prepare`を呼ばないため、capabilityやreservationを作らない。
+照会は現在の適格性を示すもので、後続の`prepare`や送信を保証しない。
+reservation容量やstdin pipeの使用可能性はこの照会だけでは保証せず、後続の`prepare`と同期送信時の最終検査で改めて確認する。
+
+Codexのworkingは現在turnのsteer適格性を確認できた場合に限る。
+Claudeのworking、delegated/reviewのterminal、disconnected、handoff中、active wait、送信結果不明、retired、closedはunverifiedを返す。
+stoppedはstandalone terminal context、同一actorのlife proof、明示start適格性がすべて確認できた場合だけ返す。
+送信直前にも既存の同期gateを通すため、状態表示後の失効は送信を許可しない。
+
 `startLaunch`はrouter attach後にowned collector接続とcomposition起動を待ち、Codexでは既知threadを観測してからcomposition/collector両方のcurrent proofを確認する。
 失敗時はadmissionをretireし、native stopを試みる。
 `stop`は最初にrouter capabilityを無効化し、collectorを切断してからcompositionへstopを依頼する。
@@ -84,6 +100,15 @@ fixtureはruntime process spawnとprovider event transportを置換する。別t
 question/permission pendingのstate観測は未対応であるため、NS09の期待条件を満たしたとは扱わない。
 この文書だけでIssue #175全体や実native採用の完了を宣言しない。
 
-全体検証は`npm test`を専用worktreeで子プロセス起動が許可された条件で実行し、1791/1791件が成功した。
-通常sandboxでの先行実行はtest runnerの子プロセス起動時に`spawn EPERM`となり、製品testの失敗とは数えない。
+R1のHTTP target回帰を`npm run test:inprocess -- test/owned-native-instruction-dispatch.test.js test/native-instruction-service-http-target.test.js test/native-instruction-service-factory.test.js test/native-launch-composition.test.js`で実行し、171/171件が成功した。
+通常のHTTP回帰では`instructionTargetState` callbackを省略し、Codex working、Claude/Codex standalone stopped、失効後の送信拒否を製品factory経由で確認する。
+別の回帰は呼び出し元callbackの上書き、繰り返すGET、stale turn、別launch、Claude steer、delegated terminal、再接続前後、active wait、uncertain write、integration closeを確認する。
+writer適格性照会を128回行ってもreservationは消費されず、続く128回のprepareが成功し、上限超過時の送信writeは0だった。
+handoff時のtarget projectionは、製品composition、owner router、runner、writer、collectorを通るCodex fixtureでworkingからunverifiedへ変わることを確認した。
+これらの自動試験はprocess spawnとnative event transportをfixtureで置き換えており、実Claude/Codex runtimeの証跡には含めない。
+R1修正前のHEAD `44e3635`では、専用worktreeで子プロセス起動が許可された条件の`npm test`が1791/1791件成功した。
+R1修正前の通常sandbox試行はtest runnerの子プロセス起動時に`spawn EPERM`となり、製品testの失敗とは数えなかった。
 結果のsummaryと実行条件はignore対象の`.cross-review/native-integration-full-test.log`に記録した。tool出力上限のため完全なstdoutではない。
+
+R1修正後の専用worktreeで`npm test`を子プロセス起動が許可された条件で実行し、1802/1802件が成功した。
+完全な出力をignore対象の`.cross-review/native-integration-r1-full-test.log`に保存した。

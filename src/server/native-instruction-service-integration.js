@@ -320,6 +320,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   const admissionByReceipt = new WeakMap();
   const admissions = new Set();
+  const admissionsByLaunchRef = new Map();
   let closing = false;
   let closePromise = null;
 
@@ -401,6 +402,16 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     return Object.freeze({ state: entryFor(receipt).state });
   }
 
+  function instructionTargetState(launchRef) {
+    const unverified = (reason = 'instruction_target_unverified') =>
+      Object.freeze({ status: 'unverified', nativeTurnId: null, reason });
+    if (closing) return unverified('native_instruction_integration_closed');
+    const entry = admissionsByLaunchRef.get(launchRef);
+    if (!entry || entry.state !== 'running') return unverified(entry ? 'native_launch_retired' : undefined);
+    try { return composition.instructionTargetState(launchRef); }
+    catch { return unverified(); }
+  }
+
   function startLaunch(value) {
     if (closing) throw integrationError('native_instruction_integration_closed');
     const { admission, inputText } = captureLaunchStart(value);
@@ -434,6 +445,8 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         if (!composition.resolveProof(result.launchRef) || !collector.resolveProof(result.launchRef)) {
           throw integrationError('native_execution_proof_unavailable');
         }
+        entry.launchRef = result.launchRef;
+        admissionsByLaunchRef.set(result.launchRef, entry);
         entry.state = 'running';
         return Object.freeze({ receipt, result, collector });
       } catch (error) {
@@ -472,6 +485,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     launchRegistry: launchKernel.registry,
     checkpointPath,
     journalPath,
+    instructionTargetState,
     close,
   });
 }
@@ -504,6 +518,7 @@ async function startNativeInstructionServer(inputOptions) {
       registrationRegistry: integration.registrationRegistry,
       launchRegistry: integration.launchRegistry,
       instructionService: integration.service,
+      instructionTargetState: integration.instructionTargetState,
       onShutdown: async () => {
         let failure = null;
         try { await integration.close(); } catch (error) { failure = error; }
