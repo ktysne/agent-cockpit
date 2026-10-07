@@ -120,12 +120,14 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
 
   const webContext = pageContext(web, {
     displayPreferences: { hideFinished: true },
+    lastState: null,
     element: fakeElement,
     document: { createElement: fakeElement },
     sharedBranch: () => '',
     shownPermissions: () => [],
     shownActiveDecisions: () => [],
     shownCommonQuestions: () => [],
+    instructionComposer: () => null,
     appendCommonQuestions() {},
     hasHiddenJudgmentItems: () => false,
     orderedSectionKeys: (keys) => keys,
@@ -143,6 +145,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
 
   const mockContext = pageContext(mock, {
     ui: { hideFinished: true },
+    instructionComposer: () => '',
     sharedBranch: () => '',
     visibleDecisions: () => [],
     visiblePerms: () => [],
@@ -164,6 +167,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
 
   const kindContext = pageContext(web, {
     DEFAULT_SECTION_ORDER: ['judgment', 'tasks', 'now'],
+    lastState: null,
     expandedKindSections: new Set(),
     sessionReferences: () => [{
       product: { key: 'p', name: 'P', pullRequestGroups: [] },
@@ -174,6 +178,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     shownActiveDecisions: () => [],
     kindEndedDecisionEntries: () => [],
     shownCommonQuestions: () => [],
+    instructionComposer: () => null,
     kindEndedAgentCount: () => 1,
     kindTodoTaskCount: () => 0,
     kindDoneTaskCount: () => 0,
@@ -401,12 +406,14 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
   }];
   const kindContext = pageContext(web, {
     DEFAULT_SECTION_ORDER: ['judgment', 'tasks', 'now'],
+    lastState: null,
     expandedKindSections: new Set(),
     sessionReferences: () => references,
     shownPermissions: () => [],
     shownActiveDecisions: () => [],
     kindEndedDecisionEntries: () => [],
     shownCommonQuestions: () => [],
+    instructionComposer: () => null,
     kindEndedAgentCount: () => 1,
     kindTodoTaskCount: () => 1,
     kindDoneTaskCount: () => 1,
@@ -757,8 +764,9 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   const countsSource = functionSource(web, 'idleHiddenSessions');
   const noteSource = functionSource(web, 'renderIdleNote');
   const endedAgentSource = functionSource(web, 'isEndedAgent');
+  const finishedInstructionSource = functionSource(web, 'isFinishedInstruction');
   const activeDecisionSource = functionSource(web, 'isActiveDecision');
-  assert.ok(idleSource && countsSource && noteSource && endedAgentSource && activeDecisionSource);
+  assert.ok(idleSource && countsSource && noteSource && endedAgentSource && finishedInstructionSource && activeDecisionSource);
   const note = { hidden: true, children: [], replaceChildren(...children) { this.children = children; } };
   let renders = 0;
   const context = pageContext(web, {
@@ -770,7 +778,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
     lastState: {},
     render: () => { renders += 1; },
   });
-  vm.runInContext(`${endedAgentSource}\n${activeDecisionSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
+  vm.runInContext(`${endedAgentSource}\n${finishedInstructionSource}\n${activeDecisionSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
   const now = 2_000_000;
   const stale = {
     session_id: 'stale', status: '不明', lastUpdatedAt: new Date(now - 1_800_001).toISOString(),
@@ -811,13 +819,15 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
 
   const mockIdle = functionSource(mock, 'isIdleHiddenSession');
   const mockActiveDecision = functionSource(mock, 'isActiveDecision');
+  const mockFinishedInstruction = functionSource(mock, 'isFinishedInstructionRecord');
+  const mockInstructionRecords = functionSource(mock, 'instructionRecordsForSession');
   const mockContext = pageContext(mock, {
-    ui: { idleHideMinutes: 30 },
+    ui: { idleHideMinutes: 30, instructionRecords: [] },
     effectiveDecisionState: (decision) => decision.kind,
     commonQuestionsOf: (session) => session.commonQuestions || [],
     isFinishedCommonQuestion: () => false,
   });
-  vm.runInContext(`${mockActiveDecision}\n${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
+  vm.runInContext(`${mockActiveDecision}\n${mockFinishedInstruction}\n${mockInstructionRecords}\n${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
   assert.equal(mockContext.isIdle({
     status: 'unknown', lastUpdatedAt: new Date(now - 45 * 60_000).toISOString(), perms: [], decisions: [], subagents: [],
   }, now), true);
@@ -1347,7 +1357,11 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
   const context = pageContext(web, {
     answerNoteComposing: false,
     commonQuestionComposing: false,
+    instructionComposing: false,
+    instructionDiagnosticsNotice: () => null,
     commonQuestionDiagnosticsNotice: () => null,
+    instructionAlternativeRecoveryPanel: () => null,
+    instructionPreviewRecoveryPanel: () => null,
     renderRouting() {},
     idleHiddenSessions: () => [{}],
     sessionsAfterIdleFilter: () => [],
@@ -1398,7 +1412,11 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
     const context = pageContext(web, {
       answerNoteComposing: false,
       commonQuestionComposing: false,
+      instructionComposing: false,
+      instructionDiagnosticsNotice: () => null,
       commonQuestionDiagnosticsNotice: () => null,
+      instructionAlternativeRecoveryPanel: () => null,
+      instructionPreviewRecoveryPanel: () => null,
       renderRouting() {},
       idleHiddenSessions: () => [],
       sessionsAfterIdleFilter: (sessions) => sessions,

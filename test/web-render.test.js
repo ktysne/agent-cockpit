@@ -4,10 +4,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createFakeClock } = require('../tools/manual/fake-clock');
-const { cssDeclarations, functionSource, pageContext, sourceBetween } = require('./support/page-context');
+const { cssDeclarations, functionSource, pageContext: createPageContext, sourceBetween } = require('./support/page-context');
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+
+function pageContext(html, sandbox = {}) {
+  const instructionState = html.includes('let instructionComposing = false;')
+    ? { instructionComposing: false, instructionDiagnosticsNotice: () => null, instructionAlternativeRecoveryPanel: () => null, instructionPreviewRecoveryPanel: () => null }
+    : {};
+  return createPageContext(html, { ...instructionState, ...sandbox });
+}
 
 test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
   const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
@@ -101,11 +108,12 @@ test('終わったセッションは待機中で未完了のものが無い場�
   const endedAgent = functionSource(pageHtml, 'isEndedAgent');
   const endedDecision = functionSource(pageHtml, 'isEndedDecision');
   const finishedQuestion = functionSource(pageHtml, 'isFinishedCommonQuestion');
+  const finishedInstruction = functionSource(pageHtml, 'isFinishedInstruction');
   const isFinished = functionSource(pageHtml, 'isFinishedSession');
   const status = functionSource(pageHtml, 'activityStatus');
-  assert.ok(endedAgent && endedDecision && finishedQuestion && isFinished && status);
+  assert.ok(endedAgent && endedDecision && finishedQuestion && finishedInstruction && isFinished && status);
   const context = pageContext(pageHtml, {});
-  vm.runInContext(`${endedAgent}\n${endedDecision}\n${finishedQuestion}\n${status}\n${isFinished}`, context);
+  vm.runInContext(`${endedAgent}\n${endedDecision}\n${finishedQuestion}\n${finishedInstruction}\n${status}\n${isFinished}`, context);
 
   const finished = {
     status: '待機中',
@@ -192,9 +200,10 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
   assert.equal(now.body.children.length, 0);
 });
 
-function reloadHarness(initialUiVersion, drafts = []) {
+function reloadHarness(initialUiVersion, drafts = [], instructionState = {}) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
+  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'instructionTargetStillBound', 'hasUnsentInstructionWork',
+    'findInstructionRecord', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
@@ -204,6 +213,12 @@ function reloadHarness(initialUiVersion, drafts = []) {
     initialUiVersion,
     uiUpdatePending: false,
     answerDrafts: new Map(drafts),
+    instructionComposing: instructionState.composing === true,
+    instructionDrafts: new Map(instructionState.drafts || []),
+    instructionAlternatives: new Map(instructionState.alternatives || []),
+    instructionInFlight: new Set(instructionState.inFlight || []),
+    instructionAlternativeInFlight: new Set(instructionState.alternativeInFlight || []),
+    instructionPreviewSavePending: new Map(instructionState.previewSavePending || []),
     reloadNote,
     location: { reload: () => { reloadCount += 1; } },
   });
@@ -284,6 +299,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     commonQuestionComposing: false,
     HTMLElement: class FakeHTMLElement {},
     commonQuestionDiagnosticsNotice: () => null,
+    instructionAlternativeRecoveryPanel: () => null,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     sinceSeenMode: 'always',
@@ -539,7 +555,7 @@ test('新しい画面の版は書きかけがあれば知らせ、書きかけ�
   assert.equal(harness.context.checkUiVersion(answerableState()), false);
   assert.equal(harness.reloadCount, 0);
   assert.equal(harness.reloadNote.hidden, false);
-  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
+  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答や指示があるため、読み込みを保留しています。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
 
   harness.context.answerDrafts.set(DRAFT_KEY, { choice: null, note: '', picks: [] });
   assert.equal(harness.context.checkUiVersion(answerableState()), true);
@@ -562,6 +578,92 @@ test('回答できなくなった判断事項と消えた判断事項の下書�
   const draft = [[DRAFT_KEY, { choice: 'ok', note: '書きかけ', picks: [] }]];
   assert.equal(reloadHarness('v1', draft).context.checkUiVersion(answerableState(null, 'resolved')), true);
   assert.equal(reloadHarness('v1', draft).context.checkUiVersion({ uiVersion: 'v2', sessions: [] }), true);
+});
+
+test('指示対象や診断だけが変わっても画面署名が変わる', () => {
+  const signature = functionSource(pageHtml, 'instructionProjectionSignature');
+  assert.ok(signature);
+  const context = pageContext(pageHtml);
+  vm.runInContext(signature, context);
+  const base = {
+    sessions: [{ session_id: 'session-1', instructions: [] }],
+    instructionTargets: [{ launchRef: 'launch-1', sessionId: 'session-1', executionId: 'exec-1', status: 'working', nativeTurnId: 'turn-1' }],
+    instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false },
+  };
+  assert.notEqual(context.instructionProjectionSignature(base), context.instructionProjectionSignature({
+    ...base, instructionTargets: [{ ...base.instructionTargets[0], status: 'waiting', nativeTurnId: null }],
+  }));
+  assert.notEqual(context.instructionProjectionSignature(base), context.instructionProjectionSignature({
+    ...base, instructionDiagnostics: { ...base.instructionDiagnostics, blocked: true, errorCode: 'instruction_journal_blocked' },
+  }));
+});
+
+test('同じ実行の一時的な待機中は入力下書きを保ち、対象消失後は版更新を許す', () => {
+  const draft = [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '入力中' }]];
+  const waiting = reloadHarness('v1', [], { drafts: draft });
+  const state = {
+    uiVersion: 'v2', sessions: [],
+    instructionTargets: [{ launchRef: 'launch-1', sessionId: 'session-1', executionId: 'exec-1', status: 'waiting' }],
+    instructionDiagnostics: { targets: 'available' },
+  };
+  assert.equal(waiting.context.checkUiVersion(state), false);
+  assert.equal(waiting.reloadCount, 0);
+
+  const unverified = reloadHarness('v1', [], { drafts: draft });
+  assert.equal(unverified.context.checkUiVersion({ ...state,
+    instructionTargets: [{ ...state.instructionTargets[0], status: 'unverified' }],
+  }), false);
+  assert.equal(unverified.reloadCount, 0);
+
+  const ended = reloadHarness('v1', [], { drafts: draft });
+  assert.equal(ended.context.checkUiVersion({ ...state, instructionTargets: [] }), true);
+  assert.equal(ended.reloadCount, 1);
+});
+
+test('保留中の代替要求と送信中の指示は対象消失後も版更新を止める', () => {
+  const state = { uiVersion: 'v2', sessions: [], instructionTargets: [], instructionDiagnostics: { targets: 'available' } };
+  const request = {
+    oldDeliveryAttemptId: 'old-1', newDeliveryAttemptId: 'new-1', sessionId: 'session-1',
+    launchRef: 'launch-1', executionId: 'period-1', registrationExecutionId: 'execution-1',
+    logicalMessageId: 'message-1', revision: 1, text: '固定した本文', mode: 'next-user-input', expectedTurnId: null,
+  };
+  const pending = reloadHarness('v1', [], { alternatives: [['old-1', { pendingRequest: request }]] });
+  const missingDelivery = {
+    ...state,
+    instructionDiagnostics: { service: 'blocked', blocked: true, errorCode: 'instruction_delivery_missing', targets: 'available' },
+  };
+  assert.equal(pending.context.checkUiVersion(missingDelivery), false);
+  assert.equal(pending.reloadCount, 0);
+  pending.context.instructionAlternatives.clear();
+  assert.equal(pending.context.checkUiVersion(missingDelivery), true);
+  assert.equal(pending.reloadCount, 1);
+
+  const inflight = reloadHarness('v1', [], { inFlight: ['session-1'] });
+  assert.equal(inflight.context.checkUiVersion(state), false);
+  assert.equal(inflight.reloadCount, 0);
+
+  const composing = reloadHarness('v1', [], { composing: true });
+  assert.equal(composing.context.checkUiVersion(state), false);
+  assert.equal(composing.reloadCount, 0);
+
+  const previewPending = reloadHarness('v1', [], {
+    previewSavePending: [['instruction-a', { phase: 'pending', text: 'fixed body' }]],
+  });
+  assert.equal(previewPending.context.checkUiVersion(state), false);
+  assert.equal(previewPending.reloadCount, 0);
+  previewPending.context.instructionPreviewSavePending.clear();
+  assert.equal(previewPending.context.checkUiVersion(state), true);
+  assert.equal(previewPending.reloadCount, 1);
+});
+
+test('文字が残っていない対象とモードだけの下書きは版更新を止めない', () => {
+  const harness = reloadHarness('v1', [], {
+    drafts: [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '' }]],
+  });
+  assert.equal(harness.context.checkUiVersion({
+    uiVersion: 'v2', sessions: [], instructionTargets: [], instructionDiagnostics: { targets: 'available' },
+  }), true);
+  assert.equal(harness.reloadCount, 1);
 });
 
 test('自分の画面の版が空なら読み込み直さない', () => {
@@ -1716,7 +1818,7 @@ test('PR 群が無いプロダクトの空表示は完了表示の設定にか�
 
 test('終わったセッションはタスクの有無にかかわらず両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
+    'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount',
     'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts', 'sessionReferences',
     'taskVisibility', 'kindDoneTaskCount', 'element', 'badge', 'appendTaskItem',
   ];
@@ -1774,7 +1876,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
-    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'isFinishedCommonQuestion', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
+    'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
     'hasProductContent', 'sessionActivityTime', 'isIdleHiddenSession', 'idleHiddenSessions', 'isActiveDecision', 'countJudgments', 'sessionsAfterIdleFilter',
     'orderedProducts', 'sessionReferences', 'element', 'productSection',
   ];
@@ -2724,6 +2826,11 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     checkUiVersion: () => false,
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
+    observeInstructionStates: () => null,
+    instructionProjectionSignature: () => '',
+    renderedInstructionSignature: '',
+    deferredRenderPending: false,
+    countJudgments: () => ({ permission: 0, decisions: 0, questions: 0, questionProvisional: 0 }),
     renderedPullRequestExpirySignature: 'reservation:visible',
     updateConnectionNote() {},
     isAwaitingDecision: () => false,
@@ -3319,7 +3426,7 @@ test('作業中がなく未着手だけのセッションでは未着手を畳�
 
 test('一部完了のセッションでは完了タスクを表示できる', () => {
   const names = [
-    'element', 'activityStatus', 'isEndedAgent', 'isFinishedCommonQuestion', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
+    'element', 'activityStatus', 'isEndedAgent', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'isFinishedSession', 'appendAgents', 'appendDecisions', 'taskVisibility', 'appendExpandToggle', 'appendPlanToggle', 'appendTasks',
     'kindEndedDecisionEntries', 'kindEndedAgentCount',
   ];
   const functions = names.map((name) => functionSource(pageHtml, name));
@@ -3473,6 +3580,11 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       checkUiVersion: () => false,
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
+      observeInstructionStates: () => null,
+      instructionProjectionSignature: () => '',
+      renderedInstructionSignature: '',
+      deferredRenderPending: false,
+      countJudgments: () => ({ permission: 0, decisions: 0, questions: 0, questionProvisional: 0 }),
       renderedPullRequestExpirySignature: '',
       updateConnectionNote() {},
       isPendingDecision: () => false,

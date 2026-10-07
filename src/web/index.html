@@ -383,6 +383,19 @@ h3.sub .count { font-weight: normal; }
 .common-question-confirm-actions .secondary { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 .common-question-confirm-actions button:disabled { opacity: .45; cursor: default; }
 .common-question-error { margin: 0; color: var(--danger); font-size: 12px; }.common-question-diagnostics { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
+.instruction-composer, .instruction-card { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.instruction-composer h4, .instruction-card h4 { margin: 0; font-size: 13px; }
+.instruction-form { display: grid; gap: 8px; }
+.instruction-form label { display: grid; gap: 3px; font-size: 12px; }
+.instruction-form select, .instruction-form textarea { min-width: 0; width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.instruction-form textarea { min-height: 72px; resize: vertical; }
+.instruction-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.instruction-actions button { min-height: 36px; padding: 5px 10px; cursor: pointer; }
+.instruction-status, .instruction-reason, .instruction-target { margin: 0; color: var(--text-2); font-size: 12px; }
+.instruction-preview { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 6px; background: var(--surface); }
+.instruction-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.instruction-preview textarea { min-width: 0; width: 100%; min-height: 72px; resize: vertical; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--surface); color: var(--text); font: inherit; }
+.instruction-diagnostics { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); color: var(--text-2); }
 .kind-empty { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .kind-empty h2 { margin: 0; color: var(--text-2); font-size: 15px; }
 @media (max-width: 640px) {
@@ -553,6 +566,7 @@ let showIdleSessions = false;
 let hasRenderedState = false;
 let answerNoteComposing = false;
 let commonQuestionComposing = false;
+let instructionComposing = false;
 let deferredRenderPending = false;
 let connectionLost = false;
 let lastStateAt = new Date();
@@ -573,6 +587,98 @@ const commonQuestionNotices = new Map();
 const commonQuestionSubmittedDrafts = new Map();
 const commonQuestionInFlight = new Set();
 const commonQuestionCancelConfirmations = new Set();
+const instructionDrafts = new Map();
+const instructionErrors = new Map();
+const instructionNotices = new Map();
+const instructionInFlight = new Set();
+const instructionAlternatives = new Map();
+const instructionAlternativeInFlight = new Set();
+const INSTRUCTION_MODES = new Set(['steer', 'start', 'next-user-input']);
+const MAX_PENDING_INSTRUCTION_ALTERNATIVES = 64;
+const MAX_INSTRUCTION_TEXT_BYTES = 64 * 1024;
+const INSTRUCTION_PREVIEW_STORAGE_KEY = 'agent-cockpit.instruction-previews';
+const INSTRUCTION_ALTERNATIVE_STORAGE_KEY = 'agent-cockpit.instruction-alternative-requests';
+const MAX_PENDING_INSTRUCTION_PREVIEWS = 64;
+const instructionPreviewSavePending = new Map();
+const instructionPreviews = new Map();
+const instructionAlternativeDiscardConfirmations = new Set();
+let observedInstructionStates = new Map();
+let renderedInstructionSignature = null;
+try {
+  const saved = JSON.parse(globalThis.sessionStorage?.getItem(INSTRUCTION_PREVIEW_STORAGE_KEY) || '{}');
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    for (const [id, preview] of Object.entries(saved)) {
+      if (typeof id === 'string' && preview && typeof preview === 'object' &&
+          typeof preview.launchRef === 'string' && typeof preview.mode === 'string' &&
+          Number.isSafeInteger(preview.revision) && typeof preview.text === 'string') {
+        instructionPreviews.set(id, preview);
+      }
+    }
+  }
+} catch {}
+
+function normalizeInstructionAlternativeRequest(oldId, value) {
+  const fields = ['oldDeliveryAttemptId', 'launchRef', 'sessionId', 'executionId', 'newDeliveryAttemptId',
+    'registrationExecutionId', 'logicalMessageId', 'revision', 'text', 'mode', 'expectedTurnId', 'createdAt'];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  let keys;
+  try { keys = Reflect.ownKeys(value); } catch { return null; }
+  if (keys.length !== fields.length || keys.some((key) => typeof key !== 'string' || !fields.includes(key))) return null;
+  if (value.oldDeliveryAttemptId !== oldId || !validScopedInstructionId(oldId) ||
+      !validScopedInstructionId(value.launchRef) || !validScopedInstructionId(value.sessionId) ||
+      !validScopedInstructionId(value.executionId) || !validScopedInstructionId(value.newDeliveryAttemptId) ||
+      !validScopedInstructionId(value.registrationExecutionId) ||
+      !validScopedInstructionId(value.logicalMessageId) || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
+      instructionTextByteLength(value.text) === null || instructionTextByteLength(value.text) > MAX_INSTRUCTION_TEXT_BYTES ||
+      value.mode !== 'next-user-input' || value.expectedTurnId !== null || !Number.isSafeInteger(value.createdAt)) return null;
+  return Object.freeze(Object.fromEntries(fields.map((field) => [field, value[field]])));
+}
+
+function instructionTextByteLength(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  let byteLength = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (index + 1 >= text.length || !(next >= 0xdc00 && next <= 0xdfff)) return null;
+      byteLength += 4;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return null;
+    else byteLength += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+  }
+  return byteLength;
+}
+
+function persistInstructionAlternativeRequests() {
+  try {
+    const storage = globalThis.sessionStorage;
+    if (!storage) return false;
+    const requests = Object.fromEntries([...instructionAlternatives]
+      .filter(([, draft]) => draft?.pendingRequest)
+      .map(([id, draft]) => [id, draft.pendingRequest]));
+    if (Object.keys(requests).length > MAX_PENDING_INSTRUCTION_ALTERNATIVES) return false;
+    if (Object.keys(requests).length) {
+      const serialized = JSON.stringify(requests);
+      storage.setItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY, serialized);
+      return storage.getItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY) === serialized;
+    }
+    storage.removeItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY);
+    return storage.getItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY) === null;
+  } catch { return false; }
+}
+
+try {
+  const saved = JSON.parse(globalThis.sessionStorage?.getItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY) || '{}');
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    for (const [oldId, item] of Object.entries(saved).slice(0, MAX_PENDING_INSTRUCTION_ALTERNATIVES)) {
+      const request = normalizeInstructionAlternativeRequest(oldId, item);
+      if (request) instructionAlternatives.set(oldId, {
+        open: true, text: request.text, deliveryAttemptId: request.newDeliveryAttemptId, pendingRequest: request,
+      });
+    }
+  }
+} catch {}
 const pendingTaskCloseActions = new Map();
 const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
@@ -1269,6 +1375,186 @@ function commonQuestionKey(question) {
   return `${question.sessionId}\0${question.internalQuestionId}`;
 }
 
+function instructionDraftFor(sessionId) {
+  if (!instructionDrafts.has(sessionId)) instructionDrafts.set(sessionId, { targetLaunchRef: '', mode: '', text: '' });
+  return instructionDrafts.get(sessionId);
+}
+
+function instructionIds() {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return { deliveryAttemptId: `instruction-${random}`, logicalMessageId: `instruction-message-${random}` };
+}
+
+function persistInstructionPreviews() {
+  try {
+    const storage = globalThis.sessionStorage;
+    if (!storage) return false;
+    const serialized = JSON.stringify(Object.fromEntries(instructionPreviews));
+    storage.setItem(INSTRUCTION_PREVIEW_STORAGE_KEY, serialized);
+    return storage.getItem(INSTRUCTION_PREVIEW_STORAGE_KEY) === serialized;
+  } catch { return false; }
+}
+
+function rememberInstructionPreview(instruction, text) {
+  if (!instruction || !validScopedInstructionId(instruction.deliveryAttemptId) ||
+      !validScopedInstructionId(instruction.launchRef) || !INSTRUCTION_MODES.has(instruction.mode) ||
+      !Number.isSafeInteger(instruction.revision) || typeof text !== 'string' || !text.trim()) return false;
+  const previous = instructionPreviews.get(instruction.deliveryAttemptId);
+  instructionPreviews.set(instruction.deliveryAttemptId, {
+    launchRef: instruction.launchRef, mode: instruction.mode, revision: instruction.revision, text,
+  });
+  if (persistInstructionPreviews()) return true;
+  if (previous) instructionPreviews.set(instruction.deliveryAttemptId, previous);
+  else instructionPreviews.delete(instruction.deliveryAttemptId);
+  return false;
+}
+
+function reserveInstructionPreviewSave(key, text, lateKey = null) {
+  if (instructionPreviewSavePending.has(key) || instructionPreviewSavePending.size >= MAX_PENDING_INSTRUCTION_PREVIEWS) return false;
+  instructionPreviewSavePending.set(key, Object.freeze({ phase: 'requesting', text, lateKey }));
+  return true;
+}
+
+function completeInstructionPreviewSave(key, instruction, text, lateKey = null) {
+  const reservation = instructionPreviewSavePending.get(key);
+  if (!reservation || reservation.phase !== 'requesting' || reservation.text !== text ||
+      (reservation.lateKey || null) !== (lateKey || null) ||
+      !instruction || !validScopedInstructionId(instruction.deliveryAttemptId) ||
+      !validScopedInstructionId(instruction.launchRef) || !INSTRUCTION_MODES.has(instruction.mode) ||
+      !Number.isSafeInteger(instruction.revision)) return null;
+  const id = instruction.deliveryAttemptId;
+  if (key !== id && instructionPreviewSavePending.has(id)) return null;
+  const snapshot = JSON.parse(JSON.stringify(instruction));
+  if (snapshot.identity && typeof snapshot.identity === 'object') Object.freeze(snapshot.identity);
+  Object.freeze(snapshot);
+  instructionPreviewSavePending.delete(key);
+  instructionPreviewSavePending.set(id, Object.freeze({ phase: 'pending', instruction: snapshot, text, lateKey }));
+  return id;
+}
+
+function releaseInstructionPreviewSave(key) {
+  if (instructionPreviewSavePending.get(key)?.phase === 'requesting') instructionPreviewSavePending.delete(key);
+}
+
+function pendingInstructionPreviewForLateKey(lateKey) {
+  for (const [id, pending] of instructionPreviewSavePending) {
+    if (pending.lateKey === lateKey) return { id, pending };
+  }
+  return null;
+}
+
+function retryInstructionPreviewSave(id) {
+  const pending = instructionPreviewSavePending.get(id);
+  if (!pending || pending.phase !== 'pending' ||
+      !rememberInstructionPreview(pending.instruction, pending.text)) return false;
+  instructionPreviewSavePending.delete(id);
+  instructionErrors.delete('preview:' + id);
+  if (pending.lateKey) instructionErrors.delete(pending.lateKey);
+  const sessionId = pending.instruction.sessionId;
+  const notice = pending.lateKey
+    ? '後続の指示を保存しました。送信は別操作です。'
+    : '指示を保存しました。送信は別操作です。';
+  if (sessionId) instructionNotices.set(sessionId, notice);
+  if (typeof liveStatus !== 'undefined' && liveStatus) liveStatus.textContent = notice;
+  return true;
+}
+
+async function runInstructionPreviewSaveRetry(id) {
+  if (!instructionPreviewSavePending.has(id)) return;
+  if (!retryInstructionPreviewSave(id)) {
+    const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。';
+    instructionErrors.set('preview:' + id, message);
+    if (typeof liveStatus !== 'undefined' && liveStatus) liveStatus.textContent = message;
+  }
+  try { await refresh(); } catch {}
+  if (lastState) render(lastState);
+}
+
+function instructionPreviewFor(instruction) {
+  if (!instruction || typeof instruction.deliveryAttemptId !== 'string') return null;
+  const preview = instructionPreviews.get(instruction.deliveryAttemptId);
+  return preview && preview.launchRef === instruction.launchRef && preview.mode === instruction.mode &&
+    preview.revision === instruction.revision ? preview.text : null;
+}
+
+function forgetInstructionPreview(id) {
+  if (instructionPreviews.delete(id)) persistInstructionPreviews();
+}
+
+function instructionReasonLabel(reason) {
+  const labels = {
+    instruction_dispatch_unavailable: '送信先を確認できるまで保留しています。',
+    instruction_delivery_unknown: '送信結果が不明です。自動再送せず、状態確認を待っています。',
+    instruction_delivery_missing: '保存済み指示の配送記録を確認できません。再送を保留しています。',
+    instruction_target_unverified: '実行先の状態を確認できるまで保留しています。',
+  };
+  return labels[reason] || '状態を確認できるまで保留しています。';
+}
+
+function instructionStateLabel(instruction) {
+  if (instruction.state === 'available' || instruction.state === 'claimed') return '保存済みです。送信前です。';
+  if (instruction.state === 'sending') return '送信開始済みです。結果を確認しています。';
+  if (instruction.state === 'accepted') return '受付済みです。入力への反映は未確認です。';
+  if (instruction.state === 'applied') return '入力への反映が確認されています。';
+  if (instruction.state === 'unknown') return '送信結果が不明です。自動再送しません。';
+  if (instruction.state === 'unavailable') return '保存済みの指示を確認できません。再送は保留しています。';
+  if (instruction.state === 'cancelled_before_send') return '送信前に取り下げました。';
+  if (instruction.state === 'superseded_before_send') return '新しい指示へ差し替えました。';
+  return '状態を確認できません。';
+}
+
+function isFinishedInstruction(instruction) {
+  return instruction?.state === 'applied' || instruction?.state === 'cancelled_before_send' ||
+    instruction?.state === 'superseded_before_send';
+}
+
+function normalizeLateAnswer(question, answers) {
+  if (!question || !Array.isArray(question.questions) || !Array.isArray(answers) ||
+      answers.length !== question.questions.length) return null;
+  const normalized = [];
+  for (const item of question.questions) {
+    const answer = answers.find((candidate) => candidate.questionId === item.id);
+    if (!answer || !Array.isArray(answer.optionIds) || answer.optionIds.some((id) => typeof id !== 'string') ||
+        typeof answer.freeText !== 'string') return null;
+    normalized.push({ questionId: item.id, optionIds: [...answer.optionIds],
+      freeText: answer.freeText.trim() ? answer.freeText : null });
+  }
+  return normalized;
+}
+
+async function lateAnswerDigest(question, answers) {
+  const normalized = normalizeLateAnswer(question, answers);
+  if (!normalized || !globalThis.crypto?.subtle || typeof globalThis.TextEncoder !== 'function') return null;
+  const bytes = new TextEncoder().encode(JSON.stringify(normalized));
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function formatLateAnswerPreview(question, answers) {
+  const normalized = normalizeLateAnswer(question, answers);
+  if (!normalized) return null;
+  const sections = [];
+  for (const item of question.questions) {
+    const answer = normalized.find((candidate) => candidate.questionId === item.id);
+    const values = answer.optionIds.map((id) => item.options.find((option) => option.id === id)?.label);
+    if (values.some((value) => typeof value !== 'string')) return null;
+    if (answer.freeText !== null) values.push(answer.freeText);
+    sections.push(`${item.text}\n${values.map((value) => `- ${value}`).join('\n')}`);
+  }
+  return sections.join('\n\n');
+}
+
+function instructionTargetMode(target, mode) {
+  if (!target || target.status === 'unverified' || target.status === 'waiting') return false;
+  if (mode === 'steer') return target.status === 'working' && Boolean(target.nativeTurnId);
+  if (mode === 'next-user-input') return target.status === 'stopped' && target.origin === 'standalone';
+  return mode === 'start' && target.status === 'stopped' && target.origin === 'standalone';
+}
+
+function instructionModeLabel(mode) {
+  return mode === 'steer' ? '実行中へ伝える' : mode === 'start' ? '停止中の実行で開始する' : '次の入力へ差し替える';
+}
+
 function isFinishedCommonQuestion(question) {
   return question.cancelled === true
     || (question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
@@ -1458,6 +1744,7 @@ function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.commonQuestions || []).some((question) => !isFinishedCommonQuestion(question))) return false;
+  if ((session.instructions || []).some((instruction) => !isFinishedInstruction(instruction))) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
   const updatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > displayPreferences.idleHideMinutes * 60_000;
@@ -2380,6 +2667,7 @@ function isFinishedSession(session) {
     && session.decisions.every(isEndedDecision)
     && session.permissionWaits.length === 0
     && !session.agents.some((agent) => !isEndedAgent(agent))
+    && (session.instructions || []).every(isFinishedInstruction)
     && (session.commonQuestions || []).every(isFinishedCommonQuestion);
 }
 
@@ -2911,6 +3199,33 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
     }
     if (question.externalResolution) card.append(element('p', 'common-question-note', '元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。'));
     if (question.lateAnswerCount > 0) card.append(element('p', 'common-question-note', `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`));
+    for (const ref of question.lateAnswerRefs || []) {
+      const target = instructionTargetFor(lastState, question.launchRef);
+      const mode = target?.status === 'working' && target.nativeTurnId ? 'steer'
+        : target?.status === 'stopped' && target.origin === 'standalone' ? 'start' : null;
+      card.append(element('p', 'common-question-note', `保存した後続回答 ${absoluteTimeLabel(ref.submittedAt)}。回答内容は状態画面に表示しません。`));
+      if (mode) {
+        const lateKey = `late:${question.internalQuestionId}:${ref.index}:${ref.digest}`;
+        const convert = element('button', 'secondary', 'この保存済み回答から後続の指示を作る');
+        convert.type = 'button';
+        convert.dataset.lateInstruction = 'true';
+        convert.dataset.lateQuestionId = question.internalQuestionId;
+        convert.dataset.lateIndex = String(ref.index);
+        convert.dataset.lateDigest = ref.digest;
+        convert.dataset.lateMode = mode;
+        convert.dataset.lateExpectedTurn = mode === 'steer' ? target.nativeTurnId : '';
+        convert.dataset.sessionId = session.session_id;
+        convert.dataset.instructionExecution = question.executionId;
+        convert.disabled = instructionInFlight.has(lateKey);
+        card.append(convert);
+        const error = element('p', 'instruction-reason', instructionErrors.get(lateKey) || '');
+        error.hidden = !error.textContent;
+        error.setAttribute('role', 'alert');
+        card.append(error);
+      } else {
+        card.append(element('p', 'instruction-reason', '保存済み回答の指示化は、送信先を確認できるまで保留しています。'));
+      }
+    }
     const formAvailable = !question.cancelled
       && !(question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
     if (formAvailable) {
@@ -3020,6 +3335,405 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
     list.append(card);
   }
   body.append(list);
+}
+
+function instructionTargetFor(state, launchRef) {
+  return (state?.instructionTargets || []).find((target) => target.launchRef === launchRef) || null;
+}
+
+function instructionTargetsForSession(state, sessionId) {
+  return (state?.instructionTargets || []).filter((target) => target.sessionId === sessionId);
+}
+
+function instructionTargetName(target) {
+  const origin = target.origin === 'standalone' ? '独立実行' : target.origin === 'delegated' ? '委譲実行' : '確認対象';
+  return `${target.identity?.nativeId || target.launchRef} · ${origin}`;
+}
+
+function findInstructionRecord(state, id) {
+  return (state?.sessions || []).flatMap((session) => (session.instructions || []).map((instruction) => ({
+    ...instruction, ownerSessionId: session.session_id,
+  }))).find((instruction) => instruction.deliveryAttemptId === id) || null;
+}
+
+function sameInstructionIdentity(left, right) {
+  return Boolean(left && right && ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId']
+    .every((key) => left[key] === right[key]));
+}
+
+function instructionAlternativeRetryState(state, request) {
+  const diagnostics = state?.instructionDiagnostics;
+  const target = instructionTargetFor(state, request.launchRef);
+  const old = findInstructionRecord(state, request.oldDeliveryAttemptId);
+  const created = findInstructionRecord(state, request.newDeliveryAttemptId);
+  const targetMatches = Boolean(target && target.sessionId === request.sessionId &&
+    target.executionId === request.registrationExecutionId && target.origin === 'standalone');
+  const oldMatches = Boolean(old && old.ownerSessionId === request.sessionId && old.launchRef === request.launchRef &&
+    old.executionId === request.executionId && old.registrationExecutionId === request.registrationExecutionId &&
+    old.logicalMessageId === request.logicalMessageId && old.origin === 'standalone' && old.revision + 1 === request.revision &&
+    ['available', 'claimed', 'superseded_before_send'].includes(old.state) &&
+    sameInstructionIdentity(old.identity, target?.identity));
+  const createdScopeMatches = Boolean(created && created.ownerSessionId === request.sessionId &&
+    created.launchRef === request.launchRef && created.executionId === request.executionId &&
+    created.registrationExecutionId === request.registrationExecutionId &&
+    created.logicalMessageId === request.logicalMessageId && created.revision === request.revision &&
+    created.origin === 'standalone' && created.mode === 'next-user-input' &&
+    sameInstructionIdentity(created.identity, target?.identity));
+  const createdAvailable = createdScopeMatches && ['available', 'claimed'].includes(created.state);
+  const createdMissing = createdScopeMatches && created.state === 'unavailable' &&
+    created.heldReason === 'instruction_delivery_missing';
+  const createdMatches = !created || createdAvailable || createdMissing;
+  const commonMatches = diagnostics?.targets === 'available' && targetMatches && target?.status === 'stopped' &&
+    instructionTargetMode(target, 'next-user-input') && oldMatches && createdMatches;
+  const readyRetry = diagnostics?.service === 'ready' && diagnostics.blocked !== true &&
+    (!created || createdAvailable);
+  const missingDeliveryRecovery = diagnostics?.service === 'blocked' && diagnostics.blocked === true &&
+    diagnostics.errorCode === 'instruction_delivery_missing' && old?.state === 'superseded_before_send' && createdMissing;
+  const allowed = commonMatches && (readyRetry || missingDeliveryRecovery);
+  let reason = null;
+  if (!targetMatches && diagnostics?.targets !== 'available') {
+    reason = '実行先の状態を確認できません。内容はこの画面に保持しています。';
+  } else if (!targetMatches || !oldMatches || !createdMatches) {
+    reason = '対象の状態が変わったため、保存結果を確認できません。内容はこの画面に保持しています。';
+  } else if (!allowed) {
+    reason = diagnostics?.service !== 'ready' || diagnostics?.blocked === true
+      ? '保存機能の復旧後に、同じ内容で結果を確認できます。'
+      : '対象の実行が確認待ちです。状態が戻るまで、内容をこの画面に保持しています。';
+  }
+  return { allowed, reason, target };
+}
+
+function instructionPreviewRecoveryPanel(state) {
+  const pending = [...instructionPreviewSavePending.entries()]
+    .filter(([, record]) => record?.phase === 'pending');
+  if (!pending.length) return null;
+  const panel = element('section', 'instruction-composer instruction-recovery');
+  panel.setAttribute('aria-label', '指示本文の保存を確認');
+  const heading = element('h2', '', 'このタブへの本文保存を確認');
+  heading.dataset.instructionPreviewRecoveryHeading = 'true';
+  heading.tabIndex = -1;
+  panel.append(heading);
+  panel.append(element('p', 'instruction-reason',
+    'サーバーへの保存は確認済みです。本文をこのタブに保存するまで、タブを閉じると内容を復元できません。'));
+  for (const [id, record] of pending) {
+    const instruction = record.instruction;
+    const target = instructionTargetFor(state, instruction.launchRef);
+    const targetName = target ? instructionTargetName(target) : '実行先を確認できません';
+    const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
+    const item = element('article', 'instruction-card');
+    const itemHeading = element('h3', '', instructionModeLabel(instruction.mode) + ' · ' + targetName + ' · ' + createdAt);
+    itemHeading.dataset.instructionPreviewTitle = id;
+    itemHeading.tabIndex = -1;
+    item.append(itemHeading);
+    const preview = element('section', 'instruction-preview');
+    preview.append(element('strong', '', '保存済みの指示本文'));
+    const text = element('textarea');
+    text.value = record.text;
+    text.readOnly = true;
+    text.rows = 4;
+    text.dataset.instructionPreviewRecoveryText = id;
+    text.setAttribute('aria-label', '保存済みの指示本文');
+    preview.append(text);
+    item.append(preview);
+    const errorMessage = instructionErrors.get('preview:' + id);
+    if (errorMessage) {
+      const error = element('p', 'instruction-reason', errorMessage);
+      error.setAttribute('role', 'alert');
+      item.append(error);
+    }
+    const retry = element('button', '', 'このタブに本文を保存する');
+    retry.type = 'button';
+    retry.dataset.instructionPreviewRetry = id;
+    item.append(retry);
+    panel.append(item);
+  }
+  return panel;
+}
+
+function instructionAlternativeRecoveryPanel(state) {
+  const pending = [...instructionAlternatives.entries()]
+    .filter(([, draft]) => draft?.pendingRequest);
+  if (!pending.length) return null;
+  const panel = element('section', 'instruction-composer instruction-recovery');
+  panel.setAttribute('aria-label', '保存結果を確認する指示');
+  const panelHeading = element('h2', '', '差し替えの保存結果を確認');
+  panelHeading.dataset.instructionRecoveryHeading = 'true';
+  panelHeading.tabIndex = -1;
+  panel.append(panelHeading);
+  panel.append(element('p', 'instruction-reason', '保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。'));
+  for (const [oldId, draft] of pending) {
+    const request = draft.pendingRequest;
+    const retry = instructionAlternativeRetryState(state, request);
+    const item = element('article', 'instruction-card');
+    const targetName = retry.target ? instructionTargetName(retry.target) : '実行先を確認できません';
+    const heading = element('h3', '', `${targetName} · 次の入力へ差し替え`);
+    heading.dataset.instructionAlternativeTitle = oldId;
+    heading.tabIndex = -1;
+    item.append(heading);
+    const preview = element('section', 'instruction-preview');
+    preview.append(element('strong', '', '保存要求に固定した内容'));
+    const fixedText = element('textarea');
+    fixedText.value = request.text;
+    fixedText.readOnly = true;
+    fixedText.rows = 4;
+    fixedText.dataset.instructionRecoveryText = oldId;
+    fixedText.setAttribute('aria-label', '保存要求に固定した内容');
+    preview.append(fixedText);
+    item.append(preview);
+    const errorMessage = instructionErrors.get('alternative:' + oldId);
+    if (errorMessage) {
+      const error = element('p', 'instruction-reason', errorMessage);
+      error.setAttribute('role', 'alert');
+      item.append(error);
+    }
+    if (retry.reason) item.append(element('p', 'instruction-reason', retry.reason));
+    const actions = element('div', 'instruction-actions');
+    const retryButton = element('button', '', '同じ内容で保存結果を確認する');
+    retryButton.type = 'button';
+    retryButton.dataset.instructionAlternativeRetry = oldId;
+    retryButton.disabled = !retry.allowed;
+    if (instructionAlternativeInFlight.has(oldId)) retryButton.textContent = '保存結果を確認中…';
+    actions.append(retryButton);
+    if (instructionAlternativeDiscardConfirmations.has(oldId)) {
+      const confirmation = element('p', 'instruction-reason', 'この要求内容だけをこの画面から破棄します。サーバーの履歴は削除されません。');
+      const discard = element('button', '', '要求内容を破棄する');
+      discard.type = 'button';
+      discard.dataset.instructionAlternativeDiscard = oldId;
+      const keep = element('button', '', '戻る');
+      keep.type = 'button';
+      keep.dataset.instructionAlternativeDiscardDismiss = oldId;
+      actions.append(confirmation, discard, keep);
+    } else {
+      const askDiscard = element('button', '', 'この要求内容を破棄');
+      askDiscard.type = 'button';
+      askDiscard.dataset.instructionAlternativeDiscardAsk = oldId;
+      actions.append(askDiscard);
+    }
+    item.append(actions);
+    panel.append(item);
+  }
+  return panel;
+}
+
+function instructionCard(session, state, instruction) {
+  const card = element('article', 'instruction-card');
+  const target = instructionTargetFor(state, instruction.launchRef);
+  const serviceReady = state?.instructionDiagnostics?.service === 'ready' && state?.instructionDiagnostics?.blocked !== true;
+  const targetReady = target && instruction.executionState === 'active' && instructionTargetMode(target, instruction.mode);
+  const preview = instructionPreviewFor(instruction);
+  const targetLabel = target ? instructionTargetName(target) : '実行先を確認できません';
+  const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
+  const alternativeDraft = instructionAlternatives.get(instruction.deliveryAttemptId);
+  const alternativePending = Boolean(alternativeDraft?.pendingRequest);
+  const title = element('h4', '', `${instructionModeLabel(instruction.mode)} · ${targetLabel} · ${createdAt}`);
+  title.dataset.instructionPreviewTitle = instruction.deliveryAttemptId;
+  title.tabIndex = -1;
+  card.append(title);
+  card.append(element('p', 'instruction-status', instructionStateLabel(instruction)));
+  if (!isFinishedInstruction(instruction)) {
+    const previewPanel = element('section', 'instruction-preview');
+    previewPanel.append(element('strong', '', '送信内容'));
+    if (preview) previewPanel.append(element('pre', '', preview));
+    else previewPanel.append(element('p', 'instruction-reason', 'このタブで内容を確認できないため送信できません。作成したタブで開いてください。'));
+    card.append(previewPanel);
+  }
+  if (instruction.heldReason) card.append(element('p', 'instruction-reason', instructionReasonLabel(instruction.heldReason)));
+  else if (!targetReady && ['available', 'claimed'].includes(instruction.state)) card.append(element('p', 'instruction-reason', '実行先の状態を確認できないため、送信を保留しています。'));
+  const actionError = instructionErrors.get(`action:${instruction.deliveryAttemptId}`);
+  if (actionError) card.append(element('p', 'instruction-reason', actionError));
+  const actions = element('div', 'instruction-actions');
+  const operationKey = instruction.deliveryAttemptId;
+  const busy = instructionInFlight.has(operationKey) || instructionAlternativeInFlight.has(operationKey) || alternativePending;
+  if (['available', 'claimed'].includes(instruction.state)) {
+    const send = element('button', '', preview
+      ? instruction.mode === 'start' ? '同じ実行で次の入力を開始' : 'この実行へ送る'
+      : '内容を確認できないため送信できません');
+    send.type = 'button';
+    send.dataset.instructionAction = 'send';
+    send.dataset.instructionId = instruction.deliveryAttemptId;
+    send.dataset.instructionSession = session.session_id;
+    send.dataset.instructionExecution = instruction.registrationExecutionId;
+    send.disabled = busy || !serviceReady || !targetReady || !preview;
+    actions.append(send);
+    const cancel = element('button', '', '保存した指示を取り下げる');
+    cancel.type = 'button';
+    cancel.dataset.instructionAction = 'cancel';
+    cancel.dataset.instructionId = instruction.deliveryAttemptId;
+    cancel.dataset.instructionSession = session.session_id;
+    cancel.dataset.instructionExecution = instruction.registrationExecutionId;
+    cancel.disabled = busy || !serviceReady;
+    actions.append(cancel);
+    if (!alternativePending && instruction.origin === 'standalone' && instruction.executionState === 'active' && target?.status === 'stopped' && serviceReady) {
+      const alternative = element('button', '', '次の入力へ差し替える');
+      alternative.type = 'button';
+      alternative.dataset.instructionAlternativeOpen = instruction.deliveryAttemptId;
+      alternative.dataset.instructionSession = session.session_id;
+      alternative.dataset.instructionExecution = instruction.registrationExecutionId;
+      alternative.setAttribute('aria-expanded', String(instructionAlternatives.get(operationKey)?.open === true));
+      actions.append(alternative);
+    }
+  }
+  if (actions.childNodes.length) card.append(actions);
+  const alternativeTargetMatches = Boolean(target && target.sessionId === session.session_id &&
+    target.executionId === instruction.registrationExecutionId && target.origin === 'standalone');
+  const alternativeCanSubmit = serviceReady && state?.instructionDiagnostics?.targets === 'available' &&
+    alternativeTargetMatches && target?.status === 'stopped' && instructionTargetMode(target, 'next-user-input');
+  if (alternativeDraft?.open && !alternativePending && ['available', 'claimed'].includes(instruction.state) &&
+      instruction.origin === 'standalone' && instruction.executionState === 'active' && alternativeTargetMatches) {
+    const form = element('form', 'instruction-form');
+    form.dataset.instructionAlternativeForm = instruction.deliveryAttemptId;
+    form.dataset.instructionSession = session.session_id;
+    form.dataset.instructionExecution = instruction.registrationExecutionId;
+    const label = element('label', '', '次に送る指示');
+    const textarea = element('textarea');
+    textarea.name = 'text';
+    textarea.maxLength = 65536;
+    textarea.required = true;
+    textarea.dataset.instructionField = 'alternative-text';
+    textarea.dataset.instructionSession = session.session_id;
+    textarea.dataset.instructionId = instruction.deliveryAttemptId;
+    textarea.value = alternativeDraft.text;
+    textarea.readOnly = instructionAlternativeInFlight.has(operationKey);
+    label.append(textarea);
+    form.append(label);
+    if (!alternativeCanSubmit) {
+      form.append(element('p', 'instruction-reason', state?.instructionDiagnostics?.service !== 'ready' || state?.instructionDiagnostics?.blocked === true
+        ? '保存機能の復旧後に続けられます。入力内容は保持しています。'
+        : '対象の実行が確認待ちです。状態が戻るまで入力内容を保持しています。'));
+    }
+    const error = element('p', 'instruction-reason', instructionErrors.get('alternative:' + operationKey) || '');
+    error.hidden = !error.textContent;
+    error.setAttribute('role', 'alert');
+    const submit = element('button', '', '差し替えを保存する');
+    submit.type = 'submit';
+    submit.disabled = instructionAlternativeInFlight.has(operationKey) || !alternativeCanSubmit || !alternativeDraft.text.trim();
+    form.append(error, submit);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void runInstructionAlternative(form);
+    });
+    card.append(form);
+  }
+  return card;
+}
+
+function instructionComposer(session, state) {
+  const targets = instructionTargetsForSession(state, session.session_id);
+  const instructions = Array.isArray(session.instructions) ? session.instructions : [];
+  const serviceReady = state?.instructionDiagnostics?.service === 'ready' && state?.instructionDiagnostics?.blocked !== true;
+  if (!targets.length && !instructions.length) return null;
+  const panel = element('section', 'instruction-composer');
+  panel.setAttribute('aria-label', '指示の保存と送信');
+  panel.append(element('h4', '', '指示を保存して届ける'));
+  if (!serviceReady) {
+    const reason = state?.instructionDiagnostics?.errorCode || state?.instructionDiagnostics?.service || 'instruction_dispatch_unavailable';
+    panel.append(element('p', 'instruction-reason', instructionReasonLabel(reason)));
+  } else if (state?.instructionDiagnostics?.targets !== 'available') {
+    panel.append(element('p', 'instruction-reason', '実行先を確認できないため、指示を保存できません。'));
+  }
+  for (const instruction of instructions) panel.append(instructionCard(session, state, instruction));
+  if (serviceReady && state?.instructionDiagnostics?.targets === 'available') {
+    const draft = instructionDraftFor(session.session_id);
+    const form = element('form', 'instruction-form');
+    form.dataset.instructionCreateForm = 'true';
+    form.dataset.instructionSession = session.session_id;
+    const targetLabel = element('label', '', '対象の実行');
+    const targetSelect = element('select');
+    targetSelect.name = 'launch_ref';
+    targetSelect.dataset.instructionField = 'target';
+    targetSelect.dataset.instructionSession = session.session_id;
+    targetSelect.disabled = instructionInFlight.has(session.session_id);
+    const placeholder = element('option', '', '実行を選択してください');
+    placeholder.value = '';
+    targetSelect.append(placeholder);
+    for (const target of targets) {
+      const option = element('option', '', `${instructionTargetName(target)} · ${target.status === 'working' ? '作業中' : target.status === 'stopped' ? '停止中' : '確認待ち'}`);
+      option.value = target.launchRef;
+      targetSelect.append(option);
+    }
+    if (draft.targetLaunchRef && !targets.some((target) => target.launchRef === draft.targetLaunchRef)) {
+      const stale = element('option', '', '以前の実行 (現在選択できません)');
+      stale.value = draft.targetLaunchRef;
+      stale.disabled = true;
+      targetSelect.append(stale);
+    }
+    targetSelect.value = draft.targetLaunchRef || '';
+    targetLabel.append(targetSelect);
+    form.append(targetLabel);
+    const target = targets.find((candidate) => candidate.launchRef === draft.targetLaunchRef) || null;
+    const modeLabel = element('label', '', '指示の種類');
+    const modeSelect = element('select');
+    modeSelect.name = 'mode';
+    modeSelect.dataset.instructionField = 'mode';
+    modeSelect.dataset.instructionSession = session.session_id;
+    modeSelect.disabled = instructionInFlight.has(session.session_id);
+    const modePlaceholder = element('option', '', '種類を選択してください');
+    modePlaceholder.value = '';
+    modeSelect.append(modePlaceholder);
+    const modes = target?.status === 'working' ? ['steer']
+      : target?.status === 'stopped' && target.origin === 'standalone' ? ['start'] : [];
+    for (const mode of modes) {
+      const option = element('option', '', instructionModeLabel(mode));
+      option.value = mode;
+      modeSelect.append(option);
+    }
+    modeSelect.value = modes.includes(draft.mode) ? draft.mode : '';
+    modeLabel.append(modeSelect);
+    form.append(modeLabel);
+    const textareaLabel = element('label', '', '指示の内容');
+    const textarea = element('textarea');
+    textarea.name = 'text';
+    textarea.maxLength = 65536;
+    textarea.required = true;
+    textarea.dataset.instructionField = 'text';
+    textarea.dataset.instructionSession = session.session_id;
+    textarea.value = draft.text;
+    textarea.disabled = instructionInFlight.has(session.session_id);
+    textareaLabel.append(textarea);
+    form.append(textareaLabel);
+    const expected = target && draft.mode === 'steer' && target.nativeTurnId
+      ? '選択した実行が作業中の場合に送信します。'
+      : target?.reason || '実行先と指示の種類を選んでください。';
+    form.append(element('p', 'instruction-reason', expected));
+    const error = element('p', 'instruction-reason', instructionErrors.get(session.session_id) || '');
+    error.hidden = !error.textContent;
+    error.setAttribute('role', 'alert');
+    const notice = element('p', 'instruction-status', instructionNotices.get(session.session_id) || '');
+    notice.hidden = !notice.textContent;
+    const actions = element('div', 'instruction-actions');
+    const save = element('button', '', '指示を保存する');
+    save.type = 'submit';
+    save.disabled = instructionInFlight.has(session.session_id) || !serviceReady || !target ||
+      !instructionTargetMode(target, draft.mode) || !draft.text.trim();
+    actions.append(save);
+    form.append(error, notice, actions);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void runInstructionCreate(form);
+    });
+    panel.append(form);
+  }
+  return panel;
+}
+
+function setInstructionDraftField(sessionId, field, value) {
+  const draft = instructionDraftFor(sessionId);
+  if (draft[field] === value) return draft;
+  draft[field] = value;
+  draft.deliveryAttemptId = null;
+  draft.logicalMessageId = null;
+  instructionErrors.delete(sessionId);
+  instructionNotices.delete(sessionId);
+  return draft;
+}
+
+function updateInstructionSave(form) {
+  const sessionId = form.dataset.instructionSession;
+  const draft = instructionDraftFor(sessionId);
+  const target = instructionTargetFor(lastState, draft.targetLaunchRef);
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) submit.disabled = instructionInFlight.has(sessionId) || !target ||
+    !instructionTargetMode(target, draft.mode) || !draft.text.trim();
 }
 function appendTaskItem(list, task, product, session, withTags = false, multipleSessions = false) {
   const labels = { todo: '未着手', doing: '作業中', done: '完了' };
@@ -3182,6 +3896,8 @@ function sessionBlock(product, session, multipleSessions) {
   const now = element('div', 'now');
   now.append(mainRow(session, product));
   nowContent.append(now);
+  const instructions = instructionComposer(session, lastState);
+  if (instructions) nowContent.append(instructions);
   appendAgents(nowContent, session, product);
   sections.now.push(...nowContent.childNodes);
   for (const key of orderedSectionKeys(['judgment', 'tasks', 'now'])) body.append(...sections[key]);
@@ -3413,6 +4129,11 @@ function renderKindSections(products) {
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
+    const instructions = instructionComposer(session, lastState);
+    if (instructions) {
+      const createdAt = Math.max(...(session.instructions || []).map((item) => item.createdAt).filter(Number.isFinite), 0);
+      activityItems.push({ age: createdAt, row: instructions });
+    }
     const holder = element('div');
     appendAgents(holder, session, product, true, multipleSessions, showEndedAgents, false);
     const list = holder.querySelector('.agent-list');
@@ -3476,8 +4197,98 @@ function commonQuestionDiagnosticsNotice(diagnostics) {
     : '保存済み質問の復旧確認が必要です。新しい送信は保留されています。'));
   return notice;
 }
+
+function instructionDiagnosticsNotice(diagnostics) {
+  if (!diagnostics || (diagnostics.service === 'ready' && diagnostics.blocked !== true &&
+      diagnostics.targets === 'available' && !diagnostics.errorCode && !diagnostics.unmatchedCount)) return null;
+  const notice = element('section', 'instruction-diagnostics');
+  notice.setAttribute('role', 'status');
+  notice.append(element('strong', '', '指示の復旧状態を確認してください。'));
+  const reasons = [];
+  if (diagnostics.service !== 'ready') reasons.push('保存サービスに接続できません');
+  if (diagnostics.targets !== 'available') reasons.push('実行先を確認できません');
+  if (diagnostics.errorCode) reasons.push('復旧確認が必要です');
+  if (diagnostics.unmatchedCount) reasons.push(`照合できない指示 ${diagnostics.unmatchedCount} 件`);
+  notice.append(element('span', '', `${reasons.join('。')}。不明な指示は自動再送しません。`));
+  return notice;
+}
+
+function observeInstructionStates(state) {
+  const current = new Map();
+  let announcement = null;
+  const notices = {
+    sending: '指示の送信を開始しました。結果を確認しています。',
+    accepted: '指示は受付済みです。入力への反映は未確認です。',
+    applied: '指示が入力へ反映されたことを確認しました。',
+    unknown: '送信結果が不明です。安全のため自動再送しません。',
+    unavailable: '保存済みの指示を確認できません。再送を保留しています。',
+    cancelled_before_send: '指示を送信前に取り下げました。',
+    superseded_before_send: '指示を新しい内容へ差し替えました。',
+  };
+  for (const session of state?.sessions || []) {
+    for (const instruction of session.instructions || []) {
+      const id = instruction.deliveryAttemptId;
+      current.set(id, instruction.state);
+      if (isFinishedInstruction(instruction)) forgetInstructionPreview(id);
+      const previous = observedInstructionStates.get(id);
+      if (previous && previous !== instruction.state && notices[instruction.state]) {
+        announcement = notices[instruction.state];
+        instructionNotices.set(session.session_id, announcement);
+      }
+    }
+  }
+  observedInstructionStates = current;
+  return announcement;
+}
+
+function instructionProjectionSignature(state) {
+  return JSON.stringify({
+    sessions: (state?.sessions || []).map((session) => [session.session_id, session.instructions || []]),
+    targets: state?.instructionTargets || [],
+    diagnostics: state?.instructionDiagnostics || null,
+  });
+}
+
+function restoreInstructionPreviewRecoveryFocus(focusData, activeTextarea = null) {
+  const escapedId = CSS.escape(focusData.id);
+  const title = root.querySelector('[data-instruction-preview-title="' + escapedId + '"]');
+  const recoveryHeading = root.querySelector('[data-instruction-preview-recovery-heading]');
+  const stableControl = document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]');
+  if (focusData.kind === 'instruction-preview-text') {
+    const control = root.querySelector('[data-instruction-preview-recovery-text="' + escapedId + '"]');
+    if (activeTextarea && control) {
+      control.replaceWith(activeTextarea);
+      activeTextarea.focus({ preventScroll: true });
+      activeTextarea.setSelectionRange(focusData.start, focusData.end);
+    } else if (control) control.focus({ preventScroll: true });
+    else (title || recoveryHeading || stableControl)?.focus({ preventScroll: true });
+    return;
+  }
+  const retry = focusData.kind === 'instruction-preview-retry'
+    ? root.querySelector('[data-instruction-preview-retry="' + escapedId + '"]')
+    : null;
+  (retry || title || recoveryHeading || stableControl)?.focus({ preventScroll: true });
+}
+
+function restoreInstructionAlternativeFocus(focusData) {
+  const id = focusData.id;
+  const escapedId = CSS.escape(id);
+  const selectors = focusData.kind === 'instruction-alt-retry'
+    ? [`[data-instruction-alternative-retry="${escapedId}"]`]
+    : focusData.kind === 'instruction-alt-discard-ask'
+      ? [`[data-instruction-alternative-discard-ask="${escapedId}"]`, `[data-instruction-alternative-discard="${escapedId}"]`]
+      : focusData.kind === 'instruction-alt-discard-dismiss'
+        ? [`[data-instruction-alternative-discard-dismiss="${escapedId}"]`, `[data-instruction-alternative-discard-ask="${escapedId}"]`]
+        : focusData.kind === 'instruction-alt-discard'
+          ? [`[data-instruction-alternative-discard="${escapedId}"]`]
+          : [];
+  const control = selectors.map((selector) => root.querySelector(selector)).find((item) => item && !item.disabled);
+  if (control) control.focus({ preventScroll: true });
+  else root.querySelector(`[data-instruction-alternative-title="${escapedId}"]`)?.focus({ preventScroll: true });
+}
+
 function render(state) {
-  if (answerNoteComposing || commonQuestionComposing) {
+  if (answerNoteComposing || commonQuestionComposing || instructionComposing) {
     deferredRenderPending = true;
     return;
   }
@@ -3491,6 +4302,9 @@ function render(state) {
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
   const activeCommonField = active instanceof HTMLElement && active.matches('[data-common-option], [data-common-free-text]') ? active : null;
+  const activeInstructionField = active instanceof HTMLElement && active.matches('[data-instruction-field]') ? active : null;
+  const activeInstructionRecoveryText = active instanceof HTMLTextAreaElement && active.dataset.instructionRecoveryText ? active : null;
+  const activeInstructionPreviewRecoveryText = active instanceof HTMLTextAreaElement && active.dataset.instructionPreviewRecoveryText ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
@@ -3506,7 +4320,19 @@ function render(state) {
         : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
-          : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
+        : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
+         : activeInstructionField ? { kind: 'instruction-input', sessionId: activeInstructionField.dataset.instructionSession,
+           field: activeInstructionField.dataset.instructionField, id: activeInstructionField.dataset.instructionId || '',
+           start: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionStart : 0,
+           end: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionEnd : 0 }
+         : activeInstructionRecoveryText ? { kind: 'instruction-alt-preview', id: activeInstructionRecoveryText.dataset.instructionRecoveryText,
+           start: activeInstructionRecoveryText.selectionStart, end: activeInstructionRecoveryText.selectionEnd }
+         : activeInstructionPreviewRecoveryText ? { kind: 'instruction-preview-text', id: activeInstructionPreviewRecoveryText.dataset.instructionPreviewRecoveryText, start: activeInstructionPreviewRecoveryText.selectionStart, end: activeInstructionPreviewRecoveryText.selectionEnd }
+          : active?.dataset?.instructionPreviewRetry ? { kind: 'instruction-preview-retry', id: active.dataset.instructionPreviewRetry }
+          : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
+         : active?.dataset?.instructionAlternativeDiscardAsk ? { kind: 'instruction-alt-discard-ask', id: active.dataset.instructionAlternativeDiscardAsk }
+         : active?.dataset?.instructionAlternativeDiscard ? { kind: 'instruction-alt-discard', id: active.dataset.instructionAlternativeDiscard }
+         : active?.dataset?.instructionAlternativeDiscardDismiss ? { kind: 'instruction-alt-discard-dismiss', id: active.dataset.instructionAlternativeDiscardDismiss }
          : activeCommonField ? { kind: 'common-input', sessionId: activeCommonField.closest('.common-question')?.dataset.sessionId, internalQuestionId: activeCommonField.closest('.common-question')?.dataset.internalQuestionId, questionId: activeCommonField.dataset.questionId || activeCommonField.dataset.commonFreeText, optionId: activeCommonField.dataset.optionId || '', start: activeCommonField instanceof HTMLTextAreaElement ? activeCommonField.selectionStart : 0, end: activeCommonField instanceof HTMLTextAreaElement ? activeCommonField.selectionEnd : 0 }
          : active?.dataset?.showFinished ? { kind: 'show-finished' }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
@@ -3538,8 +4364,24 @@ function render(state) {
     root.replaceChildren(element('section', 'section empty', emptyText));
     const questionNotice = commonQuestionDiagnosticsNotice(state.commonQuestionDiagnostics);
     if (questionNotice) root.prepend(questionNotice);
+    const instructionNotice = instructionDiagnosticsNotice(state.instructionDiagnostics);
+    if (instructionNotice) root.prepend(instructionNotice);
+    const alternativeRecovery = instructionAlternativeRecoveryPanel(state);
+    if (alternativeRecovery) root.prepend(alternativeRecovery);
+    const previewRecovery = instructionPreviewRecoveryPanel(state);
+    if (previewRecovery) root.prepend(previewRecovery);
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
+    else if (focusData?.kind === 'instruction-alt-preview') {
+      const control = root.querySelector(`[data-instruction-recovery-text="${CSS.escape(focusData.id)}"]`);
+      if (control) {
+        control.replaceWith(activeInstructionRecoveryText);
+        activeInstructionRecoveryText.focus({ preventScroll: true });
+        activeInstructionRecoveryText.setSelectionRange(focusData.start, focusData.end);
+      }
+    }
+    else if (focusData?.kind?.startsWith('instruction-preview-')) restoreInstructionPreviewRecoveryFocus(focusData, activeInstructionPreviewRecoveryText);
+    else if (focusData?.kind?.startsWith('instruction-alt-')) restoreInstructionAlternativeFocus(focusData);
     else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
@@ -3554,6 +4396,12 @@ function render(state) {
   }
   const questionNotice = commonQuestionDiagnosticsNotice(state.commonQuestionDiagnostics);
   if (questionNotice) root.prepend(questionNotice);
+  const instructionNotice = instructionDiagnosticsNotice(state.instructionDiagnostics);
+  if (instructionNotice) root.prepend(instructionNotice);
+  const alternativeRecovery = instructionAlternativeRecoveryPanel(state);
+  if (alternativeRecovery) root.prepend(alternativeRecovery);
+  const previewRecovery = instructionPreviewRecoveryPanel(state);
+  if (previewRecovery) root.prepend(previewRecovery);
 
   if (focusData?.kind?.startsWith('merge-')) {
     const controls = [...root.querySelectorAll('[data-merge-method], [data-reservation-toggle], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-merge-go], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
@@ -3582,6 +4430,36 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'instruction-alt-preview') {
+      const control = root.querySelector(`[data-instruction-recovery-text="${CSS.escape(focusData.id)}"]`);
+      if (activeInstructionRecoveryText && control) {
+        control.replaceWith(activeInstructionRecoveryText);
+        activeInstructionRecoveryText.focus({ preventScroll: true });
+        activeInstructionRecoveryText.setSelectionRange(focusData.start, focusData.end);
+      } else control?.focus({ preventScroll: true });
+      return;
+    }
+    if (focusData.kind.startsWith('instruction-preview-')) {
+      restoreInstructionPreviewRecoveryFocus(focusData, activeInstructionPreviewRecoveryText);
+      return;
+    }
+    if (focusData.kind.startsWith('instruction-alt-')) {
+      restoreInstructionAlternativeFocus(focusData);
+      return;
+    }
+    if (focusData.kind === 'instruction-input') {
+      const control = [...root.querySelectorAll('[data-instruction-field]')].find((item) =>
+        item.dataset.instructionSession === focusData.sessionId &&
+        item.dataset.instructionField === focusData.field && (item.dataset.instructionId || '') === focusData.id);
+      if (activeInstructionField && control && activeInstructionField.tagName === control.tagName) {
+        if (activeInstructionField instanceof HTMLTextAreaElement) {
+          control.replaceWith(activeInstructionField);
+          activeInstructionField.focus({ preventScroll: true });
+          activeInstructionField.setSelectionRange(focusData.start, focusData.end);
+        } else control.focus({ preventScroll: true });
+      } else control?.focus({ preventScroll: true });
+      return;
+    }
     if (focusData.kind === 'common-input') {
       const control = [...root.querySelectorAll('[data-common-option], [data-common-free-text]')].find((item) => {
         const card = item.closest('.common-question');
@@ -3656,7 +4534,7 @@ function render(state) {
 }
 
 function renderDeferredState() {
-  if (!deferredRenderPending || answerNoteComposing) return;
+  if (!deferredRenderPending || answerNoteComposing || commonQuestionComposing || instructionComposing) return;
   deferredRenderPending = false;
   if (lastState) render(lastState);
 }
@@ -3735,6 +4613,13 @@ async function sendDecisionAnswer(button) {
 }
 
 document.addEventListener('change', (event) => {
+  const instructionField = event.target.closest('[data-instruction-field]');
+  if (instructionField && ['target', 'mode'].includes(instructionField.dataset.instructionField)) {
+    const fieldName = instructionField.dataset.instructionField === 'target' ? 'targetLaunchRef' : 'mode';
+    setInstructionDraftField(instructionField.dataset.instructionSession, fieldName, instructionField.value);
+    if (lastState) render(lastState);
+    return;
+  }
   const commonOption = event.target.closest('[data-common-option]');
   if (commonOption) {
     updateCommonQuestionSubmit(commonOption.closest('.common-question'));
@@ -3789,6 +4674,26 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('input', (event) => {
+  const instructionField = event.target.closest('[data-instruction-field]');
+  if (instructionField) {
+    const field = instructionField.dataset.instructionField;
+    if (field === 'alternative-text') {
+      const draft = instructionAlternatives.get(instructionField.dataset.instructionId);
+      if (draft && !draft.pendingRequest && draft.text !== instructionField.value) {
+        draft.text = instructionField.value;
+        draft.deliveryAttemptId = null;
+        instructionErrors.delete('alternative:' + instructionField.dataset.instructionId);
+        instructionNotices.delete(instructionField.dataset.instructionSession);
+      }
+      const submit = instructionField.closest('form')?.querySelector('[type="submit"]');
+      if (submit) submit.disabled = !draft?.text.trim() || instructionAlternativeInFlight.has(instructionField.dataset.instructionId);
+      return;
+    }
+    const fieldName = field === 'target' ? 'targetLaunchRef' : field;
+    setInstructionDraftField(instructionField.dataset.instructionSession, fieldName, instructionField.value);
+    updateInstructionSave(instructionField.closest('[data-instruction-create-form]'));
+    return;
+  }
   const commonText = event.target.closest('[data-common-free-text]');
   if (commonText) {
     updateCommonQuestionSubmit(commonText.closest('.common-question'));
@@ -3807,11 +4712,16 @@ document.addEventListener('input', (event) => {
 });
 
 document.addEventListener('compositionstart', (event) => {
+  if (event.target.matches?.('[data-instruction-field="text"], [data-instruction-field="alternative-text"]')) instructionComposing = true;
   if (event.target.matches?.('[data-common-free-text]')) commonQuestionComposing = true;
   if (event.target.matches?.('[data-answer-note]')) answerNoteComposing = true;
 }, true);
 
 document.addEventListener('compositionend', (event) => {
+  if (event.target.matches?.('[data-instruction-field="text"], [data-instruction-field="alternative-text"]')) {
+    instructionComposing = false;
+    renderDeferredState();
+  }
   if (event.target.matches?.('[data-common-free-text]')) {
     commonQuestionComposing = false;
     updateCommonQuestionSubmit(event.target.closest('.common-question'));
@@ -3919,6 +4829,329 @@ async function runCommonQuestionAction(button, action) {
     if (lastState) render(lastState);
   }
 }
+
+function instructionErrorText(code) {
+  if (code === 'instruction_target_unverified' || code === 'instruction_dispatch_unavailable') return '実行先の状態を確認できません。入力は保持しています。';
+  if (code === 'instruction_scope_mismatch' || code === 'instruction_launch_unavailable') return '対象の実行が変わりました。最新の状態を確認してください。';
+  if (code === 'instruction_idempotency_conflict' || code === 'instruction_attempt_conflict') return '保存内容が既存の指示と一致しません。内容を変更して保存し直してください。';
+  return '保存できませんでした。入力内容を保持しています。';
+}
+
+async function instructionResponse(response) {
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error('instruction request failed'), { code: result.error || `http_${response.status}` });
+  return result;
+}
+
+async function runInstructionCreate(form) {
+  const sessionId = form.dataset.instructionSession;
+  const draft = instructionDraftFor(sessionId);
+  if (!draft.deliveryAttemptId || !draft.logicalMessageId) Object.assign(draft, instructionIds());
+  const reservationKey = draft.deliveryAttemptId;
+  const existingPreview = instructionPreviewSavePending.get(reservationKey);
+  if (existingPreview?.phase === 'pending') {
+    await runInstructionPreviewSaveRetry(reservationKey);
+    return;
+  }
+  if (existingPreview?.phase === 'requesting') return;
+  const target = instructionTargetFor(lastState, draft.targetLaunchRef);
+  if (!target || !instructionTargetMode(target, draft.mode) || !draft.text.trim() || instructionInFlight.has(sessionId)) return;
+  const key = sessionId;
+  const previewText = draft.text;
+  if (!reserveInstructionPreviewSave(reservationKey, previewText)) {
+    instructionErrors.set(key, '本文の保存確認は 64 件までです。確認待ちを先に整理してください。入力内容は保持しています。');
+    if (lastState) render(lastState);
+    return;
+  }
+  instructionInFlight.add(key);
+  instructionErrors.delete(key);
+  for (const control of form.elements) control.disabled = true;
+  const body = {
+    session_id: target.sessionId,
+    execution_id: target.executionId,
+    launch_ref: target.launchRef,
+    delivery_attempt_id: reservationKey,
+    logical_message_id: draft.logicalMessageId,
+    revision: 0,
+    text: previewText,
+    mode: draft.mode,
+    expected_turn_id: draft.mode === 'steer' ? target.nativeTurnId : null,
+  };
+  try {
+    const result = await instructionResponse(await postUiAction('/api/instructions/create', body));
+    const instruction = result?.instruction;
+    if (!['created', 'existing'].includes(result?.outcome) || instruction?.deliveryAttemptId !== body.delivery_attempt_id ||
+        instruction.launchRef !== body.launch_ref || instruction.mode !== body.mode || instruction.revision !== body.revision) {
+      throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
+    const pendingId = completeInstructionPreviewSave(reservationKey, instruction, previewText);
+    if (!pendingId) throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    if (draft.deliveryAttemptId === body.delivery_attempt_id) {
+      draft.deliveryAttemptId = null;
+      draft.logicalMessageId = null;
+    }
+    if (draft.text === previewText) draft.text = '';
+    if (!retryInstructionPreviewSave(pendingId)) {
+      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。';
+      instructionErrors.set('preview:' + pendingId, message);
+      instructionNotices.set(key, message);
+      liveStatus.textContent = message;
+      try { await refresh(); } catch {}
+      if (lastState) render(lastState);
+      return;
+    }
+    instructionNotices.set(key, result.outcome === 'existing' ? '同じ指示はすでに保存されています。送信は別操作です。' : '指示を保存しました。送信は別操作です。');
+    await refresh();
+    if (lastState) render(lastState);
+    liveStatus.textContent = '指示を保存しました。送信はまだ開始していません。';
+  } catch (error) {
+    releaseInstructionPreviewSave(reservationKey);
+    instructionErrors.set(key, instructionErrorText(error.code));
+    showWriteError('指示を保存できませんでした');
+    await refresh();
+    if (lastState) render(lastState);
+  } finally {
+    instructionInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
+
+async function runInstructionAction(button) {
+  const id = button.dataset.instructionId;
+  const action = button.dataset.instructionAction;
+  const sessionId = button.dataset.instructionSession;
+  const key = id;
+  const instruction = (lastState?.sessions || []).flatMap((session) => session.instructions || [])
+    .find((item) => item.deliveryAttemptId === id);
+  if (!validScopedInstructionId(id) || instructionInFlight.has(key) ||
+      (action === 'send' && !instructionPreviewFor(instruction))) return;
+  instructionInFlight.add(key);
+  button.disabled = true;
+  instructionErrors.delete(`action:${key}`);
+  try {
+    const response = await postUiAction(`/api/instructions/${encodeURIComponent(id)}/${action}`, {
+      session_id: sessionId,
+      execution_id: button.dataset.instructionExecution,
+    });
+    const result = await instructionResponse(response);
+    const notice = action === 'cancel'
+      ? result.instruction.state === 'cancelled_before_send' ? '送信前に取り下げました。' : '取消要求を記録しました。送信済みの内容は戻せません。'
+      : result.instruction.state === 'unknown' ? '送信結果が不明です。自動再送しません。'
+        : result.instruction.state === 'accepted' ? '受付済みです。入力への反映は未確認です。'
+          : '送信を開始しました。状態を確認しています。';
+    instructionNotices.set(sessionId, notice);
+    liveStatus.textContent = notice;
+    await refresh();
+    if (lastState) render(lastState);
+  } catch (error) {
+    instructionErrors.set(`action:${key}`, instructionErrorText(error.code));
+    showWriteError('指示の状態を更新できませんでした');
+    await refresh();
+    if (lastState) render(lastState);
+  } finally {
+    instructionInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
+
+function validScopedInstructionId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 512 && value === value.trim();
+}
+
+function instructionAlternativeResultMatches(result, request, target) {
+  const instruction = result?.instruction;
+  return ['created', 'existing', 'superseded'].includes(result?.outcome) && instruction &&
+    instruction.deliveryAttemptId === request.newDeliveryAttemptId &&
+    instruction.logicalMessageId === request.logicalMessageId && instruction.revision === request.revision &&
+    instruction.launchRef === request.launchRef && instruction.sessionId === request.sessionId &&
+    instruction.executionId === request.executionId && instruction.origin === 'standalone' &&
+    instruction.mode === 'next-user-input' && ['available', 'claimed'].includes(instruction.state) &&
+    Number.isSafeInteger(instruction.createdAt) && sameInstructionIdentity(instruction.identity, target?.identity);
+}
+
+async function runInstructionAlternative(formOrId) {
+  const oldId = typeof formOrId === 'string' ? formOrId : formOrId?.dataset.instructionAlternativeForm;
+  const form = typeof formOrId === 'string' ? null : formOrId;
+  const draft = instructionAlternatives.get(oldId);
+  if (!draft || instructionAlternativeInFlight.has(oldId)) return;
+  let request = draft.pendingRequest;
+  if (!request) {
+    const instruction = findInstructionRecord(lastState, oldId);
+    if (!instruction || !draft.text.trim() || instruction.ownerSessionId !== form?.dataset.instructionSession ||
+        instruction.registrationExecutionId !== form?.dataset.instructionExecution) return;
+    const textBytes = instructionTextByteLength(draft.text);
+    if (textBytes === null || textBytes > MAX_INSTRUCTION_TEXT_BYTES) {
+      instructionErrors.set('alternative:' + oldId, '指示は UTF-8 で 64 KiB 以下、正しい文字列で入力してください。内容は入力欄に保持しています。');
+      if (lastState) render(lastState);
+      return;
+    }
+    const pendingCount = [...instructionAlternatives.values()].filter((item) => item?.pendingRequest).length;
+    if (pendingCount >= MAX_PENDING_INSTRUCTION_ALTERNATIVES) {
+      instructionErrors.set('alternative:' + oldId, '保存結果の確認待ちは 64 件までです。先に確認待ちの要求を整理してください。本文は入力欄に保持しています。');
+      if (lastState) render(lastState);
+      return;
+    }
+    if (!draft.deliveryAttemptId) draft.deliveryAttemptId = instructionIds().deliveryAttemptId;
+    request = normalizeInstructionAlternativeRequest(oldId, {
+      oldDeliveryAttemptId: oldId,
+      launchRef: instruction.launchRef,
+      sessionId: instruction.ownerSessionId,
+      executionId: instruction.executionId,
+      newDeliveryAttemptId: draft.deliveryAttemptId,
+      registrationExecutionId: instruction.registrationExecutionId,
+      logicalMessageId: instruction.logicalMessageId,
+      revision: instruction.revision + 1,
+      text: draft.text,
+      mode: 'next-user-input',
+      expectedTurnId: null,
+      createdAt: Date.now(),
+    });
+    if (!request) {
+      instructionErrors.set('alternative:' + oldId, '指示の保存要求を作れません。入力内容を確認してください。');
+      if (lastState) render(lastState);
+      return;
+    }
+    draft.pendingRequest = request;
+    if (!persistInstructionAlternativeRequests()) {
+      delete draft.pendingRequest;
+      instructionErrors.set('alternative:' + oldId, 'このタブに要求内容を保存できないため、送信を開始しませんでした。');
+      if (lastState) render(lastState);
+      return;
+    }
+  }
+  const retryState = instructionAlternativeRetryState(lastState, request);
+  if (!retryState.allowed) {
+    instructionErrors.set('alternative:' + oldId, retryState.reason || '対象を確認できません。');
+    if (lastState) render(lastState);
+    return;
+  }
+  instructionAlternativeInFlight.add(oldId);
+  instructionErrors.delete('alternative:' + oldId);
+  if (form) for (const control of form.elements) control.disabled = true;
+  try {
+    const result = await instructionResponse(await postUiAction(`/api/instructions/${encodeURIComponent(oldId)}/alternative`, {
+      session_id: request.sessionId,
+      execution_id: request.registrationExecutionId,
+      new_delivery_attempt_id: request.newDeliveryAttemptId,
+      logical_message_id: request.logicalMessageId,
+      revision: request.revision,
+      text: request.text,
+      mode: request.mode,
+      expected_turn_id: request.expectedTurnId,
+    }));
+    if (!instructionAlternativeResultMatches(result, request, retryState.target)) {
+      throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
+    if (!rememberInstructionPreview(result.instruction, request.text)) {
+      throw Object.assign(new Error('instruction_preview_persistence_failed'), { code: 'instruction_preview_persistence_failed' });
+    }
+    instructionAlternatives.delete(oldId);
+    instructionAlternativeDiscardConfirmations.delete(oldId);
+    if (!persistInstructionAlternativeRequests()) {
+      instructionAlternatives.set(oldId, draft);
+      throw Object.assign(new Error('instruction_local_request_retained'), { code: 'instruction_local_request_retained' });
+    }
+    draft.pendingRequest = null;
+    instructionNotices.set(request.sessionId, '差し替えた指示を保存しました。送信は別操作です。');
+    liveStatus.textContent = '差し替えた指示を保存しました。送信は別操作です。';
+    await refresh();
+    if (lastState) render(lastState);
+  } catch (error) {
+    const message = error.code === 'instruction_response_mismatch'
+      ? '保存応答の対象が一致しないため、内容を保持しています。'
+      : error.code === 'instruction_preview_persistence_failed'
+        ? 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。固定した内容を保持しています。'
+      : error.code === 'instruction_local_request_retained'
+        ? '保存結果は確認できましたが、このタブの復旧情報を更新できません。内容を保持しています。'
+        : instructionErrorText(error.code);
+    instructionErrors.set('alternative:' + oldId, message);
+    if (error.code !== 'instruction_preview_persistence_failed') showWriteError('差し替えた指示を保存できませんでした');
+    await refresh();
+    if (lastState) render(lastState);
+  } finally {
+    instructionAlternativeInFlight.delete(oldId);
+    if (lastState) render(lastState);
+  }
+}
+
+async function runLateInstruction(button) {
+  const key = 'late:' + button.dataset.lateQuestionId + ':' + button.dataset.lateIndex + ':' + button.dataset.lateDigest;
+  const existingPreview = pendingInstructionPreviewForLateKey(key);
+  if (existingPreview?.pending.phase === 'pending') {
+    await runInstructionPreviewSaveRetry(existingPreview.id);
+    return;
+  }
+  if (existingPreview || instructionInFlight.has(key)) return;
+  if (instructionPreviewSavePending.size >= MAX_PENDING_INSTRUCTION_PREVIEWS) {
+    instructionErrors.set(key, '本文の保存確認は 64 件までです。確認待ちを先に整理してください。質問の配送状態は変わっていません。');
+    if (lastState) render(lastState);
+    return;
+  }
+  const question = (lastState?.sessions || []).flatMap((session) => (session.commonQuestions || []).map((item) => ({
+    ...item, sessionId: session.session_id,
+  }))).find((item) => item.internalQuestionId === button.dataset.lateQuestionId);
+  const ref = question?.lateAnswerRefs?.find((item) => item.index === Number(button.dataset.lateIndex) &&
+    item.digest === button.dataset.lateDigest);
+  const submittedDraft = question ? commonQuestionSubmittedDrafts.get(commonQuestionKey(question)) : null;
+  const digest = question && submittedDraft ? await lateAnswerDigest(question, submittedDraft) : null;
+  const previewText = question && submittedDraft ? formatLateAnswerPreview(question, submittedDraft) : null;
+  if (!ref || !submittedDraft || digest !== ref.digest || !previewText) {
+    instructionErrors.set(key, 'このタブで保存した回答内容を確認できないため、後続の指示を作成できません。質問の配送状態は変わっていません。');
+    liveStatus.textContent = '回答内容を確認できないため、後続の指示を作成できません。';
+    if (lastState) render(lastState);
+    return;
+  }
+  const reservationKey = 'late-preview:' + key;
+  if (!reserveInstructionPreviewSave(reservationKey, previewText, key)) {
+    instructionErrors.set(key, '本文の保存確認は 64 件までです。確認待ちを先に整理してください。質問の配送状態は変わっていません。');
+    if (lastState) render(lastState);
+    return;
+  }
+  instructionInFlight.add(key);
+  button.disabled = true;
+  try {
+    const result = await instructionResponse(await postUiAction(
+      `/api/decisions/${encodeURIComponent(button.dataset.lateQuestionId)}/late-instruction`, {
+        session_id: button.dataset.sessionId,
+        execution_id: button.dataset.instructionExecution,
+        index: Number(button.dataset.lateIndex),
+        digest: button.dataset.lateDigest,
+        mode: button.dataset.lateMode,
+        expected_turn_id: button.dataset.lateExpectedTurn || null,
+      }));
+    const instruction = result?.instruction;
+    if (!['created', 'existing'].includes(result?.outcome) || instruction?.mode !== button.dataset.lateMode) {
+      throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
+    const pendingId = completeInstructionPreviewSave(reservationKey, instruction, previewText, key);
+    if (!pendingId) throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    if (!retryInstructionPreviewSave(pendingId)) {
+      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。';
+      instructionErrors.set(key, message);
+      instructionErrors.set('preview:' + pendingId, message);
+      liveStatus.textContent = message;
+      try { await refresh(); } catch {}
+      if (lastState) render(lastState);
+      return;
+    }
+    instructionNotices.set(button.dataset.sessionId, result.outcome === 'existing'
+      ? 'この保存済み回答から作った指示はすでにあります。送信は別操作です。'
+      : '後続の指示を保存しました。送信は別操作です。');
+    liveStatus.textContent = instructionNotices.get(button.dataset.sessionId);
+    await refresh();
+    if (lastState) render(lastState);
+  } catch (error) {
+    releaseInstructionPreviewSave(reservationKey);
+    instructionErrors.set(key, instructionErrorText(error.code));
+    showWriteError('後続の指示を保存できませんでした');
+    await refresh();
+    if (lastState) render(lastState);
+  } finally {
+    instructionInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
+
 async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = null) {
   button.disabled = true;
   try {
@@ -4299,6 +5532,56 @@ document.addEventListener('click', (event) => {
   if (event.button === 0 && handleExternalLink(event)) return;
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.instructionAction) { void runInstructionAction(button); return; }
+  if (button.dataset.instructionPreviewRetry) { void runInstructionPreviewSaveRetry(button.dataset.instructionPreviewRetry); return; }
+  if (button.dataset.instructionAlternativeOpen) {
+    const id = button.dataset.instructionAlternativeOpen;
+    const draft = instructionAlternatives.get(id) || { text: '', deliveryAttemptId: null };
+    draft.open = !draft.open;
+    if (draft.open) {
+      const instruction = findInstructionRecord(lastState, id);
+      if (instruction) Object.assign(draft, {
+        launchRef: instruction.launchRef,
+        sessionId: instruction.ownerSessionId,
+        executionId: instruction.executionId,
+        registrationExecutionId: instruction.registrationExecutionId,
+      });
+    }
+    instructionAlternatives.set(id, draft);
+    if (lastState) render(lastState);
+    if (draft.open) document.querySelector(`[data-instruction-field="alternative-text"][data-instruction-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (button.dataset.instructionAlternativeRetry) {
+    void runInstructionAlternative(button.dataset.instructionAlternativeRetry);
+    return;
+  }
+  if (button.dataset.instructionAlternativeDiscardAsk) {
+    instructionAlternativeDiscardConfirmations.add(button.dataset.instructionAlternativeDiscardAsk);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.instructionAlternativeDiscardDismiss) {
+    instructionAlternativeDiscardConfirmations.delete(button.dataset.instructionAlternativeDiscardDismiss);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.instructionAlternativeDiscard) {
+    const id = button.dataset.instructionAlternativeDiscard;
+    const draft = instructionAlternatives.get(id);
+    if (!draft?.pendingRequest || instructionAlternativeInFlight.has(id)) return;
+    instructionAlternatives.delete(id);
+    if (!persistInstructionAlternativeRequests()) {
+      instructionAlternatives.set(id, draft);
+      instructionErrors.set('alternative:' + id, 'このタブの復旧情報を削除できません。要求内容は保持しています。');
+    } else {
+      instructionAlternativeDiscardConfirmations.delete(id);
+      instructionErrors.delete('alternative:' + id);
+    }
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.lateInstruction) { void runLateInstruction(button); return; }
   if (button.dataset.commonSubmit) { void runCommonQuestionAction(button, 'answer'); return; }
   if (button.dataset.commonHold) { void runCommonQuestionAction(button, 'hold'); return; }
   if (button.dataset.commonCancel) { void runCommonQuestionAction(button, 'cancel'); return; }
@@ -4507,7 +5790,7 @@ document.addEventListener('change', (event) => {
 function renderReloadNote(pending) {
   reloadNote.hidden = !pending;
   reloadNote.innerHTML = pending
-    ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
+    ? '<span>画面が新しくなりました。書きかけの回答や指示があるため、読み込みを保留しています。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
     : '';
 }
 
@@ -4523,6 +5806,41 @@ function hasUnsentAnswerDraft(state) {
   return false;
 }
 
+function instructionTargetStillBound(state, sessionId, launchRef, registrationExecutionId = null) {
+  const diagnostics = state?.instructionDiagnostics;
+  const targets = state?.instructionTargets;
+  if (!Array.isArray(targets)) return diagnostics?.targets !== 'available';
+  const target = targets.find((item) => item.launchRef === launchRef);
+  if (!target) return diagnostics?.targets !== 'available';
+  return target.sessionId === sessionId &&
+    (!registrationExecutionId || target.executionId === registrationExecutionId);
+}
+
+function hasUnsentInstructionWork(state) {
+  if (instructionComposing || instructionInFlight.size || instructionAlternativeInFlight.size || instructionPreviewSavePending.size) return true;
+  for (const draft of instructionAlternatives.values()) {
+    if (draft?.pendingRequest) return true;
+  }
+  for (const [sessionId, draft] of instructionDrafts) {
+    if (typeof draft?.text !== 'string' || !draft.text.trim()) continue;
+    if (draft.targetLaunchRef) {
+      if (instructionTargetStillBound(state, sessionId, draft.targetLaunchRef)) return true;
+    } else if (state?.instructionDiagnostics?.targets !== 'available' ||
+        (state?.instructionTargets || []).some((target) => target.sessionId === sessionId)) {
+      return true;
+    }
+  }
+  for (const [oldId, draft] of instructionAlternatives) {
+    if (!draft?.open || typeof draft.text !== 'string' || !draft.text.trim()) continue;
+    const old = findInstructionRecord(state, oldId);
+    const launchRef = draft.launchRef || old?.launchRef;
+    const sessionId = draft.sessionId || old?.ownerSessionId;
+    const executionId = draft.registrationExecutionId || old?.registrationExecutionId;
+    if (launchRef && sessionId && instructionTargetStillBound(state, sessionId, launchRef, executionId)) return true;
+  }
+  return false;
+}
+
 function checkUiVersion(state) {
   if (!initialUiVersion || state.uiVersion == null) return false;
   if (state.uiVersion === initialUiVersion) {
@@ -4530,7 +5848,7 @@ function checkUiVersion(state) {
     uiUpdatePending = false;
     return false;
   }
-  if (!hasUnsentAnswerDraft(state)) {
+  if (!hasUnsentAnswerDraft(state) && !hasUnsentInstructionWork(state)) {
     location.reload();
     return true;
   }
@@ -4560,9 +5878,12 @@ async function refresh() {
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
     const sinceSeenVisibilityChanged = sinceSeenMode === 'away' && header.dataset.away !== awayBefore;
+    const instructionAnnouncement = observeInstructionStates(state);
     const pullRequestExpiry = pullRequestExpirySignature(state.pullRequests);
     const pullRequestExpiryChanged = pullRequestExpiry !== renderedPullRequestExpirySignature;
-    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged)) {
+    const nextInstructionSignature = instructionProjectionSignature(state);
+    const instructionChanged = nextInstructionSignature !== renderedInstructionSignature;
+    if (state.version === lastVersion && (sinceSeenVisibilityChanged || pullRequestExpiryChanged || instructionChanged)) {
       render(state);
       renderedPullRequestExpirySignature = pullRequestExpiry;
     }
@@ -4575,6 +5896,8 @@ async function refresh() {
       const judgmentCounts = countJudgments(visibleSessions);
       liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions + judgmentCounts.questions + judgmentCounts.questionProvisional} 件)。`;
     }
+    if (instructionAnnouncement) liveStatus.textContent = instructionAnnouncement;
+    if (!deferredRenderPending) renderedInstructionSignature = nextInstructionSignature;
   } catch {
     connectionLost = true;
     updateConnectionNote();

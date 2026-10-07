@@ -12,7 +12,7 @@ const DELIVERY_STATES = new Set([
   'available', 'claimed', 'sending', 'accepted', 'applied', 'unknown',
   'cancelled_before_send', 'superseded_before_send',
 ]);
-const DELIVERY_KINDS = new Set(['question', 'result', 'pr-notification']);
+const DELIVERY_KINDS = new Set(['question', 'result', 'pr-notification', 'instruction']);
 const IDENTITY_FIELDS = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
 const CLAIM_FIELDS = [
   'launchId', 'runId', 'attemptId', 'provider', 'nativeIdKind', 'hostId', 'homeScopeId',
@@ -418,7 +418,7 @@ function normalizeDelivery(value) {
   if (value.kind === 'result') {
     if (target.kind !== 'owner' || value.ownerGeneration === null) return null;
   } else if (target.kind !== 'execution' || value.ownerGeneration !== null) return null;
-  if (value.kind === 'question' &&
+  if (['question', 'instruction'].includes(value.kind) &&
       (!identitiesEqual(source.identity, target.identity) ||
        source.launchRef !== target.launchRef ||
        !sameJson(source.claims, target.claims) ||
@@ -726,7 +726,7 @@ function createDelivery(ledger, kind, input, executionRecord, targetRecord = und
   let sourceWithOwner = null;
   let target = null;
 
-  if (kind === 'question') {
+  if (kind === 'question' || kind === 'instruction') {
     if (targetRecord !== undefined) throw ledgerError('invalid_delivery');
     target = executionTarget(source);
   } else if (kind === 'result') {
