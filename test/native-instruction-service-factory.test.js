@@ -10,6 +10,24 @@ const {
   startNativeInstructionServer,
 } = require('../src/server/native-instruction-service-integration');
 const { startServer } = require('../src/server/server');
+const { createTemporaryNativeInstructionHarness } = require('./support/native-instruction-integration-harness');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function codexAdmission(suffix) {
+  return {
+    launchId: `launch-codex-${suffix}`,
+    runId: `run-codex-${suffix}`,
+    attemptId: `attempt-codex-${suffix}`,
+    profileId: 'codex',
+    origin: 'standalone',
+    purpose: 'agent',
+  };
+}
 
 function profiles(directory) {
   return Object.fromEntries(['claude', 'codex'].map((provider) => [provider, {
@@ -139,3 +157,97 @@ test('target projection becomes unverified as integration cleanup begins', async
   });
   await closing;
 });
+
+test('Codex collector connects after a login delayed beyond the source attach timeout', async (t) => {
+  let harness;
+  harness = await createTemporaryNativeInstructionHarness({
+    runnerTimeouts: { startupMs: 2000, rpcMs: 2000, loginMs: 12000, stopMs: 1000 },
+    onAuthenticationRequired: async ({ loginId }) => {
+      await new Promise((resolve) => setTimeout(resolve, 5200));
+      assert.equal(harness.processesByProvider.get('codex').at(-1).completeLogin(loginId), true);
+    },
+  });
+  t.after(() => harness.removeDirectory());
+
+  const started = await harness.start('codex', { launchSuffix: 'identity-after-attach-window' });
+
+  assert.equal(started.process.spawnCount, 1);
+  assert.equal(started.process.rpcMethods.filter((method) => method === 'thread/start').length, 1);
+  assert.equal(started.result.accepted, true);
+  assert.equal(started.result.status, 'observed');
+});
+
+test('Codex start rejects when the collector cannot establish a connected source', async (t) => {
+  const harness = await createTemporaryNativeInstructionHarness({
+    onNative() {},
+    dropNative: (event) => event.type === 'identity',
+  });
+  t.after(() => harness.removeDirectory());
+
+  await assert.rejects(harness.start('codex', { launchSuffix: 'source-never-connected' }), {
+    code: 'native_source_initialization_unavailable',
+  });
+});
+
+test('Codex start preserves its original result for an actor-life-authenticated terminal target', async (t) => {
+  let harness;
+  let ended = false;
+  harness = await createTemporaryNativeInstructionHarness({
+    onNative() {},
+    afterNative(event) {
+      if (event.type !== 'context' || ended) return;
+      ended = true;
+      assert.equal(harness.processesByProvider.get('codex').at(-1).endCurrentContext(), true);
+    },
+  });
+  t.after(() => harness.removeDirectory());
+
+  const started = await harness.start('codex', { launchSuffix: 'standalone-terminal-with-actor-life' });
+
+  assert.equal(started.result.accepted, false);
+  assert.equal(started.result.status, 'unknown');
+  assert.equal(typeof started.result.observation.nativeId, 'string');
+  assert.equal(started.result.observation.contextKind, null);
+  assert.equal(harness.instructionTargetState(started.result.launchRef).status, 'stopped');
+});
+
+test('Codex early terminal without actor life is rejected as unverified', async (t) => {
+  const harness = await createTemporaryNativeInstructionHarness({
+    fakeRuntime: { earlyTurnCompletion: true },
+  });
+  t.after(() => harness.removeDirectory());
+  const suffix = 'early-terminal-without-actor-life';
+  const admission = codexAdmission(suffix);
+  const { receipt } = await harness.admit('codex', suffix);
+
+  await assert.rejects(harness.native.startLaunch({
+    ...admission,
+    inputText: 'initial context with an unmatched early terminal',
+  }), { code: 'native_execution_proof_unavailable' });
+  assert.equal(harness.native.getLaunchState(receipt).state, 'stopped');
+});
+
+for (const invalidator of ['stop', 'close']) {
+  test(`Codex start rejects when ${invalidator} invalidates a pending login`, async (t) => {
+    const challengeSeen = deferred();
+    const harness = await createTemporaryNativeInstructionHarness({
+      onAuthenticationRequired: (challenge) => { challengeSeen.resolve(challenge); },
+      runnerTimeouts: { startupMs: 2000, rpcMs: 2000, loginMs: 12000, stopMs: 1000 },
+    });
+    t.after(() => harness.removeDirectory());
+    const suffix = `pending-login-${invalidator}`;
+    const admission = codexAdmission(suffix);
+    const { receipt } = await harness.admit('codex', suffix);
+    const pending = harness.native.startLaunch({
+      ...admission,
+      inputText: 'explicit standalone context start',
+    });
+    await challengeSeen.promise;
+
+    if (invalidator === 'stop') await harness.native.stop(receipt);
+    else await harness.close();
+
+    await assert.rejects(pending);
+    assert.equal(harness.native.getLaunchState(receipt).state, 'stopped');
+  });
+}

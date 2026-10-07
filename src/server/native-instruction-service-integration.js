@@ -433,16 +433,24 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     }
     entry.startPromise = (async () => {
       try {
-        const connection = Promise.resolve(collector.connect());
-        const starting = composition.start(receipt, { inputText });
-        const [result] = await Promise.all([starting, connection]);
+        const result = await composition.start(receipt, { inputText });
         if (entry.state !== 'starting') throw integrationError('native_launch_invalidated');
+        const connection = await collector.connect();
+        if (entry.state !== 'starting') throw integrationError('native_launch_invalidated');
+        if (ownDataValue(connection, 'status') !== 'connected') {
+          throw integrationError('native_source_initialization_unavailable');
+        }
+        let observation = null;
         if (entry.provider === 'codex') {
           const nativeId = result.observation?.nativeId;
-          const observation = nativeId ? await collector.observeKnownThread(nativeId) : null;
-          if (observation?.status !== 'observed') throw integrationError('native_source_initialization_unavailable');
+          observation = nativeId ? await collector.observeKnownThread(nativeId) : null;
+          if (entry.state !== 'starting') throw integrationError('native_launch_invalidated');
         }
-        if (!composition.resolveProof(result.launchRef) || !collector.resolveProof(result.launchRef)) {
+        const activeProof = composition.resolveProof(result.launchRef) && collector.resolveProof(result.launchRef);
+        const activeObserved = entry.provider !== 'codex' || ownDataValue(observation, 'status') === 'observed';
+        const targetState = composition.instructionTargetState(result.launchRef);
+        const stopped = ownDataValue(targetState, 'status') === 'stopped';
+        if (!(activeProof && activeObserved) && !stopped) {
           throw integrationError('native_execution_proof_unavailable');
         }
         entry.launchRef = result.launchRef;

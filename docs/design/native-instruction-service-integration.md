@@ -33,7 +33,7 @@ runnerのprocess spawnとprovider runtime eventはfixtureで置換するため�
 | ID-F08-NS09 | 共通の安全条件。review、ended delegated、question/permission hold、native未対応next-user-input | 保存済み指示を禁止対象へ明示send | source/target/mode確認、実wire | 指示write0、standalone/startへの自動変換0。question/permission pending状態では送信を保留する。この状態条件は現在のnative経路で未確認 |
 | ID-F08-NS10 | 共通。取消とsend-startの直列化 | 保存前の取消と送信開始を競合させる | 実storeのcommit順序と途中台帳 | 取消確定ならwrite0。送信開始後の取消を送信前取消として扱わない |
 | ID-F08-NS11 | Claude Code 2.1.292の実standalone startを1回確認（source `ea600a0`） | boot context terminal後、同じowned process/launch/session/actor/periodへ明示`start` | durable `sending`、stdin write後のnative context acknowledgement、次context、終了とcleanup | 別session/追加spawn/fallback 0。`accepted`を観測、applied/steer/pending waitは未確認 |
-| ID-F08-NS12 | 実runtime未確認。Codex本人認証 | 固定turnへのsteer、terminal後の明示start | 新ログインURL/期限、thread/turn/item/clientId/完全input、終了確認 | 同threadのみ。clientUserMessageIdとnative clientIdの実対応を確認するまでappliedを認定しない |
+| ID-F08-NS12 | Codex CLI 0.160.1の実run1。`startLaunch`は正常返却せずharness結果がunknown（source `9d5f7e1`） | Codex threadへの明示startと固定turnへのsteer | login、thread-start、identity/context、完全input/clientId、終了確認 | login後にthreadとidentity/contextを観測した。初回`turn/start` RPCは1回、通常instructionRequestは0回。steerとappliedは未確認 |
 
 宛先、送信回数、状態、禁止副作用の許容差は0とする。
 ランダムIDと時刻だけを比較時に正規化し、能力差やunknownを正規化しない。
@@ -74,7 +74,11 @@ Claudeのworking、delegated/reviewのterminal、disconnected、handoff中、act
 stoppedはstandalone terminal context、同一actorのlife proof、明示start適格性がすべて確認できた場合だけ返す。
 送信直前にも既存の同期gateを通すため、状態表示後の失効は送信を許可しない。
 
-`startLaunch`はrouter attach後にowned collector接続とcomposition起動を待ち、Codexでは既知threadを観測してからcomposition/collector両方のcurrent proofを確認する。
+`startLaunch`はcomposition起動の完了後にowned collectorを接続し、接続結果が`connected`の場合だけCodexの既知threadを観測する。
+active contextはCodex観測が`observed`でcomposition/collector両方のcurrent proofがある場合に限り開始済みとする。
+terminal contextはcompositionの`instructionTargetState`が`stopped`を返す場合だけ開始先として認める。この判定はstandalone actor-life/self-ownerと同期最終guardを通り、早期terminal eventだけでは成立しない。
+compositionの`result.accepted/status`は元の観測結果を保ち、terminal判定で書き換えない。
+各await後にadmissionのstarting状態を再確認し、stopやcloseによる失効後に観測を続けない。
 失敗時はadmissionをretireし、native stopを試みる。
 `stop`は最初にrouter capabilityを無効化し、collectorを切断してからcompositionへstopを依頼する。
 snapshotの`processState === 'stopped'`だけを停止成功とし、確認できない場合は`stop_unconfirmed`を残して固定error codeでrejectする。
@@ -117,3 +121,17 @@ R1修正前の通常sandbox試行はtest runnerの子プロセス起動時に`sp
 
 R1修正後の専用worktreeで`npm test`を子プロセス起動が許可された条件で実行し、1802/1802件が成功した。
 完全な出力をignore対象の`.cross-review/native-integration-r1-full-test.log`に保存した。
+
+## NS12 Codex runtime観測
+
+修正前のsource `9d5f7e1`でCodex CLI 0.160.1を1回起動し、login完了、thread start、native identity、context eventを観測した。
+`startLaunch`は正常返却せず、harnessの結果はunknownだった。
+初回`turn/start` RPCを1回、native contextを1件観測したが、通常instructionRequestは0回で、bootstrapの完了確認へ到達していない。
+cleanup、認証設定不変、source不変を確認した。元のproduct error codeは未保存だが、harnessの固定失敗codeは`product_operation_unconfirmed`として保存されている。
+run1時点のsourceではcollector接続がcomposition起動と並行しており、Codex identityが届く前にowned-sourceの5秒attach待機が切れる可能性がある。harnessの固定失敗codeでは原因を識別できないため、これはコード経路からの推定である。
+
+修正後のfactory試験は`npm run test:inprocess -- test/native-instruction-service-factory.test.js`で11/11件成功した。
+製品factory、owned runner/source、real file storeを通し、5.2秒のlogin遅延、collector未接続、active proof、actor-lifeを持つstandalone terminal、actor-lifeを持たないearly terminal、pending login中のstopとcloseを検証した。
+この遅延とnative eventはfixtureで作っており、Codex runtime再検証の成功証拠には含めない。
+Codexのsteer、実runtimeでの再検証、NS12の完全input/clientIdに基づくapplied判定は未確認である。
+run1 harness script SHA-256は`9BCABA656BC8361C3C3B56BD95DF379D6A3748CAFAFF32472DE1148AFD87C108`、sanitized result SHA-256は`2FCB0179E8EE415C1175DEFF8828A69547381FF926A934DC903B938CB0094C42`で、root-side manifestにsource/script/resultを固定している。

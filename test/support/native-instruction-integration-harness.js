@@ -131,6 +131,12 @@ function createFakeNativeProcess(provider, homePath, options = {}) {
           if (options.instructionWriteError) return 'write-error';
           emitInstructionItem(request);
         }
+        if (!isInstruction && options.earlyTurnCompletion) {
+          state.child.send({
+            jsonrpc: '2.0', method: 'turn/completed',
+            params: { threadId: state.threadId, turn: { id: turnId } },
+          });
+        }
         state.child.send(rpcResponse(request.id, { turn: { id: turnId } }));
         if (isInstruction) state.turnId = turnId;
         else if (options.waitOnStart) setImmediate(() => state.child?.send({
@@ -267,7 +273,10 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
           ...runnerOptions,
           onNative(event) {
             try { options.onNative(event); } catch {}
-            return runnerOptions.onNative(event);
+            const dropped = options.dropNative?.(event) === true;
+            const accepted = dropped ? true : runnerOptions.onNative(event);
+            try { options.afterNative?.(event); } catch {}
+            return accepted;
           },
         }
       : runnerOptions;
@@ -282,7 +291,7 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     return createOwnedNativeRunner({
       ...observedRunnerOptions,
       spawnImpl: fakeProcess.spawnImpl,
-      timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 250 },
+      timeouts: options.runnerTimeouts || { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 250 },
     });
   }
 
@@ -373,6 +382,7 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     close,
     get native() { return integration.native; },
     get service() { return integration.service; },
+    get instructionTargetState() { return integration.instructionTargetState; },
     get checkpointWriteCount() { return checkpointWriteCount; },
   });
 }
@@ -395,6 +405,7 @@ async function createTemporaryNativeInstructionHarness(options = {}) {
     admit: harness.admit,
     restartService: harness.restartService,
     get service() { return harness.service; },
+    get instructionTargetState() { return harness.instructionTargetState; },
     get providerAdapters() { return harness.providerAdapters; },
     get providerInstructionAdapters() { return harness.providerInstructionAdapters; },
     get checkpointWriteCount() { return harness.checkpointWriteCount; },
