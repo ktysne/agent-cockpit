@@ -1270,6 +1270,14 @@ function decisionCountTitle(decisions) {
   return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
 
+// 0 件で消えた札の代わりに、並びで次にある札を返す。後ろに無ければ直前の札を返す。
+function filterFocusFallback(buttons, key) {
+  const position = (item) => FILTERS.findIndex((filter) => filter.key === item.dataset.filter);
+  const removed = FILTERS.findIndex((filter) => filter.key === key);
+  const chips = buttons.filter((item) => item.dataset.filter && position(item) >= 0);
+  return chips.find((item) => position(item) > removed) || chips.at(-1) || null;
+}
+
 function renderSummary(sessions, pullRequestGroups = []) {
   const judgmentCounts = countJudgments(sessions);
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
@@ -3359,6 +3367,8 @@ function render(state) {
         ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
       : focusData.kind === 'review-skip' && !button
         ? buttons.find((item) => item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip !== focusData.action)
+      : focusData.kind === 'filter' && !button
+        ? filterFocusFallback(buttons, focusData.key) || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
       : button;
     fallback?.focus({ preventScroll: true });
   }
