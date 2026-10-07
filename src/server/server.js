@@ -2224,6 +2224,9 @@ async function hasSessionJsonFiles(claudeHome) {
 }
 
 async function startServer(options = {}) {
+  if (options.onShutdown !== undefined && typeof options.onShutdown !== 'function') {
+    throw new TypeError('onShutdown must be a function');
+  }
   for (const key of Object.keys(process.env)) {
     if (isGithubCredentialEnvironmentVariable(key)) delete process.env[key];
   }
@@ -2291,6 +2294,7 @@ async function startServer(options = {}) {
   pullRequestTracker.onRefreshed = (owner, repo) => pullRequestMergeManager.checkReservations?.(owner, repo);
   let info = null;
   let closing = null;
+  let shutdownError = null;
   let lastRequestAt = Date.now();
   const server = options.server || http.createServer((request, response) => {
     Promise.resolve(handler(request, response)).catch((error) => {
@@ -2348,6 +2352,11 @@ async function startServer(options = {}) {
     if (server.listening) await new Promise((resolve) => server.close(resolve));
     try { await questionService?.close?.(); } catch {}
     try { await instructionService?.close?.(); } catch {}
+    let shutdownFailure = null;
+    try { await options.onShutdown?.(); } catch (shutdownError) { shutdownFailure = shutdownError; }
+    if (shutdownFailure) {
+      throw new AggregateError([error, shutdownFailure], 'server startup and shutdown failed', { cause: error });
+    }
     throw error;
   }
 
@@ -2369,32 +2378,46 @@ async function startServer(options = {}) {
     if (state.snapshot().sessions.length > 0) return;
     if (await hasSessionJsonFiles(claudeHome)) return;
     logLine(homeDir, 'stopping after idle timeout');
-    await close();
+    await close().catch((error) => { shutdownError ||= error; });
   }, 60_000);
   idleTimer.unref();
 
   async function close() {
     if (closing) return closing;
     closing = (async () => {
+      let failure = null;
+      const attempt = async (operation) => {
+        try { await operation(); } catch (error) { failure ||= error; }
+      };
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
-      answerDelivery.close();
-      pullRequestMergeManager.close?.();
-      pullRequestTracker.close();
-      if (server.listening) await new Promise((resolve) => server.close(resolve));
-      await handler.flushQuestionLosses();
-      await handler.flushInstructionLosses();
-      try { await instructionService?.flush?.(); } catch {}
-      try { await instructionService?.close?.(); } catch {}
-      try { await questionService?.close?.(); } catch {}
-      await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
-      await removeServerInfoIfOwned(homeDir, info);
+      await attempt(() => answerDelivery.close());
+      await attempt(() => pullRequestMergeManager.close?.());
+      await attempt(() => pullRequestTracker.close());
+      if (server.listening) {
+        await attempt(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+      }
+      await attempt(() => handler.flushQuestionLosses());
+      await attempt(() => handler.flushInstructionLosses());
+      await attempt(() => instructionService?.flush?.());
+      await attempt(() => instructionService?.close?.());
+      await attempt(() => questionService?.close?.());
+      await attempt(() => Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean)));
+      await attempt(() => removeServerInfoIfOwned(homeDir, info));
+      await attempt(() => options.onShutdown?.());
+      if (failure) {
+        shutdownError = failure;
+        logLine(homeDir, 'shutdown incomplete');
+        throw failure;
+      }
       logLine(homeDir, 'stopped');
     })();
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, questionService, instructionService, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, questionService, instructionService, pullRequestTracker,
+    pullRequestMergeManager, info, homeDir, close,
+    get shutdownError() { return shutdownError ? 'shutdown_incomplete' : null; } };
 }
 
 function parseArguments(argv) {
@@ -2410,7 +2433,13 @@ if (require.main === module) {
   startServer(parseArguments(process.argv.slice(2)))
     .then((runtime) => {
       console.log(`Agent Cockpit listening at http://127.0.0.1:${runtime.info.port}/`);
-      const stop = () => runtime.close().finally(() => { process.exitCode = 0; });
+      const stop = () => runtime.close().then(
+        () => { process.exitCode = 0; },
+        () => {
+          console.error('Agent Cockpit shutdown incomplete.');
+          process.exitCode = 1;
+        },
+      );
       process.once('SIGINT', stop);
       process.once('SIGTERM', stop);
     })

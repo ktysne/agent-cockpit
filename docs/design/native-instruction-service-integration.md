@@ -1,0 +1,90 @@
+# Native writerと通常指示サービスの接続
+
+## 対象と採用境界
+
+この接続は、通常指示サービスの永続配信と、認可された同じowned processの限定writerを結合する。
+`createNativeInstructionServiceIntegration`はnative composition、owner router、実ファイルstore/journal、provider adapter、instruction serviceをまとめる。
+`startNativeInstructionServer`はそのserviceとregistryを既存のloopback serverへ渡す、明示起動用の製品APIである。
+既定daemonのprofileや起動設定は自動変更せず、信頼された呼び出し元がnative launchを登録・開始する。
+以下の期待値はIssue #175と配信契約から定義し、既存実装の出力比較では作らない。
+
+送信開始の保存に成功するまで本文をnative writerへ渡さない。
+保存後にopaque認可を同期再検査し、最終guardから同じpipeの書き込みまでawaitを挟まない。
+read-only sourceの観測をdispatch認可へ転用しない。
+受付応答だけではappliedにせず、完全な入力証拠と固定宛先を照合する。
+unknownと送信済み結果不明を自動再送しない。
+
+## 適合シナリオと期待値
+
+自動試験は製品integration factory、composition、collector、runner/writer、service、adapter、実file store/journalを通る。
+runnerのprocess spawnとprovider runtime eventはfixtureで置換するため、実Claude/Codex runtimeの成功証跡にはならない。
+初期化やfixtureの成功を実runtimeの適合として扱わない。
+
+| ID | 区分と能力条件 | 入力と操作 | 観測点と期限 | 期待値と禁止副作用 |
+|---|---|---|---|---|
+| ID-F08-NS01 | 共通。登録済み固定launch | 本文を未送信として保存 | journalとcheckpointの実ファイル、service projection | available。native指示write0、自動send0 |
+| ID-F08-NS02 | 共通。matching terminal、attested standalone actor | 同じnative/session/periodへ明示start | send-start保存前後、実pipe write、ack。prepare/ack各5秒以内 | 保存成功後にstart1回。別native0、再spawn0、受付だけによるapplied0 |
+| ID-F08-NS03 | 仕様差。Codexの固定working turn | expectedTurnId付きsteer | 同期guardと実wire request、5秒以内 | Codexは固定turnへのsteer1回、turn/start0。Claude workingはunsupported/write0。startへの自動変換0 |
+| ID-F08-NS04 | 共通。実checkpoint書き込み失敗 | send-start保存を失敗させる | atomic書き込み失敗、サービス状態、同一store再起動 | native本文露出0、write0。保存停止を維持し、復旧時も自動再送0 |
+| ID-F08-NS05 | 共通。保存中のsource/context/owner失効 | send-start保存待機中にdetachまたは認可を失効 | 保存完了後の同期再検査と実wire | 保存後はunknown、指示write0、fallback0、旧proof復活0 |
+| ID-F08-NS06 | 共通。ack喪失またはpipe書き込み失敗 | 明示send後に応答を失う | write開始、ack拒否/期限、同一ファイル再起動 | 指示write累計1回以下、unknown。再sendと再起動による追加write0 |
+| ID-F08-NS07 | 共通の安全条件。完全な入力証拠が必要 | ackだけ、欠損clientId、部分本文、別turn/item、早期証拠を渡す | accepted/applying/appliedの境界、候補は60秒/128件/256KiB以内 | ackだけのapplied0、不一致証拠によるapplied0。完全一致証拠だけを受付後に採用。能力がないproviderの適用結果はunknown |
+| ID-F08-NS08 | 共通。複数admissionまたは旧lease | 別ownerのopaque capability、clone、旧接続の証拠を渡す | 実owner routing、同期guard、証拠購読 | 誤owner write0、旧証拠のapplied0、汎用RPCへの迂回0 |
+| ID-F08-NS09 | 共通の安全条件。review、ended delegated、question/permission hold、native未対応next-user-input | 保存済み指示を禁止対象へ明示send | source/target/mode確認、実wire | 指示write0、standalone/startへの自動変換0。question/permission pending状態では送信を保留する。この状態条件は現在のnative経路で未確認 |
+| ID-F08-NS10 | 共通。取消とsend-startの直列化 | 保存前の取消と送信開始を競合させる | 実storeのcommit順序と途中台帳 | 取消確定ならwrite0。送信開始後の取消を送信前取消として扱わない |
+| ID-F08-NS11 | 実runtime未確認。Claude standalone | 隔離HOMEの同じowned processで次contextを明示start | runtime版、同session/period、context、native受付、終了確認 | 別session0、再spawn0。echoでappliedを認定しない。真正入力証拠不足はunknown |
+| ID-F08-NS12 | 実runtime未確認。Codex本人認証 | 固定turnへのsteer、terminal後の明示start | 新ログインURL/期限、thread/turn/item/clientId/完全input、終了確認 | 同threadのみ。clientUserMessageIdとnative clientIdの実対応を確認するまでappliedを認定しない |
+
+宛先、送信回数、状態、禁止副作用の許容差は0とする。
+ランダムIDと時刻だけを比較時に正規化し、能力差やunknownを正規化しない。
+タイムアウトは各境界の契約に従い、未実行やskipを成功に混ぜない。
+
+## 担当境界
+
+接続moduleはprovider固定のowner routerを提供し、上記factoryが実際のserviceへ接続する。
+信頼された起動lifecycleだけがcompositionのopaque admission receiptをrouterへ渡す。
+同一receiptの二重登録は同じactive routeを返し、detach後の再登録は拒否する。
+既存契約の不足が判明した場合は認可を緩めず、未送信またはunknownを保つ。
+native runner、source、runtime kernel、wait専用経路はこの接続では変更しない。
+receiptからownerを一度だけ取得し、prepareで成功したopaque capabilityをそのownerへ固定する。
+check、dispatch、証拠購読では現在のlaunchRefからownerを選び直さない。
+最終checkとdispatchは同期関数とし、dispatchの戻り値を変換せず返す。
+detachとcloseは登録と既存capabilityを失効させ、証拠購読を解除する。
+composition自身のsource失効もownerの同期検査で拒否される。
+
+組み立ては、実storeのverifier closure、provider delivery adapter、owner router、provider instruction adapter、serviceの順に行う。
+adapterの準備前にはverifierがfalseを返す。
+`startNativeInstructionServer`は同じservice、registration registry、launch registryを`startServer`へ渡し、既存の127.0.0.1 bindとsecret/Origin gateを使う。
+HTTP requestにはnative profile allowlist、receipt、writer capabilityによる認可を追加しない。
+起動は明示opt-inであり、既定daemonや恒久HOMEへprofileを追加しない。
+
+`startLaunch`はrouter attach後にowned collector接続とcomposition起動を待ち、Codexでは既知threadを観測してからcomposition/collector両方のcurrent proofを確認する。
+失敗時はadmissionをretireし、native stopを試みる。
+`stop`は最初にrouter capabilityを無効化し、collectorを切断してからcompositionへstopを依頼する。
+snapshotの`processState === 'stopped'`だけを停止成功とし、確認できない場合は`stop_unconfirmed`を残して固定error codeでrejectする。
+server close hookは既存flushが失敗しても実行し、server info削除と全cleanupを試す。失敗時の公開statusは固定値`shutdown_incomplete`とし、error messageやtokenを返さない。
+factory closeはservice、router、admissionごとのowned process、storeのflush/closeを順に行い、部分初期化失敗時も作成済みresourceを解放する。
+
+## 保留中のquestion/permission状態
+
+通常instructionのnative ownerは、現在の実装ではquestionまたはpermission pending状態を読み取らない。
+Codex runnerはapproval policyを`never`、Claude runnerはpermission modeを`dontAsk`に固定しており、runner parserからquestion/permission待機状態を通知する契約もない。
+そのため、`mode: 'question'`や`mode: 'permission'`のAPI入力を拒否する回帰だけでは、実runtimeが待機中の送信保留を証明できない。
+Claude専用`cockpit_wait`のcontinuation状態は別機能であり、question/permission pending状態と同一視しない。
+この状態のcollector/parser/service gateと副作用0検証は未実装・未確認で、Issue #175のNS09/G4と関連Issue #174/#170の残事項として扱う。
+
+## 検証結果
+
+関連3 filesを`npm run test:inprocess -- test/native-instruction-integration-router.test.js test/native-instruction-service-conformance.test.js test/native-instruction-service-factory.test.js`で実行し、35/35件が成功した。
+内訳はrouter 14件、service/provider conformance 17件、factory/server lifecycle 4件である。
+自動試験はsend-start永続化、保存失敗時のwrite拒否、detach中の同期再認可、完全なCodex input証拠、unsupported mode、明示start、review/delegated拒否、取消とsend-startの順序競合を両providerで検証する。
+question/permissionのmode API拒否も確認するが、これはpending状態を保留する証明ではない。
+fixtureはruntime process spawnとprovider event transportを置換する。別turn/input mismatch、client ID欠損、item再利用、早期証拠は`test/owned-native-instruction-dispatch.test.js`と`test/instruction-input-correlator.test.js`の既存回帰が補完する。
+実Claude/Codex runtimeは未確認であり、対応するログイン・実wire schema・終了確認の証跡を自動fixture結果と分けて記録する。
+question/permission pendingのstate観測は未対応であるため、NS09の期待条件を満たしたとは扱わない。
+この文書だけでIssue #175全体や実native採用の完了を宣言しない。
+
+全体検証は`npm test`を専用worktreeで子プロセス起動が許可された条件で実行し、1791/1791件が成功した。
+通常sandboxでの先行実行はtest runnerの子プロセス起動時に`spawn EPERM`となり、製品testの失敗とは数えない。
+結果のsummaryと実行条件はignore対象の`.cross-review/native-integration-full-test.log`に記録した。tool出力上限のため完全なstdoutではない。
+
