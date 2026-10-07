@@ -372,6 +372,7 @@ function createOwnedNativeRunner(options) {
   let turnStartPending = false;
   let earlyTurnCompletion = null;
   let earlyWaitCall = null;
+  let earlyResolvedWaitRequest = null;
   let waitCallSeen = false;
   let activeWait = null;
   let activeLogin = null;
@@ -565,6 +566,7 @@ function createOwnedNativeRunner(options) {
     generation += 1;
     pendingOwnedWaitResponses.clear();
     retiredOwnedWaitRequests.clear();
+    earlyResolvedWaitRequest = null;
     if (sourceController) sourceController.invalidate();
     if (instructionController) instructionController.invalidate();
     if (claudeWait) claudeWait.controller.stop().catch(() => {});
@@ -886,6 +888,9 @@ function createOwnedNativeRunner(options) {
       throw runnerError('native_server_resolution_invalid');
     }
     const idKey = nativeRequestIdKey(message.params.requestId);
+    if (earlyResolvedWaitRequest && earlyResolvedWaitRequest.requestIdKey === idKey) {
+      throw runnerError('native_server_resolution_unmatched');
+    }
     const ownedWaitResponse = pendingOwnedWaitResponses.get(idKey);
     if (ownedWaitResponse) {
       if (ownedWaitResponse.resolved) throw runnerError('native_server_resolution_unmatched');
@@ -912,7 +917,10 @@ function createOwnedNativeRunner(options) {
       return;
     }
     const pending = pendingNativeRequests.get(idKey);
-    if (!pending) throw runnerError('native_server_resolution_unmatched');
+    if (!pending) {
+      deferEarlyWaitResolution(message, idKey);
+      return;
+    }
     if (pending.generation !== generation || pending.child !== child || !childSpawned ||
         !['starting', 'running'].includes(state) || message.params.threadId !== pending.threadId ||
         !nativeIdentity || nativeIdentity.nativeId !== pending.threadId || !nativeContext ||
@@ -922,6 +930,47 @@ function createOwnedNativeRunner(options) {
     }
     pendingNativeRequests.delete(idKey);
     pendingNativeRequestRevision += 1n;
+  }
+
+  function deferEarlyWaitResolution(message, idKey) {
+    const wait = earlyWaitCall;
+    const completed = earlyTurnCompletion;
+    if (earlyResolvedWaitRequest || !turnStartPending || !wait || !completed ||
+        wait.requestIdKey !== idKey || wait.requestId !== message.params.requestId) {
+      throw runnerError('native_server_resolution_unmatched');
+    }
+    if (wait.generation !== generation || wait.child !== child || !childSpawned || state !== 'starting' ||
+        !usedNativeRequestIds.has(idKey) || message.params.threadId !== wait.threadId ||
+        completed.threadId !== wait.threadId || completed.turnId !== wait.turnId ||
+        pendingNativeRequests.has(idKey) || pendingOwnedWaitResponses.has(idKey) ||
+        retiredOwnedWaitRequests.has(idKey)) {
+      throw runnerError('native_server_resolution_scope_mismatch');
+    }
+    earlyResolvedWaitRequest = Object.freeze({
+      requestId: wait.requestId,
+      requestIdKey: wait.requestIdKey,
+      generation: wait.generation,
+      child: wait.child,
+      threadId: wait.threadId,
+      turnId: wait.turnId,
+    });
+  }
+
+  function replayEarlyWaitResolution(expectedGeneration, expectedChild, turnId) {
+    const deferred = earlyResolvedWaitRequest;
+    if (!deferred) return;
+    const retired = retiredOwnedWaitRequests.get(deferred.requestIdKey);
+    if (deferred.generation !== expectedGeneration || expectedGeneration !== generation ||
+        deferred.child !== expectedChild || expectedChild !== child || !childSpawned || state !== 'starting' ||
+        turnStartPending || terminalContextId !== turnId || deferred.turnId !== turnId ||
+        !retired || retired.requestId !== deferred.requestId || retired.requestIdKey !== deferred.requestIdKey ||
+        retired.generation !== deferred.generation || retired.child !== deferred.child ||
+        retired.threadId !== deferred.threadId || retired.turnId !== deferred.turnId) {
+      throw runnerError('native_server_resolution_scope_mismatch');
+    }
+    earlyResolvedWaitRequest = null;
+    resolveNativeHoldRequest({ method: 'serverRequest/resolved',
+      params: { requestId: deferred.requestId, threadId: deferred.threadId } });
   }
 
   function captureNativePendingSummary(threadId, turnId) {
@@ -1790,6 +1839,7 @@ function createOwnedNativeRunner(options) {
     emitIdentity(threadResult.thread.id);
     requireCurrent(expectedGeneration);
     turnStartPending = true;
+    const turnStartChild = child;
     const turnResult = await sendRpc('turn/start', {
       threadId: threadResult.thread.id,
       input: [{ type: 'text', text: inputText }],
@@ -1801,7 +1851,8 @@ function createOwnedNativeRunner(options) {
     if (!isRecord(turnResult) || !isRecord(turnResult.turn) || !isIdentifier(turnResult.turn.id)) {
       throw runnerError('turn_result_invalid');
     }
-    if (earlyWaitCall && earlyWaitCall.turnId !== turnResult.turn.id) {
+    if (earlyWaitCall && (earlyWaitCall.threadId !== threadResult.thread.id ||
+        earlyWaitCall.turnId !== turnResult.turn.id)) {
       throw runnerError('wait_request_context_mismatch');
     }
     if (earlyTurnCompletion) {
@@ -1810,6 +1861,7 @@ function createOwnedNativeRunner(options) {
       }
       earlyTurnCompletion = null;
       emitContextEnded(turnResult.turn.id, true);
+      replayEarlyWaitResolution(expectedGeneration, turnStartChild, turnResult.turn.id);
     } else {
       emitContext(turnResult.turn.id);
       const queuedWaitCall = earlyWaitCall;
@@ -1866,6 +1918,7 @@ function createOwnedNativeRunner(options) {
     generation += 1;
     pendingOwnedWaitResponses.clear();
     retiredOwnedWaitRequests.clear();
+    earlyResolvedWaitRequest = null;
     state = 'stopping';
     if (sourceController) sourceController.invalidate();
     if (instructionController) instructionController.invalidate();

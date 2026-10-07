@@ -1195,6 +1195,111 @@ test('a late resolution for an early wait invalidated by turn completion keeps t
   await runner.stop();
 });
 
+test('an early terminal and wait resolution in one turn-start batch are reconciled after the RPC response', async (t) => {
+  const workspace = createWorkspace(t);
+  const events = [];
+  let callbacks = 0;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsBeforeTurnResponse: [
+      makeWaitRequest(),
+      codexTurnCompleted(),
+      nativeHoldResolved('wait_request_1'),
+    ],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    onNative: (event) => events.push(event),
+    onWaitRequired: () => { callbacks += 1; },
+  });
+
+  const snapshot = await runner.start({ inputText: 'fixed task' });
+  assert.equal(snapshot.state, 'running');
+  assert.equal(snapshot.contextState, 'ended');
+  assert.deepEqual(events.map((event) => event.type), ['identity', 'context_ended']);
+  assert.equal(callbacks, 0);
+  assert.equal(waitReplies(harness).length, 0);
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().failureCode, 'native_server_resolution_unmatched');
+  await runner.stop();
+});
+
+test('a deferred early wait resolution is discarded when the turn response has a different ID', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsBeforeTurnResponse: [
+      makeWaitRequest({ turnId: 'turn_native_2' }),
+      codexTurnCompleted('thread_native_1', 'turn_native_2'),
+      nativeHoldResolved('wait_request_1'),
+    ],
+  });
+  const runner = createWaitRunner(workspace, harness);
+
+  await assert.rejects(runner.start({ inputText: 'fixed task' }));
+  assert.equal(runner.snapshot().failureCode, 'wait_request_context_mismatch');
+  assert.equal(waitReplies(harness).length, 0);
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().failureCode, 'wait_request_context_mismatch');
+  await runner.stop();
+});
+
+test('a deferred early wait resolution is not replayed after stop or failure', async (t) => {
+  for (const outcome of ['stop', 'failure']) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = createWaitProfileHarness(workspace, {
+      waitCallsBeforeTurnResponse: [
+        makeWaitRequest(),
+        codexTurnCompleted(),
+        nativeHoldResolved('wait_request_1'),
+      ],
+    });
+    let runner;
+    runner = createWaitRunner(workspace, harness, {
+      onNative: (event) => {
+        events.push(event.type);
+        if (event.type !== 'context_ended') return;
+        if (outcome === 'stop') void runner.stop();
+        else throw new Error('synthetic notification failure');
+      },
+    });
+
+    await assert.rejects(runner.start({ inputText: 'fixed task' }));
+    assert.deepEqual(events, ['identity', 'context_ended']);
+    assert.equal(waitReplies(harness).length, 0);
+    const failureCode = runner.snapshot().failureCode;
+    assert.equal(failureCode, outcome === 'failure' ? 'native_callback_failed' : null);
+    harness.child.send(nativeHoldResolved('wait_request_1'));
+    assert.equal(runner.snapshot().failureCode, failureCode);
+    if (outcome === 'stop') assert.equal((await runner.stop()).state, 'stopped');
+    else await runner.stop();
+  }
+});
+
+test('early wait resolutions reject unknown IDs, type or thread mismatches, and duplicates', async (t) => {
+  const scenarios = [
+    { waitId: 'wait_request_1', requestId: 'unknown', threadId: 'thread_native_1', failureCode: 'native_server_resolution_unmatched' },
+    { waitId: 7, requestId: '7', threadId: 'thread_native_1', failureCode: 'native_server_resolution_unmatched' },
+    { waitId: 'wait_request_1', requestId: 'wait_request_1', threadId: 'thread_other', failureCode: 'native_server_resolution_scope_mismatch' },
+    { waitId: 'wait_request_1', requestId: 'wait_request_1', threadId: 'thread_native_1', duplicate: true, failureCode: 'native_server_resolution_unmatched' },
+  ];
+  for (const scenario of scenarios) {
+    const workspace = createWorkspace(t);
+    const resolution = nativeHoldResolved(scenario.requestId, scenario.threadId);
+    const messages = [
+      makeWaitRequest({}, { requestId: scenario.waitId }),
+      codexTurnCompleted(),
+      resolution,
+      ...(scenario.duplicate ? [resolution] : []),
+    ];
+    const harness = createWaitProfileHarness(workspace, { waitCallsBeforeTurnResponse: messages });
+    const runner = createWaitRunner(workspace, harness);
+
+    await assert.rejects(runner.start({ inputText: 'fixed task' }));
+    assert.equal(runner.snapshot().failureCode, scenario.failureCode);
+    assert.equal(waitReplies(harness).length, 0);
+    await runner.stop();
+  }
+});
+
 test('a discarded wait resolution does not change a later native hold capture', async (t) => {
   const workspace = createWorkspace(t);
   let contextCurrent = true;
