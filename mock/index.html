@@ -249,7 +249,15 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
-/* タスクの行と同じく、題の中で折り返して札と操作を同じ行に残す。 */
+/* 文字は左の列の中で折り返し、操作は右の列に縦に積む。操作の幅で題が潰れないよう、行の中に操作を混ぜない。 */
+.pr-body { display: flex; gap: 12px; align-items: stretch; }
+.pr-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pr-text > .badges { margin-top: 0; }
+/* 幅を固定して行をまたいで操作の縦の並びをそろえ、区切り線は PR の高さいっぱいに引いて中身だけ中央に置く。 */
+.pr-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: stretch; gap: 6px; }
+.pr-actions .merge-btn, .pr-actions .conflict-btn { margin-left: 0; width: 100%; padding-inline: 8px; }
+.merge-state { color: var(--text-2); font-size: 11px; text-align: center; }
+.merge-state.ok { color: var(--ok-text); font-weight: 600; }
 .pr .pline { display: flex; gap: 8px; align-items: baseline; }
 .pr .pline > * { flex: none; }
 .pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
@@ -343,7 +351,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 }
 /* これより狭いと、札と操作を同じ行に残したときに題が数文字の幅しか残らないため、要素ごとに折り返す。 */
 @media (max-width: 480px) {
-  .task .line, .pr .pline { flex-wrap: wrap; }
+  .task .line { flex-wrap: wrap; }
 }
 .app-icon { width: 28px; height: 28px; flex: none; }
 </style>
@@ -1701,18 +1709,20 @@ function prItem(p, pr) {
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
+  const actions = [
+    mergeIntent ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
+    !mergeIntent && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
+      <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
+    conflictButton(p, pr),
+  ].join('').trim();
   return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
+    <div class="pr-body"><div class="pr-text">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>
-      ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
-      ${!mergeIntent && conditionMet ? '<span class="badge ok">マージできます</span>' : !mergeIntent && !operationBlocker ? '<span class="badge mute">マージ操作は可能</span>' : ''}
-      ${!mergeIntent && (!operationBlocker || rsv) ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
-        <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>レビュー収束後マージ</label>` : ''}
-      ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
-    <div class="badges">${prBadges(p, pr)}</div>
+    <div class="badges">${mergeIntent ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
     ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr, rsv.method).join('、'))})</span>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
@@ -1720,6 +1730,7 @@ function prItem(p, pr) {
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
     ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
+    </div>${actions ? `<div class="pr-actions">${actions}</div>` : ''}</div>
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
     ${transientMessageVisible(ui.mergeErrors[k]) ? `<div class="merge-error" role="status">${esc(ui.mergeErrors[k].message)}</div>` : ''}
     ${confirmManual && (!operationBlocker || rsv) ? mergeConfirm(p, pr) : ''}

@@ -869,7 +869,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const absent = { headRefOid: headSha };
   assert.equal(line(absent), null);
   assert.equal(context.crossReviewState(absent).warn, null);
-  assert.match(html, /if \(pullRequest\.crossReview !== undefined\) item\.append\(crossReviewLine\(pullRequest\)\)/);
+  assert.match(html, /if \(pullRequest\.crossReview !== undefined\) text\.append\(crossReviewLine\(pullRequest\)\)/);
 
   const missing = line({ headRefOid: headSha, crossReview: null });
   const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
@@ -2337,9 +2337,14 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   const reservationToggle = rowNodes.find((node) => node.dataset?.reservationToggle === key);
   assert.ok(reservationToggle);
   assert.equal(reservationToggle.checked, false);
-  assert.equal(line.children.includes(rowNodes.find((node) => node.dataset?.openMerge === key)), true);
-  const reservationLabel = line.children.find((node) => node.className === 'reservation-toggle');
-  assert.equal(line.children.includes(reservationLabel), true);
+  const mergeActions = rowNodes.find((node) => node.className === 'pr-actions');
+  assert.ok(mergeActions, 'マージの操作と予約のチェックは右の列に置く');
+  assert.equal(flatten(line).some((node) => node.dataset?.openMerge === key || node.dataset?.reservationToggle === key), false, '題の行には操作を混ぜない');
+  assert.deepEqual(mergeActions.children.map((node) => node.className), ['merge-state', 'merge-btn outline', 'reservation-toggle']);
+  assert.equal(mergeActions.children[0].textContent, 'マージ操作は可能');
+  assert.equal(mergeActions.children.includes(rowNodes.find((node) => node.dataset?.openMerge === key)), true);
+  const reservationLabel = mergeActions.children.find((node) => node.className === 'reservation-toggle');
+  assert.ok(flatten(reservationLabel).some((node) => node.textContent === '収束後マージ'));
   assert.equal(reservationLabel.children.includes(reservationToggle), true);
   reservationToggle.checked = true;
   holdReservation = true;

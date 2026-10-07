@@ -28,16 +28,16 @@
           "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .stack-base code",
           "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .stack-base span"
         ],
-        "stack.pos-bottom": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pline .pos",
-        "stack.pos-middle": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .pline .pos",
-        "stack.pos-top": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .stack-level > .pr > .pline .pos",
-        "stack.mergeable-badge": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pline .badge",
-        "stack.merge-button": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pline .merge-btn",
+        "stack.pos-bottom": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pr-body .pline .pos",
+        "stack.pos-middle": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .pr-body .pline .pos",
+        "stack.pos-top": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .stack-level > .pr > .pr-body .pline .pos",
+        "stack.mergeable-badge": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pr-body .merge-state",
+        "stack.merge-button": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .pr-body .merge-btn",
         "stack.branch-middle": [
-          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .branch code:first-child",
-          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .branch code:last-child"
+          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .pr-body .branch code:first-child",
+          "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .pr-body .branch code:last-child"
         ],
-        "stack.wait-middle": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .why-not",
+        "stack.wait-middle": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level > .pr > .pr-body .why-not",
         "stack.level": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(1) > .pr > .stack-level",
         "stack.single": "#root > section.section:nth-child(2) .pr-repo-group .pr-repo-content > .stack:nth-child(2)"
       }
