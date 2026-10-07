@@ -69,6 +69,7 @@ function createHarness() {
     constSource('commonQuestionDraftKey'),
     constSource('allSessions'),
     mock.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0],
+    constSource('activeFilters'),
     ...['answerOf', 'isActiveDecision', 'isEndedDecision', 'isAwaitingDecision', 'decisionCategory', 'ageMinutes',
       'countJudgments', 'countHidden', 'hiddenCommonQuestionsOf', 'decisionCountTitle', 'commonQuestionDraft', 'commonQuestionAnswersValid',
       'commonQuestionStatus', 'commonQuestionLabels', 'commonQuestionCancelControl', 'commonQuestionCard',
@@ -78,7 +79,7 @@ function createHarness() {
 
   const context = pageContext(mock, {
     ui,
-    DATA: { products: [product] },
+    DATA: { products: [product], integrations: { commonQuestions: true } },
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     commonQuestionDrafts: new Map(), commonQuestionSubmittedDrafts: new Map(), commonQuestionInFlight: new Set(),
     commonQuestionErrors: new Map(), commonQuestionNotices: new Map(), commonQuestionCancelConfirmations: new Set(),
@@ -123,6 +124,17 @@ function createHarness() {
   context.hasHiddenJudgmentItems = vm.runInContext('hasHiddenJudgmentItems', context);
   return { context, session, product, summaryNodes };
 }
+
+test('モックは共通質問が未構成のとき「質問対応」のチップと共通質問を出さない', () => {
+  const { context, summaryNodes } = createHarness();
+  context.DATA.integrations.commonQuestions = false;
+  context.renderSummary();
+  assert.doesNotMatch(summaryNodes.summary.innerHTML, /質問対応/);
+  assert.doesNotMatch(context.renderProductMode(), /class="common-question"/);
+  context.DATA.integrations.commonQuestions = true;
+  context.renderSummary();
+  assert.match(summaryNodes.summary.innerHTML, /質問対応/);
+});
 
 test('モックのプロダクト表示と種類別表示は実際の共通質問カードを判断欄へ描画する', () => {
   const { context, summaryNodes } = createHarness();
