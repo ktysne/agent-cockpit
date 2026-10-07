@@ -114,3 +114,15 @@ standaloneの一回のassistant contextでproofとwriterの認可を確認し、
 owned stop後のchild exitとclose、通常Codex/Claude認証ファイルの不変、隔離認証artifactの新規作成0件を確認した。
 結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-8fa31cf9-e215-4ede-a087-39e2ae17bc68.json`に保持する。
 実probeはstandaloneだけであり、最後のancestor callbackからの失効注入、複数context、delegated、handoff、reconnect、Codex waitはこの結果で実証していない。
+
+## Native 登録履歴の受動復旧
+
+ID-F11-B01〜B03 の独立期待値と復旧境界は [native-recovery-checkpoint.md](native-recovery-checkpoint.md) に定義する。
+
+ID-F11-B01 と B02 は実ファイル store と Claude/Codex adapter の fixture で pass、実 native runtime は両 provider とも未実施である。
+
+ID-F11-B03 は ended tombstone と explicit order を検証する共通 kernel unit であり、provider adapter または実runtimeの結果として扱わない。
+
+対応する試験は [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) と [conversation-registry.test.js](../../test/conversation-registry.test.js) にある。
+
+この結果は passive registration bootstrap の適合に限り、fresh evidence reconciliation や Issue #177 全体の runtime 復旧を示さない。

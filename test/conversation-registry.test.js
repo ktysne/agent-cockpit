@@ -359,3 +359,148 @@ test('authority revision records a partial conversation change even if period al
   assert.equal(snapshot.conversations.length, 1);
   assert.equal(snapshot.executions.length, 0);
 });
+
+function passiveRecoveryRegistrations(kernel, executionState = 'unknown') {
+  const snapshot = structuredClone(kernel.registry.snapshot());
+  return {
+    conversations: snapshot.conversations,
+    executions: snapshot.executions.map((execution) => ({
+      conversationId: execution.conversationId,
+      executionId: execution.executionId,
+      sessionId: execution.sessionId,
+      state: executionState,
+    })),
+    replayClaims: snapshot.replayClaims,
+    incompleteConversationIds: snapshot.incompleteConversationIds,
+    launches: [],
+    runtimeLaunches: [],
+    connections: [],
+    actors: [],
+    handoffs: [],
+  };
+}
+
+test('restored registration claims retain identifiers but require fresh evidence and writers', () => {
+  const source = createRegistrationKernel();
+  const identity = identityFrom('codex', {
+    nativeIdKind: 'thread', hostId: 'restore-host', homeScopeId: 'restore-home', nativeId: 'restore-thread',
+  });
+  const evidenceInput = evidence('restore-evidence');
+  const startOptions = { startId: 'restore-start' };
+  const original = source.authority.register(identity, evidenceInput, startOptions);
+  source.authority.bindWriter(original.executionId, {
+    identity,
+    contextId: 'restore-context',
+    evidence: evidence('restore-writer-evidence'),
+  });
+  const history = passiveRecoveryRegistrations(source, 'unknown');
+  const recovered = createRegistrationKernel();
+  const revision = recovered.registry.captureAuthorityRevision();
+
+  const result = recovered.authority.restoreHistory(history);
+
+  assert.equal(result.restored, true);
+  assert.equal(result.historyIncomplete, false);
+  assert.equal(recovered.registry.checkAuthorityRevision(revision), false);
+  assert.deepEqual(recovered.registry.snapshot().conversations, source.registry.snapshot().conversations);
+  assert.deepEqual(recovered.registry.snapshot().executions.map((execution) => ({
+    conversationId: execution.conversationId,
+    executionId: execution.executionId,
+    sessionId: execution.sessionId,
+    state: execution.state,
+  })), history.executions);
+  assert.deepEqual(recovered.registry.snapshot().replayClaims, history.replayClaims);
+  assert.equal(recovered.registry.snapshot().observations.length, 0);
+  assert.equal(recovered.registry.isRegisteredSessionId(original.sessionId), true);
+  assert.throws(() => recovered.authority.bindWriter(original.executionId, {
+    identity,
+    contextId: 'restore-context',
+    evidence: evidence('restore-writer-evidence-new'),
+  }), (error) => error.code === 'stale_execution');
+  assert.throws(() => recovered.authority.register(identity, evidenceInput, startOptions),
+    (error) => error.code === 'needs_revalidation');
+  assert.throws(() => recovered.authority.restoreHistory(history),
+    (error) => error.code === 'recovery_registry_not_empty');
+});
+
+test('incomplete restored history locks registration across identities', () => {
+  const source = createRegistrationKernel();
+  const originalIdentity = identityFrom('claude', claudeNative());
+  const original = register(source.authority, originalIdentity, 'legacy-start');
+  const history = passiveRecoveryRegistrations(source, 'unknown');
+  history.replayClaims = [];
+  history.incompleteConversationIds = [original.conversationId];
+  const recovered = createRegistrationKernel();
+  const result = recovered.authority.restoreHistory(history);
+  const otherIdentity = identityFrom('codex', {
+    nativeIdKind: 'thread', hostId: 'other-host', homeScopeId: 'other-home', nativeId: 'other-thread',
+  });
+
+  assert.equal(result.historyIncomplete, true);
+  assert.throws(() => register(recovered.authority, otherIdentity, 'unrelated-start'),
+    (error) => error.code === 'needs_revalidation');
+
+  const fresh = createRegistrationKernel();
+  assert.equal(register(fresh.authority, otherIdentity, 'fresh-start').executionId.startsWith('exec-'), true);
+});
+
+test('failed restore staging leaves the empty kernel intact and retryable', () => {
+  const source = createRegistrationKernel();
+  register(source.authority, identityFrom('claude', claudeNative()), 'staging-start');
+  const validHistory = passiveRecoveryRegistrations(source, 'unknown');
+  const malformedHistory = structuredClone(validHistory);
+  malformedHistory.replayClaims[0].order = 0;
+  const recovered = createRegistrationKernel();
+
+  assert.throws(() => recovered.authority.restoreHistory(malformedHistory),
+    (error) => error.code === 'invalid_recovery_history');
+  assert.deepEqual(recovered.registry.snapshot().conversations, []);
+  assert.deepEqual(recovered.registry.snapshot().executions, []);
+  assert.equal(recovered.authority.restoreHistory(validHistory).restored, true);
+});
+
+test('restore does not overwrite a registration created reentrantly while staging', () => {
+  const recovered = createRegistrationKernel();
+  const identity = identityFrom('claude', claudeNative({ nativeId: 'reentrant-thread' }));
+  const emptyHistory = {
+    conversations: [], executions: [], launches: [], runtimeLaunches: [], connections: [], actors: [], handoffs: [],
+    replayClaims: [], incompleteConversationIds: [],
+  };
+  let conversationReads = 0;
+  const reentrantHistory = new Proxy(emptyHistory, {
+    get(target, property, receiver) {
+      if (property === 'conversations' && ++conversationReads === 3) {
+        recovered.authority.register(identity, evidence('reentrant-evidence'), { startId: 'reentrant-start' });
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  assert.throws(() => recovered.authority.restoreHistory(reentrantHistory),
+    (error) => error.code === 'recovery_registry_not_empty');
+  assert.equal(recovered.registry.snapshot().conversations[0].identity.nativeId, 'reentrant-thread');
+  assert.equal(recovered.registry.snapshot().executions.length, 1);
+});
+
+test('ID-F11-B03: ended tombstones and last execution follow explicit order after reversed restore', () => {
+  const source = createRegistrationKernel();
+  const identity = identityFrom('claude', claudeNative({ nativeId: 'ordered-recovery-session' }));
+  const first = register(source.authority, identity, 'ordered-start-first');
+  source.authority.end(first.executionId);
+  const second = register(source.authority, identity, 'ordered-start-second', { resume: true });
+  const history = passiveRecoveryRegistrations(source, 'unknown');
+  history.executions.find((execution) => execution.executionId === first.executionId).state = 'ended';
+  history.executions.reverse();
+  history.replayClaims.reverse();
+
+  const recovered = createRegistrationKernel();
+  recovered.authority.restoreHistory(history);
+  const restoredExecutions = new Map(recovered.registry.snapshot().executions.map((execution) => [
+    execution.executionId, execution.state,
+  ]));
+
+  assert.equal(restoredExecutions.get(first.executionId), 'ended');
+  assert.equal(restoredExecutions.get(second.executionId), 'unknown');
+  assert.throws(() => register(recovered.authority, identity, 'ordered-start-after-recovery', { resume: true }),
+    (error) => error.code === 'invalid_resume');
+});
