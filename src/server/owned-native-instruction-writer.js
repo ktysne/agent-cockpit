@@ -38,6 +38,7 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
   const entries = new Map();
   const itemOwners = new Map();
   const listeners = new Set();
+  const closedListeners = new Set();
   let retainedBytes = 0;
   let invalidated = false;
   let candidateCount = 0;
@@ -46,22 +47,28 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
     retainedBytes -= reservation.bytes; candidateCount -= reservation.candidates;
     entry.payloadBytes -= reservation.bytes; entry.candidateCount -= reservation.candidates;
   }
-  function clearPayload(entry) {
+  function clearPayload(entry, reason = 'instruction_observation_closed') {
     if (entry.payloadCleared) return;
-    if (entry.used && !entry.settled) settle(entry, dispatchError('instruction_ack_timeout'));
+    if (entry.used && !entry.settled) {
+      settle(entry, dispatchError(reason));
+      return;
+    }
     entry.payloadCleared = true;
+    clearTimeout(entry.expiryTimer);
     for (const reservation of entry.reservations) releaseEntryReservation(entry, reservation);
     entry.input = null; entry.candidates.length = 0; entry.prepared = null; entry.resolve = null; entry.reject = null;
     for (const receipt of entry.receipts) receipts.delete(receipt);
     entry.receipts.clear();
+    for (const listener of [...closedListeners]) { try { listener(entry.token, reason); } catch {} }
   }
-  function expire() { for (const entry of entries.values()) if (entry.expiresAt <= NOW()) clearPayload(entry); }
+  function expirePayload(entry) { clearPayload(entry, entry.used && !entry.settled ? 'instruction_ack_timeout' : 'instruction_observation_closed'); }
+  function expire() { for (const entry of entries.values()) if (!entry.nativeTurnId && entry.expiresAt <= NOW()) expirePayload(entry); }
 
   function current(entry) {
     return !invalidated && entry && !entry.payloadCleared && !entry.used && entry.expiresAt > NOW() && operations.check(entry.capture, entry.metadata) === true;
   }
   function evidenceCurrent(entry) {
-    return !invalidated && entry?.used && !entry.payloadCleared && !entry.conflict && entry.nativeTurnId && entry.expiresAt > NOW() &&
+    return !invalidated && entry?.used && !entry.payloadCleared && !entry.conflict && entry.nativeTurnId &&
       operations.checkEvidence(entry.capture, entry.nativeTurnId) === true;
   }
   function settle(entry, error, nativeTurnId) {
@@ -69,18 +76,20 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
     entry.settled = true;
     clearTimeout(entry.timer);
     operations.complete(entry.token, error);
-    if (error) { entry.conflict = true; entry.reject(error); return; }
+    if (error) { entry.conflict = true; entry.reject(error); clearPayload(entry, error.code); return; }
     entry.nativeTurnId = nativeTurnId;
+    clearTimeout(entry.expiryTimer);
     entry.resolve(Object.freeze({ clientRequestId: entry.metadata.deliveryAttemptId, nativeTurnId, nativeItemId: null }));
     flush(entry);
+    if (!evidenceCurrent(entry)) clearPayload(entry, 'instruction_source_invalid');
   }
   function flush(entry) {
     if (entry.writing || !evidenceCurrent(entry)) return;
     for (const candidate of entry.candidates.splice(0)) {
-      if (candidate.nativeTurnId !== entry.nativeTurnId) { entry.conflict = true; return; }
+      if (candidate.nativeTurnId !== entry.nativeTurnId) { entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return; }
       const previous = itemOwners.get(candidate.nativeItemId);
-      if (previous && previous !== entry) { previous.conflict = true; entry.conflict = true; return; }
-      if (!previous && itemOwners.size >= MAX_ENTRIES) { entry.conflict = true; return; }
+      if (previous && previous !== entry) { previous.conflict = true; entry.conflict = true; clearPayload(previous, 'instruction_evidence_conflict'); clearPayload(entry, 'instruction_evidence_conflict'); return; }
+      if (!previous && itemOwners.size >= MAX_ENTRIES) { entry.conflict = true; clearPayload(entry, 'instruction_evidence_capacity'); return; }
       itemOwners.set(candidate.nativeItemId, entry);
       if (entry.deliveredItems.has(candidate.nativeItemId)) continue;
       entry.deliveredItems.add(candidate.nativeItemId);
@@ -136,7 +145,7 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       entry.resolve = resolve; entry.reject = reject;
       entry.timer = setTimeout(() => settle(entry, dispatchError('instruction_ack_timeout')), ACK_MS);
       entry.input = command.input; entry.prepared = prepared;
-      entry.expiryTimer = setTimeout(() => clearPayload(entry), Math.max(0, entry.expiresAt - NOW())); entry.expiryTimer.unref();
+      entry.expiryTimer = setTimeout(() => expirePayload(entry), Math.max(0, entry.expiresAt - NOW())); entry.expiryTimer.unref();
       const onWrite = (error) => { if (error) settle(entry, dispatchError('instruction_write_failed')); };
       let accepted = false;
       try {
@@ -158,6 +167,13 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       return promise;
     },
     subscribeEvidence(listener) { if (typeof listener !== 'function') throw dispatchError(); listeners.add(listener); return () => listeners.delete(listener); },
+    subscribeClosed(listener) { if (typeof listener !== 'function') throw dispatchError(); closedListeners.add(listener); return () => closedListeners.delete(listener); },
+    closeObservation(token) {
+      const entry = tokens.get(token);
+      if (!entry || entry.payloadCleared) return false;
+      clearPayload(entry);
+      return true;
+    },
     inspectEvidence(token, receipt) {
       expire();
       const stored = receipts.get(receipt); const entry = tokens.get(token);
@@ -192,15 +208,25 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       if (invalidated || !item || item.type !== 'userMessage' || typeof item.clientId !== 'string' ||
           typeof item.id !== 'string' || !item.id || typeof turnId !== 'string') return false;
       const entry = entries.get(item.clientId);
-      if (!entry?.used || entry.settled && entry.conflict || entry.metadata.source.identity.nativeId !== threadId ||
-          entry.expiresAt <= NOW()) return false;
+      if (!entry?.used || entry.payloadCleared || entry.settled && entry.conflict || entry.metadata.source.identity.nativeId !== threadId ||
+          !entry.nativeTurnId && entry.expiresAt <= NOW()) return false;
+      if (entry.nativeTurnId && !evidenceCurrent(entry)) { clearPayload(entry, 'instruction_source_invalid'); return false; }
       let input;
-      try { input = normalizeNativeInput(item.content); } catch { entry.conflict = true; return false; }
-      if (JSON.stringify(input) !== JSON.stringify(entry.input)) { entry.conflict = true; return false; }
+      try { input = normalizeNativeInput(item.content); } catch { entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return false; }
+      if (turnId !== (entry.nativeTurnId || entry.metadata.expectedTurnId) && entry.metadata.mode === 'steer' ||
+          entry.nativeTurnId && turnId !== entry.nativeTurnId || JSON.stringify(input) !== JSON.stringify(entry.input)) {
+        entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return false;
+      }
+      if (entry.deliveredItems.has(item.id)) return true;
+      const pending = entry.candidates.find(candidate => candidate.nativeItemId === item.id);
+      if (pending) {
+        if (pending.nativeTurnId === turnId && JSON.stringify(pending.input) === JSON.stringify(input)) return true;
+        entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return false;
+      }
       const size = Buffer.byteLength(JSON.stringify({ nativeTurnId: turnId, nativeItemId: item.id, input }));
-      if (candidateCount >= MAX_ENTRIES || retainedBytes + size > MAX_BYTES) { entry.conflict = true; return false; }
+      if (candidateCount >= MAX_ENTRIES || retainedBytes + size > MAX_BYTES) { entry.conflict = true; clearPayload(entry, 'instruction_evidence_capacity'); return false; }
       const reservation = reservePayload(size, 1);
-      if (!reservation) { entry.conflict = true; return false; }
+      if (!reservation) { entry.conflict = true; clearPayload(entry, 'instruction_evidence_capacity'); return false; }
       entry.reservations.add(reservation);
       candidateCount += 1; entry.candidateCount += 1; retainedBytes += size; entry.payloadBytes += size;
       entry.candidates.push(Object.freeze({ nativeTurnId: turnId, nativeItemId: item.id, input: entry.input }));
@@ -211,6 +237,11 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       for (const entry of entries.values()) if (entry.used && !entry.settled) settle(entry, dispatchError());
       for (const entry of entries.values()) { clearTimeout(entry.expiryTimer); clearPayload(entry); }
       listeners.clear();
+      closedListeners.clear();
+    },
+    endContext(turnId) {
+      for (const entry of entries.values()) if (entry.nativeTurnId === turnId ||
+          entry.used && entry.metadata.expectedTurnId === turnId) clearPayload(entry, 'instruction_context_ended');
     },
   });
   WRITERS.set(sourceCapability, facade);

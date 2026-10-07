@@ -631,7 +631,7 @@ const DATA = {
       subagents: [
         { type: 'Explore', text: 'フックの入力項目を調査', since: '完了', state: 'done',
           model: { vendor: 'claude', name: 'Haiku 4.5', effort: '—' }, route: 'default' },
-        { type: 'impl-light', text: 'モックの文言を修正', since: '3 分前', state: 'busy',
+        { type: 'impl-light', text: 'モックの文言を修正', since: '3 分前', state: 'busy', backgrounded: true,
           model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { unavailable: '利用上限(14:00 解除)のため Claude 側で実装' } },
         { type: 'browser-check', text: '設定画面のレイアウトを確認中', since: '4 分前', sinceMin: 4, state: 'done', unconfirmed: true,
@@ -1840,7 +1840,9 @@ const closedAgentKey = (session, agent) => `${session.id}::${agent.id || agent.t
 const isMainBackgroundCodex = agent => agent.isCodex === true && agent.backgrounded === true && !agent.parent_agent_id && agent.state === 'busy';
 const isClosedByUser = (session, agent) => ui.closedAgents.includes(closedAgentKey(session, agent));
 const isBusyAgent = (session, agent) => agent.state === 'busy' && !isClosedByUser(session, agent);
-const isClosable = (session, agent) => (!!agent.unconfirmed || isMainBackgroundCodex(agent)) && !isClosedByUser(session, agent);
+const isClosable = (session, agent) => ((!isBusyAgent(session, agent) && !!agent.unconfirmed)
+  || (!agent.isCodex && agent.backgrounded && isBusyAgent(session, agent))
+  || isMainBackgroundCodex(agent)) && !isClosedByUser(session, agent);
 const isUnconfirmed = (session, agent) => !!agent.unconfirmed && !isClosedByUser(session, agent);
 const isEndedAgent = (session, agent) => (agent.state === 'done' || isClosedByUser(session, agent)) && !isClosable(session, agent);
 

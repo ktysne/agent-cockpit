@@ -221,7 +221,7 @@ function createInstructionInputCorrelator(options = {}) {
       evidence: state === 'applied' && entry.evidence ? entry.evidence.value : null,
       expiresAt: currentTime + FINISHED_RETENTION_MS,
     });
-    try { options.onFinished?.(entry.deliveryAttemptId, state, reason); } catch {}
+    try { options.onFinished?.(entry.deliveryAttemptId, state, reason, entry.sourceToken); } catch {}
   }
 
   function notifyUnknown(id, reason) {
@@ -234,14 +234,22 @@ function createInstructionInputCorrelator(options = {}) {
   function finishUnknown(entry, reason, currentTime = nowValue()) {
     if (!pending.has(entry.deliveryAttemptId) || entry.phase === 'committing') return false;
     rememberFinished(entry, 'unknown', reason, currentTime);
-    notifyUnknown(entry.deliveryAttemptId, reason);
+    if (!entry.unknownNotified) { entry.unknownNotified = true; notifyUnknown(entry.deliveryAttemptId, reason); }
     return true;
   }
 
   function expireEntry(entry) {
-    if (entry.phase === 'committing') return false;
+    if (['applying', 'committing'].includes(entry.phase)) return false;
     const currentTime = nowValue();
     if (entry.expiresAt > currentTime) return false;
+    if (entry.recoverAfterExpiry && entry.accepted) {
+      clearTimer(entry);
+      if (!entry.unknownNotified) {
+        entry.unknownNotified = true;
+        notifyUnknown(entry.deliveryAttemptId, 'instruction_evidence_expired');
+      }
+      return false;
+    }
     finishUnknown(entry, 'instruction_evidence_expired', currentTime);
     return true;
   }
@@ -263,7 +271,7 @@ function createInstructionInputCorrelator(options = {}) {
     const delay = Math.max(0, entry.expiresAt - nowValue());
     entry.timer = setTimeoutImpl(() => {
       entry.timer = null;
-      if (entry.phase !== 'committing') finishUnknown(entry, 'instruction_evidence_expired');
+      expireEntry(entry);
     }, delay);
     if (entry.timer && typeof entry.timer.unref === 'function') entry.timer.unref();
   }
@@ -293,7 +301,7 @@ function createInstructionInputCorrelator(options = {}) {
     return true;
   }
 
-  function attachSourceToken(id, sourceToken) {
+  function attachSourceToken(id, sourceToken, recoverAfterExpiry = false) {
     const entry = pending.get(id);
     if (!entry || sourceToken === null || (typeof sourceToken !== 'symbol' && typeof sourceToken !== 'object')) {
       throw correlatorError('instruction_source_unavailable');
@@ -302,6 +310,7 @@ function createInstructionInputCorrelator(options = {}) {
       throw correlatorError('instruction_source_conflict');
     }
     entry.sourceToken = sourceToken;
+    entry.recoverAfterExpiry = recoverAfterExpiry === true;
     entry.phase = 'prepared';
     return true;
   }
@@ -328,6 +337,7 @@ function createInstructionInputCorrelator(options = {}) {
     }
     if (entry.phase !== 'dispatching' && entry.phase !== 'accepted') return false;
     entry.phase = 'applying';
+    clearTimer(entry);
     let result;
     try {
       result = options.onApplied(entry.deliveryAttemptId, structuredClone(evidence), entry.sourceToken);
@@ -474,6 +484,12 @@ function createInstructionInputCorrelator(options = {}) {
   function unknown(id, reason = 'instruction_delivery_unknown') {
     const entry = pending.get(id);
     if (!entry || entry.phase === 'committing') return false;
+    if (reason === 'instruction_evidence_expired' && entry.recoverAfterExpiry && entry.accepted) {
+      if (entry.phase === 'applying') return false;
+      clearTimer(entry);
+      if (!entry.unknownNotified) { entry.unknownNotified = true; notifyUnknown(id, reason); }
+      return true;
+    }
     return finishUnknown(entry, reason);
   }
 
@@ -489,7 +505,7 @@ function createInstructionInputCorrelator(options = {}) {
   function expire() {
     const currentTime = nowValue();
     for (const entry of pending.values()) {
-      if (entry.expiresAt <= currentTime && entry.phase !== 'committing') finishUnknown(entry, 'instruction_evidence_expired', currentTime);
+      if (entry.expiresAt <= currentTime) expireEntry(entry);
     }
     evictFinished(currentTime);
   }

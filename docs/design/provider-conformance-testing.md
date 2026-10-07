@@ -89,7 +89,7 @@ ID-F12-D01は、共通質問と指示の検証済みprojectionに対する表示
 
 古い・unknown event、session fileの再走査、projection取得中の失敗は削除tombstoneを解除しない。snapshotまたはregistryを取得できない間のhide/unhide/deleteは503で状態を変えず、GETは200を返して他の表示を維持する。新しい検証済みstate writeだけが、同providerのtombstoneを解除する。
 
-HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-projection-display.test.js)で17件、保存形式と旧store復元は[test/state-persistence.test.js](../../test/state-persistence.test.js)の対象テスト1件が成功した。実Claude/Codex runtimeでの表示・削除動作は未確認である。
+HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-projection-display.test.js)で19件、保存形式と旧store復元は[test/state-persistence.test.js](../../test/state-persistence.test.js)の対象テスト1件が成功した。実Claude/Codex runtimeでの表示・削除動作は未確認である。
 
 ## 共通質問の推奨自動適用
 
@@ -130,6 +130,17 @@ PRには対象シナリオID、関連Issue、ClaudeとCodexそれぞれの結果
 featureをmainへ提出する前に、採用対象の共通機能について両adapterの適合試験、必要な実runtime接点試験、横断runtime試験の成功を確認する。
 採用対象に残す機能の未確認項目は解消する。
 未確認項目を残す場合は、開発者が承認した対象範囲の縮小または代替仕様によって採用対象から外し、理由、担当Issue、確認条件を記録する。
+
+## ACK確定後の入力証拠の適合
+
+`ID-F08-NI14`はACK確定後に観測期限を超えて届く入力証拠を扱う。
+ClaudeとCodexのadapter fixtureで、期限後のunknownから完全一致の証拠を保存してappliedへ進め、native writeが1回のままであることを確かめる。
+未使用capabilityは60秒で失効し、ACK未確定の5秒タイムアウトは回復対象にしない。
+終端、source失効、不一致で受付を閉じ、未知のcapabilityや古いsource tokenの閉鎖操作を拒否する。
+保持中のunknownも件数と入力予約の上限を消費し、終端で予約を回収する。
+閉鎖通知のない既存ownerは従来の60秒回収を維持する。
+この結果はfixtureでの適合確認であり、両providerの実runtimeで60秒超の入力通知を観測した証拠にはしない。
+実runtimeの確認は横断統合試験に残す。
 
 ## actor生存とcontext認可の適合
 

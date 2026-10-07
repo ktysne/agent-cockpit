@@ -387,6 +387,10 @@ function createInstructionDeliveryService(options = {}) {
       }
     }, true),
     onUnknown: (id, reason) => enqueue(() => markUnknownNow(id, reason), true),
+    onFinished: (id, state, reason, sourceToken) => {
+      const record = findIntent(id);
+      if (record) providerAdapter(record.source.claims.provider)?.closeInstructionObservation?.(id, sourceToken);
+    },
   });
 
   function bindAdapter(adapter) {
@@ -494,7 +498,7 @@ function createInstructionDeliveryService(options = {}) {
       adapter.abandon?.(id);
       throw serviceError(prepared?.heldReason || 'instruction_dispatch_unavailable');
     }
-    correlator.attachSourceToken(id, prepared.sourceToken);
+    correlator.attachSourceToken(id, prepared.sourceToken, prepared.recoverAfterExpiry);
     try {
       await adapter.rehydratePayload(id, record.envelope);
     } catch (error) {

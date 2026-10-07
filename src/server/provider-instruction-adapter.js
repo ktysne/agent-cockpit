@@ -145,9 +145,12 @@ function createProviderInstructionAdapter(provider, options = {}) {
 
   const owner = options.nativeOwner || null;
   const ownerMethods = owner ? Object.fromEntries(OWNER_METHODS.map((name) => [name, dataMethod(owner, name)])) : null;
+  if (ownerMethods) for (const name of ['closeInstructionObservation', 'subscribeInstructionClosed', 'supportsLateInstructionEvidence']) ownerMethods[name] = dataMethod(owner, name);
   const available = Boolean(owner && OWNER_METHODS.every((name) => typeof ownerMethods[name] === 'function') &&
     !utilTypes.isAsyncFunction(ownerMethods.checkInstructionDispatch) &&
     !utilTypes.isAsyncFunction(ownerMethods.dispatchInstructionNow));
+  const observationClosureAvailable = Boolean(ownerMethods && ['closeInstructionObservation', 'subscribeInstructionClosed'].every(name =>
+    typeof ownerMethods[name] === 'function' && !utilTypes.isAsyncFunction(ownerMethods[name])));
   const contexts = new Map();
   const capabilityContexts = new WeakMap();
   const acceptedListeners = new Set();
@@ -155,6 +158,7 @@ function createProviderInstructionAdapter(provider, options = {}) {
   const unknownListeners = new Set();
   let closed = false;
   let unsubscribe = null;
+  let unsubscribeClosed = null;
 
   function invokeOwner(name, args) {
     try { return ownerMethods[name].apply(owner, args); }
@@ -178,6 +182,7 @@ function createProviderInstructionAdapter(provider, options = {}) {
     }
     contexts.delete(context.metadata.deliveryAttemptId);
     if (context.capability) capabilityContexts.delete(context.capability);
+    try { ownerMethods?.closeInstructionObservation?.call(owner, context.capability, context.metadata); } catch {}
     if (reason && ['dispatching', 'accepting', 'accepted'].includes(context.phase)) {
       notifyUnknown(context.metadata.deliveryAttemptId, reason);
     }
@@ -187,6 +192,13 @@ function createProviderInstructionAdapter(provider, options = {}) {
     if (context.timer !== null) clearTimeoutImpl(context.timer);
     context.timer = setTimeoutImpl(() => {
       context.timer = null;
+      if (context.phase === 'accepted' && context.recoverAfterExpiry) {
+        if (!context.observationUnknown) {
+          context.observationUnknown = true;
+          notifyUnknown(context.metadata.deliveryAttemptId, 'instruction_evidence_expired');
+        }
+        return;
+      }
       discardContext(context, context.phase === 'prepared' || context.phase === 'preparing'
         ? null : 'instruction_capability_expired');
     }, ttlMs);
@@ -257,7 +269,8 @@ function createProviderInstructionAdapter(provider, options = {}) {
   function processEvidence(capability, evidence) {
     if (!nativeCapability(capability)) return false;
     const context = capabilityContexts.get(capability);
-    if (!context || !['dispatching', 'accepting', 'accepted'].includes(context.phase) || context.expiresAt <= Date.now()) {
+    if (!context || !['dispatching', 'accepting', 'accepted'].includes(context.phase) ||
+        context.expiresAt <= Date.now() && !(context.phase === 'accepted' && context.recoverAfterExpiry)) {
       return false;
     }
     let acceptedAny = false;
@@ -276,7 +289,7 @@ function createProviderInstructionAdapter(provider, options = {}) {
         if (settled) return;
         settled = true;
         clearTimeoutImpl(timer);
-        if (error) reject(error);
+        if (error) { discardContext(context); reject(error); }
         else resolve(value);
       };
       const timer = setTimeoutImpl(() => {
@@ -286,6 +299,10 @@ function createProviderInstructionAdapter(provider, options = {}) {
       timer?.unref?.();
       Promise.prototype.then.call(rawPromise, (value) => {
         if (settled) return;
+        if (contexts.get(context.metadata.deliveryAttemptId) !== context) {
+          finish(adapterError('instruction_source_invalid'));
+          return;
+        }
         let correlation;
         try {
           correlation = exactObject(value, ['clientRequestId', 'nativeTurnId', 'nativeItemId'],
@@ -351,6 +368,13 @@ function createProviderInstructionAdapter(provider, options = {}) {
       const release = invokeOwner('subscribeInstructionEvidence', [(capability, evidence) => processEvidence(capability, evidence)]);
       if (typeof release !== 'function') throw adapterError('instruction_evidence_source_unavailable');
       unsubscribe = release;
+      if (observationClosureAvailable) {
+        unsubscribeClosed = ownerMethods.subscribeInstructionClosed.call(owner, (capability, reason) => {
+          const context = capabilityContexts.get(capability);
+          if (context) discardContext(context, reason);
+        });
+        if (typeof unsubscribeClosed !== 'function') throw adapterError('instruction_evidence_source_unavailable');
+      }
     } catch {
       for (const context of contexts.values()) discardContext(context);
       throw adapterError('instruction_evidence_source_unavailable');
@@ -424,11 +448,14 @@ function createProviderInstructionAdapter(provider, options = {}) {
       return { ok: false, heldReason: 'instruction_dispatch_unavailable' };
     }
     context.capability = capability;
+    context.recoverAfterExpiry = Boolean(unsubscribeClosed &&
+      (typeof ownerMethods.supportsLateInstructionEvidence !== 'function' ||
+        ownerMethods.supportsLateInstructionEvidence.call(owner, capability) === true));
     context.phase = 'prepared';
     context.expiresAt = Date.now() + CAPABILITY_TTL_MS;
     capabilityContexts.set(capability, context);
     scheduleExpiry(context);
-    return { ok: true, sourceToken: context.sourceToken };
+    return { ok: true, sourceToken: context.sourceToken, recoverAfterExpiry: context.recoverAfterExpiry };
   }
 
   function verifyDeliveryTarget(delivery) {
@@ -479,10 +506,18 @@ function createProviderInstructionAdapter(provider, options = {}) {
     discardContext(context);
     return true;
   }
+  function closeInstructionObservation(id, sourceToken) {
+    const context = contexts.get(id);
+    if (!context || context.sourceToken !== sourceToken) return false;
+    discardContext(context);
+    return true;
+  }
 
   function close() {
     if (closed) return;
     closed = true;
+    try { unsubscribeClosed?.(); } catch {}
+    unsubscribeClosed = null;
     if (unsubscribe) {
       try { unsubscribe(); } catch {}
       unsubscribe = null;
@@ -505,6 +540,7 @@ function createProviderInstructionAdapter(provider, options = {}) {
     onEvidence: (listener) => subscribe(evidenceListeners, listener, 'instruction_evidence_source_unavailable'),
     onUnknown: (listener) => subscribe(unknownListeners, listener, 'instruction_dispatch_unavailable'),
     abandon,
+    closeInstructionObservation,
     createInstructionDelivery: deliveryAdapter.createInstructionDelivery,
     get: deliveryAdapter.get,
     cancel: deliveryAdapter.cancel,
