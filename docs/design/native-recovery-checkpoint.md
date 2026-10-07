@@ -93,6 +93,7 @@ incomplete 履歴が一つでもある復旧 kernel は、他 identity を含め
 | ID-F11-B01 | v2 登録を passive `unknown` として復元し、同一 start の再生、writer、proof を拒否する。v1 は全 identity を再登録ロックする。 | [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) | Claude pass、Codex pass | 両providerとも未実施 |
 | ID-F11-B02 | `sending` は `unknown` になり、payload の再取得と自動再送を拒否する。 | [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) | Claude pass、Codex pass | 両providerとも未実施 |
 | ID-F11-B03 | `ended` tombstone を保ち、配列順でなく明示 order の最新実行を使う。 | [conversation-registry.test.js](../../test/conversation-registry.test.js) | 共通kernel unit pass | 該当なし。実runtime未実施 |
+| ID-F11-B04 | 通常 store を別 kernel で開き、新規 registration と delivery を保存する。既存 claim の order を維持し、新規 claim を一度だけ追加する。 | [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) | Claude 通常 store fixture pass。Codex は未実施 | 両providerとも未実施。このケースは recovery bootstrap/runtime の実測ではない |
 
 ## 未対応の範囲
 

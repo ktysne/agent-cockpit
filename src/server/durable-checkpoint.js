@@ -535,8 +535,7 @@ function mergeRegistrationHistory(previous, incoming, maxRecords = DEFAULT_MAX_R
     actors: mergeActors(prior.actors, next.actors),
     handoffs: mergeImmutable(prior.handoffs, next.handoffs, (item) => item.handoffId,
       'checkpoint_handoff_changed'),
-    replayClaims: mergeImmutable(prior.replayClaims, next.replayClaims, (item) => item.startIdDigest,
-      'checkpoint_replay_claim_changed'),
+    replayClaims: mergeReplayClaims(prior.replayClaims, next.replayClaims),
     incompleteConversationIds: [...new Set([
       ...prior.incompleteConversationIds, ...next.incompleteConversationIds,
     ])],
@@ -544,6 +543,41 @@ function mergeRegistrationHistory(previous, incoming, maxRecords = DEFAULT_MAX_R
   validateReplayClaims(merged, maxRecords);
   validateRegistrationReferences(merged, maxRecords);
   return merged;
+}
+
+function mergeReplayClaims(prior, incoming) {
+  const priorByStart = new Map(prior.map((claim) => [claim.startIdDigest, claim]));
+  const incomingShared = incoming.filter((claim) => priorByStart.has(claim.startIdDigest));
+  const incomingSharedIds = new Set(incomingShared.map((claim) => claim.startIdDigest));
+  const priorSharedOrder = prior.filter((claim) => incomingSharedIds.has(claim.startIdDigest))
+    .sort((left, right) => left.order - right.order)
+    .map((claim) => claim.startIdDigest);
+  const incomingSharedOrder = [...incomingShared]
+    .sort((left, right) => left.order - right.order)
+    .map((claim) => claim.startIdDigest);
+  if (priorSharedOrder.some((startIdDigest, index) => startIdDigest !== incomingSharedOrder[index])) {
+    throw checkpointError('checkpoint_replay_order_changed');
+  }
+
+  for (const claim of incomingShared) {
+    const saved = priorByStart.get(claim.startIdDigest);
+    if (saved.evidenceIdDigest !== claim.evidenceIdDigest ||
+        saved.fingerprintDigest !== claim.fingerprintDigest ||
+        saved.conversationId !== claim.conversationId || saved.executionId !== claim.executionId) {
+      throw checkpointError('checkpoint_replay_claim_changed');
+    }
+  }
+
+  const freshClaims = incoming.filter((claim) => !priorByStart.has(claim.startIdDigest))
+    .sort((left, right) => left.order - right.order);
+  const highestSavedOrder = prior.reduce((highest, claim) => Math.max(highest, claim.order), 0);
+  if (freshClaims.length > MAX_REGISTRATION_ORDER - highestSavedOrder) {
+    throw checkpointError('checkpoint_capacity');
+  }
+  return [
+    ...prior,
+    ...freshClaims.map((claim, index) => ({ ...claim, order: highestSavedOrder + index + 1 })),
+  ];
 }
 
 function mergeImmutable(prior, next, idOf, errorCode) {

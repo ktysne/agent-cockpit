@@ -148,6 +148,49 @@ for (const provider of ['claude', 'codex']) {
   });
 }
 
+test('ID-F11-B04: normal store reopen persists a new Claude delivery without duplicating history order', async (t) => {
+  const provider = 'claude';
+  const directory = await temporaryDirectory(t);
+  const filePath = path.join(directory, `delivery-checkpoint-${provider}.json`);
+  const originalKernels = createKernels();
+  const originalStore = createStore(filePath, originalKernels);
+  t.after(() => originalStore.close());
+  await originalStore.ready;
+
+  const originalAdapter = createProviderRegistrationAdapter(provider,
+    originalKernels.registration.registry, originalKernels.registration.authority);
+  originalAdapter.register(identity(provider, 'saved'), evidence(`saved-evidence-${provider}`), {
+    startId: `saved-start-${provider}`,
+  });
+  await originalStore.captureRegistrations();
+  const savedClaims = JSON.parse(await fs.readFile(filePath, 'utf8')).registrations.replayClaims;
+  assert.equal(savedClaims.length, 1);
+  await originalStore.close();
+
+  const reopened = await createCommonQuestionProductHarness({ provider, directory });
+  t.after(() => reopened.close());
+  const deliveryAdapter = createProviderDeliveryAdapter(provider, reopened.deliveryStore);
+  const delivery = await deliveryAdapter.createQuestionDelivery({
+    launchRef: reopened.primary.launchRef,
+    deliveryAttemptId: `reopened-delivery-${provider}`,
+    logicalMessageId: `reopened-logical-${provider}`,
+    revision: 1,
+    payload: `reopened-payload-${provider}`,
+  });
+
+  assert.equal(delivery.state, 'available');
+  const afterDelivery = JSON.parse(await fs.readFile(filePath, 'utf8')).registrations.replayClaims;
+  assert.equal(afterDelivery.length, 3);
+  assert.deepEqual(afterDelivery.find((claim) => claim.startIdDigest === savedClaims[0].startIdDigest), savedClaims[0]);
+  const stableClaims = structuredClone(afterDelivery);
+  await reopened.deliveryStore.captureRegistrations();
+  await reopened.deliveryStore.captureRegistrations();
+  const checkpoint = JSON.parse(await fs.readFile(filePath, 'utf8'));
+  assert.deepEqual(checkpoint.registrations.replayClaims, stableClaims);
+  assert.deepEqual(checkpoint.registrations.replayClaims.map((claim) => claim.order), [1, 2, 3]);
+  assert.equal(checkpoint.ledger.deliveries.length, 1);
+});
+
 test('ID-F11-B01: legacy recovery locks all registration identities without inferring replay claims', async (t) => {
   const directory = await temporaryDirectory(t);
   const filePath = path.join(directory, 'legacy-v1.json');
