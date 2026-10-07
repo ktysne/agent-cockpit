@@ -173,6 +173,19 @@ for (const provider of PROVIDERS) {
     assert.equal(JSON.stringify(projection.snapshot()).includes('agent-child-1'), false);
   });
 
+  test(`${provider}: a resolver that reports the provider as unavailable keeps the child unknown for that reason`, () => {
+    const { fixture, projection } = createHarness(provider, { resolveActorCorrelation: () => ({ status: 'unavailable' }) });
+    const childEvent = commonEvent(fixture, {
+      agent_id: 'agent-child-1',
+      nativeEvent: nativeEvent(fixture, { agent_id: 'agent-child-1' }),
+    });
+    const result = projection.project({ writer: fixture.writer, sessionId: fixture.registration.sessionId, event: childEvent });
+
+    assert.equal(result.action, 'unknown');
+    assert.equal(result.reason, 'actor_correlation_unavailable');
+    assert.equal(result.observation.lastKnownState.actors.length, 0);
+  });
+
   test(`${provider}: resolver errors and cross-period or cross-identity proofs cannot authorize a child`, () => {
     const agentId = 'agent-child-2';
     const event = (fixture) => commonEvent(fixture, {

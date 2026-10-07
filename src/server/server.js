@@ -14,6 +14,7 @@ const { estimateTranscript } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { createRegistrationKernel } = require('./conversation-registry');
+const { createClaudeLocalIssuer } = require('./claude-local-issuer');
 const { createProviderEventProjection, createProviderEventAdapter } = require('./provider-event-projection');
 const { sanitizeManagedCollectorSnapshot } = require('./managed-collector');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
@@ -448,6 +449,7 @@ function createRequestHandler(options) {
     getServerInfo,
     markRequest,
     registrationRegistry = createRegistrationKernel().registry,
+    claudeIssuer = null,
     questionService = null,
     questionServiceReady = true,
     pendingQuestionLosses = new Set(),
@@ -467,7 +469,7 @@ function createRequestHandler(options) {
   const manualDir = options.manualDir || DEFAULT_MANUAL_DIR;
   const providerEventProjection = options.providerEventProjection || createProviderEventProjection({
     registry: registrationRegistry,
-    resolveActorCorrelation: options.resolveActorCorrelation || null,
+    resolveActorCorrelation: options.resolveActorCorrelation || claudeIssuer?.resolveActorCorrelation || null,
   });
   const providerEventAdapters = new Map(['claude', 'codex'].map((provider) => [
     provider, createProviderEventAdapter(provider, providerEventProjection),
@@ -493,6 +495,26 @@ function createRequestHandler(options) {
     if (!authorization.ok || !validSessionId(authorization.sessionId)) return null;
     if (routeId !== 'pending' && authorization.sessionId !== routeId) return null;
     return authorization.sessionId;
+  }
+
+  // フックが申告した親プロセスを照合し、通ればフック用の writer と表示用の sessionId を本文に付ける。
+  // 照合が通らない申告と、issuer の無い構成(registry を注入した構成)では申告を捨て、未登録の Claude 向けの観測の経路で扱う。
+  // 観測の経路は登録済みの sessionId を拒否するので、照合に失敗したフックが登録済みの期間へ書くことはない。
+  async function applyClaudeLineage(body) {
+    const lineage = body.claudeLineage;
+    if (Object.hasOwn(body, 'writer')) return { ok: false, reason: 'claude_writer_conflict' };
+    const { claudeLineage: _ignored, ...withoutLineage } = body;
+    if (!claudeIssuer) return { ok: true, body: withoutLineage };
+    if (!lineage || typeof lineage !== 'object' || Array.isArray(lineage) || Object.keys(lineage).length !== 1 ||
+        !Number.isSafeInteger(lineage.ppid) || lineage.ppid < 1) {
+      logLine(homeDir, 'claude writer rejected: source=hook reason=claude_parent_unverified ppid=invalid');
+      return { ok: true, body: withoutLineage };
+    }
+    const attached = await claudeIssuer.attachHookWriter({ ppid: lineage.ppid, sessionId: body.session_id });
+    if (!attached.ok) return { ok: true, body: withoutLineage };
+    const next = { ...body, writer: attached.writer, session_id: attached.sessionId };
+    delete next.claudeLineage;
+    return { ok: true, body: next };
   }
 
   function queueQuestionResponseLost(internalQuestionId) {
@@ -1223,6 +1245,14 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
+      if (Object.hasOwn(body, 'claudeLineage')) {
+        const attached = await applyClaudeLineage(body);
+        if (!attached.ok) {
+          jsonResponse(response, 403, { error: 'Writer unavailable', reason: attached.reason });
+          return;
+        }
+        body = attached.body;
+      }
       const answerRequest = { ...body };
       let authorizationDenied = false;
       let authorizeAnswer;
@@ -1861,6 +1891,39 @@ function createRequestHandler(options) {
       }
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/claude/writer') {
+      if (request.headers['x-cockpit-secret'] !== info.secret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validOriginForWrite(request)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!hasExactKeys(body, ['ppid', 'contextPid']) || !Number.isSafeInteger(body.ppid) || body.ppid < 1 ||
+          !Number.isSafeInteger(body.contextPid) || body.contextPid < 1) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      if (!claudeIssuer) {
+        jsonResponse(response, 503, { error: 'Claude writer issuer unavailable' });
+        return;
+      }
+      const attested = await claudeIssuer.attestMcp({ ppid: body.ppid, contextPid: body.contextPid });
+      if (!attested.ok) {
+        jsonResponse(response, 403, { error: 'Writer unavailable', reason: attested.reason });
+        return;
+      }
+      jsonResponse(response, 200, { writer: attested.writer });
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/events') {
       if (request.headers['x-cockpit-secret'] !== info.secret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -1882,6 +1945,14 @@ function createRequestHandler(options) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
+      }
+      if (Object.hasOwn(body, 'claudeLineage')) {
+        const attached = await applyClaudeLineage(body);
+        if (!attached.ok) {
+          jsonResponse(response, 403, { error: 'Writer unavailable', reason: attached.reason });
+          return;
+        }
+        body = attached.body;
       }
       const eventBody = { ...body };
       const writerEnvelope = Object.hasOwn(body, 'writer') ? body.writer : null;
@@ -2245,7 +2316,20 @@ async function startServer(options = {}) {
   const away = options.away || await AwayState.load(homeDir, fs, storageWriter);
   away.attachWriter?.(storageWriter);
   const routing = options.routing || await RoutingState.load(homeDir, { writer: storageWriter });
-  const registrationRegistry = options.registrationRegistry || createRegistrationKernel().registry;
+  const listSessionFiles = options.listSessionFiles || listLiveSessionFiles;
+  let registrationRegistry = options.registrationRegistry;
+  let claudeIssuer = null;
+  if (!registrationRegistry) {
+    const kernel = createRegistrationKernel();
+    registrationRegistry = kernel.registry;
+    claudeIssuer = createClaudeLocalIssuer({
+      registry: kernel.registry,
+      authority: kernel.authority,
+      claudeHome,
+      listSessionFiles,
+      log: (message) => logLine(homeDir, message),
+    });
+  }
   const launchRegistry = options.launchRegistry || null;
   const questionService = options.questionService || null;
   const instructionService = options.instructionService || null;
@@ -2269,7 +2353,9 @@ async function startServer(options = {}) {
       instructionServiceReady = false;
     }
   }
-  state.isSessionAbsenceProtected = (sessionId) => registrationRegistry.isRegisteredSessionId(sessionId);
+  state.isSessionAbsenceProtected = claudeIssuer
+    ? (sessionId) => claudeIssuer.isActiveSession(sessionId)
+    : (sessionId) => registrationRegistry.isRegisteredSessionId(sessionId);
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
@@ -2320,6 +2406,7 @@ async function startServer(options = {}) {
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
     registrationRegistry,
+    claudeIssuer,
     launchRegistry,
     questionService,
     questionServiceReady,
@@ -2357,13 +2444,17 @@ async function startServer(options = {}) {
   pullRequestTracker.start();
   pullRequestMergeManager.start?.();
   async function refreshSessionFiles() {
-    const files = await listLiveSessionFiles(claudeHome);
-    if (files) state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
+    const listingToken = claudeIssuer?.beginListing();
+    const files = await listSessionFiles(claudeHome);
+    if (files) {
+      claudeIssuer?.syncSessionFiles(files, listingToken);
+      state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
+    }
     // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
     else state.pruneExpiredStoreRecords(Date.now());
   }
   await refreshSessionFiles().catch(() => {});
-  const sessionScanTimer = setInterval(() => { refreshSessionFiles().catch(() => {}); }, SESSION_SCAN_INTERVAL_MS);
+  const sessionScanTimer = setInterval(() => { refreshSessionFiles().catch(() => {}); }, options.sessionScanIntervalMs || SESSION_SCAN_INTERVAL_MS);
   sessionScanTimer.unref();
 
   const idleTimer = setInterval(async () => {

@@ -58,19 +58,24 @@ Codex の登録には使わない。
    - `/clear` の後も MCP のプロセスが続くと、環境変数が古い値のまま残るためである。
    - セッション ID の正本は、セッションファイルにする。
 
-ファイルが読めないとき、または条件に合わないときは、writer を出さずに拒否する。
-旧来の pid の引き当てや、環境変数による経路には戻さない。
-拒否の理由は、ログと MCP のエラー文で区別して示す。
+ファイルが読めないとき、または条件に合わないときは、writer を出さない。
+MCP の writer の発行は、旧来の pid の引き当てや、環境変数による経路には戻さず、拒否する。
+フックは、照合に失敗しても要求を拒否せず、未登録の Claude 向けの観測の経路で扱う(「フック」の節)。
+照合に失敗した理由は、ログと MCP のエラー文で区別して示す。
 
 | 理由 | 意味 |
 |---|---|
 | `claude_parent_unverified` | 親プロセスを Claude と確認できない。シムやシェルを挟んで起動した場合も、これに当たる |
 | `claude_session_mismatch` | フックの `session_id` が、親の Claude のセッションファイルと合わない |
 | `claude_sessions_unreadable` | セッションファイルを読めない |
+| `claude_registration_failed` | 照合は通ったが、登録核が期間を受け付けない。生きたままの別の親が同じ `sessionId` を名乗る場合などである |
+| `claude_context_invalid` | MCP が申告した `contextPid` が正の整数でない |
+| `claude_writer_conflict` | フックの要求が `claudeLineage` と `writer` の両方を持つ。この理由だけは、要求を 403 で拒否する |
 
 照合が成り立つのは、フックを exec 形式(`command` と `args`)で設定し、node を絶対パスで指定したときだけである。
 文字列の形のフックは `claude.exe → bash.exe → node` とシェルを挟むので、親が Claude 本体にならない。
 シェルを 1 段挟むことを許すと、Bash ツールで起動したプロセスと区別できなくなる。そのため、許さない。
+この場合、MCP は writer を得られず、フックは観測の経路で扱われて、MCP の書き込みと同じセッションには載らない。
 
 ## 登録と実行期間
 
@@ -85,11 +90,14 @@ Codex の登録には使わない。
 - 実行期間の鍵は、親の Claude の `(pid, procStart)` にする。
   - pid が別のプロセスに再利用されても、`procStart` が変わるので別の期間になる。
   - startId は `(pid, procStart, sessionId)` の SHA-256 にする。MCP やフックが何度照合しても、同じ期間に冪等に解決する。
+  - 一度終えた期間と同じ鍵と `sessionId` が一覧に戻ったときは、終えた回数を startId に加えて、新しい期間として登録する。登録核は同じ startId の再送を、終えた期間の再利用として扱うためである。
 - 初めて見る会話では、`projectionId` を `sessionId` にする。
   - 既存の Claude の表示データと、同じカードを保つためである。
 - 同じ鍵で `sessionId` が変わったら(`/clear`)、古い期間を `authority.end` で終えてから、新しい `sessionId` を登録する。
-- 常駐サーバーがセッションファイルを定期的に読み直すときに、鍵のプロセスが一覧から消えたら、その期間を `authority.end` で終える。
+- 常駐サーバーがセッションファイルを定期的に読み直すときに、鍵のプロセスが一覧から消えたら、その期間を `authority.end` で終える。鍵のプロセスが残っていても `sessionId` が変わっていたら、同じく終える。
   - 期間を終えると、その期間の writer はすべて失効する。
+  - 照合のたびの読み直しでも同じ判定を行う。ただし、期間を作った後に読み始めた一覧だけを不在の証拠にする。読み始めが前後した別の照合の結果で、作ったばかりの期間を終えないためである。
+  - 一覧を読めなかったときは、何も終えない。
 
 MCP が先に照合しても、フックが先に照合しても、同じ規則で登録する。
 どちらが先に届いても動くようにするためである。
@@ -116,8 +124,15 @@ MCP が先に照合しても、フックが先に照合しても、同じ規則�
 - `event.js` と `answer.js` は、本文に `claudeLineage: { ppid }` を足して送る。
 - 常駐サーバーは要求ごとに照合する。通ったら、issuer がメモリーに持つその期間のフック用の writer を本文の `writer` に付け、既存の writer の経路へ渡す。
   - フック用の writer の `contextId` は `claude-hooks` にする。
+- 照合に失敗した要求は、拒否せずに `claudeLineage` を捨て、`claudeLineage` を持たない要求と同じ観測の経路で扱う。
+  - 失敗とは、`claudeLineage` の形が不正な場合と、`claude_parent_unverified`、`claude_session_mismatch`、`claude_sessions_unreadable`、`claude_registration_failed` の場合である。
+  - 文字列形のフックやシムを使う既存の利用者が、観測をすべて失わないためである。writer の発行は、この方針でも旧経路に戻さない。
+  - 失敗した理由はログに出す。
 - `claudeLineage` を持たないフックの要求は、従来の観測の経路で扱う。
-  - その `session_id` が登録済みなら、従来どおり拒否する。
+  - その `session_id` が登録済みなら、従来どおり拒否する。観測の経路は登録済みの期間へ書けないので、照合に失敗したフックが登録済みの期間へ書くことはない。
+- `claudeLineage` と `writer` の両方を持つ要求だけは、`claude_writer_conflict` で拒否する。
+- 常駐サーバーに issuer が無い構成(registry を注入した構成)では、`claudeLineage` を使わずに捨てて、従来の経路で扱う。
+- 再開した期間の `projectionId` は実行 ID になる。フックの要求は、通ったときに本文の `session_id` を、その期間の表示用の `sessionId` へ振り替えてから既存の経路へ渡す。
 
 ### サブエージェント
 
@@ -126,6 +141,7 @@ MCP が先に照合しても、フックが先に照合しても、同じ規則�
 
 issuer は、Claude 用の `resolveActorCorrelation` を提供する。
 フック用の writer を付けた要求に `agent_id` があれば、それをその期間の agent として verified にする。
+Claude 以外の provider には `{ status: 'unavailable' }` を返し、イベントの投影は従来どおり `actor_correlation_unavailable` として扱う。issuer が持たない Claude の期間は `unverified` にする。
 
 ## 不在の判定
 

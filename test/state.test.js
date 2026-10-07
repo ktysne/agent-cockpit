@@ -605,7 +605,7 @@ test('公開仕様でないセッション JSON の不正な項目を飛ばす',
   ]);
 
   assert.deepEqual(await listLiveSessionFiles(claudeHome), [{
-    session_id: 'session-valid', pid: process.pid, cwd: 'D:\\project', name: '正常なセッション', updatedAt: null,
+    session_id: 'session-valid', pid: process.pid, cwd: 'D:\\project', name: '正常なセッション', updatedAt: null, procStart: null,
   }]);
   assert.equal(await findLiveSessionIdByPid(process.pid, claudeHome), 'session-valid');
   assert.equal(await readSessionName('session-valid', claudeHome), '正常なセッション');
@@ -634,6 +634,35 @@ test('セッションファイルの更新時刻を ISO 形式にし、不正な
     'missing-time': null,
     'string-time': null,
     'out-of-range-time': null,
+  });
+});
+
+test('セッションファイルの procStart は文字列か有限の数値だけを受け付け、それ以外は null にする', async (t) => {
+  const { claudeHome } = await temporaryHome(t);
+  const sessionsDirectory = path.join(claudeHome, 'sessions');
+  await fs.mkdir(sessionsDirectory, { recursive: true });
+  const records = [
+    { session_id: 'string-start', procStart: '2026-10-07T00:00:00Z' },
+    { session_id: 'numeric-start', procStart: 1791113430428 },
+    { session_id: 'missing-start' },
+    { session_id: 'empty-start', procStart: '' },
+    { session_id: 'object-start', procStart: { at: 1 } },
+    { session_id: 'null-start', procStart: null },
+  ];
+  await Promise.all(records.map((record) => fs.writeFile(
+    path.join(sessionsDirectory, `${record.session_id}.json`),
+    JSON.stringify({ ...record, pid: process.pid }),
+  )));
+
+  const sessions = await listLiveSessionFiles(claudeHome);
+  const startById = Object.fromEntries(sessions.map(({ session_id, procStart }) => [session_id, procStart]));
+  assert.deepEqual(startById, {
+    'string-start': '2026-10-07T00:00:00Z',
+    'numeric-start': '1791113430428',
+    'missing-start': null,
+    'empty-start': null,
+    'object-start': null,
+    'null-start': null,
   });
 });
 

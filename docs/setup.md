@@ -61,49 +61,50 @@ git clone https://github.com/ktysne/agent-cockpit.git
 
 ### 2. フックを登録する
 
-次の `hooks` を `~/.claude/settings.json` に統合し、`D:/path/to/agent-cockpit` を置き換えます。
+次の `hooks` を `~/.claude/settings.json` に統合し、`D:/path/to/agent-cockpit` をリポジトリの絶対パスに、`D:/path/to/node` を node の絶対パス(手順 3 の `$nodePath` や `command -v node` の値)に置き換えます。
 実行ファイルと引数を分ける exec 形式(`command` と `args`)で書きます。Windows ではフックのコマンドが PowerShell で解釈され、引用符付きの実行ファイルのパスが失敗するためです。
+exec 形式で書くのは、常駐サーバーがフックの親プロセスを Claude 本体と照合するためでもあります。文字列の形のフックや、`node` を PATH 経由で呼ぶ形は `claude → シェル → node` となり、親が Claude 本体にならないので照合が通りません。通らないフックは、未登録の観測の経路で扱われ、ダッシュボードには表示されますが、MCP の書き込みと同じセッションには載りません。照合に失敗した理由(`claude_parent_unverified` など)は常駐サーバーのログ(`~/.agent-cockpit/server.log`)に出ます。
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"] }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"] }] },
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 1830 }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 1830 }] }
     ],
     "PostToolUse": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "PostToolUseFailure": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "PostToolBatch": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 2 }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 2 }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "SubagentStart": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "asyncRewake": true, "timeout": 3600 }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "asyncRewake": true, "timeout": 3600 }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] },
-      { "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/event.js"], "async": true }] },
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/away.js"], "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/answer.js"], "timeout": 5 }] }
     ]
   }
 }
@@ -120,12 +121,11 @@ git clone https://github.com/ktysne/agent-cockpit.git
 
 ### 3. MCP サーバーを登録する
 
-Codex対応featureの登録核は、認証済みwriter bindingを要求します。
-以下の旧stdio設定だけではwriterを供給できず、タスク、判断事項、PRのMCP書込みは拒否されます。
-共通質問の3ツールも同じ認証済みwriterを要求し、旧stdio設定だけでは登録や回答pollを利用できません。
+登録核は、認証済みの writer を持つ書き込みだけを受け付けます。
+Claude のセッションでは、MCP サーバーとフックが自分の親プロセスの pid を常駐サーバーへ申告し、常駐サーバーが `~/.claude/sessions/<pid>.json` と照合して writer を発行します。この照合は認証ではなく、同じ利用者の中の取り違え(Claude の Bash から起動した Codex が環境変数を継承する場合など)を防ぐためのものです。仕組みは[Claude の writer の発行](design/claude-local-issuer.md)にあります。
+照合が成り立つ条件は、MCP サーバーを `node` の絶対パスで登録すること(下の手順)と、フックを exec 形式で設定すること(手順 2)です。シェルやラッパーを挟んで起動すると、親が Claude 本体にならず、MCP の書き込みは親プロセスを確認できない旨のエラーで拒否されます。
+共通質問の3ツールも同じ認証済みwriterを要求します。
 正式ログインと製品MCPの組立、実nativeでの確認条件は[共通質問の設計](design/common-questions.md#実native接続の採用条件)に記載しています。
-外部起動からの認証済みbinding供給は#171と#166-Bで接続するため、現段階のfeatureを通常HOMEへ導入する手順は未完成です。
-旧保存データと未登録Claude hookの観測表示は保持します。
 登録核の契約と残る採用条件は[正規会話の登録核](design/codex-registration-core.md)を参照してください。
 
 メインセッションがタスクと判断事項を書き込むための MCP サーバーを、ユーザーのスコープで登録します。リポジトリのルートで実行します。
@@ -256,10 +256,10 @@ bridge は `CLAUDE_CONFIG_DIR` にかかわらず `~/.claude/tools/` に置く�
 {
   "hooks": {
     "SubagentStart": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "D:/path/to/node", "args": ["D:/path/to/agent-cockpit/src/hooks/route.js"], "timeout": 5 }] }
     ]
   }
 }

@@ -292,6 +292,7 @@ function createProviderEventProjection({ registry, resolveActorCorrelation = nul
       } catch {
         return unknown(registration, 'actor_correlation_failed');
       }
+      if (correlation && correlation.status === 'unavailable') return unknown(registration, 'actor_correlation_unavailable');
       const binding = correlation && correlation.binding;
       const actor = correlation && correlation.actor;
       if (!correlation || correlation.status !== 'verified' || !binding ||
