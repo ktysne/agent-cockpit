@@ -438,6 +438,60 @@ test('共通質問のMCP登録と状態pollは回答値を返さずwriterを固�
   assert.ok(!JSON.stringify(responses).includes('案 A'));
 });
 
+test('共通質問の送信後タイムアウトは結果不明、未送信は到達不能として案内する', async () => {
+  const calls = [
+    ['cockpit_register_question', commonQuestionInput(), '/api/sessions/pending/questions/register'],
+    ['cockpit_question_status', { questionId: 'question-fixture' }, '/api/sessions/pending/questions/status'],
+    ['cockpit_answer_poll', { questionId: 'question-fixture' }, '/api/sessions/pending/questions/answer-poll'],
+  ];
+
+  for (const [index, [name, argumentsValue, route]] of calls.entries()) {
+    const requests = [];
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: index + 1, method: 'tools/call',
+      params: { name, arguments: argumentsValue },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer: makeWriter(),
+      deadline: Date.now() + 3000,
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async (url, init) => {
+        const pathname = new URL(url).pathname;
+        requests.push(pathname);
+        if (pathname.endsWith('/response-lost')) return new Response('{}', { status: 200 });
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    });
+
+    assert.equal(responses[0].result.isError, true, name);
+    assert.equal(responses[0].result.content[0].text, TIMEOUT_MESSAGE, name);
+    assert.deepEqual(requests, name === 'cockpit_answer_poll'
+      ? [route, '/api/sessions/pending/questions/response-lost']
+      : [route], name);
+  }
+
+  for (const [index, [name, argumentsValue]] of calls.entries()) {
+    let fetchCount = 0;
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: index + 4, method: 'tools/call',
+      params: { name, arguments: argumentsValue },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer: makeWriter(),
+      ensureServerRunning: async () => null,
+      fetchImpl: async () => { fetchCount += 1; return new Response('{}', { status: 200 }); },
+    });
+
+    assert.equal(responses[0].result.isError, true, name);
+    assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE, name);
+    assert.equal(fetchCount, 0, name);
+  }
+});
+
 test('共通質問answer-pollはsink結果だけを出力し、stdio書込み失敗を同じ質問IDで通知する', async () => {
   const input = new PassThrough();
   const output = new Writable({ write(chunk, encoding, callback) { callback(new Error('output unavailable')); } });

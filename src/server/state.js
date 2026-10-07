@@ -13,6 +13,7 @@ const SESSION_FILE_ABSENCE_END_MS = 60_000;
 const TRANSIENT_NOTICE_MS = 60_000;
 const STORE_WRITE_DELAY_MS = 500;
 const STORE_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
+const PROJECTION_DISPLAY_PROVIDERS = new Set(['claude', 'codex']);
 const MAX_AWAY_PERIODS = 50;
 const RESTORE_SESSION_CLEANUP_GRACE_MS = 10 * 60 * 1000;
 const MERGED_PULL_REQUEST_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -40,6 +41,19 @@ function validStoredSessionId(value) {
 
 function validTimestamp(value, nullable = false) {
   return (nullable && value === null) || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+function projectionDisplayKey(provider, sessionId) {
+  return `${provider}\0${sessionId}`;
+}
+
+function validProjectionDisplayRecord(record) {
+  if (!isRecord(record) || !PROJECTION_DISPLAY_PROVIDERS.has(record.provider) ||
+      !validStoredSessionId(record.session_id) ||
+      Object.keys(record).some((key) => !['provider', 'session_id', 'hiddenAt', 'deletedAt'].includes(key)) ||
+      (record.hiddenAt !== undefined && !validTimestamp(record.hiddenAt)) ||
+      (record.deletedAt !== undefined && !validTimestamp(record.deletedAt))) return false;
+  return (record.hiddenAt !== undefined) !== (record.deletedAt !== undefined);
 }
 
 function stableStringify(value) {
@@ -322,6 +336,18 @@ function normalizeStore(value) {
     }
     hiddenSessions.push({ session_id: record.session_id, updatedAt: record.updatedAt });
   }
+  const projectionDisplaySettingsValue = value.projectionDisplaySettings === undefined ? [] : value.projectionDisplaySettings;
+  if (!Array.isArray(projectionDisplaySettingsValue)) throw new Error('Invalid projection display settings');
+  const projectionDisplaySettings = [];
+  const projectionDisplayKeys = new Set();
+  for (const record of projectionDisplaySettingsValue) {
+    const key = isRecord(record) && projectionDisplayKey(record.provider, record.session_id);
+    if (!validProjectionDisplayRecord(record) || projectionDisplayKeys.has(key)) {
+      throw new Error('Invalid projection display settings');
+    }
+    projectionDisplayKeys.add(key);
+    projectionDisplaySettings.push({ ...record });
+  }
   const prs = value.prs === undefined ? [] : value.prs;
   const deletedSessions = new Map();
   if (value.deletedSessions !== undefined && !isRecord(value.deletedSessions)) throw new Error('Invalid deleted sessions');
@@ -363,6 +389,7 @@ function normalizeStore(value) {
     decisionLifecycles,
     closedTasks,
     hiddenSessions,
+    projectionDisplaySettings,
     deletedSessions,
     prs: prs.map(normalizePullRequestRecord),
     relatedPrs: relatedPrs.map(normalizeRelatedPullRequestRecord),
@@ -1152,6 +1179,9 @@ class DashboardState {
     this.fieldNames = new Set();
     this.notificationTypes = new Set();
     this.sessionFiles = new Map();
+    this.sessionFileProviderById = new Map();
+    this.sessionProviderSourcesById = new Map();
+    this.unknownSessionProviderSourceIds = new Set();
     this.sessionFileLastSeenAt = new Map();
     this.plans = new Map();
     this.askDecisionBindings = new Map();
@@ -1162,6 +1192,7 @@ class DashboardState {
     this.estimates = new Map();
     this.hiddenSessions = new Set();
     this.hiddenSessionUpdatedAt = new Map();
+    this.projectionDisplaySettings = new Map();
     this.deletedSessions = new Map();
     this.closedTasks = new Map();
     this.pullRequests = new Map();
@@ -1250,6 +1281,9 @@ class DashboardState {
       this.hiddenSessions.add(record.session_id);
       this.hiddenSessionUpdatedAt.set(record.session_id, record.updatedAt);
     }
+    this.projectionDisplaySettings = new Map(store.projectionDisplaySettings.map((record) => [
+      projectionDisplayKey(record.provider, record.session_id), { ...record },
+    ]));
     for (const record of store.prs) {
       let records = this.pullRequests.get(record.session_id);
       if (!records) {
@@ -1438,6 +1472,9 @@ class DashboardState {
       session_id: sessionId,
       updatedAt: this.hiddenSessionUpdatedAt.get(sessionId),
     }));
+    const projectionDisplaySettings = [...this.projectionDisplaySettings.values()]
+      .sort((left, right) => projectionDisplayKey(left.provider, left.session_id).localeCompare(projectionDisplayKey(right.provider, right.session_id)))
+      .map((record) => ({ ...record }));
     return {
       version: 1,
       display: cloneDisplay(this.display),
@@ -1446,6 +1483,7 @@ class DashboardState {
       decisionLifecycles,
       closedTasks,
       hiddenSessions,
+      projectionDisplaySettings,
       deletedSessions: Object.fromEntries(this.deletedSessions),
       prs: this.pullRequestRegistrations(),
       relatedPrs: [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord),
@@ -1997,8 +2035,11 @@ class DashboardState {
   }
 
   // フックがまだ届いていないセッションも一覧に出し、題名の変更を拾うために使う。
-  syncSessionFiles(files, now = Date.now()) {
+  syncSessionFiles(files, now = Date.now(), sourceProvider = null) {
     if (!Array.isArray(files)) return;
+    this.sessionFileProviderById = PROJECTION_DISPLAY_PROVIDERS.has(sourceProvider)
+      ? new Map(files.map((file) => [file.session_id, sourceProvider]))
+      : new Map();
     const next = new Map(files.map((file) => [file.session_id, file]));
     const previous = this.sessionFiles;
     let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
@@ -2224,6 +2265,16 @@ class DashboardState {
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
     if (wasHidden) this.requestStoreWrite();
     if (askDecisionStateChanged) this.requestStoreWrite();
+    if (this.sessions.has(event.session_id)) {
+      let providers = this.sessionProviderSourcesById.get(event.session_id);
+      if (!providers) {
+        providers = new Set();
+        this.sessionProviderSourcesById.set(event.session_id, providers);
+      }
+      if (PROJECTION_DISPLAY_PROVIDERS.has(metadata.provider)) providers.add(metadata.provider);
+      else this.unknownSessionProviderSourceIds.add(event.session_id);
+    }
+    metadata.onVerifiedStateWrite?.(event);
     return true;
   }
 
@@ -2278,14 +2329,87 @@ class DashboardState {
   }
 
   clearHiddenSessions() {
-    const count = this.hiddenSessions.size;
-    if (count > 0) {
+    const hiddenIds = new Set(this.hiddenSessions);
+    for (const [key, record] of this.projectionDisplaySettings) {
+      if (record.hiddenAt === undefined) continue;
+      hiddenIds.add(record.session_id);
+      delete record.hiddenAt;
+      if (record.deletedAt === undefined) this.projectionDisplaySettings.delete(key);
+    }
+    if (hiddenIds.size > 0) {
       this.hiddenSessions.clear();
       this.hiddenSessionUpdatedAt.clear();
       this.touch();
       this.requestStoreWrite();
     }
-    return count;
+    return hiddenIds.size;
+  }
+
+  projectionDisplayFor(provider, sessionId) {
+    const record = this.projectionDisplaySettings.get(projectionDisplayKey(provider, sessionId));
+    return record ? { ...record } : null;
+  }
+
+  projectionDisplayRecordsForSession(sessionId) {
+    return [...this.projectionDisplaySettings.values()]
+      .filter((record) => record.session_id === sessionId)
+      .map((record) => ({ ...record }));
+  }
+
+  sessionProviderSourcesFor(sessionId) {
+    const providers = new Set([
+      this.sessionFileProviderById.get(sessionId),
+      this.sessions.get(sessionId)?.provider,
+    ].filter((provider) => PROJECTION_DISPLAY_PROVIDERS.has(provider)));
+    for (const provider of this.sessionProviderSourcesById.get(sessionId) || []) providers.add(provider);
+    const hasUnknownFileSource = this.sessionFiles.has(sessionId) && !this.sessionFileProviderById.has(sessionId);
+    const hasUntrackedSession = this.sessions.has(sessionId) && !this.sessionProviderSourcesById.has(sessionId) &&
+      !this.sessionFileProviderById.has(sessionId);
+    if (this.unknownSessionProviderSourceIds.has(sessionId) || hasUnknownFileSource || hasUntrackedSession) {
+      providers.add('unknown');
+    }
+    return [...providers];
+  }
+
+  setProjectionHidden(provider, sessionId, hidden, now = Date.now()) {
+    if (!PROJECTION_DISPLAY_PROVIDERS.has(provider) || !validStoredSessionId(sessionId) || typeof hidden !== 'boolean') return false;
+    const key = projectionDisplayKey(provider, sessionId);
+    const current = this.projectionDisplaySettings.get(key);
+    if (hidden) {
+      if (current?.deletedAt !== undefined) return false;
+      this.projectionDisplaySettings.set(key, { provider, session_id: sessionId, hiddenAt: isoTime(now) });
+    } else {
+      if (current?.hiddenAt === undefined) return false;
+      delete current.hiddenAt;
+      if (current.deletedAt === undefined) this.projectionDisplaySettings.delete(key);
+    }
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  deleteProjectionDisplay(provider, sessionId, now = Date.now()) {
+    if (!PROJECTION_DISPLAY_PROVIDERS.has(provider) || !validStoredSessionId(sessionId)) return false;
+    const key = projectionDisplayKey(provider, sessionId);
+    const current = this.projectionDisplaySettings.get(key);
+    if (current?.deletedAt !== undefined) return false;
+    this.projectionDisplaySettings.set(key, { provider, session_id: sessionId, deletedAt: isoTime(now) });
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  clearProjectionDeletionAfterVerifiedWrite(provider, sessionId, at) {
+    if (!PROJECTION_DISPLAY_PROVIDERS.has(provider) || !validStoredSessionId(sessionId) ||
+        typeof at !== 'number' || !Number.isFinite(at)) return false;
+    const key = projectionDisplayKey(provider, sessionId);
+    const current = this.projectionDisplaySettings.get(key);
+    if (current?.deletedAt === undefined || at <= Date.parse(current.deletedAt)) return false;
+    delete current.deletedAt;
+    if (current.hiddenAt === undefined) this.projectionDisplaySettings.delete(key);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
   }
 
   patchDisplayPreferences(changes) {
