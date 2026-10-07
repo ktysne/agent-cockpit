@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { createProviderEventAdapter, createProviderEventProjection } = require('../src/server/provider-event-projection');
 const { createRegistrationFixture } = require('./support/registration');
+const { sanitizeEvent } = require('../src/server/events');
 
 const PROVIDERS = ['claude', 'codex'];
 
@@ -252,6 +253,46 @@ for (const provider of PROVIDERS) {
     });
     assert.equal(foreignSession.action, 'reject');
     assert.equal(foreignSession.status, 'mismatch');
+  });
+
+  test(provider + ': nested TaskStop IDs match flat sanitization and invalid events are removed', () => {
+    const { fixture, projection } = createHarness(provider);
+    const adapter = createProviderEventAdapter(provider, projection);
+    const normalizeAndSanitize = ({ hookEventName = 'PostToolUse', toolName = 'TaskStop', flatId, nativeId }) => {
+      const nested = nativeEvent(fixture, {
+        hook_event_name: hookEventName,
+        tool_name: toolName,
+        nativeEventId: 'task-stop-' + hookEventName + '-' + toolName,
+        sequence_number: 1,
+        ...(nativeId === undefined ? {} : { stoppedTaskId: nativeId }),
+      });
+      const normalized = adapter.normalize({
+        session_id: fixture.registration.sessionId,
+        hook_event_name: hookEventName,
+        tool_name: toolName,
+        hookAt: 100,
+        ...(flatId === undefined ? {} : { stoppedTaskId: flatId }),
+        nativeEvent: nested,
+      });
+      assert.equal(normalized.ok, true);
+      const eventBody = { ...normalized.event };
+      delete eventBody.nativeEvent;
+      delete eventBody.nativeEventId;
+      return sanitizeEvent(eventBody);
+    };
+
+    const flat = normalizeAndSanitize({ flatId: 'task-1' });
+    const nested = normalizeAndSanitize({ nativeId: 'task-1' });
+    assert.deepEqual(nested, flat);
+    assert.equal(nested.stoppedTaskId, 'task-1');
+
+    for (const invalid of [
+      normalizeAndSanitize({ nativeId: 'task/1' }),
+      normalizeAndSanitize({ hookEventName: 'PostToolUseFailure', nativeId: 'task-1' }),
+      normalizeAndSanitize({ toolName: 'Bash', nativeId: 'task-1' }),
+    ]) {
+      assert.equal(Object.hasOwn(invalid, 'stoppedTaskId'), false);
+    }
   });
 
   test(`${provider}: the native adapter preserves Codex review and wait context like flat events`, () => {

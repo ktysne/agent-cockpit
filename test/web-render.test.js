@@ -10,6 +10,18 @@ const { cssDeclarations, functionSource, pageContext: createPageContext, sourceB
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+test('終了した行だけを持つ待機中セッションは更新の無い設定で隠れる', () => {
+  const context = pageContext(pageHtml, {
+    displayPreferences: { idleHideMinutes: 30 }, isActiveDecision: () => false,
+  });
+  vm.runInContext(['isEndedAgent', 'isIdleHiddenSession'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const session = { status: '待機中', lastUpdatedAt: new Date(now - 31 * 60_000).toISOString(),
+    agents: [{ active: false, unconfirmed: false }] };
+  assert.equal(context.isIdleHiddenSession(session, now), true);
+  assert.equal(context.isIdleHiddenSession({ ...session, agents: [{ active: true }] }, now), false);
+});
+
 test('外したセッションは hiddenAt と更新時刻の遅い方から待ち、更新の無い帯へ移る', () => {
   const context = pageContext(pageHtml, {
     displayPreferences: { idleHideMinutes: 30, hideFinished: true },

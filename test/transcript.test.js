@@ -3,8 +3,73 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { MAX_TRANSCRIPT_BYTES, estimateTranscript } = require('../src/server/transcript');
+const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTaskNotifications } = require('../src/server/transcript');
 const { temporaryDirectory } = require('./support/temp');
+
+const notification = (id, status) => `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n</task-notification>`;
+const enqueued = (id, status, timestamp) => JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp, content: notification(id, status) });
+
+test('通知を積んだ queue-operation 行から終了通知を読む', async (t) => {
+  const fixture = await transcriptFixture(t);
+  await fs.writeFile(fixture.filePath, [
+    enqueued('queue-1', 'killed', '2026-10-08T01:00:00.000Z'),
+    enqueued('done_1', 'completed'),
+    enqueued('failed-1', 'failed', '2026-10-08T01:00:02.000Z'),
+  ].join('\n'));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['queue-1', { status: 'killed', recordedAt: '2026-10-08T01:00:00.000Z' }],
+    ['done_1', { status: 'completed', recordedAt: null }],
+    ['failed-1', { status: 'failed', recordedAt: '2026-10-08T01:00:02.000Z' }],
+  ]));
+});
+
+test('前のプロセスから引き継いだ stopped の通知に並ぶ task-id をすべて読む', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const content = '<task-notification>\n<task-id>agent-a</task-id>\n<task-id>agent_b</task-id>\n<task-id>../bad</task-id>\n<status>stopped</status>\n</task-notification>';
+  await fs.writeFile(fixture.filePath, JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: '2026-10-08T02:00:00.000Z', content }));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['agent-a', { status: 'stopped', recordedAt: '2026-10-08T02:00:00.000Z' }],
+    ['agent_b', { status: 'stopped', recordedAt: '2026-10-08T02:00:00.000Z' }],
+  ]));
+});
+
+test('通知の result に写ったほかの task-id は読まない', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const content = '<task-notification>\n<task-id>reporter</task-id>\n<status>completed</status>\n<result>記録の引用 <task-id>other-agent</task-id></result>\n</task-notification>';
+  await fs.writeFile(fixture.filePath, JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content }));
+  assert.deepEqual([...(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)).keys()], ['reporter']);
+});
+
+test('ツールの入出力や本文に写った終了通知と取り出しの行は読まない', async (t) => {
+  const fixture = await transcriptFixture(t);
+  await fs.writeFile(fixture.filePath, [
+    JSON.stringify({ type: 'queue-operation', operation: 'remove', content: notification('removed', 'killed') }),
+    JSON.stringify({ type: 'attachment', attachment: { type: 'queued_command', prompt: notification('attachment', 'killed') } }),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: `grep の結果 ${notification('tool-result', 'killed')}` }] } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', input: { content: notification('tool-use', 'completed') } }] } }),
+    JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: `前置き ${notification('not-leading', 'killed')}` }),
+  ].join('\n'));
+  assert.equal((await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)).size, 0);
+});
+
+test('終了通知は対象外の status と形の合わない id を捨て壊れた行を飛ばす', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const lines = ['{壊れた行}'];
+  for (const [id, status] of [['waiting', 'running'], ['../bad', 'killed'], ['x'.repeat(65), 'failed'], ['valid', 'completed']]) {
+    lines.push(enqueued(id, status));
+  }
+  await fs.writeFile(fixture.filePath, lines.join('\n'));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['valid', { status: 'completed', recordedAt: null }],
+  ]));
+});
+
+test('終了通知は末尾の上限内だけを読み読めない記録は空で返す', async (t) => {
+  const fixture = await transcriptFixture(t);
+  await fs.writeFile(fixture.filePath, `${enqueued('old', 'killed')}\n${'x'.repeat(MAX_TRANSCRIPT_BYTES)}\n${enqueued('new', 'killed')}\n`);
+  assert.deepEqual([...await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)].map(([id]) => id), ['new']);
+  assert.equal((await readTaskNotifications(fixture.claudeHome, fixture.cwd, 'missing')).size, 0);
+});
 
 async function transcriptFixture(testContext, sessionId = 'session_1') {
   const home = temporaryDirectory(testContext, 'agent-cockpit-transcript-').directory;

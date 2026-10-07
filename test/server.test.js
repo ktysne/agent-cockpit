@@ -17,6 +17,44 @@ const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('
 const { createRegistrationFixture } = require('./support/registration');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+test('待機中で稼働中の Claude サブエージェントがあるセッションだけ、メインのイベントの後に記録を読む', async (t) => {
+  const state = new DashboardState();
+  const reads = [];
+  const runtime = await runningServer(t, {
+    state, taskNotificationDelayMs: 10,
+    readTaskNotifications: async (home, cwd, id) => {
+      reads.push({ cwd, id });
+      return new Map([['claude-task', { status: 'killed', recordedAt: null }]]);
+    },
+  });
+  state.syncSessionFiles([
+    { session_id: 'waiting-claude', cwd: runtime.homeDir, native_session_id: 'native-waiting-claude' },
+    ...['working-claude', 'ended-claude', 'waiting-codex', 'agent-event-only'].map(session_id => ({ session_id, cwd: runtime.homeDir })),
+  ]);
+  const send = async (session_id, event) => {
+    const response = await request(runtime.info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+      body: JSON.stringify({ session_id, ...event }),
+    });
+    assert.equal(response.status, 202);
+  };
+  for (const id of ['waiting-claude', 'working-claude', 'ended-claude']) {
+    await send(id, { hook_event_name: 'SubagentStart', agent_id: 'claude-task' });
+  }
+  await send('ended-claude', { hook_event_name: 'SubagentStop', agent_id: 'claude-task' });
+  await send('ended-claude', { hook_event_name: 'Stop' });
+  await send('waiting-codex', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch', summary: 'bash ~/.claude/tools/codex-agent.sh impl-hard' });
+  await send('waiting-codex', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch' });
+  await send('waiting-codex', { hook_event_name: 'Stop' });
+  await send('waiting-claude', { hook_event_name: 'Stop' });
+  await send('agent-event-only', { hook_event_name: 'Stop' });
+  await send('agent-event-only', { hook_event_name: 'SubagentStart', agent_id: 'claude-task' });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.deepEqual(reads, [{ cwd: runtime.homeDir, id: 'native-waiting-claude' }]);
+  assert.equal(state.snapshot().sessions.find(session => session.session_id === 'waiting-claude').status, '待機中');
+  assert.equal(state.snapshot().sessions.some(session => session.session_id === 'native-waiting-claude'), false);
+});
+
 async function temporaryHome(testContext, { deferCleanup = false } = {}) {
   return createTemporaryHome(testContext, 'agent-cockpit-test-', {
     deferCleanup,

@@ -10,7 +10,7 @@ const { isGithubCredentialEnvironmentVariable } = require('./credential-environm
 const { validDisplayPatch } = require('./display-preferences');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
-const { estimateTranscript } = require('./transcript');
+const { estimateTranscript, readTaskNotifications } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { createRegistrationKernel } = require('./conversation-registry');
@@ -2158,6 +2158,12 @@ function createRequestHandler(options) {
       };
       state.addEvent(stateEventBody, eventMetadata);
       const event = sanitizeEvent(stateEventBody, eventMetadata);
+      if (event && !event.agent_id) options.scheduleTaskNotifications?.(event.session_id);
+      if (event && state.deletedSessions.has(event.session_id)
+        && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
+        jsonResponse(response, 202, { accepted: true });
+        return;
+      }
       if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
         (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
         isGithubCreatePullRequestTool(event.tool_name)
@@ -2484,6 +2490,36 @@ async function startServer(options = {}) {
   let closing = null;
   let shutdownError = null;
   let lastRequestAt = Date.now();
+  const notificationTimers = new Map();
+  const notificationReads = new Map();
+  const notificationReader = options.readTaskNotifications || readTaskNotifications;
+  function needsTaskNotifications(sessionId) {
+    const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
+    return session?.status === '待機中(サブエージェント稼働中)'
+      && session.agents.some((agent) => !agent.isCodex && agent.active);
+  }
+  function reconcileTaskNotifications(sessionId) {
+    if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
+    if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
+    const reading = (async () => {
+      try {
+        const file = state.sessionFileFor(sessionId);
+        const notifications = await notificationReader(claudeHome, file?.cwd, file?.native_session_id || sessionId);
+        if (!closing && needsTaskNotifications(sessionId)) state.applyTaskNotifications(sessionId, notifications);
+      } catch {}
+    })().finally(() => notificationReads.delete(sessionId));
+    notificationReads.set(sessionId, reading);
+    return reading;
+  }
+  function scheduleTaskNotifications(sessionId) {
+    if (closing || notificationTimers.has(sessionId) || !needsTaskNotifications(sessionId)) return;
+    const timer = setTimeout(() => {
+      notificationTimers.delete(sessionId);
+      void reconcileTaskNotifications(sessionId);
+    }, options.taskNotificationDelayMs ?? 500);
+    timer.unref();
+    notificationTimers.set(sessionId, timer);
+  }
   const server = options.server || http.createServer((request, response) => {
     Promise.resolve(handler(request, response)).catch((error) => {
       logLine(homeDir, 'request failed');
@@ -2507,6 +2543,7 @@ async function startServer(options = {}) {
     webPath: options.webPath,
     manualDir: options.manualDir,
     dev,
+    scheduleTaskNotifications,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
     registrationRegistry,
@@ -2570,6 +2607,11 @@ async function startServer(options = {}) {
     else state.pruneExpiredStoreRecords(Date.now());
   }
   await refreshSessionFiles().catch(() => {});
+  for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
+  const notificationTimer = setInterval(() => {
+    for (const session of state.snapshot().sessions) void reconcileTaskNotifications(session.session_id);
+  }, 60_000);
+  notificationTimer.unref();
   const sessionScanTimer = setInterval(() => { refreshSessionFiles().catch(() => {}); }, options.sessionScanIntervalMs || SESSION_SCAN_INTERVAL_MS);
   sessionScanTimer.unref();
 
@@ -2591,6 +2633,10 @@ async function startServer(options = {}) {
       };
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
+      clearInterval(notificationTimer);
+      for (const timer of notificationTimers.values()) clearTimeout(timer);
+      notificationTimers.clear();
+      await attempt(() => Promise.all(notificationReads.values()));
       await attempt(() => answerDelivery.close());
       await attempt(() => pullRequestMergeManager.close?.());
       await attempt(() => pullRequestTracker.close());
