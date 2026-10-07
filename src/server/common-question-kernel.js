@@ -368,6 +368,7 @@ function selectionFor(record, answers, source, at, uuid) {
     return { record: next, outcome: 'late' };
   }
   if (record.cancelledAt !== null || record.externalResolution !== null) {
+    if (record.lateAnswers.some((late) => late.digest === digest)) return { record, outcome: 'duplicate' };
     if (record.lateAnswers.length >= MAX_LATE_ANSWERS) throw questionError('late_answer_capacity');
     const next = normalizeQuestionRecord({
       ...record,

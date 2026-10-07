@@ -410,6 +410,52 @@ test('a trusted external resolution suppresses a sink while send-start is paused
   assert.equal(resolved.question.deliveryState, 'unknown');
 });
 
+test('unanswered external-resolution replies deduplicate when the first result is unused and after service restart', async (t) => {
+  const fixture = await createFixture(t, { verifyNativeQuestion: () => true });
+  const created = await register(fixture);
+  await fixture.service.resolveExternal(created.question.internalQuestionId, { source: 'trusted' });
+
+  await fixture.service.submitAnswer(created.question.internalQuestionId, answers('continue'));
+  const readJournal = async () => JSON.parse(await fs.readFile(fixture.journalPath, 'utf8'));
+  const saved = await readJournal();
+  const savedRecord = saved.questions.find((item) => item.internalQuestionId === created.question.internalQuestionId);
+  assert.equal(savedRecord.revision, 0);
+  assert.equal(savedRecord.selection, null);
+  assert.equal(savedRecord.deliveryIntent, null);
+  assert.equal(savedRecord.lateAnswers.length, 1);
+  const committedRevision = saved.revision;
+
+  const retry = await fixture.service.submitAnswer(created.question.internalQuestionId, answers('continue'));
+  assert.equal(retry.outcome, 'duplicate');
+  assert.equal((await readJournal()).revision, committedRevision);
+
+  const previousService = fixture.service;
+  await previousService.close();
+  const reopened = fixture.createService();
+  t.after(() => reopened.close());
+  fixture.service = reopened;
+  await reopened.ready();
+  const afterRestart = await reopened.submitAnswer(created.question.internalQuestionId, answers('continue'));
+  assert.equal(afterRestart.outcome, 'duplicate');
+  const afterRestartJournal = await readJournal();
+  assert.equal(afterRestartJournal.revision, committedRevision);
+  assert.equal(afterRestartJournal.questions[0].lateAnswers.length, 1);
+
+  const different = await reopened.submitAnswer(created.question.internalQuestionId, answers('stop'));
+  assert.equal(different.outcome, 'late');
+  const finalJournal = await readJournal();
+  assert.equal(finalJournal.questions[0].lateAnswers.length, 2);
+  assert.equal(finalJournal.questions[0].selection, null);
+  assert.equal(finalJournal.questions[0].deliveryIntent, null);
+  assert.equal(fixture.delivery.deliveries.size, 0);
+  assert.equal(fixture.delivery.payloads.size, 0);
+  let sinkCalls = 0;
+  const poll = await reopened.answerPoll(fixture.writer, 'question-1', () => { sinkCalls += 1; });
+  assert.equal(poll.outcome, 'unavailable');
+  assert.equal(Object.hasOwn(poll, 'answers'), false);
+  assert.equal(sinkCalls, 0);
+});
+
 test('external resolution preserves a late answer without marking the question manually cancelled', async (t) => {
   const fixture = await createFixture(t, { verifyNativeQuestion: () => true });
   const created = await register(fixture);
