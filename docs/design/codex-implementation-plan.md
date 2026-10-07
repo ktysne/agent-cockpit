@@ -12,7 +12,7 @@ ClaudeとCodexで同じ結果を期待する機能は、本実装に合わせて
 LLMが生成する文面やproviderの能力差は同等性の対象にしない。
 試験手順と結果の扱いは[Claude/Codex適合試験方針](provider-conformance-testing.md)を正本とする。
 
-Codexの共有契約は固定版の[共有契約文書](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md)を参照する。
+Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照する。
 この契約のモデルは参照用であり、実adapterやruntimeの適合を証明しない。
 過去のPoCは固定SHAの証拠として扱い、本製品に機能が実装済みとはみなさない。
 
