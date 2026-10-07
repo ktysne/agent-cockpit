@@ -161,8 +161,23 @@ main提出前に、採用対象の共通機能で両adapterの適合試験、必
 NS12のCodex CLI 0.160.1 run4では、本人認証、同一owned processでのstartとsteer、送信前の永続保存、適用相関を観測したが、全体結果は `steer_delivery_validation` の `scenario_gate_not_met` で `unknown` だった。
 固定記録はsource head `e83cf3d116e50c8f2afe8c3436de9606d9917220`、script SHA-256 `7C232D52B0BD892487D355809EEF290AADC97AE9294798E04308A97797CC7B04`、summary SHA-256 `5714A0A8FA8C9346922DE651C3C65AB6A5317376370C860BCEA30329D3F5055C` である。
 この結果はG2のID-F04再接続やcurrentProof失効を確認しておらず、frozen unknownを維持する。
+PR202で記録したClaudeの実runtime結果は起動順修正前のもので、修正後のruntime確認は未実施である。
 
 #206の受動復旧は登録履歴を戻す範囲に限られ、#210の質問serviceに対するlaunchとruntime再照合を証明しない。
+
+#206のreplay claimと実行履歴も、#209の容量予約および終端回収の対象に含める。
+claimと履歴の保持量を無制限に増やさず、終端記録の回収と容量予約の上限に反映する。
+
+#210では、不完全な会話履歴を再照合した後に、その会話を永続checkpointの`incompleteConversationIds`から除く規則を定める。
+新しいkernelで通常のstoreを開いて同じstartを再送する場合も、checkpoint replay claimの不一致で保存が恒久的に拒否されないよう、復旧後の扱いを定める。
+
+[#207の実機確認](https://github.com/ktysne/agent-cockpit/issues/207#issuecomment-6039522384)では、Windows Desktop Claude 2.1.289の2セッションで、MCPとexec形式hookの直接の親が同じ`claude.exe`であり、親PIDがsessionsファイル名と一致した。
+sessionsファイルから取得できるClaude親プロセスの開始時刻はPID再利用の確認候補に限り、今回の試験で検証した証拠ではない。
+親プロセスの照合にはexec形式hookから直接親を確認できる経路を使う。
+文字列形式hookはshellを介してbash toolと区別できないため受け付けず、shell形式へのfallbackを設けない。
+hookを起動するNode実行ファイルは絶対パスで指定し、その設定手順をClaude側の実装で定める。
+再開でnative session IDが変わる場合は#213の会話対応を使い、subagentは同じ親プロセス配下でも`agent_id`で区別する。
+`/clear`、Claude CLI、他OS、session file読取の遅延は未確認である。
 
 #209では、unknownから許される遷移と保持証拠が増やす最大量を予約し、件数、予約量、残容量、閾値を診断する。
 容量が尽きた場合は新規受付を抑え、進行中の確定記録に必要な領域を確保する。
@@ -176,6 +191,8 @@ sendingやunknownを時間だけで回収しない。
 authority失効は物理停止を証明しないためpendingを消して配信を再開せず、停止が未確認または失敗した場合も再送を0回にする。
 待機中のturn終了、遅延resolved、停止失敗を個別に検証する。
 PR205の表示fixtureは物理停止の証拠に含めない。
+PR230のマージはnative待ち表示案への合意を意味しない。
+PR205の設計資料は、native waiting状態の戻り値と質問・許可情報の読取範囲を実装に合わせて更新する。
 
 #215では、Cockpit専用の認証保存先を実行HOMEから分け、各runでHOMEを分離する。
 Codex CLI 0.160.1のサポート済み認証経路で、読込と更新、権限、並行refresh、認証直列化を確認するまでは、毎回ログインを暫定経路として残す。
@@ -201,14 +218,16 @@ owned processのexitとcloseを確認して非稼働を確かめた後にHOMEを
 モデルはfeature PRをmergeしない。
 
 #218の文書条件と#219のtargeted CLAUDE更新は、製品実装やruntime証拠の完了を意味しない。
-最終main PRからPoCを除外する作業と、sanitize済みsummaryおよびmanifestの追跡整備は後続条件として残す。
-現feature branchからPoCを削除しない。
+最終main PRでは`poc/`全体と`tools/probes/common-question-runtime.js`、`test/common-question-runtime-probe.test.js`を除く。
+`npm test`と`npm run test:inprocess`の対象を`test/**/*.test.js`に明示し、PoCの固定SHA参照を文書に残す。
+この削除は最終main PRの準備段階に限り、現feature branchではPoCを保持する。
+sanitize済みsummaryおよびmanifestの追跡整備も後続条件として残す。
 
 ### 監査Issueと対応段階
 
 | 監査Issue | 対応段階 |
 |---|---|
-| #207 | #166-B、#171-B、#180-A |
+| #207 | Codex側は#166-Bのdelegated MCP親子binding、#171-B/#180-Aの証拠schemaとruntime接点、#177-Aの復旧後resume/projection、kernel API契約を担当する。Claude側は#202、#205、#227のマージ後にissuer、MCP、hooks、activeな実行だけを不在判定から保護する処理、subagent対応、既定composition、実runtime試験を実装する。 |
 | #208 | #167-B、#175-B |
 | #209 | #177-A/B/C、#174、#175-A、#179 |
 | #210 | #177-B/C、#174、#175-A |
