@@ -14,6 +14,16 @@ function unique(values) {
   return [...new Set(values.filter((value) => typeof value === 'string' && value))];
 }
 
+function confirmedMergedHead(pullRequest) {
+  if (!isCompleteCommitSha(pullRequest?.headRefOid) || !validBranchName(pullRequest?.headRefName) ||
+    !validBranchName(pullRequest?.baseRefName)) return null;
+  return {
+    headRefOid: pullRequest.headRefOid.toLowerCase(),
+    headRefName: pullRequest.headRefName,
+    baseRefName: pullRequest.baseRefName,
+  };
+}
+
 function retargetedBaseStatus(retargeted) {
   if (!retargeted.length) return '';
   return `#${retargeted.map((item) => item.number).join('、')} の base は付け替え済みです。`;
@@ -243,10 +253,11 @@ class PullRequestMergeManager {
       .filter((record) => record.number === pullRequest.number);
     const related = this.state.relatedPullRequestRegistrationsForRepo(owner, repo)
       .filter((record) => record.number === pullRequest.number);
+    const changes = { state: 'merged', mergedAt, mergedHead: confirmedMergedHead(pullRequest) };
     for (const registration of registrations) {
-      this.state.updatePullRequest(registration.session_id, owner, repo, pullRequest.number, { state: 'merged', mergedAt });
+      this.state.updatePullRequest(registration.session_id, owner, repo, pullRequest.number, changes);
     }
-    for (const record of related) this.state.updateRelatedPullRequest(owner, repo, pullRequest.number, { state: 'merged', mergedAt });
+    for (const record of related) this.state.updateRelatedPullRequest(owner, repo, pullRequest.number, changes);
     return this.handleDetectedMerge({
       owner,
       repo,
@@ -636,6 +647,7 @@ class PullRequestMergeManager {
       automatic: confirmedIntent?.automatic === true,
       reservedHeadRefOid: expectedHeadRefOid,
       mergedHeadRefOid: pullRequest.headRefOid || null,
+      mergedHead: confirmedMergedHead(pullRequest),
       headMismatch: Boolean(headMismatch),
       ...(automaticResult ? { automaticResult } : {}),
     }, this.now());

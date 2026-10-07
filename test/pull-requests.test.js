@@ -104,13 +104,14 @@ async function trackerFixture(testContext, registeredNumbers = [31], cwd = proce
 function rememberHistoricalMerge(state, number, headRefName, baseRefName, headRefOid, mergedAt, registered = false) {
   const url = `https://github.com/example/project/pull/${number}`;
   const lastOpen = { title: `PR ${number}`, url, headRefName, baseRefName, headRefOid };
+  const mergedHead = { headRefOid, headRefName, baseRefName };
   if (registered) {
     state.registerPullRequest(`session-${number}`, { url }, { product: { key: 'project', name: 'project' } });
-    state.updatePullRequest(`session-${number}`, 'example', 'project', number, { state: 'merged', mergedAt, lastOpen });
+    state.updatePullRequest(`session-${number}`, 'example', 'project', number, { state: 'merged', mergedAt, lastOpen, mergedHead });
     return;
   }
   state.rememberRelatedPullRequest({ owner: 'example', repo: 'project', number, url, lastOpen });
-  state.updateRelatedPullRequest('example', 'project', number, { state: 'merged', mergedAt });
+  state.updateRelatedPullRequest('example', 'project', number, { state: 'merged', mergedAt, mergedHead });
 }
 
 test('PR URL の抽出は出力中の GitHub URL を限定して返す', () => {
@@ -318,6 +319,86 @@ test('同じリポジトリで登録が消えたプロダクトの表示用デ�
 
   assert.deepEqual(tracker.snapshot().map((group) => group.product.key), ['product-b']);
   assert.ok(state.version > versionBeforeRefresh);
+});
+
+test('gh pr view で検出したマージの最終 head を lastOpen と分けて保存する', async (t) => {
+  const { state, github, tracker } = await trackerFixture(t, [30]);
+  const previousHead = 'a'.repeat(40);
+  const mergedHead = 'b'.repeat(40);
+  github.openPullRequests = [ghPullRequest(30, 'feat/parent', 'main', previousHead)];
+  await tracker.refreshRepo('example', 'project');
+
+  github.openPullRequests = [];
+  github.views.set(30, {
+    ...ghPullRequest(30, 'feat/parent', 'main', mergedHead),
+    state: 'MERGED',
+    mergedAt: '2026-10-03T11:59:00.000Z',
+  });
+  await tracker.refreshRepo('example', 'project');
+
+  const record = state.pullRequestRegistrationForSession('session-30', 'example', 'project', 30);
+  assert.equal(record.lastOpen.headRefOid, previousHead);
+  assert.deepEqual(record.mergedHead, {
+    headRefOid: mergedHead,
+    headRefName: 'feat/parent',
+    baseRefName: 'main',
+  });
+});
+
+test('一覧にないマージ済み PR の最終 head から比較 base をたどり積み直しを検出する', async (t) => {
+  const { state, github, calls, tracker } = await trackerFixture(t, [30]);
+  const previousHead = 'a'.repeat(40);
+  const mergedHead = 'b'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(30, 'feat/parent', 'main', previousHead)];
+  await tracker.refreshRepo('example', 'project');
+
+  github.openPullRequests = [];
+  github.views.set(30, {
+    ...ghPullRequest(30, 'feat/parent', 'main', mergedHead),
+    state: 'MERGED',
+    mergedAt: '2026-10-03T11:59:00.000Z',
+  });
+  await tracker.refreshRepo('example', 'project');
+
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'feat/parent', childHead)];
+  github.branchHeads.set('feat/parent', mergedHead);
+  github.comparisons.set(`main...${childHead}`, compareResult([mergedHead, childHead]));
+  github.comparisons.set(`feat/parent...${childHead}`, compareResult([childHead]));
+  await tracker.refreshRepo('example', 'project');
+
+  assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/main...${childHead}`)));
+  assert.equal(tracker.repositoryState('example', 'project').restackResults.get(31).parent.number, 30);
+  assert.deepEqual(state.pullRequestRegistrationForSession('session-30', 'example', 'project', 30).mergedHead, {
+    headRefOid: mergedHead,
+    headRefName: 'feat/parent',
+    baseRefName: 'main',
+  });
+});
+
+test('確定済み head の印がない記録は積み直し候補にしない', async (t) => {
+  const { state, github, tracker } = await trackerFixture(t, [30]);
+  const unconfirmedHead = 'a'.repeat(40);
+  const childHead = 'b'.repeat(40);
+  const mergedAt = '2026-10-03T11:00:00.000Z';
+  state.updatePullRequest('session-30', 'example', 'project', 30, {
+    state: 'merged',
+    mergedAt,
+    lastOpen: {
+      title: 'PR 30',
+      url: 'https://github.com/example/project/pull/30',
+      headRefName: 'feat/parent',
+      baseRefName: 'main',
+      headRefOid: unconfirmedHead,
+    },
+  });
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main', childHead)];
+  github.comparisons.set(`main...${childHead}`, compareResult([unconfirmedHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  assert.equal(state.pullRequestRegistrationForSession('session-30', 'example', 'project', 30).mergedHead, undefined);
+  assert.equal(tracker.repositoryState('example', 'project').restackResults.get(31).parent, null);
 });
 
 test('スカッシュした親のコミットはbaseをmainに変えても残り、pushで消える', async (t) => {
@@ -1422,6 +1503,43 @@ test('マージ済みの一覧を最古のオープン PR の作成日以降に�
   const [group] = tracker.snapshot();
   assert.equal(group.trees[0].blocker, '積み直しが必要か確かめられない');
   assert.equal(group.mergeableCount, 0);
+});
+
+test('effective は確定済み head を使い、印のない記録では lastOpen をたどる', () => {
+  const confirmedParent = {
+    ...pullRequestRegistration(40, {
+      state: 'merged',
+      mergedAt: '2026-10-03T11:00:00.000Z',
+      lastOpen: {
+        title: 'PR 40', url: 'https://github.com/example/project/pull/40',
+        headRefName: 'feat/confirmed', baseRefName: 'old-base', headRefOid: 'a'.repeat(40),
+      },
+    }),
+    mergedHead: {
+      headRefOid: 'b'.repeat(40),
+      headRefName: 'feat/confirmed',
+      baseRefName: 'main',
+    },
+  };
+  const legacyParent = pullRequestRegistration(42, {
+    state: 'merged',
+    mergedAt: '2026-10-03T11:01:00.000Z',
+    lastOpen: {
+      title: 'PR 42', url: 'https://github.com/example/project/pull/42',
+      headRefName: 'feat/legacy', baseRefName: 'integration', headRefOid: 'c'.repeat(40),
+    },
+  });
+  const result = assemblePullRequestStacks({
+    defaultBranch: 'main',
+    openPullRequests: [
+      pullRequest(41, 'feat/child', 'feat/confirmed'),
+      pullRequest(43, 'feat/legacy-child', 'feat/legacy'),
+    ],
+    registrations: [confirmedParent, legacyParent],
+  });
+
+  assert.equal(result.trees.find((tree) => tree.number === 41).effectiveBase, 'main');
+  assert.equal(result.trees.find((tree) => tree.number === 43).effectiveBase, 'integration');
 });
 
 test('親だけを登録したスタックで、親がマージされ子の base が main に付け替わっても子を表示し続ける', () => {

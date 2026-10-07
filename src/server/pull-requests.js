@@ -3,7 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { isCompleteCommitSha, repositoryKey, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
 
@@ -92,6 +92,16 @@ function lastOpenPullRequest(pr) {
   };
 }
 
+function confirmedMergedHead(value) {
+  if (!isCompleteCommitSha(value?.headRefOid) || !validBranchName(value?.headRefName) ||
+    !validBranchName(value?.baseRefName)) return null;
+  return {
+    headRefOid: value.headRefOid.toLowerCase(),
+    headRefName: value.headRefName,
+    baseRefName: value.baseRefName,
+  };
+}
+
 function parseRepositoryConfig(stdout) {
   const value = JSON.parse(stdout);
   if (!value || typeof value !== 'object' || typeof value.default_branch !== 'string' || !value.default_branch) {
@@ -110,15 +120,16 @@ function parseRepositoryConfig(stdout) {
 
 function storedPullRequest(registration) {
   const known = registration.lastOpen || {};
+  const mergedHead = registration.state === 'merged' ? confirmedMergedHead(registration.mergedHead) : null;
   if (!Number.isSafeInteger(registration.number) || registration.number < 1) return null;
-  if (!known.headRefName && !known.baseRefName && !known.title) return null;
+  if (!known.headRefName && !known.baseRefName && !known.title && !mergedHead) return null;
   return {
     number: registration.number,
     title: asText(known.title, 500),
     url: asText(known.url || registration.url, 2000),
-    headRefName: asText(known.headRefName, 500),
-    baseRefName: asText(known.baseRefName, 500),
-    headRefOid: isCompleteCommitSha(known.headRefOid) ? known.headRefOid : '',
+    headRefName: mergedHead?.headRefName || asText(known.headRefName, 500),
+    baseRefName: mergedHead?.baseRefName || asText(known.baseRefName, 500),
+    headRefOid: mergedHead?.headRefOid || (isCompleteCommitSha(known.headRefOid) ? known.headRefOid : ''),
     isCrossRepository: known.isCrossRepository === true,
     draft: known.isDraft === true,
     mergeable: asText(known.mergeable, 40).toUpperCase(),
@@ -139,6 +150,7 @@ function storedRelatedPullRequest(record) {
     state: record.state,
     mergedAt: record.mergedAt,
     lastOpen: record.lastOpen,
+    mergedHead: record.mergedHead,
   });
 }
 
@@ -190,15 +202,13 @@ function historicalMergedPullRequests(registrations, relatedPullRequests, openPu
   for (const record of [...registrations, ...relatedPullRequests]) {
     if (record.state !== 'merged' || openNumbers.has(record.number)) continue;
     const pullRequest = record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record);
-    if (!pullRequest?.headRefName || !pullRequest.baseRefName || !isCompleteCommitSha(pullRequest.headRefOid) ||
-      !Number.isFinite(Date.parse(pullRequest.mergedAt || ''))) continue;
+    const mergedHead = confirmedMergedHead(record.mergedHead);
+    if (!pullRequest || !mergedHead || !Number.isFinite(Date.parse(pullRequest.mergedAt || ''))) continue;
     const previous = byNumber.get(pullRequest.number);
     if (!previous || Date.parse(pullRequest.mergedAt) > Date.parse(previous.mergedAt)) {
       byNumber.set(pullRequest.number, {
         number: pullRequest.number,
-        headRefOid: pullRequest.headRefOid.toLowerCase(),
-        headRefName: pullRequest.headRefName,
-        baseRefName: pullRequest.baseRefName,
+        ...mergedHead,
         mergedAt: pullRequest.mergedAt,
       });
     }
@@ -260,7 +270,11 @@ function assemblePullRequestStacks({
   const openByNumber = mapByNumber(open);
   const historical = [...registrations, ...relatedPullRequests]
     .filter((record) => !openByNumber.has(record.number) && ['merged', 'closed'].includes(record.state))
-    .map((record) => record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record))
+    .map((record) => {
+      const pullRequest = record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record);
+      const mergedHead = record.state === 'merged' ? confirmedMergedHead(record.mergedHead) : null;
+      return pullRequest && mergedHead ? { ...pullRequest, ...mergedHead } : pullRequest;
+    })
     .filter(Boolean);
   const nodes = [...open, ...historical];
   const nodeByNumber = mapByNumber(nodes);
@@ -917,17 +931,16 @@ class PullRequestTracker {
           openNumbers.add(normalized.number);
           continue;
         }
+        const stateChanges = {
+          state: closedState,
+          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
+        };
+        if (closedState === 'merged') stateChanges.mergedHead = confirmedMergedHead(value);
         for (const record of result.tracked.registrations) {
-          this.state.updatePullRequest(record.session_id, owner, repo, result.number, {
-            state: closedState,
-            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-          });
+          this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
         }
         if (result.tracked.related) {
-          this.state.updateRelatedPullRequest(owner, repo, result.number, {
-            state: closedState,
-            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-          });
+          this.state.updateRelatedPullRequest(owner, repo, result.number, stateChanges);
         }
         if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
           const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
