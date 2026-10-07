@@ -100,6 +100,8 @@ kernelへ未登録のClaude aliasでは、既存hookの観測経路を維持す�
 新期間から結果を組み直さない。
 未登録MCPはPIDやClaude IDが一致しても拒否する。
 このため通常HOMEへの旧MCP設定だけでは新しい認証済み書込みを開始できない。
+通常のDesktopとCLIのClaudeは、[Claudeのwriterの発行](claude-local-issuer.md)のissuerが申告された親プロセスをセッションファイルと照合して登録する。
+この証拠は認証ではなく、ID-F02-A01とID-F02-A04のPIDに関する期待値に対するClaudeだけの例外である。
 
 ## 検証層と採用条件
 
