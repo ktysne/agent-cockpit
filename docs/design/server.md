@@ -172,7 +172,7 @@ PostToolUse の出力全文は送らない。
   開始時刻はそのイベントの時刻とし、稼働中として扱う。
   `SubagentStop` 後のイベントでは行を作らず、稼働中にも戻さない。
   `codex:<tool_use_id>` の Codex 行はこの復元の対象外とする。
-- サブエージェントを終了にするのは、`SubagentStop` を受けたとき、メインの `TaskStop` の `PostToolUse` の `tool_input.task_id` が Claude のサブエージェントに一致したとき、終了通知から `SubagentStop` を合成したときである。
+- サブエージェントを終了にするのは、`SubagentStop` を受けたとき、メインの `TaskStop` の `PostToolUse` の `tool_input.task_id`(無ければ非推奨の `shell_id`)が Claude のサブエージェントに一致したとき、終了通知から `SubagentStop` を合成したときである。
   どの場合も、そのサブエージェントの未完了のツールと許可待ちを消す。
   `SubagentStart` を受けたら稼働中に戻し、開始時刻をその時刻にする。
 - タスク: `tasks` の全項目と、最後に書いた時刻 `tasksUpdatedAt`。

@@ -36,6 +36,13 @@ test('TaskStop の成功だけに形の合う停止タスク ID を載せて正�
   assert.equal(sanitizeEvent({ session_id: 'stop-task', hook_event_name: 'PostToolUse', tool_name: 'Read', stoppedTaskId: 'task_1-2' }).stoppedTaskId, undefined);
 });
 
+test('TaskStop の task_id が無いときは非推奨の shell_id を停止タスク ID にする', () => {
+  const stop = (tool_input) => makeHookEvent({ session_id: 'stop-task', hook_event_name: 'PostToolUse', tool_name: 'TaskStop', tool_input }).stoppedTaskId;
+  assert.equal(stop({ shell_id: 'shell_1' }), 'shell_1');
+  assert.equal(stop({ task_id: 'task_1', shell_id: 'shell_1' }), 'task_1');
+  assert.equal(stop({ shell_id: '../bad' }), undefined);
+});
+
 test('フックは入力全文を送らず、任意のツール出力から Codex の行だけを抽出する', async (t) => {
   await temporaryHome(t);
   const event = makeHookEvent({
