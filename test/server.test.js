@@ -182,6 +182,7 @@ test('衝突解消依頼口は画面秘密値と Origin を照合する', async 
 });
 
 test('衝突解消依頼は PR と head と依頼先を取り直し、終了扱いでない登録セッションへ届ける', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_790_000_000_000 });
   const state = new DashboardState();
   const url = 'https://github.com/example/project/pull/42';
   const product = { product: { key: 'project', name: 'Project' } };

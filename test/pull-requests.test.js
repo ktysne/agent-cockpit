@@ -614,7 +614,8 @@ test('マージできる PR の件数は、登録したセッションがあり�
   assert.equal(tracker.snapshot()[0].mergeableCount, 1);
 });
 
-test('PR の衝突依頼スナップショットは登録セッションの稼働状態を示し、head 変更後は依頼済み表示を外す', () => {
+test('PR の衝突依頼スナップショットは登録セッションの稼働状態を示し、head 変更後は依頼済み表示を外す', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_790_000_000_000 });
   const state = new DashboardState();
   const url = 'https://github.com/example/project/pull/42';
   for (const sessionId of ['conflict-live', 'conflict-ended']) {
@@ -656,6 +657,21 @@ test('PR の衝突依頼スナップショットは登録セッションの稼�
   pullRequest.headRefOid = 'b'.repeat(40);
   snapshot = tracker.snapshot()[0].trees[0];
   assert.equal(Object.hasOwn(snapshot, 'conflictRequest'), false);
+});
+
+test('PR 登録は14日ちょうど保持し、期限を1ミリ秒過ぎると削除する', () => {
+  const registeredAt = Date.parse('2026-10-03T00:00:00.000Z');
+  const retentionMs = 14 * 24 * 60 * 60 * 1000;
+  const state = new DashboardState();
+  state.registerPullRequest('retention-boundary', {
+    url: 'https://github.com/example/project/pull/43',
+  }, {}, registeredAt);
+
+  state.pruneExpiredStoreRecords(registeredAt + retentionMs);
+  assert.equal(state.pullRequestRegistrations().length, 1);
+
+  state.pruneExpiredStoreRecords(registeredAt + retentionMs + 1);
+  assert.equal(state.pullRequestRegistrations().length, 0);
 });
 
 test('オープン一覧から消えた PR の状態を gh pr view で確認する', async (t) => {
