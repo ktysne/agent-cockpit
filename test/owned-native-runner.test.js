@@ -145,7 +145,7 @@ function codexResponder(options = {}) {
     methods.push(request.method);
     if (request.method === 'initialize') {
       if (options.serverRequest) {
-        child.send({ id: 'server-request', method: 'item/commandExecution/requestApproval', params: { command: 'private' } });
+        child.send(makeNativeHoldRequest('server-request', 'item/commandExecution/requestApproval'));
       }
       child.send(codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } }));
       return;
@@ -629,7 +629,7 @@ test('the authentication prompt promise does not substitute for the native login
   await runner.stop();
 });
 
-test('a server permission request is never answered and terminates the Codex attempt', async (t) => {
+test('a native permission request before a verified thread turn fails without replying', async (t) => {
   const workspace = createWorkspace(t);
   const harness = codexResponder({ workspace, serverRequest: true });
   let disconnect = null;
@@ -640,8 +640,8 @@ test('a server permission request is never answered and terminates the Codex att
     onDisconnect: (event) => { disconnect = event; },
   }));
   await assert.rejects(runner.start({ inputText: 'task' }));
-  assert.equal(runner.snapshot().failureCode, 'unknown_server_request');
-  assert.equal(disconnect.reason, 'unknown_server_request');
+  assert.equal(runner.snapshot().failureCode, 'native_server_request_scope_unavailable');
+  assert.equal(disconnect.reason, 'native_server_request_scope_unavailable');
   assert.deepEqual(harness.methods, ['initialize']);
   assert.equal(harness.child.stdin.writes.some((line) => line.includes('server-request')), false);
   await runner.stop();
@@ -792,6 +792,30 @@ function makeWaitRequest(params = {}, options = {}) {
   return request;
 }
 
+function makeNativeHoldRequest(requestId, method = 'item/tool/requestUserInput', overrides = {}) {
+  const methodParams = method === 'item/tool/requestUserInput'
+    ? { isBlocking: true, questions: [{ header: 'Choice', id: 'choice', question: 'Select an option' }] }
+    : method === 'item/permissions/requestApproval'
+      ? { cwd: 'C:\\workspace', permissions: {}, startedAtMs: 1 }
+      : { startedAtMs: 1 };
+  return {
+    jsonrpc: '2.0',
+    id: requestId,
+    method,
+    params: {
+      threadId: 'thread_native_1',
+      turnId: 'turn_native_1',
+      itemId: 'item_native_1',
+      ...methodParams,
+      ...overrides,
+    },
+  };
+}
+
+function nativeHoldResolved(requestId, threadId = 'thread_native_1') {
+  return { method: 'serverRequest/resolved', params: { requestId, threadId } };
+}
+
 function createWaitProfileHarness(workspace, options = {}) {
   const requests = [];
   const harness = createSpawnHarness(workspace, (line, child) => {
@@ -836,6 +860,185 @@ function waitReplies(harness, requestId = 'wait_request_1') {
     .map((line) => JSON.parse(line))
     .filter((message) => message.id === requestId && Object.hasOwn(message, 'result'));
 }
+
+test('native questions and approvals bind to the current turn and accept matching terminal resolutions', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace);
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+  const requests = [
+    makeNativeHoldRequest('question-request-private', 'item/tool/requestUserInput', {
+      autoResolutionMs: 0,
+      questions: [{ header: 'Choice', id: 'choice', question: 'Select an option', isOther: false,
+        isSecret: false, options: [{ label: 'One', description: 'First option' }] }],
+    }),
+    makeNativeHoldRequest(1, 'item/permissions/requestApproval'),
+    makeNativeHoldRequest('command-approval', 'item/commandExecution/requestApproval'),
+    makeNativeHoldRequest('file-approval', 'item/fileChange/requestApproval', { startedAtMs: -1 }),
+  ];
+  harness.child.send(...requests);
+  assert.equal(runner.snapshot().state, 'running');
+  const snapshot = JSON.stringify(runner.snapshot());
+  for (const privateValue of ['question-request-private', 'command-approval', 'file-approval', 'Select an option', 'First option', 'item_native_1']) {
+    assert.equal(snapshot.includes(privateValue), false);
+  }
+  harness.child.send(codexTurnCompleted());
+  for (const request of requests) harness.child.send(nativeHoldResolved(request.id));
+  assert.equal(runner.snapshot().state, 'running');
+  const replies = harness.child.stdin.writes.filter((line) => line.endsWith('\n'))
+    .map((line) => JSON.parse(line))
+    .filter((message) => !Object.hasOwn(message, 'method') && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
+  assert.equal(replies.length, 0);
+  await runner.stop();
+});
+
+test('native pending summaries expose matching kind counts and invalidate replaced request sets', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace);
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+
+  const empty = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(empty.pending, []);
+  assert.equal(empty.checkCurrent(), true);
+  assert.equal(runner.captureNativePendingSummary('thread_other', 'turn_native_1'), null);
+
+  const questionId = 'private-question-request';
+  const questionItemId = 'private-question-item';
+  const approvalId = 'private-approval-request';
+  harness.child.send(
+    makeNativeHoldRequest(questionId, 'item/tool/requestUserInput', {
+      itemId: questionItemId,
+      questions: [{ header: 'Secret header', id: 'private-question', question: 'Secret question' }],
+    }),
+    makeNativeHoldRequest(approvalId, 'item/commandExecution/requestApproval', { itemId: 'private-approval-item' }),
+  );
+  assert.equal(empty.checkCurrent(), false);
+  const captured = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(captured.pending, [{ kind: 'question', count: 1 }, { kind: 'approval', count: 1 }]);
+  assert.equal(captured.checkCurrent(), true);
+  const publicSummary = JSON.stringify(captured.pending);
+  for (const privateValue of [questionId, questionItemId, approvalId, 'private-approval-item', 'Secret header', 'Secret question']) {
+    assert.equal(publicSummary.includes(privateValue), false);
+  }
+
+  harness.child.send(nativeHoldResolved(questionId));
+  harness.child.send(makeNativeHoldRequest('replacement-question-request'));
+  const replacement = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(replacement.pending, captured.pending);
+  assert.equal(captured.checkCurrent(), false);
+  assert.equal(replacement.checkCurrent(), true);
+  harness.child.send(nativeHoldResolved('replacement-question-request'));
+  harness.child.send(nativeHoldResolved(approvalId));
+  assert.equal(replacement.checkCurrent(), false);
+  await runner.stop();
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
+});
+
+test('native request IDs distinguish strings from integers and cannot be reused after resolution', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace);
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+  harness.child.send(
+    makeNativeHoldRequest('1'),
+    makeNativeHoldRequest(1, 'item/commandExecution/requestApproval'),
+    makeNativeHoldRequest('-opaque-string-id'),
+    makeNativeHoldRequest(-1, 'item/fileChange/requestApproval'),
+  );
+  harness.child.send(nativeHoldResolved(1));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(nativeHoldResolved('1'));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(nativeHoldResolved(-1));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(nativeHoldResolved('-opaque-string-id'));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(makeNativeHoldRequest('used-once'));
+  harness.child.send(nativeHoldResolved('used-once'));
+  harness.child.send(makeNativeHoldRequest('used-once'));
+  assert.equal(runner.snapshot().failureCode, 'native_server_request_id_reused');
+  await runner.stop();
+});
+
+test('native request scope mismatches and unmatched resolutions fail closed without replies', async (t) => {
+  const cases = [
+    {
+      run(harness) { harness.child.send(makeNativeHoldRequest('wrong-thread', 'item/tool/requestUserInput', { threadId: 'thread_other' })); },
+      failureCode: 'native_server_request_scope_mismatch',
+    },
+    {
+      run(harness) { harness.child.send(makeNativeHoldRequest('wrong-turn', 'item/tool/requestUserInput', { turnId: 'turn_other' })); },
+      failureCode: 'native_server_request_scope_mismatch',
+    },
+    {
+      run(harness) { harness.child.send(nativeHoldResolved('unknown')); },
+      failureCode: 'native_server_resolution_unmatched',
+    },
+    {
+      run(harness) {
+        harness.child.send(makeNativeHoldRequest('mismatch'));
+        harness.child.send(nativeHoldResolved('mismatch', 'thread_other'));
+      },
+      failureCode: 'native_server_resolution_scope_mismatch',
+    },
+    {
+      run(harness) {
+        harness.child.send(makeNativeHoldRequest('duplicate-pending'));
+        harness.child.send(makeNativeHoldRequest('duplicate-pending'));
+      },
+      failureCode: 'native_server_request_id_reused',
+    },
+    {
+      run(harness) {
+        harness.child.send(makeNativeHoldRequest('double-resolution'));
+        harness.child.send(nativeHoldResolved('double-resolution'));
+        harness.child.send(nativeHoldResolved('double-resolution'));
+      },
+      failureCode: 'native_server_resolution_unmatched',
+    },
+    {
+      run(harness) {
+        harness.child.send(makeNativeHoldRequest('wrong-turn-resolution'));
+        harness.child.send({ method: 'serverRequest/resolved', params: {
+          requestId: 'wrong-turn-resolution', threadId: 'thread_native_1', turnId: 'turn_other',
+        } });
+      },
+      failureCode: 'native_server_resolution_invalid',
+    },
+    {
+      run(harness) { harness.child.send(makeNativeHoldRequest('malformed', 'item/fileChange/requestApproval', { startedAtMs: undefined })); },
+      failureCode: 'native_server_request_invalid',
+    },
+  ];
+  for (const scenario of cases) {
+    const workspace = createWorkspace(t);
+    const harness = createWaitProfileHarness(workspace);
+    const runner = createWaitRunner(workspace, harness);
+    await runner.start({ inputText: 'fixed task' });
+    scenario.run(harness);
+    assert.equal(runner.snapshot().failureCode, scenario.failureCode);
+    const replies = harness.child.stdin.writes.filter((line) => line.endsWith('\n'))
+      .map((line) => JSON.parse(line))
+      .filter((message) => !Object.hasOwn(message, 'method') && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
+    assert.equal(replies.length, 0);
+    await runner.stop();
+  }
+});
+
+test('native request ID retention is bounded and overflow fails closed', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace);
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+  harness.child.send(...Array.from({ length: 129 }, (_, index) => makeNativeHoldRequest(index + 1)));
+  assert.equal(runner.snapshot().failureCode, 'native_server_request_limit');
+  const replies = harness.child.stdin.writes.filter((line) => line.endsWith('\n'))
+    .map((line) => JSON.parse(line))
+    .filter((message) => !Object.hasOwn(message, 'method') && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
+  assert.equal(replies.length, 0);
+  await runner.stop();
+});
 
 test('the fixed Codex wait profile queues one early native call and returns one static JSONL response', async (t) => {
   const workspace = createWorkspace(t);
@@ -1058,7 +1261,7 @@ test('a wait receipt cannot release a different runner and unknown approval requ
   await unknownRunner.start({ inputText: 'fixed task' });
   unknownHarness.child.send({
     id: 'permission_request_1',
-    method: 'item/commandExecution/requestApproval',
+    method: 'mcpServer/elicitation/request',
     params: { command: 'private' },
   });
   assert.equal(unknownHarness.child.stdin.writes.some((line) => line.includes('permission_request_1')), false);

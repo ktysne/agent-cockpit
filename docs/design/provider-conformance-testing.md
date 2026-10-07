@@ -74,6 +74,22 @@ fixtureを使った試験と実runtime試験の結果を分けて記録する。
 候補には正常系、誤配信、重複、取消前後、送信後の応答喪失や再起動、owner handoff、旧期間と新期間の分離がある。
 適用しない候補は、その機能の契約上不要である理由を記録する。
 
+## Codex native pendingの表示
+
+`ID-F08-NS09`はCodex nativeの質問要求と許可要求をCockpitで表示するシナリオである。
+Codexのowned runnerが受け取った要求を製品HTTP経路へ通し、実storeを使うfixtureで確認する。
+共通期待値は、待機中の指示作成と送信が0回であること、HTTPに種別と件数だけを含めること、下書きを保持することである。
+HTTP、safe snapshot、UIには要求本文、request ID、item ID、内部revisionを公開しない。
+同じ状態への繰り返しGETは要求を消費せず、pending中は新しい指示の作成と送信を拒否する。
+pendingが消えた後も、現在のownerとnative contextを再確認できない場合は`unverified`を維持する。
+Claude nativeの質問要求と許可要求はunsupportedまたは未確認として扱い、Cockpit独自の`cockpit_wait`をこのシナリオの成功に数えない。
+回答や許可の製品APIは追加せず、fixtureの成功を実runtimeの能力や質問への回答完了の証明に拡張しない。
+
+HTTP経路は[実factoryのCodex fixture](../../test/native-instruction-service-http-target.test.js)で確認する。
+runnerの件数投影と置換時失効は[runner test](../../test/owned-native-runner.test.js)、入力保持と通知は[web test](../../test/instruction-web.test.js)と[render test](../../test/web-render.test.js)で確認する。
+このcheckpointでは関連6ファイルのin-process test 260件が成功した。
+実Codex runtimeは未実施であり、Claude native waitはunsupportedまたは未確認である。
+
 ## 実行と結果の記録
 
 自動適合試験は既存の npm test 経路へ統合する。

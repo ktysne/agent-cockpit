@@ -31,6 +31,8 @@ const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_LINES = 100_000;
 const MAX_NATIVE_TERMINALS = MAX_INSTRUCTION_DISPATCHES + 1;
+const MAX_NATIVE_SERVER_REQUESTS = 128;
+const MAX_NATIVE_REQUEST_ID_LENGTH = 1024;
 const READ_RPC_ID_START = 2 ** 32;
 const INSTRUCTION_RPC_ID_START = 2 ** 48;
 const DEFAULT_TIMEOUTS = Object.freeze({ startupMs: 15_000, rpcMs: 10_000, loginMs: 5 * 60_000, stopMs: 2_000 });
@@ -343,6 +345,9 @@ function createOwnedNativeRunner(options) {
   let pendingRpc = null;
   const pendingReadRpcs = new Map();
   const MAX_PENDING_READ_RPCS = 1;
+  const pendingNativeRequests = new Map();
+  let pendingNativeRequestRevision = 0n;
+  const usedNativeRequestIds = new Set();
   let nextRpcId = 1;
   let nextReadRpcId = READ_RPC_ID_START;
   let nextInstructionRpcId = INSTRUCTION_RPC_ID_START;
@@ -754,6 +759,151 @@ function createOwnedNativeRunner(options) {
       (Number.isSafeInteger(value) && value >= 0);
   }
 
+  function isNativeServerRequestId(value) {
+    return (typeof value === 'string' && value.length <= MAX_NATIVE_REQUEST_ID_LENGTH) || Number.isSafeInteger(value);
+  }
+
+  function nativeRequestIdKey(id) {
+    return typeof id === 'string' ? `string:${id}` : `integer:${id}`;
+  }
+
+  function parseNativeHoldRequest(message) {
+    const requestKeys = Object.prototype.hasOwnProperty.call(message, 'jsonrpc')
+      ? ['jsonrpc', 'id', 'method', 'params']
+      : ['id', 'method', 'params'];
+    if (!hasExactKeys(message, requestKeys) ||
+        (Object.prototype.hasOwnProperty.call(message, 'jsonrpc') && message.jsonrpc !== '2.0') ||
+        !isNativeServerRequestId(message.id) || typeof message.method !== 'string' || !isRecord(message.params)) {
+      throw runnerError('native_server_request_invalid');
+    }
+    const params = message.params;
+    if (!isIdentifier(params.threadId) || !isIdentifier(params.turnId) || !isIdentifier(params.itemId)) {
+      throw runnerError('native_server_request_invalid');
+    }
+
+    let kind;
+    if (message.method === 'item/tool/requestUserInput') {
+      kind = 'user_input';
+      if (typeof params.isBlocking !== 'boolean' || !Array.isArray(params.questions) ||
+          (Object.hasOwn(params, 'autoResolutionMs') && params.autoResolutionMs !== null &&
+            (!Number.isSafeInteger(params.autoResolutionMs) || params.autoResolutionMs < 0)) ||
+          params.questions.some((question) => !isRecord(question) ||
+            typeof question.header !== 'string' || typeof question.id !== 'string' || typeof question.question !== 'string' ||
+            (Object.hasOwn(question, 'isOther') && typeof question.isOther !== 'boolean') ||
+            (Object.hasOwn(question, 'isSecret') && typeof question.isSecret !== 'boolean') ||
+            (Object.hasOwn(question, 'options') && question.options !== null &&
+              (!Array.isArray(question.options) || question.options.some((option) => !isRecord(option) ||
+                typeof option.description !== 'string' || typeof option.label !== 'string'))))) {
+        throw runnerError('native_server_request_invalid');
+      }
+    } else if (message.method === 'item/commandExecution/requestApproval') {
+      kind = 'command_approval';
+      if (!Number.isSafeInteger(params.startedAtMs)) {
+        throw runnerError('native_server_request_invalid');
+      }
+    } else if (message.method === 'item/fileChange/requestApproval') {
+      kind = 'file_change_approval';
+      if (!Number.isSafeInteger(params.startedAtMs)) {
+        throw runnerError('native_server_request_invalid');
+      }
+    } else if (message.method === 'item/permissions/requestApproval') {
+      kind = 'permissions_approval';
+      if (typeof params.cwd !== 'string' ||
+          !isRecord(params.permissions) || !Number.isSafeInteger(params.startedAtMs)) {
+        throw runnerError('native_server_request_invalid');
+      }
+    } else {
+      throw runnerError('unknown_server_request');
+    }
+    return Object.freeze({
+      idKey: nativeRequestIdKey(message.id),
+      threadId: params.threadId,
+      turnId: params.turnId,
+      kind,
+    });
+  }
+
+  function recordNativeHoldRequest(message) {
+    const request = parseNativeHoldRequest(message);
+    if (usedNativeRequestIds.has(request.idKey)) throw runnerError('native_server_request_id_reused');
+    if (usedNativeRequestIds.size >= MAX_NATIVE_SERVER_REQUESTS) throw runnerError('native_server_request_limit');
+    usedNativeRequestIds.add(request.idKey);
+    if (!childSpawned || !child || !['starting', 'running'].includes(state) || turnStartPending ||
+        !nativeIdentity || !nativeContext || terminalContextId) {
+      throw runnerError('native_server_request_scope_unavailable');
+    }
+    if (nativeIdentity.nativeId !== request.threadId || nativeContext.nativeContextId !== request.turnId) {
+      throw runnerError('native_server_request_scope_mismatch');
+    }
+    pendingNativeRequests.set(request.idKey, Object.freeze({
+      generation,
+      child,
+      threadId: request.threadId,
+      turnId: request.turnId,
+      kind: request.kind,
+    }));
+    pendingNativeRequestRevision += 1n;
+  }
+
+  function resolveNativeHoldRequest(message) {
+    const notificationKeys = Object.prototype.hasOwnProperty.call(message, 'jsonrpc')
+      ? ['jsonrpc', 'method', 'params']
+      : ['method', 'params'];
+    if (!hasExactKeys(message, notificationKeys) ||
+        (Object.prototype.hasOwnProperty.call(message, 'jsonrpc') && message.jsonrpc !== '2.0') ||
+        !isRecord(message.params) || !hasExactKeys(message.params, ['requestId', 'threadId']) ||
+        !isNativeServerRequestId(message.params.requestId) || !isIdentifier(message.params.threadId)) {
+      throw runnerError('native_server_resolution_invalid');
+    }
+    const idKey = nativeRequestIdKey(message.params.requestId);
+    const pending = pendingNativeRequests.get(idKey);
+    if (!pending) throw runnerError('native_server_resolution_unmatched');
+    if (pending.generation !== generation || pending.child !== child || !childSpawned ||
+        !['starting', 'running'].includes(state) || message.params.threadId !== pending.threadId ||
+        !nativeIdentity || nativeIdentity.nativeId !== pending.threadId || !nativeContext ||
+        nativeContext.nativeContextId !== pending.turnId ||
+        (terminalContextId !== null && terminalContextId !== pending.turnId)) {
+      throw runnerError('native_server_resolution_scope_mismatch');
+    }
+    pendingNativeRequests.delete(idKey);
+    pendingNativeRequestRevision += 1n;
+  }
+
+  function captureNativePendingSummary(threadId, turnId) {
+    if (!isIdentifier(threadId) || !isIdentifier(turnId) || state !== 'running' || !childSpawned || !child ||
+        !nativeIdentity || nativeIdentity.nativeId !== threadId || !nativeContext ||
+        nativeContext.nativeContextId !== turnId || terminalContextId || turnStartPending || activeWait ||
+        instructionStart || instructionUncertain) return null;
+    const capturedGeneration = generation;
+    const capturedChild = child;
+    const capturedRevision = pendingNativeRequestRevision;
+    const counts = new Map([['question', 0], ['approval', 0]]);
+    for (const request of pendingNativeRequests.values()) {
+      if (request.generation !== capturedGeneration || request.child !== capturedChild ||
+          request.threadId !== threadId || request.turnId !== turnId) return null;
+      const category = request.kind === 'user_input' ? 'question' :
+        ['command_approval', 'file_change_approval', 'permissions_approval'].includes(request.kind) ? 'approval' : null;
+      if (!category) return null;
+      counts.set(category, counts.get(category) + 1);
+    }
+    const pending = [...counts]
+      .filter(([, count]) => count > 0)
+      .map(([kind, count]) => Object.freeze({ kind, count }));
+    const checkCurrent = () => {
+      if (pendingNativeRequestRevision !== capturedRevision || generation !== capturedGeneration || child !== capturedChild ||
+          state !== 'running' || !childSpawned || !nativeIdentity || nativeIdentity.nativeId !== threadId || !nativeContext ||
+          nativeContext.nativeContextId !== turnId || terminalContextId || turnStartPending || activeWait ||
+          instructionStart || instructionUncertain) return false;
+      for (const request of pendingNativeRequests.values()) {
+        if (request.generation !== capturedGeneration || request.child !== capturedChild ||
+            request.threadId !== threadId || request.turnId !== turnId) return false;
+      }
+      return true;
+    };
+    const capture = Object.freeze({ pending: Object.freeze(pending), checkCurrent });
+    return checkCurrent() ? capture : null;
+  }
+
   function parseWaitRequest(message) {
     const requestKeys = Object.prototype.hasOwnProperty.call(message, 'jsonrpc')
       ? ['jsonrpc', 'id', 'method', 'params']
@@ -1107,7 +1257,7 @@ function createOwnedNativeRunner(options) {
 
 
   function captureInstruction(metadata) {
-    if (state !== 'running' || !ownedSource || !nativeIdentity || !nativeContext || activeWait || instructionStart || instructionUncertain ||
+    if (state !== 'running' || !ownedSource || !nativeIdentity || !nativeContext || activeWait || pendingNativeRequests.size > 0 || instructionStart || instructionUncertain ||
         provider === 'codex' && !initializeHomeConfirmed || provider !== 'codex' && metadata.mode === 'steer') return null;
     const capture = { generation, identity: nativeIdentity, contextId: nativeContext.nativeContextId, terminal: terminalContextId, child, lease: sourceController.captureInstructionLease() };
     return checkInstruction(capture, metadata) ? capture : null;
@@ -1118,7 +1268,7 @@ function createOwnedNativeRunner(options) {
       sourceController.isLeaseTokenCurrent(capture.lease) === true;
   }
   function checkInstruction(capture, metadata) {
-    return Boolean(checkInstructionPhysical(capture) && !activeWait && !instructionUncertain &&
+    return Boolean(checkInstructionPhysical(capture) && !activeWait && pendingNativeRequests.size === 0 && !instructionUncertain &&
       (!claudeWait || !claudeWait.controller.transitioning() && (metadata.mode !== 'start' || !claudeWait.controller.inputInFlight())) &&
       (!instructionStart || instructionStart.capture === capture) &&
       nativeContext?.nativeContextId === capture.contextId && terminalContextId === capture.terminal &&
@@ -1204,7 +1354,16 @@ function createOwnedNativeRunner(options) {
           handleWaitToolCall(message);
           return;
         }
+        if (['item/tool/requestUserInput', 'item/permissions/requestApproval',
+          'item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(message.method)) {
+          recordNativeHoldRequest(message);
+          return;
+        }
         throw runnerError('unknown_server_request');
+      }
+      if (message.method === 'serverRequest/resolved') {
+        resolveNativeHoldRequest(message);
+        return;
       }
       if (message.method === 'account/login/completed') {
         handleLoginCompleted(message.params);
@@ -1640,7 +1799,9 @@ function createOwnedNativeRunner(options) {
     return stopPromise;
   }
 
-  const runner = { start, stop, snapshot: safeSnapshot };
+  const runner = { start, stop, snapshot: safeSnapshot,
+    canPrepareInstruction(value) { return instructionController?.canPrepare(value) === true; },
+    captureNativePendingSummary };
   if (waitProfile) {
     runner.releaseWait = releaseWait;
     runner.cancelWait = cancelWait;
