@@ -8,7 +8,7 @@
       "key": "answer.options",
       "bounds": {
         "x": 52,
-        "y": 165,
+        "y": 166,
         "width": 1478,
         "height": 231
       },
@@ -18,7 +18,7 @@
       "key": "answer.recommended",
       "bounds": {
         "x": 52,
-        "y": 165,
+        "y": 166,
         "width": 1478,
         "height": 112
       },
@@ -28,7 +28,7 @@
       "key": "answer.ok",
       "bounds": {
         "x": 32,
-        "y": 432,
+        "y": 433,
         "width": 256,
         "height": 81
       },
@@ -38,7 +38,7 @@
       "key": "answer.meta",
       "bounds": {
         "x": 32,
-        "y": 529,
+        "y": 530,
         "width": 1518,
         "height": 38
       },
@@ -48,7 +48,7 @@
       "key": "answer.note",
       "bounds": {
         "x": 32,
-        "y": 583,
+        "y": 584,
         "width": 1518,
         "height": 126
       },
@@ -88,7 +88,7 @@
       "key": "answer.picked",
       "bounds": {
         "x": 52,
-        "y": 285,
+        "y": 286,
         "width": 1478,
         "height": 111
       },

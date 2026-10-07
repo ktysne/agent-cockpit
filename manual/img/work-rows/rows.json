@@ -11,7 +11,7 @@
       "key": "rows.heading",
       "bounds": {
         "x": 0,
-        "y": 0,
+        "y": 1,
         "width": 1576,
         "height": 42
       },
@@ -21,7 +21,7 @@
       "key": "rows.main-state",
       "bounds": {
         "x": 120,
-        "y": 66,
+        "y": 67,
         "width": 78,
         "height": 42
       },
@@ -41,7 +41,7 @@
       "key": "rows.main-tool",
       "bounds": {
         "x": 20,
-        "y": 164,
+        "y": 165,
         "width": 1536,
         "height": 44
       },
@@ -51,7 +51,7 @@
       "key": "rows.main-time",
       "bounds": {
         "x": 1488,
-        "y": 66,
+        "y": 67,
         "width": 68,
         "height": 38
       },
@@ -61,7 +61,7 @@
       "key": "rows.agent-who",
       "bounds": {
         "x": 20,
-        "y": 314,
+        "y": 315,
         "width": 1436,
         "height": 44
       },
@@ -71,7 +71,7 @@
       "key": "rows.agent-description",
       "bounds": {
         "x": 20,
-        "y": 366,
+        "y": 367,
         "width": 1536,
         "height": 45
       },
@@ -81,7 +81,7 @@
       "key": "rows.route",
       "bounds": {
         "x": 20,
-        "y": 422,
+        "y": 423,
         "width": 127,
         "height": 40
       },
@@ -101,7 +101,7 @@
       "key": "rows.agent-time",
       "bounds": {
         "x": 1476,
-        "y": 314,
+        "y": 315,
         "width": 80,
         "height": 38
       },
@@ -111,7 +111,7 @@
       "key": "rows.ended",
       "bounds": {
         "x": 0,
-        "y": 489,
+        "y": 490,
         "width": 1576,
         "height": 175
       },
@@ -121,7 +121,7 @@
       "key": "rows.toggle",
       "bounds": {
         "x": 0,
-        "y": 676,
+        "y": 677,
         "width": 264,
         "height": 64
       },

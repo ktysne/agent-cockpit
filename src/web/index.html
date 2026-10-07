@@ -283,7 +283,15 @@ h3.sub .count { font-weight: normal; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
 .pr .xr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-/* タスクの行と同じく、題の中で折り返して札と操作を同じ行に残す。 */
+/* 文字は左の列の中で折り返し、操作は右の列に縦に積む。操作の幅で題が潰れないよう、行の中に操作を混ぜない。 */
+.pr-body { display: flex; gap: 12px; align-items: stretch; }
+.pr-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pr-text > .badges { margin-top: 0; }
+/* 幅を固定して行をまたいで操作の縦の並びをそろえ、区切り線は PR の高さいっぱいに引いて中身だけ中央に置く。 */
+.pr-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: stretch; gap: 6px; }
+.pr-actions .merge-btn, .pr-actions .conflict-btn { margin-left: 0; width: 100%; padding-inline: 8px; }
+.merge-state { color: var(--text-2); font-size: 11px; text-align: center; }
+.merge-state.ok { color: var(--ok-text); font-weight: 600; }
 .pr .pline { display: flex; gap: 8px; align-items: baseline; }
 .pr .pline > * { flex: none; }
 .pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
@@ -362,7 +370,7 @@ h3.sub .count { font-weight: normal; }
 }
 /* これより狭いと、札と操作を同じ行に残したときに題が数文字の幅しか残らないため、要素ごとに折り返す。 */
 @media (max-width: 480px) {
-  .task-head, .pr .pline { flex-wrap: wrap; }
+  .task-head { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 </style>
@@ -1930,7 +1938,7 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   target.append(panel);
 }
 
-function appendPullRequestConflictControls(line, details, group, pullRequest) {
+function appendPullRequestConflictControls(actions, text, details, group, pullRequest) {
   if (!pullRequest.conflict) return;
   const uiKey = pullRequestConflictUiKey(group, pullRequest);
   const names = pullRequestConflictTargetNames(pullRequest, true);
@@ -1938,7 +1946,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
   button.type = 'button';
   button.dataset.conflictOpen = uiKey;
   button.disabled = !names.length || !pullRequest.conflictRequestKey || pullRequestConflictConfirmations.has(uiKey) || pullRequestConflictInFlight.has(uiKey);
-  line.append(button);
+  actions.append(button);
 
   if (pullRequest.conflictRequest) {
     const recipients = pullRequestConflictSessionNames(pullRequest.conflictRequest.sessionIds);
@@ -1947,7 +1955,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
     const status = element('div', 'badges');
     status.setAttribute('role', 'status');
     status.append(badge(`${time} に ${namesForStatus.join('、')} のセッションへ衝突の解消を依頼した`, 'accent long'));
-    details.append(status);
+    text.append(status);
   }
 
   if (!names.length) {
@@ -1955,7 +1963,7 @@ function appendPullRequestConflictControls(line, details, group, pullRequest) {
     const reason = allTargets.length
       ? `依頼先の ${pullRequestConflictTargetNames(pullRequest).join('、')} のセッションが終了している`
       : 'PR を登録したセッションがありません';
-    details.append(element('div', 'why-not', `衝突の解消を依頼できない理由: ${reason}`));
+    text.append(element('div', 'why-not', `衝突の解消を依頼できない理由: ${reason}`));
   }
 
   if (pullRequestConflictConfirmations.has(uiKey)) {
@@ -1988,26 +1996,27 @@ function appendPullRequestTree(target, group, pullRequest) {
   link.rel = 'noopener noreferrer';
   link.setAttribute('aria-label', `GitHub で PR #${pullRequest.number} を開く`);
   line.append(link, element('span', 'ptitle', pullRequest.title));
-  if (!mergeIntent && conditionMet) line.append(badge('マージできます', 'ok'));
-  else if (!mergeIntent && pullRequest.canMerge) line.append(badge('マージ操作は可能', 'mute'));
+  const body = element('div', 'pr-body');
+  const text = element('div', 'pr-text');
+  const actions = element('div', 'pr-actions');
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
   const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
   if (mergeKey && mergeIntent) {
-    line.append(badge('マージキューに追加済み (未マージ)', 'accent'));
     if (queued && !pullRequest.mergeIntent) {
       const left = element('button', 'link-btn', 'キューから外れた');
       left.type = 'button';
       left.dataset.queueLeft = mergeKey;
       left.title = 'GitHub でキューから外れたときに押すと、マージの操作に戻る';
-      line.append(left);
+      actions.append(left);
     }
   } else if (mergeKey && (reservation || pullRequest.canMerge)) {
+    if (conditionMet) actions.append(element('span', 'merge-state ok', 'マージできます'));
+    else if (pullRequest.canMerge) actions.append(element('span', 'merge-state', 'マージ操作は可能'));
     const merge = element('button', `merge-btn ${conditionMet ? '' : 'outline'}`.trim(), 'マージする');
     merge.type = 'button';
     merge.dataset.openMerge = mergeKey;
     merge.dataset.mergeKey = mergeKey;
     merge.disabled = Boolean(confirmation) || pullRequestMergeInFlight.has(mergeKey);
-    line.append(merge);
     // 方式が取れないときに塞ぐのは新しい予約だけにする。既存の予約は方式が分からなくても取り消せる必要がある。
     const reservationDisabled = pullRequestMergeInFlight.has(mergeKey) || (!reservation && !(group.mergeMethods || []).length);
     const reservationChoice = element('label', `reservation-toggle ${reservationDisabled ? 'disabled' : ''}`.trim());
@@ -2020,24 +2029,28 @@ function appendPullRequestTree(target, group, pullRequest) {
     reservationToggle.dataset.reservationToggle = mergeKey;
     reservationToggle.dataset.mergeKey = mergeKey;
     reservationToggle.setAttribute('aria-label', `PR #${pullRequest.number} のレビュー収束後マージを予約`);
-    reservationChoice.append(reservationToggle, document.createTextNode('レビュー収束後マージ'));
-    line.append(reservationChoice);
+    reservationChoice.append(reservationToggle, document.createTextNode('収束後マージ'));
+    actions.append(merge, reservationChoice);
   }
-  item.append(line);
+  text.append(line);
   const branch = element('div', 'branch');
   branch.append(element('code', '', pullRequest.headRefName), document.createTextNode(' → '), element('code', '', pullRequest.effectiveBase));
-  item.append(branch);
+  text.append(branch);
   const badges = element('div', 'badges');
+  if (mergeKey && mergeIntent) badges.append(badge('マージキューに追加済み (未マージ)', 'accent'));
   appendPullRequestBadges(badges, pullRequest);
   if (reservation) {
     const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest, group, reservation.method).join('、')})`;
     badges.append(badge(reservedText, 'accent long'));
   }
-  item.append(badges);
-  if (pullRequest.crossReview !== undefined) item.append(crossReviewLine(pullRequest));
-  if (!reservation && !pullRequest.canMerge && pullRequest.blocker) item.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
-  else if (!reservation && waiting.length) item.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
-  if (pullRequest.conflict) appendPullRequestConflictControls(line, item, group, pullRequest);
+  text.append(badges);
+  if (pullRequest.crossReview !== undefined) text.append(crossReviewLine(pullRequest));
+  if (!reservation && !pullRequest.canMerge && pullRequest.blocker) text.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
+  else if (!reservation && waiting.length) text.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
+  body.append(text);
+  item.append(body);
+  if (pullRequest.conflict) appendPullRequestConflictControls(actions, text, item, group, pullRequest);
+  if (actions.children.length) body.append(actions);
   if (mergeKey && confirmation && !mergeIntent) appendPullRequestMergeConfirmation(item, group, pullRequest);
   const mergeMessage = mergeKey ? pullRequestMergeMessages.get(mergeKey) : null;
   if (mergeMessage && !pullRequestTransientNoticeExpired(mergeMessage.shownAt)) {
