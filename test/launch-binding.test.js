@@ -326,3 +326,39 @@ test('launch storage stops at its bounded capacity', () => {
   }), evidence('capacity-overflow-evidence')), 'capacity');
   assert.equal(kernel.registry.snapshot().launches.length, 10_000);
 });
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider} launch authority revisions track only mutations and cannot be cloned or restored`, () => {
+    const native = identity(provider);
+    const registration = createFakeRegistrationRegistry([{ periodId: 'stamp-period', identity: native }]);
+    const kernel = createLaunchBindingKernel({ registrationRegistry: registration.registry });
+    const initial = kernel.registry.captureAuthorityRevision();
+    for (const foreign of [undefined, {}, structuredClone(initial), JSON.parse(JSON.stringify(initial)), createLaunchBindingKernel({ registrationRegistry: registration.registry }).registry.captureAuthorityRevision()]) {
+      assert.equal(kernel.registry.checkAuthorityRevision(foreign), false);
+    }
+    const input = claims({ provider, nativeIdKind: native.nativeIdKind });
+    kernel.registry.observe(input, evidence('stamp-observe'));
+    kernel.registry.snapshot();
+    assert.equal(kernel.registry.checkAuthorityRevision(initial), true);
+    const launch = kernel.authority.registerLaunch(input, evidence('stamp-register'));
+    assert.equal(kernel.registry.checkAuthorityRevision(initial), false);
+    let current = kernel.registry.captureAuthorityRevision();
+    kernel.authority.registerLaunch(input, evidence('stamp-register'));
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    const request = { identity: native, executionBinding: periodBinding('stamp-period'), evidence: evidence('stamp-bind', { registrationRef: launch.launchRef }) };
+    kernel.authority.bindExecution(launch.launchRef, request);
+    assert.equal(kernel.registry.checkAuthorityRevision(current), false);
+    current = kernel.registry.captureAuthorityRevision();
+    kernel.authority.bindExecution(launch.launchRef, request);
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    assert.throws(() => kernel.authority.bindExecution(launch.launchRef, { ...request, executionBinding: periodBinding('other') }));
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    kernel.authority.endLaunch(launch.launchRef);
+    assert.equal(kernel.registry.checkAuthorityRevision(current), false);
+    current = kernel.registry.captureAuthorityRevision();
+    kernel.authority.endLaunch(launch.launchRef);
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    assert.equal(kernel.registry.checkAuthorityRevision(initial), false);
+    assert.equal(JSON.stringify(kernel.registry.snapshot()).includes('authorityRevision'), false);
+  });
+}

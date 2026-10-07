@@ -87,3 +87,30 @@ PRには対象シナリオID、関連Issue、ClaudeとCodexそれぞれの結果
 featureをmainへ提出する前に、採用対象の共通機能について両adapterの適合試験、必要な実runtime接点試験、横断runtime試験の成功を確認する。
 採用対象に残す機能の未確認項目は解消する。
 未確認項目を残す場合は、開発者が承認した対象範囲の縮小または代替仕様によって採用対象から外し、理由、担当Issue、確認条件を記録する。
+
+## actor生存とcontext認可の適合
+
+#171-Bと#180-Aでは、main actor、canonical period、owned processの生存とcontext認可を別々に観測する。
+共通scenario ID-F04-B04、ID-F04-N06〜N14は両製品registration、launch、runtime adapterを通し、context終端、fresh context、owner chain、確定source失効、unknown connectionを検証する。
+独立した期待値、観測点、期限、禁止副作用は[codex-runtime-binding-core.md](codex-runtime-binding-core.md)と[native-launch-composition.md](native-launch-composition.md)で定義する。
+fixtureの成功は、real runtimeでの長寿命main actorや同periodの複数contextの実証へ合算しない。
+送信開始保存後のpayload認可は、opaque handleとowner chainを同期検査するcomposition facadeを採用条件にする。
+送信開始保存中のcontext失効はID-F05-N01で、両providerの実file storeとdelivery adapterへ固定trusted facadeを注入して確認する。
+葉のraw kernel proofが単独で有効でも、ancestor chainが失効したときはpayload sinkを0回に保つ。
+復旧後のunknownは自動再送せず、追加のcontextStateを保存schemaへ取り込まない。
+
+ID-F04-N13のcontext callbackは両providerで同じraw authority失効を拒否する。
+固定wait返信はCodexの実owned runnerとfake pipeを通すfixtureであり、実modelやログイン後runtimeの能力を証明しない。
+Claude固定waitはunsupportedのままで、共通callback試験の成功をClaude wait能力へ拡張しない。
+
+ID-F04-N14とID-F05-N02では最後のancestor callbackからのraw葉失効を両providerで検査する。
+canonical revisionとprivate proof capabilityの最終検査はcallbackを呼ばず、失効後のproof返却とpayload sinkを0回に保つ。
+
+## 実runtimeの回帰記録
+
+sourceSHA `6151af8f3b557db4c99e20a5a077e55927b0f3a2`で全体npm testは1421/1421件が通過し、fail、cancelled、skipped、todoは0件だった。
+2026年10月7日、同sourceSHAのcanonical revisionsとcallbackなしの最終proof guardを含むv1経路をClaude Code 2.1.291の隔離HOMEで回帰確認した。
+standaloneの一回のassistant contextでproofとwriterの認可を確認し、終端後はactorとcanonical periodがactive、contextStateがendedとなり、旧proofとwriterを拒否した。
+owned stop後のchild exitとclose、通常Codex/Claude認証ファイルの不変、隔離認証artifactの新規作成0件を確認した。
+結果はexcludedな`.cross-review/native-live-binding-probe-results-claude-lifecycle-8fa31cf9-e215-4ede-a087-39e2ae17bc68.json`に保持する。
+実probeはstandaloneだけであり、最後のancestor callbackからの失効注入、複数context、delegated、handoff、reconnect、Codex waitはこの結果で実証していない。

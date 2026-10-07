@@ -3,7 +3,8 @@
 ## 対象と信頼境界
 
 Issue #171-BのCockpit側コアは、#171-Aの不変bindingを読み取り、現行ownerとcurrentProofを管理する。
-#170のcollectorは未実装であり、このコアのfixture成功は実native証拠の取得やruntime採用の完了を意味しない。
+#170の先行read-only collectorは実装済みだが、native issuerと同じsourceからのproof発行への接続は未確認である。
+このコアのfixture成功は実native証拠の取得やruntime採用の完了を意味しない。
 
 信頼済みdaemon組立コードだけがauthorityを保持する。
 接続の認証、HOMEの確定、native actor/contextの所属、起動との相関、handoff送信者の認証は、authorityを呼ぶ前にcollectorが検証する。
@@ -25,7 +26,7 @@ AのbindExecutionを再照合時に呼ぶと終了済みの起動元親を再要
 ## API
 
 製品ファイルはsrc/server/runtime-binding.jsとする。
-既存の登録核、launch核、state、events、store、server、MCP入口は変更しない。
+登録核とlaunch核にはcallbackなしのreadonly authority revisionを追加し、既存の保存schemaを維持する。
 
 `createRuntimeBindingKernel({registrationRegistry,launchRegistry})`はregistryとauthorityを返す。
 以下の入力は完全なschemaとして検査し、不明なclaimsキーを拒否する。
@@ -36,24 +37,35 @@ metadataの不明キーは捨てる。
 | authority.adoptExecution(launchRef, immutableExecutionClaims) | Aのbound記録と完全一致した固定値を取り込み、初期owner、generation 0、proof nullを保持。同内容再送は冪等。native検証への昇格はしない |
 | authority.openConnection(scope, connectionId, evidence) | scopeはprovider/nativeIdKind/hostId/homeScopeId/connectionSlotId。返却値は{connectionHandle,connectionGeneration}。同slotの新しいconnectionIdで内部世代を1増やし、旧接続を失効。同じlive接続と同証拠は冪等。切断済みIDを再使用しない |
 | authority.disconnect(connectionHandle) | 当該接続を失効。旧接続の遅延disconnectは新接続に影響しない |
-| authority.attestActor(connectionHandle, claims, evidence) | claimsはidentity/periodId/actor/contextId/launchRef/immutableExecutionClaims。owner単独の証明では末尾2項をnull。子証明はlaunchRefと完全な固定値を明示。返却値は{actorHandle}。接続scope、同じ#166のactive期間、A bindingを照合 |
+| authority.attestActor(connectionHandle, claims, evidence, mutationGuard?) | claimsはidentity/periodId/actor/contextId/launchRef/immutableExecutionClaims。owner単独の証明では末尾2項をnull。子証明はlaunchRefと完全な固定値を明示。返却値は{actorHandle}。接続scope、同じ#166のactive期間、A bindingを照合 |
+| authority.endContext(actorHandle) | 現接続の当該identity、period、actor、contextだけを不可逆に終了。同じcontextのalias handleと旧proofを失効し、actorと期間は終了しない。旧接続の遅延終了はfalse |
 | authority.endActor(actorHandle) | 当該period/actorを不可逆に終了。別contextの同actorも失効。同じ期間での再attestを拒否 |
-| authority.reconcileExecution(launchRef, {executionActorHandle,ownerActorHandle,expectedOwnerGeneration}) | 子と現行ownerの新鮮なactor証明を照合して{proofHandle,currentProof}を返す。実行側claimの省略やowner世代不一致は拒否 |
+| authority.reconcileExecution(launchRef, {executionActorHandle,ownerActorHandle,expectedOwnerGeneration}, mutationGuard?) | 子と現行ownerの新鮮なactor証明を照合して{proofHandle,currentProof}を返す。実行側claimの省略やowner世代不一致は拒否 |
 | authority.handoff(launchRef, transition, newOwnerActorHandle) | 認証済みtransitionのCASを実行し、proofをnullにする。新ownerのfresh actor証明を要求。旧ownerの生存は要求しない |
+| registry.checkCurrentConnection(connectionHandle) | private opaque handleの現在の接続世代とslotを同期検査しbooleanを返す。JSON複製、他kernel、旧接続はfalse。metadataからcapabilityを復元しない |
+| registry.checkProofCapability(launchRef, opaqueHandle) | callbackなしの同期boolean検査。private proof所属、latest、immutable claims、owner世代、execution/owner接続、actor/context tombstoneを確認する。foreign handleはfalse。canonical period/launchの現状態は別のrevision検査を必要とする。 |
 | registry.checkCurrentProof(launchRef, proofHandle) | A state、固定値、子とownerの#166期間、actor終了、両接続世代、現行owner世代、最新proofを使用直前に再検査し、okと理由を返す |
 | registry.observe(identity, metadata) | 未確認観測を保持するだけ。取り込み、接続登録、actor証明、writer発行を行わない |
 | registry.get(launchRef), registry.snapshot() | 深いコピーの公開情報。capabilityを含めず、失効したcurrentProofはnull |
 
+actorの生存はtrusted native attestationを受けた記録だけから判定する。
+active期間、PID、プロセスの存在だけではactor証明を作らない。
+context終端は当該contextの認可だけを失効し、actor、canonical期間、owned processの寿命を変更しない。
+proofの使用、再照合、handoff先の認可にはactor生存とcontext有効性の両方を要求する。
+
 接続失効だけではactorを終了しない。
 snapshotのactor状態は、期間終了またはactor終了ならended、接続失効だけならunknown、active期間と現行接続ならactiveとする。
 旧世代のactorHandleによる遅延endActorは現行actorを終了させない。
+snapshotには既存actor stateに加えてcontextStateを返し、context終端後もactor stateはactiveのまま、contextStateはendedとなる。
 
 connectionHandle、actorHandle、proofHandleは空の凍結objectとprivate WeakMapで管理する。
 JSON複製、別kernel発行、公開snapshotから復元したobjectは受理しない。
 接続slotとconnectionId、起動、証拠、actor tombstoneは上限を持ち、上限超過をfail closedで拒否する。
 接続IDと証拠IDの同内容再送と別内容すり替えを区別する。
 同じ接続世代、完全identity、contextIdの組を異なるperiod/actorへ再割当しない。
-異なるidentityや新接続世代では同名contextIdを許す。
+異なるidentityまたは期間では同名contextIdを区別する。
+確定終了済みcontextはidentity、period、actor、contextIdの組で保持し、新接続世代でも再attestを拒否する。
+終了が確定していないcontextの新接続世代での再attestは許し、fresh証拠との再照合を要求する。
 
 handoff transitionはhandoffId、expectedOwner、expectedOwnerGeneration、newOwner、newOwnerGeneration、immutableExecutionClaims、evidenceを持つ。
 新世代は旧世代+1の安全な整数に限る。
@@ -86,6 +98,7 @@ fixture issuerはauthorityを保持するが、実native認証を模倣して完
 | ID-F03-B03 | 同じ#166へ登録した子とownerを完全claimでattestしてreconcile | 固定した子identity/bindingとowner、世代0のproofを返す。Aを変更せず、writerを発行しない |
 | ID-F04-B01 | 子またはownerの同slotを新connectionIdで再接続。旧disconnectと旧attestを遅れて送る | 旧proofを拒否。期間を新設せず、旧disconnectは新接続を失効させない。失効側を再attestし両側をreconcileするまでproofなし |
 | ID-F04-B02 | active期間のactor終了、#166期間終了、A launch終了を別々に行う | それぞれ既存proofを拒否。actor終了は同actorの別contextも失効。再送や新接続で終了actorを復活させず、他actorや子期間を終了しない |
+| ID-F04-B04 | Claude/Codexの子または異provider owner contextを終了し、alias、再送、同slot再接続、fresh contextを順に照合する | 旧proofとended contextの再attestを拒否。actor stateはactive、contextStateはended。fresh contextの明示reconcileだけが新proofを作り、旧opaque proofは復活しない。registration、既存writer認可、A binding、owner世代を変更しない |
 | ID-F09-B01 | 世代0から1へのhandoff、同ID同内容再送、同ID別内容、旧CAS、世代飛び、固定値変更を順に送る | 正しいtransitionだけ1回反映し、受理後proofはnull。再照合前の旧proofを拒否。固定値とA記録を維持 |
 | ID-F09-B02 | 起動元owner終了後、freshな新ownerへ認証済みhandoffし、子と新ownerを再照合 | 子の期間はactiveのまま。A bind再実行なしで新owner世代のproofを発行。未認証観測から自動handoffしない |
 | ID-F09-B03 | 1→2のhandoff後、0→1の同内容再送。snapshotを別kernelへ渡す | 過去receiptのみ返しownerは世代2のまま。snapshotとJSONは新kernelのproofにならない。復元によるowner権威を作らない |
@@ -95,7 +108,7 @@ fixture issuerはauthorityを保持するが、実native認証を模倣して完
 
 ## #170との合同試験ゲート
 
-collector採用前に、以下を実接続で満たす必要がある。
+先行read-only collectorからnative issuerとproof発行を接続して採用する前に、以下を実接続で満たす必要がある。
 
 1. 専用HOME、127.0.0.1 app-server、接続認証を確定し、外部JSONからauthorityへ到達する入口を設けない。
 2. 実socketごとのconnectionIdと安定slotを管理し、再接続時のsnapshotとイベントを同じ世代で照合する。遅延旧イベントは旧handleのまま拒否する。
@@ -112,7 +125,7 @@ collector採用前に、以下を実接続で満たす必要がある。
 この核は同じプロセスに保持した記録だけを権威として扱う。
 snapshotをauthorityへ戻すAPIは持たない。
 #177で認証されたcheckpointとhandoff履歴を再検証するまでは、再起動後のownerとproofを未確認として扱う。
-#170の実collector、#180-Aのrunner採用、#166-Bのwriter境界、#175の配信、#177の復元が通るまでIssue #171全体は完了にしない。
+#170のnative issuer接続、#180-Aのrunner採用、#166-Bのwriter境界、#175の配信、#177の復元が通るまでIssue #171全体は完了にしない。
 
 
 ## 外部bridge変更の候補
@@ -137,8 +150,30 @@ collectorのwire証拠が未確定なので、ここでは配置する差分や�
 
 専用単体試験10件と、Claude/Codex双方を通す共通scenario8件が通過した。
 共通scenarioにはstandalone self-owner、異provider owner、接続失効のunknown表示、現在owner終了、起動元終了後のhandoff、過去receipt再送を含む。
-全体のnpm testは1113件通過し、fail、cancelled、skipped、todoは0件だった。
+sourceSHA `6151af8f3b557db4c99e20a5a077e55927b0f3a2`の全体npm testは1421件通過し、fail、cancelled、skipped、todoは0件だった。
 この結果はfixture issuerを使ったコアと製品adapterの適合であり、実native認証や配送の成功件数へ合算しない。
 
 専用worktreeでCodeGraph init、sync、exploreを実行し、変更後も索引を同期してproof検査の影響範囲を確認した。
 担当サンドボックスのexploreはunable to open database fileで失敗したため、主担当が権限を拡張した同worktreeで実行し、現行ソースと照合した。
+
+## canonical authorityのrevision
+
+registrationとlaunchのregistryは`captureAuthorityRevision()`と`checkAuthorityRevision(opaqueStamp)`を持つ。
+stampはkernelごとのprivate frozen objectで、認可に影響するauthorityの実変更ごとに新しいobjectへ置き換える。
+新規登録、period終了、writerの作成と置換、launch bindingと終了はstampを更新する。
+途中で変更した後に例外が出ても、変更前のstampを有効に戻さない。
+拒否して変更しなかった操作と完全同一の冪等操作はstampを維持し、unverifiedなobserveや読取りでは更新しない。
+両methodはsnapshot、外部getter、clock、callbackを呼ばない。
+foreign kernel、JSON複製、復旧前のstampはfalseとなり、stampを保存schemaへ追加しない。
+現kernelには直接restore/reset/eviction APIがなく、復旧時は新kernelの初期stampとauthority replayで別の寿命を持つ。
+
+`checkProofCapability`はcanonical periodの生存やlaunch状態を単独では認可しない。
+compositionはmetadata検査前にcanonical stampを捕捉し、callbackを含む検査がすべて終わった後に両stampと全nodeのprivate proof capabilityを確認する。
+
+同sourceSHAのcanonical revisionsとcallbackなしの最終proof guardを含むstandalone v1 lifecycleは、実Claude Code 2.1.291でも回帰確認した。
+実証した正常認可、context終端後の拒否、認証ファイルとchild終了の範囲は[provider-conformance-testing.md](provider-conformance-testing.md)の実runtime回帰記録に記載する。
+
+owned sourceのattest/reconcileは任意のtrusted同期mutationGuardを渡す。
+guard指定時はcanonical registration/launch revision capabilitiesを必須とし、metadata callback完了後のguard exact true、両revision、private接続/context/actorとimmutable owner世代、latest proof同一性を確認してからMapを変更する。
+未指定の既存APIは同じ入力形式を維持する。
+具体的なloan/read receiptの寿命とfixtureは[同owned sourceのcollector結合](owned-native-source-collector.md)に記載する。

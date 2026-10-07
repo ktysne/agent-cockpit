@@ -293,6 +293,10 @@ function sanitizeManagedCollectorSnapshot(value) {
 }
 
 function createManagedCollector(options = {}) {
+  if (Object.hasOwn(options, 'ownedSourceAccessor')) {
+    const { createOwnedNativeSourceCollector } = require('./owned-native-source-collector');
+    return createOwnedNativeSourceCollector(options, sanitizeManagedCollectorSnapshot);
+  }
   const {
     provider,
     expectedHome,

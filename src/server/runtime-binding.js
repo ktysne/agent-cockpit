@@ -165,6 +165,12 @@ function actorEqual(left, right) {
 function bindingEqual(left, right) {
   return Boolean(left && right) && left.periodId === right.periodId && actorEqual(left.actor, right.actor);
 }
+function immutableClaimsEqual(left, right) {
+  return Boolean(left && right) && ['launchId', 'runId', 'attemptId', 'provider', 'nativeIdKind',
+    'hostId', 'homeScopeId', 'origin', 'purpose'].every((field) => left[field] === right[field]) &&
+    (left.originBinding === null && right.originBinding === null || bindingEqual(left.originBinding, right.originBinding)) &&
+    identityEqual(left.identity, right.identity) && bindingEqual(left.executionBinding, right.executionBinding);
+}
 function scopeMatchesIdentity(scope, identity) {
   return Boolean(scope && identity) && scope.provider === identity.provider &&
     scope.nativeIdKind === identity.nativeIdKind && scope.hostId === identity.hostId &&
@@ -227,12 +233,34 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
   const evidenceClaims = new Map();
   const actorClaims = new Map();
   const actorTombstones = new Set();
+  const contextTombstones = new Set();
   const proofByLaunch = new Map();
   const proofHandles = new WeakMap();
   const connectionHandles = new WeakMap();
   const actorHandles = new WeakMap();
   const handoffReceipts = new Map();
   const connectionIdClaims = new Map();
+
+  function captureMutationGuard(guard) {
+    if (guard === undefined) return null;
+    if (typeof guard !== 'function' ||
+        typeof registrationRegistry.captureAuthorityRevision !== 'function' ||
+        typeof registrationRegistry.checkAuthorityRevision !== 'function' ||
+        typeof launchRegistry.captureAuthorityRevision !== 'function' ||
+        typeof launchRegistry.checkAuthorityRevision !== 'function') throw runtimeError('source_guard_unavailable');
+    try {
+      return { guard, registration: registrationRegistry.captureAuthorityRevision(), launch: launchRegistry.captureAuthorityRevision() };
+    } catch { throw runtimeError('source_guard_unavailable'); }
+  }
+
+  function checkMutationGuard(captured) {
+    if (!captured) return;
+    try {
+      if (captured.guard() !== true ||
+          registrationRegistry.checkAuthorityRevision(captured.registration) !== true ||
+          launchRegistry.checkAuthorityRevision(captured.launch) !== true) throw runtimeError('source_guard_unavailable');
+    } catch { throw runtimeError('source_guard_unavailable'); }
+  }
 
   function readSnapshot() {
     let snapshot;
@@ -308,6 +336,10 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return JSON.stringify([scope.provider, scope.nativeIdKind, scope.hostId, scope.homeScopeId, scope.connectionSlotId]);
   }
   function actorKey(periodId, actor) { return JSON.stringify([periodId, actor.kind, actor.id]); }
+  function contextGroupKey(actor) {
+    return JSON.stringify([...IDENTITY_FIELDS.map((field) => actor.identity[field]),
+      actor.periodId, actor.actor.kind, actor.actor.id, actor.contextId]);
+  }
   function currentConnection(connection) {
     if (!connection || !connection.active) return false;
     const latest = slotStates.get(connection.slotKey);
@@ -328,6 +360,15 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return { ok: true, period };
   }
 
+  function currentContextState(actor, snapshot) {
+    const state = currentActorState(actor, snapshot);
+    if (!state.ok) return state;
+    if (contextTombstones.has(contextGroupKey(actor))) {
+      return { ok: false, reason: actor.isExecution ? 'execution_context_ended' : 'owner_context_ended' };
+    }
+    return state;
+  }
+
   function verifyChildPeriodForProof(snapshot, source, claims) {
     const period = activePeriod(snapshot, claims.executionBinding.periodId);
     return Boolean(period && identityEqual(period.identity, claims.identity) &&
@@ -344,9 +385,9 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     if (runtime.ownerGeneration !== proof.ownerGeneration || !bindingEqual(runtime.currentOwner, proof.owner)) {
       return { ok: false, reason: 'owner_generation_mismatch' };
     }
-    const execution = currentActorState({ ...proof.executionActor, isExecution: true }, snapshot);
+    const execution = currentContextState({ ...proof.executionActor, isExecution: true }, snapshot);
     if (!execution.ok) return execution;
-    const owner = currentActorState({ ...proof.ownerActor, isExecution: false }, snapshot);
+    const owner = currentContextState({ ...proof.ownerActor, isExecution: false }, snapshot);
     if (!owner.ok) return owner;
     if (!bindingEqual(runtime.currentOwner, { periodId: proof.ownerActor.periodId, actor: proof.ownerActor.actor })) {
       return { ok: false, reason: 'owner_conflict' };
@@ -453,6 +494,10 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return connection;
   }
 
+  function checkCurrentConnection(connectionHandle) {
+    return currentConnection(connectionHandles.get(connectionHandle));
+  }
+
   function disconnect(connectionHandle) {
     const connection = connectionHandles.get(connectionHandle);
     if (!connection || !currentConnection(connection)) return false;
@@ -460,7 +505,8 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return true;
   }
 
-  function attestActor(connectionHandle, claimsInput, evidenceInput) {
+  function attestActor(connectionHandle, claimsInput, evidenceInput, mutationGuard) {
+    const guarded = captureMutationGuard(mutationGuard);
     const connection = getConnection(connectionHandle);
     const claims = normalizeActorClaims(claimsInput);
     const evidence = normalizeEvidence(evidenceInput);
@@ -481,6 +527,7 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
       }
     }
     if (actorTombstones.has(actorKey(claims.periodId, claims.actor))) throw runtimeError('actor_ended');
+    if (contextTombstones.has(contextGroupKey(claims))) throw runtimeError('context_ended');
     const contextKey = JSON.stringify([connection.connectionId, connection.generation,
       ...IDENTITY_FIELDS.map((field) => claims.identity[field]), claims.contextId]);
     const subject = { connectionId: connection.connectionId, connectionGeneration: connection.generation, claims };
@@ -494,6 +541,9 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
           ? 'actor_ended' : fresh.reason.includes('period_ended') ? 'stale_period' : fresh.reason;
         throw runtimeError(code);
       }
+      checkMutationGuard(guarded);
+      if (!currentConnection(connection) || actorTombstones.has(previous.actor.actorLifeKey) ||
+          contextTombstones.has(previous.actor.contextLifeKey)) throw runtimeError('stale_connection');
       return { actorHandle: previous.handle };
     }
     const evidenceClaim = assertEvidenceAvailable(evidence, 'actor', subject);
@@ -501,8 +551,12 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     const actor = { identity: cloneIdentity(claims.identity), periodId: claims.periodId,
       actor: cloneActor(claims.actor), contextId: claims.contextId, launchRef: claims.launchRef,
       immutableExecutionClaims: launchClaims ? cloneClaims(launchClaims) : null,
-      connection, evidence: cloneEvidence(evidence) };
+      connection, evidence: cloneEvidence(evidence),
+      actorLifeKey: actorKey(claims.periodId, claims.actor), contextLifeKey: contextGroupKey(claims) };
     const handle = Object.freeze({});
+    checkMutationGuard(guarded);
+    if (!currentConnection(connection) || actorTombstones.has(actor.actorLifeKey) ||
+        contextTombstones.has(actor.contextLifeKey)) throw runtimeError('stale_connection');
     actorHandles.set(handle, actor);
     actorClaims.set(contextKey, { fingerprint, actor, handle });
     commitEvidence(evidence, evidenceClaim.fingerprint, contextKey);
@@ -518,20 +572,31 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return true;
   }
 
+  function endContext(actorHandle) {
+    const actor = actorHandles.get(actorHandle);
+    if (!actor) throw runtimeError('foreign_actor_handle');
+    if (!currentConnection(actor.connection)) return false;
+    contextTombstones.add(contextGroupKey(actor));
+    return true;
+  }
+
   function requireActor(actorHandle) {
     const actor = actorHandles.get(actorHandle);
     if (!actor) throw runtimeError('foreign_actor_handle');
-    const state = currentActorState(actor, readSnapshot());
+    const state = currentContextState(actor, readSnapshot());
     if (!state.ok) {
       const code = state.reason === 'execution_actor_ended' || state.reason === 'owner_actor_ended'
         ? 'actor_ended' : state.reason.includes('period_ended') ? 'stale_period' :
-          state.reason === 'stale_connection' ? 'stale_connection' : 'identity_mismatch';
+          state.reason === 'stale_connection' ? 'stale_connection' :
+          state.reason.includes('context_ended') ? 'context_ended' : 'identity_mismatch';
       throw runtimeError(code);
     }
     return actor;
   }
 
-  function reconcileExecution(launchRef, input) {
+  function reconcileExecution(launchRef, input, mutationGuard) {
+    const guarded = captureMutationGuard(mutationGuard);
+    const expectedLatestProof = proofByLaunch.get(launchRef);
     if (!isRecord(input) || !hasExactKeys(input,
         ['executionActorHandle', 'ownerActorHandle', 'expectedOwnerGeneration']) ||
         !Number.isSafeInteger(input.expectedOwnerGeneration) || input.expectedOwnerGeneration < 0) {
@@ -558,6 +623,12 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     if (!status.ok) throw runtimeError(status.reason === 'execution_period_ended' ? 'stale_period' :
       status.reason === 'stale_launch' ? 'stale_launch' : status.reason === 'registry_unavailable' ? 'registry_unavailable' : 'stale_connection');
     const proofHandle = Object.freeze({});
+    checkMutationGuard(guarded);
+    if ((guarded && proofByLaunch.get(launchRef) !== expectedLatestProof) ||
+        !immutableClaimsEqual(runtime.claims, claims) || runtime.ownerGeneration !== proof.ownerGeneration ||
+        !bindingEqual(runtime.currentOwner, proof.owner) || ![executionActor, ownerActor].every((actor) =>
+          currentConnection(actor.connection) && !actorTombstones.has(actor.actorLifeKey) &&
+          !contextTombstones.has(actor.contextLifeKey))) throw runtimeError('stale_connection');
     proofHandles.set(proofHandle, proof);
     proofByLaunch.set(launchRef, proof);
     runtime.currentProof = publicProof(proof);
@@ -645,6 +716,39 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     return { ok: true, reason: 'accepted' };
   }
 
+  function checkProofCapability(launchRef, proofHandle) {
+    const runtime = launches.get(launchRef);
+    const proof = proofHandles.get(proofHandle);
+    if (!runtime || !proof || proof.launchRef !== launchRef || proofByLaunch.get(launchRef) !== proof ||
+        !immutableClaimsEqual(runtime.claims, proof.claims) ||
+        runtime.ownerGeneration !== proof.ownerGeneration || !bindingEqual(runtime.currentOwner, proof.owner)) return false;
+    const execution = proof.executionActor;
+    const owner = proof.ownerActor;
+    if (!execution || !owner || execution.launchRef !== launchRef ||
+        !immutableClaimsEqual(execution.immutableExecutionClaims, runtime.claims) ||
+        !identityEqual(execution.identity, runtime.claims.identity) ||
+        !bindingEqual({ periodId: execution.periodId, actor: execution.actor }, runtime.claims.executionBinding) ||
+        !bindingEqual({ periodId: owner.periodId, actor: owner.actor }, runtime.currentOwner)) return false;
+    return [execution, owner].every((actor) => currentConnection(actor.connection) &&
+      scopeMatchesIdentity(actor.connection.scope, actor.identity) &&
+      !actorTombstones.has(actor.actorLifeKey) &&
+      !contextTombstones.has(actor.contextLifeKey));
+  }
+
+  function checkActorLifeCapability(launchRef, actorHandle, expectedOwnerGeneration) {
+    const runtime = launches.get(launchRef);
+    const actor = actorHandles.get(actorHandle);
+    return Boolean(runtime && actor && Number.isSafeInteger(expectedOwnerGeneration) &&
+      runtime.ownerGeneration === expectedOwnerGeneration && runtime.claims.origin === 'standalone' &&
+      runtime.claims.purpose === 'agent' && actor.launchRef === launchRef &&
+      immutableClaimsEqual(actor.immutableExecutionClaims, runtime.claims) &&
+      identityEqual(actor.identity, runtime.claims.identity) &&
+      bindingEqual({ periodId: actor.periodId, actor: actor.actor }, runtime.claims.executionBinding) &&
+      bindingEqual(runtime.currentOwner, runtime.claims.executionBinding) && currentConnection(actor.connection) &&
+      scopeMatchesIdentity(actor.connection.scope, actor.identity) && !actorTombstones.has(actor.actorLifeKey) &&
+      contextTombstones.has(actor.contextLifeKey));
+  }
+
   function observe(identityInput, metadataInput) {
     const identity = normalizeIdentity(identityInput);
     const metadata = normalizeEvidence(metadataInput, false);
@@ -676,14 +780,16 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
         connectionGeneration: actor.connection.generation,
         state: actorTombstones.has(actorKey(actor.periodId, actor.actor)) || !activePeriod(registrationSnapshot, actor.periodId)
         ? 'ended' : currentConnection(actor.connection) ? 'active' : 'unknown',
+        contextState: contextTombstones.has(contextGroupKey(actor)) ? 'ended' :
+          currentContextState(actor, registrationSnapshot).ok ? 'active' : 'unknown',
       evidence: cloneEvidence(actor.evidence) })),
       handoffs: [...handoffReceipts.values()].map(({ receipt }) => cloneReceipt(receipt)),
     };
   }
 
-  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof });
+  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof, checkCurrentConnection, checkProofCapability, checkActorLifeCapability });
   const authority = Object.freeze({ adoptExecution, openConnection, disconnect, attestActor,
-    endActor, reconcileExecution, handoff });
+    endActor, endContext, reconcileExecution, handoff });
   return Object.freeze({ registry, authority });
 }
 
@@ -754,14 +860,14 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
       if (!connectionHandles.has(connectionHandle)) return false;
       return authority.disconnect(connectionHandle);
     },
-    attestActor(connectionHandle, claims, evidence) {
+    attestActor(connectionHandle, claims, evidence, mutationGuard) {
       if (!connectionHandles.has(connectionHandle)) throw runtimeError('foreign_connection_handle');
       const normalized = normalizeActorClaims(claims);
       if (!normalized || normalized.identity.provider !== provider || normalized.identity.nativeIdKind !== expectedKind ||
           (normalized.immutableExecutionClaims &&
            (normalized.immutableExecutionClaims.provider !== provider ||
             normalized.immutableExecutionClaims.nativeIdKind !== expectedKind))) throw runtimeError('provider_mismatch');
-      const attested = authority.attestActor(connectionHandle, claims, evidence);
+      const attested = authority.attestActor(connectionHandle, claims, evidence, mutationGuard);
       claimAdapterHandle(attested.actorHandle, ACTOR_HANDLE_ADAPTER_OWNERS, adapterOwner, 'foreign_actor_handle');
       actorHandles.add(attested.actorHandle);
       return attested;
@@ -770,10 +876,15 @@ function createProviderRuntimeAdapter(provider, registry, authority) {
       if (!actorHandles.has(actorHandle)) throw runtimeError('foreign_actor_handle');
       return authority.endActor(actorHandle);
     },
-    reconcileExecution(launchRef, input) {
+    endContext(actorHandle) {
+      if (!actorHandles.has(actorHandle)) throw runtimeError('foreign_actor_handle');
+      if (typeof authority.endContext !== 'function') throw runtimeError('context_end_unavailable');
+      return authority.endContext(actorHandle);
+    },
+    reconcileExecution(launchRef, input, mutationGuard) {
       requireLaunch(launchRef);
       if (!isRecord(input) || !actorHandles.has(input.executionActorHandle)) throw runtimeError('foreign_actor_handle');
-      const reconciled = authority.reconcileExecution(launchRef, input);
+      const reconciled = authority.reconcileExecution(launchRef, input, mutationGuard);
       return reconciled;
     },
     handoff(launchRef, transition, newOwnerActorHandle) {
