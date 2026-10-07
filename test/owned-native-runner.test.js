@@ -2207,6 +2207,22 @@ test('an active wait resolution before turn completion cancels the request witho
   await runner.stop();
 });
 
+test('a cancelled active wait still rejects another wait call in the same turn', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt;
+  const harness = createWaitProfileHarness(workspace, { waitCallsAfterTurnResponse: [makeWaitRequest()] });
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(makeWaitRequest({}, { requestId: 'duplicate-wait' }));
+  assert.equal(runner.snapshot().failureCode, 'wait_request_duplicate');
+  assert.equal(waitReplies(harness).length, 0);
+  await runner.stop();
+});
+
 test('an early wait resolution before early turn completion prevents activation after turn start', async (t) => {
   for (const completeEarly of [false, true]) {
     const workspace = createWorkspace(t);
