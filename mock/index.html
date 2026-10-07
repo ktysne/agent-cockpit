@@ -1268,6 +1268,27 @@ function applyMockInstructionAlternative(oldId, request) {
   return true;
 }
 
+function commitMockInstructionAlternative(oldId, request, saved) {
+  if (!applyMockInstructionAlternative(oldId, request)) {
+    saved.error = '対象の状態が確認できません。要求本文は保持しています。';
+    save();
+    return false;
+  }
+  const session = allSessions().find(item => item.id === request.sessionId);
+  const previousNotice = session ? ui.instructionNotices[session.id] : undefined;
+  delete ui.instructionAlternatives[oldId];
+  if (session) ui.instructionNotices[session.id] = '新しい指示を保存しました。送信前に内容を確認してください。';
+  if (save()) return true;
+  ui.instructionAlternatives[oldId] = {
+    ...saved, pendingRequest: request, error: 'モックの保存を確認できません。要求本文を保持しています。',
+  };
+  if (session) {
+    if (previousNotice === undefined) delete ui.instructionNotices[session.id];
+    else ui.instructionNotices[session.id] = previousNotice;
+  }
+  return false;
+}
+
 function instructionAlternativeRecoveryPanel() {
   const pending = Object.entries(ui.instructionAlternatives).filter(([, item]) => item?.pendingRequest);
   if (!pending.length) return '';
@@ -2583,12 +2604,8 @@ document.addEventListener('click', e => {
     const oldId = t.dataset.instructionAlternativeRetry;
     const saved = ui.instructionAlternatives[oldId];
     if (!saved?.pendingRequest) return;
-    if (applyMockInstructionAlternative(oldId, saved.pendingRequest)) {
-      delete ui.instructionAlternatives[oldId];
-      const session = allSessions().find(item => item.id === saved.pendingRequest.sessionId);
-      if (session) ui.instructionNotices[session.id] = '新しい指示を保存しました。送信は別操作です。';
-    } else saved.error = '対象の状態が戻った後、同じ内容で保存結果を確認してください。要求本文は保持しています。';
-    save(); render();
+    commitMockInstructionAlternative(oldId, saved.pendingRequest, saved);
+    render();
     return;
   }
   if (t.dataset.instructionAlternativeDiscardAsk || t.dataset.instructionAlternativeDiscardDismiss) {
@@ -2631,15 +2648,15 @@ document.addEventListener('click', e => {
       expectedTurnId: null,
       createdAt: Date.now(),
     };
-    ui.instructionAlternatives[oldId] = { ...alternative, open: false, pendingRequest: request, error: null };
-    save();
-    if (applyMockInstructionAlternative(oldId, request)) {
-      delete ui.instructionAlternatives[oldId];
-      ui.instructionNotices[session.id] = '新しい指示を保存しました。送信前に内容を確認してください。';
-    } else {
-      ui.instructionAlternatives[oldId].error = '対象の状態を確認できません。要求内容はこのモックに保持しています。';
+    const saved = { ...alternative, open: false, pendingRequest: request, error: null };
+    ui.instructionAlternatives[oldId] = saved;
+    if (!save()) {
+      saved.error = 'このモックに要求内容を保存できません。要求本文を画面に保持しています。';
+      render();
+      return;
     }
-    save(); render();
+    commitMockInstructionAlternative(oldId, request, saved);
+    render();
     return;
   }
   if (t.dataset.mockLateInstruction) {

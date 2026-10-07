@@ -621,9 +621,21 @@ test('同じ実行の一時的な待機中は入力下書きを保ち、対象�
 
 test('保留中の代替要求と送信中の指示は対象消失後も版更新を止める', () => {
   const state = { uiVersion: 'v2', sessions: [], instructionTargets: [], instructionDiagnostics: { targets: 'available' } };
-  const pending = reloadHarness('v1', [], { alternatives: [['old-1', { pendingRequest: { text: '固定した本文' } }]] });
-  assert.equal(pending.context.checkUiVersion(state), false);
+  const request = {
+    oldDeliveryAttemptId: 'old-1', newDeliveryAttemptId: 'new-1', sessionId: 'session-1',
+    launchRef: 'launch-1', executionId: 'period-1', registrationExecutionId: 'execution-1',
+    logicalMessageId: 'message-1', revision: 1, text: '固定した本文', mode: 'next-user-input', expectedTurnId: null,
+  };
+  const pending = reloadHarness('v1', [], { alternatives: [['old-1', { pendingRequest: request }]] });
+  const missingDelivery = {
+    ...state,
+    instructionDiagnostics: { service: 'blocked', blocked: true, errorCode: 'instruction_delivery_missing', targets: 'available' },
+  };
+  assert.equal(pending.context.checkUiVersion(missingDelivery), false);
   assert.equal(pending.reloadCount, 0);
+  pending.context.instructionAlternatives.clear();
+  assert.equal(pending.context.checkUiVersion(missingDelivery), true);
+  assert.equal(pending.reloadCount, 1);
 
   const inflight = reloadHarness('v1', [], { inFlight: ['session-1'] });
   assert.equal(inflight.context.checkUiVersion(state), false);

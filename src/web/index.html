@@ -1385,20 +1385,26 @@ function instructionIds() {
 
 function persistInstructionPreviews() {
   try {
-    globalThis.sessionStorage?.setItem(INSTRUCTION_PREVIEW_STORAGE_KEY,
-      JSON.stringify(Object.fromEntries(instructionPreviews)));
-  } catch {}
+    const storage = globalThis.sessionStorage;
+    if (!storage) return false;
+    const serialized = JSON.stringify(Object.fromEntries(instructionPreviews));
+    storage.setItem(INSTRUCTION_PREVIEW_STORAGE_KEY, serialized);
+    return storage.getItem(INSTRUCTION_PREVIEW_STORAGE_KEY) === serialized;
+  } catch { return false; }
 }
 
 function rememberInstructionPreview(instruction, text) {
   if (!instruction || !validScopedInstructionId(instruction.deliveryAttemptId) ||
       !validScopedInstructionId(instruction.launchRef) || !INSTRUCTION_MODES.has(instruction.mode) ||
       !Number.isSafeInteger(instruction.revision) || typeof text !== 'string' || !text.trim()) return false;
+  const previous = instructionPreviews.get(instruction.deliveryAttemptId);
   instructionPreviews.set(instruction.deliveryAttemptId, {
     launchRef: instruction.launchRef, mode: instruction.mode, revision: instruction.revision, text,
   });
-  persistInstructionPreviews();
-  return true;
+  if (persistInstructionPreviews()) return true;
+  if (previous) instructionPreviews.set(instruction.deliveryAttemptId, previous);
+  else instructionPreviews.delete(instruction.deliveryAttemptId);
+  return false;
 }
 
 function instructionPreviewFor(instruction) {
@@ -3301,17 +3307,26 @@ function instructionAlternativeRetryState(state, request) {
     target.executionId === request.registrationExecutionId && target.origin === 'standalone');
   const oldMatches = Boolean(old && old.ownerSessionId === request.sessionId && old.launchRef === request.launchRef &&
     old.executionId === request.executionId && old.registrationExecutionId === request.registrationExecutionId &&
-    old.logicalMessageId === request.logicalMessageId && old.origin === 'standalone' && old.revision < request.revision &&
-    ['available', 'claimed', 'superseded_before_send'].includes(old.state));
-  const createdMatches = !created || (created.ownerSessionId === request.sessionId &&
+    old.logicalMessageId === request.logicalMessageId && old.origin === 'standalone' && old.revision + 1 === request.revision &&
+    ['available', 'claimed', 'superseded_before_send'].includes(old.state) &&
+    sameInstructionIdentity(old.identity, target?.identity));
+  const createdScopeMatches = Boolean(created && created.ownerSessionId === request.sessionId &&
     created.launchRef === request.launchRef && created.executionId === request.executionId &&
     created.registrationExecutionId === request.registrationExecutionId &&
     created.logicalMessageId === request.logicalMessageId && created.revision === request.revision &&
     created.origin === 'standalone' && created.mode === 'next-user-input' &&
-    ['available', 'claimed'].includes(created.state));
-  const allowed = diagnostics?.service === 'ready' && diagnostics.blocked !== true &&
-    diagnostics.targets === 'available' && targetMatches && target?.status === 'stopped' &&
+    sameInstructionIdentity(created.identity, target?.identity));
+  const createdAvailable = createdScopeMatches && ['available', 'claimed'].includes(created.state);
+  const createdMissing = createdScopeMatches && created.state === 'unavailable' &&
+    created.heldReason === 'instruction_delivery_missing';
+  const createdMatches = !created || createdAvailable || createdMissing;
+  const commonMatches = diagnostics?.targets === 'available' && targetMatches && target?.status === 'stopped' &&
     instructionTargetMode(target, 'next-user-input') && oldMatches && createdMatches;
+  const readyRetry = diagnostics?.service === 'ready' && diagnostics.blocked !== true &&
+    (!created || createdAvailable);
+  const missingDeliveryRecovery = diagnostics?.service === 'blocked' && diagnostics.blocked === true &&
+    diagnostics.errorCode === 'instruction_delivery_missing' && old?.state === 'superseded_before_send' && createdMissing;
+  const allowed = commonMatches && (readyRetry || missingDeliveryRecovery);
   let reason = null;
   if (!targetMatches && diagnostics?.targets !== 'available') {
     reason = '実行先の状態を確認できません。内容はこの画面に保持しています。';
@@ -4706,7 +4721,14 @@ async function runInstructionCreate(form) {
   };
   try {
     const result = await instructionResponse(await postUiAction('/api/instructions/create', body));
-    rememberInstructionPreview(result.instruction, previewText);
+    if (!rememberInstructionPreview(result.instruction, previewText)) {
+      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。入力を保持しています。';
+      instructionNotices.set(key, message);
+      await refresh();
+      if (lastState) render(lastState);
+      liveStatus.textContent = message;
+      return;
+    }
     draft.text = '';
     draft.deliveryAttemptId = null;
     draft.logicalMessageId = null;
@@ -4848,9 +4870,11 @@ async function runInstructionAlternative(formOrId) {
       mode: request.mode,
       expected_turn_id: request.expectedTurnId,
     }));
-    if (!instructionAlternativeResultMatches(result, request, retryState.target) ||
-        !rememberInstructionPreview(result.instruction, request.text)) {
+    if (!instructionAlternativeResultMatches(result, request, retryState.target)) {
       throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
+    if (!rememberInstructionPreview(result.instruction, request.text)) {
+      throw Object.assign(new Error('instruction_preview_persistence_failed'), { code: 'instruction_preview_persistence_failed' });
     }
     instructionAlternatives.delete(oldId);
     instructionAlternativeDiscardConfirmations.delete(oldId);
@@ -4866,11 +4890,13 @@ async function runInstructionAlternative(formOrId) {
   } catch (error) {
     const message = error.code === 'instruction_response_mismatch'
       ? '保存応答の対象が一致しないため、内容を保持しています。'
+      : error.code === 'instruction_preview_persistence_failed'
+        ? 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。固定した内容を保持しています。'
       : error.code === 'instruction_local_request_retained'
         ? '保存結果は確認できましたが、このタブの復旧情報を更新できません。内容を保持しています。'
         : instructionErrorText(error.code);
     instructionErrors.set('alternative:' + oldId, message);
-    showWriteError('差し替えた指示を保存できませんでした');
+    if (error.code !== 'instruction_preview_persistence_failed') showWriteError('差し替えた指示を保存できませんでした');
     await refresh();
     if (lastState) render(lastState);
   } finally {
@@ -4908,7 +4934,14 @@ async function runLateInstruction(button) {
         mode: button.dataset.lateMode,
         expected_turn_id: button.dataset.lateExpectedTurn || null,
       }));
-    rememberInstructionPreview(result.instruction, previewText);
+    if (!rememberInstructionPreview(result.instruction, previewText)) {
+      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。回答内容は保持しています。';
+      instructionErrors.set(key, message);
+      liveStatus.textContent = message;
+      await refresh();
+      if (lastState) render(lastState);
+      return;
+    }
     instructionNotices.set(button.dataset.sessionId, result.outcome === 'existing'
       ? 'この保存済み回答から作った指示はすでにあります。送信は別操作です。'
       : '後続の指示を保存しました。送信は別操作です。');
