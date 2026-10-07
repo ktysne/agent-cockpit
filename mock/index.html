@@ -1281,6 +1281,7 @@ function saveMockInstructionPreviewRecovery(id) {
 }
 
 function instructionTargetAvailability(session) {
+  if (!DATA.integrations.instructions) return { mode: '', reason: '' };
   const hasPendingWork = session.perms.length > 0
     || session.decisions.some(isActiveDecision)
     || commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question));

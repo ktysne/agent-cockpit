@@ -167,6 +167,7 @@ test('mock composer is hidden when instructions are not configured and starts an
   assert.match(context.instructionComposer(product, session), /data-instruction-session="session-a"/);
   context.DATA.integrations.instructions = false;
   assert.equal(context.instructionComposer(product, session), '');
+  assert.equal(context.instructionTargetAvailability(session).mode, '');
 });
 
 test('mock composer requires explicit target and mode selections and holds while session work is pending', () => {
