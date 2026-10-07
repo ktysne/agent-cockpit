@@ -2158,7 +2158,9 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
   const sessionId = 'session-title';
   const sessionDirectory = path.join(claudeHome, 'sessions');
   await fs.mkdir(sessionDirectory, { recursive: true });
-  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, name: '段階 1 の実装' }));
+  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({
+    pid: process.pid, sessionId, name: '段階 1 の実装', procStart: 'title-start',
+  }));
   await fs.writeFile(path.join(sessionDirectory, `${sessionId}.key`), 'not a session record');
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
@@ -2167,7 +2169,7 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
     session_id: sessionId,
     hook_event_name: 'SessionStart',
     cwd: 'D:\\Desktop\\Develop\\agent-cockpit\\.claude\\worktrees\\stage1',
-  }, { homeDir, environment: { AGENT_COCKPIT_HOME: homeDir } });
+  }, { homeDir, environment: { AGENT_COCKPIT_HOME: homeDir }, ppid: process.pid });
 
   assert.equal(result.exitCode, 0);
   assert.equal(result.additionalContext, `Agent Cockpit: http://127.0.0.1:${runtime.info.port}/`);

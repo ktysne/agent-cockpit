@@ -41,7 +41,8 @@ async function postHookRequest(body, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || Date.now;
   const deadline = now() + (options.timeoutMs || 1_000);
-  const result = await postToServer('/api/hooks/answers', body, {
+  const ppid = options.ppid === undefined ? process.ppid : options.ppid;
+  const result = await postToServer('/api/hooks/answers', { ...body, claudeLineage: { ppid } }, {
     homeDir,
     fetchImpl,
     cache: 'no-store',

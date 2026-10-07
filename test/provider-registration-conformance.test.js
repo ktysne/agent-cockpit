@@ -377,11 +377,12 @@ test('ID-F02-A03: MCPはCodexのthread metadataなし・不一致とClaude metad
     assert.equal(server.runtime.state.planSummary(fixture.registration.sessionId).tasks[0].title, `${provider} MCP task`, provider);
 
     if (provider === 'claude') {
-      const wrongEnvironment = await mcpExchange([
-        toolCall('wrong-env', 'cockpit_set_tasks', { tasks: [] }, { provider: 'claude' }),
+      // /clear の後も MCP の環境変数は古いままなので、Claude の writer の照合には使わない。
+      const staleEnvironment = await mcpExchange([
+        toolCall('stale-env', 'cockpit_set_tasks', { tasks: [] }, { provider: 'claude' }),
       ], { ...options, environment: { CLAUDE_CODE_SESSION_ID: 'different-claude-session' } });
-      assert.equal(wrongEnvironment[0].result.isError, true);
-      assert.equal(counter.postCount(), 1);
+      assert.equal(staleEnvironment[0].result.isError, undefined);
+      assert.equal(counter.postCount(), 2);
     }
   }
 });
