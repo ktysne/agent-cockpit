@@ -4204,6 +4204,11 @@ function commonQuestionDiagnosticsNotice(diagnostics) {
   if (!diagnostics.recovery && !orphanCount) return null;
   const notice = element('section', 'common-question-diagnostics');
   notice.setAttribute('role', 'status');
+  if (diagnostics.recovery?.status === 'unavailable') {
+    notice.append(element('strong', '', '質問の状態を取得できません。'));
+    notice.append(element('span', '', '質問情報を読み込めないため、現在の状態を表示できません。再読み込みして確認してください。'));
+    return notice;
+  }
   notice.append(element('strong', '', '質問の状態を確認できません。'));
   notice.append(element('span', '', orphanCount
     ? `保存済み質問 ${orphanCount} 件の復旧確認が必要です。新しい送信は保留されています。`
