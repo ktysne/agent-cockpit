@@ -201,12 +201,14 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-item { min-width: 0; overflow-wrap: anywhere; padding: 6px 10px; border-radius: 8px; }
 .task-item:hover { background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
-/* PR の行と同じく、文字は左の列で折り返し、完了条件の数と完了にするは右の列に縦に積む。 */
+/* 題の行だけを左右に分け、完了条件の数と完了にするを右に縦に積む。完了条件の一覧はその下に行の幅いっぱいで並べる。 */
 .task-body { display: flex; gap: 12px; align-items: stretch; }
-.task-text { flex: 1 1 auto; min-width: 0; }
-.task-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
+.task-text { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+/* 幅は文字に合わせ、文字の左右の空きは行の余白と同じ 10px にする。最小幅は「完了条件 0/3」が収まる幅で、行ごとや押した後に列が揺れないようにする。 */
+.task-actions { flex: none; width: max-content; min-width: calc(6em + 11px); padding-left: 10px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
 .task-actions .link-btn { color: var(--text-2); font-size: 12px; }
 .task-actions .link-btn:hover { color: var(--text); }
+.close-note > span { display: block; }
 .task-head { display: flex; align-items: baseline; gap: 6px 8px; }
 .task-head > * { flex: none; }
 .task-head > .prod-tag, .task-head > .session-tag { flex: 0 1 auto; min-width: 0; }
@@ -2785,19 +2787,25 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
     if (pending) close.dataset.cancelCloseTask = closeKey;
     else if (!sending) close.dataset.closeTask = closeKey;
     actions.append(close);
-    if (pending) actions.append(element('span', 'meta', '5 秒後に完了にします。'));
+    if (pending) {
+      // 右の列の幅では文の途中で折れるため、区切りの良い位置で 2 行に分け、読み上げは 1 文にする。
+      const note = element('span', 'meta close-note');
+      note.setAttribute('aria-label', '5 秒後に完了にします。');
+      note.append(element('span', '', '5 秒後に'), element('span', '', '完了にします。'));
+      actions.append(note);
+    }
   }
   text.append(header);
+  body.append(text, actions);
+  item.append(body);
   if (task.criteria.length) {
     const criteria = element('ul', 'criteria-list');
     for (const criterion of task.criteria) {
       const row = element('li', criterion.met ? 'met' : '', criterion.text);
       criteria.append(row);
     }
-    text.append(criteria);
+    item.append(criteria);
   }
-  body.append(text, actions);
-  item.append(body);
   list.append(item);
 }
 

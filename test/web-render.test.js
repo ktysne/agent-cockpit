@@ -1759,6 +1759,8 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   }, {}, partial);
   const closedActions = descendants(manuallyClosedTaskList).find((node) => node.className === 'task-actions');
   assert.deepEqual(closedActions.children.map((node) => node.textContent), ['完了条件 1/1', '画面で完了にした']);
+  const closedItem = manuallyClosedTaskList.children[0];
+  assert.deepEqual(closedItem.children.map((node) => node.className), ['task-body', 'criteria-list'], '完了条件の一覧は題の行の下に行の幅いっぱいで並べる');
 
   context.displayPreferences.hideFinished = false;
   const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, partial]);
