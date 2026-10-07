@@ -2,7 +2,7 @@
   "name": "cancelled",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1478,
+  "height": 1528,
   "parts": [
     {
       "key": "cancelled.notice",
@@ -17,9 +17,9 @@
     {
       "key": "cancelled.merge-button",
       "bounds": {
-        "x": 1111,
-        "y": 215,
-        "width": 185,
+        "x": 1280,
+        "y": 293,
+        "width": 270,
         "height": 64
       },
       "visible": true
@@ -27,8 +27,8 @@
     {
       "key": "cancelled.toggle",
       "bounds": {
-        "x": 1312,
-        "y": 222,
+        "x": 1280,
+        "y": 383,
         "width": 36,
         "height": 36
       },
