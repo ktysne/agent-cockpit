@@ -57,10 +57,10 @@ function validateCapabilityToken(token) {
   return token;
 }
 
-function normalizeTimeout(value) {
-  if (value === undefined) return DEFAULT_TIMEOUT_MS;
+function normalizeTimeout(value, fallback, errorCode) {
+  if (value === undefined) return fallback;
   if (!Number.isInteger(value) || value < 50 || value > 60_000) {
-    throw transportError('invalid_timeout');
+    throw transportError(errorCode);
   }
   return value;
 }
@@ -174,11 +174,11 @@ function makeClientFrame(opcode, payload, randomBytesImpl = randomBytes) {
   return Buffer.concat([header, masked]);
 }
 
-function connectLoopback(port, timeoutMs) {
+function connectLoopback(port, deadline) {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: '127.0.0.1', port });
     let settled = false;
-    const timer = setTimeout(() => finish(transportError('connect_timeout')), timeoutMs);
+    const timer = setTimeout(() => finish(transportError('connect_timeout')), Math.max(0, deadline - Date.now()));
     function finish(error) {
       if (settled) return;
       settled = true;
@@ -193,7 +193,7 @@ function connectLoopback(port, timeoutMs) {
         resolve(socket);
       }
     }
-    const onConnect = () => finish(null);
+    const onConnect = () => finish(Date.now() < deadline ? null : transportError('connect_timeout'));
     const onError = () => finish(transportError('connection_failed'));
     socket.once('connect', onConnect);
     socket.once('error', onError);
@@ -205,7 +205,7 @@ class WebSocketJsonRpcTransport {
 
   constructor(socket, options) {
     this.socket = socket;
-    this.timeoutMs = options.timeoutMs;
+    this.requestTimeoutMs = options.requestTimeoutMs;
     this.randomBytes = options.randomBytes || randomBytes;
     this.#capabilityToken = options.capabilityToken;
     this.onNotification = options.onNotification;
@@ -236,7 +236,7 @@ class WebSocketJsonRpcTransport {
     socket.on('error', () => this.fail('connection_failed'));
   }
 
-  async open(hostHeader, port) {
+  async open(hostHeader, port, handshakeDeadline) {
     if (this.closed) return Promise.reject(transportError(this.failureCode || 'connection_closed'));
     const key = this.randomBytes(16).toString('base64');
     const acceptValue = createHash('sha1').update(key + WEBSOCKET_GUID).digest('base64');
@@ -256,7 +256,12 @@ class WebSocketJsonRpcTransport {
       this.openResolve = resolve;
       this.openReject = reject;
       this.expectedAcceptValue = acceptValue;
-      this.openTimer = setTimeout(() => this.fail('handshake_timeout'), this.timeoutMs);
+      const remainingMs = handshakeDeadline - Date.now();
+      if (remainingMs <= 0) {
+        this.fail('handshake_timeout');
+        return;
+      }
+      this.openTimer = setTimeout(() => this.fail('handshake_timeout'), remainingMs);
       try {
         this.socket.write(request, (error) => {
           if (error) this.fail('connection_failed');
@@ -407,7 +412,7 @@ class WebSocketJsonRpcTransport {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.settle(key, transportError('request_timeout'));
-      }, this.timeoutMs);
+      }, this.requestTimeoutMs);
       this.pending.set(key, { resolve, reject, timer });
       this.sendJson({ id, method, params }).catch(() => this.settle(key, transportError('connection_failed')));
     });
@@ -640,7 +645,17 @@ class WebSocketJsonRpcTransport {
 async function createCodexManagedTransport(options = {}) {
   const { port, hostHeader } = parseLoopbackEndpoint(options.endpoint);
   const capabilityToken = validateCapabilityToken(options.capabilityToken);
-  const timeoutMs = normalizeTimeout(options.timeoutMs);
+  const legacyTimeoutMs = options.timeoutMs;
+  const handshakeTimeoutMs = normalizeTimeout(
+    options.handshakeTimeoutMs === undefined ? legacyTimeoutMs : options.handshakeTimeoutMs,
+    DEFAULT_TIMEOUT_MS,
+    options.handshakeTimeoutMs === undefined ? 'invalid_timeout' : 'invalid_handshake_timeout',
+  );
+  const requestTimeoutMs = normalizeTimeout(
+    options.requestTimeoutMs === undefined ? legacyTimeoutMs : options.requestTimeoutMs,
+    DEFAULT_TIMEOUT_MS,
+    options.requestTimeoutMs === undefined ? 'invalid_timeout' : 'invalid_request_timeout',
+  );
   if (typeof options.onDisconnect !== 'function' || typeof options.onNotification !== 'function' ||
       typeof options.onServerRequest !== 'function') {
     throw transportError('transport_callbacks_required');
@@ -651,23 +666,24 @@ async function createCodexManagedTransport(options = {}) {
     disconnectNotified = true;
     try { options.onDisconnect(event); } catch {}
   };
+  const handshakeDeadline = Date.now() + handshakeTimeoutMs;
   let socket;
   try {
-    socket = await connectLoopback(port, timeoutMs);
+    socket = await connectLoopback(port, handshakeDeadline);
   } catch (error) {
     onDisconnect({ code: error instanceof ManagedTransportError ? error.code : 'connection_failed' });
     throw error;
   }
   const transport = new WebSocketJsonRpcTransport(socket, {
     capabilityToken,
-    timeoutMs,
+    requestTimeoutMs,
     randomBytes: options.randomBytes,
     onNotification: options.onNotification,
     onServerRequest: options.onServerRequest,
     onDisconnect,
   });
   try {
-    await transport.open(hostHeader, port);
+    await transport.open(hostHeader, port, handshakeDeadline);
   } catch (error) {
     transport.close();
     throw error instanceof ManagedTransportError ? error : transportError('connection_failed');

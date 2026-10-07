@@ -38,6 +38,9 @@ test('managed process isolates its HOME, exposes a secret-free snapshot, and sto
     onServerRequest() {},
     onDisconnect() { disconnectCount += 1; },
   });
+  assert.equal(fixture.transportOptions.timeoutMs, undefined);
+  assert.equal(fixture.transportOptions.handshakeTimeoutMs, 1000);
+  assert.equal(fixture.transportOptions.requestTimeoutMs, undefined);
   assert.equal(fixture.transportOptions.capabilityToken.length, 64);
   assert.equal(serverCall.args.includes(fixture.transportOptions.capabilityToken), false);
   assert.equal(JSON.stringify(manager.snapshot()).includes(fixture.transportOptions.capabilityToken), false);
@@ -216,6 +219,48 @@ test('stop closes a transport that finishes connecting after shutdown', async (t
   assert.equal(fixture.calls.length, 1);
 });
 
+test('managed process separates the retry handshake deadline from the request deadline', async (t) => {
+  const fixture = createProcessFixture(t);
+  const receivedOptions = [];
+  const manager = fixture.createManager({
+    transportTimeoutMs: 800,
+    requestTimeoutMs: 2300,
+    transportFactory: async (options) => {
+      receivedOptions.push(options);
+      return {
+        request: async () => ({ codexHome: fixture.managedHomePath, userAgent: 'codex_cli/0.160.1' }),
+        notify: async () => {},
+        confirmLoadedThread: async () => true,
+        close() {},
+        snapshot: () => ({ state: 'open' }),
+      };
+    },
+  });
+  await manager.start();
+  await manager.connect({ onNotification() {}, onServerRequest() {}, onDisconnect() {} });
+  assert.equal(receivedOptions[0].timeoutMs, 800);
+  assert.equal(receivedOptions[0].handshakeTimeoutMs, 800);
+  assert.equal(receivedOptions[0].requestTimeoutMs, 2300);
+
+  await manager.launchRemoteCLI({ threadId: THREAD_ID });
+  assert.equal(receivedOptions[1].timeoutMs, 800);
+  assert.equal(receivedOptions[1].handshakeTimeoutMs, undefined);
+  assert.equal(receivedOptions[1].requestTimeoutMs, 2300);
+  await manager.stop();
+});
+
+test('managed process validates explicit transport and request deadlines', (t) => {
+  const fixture = createProcessFixture(t);
+  assert.throws(
+    () => fixture.createManager({ transportTimeoutMs: 49 }),
+    (error) => error.code === 'invalid_transport_timeout',
+  );
+  assert.throws(
+    () => fixture.createManager({ requestTimeoutMs: 60_001 }),
+    (error) => error.code === 'invalid_request_timeout',
+  );
+});
+
 test('remote resume arguments contain no settings overrides', () => {
   const args = makeRemoteCliArguments(THREAD_ID, 'ws://127.0.0.1:12345', 'CODEX_REMOTE_AUTH_TOKEN_1234567890AB');
   assert.deepEqual(args, [
@@ -286,6 +331,8 @@ function createProcessFixture(t) {
         managedHomePath: selectedManagedHomePath,
         hostId: 'local-host',
         homeScopeId: 'managed-home-test',
+        transportTimeoutMs: overrides.transportTimeoutMs,
+        requestTimeoutMs: overrides.requestTimeoutMs,
         environment: {
           PATH: 'C:\\Windows\\System32',
           CODEX_HOME: normalCodexHome,
