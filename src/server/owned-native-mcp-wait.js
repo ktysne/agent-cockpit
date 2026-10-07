@@ -12,6 +12,14 @@ const MAX_CANDIDATES = 16;
 const MAX_BYTES = 256 * 1024;
 const BODY_LIMIT_BYTES = 64 * 1024;
 const MATCH_TIMEOUT_MS = 5000;
+const SECURITY_HEADERS = Object.freeze({
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "frame-ancestors 'none'",
+  'cross-origin-resource-policy': 'same-origin',
+  'cross-origin-opener-policy': 'same-origin',
+});
 const WAIT_SOURCES = new WeakMap();
 
 function data(value, keys) {
@@ -47,7 +55,7 @@ function createOwnedNativeMcpWait(sourceCapability, options) {
   const route = '/' + crypto.randomUUID() + '/mcp';
   let server = null, port = null, initialized = false, invalidated = false, stopped = false;
   let bodyBytes = 0, partialBytes = 0;
-  let retainedBytes = 0, candidates = 0, current = null, startPromise = null;
+  let retainedBytes = 0, candidates = 0, current = null, startPromise = null, rejectStart = null, stopPromise = null;
 
   function notifyInvalidated(entry) {
     for (const listener of [...invalidationListeners]) { try { listener(entry?.handle || null); } catch {} }
@@ -145,6 +153,7 @@ function createOwnedNativeMcpWait(sourceCapability, options) {
     response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(line), 'Cache-Control': 'no-store' }); response.end(line);
   }
   function requestHandler(request, response) {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.setHeader(name, value);
     const reject = status => { if (!response.headersSent && !response.destroyed) { response.writeHead(status); response.end(); } request.resume(); };
     if (request.headers.host !== `127.0.0.1:${port}` || request.headers.origin !== undefined || request.url !== route) { reject(403); return; }
     const received = typeof request.headers.authorization === 'string' ? Buffer.from(request.headers.authorization) : Buffer.alloc(0);
@@ -209,8 +218,12 @@ function createOwnedNativeMcpWait(sourceCapability, options) {
       server.keepAliveTimeout = MATCH_TIMEOUT_MS;
       server.on('clientError', (_, socket) => socket.destroy()); server.on('error', invalidate);
       startPromise = new Promise((resolve, reject) => {
-        server.once('error', reject);
+        const rejectPendingStart = error => { rejectStart = null; reject(error); };
+        rejectStart = rejectPendingStart;
+        server.once('error', rejectPendingStart);
         server.listen(0, '127.0.0.1', () => {
+          if (stopped || invalidated) { server.closeAllConnections(); server.close(() => {}); reject(new Error('owned wait unavailable')); rejectStart = null; return; }
+          rejectStart = null;
           port = server.address().port;
           resolve(Object.freeze({ secret, mcpConfig: JSON.stringify({ mcpServers: { cockpit_wait: { type: 'http', url: `http://127.0.0.1:${port}${route}`, headers: { Authorization: 'Bearer ${COCKPIT_NATIVE_MCP_SECRET}' } } } }) }));
         });
@@ -250,11 +263,15 @@ function createOwnedNativeMcpWait(sourceCapability, options) {
     },
     isListening() { return server?.listening === true; },
     invalidate,
-    async stop() {
-      if (stopped) return;
+    stop() {
+      if (stopPromise) return stopPromise;
+      stopPromise = Promise.resolve().then(async () => {
+        if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(() => resolve())); }
+        listeners.clear(); invalidationListeners.clear();
+      });
       stopped = true; invalidate();
-      if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(() => resolve())); }
-      listeners.clear(); invalidationListeners.clear();
+      if (rejectStart) { rejectStart(new Error('owned wait unavailable')); rejectStart = null; }
+      return stopPromise;
     },
   });
   return Object.freeze({ facade, controller });

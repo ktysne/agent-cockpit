@@ -14,7 +14,7 @@ const { createRuntimeBindingKernel } = require('../src/server/runtime-binding');
 const { createNativeLaunchComposition } = require('../src/server/native-launch-composition');
 const { createOwnedNativeRunner } = require('../src/server/owned-native-runner');
 
-async function fixture(t) {
+async function fixture(t, { spawnFailure = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-wait-'));
   const homePath = path.join(directory, 'home'), cwd = path.join(directory, 'cwd'), executablePath = path.join(directory, 'native.exe');
   fs.mkdirSync(homePath); fs.mkdirSync(cwd); fs.writeFileSync(executablePath, 'fixture');
@@ -56,7 +56,7 @@ async function fixture(t) {
     getAuthentication: () => ({ oauthToken: 'fixture-token' }),
     runnerFactory(options) {
       runner = createOwnedNativeRunner({ ...options, onSourceReady(cap) { capability = cap; options.onSourceReady(cap); }, onNative(event) { options.onNative(event); if (event.type === 'identity') collector.connect(); },
-        spawnImpl(_exe, capturedArgs, config) { environment = { ...config.env }; args = capturedArgs; setImmediate(() => child.emit('spawn')); return child; },
+        spawnImpl(_exe, capturedArgs, config) { environment = { ...config.env }; args = capturedArgs; if (spawnFailure) throw new Error('fixture spawn failure'); setImmediate(() => child.emit('spawn')); return child; },
         timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 100 } });
       return runner;
     },
@@ -67,6 +67,7 @@ async function fixture(t) {
   owner.subscribeVerifiedWait((handle, metadata) => waits.push({ handle, metadata }));
   owner.subscribeWaitInvalidated(handle => invalidations.push(handle));
   t.after(async () => { await composition.stop(receipt); fs.rmSync(directory, { recursive: true, force: true }); });
+  if (spawnFailure) { await assert.rejects(composition.start(receipt, { inputText: 'fixture wait input' })); return { composition, receipt, runner }; }
   const started = await composition.start(receipt, { inputText: 'fixture wait input' });
   await collector.connect();
   const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
@@ -74,7 +75,7 @@ async function fixture(t) {
   function request(body, headers = {}, method = 'POST') {
     return new Promise((resolve, reject) => {
       const req = http.request(url, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + environment.COCKPIT_NATIVE_MCP_SECRET, ...headers } }, response => {
-        let text = ''; response.on('data', chunk => { text += chunk; }); response.on('end', () => resolve({ status: response.statusCode, body: text ? JSON.parse(text) : null }));
+        let text = ''; response.on('data', chunk => { text += chunk; }); response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: text ? JSON.parse(text) : null }));
       });
       req.on('error', reject); req.setTimeout(2000, () => req.destroy(new Error('fixture HTTP timeout'))); req.end(JSON.stringify(body));
     });
@@ -293,7 +294,7 @@ for (const invalidation of ['detach', 'period', 'actor']) test('CW08 ' + invalid
   await pending; assert.equal(f.ends.length, 0);
 });
 
-async function controlledWait(t, f) {
+async function controlledWait(t, f, { stopBeforeReady = false } = {}) {
   const { createRequire } = require('node:module');
   const filename = require.resolve('../src/server/owned-native-mcp-wait');
   const localRequire = createRequire(filename), latch = localRequire('./owned-native-wait');
@@ -316,7 +317,9 @@ async function controlledWait(t, f) {
   }, onInvalidated() {} });
   wait.facade.subscribe(handle => handles.push(handle));
   t.after(() => wait.controller.stop());
-  const config = await wait.controller.start(), url = new URL(JSON.parse(config.mcpConfig).mcpServers.cockpit_wait.url);
+  const startup = wait.controller.start();
+  if (stopBeforeReady) { const stopping = wait.controller.stop(); await assert.rejects(startup, /unavailable/); await stopping; return { wait, stopping }; }
+  const config = await startup, url = new URL(JSON.parse(config.mcpConfig).mcpServers.cockpit_wait.url);
   const request = body => new Promise((resolve, reject) => {
     const req = http.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + config.secret } }, response => {
       let text = ''; response.on('data', chunk => text += chunk); response.on('end', () => resolve(text ? JSON.parse(text) : { status: response.statusCode }));
@@ -448,4 +451,70 @@ test('CW03 a second authenticated initialize cannot reconnect or retain proof', 
   assert.equal((await f.request({ jsonrpc: '2.0', id: 10, method: 'initialize', params: { protocolVersion: '2025-11-25' } })).status, 400);
   assert.equal(f.composition.resolveProof(f.started.launchRef), null); assert.equal(f.waits.length, 0); assert.equal(f.ends.length, 0);
   assert.equal(f.actualRegistration.registry.snapshot().executions[0].state, 'active');
+});
+
+
+test('CW01 a subsequent instruction input establishes partial/full wait stream scope before context emission', async t => {
+  const f = await fixture(t);
+  f.child.send({ type: 'result', session_id: 'native-id', uuid: '44444444-4444-4444-8444-444444444444' });
+  const owner = f.composition.createInstructionOwner(f.receipt), pair = instructionPair(f, 'second-input');
+  const token = owner.prepareInstructionDispatch(pair.metadata); assert.ok(token);
+  const ack = await owner.dispatchInstructionNow(token, pair.command); assert.equal(ack.nativeTurnId, 'context-c');
+  const nonce = 'e'.repeat(48);
+  f.stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'second-tool', name: 'mcp__cockpit_wait__cockpit_wait', input: {} } });
+  f.stream({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ nonce }) } });
+  f.stream({ type: 'content_block_stop', index: 0 }); f.full(nonce, 'context-c', 'second-tool');
+  const pending = f.call(nonce); await f.until(() => f.waits.length === 1);
+  assert.equal(f.waits[0].metadata.nativeContextId, 'context-c'); assert.equal(f.child.killCalls, 0);
+  assert.equal(f.owner.settleWait(f.waits[0].handle, 'released'), true); await pending;
+  matchingResult(f, 'released', 'second-tool'); f.stream({ type: 'message_start', message: { role: 'assistant', id: 'context-d' } });
+  assert.ok(f.composition.resolveProof(f.started.launchRef)); assert.equal(f.ends.length, 1); assert.equal(f.writes.length, 2);
+});
+
+test('CW09 spawn failure closes the dedicated endpoint before explicit composition stop', async t => {
+  const f = await fixture(t, { spawnFailure: true });
+  const deadline = Date.now() + 1000;
+  while (f.runner.snapshot().waitEndpointActive) { assert.ok(Date.now() < deadline); await new Promise(resolve => setImmediate(resolve)); }
+  assert.equal(f.runner.snapshot().state, 'failed');
+});
+
+test('CW09 natural child exit closes the dedicated endpoint before explicit composition stop', async t => {
+  const f = await fixture(t); assert.equal(f.runner.snapshot().waitEndpointActive, true);
+  f.child.emit('exit', 0); f.child.emit('close', 0);
+  await f.until(() => f.runner.snapshot().waitEndpointActive === false);
+  assert.equal(f.runner.snapshot().childExited, true); assert.equal(f.runner.snapshot().childClosed, true);
+  assert.equal(f.child.killCalls, 0); assert.equal(f.composition.resolveProof(f.started.launchRef), null);
+});
+
+for (const kind of ['success', 'auth', 'origin']) test('CW02 dedicated MCP ' + kind + ' responses carry the fixed browser protections', async t => {
+  const f = await fixture(t);
+  const response = await f.request({ jsonrpc: '2.0', id: 9, method: 'tools/list' }, kind === 'auth' ? { Authorization: 'Bearer wrong' } : kind === 'origin' ? { Origin: 'http://foreign.example' } : {});
+  assert.equal(response.status, kind === 'success' ? 200 : kind === 'auth' ? 401 : 403);
+  for (const [key, value] of Object.entries({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'", 'cross-origin-resource-policy': 'same-origin', 'cross-origin-opener-policy': 'same-origin' })) assert.equal(response.headers[key], value);
+});
+
+
+test('CW09 reentrant and duplicate endpoint stop share the same close completion Promise', async t => {
+  const f = await fixture(t), c = await controlledWait(t, f);
+  const originalClose = http.Server.prototype.close;
+  let completeClose = null, nested = null, resolved = false;
+  http.Server.prototype.close = function(callback) { return originalClose.call(this, () => { completeClose = callback; }); };
+  t.after(() => { http.Server.prototype.close = originalClose; completeClose?.(); });
+  c.wait.facade.subscribeInvalidated(() => { nested = c.wait.controller.stop(); });
+  let first;
+  try {
+    first = c.wait.controller.stop(); const second = c.wait.controller.stop();
+    assert.equal(first, second); assert.equal(first, nested); first.then(() => { resolved = true; });
+    await f.until(() => completeClose !== null); assert.equal(resolved, false);
+  } finally { http.Server.prototype.close = originalClose; completeClose?.(); }
+  await first;
+  assert.equal(resolved, true); assert.equal(c.wait.controller.isListening(), false);
+});
+
+
+test('CW09 stop before the listen callback completes cannot leave a late owned endpoint', { timeout: 2000 }, async t => {
+  const f = await fixture(t), c = await controlledWait(t, f, { stopBeforeReady: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(c.wait.controller.isListening(), false);
+  assert.equal(c.wait.controller.stop(), c.stopping); await c.wait.controller.stop();
 });

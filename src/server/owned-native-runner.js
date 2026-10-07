@@ -555,7 +555,7 @@ function createOwnedNativeRunner(options) {
     generation += 1;
     if (sourceController) sourceController.invalidate();
     if (instructionController) instructionController.invalidate();
-    claudeMcpWait?.controller.invalidate();
+    if (claudeWait) claudeWait.controller.stop().catch(() => {});
     invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
@@ -1322,6 +1322,7 @@ function createOwnedNativeRunner(options) {
         instructionUncertain = true; instructionController.acknowledge(pending.token, null, true); return;
       }
       beginInstructionContext(pending.capture);
+      if (claudeWait) { claudeWait.controller.observe(message); requireCurrent(pending.capture.generation); }
       emitContext(nativeMessage.id);
       pending.acknowledged = true; instructionStart = null;
       instructionController.acknowledge(pending.token, nativeMessage.id);

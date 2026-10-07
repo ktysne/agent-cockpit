@@ -126,6 +126,18 @@ CW10 の製品実時間検証、質問 issuer/service/store への接続、Codex
 担当 source と fixture の構文検査、差分検査は成功した。
 全体テストと製品 native の CW10 はこの fixture 結果とは別に扱う。
 
-root の全体 `npm test` は 1579/1579 成功した（fail/skip/cancel/todo 0）。
+初回の root 全体 `npm test` は 1579/1579 成功した（fail/skip/cancel/todo 0）。
 CodeGraph の同期と現在の定義・影響範囲の確認も成功した。
 この結果は fixture と全体回帰の確認であり、CW10 の製品実時間検証を代替しない。
+
+後続の standalone input は beginInstructionContext で新 input epoch を確定し、同じ message_start を wait parser に渡して stream scope を更新してから context を通知する。
+spawn 失敗と child の自然終了も専用 endpoint を閉じ、明示的な composition.stop に cleanup を依存させない。
+重複 stop と失効通知からの再入は同一の endpoint close 完了 Promise を待ち、listen 完了前の stop は pending start を reject して遅延 listen を残さない。
+専用 HTTP の成功と拒否応答には、既存 server と同じ no-store、nosniff、X-Frame-Options DENY、CSP frame-ancestors none、CORP/COOP same-origin を付ける。
+
+これらの修正前に専用 6 回帰 fixture が失敗し、修正後は全件成功した。
+修正後の関連 5 test file は 273/273 成功し、重複 stop と listen 完了前 stop を含む dedicated fixture の最終確認は 43/43 成功した。
+初回全体結果は修正後の全体検証を代替しない。
+
+修正後の root 全体 npm test は 1587/1587 成功した（fail/skip/cancel/todo 0）。
+CodeGraph 同期と修正箇所の影響範囲確認、差分検査も成功した。
