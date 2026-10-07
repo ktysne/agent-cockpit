@@ -104,6 +104,12 @@ for (const provider of ['claude', 'codex']) {
     state.deleteProjectionDisplay(provider, sessionId, deletedAt);
     assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
       .some((session) => session.session_id === sessionId), false);
+    const afterEvents = [];
+    const afterEvent = runtime.answerDelivery.afterEvent.bind(runtime.answerDelivery);
+    runtime.answerDelivery.afterEvent = (event) => {
+      afterEvents.push(event.hook_event_name);
+      return afterEvent(event);
+    };
 
     const postEvent = (event) => request(runtime.info.port, {
       method: 'POST',
@@ -114,18 +120,25 @@ for (const provider of ['claude', 'codex']) {
     const stale = await postEvent(registeredEvent(fixture, 'UserPromptSubmit', deletedAt, 1));
     assert.equal(stale.status, 202);
     assert.deepEqual(jsonBody(stale), { accepted: true });
-    assert.equal(state.sessions.has(sessionId), false);
+    assert.equal(state.sessions.has(sessionId), true);
+    assert.equal(state.entries.get(sessionId)?.length, 1);
+    assert.deepEqual(afterEvents, ['UserPromptSubmit']);
+    assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+      .some((session) => session.session_id === sessionId), false);
     assert.equal(state.projectionDisplayFor(provider, sessionId).deletedAt, new Date(deletedAt).toISOString());
 
     const unknown = await postEvent(registeredEvent(fixture, 'PermissionRequest', deletedAt + 1, 2));
     assert.equal(unknown.status, 202);
     assert.equal(jsonBody(unknown).status, 'unknown');
-    assert.equal(state.sessions.has(sessionId), false);
+    assert.equal(state.sessions.has(sessionId), true);
+    assert.equal(state.entries.get(sessionId)?.length, 1);
+    assert.deepEqual(afterEvents, ['UserPromptSubmit']);
     assert.equal(state.projectionDisplayFor(provider, sessionId).deletedAt, new Date(deletedAt).toISOString());
 
     const current = await postEvent(registeredEvent(fixture, 'UserPromptSubmit', deletedAt + 2, 3));
     assert.equal(current.status, 202);
     assert.deepEqual(jsonBody(current), { accepted: true });
+    assert.deepEqual(afterEvents, ['UserPromptSubmit', 'UserPromptSubmit']);
     assert.equal(state.projectionDisplayFor(provider, sessionId), null);
     assert.equal(state.sessions.has(sessionId), true);
     state.sessions.get(sessionId).provider = `preserved-${provider}`;
@@ -205,6 +218,39 @@ for (const provider of ['claude', 'codex']) {
     assert.equal(realDeletionCalls, 0);
   });
 }
+
+test('tombstoneより古いSessionEndも通常処理され、projection表示だけは抑制される', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'projection-late-session-end' });
+  const state = new DashboardState();
+  const runtime = (await startTestServer(t, {
+    state,
+    registrationRegistry: fixture.registry,
+    questionService: questionService(fixture),
+  })).runtime;
+  const sessionId = fixture.registration.sessionId;
+  const deletedAt = Date.now();
+  state.deleteProjectionDisplay('claude', sessionId, deletedAt);
+  const afterEvents = [];
+  const afterEvent = runtime.answerDelivery.afterEvent.bind(runtime.answerDelivery);
+  runtime.answerDelivery.afterEvent = (event) => {
+    afterEvents.push(event.hook_event_name);
+    return afterEvent(event);
+  };
+
+  const response = await request(runtime.info.port, {
+    method: 'POST',
+    path: '/api/events',
+    headers: hookHeaders(runtime.info.secret, { 'content-type': 'application/json' }),
+    body: JSON.stringify(registeredEvent(fixture, 'SessionEnd', deletedAt - 1, 1)),
+  });
+  assert.equal(response.status, 202);
+  assert.deepEqual(jsonBody(response), { accepted: true });
+  assert.equal(state.endedAt.get(sessionId), deletedAt - 1);
+  assert.deepEqual(afterEvents, ['SessionEnd']);
+  assert.equal(state.projectionDisplayFor('claude', sessionId).deletedAt, new Date(deletedAt).toISOString());
+  assert.equal(jsonBody(await request(runtime.info.port, { path: '/api/state' })).sessions
+    .some((session) => session.session_id === sessionId), false);
+});
 
 test('GET /api/state は質問snapshotとregistrationの片方が失敗したら部分projectionを出さない', async (t) => {
   const fixture = createRegistrationFixture('claude', { nativeId: 'projection-pair-clear' });
@@ -406,6 +452,16 @@ test('synthetic-only projection deletion does not end a real session', async (t)
   assert.deepEqual(deletionResults, []);
   assert.equal(state.deletedSessions.has(fixture.registration.sessionId), false);
   assert.deepEqual(ended, []);
+
+  state.setProjectionHidden('codex', 'projection-clear-hidden', true);
+  const deletedAt = Date.now();
+  state.deleteProjectionDisplay('claude', 'projection-clear-tombstone', deletedAt);
+  const cleared = await postUi(runtime, '/api/hidden-sessions', { action: 'clear' });
+  assert.equal(cleared.status, 200);
+  assert.deepEqual(jsonBody(cleared), { cleared: 1 });
+  assert.equal(state.projectionDisplayFor('codex', 'projection-clear-hidden'), null);
+  assert.equal(state.projectionDisplayFor('claude', 'projection-clear-tombstone')?.deletedAt,
+    new Date(deletedAt).toISOString());
 });
 
 test('同じsession IDに複数providerのprojectionがある場合は表示操作を拒否する', async (t) => {
@@ -444,12 +500,39 @@ test('同じsession IDに複数providerのprojectionがある場合は表示操�
     },
   })).runtime;
 
+  runtime.state.setProjectionHidden('claude', sharedSessionId, true);
+  const unhidden = await postUi(runtime, '/api/hidden-sessions', { action: 'unhide', session_ids: [sharedSessionId] });
+  assert.equal(unhidden.status, 409);
+  assert.equal(runtime.state.projectionDisplayFor('claude', sharedSessionId)?.hiddenAt !== undefined, true);
+
   const hidden = await postUi(runtime, '/api/hidden-sessions', { action: 'hide', session_id: sharedSessionId });
   assert.equal(hidden.status, 409);
   const deleted = await postUi(runtime, '/api/record-deletions', { session_ids: [sharedSessionId] });
   assert.equal(deleted.status, 409);
-  assert.equal(runtime.state.projectionDisplayFor('claude', sharedSessionId), null);
+  assert.equal(runtime.state.projectionDisplayFor('claude', sharedSessionId)?.hiddenAt !== undefined, true);
   assert.equal(runtime.state.projectionDisplayFor('codex', sharedSessionId), null);
+});
+
+test('複数provider起源の実rowは片方のprojection tombstoneがあってもGETに残る', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'mixed-provenance-visible-row' });
+  const sessionId = fixture.registration.sessionId;
+  const state = new DashboardState();
+  const hookAt = Date.now();
+  state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt }, { provider: 'claude' });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'UserPromptSubmit', hookAt: hookAt + 1 }, { provider: 'codex' });
+  state.deleteProjectionDisplay('claude', sessionId, hookAt + 2);
+  const runtime = (await startTestServer(t, {
+    state,
+    registrationRegistry: fixture.registry,
+    questionService: questionService(fixture),
+  })).runtime;
+
+  const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  const row = snapshot.sessions.find((session) => session.session_id === sessionId);
+  assert.ok(row);
+  assert.deepEqual(state.sessionProviderSourcesFor(sessionId), ['claude', 'codex']);
+  assert.equal(row.commonQuestions, undefined);
+  assert.equal(state.projectionDisplayFor('claude', sessionId)?.deletedAt, new Date(hookAt + 2).toISOString());
 });
 
 for (const [rowProvider, fileProvider] of [['claude', 'claude'], ['unknown', null]]) {
