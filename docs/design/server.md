@@ -109,7 +109,7 @@ PR 登録はグループの起点と、マージ後の base 付け替えと rest
 
 共通質問・指示から合成する検証済み行の表示設定は、`projectionDisplaySettings` として `store.json` に保存する。各要素は `{provider, session_id, hiddenAt}` または `{provider, session_id, deletedAt}` のどちらかで、provider と session ID の組を識別に使う。項目の無い旧形式は空として読む。画面は provider を指定せず、サーバーが有効なsnapshotと登録情報から対象を照合する。
 
-合成行の非表示と削除は表示overlayだけを変更し、projection削除から実セッションの終了処理や `answerDelivery` の終了通知を呼ばない。同providerの実rowが存在するときは、削除印がある間だけそのrowを `GET /api/state` から隠す。session file と実状態は保持して不在終了の判定を続ける。複数providerのprojection、実rowの複数・不明・異providerの起源が重なる操作は `409`、構成済みのprojection snapshotまたは登録情報を取得できない操作は状態を変更せず `503` を返す。snapshot取得に失敗したときも `GET /api/state` は応答し、取得できた表示を返す。
+合成行の非表示と削除は表示overlayだけを変更し、projection削除から実セッションの終了処理や `answerDelivery` の終了通知を呼ばない。実rowの起源が同providerだけのときは、削除印がある間だけそのrowを `GET /api/state` から隠す。混在・不明の実rowは隠さない。session file と実状態は保持して不在終了の判定を続ける。複数providerのprojection、実rowの複数・不明・異providerの起源が重なる操作は `409`、構成済みのprojection snapshotまたは登録情報を取得できない操作は状態を変更せず `503` を返す。snapshot取得に失敗したときも `GET /api/state` は応答し、取得できた表示を返す。
 
 projectionの `deletedAt` は一覧の再合成、session fileの再走査、古いイベントでは解除しない。イベントは表示印だけを理由に通常の状態更新や後続処理を止めず、検証済み登録から受理した `SessionEnd` 以外のstate writeで、`hookAt` が削除時刻より新しい場合だけ同providerの印を解除する。`{action: "clear"}` は非表示印を消すが、削除印を残す。この表示overlayの時刻判定は、実セッション削除を扱う `deletedSessions` の互換動作とは独立している。
 
