@@ -598,6 +598,8 @@ const MAX_PENDING_INSTRUCTION_ALTERNATIVES = 64;
 const MAX_INSTRUCTION_TEXT_BYTES = 64 * 1024;
 const INSTRUCTION_PREVIEW_STORAGE_KEY = 'agent-cockpit.instruction-previews';
 const INSTRUCTION_ALTERNATIVE_STORAGE_KEY = 'agent-cockpit.instruction-alternative-requests';
+const MAX_PENDING_INSTRUCTION_PREVIEWS = 64;
+const instructionPreviewSavePending = new Map();
 const instructionPreviews = new Map();
 const instructionAlternativeDiscardConfirmations = new Set();
 let observedInstructionStates = new Map();
@@ -1405,6 +1407,67 @@ function rememberInstructionPreview(instruction, text) {
   if (previous) instructionPreviews.set(instruction.deliveryAttemptId, previous);
   else instructionPreviews.delete(instruction.deliveryAttemptId);
   return false;
+}
+
+function reserveInstructionPreviewSave(key, text, lateKey = null) {
+  if (instructionPreviewSavePending.has(key) || instructionPreviewSavePending.size >= MAX_PENDING_INSTRUCTION_PREVIEWS) return false;
+  instructionPreviewSavePending.set(key, Object.freeze({ phase: 'requesting', text, lateKey }));
+  return true;
+}
+
+function completeInstructionPreviewSave(key, instruction, text, lateKey = null) {
+  const reservation = instructionPreviewSavePending.get(key);
+  if (!reservation || reservation.phase !== 'requesting' || reservation.text !== text ||
+      (reservation.lateKey || null) !== (lateKey || null) ||
+      !instruction || !validScopedInstructionId(instruction.deliveryAttemptId) ||
+      !validScopedInstructionId(instruction.launchRef) || !INSTRUCTION_MODES.has(instruction.mode) ||
+      !Number.isSafeInteger(instruction.revision)) return null;
+  const id = instruction.deliveryAttemptId;
+  if (key !== id && instructionPreviewSavePending.has(id)) return null;
+  const snapshot = JSON.parse(JSON.stringify(instruction));
+  if (snapshot.identity && typeof snapshot.identity === 'object') Object.freeze(snapshot.identity);
+  Object.freeze(snapshot);
+  instructionPreviewSavePending.delete(key);
+  instructionPreviewSavePending.set(id, Object.freeze({ phase: 'pending', instruction: snapshot, text, lateKey }));
+  return id;
+}
+
+function releaseInstructionPreviewSave(key) {
+  if (instructionPreviewSavePending.get(key)?.phase === 'requesting') instructionPreviewSavePending.delete(key);
+}
+
+function pendingInstructionPreviewForLateKey(lateKey) {
+  for (const [id, pending] of instructionPreviewSavePending) {
+    if (pending.lateKey === lateKey) return { id, pending };
+  }
+  return null;
+}
+
+function retryInstructionPreviewSave(id) {
+  const pending = instructionPreviewSavePending.get(id);
+  if (!pending || pending.phase !== 'pending' ||
+      !rememberInstructionPreview(pending.instruction, pending.text)) return false;
+  instructionPreviewSavePending.delete(id);
+  instructionErrors.delete('preview:' + id);
+  if (pending.lateKey) instructionErrors.delete(pending.lateKey);
+  const sessionId = pending.instruction.sessionId;
+  const notice = pending.lateKey
+    ? '後続の指示を保存しました。送信は別操作です。'
+    : '指示を保存しました。送信は別操作です。';
+  if (sessionId) instructionNotices.set(sessionId, notice);
+  if (typeof liveStatus !== 'undefined' && liveStatus) liveStatus.textContent = notice;
+  return true;
+}
+
+async function runInstructionPreviewSaveRetry(id) {
+  if (!instructionPreviewSavePending.has(id)) return;
+  if (!retryInstructionPreviewSave(id)) {
+    const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。';
+    instructionErrors.set('preview:' + id, message);
+    if (typeof liveStatus !== 'undefined' && liveStatus) liveStatus.textContent = message;
+  }
+  try { await refresh(); } catch {}
+  if (lastState) render(lastState);
 }
 
 function instructionPreviewFor(instruction) {
@@ -3340,6 +3403,53 @@ function instructionAlternativeRetryState(state, request) {
   return { allowed, reason, target };
 }
 
+function instructionPreviewRecoveryPanel(state) {
+  const pending = [...instructionPreviewSavePending.entries()]
+    .filter(([, record]) => record?.phase === 'pending');
+  if (!pending.length) return null;
+  const panel = element('section', 'instruction-composer instruction-recovery');
+  panel.setAttribute('aria-label', '指示本文の保存を確認');
+  const heading = element('h2', '', 'このタブへの本文保存を確認');
+  heading.dataset.instructionPreviewRecoveryHeading = 'true';
+  heading.tabIndex = -1;
+  panel.append(heading);
+  panel.append(element('p', 'instruction-reason',
+    'サーバーへの保存は確認済みです。本文をこのタブに保存するまで、タブを閉じると内容を復元できません。'));
+  for (const [id, record] of pending) {
+    const instruction = record.instruction;
+    const target = instructionTargetFor(state, instruction.launchRef);
+    const targetName = target ? instructionTargetName(target) : '実行先を確認できません';
+    const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
+    const item = element('article', 'instruction-card');
+    const itemHeading = element('h3', '', instructionModeLabel(instruction.mode) + ' · ' + targetName + ' · ' + createdAt);
+    itemHeading.dataset.instructionPreviewTitle = id;
+    itemHeading.tabIndex = -1;
+    item.append(itemHeading);
+    const preview = element('section', 'instruction-preview');
+    preview.append(element('strong', '', '保存済みの指示本文'));
+    const text = element('textarea');
+    text.value = record.text;
+    text.readOnly = true;
+    text.rows = 4;
+    text.dataset.instructionPreviewRecoveryText = id;
+    text.setAttribute('aria-label', '保存済みの指示本文');
+    preview.append(text);
+    item.append(preview);
+    const errorMessage = instructionErrors.get('preview:' + id);
+    if (errorMessage) {
+      const error = element('p', 'instruction-reason', errorMessage);
+      error.setAttribute('role', 'alert');
+      item.append(error);
+    }
+    const retry = element('button', '', 'このタブに本文を保存する');
+    retry.type = 'button';
+    retry.dataset.instructionPreviewRetry = id;
+    item.append(retry);
+    panel.append(item);
+  }
+  return panel;
+}
+
 function instructionAlternativeRecoveryPanel(state) {
   const pending = [...instructionAlternatives.entries()]
     .filter(([, draft]) => draft?.pendingRequest);
@@ -3415,7 +3525,10 @@ function instructionCard(session, state, instruction) {
   const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
   const alternativeDraft = instructionAlternatives.get(instruction.deliveryAttemptId);
   const alternativePending = Boolean(alternativeDraft?.pendingRequest);
-  card.append(element('h4', '', `${instructionModeLabel(instruction.mode)} · ${targetLabel} · ${createdAt}`));
+  const title = element('h4', '', `${instructionModeLabel(instruction.mode)} · ${targetLabel} · ${createdAt}`);
+  title.dataset.instructionPreviewTitle = instruction.deliveryAttemptId;
+  title.tabIndex = -1;
+  card.append(title);
   card.append(element('p', 'instruction-status', instructionStateLabel(instruction)));
   if (!isFinishedInstruction(instruction)) {
     const previewPanel = element('section', 'instruction-preview');
@@ -4136,6 +4249,27 @@ function instructionProjectionSignature(state) {
   });
 }
 
+function restoreInstructionPreviewRecoveryFocus(focusData, activeTextarea = null) {
+  const escapedId = CSS.escape(focusData.id);
+  const title = root.querySelector('[data-instruction-preview-title="' + escapedId + '"]');
+  const recoveryHeading = root.querySelector('[data-instruction-preview-recovery-heading]');
+  const stableControl = document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]');
+  if (focusData.kind === 'instruction-preview-text') {
+    const control = root.querySelector('[data-instruction-preview-recovery-text="' + escapedId + '"]');
+    if (activeTextarea && control) {
+      control.replaceWith(activeTextarea);
+      activeTextarea.focus({ preventScroll: true });
+      activeTextarea.setSelectionRange(focusData.start, focusData.end);
+    } else if (control) control.focus({ preventScroll: true });
+    else (title || recoveryHeading || stableControl)?.focus({ preventScroll: true });
+    return;
+  }
+  const retry = focusData.kind === 'instruction-preview-retry'
+    ? root.querySelector('[data-instruction-preview-retry="' + escapedId + '"]')
+    : null;
+  (retry || title || recoveryHeading || stableControl)?.focus({ preventScroll: true });
+}
+
 function restoreInstructionAlternativeFocus(focusData) {
   const id = focusData.id;
   const escapedId = CSS.escape(id);
@@ -4170,6 +4304,7 @@ function render(state) {
   const activeCommonField = active instanceof HTMLElement && active.matches('[data-common-option], [data-common-free-text]') ? active : null;
   const activeInstructionField = active instanceof HTMLElement && active.matches('[data-instruction-field]') ? active : null;
   const activeInstructionRecoveryText = active instanceof HTMLTextAreaElement && active.dataset.instructionRecoveryText ? active : null;
+  const activeInstructionPreviewRecoveryText = active instanceof HTMLTextAreaElement && active.dataset.instructionPreviewRecoveryText ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
@@ -4192,7 +4327,9 @@ function render(state) {
            end: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionEnd : 0 }
          : activeInstructionRecoveryText ? { kind: 'instruction-alt-preview', id: activeInstructionRecoveryText.dataset.instructionRecoveryText,
            start: activeInstructionRecoveryText.selectionStart, end: activeInstructionRecoveryText.selectionEnd }
-         : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
+         : activeInstructionPreviewRecoveryText ? { kind: 'instruction-preview-text', id: activeInstructionPreviewRecoveryText.dataset.instructionPreviewRecoveryText, start: activeInstructionPreviewRecoveryText.selectionStart, end: activeInstructionPreviewRecoveryText.selectionEnd }
+          : active?.dataset?.instructionPreviewRetry ? { kind: 'instruction-preview-retry', id: active.dataset.instructionPreviewRetry }
+          : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
          : active?.dataset?.instructionAlternativeDiscardAsk ? { kind: 'instruction-alt-discard-ask', id: active.dataset.instructionAlternativeDiscardAsk }
          : active?.dataset?.instructionAlternativeDiscard ? { kind: 'instruction-alt-discard', id: active.dataset.instructionAlternativeDiscard }
          : active?.dataset?.instructionAlternativeDiscardDismiss ? { kind: 'instruction-alt-discard-dismiss', id: active.dataset.instructionAlternativeDiscardDismiss }
@@ -4231,6 +4368,8 @@ function render(state) {
     if (instructionNotice) root.prepend(instructionNotice);
     const alternativeRecovery = instructionAlternativeRecoveryPanel(state);
     if (alternativeRecovery) root.prepend(alternativeRecovery);
+    const previewRecovery = instructionPreviewRecoveryPanel(state);
+    if (previewRecovery) root.prepend(previewRecovery);
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
     else if (focusData?.kind === 'instruction-alt-preview') {
@@ -4241,6 +4380,7 @@ function render(state) {
         activeInstructionRecoveryText.setSelectionRange(focusData.start, focusData.end);
       }
     }
+    else if (focusData?.kind?.startsWith('instruction-preview-')) restoreInstructionPreviewRecoveryFocus(focusData, activeInstructionPreviewRecoveryText);
     else if (focusData?.kind?.startsWith('instruction-alt-')) restoreInstructionAlternativeFocus(focusData);
     else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
@@ -4260,6 +4400,8 @@ function render(state) {
   if (instructionNotice) root.prepend(instructionNotice);
   const alternativeRecovery = instructionAlternativeRecoveryPanel(state);
   if (alternativeRecovery) root.prepend(alternativeRecovery);
+  const previewRecovery = instructionPreviewRecoveryPanel(state);
+  if (previewRecovery) root.prepend(previewRecovery);
 
   if (focusData?.kind?.startsWith('merge-')) {
     const controls = [...root.querySelectorAll('[data-merge-method], [data-reservation-toggle], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-merge-go], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
@@ -4295,6 +4437,10 @@ function render(state) {
         activeInstructionRecoveryText.focus({ preventScroll: true });
         activeInstructionRecoveryText.setSelectionRange(focusData.start, focusData.end);
       } else control?.focus({ preventScroll: true });
+      return;
+    }
+    if (focusData.kind.startsWith('instruction-preview-')) {
+      restoreInstructionPreviewRecoveryFocus(focusData, activeInstructionPreviewRecoveryText);
       return;
     }
     if (focusData.kind.startsWith('instruction-alt-')) {
@@ -4700,43 +4846,66 @@ async function instructionResponse(response) {
 async function runInstructionCreate(form) {
   const sessionId = form.dataset.instructionSession;
   const draft = instructionDraftFor(sessionId);
+  if (!draft.deliveryAttemptId || !draft.logicalMessageId) Object.assign(draft, instructionIds());
+  const reservationKey = draft.deliveryAttemptId;
+  const existingPreview = instructionPreviewSavePending.get(reservationKey);
+  if (existingPreview?.phase === 'pending') {
+    await runInstructionPreviewSaveRetry(reservationKey);
+    return;
+  }
+  if (existingPreview?.phase === 'requesting') return;
   const target = instructionTargetFor(lastState, draft.targetLaunchRef);
   if (!target || !instructionTargetMode(target, draft.mode) || !draft.text.trim() || instructionInFlight.has(sessionId)) return;
-  if (!draft.deliveryAttemptId || !draft.logicalMessageId) Object.assign(draft, instructionIds());
   const key = sessionId;
+  const previewText = draft.text;
+  if (!reserveInstructionPreviewSave(reservationKey, previewText)) {
+    instructionErrors.set(key, '本文の保存確認は 64 件までです。確認待ちを先に整理してください。入力内容は保持しています。');
+    if (lastState) render(lastState);
+    return;
+  }
   instructionInFlight.add(key);
   instructionErrors.delete(key);
   for (const control of form.elements) control.disabled = true;
-  const previewText = draft.text;
   const body = {
     session_id: target.sessionId,
     execution_id: target.executionId,
     launch_ref: target.launchRef,
-    delivery_attempt_id: draft.deliveryAttemptId,
+    delivery_attempt_id: reservationKey,
     logical_message_id: draft.logicalMessageId,
     revision: 0,
-    text: draft.text,
+    text: previewText,
     mode: draft.mode,
     expected_turn_id: draft.mode === 'steer' ? target.nativeTurnId : null,
   };
   try {
     const result = await instructionResponse(await postUiAction('/api/instructions/create', body));
-    if (!rememberInstructionPreview(result.instruction, previewText)) {
-      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。入力を保持しています。';
+    const instruction = result?.instruction;
+    if (!['created', 'existing'].includes(result?.outcome) || instruction?.deliveryAttemptId !== body.delivery_attempt_id ||
+        instruction.launchRef !== body.launch_ref || instruction.mode !== body.mode || instruction.revision !== body.revision) {
+      throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
+    const pendingId = completeInstructionPreviewSave(reservationKey, instruction, previewText);
+    if (!pendingId) throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    if (draft.deliveryAttemptId === body.delivery_attempt_id) {
+      draft.deliveryAttemptId = null;
+      draft.logicalMessageId = null;
+    }
+    if (draft.text === previewText) draft.text = '';
+    if (!retryInstructionPreviewSave(pendingId)) {
+      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。';
+      instructionErrors.set('preview:' + pendingId, message);
       instructionNotices.set(key, message);
-      await refresh();
-      if (lastState) render(lastState);
       liveStatus.textContent = message;
+      try { await refresh(); } catch {}
+      if (lastState) render(lastState);
       return;
     }
-    draft.text = '';
-    draft.deliveryAttemptId = null;
-    draft.logicalMessageId = null;
     instructionNotices.set(key, result.outcome === 'existing' ? '同じ指示はすでに保存されています。送信は別操作です。' : '指示を保存しました。送信は別操作です。');
     await refresh();
     if (lastState) render(lastState);
     liveStatus.textContent = '指示を保存しました。送信はまだ開始していません。';
   } catch (error) {
+    releaseInstructionPreviewSave(reservationKey);
     instructionErrors.set(key, instructionErrorText(error.code));
     showWriteError('指示を保存できませんでした');
     await refresh();
@@ -4906,8 +5075,18 @@ async function runInstructionAlternative(formOrId) {
 }
 
 async function runLateInstruction(button) {
-  const key = `late:${button.dataset.lateQuestionId}:${button.dataset.lateIndex}:${button.dataset.lateDigest}`;
-  if (instructionInFlight.has(key)) return;
+  const key = 'late:' + button.dataset.lateQuestionId + ':' + button.dataset.lateIndex + ':' + button.dataset.lateDigest;
+  const existingPreview = pendingInstructionPreviewForLateKey(key);
+  if (existingPreview?.pending.phase === 'pending') {
+    await runInstructionPreviewSaveRetry(existingPreview.id);
+    return;
+  }
+  if (existingPreview || instructionInFlight.has(key)) return;
+  if (instructionPreviewSavePending.size >= MAX_PENDING_INSTRUCTION_PREVIEWS) {
+    instructionErrors.set(key, '本文の保存確認は 64 件までです。確認待ちを先に整理してください。質問の配送状態は変わっていません。');
+    if (lastState) render(lastState);
+    return;
+  }
   const question = (lastState?.sessions || []).flatMap((session) => (session.commonQuestions || []).map((item) => ({
     ...item, sessionId: session.session_id,
   }))).find((item) => item.internalQuestionId === button.dataset.lateQuestionId);
@@ -4919,6 +5098,12 @@ async function runLateInstruction(button) {
   if (!ref || !submittedDraft || digest !== ref.digest || !previewText) {
     instructionErrors.set(key, 'このタブで保存した回答内容を確認できないため、後続の指示を作成できません。質問の配送状態は変わっていません。');
     liveStatus.textContent = '回答内容を確認できないため、後続の指示を作成できません。';
+    if (lastState) render(lastState);
+    return;
+  }
+  const reservationKey = 'late-preview:' + key;
+  if (!reserveInstructionPreviewSave(reservationKey, previewText, key)) {
+    instructionErrors.set(key, '本文の保存確認は 64 件までです。確認待ちを先に整理してください。質問の配送状態は変わっていません。');
     if (lastState) render(lastState);
     return;
   }
@@ -4934,11 +5119,18 @@ async function runLateInstruction(button) {
         mode: button.dataset.lateMode,
         expected_turn_id: button.dataset.lateExpectedTurn || null,
       }));
-    if (!rememberInstructionPreview(result.instruction, previewText)) {
-      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。回答内容は保持しています。';
+    const instruction = result?.instruction;
+    if (!['created', 'existing'].includes(result?.outcome) || instruction?.mode !== button.dataset.lateMode) {
+      throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
+    const pendingId = completeInstructionPreviewSave(reservationKey, instruction, previewText, key);
+    if (!pendingId) throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    if (!retryInstructionPreviewSave(pendingId)) {
+      const message = 'サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です。';
       instructionErrors.set(key, message);
+      instructionErrors.set('preview:' + pendingId, message);
       liveStatus.textContent = message;
-      await refresh();
+      try { await refresh(); } catch {}
       if (lastState) render(lastState);
       return;
     }
@@ -4949,6 +5141,7 @@ async function runLateInstruction(button) {
     await refresh();
     if (lastState) render(lastState);
   } catch (error) {
+    releaseInstructionPreviewSave(reservationKey);
     instructionErrors.set(key, instructionErrorText(error.code));
     showWriteError('後続の指示を保存できませんでした');
     await refresh();
@@ -5340,6 +5533,7 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.instructionAction) { void runInstructionAction(button); return; }
+  if (button.dataset.instructionPreviewRetry) { void runInstructionPreviewSaveRetry(button.dataset.instructionPreviewRetry); return; }
   if (button.dataset.instructionAlternativeOpen) {
     const id = button.dataset.instructionAlternativeOpen;
     const draft = instructionAlternatives.get(id) || { text: '', deliveryAttemptId: null };
@@ -5623,7 +5817,7 @@ function instructionTargetStillBound(state, sessionId, launchRef, registrationEx
 }
 
 function hasUnsentInstructionWork(state) {
-  if (instructionComposing || instructionInFlight.size || instructionAlternativeInFlight.size) return true;
+  if (instructionComposing || instructionInFlight.size || instructionAlternativeInFlight.size || instructionPreviewSavePending.size) return true;
   for (const draft of instructionAlternatives.values()) {
     if (draft?.pendingRequest) return true;
   }

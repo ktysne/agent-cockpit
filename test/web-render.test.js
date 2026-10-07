@@ -11,7 +11,7 @@ const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 
 
 function pageContext(html, sandbox = {}) {
   const instructionState = html.includes('let instructionComposing = false;')
-    ? { instructionComposing: false, instructionDiagnosticsNotice: () => null, instructionAlternativeRecoveryPanel: () => null }
+    ? { instructionComposing: false, instructionDiagnosticsNotice: () => null, instructionAlternativeRecoveryPanel: () => null, instructionPreviewRecoveryPanel: () => null }
     : {};
   return createPageContext(html, { ...instructionState, ...sandbox });
 }
@@ -218,6 +218,7 @@ function reloadHarness(initialUiVersion, drafts = [], instructionState = {}) {
     instructionAlternatives: new Map(instructionState.alternatives || []),
     instructionInFlight: new Set(instructionState.inFlight || []),
     instructionAlternativeInFlight: new Set(instructionState.alternativeInFlight || []),
+    instructionPreviewSavePending: new Map(instructionState.previewSavePending || []),
     reloadNote,
     location: { reload: () => { reloadCount += 1; } },
   });
@@ -644,6 +645,15 @@ test('保留中の代替要求と送信中の指示は対象消失後も版更�
   const composing = reloadHarness('v1', [], { composing: true });
   assert.equal(composing.context.checkUiVersion(state), false);
   assert.equal(composing.reloadCount, 0);
+
+  const previewPending = reloadHarness('v1', [], {
+    previewSavePending: [['instruction-a', { phase: 'pending', text: 'fixed body' }]],
+  });
+  assert.equal(previewPending.context.checkUiVersion(state), false);
+  assert.equal(previewPending.reloadCount, 0);
+  previewPending.context.instructionPreviewSavePending.clear();
+  assert.equal(previewPending.context.checkUiVersion(state), true);
+  assert.equal(previewPending.reloadCount, 1);
 });
 
 test('文字が残っていない対象とモードだけの下書きは版更新を止めない', () => {

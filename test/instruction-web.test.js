@@ -199,6 +199,80 @@ test('stopped mock session with an open question cannot select a start instructi
   assert.match(html, /data-instruction-mode="session-waiting" disabled/);
 });
 
+test('mock preview recovery keeps the saved instruction and body until local storage succeeds', () => {
+  const id = 'mock-instruction-preview-recovery';
+  const body = '確認が必要な既存指示本文';
+  const record = { deliveryAttemptId: id, sessionId: 'session-a', mode: 'steer', createdAt: 100, state: 'available' };
+  const ui = {
+    instructionRecords: [record], instructionPreviewRecoveries: { [id]: body }, instructionPreviews: {},
+    instructionNotices: {}, instructionAlternatives: {}, hideFinished: true,
+  };
+  const errors = new Map();
+  const writes = [false, true];
+  const context = pageContext(mock, {
+    ui,
+    instructionPreviewRecoveryErrors: errors,
+    allSessions: () => [{ id: 'session-a', title: 'Session A' }],
+    esc: value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]),
+    absoluteTimeLabel: () => '作成時刻',
+    instructionModeText: () => '実行中へ伝える',
+    instructionStateText: () => '指示を保存しました。送信前です。',
+    isFinishedInstructionRecord: item => ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(item.state),
+    instructionTargetAvailability: () => ({ mode: 'steer' }),
+    save: () => writes.shift(),
+    MAX_PENDING_INSTRUCTION_PREVIEWS: 64,
+  });
+  const names = [
+    'registerMockInstructionPreviewRecovery', 'instructionPreviewText', 'saveMockInstructionPreviewRecovery',
+    'instructionPreviewRecoveryPanel', 'instructionCard',
+  ];
+  const sources = names.map(name => functionSource(mock, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  assert.match(context.instructionPreviewRecoveryPanel(), /保存済みの指示本文/);
+  assert.match(context.instructionPreviewRecoveryPanel(), new RegExp(body));
+  const render = functionSource(mock, 'render');
+  assert.ok(render);
+  assert.match(render, /instructionPreviewRecoveryPanel\(\)/);
+  assert.match(render, /insertAdjacentHTML\('afterbegin', previewRecovery\)/);
+  assert.match(render, /active\?\.dataset\?\.instructionPreviewRecovery/);
+  assert.match(functionSource(mock, 'instructionCard'), /<h4 tabindex="-1">/);
+  const pendingCard = context.instructionCard({ id: 'session-a', title: 'Session A' }, record);
+  assert.match(pendingCard, /data-instruction-action="send"[^>]*disabled/);
+  assert.match(pendingCard, /data-instruction-action="cancel"/);
+  assert.equal(context.instructionPreviewText(record), null);
+
+  assert.equal(context.saveMockInstructionPreviewRecovery(id), false);
+  assert.equal(ui.instructionPreviewRecoveries[id], body);
+  assert.equal(Object.hasOwn(ui.instructionPreviews, id), false);
+  assert.equal(ui.instructionRecords[0], record);
+  assert.match(errors.get(id), /本文は保持しています/);
+
+  assert.equal(context.saveMockInstructionPreviewRecovery(id), true);
+  assert.equal(Object.hasOwn(ui.instructionPreviewRecoveries, id), false);
+  assert.equal(ui.instructionPreviews[id], body);
+  assert.equal(ui.instructionRecords[0], record);
+  assert.equal(record.text, undefined);
+  assert.equal(context.instructionPreviewRecoveryPanel(), '');
+  assert.equal(context.instructionPreviewText(record), body);
+  assert.match(context.instructionCard({ id: 'session-a', title: 'Session A' }, record), /送信内容/);
+  const recoveredCard = context.instructionCard({ id: 'session-a', title: 'Session A' }, record);
+  assert.match(recoveredCard, /data-instruction-action="send" data-instruction-id="mock-instruction-preview-recovery">/);
+  assert.match(recoveredCard, /data-instruction-action="cancel"/);
+  assert.equal(errors.has(id), false);
+});
+
+test('mock preview recovery enforces the 64-item pending limit', () => {
+  const recoveries = Object.fromEntries(Array.from({ length: 64 }, (_, index) => ['pending-' + index, '本文']));
+  const context = pageContext(mock, { ui: { instructionPreviewRecoveries: recoveries }, MAX_PENDING_INSTRUCTION_PREVIEWS: 64 });
+  const source = functionSource(mock, 'registerMockInstructionPreviewRecovery');
+  assert.ok(source);
+  vm.runInContext(source, context);
+  assert.equal(context.registerMockInstructionPreviewRecovery('overflow', '本文'), false);
+  assert.equal(Object.keys(recoveries).length, 64);
+});
+
 test('lost alternative response retries the same frozen request and adds preview only after a matching response', async () => {
   const calls = [];
   const alternative = {
@@ -363,56 +437,217 @@ test('preview storage failure keeps the fixed alternative request through reload
   }
 });
 
-test('通常指示はプレビュー永続化を確認するまで入力と安定IDを保持する', async () => {
+test('通常指示の成功後は本文だけをローカル復旧し、新しい下書きを残す', async () => {
   const storage = instructionStorage();
   storage.setPreviewFailure('throw');
   const draft = { targetLaunchRef: 'launch-a', mode: 'steer', text: '通常の指示', deliveryAttemptId: 'stable-attempt', logicalMessageId: 'stable-logical' };
   const instructionDrafts = new Map([['session-a', draft]]);
+  const instructionPreviews = new Map();
+  const instructionPreviewSavePending = new Map();
   const target = {
     launchRef: 'launch-a', sessionId: 'session-a', executionId: 'execution-a', origin: 'standalone',
     status: 'working', nativeTurnId: 'turn-a',
   };
   const state = { instructionTargets: [target] };
   const posts = [];
+  const errors = new Map();
+  const notices = new Map();
   const context = pageContext(product, {
-    INSTRUCTION_PREVIEW_STORAGE_KEY: 'instruction-preview', INSTRUCTION_MODES: new Set(['steer', 'start', 'next-user-input']),
+    INSTRUCTION_PREVIEW_STORAGE_KEY: 'instruction-preview',
+    INSTRUCTION_MODES: new Set(['steer', 'start', 'next-user-input']),
+    MAX_PENDING_INSTRUCTION_PREVIEWS: 64,
+    instructionPreviewSavePending,
     instructionDrafts,
-    instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(), instructionPreviews: new Map(),
-    lastState: state, liveStatus: { textContent: '' },
+    instructionInFlight: new Set(),
+    instructionErrors: errors,
+    instructionNotices: notices,
+    instructionPreviews,
+    lastState: state,
+    liveStatus: { textContent: '' },
     postUiAction: async (url, body) => {
       posts.push({ url, body: JSON.parse(JSON.stringify(body)) });
-      return { ok: true, json: async () => ({ outcome: 'existing', instruction: {
-        deliveryAttemptId: body.delivery_attempt_id, launchRef: body.launch_ref, mode: body.mode, revision: body.revision,
+      return { ok: true, json: async () => ({ outcome: 'created', instruction: {
+        deliveryAttemptId: body.delivery_attempt_id, launchRef: body.launch_ref, mode: body.mode,
+        revision: body.revision, sessionId: body.session_id, createdAt: 10,
       } }) };
     },
-    refresh: async () => {}, render() {}, showWriteError() {},
+    refresh: async () => {},
+    render() {},
+    showWriteError() {},
   });
-  context.sessionStorage = storage;
-  const sources = ['validScopedInstructionId', 'instructionDraftFor', 'instructionTargetFor', 'instructionTargetMode',
-    'instructionResponse', 'persistInstructionPreviews', 'rememberInstructionPreview', 'runInstructionCreate']
-    .map(name => functionSource(product, name));
+  const names = [
+    'validScopedInstructionId', 'instructionDraftFor', 'instructionTargetFor', 'instructionTargetMode',
+    'instructionResponse', 'instructionErrorText', 'persistInstructionPreviews', 'rememberInstructionPreview',
+    'reserveInstructionPreviewSave', 'completeInstructionPreviewSave', 'releaseInstructionPreviewSave',
+    'retryInstructionPreviewSave', 'runInstructionPreviewSaveRetry', 'runInstructionCreate',
+  ];
+  const sources = names.map((name) => functionSource(product, name));
   assert.ok(sources.every(Boolean));
+  context.sessionStorage = storage;
   vm.runInContext(sources.join('\n'), context);
   const form = { dataset: { instructionSession: 'session-a' }, elements: [] };
 
   await context.runInstructionCreate(form);
   assert.equal(posts.length, 1);
-  assert.equal(draft.text, '通常の指示');
-  assert.equal(draft.deliveryAttemptId, 'stable-attempt');
-  assert.equal(draft.logicalMessageId, 'stable-logical');
-  assert.equal(context.instructionPreviews.has('stable-attempt'), false);
-  assert.match(context.instructionNotices.get('session-a'), /サーバーへの保存は確認済みですが、このタブへの本文保存が未完了です/);
-
-  storage.setPreviewFailure(null);
-  await context.runInstructionCreate(form);
-  assert.equal(posts.length, 2);
-  assert.deepEqual(posts[1], posts[0]);
   assert.equal(draft.text, '');
   assert.equal(draft.deliveryAttemptId, null);
   assert.equal(draft.logicalMessageId, null);
+  assert.equal(instructionPreviews.has('stable-attempt'), false);
+  assert.equal(instructionPreviewSavePending.get('stable-attempt').text, '通常の指示');
+  assert.equal(instructionPreviewSavePending.get('stable-attempt').phase, 'pending');
+
+  draft.text = '新しく入力した指示';
+  draft.deliveryAttemptId = null;
+  draft.logicalMessageId = null;
+  draft.mode = 'start';
+  target.status = 'stopped';
+  target.nativeTurnId = null;
+  storage.setPreviewFailure(null);
+  await context.runInstructionPreviewSaveRetry('stable-attempt');
+  assert.equal(posts.length, 1);
+  assert.equal(instructionPreviewSavePending.has('stable-attempt'), false);
   assert.equal(JSON.parse(storage.getItem('instruction-preview'))['stable-attempt'].text, '通常の指示');
+  assert.equal(instructionPreviews.get('stable-attempt').mode, 'steer');
+  assert.equal(draft.text, '新しく入力した指示');
+  assert.equal(draft.mode, 'start');
+
+  for (let index = 0; index < 64; index += 1) {
+    instructionPreviewSavePending.set('occupied-' + index, { phase: 'pending', text: 'held' });
+  }
+  draft.text = '容量超過時も保持する';
+  draft.deliveryAttemptId = 'capacity-attempt';
+  draft.logicalMessageId = 'capacity-message';
+  await context.runInstructionCreate(form);
+  assert.equal(posts.length, 1);
+  assert.equal(draft.text, '容量超過時も保持する');
+  assert.match(errors.get('session-a'), /64 件まで/);
 });
 
+test('後続回答のプレビュー復旧は質問・対象・方式が変わっても同じ回答からのPOSTを重ねない', async () => {
+  const storage = instructionStorage();
+  storage.setPreviewFailure('mismatch');
+  const question = {
+    internalQuestionId: 'question-a',
+    lateAnswerRefs: [{ index: 2, digest: 'digest-a' }],
+  };
+  const lastState = { sessions: [{ session_id: 'session-a', commonQuestions: [question] }] };
+  const instructionPreviewSavePending = new Map();
+  const instructionPreviews = new Map();
+  const instructionErrors = new Map();
+  const instructionNotices = new Map();
+  const posts = [];
+  const context = pageContext(product, {
+    INSTRUCTION_PREVIEW_STORAGE_KEY: 'instruction-preview',
+    INSTRUCTION_MODES: new Set(['steer', 'start', 'next-user-input']),
+    MAX_PENDING_INSTRUCTION_PREVIEWS: 64,
+    instructionPreviewSavePending,
+    instructionPreviews,
+    instructionErrors,
+    instructionNotices,
+    instructionInFlight: new Set(),
+    commonQuestionSubmittedDrafts: new Map([['question-draft', { answers: [] }]]),
+    commonQuestionKey: () => 'question-draft',
+    commonQuestionErrors: new Map(),
+    lateAnswerDigest: async () => 'digest-a',
+    formatLateAnswerPreview: () => '固定した後続回答本文',
+    lastState,
+    liveStatus: { textContent: '' },
+    postUiAction: async (url, body) => {
+      posts.push({ url, body: JSON.parse(JSON.stringify(body)) });
+      return { ok: true, json: async () => ({ outcome: 'created', instruction: {
+        deliveryAttemptId: 'late-attempt', launchRef: 'launch-a', mode: body.mode, revision: 0,
+        sessionId: body.session_id, executionId: 'period-a', createdAt: 20,
+      } }) };
+    },
+    instructionErrorText: code => String(code || 'failed'),
+    refresh: async () => {},
+    render() {},
+    showWriteError() {},
+  });
+  const names = [
+    'validScopedInstructionId', 'persistInstructionPreviews', 'rememberInstructionPreview',
+    'reserveInstructionPreviewSave', 'completeInstructionPreviewSave', 'releaseInstructionPreviewSave',
+    'pendingInstructionPreviewForLateKey', 'retryInstructionPreviewSave', 'runInstructionPreviewSaveRetry',
+    'instructionResponse', 'runLateInstruction',
+  ];
+  const sources = names.map((name) => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  context.sessionStorage = storage;
+  vm.runInContext(sources.join('\n'), context);
+  const button = { dataset: {
+    lateQuestionId: 'question-a', lateIndex: '2', lateDigest: 'digest-a',
+    sessionId: 'session-a', instructionExecution: 'execution-a', lateMode: 'steer', lateExpectedTurn: 'turn-a',
+  }, disabled: false };
+
+  await context.runLateInstruction(button);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].body.mode, 'steer');
+  assert.equal(instructionPreviewSavePending.get('late-attempt').text, '固定した後続回答本文');
+  assert.equal(instructionErrors.has('late:question-a:2:digest-a'), true);
+
+  lastState.sessions = [];
+  button.dataset.lateMode = 'start';
+  button.dataset.lateExpectedTurn = '';
+  storage.setPreviewFailure(null);
+  await context.runLateInstruction(button);
+  assert.equal(posts.length, 1);
+  assert.equal(instructionPreviewSavePending.has('late-attempt'), false);
+  assert.equal(instructionErrors.has('late:question-a:2:digest-a'), false);
+  assert.equal(JSON.parse(storage.getItem('instruction-preview'))['late-attempt'].text, '固定した後続回答本文');
+});
+test('本文確認の再描画と復旧完了後に同じ指示または安定したcontrolへフォーカスを戻す', () => {
+  const helper = functionSource(product, 'restoreInstructionPreviewRecoveryFocus');
+  const card = functionSource(product, 'instructionCard');
+  assert.ok(helper);
+  assert.match(card, /title\.dataset\.instructionPreviewTitle = instruction\.deliveryAttemptId/);
+  assert.match(card, /title\.tabIndex = -1/);
+  let replacedWith = null;
+  let focused = null;
+  let selection = null;
+  let retryVisible = true;
+  let titleVisible = true;
+  let recoveryHeadingVisible = true;
+  const activeTextarea = {
+    focus() { focused = this; },
+    setSelectionRange(start, end) { selection = [start, end]; },
+  };
+  const replacement = { replaceWith(node) { replacedWith = node; } };
+  const retryButton = { focus() { focused = this; } };
+  const title = { focus() { focused = this; } };
+  const recoveryHeading = { focus() { focused = this; } };
+  const modeButton = { focus() { focused = this; } };
+  const root = {
+    querySelector(selector) {
+      if (selector === '[data-instruction-preview-recovery-text="attempt-a"]') return replacement;
+      if (selector === '[data-instruction-preview-retry="attempt-a"]') return retryVisible ? retryButton : null;
+      if (selector === '[data-instruction-preview-title="attempt-a"]') return titleVisible ? title : null;
+      if (selector === '[data-instruction-preview-recovery-heading]') return recoveryHeadingVisible ? recoveryHeading : null;
+      return null;
+    },
+  };
+  const document = { querySelector: () => modeButton };
+  const context = vm.createContext({ root, document, displayPreferences: { mode: 'product' }, CSS: { escape: value => value } });
+  vm.runInContext(helper, context);
+
+  context.restoreInstructionPreviewRecoveryFocus({
+    kind: 'instruction-preview-text', id: 'attempt-a', start: 1, end: 3,
+  }, activeTextarea);
+  assert.equal(replacedWith, activeTextarea);
+  assert.equal(focused, activeTextarea);
+  assert.deepEqual(selection, [1, 3]);
+
+  context.restoreInstructionPreviewRecoveryFocus({ kind: 'instruction-preview-retry', id: 'attempt-a' });
+  assert.equal(focused, retryButton);
+
+  retryVisible = false;
+  context.restoreInstructionPreviewRecoveryFocus({ kind: 'instruction-preview-retry', id: 'attempt-a' });
+  assert.equal(focused, title);
+
+  titleVisible = false;
+  recoveryHeadingVisible = false;
+  context.restoreInstructionPreviewRecoveryFocus({ kind: 'instruction-preview-retry', id: 'attempt-a' });
+  assert.equal(focused, modeButton);
+});
 
 test('mock retains an alternative request when the final local state write fails', () => {
   const request = {
