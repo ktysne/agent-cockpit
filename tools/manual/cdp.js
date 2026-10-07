@@ -181,7 +181,8 @@ async function launchBrowser({ browserPath, temporaryParent = os.tmpdir() }) {
     let endpoint = null;
     while (!endpoint) {
       if (spawnError) throw new Error(`ブラウザを起動できません: ${spawnError.message}`);
-      if (child.exitCode !== null) throw new Error(`ブラウザが起動直後に終了しました(終了コード ${child.exitCode})`);
+      // Edge は起動したプロセスが本体を別のプロセスで立てて終了コード 0 で抜けることがあるため、0 なら待ち受けを待ち続ける。
+      if (child.exitCode !== null && child.exitCode !== 0) throw new Error(`ブラウザが起動直後に終了しました(終了コード ${child.exitCode})`);
       if (performance.now() > deadline) throw new Error('ブラウザの DevTools の待ち受けを確認できません');
       try {
         endpoint = parseDevToolsActivePort(await fsp.readFile(path.join(userDataDirectory, 'DevToolsActivePort'), 'utf8'));
