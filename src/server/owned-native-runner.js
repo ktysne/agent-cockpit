@@ -342,6 +342,7 @@ function createOwnedNativeRunner(options) {
   let stdoutBuffer = Buffer.alloc(0);
   let lineCount = 0;
   let ignoredMessageCount = 0;
+  let unmatchedResolutionCount = 0;
   let pendingRpc = null;
   const pendingReadRpcs = new Map();
   const MAX_PENDING_READ_RPCS = 1;
@@ -419,6 +420,7 @@ function createOwnedNativeRunner(options) {
       ownedChildActive: Boolean(child && !childExited && !childClosed),
       lineCount,
       ignoredMessageCount,
+      unmatchedResolutionCount,
       pendingRpcCount: (pendingRpc ? 1 : 0) + pendingReadRpcs.size,
       contextState: terminalContextId ? 'ended' : nativeContext ? 'active' : 'none',
       terminalContextCount,
@@ -889,15 +891,16 @@ function createOwnedNativeRunner(options) {
     }
     const idKey = nativeRequestIdKey(message.params.requestId);
     if (earlyResolvedWaitRequest && earlyResolvedWaitRequest.requestIdKey === idKey) {
-      throw runnerError('native_server_resolution_unmatched');
+      unmatchedResolutionCount += 1;
+      return;
     }
     const ownedWaitResponse = pendingOwnedWaitResponses.get(idKey);
     if (ownedWaitResponse) {
-      if (ownedWaitResponse.resolved) throw runnerError('native_server_resolution_unmatched');
-      if (ownedWaitResponse.generation !== generation || ownedWaitResponse.child !== child ||
+      if (ownedWaitResponse.resolved || ownedWaitResponse.generation !== generation || ownedWaitResponse.child !== child ||
           !childSpawned || !['starting', 'running'].includes(state) ||
           message.params.threadId !== ownedWaitResponse.threadId) {
-        throw runnerError('native_server_resolution_scope_mismatch');
+        unmatchedResolutionCount += 1;
+        return;
       }
       ownedWaitResponse.resolved = true;
       if (ownedWaitResponse.writeCompleted) pendingOwnedWaitResponses.delete(idKey);
@@ -911,13 +914,23 @@ function createOwnedNativeRunner(options) {
           !childSpawned || !['starting', 'running'].includes(state) ||
           message.params.threadId !== retiredWaitRequest.threadId ||
           pendingNativeRequests.has(idKey) || pendingOwnedWaitResponses.has(idKey)) {
-        throw runnerError('native_server_resolution_scope_mismatch');
+        unmatchedResolutionCount += 1;
+        return;
       }
       retiredOwnedWaitRequests.delete(idKey);
       return;
     }
     const pending = pendingNativeRequests.get(idKey);
     if (!pending) {
+      const wait = activeWait;
+      if (wait && wait.requestIdKey === idKey && wait.threadId === message.params.threadId &&
+          wait.child === child && wait.generation === generation && childSpawned &&
+          ['starting', 'running'].includes(state)) {
+        // 取り消された要求へ応答すると指示が失われるため、無応答でreceiptを失効させる。
+        wait.latch.invalidate();
+        activeWait = null;
+        return;
+      }
       deferEarlyWaitResolution(message, idKey);
       return;
     }
@@ -926,7 +939,8 @@ function createOwnedNativeRunner(options) {
         !nativeIdentity || nativeIdentity.nativeId !== pending.threadId || !nativeContext ||
         nativeContext.nativeContextId !== pending.turnId ||
         (terminalContextId !== null && terminalContextId !== pending.turnId)) {
-      throw runnerError('native_server_resolution_scope_mismatch');
+      unmatchedResolutionCount += 1;
+      return;
     }
     pendingNativeRequests.delete(idKey);
     pendingNativeRequestRevision += 1n;
@@ -935,16 +949,22 @@ function createOwnedNativeRunner(options) {
   function deferEarlyWaitResolution(message, idKey) {
     const wait = earlyWaitCall;
     const completed = earlyTurnCompletion;
-    if (earlyResolvedWaitRequest || !turnStartPending || !wait || !completed ||
+    if (earlyResolvedWaitRequest || !turnStartPending || !wait ||
         wait.requestIdKey !== idKey || wait.requestId !== message.params.requestId) {
-      throw runnerError('native_server_resolution_unmatched');
+      unmatchedResolutionCount += 1;
+      return;
     }
     if (wait.generation !== generation || wait.child !== child || !childSpawned || state !== 'starting' ||
         !usedNativeRequestIds.has(idKey) || message.params.threadId !== wait.threadId ||
-        completed.threadId !== wait.threadId || completed.turnId !== wait.turnId ||
+        (completed && (completed.threadId !== wait.threadId || completed.turnId !== wait.turnId)) ||
         pendingNativeRequests.has(idKey) || pendingOwnedWaitResponses.has(idKey) ||
         retiredOwnedWaitRequests.has(idKey)) {
-      throw runnerError('native_server_resolution_scope_mismatch');
+      unmatchedResolutionCount += 1;
+      return;
+    }
+    if (!completed) {
+      earlyWaitCall = null;
+      return;
     }
     earlyResolvedWaitRequest = Object.freeze({
       requestId: wait.requestId,
@@ -966,7 +986,9 @@ function createOwnedNativeRunner(options) {
         !retired || retired.requestId !== deferred.requestId || retired.requestIdKey !== deferred.requestIdKey ||
         retired.generation !== deferred.generation || retired.child !== deferred.child ||
         retired.threadId !== deferred.threadId || retired.turnId !== deferred.turnId) {
-      throw runnerError('native_server_resolution_scope_mismatch');
+      earlyResolvedWaitRequest = null;
+      unmatchedResolutionCount += 1;
+      return;
     }
     earlyResolvedWaitRequest = null;
     resolveNativeHoldRequest({ method: 'serverRequest/resolved',
