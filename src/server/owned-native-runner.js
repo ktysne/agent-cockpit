@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const { createOwnedNativeWaitLatch } = require('./owned-native-wait');
+const { createOwnedNativeMcpWait, TOOL_NAME: CLAUDE_WAIT_TOOL } = require('./owned-native-mcp-wait');
+const { createOwnedNativeClaudeWait } = require('./owned-native-claude-wait');
 const { createOwnedNativeSource, getOwnedSource } = require('./owned-native-source');
 const { createOwnedInstructionWriter, MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
 
@@ -248,7 +250,7 @@ function createOwnedNativeRunner(options) {
   assertOnlyKeys(options, [
     'provider', 'executablePath', 'hostId', 'homeScopeId', 'homePath', 'cwd', 'profile',
     'getAuthentication', 'onAuthenticationRequired', 'isCurrent', 'isSourceCurrent', 'isObservationCurrent', 'isContextCurrent', 'onWaitRequired',
-    'spawnImpl', 'timeouts', 'onNative', 'onDisconnect', 'ownedSourceClaim', 'onSourceReady',
+    'spawnImpl', 'timeouts', 'onNative', 'onDisconnect', 'ownedSourceClaim', 'onSourceReady', 'captureWaitAuthorization', 'onContextContinuation',
   ], 'invalid_configuration');
   if (options.provider !== 'codex' && options.provider !== 'claude') throw runnerError('invalid_provider');
   if (options.profile !== PROFILE && options.profile !== WAIT_PROFILE) throw runnerError('invalid_profile');
@@ -264,12 +266,15 @@ function createOwnedNativeRunner(options) {
     throw runnerError('invalid_authentication_prompt');
   }
   const waitProfile = options.profile === WAIT_PROFILE;
-  if (waitProfile && options.provider !== 'codex') throw runnerError('unsupported_profile');
-  if (waitProfile && (typeof options.onWaitRequired !== 'function' ||
+  const claudeWaitProfile = waitProfile && options.provider === 'claude';
+  if (claudeWaitProfile && !options.ownedSourceClaim) throw runnerError('unsupported_profile');
+  if (claudeWaitProfile && (typeof options.captureWaitAuthorization !== 'function' || typeof options.onContextContinuation !== 'function' ||
+      !options.ownedSourceClaim || typeof options.onSourceReady !== 'function')) throw runnerError('invalid_wait_callbacks');
+  if (waitProfile && !claudeWaitProfile && (typeof options.onWaitRequired !== 'function' ||
       typeof options.isCurrent !== 'function' || typeof options.isSourceCurrent !== 'function' || typeof options.isContextCurrent !== 'function')) {
     throw runnerError('invalid_wait_callbacks');
   }
-  if (!waitProfile && options.onWaitRequired !== undefined) throw runnerError('invalid_profile');
+  if (!waitProfile && (options.onWaitRequired !== undefined || options.captureWaitAuthorization !== undefined || options.onContextContinuation !== undefined)) throw runnerError('invalid_profile');
   if (options.isCurrent !== undefined && typeof options.isCurrent !== 'function') throw runnerError('invalid_current_callback');
   if (options.isSourceCurrent !== undefined && typeof options.isSourceCurrent !== 'function') throw runnerError('invalid_current_callback');
   if (options.isObservationCurrent !== undefined && typeof options.isObservationCurrent !== 'function') throw runnerError('invalid_current_callback');
@@ -369,9 +374,31 @@ function createOwnedNativeRunner(options) {
   let failureCode = null;
   let authCapability = provider === 'codex' ? 'managed_chatgpt_login' : 'claude_oauth_environment';
   const cancellations = new Set();
+  let activeInputEpoch = 0, nextInputEpoch = 1;
   let resolveContext = null;
   const contextReady = new Promise((resolve) => { resolveContext = resolve; });
   contextReady.catch(() => {});
+  const claudeMcpWait = claudeWaitProfile ? createOwnedNativeMcpWait(ownedSource.capability, {
+    capture: (native) => options.captureWaitAuthorization(native),
+    onInvalidated: () => fail('claude_wait_unknown'),
+  }) : null;
+  const claudeWait = claudeWaitProfile ? createOwnedNativeClaudeWait(ownedSource.capability, {
+    mcp: claudeMcpWait,
+    current: () => nativeIdentity ? { sessionId: nativeIdentity.nativeId, nativeContextId: nativeContext?.nativeContextId || null, inputEpoch: activeInputEpoch } : null,
+    scope: () => ({ generation, child, identity: nativeIdentity, context: nativeContext, epoch: activeInputEpoch, lease: sourceController.captureInstructionLease() }),
+    checkScope: (capture) => capture && generation === capture.generation && child === capture.child && nativeIdentity === capture.identity &&
+      nativeContext === capture.context && activeInputEpoch === capture.epoch && !terminalContextId &&
+      ['starting', 'running'].includes(state) && ownedSource.facade.checkSource() === true && sourceController.isLeaseTokenCurrent(capture.lease) === true,
+    onContinuation: (permit) => options.onContextContinuation(permit),
+    onUnknown: () => fail('claude_wait_unknown'),
+    advance(from, to, capture) {
+      if (generation !== capture.generation || nativeContext?.nativeContextId !== from || !sourceController.isLeaseTokenCurrent(capture.lease)) return false;
+      emitContextEnded(from);
+      if (!sourceController.beginInstructionContext(from)) return false;
+      nativeContext = null; terminalContextId = null; waitCallSeen = false;
+      emitContext(to); return nativeContext?.nativeContextId === to && ['starting', 'running'].includes(state);
+    },
+  }) : null;
 
   function safeSnapshot() {
     return Object.freeze({
@@ -380,6 +407,7 @@ function createOwnedNativeRunner(options) {
       authCapability,
       childExited,
       childClosed,
+      waitEndpointActive: claudeMcpWait?.controller.isListening() === true,
       ownedChildActive: Boolean(child && !childExited && !childClosed),
       lineCount,
       ignoredMessageCount,
@@ -527,6 +555,7 @@ function createOwnedNativeRunner(options) {
     generation += 1;
     if (sourceController) sourceController.invalidate();
     if (instructionController) instructionController.invalidate();
+    claudeMcpWait?.controller.invalidate();
     invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
@@ -614,6 +643,7 @@ function createOwnedNativeRunner(options) {
     if (nativeContext && nativeContext.nativeContextId !== nativeContextId) throw runnerError('native_context_conflict');
     if (!nativeContext && !matchedEarlyTurnStart) throw runnerError('native_context_conflict');
     invalidateWait();
+    if (claudeWait && !claudeWait.controller.transitioning()) claudeWait.controller.endInput();
     terminalContextId = nativeContextId;
     terminalContextCount = Math.min(Number.MAX_SAFE_INTEGER, terminalContextCount + 1);
     if (instructionController) {
@@ -1089,6 +1119,7 @@ function createOwnedNativeRunner(options) {
   }
   function checkInstruction(capture, metadata) {
     return Boolean(checkInstructionPhysical(capture) && !activeWait && !instructionUncertain &&
+      (!claudeWait || !claudeWait.controller.transitioning() && (metadata.mode !== 'start' || !claudeWait.controller.inputInFlight())) &&
       (!instructionStart || instructionStart.capture === capture) &&
       nativeContext?.nativeContextId === capture.contextId && terminalContextId === capture.terminal &&
       metadata.source.identity.nativeId === nativeIdentity.nativeId &&
@@ -1131,6 +1162,7 @@ function createOwnedNativeRunner(options) {
     if (!checkInstructionPhysical(capture) || terminalContextId !== capture.contextId ||
         !sourceController.beginInstructionContext(capture.contextId)) throw runnerError('instruction_context_conflict');
     nativeContext = null; terminalContextId = null; waitCallSeen = false;
+    if (claudeWait) activeInputEpoch = nextInputEpoch++;
   }
   function handleInstructionAck(pending, result, rejected) {
     if (!instructionController.isPending(pending.token)) return;
@@ -1251,8 +1283,10 @@ function createOwnedNativeRunner(options) {
       claudeTerminalResults.set(uuid, fingerprint);
       if (!nativeContext || terminalContextId || instructionStart) throw runnerError('claude_result_before_context');
       emitContextEnded(nativeContext.nativeContextId);
+      activeInputEpoch = 0;
       return;
     }
+    if (claudeWait && !instructionStart && claudeWait.controller.observe(message)) return;
     if (message.type !== 'stream_event') {
       ignoredMessageCount = Math.min(Number.MAX_SAFE_INTEGER, ignoredMessageCount + 1);
       return;
@@ -1425,9 +1459,20 @@ function createOwnedNativeRunner(options) {
   async function spawnOwnedProcess(authentication, expectedGeneration) {
     requireOwnerCurrent(expectedGeneration);
     const environment = makeEnvironment(provider, homePath, provider === 'claude' ? authentication.oauthToken : null);
+    let argumentsList = buildArguments(provider);
+    if (claudeMcpWait) {
+      const endpoint = await awaitCurrent(claudeMcpWait.controller.start(), expectedGeneration, timeouts.startupMs, 'claude_wait_start_timeout');
+      requireOwnerCurrent(expectedGeneration);
+      environment.COCKPIT_NATIVE_MCP_SECRET = endpoint.secret;
+      environment.MCP_TOOL_TIMEOUT = '420000';
+      environment.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT = '420000';
+      environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS = '0';
+      environment.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+      argumentsList = [...argumentsList, '--allowedTools', CLAUDE_WAIT_TOOL, '--permission-mode', 'dontAsk', '--mcp-config', endpoint.mcpConfig];
+    }
     let childProcess;
     try {
-      childProcess = spawnImpl(executablePath, buildArguments(provider), {
+      childProcess = spawnImpl(executablePath, argumentsList, {
         cwd,
         env: environment,
         shell: false,
@@ -1525,6 +1570,7 @@ function createOwnedNativeRunner(options) {
   }
 
   async function startClaude(inputText, expectedGeneration) {
+    if (claudeWait) activeInputEpoch = nextInputEpoch++;
     const line = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: inputText }] } });
     await writeLine(line, expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
@@ -1583,7 +1629,7 @@ function createOwnedNativeRunner(options) {
       if (typeof pending.reject === 'function') pending.reject(runnerError('operation_stopped'));
     }
     pendingReadWrite = null;
-    stopPromise = stopChild(child).then((confirmed) => {
+    stopPromise = Promise.all([stopChild(child), claudeWait ? claudeWait.controller.stop() : Promise.resolve()]).then(([confirmed]) => {
       if (confirmed || state !== 'stop_unconfirmed') state = 'stopped';
       return safeSnapshot();
     }, () => {

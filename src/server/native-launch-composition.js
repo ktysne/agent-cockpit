@@ -6,6 +6,8 @@ const { createProviderRegistrationAdapter } = require('./provider-registration')
 const { createProviderLaunchAdapter } = require('./launch-binding');
 const { createProviderRuntimeAdapter } = require('./runtime-binding');
 const { getOwnedSource } = require('./owned-native-runner');
+const { getOwnedNativeMcpWait } = require('./owned-native-mcp-wait');
+const { getOwnedWaitSource } = require('./owned-native-claude-wait');
 const { createOwnedInstructionDispatch } = require('./owned-native-instruction-dispatch');
 const { getOwnedInstructionWriter, MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
 const { createManagedCollector, sanitizeManagedCollectorSnapshot } = require('./managed-collector');
@@ -103,7 +105,9 @@ function normalizeProfiles(value) {
   if (!entries.length || entries.length > MAX_PROFILES) throw new TypeError('profiles are outside the supported bound');
   const profiles = new Map();
   for (const [profileId, config] of entries) {
-    if (!isIdentifier(profileId) || !hasExactKeys(config, PROFILE_FIELDS) ||
+    if (!isIdentifier(profileId) || !(hasExactKeys(config, PROFILE_FIELDS) || hasExactKeys(config, [...PROFILE_FIELDS, 'runnerProfile'])) ||
+        (Object.hasOwn(config, 'runnerProfile') && (!['cockpit-native-v1', 'cockpit-native-wait-v1'].includes(config.runnerProfile) ||
+          config.runnerProfile === 'cockpit-native-wait-v1' && config.provider !== 'claude')) ||
         !Object.hasOwn(PROVIDER_NATIVE_ID_KINDS, config.provider) ||
         !isAbsolutePath(config.executablePath) || !isAbsolutePath(config.homePath) ||
         !isAbsolutePath(config.cwd) || !isIdentifier(config.homeScopeId)) {
@@ -111,6 +115,7 @@ function normalizeProfiles(value) {
     }
     profiles.set(profileId, Object.freeze({
       profileId,
+      runnerProfile: config.runnerProfile || 'cockpit-native-v1',
       provider: config.provider,
       nativeIdKind: PROVIDER_NATIVE_ID_KINDS[config.provider],
       executablePath: path.normalize(config.executablePath),
@@ -440,7 +445,7 @@ function createNativeLaunchComposition(options = {}) {
 
   function resolveProof(launchRef, context) {
     const record = launchRecords.get(launchRef);
-    if (!record) return null;
+    if (!record || record.waitTransition) return null;
     if (proofResolutionInProgress.has(record)) {
       proofResolutionReentered.add(record);
       return null;
@@ -715,6 +720,7 @@ function createNativeLaunchComposition(options = {}) {
   }
 
   function bindNativeContext(record, context, epoch, mutationGuard) {
+    if (record.waitTransition && (context?.nativeContextId !== record.waitTransition.toContextId || mutationGuard !== record.waitTransition.guard)) return false;
     const mutationAllowed = () => mutationGuard === undefined || mutationGuard() === true;
     if (record.activeEpoch !== epoch || record.epoch !== epoch || !record.identity || !record.connectionHandle) return false;
     const verifiedPeriod = periodMatches(record);
@@ -890,7 +896,24 @@ function createNativeLaunchComposition(options = {}) {
     setUnknown(record, 'native_observation_gap');
   }
 
+  function transitionTerminal(record, event, epoch) {
+    const transition = record.waitTransition;
+    if (!transition || event?.context?.nativeContextId !== transition.fromContextId || !transition.guard() ||
+        getOwnedWaitSource(record.sourceCapability)?.isTransitioning(transition.permit) !== true) {
+      quarantine(record, epoch, 'wait_continuation_terminal_unknown'); return false;
+    }
+    return endNativeContext(record, event, epoch);
+  }
+
   function processNativeEvent(record, event, epoch) {
+    if (record.waitTransition && event?.type === 'context_ended') { transitionTerminal(record, event, epoch); return; }
+    if (record.waitTransition && event?.type === 'context') {
+      const transition = record.waitTransition;
+      if (event.context?.nativeContextId !== transition.toContextId || transition.adopting || !expectedIdentity(record, event.identity)) return;
+      transition.adopting = true;
+      bindNativeContext(record, event.context, epoch, transition.guard);
+      return;
+    }
     if ((record.logicalDetached || record.ownedLoan?.needsFreshContext) && physicalSourceCurrent(record, epoch)) {
       if (event?.type === 'context_ended') endNativeContext(record, event, epoch);
       return;
@@ -1135,7 +1158,11 @@ function createNativeLaunchComposition(options = {}) {
         homeScopeId: record.profile.homeScopeId,
         homePath: record.profile.homePath,
         cwd: record.profile.cwd,
-        profile: 'cockpit-native-v1',
+        profile: record.profile.runnerProfile,
+        ...(record.profile.runnerProfile === 'cockpit-native-wait-v1' && record.profile.provider === 'claude' ? {
+          captureWaitAuthorization: (native) => captureWaitAuthorization(record, native),
+          onContextContinuation: (permit) => continueWaitContext(record, permit, epoch),
+        } : {}),
         ownedSourceClaim: record.sourceClaim,
         onSourceReady: (capability) => bindOwnedSource(record, capability, epoch),
         ...(record.profile.provider === 'claude' ? {
@@ -1373,9 +1400,11 @@ function createNativeLaunchComposition(options = {}) {
         source.checkSource() !== true) throw compositionError('owned_source_unverified');
     record.sourceCapability = capability;
     record.sourceFacade = source;
+    ensureWaitSubscription(record);
     source.subscribeTerminal(record.sourceClaim, (event) => {
       if (!physicalSourceCurrent(record, epoch)) return;
-      if (record.logicalDetached || sourceCanObserve(record, epoch)) endNativeContext(record, event, epoch);
+      if (record.waitTransition) transitionTerminal(record, event, epoch);
+      else if (record.logicalDetached || sourceCanObserve(record, epoch)) endNativeContext(record, event, epoch);
       else if (record.logicalDetached && physicalSourceCurrent(record, epoch)) endNativeContext(record, event, epoch);
       else fenceNativeObservationGap(record, event);
       if (record.ownedLoan?.active) record.ownedLoan.onNative(event);
@@ -1531,6 +1560,121 @@ function createNativeLaunchComposition(options = {}) {
     return record.ownedCollector;
   }
 
+  function waitLoanCurrent(record, loan) {
+    try {
+      return Boolean(loan?.active && record.ownedLoan === loan && !loan.needsFreshContext && !record.logicalDetached &&
+        !record.runtimeDisconnected && record.epoch === loan.epoch && record.activeEpoch === loan.epoch &&
+        record.connectionHandle === loan.connectionHandle && record.connectionGeneration === loan.connectionGeneration &&
+        record.sourceFacade.checkSource() === true && record.sourceFacade.checkLease(loan.lease) === true &&
+        runtimeKernel.registry.checkCurrentConnection(loan.connectionHandle) === true);
+    } catch { return false; }
+  }
+  function waitProjection(record) {
+    if (!record.identity || !record.registration || !record.executionBinding) return null;
+    const claims = {};
+    for (const field of CLAIM_FIELDS.slice(0, 10)) claims[field] = field === 'originBinding' ? cloneBinding(record.claims[field]) : record.claims[field];
+    return { launchRef: record.launchRef, claims, identity: cloneIdentity(record.identity), executionBinding: cloneBinding(record.executionBinding),
+      conversationId: record.registration.conversationId, sessionId: record.registration.sessionId };
+  }
+  function captureWaitAuthorization(record, native) {
+    const loan = record.ownedLoan, epoch = record.epoch, sourceCapability = record.sourceCapability;
+    const proof = record.proofHandle, contextId = record.currentContextId, owner = record.currentOwnerRecord, ownerGeneration = record.ownerGeneration;
+    if (!waitLoanCurrent(record, loan) || record.waitTransition || !proof || native.sessionId !== record.identity?.nativeId ||
+        native.nativeContextId !== contextId || record.profile.provider !== 'claude') return null;
+    const source = waitProjection(record);
+    if (!source) return null;
+    const metadata = deepFreeze({ source, target: { kind: 'execution', launchRef: source.launchRef, claims: source.claims, identity: source.identity,
+      periodId: source.executionBinding.periodId, actor: source.executionBinding.actor, conversationId: source.conversationId, sessionId: source.sessionId },
+      nativeContextId: contextId, nativeToolUseId: native.nativeToolUseId, inputDigest: digest({ nonce: native.input.nonce }) });
+    let latest = null, checking = false;
+    const authorization = {
+      metadata,
+      checkCurrent() {
+        if (checking || record.waitTransition || record.epoch !== epoch || record.sourceCapability !== sourceCapability ||
+            record.proofHandle !== proof || record.currentContextId !== contextId || record.currentOwnerRecord !== owner || record.ownerGeneration !== ownerGeneration || !waitLoanCurrent(record, loan)) return false;
+        checking = true; latest = null;
+        try {
+          const registrationStamp = registrationKernel.registry.captureAuthorityRevision(), launchStamp = launchKernel.registry.captureAuthorityRevision();
+          if (resolveProof(record.launchRef) !== proof) return false;
+          const chain = captureLiveOwnerChain(record);
+          if (!chain || registrationKernel.registry.checkAuthorityRevision(registrationStamp) !== true || launchKernel.registry.checkAuthorityRevision(launchStamp) !== true) return false;
+          latest = { registrationStamp, launchStamp, chain };
+          return authorization.checkFinal();
+        } catch { return false; }
+        finally { checking = false; }
+      },
+      checkFinal() {
+        try {
+          return Boolean(latest && record.epoch === epoch && record.sourceCapability === sourceCapability && record.proofHandle === proof &&
+            record.currentContextId === contextId && record.currentOwnerRecord === owner && record.ownerGeneration === ownerGeneration &&
+            (!record.waitTransition || record.waitTransition.authorization === authorization) && waitLoanCurrent(record, loan) &&
+            registrationKernel.registry.checkAuthorityRevision(latest.registrationStamp) === true && launchKernel.registry.checkAuthorityRevision(latest.launchStamp) === true &&
+            latest.chain.every(node => runtimeKernel.registry.checkProofCapability(node.record.launchRef, node.proofHandle) === true) && finalChainCurrent(latest.chain) &&
+            registrationKernel.registry.checkAuthorityRevision(latest.registrationStamp) === true && launchKernel.registry.checkAuthorityRevision(latest.launchStamp) === true);
+        } catch { return false; }
+      },
+      transitionCapture() { return latest && { ...latest, loan, epoch, sourceCapability, owner, ownerGeneration, proof, contextId }; },
+    };
+    if (!authorization.checkCurrent()) return null;
+    if (!record.waitAuthorizations) record.waitAuthorizations = new Map();
+    if (record.waitAuthorizations.has(native.nativeToolUseId) || record.waitAuthorizations.size >= 128) return null;
+    record.waitAuthorizations.set(native.nativeToolUseId, authorization);
+    return { metadata, checkCurrent: authorization.checkCurrent, checkFinal: authorization.checkFinal };
+  }
+  function ensureWaitSubscription(record) {
+    const native = record.sourceCapability && getOwnedNativeMcpWait(record.sourceCapability);
+    if (!native || record.waitSubscribed) return;
+    record.waitSubscribed = true;
+    native.subscribe((handle, observation) => {
+      const authorization = record.waitAuthorizations?.get(observation.nativeToolUseId);
+      if (!authorization) return;
+      if (!record.waitHandles) record.waitHandles = new WeakMap();
+      record.waitHandles.set(handle, authorization);
+      for (const callback of [...(record.waitListeners || [])]) callback(handle, authorization.metadata);
+    });
+    native.subscribeInvalidated(handle => {
+      for (const callback of [...(record.waitInvalidationListeners || [])]) { try { callback(handle); } catch {} }
+    });
+  }
+  function createWaitOwner(admissionReceipt) {
+    const record = admissionRecords.get(admissionReceipt);
+    if (!record || record.profile.runnerProfile !== 'cockpit-native-wait-v1' || record.profile.provider !== 'claude') throw compositionError('wait_owner_unavailable');
+    if (record.waitOwner) return record.waitOwner;
+    record.waitListeners = new Set(); record.waitInvalidationListeners = new Set();
+    record.waitOwner = Object.freeze({
+      subscribeVerifiedWait(callback) { if (typeof callback !== 'function') throw compositionError('wait_listener_invalid'); record.waitListeners.add(callback); return () => record.waitListeners.delete(callback); },
+      checkWait(handle) { return !record.waitTransition && record.waitHandles?.has(handle) === true && getOwnedNativeMcpWait(record.sourceCapability)?.check(handle) === true; },
+      settleWait(handle, status) { return !record.waitTransition && record.waitHandles?.has(handle) === true && getOwnedNativeMcpWait(record.sourceCapability)?.settle(handle, status) === true; },
+      subscribeWaitInvalidated(callback) { if (typeof callback !== 'function') throw compositionError('wait_listener_invalid'); record.waitInvalidationListeners.add(callback); return () => record.waitInvalidationListeners.delete(callback); },
+    });
+    ensureWaitSubscription(record); return record.waitOwner;
+  }
+  function continueWaitContext(record, permit, epoch) {
+    const waitSource = getOwnedWaitSource(record.sourceCapability);
+    const continuation = waitSource?.inspectContinuation(permit);
+    const authorization = continuation && record.waitAuthorizations?.get(continuation.nativeToolUseId);
+    if (!continuation || !authorization || record.waitHandles?.get(continuation.waitHandle) !== authorization || record.waitTransition ||
+        record.currentContextId !== continuation.fromContextId || record.terminalContextIds.has(continuation.toContextId) ||
+        record.terminalContextIds.size >= MAX_ENDED_CONTEXT_IDS || !authorization.checkCurrent() || !authorization.checkFinal()) return false;
+    const capture = authorization.transitionCapture();
+    const guard = () => {
+      try {
+        return Boolean(record.waitTransition?.permit === permit && record.epoch === epoch && record.sourceCapability === capture.sourceCapability &&
+          record.currentOwnerRecord === capture.owner && record.ownerGeneration === capture.ownerGeneration && waitLoanCurrent(record, capture.loan) &&
+          registrationKernel.registry.checkAuthorityRevision(capture.registrationStamp) === true && launchKernel.registry.checkAuthorityRevision(capture.launchStamp) === true &&
+          capture.chain.slice(1).every(node => runtimeKernel.registry.checkProofCapability(node.record.launchRef, node.proofHandle) === true) && finalChainCurrent(capture.chain.slice(1)));
+      } catch { return false; }
+    };
+    const transition = { permit, authorization, fromContextId: continuation.fromContextId, toContextId: continuation.toContextId, guard, adopting: false };
+    record.waitTransition = transition;
+    try {
+      if (waitSource.consumeContinuation(permit) !== true || !guard() || record.currentContextId !== transition.toContextId || !record.proofHandle ||
+          runtimeKernel.registry.checkProofCapability(record.launchRef, record.proofHandle) !== true) throw compositionError('wait_continuation_unknown');
+      return true;
+    } catch { quarantine(record, epoch, 'wait_continuation_unknown'); return false; }
+    finally { if (record.waitTransition === transition) record.waitTransition = null; }
+  }
+
   function createInstructionOwner(admissionReceipt) {
     const record = admissionRecords.get(admissionReceipt);
     if (!record) throw compositionError('admission_receipt_unavailable');
@@ -1555,7 +1699,7 @@ function createNativeLaunchComposition(options = {}) {
     }
     function capture(metadata, evidenceTurn = null) {
       const loan = record.ownedLoan;
-      if (!loanCurrent(loan) || record.claims.origin === 'review' || record.claims.purpose !== 'agent' ||
+      if (record.waitTransition || !loanCurrent(loan) || record.claims.origin === 'review' || record.claims.purpose !== 'agent' ||
           JSON.stringify(metadata.source) !== JSON.stringify(projection())) return null;
       const registrationStamp = registrationKernel.registry.captureAuthorityRevision();
       const launchStamp = launchKernel.registry.captureAuthorityRevision();
@@ -1640,6 +1784,7 @@ function createNativeLaunchComposition(options = {}) {
     admitLaunch,
     createOwnedCollector,
     createInstructionOwner,
+    createWaitOwner,
     start,
     stop,
     handoff,
