@@ -96,13 +96,16 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
   if (remaining <= 0) {
     const error = new Error('server request deadline elapsed');
     error.code = 'DEADLINE_TIMEOUT';
+    error.requestStarted = false;
     throw error;
   }
   const controller = new AbortController();
   let timeout;
+  let requestStarted = false;
   try {
     return await Promise.race([
       (async () => {
+        requestStarted = true;
         const response = await fetchImpl(url, { ...options, signal: controller.signal });
         return readResponse ? readResponse(response) : response;
       })(),
@@ -113,6 +116,7 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
             ? 'server request deadline elapsed'
             : 'server request attempt timed out');
           error.code = deadlineReached ? 'DEADLINE_TIMEOUT' : 'ATTEMPT_TIMEOUT';
+          error.requestStarted = requestStarted;
           reject(error);
           controller.abort();
         }, Math.min(attemptTimeoutMs, remaining));
@@ -276,7 +280,8 @@ async function postToServer(requestPath, body, options = {}) {
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
     } catch (error) {
-      if (retryAfterTimeout === false && (error?.code === 'ATTEMPT_TIMEOUT' || error?.code === 'DEADLINE_TIMEOUT')) {
+      if (retryAfterTimeout === false && error?.requestStarted === true &&
+          (error.code === 'ATTEMPT_TIMEOUT' || error.code === 'DEADLINE_TIMEOUT')) {
         return { ok: false, status: null, json: null, timedOut: true };
       }
       if (attempt + 1 >= maxAttempts) return { ok: false, status: null, json: null };
@@ -287,9 +292,6 @@ async function postToServer(requestPath, body, options = {}) {
         return { ok: false, status: null, json: null };
       }
     }
-  }
-  if (retryAfterTimeout === false && now() >= deadline) {
-    return { ok: false, status: null, json: null, timedOut: true };
   }
   return { ok: false, status: null, json: null };
 }
