@@ -778,7 +778,10 @@ test('Stop の long-poll は 25 秒で再待機できる状態を返す', async 
 
 test('サブエージェントの answer フックは出力を返さず、PostToolBatch の状態の更新だけを送る', async () => {
   const bodies = [];
-  const options = { fetchImpl: async (url, init) => { bodies.push(JSON.parse(init.body)); throw new Error('unreachable'); } };
+  const options = {
+    readServerInfo: async () => ({ port: 49125, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => { bodies.push(JSON.parse(init.body)); throw new Error('unreachable'); },
+  };
   for (const hookEventName of ['PostToolBatch', 'Stop', 'UserPromptSubmit']) {
     const result = await runAnswerHook({ hook_event_name: hookEventName, session_id: 'session-agent', agent_id: 'agent-1' }, options);
     assert.equal(result.output || result.stderrText, null);
