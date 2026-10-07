@@ -157,7 +157,13 @@ function parseMergedPullRequestList(stdout) {
       typeof mergedAt !== 'string' || !Number.isFinite(Date.parse(mergedAt))) {
       throw new Error('invalid merged PR');
     }
-    return { number, headRefOid: headRefOid.toLowerCase(), mergedAt };
+    return {
+      number,
+      headRefOid: headRefOid.toLowerCase(),
+      headRefName: asText(value?.headRefName),
+      baseRefName: asText(value?.baseRefName),
+      mergedAt,
+    };
   }).sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
 }
 
@@ -176,6 +182,21 @@ function restackResult(commits, mergedPullRequests, mergedListComplete = true) {
   if (!commits) return { checked: false, parent: null };
   const parent = mergedPullRequests.find((candidate) => commits.has(candidate.headRefOid)) || null;
   return { checked: Boolean(parent) || mergedListComplete, parent };
+}
+
+function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBranch) {
+  let compareBase = asText(pr.baseRefName);
+  const visitedBranches = new Set();
+  while (compareBase && compareBase !== defaultBranch && !visitedBranches.has(compareBase)) {
+    visitedBranches.add(compareBase);
+    const openParent = openPullRequests.find((candidate) => (
+      candidate.number !== pr.number && candidate.headRefName === compareBase
+    ));
+    const parent = openParent || mergedPullRequests?.find((candidate) => candidate.headRefName === compareBase);
+    if (!parent) break;
+    compareBase = asText(parent.baseRefName);
+  }
+  return compareBase || defaultBranch;
 }
 
 // 積まれた子の親は子が作られた後にマージされるので、オープンの PR の最も古い作成日より後のマージだけを取る。
@@ -275,7 +296,14 @@ function assemblePullRequestStacks({
     const value = effective(pr);
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
     const hasBasePullRequest = visibleOpen.some((candidate) => candidate.headRefName === value.base);
-    if (value.base !== defaultBranch && !hasBasePullRequest) return `base の ${value.base} に対応する PR が見つからない`;
+    if (value.base !== defaultBranch && !hasBasePullRequest) {
+      const hasClosedBasePullRequest = historical.some((candidate) => (
+        candidate.state === 'closed' && candidate.headRefName === value.base
+      ));
+      return hasClosedBasePullRequest
+        ? `base の ${value.base} に対応する PR が見つからない`
+        : `base の ${value.base} は既定ブランチではないため、ダッシュボードではマージしない`;
+    }
     const parent = visibleOpen.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
     if (pr.baseRefName !== defaultBranch) return `base を ${defaultBranch} に付け替える必要がある`;
@@ -882,7 +910,7 @@ class PullRequestTracker {
       try {
         mergedPullRequests = parseMergedPullRequestList(await this.execute([
           'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
-          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,mergedAt',
+          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt',
         ]));
         mergedListComplete = mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT;
       } catch (error) {
@@ -897,7 +925,9 @@ class PullRequestTracker {
         try {
           const output = await this.execute([
             'api',
-            `repos/${repository}/compare/${encodeURIComponent(defaultBranch)}...${pr.headRefOid}`,
+            `repos/${repository}/compare/${encodeURIComponent(restackCompareBase(
+              pr, openPullRequests, mergedPullRequests, defaultBranch,
+            ))}...${pr.headRefOid}`,
           ]);
           const commits = parseCompareResult(output);
           const result = mergedPullRequests ? restackResult(commits, mergedPullRequests, mergedListComplete) : { checked: false, parent: null };

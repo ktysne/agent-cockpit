@@ -545,15 +545,15 @@ class PullRequestMergeManager {
     }
   }
 
-  notifyMerge(owner, repo, pullRequest, defaultBranch, method, stackedPullRequests, sessionIds, warning = null, headMismatch = null) {
+  notifyMerge(owner, repo, pullRequest, targetBranch, method, stackedPullRequests, sessionIds, warning = null, headMismatch = null) {
     const automatic = method ? '' : '方式は取得できませんでした。';
     const methodText = method ? `方式: ${METHOD_LABELS[method] || method}。` : automatic;
-    const lines = [`PR #${pullRequest.number} が ${defaultBranch} に入りました。${methodText}`];
+    const lines = [`PR #${pullRequest.number} が ${targetBranch} に入りました。${methodText}`];
     if (headMismatch) lines.push(`予約時の head SHA ${headMismatch.reserved} とマージされた head SHA ${headMismatch.merged} が異なります。予約の取り消しより先にマージされました。`);
     if (['squash', 'rebase'].includes(method)) {
       for (const stacked of stackedPullRequests) {
         if (validBranchName(stacked.baseRefName)) {
-          lines.push(`#${stacked.number} を \`git rebase --onto ${defaultBranch} ${stacked.baseRefName}\` で積み直して push する。`);
+          lines.push(`#${stacked.number} を \`git rebase --onto ${targetBranch} ${stacked.baseRefName}\` で積み直して push する。`);
         }
       }
     }
@@ -581,6 +581,7 @@ class PullRequestMergeManager {
 
     const repositoryState = this.tracker.repositoryState(owner, repo);
     const defaultBranch = confirmedIntent?.defaultBranch || repositoryState?.defaultBranch;
+    const targetBranch = validBranchName(pullRequest.baseRefName) ? pullRequest.baseRefName : defaultBranch;
     const savedStackedByNumber = new Map([
       ...(confirmedIntent?.stackedPullRequests || []),
     ].map((item) => [item.number, item]));
@@ -643,7 +644,7 @@ class PullRequestMergeManager {
       reservation?.session_id,
       mergeIntent?.session_id,
     ].filter(Boolean);
-    this.notifyMerge(owner, repo, pullRequest, defaultBranch || '既定ブランチ', method, stackedPullRequests, sessionIds, warning, headMismatch);
+    this.notifyMerge(owner, repo, pullRequest, targetBranch || '既定ブランチ', method, stackedPullRequests, sessionIds, warning, headMismatch);
     await this.state.waitForPersistence?.();
     const outcome = { branchDeleted, warning };
     this.mergeOutcomes.set(mergeKey, outcome);

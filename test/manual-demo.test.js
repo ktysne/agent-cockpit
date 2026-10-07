@@ -70,8 +70,10 @@ test('偽の gh は PR の定義から一覧、詳細、設定、比較に答え
   assert.equal(open[0].url, 'https://github.com/example-team/app/pull/1');
   assert.equal(open[1].statusCheckRollup[0].status, 'IN_PROGRESS');
 
-  const merged = JSON.parse((await run(gh, ['pr', 'list', '-R', 'example-team/app', '--state', 'merged', '--limit', '1000', '--search', 'merged:>=2026-10-05', '--json', 'number,headRefOid,mergedAt'])).stdout);
-  assert.deepEqual(merged, [{ number: 9, headRefOid: sha('example-team/app#9'), mergedAt: '2026-10-05T01:00:00.000Z' }]);
+  const merged = JSON.parse((await run(gh, ['pr', 'list', '-R', 'example-team/app', '--state', 'merged', '--limit', '1000', '--search', 'merged:>=2026-10-05', '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt'])).stdout);
+  assert.deepEqual(merged, [{
+    number: 9, headRefOid: sha('example-team/app#9'), headRefName: 'feature/old', baseRefName: 'main', mergedAt: '2026-10-05T01:00:00.000Z',
+  }]);
 
   const view = JSON.parse((await run(gh, ['pr', 'view', '9', '-R', 'example-team/app', '--json', `${fields},state,mergedAt`])).stdout);
   assert.equal(view.state, 'MERGED');

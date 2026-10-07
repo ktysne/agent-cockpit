@@ -876,6 +876,26 @@ test('スカッシュまたはリベースで上に積んだ PR の作成元へ�
   assert.match(notice.message, /#2 を `git rebase --onto main feature\/one` で積み直して push する/);
 });
 
+test('集約ブランチにマージされた PR はそのブランチを通知と積み直しに使う', async (t) => {
+  const fixture = await mergeFixture(t, [
+    ghPullRequest(1, 'feature/one', 'codex/feature'),
+    ghPullRequest(2, 'feature/two', 'feature/one'),
+  ]);
+  const pr = fixture.github.openPullRequests[0];
+
+  await fixture.manager.handleDetectedMerge({
+    owner: 'example',
+    repo: 'project',
+    pullRequest: pr,
+    mergedAt: new Date(NOW).toISOString(),
+    confirmedIntent: { method: 'squash' },
+    stackedPullRequests: [{ number: 2, baseRefName: 'feature/one' }],
+  });
+
+  assert.match(fixture.notices[0].message, /PR #1 が codex\/feature に入りました/);
+  assert.match(fixture.notices[0].message, /#2 を `git rebase --onto codex\/feature feature\/one` で積み直して push する/);
+});
+
 test('マージコミットでは上の PR に積み直しを依頼しない', async (t) => {
   const fixture = await mergeFixture(t, [
     ghPullRequest(1, 'feature/one', 'main'),
