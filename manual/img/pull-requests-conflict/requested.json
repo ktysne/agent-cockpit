@@ -2,13 +2,13 @@
   "name": "requested",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1466,
+  "height": 1518,
   "parts": [
     {
       "key": "requested.status",
       "bounds": {
         "x": 26,
-        "y": 1058,
+        "y": 1085,
         "width": 585,
         "height": 44
       },
@@ -17,9 +17,9 @@
     {
       "key": "requested.again",
       "bounds": {
-        "x": 1286,
-        "y": 791,
-        "width": 265,
+        "x": 1280,
+        "y": 939,
+        "width": 270,
         "height": 64
       },
       "visible": true

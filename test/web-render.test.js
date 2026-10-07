@@ -633,6 +633,58 @@ test('native pendingの解除は一度通知し、状態不明を解除済みと
   assert.equal(context.observeInstructionStates(state(target('unverified'))), null);
 });
 
+test('指示診断noticeは明示的な未構成時だけ隠す', () => {
+  const element = functionSource(pageHtml, 'element');
+  const noticeSource = functionSource(pageHtml, 'instructionDiagnosticsNotice');
+  assert.ok(element && noticeSource);
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  const context = pageContext(pageHtml, { document: { createElement: (tagName) => new FakeElement(tagName) } });
+  vm.runInContext(`${element}\n${noticeSource}`, context);
+
+  const textOf = (node) => [node.textContent, ...node.children.map(textOf)].join('');
+
+  assert.equal(context.instructionDiagnosticsNotice({
+    configuration: 'unconfigured', service: 'unavailable', targets: 'unavailable',
+  }), null);
+
+  const unavailable = context.instructionDiagnosticsNotice({
+    configuration: 'configured', service: 'unavailable', targets: 'unavailable',
+  });
+  assert.equal(unavailable.tagName, 'section');
+  assert.equal(unavailable.className, 'instruction-diagnostics');
+  assert.equal(unavailable.attributes.role, 'status');
+  assert.match(textOf(unavailable), /保存サービスに接続できません/);
+  assert.match(textOf(unavailable), /不明な指示は自動再送しません/);
+  const legacyUnavailable = context.instructionDiagnosticsNotice({ service: 'unavailable', targets: 'unavailable' });
+  assert.ok(legacyUnavailable);
+  assert.match(textOf(legacyUnavailable), /保存サービスに接続できません/);
+  assert.match(textOf(legacyUnavailable), /不明な指示は自動再送しません/);
+
+  assert.equal(context.instructionDiagnosticsNotice({
+    configuration: 'configured', service: 'ready', targets: 'available', blocked: false,
+  }), null);
+
+  const unknownRecovery = context.instructionDiagnosticsNotice({
+    configuration: 'configured', service: 'unknown', targets: 'available', errorCode: 'instruction_state_unknown',
+  });
+  assert.match(textOf(unknownRecovery), /復旧確認が必要です/);
+
+  const unknownConfiguration = context.instructionDiagnosticsNotice({
+    configuration: 'future-value', service: 'unknown', targets: 'available',
+  });
+  assert.ok(unknownConfiguration);
+});
+
 test('同じ実行の一時的な待機中は入力下書きを保ち、対象消失後は版更新を許す', () => {
   const draft = [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '入力中' }]];
   const waiting = reloadHarness('v1', [], { drafts: draft });
@@ -1011,7 +1063,7 @@ test('クロスレビューの行は往復数と head の状態を表示する',
   const absent = { headRefOid: headSha };
   assert.equal(line(absent), null);
   assert.equal(context.crossReviewState(absent).warn, null);
-  assert.match(html, /if \(pullRequest\.crossReview !== undefined\) item\.append\(crossReviewLine\(pullRequest\)\)/);
+  assert.match(html, /if \(pullRequest\.crossReview !== undefined\) text\.append\(crossReviewLine\(pullRequest\)\)/);
 
   const missing = line({ headRefOid: headSha, crossReview: null });
   const missingBadge = allNodes(missing).find((node) => node.className?.startsWith('badge'));
@@ -2482,9 +2534,14 @@ test('PR 行のチェックで予約し、確認欄は常に即時マージす�
   const reservationToggle = rowNodes.find((node) => node.dataset?.reservationToggle === key);
   assert.ok(reservationToggle);
   assert.equal(reservationToggle.checked, false);
-  assert.equal(line.children.includes(rowNodes.find((node) => node.dataset?.openMerge === key)), true);
-  const reservationLabel = line.children.find((node) => node.className === 'reservation-toggle');
-  assert.equal(line.children.includes(reservationLabel), true);
+  const mergeActions = rowNodes.find((node) => node.className === 'pr-actions');
+  assert.ok(mergeActions, 'マージの操作と予約のチェックは右の列に置く');
+  assert.equal(flatten(line).some((node) => node.dataset?.openMerge === key || node.dataset?.reservationToggle === key), false, '題の行には操作を混ぜない');
+  assert.deepEqual(mergeActions.children.map((node) => node.className), ['merge-state', 'merge-btn outline', 'reservation-toggle']);
+  assert.equal(mergeActions.children[0].textContent, 'マージ操作は可能');
+  assert.equal(mergeActions.children.includes(rowNodes.find((node) => node.dataset?.openMerge === key)), true);
+  const reservationLabel = mergeActions.children.find((node) => node.className === 'reservation-toggle');
+  assert.ok(flatten(reservationLabel).some((node) => node.textContent === '収束後マージ'));
   assert.equal(reservationLabel.children.includes(reservationToggle), true);
   reservationToggle.checked = true;
   holdReservation = true;

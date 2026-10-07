@@ -25,9 +25,9 @@
           "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > a.num",
           "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > .ptitle"
         ],
-        "row.state": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline > .badge",
-        "row.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline .merge-btn",
-        "row.reservation-toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]",
+        "row.state": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .merge-state",
+        "row.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pr-actions .merge-btn",
+        "row.reservation-toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pr-actions input[data-reservation-toggle]",
         "row.branch": [
           "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .branch code:first-child",
           "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .branch code:last-child"

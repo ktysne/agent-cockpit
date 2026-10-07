@@ -13,7 +13,7 @@
   "steps": [
     {
       "do": "click",
-      "selector": "#root > section.section:nth-child(1) .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]"
+      "selector": "#root > section.section:nth-child(1) .pr-repo-content > .stack:nth-child(1) .pr-actions input[data-reservation-toggle]"
     },
     {
       "do": "wait",
@@ -26,13 +26,13 @@
       "parts": {
         "reserved.card": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pr.reserved",
         "reserved.badge": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .badges .badge.accent",
-        "reserved.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline .merge-btn",
-        "reserved.toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]"
+        "reserved.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pr-actions .merge-btn",
+        "reserved.toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .stack:nth-child(1) .pr-actions input[data-reservation-toggle]"
       }
     },
     {
       "do": "click",
-      "selector": "#root > section.section:nth-child(1) .pr-repo-content > .stack:nth-child(1) .pline input[data-reservation-toggle]"
+      "selector": "#root > section.section:nth-child(1) .pr-repo-content > .stack:nth-child(1) .pr-actions input[data-reservation-toggle]"
     },
     {
       "do": "wait",
@@ -45,8 +45,8 @@
       "target": "#root > section.section:nth-child(1) .pr-repo-group",
       "parts": {
         "cancelled.notice": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result",
-        "cancelled.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result + .stack .pline .merge-btn",
-        "cancelled.toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result + .stack .pline input[data-reservation-toggle]"
+        "cancelled.merge-button": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result + .stack .pr-actions .merge-btn",
+        "cancelled.toggle": "#root > section.section:nth-child(1) .pr-repo-group .pr-repo-content > .merge-result + .stack .pr-actions input[data-reservation-toggle]"
       }
     }
   ]

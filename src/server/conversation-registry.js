@@ -28,7 +28,7 @@ function isRecord(value) {
 
 function hasExactKeys(value, fields) {
   if (!isRecord(value)) return false;
-  const keys = Object.keys(value);
+  const keys = Reflect.ownKeys(value);
   return keys.length === fields.length && fields.every((field) => Object.hasOwn(value, field));
 }
 
@@ -118,6 +118,10 @@ function tokenDigest(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function registrationDigest(domain, value) {
+  return crypto.createHash('sha256').update(domain).update('\0').update(value).digest('hex');
+}
+
 function createRegistrationKernel() {
   let authorityRevision = Object.freeze({});
   const captureAuthorityRevision = () => authorityRevision;
@@ -134,6 +138,10 @@ function createRegistrationKernel() {
   const sessionIdOwners = new Map();
   const writerBindingsByDigest = new Map();
   const writerDigestByContext = new Map();
+  const historyIncompleteConversationIds = new Set();
+  let nextRegistrationOrder = 1;
+  let registrationNeedsRevalidation = false;
+  let restorationUsed = false;
 
   function newConversationId() {
     let candidate;
@@ -201,11 +209,20 @@ function createRegistrationKernel() {
     }
 
     const key = identityKey(identity);
-    const startFingerprint = JSON.stringify({ key, evidence, resume, projectionId: projectionId || null });
-    const previousStart = startClaims.get(startOptions.startId);
+    const startIdDigest = registrationDigest('native-registration-start-id-v1', startOptions.startId);
+    const evidenceIdDigest = registrationDigest('native-registration-evidence-id-v1', evidence.evidenceId);
+    const fingerprintDigest = registrationDigest('native-registration-start-fingerprint-v1',
+      JSON.stringify({ key, evidence, resume, projectionId: projectionId || null }));
+    if (registrationNeedsRevalidation) {
+      throw registrationError('needs_revalidation', 'registration history requires fresh evidence');
+    }
+    const previousStart = startClaims.get(startIdDigest);
     if (previousStart) {
-      if (previousStart.fingerprint !== startFingerprint) {
+      if (previousStart.fingerprintDigest !== fingerprintDigest) {
         throw registrationError('start_replay_mismatch', 'startId was already used for different registration evidence');
+      }
+      if (previousStart.requiresRevalidation) {
+        throw registrationError('needs_revalidation', 'restored start requires fresh evidence');
       }
       const previousExecution = executionsById.get(previousStart.executionId);
       return {
@@ -214,11 +231,12 @@ function createRegistrationKernel() {
         sessionId: previousExecution.sessionId,
       };
     }
-    const previousEvidenceStartId = evidenceClaims.get(evidence.evidenceId);
-    if (previousEvidenceStartId && previousEvidenceStartId !== startOptions.startId) {
+    const previousEvidenceStartIdDigest = evidenceClaims.get(evidenceIdDigest);
+    if (previousEvidenceStartIdDigest && previousEvidenceStartIdDigest !== startIdDigest) {
       throw registrationError('evidence_replay', 'registration evidence was already used for another start');
     }
-    if (startClaims.size >= MAX_EXECUTIONS || executionsById.size >= MAX_EXECUTIONS) {
+    if (startClaims.size >= MAX_EXECUTIONS || executionsById.size >= MAX_EXECUTIONS ||
+        !Number.isSafeInteger(nextRegistrationOrder) || nextRegistrationOrder > MAX_EXECUTIONS) {
       throw registrationError('capacity', 'registration capacity reached');
     }
 
@@ -256,6 +274,7 @@ function createRegistrationKernel() {
     if (sessionOwner && sessionOwner.conversationId !== conversation.conversationId) {
       throw registrationError('projection_collision', 'session projection is already assigned to another conversation');
     }
+    const registrationOrder = nextRegistrationOrder;
     const execution = {
       conversationId: conversation.conversationId,
       executionId,
@@ -263,8 +282,10 @@ function createRegistrationKernel() {
       identity,
       state: 'active',
       evidence,
+      registrationOrder,
     };
     advanceAuthorityRevision();
+    nextRegistrationOrder += 1;
     executionsById.set(executionId, execution);
     activeExecutionByConversation.set(conversation.conversationId, executionId);
     lastExecutionByConversation.set(conversation.conversationId, executionId);
@@ -272,12 +293,16 @@ function createRegistrationKernel() {
       conversationId: conversation.conversationId,
       identityKey: key,
     });
-    startClaims.set(startOptions.startId, {
-      fingerprint: startFingerprint,
+    startClaims.set(startIdDigest, {
+      startIdDigest,
+      evidenceIdDigest,
+      fingerprintDigest,
       conversationId: conversation.conversationId,
       executionId,
+      order: registrationOrder,
+      requiresRevalidation: false,
     });
-    evidenceClaims.set(evidence.evidenceId, startOptions.startId);
+    evidenceClaims.set(evidenceIdDigest, startIdDigest);
     return { conversationId: conversation.conversationId, executionId, sessionId };
   }
 
@@ -324,7 +349,7 @@ function createRegistrationKernel() {
         executionId: execution.executionId,
         sessionId: execution.sessionId,
         state: execution.state,
-        evidence: cloneMetadata(execution.evidence),
+        evidence: execution.evidence ? cloneMetadata(execution.evidence) : null,
       })),
       observations: [...observationsById.values()].map((observation) => ({
         observationId: observation.observationId,
@@ -332,7 +357,191 @@ function createRegistrationKernel() {
         status: observation.status,
         metadata: cloneMetadata(observation.metadata),
       })),
+      replayClaims: [...startClaims.values()].map((claim) => ({
+        startIdDigest: claim.startIdDigest,
+        evidenceIdDigest: claim.evidenceIdDigest,
+        fingerprintDigest: claim.fingerprintDigest,
+        conversationId: claim.conversationId,
+        executionId: claim.executionId,
+        order: claim.order,
+      })),
+      incompleteConversationIds: [...historyIncompleteConversationIds].sort(),
     };
+  }
+
+  function restoreHistory(registrations) {
+    const fields = [
+      'conversations', 'executions', 'launches', 'runtimeLaunches', 'connections', 'actors', 'handoffs',
+      'replayClaims', 'incompleteConversationIds',
+    ];
+    if (!hasExactKeys(registrations, fields) ||
+        !Array.isArray(registrations.conversations) || registrations.conversations.length > MAX_CONVERSATIONS ||
+        !Array.isArray(registrations.executions) || registrations.executions.length > MAX_EXECUTIONS ||
+        !Array.isArray(registrations.replayClaims) || registrations.replayClaims.length > MAX_EXECUTIONS ||
+        !Array.isArray(registrations.incompleteConversationIds) ||
+        registrations.incompleteConversationIds.length > MAX_CONVERSATIONS) {
+      throw registrationError('invalid_recovery_history', 'registration recovery history is invalid');
+    }
+    const maps = [
+      conversationsByIdentity, conversationsById, executionsById, observationsById, startClaims, evidenceClaims,
+      activeExecutionByConversation, lastExecutionByConversation, sessionIdOwners, writerBindingsByDigest,
+      writerDigestByContext,
+    ];
+    if (restorationUsed || maps.some((map) => map.size !== 0) || historyIncompleteConversationIds.size !== 0) {
+      throw registrationError('recovery_registry_not_empty', 'registration recovery requires a fresh kernel');
+    }
+
+    const conversationsByIdCandidate = new Map();
+    const conversationsByIdentityCandidate = new Map();
+    const executionsByIdCandidate = new Map();
+    const sessionIdOwnersCandidate = new Map();
+    const startClaimsCandidate = new Map();
+    const evidenceClaimsCandidate = new Map();
+    const lastExecutionByConversationCandidate = new Map();
+    const incompleteCandidate = new Set();
+    const usedOrders = new Set();
+    let maxOrder = 0;
+    const conversationsWithExecutions = new Set();
+
+    for (const conversation of registrations.conversations) {
+      if (!hasExactKeys(conversation, ['conversationId', 'identity']) ||
+          !isBoundedIdentifier(conversation.conversationId)) {
+        throw registrationError('invalid_recovery_history', 'conversation history is invalid');
+      }
+      const identity = normalizeIdentity(conversation.identity);
+      if (!identity) throw registrationError('invalid_recovery_history', 'conversation identity is invalid');
+      const key = identityKey(identity);
+      if (conversationsByIdCandidate.has(conversation.conversationId) ||
+          conversationsByIdentityCandidate.has(key)) {
+        throw registrationError('invalid_recovery_history', 'conversation history contains duplicates');
+      }
+      const record = { conversationId: conversation.conversationId, identity, identityKey: key };
+      conversationsByIdCandidate.set(record.conversationId, record);
+      conversationsByIdentityCandidate.set(key, record);
+    }
+
+    for (const conversationId of registrations.incompleteConversationIds) {
+      if (!isBoundedIdentifier(conversationId) || incompleteCandidate.has(conversationId) ||
+          !conversationsByIdCandidate.has(conversationId)) {
+        throw registrationError('invalid_recovery_history', 'incomplete history reference is invalid');
+      }
+      incompleteCandidate.add(conversationId);
+    }
+
+    const sessionIds = new Set();
+    for (const execution of registrations.executions) {
+      if (!hasExactKeys(execution, ['conversationId', 'executionId', 'sessionId', 'state']) ||
+          !isBoundedIdentifier(execution.conversationId) || !isBoundedIdentifier(execution.executionId) ||
+          !isBoundedIdentifier(execution.sessionId) || !['unknown', 'ended'].includes(execution.state)) {
+        throw registrationError('invalid_recovery_history', 'execution history is invalid');
+      }
+      const conversation = conversationsByIdCandidate.get(execution.conversationId);
+      if (!conversation || executionsByIdCandidate.has(execution.executionId) || sessionIds.has(execution.sessionId)) {
+        throw registrationError('invalid_recovery_history', 'execution history reference is invalid');
+      }
+      sessionIds.add(execution.sessionId);
+      conversationsWithExecutions.add(execution.conversationId);
+      executionsByIdCandidate.set(execution.executionId, {
+        conversationId: execution.conversationId,
+        executionId: execution.executionId,
+        sessionId: execution.sessionId,
+        identity: conversation.identity,
+        state: execution.state,
+        evidence: null,
+        registrationOrder: null,
+      });
+      sessionIdOwnersCandidate.set(execution.sessionId, {
+        conversationId: execution.conversationId,
+        identityKey: conversation.identityKey,
+      });
+    }
+
+    const claimFields = [
+      'startIdDigest', 'evidenceIdDigest', 'fingerprintDigest', 'conversationId', 'executionId', 'order',
+    ];
+    const startDigests = new Set();
+    const evidenceDigests = new Set();
+    const executionClaims = new Set();
+    for (const claim of registrations.replayClaims) {
+      if (!hasExactKeys(claim, claimFields) ||
+          typeof claim.startIdDigest !== 'string' || typeof claim.evidenceIdDigest !== 'string' ||
+          typeof claim.fingerprintDigest !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(claim.startIdDigest) ||
+          !/^[a-f0-9]{64}$/.test(claim.evidenceIdDigest) ||
+          !/^[a-f0-9]{64}$/.test(claim.fingerprintDigest) ||
+          !isBoundedIdentifier(claim.conversationId) || !isBoundedIdentifier(claim.executionId) ||
+          !Number.isSafeInteger(claim.order) || claim.order < 1 || claim.order > MAX_EXECUTIONS ||
+          startDigests.has(claim.startIdDigest) || evidenceDigests.has(claim.evidenceIdDigest) ||
+          executionClaims.has(claim.executionId) || usedOrders.has(claim.order)) {
+        throw registrationError('invalid_recovery_history', 'registration replay claim is invalid');
+      }
+      const execution = executionsByIdCandidate.get(claim.executionId);
+      if (!execution || execution.conversationId !== claim.conversationId) {
+        throw registrationError('invalid_recovery_history', 'registration replay claim reference is invalid');
+      }
+      startDigests.add(claim.startIdDigest);
+      evidenceDigests.add(claim.evidenceIdDigest);
+      executionClaims.add(claim.executionId);
+      usedOrders.add(claim.order);
+      execution.registrationOrder = claim.order;
+      maxOrder = Math.max(maxOrder, claim.order);
+      startClaimsCandidate.set(claim.startIdDigest, {
+        startIdDigest: claim.startIdDigest,
+        evidenceIdDigest: claim.evidenceIdDigest,
+        fingerprintDigest: claim.fingerprintDigest,
+        conversationId: claim.conversationId,
+        executionId: claim.executionId,
+        order: claim.order,
+        requiresRevalidation: true,
+      });
+      evidenceClaimsCandidate.set(claim.evidenceIdDigest, claim.startIdDigest);
+      const previous = lastExecutionByConversationCandidate.get(claim.conversationId);
+      if (!previous || previous.registrationOrder < claim.order) {
+        lastExecutionByConversationCandidate.set(claim.conversationId, execution);
+      }
+    }
+
+    for (const execution of executionsByIdCandidate.values()) {
+      if (!executionClaims.has(execution.executionId) &&
+          !incompleteCandidate.has(execution.conversationId)) {
+        throw registrationError('incomplete_recovery_history', 'execution replay claim is missing');
+      }
+    }
+    for (const conversation of conversationsByIdCandidate.values()) {
+      if (!conversationsWithExecutions.has(conversation.conversationId) &&
+          !incompleteCandidate.has(conversation.conversationId)) {
+        throw registrationError('incomplete_recovery_history', 'conversation replay history is missing');
+      }
+    }
+    if (incompleteCandidate.size === 0 &&
+        [...usedOrders].sort((left, right) => left - right).some((order, index) => order !== index + 1)) {
+      throw registrationError('invalid_recovery_history', 'registration order history is incomplete');
+    }
+    if (!Number.isSafeInteger(maxOrder + 1)) {
+      throw registrationError('invalid_recovery_history', 'registration order is exhausted');
+    }
+    if (restorationUsed || maps.some((map) => map.size !== 0) || historyIncompleteConversationIds.size !== 0) {
+      throw registrationError('recovery_registry_not_empty', 'registration recovery requires a fresh kernel');
+    }
+
+    for (const [key, value] of conversationsByIdentityCandidate) conversationsByIdentity.set(key, value);
+    for (const [key, value] of conversationsByIdCandidate) conversationsById.set(key, value);
+    for (const [key, value] of executionsByIdCandidate) executionsById.set(key, value);
+    for (const [key, value] of sessionIdOwnersCandidate) sessionIdOwners.set(key, value);
+    for (const [key, value] of startClaimsCandidate) startClaims.set(key, value);
+    for (const [key, value] of evidenceClaimsCandidate) evidenceClaims.set(key, value);
+    for (const [key, value] of lastExecutionByConversationCandidate) lastExecutionByConversation.set(key, value.executionId);
+    for (const value of incompleteCandidate) historyIncompleteConversationIds.add(value);
+    nextRegistrationOrder = maxOrder + 1;
+    registrationNeedsRevalidation = incompleteCandidate.size > 0;
+    restorationUsed = true;
+    advanceAuthorityRevision();
+    return Object.freeze({
+      restored: true,
+      conversationCount: conversationsByIdCandidate.size,
+      executionCount: executionsByIdCandidate.size,
+      historyIncomplete: registrationNeedsRevalidation,
+    });
   }
 
   const registry = Object.freeze({
@@ -349,6 +558,7 @@ function createRegistrationKernel() {
 
   const authority = Object.freeze({
     register,
+    restoreHistory,
     bindWriter(executionId, bindingInput) {
       if (!isBoundedIdentifier(executionId) || !isRecord(bindingInput)) {
         throw registrationError('invalid_binding', 'writer binding is incomplete');

@@ -779,6 +779,13 @@ function createDurableDeliveryStore(options = {}) {
     return enqueue(() => snapshotLedger(currentCheckpoint.ledger), true);
   }
 
+  async function readNativeRecoverySnapshotNow() {
+    await ready;
+    await tail;
+    if (!accepting) throw storeError('store_closed');
+    return structuredClone(currentCheckpoint);
+  }
+
   function flush() {
     if (!accepting) return Promise.reject(storeError('store_closed'));
     return tail.then(() => ready).then(() => undefined);
@@ -822,8 +829,14 @@ function createDurableDeliveryStore(options = {}) {
     registerPrNotificationTarget: registerPrNotificationTargetForProvider,
     createPrNotification: createPrNotificationForProvider, scopedTransition, scopedSendStart,
     recordAcceptedForProvider, recordAppliedForProvider, recordAppliedInstruction: scopedRecordAppliedInstruction, markUnknownForProvider,
-    scopedRehydratePayload, scopedGet });
+    scopedRehydratePayload, scopedGet, readNativeRecoverySnapshot: readNativeRecoverySnapshotNow });
   return store;
+}
+
+function readNativeRecoverySnapshot(store) {
+  const internal = STORE_INTERNALS.get(store);
+  if (!internal) return Promise.reject(storeError('invalid_recovery_store'));
+  return internal.readNativeRecoverySnapshot();
 }
 
 function createProviderDeliveryAdapter(provider, store) {
@@ -857,4 +870,4 @@ function createProviderDeliveryAdapter(provider, store) {
   });
 }
 
-module.exports = { createDurableDeliveryStore, createProviderDeliveryAdapter };
+module.exports = { createDurableDeliveryStore, createProviderDeliveryAdapter, readNativeRecoverySnapshot };

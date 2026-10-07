@@ -1046,7 +1046,9 @@ function createRequestHandler(options) {
           executionState: link.execution.state });
       }
       const instructionRecovery = safeInstructionRecovery(instructionDashboard?.recovery);
+      const instructionConfigured = Boolean(instructionService || launchRegistry || instructionTargetState);
       const instructionDiagnostics = {
+        configuration: instructionConfigured ? "configured" : "unconfigured",
         service: instructionDashboardUnavailable ? "unavailable" : instructionRecovery?.status || "ready",
         targets: instructionTargetsUnavailable ? "unavailable" : "available",
         ...(instructionRecovery?.blocked === true ? { blocked: true } : {}),

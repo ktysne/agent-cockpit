@@ -162,6 +162,7 @@ h3.sub .count { font-weight: normal; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--text-2); }
 .dot.busy { background: var(--ok); animation: pulse 1.6s infinite; }
 .dot.wait { background: var(--warn); }
+.dot.interrupted { background: transparent; box-shadow: inset 0 0 0 2px var(--warn); }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
 
@@ -270,7 +271,15 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .stack-base code, .pr code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
 .stack-level { margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .pr { padding: 8px 0 4px; }
-/* タスクの行と同じく、題の中で折り返して札と操作を同じ行に残す。 */
+/* 文字は左の列の中で折り返し、操作は右の列に縦に積む。操作の幅で題が潰れないよう、行の中に操作を混ぜない。 */
+.pr-body { display: flex; gap: 12px; align-items: stretch; }
+.pr-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pr-text > .badges { margin-top: 0; }
+/* 幅を固定して行をまたいで操作の縦の並びをそろえ、区切り線は PR の高さいっぱいに引いて中身だけ中央に置く。 */
+.pr-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: stretch; gap: 6px; }
+.pr-actions .merge-btn, .pr-actions .conflict-btn { margin-left: 0; width: 100%; padding-inline: 8px; }
+.merge-state { color: var(--text-2); font-size: 11px; text-align: center; }
+.merge-state.ok { color: var(--ok-text); font-weight: 600; }
 .pr .pline { display: flex; gap: 8px; align-items: baseline; }
 .pr .pline > * { flex: none; }
 .pr .pline > .ptitle { flex: 0 1 auto; min-width: 0; }
@@ -364,7 +373,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 }
 /* これより狭いと、札と操作を同じ行に残したときに題が数文字の幅しか残らないため、要素ごとに折り返す。 */
 @media (max-width: 480px) {
-  .task .line, .pr .pline { flex-wrap: wrap; }
+  .task .line { flex-wrap: wrap; }
 }
 .app-icon { width: 28px; height: 28px; flex: none; }
 </style>
@@ -481,8 +490,12 @@ const DATA = {
           model: { vendor: 'claude', name: 'Sonnet 5.5', effort: 'low' }, route: 'default',
           gpt: { name: 'gpt-6-astra', effort: 'high', home: '~/.codex' } },
         { id: 'codex-main-bg', type: 'Codex (メイン直下)', text: 'Bash の背景実行を待機中', since: '1 分前', state: 'busy',
-          isCodex: true, backgrounded: true, parent_agent_id: null,
+          isCodex: true, origin: 'delegated', backgrounded: true, parent_agent_id: null,
           gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex' } },
+        // Claude 配下で委譲された Codex は独立した行にせず、親のサブエージェントの下にまとめる。終わった実行は終了として出す。
+        { id: 'codex-delegated-done', type: 'Codex (impl-standard 経由)', text: 'パーサーのテストを追加', since: '完了', state: 'done',
+          isCodex: true, origin: 'delegated', parent_agent_id: null,
+          gpt: { name: 'gpt-6-luna', effort: 'xhigh', home: '~/.codex-subagent' } },
       ],
       tasks: [
         { title: '.ssp ファイルの読み込み', state: 'done', criteria: [{ t: '既存のサンプル 12 件を読み込める', met: true }, { t: '不正なファイルでエラー表示する', met: true }] },
@@ -542,6 +555,14 @@ const DATA = {
           tasksUpdatedMin: 1,
           decisions: [{ id: 'rs-5', waitMin: 2, awaitingMin: 3, title: '負のオフセットを許可するか', kind: 'waiting',
             ctx: '既存データとの互換性を確認している。', options: [{ t: '負の値も許可する', why: '先行するカウントを保持できる', rec: true }] }],
+        },
+        // 利用者が turn を中断した。セッションは生きていて次の入力を待つので、待機中とも終了とも分けて出し、終わったものを隠す設定でも隠さない。
+        {
+          id: 'rec-studio-export', title: 'エクスポート形式の検討', status: 'interrupted', branch: 'feat/export-format',
+          main: { tool: '—', since: '3 分前' },
+          perms: [], subagents: [],
+          tasks: [{ title: 'エクスポート形式の比較', state: 'doing', updatedMin: 3, criteria: [{ t: '.ssp と MIDI の差を表にする', met: false }] }],
+          tasksUpdatedMin: 3, decisions: [], lastUpdatedMin: 3,
         },
       ],
     },
@@ -620,6 +641,15 @@ const DATA = {
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 45,
           estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', state: 'input' },
         },
+        // resume しても同じ conversationId の会話は 1 行にまとめる。再開の回数は行の札で示す。
+        {
+          id: 'agent-cockpit-codex', title: 'Codex: 表示の単位の調査', status: 'wait', branch: 'plan/pr-stack-view',
+          main: { tool: '—', since: '8 分前' },
+          codex: { conversationId: 'conv-7f3a', resumes: 2 },
+          perms: [], subagents: [],
+          tasks: [{ title: '会話の表示の単位を調べる', state: 'doing', updatedMin: 8, criteria: [{ t: 'resume の前後で同じ会話と分かる', met: false }] }],
+          tasksUpdatedMin: 8, decisions: [], lastUpdatedMin: 8,
+        },
       ],
     },
   ],
@@ -628,8 +658,14 @@ const DATA = {
   uiUpdatePending: false,
   // codexAgent は claude-codex-bridge の ~/.claude/tools/codex-agent.sh があるか。無ければサブエージェントの段と経路の札を出さない。
   // crossReview は稼働中のセッションか PR を登録したセッションの worktree のどれかに ai-cross-review の tools/cross-review.js があるか。無ければクロスレビューの段を出さない。
-  integrations: { codexAgent: true, crossReview: true },
+  // commonQuestions と instructions は、その機能が構成済みか。未構成なら「質問対応」のチップ、共通質問、指示の入力欄を出さない。
+  // 確認用に、URL へ ?commonQuestions=off や ?instructions=off を付けると未構成の見え方になる。
+  integrations: { codexAgent: true, crossReview: true, commonQuestions: true, instructions: true },
 };
+try {
+  const params = new URLSearchParams(location.search);
+  for (const key of ['commonQuestions', 'instructions']) if (params.get(key) === 'off') DATA.integrations[key] = false;
+} catch {}
 
 for (const p of DATA.products) {
   const updatedAt = (minutesAgo) => new Date(Date.now() - Math.max(0, minutesAgo) * 60_000).toISOString();
@@ -1073,6 +1109,7 @@ const FILTERS = [
   { key: 'prs', label: 'マージできる PR', cls: 'ok' },
 ];
 ui.hidden = Array.isArray(ui.hidden) ? ui.hidden.filter(key => FILTERS.some(filter => filter.key === key)) : [];
+const activeFilters = () => FILTERS.filter(filter => filter.key !== 'questions' || DATA.integrations.commonQuestions);
 
 function decisionCategory(d) {
   const a = answerOf(d.id);
@@ -1086,7 +1123,7 @@ const visibleDecisions = s => s.decisions.filter(d => isActiveDecision(d) && isS
 const visibleSubagents = s => s.subagents.filter(agent => !isBusyAgent(s, agent) || isShown('agents'));
 const visiblePermissions = s => isShown('permission') ? s.perms : [];
 const commonQuestionView = question => ({ ...question, ...(ui.commonQuestionStates[question.internalQuestionId] || {}) });
-const commonQuestionsOf = session => (session.commonQuestions || []).map(commonQuestionView);
+const commonQuestionsOf = session => DATA.integrations.commonQuestions ? (session.commonQuestions || []).map(commonQuestionView) : [];
 const isFinishedCommonQuestion = question => question.cancelled === true
   || (question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
 const visibleCommonQuestions = session => commonQuestionsOf(session).filter(question => (!ui.hideFinished || !isFinishedCommonQuestion(question))
@@ -1259,6 +1296,7 @@ function saveMockInstructionPreviewRecovery(id) {
 }
 
 function instructionTargetAvailability(session) {
+  if (!DATA.integrations.instructions) return { mode: '', reason: '' };
   if (Object.hasOwn(session, 'nativeInstructionWaiting')) {
     const pending = session.nativeInstructionWaiting;
     if (!Array.isArray(pending) || pending.length < 1 || pending.length > 2) {
@@ -1285,7 +1323,7 @@ function instructionTargetAvailability(session) {
     || commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question));
   if (hasPendingWork) return { mode: '', reason: '質問・許可・判断待ちがあるため、指示を保留中です。' };
   if (session.status === 'busy') return { mode: 'steer', reason: '' };
-  if (session.status === 'wait') return { mode: 'start', reason: '' };
+  if (session.status === 'wait' || session.status === 'interrupted') return { mode: 'start', reason: '' };
   return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
 }
 
@@ -1425,6 +1463,7 @@ function instructionPreviewRecoveryPanel() {
 }
 
 function instructionComposer(p, session) {
+  if (!DATA.integrations.instructions) return '';
   const draft = ui.instructionDrafts[session.id] || { targetSessionId: '', mode: '', text: '' };
   const availability = instructionTargetAvailability(session);
   const nativeWaiting = Object.hasOwn(session, 'nativeInstructionWaiting');
@@ -1434,7 +1473,7 @@ function instructionComposer(p, session) {
     .filter(record => !ui.hideFinished || !isFinishedInstructionRecord(record))
     .map(record => instructionCard(session, record)).join('');
   const canCreate = Boolean(availability.mode);
-  if (!['busy', 'wait'].includes(session.status) && !records) return '';
+  if (!['busy', 'wait', 'interrupted'].includes(session.status) && !records) return '';
   const modeOption = canCreate
     ? `<option value="${availability.mode}" ${modeSelected ? 'selected' : ''}>${esc(instructionModeText(availability.mode))}</option>` : '';
   const notice = ui.instructionNotices[session.id] || '';
@@ -1503,12 +1542,12 @@ function renderSummary() {
   const counts = { ...judgmentCounts, agents, prs };
   const need = judgmentCounts.permission + judgmentCounts.blocking + judgmentCounts.questions + judgmentCounts.questionProvisional;
   document.title = need ? `(${need}) Agent Cockpit` : 'Agent Cockpit';
-  document.getElementById('summary').innerHTML = FILTERS.map(x =>
+  document.getElementById('summary').innerHTML = activeFilters().map(x =>
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
   const hiddenCount = countHidden();
   const note = document.getElementById('filter-note');
-  note.hidden = ui.hidden.length === 0;
-  note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
+  note.hidden = activeFilters().every(x => isShown(x.key));
+  note.innerHTML = `<span>非表示: ${activeFilters().filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
   excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo;
@@ -1631,12 +1670,14 @@ function mainRow(p, session, withTag) {
   const unknown = session.status === 'unknown';
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
-  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : '状態不明 (時刻不明)';
+  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : '状態不明 (時刻不明)';
+  const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
+  const conversation = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
   const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}`;
   return `<div class="now-row main-row">
-      <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>
+      <div class="who"><span class="dot ${stateClass}"></span>${session.codex ? 'Codex' : 'メイン'}${sessionTag(p, session, withTag)}<strong${statusTitle}>${status}</strong>${conversation}</div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
       ${detail ? `<div class="detail">${detail}</div>` : ''}
       ${unknownSessionControls(session)}</div>`;
@@ -2182,18 +2223,20 @@ function prItem(p, pr) {
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
+  const actions = [
+    mergeIntent ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
+    !mergeIntent && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
+      <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
+    conflictButton(p, pr),
+  ].join('').trim();
   return `<div class="pr ${rsv ? 'reserved' : conditionMet ? 'can-merge' : !operationBlocker ? 'merge-pending' : ''}">
+    <div class="pr-body"><div class="pr-text">
     <div class="pline">
       ${pos.total > 1 ? `<span class="pos" title="下から数えた位置">${pos.depth}/${pos.total}</span>` : ''}
       <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>
-      ${mergeIntent ? `<span class="badge accent">マージキューに追加済み (未マージ)</span><button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : ''}
-      ${!mergeIntent && conditionMet ? '<span class="badge ok">マージできます</span>' : !mergeIntent && !operationBlocker ? '<span class="badge mute">マージ操作は可能</span>' : ''}
-      ${!mergeIntent && (!operationBlocker || rsv) ? `<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
-        <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>レビュー収束後マージ</label>` : ''}
-      ${conflictButton(p, pr)}
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
-    <div class="badges">${prBadges(p, pr)}</div>
+    <div class="badges">${mergeIntent ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
     ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr, rsv.method).join('、'))})</span>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
@@ -2201,6 +2244,7 @@ function prItem(p, pr) {
       ${e.needsRestack ? ` <button type="button" class="link-btn" data-restack="${k}">モック: 積み直しの完了を再現する</button>` : ''}</div>` : ''}
     ${waiting.length && !rsv && !mergeIntent ? `<div class="why-not">待ち: ${waiting.map(esc).join('、')}</div>` : ''}
     ${conflictStatus(p, pr)}
+    </div>${actions ? `<div class="pr-actions">${actions}</div>` : ''}</div>
     ${ui.confirm === `conflict:${k}` && pr.conflict ? conflictConfirm(p, pr) : ''}
     ${transientMessageVisible(ui.mergeErrors[k]) ? `<div class="merge-error" role="status">${esc(ui.mergeErrors[k].message)}</div>` : ''}
     ${confirmManual && (!operationBlocker || rsv) ? mergeConfirm(p, pr) : ''}
@@ -2587,9 +2631,9 @@ function render() {
   renderRouting();
   const root = document.getElementById('root');
   root.innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
-  const recovery = typeof instructionAlternativeRecoveryPanel === 'function' ? instructionAlternativeRecoveryPanel() : '';
+  const recovery = DATA.integrations.instructions && typeof instructionAlternativeRecoveryPanel === 'function' ? instructionAlternativeRecoveryPanel() : '';
   if (recovery) root.insertAdjacentHTML('afterbegin', recovery);
-  const previewRecovery = instructionPreviewRecoveryPanel();
+  const previewRecovery = DATA.integrations.instructions ? instructionPreviewRecoveryPanel() : '';
   if (previewRecovery) root.insertAdjacentHTML('afterbegin', previewRecovery);
   if (focusData?.kind?.startsWith('instruction-alt-')) {
     restoreInstructionAlternativeFocus(root, focusData);

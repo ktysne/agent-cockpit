@@ -91,14 +91,14 @@
   </details>
 
   <h2 id="pr-row">PR の行の札</h2>
-  <p>PR の行は、題、状態の札、head と base、CI とレビューの札、クロスレビューの行、待ちの行で構成します。
+  <p>PR の行は、左右の 2 列で構成します。左の列には題、head と base、CI とレビューの札、クロスレビューの行、待ちの行が並び、右の列にはマージの状態と操作が縦に並びます。
   下の図は、マージ操作はできるが、条件が残っている PR の行です。</p>
-  <figure class="guide-map" id="pr-row-map" data-shot="pull-requests-badges/group" data-crop-y="127-427" data-alt="マージ操作は可能の PR の行。1 行目に番号、題、状態の札、マージするのボタンとレビュー収束後マージのチェックがある。続いて head と base、CI と GitHub のレビューの札、クロスレビューの行、待ちの行が並ぶ">
+  <figure class="guide-map" id="pr-row-map" data-shot="pull-requests-badges/group" data-crop-y="127-427" data-alt="マージ操作は可能の PR の行。左の列に番号と題、head と base、CI と GitHub のレビューの札、クロスレビューの行、待ちの行が並ぶ。右の列に、マージ操作は可能の文字、マージするのボタン、収束後マージのチェックが縦に並ぶ">
     <ol class="guide-list">
       <li data-part="row.heading"><b>PR の番号と題</b>：番号は GitHub で PR を開くリンクです。</li>
-      <li data-part="row.state"><b>状態の札</b>：<span class="ui">マージできます</span> か <span class="ui">マージ操作は可能</span> です(<a href="#pr-mergeable">「マージできます」の条件</a>)。どちらでもない PR には出ません。</li>
+      <li data-part="row.state"><b>状態</b>：右の列のボタンの上に、<span class="ui">マージできます</span> か <span class="ui">マージ操作は可能</span> が出ます(<a href="#pr-mergeable">「マージできます」の条件</a>)。どちらでもない PR には出ません。</li>
       <li data-part="row.merge-button"><b><span class="ui">マージする</span></b>：確認欄を開きます。条件が残っているときは、枠だけの見た目になります。</li>
-      <li data-part="row.reservation-toggle" data-place="top"><b><span class="ui">レビュー収束後マージ</span></b>：チェックの状態が、この PR の予約の有無を表します。入れると予約し、外すと取り消します。</li>
+      <li data-part="row.reservation-toggle" data-place="top"><b><span class="ui">収束後マージ</span></b>：チェックの状態が、この PR の予約の有無を表します。入れると予約し、外すと取り消します。</li>
       <li data-part="row.branch" data-place="left"><b>head と base</b>：head のブランチと、実際の base のブランチです。base を付け替えた PR は、付け替えた後の base が出ます。</li>
       <li data-part="row.badges" data-place="left"><b>CI の札と GitHub のレビューの札</b>：左が CI、右が GitHub のレビューです(<a href="#pr-ci-review">CI とレビューの札</a>)。</li>
       <li data-part="row.rounds"><b>往復の目盛りと数</b>：クロスレビューを何往復したかです。目盛りは上限の 3 往復で、済んだ往復が塗られます。数は「2 / 3 往復、非対応 1」の形で、往復の数と、指摘のうち対応しないと決めた数が出ます。</li>
@@ -133,7 +133,7 @@
   <h3 id="pr-badges-other">そのほかの札</h3>
   <p>CI とレビューの札の後ろに、PR の状態によって次の札が加わります。
   下の図は、その札が出る PR の行です。</p>
-  <figure class="guide-map" id="pr-variants-map" data-shot="pull-requests-badges/group" data-crop-y="487-1462" data-alt="3 つの PR の行と、マージ済みの一覧。1 つ目は積み直しが必要の札とマージできない理由が出ている。2 つ目はコンフリクトの札とコンフリクト解決のボタンがあり、クロスレビューがレビュー未実施になっている。3 つ目はドラフトの札があり、マージできない理由がドラフトになっている。最下段にマージ済みの一覧がある">
+  <figure class="guide-map" id="pr-variants-map" data-shot="pull-requests-badges/group" data-crop-y="487-1500" data-alt="3 つの PR の行と、マージ済みの一覧。1 つ目は積み直しが必要の札とマージできない理由が出ている。2 つ目はコンフリクトの札とコンフリクト解決のボタンがあり、クロスレビューがレビュー未実施になっている。3 つ目はドラフトの札があり、マージできない理由がドラフトになっている。最下段にマージ済みの一覧がある">
     <ol class="guide-list">
       <li data-part="variants.restack-badge" data-place="right"><b><span class="ui">積み直しが必要</span></b>：下の PR をスカッシュかリベースでマージした後も、そのコミットが、この PR の差分に残っています(<a href="#pr-restack">積み直し</a>)。</li>
       <li data-part="variants.restack-reason" data-place="left"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</li>
@@ -212,7 +212,7 @@
   </details>
 
   <h2 id="pr-mergeable">「マージできます」の条件</h2>
-  <p>PR の状態の札は、2 段階の条件で決まります。</p>
+  <p>PR の状態は、2 段階の条件で決まります。</p>
   <ul>
     <li><span class="ui">マージ操作は可能</span>：マージの操作ができる PR です。スタックの一番下で、ドラフト、積み直し待ち、コンフリクト、GitHub のレビュー待ち(<span class="ui">変更要求</span> と <span class="ui">承認待ち</span>)のどれでもありません。灰色の背景で出ます</li>
     <li><span class="ui">マージできます</span>：マージの操作ができ、さらに設定で選んだ条件を満たす PR です。緑の背景で出ます</li>
@@ -315,7 +315,7 @@
 
   <h3 id="pr-merge-stack">スタックの途中をマージする</h3>
   <p>直上に PR のあるスタックの一番下を、<span class="ui">スカッシュ</span> か <span class="ui">リベース</span> でマージするときは、確認欄に、たとえば <span class="ui">スカッシュまたはリベースでは </span>#42 に #41<span class="ui"> のコミットが残るため、セッションに積み直しを依頼する。</span> と表示されます。</p>
-  <figure class="guide-map" id="pr-confirm-squash-map" data-shot="pull-requests-confirm/squash" data-crop-y="368-835" data-alt="スカッシュを選んだ確認欄。方式の行でスカッシュが選ばれ、その下に照合する head の SHA と、スカッシュまたはリベースでは #42 に #41 のコミットが残るため、セッションに積み直しを依頼するという警告が出ている。マージを実行のボタンは緑になっている">
+  <figure class="guide-map" id="pr-confirm-squash-map" data-shot="pull-requests-confirm/squash" data-crop-y="356-823" data-alt="スカッシュを選んだ確認欄。方式の行でスカッシュが選ばれ、その下に照合する head の SHA と、スカッシュまたはリベースでは #42 に #41 のコミットが残るため、セッションに積み直しを依頼するという警告が出ている。マージを実行のボタンは緑になっている">
     <ol class="guide-list">
       <li data-part="squash.methods" data-place="left"><b>マージの方式</b>：<span class="ui">スカッシュ</span> を選んでいます。</li>
       <li data-part="squash.effect-head" data-place="right"><b><span class="ui">照合する head SHA</span></b>：条件が残っていないので、クロスレビューの警告は出ません。</li>
@@ -325,7 +325,7 @@
   </figure>
 
   <h2 id="pr-reserve">レビュー収束後マージ</h2>
-  <p>PR の行にある <span class="ui">レビュー収束後マージ</span> のチェックで、その PR の予約を切り替えます。
+  <p>PR の行の右の列にある <span class="ui">収束後マージ</span> のチェックで、その PR の予約を切り替えます。
   チェックの状態は予約の有無を表し、開発者が PR ごとに操作します。既定の予約は作りません。</p>
   <p>チェックを入れると、画面で見た head、選んだマージ方式、ブランチ削除の設定を予約の口へ送ります。
   条件がそろっていれば、その場で収束記録の SHA を照合してマージします。
@@ -338,10 +338,10 @@
   <p>予約中も <span class="ui">マージする</span> は表示されます。
   予約中の札には、方式、予約した時刻、まだ満たしていない条件が出ます。
   チェックを外すと予約を取り消し、PR を登録したセッションに知らせます。</p>
-  <figure class="guide-map" id="pr-reserved-map" data-shot="pull-requests-reserve/reserved" data-crop-y="110-405" data-alt="予約中の PR の行。マージするボタンとチェック済みのレビュー収束後マージのチェックが並んでいる。予約中の札に方式、予約した時刻、満たしていない条件が書かれている">
+  <figure class="guide-map" id="pr-reserved-map" data-shot="pull-requests-reserve/reserved" data-crop-y="110-405" data-alt="予約中の PR の行。右の列に、マージするボタンとチェック済みの収束後マージのチェックが縦に並んでいる。予約中の札に方式、予約した時刻、満たしていない条件が書かれている">
     <ol class="guide-list">
       <li data-part="reserved.merge-button" data-place="top"><b><span class="ui">マージする</span></b>：予約中でも、確認欄から即時マージできます。成功すると予約が消え、失敗すると予約を残します。</li>
-      <li data-part="reserved.toggle" data-place="top"><b><span class="ui">レビュー収束後マージ</span></b>：予約中なのでチェックが入っています。外すと予約を取り消します。</li>
+      <li data-part="reserved.toggle" data-place="top"><b><span class="ui">収束後マージ</span></b>：予約中なのでチェックが入っています。外すと予約を取り消します。</li>
       <li data-part="reserved.badge" data-place="top"><b>予約中の札</b>：<span class="ui">レビュー収束後にマージ予約中</span> に続けて、括弧の中に、マージの方式、予約した時刻、まだ満たしていない条件が出ます。</li>
     </ol>
   </figure>
@@ -374,17 +374,17 @@
   <h3 id="pr-reserve-cancel">予約が取り消されるとき</h3>
   <p>予約は、次のときに取り消されます。</p>
   <ul>
-    <li>PR の行で <span class="ui">レビュー収束後マージ</span> のチェックを外したとき</li>
+    <li>PR の行で <span class="ui">収束後マージ</span> のチェックを外したとき</li>
     <li>PR が、マージされずにクローズされたとき</li>
     <li>クロスレビューの最後の結論が <code>halted</code>(停止)になったとき</li>
     <li>マージを実行して、PR がマージキューに入ったとき(以降は、方式を不明として扱い、ブランチは削除しません)</li>
   </ul>
   <p>取り消されると、リポジトリの枠の先頭に、PR へのリンクと取り消した理由が出ます。
   PR を登録したセッションにも、同じ内容を知らせます。</p>
-  <figure class="guide-map" id="pr-reserve-cancelled-map" data-shot="pull-requests-reserve/cancelled" data-crop-y="60-505" data-alt="予約を取り消した後の PR の枠。上に、PR へのリンクと取り消した理由の一行がある。その下の PR の行は、予約中の表示が消え、レビュー収束後マージのチェックが外れている">
+  <figure class="guide-map" id="pr-reserve-cancelled-map" data-shot="pull-requests-reserve/cancelled" data-crop-y="60-505" data-alt="予約を取り消した後の PR の枠。上に、PR へのリンクと取り消した理由の一行がある。その下の PR の行は、予約中の表示が消え、収束後マージのチェックが外れている">
     <ol class="guide-list">
       <li data-part="cancelled.notice" data-place="left"><b>取り消しの知らせ</b>：PR へのリンクに、取り消した理由が続きます。</li>
-      <li data-part="cancelled.toggle"><b><span class="ui">レビュー収束後マージ</span></b>：予約が無くなったので、チェックが外れます。</li>
+      <li data-part="cancelled.toggle"><b><span class="ui">収束後マージ</span></b>：予約が無くなったので、チェックが外れます。</li>
     </ol>
   </figure>
   <p>取り消しの知らせは、記録時刻から 1 分たつか、同じ PR を予約し直すと消えます。
@@ -393,7 +393,7 @@
   <h2 id="pr-skip">レビュー不要の記録</h2>
   <p>クロスレビューを省く PR は、レビュー不要と記録できます。
   記録した PR は、<span class="ui">クロスレビューも済んでいる(不要としたものを含む)</span> の条件を満たします。
-  ただし、<span class="ui">レビュー収束後マージ</span> は、クロスレビューの収束記録が要るので、レビュー不要の記録だけでは実行されません。</p>
+  ただし、レビュー収束後マージは、クロスレビューの収束記録が要るので、レビュー不要の記録だけでは実行されません。</p>
   <p>記録は、次の 2 つの方法で行います。</p>
   <ul>
     <li>PR の行の <span class="ui">レビュー不要にする</span> を押す。記録する理由は、画面からの記録だと分かる文になります。このボタンは、レビュー未実施や変更あり、対応中のように、クロスレビューの状態が黄の札のときだけ出ます。<span class="ui">レビュー済み</span> などレビューが要らない状態では、記録しても何も変わらないので出しません</li>
@@ -402,7 +402,7 @@
   <p>記録すると、クロスレビューの状態の札が <span class="ui">レビュー不要</span> に変わり、ボタンは <span class="ui">レビュー不要を取り消す</span> になります。
   <span class="ui">レビュー不要</span> の札にマウスを載せると、記録した理由が出ます。
   <span class="ui">レビュー不要を取り消す</span> を押すと、記録を消します。</p>
-  <figure class="guide-map" id="pr-skipped-map" data-shot="pull-requests-skip/skipped" data-crop-y="1177-1414" data-alt="レビュー不要と記録した PR の行。クロスレビューの行に、レビュー不要の札と、レビュー不要を取り消すがある">
+  <figure class="guide-map" id="pr-skipped-map" data-shot="pull-requests-skip/skipped" data-crop-y="1219-1456" data-alt="レビュー不要と記録した PR の行。クロスレビューの行に、レビュー不要の札と、レビュー不要を取り消すがある">
     <ol class="guide-list">
       <li data-part="skipped.state" data-mark="frame" data-place="left"><b>クロスレビューの行</b>：<span class="ui">レビュー不要</span> は、クロスレビューを不要と記録した PR です。</li>
       <li data-part="skipped.clear" data-place="top"><b><span class="ui">レビュー不要を取り消す</span></b>：記録を消します。</li>
@@ -416,7 +416,7 @@
   <p>コンフリクトのある PR には、<span class="ui">コンフリクト解決</span> のボタンが出ます。
   押すと、PR を登録したセッションに、衝突の解消を依頼する確認欄が開きます。
   ダッシュボードは、PR のブランチを変えません。作業はセッションが行います。</p>
-  <figure class="guide-map" id="pr-conflict-confirm-map" data-shot="pull-requests-conflict/confirm" data-crop-y="767-1387" data-alt="衝突の解消を依頼する確認欄。コンフリクトの PR の行の下に、依頼の見出し、依頼の内容を書いた 3 つの箇条書き、依頼を送るとやめるのボタンが並ぶ">
+  <figure class="guide-map" id="pr-conflict-confirm-map" data-shot="pull-requests-conflict/confirm" data-crop-y="767-1414" data-alt="衝突の解消を依頼する確認欄。コンフリクトの PR の行の下に、依頼の見出し、依頼の内容を書いた 3 つの箇条書き、依頼を送るとやめるのボタンが並ぶ">
     <ol class="guide-list">
       <li data-part="conflict.heading" data-place="left"><b>見出し</b>：衝突の解消を依頼する PR です。</li>
       <li data-part="conflict.effects" data-place="left"><b>依頼の内容</b>：依頼先のセッション、セッションにマージさせないこと、head が変わると依頼済みの表示を消すことが書かれています。</li>
@@ -437,7 +437,7 @@
   失敗の知らせは 1 分で消えます。
   確認欄は残るので、状態を確認してから <span class="ui">依頼を送る</span> をもう一度押せます。</p>
   <p>依頼を送ると、PR の行に、依頼した時刻と依頼先が出て、ボタンは <span class="ui">もう一度依頼する</span> に変わります。</p>
-  <figure class="guide-map" id="pr-conflict-requested-map" data-shot="pull-requests-conflict/requested" data-crop-y="767-1127" data-alt="依頼を送った後のコンフリクトの PR の行。ボタンがもう一度依頼するに変わり、行の下端に、依頼した時刻と依頼先のセッションの名前が出ている">
+  <figure class="guide-map" id="pr-conflict-requested-map" data-shot="pull-requests-conflict/requested" data-crop-y="767-1145" data-alt="依頼を送った後のコンフリクトの PR の行。ボタンがもう一度依頼するに変わり、行の下端に、依頼した時刻と依頼先のセッションの名前が出ている">
     <ol class="guide-list">
       <li data-part="requested.again" data-place="left"><b><span class="ui">もう一度依頼する</span></b>：同じ依頼を、もう一度送れます。</li>
       <li data-part="requested.status" data-place="left"><b>依頼済みの札</b>：依頼した時刻と、依頼先のセッションです。</li>

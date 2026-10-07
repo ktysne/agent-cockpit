@@ -12,6 +12,7 @@ const {
 const {
   createDurableDeliveryStore,
   createProviderDeliveryAdapter,
+  readNativeRecoverySnapshot,
 } = require('../src/server/durable-delivery-store');
 
 function identity(provider, tag) {
@@ -196,6 +197,35 @@ test('delivery store saves payload digests only and gives the sink one frozen de
   assert.deepEqual(sent, ['highly-sensitive-payload']);
   assert.equal(Object.hasOwn(await adapter.get(delivery.deliveryAttemptId), 'payload'), false);
   await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => {}), errorCode('payload_unavailable'));
+});
+
+test('native recovery reads a cloned ready checkpoint without writing or capturing registries', async (t) => {
+  const directory = await temporaryDirectory(t);
+  const fixture = createFixture();
+  let writes = 0;
+  let registrySnapshots = 0;
+  const registrationSnapshot = fixture.registrationRegistry.snapshot;
+  fixture.registrationRegistry.snapshot = () => {
+    registrySnapshots += 1;
+    return registrationSnapshot();
+  };
+  const store = createDurableDeliveryStore({
+    filePath: path.join(directory, 'read-only-checkpoint.json'),
+    ...fixture.dependencies,
+    atomicWrite: async () => { writes += 1; throw new Error('unexpected checkpoint write'); },
+  });
+  t.after(() => store.close());
+  await store.ready;
+
+  const first = await readNativeRecoverySnapshot(store);
+  first.ledger.revision = 99;
+  const second = await readNativeRecoverySnapshot(store);
+
+  assert.equal(second.revision, 0);
+  assert.equal(second.ledger.revision, 0);
+  assert.equal(second.registrations.conversations.length, 0);
+  assert.equal(writes, 0);
+  assert.equal(registrySnapshots, 0);
 });
 
 test('provider adapters scope lifecycle IDs to the delivery target kind', async (t) => {
