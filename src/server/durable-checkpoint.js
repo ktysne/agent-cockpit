@@ -4,7 +4,9 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { atomicWriteJson } = require('./json-storage');
 
-const CHECKPOINT_SCHEMA_VERSION = 1;
+const CHECKPOINT_SCHEMA_VERSION = 2;
+const LEGACY_CHECKPOINT_SCHEMA_VERSION = 1;
+const MAX_REGISTRATION_ORDER = 20_000;
 const DEFAULT_MAX_CHECKPOINT_BYTES = 1024 * 1024;
 const DEFAULT_MAX_RECORDS = 50_000;
 const MAX_CONFIGURABLE_CHECKPOINT_BYTES = 16 * 1024 * 1024;
@@ -237,9 +239,7 @@ function boundedRecordLimit(value) {
   return value;
 }
 
-function normalizeRegistrations(value, maxRecords) {
-  maxRecords = boundedRecordLimit(maxRecords);
-  const fields = ['conversations', 'executions', 'launches', 'runtimeLaunches', 'connections', 'actors', 'handoffs'];
+function normalizeRegistrationCollections(value, maxRecords, fields) {
   if (!hasExactKeys(value, fields)) throw checkpointError('invalid_checkpoint_registrations');
   const registrations = {
     conversations: normalizeCollection(value.conversations, maxRecords, normalizeConversation),
@@ -251,6 +251,108 @@ function normalizeRegistrations(value, maxRecords) {
     handoffs: normalizeCollection(value.handoffs, maxRecords, normalizeHandoff),
   };
   validateRegistrationReferences(registrations, maxRecords);
+  return registrations;
+}
+
+function normalizeReplayClaim(value) {
+  const fields = [
+    'startIdDigest', 'evidenceIdDigest', 'fingerprintDigest', 'conversationId', 'executionId', 'order',
+  ];
+  if (!hasExactKeys(value, fields) ||
+      typeof value.startIdDigest !== 'string' || typeof value.evidenceIdDigest !== 'string' ||
+      typeof value.fingerprintDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(value.startIdDigest) ||
+      !/^[a-f0-9]{64}$/.test(value.evidenceIdDigest) ||
+      !/^[a-f0-9]{64}$/.test(value.fingerprintDigest) ||
+      !isIdentifier(value.conversationId) || !isIdentifier(value.executionId) ||
+      !Number.isSafeInteger(value.order) || value.order < 1 || value.order > MAX_REGISTRATION_ORDER) {
+    throw checkpointError('invalid_checkpoint_replay_claim');
+  }
+  return {
+    startIdDigest: value.startIdDigest,
+    evidenceIdDigest: value.evidenceIdDigest,
+    fingerprintDigest: value.fingerprintDigest,
+    conversationId: value.conversationId,
+    executionId: value.executionId,
+    order: value.order,
+  };
+}
+
+function normalizeIncompleteConversationIds(value, maxRecords) {
+  const ids = normalizeCollection(value, maxRecords, (item) => {
+    if (!isIdentifier(item)) throw checkpointError('invalid_checkpoint_incomplete_history');
+    return item;
+  });
+  if (new Set(ids).size !== ids.length) throw checkpointError('duplicate_checkpoint_incomplete_history');
+  return ids;
+}
+
+function validateReplayClaims(registrations, maxRecords) {
+  const conversations = new Map(registrations.conversations.map((item) => [item.conversationId, item]));
+  const executions = new Map(registrations.executions.map((item) => [item.executionId, item]));
+  const incomplete = new Set(registrations.incompleteConversationIds);
+  const startDigests = new Set();
+  const evidenceDigests = new Set();
+  const executionClaims = new Set();
+  const orders = new Set();
+  const conversationsWithExecutions = new Set();
+  for (const conversationId of incomplete) {
+    if (!conversations.has(conversationId)) throw checkpointError('dangling_checkpoint_incomplete_history');
+  }
+  for (const claim of registrations.replayClaims) {
+    if (startDigests.has(claim.startIdDigest) || evidenceDigests.has(claim.evidenceIdDigest) ||
+        executionClaims.has(claim.executionId) || orders.has(claim.order)) {
+      throw checkpointError('duplicate_checkpoint_replay_claim');
+    }
+    const execution = executions.get(claim.executionId);
+    if (!execution || execution.conversationId !== claim.conversationId) {
+      throw checkpointError('dangling_checkpoint_replay_claim');
+    }
+    startDigests.add(claim.startIdDigest);
+    evidenceDigests.add(claim.evidenceIdDigest);
+    executionClaims.add(claim.executionId);
+    orders.add(claim.order);
+  }
+  const orderedClaims = [...orders].sort((left, right) => left - right);
+  if (incomplete.size === 0 && orderedClaims.some((order, index) => order !== index + 1)) {
+    throw checkpointError('checkpoint_replay_order_gap');
+  }
+  for (const execution of registrations.executions) {
+    conversationsWithExecutions.add(execution.conversationId);
+    if (!executionClaims.has(execution.executionId) && !incomplete.has(execution.conversationId)) {
+      throw checkpointError('incomplete_checkpoint_replay_claims');
+    }
+  }
+  for (const conversation of registrations.conversations) {
+    if (!conversationsWithExecutions.has(conversation.conversationId) &&
+        !incomplete.has(conversation.conversationId)) {
+      throw checkpointError('incomplete_checkpoint_replay_claims');
+    }
+  }
+  const totalRecords = Object.values(registrations).reduce((total, items) => total + items.length, 0);
+  if (totalRecords > maxRecords) throw checkpointError('checkpoint_capacity');
+}
+
+function normalizeRegistrations(value, maxRecords) {
+  maxRecords = boundedRecordLimit(maxRecords);
+  const fields = [
+    'conversations', 'executions', 'launches', 'runtimeLaunches', 'connections', 'actors', 'handoffs',
+    'replayClaims', 'incompleteConversationIds',
+  ];
+  const registrations = normalizeRegistrationCollections(value, maxRecords, fields);
+  registrations.replayClaims = normalizeCollection(value.replayClaims, maxRecords, normalizeReplayClaim);
+  registrations.incompleteConversationIds = normalizeIncompleteConversationIds(value.incompleteConversationIds, maxRecords);
+  validateReplayClaims(registrations, maxRecords);
+  return registrations;
+}
+
+function normalizeLegacyRegistrations(value, maxRecords) {
+  maxRecords = boundedRecordLimit(maxRecords);
+  const fields = ['conversations', 'executions', 'launches', 'runtimeLaunches', 'connections', 'actors', 'handoffs'];
+  const registrations = normalizeRegistrationCollections(value, maxRecords, fields);
+  registrations.replayClaims = [];
+  registrations.incompleteConversationIds = registrations.conversations.map((item) => item.conversationId);
+  validateReplayClaims(registrations, maxRecords);
   return registrations;
 }
 
@@ -413,7 +515,10 @@ function uniqueIndex(items, keyOf, code) {
 }
 
 function makeEmptyRegistrations() {
-  return { conversations: [], executions: [], launches: [], runtimeLaunches: [], connections: [], actors: [], handoffs: [] };
+  return {
+    conversations: [], executions: [], launches: [], runtimeLaunches: [], connections: [], actors: [], handoffs: [],
+    replayClaims: [], incompleteConversationIds: [],
+  };
 }
 
 function mergeRegistrationHistory(previous, incoming, maxRecords = DEFAULT_MAX_RECORDS) {
@@ -430,7 +535,13 @@ function mergeRegistrationHistory(previous, incoming, maxRecords = DEFAULT_MAX_R
     actors: mergeActors(prior.actors, next.actors),
     handoffs: mergeImmutable(prior.handoffs, next.handoffs, (item) => item.handoffId,
       'checkpoint_handoff_changed'),
+    replayClaims: mergeImmutable(prior.replayClaims, next.replayClaims, (item) => item.startIdDigest,
+      'checkpoint_replay_claim_changed'),
+    incompleteConversationIds: [...new Set([
+      ...prior.incompleteConversationIds, ...next.incompleteConversationIds,
+    ])],
   };
+  validateReplayClaims(merged, maxRecords);
   validateRegistrationReferences(merged, maxRecords);
   return merged;
 }
@@ -667,11 +778,14 @@ function validateLedgerRegistrationReferences(ledger, registrations) {
 function normalizeCheckpoint(value, options = {}) {
   const maxRecords = boundedRecordLimit(options.maxRecords ?? DEFAULT_MAX_RECORDS);
   const fields = ['schemaVersion', 'revision', 'registrations', 'ledger'];
-  if (!hasExactKeys(value, fields) || value.schemaVersion !== CHECKPOINT_SCHEMA_VERSION ||
+  if (!hasExactKeys(value, fields) ||
+      ![LEGACY_CHECKPOINT_SCHEMA_VERSION, CHECKPOINT_SCHEMA_VERSION].includes(value.schemaVersion) ||
       !Number.isSafeInteger(value.revision) || value.revision < 0) {
     throw checkpointError('invalid_checkpoint_version');
   }
-  const registrations = normalizeRegistrations(value.registrations, maxRecords);
+  const registrations = value.schemaVersion === LEGACY_CHECKPOINT_SCHEMA_VERSION
+    ? normalizeLegacyRegistrations(value.registrations, maxRecords)
+    : normalizeRegistrations(value.registrations, maxRecords);
   const { validateLedger } = require('./delivery-ledger');
   const ledger = validateLedger(value.ledger);
   validateLedgerRegistrationReferences(ledger, registrations);
@@ -693,7 +807,14 @@ function projectRegistrationSnapshots(registrationSnapshot, launchSnapshot, runt
       !Array.isArray(runtimeSnapshot.actors) || !Array.isArray(runtimeSnapshot.handoffs)) {
     throw checkpointError('registry_snapshot_unavailable');
   }
+  const replayFieldsMissing = !Object.hasOwn(registrationSnapshot, 'replayClaims') &&
+    !Object.hasOwn(registrationSnapshot, 'incompleteConversationIds');
+  if (!replayFieldsMissing && (!Array.isArray(registrationSnapshot.replayClaims) ||
+      !Array.isArray(registrationSnapshot.incompleteConversationIds))) {
+    throw checkpointError('registry_snapshot_unavailable');
+  }
   const snapshotCollections = [registrationSnapshot.conversations, registrationSnapshot.executions,
+    ...(replayFieldsMissing ? [] : [registrationSnapshot.replayClaims, registrationSnapshot.incompleteConversationIds]),
     launchSnapshot.launches, runtimeSnapshot.launches, runtimeSnapshot.connections,
     runtimeSnapshot.actors, runtimeSnapshot.handoffs];
   let snapshotCount = 0;
@@ -766,8 +887,16 @@ function projectRegistrationSnapshots(registrationSnapshot, launchSnapshot, runt
   const handoffs = runtimeSnapshot.handoffs.map((value) => normalizeHandoff({
     handoffId: value.handoffId, owner: value.owner, ownerGeneration: value.ownerGeneration, status: value.status,
   }));
-  const registrations = { conversations, executions, launches, runtimeLaunches, connections, actors, handoffs };
+  const replayClaims = replayFieldsMissing ? [] : registrationSnapshot.replayClaims.map(normalizeReplayClaim);
+  const incompleteConversationIds = replayFieldsMissing
+    ? conversations.map((item) => item.conversationId)
+    : normalizeIncompleteConversationIds(registrationSnapshot.incompleteConversationIds, maxRecords);
+  const registrations = {
+    conversations, executions, launches, runtimeLaunches, connections, actors, handoffs,
+    replayClaims, incompleteConversationIds,
+  };
   validateRegistrationReferences(registrations, maxRecords);
+  validateReplayClaims(registrations, maxRecords);
   return registrations;
 }
 

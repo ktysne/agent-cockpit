@@ -9,6 +9,7 @@ const { createEmptyLedger, createDelivery, registerPrTarget } = require('../src/
 const {
   createDurableCheckpointStore,
   makeEmptyCheckpoint,
+  mergeRegistrationHistory,
   normalizeCheckpoint,
 } = require('../src/server/durable-checkpoint');
 const { atomicWriteJson } = require('../src/server/json-storage');
@@ -106,6 +107,9 @@ function checkpointWithLegacyDeliveryKinds(includeInstruction = false) {
     contextId: 'source-context', launchRef: launch.launchRef, immutableExecutionClaims,
     connectionScope: scope, connectionGeneration: 1, state: 'active' }];
   checkpoint.ledger = ledger;
+  checkpoint.schemaVersion = 1;
+  delete checkpoint.registrations.replayClaims;
+  delete checkpoint.registrations.incompleteConversationIds;
   return checkpoint;
 }
 function errorCode(code) {
@@ -122,11 +126,11 @@ test('checkpoint reads v1 ledgers without instruction and validates same-target 
   const restoredLegacy = await reader.load();
   assert.deepEqual(restoredLegacy.ledger.deliveries.map((item) => item.kind).sort(),
     ['pr-notification', 'question', 'result']);
-  assert.equal(restoredLegacy.schemaVersion, 1);
+  assert.equal(restoredLegacy.schemaVersion, 2);
 
   const withInstruction = checkpointWithLegacyDeliveryKinds(true);
   const normalized = normalizeCheckpoint(withInstruction);
-  assert.equal(normalized.schemaVersion, 1);
+  assert.equal(normalized.schemaVersion, 2);
   assert.deepEqual(normalized.ledger.deliveries.map((item) => item.kind).sort(),
     ['instruction', 'pr-notification', 'question', 'result']);
   const wrongInstructionTarget = structuredClone(withInstruction);
@@ -257,6 +261,12 @@ test('checkpoint saves and restores an adopted runtime launch before owner actor
     { conversationId: 'source-conversation', executionId: 'source-period', sessionId: 'source-session', state: 'active' },
     { conversationId: 'owner-conversation', executionId: 'owner-period', sessionId: 'owner-session', state: 'active' },
   ];
+  checkpoint.registrations.replayClaims = [
+    { startIdDigest: 'a'.repeat(64), evidenceIdDigest: 'b'.repeat(64), fingerprintDigest: 'c'.repeat(64),
+      conversationId: 'source-conversation', executionId: 'source-period', order: 1 },
+    { startIdDigest: 'd'.repeat(64), evidenceIdDigest: 'e'.repeat(64), fingerprintDigest: 'f'.repeat(64),
+      conversationId: 'owner-conversation', executionId: 'owner-period', order: 2 },
+  ];
   checkpoint.registrations.launches = [{
     launchRef: child.launchRef,
     claims: {
@@ -328,4 +338,72 @@ test('checkpoint saves and restores an adopted runtime launch before owner actor
   const contradictoryActor = structuredClone(otherActorCheckpoint);
   contradictoryActor.registrations.actors[0].identity = child.identity;
   assert.throws(() => normalizeCheckpoint(contradictoryActor), errorCode('dangling_checkpoint_actor'));
+});
+
+test('checkpoint rejects replay digest values without coercing objects', () => {
+  const checkpoint = makeEmptyCheckpoint();
+  const identity = {
+    provider: 'claude', nativeIdKind: 'session', hostId: 'replay-host',
+    homeScopeId: 'replay-home', nativeId: 'replay-session',
+  };
+  checkpoint.registrations.conversations = [{ conversationId: 'replay-conversation', identity }];
+  checkpoint.registrations.executions = [{ conversationId: 'replay-conversation', executionId: 'replay-execution',
+    sessionId: 'replay-session', state: 'unknown' }];
+  let coercions = 0;
+  checkpoint.registrations.replayClaims = [{
+    startIdDigest: { toString() { coercions += 1; return 'a'.repeat(64); } },
+    evidenceIdDigest: 'b'.repeat(64),
+    fingerprintDigest: 'c'.repeat(64),
+    conversationId: 'replay-conversation',
+    executionId: 'replay-execution',
+    order: 1,
+  }];
+
+  assert.throws(() => normalizeCheckpoint(checkpoint), errorCode('invalid_checkpoint_replay_claim'));
+  assert.equal(coercions, 0);
+});
+
+test('complete replay history requires contiguous registration order', () => {
+  const checkpoint = makeEmptyCheckpoint();
+  const identity = {
+    provider: 'claude', nativeIdKind: 'session', hostId: 'order-host',
+    homeScopeId: 'order-home', nativeId: 'order-session',
+  };
+  checkpoint.registrations.conversations = [{ conversationId: 'order-conversation', identity }];
+  checkpoint.registrations.executions = [{ conversationId: 'order-conversation', executionId: 'order-execution',
+    sessionId: 'order-session', state: 'unknown' }];
+  checkpoint.registrations.replayClaims = [{
+    startIdDigest: 'a'.repeat(64), evidenceIdDigest: 'b'.repeat(64), fingerprintDigest: 'c'.repeat(64),
+    conversationId: 'order-conversation', executionId: 'order-execution', order: 2,
+  }];
+
+  assert.throws(() => normalizeCheckpoint(checkpoint), errorCode('checkpoint_replay_order_gap'));
+});
+
+test('merged replay claims reject evidence and order collisions across snapshots', () => {
+  function registrationHistory(tag, order, evidenceIdDigest) {
+    const identity = {
+      provider: 'codex', nativeIdKind: 'thread', hostId: `${tag}-host`,
+      homeScopeId: `${tag}-home`, nativeId: `${tag}-thread`,
+    };
+    const registrations = makeEmptyCheckpoint().registrations;
+    registrations.conversations = [{ conversationId: `${tag}-conversation`, identity }];
+    registrations.executions = [{ conversationId: `${tag}-conversation`, executionId: `${tag}-execution`,
+      sessionId: `${tag}-session`, state: 'unknown' }];
+    registrations.replayClaims = [{
+      startIdDigest: tag === 'first' ? 'a'.repeat(64) : 'd'.repeat(64),
+      evidenceIdDigest,
+      fingerprintDigest: tag === 'first' ? 'c'.repeat(64) : 'e'.repeat(64),
+      conversationId: `${tag}-conversation`,
+      executionId: `${tag}-execution`,
+      order,
+    }];
+    return registrations;
+  }
+
+  const first = registrationHistory('first', 1, 'b'.repeat(64));
+  const second = registrationHistory('second', 1, 'b'.repeat(64));
+  assert.throws(() => mergeRegistrationHistory(first, second), errorCode('duplicate_checkpoint_replay_claim'));
+  assert.throws(() => mergeRegistrationHistory(first, registrationHistory('second', 1, 'f'.repeat(64))),
+    errorCode('duplicate_checkpoint_replay_claim'));
 });
