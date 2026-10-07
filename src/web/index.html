@@ -1280,7 +1280,9 @@ function renderSummary(sessions, pullRequestGroups = []) {
     agents: agentCount,
     prs: pullRequestMergeableCount(pullRequestGroups),
   };
-  summary.replaceChildren(...FILTERS.map(({ key, label, color }) => {
+  // 隠している種類は 0 件でも札を残す。札を押すことが、その種類を個別に表示へ戻す手段であるため。
+  const shownFilters = FILTERS.filter(({ key }) => counts[key] > 0 || displayPreferences.hidden.includes(key));
+  summary.replaceChildren(...shownFilters.map(({ key, label, color }) => {
     const button = element('button', `chip ${color}`.trim());
     button.type = 'button';
     button.dataset.filter = key;
