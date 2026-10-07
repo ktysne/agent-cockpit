@@ -591,6 +591,8 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
+    crossReviewState: () => ({ cls: 'mute' }),
+    crossReviewWaitReason: () => null,
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
   });
@@ -651,6 +653,8 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
+    crossReviewState: () => ({ cls: 'mute' }),
+    crossReviewWaitReason: () => null,
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
   });
