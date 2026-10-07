@@ -23,6 +23,16 @@ test('通知を積んだ queue-operation 行から終了通知を読む', async 
   ]));
 });
 
+test('前のプロセスから引き継いだ stopped の通知に並ぶ task-id をすべて読む', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const content = '<task-notification>\n<task-id>agent-a</task-id>\n<task-id>agent_b</task-id>\n<task-id>../bad</task-id>\n<status>stopped</status>\n</task-notification>';
+  await fs.writeFile(fixture.filePath, JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: '2026-10-08T02:00:00.000Z', content }));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['agent-a', { status: 'stopped', recordedAt: '2026-10-08T02:00:00.000Z' }],
+    ['agent_b', { status: 'stopped', recordedAt: '2026-10-08T02:00:00.000Z' }],
+  ]));
+});
+
 test('ツールの入出力や本文に写った終了通知と取り出しの行は読まない', async (t) => {
   const fixture = await transcriptFixture(t);
   await fs.writeFile(fixture.filePath, [

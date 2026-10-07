@@ -133,8 +133,13 @@ async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs
       if (record?.type !== 'queue-operation' || record.operation !== 'enqueue') continue;
       if (typeof record.content !== 'string' || !record.content.startsWith('<task-notification>')) continue;
       const block = record.content.split('</task-notification>')[0];
-      const match = block.match(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]*?<status>(completed|killed|failed)<\/status>/);
-      if (match) notifications.set(match[1], { status: match[2], recordedAt: typeof record.timestamp === 'string' ? record.timestamp : null });
+      // 前のプロセスで終わらなかった背景のエージェントは、stopped の 1 通にまとめて複数の task-id が並ぶ。
+      const status = block.match(/<status>(completed|killed|failed|stopped)<\/status>/)?.[1];
+      if (!status) continue;
+      const recordedAt = typeof record.timestamp === 'string' ? record.timestamp : null;
+      for (const [, taskId] of block.matchAll(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>/g)) {
+        notifications.set(taskId, { status, recordedAt });
+      }
     }
   } catch {}
   return notifications;
