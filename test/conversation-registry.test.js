@@ -308,3 +308,54 @@ test('metadata over configured bounds is rejected without retaining partial obse
   }).status, 'mismatch');
   assert.equal(registry.snapshot().observations.length, 0);
 });
+
+for (const provider of ['claude', 'codex']) {
+  test(`${provider} authority revisions reject foreign and restored stamps and preserve read-only observations`, () => {
+    const kernel = createRegistrationKernel();
+    const initial = kernel.registry.captureAuthorityRevision();
+    assert.equal(Object.isFrozen(initial), true);
+    for (const foreign of [undefined, {}, structuredClone(initial), JSON.parse(JSON.stringify(initial)), createRegistrationKernel().registry.captureAuthorityRevision()]) {
+      assert.equal(kernel.registry.checkAuthorityRevision(foreign), false);
+    }
+    const native = { provider, nativeIdKind: provider === 'claude' ? 'session' : 'thread', hostId: 'stamp-host', homeScopeId: 'stamp-home', nativeId: 'stamp-native' };
+    kernel.registry.observe(native, evidence('stamp-observe'));
+    kernel.registry.snapshot();
+    assert.equal(kernel.registry.checkAuthorityRevision(initial), true);
+    const execution = register(kernel.authority, native, 'stamp-first');
+    assert.equal(kernel.registry.checkAuthorityRevision(initial), false);
+    let current = kernel.registry.captureAuthorityRevision();
+    register(kernel.authority, native, 'stamp-first');
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    assert.throws(() => register(kernel.authority, native, 'stamp-conflict'));
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    bind(kernel.authority, execution, native, 'stamp-context');
+    assert.equal(kernel.registry.checkAuthorityRevision(current), false);
+    current = kernel.registry.captureAuthorityRevision();
+    kernel.authority.end(execution.executionId);
+    assert.equal(kernel.registry.checkAuthorityRevision(current), false);
+    current = kernel.registry.captureAuthorityRevision();
+    kernel.authority.end(execution.executionId);
+    assert.equal(kernel.registry.checkAuthorityRevision(current), true);
+    register(kernel.authority, native, 'stamp-resume', { resume: true });
+    assert.equal(kernel.registry.checkAuthorityRevision(current), false);
+    assert.equal(kernel.registry.checkAuthorityRevision(initial), false);
+    assert.equal(JSON.stringify(kernel.registry.snapshot()).includes('authorityRevision'), false);
+  });
+}
+
+test('authority revision records a partial conversation change even if period allocation throws', (t) => {
+  const crypto = require('node:crypto');
+  const actualRandomUUID = crypto.randomUUID;
+  let calls = 0;
+  t.mock.method(crypto, 'randomUUID', () => {
+    if (++calls === 2) throw new Error('fixture-allocation-failure');
+    return actualRandomUUID();
+  });
+  const kernel = createRegistrationKernel();
+  const stamp = kernel.registry.captureAuthorityRevision();
+  assert.throws(() => register(kernel.authority, identityFrom('claude', claudeNative()), 'partial-stamp'), /fixture-allocation-failure/);
+  assert.equal(kernel.registry.checkAuthorityRevision(stamp), false);
+  const snapshot = kernel.registry.snapshot();
+  assert.equal(snapshot.conversations.length, 1);
+  assert.equal(snapshot.executions.length, 0);
+});

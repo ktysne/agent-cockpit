@@ -119,6 +119,10 @@ function tokenDigest(token) {
 }
 
 function createRegistrationKernel() {
+  let authorityRevision = Object.freeze({});
+  const captureAuthorityRevision = () => authorityRevision;
+  const checkAuthorityRevision = (stamp) => stamp === authorityRevision;
+  const advanceAuthorityRevision = () => { authorityRevision = Object.freeze({}); };
   const conversationsByIdentity = new Map();
   const conversationsById = new Map();
   const executionsById = new Map();
@@ -241,6 +245,7 @@ function createRegistrationKernel() {
         identity,
         identityKey: key,
       };
+      advanceAuthorityRevision();
       conversationsByIdentity.set(key, conversation);
       conversationsById.set(conversation.conversationId, conversation);
     }
@@ -259,6 +264,7 @@ function createRegistrationKernel() {
       state: 'active',
       evidence,
     };
+    advanceAuthorityRevision();
     executionsById.set(executionId, execution);
     activeExecutionByConversation.set(conversation.conversationId, executionId);
     lastExecutionByConversation.set(conversation.conversationId, executionId);
@@ -331,6 +337,8 @@ function createRegistrationKernel() {
 
   const registry = Object.freeze({
     observe,
+    captureAuthorityRevision,
+    checkAuthorityRevision,
     authorizeWriter: authorizeEnvelope,
     authorizeEvent: authorizeEnvelope,
     snapshot,
@@ -361,9 +369,10 @@ function createRegistrationKernel() {
       if (!previousDigest && writerBindingsByDigest.size >= MAX_WRITER_BINDINGS) {
         throw registrationError('capacity', 'writer binding capacity reached');
       }
-      if (previousDigest) writerBindingsByDigest.delete(previousDigest);
       const token = crypto.randomBytes(32).toString('base64url');
       const digest = tokenDigest(token);
+      advanceAuthorityRevision();
+      if (previousDigest) writerBindingsByDigest.delete(previousDigest);
       writerBindingsByDigest.set(digest, {
         executionId,
         identity,
@@ -377,6 +386,7 @@ function createRegistrationKernel() {
       const execution = executionsById.get(executionId);
       if (!execution) return false;
       if (execution.state === 'ended') return true;
+      advanceAuthorityRevision();
       execution.state = 'ended';
       activeExecutionByConversation.delete(execution.conversationId);
       revokeExecutionWriters(executionId);

@@ -5,8 +5,22 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
+const { createOwnedNativeWaitLatch } = require('./owned-native-wait');
 
 const PROFILE = 'cockpit-native-v1';
+const WAIT_PROFILE = 'cockpit-native-wait-v1';
+const WAIT_TOOL_NAME = 'cockpit_wait';
+const WAIT_TOOL_NAMESPACE = null;
+const WAIT_TOOL_SPEC = Object.freeze({
+  type: 'function',
+  name: WAIT_TOOL_NAME,
+  description: 'Wait for the trusted host to resume this task.',
+  inputSchema: Object.freeze({
+    type: 'object',
+    properties: Object.freeze({}),
+    additionalProperties: false,
+  }),
+});
 const ENVIRONMENT_ALLOWLIST = Object.freeze(['PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC']);
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -214,13 +228,24 @@ function buildArguments(provider) {
   ];
 }
 
+function isSynchronousTrue(callback) {
+  let result;
+  try { result = callback(); } catch { return false; }
+  if (result === true) return true;
+  try {
+    if (result && typeof result.then === 'function') Promise.resolve(result).catch(() => {});
+  } catch {}
+  return false;
+}
+
 function createOwnedNativeRunner(options) {
   assertOnlyKeys(options, [
     'provider', 'executablePath', 'hostId', 'homeScopeId', 'homePath', 'cwd', 'profile',
-    'getAuthentication', 'onAuthenticationRequired', 'isCurrent', 'spawnImpl', 'timeouts', 'onNative', 'onDisconnect',
+    'getAuthentication', 'onAuthenticationRequired', 'isCurrent', 'isSourceCurrent', 'isContextCurrent', 'onWaitRequired',
+    'spawnImpl', 'timeouts', 'onNative', 'onDisconnect',
   ], 'invalid_configuration');
   if (options.provider !== 'codex' && options.provider !== 'claude') throw runnerError('invalid_provider');
-  if (options.profile !== PROFILE) throw runnerError('invalid_profile');
+  if (options.profile !== PROFILE && options.profile !== WAIT_PROFILE) throw runnerError('invalid_profile');
   if (!isIdentifier(options.hostId) || !isIdentifier(options.homeScopeId)) throw runnerError('invalid_scope');
   if (typeof options.onNative !== 'function' ||
       (options.onDisconnect !== undefined && typeof options.onDisconnect !== 'function')) {
@@ -232,7 +257,16 @@ function createOwnedNativeRunner(options) {
   if (options.provider === 'codex' && typeof options.onAuthenticationRequired !== 'function') {
     throw runnerError('invalid_authentication_prompt');
   }
+  const waitProfile = options.profile === WAIT_PROFILE;
+  if (waitProfile && options.provider !== 'codex') throw runnerError('unsupported_profile');
+  if (waitProfile && (typeof options.onWaitRequired !== 'function' ||
+      typeof options.isCurrent !== 'function' || typeof options.isSourceCurrent !== 'function' || typeof options.isContextCurrent !== 'function')) {
+    throw runnerError('invalid_wait_callbacks');
+  }
+  if (!waitProfile && options.onWaitRequired !== undefined) throw runnerError('invalid_profile');
   if (options.isCurrent !== undefined && typeof options.isCurrent !== 'function') throw runnerError('invalid_current_callback');
+  if (options.isSourceCurrent !== undefined && typeof options.isSourceCurrent !== 'function') throw runnerError('invalid_current_callback');
+  if (options.isContextCurrent !== undefined && typeof options.isContextCurrent !== 'function') throw runnerError('invalid_current_callback');
   if (options.onAuthenticationRequired !== undefined && options.provider !== 'codex') {
     throw runnerError('invalid_authentication_prompt');
   }
@@ -250,7 +284,10 @@ function createOwnedNativeRunner(options) {
   const homeScopeId = options.homeScopeId;
   const getAuthentication = options.getAuthentication;
   const onAuthenticationRequired = options.onAuthenticationRequired;
+  const onWaitRequired = options.onWaitRequired;
   const isOwnerCurrent = options.isCurrent || (() => true);
+  const isSourceCurrent = options.isSourceCurrent || isOwnerCurrent;
+  const isContextCurrent = options.isContextCurrent || (() => true);
   const spawnImpl = options.spawnImpl === undefined ? spawn : options.spawnImpl;
   if (typeof spawnImpl !== 'function') throw runnerError('invalid_spawn_adapter');
   const timeouts = normalizeTimeouts(options.timeouts);
@@ -278,6 +315,9 @@ function createOwnedNativeRunner(options) {
   let terminalContextId = null;
   let turnStartPending = false;
   let earlyTurnCompletion = null;
+  let earlyWaitCall = null;
+  let waitCallSeen = false;
+  let activeWait = null;
   let activeLogin = null;
   let terminalContextCount = 0;
   let loginPromptCount = 0;
@@ -317,15 +357,15 @@ function createOwnedNativeRunner(options) {
 
   function requireOwnerCurrent(expectedGeneration) {
     requireCurrent(expectedGeneration);
-    let result;
-    try { result = isOwnerCurrent(); } catch { throw runnerError('authority_expired'); }
-    if (result !== true) {
-      try {
-        if (result && typeof result.then === 'function') Promise.resolve(result).catch(() => {});
-      } catch {}
-      throw runnerError('authority_expired');
-    }
+    if (!isSynchronousTrue(isOwnerCurrent)) throw runnerError('authority_expired');
     requireCurrent(expectedGeneration);
+    if (!isSynchronousTrue(isSourceCurrent)) throw runnerError('authority_expired');
+    requireCurrent(expectedGeneration);
+  }
+
+  function requireWriteCurrent(expectedGeneration) {
+    requireOwnerCurrent(expectedGeneration);
+    requireOwnerCurrent(expectedGeneration);
   }
 
   function awaitCurrent(value, expectedGeneration, timeoutMs, timeoutCode) {
@@ -373,6 +413,13 @@ function createOwnedNativeRunner(options) {
     try {
       options.onDisconnect(Object.freeze({ provider, reason: code }));
     } catch {}
+  }
+
+  function invalidateWait() {
+    const wait = activeWait;
+    activeWait = null;
+    earlyWaitCall = null;
+    if (wait) wait.latch.invalidate();
   }
 
   function clearActiveLogin(code) {
@@ -434,6 +481,7 @@ function createOwnedNativeRunner(options) {
     failureCode = code;
     state = 'failed';
     generation += 1;
+    invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
       const pending = pendingRpc;
@@ -445,7 +493,9 @@ function createOwnedNativeRunner(options) {
     stopChild(child).catch(() => {});
   }
 
-  function notifyNative(event) {
+  function notifyNative(event, terminal = false) {
+    if (!isCurrent(generation)) return false;
+    if (!terminal && !isSynchronousTrue(isSourceCurrent)) return false;
     try {
       const result = options.onNative(event);
       if (result && typeof result.then === 'function') {
@@ -456,6 +506,7 @@ function createOwnedNativeRunner(options) {
       if (error instanceof OwnedNativeRunnerError) throw error;
       throw runnerError('native_callback_failed');
     }
+    return isCurrent(generation) && (terminal || isSynchronousTrue(isSourceCurrent));
   }
 
   function emitIdentity(nativeId) {
@@ -464,7 +515,6 @@ function createOwnedNativeRunner(options) {
       if (nativeIdentity.nativeId !== nativeId) throw runnerError('native_identity_conflict');
       return;
     }
-    requireOwnerCurrent(generation);
     const identity = Object.freeze({
       provider,
       nativeIdKind: provider === 'codex' ? 'thread' : 'session',
@@ -484,7 +534,6 @@ function createOwnedNativeRunner(options) {
       if (nativeContext.nativeContextId !== nativeContextId) throw runnerError('native_context_conflict');
       return;
     }
-    requireOwnerCurrent(generation);
     const context = Object.freeze({
       kind: provider === 'codex' ? 'turn' : 'assistant_message',
       nativeContextId,
@@ -502,14 +551,14 @@ function createOwnedNativeRunner(options) {
       throw runnerError('native_context_terminal_duplicate');
     }
     if (nativeContext && nativeContext.nativeContextId !== nativeContextId) throw runnerError('native_context_conflict');
-    requireOwnerCurrent(generation);
+    invalidateWait();
     terminalContextId = nativeContextId;
     terminalContextCount = 1;
     const context = Object.freeze({
       kind: provider === 'codex' ? 'turn' : 'assistant_message',
       nativeContextId,
     });
-    notifyNative(Object.freeze({ type: 'context_ended', provider, identity: nativeIdentity, context }));
+    notifyNative(Object.freeze({ type: 'context_ended', provider, identity: nativeIdentity, context }), true);
   }
 
   function createLoginAttempt() {
@@ -586,8 +635,155 @@ function createOwnedNativeRunner(options) {
     emitContextEnded(completed.turnId);
   }
 
+  function hasExactKeys(value, expectedKeys) {
+    return isRecord(value) && Object.keys(value).length === expectedKeys.length &&
+      expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+  }
+
+  function isJsonRpcRequestId(value) {
+    return (typeof value === 'string' && isIdentifier(value)) ||
+      (Number.isSafeInteger(value) && value >= 0);
+  }
+
+  function parseWaitRequest(message) {
+    const requestKeys = Object.prototype.hasOwnProperty.call(message, 'jsonrpc')
+      ? ['jsonrpc', 'id', 'method', 'params']
+      : ['id', 'method', 'params'];
+    if (!hasExactKeys(message, requestKeys) ||
+        (Object.prototype.hasOwnProperty.call(message, 'jsonrpc') && message.jsonrpc !== '2.0') ||
+        !isJsonRpcRequestId(message.id) || message.method !== 'item/tool/call' ||
+        !hasExactKeys(message.params, ['threadId', 'turnId', 'callId', 'namespace', 'tool', 'arguments'])) {
+      throw runnerError('wait_request_invalid');
+    }
+    const params = message.params;
+    if (!isIdentifier(params.threadId) || !isIdentifier(params.turnId) ||
+        !isIdentifier(params.callId) || params.namespace !== WAIT_TOOL_NAMESPACE ||
+        params.tool !== WAIT_TOOL_NAME || !hasExactKeys(params.arguments, [])) {
+      throw runnerError('wait_request_invalid');
+    }
+    return Object.freeze({
+      requestId: message.id,
+      threadId: params.threadId,
+      turnId: params.turnId,
+      callId: params.callId,
+    });
+  }
+
+  function waitScopeCurrent(wait) {
+    const matches = () => wait && activeWait === wait && isCurrent(wait.generation) &&
+      nativeIdentity && nativeIdentity.nativeId === wait.threadId &&
+      nativeContext && nativeContext.nativeContextId === wait.turnId && !terminalContextId;
+    if (!matches() || !wait.callbackComplete) return false;
+    if (!isSynchronousTrue(isOwnerCurrent) || !matches()) return false;
+    if (!isSynchronousTrue(isSourceCurrent) || !matches()) return false;
+    if (!isSynchronousTrue(isContextCurrent) || !matches()) return false;
+    return true;
+  }
+
+  function discardWait(wait) {
+    if (activeWait === wait) activeWait = null;
+    if (wait) wait.latch.invalidate();
+  }
+
+  function writeWaitResponse(wait, status) {
+    const success = status === 'released';
+    const line = JSON.stringify({
+      jsonrpc: '2.0',
+      id: wait.requestId,
+      result: { contentItems: [{ type: 'inputText', text: status }], success },
+    });
+    if (!waitScopeCurrent(wait) || !waitScopeCurrent(wait)) {
+      discardWait(wait);
+      return;
+    }
+    if (!child || !child.stdin || typeof child.stdin.write !== 'function') {
+      discardWait(wait);
+      return;
+    }
+    activeWait = null;
+    try {
+      child.stdin.write(line + '\n', (error) => {
+        if (error) fail('wait_response_write_failed');
+      });
+    } catch {
+      fail('wait_response_write_failed');
+    }
+  }
+
+  function activateWaitCall(call) {
+    if (!waitProfile || !nativeIdentity || !nativeContext || terminalContextId ||
+        call.threadId !== nativeIdentity.nativeId || call.turnId !== nativeContext.nativeContextId) {
+      throw runnerError('wait_request_context_mismatch');
+    }
+    let wait;
+    const latch = createOwnedNativeWaitLatch({
+      onTerminal: (status) => { if (wait) writeWaitResponse(wait, status); },
+    });
+    wait = {
+      latch,
+      requestId: call.requestId,
+      threadId: call.threadId,
+      turnId: call.turnId,
+      generation,
+      callbackComplete: false,
+    };
+    activeWait = wait;
+    if (!waitScopeCurrentBeforeCallback(wait)) {
+      discardWait(wait);
+      return;
+    }
+    let callbackResult;
+    try { callbackResult = onWaitRequired(latch.receipt); } catch {
+      discardWait(wait);
+      throw runnerError('wait_callback_failed');
+    }
+    if (callbackResult && typeof callbackResult.then === 'function') {
+      Promise.resolve(callbackResult).catch(() => {});
+      discardWait(wait);
+      throw runnerError('async_wait_callback_unsupported');
+    }
+    wait.callbackComplete = true;
+    if (!waitScopeCurrent(wait)) discardWait(wait);
+  }
+
+  function waitScopeCurrentBeforeCallback(wait) {
+    const matches = () => wait && activeWait === wait && isCurrent(wait.generation) &&
+      nativeIdentity && nativeIdentity.nativeId === wait.threadId &&
+      nativeContext && nativeContext.nativeContextId === wait.turnId && !terminalContextId;
+    if (!matches()) return false;
+    if (!isSynchronousTrue(isOwnerCurrent) || !matches()) return false;
+    if (!isSynchronousTrue(isSourceCurrent) || !matches()) return false;
+    if (!isSynchronousTrue(isContextCurrent) || !matches()) return false;
+    return true;
+  }
+
+  function handleWaitToolCall(message) {
+    const call = parseWaitRequest(message);
+    if (!waitProfile || !nativeIdentity || call.threadId !== nativeIdentity.nativeId) {
+      throw runnerError('wait_request_context_mismatch');
+    }
+    if (waitCallSeen) throw runnerError('wait_request_duplicate');
+    waitCallSeen = true;
+    if (turnStartPending) {
+      if (earlyWaitCall) throw runnerError('wait_request_duplicate');
+      earlyWaitCall = call;
+      return;
+    }
+    activateWaitCall(call);
+  }
+
+  function releaseWait(receipt) {
+    const wait = activeWait;
+    return Boolean(wait && wait.callbackComplete && wait.latch.release(receipt));
+  }
+
+  function cancelWait(receipt) {
+    const wait = activeWait;
+    return Boolean(wait && wait.callbackComplete && wait.latch.cancel(receipt));
+  }
+
   function writeLine(line, expectedGeneration) {
-    requireOwnerCurrent(expectedGeneration);
+    requireWriteCurrent(expectedGeneration);
     if (!child || !child.stdin || typeof child.stdin.write !== 'function') throw runnerError('stdin_unavailable');
     return awaitCurrent(new Promise((resolve, reject) => {
       try {
@@ -632,9 +828,17 @@ function createOwnedNativeRunner(options) {
       throw runnerError('codex_message_invalid');
     }
     if (Object.prototype.hasOwnProperty.call(message, 'method')) {
-      if (typeof message.method !== 'string' || !message.method || Object.prototype.hasOwnProperty.call(message, 'id') ||
-          Object.prototype.hasOwnProperty.call(message, 'result') || Object.prototype.hasOwnProperty.call(message, 'error')) {
-        throw runnerError(Object.prototype.hasOwnProperty.call(message, 'id') ? 'unknown_server_request' : 'codex_message_invalid');
+      if (typeof message.method !== 'string' || !message.method ||
+          Object.prototype.hasOwnProperty.call(message, 'result') ||
+          Object.prototype.hasOwnProperty.call(message, 'error')) {
+        throw runnerError('codex_message_invalid');
+      }
+      if (Object.prototype.hasOwnProperty.call(message, 'id')) {
+        if (message.method === 'item/tool/call' && waitProfile) {
+          handleWaitToolCall(message);
+          return;
+        }
+        throw runnerError('unknown_server_request');
       }
       if (message.method === 'account/login/completed') {
         handleLoginCompleted(message.params);
@@ -829,7 +1033,7 @@ function createOwnedNativeRunner(options) {
   async function startCodex(inputText, expectedGeneration) {
     const initialize = await sendRpc('initialize', {
       clientInfo: { name: 'agent-cockpit', version: '1' },
-      capabilities: { experimentalApi: false },
+      capabilities: { experimentalApi: waitProfile },
     }, expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
     if (!isRecord(initialize)) throw runnerError('initialize_result_invalid');
@@ -850,12 +1054,14 @@ function createOwnedNativeRunner(options) {
     requireOwnerCurrent(expectedGeneration);
     if (activeLogin === loginAttempt) activeLogin = null;
     requireCurrent(expectedGeneration);
-    const threadResult = await sendRpc('thread/start', {
+    const threadStartParams = {
       cwd,
       ephemeral: true,
       approvalPolicy: 'never',
       sandbox: 'read-only',
-    }, expectedGeneration);
+    };
+    if (waitProfile) threadStartParams.dynamicTools = [WAIT_TOOL_SPEC];
+    const threadResult = await sendRpc('thread/start', threadStartParams, expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
     if (!isRecord(threadResult) || !isRecord(threadResult.thread) || !isIdentifier(threadResult.thread.id)) {
       throw runnerError('thread_result_invalid');
@@ -874,6 +1080,9 @@ function createOwnedNativeRunner(options) {
     if (!isRecord(turnResult) || !isRecord(turnResult.turn) || !isIdentifier(turnResult.turn.id)) {
       throw runnerError('turn_result_invalid');
     }
+    if (earlyWaitCall && earlyWaitCall.turnId !== turnResult.turn.id) {
+      throw runnerError('wait_request_context_mismatch');
+    }
     if (earlyTurnCompletion) {
       if (earlyTurnCompletion.threadId !== threadResult.thread.id || earlyTurnCompletion.turnId !== turnResult.turn.id) {
         throw runnerError('native_context_conflict');
@@ -882,6 +1091,9 @@ function createOwnedNativeRunner(options) {
       emitContextEnded(turnResult.turn.id);
     } else {
       emitContext(turnResult.turn.id);
+      const queuedWaitCall = earlyWaitCall;
+      earlyWaitCall = null;
+      if (queuedWaitCall) activateWaitCall(queuedWaitCall);
     }
     requireCurrent(expectedGeneration);
   }
@@ -931,6 +1143,7 @@ function createOwnedNativeRunner(options) {
     if (state === 'stopped') return Promise.resolve(safeSnapshot());
     generation += 1;
     state = 'stopping';
+    invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
       const pending = pendingRpc;
@@ -947,7 +1160,12 @@ function createOwnedNativeRunner(options) {
     return stopPromise;
   }
 
-  return Object.freeze({ start, stop, snapshot: safeSnapshot });
+  const runner = { start, stop, snapshot: safeSnapshot };
+  if (waitProfile) {
+    runner.releaseWait = releaseWait;
+    runner.cancelWait = cancelWait;
+  }
+  return Object.freeze(runner);
 }
 
 module.exports = { OwnedNativeRunnerError, createOwnedNativeRunner };

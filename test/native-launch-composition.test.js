@@ -44,6 +44,9 @@ function createFixture(options = {}) {
   });
   const registrationRegistry = Object.freeze({
     ...actualRegistrationKernel.registry,
+    checkAuthorityRevision(stamp) {
+      return options.revisionCheck ? options.revisionCheck(stamp, actualRegistrationKernel.registry.checkAuthorityRevision) : actualRegistrationKernel.registry.checkAuthorityRevision(stamp);
+    },
     authorizeWriter(...args) {
       registrationCalls.authorizeWriter += 1;
       return actualRegistrationKernel.registry.authorizeWriter(...args);
@@ -103,7 +106,20 @@ function createFixture(options = {}) {
       return actualRuntimeKernel.authority.handoff(...args);
     },
   });
-  const runtimeKernel = Object.freeze({ ...actualRuntimeKernel, authority: runtimeAuthority });
+  const runtimeRegistry = Object.freeze({
+    ...actualRuntimeKernel.registry,
+    checkCurrentConnection(handle) {
+      return options.connectionCheck
+        ? options.connectionCheck(handle, actualRuntimeKernel.registry.checkCurrentConnection)
+        : actualRuntimeKernel.registry.checkCurrentConnection(handle);
+    },
+    snapshot() {
+      const snapshot = actualRuntimeKernel.registry.snapshot();
+      if (options.onRuntimeSnapshot) options.onRuntimeSnapshot();
+      return snapshot;
+    },
+  });
+  const runtimeKernel = Object.freeze({ ...actualRuntimeKernel, registry: runtimeRegistry, authority: runtimeAuthority });
   const profiles = Object.fromEntries(PROVIDERS.map((provider) => [provider, {
     provider,
     executablePath: path.resolve(os.tmpdir(), `private-${provider}.exe`),
@@ -278,7 +294,7 @@ function createOwnedWorkspace(t) {
 }
 
 function createOwnedRunnerFactory(workspace, provider, options = {}) {
-  const harness = { child: null, methods: [], spawnCalls: 0, options: null };
+  const harness = { child: null, methods: [], responses: [], spawnCalls: 0, options: null };
   const spawnImpl = (executable, args, spawnOptions) => {
     harness.spawnCalls += 1;
     harness.options = { executable, args: [...args], cwd: spawnOptions.cwd, shell: spawnOptions.shell };
@@ -299,7 +315,10 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
         }
         return;
       }
-      if (!request?.method || !Object.hasOwn(request, 'id')) return;
+      if (!request?.method || !Object.hasOwn(request, 'id')) {
+        if (request && Object.hasOwn(request, 'result')) harness.responses.push(request);
+        return;
+      }
       harness.methods.push(request.method);
       if (request.method === 'initialize') {
         child.send({ id: request.id, result: { serverInfo: { name: 'fixture', version: '1' } } });
@@ -326,11 +345,13 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
       assert.equal(Object.hasOwn(runnerOptions, 'onAuthenticationRequired'), false);
       assert.equal(Object.hasOwn(runnerOptions, 'getAuthentication'), true);
     }
-    return createOwnedNativeRunner({
+    harness.runner = createOwnedNativeRunner({
       ...runnerOptions,
+      ...(options.waitProfile ? { profile: 'cockpit-native-wait-v1', onWaitRequired: options.onWaitRequired } : {}),
       spawnImpl,
       timeouts: { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: options.stopMs ?? 100 },
     });
+    return harness.runner;
   };
   const onAuthenticationRequired = options.onAuthenticationRequired || (({ loginId }) => {
     harness.child.send({ method: 'account/login/completed', params: { loginId, success: true } });
@@ -351,6 +372,7 @@ function createOwnedCompositionFixture(t, provider, options = {}) {
     getAuthentication: () => ({ oauthToken: 'fixture-claude-token' }),
     onAuthenticationRequired: owned.onAuthenticationRequired,
     profileOverrides: { [provider]: profile },
+    onRuntimeSnapshot: options.onRuntimeSnapshot,
   });
   return { ...fixture, workspace, nativeHarness: owned.harness };
 }
@@ -573,6 +595,7 @@ test('resolveProof rejects a synchronous reentry without invalidating the underl
   const scope = fixture.openedConnections[0].scope;
   const proof = fixture.composition.resolveProof(result.launchRef);
   let reentrantProof = proof;
+  let reentrantVerdict;
   const context = {
     launchRef: result.launchRef,
     connectionHandle: fixture.openedConnections[0].connectionHandle,
@@ -583,6 +606,7 @@ test('resolveProof rejects a synchronous reentry without invalidating the underl
     actor: launch.executionBinding.actor,
     contextId: runtime.currentProof.executionContextId,
     isCurrent() {
+      reentrantVerdict = fixture.composition.checkCurrentProof(result.launchRef, proof);
       reentrantProof = fixture.composition.resolveProof(result.launchRef);
       return true;
     },
@@ -590,6 +614,8 @@ test('resolveProof rejects a synchronous reentry without invalidating the underl
 
   assert.equal(fixture.composition.resolveProof(result.launchRef, context), null);
   assert.equal(reentrantProof, null);
+  assert.equal(reentrantVerdict.ok, false);
+  assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, true);
   assert.equal(fixture.composition.resolveProof(result.launchRef), proof);
   assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, true);
 });
@@ -1127,3 +1153,564 @@ test('an opaque receipt clone and a caller-supplied binding cannot create a laun
   }), 'invalid_admission');
   assert.equal(fixture.launchKernel.registry.snapshot().launches.length, 1);
 });
+
+for (const provider of PROVIDERS) {
+  test(`ID-F04-N06 ${provider}: fresh native context retains the main actor and retires old proof and writer`, { timeout: 1000 }, async () => {
+    const fixture = createFixture();
+    const { result } = await fixture.startStandalone(provider, 'fresh-main');
+    const proof = fixture.composition.resolveProof(result.launchRef);
+    const writer = fixture.composition.writerFor(result.launchRef);
+    const before = fixture.launchKernel.registry.get(result.launchRef);
+    const registrationCount = fixture.registrationCalls.register;
+    const actor = fixture.runtimeKernel.registry.snapshot().actors[0];
+    const runner = fixture.runners[0];
+    const identity = before.identity;
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, true);
+    runner.options.onNative({ type: 'context_ended', provider, identity,
+      context: { kind: provider === 'codex' ? 'turn' : 'assistant_message', nativeContextId: actor.contextId } });
+    const ended = fixture.runtimeKernel.registry.snapshot().actors[0];
+    assert.equal(ended.state, 'active');
+    assert.equal(ended.contextState, 'ended');
+    assert.equal(runner.stopCalls, 0);
+    assert.equal(runner.options.isCurrent(), true);
+    const authorizeCalls = fixture.registrationCalls.authorizeWriter;
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+    assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+    assert.equal(fixture.registrationCalls.authorizeWriter, authorizeCalls);
+    assert.equal(await fixture.composition.reconcileProof(result.launchRef), null);
+    runner.options.onNative({ type: 'context', provider, identity,
+      context: { kind: provider === 'codex' ? 'turn' : 'assistant_message', nativeContextId: 'fresh-main-context', parentToolUseId: null } });
+    const fresh = fixture.composition.resolveProof(result.launchRef);
+    assert.ok(fresh);
+    assert.notEqual(fresh, proof);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, structuredClone(fresh)).ok, false);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, fresh).ok, true);
+    runner.options.onNative({ type: 'context', provider, identity,
+      context: { kind: provider === 'codex' ? 'turn' : 'assistant_message', nativeContextId: actor.contextId, parentToolUseId: null } });
+    assert.equal(fixture.composition.resolveProof(result.launchRef), fresh);
+    const freshWriter = fixture.composition.writerFor(result.launchRef);
+    assert.notEqual(freshWriter.token, writer.token);
+    assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+    assert.equal(fixture.composition.authorizeWriter(result.launchRef, freshWriter).status, 'accepted');
+    assert.equal(fixture.registrationCalls.register, registrationCount);
+    assert.deepEqual(fixture.launchKernel.registry.get(result.launchRef), before);
+    assert.equal(fixture.registrationKernel.registry.snapshot().executions[0].state, 'active');
+    assert.ok(fixture.runtimeKernel.registry.snapshot().actors.every((row) =>
+      row.actor.id === actor.actor.id && row.periodId === actor.periodId && row.state === 'active'));
+  });
+
+  test(`ID-F04-N07 ${provider}: each descendant requires explicit reconciliation after its ancestor context ends`, { timeout: 1000 }, async () => {
+    const fixture = createFixture();
+    const parent = await fixture.startStandalone(provider, 'fresh-chain-parent');
+    const children = [];
+    let owner = parent.result;
+    for (const suffix of ['a', 'b']) {
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, `fresh-chain-${suffix}`));
+      const receipt = fixture.admission(provider, `fresh-chain-${suffix}`, {
+        origin: 'delegated', originReceipt: owner.runReceipt,
+      });
+      const result = await fixture.composition.start(receipt, { inputText: suffix });
+      children.push({ result, proof: fixture.composition.resolveProof(result.launchRef),
+        writer: fixture.composition.writerFor(result.launchRef), receipt });
+      owner = result;
+    }
+    const fixed = fixture.launchKernel.registry.snapshot();
+    const parentRecord = fixture.launchKernel.registry.get(parent.result.launchRef);
+    fixture.runners[0].options.onNative({ type: 'context_ended', provider, identity: parentRecord.identity,
+      context: { kind: provider === 'codex' ? 'turn' : 'assistant_message', nativeContextId: `${provider}-context-fresh-chain-parent` } });
+    for (const child of children) {
+      assert.equal(fixture.composition.checkCurrentProof(child.result.launchRef, child.proof).ok, false);
+      assert.notEqual(fixture.composition.authorizeWriter(child.result.launchRef, child.writer).status, 'accepted');
+    }
+    assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(children[1].result.launchRef, children[1].proof).ok, true);
+    fixture.sendMainContext(fixture.runners[0], provider, 'fresh-chain-parent', { contextId: 'fresh-parent-context' });
+    for (const child of children) assert.equal(fixture.composition.resolveProof(child.result.launchRef), null);
+    assert.equal(await fixture.composition.reconcileProof(children[1].result.launchRef), null);
+    for (const child of children) {
+      const proof = await fixture.composition.reconcileProof(child.result.launchRef);
+      assert.ok(proof);
+      assert.notEqual(proof, child.proof);
+      assert.equal(fixture.composition.checkCurrentProof(child.result.launchRef, child.proof).ok, false);
+      assert.equal(fixture.composition.checkCurrentProof(child.result.launchRef, proof).ok, true);
+      assert.notEqual(fixture.composition.authorizeWriter(child.result.launchRef, child.writer).status, 'accepted');
+      const writer = fixture.composition.writerFor(child.result.launchRef);
+      assert.notEqual(writer.token, child.writer.token);
+      assert.equal(fixture.composition.authorizeWriter(child.result.launchRef, writer).status, 'accepted');
+    }
+    assert.deepEqual(fixture.launchKernel.registry.snapshot(), fixed);
+    assert.equal(fixture.registrationKernel.registry.snapshot().executions.length, 3);
+    assert.ok(fixture.registrationKernel.registry.snapshot().executions.every((row) => row.state === 'active'));
+    const leaf = children[1];
+    const current = fixture.composition.resolveProof(leaf.result.launchRef);
+    const writer = fixture.composition.writerFor(leaf.result.launchRef);
+    const authorizeCalls = fixture.registrationCalls.authorizeWriter;
+    assert.equal(fixture.actualRegistrationKernel.authority.end(parentRecord.executionBinding.periodId), true);
+    assert.equal(fixture.composition.checkCurrentProof(leaf.result.launchRef, current).ok, false);
+    assert.notEqual(fixture.composition.authorizeWriter(leaf.result.launchRef, writer).status, 'accepted');
+    assert.equal(fixture.registrationCalls.authorizeWriter, authorizeCalls);
+  });
+}
+
+for (const provider of PROVIDERS) {
+  for (const mode of ['stop', 'disconnect', 'quarantine']) {
+    test(`ID-F04-N08 ${provider} ${mode}: confirmed source loss retires descendant proof and writer`, { timeout: 1000 }, async () => {
+      const fixture = createFixture();
+      const parent = await fixture.startStandalone(provider, `loss-parent-${mode}`);
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, `loss-child-${mode}`));
+      const receipt = fixture.admission(provider, `loss-child-${mode}`, {
+        origin: 'delegated', originReceipt: parent.result.runReceipt,
+      });
+      const result = await fixture.composition.start(receipt, { inputText: 'loss-child' });
+      const proof = fixture.composition.resolveProof(result.launchRef);
+      const writer = fixture.composition.writerFor(result.launchRef);
+      const runner = fixture.runners[0];
+      if (mode === 'stop') await fixture.composition.stop(parent.receipt);
+      else if (mode === 'disconnect') runner.options.onDisconnect({ provider, reason: 'fixture-disconnected' });
+      else runner.options.onNative({ type: 'unrecognized', provider });
+      assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+      assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+      const calls = fixture.registrationCalls.authorizeWriter;
+      assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+      assert.equal(fixture.registrationCalls.authorizeWriter, calls);
+      assert.equal(await fixture.composition.reconcileProof(result.launchRef), null);
+      assert.equal(fixture.composition.snapshot().launches[1].reason, 'current_proof_unavailable');
+      assert.ok(fixture.registrationKernel.registry.snapshot().executions.every((row) => row.state === 'active'));
+    });
+  }
+
+  test(`ID-F04-N09 ${provider}: a stale kernel connection cannot authorize the captured payload proof`, { timeout: 1000 }, async () => {
+    const fixture = createFixture();
+    const { result } = await fixture.startStandalone(provider, 'unknown-connection');
+    const proof = fixture.composition.resolveProof(result.launchRef);
+    const writer = fixture.composition.writerFor(result.launchRef);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, true);
+    fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections[0].connectionHandle);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+    const calls = fixture.registrationCalls.authorizeWriter;
+    assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+    assert.equal(fixture.registrationCalls.authorizeWriter, calls);
+    assert.equal(fixture.runtimeKernel.registry.snapshot().actors[0].state, 'unknown');
+    assert.equal(fixture.runtimeKernel.registry.snapshot().actors[0].contextState, 'unknown');
+  });
+}
+
+for (const provider of PROVIDERS) {
+  test(`ID-F04-N10 ${provider}: an idle owner does not terminate the child's trusted native source`, { timeout: 1000 }, async () => {
+    const fixture = createFixture();
+    const parent = await fixture.startStandalone(provider, 'idle-source-parent');
+    fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, 'idle-source-child'));
+    const receipt = fixture.admission(provider, 'idle-source-child', {
+      origin: 'delegated', originReceipt: parent.result.runReceipt,
+    });
+    const result = await fixture.composition.start(receipt, { inputText: 'idle-source-child' });
+    const oldProof = fixture.composition.resolveProof(result.launchRef);
+    const oldWriter = fixture.composition.writerFor(result.launchRef);
+    const fixed = fixture.launchKernel.registry.snapshot();
+    const own = fixture.launchKernel.registry.get(result.launchRef);
+    const owner = fixture.launchKernel.registry.get(parent.result.launchRef);
+    const contextKind = provider === 'codex' ? 'turn' : 'assistant_message';
+    fixture.runners[0].options.onNative({ type: 'context_ended', provider, identity: owner.identity,
+      context: { kind: contextKind, nativeContextId: `${provider}-context-idle-source-parent` } });
+    const runner = fixture.runners[1];
+    assert.equal(runner.options.isCurrent(), false);
+    assert.equal(runner.options.isSourceCurrent(), true);
+    runner.options.onNative({ type: 'context_ended', provider, identity: own.identity,
+      context: { kind: contextKind, nativeContextId: `${provider}-context-idle-source-child` } });
+    assert.equal(runner.stopCalls, 0);
+    const attestations = fixture.runtimeCalls.attestActor;
+    fixture.sendMainContext(runner, provider, 'idle-source-child', { contextId: 'fresh-idle-child-context' });
+    assert.equal(fixture.runtimeCalls.attestActor, attestations + 1);
+    assert.equal(runner.stopCalls, 0);
+    assert.equal(fixture.composition.snapshot().launches[1].reason, 'current_proof_unavailable');
+    assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+    assert.equal(fixture.composition.writerFor(result.launchRef), null);
+    assert.equal(await fixture.composition.reconcileProof(result.launchRef), null);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, oldProof).ok, false);
+    assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, oldWriter).status, 'accepted');
+    const ownRows = fixture.runtimeKernel.registry.snapshot().actors.filter((row) => row.launchRef === result.launchRef);
+    assert.ok(ownRows.every((row) => row.state === 'active'));
+    assert.equal(ownRows.find((row) => row.contextId === 'fresh-idle-child-context').contextState, 'active');
+    fixture.sendMainContext(fixture.runners[0], provider, 'idle-source-parent', { contextId: 'fresh-idle-owner-context' });
+    assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+    const proof = await fixture.composition.reconcileProof(result.launchRef);
+    assert.ok(proof);
+    assert.notEqual(proof, oldProof);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, true);
+    assert.deepEqual(fixture.launchKernel.registry.snapshot(), fixed);
+    assert.ok(fixture.registrationKernel.registry.snapshot().executions.every((row) => row.state === 'active'));
+    assert.equal(fixture.actualRegistrationKernel.authority.end(own.executionBinding.periodId), true);
+    assert.equal(runner.options.isSourceCurrent(), false);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+  });
+}
+
+for (const provider of PROVIDERS) {
+test(`ID-F04-N11 ${provider}: source observation rejects synchronous reentry and a stop during the trusted snapshot callback`, { timeout: 1000 }, async () => {
+  let reenter = false;
+  let stopDuringRead = false;
+  let nested;
+  let stopping;
+  let receipt;
+  const fixture = createFixture({
+    onRuntimeSnapshot() {
+      if (reenter) nested = fixture.runners[0].options.isSourceCurrent();
+      if (stopDuringRead) {
+        stopDuringRead = false;
+        stopping = fixture.composition.stop(receipt);
+      }
+    },
+  });
+  const started = await fixture.startStandalone(provider, 'source-reentry');
+  receipt = started.receipt;
+  const proof = fixture.composition.resolveProof(started.result.launchRef);
+  const runner = fixture.runners[0];
+  reenter = true;
+  assert.equal(runner.options.isSourceCurrent(), false);
+  assert.equal(nested, false);
+  reenter = false;
+  assert.equal(runner.options.isSourceCurrent(), true);
+  assert.equal(fixture.composition.checkCurrentProof(started.result.launchRef, proof).ok, true);
+  stopDuringRead = true;
+  assert.equal(runner.options.isSourceCurrent(), false);
+  assert.equal(fixture.composition.checkCurrentProof(started.result.launchRef, proof).ok, false);
+  await stopping;
+});
+
+test(`ID-F04-N11 ${provider}: the final opaque source check rejects a raw disconnect after the snapshot was captured`, { timeout: 1000 }, async () => {
+  let disconnectDuringRead = false;
+  const fixture = createFixture({
+    onRuntimeSnapshot() {
+      if (disconnectDuringRead) {
+        disconnectDuringRead = false;
+        fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections[0].connectionHandle);
+      }
+    },
+  });
+  const { result } = await fixture.startStandalone(provider, 'source-final-disconnect');
+  const proof = fixture.composition.resolveProof(result.launchRef);
+  disconnectDuringRead = true;
+  assert.equal(fixture.runners[0].options.isSourceCurrent(), false);
+  assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+});
+
+test(`ID-F04-N11 ${provider}: temporary source snapshot failure without a context event preserves proof and writer capabilities`, { timeout: 1000 }, async () => {
+  let unavailable = false;
+  const fixture = createFixture({ onRuntimeSnapshot() { if (unavailable) throw new Error('fixture-unavailable'); } });
+  const { result } = await fixture.startStandalone(provider, 'source-unavailable');
+  const proof = fixture.composition.resolveProof(result.launchRef);
+  const writer = fixture.composition.writerFor(result.launchRef);
+  const actorCount = fixture.runtimeCalls.attestActor;
+  unavailable = true;
+  const runner = fixture.runners[0];
+  const identity = fixture.launchKernel.registry.get(result.launchRef).identity;
+  runner.options.onNative({ type: 'identity', provider, identity });
+  assert.equal(runner.options.isSourceCurrent(), false);
+  assert.equal(runner.stopCalls, 0);
+  assert.equal(fixture.runtimeCalls.attestActor, actorCount);
+  assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+  const calls = fixture.registrationCalls.authorizeWriter;
+  assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+  assert.equal(fixture.registrationCalls.authorizeWriter, calls);
+  unavailable = false;
+  assert.equal(fixture.composition.resolveProof(result.launchRef), proof);
+  assert.equal(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+});
+
+test(`ID-F04-N11 ${provider}: source capability checks reject nonliteral true, thenables, and throws without destroying cached proofs`, { timeout: 1000 }, async () => {
+  let verdict;
+  const fixture = createFixture({ connectionCheck(handle, actual) {
+    if (verdict === 'throw') throw new Error('fixture-unavailable');
+    return verdict === undefined ? actual(handle) : verdict;
+  } });
+  const { result } = await fixture.startStandalone(provider, 'source-verdict');
+  const proof = fixture.composition.resolveProof(result.launchRef);
+  const runner = fixture.runners[0];
+  for (const invalid of [false, null, {}, Promise.resolve(true), 'throw']) {
+    verdict = invalid;
+    assert.equal(runner.options.isSourceCurrent(), false);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+    assert.equal(runner.stopCalls, 0);
+  }
+  verdict = undefined;
+  assert.equal(runner.options.isSourceCurrent(), true);
+  assert.equal(fixture.composition.resolveProof(result.launchRef), proof);
+});
+}
+
+
+for (const provider of PROVIDERS) {
+  for (const eventType of ['context_ended', 'context']) {
+    test(`ID-F04-N12 ${provider} ${eventType}: a native event during source uncertainty fences old context authorization`, { timeout: 1000 }, async () => {
+      let unavailable = false;
+      const fixture = createFixture({ onRuntimeSnapshot() { if (unavailable) throw new Error('fixture-unavailable'); } });
+      const { result } = await fixture.startStandalone(provider, 'terminal-during-gap');
+      const proof = fixture.composition.resolveProof(result.launchRef);
+      const writer = fixture.composition.writerFor(result.launchRef);
+      const before = fixture.launchKernel.registry.get(result.launchRef);
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, 'gap-descendant'));
+      const childReceipt = fixture.admission(provider, 'gap-descendant', {
+        origin: 'delegated', originReceipt: result.runReceipt,
+      });
+      const child = await fixture.composition.start(childReceipt, { inputText: 'gap-descendant' });
+      const childProof = fixture.composition.resolveProof(child.launchRef);
+      const childWriter = fixture.composition.writerFor(child.launchRef);
+      const contextId = `${provider}-context-terminal-during-gap`;
+      const kind = provider === 'codex' ? 'turn' : 'assistant_message';
+      unavailable = true;
+      const runner = fixture.runners[0];
+      runner.options.onNative({ type: eventType, provider, identity: before.identity,
+        context: { kind, nativeContextId: contextId, ...(eventType === 'context' ? { parentToolUseId: null } : {}) } });
+      assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+      unavailable = false;
+      assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+      assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+      assert.equal(await fixture.composition.reconcileProof(result.launchRef), null);
+      assert.equal(fixture.composition.snapshot().launches[0].reason, 'native_observation_gap');
+      assert.equal(fixture.composition.resolveProof(child.launchRef), null);
+      assert.notEqual(fixture.composition.authorizeWriter(child.launchRef, childWriter).status, 'accepted');
+      assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(child.launchRef, childProof).ok, true);
+      assert.equal(runner.stopCalls, 0);
+      const raw = fixture.runtimeKernel.registry.snapshot().actors[0];
+      assert.equal(raw.state, 'active');
+      assert.equal(raw.contextState, 'active');
+      assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, true);
+      runner.options.onNative({ type: 'context', provider, identity: before.identity,
+        context: { kind, nativeContextId: contextId, parentToolUseId: null } });
+      assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+      fixture.sendMainContext(runner, provider, 'terminal-during-gap', { contextId: 'fresh-gap-context' });
+      const fresh = fixture.composition.resolveProof(result.launchRef);
+      assert.ok(fresh);
+      assert.notEqual(fresh, proof);
+      assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+      const freshWriter = fixture.composition.writerFor(result.launchRef);
+      assert.notEqual(freshWriter.token, writer.token);
+      assert.equal(fixture.composition.authorizeWriter(result.launchRef, freshWriter).status, 'accepted');
+      assert.equal(fixture.composition.resolveProof(child.launchRef), null);
+      const freshChild = await fixture.composition.reconcileProof(child.launchRef);
+      assert.ok(freshChild);
+      assert.notEqual(freshChild, childProof);
+      assert.equal(fixture.composition.checkCurrentProof(child.launchRef, childProof).ok, false);
+      assert.notEqual(fixture.composition.authorizeWriter(child.launchRef, childWriter).status, 'accepted');
+      assert.deepEqual(fixture.launchKernel.registry.get(result.launchRef), before);
+      assert.equal(fixture.registrationKernel.registry.snapshot().executions[0].state, 'active');
+    });
+  }
+}
+
+for (const provider of PROVIDERS) {
+  test(`ID-F04-N12 ${provider}: the real owned runner delivers a negative terminal while source metadata is unknown`, { timeout: 5000 }, async (t) => {
+    let unavailable = false;
+    const fixture = createOwnedCompositionFixture(t, provider, {
+      onRuntimeSnapshot() { if (unavailable) throw new Error('fixture-unavailable'); },
+    });
+    const receipt = fixture.admission(provider, 'owned-source-gap');
+    const result = await fixture.composition.start(receipt, { inputText: 'owned-source-gap' });
+    t.after(async () => fixture.composition.stop(receipt));
+    assert.equal(result.accepted, true);
+    const proof = fixture.composition.resolveProof(result.launchRef);
+    const writer = fixture.composition.writerFor(result.launchRef);
+    const actorCount = fixture.runtimeCalls.attestActor;
+    const before = fixture.launchKernel.registry.get(result.launchRef);
+    unavailable = true;
+    assert.equal(fixture.nativeHarness.runnerOptions.isSourceCurrent(), false);
+    if (provider === 'claude') {
+      fixture.nativeHarness.child.send({ type: 'result', subtype: 'success', session_id: before.identity.nativeId });
+    } else {
+      fixture.nativeHarness.child.send({ method: 'turn/completed',
+        params: { threadId: before.identity.nativeId, turn: { id: 'turn-integration' } } });
+    }
+    unavailable = false;
+    assert.equal(fixture.composition.snapshot().launches[0].reason, 'native_observation_gap');
+    assert.equal(fixture.nativeHarness.child.exited, false);
+    assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+    assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+    const calls = fixture.registrationCalls.authorizeWriter;
+    assert.notEqual(fixture.composition.authorizeWriter(result.launchRef, writer).status, 'accepted');
+    assert.equal(fixture.registrationCalls.authorizeWriter, calls);
+    assert.equal(fixture.runtimeCalls.attestActor, actorCount);
+    assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, true);
+    assert.equal(fixture.runtimeKernel.registry.snapshot().actors[0].contextState, 'active');
+    assert.equal(fixture.registrationKernel.registry.snapshot().executions[0].state, 'active');
+    assert.deepEqual(fixture.launchKernel.registry.get(result.launchRef), before);
+  });
+}
+
+for (const provider of PROVIDERS) {
+  for (const invalidation of ['own', 'owner', 'ancestor', 'period', 'source']) {
+    test(`ID-F04-N13 ${provider} ${invalidation}: context callback rejects raw authority invalidation before a native terminal`, async () => {
+      const fixture = createFixture();
+      const root = await fixture.startStandalone(provider, 'context-gate-root');
+      const launches = [root.result];
+      for (const suffix of ['owner', 'leaf']) {
+        fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, `context-gate-${suffix}`));
+        const receipt = fixture.admission(provider, `context-gate-${suffix}`, {
+          origin: 'delegated', originReceipt: launches.at(-1).runReceipt,
+        });
+        launches.push(await fixture.composition.start(receipt, { inputText: suffix }));
+      }
+      const gate = fixture.runners.at(-1).options.isContextCurrent;
+      assert.equal(gate.length, 0);
+      assert.equal(gate(), true);
+      const leaf = launches.at(-1);
+      const rawLeafProof = fixture.composition.resolveProof(leaf.launchRef);
+      if (['own', 'owner', 'ancestor'].includes(invalidation)) {
+        const index = { own: 2, owner: 1, ancestor: 0 }[invalidation];
+        assert.equal(fixture.actualRuntimeKernel.authority.endContext(fixture.attestedActors.get(launches[index].launchRef).at(-1)), true);
+      } else if (invalidation === 'period') {
+        fixture.actualRegistrationKernel.authority.end(fixture.launchKernel.registry.get(leaf.launchRef).executionBinding.periodId);
+      } else {
+        fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections.at(-1).connectionHandle);
+      }
+      assert.equal(gate(), false);
+      assert.equal(fixture.composition.checkCurrentProof(leaf.launchRef, {}).ok, false);
+      assert.equal(gate(), false);
+      if (invalidation === 'ancestor') assert.equal(fixture.actualRuntimeKernel.registry.checkCurrentProof(leaf.launchRef, rawLeafProof).ok, true);
+      assert.equal(fixture.runners.at(-1).stopCalls, 0);
+    });
+  }
+}
+
+test('ID-F04-N13 context callback rejects synchronous reentry without restoring a rejected nested check', async () => {
+  let duringSnapshot;
+  const fixture = createFixture({ onRuntimeSnapshot() { duringSnapshot?.(); } });
+  await fixture.startStandalone('codex', 'context-gate-reentry');
+  const gate = fixture.runners[0].options.isContextCurrent;
+  let nested;
+  duringSnapshot = () => { duringSnapshot = null; nested = gate(); };
+  assert.equal(gate(), false);
+  assert.equal(nested, false);
+  assert.equal(gate(), true);
+});
+
+for (const invalidation of ['none', 'own', 'owner', 'ancestor', 'period', 'source', 'before-own', 'before-owner', 'before-ancestor']) {
+  test(`ID-F04-N13 Codex native wait ${invalidation}: reply requires the current full context proof chain`, { timeout: 5000 }, async (t) => {
+    const workspace = createOwnedWorkspace(t);
+    let waitReceipt;
+    const owned = createOwnedRunnerFactory(workspace, 'codex', {
+      waitProfile: true, onWaitRequired(receipt) { waitReceipt = receipt; },
+    });
+    let nativeLeaf = false;
+    const fixture = createFixture({
+      runnerFactory(options, createStub) { return nativeLeaf ? owned.runnerFactory(options) : createStub(options); },
+      onAuthenticationRequired: owned.onAuthenticationRequired,
+      profileOverrides: { codex: { executablePath: workspace.executablePath, homePath: workspace.homePath, cwd: workspace.cwd } },
+    });
+    const root = await fixture.startStandalone('codex', 'native-wait-root');
+    fixture.plans.push(async (runner) => fixture.sendMainContext(runner, 'codex', 'native-wait-owner'));
+    const ownerReceipt = fixture.admission('codex', 'native-wait-owner', { origin: 'delegated', originReceipt: root.result.runReceipt });
+    const owner = await fixture.composition.start(ownerReceipt, { inputText: 'owner' });
+    nativeLeaf = true;
+    const receipt = fixture.admission('codex', 'native-wait-leaf', { origin: 'delegated', originReceipt: owner.runReceipt });
+    const leaf = await fixture.composition.start(receipt, { inputText: 'leaf' });
+    t.after(async () => fixture.composition.stop(receipt));
+    assert.equal(leaf.accepted, true);
+    const sendWait = () => owned.harness.child.send({ id: 'wait-proof-gate', method: 'item/tool/call', params: {
+      threadId: 'thread-integration', turnId: 'turn-integration', callId: 'proof-gate-call',
+      namespace: null, tool: 'cockpit_wait', arguments: {},
+    } });
+    const beforeCallback = invalidation.startsWith('before-');
+    if (!beforeCallback) { sendWait(); assert.ok(waitReceipt); }
+    const targetKind = beforeCallback ? invalidation.slice('before-'.length) : invalidation;
+    if (['own', 'owner', 'ancestor'].includes(targetKind)) {
+      const target = { own: leaf, owner, ancestor: root.result }[targetKind];
+      fixture.actualRuntimeKernel.authority.endContext(fixture.attestedActors.get(target.launchRef).at(-1));
+    } else if (invalidation === 'period') {
+      fixture.actualRegistrationKernel.authority.end(fixture.launchKernel.registry.get(leaf.launchRef).executionBinding.periodId);
+    } else if (invalidation === 'source') {
+      fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections.at(-1).connectionHandle);
+    }
+    if (beforeCallback) {
+      sendWait();
+      assert.equal(waitReceipt, undefined);
+    } else {
+      owned.harness.runner.releaseWait(waitReceipt);
+    }
+    assert.equal(owned.harness.responses.length, invalidation === 'none' ? 1 : 0);
+    assert.equal(owned.harness.child.exited, false);
+  });
+}
+
+for (const provider of PROVIDERS) {
+  for (const invalidation of ['connection', 'context', 'period', 'actor', 'launch', 'latest-proof', 'handoff']) {
+    test(`ID-F04-N14 ${provider} ${invalidation}: final ancestor snapshot must reject a raw-invalidated leaf`, async () => {
+      let action;
+      let snapshots = 0;
+      const fixture = createFixture({ onRuntimeSnapshot() {
+        if (action && ++snapshots === 4) { const current = action; action = null; current(); }
+      } });
+      const root = await fixture.startStandalone(provider, 'late-leaf-root');
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, 'late-leaf'));
+      const receipt = fixture.admission(provider, 'late-leaf', { origin: 'delegated', originReceipt: root.result.runReceipt });
+      const leaf = await fixture.composition.start(receipt, { inputText: 'leaf' });
+      const proof = fixture.composition.resolveProof(leaf.launchRef);
+      const runtimeBefore = fixture.runtimeKernel.registry.get(leaf.launchRef);
+      const immutable = Object.fromEntries(['launchId', 'runId', 'attemptId', 'provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'origin', 'purpose', 'originBinding', 'identity', 'executionBinding'].map((key) => [key, runtimeBefore[key]]));
+      action = () => {
+        if (invalidation === 'connection') fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections.at(-1).connectionHandle);
+        else if (invalidation === 'context') fixture.actualRuntimeKernel.authority.endContext(fixture.attestedActors.get(leaf.launchRef).at(-1));
+        else if (invalidation === 'period') fixture.actualRegistrationKernel.authority.end(fixture.launchKernel.registry.get(leaf.launchRef).executionBinding.periodId);
+        else if (invalidation === 'actor') fixture.actualRuntimeKernel.authority.endActor(fixture.attestedActors.get(leaf.launchRef).at(-1));
+        else if (invalidation === 'launch') fixture.launchKernel.authority.endLaunch(leaf.launchRef);
+        else if (invalidation === 'latest-proof') fixture.actualRuntimeKernel.authority.reconcileExecution(leaf.launchRef, {
+          executionActorHandle: fixture.attestedActors.get(leaf.launchRef).at(-1), ownerActorHandle: fixture.attestedActors.get(root.result.launchRef).at(-1), expectedOwnerGeneration: 0,
+        });
+        else fixture.actualRuntimeKernel.authority.handoff(leaf.launchRef, { handoffId: 'late-handoff', expectedOwner: runtimeBefore.currentOwner, expectedOwnerGeneration: 0,
+          newOwner: runtimeBefore.executionBinding, newOwnerGeneration: 1, immutableExecutionClaims: immutable, evidence: fixture.nextEvidence('late-handoff'),
+        }, fixture.attestedActors.get(leaf.launchRef).at(-1));
+      };
+      assert.equal(fixture.composition.checkCurrentProof(leaf.launchRef, proof).ok, false);
+      assert.equal(snapshots, 4);
+      assert.equal(action, null);
+      assert.equal(fixture.actualRuntimeKernel.registry.checkCurrentProof(leaf.launchRef, proof).ok, false);
+    });
+  }
+}
+
+for (const provider of PROVIDERS) {
+  test(`ID-F04-N14 ${provider}: revision denial fails closed without destroying cached proof or writer`, async () => {
+    let verdict;
+    const fixture = createFixture({ revisionCheck(stamp, actual) { if (verdict === 'throw') throw new Error('unavailable'); return verdict === undefined ? actual(stamp) : verdict; } });
+    const { result } = await fixture.startStandalone(provider, 'revision-denial');
+    const proof = fixture.composition.resolveProof(result.launchRef);
+    const writer = fixture.composition.writerFor(result.launchRef);
+    for (const invalid of [false, null, {}, Promise.resolve(true), 'throw']) {
+      verdict = invalid;
+      assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+      assert.equal(fixture.composition.checkCurrentProof(result.launchRef, proof).ok, false);
+      assert.equal(fixture.runners[0].stopCalls, 0);
+    }
+    verdict = undefined;
+    assert.equal(fixture.composition.resolveProof(result.launchRef), proof);
+    assert.equal(fixture.composition.writerFor(result.launchRef).token, writer.token);
+  });
+}
+
+for (const provider of PROVIDERS) {
+  for (const stage of ['admission', 'start-auth']) {
+    test(`ID-F04-N14 ${provider} ${stage}: a last-ancestor callback cannot admit an invalidated owner`, async () => {
+      let action;
+      let snapshots = 0;
+      let authCalls = 0;
+      const fixture = createFixture({ onAuthenticationRequired() { authCalls += 1; }, onRuntimeSnapshot() {
+        if (action && ++snapshots === 4) { const current = action; action = null; current(); }
+      } });
+      const parent = await fixture.startStandalone(provider, 'admission-ancestor');
+      fixture.plans.push(async (runner) => fixture.sendMainContext(runner, provider, 'admission-owner'));
+      const ownerReceipt = fixture.admission(provider, 'admission-owner', { origin: 'delegated', originReceipt: parent.result.runReceipt });
+      const owner = await fixture.composition.start(ownerReceipt, { inputText: 'owner' });
+      const makeAdmission = () => fixture.admission(provider, 'admission-child', { origin: 'delegated', originReceipt: owner.runReceipt });
+      const childReceipt = stage === 'start-auth' ? makeAdmission() : null;
+      const registered = fixture.registrationCalls.register;
+      const attested = fixture.runtimeCalls.attestActor;
+      action = () => fixture.actualRuntimeKernel.authority.disconnect(fixture.openedConnections.at(-1).connectionHandle);
+      if (stage === 'admission') assertCode(makeAdmission, 'origin_receipt_unavailable');
+      else await assert.rejects(fixture.composition.start(childReceipt, { inputText: 'child' }), { code: 'origin_receipt_unavailable' });
+      assert.equal(snapshots, 4);
+      assert.equal(fixture.runners.length, 2);
+      assert.equal(authCalls, 0);
+      assert.equal(fixture.registrationCalls.register, registered);
+      assert.equal(fixture.runtimeCalls.attestActor, attested);
+    });
+  }
+}

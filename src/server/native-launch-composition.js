@@ -139,10 +139,10 @@ function createNativeLaunchComposition(options = {}) {
     hostId,
     profiles: profileInput,
   } = options;
-  requireKernelSurface(registrationKernel, ['snapshot', 'authorizeWriter'], ['register', 'bindWriter'], 'registrationKernel');
-  requireKernelSurface(launchKernel, ['get', 'snapshot'], ['registerLaunch', 'bindExecution'], 'launchKernel');
-  requireKernelSurface(runtimeKernel, ['get', 'checkCurrentProof', 'snapshot'], [
-    'adoptExecution', 'openConnection', 'disconnect', 'attestActor', 'endActor', 'reconcileExecution', 'handoff',
+  requireKernelSurface(registrationKernel, ['captureAuthorityRevision', 'checkAuthorityRevision', 'snapshot', 'authorizeWriter'], ['register', 'bindWriter'], 'registrationKernel');
+  requireKernelSurface(launchKernel, ['captureAuthorityRevision', 'checkAuthorityRevision', 'get', 'snapshot'], ['registerLaunch', 'bindExecution'], 'launchKernel');
+  requireKernelSurface(runtimeKernel, ['get', 'checkCurrentProof', 'checkCurrentConnection', 'checkProofCapability', 'snapshot'], [
+    'adoptExecution', 'openConnection', 'disconnect', 'attestActor', 'endActor', 'endContext', 'reconcileExecution', 'handoff',
   ], 'runtimeKernel');
   if (!isIdentifier(hostId) || typeof runnerFactory !== 'function' || typeof getAuthentication !== 'function' ||
       (onAuthenticationRequired !== undefined && typeof onAuthenticationRequired !== 'function')) {
@@ -166,6 +166,8 @@ function createNativeLaunchComposition(options = {}) {
   const runReceiptRecords = new WeakMap();
   const proofResolutionInProgress = new Set();
   const proofResolutionReentered = new Set();
+  const sourceObservationInProgress = new Set();
+  const sourceObservationReentered = new Set();
   const admissionByAttempt = new Map();
   const launchRecords = new Map();
   const launchIds = new Map();
@@ -244,7 +246,8 @@ function createNativeLaunchComposition(options = {}) {
   function captureLiveOwnerChain(record, visited = new Set(), chain = []) {
     if (!record || visited.size >= MAX_ATTEMPTS || visited.has(record) || !record.runReceipt ||
         !record.proofHandle || record.status !== 'observed' || record.epoch !== record.activeEpoch ||
-        !record.connectionHandle || !record.executionActorHandle || !periodMatches(record)) return null;
+        !record.connectionHandle || !record.executionActorHandle || !periodMatches(record) ||
+        !sourceCanObserve(record, record.epoch)) return null;
     visited.add(record);
     const launch = runtimeRecord(record);
     if (!runtimeProofSummaryMatches(record, launch)) return null;
@@ -257,6 +260,10 @@ function createNativeLaunchComposition(options = {}) {
     if (!owner) return null;
     const node = {
       record,
+      processState: record.processState,
+      identity: record.identity,
+      runtimeScope: record.runtimeScope,
+      claims: record.claims,
       proofHandle: record.proofHandle,
       epoch: record.epoch,
       activeEpoch: record.activeEpoch,
@@ -297,7 +304,7 @@ function createNativeLaunchComposition(options = {}) {
   }
 
   function receiptIsLive(receiptRecord) {
-    return Boolean(captureLiveOwnerChain(receiptRecord));
+    return Boolean(receiptRecord && resolveProof(receiptRecord.launchRef));
   }
 
   function launchCanContinue(record, epoch) {
@@ -306,6 +313,44 @@ function createNativeLaunchComposition(options = {}) {
     if (record.registration && !periodMatches(record)) return false;
     const owner = ownerRecordFor(record);
     return owner ? owner === record || receiptIsLive(owner) : record.claims.origin === 'standalone';
+  }
+
+  function sourceCanObserve(record, epoch) {
+    if (!record || sourceObservationInProgress.has(record)) {
+      if (record) sourceObservationReentered.add(record);
+      return false;
+    }
+    sourceObservationInProgress.add(record);
+    try {
+      if (record.activeEpoch !== epoch || record.epoch !== epoch ||
+          !['starting', 'running'].includes(record.processState)) return false;
+      if (!record.registration) {
+        const allowed = launchCanContinue(record, epoch);
+        return allowed && !sourceObservationReentered.has(record) && record.epoch === epoch;
+      }
+      if (!periodMatches(record) || !record.identity || !record.executionBinding ||
+          !record.connectionHandle || record.runtimeDisconnected || !record.runtimeScope) return false;
+      const handle = record.connectionHandle;
+      const generation = record.connectionGeneration;
+      const scope = record.runtimeScope;
+      let snapshot;
+      try { snapshot = runtimeKernel.registry.snapshot(); } catch { return false; }
+      if (!snapshot || typeof snapshot.then === 'function' || !Array.isArray(snapshot.connections)) return false;
+      const matching = snapshot.connections.filter((connection) => connection.state === 'active' &&
+        connection.generation === generation &&
+        ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'connectionSlotId'].every((field) =>
+          connection.scope?.[field] === scope[field]));
+      const periodCurrent = periodMatches(record);
+      let connectionCurrent;
+      try { connectionCurrent = runtimeKernel.registry.checkCurrentConnection(handle); } catch { return false; }
+      return connectionCurrent === true && matching.length === 1 && periodCurrent && !sourceObservationReentered.has(record) &&
+        record.activeEpoch === epoch && record.epoch === epoch && record.processState === 'running' &&
+        !record.runtimeDisconnected && record.connectionHandle === handle &&
+        record.connectionGeneration === generation && record.runtimeScope === scope;
+    } finally {
+      sourceObservationInProgress.delete(record);
+      sourceObservationReentered.delete(record);
+    }
   }
 
   function guardContext(record, context) {
@@ -339,9 +384,20 @@ function createNativeLaunchComposition(options = {}) {
   }
 
   function readyForReconciliation(record, context) {
-    return record && (record.status === 'observed' || record.reason === 'handoff_requires_reconciliation') &&
+    const canReconcile = record && (record.status === 'observed' ||
+      ['handoff_requires_reconciliation', 'current_proof_unavailable'].includes(record.reason));
+    return canReconcile &&
       record.activeEpoch === record.epoch && record.connectionHandle && record.executionActorHandle &&
       record.currentContextId && periodMatches(record) && guardContext(record, context);
+  }
+
+  function finalChainCurrent(chain) {
+    const fields = ['proofHandle', 'epoch', 'activeEpoch', 'status', 'processState', 'identity',
+      'runtimeScope', 'claims', 'connectionHandle', 'connectionGeneration', 'executionActorHandle',
+      'registration', 'executionBinding', 'currentContextId', 'ownerGeneration', 'currentOwnerRecord'];
+    return chain.every((node) => fields.every((field) => node.record[field] === node[field]) &&
+      !node.record.runtimeDisconnected && !sourceObservationReentered.has(node.record) &&
+      !proofResolutionReentered.has(node.record));
   }
 
   function resolveProof(launchRef, context) {
@@ -353,16 +409,49 @@ function createNativeLaunchComposition(options = {}) {
     }
     proofResolutionInProgress.add(record);
     try {
+      const registrationRevision = registrationKernel.registry.captureAuthorityRevision();
+      const launchRevision = launchKernel.registry.captureAuthorityRevision();
       if (!internalCurrent(record)) return null;
       const before = captureLiveOwnerChain(record);
       if (!before || !guardContext(record, context) || proofResolutionReentered.has(record)) return null;
       const after = captureLiveOwnerChain(record);
       if (!after || !sameLiveOwnerChain(before, after) || proofResolutionReentered.has(record)) return null;
+      if (registrationKernel.registry.checkAuthorityRevision(registrationRevision) !== true ||
+          launchKernel.registry.checkAuthorityRevision(launchRevision) !== true) return null;
+      for (const node of after) {
+        if (runtimeKernel.registry.checkProofCapability(node.record.launchRef, node.proofHandle) !== true) return null;
+      }
+      if (!finalChainCurrent(after) || proofResolutionReentered.has(record)) return null;
       return before[0].proofHandle;
+    } catch {
+      return null;
     } finally {
       proofResolutionInProgress.delete(record);
       proofResolutionReentered.delete(record);
     }
+  }
+
+  function checkCurrentProof(launchRef, proofHandle) {
+    const record = launchRecords.get(launchRef);
+    if (!record || !proofHandle || record.proofHandle !== proofHandle) {
+      return { ok: false, reason: 'proof_mismatch' };
+    }
+    const current = resolveProof(launchRef);
+    return current === proofHandle && record.proofHandle === proofHandle
+      ? { ok: true, reason: 'accepted' }
+      : { ok: false, reason: 'proof_unavailable' };
+  }
+
+  function contextCanContinue(record, epoch) {
+    if (!record || record.activeEpoch !== epoch || record.epoch !== epoch ||
+        record.processState !== 'running' || !record.currentContextId || !record.proofHandle) return false;
+    const contextId = record.currentContextId;
+    const proofHandle = record.proofHandle;
+    let checked;
+    try { checked = checkCurrentProof(record.launchRef, proofHandle); } catch { return false; }
+    return checked?.ok === true && record.activeEpoch === epoch && record.epoch === epoch &&
+      record.processState === 'running' && record.currentContextId === contextId &&
+      record.proofHandle === proofHandle;
   }
 
   function createRunReceipt(record) {
@@ -378,7 +467,26 @@ function createNativeLaunchComposition(options = {}) {
     record.reason = reason;
   }
 
+  function invalidateOwnedProofs(source) {
+    for (const record of launchRecords.values()) {
+      const visited = new Set();
+      let owner = record;
+      while (owner && !visited.has(owner) && visited.size < MAX_ATTEMPTS) {
+        if (owner === source) {
+          record.proofHandle = null;
+          record.writerEnvelope = null;
+          record.writerContextId = null;
+          if (record !== source) setUnknown(record, 'current_proof_unavailable');
+          break;
+        }
+        visited.add(owner);
+        owner = ownerRecordFor(owner);
+      }
+    }
+  }
+
   function disconnectRuntime(record) {
+    invalidateOwnedProofs(record);
     if (record.connectionHandle && !record.runtimeDisconnected) {
       record.runtimeDisconnected = true;
       try { runtimeAdapters[record.profile.provider].disconnect(record.connectionHandle); } catch {}
@@ -419,10 +527,7 @@ function createNativeLaunchComposition(options = {}) {
 
   function bindNativeIdentity(record, identity, epoch) {
     if (record.activeEpoch !== epoch || record.epoch !== epoch) return false;
-    if (!launchCanContinue(record, epoch)) {
-      quarantine(record, epoch, 'launch_authority_expired');
-      return false;
-    }
+    if (!sourceCanObserve(record, epoch)) return false;
     if (!expectedIdentity(record, identity)) {
       quarantine(record, epoch, 'native_identity_scope_mismatch');
       return false;
@@ -568,8 +673,12 @@ function createNativeLaunchComposition(options = {}) {
       quarantine(record, epoch, 'native_context_unavailable');
       return false;
     }
+    if (record.uncertainContextIds.has(context.nativeContextId)) {
+      if (!record.currentContextId) setUnknown(record, 'native_observation_gap');
+      return false;
+    }
     if (record.terminalContextIds.has(context.nativeContextId)) {
-      setUnknown(record, 'native_context_ended');
+      if (!record.currentContextId) setUnknown(record, 'native_context_ended');
       return false;
     }
     if (record.currentContextId) {
@@ -579,11 +688,6 @@ function createNativeLaunchComposition(options = {}) {
     }
 
     const currentOwner = ownerRecordFor(record);
-    if (currentOwner !== record && (!currentOwner || currentOwner.status !== 'observed' ||
-        !receiptIsLive(currentOwner) || !currentOwner.executionActorHandle)) {
-      setUnknown(record, 'owner_proof_unavailable');
-      return false;
-    }
     const claims = immutableClaims(record);
     if (!claims || !periodMatches(record) || record.activeEpoch !== epoch) {
       setUnknown(record, 'binding_unavailable');
@@ -601,9 +705,15 @@ function createNativeLaunchComposition(options = {}) {
       setUnknown(record, 'registration_changed');
       return false;
     }
+    record.currentContextKind = context.kind;
+    record.currentContextId = context.nativeContextId;
+    record.executionActorHandle = executionActor.actorHandle;
+    record.proofHandle = null;
+    record.writerEnvelope = null;
+    record.writerContextId = null;
     const ownerActorHandle = currentOwner === record ? executionActor.actorHandle : currentOwner?.executionActorHandle;
     if (!ownerActorHandle || (currentOwner !== record && !receiptIsLive(currentOwner))) {
-      setUnknown(record, 'owner_proof_unavailable');
+      setUnknown(record, 'current_proof_unavailable');
       return false;
     }
     const runtime = runtimeRecord(record);
@@ -661,8 +771,11 @@ function createNativeLaunchComposition(options = {}) {
     }
     if (record.currentContextId !== context.nativeContextId) return true;
     if (record.executionActorHandle) {
-      try { runtimeAdapters[record.profile.provider].endActor(record.executionActorHandle); }
-      catch {
+      try {
+        if (runtimeAdapters[record.profile.provider].endContext(record.executionActorHandle) !== true) {
+          throw compositionError('native_context_end_unverified');
+        }
+      } catch {
         quarantine(record, epoch, 'native_context_end_unverified');
         return false;
       }
@@ -670,14 +783,38 @@ function createNativeLaunchComposition(options = {}) {
     record.executionActorHandle = null;
     record.proofHandle = null;
     record.writerEnvelope = null;
+    invalidateOwnedProofs(record);
+    record.currentContextId = null;
+    record.currentContextKind = null;
+    record.writerContextId = null;
     setUnknown(record, 'native_context_ended');
     return true;
   }
 
+  function fenceNativeObservationGap(record, event) {
+    const affectsContext = event?.type === 'context' || event?.type === 'context_ended';
+    const changesIdentity = event?.type === 'identity' && !identityEquals(record.identity, event.identity);
+    if (!affectsContext && !changesIdentity) return;
+    if (record.currentContextId) {
+      if (!record.uncertainContextIds.has(record.currentContextId) &&
+          record.uncertainContextIds.size >= MAX_ENDED_CONTEXT_IDS) {
+        quarantine(record, record.epoch, 'native_observation_gap_limit');
+        return;
+      }
+      record.uncertainContextIds.add(record.currentContextId);
+    }
+    invalidateOwnedProofs(record);
+    record.currentContextId = null;
+    record.currentContextKind = null;
+    record.executionActorHandle = null;
+    record.pendingContexts = [];
+    setUnknown(record, 'native_observation_gap');
+  }
+
   function processNativeEvent(record, event, epoch) {
     if (record.activeEpoch !== epoch || record.epoch !== epoch || record.processState !== 'running') return;
-    if (!launchCanContinue(record, epoch)) {
-      quarantine(record, epoch, 'launch_authority_expired');
+    if (!sourceCanObserve(record, epoch)) {
+      fenceNativeObservationGap(record, event);
       return;
     }
     if (!isRecord(event) || event.provider !== record.profile.provider) {
@@ -855,6 +992,7 @@ function createNativeLaunchComposition(options = {}) {
       currentContextKind: null,
       currentContextId: null,
       terminalContextIds: new Set(),
+      uncertainContextIds: new Set(),
       pendingContexts: [],
       executionActorHandle: null,
       proofHandle: null,
@@ -924,6 +1062,8 @@ function createNativeLaunchComposition(options = {}) {
           },
         } : {}),
         isCurrent: () => launchCanContinue(record, epoch),
+        isSourceCurrent: () => sourceCanObserve(record, epoch),
+        isContextCurrent: () => contextCanContinue(record, epoch),
         onNative: (event) => {
           try { processNativeEvent(record, event, epoch); }
           catch (error) {
@@ -1135,6 +1275,7 @@ function createNativeLaunchComposition(options = {}) {
     handoff,
     reconcileProof,
     resolveProof,
+    checkCurrentProof,
     writerFor,
     authorizeWriter,
     snapshot,
