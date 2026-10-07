@@ -156,3 +156,74 @@ test('試行の締切が応答本文の読み込みにも適用される', async
   assert.equal(jsonStarted, true);
   assert.equal(requestSignal.aborted, true);
 });
+
+test('retryAfterTimeout が false のとき試行タイムアウトを再送せず timedOut を返す', async () => {
+  let ensureCalls = 0;
+  let requests = 0;
+  const result = await postToServer('/api/test', {}, {
+    homeDir: 'unused',
+    timeoutMs: 200,
+    attemptTimeoutMs: 20,
+    retryAfterTimeout: false,
+    ensure: async () => {
+      ensureCalls += 1;
+      return serverInfo(41001, 'secret');
+    },
+    fetchImpl: async (_url, options) => {
+      requests += 1;
+      return new Promise((_, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, status: null, json: null, timedOut: true });
+  assert.equal(requests, 1);
+  assert.equal(ensureCalls, 1);
+});
+
+test('既定の retryAfterTimeout はタイムアウト後に再送する', async () => {
+  let requests = 0;
+  const result = await postToServer('/api/test', {}, {
+    homeDir: 'unused',
+    initialInfo: serverInfo(41001, 'secret'),
+    ensure: false,
+    timeoutMs: 500,
+    attemptTimeoutMs: 20,
+    readServerInfo: async () => serverInfo(41001, 'secret'),
+    fetchImpl: async (_url, options) => {
+      requests += 1;
+      if (requests === 1) {
+        return new Promise((_, reject) => {
+          options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+      return successResponse();
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, status: 200, json: { accepted: true } });
+  assert.equal(requests, 2);
+});
+
+test('retryAfterTimeout が false でも接続拒否は再試行する', async () => {
+  let ensureCalls = 0;
+  let requests = 0;
+  const result = await postToServer('/api/test', {}, {
+    homeDir: 'unused',
+    retryAfterTimeout: false,
+    ensure: async () => {
+      ensureCalls += 1;
+      return serverInfo(41001, 'secret');
+    },
+    fetchImpl: async () => {
+      requests += 1;
+      if (requests === 1) throw new Error('ECONNREFUSED');
+      return successResponse();
+    },
+  });
+
+  assert.deepEqual(result, { ok: true, status: 200, json: { accepted: true } });
+  assert.equal(requests, 2);
+  assert.equal(ensureCalls, 2);
+});
