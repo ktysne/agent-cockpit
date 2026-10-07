@@ -140,6 +140,7 @@ state が `merged` の登録は残す。
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
 
 `answer.js` から届く `PostToolBatch` は、常駐サーバーの受信時刻を使う状態イベントとして記録する。
+サブエージェントの `PostToolBatch` は `agent_id` 付きで送り、状態イベントとしてだけ記録する。回答、知らせ、催促はメインにだけ渡すので、この要求には何も返さない。
 入力の要約は、Bash なら改行と続く空白を空白一つに置き換えたコマンド、Read、Edit、Write ならファイルのパス、それ以外はツール名だけにする。
 要約が80文字を超える場合だけ先頭79文字に「…」を付ける。画面幅による省略は CSS の `text-overflow: ellipsis` で行う。
 

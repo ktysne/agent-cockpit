@@ -776,14 +776,32 @@ test('Stop の long-poll は 25 秒で再待機できる状態を返す', async 
   assert.deepEqual(await poll, { stderrText: null, done: false });
 });
 
-test('サブエージェントの answer フックはイベント種別にかかわらず通信しない', async () => {
-  let requests = 0;
-  const options = { fetchImpl: async () => { requests += 1; throw new Error('unexpected network request'); } };
+test('サブエージェントの answer フックは出力を返さず、PostToolBatch の状態の更新だけを送る', async () => {
+  const bodies = [];
+  const options = { fetchImpl: async (url, init) => { bodies.push(JSON.parse(init.body)); throw new Error('unreachable'); } };
   for (const hookEventName of ['PostToolBatch', 'Stop', 'UserPromptSubmit']) {
     const result = await runAnswerHook({ hook_event_name: hookEventName, session_id: 'session-agent', agent_id: 'agent-1' }, options);
     assert.equal(result.output || result.stderrText, null);
   }
-  assert.equal(requests, 0);
+  assert.ok(bodies.length > 0);
+  assert.ok(bodies.every((body) => body.action === 'post-tool-batch' && body.agent_id === 'agent-1'));
+});
+
+test('サブエージェントの PostToolBatch は回答を渡さず、そのサブエージェントの拒否されたツールを片付ける', async (t) => {
+  const state = new DashboardState();
+  const { homeDir, runtime } = await runningServer(t, { state });
+  const decision = state.addDecision('session-sub-batch', {
+    title: '期限をどうしますか。', context: '', state: 'provisional', options: [],
+  }, NOW);
+  runtime.answerDelivery.submitAnswer('session-sub-batch', decision.id, null, '期限を 1 日にする。');
+  state.addEvent({ session_id: 'session-sub-batch', hook_event_name: 'PreToolUse', hookAt: NOW, agent_id: 'agent-1', tool_name: 'Bash', tool_use_id: 'rejected-tool' });
+  state.addEvent({ session_id: 'session-sub-batch', hook_event_name: 'PreToolUse', hookAt: NOW, agent_id: 'agent-2', tool_name: 'Read', tool_use_id: 'other-agent-tool' });
+
+  const batch = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-sub-batch', agent_id: 'agent-1' }, { homeDir });
+
+  assert.equal(batch.output, null);
+  assert.equal(state.decisionFor('session-sub-batch', decision.id).answer.deliveredAt, null);
+  assert.deepEqual(state.snapshot().sessions.find((session) => session.session_id === 'session-sub-batch').tools.map((tool) => tool.tool_use_id), ['other-agent-tool']);
 });
 
 test('離席中のサブエージェント質問は deny し、判断事項を作らない', () => {

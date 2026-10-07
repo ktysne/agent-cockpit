@@ -488,6 +488,18 @@ function createRequestHandler(options) {
           result = await answerDelivery.waitForAsk({ sessionId: body.session_id, toolUseId: body.id });
         } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
           result = answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome });
+        } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch' && body.agent_id !== undefined) {
+          if (!validText(body.agent_id, 256)) {
+            jsonResponse(response, 400, { error: 'Invalid request' });
+            return;
+          }
+          state.addEvent({
+            session_id: body.session_id,
+            hook_event_name: 'PostToolBatch',
+            agent_id: body.agent_id,
+            hookAt: Date.now(),
+          });
+          result = { hookOutput: null };
         } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch') {
           state.addEvent({
             session_id: body.session_id,
