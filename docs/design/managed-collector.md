@@ -43,6 +43,16 @@ collectorはhandleをgenerationとともに内部Mapへ保持し、切断時に�
 
 `snapshot()`と`onObservation`はallowlist済みのbounded値を返し、native本文、capability token、writer、actor handle、proof handleを含めない。
 
+## 通信期限
+
+Codex managed transportは、TCP接続とWebSocket upgradeの期限を`handshakeTimeoutMs`で、各JSON-RPC要求の応答期限を`requestTimeoutMs`で指定する。
+transport単体の既定値は両方とも5秒である。
+互換性のため`timeoutMs`も受け付け、個別の期限が未指定の場合に両方へ適用する。
+
+process managerの`connect`は、合計`connectTimeoutMs`（既定15秒）の範囲で接続を再試行し、各試行のhandshakeを既定1秒または残り時間の短い方で制限する。
+この再試行期限をRPC応答期限へ流用しない。
+managerの`transportTimeoutMs`は両期限の共通値であり、`requestTimeoutMs`を指定した場合はRPC応答期限にその値を使う。
+
 ## 登録照合と証拠
 
 collectorは`registrationRegistry.snapshot()`をread-onlyで読み、provider、nativeIdKind、hostId、homeScopeId、native ID、conversation、execution、sessionの完全一致を確認する。
