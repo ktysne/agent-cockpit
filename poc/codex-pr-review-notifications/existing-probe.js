@@ -418,7 +418,7 @@ async function runProbe({ outDir }) {
         }
       },
     });
-    const retargetResult = await baseChangedDuringRetarget.manager.merge(registrationInput(baseChangedDuringRetarget, 1));
+    const retargetResult = await baseChangedDuringRetarget.manager.merge(registrationInput(baseChangedDuringRetarget, 1, { deleteBranch: true }));
     report.cases.baseChangedAfterChildRetarget = {
       resultStatus: retargetResult.status,
       childEditCalls: baseChangedDuringRetarget.calls.filter((call) => call[1] === 'edit').length,
@@ -491,7 +491,7 @@ async function runProbe({ outDir }) {
       ghPullRequest(2, 'feature/two', 'feature/one'),
     ], (value) => value.number === 1 ? ['session-1', 'session-ended'] : ['session-2']);
     mergeWithStack.state.endSession('session-ended', NOW);
-    const mergedResult = await mergeWithStack.manager.merge(registrationInput(mergeWithStack, 1));
+    const mergedResult = await mergeWithStack.manager.merge(registrationInput(mergeWithStack, 1, { deleteBranch: true }));
     const parentNotice = mergeWithStack.delivery.deliverPostToolBatch('session-1') || '';
     const childNotice = mergeWithStack.delivery.deliverPostToolBatch('session-2') || '';
     const endedNotice = mergeWithStack.delivery.deliverPostToolBatch('session-ended') || '';
@@ -518,7 +518,7 @@ async function runProbe({ outDir }) {
       ghPullRequest(1, 'feature/one', 'main'),
       ghPullRequest(2, 'feature/two', 'feature/one'),
     ]);
-    const rebaseResult = await rebaseWithStack.manager.merge(registrationInput(rebaseWithStack, 1, { method: 'rebase' }));
+    const rebaseResult = await rebaseWithStack.manager.merge(registrationInput(rebaseWithStack, 1, { method: 'rebase', deleteBranch: true }));
     const rebaseNotice = rebaseWithStack.delivery.deliverPostToolBatch('session-2') || '';
     report.cases.rebaseMergeNotice = {
       merged: rebaseResult.merged === true,
