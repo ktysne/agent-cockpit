@@ -1,12 +1,14 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const { createOwnedNativeWaitLatch } = require('./owned-native-wait');
 const { createOwnedNativeSource, getOwnedSource } = require('./owned-native-source');
+const { createOwnedInstructionWriter, MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
 
 const PROFILE = 'cockpit-native-v1';
 const WAIT_PROFILE = 'cockpit-native-wait-v1';
@@ -26,6 +28,9 @@ const ENVIRONMENT_ALLOWLIST = Object.freeze(['PATH', 'PATHEXT', 'SYSTEMROOT', 'W
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
 const MAX_LINES = 100_000;
+const MAX_NATIVE_TERMINALS = MAX_INSTRUCTION_DISPATCHES + 1;
+const READ_RPC_ID_START = 2 ** 32;
+const INSTRUCTION_RPC_ID_START = 2 ** 48;
 const DEFAULT_TIMEOUTS = Object.freeze({ startupMs: 15_000, rpcMs: 10_000, loginMs: 5 * 60_000, stopMs: 2_000 });
 const MAX_TIMEOUT_MS = 60_000;
 const MAX_LOGIN_TIMEOUT_MS = 15 * 60_000;
@@ -334,6 +339,17 @@ function createOwnedNativeRunner(options) {
   const pendingReadRpcs = new Map();
   const MAX_PENDING_READ_RPCS = 1;
   let nextRpcId = 1;
+  let nextReadRpcId = READ_RPC_ID_START;
+  let nextInstructionRpcId = INSTRUCTION_RPC_ID_START;
+  const instructionRpcs = new Map();
+  const knownInstructionTerminals = new Set();
+  const claudeTerminalResults = new Map();
+  let instructionStart = null;
+  let instructionUncertain = false;
+  const instructionController = ownedSource ? createOwnedInstructionWriter(ownedSource.capability, {
+    capture: captureInstruction, check: checkInstruction, checkEvidence: checkInstructionEvidence,
+    prepareWrite: prepareInstructionWrite, register: registerInstruction, unregister: unregisterInstruction, complete: completeInstruction,
+  }) : null;
   let firstIssuedReadRpcId = null;
   let lastIssuedReadRpcId = null;
   let pendingReadWrite = null;
@@ -510,6 +526,7 @@ function createOwnedNativeRunner(options) {
     state = 'failed';
     generation += 1;
     if (sourceController) sourceController.invalidate();
+    if (instructionController) instructionController.invalidate();
     invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {
@@ -598,7 +615,11 @@ function createOwnedNativeRunner(options) {
     if (!nativeContext && !matchedEarlyTurnStart) throw runnerError('native_context_conflict');
     invalidateWait();
     terminalContextId = nativeContextId;
-    terminalContextCount = 1;
+    terminalContextCount = Math.min(Number.MAX_SAFE_INTEGER, terminalContextCount + 1);
+    if (instructionController) {
+      if (knownInstructionTerminals.size >= MAX_NATIVE_TERMINALS) throw runnerError('native_context_end_limit');
+      knownInstructionTerminals.add(nativeContextId);
+    }
     const context = Object.freeze({
       kind: provider === 'codex' ? 'turn' : 'assistant_message',
       nativeContextId,
@@ -675,6 +696,13 @@ function createOwnedNativeRunner(options) {
       throw runnerError('codex_turn_completion_invalid');
     }
     const completed = Object.freeze({ threadId: params.threadId, turnId: params.turn.id });
+    if (instructionStart && !instructionStart.acknowledged) {
+      if (knownInstructionTerminals.has(completed.turnId)) return;
+      if (instructionStart.earlyCompletion) throw runnerError('codex_turn_completion_duplicate');
+      instructionStart.earlyCompletion = completed;
+      return;
+    }
+    if (knownInstructionTerminals.has(completed.turnId)) return;
     if (turnStartPending) {
       if (earlyTurnCompletion) throw runnerError('codex_turn_completion_duplicate');
       earlyTurnCompletion = completed;
@@ -853,6 +881,7 @@ function createOwnedNativeRunner(options) {
     if (pendingRpc) throw runnerError('rpc_overlap');
     if (firstIssuedReadRpcId !== null) throw runnerError('rpc_id_sequence_invalid');
     const id = nextRpcId;
+    if (!Number.isSafeInteger(id) || id >= READ_RPC_ID_START) throw runnerError('rpc_id_exhausted');
     nextRpcId += 1;
     let resolveResponse;
     let rejectResponse;
@@ -949,8 +978,8 @@ function createOwnedNativeRunner(options) {
         !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
       throw runnerError('owned_read_unavailable');
     }
-    const id = nextRpcId;
-    if (!Number.isSafeInteger(id)) throw runnerError('rpc_id_exhausted');
+    const id = nextReadRpcId;
+    if (!Number.isSafeInteger(id) || id >= INSTRUCTION_RPC_ID_START) return Promise.reject(runnerError('rpc_id_exhausted'));
     let resolveResponse;
     let rejectResponse;
     const response = new Promise((resolve, reject) => {
@@ -981,7 +1010,7 @@ function createOwnedNativeRunner(options) {
         if (firstIssuedReadRpcId === null) firstIssuedReadRpcId = id;
         else if (id !== lastIssuedReadRpcId + 1) throw runnerError('rpc_id_sequence_invalid');
         lastIssuedReadRpcId = id;
-        nextRpcId += 1;
+        nextReadRpcId += 1;
         pendingReadRpcs.set(id, pending);
         pendingReadWrite = writeState;
         writeAttempted = true;
@@ -1046,6 +1075,88 @@ function createOwnedNativeRunner(options) {
     });
   }
 
+
+  function captureInstruction(metadata) {
+    if (state !== 'running' || !ownedSource || !nativeIdentity || !nativeContext || activeWait || instructionStart || instructionUncertain ||
+        provider === 'codex' && !initializeHomeConfirmed || provider !== 'codex' && metadata.mode === 'steer') return null;
+    const capture = { generation, identity: nativeIdentity, contextId: nativeContext.nativeContextId, terminal: terminalContextId, child, lease: sourceController.captureInstructionLease() };
+    return checkInstruction(capture, metadata) ? capture : null;
+  }
+  function checkInstructionPhysical(capture) {
+    return capture && isCurrent(capture.generation) && state === 'running' && child === capture.child &&
+      nativeIdentity === capture.identity && ownedSource.facade.checkSource() === true &&
+      sourceController.isLeaseTokenCurrent(capture.lease) === true;
+  }
+  function checkInstruction(capture, metadata) {
+    return Boolean(checkInstructionPhysical(capture) && !activeWait && !instructionUncertain &&
+      (!instructionStart || instructionStart.capture === capture) &&
+      nativeContext?.nativeContextId === capture.contextId && terminalContextId === capture.terminal &&
+      metadata.source.identity.nativeId === nativeIdentity.nativeId &&
+      (metadata.mode === 'steer' ? provider === 'codex' && !terminalContextId && metadata.expectedTurnId === capture.contextId :
+        terminalContextId === capture.contextId && metadata.source.claims.origin === 'standalone'));
+  }
+  function checkInstructionEvidence(capture, turnId) {
+    return Boolean(checkInstructionPhysical(capture) && nativeContext?.nativeContextId === turnId && !terminalContextId);
+  }
+  function prepareInstructionWrite(metadata, input, capture) {
+    if (!checkInstruction(capture, metadata)) return null;
+    const stdin = child.stdin; const write = stdin?.write;
+    if (!stdin || typeof write !== 'function' || stdin.destroyed) return null;
+    let id = null; let line;
+    if (provider === 'codex') {
+      id = nextInstructionRpcId;
+      if (!Number.isSafeInteger(id) || id < INSTRUCTION_RPC_ID_START) return null;
+      nextInstructionRpcId += 1;
+      const params = { threadId: nativeIdentity.nativeId, input, clientUserMessageId: metadata.deliveryAttemptId };
+      if (metadata.mode === 'steer') params.expectedTurnId = metadata.expectedTurnId;
+      else { params.approvalPolicy = 'never'; params.sandboxPolicy = { type: 'readOnly', networkAccess: false }; }
+      line = JSON.stringify({ jsonrpc: '2.0', id, method: metadata.mode === 'steer' ? 'turn/steer' : 'turn/start', params });
+    } else line = JSON.stringify({ type: 'user', session_id: nativeIdentity.nativeId,
+      message: { role: 'user', content: input.map(item => ({ type: 'text', text: item.text })) } });
+    return { id, capture, write: write.bind(stdin), line: line + '\n' };
+  }
+  function registerInstruction(token, prepared, metadata) {
+    const pending = { token, capture: prepared.capture, metadata, acknowledged: false, earlyCompletion: null };
+    if (prepared.id !== null) instructionRpcs.set(prepared.id, pending);
+    if (metadata.mode === 'start') instructionStart = pending;
+  }
+  function completeInstruction(token, error) {
+    if (error && instructionStart?.token === token) instructionUncertain = true;
+  }
+  function unregisterInstruction(token, prepared) {
+    if (prepared.id !== null && instructionRpcs.get(prepared.id)?.token === token) instructionRpcs.delete(prepared.id);
+    if (instructionStart?.token === token) instructionStart = null;
+  }
+  function beginInstructionContext(capture) {
+    if (!checkInstructionPhysical(capture) || terminalContextId !== capture.contextId ||
+        !sourceController.beginInstructionContext(capture.contextId)) throw runnerError('instruction_context_conflict');
+    nativeContext = null; terminalContextId = null; waitCallSeen = false;
+  }
+  function handleInstructionAck(pending, result, rejected) {
+    if (!instructionController.isPending(pending.token)) return;
+    if (!isSynchronousTrue(isOwnerCurrent) || !isSynchronousTrue(isSourceCurrent) ||
+        !instructionController.isPending(pending.token) || !checkInstructionPhysical(pending.capture)) {
+      instructionController.acknowledge(pending.token, null, true); return;
+    }
+    let turnId = pending.metadata.mode === 'steer' ? result?.turnId : result?.turn?.id;
+    if (rejected || !isIdentifier(turnId) || !instructionController.canAcknowledge(pending.token, turnId) || !checkInstructionPhysical(pending.capture) ||
+        pending.metadata.mode === 'steer' && turnId !== pending.metadata.expectedTurnId ||
+        pending.metadata.mode === 'start' && knownInstructionTerminals.has(turnId)) {
+      if (pending.metadata.mode === 'start') instructionUncertain = true;
+      instructionController.acknowledge(pending.token, null, true); return;
+    }
+    if (pending.metadata.mode === 'start') {
+      if (pending.earlyCompletion && pending.earlyCompletion.turnId !== turnId) {
+        instructionUncertain = true; instructionController.acknowledge(pending.token, null, true); return;
+      }
+      beginInstructionContext(pending.capture);
+      instructionStart = null;
+      if (pending.earlyCompletion) emitContextEnded(turnId, true);
+      else emitContext(turnId);
+    }
+    instructionController.acknowledge(pending.token, turnId);
+  }
+
   function handleCodexMessage(message) {
     if (!isRecord(message) || (Object.hasOwn(message, 'jsonrpc') && message.jsonrpc !== '2.0')) {
       throw runnerError('codex_message_invalid');
@@ -1067,6 +1178,11 @@ function createOwnedNativeRunner(options) {
         handleLoginCompleted(message.params);
         return;
       }
+      if ((message.method === 'item/started' || message.method === 'item/completed') && instructionController) {
+        const params = message.params;
+        if (isRecord(params) && isRecord(params.item)) instructionController.observeItem(params.threadId, params.turnId, params.item);
+        return;
+      }
       if (message.method === 'turn/completed') {
         handleTurnCompleted(message.params);
         return;
@@ -1084,6 +1200,13 @@ function createOwnedNativeRunner(options) {
       else pending.resolve(message.result);
       return;
     }
+    const instruction = instructionRpcs.get(message.id);
+    if (instruction) {
+      if (instruction.acknowledged) throw runnerError('rpc_response_unexpected');
+      instruction.acknowledged = true;
+      handleInstructionAck(instruction, hasError ? null : message.result, hasError);
+      return;
+    }
     const pendingRead = pendingReadRpcs.get(message.id);
     if (pendingRead) {
       pendingReadRpcs.delete(message.id);
@@ -1095,6 +1218,14 @@ function createOwnedNativeRunner(options) {
     throw runnerError('rpc_response_unexpected');
   }
 
+  function claudeResultFingerprint(value) {
+    function canonical(item) {
+      if (Array.isArray(item)) return item.map(canonical);
+      if (item && typeof item === 'object') return Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical(item[key])]));
+      return item;
+    }
+    return crypto.createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+  }
   function handleClaudeMessage(message) {
     if (!isRecord(message) || typeof message.type !== 'string') throw runnerError('claude_message_invalid');
     if (message.type === 'system' && message.subtype === 'init') {
@@ -1106,7 +1237,19 @@ function createOwnedNativeRunner(options) {
       if (!nativeIdentity || !isIdentifier(message.session_id) || message.session_id !== nativeIdentity.nativeId) {
         throw runnerError('claude_result_identity_invalid');
       }
-      if (!nativeContext) throw runnerError('claude_result_before_context');
+      if (typeof message.uuid !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(message.uuid)) {
+        throw runnerError('claude_result_uuid_invalid');
+      }
+      const uuid = message.uuid.toLowerCase();
+      const fingerprint = claudeResultFingerprint({ ...message, uuid });
+      const known = claudeTerminalResults.get(uuid);
+      if (known) {
+        if (known !== fingerprint) throw runnerError('claude_result_uuid_conflict');
+        return;
+      }
+      if (claudeTerminalResults.size >= MAX_NATIVE_TERMINALS) throw runnerError('claude_result_uuid_limit');
+      claudeTerminalResults.set(uuid, fingerprint);
+      if (!nativeContext || terminalContextId || instructionStart) throw runnerError('claude_result_before_context');
       emitContextEnded(nativeContext.nativeContextId);
       return;
     }
@@ -1137,6 +1280,18 @@ function createOwnedNativeRunner(options) {
     if (!nativeIdentity) throw runnerError('native_event_order_invalid');
     if (Object.prototype.hasOwnProperty.call(message, 'session_id') && message.session_id !== nativeIdentity.nativeId) {
       throw runnerError('native_identity_conflict');
+    }
+    if (instructionStart && provider === 'claude') {
+      if (!instructionController.isPending(instructionStart.token)) return;
+      const pending = instructionStart;
+      if (!checkInstructionPhysical(pending.capture) || nativeMessage.id === pending.capture.contextId) {
+        instructionUncertain = true; instructionController.acknowledge(pending.token, null, true); return;
+      }
+      beginInstructionContext(pending.capture);
+      emitContext(nativeMessage.id);
+      pending.acknowledged = true; instructionStart = null;
+      instructionController.acknowledge(pending.token, nativeMessage.id);
+      return;
     }
     emitContext(nativeMessage.id);
   }
@@ -1191,6 +1346,7 @@ function createOwnedNativeRunner(options) {
     child.once('exit', () => {
       childExited = true;
       if (sourceController) sourceController.invalidate();
+    if (instructionController) instructionController.invalidate();
       if (childTerminationResolve) childTerminationResolve();
       restoreStateAfterLateTermination();
       if (isCurrent(expectedGeneration)) fail('process_exited');
@@ -1198,6 +1354,7 @@ function createOwnedNativeRunner(options) {
     child.once('close', () => {
       childClosed = true;
       if (sourceController) sourceController.invalidate();
+    if (instructionController) instructionController.invalidate();
       if (childTerminationResolve) childTerminationResolve();
       restoreStateAfterLateTermination();
       if (isCurrent(expectedGeneration)) fail('process_exited');
@@ -1413,6 +1570,7 @@ function createOwnedNativeRunner(options) {
     generation += 1;
     state = 'stopping';
     if (sourceController) sourceController.invalidate();
+    if (instructionController) instructionController.invalidate();
     invalidateWait();
     cancelCurrentOperations();
     if (pendingRpc) {

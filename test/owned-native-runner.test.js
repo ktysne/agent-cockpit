@@ -222,7 +222,7 @@ test('construction does not spawn and Claude reports only native main-message co
                 event: { type: 'message_start', message: { id: 'assistant_message_native_1', role: 'assistant' } },
               },
               { type: 'assistant', message: { content: [{ type: 'text', text: secretText }] } },
-              { type: 'result', session_id: 'session_native_1', result: secretText },
+              { type: 'result', uuid: '11111111-1111-4111-8111-111111111111', session_id: 'session_native_1', result: secretText },
             );
           }
         });

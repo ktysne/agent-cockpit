@@ -735,6 +735,20 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
       !contextTombstones.has(actor.contextLifeKey));
   }
 
+  function checkActorLifeCapability(launchRef, actorHandle, expectedOwnerGeneration) {
+    const runtime = launches.get(launchRef);
+    const actor = actorHandles.get(actorHandle);
+    return Boolean(runtime && actor && Number.isSafeInteger(expectedOwnerGeneration) &&
+      runtime.ownerGeneration === expectedOwnerGeneration && runtime.claims.origin === 'standalone' &&
+      runtime.claims.purpose === 'agent' && actor.launchRef === launchRef &&
+      immutableClaimsEqual(actor.immutableExecutionClaims, runtime.claims) &&
+      identityEqual(actor.identity, runtime.claims.identity) &&
+      bindingEqual({ periodId: actor.periodId, actor: actor.actor }, runtime.claims.executionBinding) &&
+      bindingEqual(runtime.currentOwner, runtime.claims.executionBinding) && currentConnection(actor.connection) &&
+      scopeMatchesIdentity(actor.connection.scope, actor.identity) && !actorTombstones.has(actor.actorLifeKey) &&
+      contextTombstones.has(actor.contextLifeKey));
+  }
+
   function observe(identityInput, metadataInput) {
     const identity = normalizeIdentity(identityInput);
     const metadata = normalizeEvidence(metadataInput, false);
@@ -773,7 +787,7 @@ function createRuntimeBindingKernel({ registrationRegistry, launchRegistry } = {
     };
   }
 
-  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof, checkCurrentConnection, checkProofCapability });
+  const registry = Object.freeze({ observe, get, snapshot, checkCurrentProof, checkCurrentConnection, checkProofCapability, checkActorLifeCapability });
   const authority = Object.freeze({ adoptExecution, openConnection, disconnect, attestActor,
     endActor, endContext, reconcileExecution, handoff });
   return Object.freeze({ registry, authority });

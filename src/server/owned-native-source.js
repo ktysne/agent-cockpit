@@ -1,5 +1,8 @@
 'use strict';
 
+const { MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
+const MAX_SOURCE_TERMINALS = MAX_INSTRUCTION_DISPATCHES + 1;
+
 const SOURCE_CAPABILITIES = new WeakMap();
 const READ_LEASES = new WeakMap();
 const READ_RECEIPTS = new WeakMap();
@@ -130,7 +133,7 @@ function createOwnedNativeSource(options) {
       return false;
     }
     const key = identity.nativeId + '\u0000' + context.nativeContextId;
-    if (source.terminals.has(key)) return false;
+    if (source.terminals.has(key) || source.terminals.size >= MAX_SOURCE_TERMINALS) return false;
     const event = makeEvent('context_ended', identity, context);
     source.terminals.set(key, event);
     deliver(source.terminalSubscribers, event, (subscription) =>
@@ -355,6 +358,14 @@ function createOwnedNativeSource(options) {
       const context = freezeContext(value, source.provider, true);
       return recordTerminal(identity, context, true);
     },
+    beginInstructionContext(terminalId) {
+      if (!checkSource() || !source.currentIdentity || !source.currentContext ||
+          source.currentContext.nativeContextId !== terminalId ||
+          !source.terminals.has(source.currentIdentity.nativeId + '\u0000' + terminalId)) return false;
+      source.currentContext = null;
+      return true;
+    },
+    captureInstructionLease() { return source.activeLease; },
     isLeaseTokenCurrent(leaseToken) {
       return Boolean(leaseToken && leaseToken.source === source && isLeaseRecordCurrent(leaseToken));
     },

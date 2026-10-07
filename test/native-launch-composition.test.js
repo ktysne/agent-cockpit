@@ -1515,7 +1515,7 @@ for (const provider of PROVIDERS) {
     unavailable = true;
     assert.equal(fixture.nativeHarness.runnerOptions.isSourceCurrent(), false);
     if (provider === 'claude') {
-      fixture.nativeHarness.child.send({ type: 'result', subtype: 'success', session_id: before.identity.nativeId });
+      fixture.nativeHarness.child.send({ type: 'result', uuid: '11111111-1111-4111-8111-111111111111', subtype: 'success', session_id: before.identity.nativeId });
     } else {
       fixture.nativeHarness.child.send({ method: 'turn/completed',
         params: { threadId: before.identity.nativeId, turn: { id: 'turn-integration' } } });
