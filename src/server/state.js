@@ -99,6 +99,20 @@ function validPullRequestLastOpen(value) {
   return true;
 }
 
+function validMergedPullRequestHead(value) {
+  return isRecord(value) && isCompleteCommitSha(value.headRefOid) &&
+    validBranchName(value.headRefName) && validBranchName(value.baseRefName);
+}
+
+function normalizeMergedPullRequestHead(value) {
+  if (!validMergedPullRequestHead(value)) return null;
+  return {
+    headRefOid: value.headRefOid.toLowerCase(),
+    headRefName: value.headRefName,
+    baseRefName: value.baseRefName,
+  };
+}
+
 function normalizePullRequestLastOpen(value) {
   if (!value) return null;
   const normalized = { ...value };
@@ -117,7 +131,8 @@ function validPullRequestRecord(record) {
     (record.product !== null && (!isRecord(record.product) || typeof record.product.key !== 'string' ||
       record.product.key.length > 500 || typeof record.product.name !== 'string' || record.product.name.length > 200)) ||
     ![null, 'unknown', 'open', 'merged', 'closed'].includes(record.state) ||
-    (record.mergedAt !== null && !validTimestamp(record.mergedAt))) return false;
+    (record.mergedAt !== null && !validTimestamp(record.mergedAt)) ||
+    (record.mergedHead !== undefined && !validMergedPullRequestHead(record.mergedHead))) return false;
   const parsedUrl = parsePullRequestUrl(record.url);
   if (!parsedUrl || parsedUrl.owner !== record.owner || parsedUrl.repo !== record.repo || parsedUrl.number !== record.number) return false;
   if (!validPullRequestLastOpen(record.lastOpen)) return false;
@@ -125,6 +140,7 @@ function validPullRequestRecord(record) {
 }
 
 function normalizePullRequestRecord(record) {
+  const mergedHead = normalizeMergedPullRequestHead(record.mergedHead);
   return {
     session_id: record.session_id,
     owner: record.owner,
@@ -137,6 +153,7 @@ function normalizePullRequestRecord(record) {
     state: record.state || 'unknown',
     mergedAt: record.mergedAt || null,
     lastOpen: normalizePullRequestLastOpen(record.lastOpen),
+    ...(mergedHead ? { mergedHead } : {}),
   };
 }
 
@@ -144,13 +161,15 @@ function validRelatedPullRequestRecord(record) {
   if (!isRecord(record) || !validRepositoryPart(record.owner) || !validRepositoryPart(record.repo) ||
     !Number.isSafeInteger(record.number) || record.number < 1 || !validTimestamp(record.addedAt) ||
     ![null, 'unknown', 'open', 'merged', 'closed'].includes(record.state) ||
-    (record.mergedAt !== null && !validTimestamp(record.mergedAt))) return false;
+    (record.mergedAt !== null && !validTimestamp(record.mergedAt)) ||
+    (record.mergedHead !== undefined && !validMergedPullRequestHead(record.mergedHead))) return false;
   const parsedUrl = parsePullRequestUrl(record.url);
   return Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo &&
     parsedUrl.number === record.number && validPullRequestLastOpen(record.lastOpen));
 }
 
 function normalizeRelatedPullRequestRecord(record) {
+  const mergedHead = normalizeMergedPullRequestHead(record.mergedHead);
   return {
     owner: record.owner,
     repo: record.repo,
@@ -160,6 +179,7 @@ function normalizeRelatedPullRequestRecord(record) {
     state: record.state || 'unknown',
     mergedAt: record.mergedAt || null,
     lastOpen: normalizePullRequestLastOpen(record.lastOpen),
+    ...(mergedHead ? { mergedHead } : {}),
   };
 }
 
@@ -1467,10 +1487,14 @@ class DashboardState {
     }
     if (previous && stableStringify(previous) === stableStringify(next)) return false;
     this.mergedPullRequests.set(key, next);
-    for (const registration of this.pullRequestRegistrationsForRepo(next.owner, next.repo).filter((item) => item.number === next.number)) {
-      this.updatePullRequest(registration.session_id, next.owner, next.repo, next.number, { state: 'merged', mergedAt: next.mergedAt });
+    const registrationChanges = { state: 'merged', mergedAt: next.mergedAt };
+    if (Object.hasOwn(record, 'mergedHead')) {
+      registrationChanges.mergedHead = normalizeMergedPullRequestHead(record.mergedHead);
     }
-    this.updateRelatedPullRequest(next.owner, next.repo, next.number, { state: 'merged', mergedAt: next.mergedAt });
+    for (const registration of this.pullRequestRegistrationsForRepo(next.owner, next.repo).filter((item) => item.number === next.number)) {
+      this.updatePullRequest(registration.session_id, next.owner, next.repo, next.number, registrationChanges);
+    }
+    this.updateRelatedPullRequest(next.owner, next.repo, next.number, registrationChanges);
     this.pruneExpiredStoreRecords(now);
     this.touch();
     this.requestStoreWrite();
@@ -1718,6 +1742,9 @@ class DashboardState {
       state: previous?.state || related?.state || 'unknown',
       mergedAt: previous?.mergedAt || related?.mergedAt || null,
       lastOpen: previous?.lastOpen ? { ...previous.lastOpen } : related?.lastOpen ? { ...related.lastOpen } : null,
+      ...(previous?.mergedHead || related?.mergedHead
+        ? { mergedHead: { ...(previous?.mergedHead || related.mergedHead) } }
+        : {}),
     };
     if (previous && stableStringify(previous) === stableStringify(next)) {
       if (this.relatedPullRequests.delete(relatedKey)) {
@@ -1743,6 +1770,11 @@ class DashboardState {
     }
     const next = { ...current, ...changes };
     if (changes.lastOpen) next.lastOpen = { ...changes.lastOpen };
+    if (Object.hasOwn(changes, 'mergedHead')) {
+      const mergedHead = normalizeMergedPullRequestHead(changes.mergedHead);
+      if (mergedHead) next.mergedHead = mergedHead;
+      else delete next.mergedHead;
+    }
     if (stableStringify(current) === stableStringify(next)) return false;
     records.set(key, next);
     this.touch();

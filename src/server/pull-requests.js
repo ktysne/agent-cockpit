@@ -3,7 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { isCompleteCommitSha, repositoryKey, validRepositoryPart } = require('./pull-request-utils');
+const { isCompleteCommitSha, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
 
@@ -92,6 +92,16 @@ function lastOpenPullRequest(pr) {
   };
 }
 
+function confirmedMergedHead(value) {
+  if (!isCompleteCommitSha(value?.headRefOid) || !validBranchName(value?.headRefName) ||
+    !validBranchName(value?.baseRefName)) return null;
+  return {
+    headRefOid: value.headRefOid.toLowerCase(),
+    headRefName: value.headRefName,
+    baseRefName: value.baseRefName,
+  };
+}
+
 function parseRepositoryConfig(stdout) {
   const value = JSON.parse(stdout);
   if (!value || typeof value !== 'object' || typeof value.default_branch !== 'string' || !value.default_branch) {
@@ -110,15 +120,16 @@ function parseRepositoryConfig(stdout) {
 
 function storedPullRequest(registration) {
   const known = registration.lastOpen || {};
+  const mergedHead = registration.state === 'merged' ? confirmedMergedHead(registration.mergedHead) : null;
   if (!Number.isSafeInteger(registration.number) || registration.number < 1) return null;
-  if (!known.headRefName && !known.baseRefName && !known.title) return null;
+  if (!known.headRefName && !known.baseRefName && !known.title && !mergedHead) return null;
   return {
     number: registration.number,
     title: asText(known.title, 500),
     url: asText(known.url || registration.url, 2000),
-    headRefName: asText(known.headRefName, 500),
-    baseRefName: asText(known.baseRefName, 500),
-    headRefOid: isCompleteCommitSha(known.headRefOid) ? known.headRefOid : '',
+    headRefName: mergedHead?.headRefName || asText(known.headRefName, 500),
+    baseRefName: mergedHead?.baseRefName || asText(known.baseRefName, 500),
+    headRefOid: mergedHead?.headRefOid || (isCompleteCommitSha(known.headRefOid) ? known.headRefOid : ''),
     isCrossRepository: known.isCrossRepository === true,
     draft: known.isDraft === true,
     mergeable: asText(known.mergeable, 40).toUpperCase(),
@@ -139,6 +150,7 @@ function storedRelatedPullRequest(record) {
     state: record.state,
     mergedAt: record.mergedAt,
     lastOpen: record.lastOpen,
+    mergedHead: record.mergedHead,
   });
 }
 
@@ -157,7 +169,13 @@ function parseMergedPullRequestList(stdout) {
       typeof mergedAt !== 'string' || !Number.isFinite(Date.parse(mergedAt))) {
       throw new Error('invalid merged PR');
     }
-    return { number, headRefOid: headRefOid.toLowerCase(), mergedAt };
+    return {
+      number,
+      headRefOid: headRefOid.toLowerCase(),
+      headRefName: asText(value?.headRefName),
+      baseRefName: asText(value?.baseRefName),
+      mergedAt,
+    };
   }).sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
 }
 
@@ -178,6 +196,59 @@ function restackResult(commits, mergedPullRequests, mergedListComplete = true) {
   return { checked: Boolean(parent) || mergedListComplete, parent };
 }
 
+function historicalMergedPullRequests(registrations, relatedPullRequests, openPullRequests) {
+  const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
+  const byNumber = new Map();
+  for (const record of [...registrations, ...relatedPullRequests]) {
+    if (record.state !== 'merged' || openNumbers.has(record.number)) continue;
+    const pullRequest = record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record);
+    const mergedHead = confirmedMergedHead(record.mergedHead);
+    if (!pullRequest || !mergedHead || !Number.isFinite(Date.parse(pullRequest.mergedAt || ''))) continue;
+    const previous = byNumber.get(pullRequest.number);
+    if (!previous || Date.parse(pullRequest.mergedAt) > Date.parse(previous.mergedAt)) {
+      byNumber.set(pullRequest.number, {
+        number: pullRequest.number,
+        ...mergedHead,
+        mergedAt: pullRequest.mergedAt,
+      });
+    }
+  }
+  return [...byNumber.values()].sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
+}
+
+function mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests) {
+  const byNumber = new Map(historicalPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]));
+  for (const pullRequest of mergedPullRequests || []) byNumber.set(pullRequest.number, pullRequest);
+  return [...byNumber.values()].sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
+}
+
+async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBranch, readBranchHead, liveMergedBranches) {
+  let compareBase = asText(pr.baseRefName);
+  const visitedBranches = new Set();
+  while (compareBase && compareBase !== defaultBranch && !visitedBranches.has(compareBase)) {
+    visitedBranches.add(compareBase);
+    const openParent = openPullRequests.find((candidate) => (
+      candidate.number !== pr.number && candidate.headRefName === compareBase
+    ));
+    if (openParent) {
+      compareBase = asText(openParent.baseRefName);
+      continue;
+    }
+    if (openPullRequests.some((candidate) => candidate.headRefName === compareBase)) break;
+    // 同じ head ブランチ名が再利用されることがあるので、マージ済みの親は最も新しいマージを採る。
+    const mergedParent = mergedPullRequests.findLast((candidate) => candidate.headRefName === compareBase);
+    if (!mergedParent) break;
+    const currentHead = await readBranchHead(compareBase);
+    // 積んだ親はマージ後に head が進まないため、異なる head は同名の現行ブランチとして扱う。
+    if (currentHead && currentHead !== mergedParent.headRefOid) {
+      liveMergedBranches.add(compareBase);
+      break;
+    }
+    compareBase = asText(mergedParent.baseRefName);
+  }
+  return compareBase || defaultBranch;
+}
+
 // 積まれた子の親は子が作られた後にマージされるので、オープンの PR の最も古い作成日より後のマージだけを取る。
 // gh の検索は日付の単位なので、1 日前から取る。
 function mergedSearchSince(openPullRequests) {
@@ -193,12 +264,17 @@ function assemblePullRequestStacks({
   retargetedPrs = [],
   relatedPullRequests = [],
   restackResults = new Map(),
+  liveMergedBranches = new Set(),
 }) {
   const open = openPullRequests.map((pr) => ({ ...pr })).sort((left, right) => left.number - right.number);
   const openByNumber = mapByNumber(open);
   const historical = [...registrations, ...relatedPullRequests]
     .filter((record) => !openByNumber.has(record.number) && ['merged', 'closed'].includes(record.state))
-    .map((record) => record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record))
+    .map((record) => {
+      const pullRequest = record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record);
+      const mergedHead = record.state === 'merged' ? confirmedMergedHead(record.mergedHead) : null;
+      return pullRequest && mergedHead ? { ...pullRequest, ...mergedHead } : pullRequest;
+    })
     .filter(Boolean);
   const nodes = [...open, ...historical];
   const nodeByNumber = mapByNumber(nodes);
@@ -209,8 +285,10 @@ function assemblePullRequestStacks({
     let base = explicit?.base || pr.baseRefName;
     const seen = new Set([pr.number]);
     while (base) {
+      if (liveMergedBranches.has(base)) break;
       const merged = historical.find((candidate) => candidate.state === 'merged' &&
-        candidate.headRefName === base && candidate.number !== pr.number);
+        candidate.headRefName === base && isCompleteCommitSha(candidate.headRefOid) && candidate.baseRefName &&
+        candidate.number !== pr.number);
       if (!merged || seen.has(merged.number)) break;
       seen.add(merged.number);
       base = merged.baseRefName;
@@ -275,7 +353,14 @@ function assemblePullRequestStacks({
     const value = effective(pr);
     if (!defaultBranch) return 'リポジトリ設定を取得できません';
     const hasBasePullRequest = visibleOpen.some((candidate) => candidate.headRefName === value.base);
-    if (value.base !== defaultBranch && !hasBasePullRequest) return `base の ${value.base} に対応する PR が見つからない`;
+    if (value.base !== defaultBranch && !hasBasePullRequest) {
+      const hasClosedBasePullRequest = historical.some((candidate) => (
+        candidate.state === 'closed' && candidate.headRefName === value.base
+      ));
+      return hasClosedBasePullRequest
+        ? `base の ${value.base} に対応する PR が見つからない`
+        : `base の ${value.base} は既定ブランチではないため、ダッシュボードではマージしない`;
+    }
     const parent = visibleOpen.find((candidate) => candidate.number === parentByNumber.get(pr.number));
     if (parent) return `下の #${parent.number} のマージ待ち`;
     if (pr.baseRefName !== defaultBranch) return `base を ${defaultBranch} に付け替える必要がある`;
@@ -371,6 +456,11 @@ function ghErrorMessage(error) {
   if (error?.code === 'ETIMEDOUT' || error?.killed) return 'gh の取得がタイムアウトしました';
   if (error?.code === 'EPERM' || error?.code === 'EACCES') return 'gh を実行できません';
   return 'gh の認証、通信、または取得結果を確認してください';
+}
+
+function isGitHubNotFoundError(error) {
+  const text = [error?.message, error?.stderr].filter((value) => typeof value === 'string').join('\n');
+  return /(?:http\s+404|\b404 not found\b)/i.test(text);
 }
 
 function ghEnvironment(environment = process.env) {
@@ -683,6 +773,7 @@ class PullRequestTracker {
       relatedPullRequests: this.state.relatedPullRequestRegistrationsForRepo(registration.owner, registration.repo),
       retargetedPrs: this.state.pullRequestRetargetsForRepo(registration.owner, registration.repo),
       restackResults: repository.restackResults,
+      liveMergedBranches: repository.liveMergedBranches,
     });
     const find = (items) => {
       for (const item of items) {
@@ -725,6 +816,19 @@ class PullRequestTracker {
       pullRequest,
       mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
     };
+  }
+
+  async readRemoteBranchHead(repository, branch) {
+    const encodedBranch = branch.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    try {
+      const output = await this.execute(['api', `repos/${repository}/git/ref/heads/${encodedBranch}`]);
+      const headRefOid = JSON.parse(output)?.object?.sha;
+      if (!isCompleteCommitSha(headRefOid)) throw new Error('invalid branch ref');
+      return headRefOid.toLowerCase();
+    } catch (error) {
+      if (isGitHubNotFoundError(error)) return null;
+      throw error;
+    }
   }
 
   async fetchRepository(owner, repo, repository) {
@@ -827,17 +931,16 @@ class PullRequestTracker {
           openNumbers.add(normalized.number);
           continue;
         }
+        const stateChanges = {
+          state: closedState,
+          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
+        };
+        if (closedState === 'merged') stateChanges.mergedHead = confirmedMergedHead(value);
         for (const record of result.tracked.registrations) {
-          this.state.updatePullRequest(record.session_id, owner, repo, result.number, {
-            state: closedState,
-            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-          });
+          this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
         }
         if (result.tracked.related) {
-          this.state.updateRelatedPullRequest(owner, repo, result.number, {
-            state: closedState,
-            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-          });
+          this.state.updateRelatedPullRequest(owner, repo, result.number, stateChanges);
         }
         if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
           const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
@@ -882,7 +985,7 @@ class PullRequestTracker {
       try {
         mergedPullRequests = parseMergedPullRequestList(await this.execute([
           'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
-          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,mergedAt',
+          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt',
         ]));
         mergedListComplete = mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT;
       } catch (error) {
@@ -890,17 +993,34 @@ class PullRequestTracker {
       }
     }
 
+    const historicalPullRequests = historicalMergedPullRequests(
+      this.state.pullRequestRegistrationsForRepo(owner, repo),
+      this.state.relatedPullRequestRegistrationsForRepo(owner, repo),
+      openPullRequests,
+    );
+    const mergedCandidates = mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests);
+    const liveMergedBranches = new Set();
+    const branchHeadRequests = new Map();
+    const readBranchHead = (branch) => {
+      if (!branchHeadRequests.has(branch)) {
+        branchHeadRequests.set(branch, this.readRemoteBranchHead(repository, branch));
+      }
+      return branchHeadRequests.get(branch);
+    };
     const restackResults = new Map();
     const comparisons = listAvailable && defaultBranch
       ? await Promise.all(openPullRequests.map(async (pr) => {
         if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
         try {
+          const compareBase = await restackCompareBase(
+            pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
+          );
           const output = await this.execute([
             'api',
-            `repos/${repository}/compare/${encodeURIComponent(defaultBranch)}...${pr.headRefOid}`,
+            `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${pr.headRefOid}`,
           ]);
           const commits = parseCompareResult(output);
-          const result = mergedPullRequests ? restackResult(commits, mergedPullRequests, mergedListComplete) : { checked: false, parent: null };
+          const result = restackResult(commits, mergedCandidates, mergedListComplete);
           if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
           return [pr.number, result];
         } catch (error) {
@@ -940,6 +1060,7 @@ class PullRequestTracker {
           relatedPullRequests,
           retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
           restackResults,
+          liveMergedBranches,
         });
         groupAssemblies.push({ group, assembled });
         const visit = (pullRequest) => {
@@ -992,6 +1113,7 @@ class PullRequestTracker {
       listAvailable,
       uninspectedNumbers,
       restackResults,
+      liveMergedBranches,
     });
     await this.refreshReviewGroups(owner, repo);
     this.state.touch();
@@ -1051,6 +1173,7 @@ class PullRequestTracker {
         relatedPullRequests,
         retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
         restackResults: repositoryState.restackResults,
+        liveMergedBranches: repositoryState.liveMergedBranches,
       });
       const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
       const trees = assembled.trees.map((tree) => applyMergeCondition(attachCrossReviewState(

@@ -1460,7 +1460,7 @@ function mergeBaseConflictBlocker(p, pr) {
   const e = effective(p, pr);
   const parent = parentPr(p, pr);
   if (parent) return `下の #${parent.number} のマージ待ち`;
-  if (e.base !== p.repo.defaultBranch) return `base の ${e.base} に対応する PR が見つからない`;
+  if (e.base !== p.repo.defaultBranch) return `base の ${e.base} は既定ブランチではないため、ダッシュボードではマージしない`;
   if (pr.draft) return 'ドラフト';
   if (e.needsRestack) return `積み直し待ち (squash で入った #${e.squashedUnder.number} のコミットが差分に残っている)`;
   if (pr.conflict) return 'コンフリクトあり';
