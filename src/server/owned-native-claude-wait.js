@@ -80,11 +80,13 @@ function createOwnedNativeClaudeWait(sourceCapability, options) {
     const item = blocks[0];
     const fields = Object.hasOwn(item || {}, 'is_error') ? ['type', 'tool_use_id', 'content', 'is_error'] : ['type', 'tool_use_id', 'content'];
     const sent = options.mcp.controller.inspectSent(active.handle);
+    const contentMatches = sent && (typeof item.content === 'string' ? item.content === sent.status :
+      Array.isArray(item.content) && item.content.length === 1 && exact(item.content[0], ['type', 'text']) &&
+      item.content[0].type === 'text' && item.content[0].text === sent.status);
     if (!exact(item, fields) || item.type !== 'tool_result' || !sent || resultMatched ||
         item.tool_use_id !== active.native.nativeToolUseId || current.nativeContextId !== active.native.nativeContextId ||
         current.inputEpoch !== active.native.inputEpoch || !pureTrue(options.checkScope, active.scope) ||
-        !Array.isArray(item.content) || item.content.length !== 1 || !exact(item.content[0], ['type', 'text']) ||
-        item.content[0].type !== 'text' || item.content[0].text !== sent.status ||
+        !contentMatches ||
         (item.is_error === undefined ? sent.status !== 'released' : item.is_error !== (sent.status !== 'released'))) return unknown();
     resultMatched = true; return true;
   }

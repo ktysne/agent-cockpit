@@ -544,3 +544,15 @@ for (const caller of [{ type: 'direct' }, { type: 'code_execution' }, { type: 'd
     }
   });
 }
+for (const [content, isError, expected] of [['cancelled', true, true], ['released', true, false], ['cancelled', false, false]]) {
+  test('CW01 string cancellation result ' + content + '/' + isError + ' requires exact sent status and error flag', async t => {
+    const f = await fixture(t), nonce = 'e'.repeat(48); f.full(nonce);
+    const pending = f.call(nonce); await f.until(() => f.waits.length === 1);
+    assert.equal(f.owner.settleWait(f.waits[0].handle, 'cancelled'), true); await pending;
+    f.child.send({ type: 'user', session_id: 'native-id', parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'native-tool', content, is_error: isError }] } });
+    f.stream({ type: 'message_start', message: { role: 'assistant', id: 'context-b' } });
+    assert.equal(Boolean(f.composition.resolveProof(f.started.launchRef)), expected);
+    assert.equal(f.actorHandles.length, expected ? 2 : 1);
+  });
+}
