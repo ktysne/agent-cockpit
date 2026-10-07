@@ -22,6 +22,7 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - 通常の作業PRは `codex/feature-codex-support` をbaseにする。
 - 全作業、統合検証、レビューを終えた後に限り、集約先から `main` への最終PRを作る。
 - mainへ直接pushせず、mergeは既存の開発者確認フローで行う。
+- 現在のダッシュボードがマージできるのはbaseが既定ブランチのPRだけである。この制限を迂回せず、モデルの判断だけでfeature向けPRをマージしない。
 - ClaudeとCodexで同じ結果を期待する機能は、[適合試験方針](docs/design/provider-conformance-testing.md)に機能単位のscenarioを追加する。
 - scenarioの期待値は実装から独立に定め、両adapterの結果、fixtureと実runtimeの区別、未確認理由を記録する。
 - 未実装側や未実行runtimeを成功扱いしない。
@@ -45,6 +46,7 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 ## Claude と Codex の設定文書
 
 `CLAUDE.md`はClaude Code向け、`AGENTS.md`はCodex向けの独立した正本として管理する。
+両方のエージェントが守る規則は、それぞれの正本に記載する。
 片方の変更をもう片方へ自動反映せず、指定されたファイルだけを更新する。
 
 ## リモートセッション時の作業について

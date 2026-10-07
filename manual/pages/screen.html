@@ -7,7 +7,7 @@
   <figure class="guide-map" id="screen-overview-map" data-shot="overview/product" data-alt="ダッシュボードの全体。上から、ヘッダ、件数の札、経路の設定、表示モードの切り替えが並び、その下にプロダクトのカードがある">
     <ol class="guide-list">
       <li data-part="overview.header" data-mark="frame" data-place="left"><b>ヘッダ</b>：アプリの名前、<span class="ui">離席中</span> のチェック、設定のボタンです(<a href="#screen-header">ヘッダ</a>)。</li>
-      <li data-part="overview.summary" data-mark="frame" data-place="right"><b>件数の札</b>：許可待ちや判断待ちなど、5 種類の件数です。押すと、その種類を一覧から隠せます(<a href="#screen-summary">件数の札</a>)。</li>
+      <li data-part="overview.summary" data-mark="frame" data-place="right"><b>件数の札</b>：許可待ちや判断待ちなど、1 件以上ある種類の件数です。押すと、その種類を一覧から隠せます(<a href="#screen-summary">件数の札</a>)。</li>
       <li data-part="overview.routing" data-mark="frame" data-place="right"><b>経路の設定</b>：サブエージェントとクロスレビューを、Codex と Claude のどちらで行うかを選びます(<a href="#screen-routing">経路の設定</a>)。</li>
       <li data-part="overview.mode" data-mark="frame" data-place="right"><b>表示モードの切り替え</b>：一覧を、プロダクトごとに並べるか、種類ごとに並べるかを選びます(<a href="#screen-modes">プロダクト別と種類別の違い</a>)。</li>
       <li data-part="overview.product-card" data-mark="frame" data-place="left"><b>プロダクトのカード</b>：プロダクトごとに、セッションの状態をまとめたものです。種類別では、種類ごとの欄に代わります(<a href="#screen-product-card">プロダクトのカード</a>)。</li>
@@ -26,11 +26,11 @@
   </figure>
 
   <h2 id="screen-summary">件数の札</h2>
-  <p>ヘッダの下に、5 種類の札が並びます。
+  <p>ヘッダの下に、5 種類のうち 1 件以上ある種類の札が並びます。0 件の種類の札は出ません。
   数字は、いま一覧に出ているセッションにある、その種類の項目の数です。1 つのセッションに判断事項が 3 件あれば、3 と数えます。
   外したセッションと、更新が無くて隠れているセッションは含みません。</p>
   <p>札を押すと、その種類の項目を一覧から隠します。
-  もう一度押すと、表示に戻ります。
+  もう一度押すと、表示に戻ります。隠している種類の札は、0 件でも残ります。
   隠している種類は、一覧の最下部の注記に出ます(<a href="#screen-bottom">一覧の最下部</a>)。</p>
   <figure class="guide-map" id="screen-summary-map" data-shot="screen-top/top" data-crop="0-1270" data-crop-y="112-196" data-alt="件数の札。左から、許可待ち、止めて待っている、仮に推奨案で進行中、稼働中のサブエージェント、マージできる PR の 5 つの札が並ぶ">
     <ol class="guide-list">
@@ -93,6 +93,14 @@
       <li data-part="bottom.idle" data-mark="frame" data-place="left"><b>隠している更新の無いセッション</b>：<span class="ui">更新の無いセッションを隠しています</span> と、隠している件数が出ます。作業中のセッションと、許可待ち、判断待ち、稼働中のサブエージェントのあるセッションは隠れません。<span class="ui">表示する</span> は、開いているページの間だけ有効です。</li>
     </ol>
   </figure>
+  <p>外したセッションも、更新と外した時刻の遅い方から設定時間を過ぎると、<span class="ui">更新の無いセッション</span> に移ります。
+  作業中、許可待ち、有効な判断事項、稼働中のサブエージェントがある場合は移りません。</p>
+  <p>外したセッション、終わったもの、更新の無いセッションの帯は、右端のゴミ箱から記録を削除できます。
+  同じ帯に出る件数を確認して <span class="ui">削除する</span> を押します。
+  削除は元に戻せません。
+  <span class="ui">やめる</span> を押すと削除せずに戻ります。</p>
+  <p>削除するのはダッシュボードの記録です。
+  Claude Code の会話ファイルや GitHub の PR は削除しません。</p>
 
   <h2 id="screen-modes">プロダクト別と種類別の違い</h2>
   <p>表示モードの切り替えは、同じ情報を 2 通りに並べ替えます。

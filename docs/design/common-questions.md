@@ -128,6 +128,11 @@ HTTP応答のfinishはMCP stdioへの到達証拠ではない。
 
 共通質問の名前空間を持つ配信記録に対応するjournalがない場合、共通質問serviceの書込みと回答返却を停止する。
 共用の配信store全体は停止せず、ほかの機能の配信記録を取消または補修しない。
+
+HTTPの`/api/state`は、質問serviceのdashboard snapshotと登録snapshotの両方が正常な場合にだけ質問を投影する。
+どちらかの読取りが失敗するか形式が不正な場合は両方の結果を破棄し、ほかの状態を返したうえで`commonQuestionDiagnostics.recovery`に`status: unavailable`と`errorCode: common_question_state_unavailable`を示す。
+この読取り失敗は質問serviceの書込み準備状態を変更しない。
+ダッシュボードから回答・保留・取消を行うPOST経路は従来どおり認証を確認し、質問を読み取れない場合は503を返して書込みを行わない。
 状態の読取りでは復旧が必要な理由を示す。
 
 取消台帳がcancelled_before_sendなら、質問履歴のcancelledAtが欠落していても取消済みと表示する。

@@ -2,13 +2,13 @@
   "name": "group",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1512,
+  "height": 1514,
   "parts": [
     {
       "key": "row.heading",
       "bounds": {
         "x": 26,
-        "y": 145,
+        "y": 146,
         "width": 389,
         "height": 45
       },
@@ -17,9 +17,9 @@
     {
       "key": "row.state",
       "bounds": {
-        "x": 1280,
-        "y": 183,
-        "width": 270,
+        "x": 1368,
+        "y": 184,
+        "width": 182,
         "height": 35
       },
       "visible": true
@@ -27,9 +27,9 @@
     {
       "key": "row.merge-button",
       "bounds": {
-        "x": 1280,
+        "x": 1368,
         "y": 231,
-        "width": 270,
+        "width": 182,
         "height": 64
       },
       "visible": true
@@ -37,7 +37,7 @@
     {
       "key": "row.reservation-toggle",
       "bounds": {
-        "x": 1280,
+        "x": 1368,
         "y": 321,
         "width": 36,
         "height": 36
@@ -48,7 +48,7 @@
       "key": "row.branch",
       "bounds": {
         "x": 26,
-        "y": 204,
+        "y": 205,
         "width": 341,
         "height": 28
       },
@@ -58,7 +58,7 @@
       "key": "row.badges",
       "bounds": {
         "x": 26,
-        "y": 246,
+        "y": 247,
         "width": 274,
         "height": 44
       },
@@ -68,7 +68,7 @@
       "key": "row.rounds",
       "bounds": {
         "x": 161,
-        "y": 311,
+        "y": 312,
         "width": 374,
         "height": 38
       },
@@ -78,7 +78,7 @@
       "key": "row.xr-state",
       "bounds": {
         "x": 551,
-        "y": 308,
+        "y": 309,
         "width": 216,
         "height": 44
       },
@@ -88,7 +88,7 @@
       "key": "row.skip",
       "bounds": {
         "x": 783,
-        "y": 298,
+        "y": 299,
         "width": 216,
         "height": 64
       },
@@ -98,8 +98,8 @@
       "key": "row.wait",
       "bounds": {
         "x": 26,
-        "y": 370,
-        "width": 1204,
+        "y": 371,
+        "width": 1296,
         "height": 38
       },
       "visible": true
@@ -108,7 +108,7 @@
       "key": "variants.restack-badge",
       "bounds": {
         "x": 286,
-        "y": 592,
+        "y": 593,
         "width": 173,
         "height": 44
       },
@@ -118,7 +118,7 @@
       "key": "variants.restack-reason",
       "bounds": {
         "x": 26,
-        "y": 696,
+        "y": 697,
         "width": 1524,
         "height": 38
       },
@@ -128,7 +128,7 @@
       "key": "variants.reviewed",
       "bounds": {
         "x": 551,
-        "y": 644,
+        "y": 645,
         "width": 133,
         "height": 44
       },
@@ -138,7 +138,7 @@
       "key": "variants.conflict-badge",
       "bounds": {
         "x": 286,
-        "y": 914,
+        "y": 915,
         "width": 126,
         "height": 44
       },
@@ -147,9 +147,9 @@
     {
       "key": "variants.conflict-button",
       "bounds": {
-        "x": 1280,
-        "y": 913,
-        "width": 270,
+        "x": 1302,
+        "y": 914,
+        "width": 249,
         "height": 64
       },
       "visible": true
@@ -158,8 +158,8 @@
       "key": "variants.unreviewed",
       "bounds": {
         "x": 26,
-        "y": 966,
-        "width": 1204,
+        "y": 967,
+        "width": 1230,
         "height": 64
       },
       "visible": true
@@ -168,7 +168,7 @@
       "key": "variants.draft",
       "bounds": {
         "x": 26,
-        "y": 1256,
+        "y": 1257,
         "width": 97,
         "height": 44
       },
@@ -178,7 +178,7 @@
       "key": "variants.draft-reason",
       "bounds": {
         "x": 26,
-        "y": 1380,
+        "y": 1381,
         "width": 1524,
         "height": 38
       },

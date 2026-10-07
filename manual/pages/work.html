@@ -22,8 +22,8 @@
   </figure>
   <details class="more">
     <summary>タスクの行の折り返しの詳細</summary>
-    <p>幅が足りないときは、題の中で折り返し、札、完了条件の数、操作は同じ行に残ります。
-    画面幅が 480px 以下では、行の要素ごとに折り返します。</p>
+    <p>タスクの題の行は左右に分かれます。題は左側で折り返し、完了条件の数と <span class="ui">完了にする</span> は右側に縦に並びます。完了条件の一覧は、その下に行の幅いっぱいで並びます。
+    画面幅が 480px 以下では、状態の札と題も要素ごとに折り返します。</p>
   </details>
   <p>完了したタスクは、いつも畳みます。
   作業中のタスクがあるセッションでは、未着手のタスクも畳みます。
@@ -45,13 +45,13 @@
   <p><span class="ui">完了にする</span> を押すと、そのタスクを完了にします。
   押した直後は完了にせず、5 秒の間は取り消せます。
   この間、ボタンは <span class="ui">取り消す</span> に変わり、<span class="ui">5 秒後に完了にします。</span> と出ます。</p>
-  <figure class="guide-map" id="work-task-close-map" data-shot="work-tasks/closing" data-alt="完了にするを押した直後のタスクの見出しの行。右端に、取り消すのボタンと、5 秒後に完了にしますの文が出ている">
+  <figure class="guide-map" id="work-task-close-map" data-shot="work-tasks/closing" data-alt="完了にするを押した直後のタスクの行。題の右側に、完了条件の数、取り消すのボタン、5 秒後に完了にしますの文が縦に並び、その下に完了条件の一覧が続く">
     <ol class="guide-list">
       <li data-part="closing.cancel"><b><span class="ui">取り消す</span></b>：完了にする操作をやめます。</li>
       <li data-part="closing.note"><b>案内の文</b>：<span class="ui">5 秒後に完了にします。</span> と出て、5 秒たつと完了にします。</li>
     </ol>
   </figure>
-  <p>画面で完了にしたタスクは、同じ行の完了条件の数に続けて <span class="ui">画面で完了にした</span> が出ます。
+  <p>画面で完了にしたタスクは、右の列の完了条件の数の下に <span class="ui">画面で完了にした</span> が出ます。
   タスクの完了は、「前回見てから」にも、タスクが完了した変化として載ります(<a href="away.html#away-since-seen">前回見てから</a>)。</p>
   <details class="more">
     <summary>画面での完了とセッションの登録の関係の詳細</summary>

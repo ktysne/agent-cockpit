@@ -318,7 +318,8 @@ function makeHookEvent(input, now = Date.now()) {
 
 async function postEvent(event, options = {}) {
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
-  const result = await postToServer('/api/events', event, {
+  const ppid = options.ppid === undefined ? process.ppid : options.ppid;
+  const result = await postToServer('/api/events', { ...event, claudeLineage: { ppid } }, {
     homeDir,
     fetchImpl: options.fetchImpl || fetch,
     startServer: options.startServer,

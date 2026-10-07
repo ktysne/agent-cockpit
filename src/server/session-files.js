@@ -39,6 +39,13 @@ function processIsAlive(pid) {
   }
 }
 
+// 起動時刻の表現は公開仕様ではないので、文字列か有限の数値だけを受け付け、それ以外は null にする。
+function sessionFileProcStart(value) {
+  if (typeof value === 'string' && value.length > 0 && value.length <= 128) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
 function sessionFileUpdatedAt(value) {
   if (!Number.isFinite(value)) return null;
   const date = new Date(value);
@@ -71,6 +78,7 @@ async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = pro
       cwd: typeof value.cwd === 'string' ? value.cwd : '',
       name: typeof value.name === 'string' ? value.name.slice(0, 200) : null,
       updatedAt: sessionFileUpdatedAt(value.updatedAt),
+      procStart: sessionFileProcStart(value.procStart),
     });
   }
   return sessions;

@@ -16,9 +16,9 @@ const ORIGIN = 'standalone';
 const DIGEST = 'a'.repeat(64);
 const SECOND_DIGEST = DIGEST;
 
-function registrationView(harness) {
+function registrationView(harness, snapshotOverride) {
   const registry = harness.registrationRegistry;
-  const snapshot = () => registry.snapshot();
+  const snapshot = () => snapshotOverride ? snapshotOverride(registry) : registry.snapshot();
   return Object.freeze({
     snapshot,
     authorizeEvent: () => ({ ok: false, status: 'unverified' }),
@@ -73,9 +73,13 @@ async function createRuntime(t, options = {}) {
   const temporary = temporaryHome(t, 'agent-cockpit-instruction-http-home-', { deferCleanup: true });
   const question = lateQuestion(harness);
   let draftReads = 0;
+  let questionAnswerCalls = 0;
   const questionService = options.withQuestion ? {
     ready: async () => {},
-    dashboardSnapshot: async () => ({ version: 1, questions: [question], recovery: { status: 'ready' } }),
+    dashboardSnapshot: options.questionDashboardSnapshot
+      ? () => options.questionDashboardSnapshot(harness)
+      : async () => ({ version: 1, questions: [question], recovery: { status: 'ready' } }),
+    submitAnswer: async () => { questionAnswerCalls += 1; return { outcome: 'selected', question }; },
     readLateAnswerDraft: async (internalQuestionId, index, digest) => {
       draftReads += 1;
       if (internalQuestionId !== question.internalQuestionId) return null;
@@ -102,7 +106,7 @@ async function createRuntime(t, options = {}) {
     claudeHome: temporary.claudeHome,
     userHome: temporary.homeDir,
     port: 0,
-    registrationRegistry: registrationView(harness),
+    registrationRegistry: registrationView(harness, options.registrationSnapshot),
     launchRegistry: instructionTargetsConfigured ? harness.launchRegistry : null,
     instructionService,
     instructionTargetState: options.instructionTargetState || (instructionTargetsConfigured ? harness.targetState : null),
@@ -114,7 +118,7 @@ async function createRuntime(t, options = {}) {
     await temporary.cleanup();
     await fs.rm(directory, { recursive: true, force: true });
   });
-  return { harness, runtime, question, draftReads: () => draftReads };
+  return { harness, runtime, question, draftReads: () => draftReads, questionAnswerCalls: () => questionAnswerCalls };
 }
 
 function post(runtime, pathname, body, origin = `http://127.0.0.1:${runtime.info.port}`) {
@@ -222,6 +226,102 @@ test('構成済み指示サービスの起動失敗を診断に残す', async (t
   assert.equal(diagnostics.configuration, 'configured');
   assert.equal(diagnostics.service, 'unavailable');
   assert.equal(diagnostics.targets, 'available');
+});
+
+for (const [failureName, questionDashboardSnapshot] of [
+  ['throws', async () => { throw new Error('private question snapshot details'); }],
+  ['is malformed', async () => ({ version: 1, questions: { internalQuestionId: 'private-question-id' } })],
+  ['contains malformed entries', async () => ({ version: 1, questions: [null] })],
+]) {
+  test(`question state ${failureName} without hiding other dashboard state`, async (t) => {
+    const { harness, runtime } = await createRuntime(t, { withQuestion: true, questionDashboardSnapshot });
+    const instructionBody = createBody(harness);
+    const created = await post(runtime, '/api/instructions/create', instructionBody);
+    assert.equal(created.status, 200);
+
+    const state = await request(runtime.info.port, { path: '/api/state' });
+    assert.equal(state.status, 200);
+    const snapshot = jsonBody(state);
+    assert.equal(Array.isArray(snapshot.sessions), true);
+    assert.equal(Array.isArray(snapshot.pullRequests), true);
+    assert.deepEqual(snapshot.instructionDiagnostics, {
+      configuration: 'configured', service: 'ready', targets: 'available',
+    });
+    assert.deepEqual(snapshot.commonQuestionDiagnostics, {
+      recovery: { status: 'unavailable', errorCode: 'common_question_state_unavailable' },
+    });
+    assert.equal(snapshot.sessions.some((session) =>
+      session.instructions?.some((instruction) => instruction.deliveryAttemptId === instructionBody.delivery_attempt_id)), true);
+    assert.equal(snapshot.sessions.some((session) => session.commonQuestions?.length), false);
+    assert.equal(JSON.stringify(snapshot).includes('private question snapshot details'), false);
+    assert.equal(JSON.stringify(snapshot).includes('private-question-id'), false);
+  });
+}
+
+for (const [failureName, failedSnapshot] of [
+  ['throws', () => { throw new Error('private registration snapshot details'); }],
+  ['is malformed', () => ({ conversations: [], executions: null })],
+  ['contains malformed entries', () => ({ conversations: [null], executions: [] })],
+]) {
+  test(`registration snapshot ${failureName} drops partial questions and preserves the next dashboard read`, async (t) => {
+    let questionSnapshotRead = false;
+    const questionDashboardSnapshot = async (harness) => {
+      questionSnapshotRead = true;
+      return { version: 1, questions: [{ ...lateQuestion(harness), identity: {
+        ...harness.launch.identity, nativeId: 'private-question-native-id',
+      } }], recovery: { status: 'ready' } };
+    };
+    const registrationSnapshot = (registry) => {
+      if (questionSnapshotRead) {
+        questionSnapshotRead = false;
+        return failedSnapshot();
+      }
+      return registry.snapshot();
+    };
+    const { harness, runtime } = await createRuntime(t, {
+      withQuestion: true,
+      questionDashboardSnapshot,
+      registrationSnapshot,
+    });
+    const instructionBody = createBody(harness);
+    assert.equal((await post(runtime, '/api/instructions/create', instructionBody)).status, 200);
+
+    const state = await request(runtime.info.port, { path: '/api/state' });
+    assert.equal(state.status, 200);
+    const snapshot = jsonBody(state);
+    assert.deepEqual(snapshot.commonQuestionDiagnostics, {
+      recovery: { status: 'unavailable', errorCode: 'common_question_state_unavailable' },
+    });
+    assert.equal(snapshot.sessions.some((session) => session.commonQuestions?.length), false);
+    assert.equal(snapshot.sessions.some((session) =>
+      session.instructions?.some((instruction) => instruction.deliveryAttemptId === instructionBody.delivery_attempt_id)), true);
+    assert.deepEqual(snapshot.instructionDiagnostics, {
+      configuration: 'configured', service: 'ready', targets: 'available',
+    });
+    assert.equal(JSON.stringify(snapshot).includes('common-question-internal-1'), false);
+    assert.equal(JSON.stringify(snapshot).includes('private-question-native-id'), false);
+    assert.equal(JSON.stringify(snapshot).includes('private registration snapshot details'), false);
+  });
+}
+
+test('question writes remain authorized and fail closed when the dashboard snapshot is unavailable', async (t) => {
+  const { harness, runtime, questionAnswerCalls } = await createRuntime(t, {
+    withQuestion: true,
+    questionDashboardSnapshot: async () => { throw new Error('private question snapshot details'); },
+  });
+  const pathname = '/api/decisions/cq-common-question-internal-1/answer';
+  const body = {
+    session_id: harness.launch.sessionId,
+    execution_id: harness.launch.executionBinding.periodId,
+    answers: [],
+  };
+  const unauthorized = await postWithoutSecret(runtime, pathname, body);
+  assert.equal(unauthorized.status, 401);
+  assert.equal(questionAnswerCalls(), 0);
+
+  const unavailable = await post(runtime, pathname, body);
+  assert.equal(unavailable.status, 503);
+  assert.equal(questionAnswerCalls(), 0);
 });
 
 for (const provider of PROVIDERS) {

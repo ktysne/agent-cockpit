@@ -24,6 +24,131 @@ async function temporaryHome(testContext, { deferCleanup = false } = {}) {
   });
 }
 
+test('記録削除 API は秘密値と Origin と本文を厳密に検証する', async (t) => {
+  const runtime = await runningServer(t);
+  const send = (body, headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`)) => request(runtime.info.port, {
+    method: 'POST', path: '/api/record-deletions', headers, body: JSON.stringify(body),
+  });
+  assert.equal((await send({ session_ids: ['unknown'] }, {})).status, 401);
+  assert.equal((await send({ session_ids: ['unknown'] }, uiHeaders(runtime.info, 'https://other.example'))).status, 403);
+  const noOrigin = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`);
+  delete noOrigin.origin;
+  assert.equal((await send({ session_ids: ['unknown'] }, noOrigin)).status, 403);
+  const pr = { owner: 'example', repo: 'project', number: 31 };
+  for (const body of [null, [], {}, { session_ids: [] }, { session_ids: ['unknown'], extra: true },
+    { session_ids: 'unknown' }, { session_ids: ['../invalid'] }, { session_ids: Array(51).fill('unknown') },
+    { merge_history: [{ ...pr, extra: true }] }, { merge_history: [{ ...pr, number: 0 }] },
+    { merge_history: Array(51).fill(pr) }, { closed_pull_requests: [{ ...pr, owner: '../invalid' }] },
+    { closed_pull_requests: Array(51).fill(pr) }, { closed_pull_requests: [null] }]) {
+    assert.equal((await send(body)).status, 400, JSON.stringify(body));
+  }
+  const unknown = await send({ session_ids: ['unknown'], merge_history: [pr], closed_pull_requests: [pr] });
+  assert.equal(unknown.status, 200);
+  assert.deepEqual(jsonBody(unknown), { deleted: { sessions: 0, pullRequests: 0 } });
+});
+
+test('記録削除 API は指定 ID だけを削除し、待機の解除と PR グループ更新を行う', async (t) => {
+  const state = new DashboardState();
+  const ended = [];
+  const refreshed = [];
+  const runtime = await runningServer(t, {
+    state,
+    answerDelivery: { sessionEnded: (...args) => ended.push(args), sessionReopened() {}, close() {} },
+    pullRequestTracker: { snapshot: () => [], refreshReviewGroups: async (...args) => refreshed.push(args), close() {}, start() {} },
+  });
+  const now = Date.now();
+  state.syncSessionFiles([{ session_id: 'delete-this', updatedAt: new Date(now - 10).toISOString() }, { session_id: 'keep-this' }], now);
+  state.registerPullRequest('delete-this', { url: 'https://github.com/example/project/pull/31' }, {}, now);
+  state.updatePullRequest('delete-this', 'example', 'project', 31, { state: 'closed' });
+  state.recordMergedPullRequest({ owner: 'example', repo: 'project', number: 32,
+    url: 'https://github.com/example/project/pull/32', mergedAt: new Date(now).toISOString() }, now);
+  const pr = number => ({ owner: 'example', repo: 'project', number });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/record-deletions', headers: uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`),
+    body: JSON.stringify({ session_ids: ['delete-this', 'delete-this', 'unknown'], merge_history: [pr(32), pr(32)], closed_pull_requests: [pr(31), pr(31)] }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(jsonBody(response), { deleted: { sessions: 1, pullRequests: 2 } });
+  assert.deepEqual(state.snapshot().sessions.map(session => session.session_id), ['keep-this']);
+  assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project'), []);
+  assert.deepEqual(refreshed, [['example', 'project']]);
+  assert.equal(ended.length, 1);
+  assert.equal(ended[0][0], 'delete-this');
+});
+
+test('記録削除後の PR グループ更新が失敗しても他のリポジトリを試し 200 を返す', async (t) => {
+  const state = new DashboardState();
+  const refreshAttempts = [];
+  for (const repo of ['first', 'second']) {
+    state.registerPullRequest('refresh-failure', { url: `https://github.com/example/${repo}/pull/31` });
+    state.updatePullRequest('refresh-failure', 'example', repo, 31, { state: 'closed' });
+  }
+  const runtime = await runningServer(t, {
+    state,
+    pullRequestTracker: {
+      snapshot: () => [],
+      async refreshReviewGroups(owner, repo) {
+        refreshAttempts.push([owner, repo]);
+        if (repo === 'first') throw new Error('refresh failed');
+      },
+      close() {}, start() {},
+    },
+  });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/record-deletions',
+    headers: uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`),
+    body: JSON.stringify({ closed_pull_requests: [
+      { owner: 'example', repo: 'first', number: 31 },
+      { owner: 'example', repo: 'second', number: 31 },
+    ] }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(jsonBody(response), { deleted: { sessions: 0, pullRequests: 2 } });
+  assert.deepEqual(refreshAttempts, [['example', 'first'], ['example', 'second']]);
+});
+
+test('PR 登録に失敗したときは削除印を解除しない', async (t) => {
+  const state = new DashboardState();
+  const fixture = createRegistrationFixture('claude', { nativeId: 'deleted-registration' });
+  const sessionId = fixture.registration.sessionId;
+  state.syncSessionFiles([{ session_id: sessionId }]);
+  state.deleteSession(sessionId);
+  state.registerPullRequest = () => null;
+  const runtime = await runningServer(t, { state, registrationRegistry: fixture.registry });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pending/prs',
+    headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({
+      kind: 'add_pr', writer: fixture.writer, url: 'https://github.com/example/project/pull/31',
+    }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(state.deletedSessions.has(sessionId), true);
+});
+
+test('削除時刻以前のフックは回答待ちの再登録にも渡さない', async (t) => {
+  const state = new DashboardState();
+  const delivered = [];
+  const runtime = await runningServer(t, {
+    state,
+    answerDelivery: { afterEvent: event => delivered.push(event), sessionEnded() {}, sessionReopened() {}, close() {} },
+  });
+  const deletedAt = Date.now();
+  state.syncSessionFiles([{ session_id: 'old-hook' }], deletedAt - 1);
+  state.deleteSession('old-hook', deletedAt);
+  for (const hookAt of [deletedAt - 1, deletedAt, deletedAt + 1]) {
+    const response = await request(runtime.info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+      body: JSON.stringify({ session_id: 'old-hook', hook_event_name: 'SessionStart', hookAt }),
+    });
+    assert.equal(response.status, 202);
+  }
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].hookAt, deletedAt + 1);
+});
+
 test('離席中の切り替えは秘密値と Origin を照合し、状態を軽い応答で返す', async (t) => {
   const runtime = await runningServer(t);
   const body = JSON.stringify({ enabled: true });
@@ -2158,7 +2283,9 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
   const sessionId = 'session-title';
   const sessionDirectory = path.join(claudeHome, 'sessions');
   await fs.mkdir(sessionDirectory, { recursive: true });
-  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({ pid: process.pid, sessionId, name: '段階 1 の実装' }));
+  await fs.writeFile(path.join(sessionDirectory, `${process.pid}.json`), JSON.stringify({
+    pid: process.pid, sessionId, name: '段階 1 の実装', procStart: 'title-start',
+  }));
   await fs.writeFile(path.join(sessionDirectory, `${sessionId}.key`), 'not a session record');
   const runtime = await startServer({ homeDir, claudeHome, port: 0 });
   t.after(() => runtime.close());
@@ -2167,7 +2294,7 @@ test('SessionStart はタイトルを読み、ダッシュボードの URL を�
     session_id: sessionId,
     hook_event_name: 'SessionStart',
     cwd: 'D:\\Desktop\\Develop\\agent-cockpit\\.claude\\worktrees\\stage1',
-  }, { homeDir, environment: { AGENT_COCKPIT_HOME: homeDir } });
+  }, { homeDir, environment: { AGENT_COCKPIT_HOME: homeDir }, ppid: process.pid });
 
   assert.equal(result.exitCode, 0);
   assert.equal(result.additionalContext, `Agent Cockpit: http://127.0.0.1:${runtime.info.port}/`);

@@ -110,12 +110,12 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
     assert.equal(Object.fromEntries(cssDeclarations(source, `${row} > *`)).flex, 'none');
     assert.match(source, new RegExp(`${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^{]*\\{[^}]*flex: 0 1 auto; min-width: 0;`));
   }
-  for (const selector of ['.pr-body', '.pr-text', '.pr-text > .badges', '.pr-actions', '.pr-actions .merge-btn, .pr-actions .conflict-btn', '.merge-state', '.merge-state.ok', '.pr .pline', '.pr .pline > *', '.pr .pline > .ptitle']) {
+  for (const selector of ['.task-body', '.task-text', '.task-actions', '.task-actions .link-btn', '.task-actions .link-btn:hover', '.close-note > span', '.pr-body', '.pr-text','.pr-text > .badges', '.pr-actions', '.pr-actions .merge-btn, .pr-actions .conflict-btn', '.merge-state', '.merge-state.ok', '.pr .pline', '.pr .pline > *', '.pr .pline > .ptitle']) {
     assert.deepEqual(cssDeclarations(web, selector), cssDeclarations(mock, selector), `${selector} はモックとそろえる`);
   }
   assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-text'))['min-width'], '0', '題は左の列の中で折り返す');
   assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions')).flex, 'none');
-  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions')).width, '148px', '操作の列の幅を行をまたいでそろえる');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions'))['min-width'], 'calc(6.5em + 11px)', 'マージできる行どうしで操作の列の幅をそろえる');
   assert.match(web, /@media \(max-width: 480px\) \{\s*\.task-head \{ flex-wrap: wrap; \}/);
   assert.match(mock, /@media \(max-width: 480px\) \{\s*\.task \.line \{ flex-wrap: wrap; \}/);
 
@@ -733,6 +733,55 @@ test('PRフィルターの札はマージできる件数を表示する', () => 
   const chip = summary.children.find((item) => item.dataset.filter === 'prs');
   assert.ok(chip);
   assert.equal(chip.children.find((item) => item.tag === 'strong').textContent, '3');
+});
+
+test('件数の札は1件以上の種類と隠している種類だけを出す', () => {
+  const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  const renderSummary = functionSource(web, 'renderSummary');
+  const judgmentHelpers = ['isActiveDecision', 'isAwaitingDecision', 'countJudgments', 'hasEffectiveAnswer']
+    .map((name) => functionSource(web, name));
+  const summary = { children: [], replaceChildren(...children) { this.children = children; } };
+  const filterNote = { replaceChildren() {} };
+  const element = (tag, className, textContent = '') => ({
+    tag, className, textContent, children: [], dataset: {}, attributes: {},
+    append(...items) { this.children.push(...items); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener() {},
+  });
+  const context = pageContext(web, {
+    summary,
+    displayPreferences: { hidden: ['agents'] },
+    pullRequestMergeableCount: (groups) => groups.reduce((count, group) => count + group.mergeableCount, 0),
+    pullRequestOpenCount: () => 0,
+    isPendingDecision: () => false,
+    hasEffectiveAnswer: () => false,
+    element,
+    document: {
+      createTextNode: (textContent) => ({ textContent }),
+      getElementById: () => filterNote,
+    },
+  });
+  vm.runInContext(`${judgmentHelpers.join('\n')}\n${filters}\n${renderSummary}\nthis.renderSummary = renderSummary;`, context);
+  context.renderSummary([], [{ mergeableCount: 1 }]);
+
+  assert.deepEqual(summary.children.map((item) => item.dataset.filter), ['agents', 'prs']);
+});
+
+test('フォーカスのある札が消えたら並びの次の札、無ければ直前の札へ移す', () => {
+  const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  const context = pageContext(web, {});
+  vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\nthis.filterFocusFallback = filterFocusFallback;`, context);
+  const button = (filter) => ({ dataset: filter ? { filter } : {} });
+  const buttons = [button(), button('permission'), button('agents'), button('prs')];
+
+  assert.equal(context.filterFocusFallback(buttons, 'blocking').dataset.filter, 'agents');
+  assert.equal(context.filterFocusFallback(buttons.slice(0, 3), 'prs').dataset.filter, 'agents');
+  assert.equal(context.filterFocusFallback([button()], 'prs'), null);
+});
+
+test('札が消えた再描画のフォーカスは代わりの札か表示切り替えへ戻す', () => {
+  const render = functionSource(web, 'render');
+  assert.match(render, /focusData\.kind === 'filter' && !button\s*\?\s*filterFocusFallback\(buttons, focusData\.key\) \|\| document\.querySelector\('\[data-action="mode"\]/);
 });
 
 test('PRフィルターの切り替えは保存し、両表示モードのPR欄を隠す', () => {

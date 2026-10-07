@@ -76,7 +76,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.equal((estimatedText.match(/10:00/g) || []).length, 1);
   assert.match(estimatedText, /入力待ちらしい: いいえ/);
 
-  const mockFunctions = ['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
+  const mockFunctions = ['mainRow', 'unknownSessionControls', 'lineagePersisted', 'lineageNotice'].map((name) => functionSource(mock, name));
   assert.ok(mockFunctions.every(Boolean));
   const mockContext = pageContext(mock, {
     ui: { estimatedSessions: ['unknown'] },
@@ -209,7 +209,7 @@ test('モックでも終わったセッションはタスクの有無にかか�
   const visibleSource = mock.match(/const visibleSessions = p => p\.sessions\.filter\([\s\S]*?\);/)?.[0];
   assert.ok(visibleSource);
   const context = pageContext(mock, {
-    ui: { hideFinished: true, hiddenSessions: [] },
+    ui: { hideFinished: true, hiddenSessions: [], deletedSessionIds: [] },
     showIdleSessions: false,
     isFinishedSession: (session) => session.finished,
     isIdleHiddenSession: () => false,
@@ -279,7 +279,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   const mockReservationNotices = functionSource(mock, 'reservationNoticeRows');
   assert.ok(mockPr && mockReservationNotices);
   const mockContext = pageContext(mock, {
-    ui: { hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
+    ui: { dismissedMergeHistory: [], deletedClosedPrs: [], hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
     pullRequestMergeResults: new Map(),
     openPrs: () => [{ number: 1 }],
     parentPr: () => null,
@@ -295,7 +295,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     absoluteTimeLabel: (value) => value,
     transientMessageVisible: () => false,
   });
-  vm.runInContext(`${mockReservationNotices}\n${mockPr}\nthis.renderPr = prBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'visibleClosedPrs')}\n${mockReservationNotices}\n${mockPr}\nthis.renderPr = prBlock;`, mockContext);
   const mockProduct = {
     id: 'product', name: 'Product', repo: { name: 'owner/repo', fetched: '少し前' },
     prs: [{ number: 2, state: 'merged' }, { number: 3, state: 'closed' }],
@@ -604,6 +604,8 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
+    crossReviewState: () => ({ cls: 'mute' }),
+    crossReviewWaitReason: () => null,
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
   });
@@ -664,6 +666,8 @@ test('モックの予約チェックは PR 行にあり、確認欄は即時マ�
     conflictButton: () => '',
     prBadges: () => '',
     crossReviewLine: () => '',
+    crossReviewState: () => ({ cls: 'mute' }),
+    crossReviewWaitReason: () => null,
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
   });
@@ -718,8 +722,9 @@ test('マージ確認欄の文言は実装とモックでそろえる', () => {
   }
   assert.match(web, /スカッシュまたはリベースでは \$\{childNumbers\} に #\$\{pullRequest\.number\} のコミットが残るため/);
   assert.match(mock, /スカッシュまたはリベースでは \$\{kidNames\} に #\$\{pr\.number\} のコミットが残るため/);
-  assert.match(web, /完了条件 \$\{met\}\/\$\{task\.criteria\.length\}\$\{task\.closedByUser \? '、画面で完了にした' : ''\}/);
-  assert.match(mock, /完了条件 \$\{met\}\/\$\{t\.criteria\.length\}\$\{closedHere \? '、画面で完了にした' : ''\}/);
+  assert.match(web, /完了条件 \$\{met\}\/\$\{task\.criteria\.length\}`/);
+  assert.match(web, /if \(task\.closedByUser\) actions\.append\(element\('span', 'meta', '画面で完了にした'\)\)/);
+  assert.match(mock, /完了条件 \$\{met\}\/\$\{t\.criteria\.length\}<\/span>\$\{closedHere \? '<span class="meta">画面で完了にした<\/span>' : ''\}/);
 });
 
 test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {
@@ -735,6 +740,7 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
     element: fakeElement,
     document: { getElementById: () => note },
     hideFinishedInput,
+    recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
     changeDisplaySetting: (key, input) => changes.push([key, input.checked]),
   });
   vm.runInContext(`${countsSource}\n${noteSource}\nthis.countHidden = finishedHiddenCounts; this.renderFinished = renderFinishedNote;`, context);
@@ -776,6 +782,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
     element: fakeElement,
     document: { getElementById: () => note },
     lastState: {},
+    recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
     render: () => { renders += 1; },
   });
   vm.runInContext(`${endedAgentSource}\n${finishedInstructionSource}\n${activeDecisionSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
@@ -801,15 +808,15 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
 
   const finished = { ...stale, session_id: 'finished', finished: true };
   const manuallyHidden = { ...stale, session_id: 'manual', hidden: true };
-  assert.deepEqual(JSON.parse(JSON.stringify(context.idleCount([stale, finished, manuallyHidden], now))), [stale]);
-  context.renderIdle(1);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.idleCount([stale, finished, manuallyHidden], now))), [stale, manuallyHidden]);
+  context.renderIdle(1, [stale]);
   assert.equal(note.hidden, false);
   assert.equal(note.children[0].textContent, '更新の無いセッションを隠しています (1 件)');
   assert.equal(note.children[1].textContent, '表示する');
   note.children[1].listeners.get('click')();
   assert.equal(context.showIdleSessions, true);
   assert.equal(renders, 1);
-  context.renderIdle(1);
+  context.renderIdle(1, [stale]);
   assert.equal(note.children[0].textContent, '更新の無いセッションを表示しています');
   assert.equal(note.children[1].textContent, '隠す');
   note.children[1].listeners.get('click')();
@@ -822,7 +829,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   const mockFinishedInstruction = functionSource(mock, 'isFinishedInstructionRecord');
   const mockInstructionRecords = functionSource(mock, 'instructionRecordsForSession');
   const mockContext = pageContext(mock, {
-    ui: { idleHideMinutes: 30, instructionRecords: [] },
+    ui: { idleHideMinutes: 30, instructionRecords: [], hiddenSessions: [], hiddenSessionUpdatedAt: {} },
     effectiveDecisionState: (decision) => decision.kind,
     commonQuestionsOf: (session) => session.commonQuestions || [],
     isFinishedCommonQuestion: () => false,
@@ -1368,6 +1375,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
     renderSummary() {},
     renderExcludedNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
     renderFinishedNote() {},
     renderIdleNote() {},
     updateTitle() {},
@@ -1390,6 +1398,57 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
 
   assert.deepEqual(JSON.parse(JSON.stringify(modeButton.focusOptions)), { preventScroll: true });
   assert.equal(root.children[0].textContent, '更新の無いセッションを隠しています。下の「表示する」から表示できます。');
+});
+
+test('一覧が空になる描き直しで札が消えたら残る札か表示切り替えへフォーカスを移す', () => {
+  const render = functionSource(web, 'render');
+  const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  const exercise = (chipKeys) => {
+    const focusable = (dataset) => ({ dataset, setAttribute() {}, focus(options) { this.focusOptions = options; } });
+    const modeButton = focusable({ mode: 'product' });
+    const chips = chipKeys.map((filter) => focusable({ filter }));
+    const context = pageContext(web, {
+      answerNoteComposing: false,
+      commonQuestionComposing: false,
+      instructionComposing: false,
+      renderRouting() {},
+      commonQuestionDiagnosticsNotice: () => null,
+      instructionDiagnosticsNotice: () => null,
+      instructionAlternativeRecoveryPanel: () => null,
+      instructionPreviewRecoveryPanel: () => null,
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: () => [],
+      renderSummary() {},
+      renderExcludedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
+      renderIdleNote() {},
+      updateTitle() {},
+      summary: { querySelectorAll: () => chips },
+      document: {
+        activeElement: { dataset: { filter: 'prs' }, hasAttribute: () => false },
+        querySelectorAll: () => [modeButton],
+        querySelector: (selector) => selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
+      },
+      HTMLTextAreaElement: class {},
+      HTMLElement: class {},
+      displayPreferences: { mode: 'product' },
+      visibleSinceSeen: () => [],
+      orderedProducts: () => [],
+      root: { replaceChildren() {} },
+      element: (tag, className, textContent) => ({ tag, className, textContent }),
+    });
+    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${render}\nthis.render = render;`, context);
+    context.render({ sessions: [], pullRequests: [] });
+    return { modeButton, chips };
+  };
+
+  const withChip = exercise(['agents']);
+  assert.ok(withChip.chips[0].focusOptions);
+  assert.equal(withChip.modeButton.focusOptions, undefined);
+  const withoutChip = exercise([]);
+  assert.deepEqual(JSON.parse(JSON.stringify(withoutChip.modeButton.focusOptions)), { preventScroll: true });
 });
 
 test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
@@ -1423,6 +1482,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       renderSummary() {},
       renderExcludedNote() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
       renderFinishedNote() {},
       renderIdleNote() {},
       updateTitle() {},

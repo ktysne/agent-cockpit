@@ -8,7 +8,7 @@
       "key": "result.row",
       "bounds": {
         "x": 26,
-        "y": 1056,
+        "y": 1055,
         "width": 1524,
         "height": 88
       },
@@ -18,7 +18,7 @@
       "key": "result.close",
       "bounds": {
         "x": 989,
-        "y": 1068,
+        "y": 1067,
         "width": 72,
         "height": 64
       },
@@ -28,7 +28,7 @@
       "key": "result.retargeted",
       "bounds": {
         "x": 286,
-        "y": 247,
+        "y": 246,
         "width": 297,
         "height": 44
       },
@@ -38,7 +38,7 @@
       "key": "result.restack",
       "bounds": {
         "x": 591,
-        "y": 247,
+        "y": 246,
         "width": 173,
         "height": 44
       },
@@ -48,7 +48,7 @@
       "key": "result.reason",
       "bounds": {
         "x": 26,
-        "y": 351,
+        "y": 350,
         "width": 1524,
         "height": 38
       },
@@ -58,7 +58,7 @@
       "key": "result.merged-list",
       "bounds": {
         "x": 26,
-        "y": 1009,
+        "y": 1008,
         "width": 1524,
         "height": 47
       },
