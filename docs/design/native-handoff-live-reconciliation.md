@@ -118,13 +118,57 @@ handoff receipt に必要な fingerprint が保存されていない場合、同
 attempt の同一 fingerprint は一度だけ反映され、不一致 fingerprint は拒否されることを確認する。
 この実 runtime smoke は file-store restart、kernel restore、attempt replay、handoff receipt replay を検証していない。
 
-## 再接続の次シナリオ
+## 再接続の短時間実測
 
-composition が返す owned collector には `disconnect` と `connect` があり、再接続時には runtime connection を開き直して generation を進める。
-Claude の `owned-native-source.readCurrent` は unsupported を返すため、disconnect/connect だけでは proof は復元されない。
-再接続後は新しい Claude native context event と fresh source lease が必要になる。
+Claude Code CLI `2.1.292` の単一 owned process を起動し、native wait 中に owned source collector を disconnect/connect した。
+試験時のsource revisionは `620c211f6e9161686cac82b8e17ee61e474bb7b1` で、product sourceは実行前後で安定していた。
 
-次の短時間試験では、旧 proof の失効、旧 wait と writer の状態、connection generation の増加、new context 受信前の authority 不在、fresh proof 成立、旧 proof/writer の継続拒否、delivery dispatch 0件を別々に観測する。
-collector disconnect が process を停止するか旧 wait を無効化した場合は、そのまま unknown として記録する。
-同じ process を再 spawn したり旧 context を再利用したりして reconnect 成功と扱わない。
-この follow-up は許可済みだが、この記録の handoff smoke とは別の試験結果として保存する。
+| 観測 | 結果 |
+| --- | --- |
+| 初期 native wait、proof、writer | すべて有効 |
+| disconnect 後の旧 proof、旧 writer | 両方拒否 |
+| disconnect 後の旧 wait | response 前に無効化 |
+| 同一 process での collector 再接続 | 接続成功、generation 1 から2へ進行 |
+| reconnect 後の Claude source read | `unsupported` |
+| fresh context 前の proof | なし |
+| fresh context 前の `composition.reconcileProof` | proof を発行しなかった |
+| reconnect 後の2回目の native wait/context | 観測なし。旧 wait が無効で次の prompt step に進めなかった |
+| process restart | 試していない。owned process の再spawnは0 |
+| native delivery dispatch | probeからの呼出し0 |
+| outcome | `unknown`、reason `reconnect_wait_invalidated` |
+
+collector disconnect 自体では owned Claude process は動作中のままだった。
+旧 wait が無効化されたため、waitを解放して次の native context を要求する操作は行わず、scenario cleanup で owned process を停止した。
+fresh context後の proof、旧 proof/writerの継続拒否、product delivery transportの実dispatch件数は未確認である。
+この結果は reconnect 成功または Issue #177 の完了を示さない。
+
+## 再接続の実行証拠
+
+| 項目 | 値 |
+| --- | --- |
+| source revision | `620c211f6e9161686cac82b8e17ee61e474bb7b1` |
+| Claude Code CLI | `2.1.292` |
+| reconnect harness SHA-256 | `1A7F0EA65809BDE2964025CFF62137F47D92E6E8C1A00133A0DCA4B000A00112` |
+| sanitized result SHA-256 | `A34E3B3FC85B5BB5000272746FB101A7F671CEF57B9D24C3108F79B31F948E96` |
+| sanitized result artifact | `.cross-review/pr177-native-handoff-runtime/claude-owned-wait-live-results-b5819aa9-226b-40cd-b3d0-14ec44e06593.json` |
+| reconnect evidence addendum | `.cross-review/pr177-native-handoff-runtime/reconnect-runtime-addendum.md` |
+| frozen handoff harness SHA-256 | `0EAE91B092A6AABB7D8D6A278B2825670687FF7A99624067F50DA1E16A552AC2` |
+
+最初の reconnect 試行は結果を保存できず、`result_write_failed` の unknown として扱った。
+その後の専用result path write/remove preflight はsandbox内で `EPERM` となり、process count 0、隔離HOME count 0を確認した。
+保存済み結果はこの初回試行を置き換えず、昇格実行で行った別試行の unknown を記録している。
+
+## 再接続試験のcleanup
+
+| 確認 | 結果 |
+| --- | --- |
+| Claude process count after cleanup | 0 |
+| isolated HOME count after cleanup | 0 |
+| child exit / close | 確認 |
+| owned child inactive / wait endpoint inactive | 確認 |
+| isolated HOME removed | 確認 |
+| normal authentication fingerprint | 実行前後で不変 |
+| product source stability | true |
+| timeout handles cleared / HTTP end observer restored | true |
+| secret/private payload / nonce artifact | 0 |
+| HOME preserved for unconfirmed process | なし |
