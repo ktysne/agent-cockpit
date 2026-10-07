@@ -143,6 +143,21 @@ function killProcessTree(child) {
   });
 }
 
+// 起動したプロセスが本体を別のプロセスで立てて抜けたときは、プロセスツリーをたどれないので、起動ごとに固有の一時プロファイルのパスで本体を探して止める。
+function killByUserDataDirectory(userDataDirectory) {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      const script = 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:MANUAL_BROWSER_PROFILE) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
+      execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        windowsHide: true,
+        env: { ...process.env, MANUAL_BROWSER_PROFILE: userDataDirectory },
+      }, () => resolve());
+    } else {
+      execFile('pkill', ['-KILL', '-f', '--', userDataDirectory], () => resolve());
+    }
+  });
+}
+
 /**
  * ブラウザをヘッドレスで起動して DevTools につなぐ。
  * 普段のプロファイルの localStorage と拡張機能が画面に混ざらないよう、一時のユーザーデータを使う。
@@ -166,6 +181,7 @@ async function launchBrowser({ browserPath, temporaryParent = os.tmpdir() }) {
   child.once('error', (error) => { spawnError = error; });
 
   async function dispose() {
+    if (child.exitCode === 0) await killByUserDataDirectory(userDataDirectory);
     await killProcessTree(child);
     await new Promise((resolve) => {
       if (child.exitCode !== null) resolve();
@@ -181,7 +197,8 @@ async function launchBrowser({ browserPath, temporaryParent = os.tmpdir() }) {
     let endpoint = null;
     while (!endpoint) {
       if (spawnError) throw new Error(`ブラウザを起動できません: ${spawnError.message}`);
-      if (child.exitCode !== null) throw new Error(`ブラウザが起動直後に終了しました(終了コード ${child.exitCode})`);
+      // Edge は起動したプロセスが本体を別のプロセスで立てて終了コード 0 で抜けることがあるため、0 なら待ち受けを待ち続ける。
+      if (child.exitCode !== null && child.exitCode !== 0) throw new Error(`ブラウザが起動直後に終了しました(終了コード ${child.exitCode})`);
       if (performance.now() > deadline) throw new Error('ブラウザの DevTools の待ち受けを確認できません');
       try {
         endpoint = parseDevToolsActivePort(await fsp.readFile(path.join(userDataDirectory, 'DevToolsActivePort'), 'utf8'));

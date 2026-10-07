@@ -718,8 +718,9 @@ test('マージ確認欄の文言は実装とモックでそろえる', () => {
   }
   assert.match(web, /スカッシュまたはリベースでは \$\{childNumbers\} に #\$\{pullRequest\.number\} のコミットが残るため/);
   assert.match(mock, /スカッシュまたはリベースでは \$\{kidNames\} に #\$\{pr\.number\} のコミットが残るため/);
-  assert.match(web, /完了条件 \$\{met\}\/\$\{task\.criteria\.length\}\$\{task\.closedByUser \? '、画面で完了にした' : ''\}/);
-  assert.match(mock, /完了条件 \$\{met\}\/\$\{t\.criteria\.length\}\$\{closedHere \? '、画面で完了にした' : ''\}/);
+  assert.match(web, /完了条件 \$\{met\}\/\$\{task\.criteria\.length\}`/);
+  assert.match(web, /if \(task\.closedByUser\) actions\.append\(element\('span', 'meta', '画面で完了にした'\)\)/);
+  assert.match(mock, /完了条件 \$\{met\}\/\$\{t\.criteria\.length\}<\/span>\$\{closedHere \? '<span class="meta">画面で完了にした<\/span>' : ''\}/);
 });
 
 test('完了済みを隠した件数を知らせ、表示する操作で設定を解除する', () => {

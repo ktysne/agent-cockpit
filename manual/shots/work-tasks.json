@@ -22,7 +22,7 @@
         "task.heading": ".session-body > h3.sub:has(+ ul.task-list)",
         "task.state": ".session-body > ul.task-list > .task-item:nth-child(1) .badge",
         "task.title": ".session-body > ul.task-list > .task-item:nth-child(1) .task-title",
-        "task.count": ".session-body > ul.task-list > .task-item:nth-child(1) .task-head > .meta",
+        "task.count": ".session-body > ul.task-list > .task-item:nth-child(1) .task-actions > .meta:first-child",
         "task.close": ".session-body > ul.task-list > .task-item:nth-child(1) .close-task",
         "task.criteria": ".session-body > ul.task-list > .task-item:nth-child(1) .criteria-list",
         "task.todo-toggle": ".session-body > ul.task-list + .ended-toggle",
@@ -40,10 +40,10 @@
     {
       "do": "screenshot",
       "name": "closing",
-      "target": ".session-body > ul.task-list > .task-item:nth-child(1) .task-head",
+      "target": ".session-body > ul.task-list > .task-item:nth-child(1) .task-body",
       "parts": {
         "closing.cancel": ".session-body > ul.task-list > .task-item:nth-child(1) [data-cancel-close-task]",
-        "closing.note": ".session-body > ul.task-list > .task-item:nth-child(1) .task-head > .meta:last-child"
+        "closing.note": ".session-body > ul.task-list > .task-item:nth-child(1) .task-actions > .meta:last-child"
       }
     }
   ]
