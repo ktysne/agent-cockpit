@@ -181,9 +181,10 @@ h3.sub .count { font-weight: normal; }
 /* PR の行と同じく、文字は左の列で折り返し、完了条件の数と完了にするは右の列に縦に積む。 */
 .task-body { display: flex; gap: 12px; align-items: stretch; }
 .task-text { flex: 1 1 auto; min-width: 0; }
-.task-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
+.task-actions { flex: none; width: 112px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
 .task-actions .link-btn { color: var(--text-2); font-size: 12px; }
 .task-actions .link-btn:hover { color: var(--text); }
+.close-note > span { display: block; }
 .task .line { display: flex; gap: 4px 8px; align-items: baseline; min-width: 0; }
 .task .line > * { flex: none; }
 .task .line > .title, .task .line > .prod-tag, .task .line > .session-tag { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
@@ -1263,7 +1264,7 @@ function taskItem(p, session, t, withTag) {
   const key = closedTaskKey(session, t);
   const pending = pendingClosedTasks.has(key);
   const close = state === 'done' ? '' : pending
-    ? `<button type="button" class="link-btn" data-cancel-close-task="${esc(key)}">取り消す</button><span class="meta">5 秒後に完了にします。</span>`
+    ? `<button type="button" class="link-btn" data-cancel-close-task="${esc(key)}">取り消す</button><span class="meta close-note" aria-label="5 秒後に完了にします。"><span>5 秒後に</span><span>完了にします。</span></span>`
     : `<button type="button" class="link-btn" data-close-task="${esc(key)}">完了にする</button>`;
   return `<li class="task ${state}"><div class="task-body"><div class="task-text">
     <div class="line"><span class="state ${state}">${label}</span>${sessionTag(p, session, withTag)}
