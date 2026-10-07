@@ -751,6 +751,63 @@ function createRequestHandler(options) {
       jsonResponse(response, 200, saved);
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/record-deletions') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      const keys = ['session_ids', 'merge_history', 'closed_pull_requests'];
+      const validPullRequest = (record) => record && typeof record === 'object' && !Array.isArray(record)
+        && Object.keys(record).length === 3 && Object.keys(record).every((key) => ['owner', 'repo', 'number'].includes(key))
+        && validRepositoryPart(record.owner) && validRepositoryPart(record.repo)
+        && Number.isSafeInteger(record.number) && record.number > 0;
+      if (!body || typeof body !== 'object' || Array.isArray(body)
+        || Object.keys(body).some((key) => !keys.includes(key))
+        || keys.some((key) => Object.hasOwn(body, key) && (!Array.isArray(body[key]) || body[key].length > 50
+          || !body[key].every(key === 'session_ids' ? isShortSessionId : validPullRequest)))
+        || !keys.some((key) => body[key]?.length > 0)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const now = Date.now();
+      let sessions = 0;
+      for (const sessionId of new Set(body.session_ids || [])) {
+        if (state.deleteSession(sessionId, now)) sessions += 1;
+      }
+      const deletedPullRequests = new Set();
+      const changedRepositories = new Map();
+      for (const record of body.merge_history || []) {
+        if (state.dismissMergedPullRequestHistory(record.owner, record.repo, record.number, now)) {
+          deletedPullRequests.add(`${record.owner.toLowerCase()}/${record.repo.toLowerCase()}#${record.number}`);
+        }
+      }
+      for (const record of body.closed_pull_requests || []) {
+        if (!state.deleteClosedPullRequest(record.owner, record.repo, record.number)) continue;
+        const repository = `${record.owner.toLowerCase()}/${record.repo.toLowerCase()}`;
+        deletedPullRequests.add(`${repository}#${record.number}`);
+        changedRepositories.set(repository, record);
+      }
+      for (const { owner, repo } of changedRepositories.values()) {
+        try {
+          await pullRequestTracker?.refreshReviewGroups?.(owner, repo);
+        } catch {
+          logLine(homeDir, `pull request group refresh failed for ${owner}/${repo}`);
+        }
+      }
+      jsonResponse(response, 200, { deleted: { sessions, pullRequests: deletedPullRequests.size } });
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/hidden-sessions') {
       if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -1095,6 +1152,11 @@ function createRequestHandler(options) {
       const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
       state.addEvent(body, eventMetadata);
       const event = sanitizeEvent(body, eventMetadata);
+      if (event && state.deletedSessions.has(event.session_id)
+        && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
+        jsonResponse(response, 202, { accepted: true });
+        return;
+      }
       if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
         (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
         isGithubCreatePullRequestTool(event.tool_name)

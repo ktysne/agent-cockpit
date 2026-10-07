@@ -337,6 +337,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .excluded-note[hidden] { display: none; }
+.record-deletion { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.record-delete-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; }
+.record-delete-icon svg { width: 16px; height: 16px; }
+
 .wait { font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .wait.stale { color: var(--danger); font-weight: 600; }
 .decision.long-wait { background: var(--danger-soft); }
@@ -634,7 +638,7 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review' }, load());
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
 ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
@@ -648,6 +652,7 @@ for (const [key, notice] of Object.entries(ui.reservationNotices)) {
 ui.mergeableCondition = ['operation', 'ci', 'cross-review'].includes(ui.mergeableCondition) ? ui.mergeableCondition : 'cross-review';
 ui.reviewSkips = ui.reviewSkips && typeof ui.reviewSkips === 'object' && !Array.isArray(ui.reviewSkips) ? ui.reviewSkips : {};
 let hiddenSessionsUndo = null;
+const recordDeletionConfirmations = new Map();
 let showIdleSessions = false;
 const answerErrors = new Map();
 const pendingClosedTasks = new Map();
@@ -928,21 +933,23 @@ const picksOf = a => a.choice === 'pick' ? (a.picks || []) : [];
 const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) || !!a.note.trim();
 const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
 
-const allSessions = () => DATA.products.flatMap(p => p.sessions);
+const allSessions = () => DATA.products.flatMap(p => p.sessions).filter(s => !ui.deletedSessionIds.includes(s.id));
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === 'busy' || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
-  const updatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
+  const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
+  const hiddenAt = ui.hiddenSessions.includes(session.id) ? Date.parse(ui.hiddenSessionUpdatedAt[session.id] || '') : NaN;
+  const updatedAt = Number.isFinite(hiddenAt) ? Math.max(Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : hiddenAt, hiddenAt) : lastUpdatedAt;
   return Number.isFinite(updatedAt) && now - updatedAt > ui.idleHideMinutes * 60_000;
 }
 function idleHiddenSessions(sessions = allSessions(), now = Date.now()) {
-  return sessions.filter(session => !ui.hiddenSessions.includes(session.id)
-    && !(ui.hideFinished && isFinishedSession(session))
+  return sessions.filter(session => !(ui.hideFinished && !ui.hiddenSessions.includes(session.id) && isFinishedSession(session))
     && isIdleHiddenSession(session, now));
 }
-const visibleSessions = p => p.sessions.filter(s => !ui.hiddenSessions.includes(s.id)
-  && !(ui.hideFinished && isFinishedSession(s))
+const visibleSessions = p => p.sessions.filter(s => !ui.deletedSessionIds.includes(s.id)
+  && (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s))
+  && !(ui.hideFinished && !ui.hiddenSessions.includes(s.id) && isFinishedSession(s))
   && (showIdleSessions || !isIdleHiddenSession(s)));
 const effectiveDecisionState = d => d.kind;
 function isActiveDecision(decision) {
@@ -1008,21 +1015,100 @@ const hasHiddenJudgmentItems = s => (!isShown('permission') && s.perms.length > 
   || s.decisions.some(d => isActiveDecision(d) && !isShown(decisionCategory(d)));
 
 function countHidden() {
-  const hiddenRows = allSessions().filter(s => !ui.hiddenSessions.includes(s.id)).reduce((n, s) => n
+  const hiddenRows = allSessions().filter(s => (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s))).reduce((n, s) => n
     + s.decisions.filter(d => isActiveDecision(d) && !isShown(decisionCategory(d))).length
     + s.subagents.filter(agent => isBusyAgent(s, agent) && !isShown('agents')).length
     + (isShown('permission') ? 0 : s.perms.length), 0);
   return hiddenRows + (isShown('prs') ? 0 : DATA.products.reduce((n, p) => n + openPrs(p).length, 0));
 }
 
+const recordDeletionTargets = new Map();
+function visibleClosedPrs(product) {
+  return (product.closedPrs || []).filter(pr => !ui.deletedClosedPrs.includes(`${product.repo.name}#${pr.number}`.toLowerCase()));
+}
+function finishedDeletionTargets() {
+  const targets = { sessions: [], prs: [], closed: [] };
+  if (!ui.hideFinished) return targets;
+  targets.sessions = allSessions().filter(s => !ui.hiddenSessions.includes(s.id) && isFinishedSession(s)).map(s => s.id);
+  for (const product of DATA.products) {
+    for (const pr of product.prs) {
+      const key = `${product.repo.name}#${pr.number}`.toLowerCase();
+      if (isMerged(product, pr) && pr.headMismatch !== true && !hasVisibleAutomaticMergeResult(product, pr)
+        && !ui.dismissedMergeHistory.includes(key)) targets.prs.push(key);
+    }
+    for (const pr of visibleClosedPrs(product)) targets.closed.push(`${product.repo.name}#${pr.number}`.toLowerCase());
+  }
+  // 同じリポジトリを複数のプロダクトが共有しても、件数の Set と同じく 1 件に数える。
+  targets.prs = [...new Set(targets.prs)];
+  targets.closed = [...new Set(targets.closed)];
+  return targets;
+}
+function recordDeletionControls(band, targets, count) {
+  recordDeletionTargets.set(band, { targets, count });
+  let confirmation = recordDeletionConfirmations.get(band);
+  if (confirmation) confirmation.count = countRecordDeletionTargets(
+    intersectRecordDeletionTargets(confirmation.targets, targets),
+  );
+  if (confirmation && !confirmation.count && !confirmation.pending) {
+    recordDeletionConfirmations.delete(band);
+    confirmation = null;
+  }
+  if (!count && !confirmation) return '';
+  const attrs = action => `type="button" class="link-btn${action === 'open' ? ' record-delete-icon' : ''}" data-record-band="${band}" data-record-action="${action}" aria-disabled="${confirmation?.pending === true && !action.startsWith('mock-')}"`;
+  return confirmation
+    ? `<span class="record-deletion"><span>${confirmation.count} 件の記録を削除します。元に戻せません</span>${confirmation.error ? `<span class="error" role="alert">${esc(confirmation.error)}</span>` : ''}<button ${attrs('confirm')}>${confirmation.pending ? '削除中…' : '削除する'}</button><button ${attrs('cancel')}>やめる</button><button ${attrs('mock-pending')}>モック: 通信中を表示</button><button ${attrs('mock-error')}>モック: 失敗の知らせを表示</button></span>`
+    : `<span class="record-deletion"><button ${attrs('open')} aria-label="この ${count} 件の記録を削除する" title="この ${count} 件の記録を削除する"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button></span>`;
+}
+
+function hasVisibleAutomaticMergeResult(product, pullRequest) {
+  if (ui.merged[prKey(product, pullRequest.number)]?.auto !== true) return false;
+  return (pullRequestMergeResults.get(product.repo.name) || []).some(result => result.productId === product.id
+    && result.number === pullRequest.number && pullRequestMergeResultVisible(result));
+}
+function intersectRecordDeletionTargets(selected, current) {
+  return Object.fromEntries(Object.keys(selected).map(field => {
+    const currentTargets = new Set(current[field] || []);
+    return [field, (selected[field] || []).filter(target => currentTargets.has(target))];
+  }));
+}
+function countRecordDeletionTargets(targets) {
+  return Object.values(targets).reduce((total, items) => total + items.length, 0);
+}
+function focusRecordDeletion(band, action) {
+  (document.querySelector(`[data-record-band="${band}"][data-record-action="${action}"]`)
+    || document.querySelector(`[data-mode="${ui.mode}"]`))?.focus({ preventScroll: true });
+}
+function deleteNoteRecords(band) {
+  const confirmation = recordDeletionConfirmations.get(band);
+  if (!confirmation || confirmation.pending) return;
+  const targets = intersectRecordDeletionTargets(confirmation.targets, recordDeletionTargets.get(band)?.targets || {});
+  if (!countRecordDeletionTargets(targets)) {
+    recordDeletionConfirmations.delete(band);
+    return;
+  }
+  const { sessions, prs, closed } = targets;
+  ui.deletedSessionIds = [...new Set([...ui.deletedSessionIds, ...sessions])];
+  ui.hiddenSessions = ui.hiddenSessions.filter(id => !sessions.includes(id));
+  for (const id of sessions) delete ui.hiddenSessionUpdatedAt[id];
+  ui.dismissedMergeHistory = [...new Set([...ui.dismissedMergeHistory, ...prs])];
+  ui.deletedClosedPrs = [...new Set([...ui.deletedClosedPrs, ...closed])];
+  if (hiddenSessionsUndo) {
+    hiddenSessionsUndo.sessionIds = hiddenSessionsUndo.sessionIds.filter(id => !sessions.includes(id));
+    if (!hiddenSessionsUndo.sessionIds.length) hiddenSessionsUndo = null;
+  }
+  recordDeletionConfirmations.delete(band);
+}
+
 function finishedHiddenCounts() {
   if (!ui.hideFinished) return { sessions: 0, pullRequests: 0 };
   const pullRequests = new Set();
   for (const product of DATA.products) {
-    for (const pr of product.prs.filter(item => isMerged(product, item) && item.headMismatch !== true)) {
+    for (const pr of product.prs.filter(item => isMerged(product, item) && item.headMismatch !== true
+      && !hasVisibleAutomaticMergeResult(product, item)
+      && !ui.dismissedMergeHistory.includes(`${product.repo.name}#${item.number}`.toLowerCase()))) {
       pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
     }
-    for (const pr of product.closedPrs || []) pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
+    for (const pr of visibleClosedPrs(product)) pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
   }
   return {
     sessions: allSessions().filter(session => !ui.hiddenSessions.includes(session.id) && isFinishedSession(session)).length,
@@ -1031,7 +1117,7 @@ function finishedHiddenCounts() {
 }
 
 function renderSummary() {
-  const sessions = allSessions().filter(s => !ui.hiddenSessions.includes(s.id));
+  const sessions = allSessions().filter(s => (!ui.hiddenSessions.includes(s.id) || isIdleHiddenSession(s)));
   const judgmentCounts = countJudgments(sessions);
   const agents = sessions.reduce((n, s) => n + s.subagents.filter(agent => isBusyAgent(s, agent)).length, 0);
   const prs = DATA.products.reduce((n, p) => n + openPrs(p).filter(pr => pullRequestMergeable(p, pr)).length, 0);
@@ -1047,8 +1133,7 @@ function renderSummary() {
   note.hidden = ui.hidden.length === 0;
   note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
   const excluded = document.getElementById('excluded-note');
-  const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id));
-  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo;
+  const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id) && !isIdleHiddenSession(s));
   const hiddenJudgmentCounts = countJudgments(hiddenSessions);
   const pendingCounts = [
     hiddenJudgmentCounts.permission ? `許可待ち ${hiddenJudgmentCounts.permission} 件` : '',
@@ -1061,23 +1146,26 @@ function renderSummary() {
   const showHidden = hiddenSessions.length
     ? `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>外したセッションを戻す</button>`
     : '';
-  excluded.innerHTML = `${undo}${showHidden}`;
+  excluded.innerHTML = `${undo}${showHidden}${recordDeletionControls('excluded', { sessions: hiddenSessions.map(s => s.id), prs: [], closed: [] }, hiddenSessions.length)}`;
+  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   const hiddenFinished = finishedHiddenCounts();
   const finishedParts = [
     hiddenFinished.sessions ? `セッション ${hiddenFinished.sessions} 件` : '',
     hiddenFinished.pullRequests ? `PR ${hiddenFinished.pullRequests} 件` : '',
   ].filter(Boolean);
   const finished = document.getElementById('finished-note');
-  finished.hidden = finishedParts.length === 0;
   finished.innerHTML = finishedParts.length
     ? `<span>終わったものを隠しています (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished>表示する</button>`
     : '';
+  finished.innerHTML += recordDeletionControls('finished', finishedDeletionTargets(), hiddenFinished.sessions + hiddenFinished.pullRequests);
+  finished.hidden = finishedParts.length === 0 && !recordDeletionConfirmations.has('finished');
   const idleHiddenCount = idleHiddenSessions().length;
   const idle = document.getElementById('idle-note');
-  idle.hidden = idleHiddenCount === 0;
   idle.innerHTML = idleHiddenCount
     ? `<span>${showIdleSessions ? '更新の無いセッションを表示しています' : `更新の無いセッションを隠しています (${idleHiddenCount} 件)`}</span><button type="button" class="link-btn" data-show-idle>${showIdleSessions ? '隠す' : '表示する'}</button>`
     : '';
+  idle.innerHTML += recordDeletionControls('idle', { sessions: idleHiddenSessions().map(s => s.id), prs: [], closed: [] }, idleHiddenCount);
+  idle.hidden = idleHiddenCount === 0 && !recordDeletionConfirmations.has('idle');
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
@@ -1770,7 +1858,7 @@ function reservationNoticeRows(p) {
 const MERGED_VISIBLE_COUNT = 5;
 function prBlock(p, withTag) {
   const roots = openPrs(p).filter(pr => !parentPr(p, pr));
-  const merged = p.prs.filter(pr => isMerged(p, pr));
+  const merged = p.prs.filter(pr => isMerged(p, pr) && !ui.dismissedMergeHistory.includes(`${p.repo.name}#${pr.number}`.toLowerCase()));
   const tag = withTag ? `<span class="prod-tag">${esc(p.name)}</span>` : '';
   const headingTag = withTag ? 'h3' : 'h4';
   const head = `<header class="prs-head"><${headingTag} class="pr-repo-title"><strong>${esc(p.repo.name)}</strong></${headingTag}>${tag}<span class="meta">GitHub から ${esc(p.repo.fetched)}に取得</span></header>`;
@@ -1782,7 +1870,7 @@ function prBlock(p, withTag) {
   const visibleMerged = ui.hideFinished ? mergedNewestFirst.filter(({ pr }) => pr.headMismatch === true) : mergedNewestFirst;
   const mergedLine = foldedPrLine(p, 'merged', 'マージ済み (24 時間)', visibleMerged.map(({ pr, m }) =>
     `<span class="badge long ${pr.headMismatch === true ? 'warn' : 'mute'}">#${pr.number} (${METHOD_LABEL[m.method]}、${esc(absoluteTimeLabel(m.at, Date.now(), m.at))}${m.auto ? '、予約で自動' : ''}${pr.headMismatch === true ? `、警告: 予約時に確認した ${shortShaLabel(pr.reservedHeadRefOid)} とは異なる ${shortShaLabel(pr.mergedHeadRefOid)} がマージされました` : ''})</span>`), true);
-  const closed = p.closedPrs || [];
+  const closed = visibleClosedPrs(p);
   const closedLine = foldedPrLine(p, 'closed', 'クローズ済み', closed.map(pr =>
     `<a class="badge mute" href="https://github.com/${esc(p.repo.name)}/pull/${pr.number}" target="_blank" rel="noopener noreferrer" aria-label="GitHub で PR #${pr.number} を開く" title="${esc(pr.title)}">#${pr.number}</a>`));
   const empty = !roots.length
@@ -1973,7 +2061,7 @@ function orderControls(p, idx, total, pinnedCount) {
 
 // 「×」は外すセッションがあるときだけ出す。セッションの無いカードは、PR が閉じるか未読を既読にすれば消える。
 function productCloseButton(p, describedById) {
-  if (!visibleSessions(p).length) return '';
+  if (!visibleSessions(p).some(s => !ui.hiddenSessions.includes(s.id))) return '';
   return `<button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトのセッションを一覧から外す" aria-describedby="${describedById}" title="このプロダクトのセッションを一覧から外す">×</button>`;
 }
 
@@ -2084,7 +2172,8 @@ function renderKindMode() {
 function render() {
   const active = document.activeElement;
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
-  const focusData = focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
+  const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
+    : focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
        : active?.dataset?.showFinished ? { kind: 'show-finished' }
        : active?.dataset?.showIdle ? { kind: 'show-idle' }
@@ -2098,7 +2187,9 @@ function render() {
   renderReloadNote();
   renderRouting();
   document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
-  if (focusData?.attribute) {
+  if (focusData?.kind === 'record-deletion') {
+    focusRecordDeletion(focusData.band, focusData.action);
+  } else if (focusData?.attribute) {
     [...document.querySelectorAll(`[${focusData.attribute}]`)].find(button => button.getAttribute(focusData.attribute) === focusData.value)?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'show-finished') {
     (document.querySelector('[data-show-finished]') || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
@@ -2123,6 +2214,40 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.dataset.recordBand) {
+    const band = t.dataset.recordBand;
+    if (t.dataset.recordAction === 'open') {
+      recordDeletionConfirmations.set(band, { ...recordDeletionTargets.get(band), targets: { ...recordDeletionTargets.get(band).targets }, pending: false, error: '' });
+      render();
+      focusRecordDeletion(band, 'cancel');
+    } else if (t.dataset.recordAction === 'cancel') {
+      if (recordDeletionConfirmations.get(band)?.pending) return;
+      recordDeletionConfirmations.delete(band);
+      render();
+      focusRecordDeletion(band, 'open');
+    } else if (t.dataset.recordAction === 'mock-pending') {
+      const confirmation = recordDeletionConfirmations.get(band);
+      if (!confirmation) return;
+      confirmation.pending = true;
+      confirmation.error = '';
+      save();
+      render();
+    } else if (t.dataset.recordAction === 'mock-error') {
+      const confirmation = recordDeletionConfirmations.get(band);
+      if (!confirmation) return;
+      confirmation.pending = false;
+      confirmation.error = '記録を削除できませんでした。もう一度お試しください。';
+      save();
+      render();
+    } else {
+      if (recordDeletionConfirmations.get(band)?.pending) return;
+      deleteNoteRecords(band);
+      save();
+      render();
+      focusRecordDeletion(band, 'open');
+    }
+    return;
+  }
   if (t.dataset.mode) { ui.mode = t.dataset.mode; }
   else if (t.hasAttribute('data-show-idle')) {
     showIdleSessions = !showIdleSessions;
@@ -2183,12 +2308,17 @@ document.addEventListener('click', e => {
   } else if (t.dataset.hideSession) {
     const id = t.dataset.hideSession;
     hiddenSessionsUndo = null;
-    if (!ui.hiddenSessions.includes(id)) ui.hiddenSessions.push(id);
+    if (!ui.hiddenSessions.includes(id)) {
+      ui.hiddenSessions.push(id);
+      ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
+    }
   } else if (t.dataset.closeProduct) {
     const product = byId(t.dataset.closeProduct);
     if (product) {
-      const sessionIds = visibleSessions(product).map(session => session.id);
+      const sessionIds = visibleSessions(product).filter(session => !ui.hiddenSessions.includes(session.id)).map(session => session.id);
+      if (!sessionIds.length) return;
       hiddenSessionsUndo = { productName: product.name, sessionIds };
+      for (const id of sessionIds) ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
       ui.hiddenSessions = [...new Set([
         ...ui.hiddenSessions,
         ...sessionIds,

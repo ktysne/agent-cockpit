@@ -30,6 +30,75 @@ function mergedPullRequest(number, headRefOid, mergedAt = '2026-10-03T11:00:00.0
   return { number, headRefOid, headRefName, baseRefName, mergedAt };
 }
 
+test('非表示にしたマージ履歴は再記録と復元で戻らず、新しいマージ日時で表示する', async (t) => {
+  const homeDir = await temporaryDirectory(t);
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  const record = { owner: 'example', repo: 'project', number: 31,
+    url: 'https://github.com/example/project/pull/31', mergedAt: new Date(now - 100).toISOString() };
+  state.registerPullRequest('merged-session', { url: record.url }, {}, now);
+  state.recordMergedPullRequest(record, now);
+  assert.equal(state.dismissMergedPullRequestHistory('example', 'project', 999, now), false);
+  assert.equal(state.dismissMergedPullRequestHistory('example', 'project', 31, now), true);
+  assert.equal(state.dismissMergedPullRequestHistory('example', 'project', 31, now), false);
+  state.recordMergedPullRequest({ ...record, title: '更新したタイトル' }, now);
+  assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project', now), []);
+  assert.equal(state.mergedPullRequests.size, 1);
+  assert.equal(state.pullRequestRegistrations()[0].state, 'merged');
+  await state.flushPersistence();
+  const restored = await DashboardState.load(homeDir, { now: now + 1 });
+  assert.deepEqual(restored.mergedPullRequestHistoryForRepo('example', 'project', now + 1), []);
+  assert.equal(restored.mergedPullRequests.values().next().value.historyDismissedAt, new Date(now).toISOString());
+  restored.recordMergedPullRequest({ ...record, mergedAt: new Date(now + 2).toISOString() }, now + 2);
+  const history = restored.mergedPullRequestHistoryForRepo('example', 'project', now + 2);
+  assert.equal(history.length, 1);
+  assert.equal(history[0].historyDismissedAt, undefined);
+  await restored.flushPersistence();
+});
+
+test('head が食い違うマージ履歴は非表示にしない', () => {
+  const state = new DashboardState();
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  state.recordMergedPullRequest({ owner: 'example', repo: 'project', number: 31,
+    url: 'https://github.com/example/project/pull/31', headMismatch: true, mergedAt: new Date(now).toISOString() }, now);
+  assert.equal(state.dismissMergedPullRequestHistory('example', 'project', 31, now), false);
+  assert.equal(state.mergedPullRequestHistoryForRepo('example', 'project', now).length, 1);
+});
+
+test('closed 登録を削除してグループに反映し、merged 登録とスタック追跡を残す', async () => {
+  const state = new DashboardState();
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  const product = { key: 'project', name: 'project' };
+  for (const [number, status] of [[31, 'merged'], [32, 'closed'], [33, 'open']]) {
+    state.registerPullRequest(`session-${number}`, { url: `https://github.com/example/project/pull/${number}` }, { product }, now);
+    state.updatePullRequest(`session-${number}`, 'example', 'project', number, {
+      state: status, mergedAt: status === 'merged' ? new Date(now - 100).toISOString() : null,
+      lastOpen: { title: `PR ${number}`, headRefName: `feat/${number}`, baseRefName: number === 33 ? 'feat/31' : 'main', headRefOid: 'a'.repeat(40) },
+      ...(status === 'merged' ? { mergedHead: { headRefName: 'feat/31', baseRefName: 'main', headRefOid: 'a'.repeat(40) } } : {}),
+    });
+  }
+  state.rememberRelatedPullRequest({ owner: 'example', repo: 'project', number: 34,
+    url: 'https://github.com/example/project/pull/34', lastOpen: pullRequest(34, 'feat/34', 'main') }, now);
+  state.updateRelatedPullRequest('example', 'project', 34, { state: 'closed' });
+  const tracker = new PullRequestTracker({ state, now: () => now, readCrossReviewState: async () => null });
+  tracker.repositories.set('example/project', {
+    defaultBranch: 'main', openPullRequests: [pullRequest(33, 'feat/33', 'feat/31')],
+    mergeMethods: ['merge'], uninspectedNumbers: new Set(), restackResults: new Map(), liveMergedBranches: new Map(), listAvailable: true,
+  });
+  await tracker.refreshReviewGroups('example', 'project');
+  const before = tracker.snapshot()[0];
+  const merged = state.pullRequestRegistrations().find(record => record.number === 31);
+  assert.ok(before.merged.some(record => record.number === 32));
+  assert.equal(state.deleteClosedPullRequest('example', 'project', 32), true);
+  assert.equal(state.deleteClosedPullRequest('example', 'project', 34), true);
+  assert.equal(state.deleteClosedPullRequest('example', 'project', 31), false);
+  await tracker.refreshReviewGroups('example', 'project');
+  const after = tracker.snapshot()[0];
+  assert.ok(!after.merged.some(record => [32, 34].includes(record.number)));
+  assert.deepEqual(after.trees, before.trees);
+  assert.deepEqual(state.pullRequestRegistrations().find(record => record.number === 31), merged);
+});
+
 function compareResult(commits = [], aheadBy = commits.length) {
   return { ahead_by: aheadBy, commits: commits.map((sha) => ({ sha })) };
 }
