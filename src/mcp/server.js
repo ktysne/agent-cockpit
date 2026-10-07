@@ -499,12 +499,13 @@ async function postCommonQuestion(name, args, options = {}) {
     if (name === 'cockpit_answer_poll' && (!response || response.status === null || response.status >= 500)) {
       if (writer) await notifyQuestionResponseLost(args.questionId, writer, options);
     }
-    const message = response?.status === 400 ? '質問の入力を確認してください。'
-      : response?.status === 403 ? WRITER_REQUIRED_MESSAGE
-        : response?.status === 404 ? 'この実行期間の質問が見つかりません。'
-          : response?.status === 409 ? '質問の内容が変わったため登録できません。'
-            : response?.status === 503 ? '質問サービスを利用できません。'
-              : UNREACHABLE_MESSAGE;
+    const message = response?.timedOut ? TIMEOUT_MESSAGE
+      : response?.status === 400 ? '質問の入力を確認してください。'
+        : response?.status === 403 ? WRITER_REQUIRED_MESSAGE
+          : response?.status === 404 ? 'この実行期間の質問が見つかりません。'
+            : response?.status === 409 ? '質問の内容が変わったため登録できません。'
+              : response?.status === 503 ? '質問サービスを利用できません。'
+                : UNREACHABLE_MESSAGE;
     return toolResult(message, true);
   }
 
