@@ -1152,6 +1152,100 @@ test('a resolved notification confirms only a written owned wait and remains sco
   await runner.stop();
 });
 
+test('a late resolution for an invalidated active wait is consumed once after turn completion', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  const events = [];
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    onNative: (event) => events.push(event),
+    onWaitRequired: (value) => { receipt = value; },
+  });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  harness.child.send(codexTurnCompleted());
+  assert.deepEqual(events.map((event) => event.type), ['identity', 'context', 'context_ended']);
+  assert.equal(waitReplies(harness).length, 0);
+
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().failureCode, 'native_server_resolution_unmatched');
+  await runner.stop();
+});
+
+test('a late resolution for an early wait invalidated by turn completion keeps the runner alive', async (t) => {
+  const workspace = createWorkspace(t);
+  const events = [];
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsBeforeTurnResponse: [makeWaitRequest()],
+    terminalBeforeTurnResponse: true,
+  });
+  const runner = createWaitRunner(workspace, harness, { onNative: (event) => events.push(event) });
+
+  await runner.start({ inputText: 'fixed task' });
+  assert.deepEqual(events.map((event) => event.type), ['identity', 'context_ended']);
+  assert.equal(waitReplies(harness).length, 0);
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  await runner.stop();
+});
+
+test('a discarded wait resolution does not change a later native hold capture', async (t) => {
+  const workspace = createWorkspace(t);
+  let contextCurrent = true;
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, {
+    isContextCurrent: () => contextCurrent,
+    onWaitRequired: (value) => { receipt = value; },
+  });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  harness.child.send(makeNativeHoldRequest('later-hold'));
+  contextCurrent = false;
+  assert.equal(runner.releaseWait(receipt), true);
+  contextCurrent = true;
+  assert.equal(waitReplies(harness).length, 0);
+
+  const pending = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(pending.pending, [{ kind: 'question', count: 1 }]);
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(pending.checkCurrent(), true);
+  harness.child.send(nativeHoldResolved('later-hold'));
+  assert.equal(pending.checkCurrent(), false);
+  await runner.stop();
+});
+
+test('retired wait resolutions still require the original ID type and thread', async (t) => {
+  const scenarios = [
+    { waitId: 7, resolution: nativeHoldResolved('7'), failureCode: 'native_server_resolution_unmatched' },
+    { waitId: 'wrong-thread-wait', resolution: nativeHoldResolved('wrong-thread-wait', 'thread_other'), failureCode: 'native_server_resolution_scope_mismatch' },
+  ];
+  for (const scenario of scenarios) {
+    const workspace = createWorkspace(t);
+    const harness = createWaitProfileHarness(workspace, {
+      waitCallsAfterTurnResponse: [makeWaitRequest({}, { requestId: scenario.waitId })],
+    });
+    const runner = createWaitRunner(workspace, harness);
+    await runner.start({ inputText: 'fixed task' });
+    await new Promise((resolve) => setImmediate(resolve));
+    harness.child.send(codexTurnCompleted());
+    harness.child.send(scenario.resolution);
+    assert.equal(runner.snapshot().failureCode, scenario.failureCode);
+    await runner.stop();
+  }
+});
+
 test('a resolved notification may precede the owned wait write callback but cannot confirm a failed write', async (t) => {
   for (const writeError of [null, new Error('private write failure')]) {
     const workspace = createWorkspace(t);

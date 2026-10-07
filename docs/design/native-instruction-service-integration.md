@@ -30,9 +30,9 @@ runnerのprocess spawnとprovider runtime eventはfixtureで置換するため�
 | ID-F08-NS06 | 共通。ack喪失またはpipe書き込み失敗 | 明示send後に応答を失う | write開始、ack拒否/期限、同一ファイル再起動 | 指示write累計1回以下、unknown。再sendと再起動による追加write0 |
 | ID-F08-NS07 | 共通の安全条件。完全な入力証拠が必要 | ackだけ、欠損clientId、部分本文、別turn/item、早期証拠を渡す | accepted/applying/appliedの境界、候補は60秒/128件/256KiB以内 | ackだけのapplied0、不一致証拠によるapplied0。完全一致証拠だけを受付後に採用。能力がないproviderの適用結果はunknown |
 | ID-F08-NS08 | 共通。複数admissionまたは旧lease | 別ownerのopaque capability、clone、旧接続の証拠を渡す | 実owner routing、同期guard、証拠購読 | 誤owner write0、旧証拠のapplied0、汎用RPCへの迂回0 |
-| ID-F08-NS09 | 共通の安全条件。review、ended delegated、question/permission hold、native未対応next-user-input | 保存済み指示を禁止対象へ明示send | source/target/mode確認、実wire | 指示write0、standalone/startへの自動変換0。question/permission pending状態では送信を保留する。この状態条件は現在のnative経路で未確認 |
+| ID-F08-NS09 | 共通の安全条件。review、ended delegated、question/permission hold、native未対応next-user-input | 保存済み指示を禁止対象へ明示send | source/target/mode確認、実wire | 指示write0、standalone/startへの自動変換0。question/permission pending時のtarget表示とsteer拒否はfixtureで確認するが、実runtimeでpendingが発生した場合の挙動は未確認 |
 | ID-F08-NS10 | 共通。取消とsend-startの直列化 | 保存前の取消と送信開始を競合させる | 実storeのcommit順序と途中台帳 | 取消確定ならwrite0。送信開始後の取消を送信前取消として扱わない |
-| ID-F08-NS11 | Claude Code 2.1.292の実standalone startを1回確認（source `ea600a0`） | boot context terminal後、同じowned process/launch/session/actor/periodへ明示`start` | durable `sending`、stdin write後のnative context acknowledgement、次context、終了とcleanup | 別session/追加spawn/fallback 0。`accepted`を観測、applied/steer/pending waitは未確認 |
+| ID-F08-NS11 | Claude Code 2.1.292の実standalone startを1回確認（e83cf3dの順序修正前のsource `ea600a0`） | boot context terminal後、同じowned process/launch/session/actor/periodへ明示`start` | durable `sending`、stdin write後のnative context acknowledgement、次context、終了とcleanup | 別session/追加spawn/fallback 0。`accepted`を観測、applied/steer/pending waitは未確認 |
 | ID-F08-NS12 | Codex CLI 0.160.1の実run3（source `e83cf3d`）。機能証拠は一致したがscenarioはunknown | 同じowned processでboot terminal後の明示startと固定turnへのsteer | sending checkpoint revision 2/6、完全input、clientId、thread、turn、native item、service applied、cleanup | process/spawnは1回、start/steerは各1回で、両deliveryのnative evidenceとservice appliedが一致した。清掃前scanで`rawPayloadOutsideDurableDataCount=1`となりfile分類が記録されていないため、全体は`scenario_gate_not_met` |
 
 宛先、送信回数、状態、禁止副作用の許容差は0とする。
@@ -62,7 +62,10 @@ HTTP requestにはnative profile allowlist、receipt、writer capabilityによ�
 
 `/api/state`の`instructionTargets`は、native integrationがlaunchRefごとに返す安全な状態だけを表示する。
 `startNativeInstructionServer`は呼び出し元の`serverOptions.instructionTargetState`を上書きし、登録状態を確認する内部callbackを必ず渡す。
-`instructionTargetState` callbackは`{status, nativeTurnId, reason}`だけを返し、serverはこれを既存launch metadataへ重ねて表示する。HTTP requestからreceiptやprofileを受け取らない。
+`instructionTargetState` callbackは通常`{status, nativeTurnId, reason}`を返す。
+Codexでnative questionまたはapprovalが保留中なら、`status: 'waiting'`、`reason: 'native_request_pending'`、件数を示す`nativeWaiting: [{kind, count}, ...]`を返す。
+serverは`nativeWaiting`を含めて既存launch metadataへ重ねて表示し、steerは`working`状態の場合だけ受け付ける。
+HTTP requestからreceiptやprofileを受け取らない。
 
 compositionは通常writerと同じ`capture`と`checkFinal`を使い、runnerの物理writer適格性も副作用なしで確認する。
 この照会は`prepare`を呼ばないため、capabilityやreservationを作らない。
@@ -87,11 +90,16 @@ factory closeはservice、router、admissionごとのowned process、storeのflu
 
 ## 保留中のquestion/permission状態
 
-通常instructionのnative ownerは、現在の実装ではquestionまたはpermission pending状態を読み取らない。
-Codex runnerはapproval policyを`never`、Claude runnerはpermission modeを`dontAsk`に固定しており、runner parserからquestion/permission待機状態を通知する契約もない。
-そのため、`mode: 'question'`や`mode: 'permission'`のAPI入力を拒否する回帰だけでは、実runtimeが待機中の送信保留を証明できない。
+Codex runnerはnative questionとapproval要求を現在のturnに結び付けて保持し、compositionは種類別の件数を`nativeWaiting`へ投影する。
+要求が残っている間のtarget stateは`waiting`となり、HTTP serverは`working`以外のtargetへのsteerを拒否する。
+このparser、件数の投影、steer gateはfixtureで実装と回帰を確認している。
+実runtimeでquestionまたはpermission要求が発生した場合の表示と送信保留は未確認である。
+
+Codex runnerの`approvalPolicy: 'never'`とClaude runnerのpermission mode `dontAsk`は起動時の設定値であり、実runtimeがquestionやpermission要求を出さないことの証拠にはならない。
+`mode: 'question'`や`mode: 'permission'`のAPI入力拒否はnative request保留中の処理を通らないため、pending時の送信保留を証明しない。
+
 Claude専用`cockpit_wait`のcontinuation状態は別機能であり、question/permission pending状態と同一視しない。
-この状態のcollector/parser/service gateと副作用0検証は未実装・未確認で、Issue #175のNS09/G4と関連Issue #174/#170の残事項として扱う。
+実runtimeでのpending観測と送信保留は未確認であり、Issue #175のNS09/G4と関連Issue #174/#170の残事項として扱う。
 
 ## 検証結果
 
@@ -99,14 +107,19 @@ Claude専用`cockpit_wait`のcontinuation状態は別機能であり、question/
 内訳はrouter 14件、service/provider conformance 17件、factory/server lifecycle 4件である。
 自動試験はsend-start永続化、保存失敗時のwrite拒否、detach中の同期再認可、完全なCodex input証拠、unsupported mode、明示start、review/delegated拒否、取消とsend-startの順序競合を両providerで検証する。
 question/permissionのmode API拒否も確認するが、これはpending状態を保留する証明ではない。
+`test/native-instruction-service-http-target.test.js`はfixtureでCodexのquestion/approval件数表示とcreate/send拒否を確認する。
 fixtureはruntime process spawnとprovider event transportを置換する。別turn/input mismatch、client ID欠損、item再利用、早期証拠は`test/owned-native-instruction-dispatch.test.js`と`test/instruction-input-correlator.test.js`の既存回帰が補完する。
 NS11では、Claude Code 2.1.292をsource `ea600a000ee77554f750b6bec1aed946d8563ae9`の製品integration factory、native collector/runner/writer、実durable storeへ接続した。
+このsourceはe83cf3dの順序修正より前であり、記録済みの実runtime結果は修正前のsourceに対するものだ。
 隔離HOMEの同じowned processでboot contextのterminalを確認してから、同じlaunch/session/actor/periodへ明示`start`を1回送った。
 追加spawnとfallbackは0回で、実checkpointがstdin write時に`sending`状態だった。native context acknowledgement後に`accepted`となり、独立した次assistant contextとterminal eventも確認した。
 acceptedは入力適用を意味しない。Claude native eventでは完全な本文とclient IDを確認できず、serviceAppliedObserved=false、appliedVerified=falseだった。
 認証credentialはread-onlyで利用し、前後のfingerprint一致を確認した。隔離HOMEとworkspaceのprompt marker検出は0件、一時runtime全体のcredential token検出も0件で、durable一時storeには指示本文を検出した。child exitとclose、runner inactive、integration closeの確認後に隔離HOME/storeを削除し、cleanup errorはnullだった。
-Claude steer、実question/permission pendingの保留、Codex NS12は未確認である。source、script、resultのSHA-256は調整用worktreeのignore対象manifestに固定し、source `ea600a000ee77554f750b6bec1aed946d8563ae9`、script `763703F6DB3052CDB87FF4A6A80E9736A196BA8F64F4F45F6761D2019D071308`、result `C08B8B2C62AD624A9C526E4A6C5326F67E293061C785117A648B912AFEF93935`を識別子とする。結果statusは`real_claude_start_accepted_applied_unverified`。
-question/permission pendingのstate観測は未対応であるため、NS09の期待条件を満たしたとは扱わない。
+NS11の実測時点では、Claude steer、実question/permission pendingの保留、Codex NS12は未確認だった。
+post-e83のClaude経路はfixtureで確認したが、Claude実runtimeは再実行していない。
+source、script、resultのSHA-256は調整用worktreeのignore対象manifestに固定し、source `ea600a000ee77554f750b6bec1aed946d8563ae9`、script `763703F6DB3052CDB87FF4A6A80E9736A196BA8F64F4F45F6761D2019D071308`、result `C08B8B2C62AD624A9C526E4A6C5326F67E293061C785117A648B912AFEF93935`を識別子とする。
+結果statusは`real_claude_start_accepted_applied_unverified`。
+fixtureでpending stateの表示と送信拒否を確認しているが、実runtimeでのpending観測は未確認であるため、NS09の期待条件を満たしたとは扱わない。
 この文書だけでIssue #175全体や実native採用の完了を宣言しない。
 
 R1のHTTP target回帰を`npm run test:inprocess -- test/owned-native-instruction-dispatch.test.js test/native-instruction-service-http-target.test.js test/native-instruction-service-factory.test.js test/native-launch-composition.test.js`で実行し、171/171件が成功した。
