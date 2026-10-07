@@ -33,7 +33,7 @@ runnerのprocess spawnとprovider runtime eventはfixtureで置換するため�
 | ID-F08-NS09 | 共通の安全条件。review、ended delegated、question/permission hold、native未対応next-user-input | 保存済み指示を禁止対象へ明示send | source/target/mode確認、実wire | 指示write0、standalone/startへの自動変換0。question/permission pending状態では送信を保留する。この状態条件は現在のnative経路で未確認 |
 | ID-F08-NS10 | 共通。取消とsend-startの直列化 | 保存前の取消と送信開始を競合させる | 実storeのcommit順序と途中台帳 | 取消確定ならwrite0。送信開始後の取消を送信前取消として扱わない |
 | ID-F08-NS11 | Claude Code 2.1.292の実standalone startを1回確認（source `ea600a0`） | boot context terminal後、同じowned process/launch/session/actor/periodへ明示`start` | durable `sending`、stdin write後のnative context acknowledgement、次context、終了とcleanup | 別session/追加spawn/fallback 0。`accepted`を観測、applied/steer/pending waitは未確認 |
-| ID-F08-NS12 | Codex CLI 0.160.1の実run1。`startLaunch`は正常返却せずharness結果がunknown（source `9d5f7e1`） | Codex threadへの明示startと固定turnへのsteer | login、thread-start、identity/context、完全input/clientId、終了確認 | login後にthreadとidentity/contextを観測した。初回`turn/start` RPCは1回、通常instructionRequestは0回。steerとappliedは未確認 |
+| ID-F08-NS12 | Codex CLI 0.160.1の実run3（source `e83cf3d`）。機能証拠は一致したがscenarioはunknown | 同じowned processでboot terminal後の明示startと固定turnへのsteer | sending checkpoint revision 2/6、完全input、clientId、thread、turn、native item、service applied、cleanup | process/spawnは1回、start/steerは各1回で、両deliveryのnative evidenceとservice appliedが一致した。清掃前scanで`rawPayloadOutsideDurableDataCount=1`となりfile分類が記録されていないため、全体は`scenario_gate_not_met` |
 
 宛先、送信回数、状態、禁止副作用の許容差は0とする。
 ランダムIDと時刻だけを比較時に正規化し、能力差やunknownを正規化しない。
@@ -133,5 +133,18 @@ run1時点のsourceではcollector接続がcomposition起動と並行してお�
 修正後のfactory試験は`npm run test:inprocess -- test/native-instruction-service-factory.test.js`で11/11件成功した。
 製品factory、owned runner/source、real file storeを通し、5.2秒のlogin遅延、collector未接続、active proof、actor-lifeを持つstandalone terminal、actor-lifeを持たないearly terminal、pending login中のstopとcloseを検証した。
 この遅延とnative eventはfixtureで作っており、Codex runtime再検証の成功証拠には含めない。
-Codexのsteer、実runtimeでの再検証、NS12の完全input/clientIdに基づくapplied判定は未確認である。
 run1 harness script SHA-256は`9BCABA656BC8361C3C3B56BD95DF379D6A3748CAFAFF32472DE1148AFD87C108`、sanitized result SHA-256は`2FCB0179E8EE415C1175DEFF8828A69547381FF926A934DC903B938CB0094C42`で、root-side manifestにsource/script/resultを固定している。
+
+run2ではcheckpoint検査が不成立となり、シナリオ結果はunknownだった。後続のreal store自己試験でobserver digest mismatchを再現したが、run2自身の具体的なerror codeは保存されていない。
+
+source `e83cf3d`でCodex CLI 0.160.1を同じowned processで起動し、spawn 1回、boot contextのterminal、明示start 1回、steer 1回を観測した。
+両送信ではstdin write前のdurable `sending` checkpoint revision 2と6を確認した。保存envelope digestは独立期待値と一致し、native input全文hashは送信本文と一致した。client ID、thread、turn、native item、service appliedもそれぞれ一致した。
+このためstartとsteerの機能証拠は確認できたが、run3の全体statusは`unknown`、failure codeは`scenario_gate_not_met`だった。
+清掃前のrunRoot scanでは`rawPayloadOutsideDurableDataCount=1`だったが、summaryに該当artifactのfile分類はなく、種類を推定しない。このraw payload countはdurable data内を対象に含めない。
+scan対象はrunRootに限られ、通常HOME、OS store、その他の絶対pathは走査していない。隔離HOMEの`.codex/auth.json`は不在で、既知の認証secret値との照合も実施していない。`credentialPatternArtifactCount=0`は別のpattern scan結果であり、端末全体にtokenがないことを示さない。
+summaryの`rawNativeInputSavedOutsideProductData=false`は固定値であり、入力の不存在の証拠には使わない。
+child exitとclose、runner inactive、integration close、隔離HOME/cwd/storeの削除を確認し、通常認証設定とsourceが不変であることも確認した。
+harness scriptには固定BOOT/START/STEER試験文面が含まれる。sanitized summaryには実測native入力全文、raw frame、tokenを保存せず、試験文面のhashと相関結果を保存する。この保全範囲の記録は、runRoot外を含む端末全体の不在確認ではない。
+run3 script SHA-256は`55159428905C999DF2F3D17591DFB40C04D098D14091DA6A1D47FC9F2677B444`、sanitized summary SHA-256は`8A2469AC4360661538ECA9A336D5D0F03C568FBC0B6411DAA9EA0622BFDB586A`で、root-side manifestに固定している。
+
+NS09のquestion/permission pending保留は未対応のままで、Claudeのapplied判定も未確認である。PR #202はDraftを維持する。
