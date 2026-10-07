@@ -498,7 +498,7 @@ test('同じsession IDに複数providerのprojectionがある場合は表示操�
       ready: async () => {},
       dashboardSnapshot: async () => ({ version: 1, questions: [questionFor(claude), questionFor(codex)] }),
     },
-    })).runtime;
+  })).runtime;
 
   runtime.state.setProjectionHidden('claude', sharedSessionId, true);
   const unhidden = await postUi(runtime, '/api/hidden-sessions', { action: 'unhide', session_ids: [sharedSessionId] });
