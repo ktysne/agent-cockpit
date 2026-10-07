@@ -32,7 +32,7 @@ runnerのprocess spawnとprovider runtime eventはfixtureで置換するため�
 | ID-F08-NS08 | 共通。複数admissionまたは旧lease | 別ownerのopaque capability、clone、旧接続の証拠を渡す | 実owner routing、同期guard、証拠購読 | 誤owner write0、旧証拠のapplied0、汎用RPCへの迂回0 |
 | ID-F08-NS09 | 共通の安全条件。review、ended delegated、question/permission hold、native未対応next-user-input | 保存済み指示を禁止対象へ明示send | source/target/mode確認、実wire | 指示write0、standalone/startへの自動変換0。question/permission pending状態では送信を保留する。この状態条件は現在のnative経路で未確認 |
 | ID-F08-NS10 | 共通。取消とsend-startの直列化 | 保存前の取消と送信開始を競合させる | 実storeのcommit順序と途中台帳 | 取消確定ならwrite0。送信開始後の取消を送信前取消として扱わない |
-| ID-F08-NS11 | 実runtime未確認。Claude standalone | 隔離HOMEの同じowned processで次contextを明示start | runtime版、同session/period、context、native受付、終了確認 | 別session0、再spawn0。echoでappliedを認定しない。真正入力証拠不足はunknown |
+| ID-F08-NS11 | Claude Code 2.1.292の実standalone startを1回確認（source `ea600a0`） | boot context terminal後、同じowned process/launch/session/actor/periodへ明示`start` | durable `sending`、stdin write後のnative context acknowledgement、次context、終了とcleanup | 別session/追加spawn/fallback 0。`accepted`を観測、applied/steer/pending waitは未確認 |
 | ID-F08-NS12 | 実runtime未確認。Codex本人認証 | 固定turnへのsteer、terminal後の明示start | 新ログインURL/期限、thread/turn/item/clientId/完全input、終了確認 | 同threadのみ。clientUserMessageIdとnative clientIdの実対応を確認するまでappliedを認定しない |
 
 宛先、送信回数、状態、禁止副作用の許容差は0とする。
@@ -96,7 +96,12 @@ Claude専用`cockpit_wait`のcontinuation状態は別機能であり、question/
 自動試験はsend-start永続化、保存失敗時のwrite拒否、detach中の同期再認可、完全なCodex input証拠、unsupported mode、明示start、review/delegated拒否、取消とsend-startの順序競合を両providerで検証する。
 question/permissionのmode API拒否も確認するが、これはpending状態を保留する証明ではない。
 fixtureはruntime process spawnとprovider event transportを置換する。別turn/input mismatch、client ID欠損、item再利用、早期証拠は`test/owned-native-instruction-dispatch.test.js`と`test/instruction-input-correlator.test.js`の既存回帰が補完する。
-実Claude/Codex runtimeは未確認であり、対応するログイン・実wire schema・終了確認の証跡を自動fixture結果と分けて記録する。
+NS11では、Claude Code 2.1.292をsource `ea600a000ee77554f750b6bec1aed946d8563ae9`の製品integration factory、native collector/runner/writer、実durable storeへ接続した。
+隔離HOMEの同じowned processでboot contextのterminalを確認してから、同じlaunch/session/actor/periodへ明示`start`を1回送った。
+追加spawnとfallbackは0回で、実checkpointがstdin write時に`sending`状態だった。native context acknowledgement後に`accepted`となり、独立した次assistant contextとterminal eventも確認した。
+acceptedは入力適用を意味しない。Claude native eventでは完全な本文とclient IDを確認できず、serviceAppliedObserved=false、appliedVerified=falseだった。
+認証credentialはread-onlyで利用し、前後のfingerprint一致を確認した。child exitとclose、integration close、runner inactiveの後に隔離HOME/storeを削除し、marker/token scanは完了して0件、cleanup errorはnullだった。
+Claude steer、実question/permission pendingの保留、Codex NS12は未確認である。source、script、resultのSHA-256は調整用worktreeのignore対象manifestに固定し、source `ea600a000ee77554f750b6bec1aed946d8563ae9`、script `763703F6DB3052CDB87FF4A6A80E9736A196BA8F64F4F45F6761D2019D071308`、result `C08B8B2C62AD624A9C526E4A6C5326F67E293061C785117A648B912AFEF93935`を識別子とする。結果statusは`real_claude_start_accepted_applied_unverified`。
 question/permission pendingのstate観測は未対応であるため、NS09の期待条件を満たしたとは扱わない。
 この文書だけでIssue #175全体や実native採用の完了を宣言しない。
 
