@@ -61,7 +61,8 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
     entry.receipts.clear();
     for (const listener of [...closedListeners]) { try { listener(entry.token, reason); } catch {} }
   }
-  function expire() { for (const entry of entries.values()) if (!entry.nativeTurnId && entry.expiresAt <= NOW()) clearPayload(entry); }
+  function expirePayload(entry) { clearPayload(entry, entry.used && !entry.settled ? 'instruction_ack_timeout' : 'instruction_observation_closed'); }
+  function expire() { for (const entry of entries.values()) if (!entry.nativeTurnId && entry.expiresAt <= NOW()) expirePayload(entry); }
 
   function current(entry) {
     return !invalidated && entry && !entry.payloadCleared && !entry.used && entry.expiresAt > NOW() && operations.check(entry.capture, entry.metadata) === true;
@@ -144,7 +145,7 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       entry.resolve = resolve; entry.reject = reject;
       entry.timer = setTimeout(() => settle(entry, dispatchError('instruction_ack_timeout')), ACK_MS);
       entry.input = command.input; entry.prepared = prepared;
-      entry.expiryTimer = setTimeout(() => clearPayload(entry), Math.max(0, entry.expiresAt - NOW())); entry.expiryTimer.unref();
+      entry.expiryTimer = setTimeout(() => expirePayload(entry), Math.max(0, entry.expiresAt - NOW())); entry.expiryTimer.unref();
       const onWrite = (error) => { if (error) settle(entry, dispatchError('instruction_write_failed')); };
       let accepted = false;
       try {
@@ -214,6 +215,12 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       try { input = normalizeNativeInput(item.content); } catch { entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return false; }
       if (turnId !== (entry.nativeTurnId || entry.metadata.expectedTurnId) && entry.metadata.mode === 'steer' ||
           entry.nativeTurnId && turnId !== entry.nativeTurnId || JSON.stringify(input) !== JSON.stringify(entry.input)) {
+        entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return false;
+      }
+      if (entry.deliveredItems.has(item.id)) return true;
+      const pending = entry.candidates.find(candidate => candidate.nativeItemId === item.id);
+      if (pending) {
+        if (pending.nativeTurnId === turnId && JSON.stringify(pending.input) === JSON.stringify(input)) return true;
         entry.conflict = true; clearPayload(entry, 'instruction_evidence_conflict'); return false;
       }
       const size = Buffer.byteLength(JSON.stringify({ nativeTurnId: turnId, nativeItemId: item.id, input }));
