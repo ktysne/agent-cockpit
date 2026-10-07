@@ -987,10 +987,13 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       if (!agentId) session.stopped = false;
     }
 
-    if (eventName === 'PostToolBatch' && !agentId) {
-      session.tools = session.tools.filter((tool) => (
-        tool.agent_id || Date.parse(tool.startedAt) >= event.hookAt
-      ));
+    // 区切りが終わった時点で、同じエージェントの先に始まったツールは終わったか拒否されている。
+    // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
+    if (eventName === 'PostToolBatch') {
+      const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
+      session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
+      // メインの許可待ちは Stop と UserPromptSubmit で消す。並行する背景のサブエージェントの許可待ちを巻き込まないため。
+      if (agentId) session.permissionWaits = session.permissionWaits.filter((wait) => !startedBeforeBatch(wait));
     }
 
     if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
