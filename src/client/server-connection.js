@@ -199,6 +199,8 @@ async function requestFromServer(info, requestPath, init, {
 }
 
 async function postToServer(requestPath, body, options = {}) {
+  const maxAttempts = options.maxAttempts ?? 2;
+  if (![1, 2].includes(maxAttempts)) return { ok: false, status: null, json: null };
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const fetchImpl = options.fetchImpl || fetch;
   const environment = options.environment || process.env;
@@ -231,7 +233,7 @@ async function postToServer(requestPath, body, options = {}) {
     return { ok: false, status: null, json: null };
   }
 
-  for (let attempt = 0; attempt < 2 && now() < deadline; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts && now() < deadline; attempt += 1) {
     if (!info) return { ok: false, status: null, json: null };
     try {
       const remaining = deadline - now();
@@ -257,11 +259,11 @@ async function postToServer(requestPath, body, options = {}) {
       if (response.ok) {
         return { ok: true, status: response.status, json };
       }
-      if (response.status !== 401 || attempt > 0) return { ok: false, status: response.status, json: null };
+      if (response.status !== 401 || attempt + 1 >= maxAttempts) return { ok: false, status: response.status, json: null };
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
     } catch {
-      if (attempt > 0) return { ok: false, status: null, json: null };
+      if (attempt + 1 >= maxAttempts) return { ok: false, status: null, json: null };
       try {
         if (ensureServer) info = await ensureServer(ensureOptions);
         else info = await readInfo(homeDir, fileSystem);

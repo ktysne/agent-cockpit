@@ -156,3 +156,31 @@ test('試行の締切が応答本文の読み込みにも適用される', async
   assert.equal(jsonStarted, true);
   assert.equal(requestSignal.aborted, true);
 });
+
+test('maxAttempts 1 では応答喪失後にPOSTを再送しない', async () => {
+  let requests = 0;
+  const result = await postToServer('/api/test', {}, {
+    homeDir: 'unused',
+    initialInfo: serverInfo(41001, 'secret'),
+    ensure: false,
+    maxAttempts: 1,
+    readServerInfo: async () => serverInfo(41002, 'new-secret'),
+    fetchImpl: async () => {
+      requests += 1;
+      throw new Error('response lost');
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, status: null, json: null });
+  assert.equal(requests, 1);
+});
+test('不正な maxAttempts は常駐サーバーを起動する前に拒否する', async () => {
+  let starts = 0;
+  const result = await postToServer('/api/test', {}, {
+    homeDir: 'unused',
+    maxAttempts: 3,
+    ensureServerRunning: async () => { starts += 1; return serverInfo(41001, 'secret'); },
+  });
+  assert.deepEqual(result, { ok: false, status: null, json: null });
+  assert.equal(starts, 0);
+});

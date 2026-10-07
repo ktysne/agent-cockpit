@@ -1788,9 +1788,10 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   assert.equal(jsonBody(mode).display.mergeableCondition, 'cross-review');
   assert.equal(Object.hasOwn(jsonBody(mode).display, 'mergeAfterReviewDefault'), false);
   const hidden = await request(runtime.info.port, {
-    method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs'] }), headers: validHeaders,
+    method: 'POST', path: endpoint, body: JSON.stringify({ hidden: ['agents', 'prs', 'questions'] }), headers: validHeaders,
   });
   assert.equal(hidden.status, 200);
+  assert.deepEqual(jsonBody(hidden).display.hidden, ['agents', 'prs', 'questions']);
   const pinned = await request(runtime.info.port, {
     method: 'POST', path: endpoint, body: JSON.stringify({ pinned: ['C:\\project'] }), headers: validHeaders,
   });
@@ -1866,7 +1867,7 @@ test('表示設定 API は照合し、変更した項目だけを既存値へ合
   });
   assert.equal(removedPreference.status, 400);
   assert.deepEqual(jsonBody(await request(runtime.info.port, { path: '/api/state' })).display, {
-    mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs'],
+    mode: 'kind', order: [], pinned: ['C:\\project'], collapsed: [], hidden: ['agents', 'prs', 'questions'],
     sectionOrder: ['tasks', 'now', 'sinceSeen', 'judgment', 'prs'],
     longWaitMinutes: 120, awayAnswerWaitMinutes: 30, idleHideMinutes: 1440, hideFinished: true, mergeableCondition: 'cross-review',
     mergeResultHideMinutes: 60,

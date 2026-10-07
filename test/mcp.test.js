@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { PassThrough } = require('node:stream');
+const { PassThrough, Writable } = require('node:stream');
 const { startMcpServer, UNREACHABLE_MESSAGE, WRITER_REQUIRED_MESSAGE } = require('../src/mcp/server');
 
 function makeWriter(provider = 'claude', nativeId = 'mcp-session') {
@@ -57,7 +57,7 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.equal(responses[0].id, 1);
   assert.equal(responses[0].result.serverInfo.name, 'agent-cockpit');
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
-    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_add_pr', 'cockpit_skip_review',
+    'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_register_question', 'cockpit_question_status', 'cockpit_answer_poll', 'cockpit_add_pr', 'cockpit_skip_review',
   ]);
   assert.equal(responses[2].id, 3);
   assert.match(responses[2].result.content[0].text, /テストを書く \(doing\)/);
@@ -324,4 +324,276 @@ test('3 種類の MCP 書き込みは未知の失敗と再試行後の 401 を�
       assert.equal(fetchCount, status === 401 ? 2 : 1, `${name} with HTTP ${status}`);
     }
   }
+});
+
+function commonQuestionInput() {
+  return {
+    questionId: 'question-fixture',
+    questions: [{
+      id: 'choice',
+      text: 'どの案を選びますか？',
+      mode: 'single',
+      options: [{ id: 'a', label: '案 A', description: '' }],
+      allowFreeText: true,
+      recommendedOptionId: null,
+    }],
+    timeoutMinutes: 5,
+  };
+}
+
+test('共通質問のMCP登録と状態pollは回答値を返さずwriterを固定経路へ送る', async () => {
+  const writer = makeWriter();
+  const requests = [];
+  const question = {
+    internalQuestionId: 'cq-fixture',
+    questionId: 'question-fixture',
+    revision: 0,
+    createdAt: 10,
+    deadlineAt: 300010,
+    held: false,
+    selectionSource: null,
+    deliveryAttemptId: null,
+    deliveryState: null,
+  };
+  const responses = await exchange([
+    {
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'cockpit_register_question', arguments: commonQuestionInput() },
+    },
+    {
+      jsonrpc: '2.0', id: 2, method: 'tools/call',
+      params: { name: 'cockpit_question_status', arguments: { questionId: 'question-fixture' } },
+    },
+  ], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer,
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      requests.push({ path: new URL(url).pathname, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify(requests.at(-1).path.endsWith('/register')
+        ? { outcome: 'created', question }
+        : question), { status: 200 });
+    },
+  });
+  assert.deepEqual(requests.map(({ path }) => path), [
+    '/api/sessions/pending/questions/register',
+    '/api/sessions/pending/questions/status',
+  ]);
+  assert.deepEqual(requests.map(({ body }) => body.writer), [writer, writer]);
+  assert.equal(requests[0].body.category, undefined);
+  assert.equal(requests[0].body.timeoutMinutes, 5);
+  assert.equal(requests[1].body.questionId, 'question-fixture');
+  assert.equal(responses[0].result.isError, undefined);
+  assert.equal(responses[1].result.isError, undefined);
+  assert.ok(!JSON.stringify(responses).includes('どの案を選びますか？'));
+  assert.ok(!JSON.stringify(responses).includes('案 A'));
+});
+
+test('共通質問answer-pollはsink結果だけを出力し、stdio書込み失敗を同じ質問IDで通知する', async () => {
+  const input = new PassThrough();
+  const output = new Writable({ write(chunk, encoding, callback) { callback(new Error('output unavailable')); } });
+  const writer = makeWriter();
+  const paths = [];
+  const running = startMcpServer({
+    input,
+    output,
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer,
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      const pathname = new URL(url).pathname;
+      const body = JSON.parse(init.body);
+      paths.push({ pathname, body });
+      if (pathname.endsWith('/answer-poll')) {
+        return new Response(JSON.stringify({
+          status: { questionId: body.questionId, deliveryAttemptId: 'delivery-1', deliveryState: 'sending' },
+          delivery: {
+            questionId: body.questionId,
+            revision: 2,
+            deliveryAttemptId: 'delivery-1',
+            answers: [{ questionId: 'choice', optionIds: ['a'], freeText: '保存した答え' }],
+          },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ outcome: 'unknown' }), { status: 200 });
+    },
+  });
+  input.end(JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_answer_poll', arguments: { questionId: 'question-fixture' } },
+  }) + '\n');
+  await running;
+  assert.deepEqual(paths.map(({ pathname }) => pathname), [
+    '/api/sessions/pending/questions/answer-poll',
+    '/api/sessions/pending/questions/response-lost',
+  ]);
+  assert.equal(paths[1].body.questionId, 'question-fixture');
+  assert.deepEqual(paths[1].body.writer, writer);
+});
+test('answer-pollは通信失敗時にPOSTを再送せず、同一質問のresponse-lostだけを一度通知する', async () => {
+  const writer = makeWriter();
+  const requests = [];
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_answer_poll', arguments: { questionId: 'question-fixture' } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer,
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      const pathname = new URL(url).pathname;
+      requests.push({ pathname, body: JSON.parse(init.body) });
+      if (pathname.endsWith('/answer-poll')) throw new Error('HTTP response lost');
+      return new Response(JSON.stringify({ outcome: 'unknown' }), { status: 200 });
+    },
+  });
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].result.isError, true);
+  assert.deepEqual(requests.map(({ pathname }) => pathname), [
+    '/api/sessions/pending/questions/answer-poll',
+    '/api/sessions/pending/questions/response-lost',
+  ]);
+  assert.equal(requests[0].body.questionId, requests[1].body.questionId);
+  assert.deepEqual(requests[0].body.writer, requests[1].body.writer);
+});
+
+test('getWriterは各tools/callで一度だけ同期取得し、その呼出しのwriterを固定する', async () => {
+  const firstWriter = makeWriter();
+  const secondWriter = structuredClone(firstWriter);
+  firstWriter.contextId = 'context-first';
+  firstWriter.executionId = 'execution-first';
+  secondWriter.contextId = 'context-second';
+  secondWriter.executionId = 'execution-second';
+  const requests = [];
+  let getterCalls = 0;
+  const responses = await exchange([
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    {
+      jsonrpc: '2.0', id: 3, method: 'tools/call',
+      params: { name: 'cockpit_register_question', arguments: commonQuestionInput() },
+    },
+    {
+      jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'cockpit_question_status', arguments: { questionId: 'question-fixture' } },
+    },
+  ], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    getWriter() {
+      getterCalls += 1;
+      return getterCalls === 1 ? firstWriter : secondWriter;
+    },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      requests.push({ path: new URL(url).pathname, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ questionId: 'question-fixture', deliveryState: null }), { status: 200 });
+    },
+  });
+
+  assert.equal(responses.length, 4);
+  assert.equal(getterCalls, 2);
+  assert.deepEqual(requests.map(({ body }) => [body.writer.contextId, body.writer.executionId]), [
+    ['context-first', 'execution-first'],
+    ['context-second', 'execution-second'],
+  ]);
+});
+
+test('getWriterはkernelと同じnull-prototype data envelopeを受け入れてコピーする', async () => {
+  const original = makeWriter();
+  const writer = Object.assign(Object.create(null), original);
+  writer.identity = Object.assign(Object.create(null), original.identity);
+  let sentWriter = null;
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_question_status', arguments: { questionId: 'question-fixture' } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    getWriter: () => writer,
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      sentWriter = JSON.parse(init.body).writer;
+      return new Response('{"questionId":"question-fixture"}', { status: 200 });
+    },
+  });
+  assert.equal(responses[0].result.isError, undefined);
+  assert.deepEqual(sentWriter, original);
+});
+
+test('getWriterの異常値や固定writerとの併用はfail-closedでHTTPへ送らない', async () => {
+  const cases = [
+    { name: 'not a function', getWriter: true },
+    { name: 'throws', getWriter() { throw new Error('fixture'); } },
+    { name: 'returns a promise', getWriter: async () => makeWriter() },
+    { name: 'returns rejected promise', getWriter: () => Promise.reject(new Error('fixture')) },
+    { name: 'returns null', getWriter: () => null },
+    { name: 'extra key', getWriter: () => ({ ...makeWriter(), untrusted: true }) },
+    { name: 'symbol key', getWriter: () => Object.assign(makeWriter(), { [Symbol('extra')]: true }) },
+    { name: 'non-enumerable key', getWriter: () => {
+      const writer = makeWriter();
+      Object.defineProperty(writer, 'hidden', { value: true });
+      return writer;
+    } },
+    { name: 'accessor field', getWriter: () => {
+      const writer = makeWriter();
+      Object.defineProperty(writer, 'contextId', { get() { return 'context-fixture'; }, enumerable: true });
+      return writer;
+    } },
+    { name: 'non-enumerable field', getWriter: () => {
+      const writer = makeWriter();
+      Object.defineProperty(writer, 'contextId', { value: 'context-fixture', enumerable: false });
+      return writer;
+    } },
+    { name: 'fixed writer and getter', getWriter: () => makeWriter(), writer: makeWriter() },
+    { name: 'mismatched thread', getWriter: () => makeWriter('codex', 'other-thread'), meta: { provider: 'codex', threadId: 'requested-thread' } },
+  ];
+
+  for (const fixture of cases) {
+    let fetchCount = 0;
+    const response = await exchange([{
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: {
+        name: 'cockpit_question_status',
+        arguments: { questionId: 'question-fixture' },
+        ...(fixture.meta ? { _meta: fixture.meta } : {}),
+      },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      getWriter: fixture.getWriter,
+      ...(fixture.writer ? { writer: fixture.writer } : {}),
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async () => { fetchCount += 1; return new Response('{}', { status: 200 }); },
+    });
+    assert.equal(response[0].result.isError, true, fixture.name);
+    assert.equal(fetchCount, 0, fixture.name);
+  }
+});
+
+test('同じbindingの並行answer-pollはそれぞれ一度のgetter結果だけを使う', async () => {
+  const writer = makeWriter();
+  let getterCalls = 0;
+  const sent = [];
+  const responses = await exchange([1, 2].map((id) => ({
+    jsonrpc: '2.0', id, method: 'tools/call',
+    params: { name: 'cockpit_answer_poll', arguments: { questionId: 'question-fixture' } },
+  })), {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    getWriter() { getterCalls += 1; return writer; },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (url, init) => {
+      sent.push(JSON.parse(init.body).writer);
+      return new Response(JSON.stringify({ questionId: 'question-fixture', deliveryState: 'available' }), { status: 200 });
+    },
+  });
+
+  assert.equal(responses.length, 2);
+  assert.equal(getterCalls, 2);
+  assert.deepEqual(sent, [writer, writer]);
 });
