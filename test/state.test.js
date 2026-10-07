@@ -72,14 +72,23 @@ test('削除時刻以前のイベントを捨て、新しいイベントで新�
   assert.deepEqual(reopened, [id]);
 });
 
-test('削除印はファイル消滅と保存期限超過で掃除する', () => {
+test('同期で一度ファイルが欠け、次の同期で古い updatedAt のファイルが戻っても再表示しない', () => {
   const state = new DashboardState();
-  state.syncSessionFiles([{ session_id: 'gone' }], 100);
-  state.deleteSession('gone', 200);
+  const file = { session_id: 'temporarily-unreadable', updatedAt: new Date(100).toISOString() };
+  state.syncSessionFiles([file], 100);
+  state.deleteSession(file.session_id, 200);
   state.syncSessionFiles([], 201);
-  assert.equal(state.deletedSessions.has('gone'), false);
-  state.deletedSessions.set('expired', new Date(0).toISOString());
-  state.pruneExpiredStoreRecords(15 * 24 * 60 * 60_000);
+  assert.equal(state.deletedSessions.has(file.session_id), true);
+  state.syncSessionFiles([file], 202);
+  assert.deepEqual(state.snapshot().sessions, []);
+  assert.equal(state.deletedSessions.has(file.session_id), true);
+});
+
+test('削除印は保存期限を超えたときに掃除する', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'expired' }], 100);
+  state.deleteSession('expired', 200);
+  state.pruneExpiredStoreRecords(14 * 24 * 60 * 60_000 + 201);
   assert.equal(state.deletedSessions.has('expired'), false);
 });
 
@@ -337,6 +346,23 @@ test('状態にかかわらず一覧にあるセッションを外せる', async
   assert.equal(state.hideSession('known-session'), true);
   assert.equal(state.snapshot().sessions[0].hidden, true);
   assert.equal(state.hideSession('missing-session'), null);
+});
+
+test('外したセッションを再度外すと更新時刻を更新して保存する', async (t) => {
+  const { homeDir } = await temporaryHome(t);
+  const state = await DashboardState.load(homeDir);
+  const sessionId = 'hidden-again';
+  state.syncSessionFiles([{ session_id: sessionId }], 100);
+  state.hideSession(sessionId, 150);
+  const version = state.version;
+
+  state.hideSession(sessionId, 250);
+
+  assert.equal(state.version, version + 1);
+  assert.equal(state.snapshot().sessions[0].hiddenAt, new Date(250).toISOString());
+  await state.flushPersistence();
+  const stored = JSON.parse(await fs.readFile(path.join(homeDir, 'store.json'), 'utf8'));
+  assert.deepEqual(stored.hiddenSessions, [{ session_id: sessionId, updatedAt: new Date(250).toISOString() }]);
 });
 
 test('終了して一覧から消えたセッションを外した集合からも除く', async (t) => {

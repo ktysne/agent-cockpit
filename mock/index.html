@@ -1033,7 +1033,8 @@ function finishedDeletionTargets() {
   for (const product of DATA.products) {
     for (const pr of product.prs) {
       const key = `${product.repo.name}#${pr.number}`.toLowerCase();
-      if (isMerged(product, pr) && pr.headMismatch !== true && !ui.dismissedMergeHistory.includes(key)) targets.prs.push(key);
+      if (isMerged(product, pr) && pr.headMismatch !== true && !hasVisibleAutomaticMergeResult(product, pr)
+        && !ui.dismissedMergeHistory.includes(key)) targets.prs.push(key);
     }
     for (const pr of visibleClosedPrs(product)) targets.closed.push(`${product.repo.name}#${pr.number}`.toLowerCase());
   }
@@ -1043,10 +1044,16 @@ function recordDeletionControls(band, targets, count) {
   recordDeletionTargets.set(band, { targets, count });
   const confirmation = recordDeletionConfirmations.get(band);
   if (!count && !confirmation) return '';
-  const attrs = action => `type="button" class="link-btn${action === 'open' ? ' record-delete-icon' : ''}" data-record-band="${band}" data-record-action="${action}"`;
+  const attrs = action => `type="button" class="link-btn${action === 'open' ? ' record-delete-icon' : ''}" data-record-band="${band}" data-record-action="${action}" aria-disabled="${confirmation?.pending === true && !action.startsWith('mock-')}"`;
   return confirmation
-    ? `<span class="record-deletion"><span>${confirmation.count} 件の記録を削除します。元に戻せません</span><button ${attrs('confirm')}>削除する</button><button ${attrs('cancel')}>やめる</button></span>`
+    ? `<span class="record-deletion"><span>${confirmation.count} 件の記録を削除します。元に戻せません</span>${confirmation.error ? `<span class="error" role="alert">${esc(confirmation.error)}</span>` : ''}<button ${attrs('confirm')}>${confirmation.pending ? '削除中…' : '削除する'}</button><button ${attrs('cancel')}>やめる</button><button ${attrs('mock-pending')}>モック: 通信中を表示</button><button ${attrs('mock-error')}>モック: 失敗の知らせを表示</button></span>`
     : `<span class="record-deletion"><button ${attrs('open')} aria-label="この ${count} 件の記録を削除する" title="この ${count} 件の記録を削除する"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button></span>`;
+}
+
+function hasVisibleAutomaticMergeResult(product, pullRequest) {
+  if (ui.merged[prKey(product, pullRequest.number)]?.auto !== true) return false;
+  return (pullRequestMergeResults.get(product.repo.name) || []).some(result => result.productId === product.id
+    && result.number === pullRequest.number && pullRequestMergeResultVisible(result));
 }
 function focusRecordDeletion(band, action) {
   (document.querySelector(`[data-record-band="${band}"][data-record-action="${action}"]`)
@@ -1054,7 +1061,7 @@ function focusRecordDeletion(band, action) {
 }
 function deleteNoteRecords(band) {
   const confirmation = recordDeletionConfirmations.get(band);
-  if (!confirmation) return;
+  if (!confirmation || confirmation.pending) return;
   const { sessions, prs, closed } = confirmation.targets;
   ui.deletedSessionIds = [...new Set([...ui.deletedSessionIds, ...sessions])];
   ui.hiddenSessions = ui.hiddenSessions.filter(id => !sessions.includes(id));
@@ -2176,14 +2183,30 @@ document.addEventListener('click', e => {
   if (t.dataset.recordBand) {
     const band = t.dataset.recordBand;
     if (t.dataset.recordAction === 'open') {
-      recordDeletionConfirmations.set(band, recordDeletionTargets.get(band));
+      recordDeletionConfirmations.set(band, { ...recordDeletionTargets.get(band), pending: false, error: '' });
       render();
       focusRecordDeletion(band, 'cancel');
     } else if (t.dataset.recordAction === 'cancel') {
+      if (recordDeletionConfirmations.get(band)?.pending) return;
       recordDeletionConfirmations.delete(band);
       render();
       focusRecordDeletion(band, 'open');
+    } else if (t.dataset.recordAction === 'mock-pending') {
+      const confirmation = recordDeletionConfirmations.get(band);
+      if (!confirmation) return;
+      confirmation.pending = true;
+      confirmation.error = '';
+      save();
+      render();
+    } else if (t.dataset.recordAction === 'mock-error') {
+      const confirmation = recordDeletionConfirmations.get(band);
+      if (!confirmation) return;
+      confirmation.pending = false;
+      confirmation.error = '記録を削除できませんでした。もう一度お試しください。';
+      save();
+      render();
     } else {
+      if (recordDeletionConfirmations.get(band)?.pending) return;
       deleteNoteRecords(band);
       save();
       render();
@@ -2258,11 +2281,10 @@ document.addEventListener('click', e => {
   } else if (t.dataset.closeProduct) {
     const product = byId(t.dataset.closeProduct);
     if (product) {
-      const sessionIds = visibleSessions(product).map(session => session.id);
+      const sessionIds = visibleSessions(product).filter(session => !ui.hiddenSessions.includes(session.id)).map(session => session.id);
+      if (!sessionIds.length) return;
       hiddenSessionsUndo = { productName: product.name, sessionIds };
-      for (const id of sessionIds) {
-        if (!ui.hiddenSessions.includes(id)) ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
-      }
+      for (const id of sessionIds) ui.hiddenSessionUpdatedAt[id] = new Date().toISOString();
       ui.hiddenSessions = [...new Set([
         ...ui.hiddenSessions,
         ...sessionIds,

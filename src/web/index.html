@@ -562,6 +562,7 @@ const TRANSIENT_NOTICE_MS = 60_000;
 let renderedPullRequestExpirySignature = '';
 let nextPullRequestMergeResultId = 0;
 let hiddenSessionsUndo = null;
+const recordDeletionTargets = new Map();
 const recordDeletionConfirmations = new Map();
 let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
@@ -1359,7 +1360,9 @@ function finishedDeletionTargets(sessions, groups) {
     const seen = new Set();
     for (const group of groups) {
       for (const record of group[source] || []) {
-        if (field === 'merge_history' ? record.headMismatch === true : record.state !== 'closed') continue;
+        const visibleAutomaticResult = record.automatic === true && record.automaticResult
+          && pullRequestMergeResultVisible(record, record.mergedAt);
+        if (field === 'merge_history' ? record.headMismatch === true || visibleAutomaticResult : record.state !== 'closed') continue;
         const key = `${group.owner}/${group.repo}#${record.number}`.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1370,7 +1373,24 @@ function finishedDeletionTargets(sessions, groups) {
   return targets;
 }
 
+function recordDeletionTargetKey(field, target) {
+  if (field === 'session_ids') return target;
+  return `${target.owner}/${target.repo}#${target.number}`.toLowerCase();
+}
+
+function intersectRecordDeletionTargets(selected, current) {
+  return Object.fromEntries(Object.keys(selected).map((field) => {
+    const currentKeys = new Set((current[field] || []).map((target) => recordDeletionTargetKey(field, target)));
+    return [field, (selected[field] || []).filter((target) => currentKeys.has(recordDeletionTargetKey(field, target)))];
+  }));
+}
+
+function countRecordDeletionTargets(targets) {
+  return Object.values(targets).reduce((total, items) => total + items.length, 0);
+}
+
 function appendRecordDeletion(note, band, targets, count) {
+  recordDeletionTargets.set(band, targets);
   const confirmation = recordDeletionConfirmations.get(band);
   if (!count && !confirmation) return;
   const controls = element('span', 'record-deletion');
@@ -1383,6 +1403,9 @@ function appendRecordDeletion(note, band, targets, count) {
     return button;
   };
   if (confirmation) {
+    confirmation.count = countRecordDeletionTargets(intersectRecordDeletionTargets(
+      confirmation.targets, recordDeletionTargets.get(band),
+    ));
     controls.append(element('span', '', `${confirmation.count} 件の記録を削除します。元に戻せません`));
     if (confirmation.error) {
       const error = element('span', 'error', confirmation.error);
@@ -1424,12 +1447,19 @@ function focusRecordDeletion(band, action) {
 async function deleteNoteRecords(band) {
   const confirmation = recordDeletionConfirmations.get(band);
   if (!confirmation || confirmation.pending) return;
+  const targets = intersectRecordDeletionTargets(confirmation.targets, recordDeletionTargets.get(band) || {});
+  if (!countRecordDeletionTargets(targets)) {
+    recordDeletionConfirmations.delete(band);
+    render(lastState);
+    focusRecordDeletion(band, 'open');
+    return;
+  }
+  confirmation.count = countRecordDeletionTargets(targets);
   confirmation.pending = true;
   confirmation.error = '';
   render(lastState);
   let deleted = 0;
   try {
-    const targets = confirmation.targets;
     const batches = Math.ceil(Math.max(...Object.values(targets).map((items) => items.length)) / 50);
     for (let index = 0; index < batches; index += 1) {
       const body = Object.fromEntries(Object.entries(targets).map(([key, items]) => [key, items.slice(index * 50, (index + 1) * 50)]));
@@ -4134,14 +4164,16 @@ document.addEventListener('click', (event) => {
   if (button.dataset.productAction === 'close') {
     const product = productGroups(lastState.sessions.filter((session) => (session.hidden !== true || isIdleHiddenSession(session))))
       .find((item) => item.key === button.dataset.productKey);
-    if (!product?.sessions.length) return;
+    if (!product) return;
+    const sessionIds = product.sessions.filter((session) => session.hidden !== true).map((session) => session.session_id);
+    if (!sessionIds.length) return;
     void runSessionAction(
       button,
       '/api/hidden-sessions',
-      { action: 'hide', session_ids: product.sessions.map((session) => session.session_id) },
+      { action: 'hide', session_ids: sessionIds },
       'プロダクトのセッションを一覧から外せませんでした',
       true,
-      { productName: product.name, sessionIds: product.sessions.map((session) => session.session_id) },
+      { productName: product.name, sessionIds },
     );
     return;
   }

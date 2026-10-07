@@ -799,7 +799,11 @@ function createRequestHandler(options) {
         changedRepositories.set(repository, record);
       }
       for (const { owner, repo } of changedRepositories.values()) {
-        await pullRequestTracker?.refreshReviewGroups?.(owner, repo);
+        try {
+          await pullRequestTracker?.refreshReviewGroups?.(owner, repo);
+        } catch {
+          logLine(homeDir, `pull request group refresh failed for ${owner}/${repo}`);
+        }
       }
       jsonResponse(response, 200, { deleted: { sessions, pullRequests: deletedPullRequests.size } });
       return;
@@ -1313,7 +1317,6 @@ function createRequestHandler(options) {
         return;
       }
       const product = productFromCwd(body.cwd);
-      state.acceptSessionWrite(sessionId);
       const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product });
       if (!registered) {
         jsonResponse(response, 400, { error: 'Invalid request' });

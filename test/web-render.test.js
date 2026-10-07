@@ -8,6 +8,7 @@ const { cssDeclarations, functionSource, pageContext, sourceBetween } = require(
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 test('外したセッションは hiddenAt と更新時刻の遅い方から待ち、更新の無い帯へ移る', () => {
   const context = pageContext(pageHtml, {
@@ -31,20 +32,82 @@ test('外したセッションは hiddenAt と更新時刻の遅い方から待�
   assert.equal(context.isIdleHiddenSession({ ...session, lastUpdatedAt: null, sessionFileUpdatedAt: old }, now), true);
 });
 
-test('終わった帯の削除対象は表示件数と一致し、警告履歴と merged 登録を除く', () => {
+test('終わった帯の削除対象は表示件数と一致し、警告履歴と表示中の自動マージ結果を除く', () => {
   const context = pageContext(pageHtml, {
     displayPreferences: { hideFinished: true }, isFinishedSession: session => session.finished === true,
+    pullRequestMergeResultVisible: result => result.visible === true,
   });
   vm.runInContext(['finishedDeletionTargets', 'finishedHiddenCounts'].map(name => functionSource(pageHtml, name)).join('\n'), context);
   const sessions = [{ session_id: 'finished', finished: true }, { session_id: 'hidden', hidden: true, finished: true }];
-  const group = { owner: 'example', repo: 'project', mergeHistory: [{ number: 1 }, { number: 2, headMismatch: true }],
+  const group = { owner: 'example', repo: 'project', mergeHistory: [
+    { number: 1 }, { number: 2, headMismatch: true },
+    { number: 5, automatic: true, automaticResult: {}, visible: true },
+    { number: 6, automatic: true, automaticResult: {}, visible: false },
+  ],
     merged: [{ number: 3, state: 'closed' }, { number: 4, state: 'merged' }] };
   const targets = context.finishedDeletionTargets(sessions, [group, group]);
   assert.deepEqual(JSON.parse(JSON.stringify(targets)), {
-    session_ids: ['finished'], merge_history: [{ owner: 'example', repo: 'project', number: 1 }],
+    session_ids: ['finished'], merge_history: [
+      { owner: 'example', repo: 'project', number: 1 }, { owner: 'example', repo: 'project', number: 6 },
+    ],
     closed_pull_requests: [{ owner: 'example', repo: 'project', number: 3 }],
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedHiddenCounts(sessions, [group, group]))), { sessions: 1, pullRequests: 2 });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedHiddenCounts(sessions, [group, group]))), { sessions: 1, pullRequests: 4 });
+});
+
+test('モックの終わった帯は表示中の自動マージ結果を削除対象から除く', () => {
+  const product = {
+    id: 'project', repo: { name: 'example/project' },
+    prs: [{ number: 1 }, { number: 2 }, { number: 3 }],
+  };
+  const ui = {
+    hideFinished: true, hiddenSessions: [], dismissedMergeHistory: [], deletedClosedPrs: [],
+    merged: { 'project#1': { auto: false }, 'project#2': { auto: true }, 'project#3': { auto: true } },
+  };
+  const context = pageContext(mockHtml, {
+    DATA: { products: [product] }, ui, pullRequestMergeResults: new Map([['example/project', [
+      { productId: 'project', number: 2, visible: true }, { productId: 'project', number: 3, visible: false },
+    ]]]),
+    allSessions: () => [], isFinishedSession: () => false, visibleClosedPrs: () => [],
+    prKey: (item, number) => `${item.id}#${number}`,
+    isMerged: (item, pullRequest) => Boolean(ui.merged[`${item.id}#${pullRequest.number}`]),
+    pullRequestMergeResultVisible: result => result.visible === true,
+  });
+  vm.runInContext([
+    functionSource(mockHtml, 'finishedDeletionTargets'),
+    functionSource(mockHtml, 'hasVisibleAutomaticMergeResult'),
+  ].join('\n'), context);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedDeletionTargets())), {
+    sessions: [], prs: ['example/project#1', 'example/project#3'], closed: [],
+  });
+});
+
+test('モックの削除確認から通信中と失敗の状態を表示できる', () => {
+  const recordDeletionConfirmations = new Map([['finished', { count: 2, pending: false, error: '' }]]);
+  const context = pageContext(mockHtml, {
+    recordDeletionTargets: new Map([['finished', { targets: {}, count: 2 }]]),
+    recordDeletionConfirmations,
+    esc: value => String(value),
+    document: { addEventListener: (_name, callback) => { context.handleClick = callback; } },
+    render() {}, save() {},
+  });
+  const clickListener = mockHtml.match(/document\.addEventListener\('click', e => \{[\s\S]*?^\}\);/m)?.[0];
+  assert.ok(clickListener);
+  vm.runInContext(`${functionSource(mockHtml, 'recordDeletionControls')}\n${clickListener}`, context);
+  const press = action => {
+    const button = { dataset: { recordBand: 'finished', recordAction: action }, closest: () => button };
+    context.handleClick({ target: button });
+  };
+
+  press('mock-pending');
+  const pending = context.recordDeletionControls('finished', {}, 2);
+  assert.match(pending, /削除中…/);
+  assert.match(pending, /aria-disabled="true"/);
+  press('mock-error');
+  const failed = context.recordDeletionControls('finished', {}, 2);
+  assert.match(failed, /role="alert"/);
+  assert.match(failed, /記録を削除できませんでした/);
 });
 
 function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) })) {
@@ -68,7 +131,7 @@ function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true,
   const context = pageContext(pageHtml, {
     lastState: { sessions, pullRequests: [] }, displayPreferences: { mode: 'product', idleHideMinutes: 30, hideFinished: true },
     answerNoteComposing: false,
-    hiddenSessionsUndo: null, recordDeletionConfirmations: new Map(), showIdleSessions: false,
+    hiddenSessionsUndo: null, recordDeletionTargets: new Map(), recordDeletionConfirmations: new Map(), showIdleSessions: false,
     element: (tag, className, text) => new Node(tag, className, text),
     HTMLTextAreaElement: class TextArea {},
     document: {
@@ -84,9 +147,10 @@ function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true,
   });
   vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
     'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
-    'appendRecordDeletion', 'focusRecordDeletion', 'deleteNoteRecords', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+    'recordDeletionTargetKey', 'intersectRecordDeletionTargets', 'countRecordDeletionTargets', 'appendRecordDeletion',
+    'focusRecordDeletion', 'deleteNoteRecords', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
   context.render(context.lastState);
-  return { context, notes, buttons, get activeElement() { return activeElement; } };
+  return { context, notes, buttons, nodes: () => Object.values(notes).flatMap(flatten), get activeElement() { return activeElement; } };
 }
 
 test('帯の削除確認は再描画でも対象とフォーカスを保ち、やめるでは送信しない', () => {
@@ -122,6 +186,38 @@ test('帯の削除は50件ずつ送信し、削除したIDを元に戻す記録�
   assert.deepEqual(Array.from(harness.context.hiddenSessionsUndo.sessionIds), ['other']);
   assert.equal(harness.context.recordDeletionConfirmations.size, 0);
   assert.equal(harness.context.liveStatus.textContent, '51 件の記録を削除しました。');
+});
+
+test('削除確認は現在の帯との交わりだけを数えて送る', async () => {
+  const bodies = [];
+  const sessions = ['still-hidden', 'active-again'].map(session_id => ({ session_id, hidden: true, hiddenAt: new Date().toISOString() }));
+  const harness = recordDeletionHarness(sessions, async (_url, body) => {
+    bodies.push(body);
+    return { ok: true, json: async () => ({ deleted: { sessions: body.session_ids.length, pullRequests: 0 } }) };
+  });
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  harness.context.render({ sessions: [sessions[0], { ...sessions[1], hidden: false }], pullRequests: [] });
+
+  const count = harness.nodes().find(node => node.tag === 'span' && node.textContent.includes('件の記録を削除します'));
+  assert.equal(count.textContent, '1 件の記録を削除します。元に戻せません');
+  await harness.context.deleteNoteRecords('excluded');
+
+  assert.deepEqual(bodies.map(body => body.session_ids), [['still-hidden']]);
+});
+
+test('削除確認を開いた後に対象がなくなったら送らず確認を閉じる', async () => {
+  let requests = 0;
+  const session = { session_id: 'active-again', hidden: true, hiddenAt: new Date().toISOString() };
+  const harness = recordDeletionHarness([session], async () => { requests += 1; });
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  harness.context.render({ sessions: [{ ...session, hidden: false }], pullRequests: [] });
+  assert.equal(harness.nodes().find(node => node.tag === 'span' && node.textContent.includes('件の記録を削除します')).textContent,
+    '0 件の記録を削除します。元に戻せません');
+
+  await harness.context.deleteNoteRecords('excluded');
+
+  assert.equal(requests, 0);
+  assert.equal(harness.context.recordDeletionConfirmations.has('excluded'), false);
 });
 
 test('帯の削除に失敗したら確認対象と元に戻す記録を残して再試行できる', async () => {
@@ -1746,6 +1842,37 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   button.dataset.productKey = 'missing';
   assert.doesNotThrow(() => handleClick({ target: button }));
   assert.deepEqual(saved, []);
+});
+
+test('プロダクトを外す操作はまだ外していないセッションだけを送る', () => {
+  const clickListener = pageHtml.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(clickListener);
+  const runClose = (sessions) => {
+    const calls = [];
+    const product = { key: 'project', name: 'Project', sessions };
+    let handleClick;
+    const context = pageContext(pageHtml, {
+      lastState: { sessions, pullRequests: [] },
+      productGroups: () => [product],
+      isIdleHiddenSession: () => true,
+      runSessionAction: (...args) => calls.push(args),
+      document: { addEventListener: (_name, callback) => { handleClick = callback; } },
+    });
+    vm.runInContext(clickListener, context);
+    const button = {
+      dataset: { productAction: 'close', productKey: 'project' },
+      closest: (selector) => selector === 'button' ? button : null,
+    };
+    handleClick({ target: button });
+    return calls;
+  };
+  const active = { session_id: 'active', hidden: false };
+  const alreadyHidden = { session_id: 'already-hidden', hidden: true };
+  const calls = runClose([active, alreadyHidden]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), { action: 'hide', session_ids: ['active'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][5])), { productName: 'Project', sessionIds: ['active'] });
+  assert.deepEqual(runClose([alreadyHidden]), []);
 });
 
 test('表示中のセッション、PR、PR のエラー、未読の変化が無いプロダクトはカードを出さない', () => {

@@ -1932,11 +1932,7 @@ class DashboardState {
     this.sessionFiles = next;
     for (const sessionId of this.deletedSessions.keys()) {
       const file = next.get(sessionId);
-      if (!file && !this.sessions.has(sessionId)) {
-        this.deletedSessions.delete(sessionId);
-        persistentChanged = true;
-        changed = true;
-      } else if (file && Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(sessionId))) {
+      if (file && Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(sessionId))) {
         this.acceptSessionWrite(sessionId, Date.parse(file.updatedAt));
         changed = true;
       }
@@ -2166,12 +2162,10 @@ class DashboardState {
   hideSession(sessionId, now = Date.now()) {
     const session = this.snapshot().sessions.find((item) => item.session_id === sessionId);
     if (!session) return null;
-    if (!this.hiddenSessions.has(sessionId)) {
-      this.hiddenSessions.add(sessionId);
-      this.hiddenSessionUpdatedAt.set(sessionId, isoTime(now));
-      this.touch();
-      this.requestStoreWrite();
-    }
+    this.hiddenSessions.add(sessionId);
+    this.hiddenSessionUpdatedAt.set(sessionId, isoTime(now));
+    this.touch();
+    this.requestStoreWrite();
     return true;
   }
 

@@ -73,6 +73,55 @@ test('記録削除 API は指定 ID だけを削除し、待機の解除と PR �
   assert.equal(ended[0][0], 'delete-this');
 });
 
+test('記録削除後の PR グループ更新が失敗しても他のリポジトリを試し 200 を返す', async (t) => {
+  const state = new DashboardState();
+  const refreshAttempts = [];
+  for (const repo of ['first', 'second']) {
+    state.registerPullRequest('refresh-failure', { url: `https://github.com/example/${repo}/pull/31` });
+    state.updatePullRequest('refresh-failure', 'example', repo, 31, { state: 'closed' });
+  }
+  const runtime = await runningServer(t, {
+    state,
+    pullRequestTracker: {
+      snapshot: () => [],
+      async refreshReviewGroups(owner, repo) {
+        refreshAttempts.push([owner, repo]);
+        if (repo === 'first') throw new Error('refresh failed');
+      },
+      close() {}, start() {},
+    },
+  });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/record-deletions',
+    headers: uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`),
+    body: JSON.stringify({ closed_pull_requests: [
+      { owner: 'example', repo: 'first', number: 31 },
+      { owner: 'example', repo: 'second', number: 31 },
+    ] }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(jsonBody(response), { deleted: { sessions: 0, pullRequests: 2 } });
+  assert.deepEqual(refreshAttempts, [['example', 'first'], ['example', 'second']]);
+});
+
+test('PR 登録に失敗したときは削除印を解除しない', async (t) => {
+  const state = new DashboardState();
+  const sessionId = 'deleted-registration';
+  state.syncSessionFiles([{ session_id: sessionId }]);
+  state.deleteSession(sessionId);
+  state.registerPullRequest = () => null;
+  const runtime = await runningServer(t, { state, findSessionIdByPid: async () => null });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: `/api/sessions/${sessionId}/prs`,
+    headers: hookHeaders(runtime.info.secret),
+    body: JSON.stringify({ kind: 'add_pr', ppid: 1, url: 'https://github.com/example/project/pull/31' }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(state.deletedSessions.has(sessionId), true);
+});
+
 test('削除時刻以前のフックは回答待ちの再登録にも渡さない', async (t) => {
   const state = new DashboardState();
   const delivered = [];
