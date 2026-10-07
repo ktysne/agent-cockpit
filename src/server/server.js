@@ -1608,6 +1608,63 @@ function createRequestHandler(options) {
       jsonResponse(response, 200, saved);
       return;
     }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/record-deletions') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse(await readJsonBody(request));
+      } catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      const keys = ['session_ids', 'merge_history', 'closed_pull_requests'];
+      const validPullRequest = (record) => record && typeof record === 'object' && !Array.isArray(record)
+        && Object.keys(record).length === 3 && Object.keys(record).every((key) => ['owner', 'repo', 'number'].includes(key))
+        && validRepositoryPart(record.owner) && validRepositoryPart(record.repo)
+        && Number.isSafeInteger(record.number) && record.number > 0;
+      if (!body || typeof body !== 'object' || Array.isArray(body)
+        || Object.keys(body).some((key) => !keys.includes(key))
+        || keys.some((key) => Object.hasOwn(body, key) && (!Array.isArray(body[key]) || body[key].length > 50
+          || !body[key].every(key === 'session_ids' ? isShortSessionId : validPullRequest)))
+        || !keys.some((key) => body[key]?.length > 0)) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
+      const now = Date.now();
+      let sessions = 0;
+      for (const sessionId of new Set(body.session_ids || [])) {
+        if (state.deleteSession(sessionId, now)) sessions += 1;
+      }
+      const deletedPullRequests = new Set();
+      const changedRepositories = new Map();
+      for (const record of body.merge_history || []) {
+        if (state.dismissMergedPullRequestHistory(record.owner, record.repo, record.number, now)) {
+          deletedPullRequests.add(`${record.owner.toLowerCase()}/${record.repo.toLowerCase()}#${record.number}`);
+        }
+      }
+      for (const record of body.closed_pull_requests || []) {
+        if (!state.deleteClosedPullRequest(record.owner, record.repo, record.number)) continue;
+        const repository = `${record.owner.toLowerCase()}/${record.repo.toLowerCase()}`;
+        deletedPullRequests.add(`${repository}#${record.number}`);
+        changedRepositories.set(repository, record);
+      }
+      for (const { owner, repo } of changedRepositories.values()) {
+        try {
+          await pullRequestTracker?.refreshReviewGroups?.(owner, repo);
+        } catch {
+          logLine(homeDir, `pull request group refresh failed for ${owner}/${repo}`);
+        }
+      }
+      jsonResponse(response, 200, { deleted: { sessions, pullRequests: deletedPullRequests.size } });
+      return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/hidden-sessions') {
       if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
         jsonResponse(response, 401, { error: 'Unauthorized' });
@@ -2019,6 +2076,12 @@ function createRequestHandler(options) {
       const agentId = eventBody.agent_id || eventBody.nativeEvent?.agent_id;
       const agentType = eventBody.agent_type || eventBody.nativeEvent?.agent_type;
       const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
+      const incomingEvent = sanitizeEvent(eventBody, { product, sessionName });
+      const deletedAt = incomingEvent && state.deletedSessions.get(incomingEvent.session_id);
+      if (deletedAt && incomingEvent.hookAt <= Date.parse(deletedAt)) {
+        jsonResponse(response, 202, { accepted: true });
+        return;
+      }
       let agentDefinition = null;
       let codexDefinitionMetadata = null;
 

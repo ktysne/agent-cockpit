@@ -17,9 +17,9 @@
     {
       "key": "requested.again",
       "bounds": {
-        "x": 1280,
-        "y": 939,
-        "width": 270,
+        "x": 1302,
+        "y": 940,
+        "width": 249,
         "height": 64
       },
       "visible": true

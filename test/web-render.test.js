@@ -8,6 +8,314 @@ const { cssDeclarations, functionSource, pageContext: createPageContext, sourceB
 
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
+
+test('外したセッションは hiddenAt と更新時刻の遅い方から待ち、更新の無い帯へ移る', () => {
+  const context = pageContext(pageHtml, {
+    displayPreferences: { idleHideMinutes: 30, hideFinished: true },
+    isActiveDecision: decision => ['waiting', 'provisional'].includes(decision.state),
+    isEndedAgent: agent => agent.active !== true,
+    isFinishedSession: session => session.finished === true,
+  });
+  vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const old = new Date(now - 31 * 60_000).toISOString();
+  const session = { session_id: 'hidden-idle', hidden: true, lastUpdatedAt: old, hiddenAt: old, status: '待機中' };
+  assert.equal(context.isIdleHiddenSession(session, now), true);
+  assert.equal(context.idleHiddenSessions([session], now).length, 1);
+  assert.equal(context.idleHiddenSessions([{ ...session, finished: true }], now).length, 1);
+  assert.equal(context.idleHiddenSessions([{ ...session, hidden: false, finished: true }], now).length, 0);
+  for (const changes of [
+    { hiddenAt: new Date(now).toISOString() }, { lastUpdatedAt: new Date(now).toISOString() },
+    { status: '作業中' }, { permissionWaits: [{}] }, { decisions: [{ state: 'waiting' }] }, { agents: [{ active: true }] },
+  ]) assert.equal(context.isIdleHiddenSession({ ...session, ...changes }, now), false);
+  assert.equal(context.isIdleHiddenSession({ ...session, lastUpdatedAt: null, sessionFileUpdatedAt: old }, now), true);
+});
+
+test('終わった帯の削除対象は表示件数と一致し、警告履歴と表示中の自動マージ結果を除く', () => {
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true }, isFinishedSession: session => session.finished === true,
+    pullRequestMergeResultVisible: result => result.visible === true,
+  });
+  vm.runInContext(['finishedDeletionTargets', 'finishedHiddenCounts'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const sessions = [{ session_id: 'finished', finished: true }, { session_id: 'hidden', hidden: true, finished: true }];
+  const group = { owner: 'example', repo: 'project', mergeHistory: [
+    { number: 1 }, { number: 2, headMismatch: true },
+    { number: 5, automatic: true, automaticResult: {}, visible: true },
+    { number: 6, automatic: true, automaticResult: {}, visible: false },
+  ],
+    merged: [{ number: 3, state: 'closed' }, { number: 4, state: 'merged' }] };
+  const targets = context.finishedDeletionTargets(sessions, [group, group]);
+  assert.deepEqual(JSON.parse(JSON.stringify(targets)), {
+    session_ids: ['finished'], merge_history: [
+      { owner: 'example', repo: 'project', number: 1 }, { owner: 'example', repo: 'project', number: 6 },
+    ],
+    closed_pull_requests: [{ owner: 'example', repo: 'project', number: 3 }],
+  });
+  const counts = context.finishedHiddenCounts(sessions, [group, group]);
+  assert.deepEqual(JSON.parse(JSON.stringify(counts)), { sessions: 1, pullRequests: 3 });
+  assert.equal(counts.pullRequests, targets.merge_history.length + targets.closed_pull_requests.length);
+});
+
+test('外したセッションだけのプロダクトには閉じるボタンを表示しない', () => {
+  class FakeElement {
+    constructor(tagName, className, textContent) { Object.assign(this, { tagName, className, textContent, dataset: {} }); }
+    setAttribute() {}
+  }
+  const source = functionSource(pageHtml, 'productCloseButton');
+  const context = pageContext(pageHtml, { element: (...args) => new FakeElement(...args) });
+  vm.runInContext(source, context);
+  assert.equal(context.productCloseButton({ sessions: [{ hidden: true }] }), null);
+  assert.equal(context.productCloseButton({ sessions: [{ hidden: false }] }).textContent, '×');
+
+  // 更新の無いセッションを表示しているときは、外したセッションも visibleSessions に入る。
+  const mockContext = pageContext(mockHtml, {
+    ui: { hiddenSessions: ['hidden-idle'] },
+    visibleSessions: product => product.sessions,
+  });
+  vm.runInContext(functionSource(mockHtml, 'productCloseButton'), mockContext);
+  assert.equal(mockContext.productCloseButton({ id: 'product', sessions: [{ id: 'hidden-idle' }] }), '');
+  assert.match(mockContext.productCloseButton({ id: 'product', sessions: [{ id: 'hidden-idle' }, { id: 'shown' }] }), /data-close-product/);
+});
+
+test('モックの削除確認は押した時点で残っている対象だけを数えて削除する', () => {
+  const ui = { deletedSessionIds: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, dismissedMergeHistory: [], deletedClosedPrs: [] };
+  const recordDeletionConfirmations = new Map([['finished', {
+    targets: { sessions: ['old', 'current'], prs: ['example/project#1'], closed: [] },
+    pending: false, error: '',
+  }]]);
+  const recordDeletionTargets = new Map([['finished', {
+    targets: { sessions: ['current'], prs: [], closed: [] }, count: 1,
+  }]]);
+  const context = pageContext(mockHtml, { ui, hiddenSessionsUndo: null, recordDeletionConfirmations, recordDeletionTargets });
+  vm.runInContext([
+    functionSource(mockHtml, 'intersectRecordDeletionTargets'),
+    functionSource(mockHtml, 'countRecordDeletionTargets'),
+    functionSource(mockHtml, 'recordDeletionControls'),
+    functionSource(mockHtml, 'deleteNoteRecords'),
+  ].join('\n'), context);
+
+  assert.match(context.recordDeletionControls('finished', recordDeletionTargets.get('finished').targets, 1),
+    /1 件の記録を削除します/);
+  assert.deepEqual(JSON.parse(JSON.stringify(recordDeletionConfirmations.get('finished').targets.sessions)), ['old', 'current']);
+  assert.deepEqual(JSON.parse(JSON.stringify(recordDeletionTargets.get('finished').targets.sessions)), ['current']);
+  context.deleteNoteRecords('finished');
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.deletedSessionIds)), ['current']);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.dismissedMergeHistory)), []);
+
+  recordDeletionConfirmations.set('finished', { targets: { sessions: ['gone'], prs: [], closed: [] }, pending: false });
+  recordDeletionTargets.set('finished', { targets: { sessions: [], prs: [], closed: [] }, count: 0 });
+  context.deleteNoteRecords('finished');
+  assert.equal(recordDeletionConfirmations.has('finished'), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.deletedSessionIds)), ['current']);
+});
+
+test('モックの終わった帯は表示中の自動マージ結果を削除対象から除く', () => {
+  const product = {
+    id: 'project', repo: { name: 'example/project' },
+    prs: [{ number: 1 }, { number: 2 }, { number: 3 }],
+  };
+  const ui = {
+    hideFinished: true, hiddenSessions: [], dismissedMergeHistory: [], deletedClosedPrs: [],
+    merged: { 'project#1': { auto: false }, 'project#2': { auto: true }, 'project#3': { auto: true } },
+  };
+  const context = pageContext(mockHtml, {
+    DATA: { products: [product] }, ui, pullRequestMergeResults: new Map([['example/project', [
+      { productId: 'project', number: 2, visible: true }, { productId: 'project', number: 3, visible: false },
+    ]]]),
+    allSessions: () => [], isFinishedSession: () => false, visibleClosedPrs: () => [],
+    prKey: (item, number) => `${item.id}#${number}`,
+    isMerged: (item, pullRequest) => Boolean(ui.merged[`${item.id}#${pullRequest.number}`]),
+    pullRequestMergeResultVisible: result => result.visible === true,
+    allSessions: () => [], isFinishedSession: () => false, visibleClosedPrs: () => [],
+  });
+  vm.runInContext([
+    functionSource(mockHtml, 'finishedDeletionTargets'),
+    functionSource(mockHtml, 'finishedHiddenCounts'),
+    functionSource(mockHtml, 'hasVisibleAutomaticMergeResult'),
+  ].join('\n'), context);
+
+  const targets = context.finishedDeletionTargets();
+  assert.deepEqual(JSON.parse(JSON.stringify(targets)), {
+    sessions: [], prs: ['example/project#1', 'example/project#3'], closed: [],
+  });
+  assert.equal(context.finishedHiddenCounts().pullRequests, targets.prs.length + targets.closed.length);
+});
+
+test('モックの削除確認から通信中と失敗の状態を表示できる', () => {
+  const recordDeletionConfirmations = new Map([['finished', { targets: { sessions: ['a', 'b'] }, count: 2, pending: false, error: '' }]]);
+  const context = pageContext(mockHtml, {
+    recordDeletionTargets: new Map([['finished', { targets: { sessions: ['a', 'b'] }, count: 2 }]]),
+    recordDeletionConfirmations,
+    esc: value => String(value),
+    document: { addEventListener: (_name, callback) => { context.handleClick = callback; } },
+    render() {}, save() {},
+  });
+  const clickListener = mockHtml.match(/document\.addEventListener\('click', e => \{[\s\S]*?^\}\);/m)?.[0];
+  assert.ok(clickListener);
+  vm.runInContext(`${functionSource(mockHtml, 'intersectRecordDeletionTargets')}\n${functionSource(mockHtml, 'countRecordDeletionTargets')}\n${functionSource(mockHtml, 'recordDeletionControls')}\n${clickListener}`, context);
+  const press = action => {
+    const button = { dataset: { recordBand: 'finished', recordAction: action }, closest: () => button };
+    context.handleClick({ target: button });
+  };
+
+  press('mock-pending');
+  const pending = context.recordDeletionControls('finished', { sessions: ['a', 'b'] }, 2);
+  assert.match(pending, /削除中…/);
+  assert.match(pending, /aria-disabled="true"/);
+  press('mock-error');
+  const failed = context.recordDeletionControls('finished', { sessions: ['a', 'b'] }, 2);
+  assert.match(failed, /role="alert"/);
+  assert.match(failed, /記録を削除できませんでした/);
+});
+
+function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) })) {
+  let activeElement = null;
+  class Node {
+    constructor(tag, className = '', textContent = '') {
+      Object.assign(this, { tag, className, textContent, dataset: {}, children: [], attributes: {}, listeners: {} });
+      this.classList = { add: value => { this.className += ` ${value}`; } };
+    }
+    setAttribute(key, value) { this.attributes[key] = value; }
+    hasAttribute(key) { return Object.hasOwn(this.attributes, key); }
+    addEventListener(key, callback) { this.listeners[key] = callback; }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    focus() { if (!this.disabled) activeElement = this; }
+  }
+  const notes = Object.fromEntries(['excluded-note', 'finished-note', 'idle-note'].map(id => [id, new Node('div')]));
+  const flatten = node => [node, ...node.children.flatMap(flatten)];
+  const mode = new Node('button');
+  const buttons = () => Object.values(notes).flatMap(flatten).filter(node => node.tag === 'button');
+  const context = pageContext(pageHtml, {
+    lastState: { sessions, pullRequests: [] }, displayPreferences: { mode: 'product', idleHideMinutes: 30, hideFinished: true },
+    answerNoteComposing: false,
+    commonQuestionComposing: false, instructionComposing: false,
+    hiddenSessionsUndo: null, recordDeletionTargets: new Map(), recordDeletionConfirmations: new Map(), showIdleSessions: false,
+    element: (tag, className, text) => new Node(tag, className, text),
+    HTMLTextAreaElement: class TextArea {},
+    HTMLElement: class {},
+    document: {
+      get activeElement() { return activeElement; }, getElementById: id => notes[id],
+      querySelectorAll: selector => selector === 'button' ? buttons() : selector === '[data-record-band]' ? buttons().filter(button => button.dataset.recordBand) : [],
+      querySelector: () => mode,
+    },
+    root: { replaceChildren() {} },
+    renderRouting() {}, renderSummary() {}, updateTitle() {}, visibleSinceSeen: () => [], orderedProducts: () => [],
+    commonQuestionDiagnosticsNotice: () => null, instructionDiagnosticsNotice: () => null,
+    instructionAlternativeRecoveryPanel: () => null, instructionPreviewRecoveryPanel: () => null,
+    isActiveDecision: () => false, isEndedAgent: () => true, isFinishedSession: session => session.finished === true,
+    countJudgments: () => ({ permission: 0, blocking: 0 }), liveStatus: { textContent: '' },
+    postUiAction, refresh: async () => {},
+  });
+  vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
+    'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
+    'recordDeletionTargetKey', 'intersectRecordDeletionTargets', 'countRecordDeletionTargets', 'appendRecordDeletion',
+    'focusRecordDeletion', 'deleteNoteRecords', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  context.render(context.lastState);
+  return { context, notes, buttons, nodes: () => Object.values(notes).flatMap(flatten), get activeElement() { return activeElement; } };
+}
+
+test('帯の削除確認は再描画でも対象とフォーカスを保ち、やめるでは送信しない', () => {
+  let requests = 0;
+  const harness = recordDeletionHarness([{ session_id: 'excluded', hidden: true, hiddenAt: new Date().toISOString() }], () => { requests += 1; });
+  const open = harness.buttons().find(button => button.dataset.recordAction === 'open');
+  assert.equal(open.attributes['aria-label'], 'この 1 件の記録を削除する');
+  open.listeners.click();
+  assert.equal(harness.activeElement.dataset.recordAction, 'cancel');
+  const confirmation = harness.context.recordDeletionConfirmations.get('excluded');
+  harness.context.render(harness.context.lastState);
+  assert.equal(harness.context.recordDeletionConfirmations.get('excluded'), confirmation);
+  assert.equal(harness.notes['excluded-note'].hidden, false);
+  assert.equal(harness.activeElement.dataset.recordAction, 'cancel');
+  assert.ok(harness.buttons().includes(harness.activeElement));
+  harness.activeElement.listeners.click();
+  assert.equal(requests, 0);
+  assert.equal(harness.context.recordDeletionConfirmations.size, 0);
+});
+
+test('帯の削除は50件ずつ送信し、削除したIDを元に戻す記録から除く', async () => {
+  const bodies = [];
+  const sessions = Array.from({ length: 51 }, (_, index) => ({ session_id: `session-${index}`, hidden: true, hiddenAt: new Date().toISOString() }));
+  const harness = recordDeletionHarness(sessions, async (url, body) => {
+    assert.equal(url, '/api/record-deletions');
+    bodies.push(body);
+    return { ok: true, json: async () => ({ deleted: { sessions: body.session_ids.length, pullRequests: 0 } }) };
+  });
+  harness.context.hiddenSessionsUndo = { productName: '作業', sessionIds: ['session-0', 'other'] };
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  await harness.context.deleteNoteRecords('excluded');
+  assert.deepEqual(bodies.map(body => body.session_ids.length), [50, 1]);
+  assert.deepEqual(Array.from(harness.context.hiddenSessionsUndo.sessionIds), ['other']);
+  assert.equal(harness.context.recordDeletionConfirmations.size, 0);
+  assert.equal(harness.context.liveStatus.textContent, '51 件の記録を削除しました。');
+});
+
+test('削除確認は現在の帯との交わりだけを数えて送る', async () => {
+  const bodies = [];
+  const sessions = ['still-hidden', 'active-again'].map(session_id => ({ session_id, hidden: true, hiddenAt: new Date().toISOString() }));
+  const harness = recordDeletionHarness(sessions, async (_url, body) => {
+    bodies.push(body);
+    return { ok: true, json: async () => ({ deleted: { sessions: body.session_ids.length, pullRequests: 0 } }) };
+  });
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  harness.context.render({ sessions: [sessions[0], { ...sessions[1], hidden: false }], pullRequests: [] });
+
+  const count = harness.nodes().find(node => node.tag === 'span' && node.textContent.includes('件の記録を削除します'));
+  assert.equal(count.textContent, '1 件の記録を削除します。元に戻せません');
+  await harness.context.deleteNoteRecords('excluded');
+
+  assert.deepEqual(bodies.map(body => body.session_ids), [['still-hidden']]);
+});
+
+test('削除確認を開いた後に対象がなくなったら、描き直しで送らずに確認と帯を閉じる', async () => {
+  let requests = 0;
+  const session = { session_id: 'active-again', hidden: true, hiddenAt: new Date().toISOString() };
+  const harness = recordDeletionHarness([session], async () => { requests += 1; });
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  harness.context.render({ sessions: [{ ...session, hidden: false }], pullRequests: [] });
+  assert.equal(harness.nodes().some(node => node.tag === 'span' && node.textContent.includes('件の記録を削除します')), false);
+  assert.equal(harness.notes['excluded-note'].hidden, true);
+
+  await harness.context.deleteNoteRecords('excluded');
+
+  assert.equal(requests, 0);
+  assert.equal(harness.context.recordDeletionConfirmations.has('excluded'), false);
+});
+
+test('帯の削除に失敗したら確認対象と元に戻す記録を残して再試行できる', async () => {
+  const harness = recordDeletionHarness([{ session_id: 'retry', hidden: true, hiddenAt: new Date().toISOString() }], async () => { throw new Error('network'); });
+  harness.context.hiddenSessionsUndo = { productName: '作業', sessionIds: ['retry'] };
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  await harness.context.deleteNoteRecords('excluded');
+  const confirmation = harness.context.recordDeletionConfirmations.get('excluded');
+  assert.equal(confirmation.pending, false);
+  assert.match(confirmation.error, /削除できませんでした/);
+  assert.deepEqual(Array.from(harness.context.hiddenSessionsUndo.sessionIds), ['retry']);
+  assert.equal(harness.buttons().find(button => button.dataset.recordAction === 'confirm').attributes['aria-disabled'], 'false');
+});
+
+test('削除の通信中も再描画でフォーカスを保ち、二重送信と取消を防ぐ', async () => {
+  let resolveResponse;
+  let requests = 0;
+  const harness = recordDeletionHarness([{ session_id: 'pending', hidden: true, hiddenAt: new Date().toISOString() }], () => {
+    requests += 1;
+    return new Promise(resolve => { resolveResponse = resolve; });
+  });
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  harness.buttons().find(button => button.dataset.recordAction === 'confirm').focus();
+  const request = harness.context.deleteNoteRecords('excluded');
+  harness.context.render(harness.context.lastState);
+  assert.equal(harness.activeElement.dataset.recordAction, 'confirm');
+  assert.ok(harness.buttons().includes(harness.activeElement));
+  assert.equal(harness.activeElement.attributes['aria-disabled'], 'true');
+  await harness.context.deleteNoteRecords('excluded');
+  harness.buttons().find(button => button.dataset.recordAction === 'cancel').listeners.click();
+  assert.equal(requests, 1);
+  assert.equal(harness.context.recordDeletionConfirmations.has('excluded'), true);
+  resolveResponse({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) });
+  await request;
+});
 
 function pageContext(html, sandbox = {}) {
   const instructionState = html.includes('let instructionComposing = false;')
@@ -328,9 +636,11 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     renderSummary() {},
     renderExcludedNote() {},
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     renderIdleNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
     renderFinishedNote() {},
     updateTitle() {},
     orderedProducts: (_sessions, _pullRequests, sinceSeen) => {
@@ -1383,7 +1693,21 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
   assert.match(card.all[1].className, /merge-pending/);
   assert.ok(card.all.some((node) => node.textContent === 'マージ操作は可能'));
   assert.ok(card.all.some((node) => node.dataset?.openMerge === key && node.className === 'merge-btn outline'));
-  assert.match(card.text, /待ち: CI 実行中、クロスレビュー未実施/);
+  assert.match(card.text, /待ち: CI 実行中(?!、)/);
+  assert.equal(card.text.includes('クロスレビュー未実施'), false);
+
+  const headSha = 'a'.repeat(40);
+  card = render({ crossReview: { round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } } });
+  assert.ok(card.text.includes('3 往復目の結論待ち'));
+  assert.equal(card.text.includes('クロスレビュー対応中'), false);
+
+  card = render({ ci: 'pass', crossReview: { round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } } });
+  assert.match(card.all[1].className, /merge-pending/);
+  assert.equal(card.text.includes('待ち:'), false);
+
+  card = render({ ci: 'pass', crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: headSha, triage: null } });
+  assert.ok(card.text.includes('この head をレビューに回した'));
+  assert.match(card.text, /待ち: クロスレビュー対応中/);
 
   card = render({ canMerge: false, blocker: 'レビューの承認待ち', ci: 'pass' });
   assert.ok(card.text.includes('マージできない理由: レビューの承認待ち'));
@@ -1726,6 +2050,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
     sinceSeenMode: 'always',
     header: { dataset: { away: 'false' } },
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     isFilterShown: () => true,
     handleExternalLink: () => false,
@@ -1755,6 +2080,37 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
   assert.deepEqual(saved, []);
 });
 
+test('プロダクトを外す操作はまだ外していないセッションだけを送る', () => {
+  const clickListener = pageHtml.match(/document\.addEventListener\('click', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(clickListener);
+  const runClose = (sessions) => {
+    const calls = [];
+    const product = { key: 'project', name: 'Project', sessions };
+    let handleClick;
+    const context = pageContext(pageHtml, {
+      lastState: { sessions, pullRequests: [] },
+      productGroups: () => [product],
+      isIdleHiddenSession: () => true,
+      runSessionAction: (...args) => calls.push(args),
+      document: { addEventListener: (_name, callback) => { handleClick = callback; } },
+    });
+    vm.runInContext(clickListener, context);
+    const button = {
+      dataset: { productAction: 'close', productKey: 'project' },
+      closest: (selector) => selector === 'button' ? button : null,
+    };
+    handleClick({ target: button });
+    return calls;
+  };
+  const active = { session_id: 'active', hidden: false };
+  const alreadyHidden = { session_id: 'already-hidden', hidden: true };
+  const calls = runClose([active, alreadyHidden]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), { action: 'hide', session_ids: ['active'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][5])), { productName: 'Project', sessionIds: ['active'] });
+  assert.deepEqual(runClose([alreadyHidden]), []);
+});
+
 test('表示中のセッション、PR、PR のエラー、未読の変化が無いプロダクトはカードを出さない', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functions = ['pullRequestOpenCount', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'productGroups', 'hasProductContent', 'sessionActivityTime', 'orderedProducts'].map((name) => (
@@ -1765,6 +2121,7 @@ test('表示中のセッション、PR、PR のエラー、未読の変化が無
   const context = pageContext(pageHtml, {
     displayPreferences: { order: [], pinned: [], collapsed: [] },
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: (key) => key !== 'prs' || pullRequestsShown,
@@ -1884,6 +2241,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
     displayPreferences: { hideFinished: true, order: [], pinned: [], collapsed: [] },
     showIdleSessions: false,
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: () => true,
@@ -1916,7 +2274,10 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   context.appendTaskItem(manuallyClosedTaskList, {
     title: '画面で閉じたタスク', state: 'done', closedByUser: true, criteria: [{ met: true }],
   }, {}, partial);
-  assert.ok(descendants(manuallyClosedTaskList).some((node) => node.className === 'meta' && node.textContent === '完了条件 1/1、画面で完了にした'));
+  const closedActions = descendants(manuallyClosedTaskList).find((node) => node.className === 'task-actions');
+  assert.deepEqual(closedActions.children.map((node) => node.textContent), ['完了条件 1/1', '画面で完了にした']);
+  const closedItem = manuallyClosedTaskList.children[0];
+  assert.deepEqual(closedItem.children.map((node) => node.className), ['task-body', 'criteria-list'], '完了条件の一覧は題の行の下に行の幅いっぱいで並べる');
 
   context.displayPreferences.hideFinished = false;
   const shownWhenDisabled = context.orderedProducts([finished, finishedWithoutTasks, partial]);
@@ -2077,9 +2438,11 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     displayPreferences: { mode: 'product', pinned: [], idleHideMinutes: 30 },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     renderIdleNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
     renderFinishedNote() {},
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
@@ -2265,6 +2628,36 @@ test('PR マージ確認欄を表示し、登録キーと画面の head SHA だ�
   assert.ok(nodes.some((node) => node.type === 'radio' && node.checked && node.value === 'rebase'));
   assert.ok(nodes.some((node) => node.type === 'checkbox' && node.checked === false && node.disabled));
   assert.ok(nodes.some((node) => node.textContent === 'fork のブランチは登録先から削除できません'));
+
+  const confirmationText = () => {
+    const target = new FakeElement('div');
+    context.appendPullRequestMergeConfirmation(target, group, pullRequest);
+    const texts = [];
+    const collect = (node) => {
+      texts.push(node.textContent);
+      for (const child of node.children || []) collect(child);
+    };
+    collect(target);
+    return texts.join('\n');
+  };
+  pullRequest.children = [];
+  assert.doesNotMatch(confirmationText(), /マージコミットを推奨/);
+  pullRequest.children = [{ number: 43 }];
+  assert.match(confirmationText(), /ブランチを残すので、#43 の base は feature\/pr-42 のまま付け替えない/);
+  assert.match(confirmationText(), /マージコミットを推奨/);
+  pullRequest.isCrossRepository = false;
+  context.pullRequestMergeOptions.set(key, { method: 'rebase', deleteBranch: true });
+  assert.match(confirmationText(), /#43 の base を main に付け替える/);
+  assert.match(confirmationText(), /セッションに積み直しを依頼する/);
+  assert.doesNotMatch(confirmationText(), /マージコミットを推奨/);
+  context.pullRequestMergeOptions.set(key, { method: 'rebase', deleteBranch: false });
+  assert.match(confirmationText(), /ブランチを残すので/);
+  assert.doesNotMatch(confirmationText(), /セッションに積み直しを依頼する/);
+  group.autoDeleteBranch = true;
+  assert.match(confirmationText(), /#43 の base を main に付け替える/);
+  pullRequest.isCrossRepository = true;
+  assert.match(confirmationText(), /ブランチを残すので/);
+  group.autoDeleteBranch = false;
 
   await context.runPullRequestMergeAction({ dataset: { mergeGo: key } }, 'merge');
   assert.equal(JSON.stringify(sent), JSON.stringify([{
@@ -3215,11 +3608,13 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       idleHiddenSessions: () => [],
+      isIdleHiddenSession: () => false,
       sessionsAfterIdleFilter: (sessions) => sessions,
       renderIdleNote() {},
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
-      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
@@ -3266,11 +3661,13 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       idleHiddenSessions: () => [],
+      isIdleHiddenSession: () => false,
       sessionsAfterIdleFilter: (sessions) => sessions,
       renderIdleNote() {},
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
-      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
@@ -3350,9 +3747,11 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: () => [],
       idleHiddenSessions: () => [],
+      isIdleHiddenSession: () => false,
       sessionsAfterIdleFilter: (sessions) => sessions,
       renderIdleNote() {},
-      renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, renderFinishedNote() {}, updateTitle() {},
+      renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {}, updateTitle() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
@@ -3427,11 +3826,13 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     displayPreferences: { mode: 'product', pinned: [] },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     renderIdleNote() {},
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
-    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+    renderFinishedNote() {},
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });
