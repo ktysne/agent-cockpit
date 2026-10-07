@@ -40,7 +40,7 @@
     {
       "key": "task.count",
       "bounds": {
-        "x": 1336,
+        "x": 1363,
         "y": 98,
         "width": 138,
         "height": 38
@@ -50,7 +50,7 @@
     {
       "key": "task.close",
       "bounds": {
-        "x": 1345,
+        "x": 1372,
         "y": 141,
         "width": 120,
         "height": 64
@@ -62,7 +62,7 @@
       "bounds": {
         "x": 20,
         "y": 121,
-        "width": 1236,
+        "width": 1294,
         "height": 115
       },
       "visible": true

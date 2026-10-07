@@ -181,7 +181,8 @@ h3.sub .count { font-weight: normal; }
 /* PR の行と同じく、文字は左の列で折り返し、完了条件の数と完了にするは右の列に縦に積む。 */
 .task-body { display: flex; gap: 12px; align-items: stretch; }
 .task-text { flex: 1 1 auto; min-width: 0; }
-.task-actions { flex: none; width: 112px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
+/* 幅は文字に合わせ、文字の左右の空きは行の余白と同じ 10px にする。最小幅は「完了条件 0/3」が収まる幅で、行ごとや押した後に列が揺れないようにする。 */
+.task-actions { flex: none; width: max-content; min-width: calc(6em + 11px); padding-left: 10px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
 .task-actions .link-btn { color: var(--text-2); font-size: 12px; }
 .task-actions .link-btn:hover { color: var(--text); }
 .close-note > span { display: block; }
