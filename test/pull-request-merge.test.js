@@ -967,6 +967,58 @@ test('集約ブランチにマージされた PR はそのブランチを通知�
   assert.match(fixture.notices[0].message, /#2 を `git rebase --onto codex\/feature feature\/one` で積み直して push する/);
 });
 
+test('ブランチを残しても前の実行で付け替えた子には積み直しを依頼する', async (t) => {
+  const fixture = await mergeFixture(t, [
+    ghPullRequest(1, 'feature/one', 'main'),
+    ghPullRequest(2, 'feature/two', 'main'),
+    ghPullRequest(3, 'feature/three', 'feature/one'),
+  ]);
+  const pr = fixture.github.openPullRequests[0];
+
+  await fixture.manager.handleDetectedMerge({
+    owner: 'example',
+    repo: 'project',
+    pullRequest: pr,
+    mergedAt: new Date(NOW).toISOString(),
+    confirmedIntent: {
+      method: 'squash', deleteBranch: false, headRefOid: pr.headRefOid, retargetedNumbers: [2],
+      stackedPullRequests: [{ number: 2, baseRefName: 'feature/one' }, { number: 3, baseRefName: 'feature/one' }],
+    },
+  });
+
+  const notice = fixture.notices[0].message;
+  assert.match(notice, /#2 を `git rebase --onto main feature\/one` で積み直して push する/);
+  assert.doesNotMatch(notice, /#2 の base は feature\/one のまま/);
+  assert.match(notice, /#3 の base は feature\/one のまま/);
+  assert.doesNotMatch(notice, /#3 を `git rebase/);
+  assert.equal(fixture.state.pullRequestRegistrationForSession('session-1', 'example', 'project', 1).mergedHead?.branchKept, true);
+});
+
+test('マージ直後に確かめられず後から検出しても、同じ head の保存済み意図から残す選択を戻す', async (t) => {
+  const fixture = await mergeFixture(t, [
+    ghPullRequest(1, 'feature/one', 'main'),
+    ghPullRequest(2, 'feature/two', 'feature/one'),
+  ]);
+  const pr = fixture.github.openPullRequests[0];
+  fixture.state.setPullRequestMergeIntent({
+    session_id: 'session-1', owner: 'example', repo: 'project', number: 1,
+    url: 'https://github.com/example/project/pull/1', headRefOid: pr.headRefOid, headRefName: 'feature/one',
+    defaultBranch: 'main', method: 'squash', deleteBranch: false, automatic: false,
+    createdAt: new Date(NOW).toISOString(), stackedPullRequests: [{ number: 2, baseRefName: 'feature/one' }],
+  });
+
+  await fixture.manager.handleDetectedMerge({
+    owner: 'example',
+    repo: 'project',
+    pullRequest: pr,
+    mergedAt: new Date(NOW).toISOString(),
+    stackedPullRequests: [{ number: 2, baseRefName: 'feature/one' }],
+  });
+
+  assert.equal(fixture.state.pullRequestRegistrationForSession('session-1', 'example', 'project', 1).mergedHead?.branchKept, true);
+  assert.doesNotMatch(fixture.notices[0].message, /git rebase/);
+});
+
 test('マージコミットでは上の PR に積み直しを依頼しない', async (t) => {
   const fixture = await mergeFixture(t, [
     ghPullRequest(1, 'feature/one', 'main'),
