@@ -609,6 +609,12 @@ const DATA = {
       prs: [],
       extraSessions: [
         {
+          id: 'agent-cockpit-codex-pending', title: 'Codex の質問・許可待ち', status: 'busy', branch: 'plan/pr-stack-view',
+          main: { tool: 'Codex native context', since: '1 分前' },
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 1,
+          nativeInstructionWaiting: [{ kind: 'question', count: 1 }, { kind: 'approval', count: 1 }],
+        },
+        {
           id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown', branch: 'plan/pr-stack-view',
           main: { tool: 'Read: mock/index.html', since: '記録時刻不明' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 45,
@@ -666,6 +672,7 @@ for (const p of DATA.products) {
 
 const STORE_KEY = 'agent-cockpit-mock';
 const MAX_PENDING_INSTRUCTION_PREVIEWS = 64;
+const MAX_NATIVE_PENDING_REQUESTS = 128;
 const MOCK_PREVIEW_RECOVERY_ID = 'mock-instruction-preview-recovery';
 const MOCK_PREVIEW_RECOVERY_TEXT = '既存の指示本文を、このタブで送信前に確認できるよう保存します。';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
@@ -1252,6 +1259,27 @@ function saveMockInstructionPreviewRecovery(id) {
 }
 
 function instructionTargetAvailability(session) {
+  if (Object.hasOwn(session, 'nativeInstructionWaiting')) {
+    const pending = session.nativeInstructionWaiting;
+    if (!Array.isArray(pending) || pending.length < 1 || pending.length > 2) {
+      return { mode: '', reason: 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。' };
+    }
+    const seen = new Set();
+    let total = 0;
+    const labels = [];
+    for (const item of pending) {
+      if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length !== 2 ||
+          !['question', 'approval'].includes(item.kind) || !Number.isSafeInteger(item.count) || item.count < 1 ||
+          seen.has(item.kind)) {
+        return { mode: '', reason: 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。' };
+      }
+      seen.add(item.kind);
+      total += item.count;
+      if (total > MAX_NATIVE_PENDING_REQUESTS) return { mode: '', reason: 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。' };
+      labels.push(`${item.kind === 'question' ? '質問' : '許可'} ${item.count} 件`);
+    }
+    return { mode: '', reason: `Codex の${labels.join('、')}待ちです。追加の指示は保留されています。入力内容は保持されます。` };
+  }
   const hasPendingWork = session.perms.length > 0
     || session.decisions.some(isActiveDecision)
     || commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question));
@@ -1399,6 +1427,7 @@ function instructionPreviewRecoveryPanel() {
 function instructionComposer(p, session) {
   const draft = ui.instructionDrafts[session.id] || { targetSessionId: '', mode: '', text: '' };
   const availability = instructionTargetAvailability(session);
+  const nativeWaiting = Object.hasOwn(session, 'nativeInstructionWaiting');
   const targetSelected = draft.targetSessionId === session.id;
   const modeSelected = targetSelected && draft.mode === availability.mode && Boolean(availability.mode);
   const records = instructionRecordsForSession(session)
@@ -1410,7 +1439,7 @@ function instructionComposer(p, session) {
     ? `<option value="${availability.mode}" ${modeSelected ? 'selected' : ''}>${esc(instructionModeText(availability.mode))}</option>` : '';
   const notice = ui.instructionNotices[session.id] || '';
   const text = String(draft.text || '');
-  const form = `<form class="instruction-form" data-instruction-session="${esc(session.id)}"><label>対象の実行<select data-instruction-target="${esc(session.id)}"><option value="" ${targetSelected ? '' : 'selected'}>実行を選択してください</option><option value="${esc(session.id)}" ${targetSelected ? 'selected' : ''}>${esc(session.title)}</option></select></label><label>指示の種類<select data-instruction-mode="${esc(session.id)}" ${targetSelected && canCreate ? '' : 'disabled'}><option value="" ${modeSelected ? '' : 'selected'}>指示の種類を選択してください</option>${modeOption}</select></label><label>指示の内容<textarea rows="3" maxlength="65536" data-instruction-draft="${esc(session.id)}" ${targetSelected && canCreate ? '' : 'disabled'}>${esc(text)}</textarea></label><small class="instruction-reason">${esc(availability.reason || '下書きはこのモックに保存されます。保存後、送信前に内容を確認できます。')}</small><button type="button" class="primary" data-instruction-save="${esc(session.id)}" ${targetSelected && modeSelected && text.trim() ? '' : 'disabled'}>指示を保存する</button>${notice ? `<p class="instruction-status" role="status">${esc(notice)}</p>` : ''}</form>`;
+  const form = `<form class="instruction-form" data-instruction-session="${esc(session.id)}"><label>対象の実行<select data-instruction-target="${esc(session.id)}"><option value="" ${targetSelected ? '' : 'selected'}>実行を選択してください</option><option value="${esc(session.id)}" ${targetSelected ? 'selected' : ''}>${esc(session.title)}</option></select></label><label>指示の種類<select data-instruction-mode="${esc(session.id)}" ${targetSelected && canCreate ? '' : 'disabled'}><option value="" ${modeSelected ? '' : 'selected'}>指示の種類を選択してください</option>${modeOption}</select></label><label>指示の内容<textarea rows="3" maxlength="65536" data-instruction-draft="${esc(session.id)}" ${targetSelected && (canCreate || nativeWaiting) ? '' : 'disabled'}>${esc(text)}</textarea></label><small class="instruction-reason">${esc(availability.reason || '下書きはこのモックに保存されます。保存後、送信前に内容を確認できます。')}</small><button type="button" class="primary" data-instruction-save="${esc(session.id)}" ${targetSelected && modeSelected && text.trim() ? '' : 'disabled'}>指示を保存する</button>${notice ? `<p class="instruction-status" role="status">${esc(notice)}</p>` : ''}</form>`;
   return `<section class="instruction-composer" role="region" aria-label="指示の保存と送信"><h4>指示を保存して届ける</h4>${form}${records}</section>`;
 }
 

@@ -892,6 +892,49 @@ test('native questions and approvals bind to the current turn and accept matchin
   await runner.stop();
 });
 
+test('native pending summaries expose matching kind counts and invalidate replaced request sets', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace);
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+
+  const empty = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(empty.pending, []);
+  assert.equal(empty.checkCurrent(), true);
+  assert.equal(runner.captureNativePendingSummary('thread_other', 'turn_native_1'), null);
+
+  const questionId = 'private-question-request';
+  const questionItemId = 'private-question-item';
+  const approvalId = 'private-approval-request';
+  harness.child.send(
+    makeNativeHoldRequest(questionId, 'item/tool/requestUserInput', {
+      itemId: questionItemId,
+      questions: [{ header: 'Secret header', id: 'private-question', question: 'Secret question' }],
+    }),
+    makeNativeHoldRequest(approvalId, 'item/commandExecution/requestApproval', { itemId: 'private-approval-item' }),
+  );
+  assert.equal(empty.checkCurrent(), false);
+  const captured = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(captured.pending, [{ kind: 'question', count: 1 }, { kind: 'approval', count: 1 }]);
+  assert.equal(captured.checkCurrent(), true);
+  const publicSummary = JSON.stringify(captured.pending);
+  for (const privateValue of [questionId, questionItemId, approvalId, 'private-approval-item', 'Secret header', 'Secret question']) {
+    assert.equal(publicSummary.includes(privateValue), false);
+  }
+
+  harness.child.send(nativeHoldResolved(questionId));
+  harness.child.send(makeNativeHoldRequest('replacement-question-request'));
+  const replacement = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(replacement.pending, captured.pending);
+  assert.equal(captured.checkCurrent(), false);
+  assert.equal(replacement.checkCurrent(), true);
+  harness.child.send(nativeHoldResolved('replacement-question-request'));
+  harness.child.send(nativeHoldResolved(approvalId));
+  assert.equal(replacement.checkCurrent(), false);
+  await runner.stop();
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
+});
+
 test('native request IDs distinguish strings from integers and cannot be reused after resolution', async (t) => {
   const workspace = createWorkspace(t);
   const harness = createWaitProfileHarness(workspace);

@@ -1784,6 +1784,14 @@ test('native target projection becomes unverified after owner handoff', async (t
   ownerCollector = owner.collector;
 
   assert.equal(fixture.composition.instructionTargetState(execution.result.launchRef).status, 'working');
+  processes[0].state.child.send({ jsonrpc: '2.0', id: 'private-handoff-pending-request',
+    method: 'item/tool/requestUserInput', params: { threadId: processes[0].state.threadId,
+      turnId: processes[0].state.turnId, itemId: 'private-handoff-pending-item', isBlocking: true,
+      questions: [{ header: 'private header', id: 'private question', question: 'private body' }] } });
+  assert.deepEqual(fixture.composition.instructionTargetState(execution.result.launchRef), {
+    status: 'waiting', nativeTurnId: processes[0].state.turnId, reason: 'native_request_pending',
+    nativeWaiting: [{ kind: 'question', count: 1 }],
+  });
   fixture.composition.handoff(
     execution.result.runReceipt,
     execution.result.runReceipt,

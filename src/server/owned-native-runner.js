@@ -346,6 +346,7 @@ function createOwnedNativeRunner(options) {
   const pendingReadRpcs = new Map();
   const MAX_PENDING_READ_RPCS = 1;
   const pendingNativeRequests = new Map();
+  let pendingNativeRequestRevision = 0n;
   const usedNativeRequestIds = new Set();
   let nextRpcId = 1;
   let nextReadRpcId = READ_RPC_ID_START;
@@ -841,6 +842,7 @@ function createOwnedNativeRunner(options) {
       turnId: request.turnId,
       kind: request.kind,
     }));
+    pendingNativeRequestRevision += 1n;
   }
 
   function resolveNativeHoldRequest(message) {
@@ -864,6 +866,42 @@ function createOwnedNativeRunner(options) {
       throw runnerError('native_server_resolution_scope_mismatch');
     }
     pendingNativeRequests.delete(idKey);
+    pendingNativeRequestRevision += 1n;
+  }
+
+  function captureNativePendingSummary(threadId, turnId) {
+    if (!isIdentifier(threadId) || !isIdentifier(turnId) || state !== 'running' || !childSpawned || !child ||
+        !nativeIdentity || nativeIdentity.nativeId !== threadId || !nativeContext ||
+        nativeContext.nativeContextId !== turnId || terminalContextId || turnStartPending || activeWait ||
+        instructionStart || instructionUncertain) return null;
+    const capturedGeneration = generation;
+    const capturedChild = child;
+    const capturedRevision = pendingNativeRequestRevision;
+    const counts = new Map([['question', 0], ['approval', 0]]);
+    for (const request of pendingNativeRequests.values()) {
+      if (request.generation !== capturedGeneration || request.child !== capturedChild ||
+          request.threadId !== threadId || request.turnId !== turnId) return null;
+      const category = request.kind === 'user_input' ? 'question' :
+        ['command_approval', 'file_change_approval', 'permissions_approval'].includes(request.kind) ? 'approval' : null;
+      if (!category) return null;
+      counts.set(category, counts.get(category) + 1);
+    }
+    const pending = [...counts]
+      .filter(([, count]) => count > 0)
+      .map(([kind, count]) => Object.freeze({ kind, count }));
+    const checkCurrent = () => {
+      if (pendingNativeRequestRevision !== capturedRevision || generation !== capturedGeneration || child !== capturedChild ||
+          state !== 'running' || !childSpawned || !nativeIdentity || nativeIdentity.nativeId !== threadId || !nativeContext ||
+          nativeContext.nativeContextId !== turnId || terminalContextId || turnStartPending || activeWait ||
+          instructionStart || instructionUncertain) return false;
+      for (const request of pendingNativeRequests.values()) {
+        if (request.generation !== capturedGeneration || request.child !== capturedChild ||
+            request.threadId !== threadId || request.turnId !== turnId) return false;
+      }
+      return true;
+    };
+    const capture = Object.freeze({ pending: Object.freeze(pending), checkCurrent });
+    return checkCurrent() ? capture : null;
   }
 
   function parseWaitRequest(message) {
@@ -1762,7 +1800,8 @@ function createOwnedNativeRunner(options) {
   }
 
   const runner = { start, stop, snapshot: safeSnapshot,
-    canPrepareInstruction(value) { return instructionController?.canPrepare(value) === true; } };
+    canPrepareInstruction(value) { return instructionController?.canPrepare(value) === true; },
+    captureNativePendingSummary };
   if (waitProfile) {
     runner.releaseWait = releaseWait;
     runner.cancelWait = cancelWait;

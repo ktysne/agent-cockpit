@@ -26,6 +26,7 @@ const APP_NAME = 'agent-cockpit';
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_EXTERNAL_URL_LENGTH = 2048;
+const MAX_NATIVE_PENDING_REQUESTS = 128;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const WRITER_CLAIM_FIELDS = Object.freeze([
@@ -557,10 +558,27 @@ function createRequestHandler(options) {
       const value = instructionTargetState(launchRef);
       if (value instanceof Promise) { value.catch(() => {}); return unavailable; }
       if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.then === "function" ||
-          !hasExactKeys(value, ["status", "nativeTurnId", "reason"]) ||
           !["working", "stopped", "waiting", "unverified"].includes(value.status) ||
-          (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId)) ||
           (value.reason !== null && !validText(value.reason, 512, true))) return unavailable;
+      if (value.status === "waiting") {
+        if (!hasExactKeys(value, ["status", "nativeTurnId", "reason", "nativeWaiting"]) ||
+            !validScopedIdentifier(value.nativeTurnId) || !Array.isArray(value.nativeWaiting) ||
+            value.nativeWaiting.length < 1 || value.nativeWaiting.length > 2) return unavailable;
+        const nativeWaiting = [];
+        const seenKinds = new Set();
+        let pendingCount = 0;
+        for (const item of value.nativeWaiting) {
+          if (!hasExactKeys(item, ["kind", "count"]) || !["question", "approval"].includes(item.kind) ||
+              !Number.isSafeInteger(item.count) || item.count < 1 || seenKinds.has(item.kind)) return unavailable;
+          pendingCount += item.count;
+          if (pendingCount > MAX_NATIVE_PENDING_REQUESTS) return unavailable;
+          seenKinds.add(item.kind);
+          nativeWaiting.push({ kind: item.kind, count: item.count });
+        }
+        return { status: value.status, nativeTurnId: value.nativeTurnId, reason: value.reason, nativeWaiting };
+      }
+      if (!hasExactKeys(value, ["status", "nativeTurnId", "reason"]) ||
+          (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId))) return unavailable;
       return { status: value.status, nativeTurnId: value.nativeTurnId, reason: value.reason };
     } catch { return unavailable; }
   }
@@ -588,7 +606,8 @@ function createRequestHandler(options) {
         return [{ launchRef: link.launch.launchRef, sessionId: link.execution.sessionId,
           executionId: link.execution.executionId, identity: { ...link.launch.identity },
           origin: link.launch.origin, purpose: link.launch.purpose,
-          status: target.status, nativeTurnId: target.nativeTurnId, reason: target.reason }];
+          status: target.status, nativeTurnId: target.nativeTurnId, reason: target.reason,
+          ...(target.status === "waiting" ? { nativeWaiting: target.nativeWaiting } : {}) }];
       });
     } catch { return []; }
   }

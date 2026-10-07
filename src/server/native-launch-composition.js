@@ -18,6 +18,7 @@ const MAX_PROFILES = 16;
 const OWNED_SOURCE_ATTACH_TIMEOUT_MS = 5000;
 const MAX_ATTEMPTS = 256;
 const MAX_PENDING_CONTEXTS = 16;
+const MAX_NATIVE_PENDING_REQUESTS = 128;
 const MAX_ENDED_CONTEXT_IDS = MAX_INSTRUCTION_DISPATCHES + 1;
 const MAX_INPUT_TEXT_BYTES = 1024 * 1024;
 const IDENTIFIER_MAX = 512;
@@ -1778,9 +1779,37 @@ function createNativeLaunchComposition(options = {}) {
         return unverified();
       }
       if (record.profile.provider === 'codex' && record.currentContextId &&
-          !record.terminalContextIds.has(record.currentContextId) &&
-          canPrepareInstruction('steer', record.currentContextId)) {
-        return Object.freeze({ status: 'working', nativeTurnId: record.currentContextId, reason: null });
+          !record.terminalContextIds.has(record.currentContextId)) {
+        const metadata = eligibilityMetadata('steer', record.currentContextId);
+        const authorization = metadata && capture(metadata);
+        if (!authorization || authorization.checkFinal() !== true ||
+            typeof record.runner.captureNativePendingSummary !== 'function') return unverified();
+        let pendingCapture;
+        try { pendingCapture = record.runner.captureNativePendingSummary(record.identity.nativeId, record.currentContextId); }
+        catch { return unverified(); }
+        if (!hasExactKeys(pendingCapture, ['pending', 'checkCurrent']) ||
+            !Array.isArray(pendingCapture.pending) || typeof pendingCapture.checkCurrent !== 'function') return unverified();
+        const nativeWaiting = [];
+        const seenKinds = new Set();
+        let pendingCount = 0;
+        for (const item of pendingCapture.pending) {
+          if (!hasExactKeys(item, ['kind', 'count']) || !['question', 'approval'].includes(item.kind) ||
+              !Number.isSafeInteger(item.count) || item.count < 1 || seenKinds.has(item.kind)) return unverified();
+          pendingCount += item.count;
+          if (pendingCount > MAX_NATIVE_PENDING_REQUESTS) return unverified();
+          seenKinds.add(item.kind);
+          nativeWaiting.push(Object.freeze({ kind: item.kind, count: item.count }));
+        }
+        if (!pendingCapture.checkCurrent() || authorization.checkFinal() !== true || !pendingCapture.checkCurrent()) {
+          return unverified();
+        }
+        if (nativeWaiting.length) {
+          return Object.freeze({ status: 'waiting', nativeTurnId: record.currentContextId,
+            reason: 'native_request_pending', nativeWaiting: Object.freeze(nativeWaiting) });
+        }
+        if (canPrepareInstruction('steer', record.currentContextId)) {
+          return Object.freeze({ status: 'working', nativeTurnId: record.currentContextId, reason: null });
+        }
       }
       if (record.profile.provider === 'claude' && record.currentContextId) {
         return unverified('instruction_steer_unsupported');

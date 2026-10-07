@@ -598,6 +598,41 @@ test('指示対象や診断だけが変わっても画面署名が変わる', ()
   }));
 });
 
+test('native pendingの解除は一度通知し、状態不明を解除済みと通知しない', () => {
+  const waitingSummary = functionSource(pageHtml, 'instructionTargetWaitingSummary');
+  const waitingNotice = functionSource(pageHtml, 'instructionTargetWaitingNotice');
+  const observe = functionSource(pageHtml, 'observeInstructionStates');
+  assert.ok(waitingSummary && waitingNotice && observe);
+  const context = pageContext(pageHtml, {
+    observedInstructionStates: new Map(),
+    observedInstructionTargetStates: new Map(),
+    instructionNotices: new Map(),
+    MAX_NATIVE_PENDING_REQUESTS: Number(pageHtml.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
+    isFinishedInstruction: () => false,
+    forgetInstructionPreview() {},
+  });
+  vm.runInContext(`${waitingSummary}\n${waitingNotice}\n${observe}`, context);
+
+  const target = (status, nativeWaiting) => ({ launchRef: 'launch-native-wait', status, nativeWaiting });
+  const state = (item) => ({ sessions: [], instructionTargets: [item] });
+  assert.equal(context.observeInstructionStates(state(target('working'))), null);
+
+  const waiting = target('waiting', [{ kind: 'question', count: 1 }, { kind: 'approval', count: 1 }]);
+  assert.match(context.observeInstructionStates(state(waiting)), /質問 1 件、許可 1 件待ちです/);
+  assert.equal(context.observeInstructionStates(state(waiting)), null);
+
+  const resolved = context.observeInstructionStates(state(target('working')));
+  assert.match(resolved, /質問待ちまたは許可待ちがなくなりました。追加指示の送信条件を再確認してください/);
+  assert.equal(context.observeInstructionStates(state(target('working'))), null);
+
+  context.observeInstructionStates(state(waiting));
+  const unknown = context.observeInstructionStates(state(target('unverified')));
+  assert.match(unknown, /解消したか確認できません/);
+  assert.match(unknown, /指示は保留されています/);
+  assert.doesNotMatch(unknown, /待ちがなくなりました|解除済み/);
+  assert.equal(context.observeInstructionStates(state(target('unverified'))), null);
+});
+
 test('同じ実行の一時的な待機中は入力下書きを保ち、対象消失後は版更新を許す', () => {
   const draft = [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '入力中' }]];
   const waiting = reloadHarness('v1', [], { drafts: draft });

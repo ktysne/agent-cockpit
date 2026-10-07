@@ -256,6 +256,76 @@ test('an active native wait keeps HTTP target state unverified', async (t) => {
   assert.equal(harness.processesByProvider.get('codex').at(-1).state.instructionWrites.length, 0);
 });
 
+test('Codex native question and approval waits project safe counts and block create and send', async (t) => {
+  const harness = await withRuntime(t);
+  const started = await startLaunch(harness, 'codex', 'native-question-approval-wait');
+  const processHarness = harness.processesByProvider.get('codex').at(-1);
+  const prior = await createInstruction(harness.runtime, started, {
+    mode: 'steer', expectedTurnId: processHarness.state.turnId,
+    deliveryAttemptId: 'native-wait-existing-attempt',
+  });
+  assert.equal(prior.response.status, 200);
+
+  processHarness.state.child.send(
+    { jsonrpc: '2.0', id: 'private-question-request', method: 'item/tool/requestUserInput', params: {
+      threadId: processHarness.state.threadId, turnId: processHarness.state.turnId, itemId: 'private-question-item',
+      isBlocking: true, questions: [{ header: 'private header', id: 'private question id', question: 'private question body' }],
+    } },
+    { jsonrpc: '2.0', id: 'private-approval-request', method: 'item/commandExecution/requestApproval', params: {
+      threadId: processHarness.state.threadId, turnId: processHarness.state.turnId, itemId: 'private-approval-item', startedAtMs: 1,
+    } },
+  );
+
+  const [firstState, repeatedState] = await Promise.all([readState(harness.runtime), readState(harness.runtime)]);
+  const target = targetFor(firstState, started.result.launchRef);
+  assert.equal(target.status, 'waiting');
+  assert.deepEqual(target.nativeWaiting, [{ kind: 'question', count: 1 }, { kind: 'approval', count: 1 }]);
+  assert.deepEqual(targetFor(repeatedState, started.result.launchRef).nativeWaiting, target.nativeWaiting);
+  const publicState = JSON.stringify(firstState);
+  for (const privateValue of ['private-question-request', 'private-question-item', 'private-approval-request',
+    'private-approval-item', 'private header', 'private question id', 'private question body']) {
+    assert.equal(publicState.includes(privateValue), false);
+  }
+
+  const blockedStart = await createInstruction(harness.runtime, started, {
+    mode: 'start', deliveryAttemptId: 'native-wait-start-attempt',
+  });
+  assert.equal(blockedStart.response.status, 409);
+  const blockedSend = await sendInstruction(harness.runtime, started, prior.body.delivery_attempt_id);
+  assert.equal(blockedSend.status, 409);
+  assert.equal(processHarness.state.instructionWrites.length, 0);
+  assert.equal(processHarness.state.child.stdin.writes.some((line) =>
+    line.includes('private-question-request') || line.includes('private-approval-request')), false);
+
+  processHarness.state.child.send(
+    { method: 'serverRequest/resolved', params: { requestId: 'private-question-request', threadId: processHarness.state.threadId } },
+    { method: 'serverRequest/resolved', params: { requestId: 'private-approval-request', threadId: processHarness.state.threadId } },
+  );
+  assert.equal(targetFor(await readState(harness.runtime), started.result.launchRef).status, 'working');
+  assert.equal(processHarness.state.instructionWrites.length, 0);
+});
+
+test('a pending native question cannot become a stopped standalone start target', async (t) => {
+  const harness = await withRuntime(t);
+  const started = await startLaunch(harness, 'codex', 'native-question-terminal');
+  const processHarness = harness.processesByProvider.get('codex').at(-1);
+  processHarness.state.child.send({ jsonrpc: '2.0', id: 'private-terminal-question',
+    method: 'item/tool/requestUserInput', params: { threadId: processHarness.state.threadId,
+      turnId: processHarness.state.turnId, itemId: 'private-terminal-item', isBlocking: true,
+      questions: [{ header: 'private header', id: 'private question', question: 'private body' }] } });
+  assert.equal(targetFor(await readState(harness.runtime), started.result.launchRef).status, 'waiting');
+
+  assert.equal(processHarness.endCurrentContext(), true);
+  const terminal = targetFor(await readState(harness.runtime), started.result.launchRef);
+  assert.equal(terminal.status, 'unverified');
+  assert.equal(Object.hasOwn(terminal, 'nativeWaiting'), false);
+  const blockedStart = await createInstruction(harness.runtime, started, {
+    mode: 'start', deliveryAttemptId: 'native-question-terminal-start-attempt',
+  });
+  assert.equal(blockedStart.response.status, 409);
+  assert.equal(processHarness.state.instructionWrites.length, 0);
+});
+
 test('an uncertain native write cannot authorize a later HTTP instruction', async (t) => {
   const harness = await withRuntime(t, { instructionWriteError: true });
   const started = await startLaunch(harness, 'codex', 'uncertain-write');
