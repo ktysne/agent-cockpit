@@ -1039,7 +1039,8 @@ function renderSummary() {
   // タブのタイトルに、開発者の手が要る件数(許可待ちと、止めて待っている判断)を出す
   const need = judgmentCounts.permission + judgmentCounts.blocking;
   document.title = need ? `(${need}) Agent Cockpit` : 'Agent Cockpit';
-  document.getElementById('summary').innerHTML = FILTERS.map(x =>
+  // 隠している種類は 0 件でも札を残す。札を押すことが、その種類を個別に表示へ戻す手段であるため。
+  document.getElementById('summary').innerHTML = FILTERS.filter(x => counts[x.key] > 0 || !isShown(x.key)).map(x =>
     `<button type="button" class="chip ${x.cls}" data-filter="${x.key}" aria-pressed="${isShown(x.key)}" title="${isShown(x.key) ? '押すと非表示にする' : '押すと表示に戻す'}">${x.label} <strong>${counts[x.key]}</strong></button>`).join('');
   const hiddenCount = countHidden();
   const note = document.getElementById('filter-note');

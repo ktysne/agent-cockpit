@@ -1270,6 +1270,14 @@ function decisionCountTitle(decisions) {
   return counts.filter(([, count]) => count > 0).map(([label, count]) => `${label} ${count} 件`).join('、');
 }
 
+// 0 件で消えた札の代わりに、並びで次にある札を返す。後ろに無ければ直前の札を返す。
+function filterFocusFallback(buttons, key) {
+  const position = (item) => FILTERS.findIndex((filter) => filter.key === item.dataset.filter);
+  const removed = FILTERS.findIndex((filter) => filter.key === key);
+  const chips = buttons.filter((item) => item.dataset.filter && position(item) >= 0);
+  return chips.find((item) => position(item) > removed) || chips.at(-1) || null;
+}
+
 function renderSummary(sessions, pullRequestGroups = []) {
   const judgmentCounts = countJudgments(sessions);
   const agentCount = sessions.reduce((total, session) => total + session.agents.filter((agent) => agent.active).length, 0);
@@ -1280,7 +1288,9 @@ function renderSummary(sessions, pullRequestGroups = []) {
     agents: agentCount,
     prs: pullRequestMergeableCount(pullRequestGroups),
   };
-  summary.replaceChildren(...FILTERS.map(({ key, label, color }) => {
+  // 隠している種類は 0 件でも札を残す。札を押すことが、その種類を個別に表示へ戻す手段であるため。
+  const shownFilters = FILTERS.filter(({ key }) => counts[key] > 0 || displayPreferences.hidden.includes(key));
+  summary.replaceChildren(...shownFilters.map(({ key, label, color }) => {
     const button = element('button', `chip ${color}`.trim());
     button.type = 'button';
     button.dataset.filter = key;
@@ -3265,7 +3275,11 @@ function render(state) {
     root.replaceChildren(element('section', 'section empty', emptyText));
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
-    else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
+    else if (focusData?.kind === 'filter') {
+      const chips = [...summary.querySelectorAll('button')];
+      (chips.find((item) => item.dataset.filter === focusData.key) || filterFocusFallback(chips, focusData.key)
+        || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
+    } else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
     return;
@@ -3357,6 +3371,8 @@ function render(state) {
         ? buttons.find((item) => item.hasAttribute('data-clear-hidden-sessions'))
       : focusData.kind === 'review-skip' && !button
         ? buttons.find((item) => item.dataset.mergeKey === focusData.key && item.dataset.reviewSkip !== focusData.action)
+      : focusData.kind === 'filter' && !button
+        ? filterFocusFallback(buttons, focusData.key) || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')
       : button;
     fallback?.focus({ preventScroll: true });
   }
