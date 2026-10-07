@@ -1530,7 +1530,21 @@ test('PR カードは条件達成、条件待ち、操作不可を分け、待�
   assert.match(card.all[1].className, /merge-pending/);
   assert.ok(card.all.some((node) => node.textContent === 'マージ操作は可能'));
   assert.ok(card.all.some((node) => node.dataset?.openMerge === key && node.className === 'merge-btn outline'));
-  assert.match(card.text, /待ち: CI 実行中、クロスレビュー未実施/);
+  assert.match(card.text, /待ち: CI 実行中(?!、)/);
+  assert.equal(card.text.includes('クロスレビュー未実施'), false);
+
+  const headSha = 'a'.repeat(40);
+  card = render({ crossReview: { round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } } });
+  assert.ok(card.text.includes('3 往復目の結論待ち'));
+  assert.equal(card.text.includes('クロスレビュー対応中'), false);
+
+  card = render({ ci: 'pass', crossReview: { round: 3, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: 'b'.repeat(40), outcome: 'fixing' } } });
+  assert.match(card.all[1].className, /merge-pending/);
+  assert.equal(card.text.includes('待ち:'), false);
+
+  card = render({ ci: 'pass', crossReview: { round: 1, max: 3, dismissed: 0, reviewedSha: headSha, triage: null } });
+  assert.ok(card.text.includes('この head をレビューに回した'));
+  assert.match(card.text, /待ち: クロスレビュー対応中/);
 
   card = render({ canMerge: false, blocker: 'レビューの承認待ち', ci: 'pass' });
   assert.ok(card.text.includes('マージできない理由: レビューの承認待ち'));
