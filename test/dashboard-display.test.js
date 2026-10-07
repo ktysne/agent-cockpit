@@ -115,7 +115,7 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
   }
   assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-text'))['min-width'], '0', '題は左の列の中で折り返す');
   assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions')).flex, 'none');
-  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions')).width, '148px', '操作の列の幅を行をまたいでそろえる');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions'))['min-width'], 'calc(6.5em + 11px)', 'マージできる行どうしで操作の列の幅をそろえる');
   assert.match(web, /@media \(max-width: 480px\) \{\s*\.task-head \{ flex-wrap: wrap; \}/);
   assert.match(mock, /@media \(max-width: 480px\) \{\s*\.task \.line \{ flex-wrap: wrap; \}/);
 
