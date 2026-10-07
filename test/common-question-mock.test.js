@@ -49,7 +49,7 @@ function createHarness() {
   };
   const product = { id: 'agent-cockpit', name: 'Agent Cockpit', sessions: [session], prs: [], news: [], repo: { loading: false } };
   const ui = {
-    mode: 'product', hidden: [], hiddenSessions: [], hideFinished: true, commonQuestionStates: {},
+    mode: 'product', hidden: [], hiddenSessions: [], hiddenKinds: [], deletedSessionIds: [], deletedClosedPrs: [], hideFinished: true, commonQuestionStates: {},
     answers: {}, pinned: [], collapsed: [], expandedEndedDecisions: [], expandedKindDecisions: false,
     expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false,
   };
@@ -73,6 +73,7 @@ function createHarness() {
     ...['answerOf', 'isActiveDecision', 'isEndedDecision', 'isAwaitingDecision', 'decisionCategory', 'ageMinutes',
       'countJudgments', 'countHidden', 'hiddenCommonQuestionsOf', 'decisionCountTitle', 'commonQuestionDraft', 'commonQuestionAnswersValid',
       'commonQuestionStatus', 'commonQuestionLabels', 'commonQuestionCancelControl', 'commonQuestionCard',
+      'isFinishedSession', 'visibleClosedPrs', 'finishedDeletionTargets', 'recordDeletionControls',
       'decisionSessionBlock', 'sessionBlock', 'renderProductMode', 'renderKindMode', 'renderSummary'].map(codeFor),
   ];
   assert.ok(sources.every(Boolean));
@@ -83,6 +84,7 @@ function createHarness() {
     DEFAULT_SECTION_ORDER: ['sinceSeen', 'judgment', 'tasks', 'now', 'prs'],
     commonQuestionDrafts: new Map(), commonQuestionSubmittedDrafts: new Map(), commonQuestionInFlight: new Set(),
     commonQuestionErrors: new Map(), commonQuestionNotices: new Map(), commonQuestionCancelConfirmations: new Set(),
+    recordDeletionConfirmations: new Map(), recordDeletionTargets: new Map(),
     orderedProducts: () => [product],
     sessionsByActivity: candidate => candidate.sessions,
     pendingDecisions: candidate => candidate.sessions.flatMap(item => item.decisions),
