@@ -888,7 +888,7 @@ test('作業行は先頭に名前と時刻を置き、詳細と状態不明の�
 
 test('モックの作業行も名前と時刻の後に全幅の詳細を並べる', () => {
   const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
-  const functions = ['mainRow', 'agentRow'].map((name) => functionSource(mock, name));
+  const functions = ['mainRow', 'agentRow', 'lineagePersisted', 'lineageNotice'].map((name) => functionSource(mock, name));
   assert.ok(functions.every(Boolean));
   const context = pageContext(mock, {
     ui: { estimatedSessions: [] },
