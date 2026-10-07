@@ -105,6 +105,14 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
       entries.set(metadata.deliveryAttemptId, entry); tokens.set(token, entry); retainedBytes += size;
       return token;
     },
+    canPrepare(value) {
+      try {
+        if (invalidated) return false;
+        const metadata = normalizeMetadata(value);
+        const capture = operations.capture(metadata);
+        return Boolean(capture && operations.check(capture, metadata) === true);
+      } catch { return false; }
+    },
     check(token) { try { expire(); return Boolean(current(tokens.get(token))); } catch { return false; } },
     dispatchNow(token, value, finalGuard) {
       expire();
@@ -163,6 +171,7 @@ function createOwnedInstructionWriter(sourceCapability, operations) {
     },
   });
   const controller = Object.freeze({
+    canPrepare(value) { return facade.canPrepare(value); },
     isPending(token) { const entry = tokens.get(token); return Boolean(!invalidated && entry?.used && !entry.settled && !entry.conflict && entry.expiresAt > NOW()); },
     canAcknowledge(token, turnId) {
       const entry = tokens.get(token);

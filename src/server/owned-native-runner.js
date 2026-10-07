@@ -1640,7 +1640,8 @@ function createOwnedNativeRunner(options) {
     return stopPromise;
   }
 
-  const runner = { start, stop, snapshot: safeSnapshot };
+  const runner = { start, stop, snapshot: safeSnapshot,
+    canPrepareInstruction(value) { return instructionController?.canPrepare(value) === true; } };
   if (waitProfile) {
     runner.releaseWait = releaseWait;
     runner.cancelWait = cancelWait;

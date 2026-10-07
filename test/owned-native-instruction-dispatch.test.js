@@ -356,6 +356,22 @@ test('ID-F08-NI06 Codex full input mismatch and item reuse cannot emit further n
   assert.equal(evidence.length, 1); assert.equal(f.instructionWrites(), 2);
 });
 
+test('native writer eligibility checks do not reserve dispatch capabilities', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  const writer = getOwnedInstructionWriter(f.capability());
+  for (let index = 0; index < 128; index += 1) {
+    const metadata = commandFor(f, started.launchRef, 'steer', 'eligibility-probe-' + index).metadata;
+    assert.equal(writer.canPrepare(metadata), true);
+  }
+  assert.equal(f.instructionWrites(), 0);
+  for (let index = 0; index < 128; index += 1) {
+    const metadata = commandFor(f, started.launchRef, 'steer', 'prepared-after-probe-' + index).metadata;
+    assert.ok(writer.prepare(metadata));
+  }
+  assert.equal(writer.prepare(commandFor(f, started.launchRef, 'steer', 'over-bound-after-probe').metadata), null);
+  assert.equal(f.instructionWrites(), 0);
+});
+
 test('ID-F08-NI09 lifetime capability bound fails closed without forgetting used delivery IDs', async t => {
   const { createOwnedInstructionWriter } = require('../src/server/owned-native-instruction-writer');
   const f = fixture(t, 'codex'); const started = await f.start();
