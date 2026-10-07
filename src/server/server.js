@@ -1590,7 +1590,7 @@ function createRequestHandler(options) {
         return;
       }
       const file = state.sessionFileFor(sessionId);
-      const estimate = await estimateTranscript(claudeHome, file?.cwd, sessionId);
+      const estimate = await estimateTranscript(claudeHome, file?.cwd, file?.native_session_id || sessionId);
       const saved = state.saveEstimate(sessionId, estimate);
       if (!saved) {
         jsonResponse(response, 409, { error: 'Session state is known' });
@@ -2458,8 +2458,10 @@ async function startServer(options = {}) {
     if (files) {
       claudeIssuer?.syncSessionFiles(files, listingToken);
       // 再開した期間の表示用 sessionId は native の ID と違うので、状態の同期にはその ID を使う。
+      // 会話記録のファイル名は native の ID なので、推定のために native_session_id も残す。
       state.syncSessionFiles(files.map((file) => ({
         ...file,
+        native_session_id: file.session_id,
         session_id: claudeIssuer?.activeProjectionFor({ sessionId: file.session_id, pid: file.pid }) || file.session_id,
         product: productFromCwd(file.cwd),
       })));

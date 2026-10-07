@@ -217,6 +217,7 @@ test('再開した期間は、親が SessionEnd なしに終わっても不在�
   const resumedId = server.runtime.state.snapshot().sessions.map((session) => session.session_id).find((id) => id.startsWith('exec-'));
   assert.ok(resumedId);
   await waitFor(() => server.runtime.state.sessionFileLastSeenAt.has(resumedId), 'resumed session file to be seen');
+  assert.equal(server.runtime.state.sessionFileFor(resumedId)?.native_session_id, 'session-a');
   server.runtime.state.setTasks(resumedId, [{ title: '再開後のタスク', state: 'doing', criteria: [] }]);
 
   const context = jsonBody(await request(server.info.port, { path: '/api/sessions/session-a/context' }));
