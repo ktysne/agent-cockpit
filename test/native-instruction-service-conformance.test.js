@@ -373,4 +373,3 @@ test('unknown delivery state survives service restart and never causes a resend'
   await assert.rejects(harness.service.send(input.deliveryAttemptId), { code: 'instruction_not_sendable' });
   assert.equal(started.process.instructionWrites.length, 1);
 });
-

@@ -87,4 +87,3 @@ question/permission pendingのstate観測は未対応であるため、NS09の�
 全体検証は`npm test`を専用worktreeで子プロセス起動が許可された条件で実行し、1791/1791件が成功した。
 通常sandboxでの先行実行はtest runnerの子プロセス起動時に`spawn EPERM`となり、製品testの失敗とは数えない。
 結果のsummaryと実行条件はignore対象の`.cross-review/native-integration-full-test.log`に記録した。tool出力上限のため完全なstdoutではない。
-
