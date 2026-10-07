@@ -21,6 +21,79 @@ async function temporaryHome(testContext, { deferCleanup = false } = {}) {
   });
 }
 
+test('記録削除 API は秘密値と Origin と本文を厳密に検証する', async (t) => {
+  const runtime = await runningServer(t);
+  const send = (body, headers = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`)) => request(runtime.info.port, {
+    method: 'POST', path: '/api/record-deletions', headers, body: JSON.stringify(body),
+  });
+  assert.equal((await send({ session_ids: ['unknown'] }, {})).status, 401);
+  assert.equal((await send({ session_ids: ['unknown'] }, uiHeaders(runtime.info, 'https://other.example'))).status, 403);
+  const noOrigin = uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`);
+  delete noOrigin.origin;
+  assert.equal((await send({ session_ids: ['unknown'] }, noOrigin)).status, 403);
+  const pr = { owner: 'example', repo: 'project', number: 31 };
+  for (const body of [null, [], {}, { session_ids: [] }, { session_ids: ['unknown'], extra: true },
+    { session_ids: 'unknown' }, { session_ids: ['../invalid'] }, { session_ids: Array(51).fill('unknown') },
+    { merge_history: [{ ...pr, extra: true }] }, { merge_history: [{ ...pr, number: 0 }] },
+    { merge_history: Array(51).fill(pr) }, { closed_pull_requests: [{ ...pr, owner: '../invalid' }] },
+    { closed_pull_requests: Array(51).fill(pr) }, { closed_pull_requests: [null] }]) {
+    assert.equal((await send(body)).status, 400, JSON.stringify(body));
+  }
+  const unknown = await send({ session_ids: ['unknown'], merge_history: [pr], closed_pull_requests: [pr] });
+  assert.equal(unknown.status, 200);
+  assert.deepEqual(jsonBody(unknown), { deleted: { sessions: 0, pullRequests: 0 } });
+});
+
+test('記録削除 API は指定 ID だけを削除し、待機の解除と PR グループ更新を行う', async (t) => {
+  const state = new DashboardState();
+  const ended = [];
+  const refreshed = [];
+  const runtime = await runningServer(t, {
+    state,
+    answerDelivery: { sessionEnded: (...args) => ended.push(args), sessionReopened() {}, close() {} },
+    pullRequestTracker: { snapshot: () => [], refreshReviewGroups: async (...args) => refreshed.push(args), close() {}, start() {} },
+  });
+  const now = Date.now();
+  state.syncSessionFiles([{ session_id: 'delete-this', updatedAt: new Date(now - 10).toISOString() }, { session_id: 'keep-this' }], now);
+  state.registerPullRequest('delete-this', { url: 'https://github.com/example/project/pull/31' }, {}, now);
+  state.updatePullRequest('delete-this', 'example', 'project', 31, { state: 'closed' });
+  state.recordMergedPullRequest({ owner: 'example', repo: 'project', number: 32,
+    url: 'https://github.com/example/project/pull/32', mergedAt: new Date(now).toISOString() }, now);
+  const pr = number => ({ owner: 'example', repo: 'project', number });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/record-deletions', headers: uiHeaders(runtime.info, `http://127.0.0.1:${runtime.info.port}`),
+    body: JSON.stringify({ session_ids: ['delete-this', 'delete-this', 'unknown'], merge_history: [pr(32), pr(32)], closed_pull_requests: [pr(31), pr(31)] }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(jsonBody(response), { deleted: { sessions: 1, pullRequests: 2 } });
+  assert.deepEqual(state.snapshot().sessions.map(session => session.session_id), ['keep-this']);
+  assert.deepEqual(state.mergedPullRequestHistoryForRepo('example', 'project'), []);
+  assert.deepEqual(refreshed, [['example', 'project']]);
+  assert.equal(ended.length, 1);
+  assert.equal(ended[0][0], 'delete-this');
+});
+
+test('削除時刻以前のフックは回答待ちの再登録にも渡さない', async (t) => {
+  const state = new DashboardState();
+  const delivered = [];
+  const runtime = await runningServer(t, {
+    state,
+    answerDelivery: { afterEvent: event => delivered.push(event), sessionEnded() {}, sessionReopened() {}, close() {} },
+  });
+  const deletedAt = Date.now();
+  state.syncSessionFiles([{ session_id: 'old-hook' }], deletedAt - 1);
+  state.deleteSession('old-hook', deletedAt);
+  for (const hookAt of [deletedAt - 1, deletedAt, deletedAt + 1]) {
+    const response = await request(runtime.info.port, {
+      method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
+      body: JSON.stringify({ session_id: 'old-hook', hook_event_name: 'SessionStart', hookAt }),
+    });
+    assert.equal(response.status, 202);
+  }
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].hookAt, deletedAt + 1);
+});
+
 test('離席中の切り替えは秘密値と Origin を照合し、状態を軽い応答で返す', async (t) => {
   const runtime = await runningServer(t);
   const body = JSON.stringify({ enabled: true });

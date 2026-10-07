@@ -9,6 +9,155 @@ const { cssDeclarations, functionSource, pageContext, sourceBetween } = require(
 // 作業ツリーは autocrlf で CRLF になることがあり、ソースの断片を照合する正規表現は LF を前提にする。
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+test('外したセッションは hiddenAt と更新時刻の遅い方から待ち、更新の無い帯へ移る', () => {
+  const context = pageContext(pageHtml, {
+    displayPreferences: { idleHideMinutes: 30, hideFinished: true },
+    isActiveDecision: decision => ['waiting', 'provisional'].includes(decision.state),
+    isEndedAgent: agent => agent.active !== true,
+    isFinishedSession: session => session.finished === true,
+  });
+  vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const old = new Date(now - 31 * 60_000).toISOString();
+  const session = { session_id: 'hidden-idle', hidden: true, lastUpdatedAt: old, hiddenAt: old, status: '待機中' };
+  assert.equal(context.isIdleHiddenSession(session, now), true);
+  assert.equal(context.idleHiddenSessions([session], now).length, 1);
+  assert.equal(context.idleHiddenSessions([{ ...session, finished: true }], now).length, 1);
+  assert.equal(context.idleHiddenSessions([{ ...session, hidden: false, finished: true }], now).length, 0);
+  for (const changes of [
+    { hiddenAt: new Date(now).toISOString() }, { lastUpdatedAt: new Date(now).toISOString() },
+    { status: '作業中' }, { permissionWaits: [{}] }, { decisions: [{ state: 'waiting' }] }, { agents: [{ active: true }] },
+  ]) assert.equal(context.isIdleHiddenSession({ ...session, ...changes }, now), false);
+  assert.equal(context.isIdleHiddenSession({ ...session, lastUpdatedAt: null, sessionFileUpdatedAt: old }, now), true);
+});
+
+test('終わった帯の削除対象は表示件数と一致し、警告履歴と merged 登録を除く', () => {
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true }, isFinishedSession: session => session.finished === true,
+  });
+  vm.runInContext(['finishedDeletionTargets', 'finishedHiddenCounts'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const sessions = [{ session_id: 'finished', finished: true }, { session_id: 'hidden', hidden: true, finished: true }];
+  const group = { owner: 'example', repo: 'project', mergeHistory: [{ number: 1 }, { number: 2, headMismatch: true }],
+    merged: [{ number: 3, state: 'closed' }, { number: 4, state: 'merged' }] };
+  const targets = context.finishedDeletionTargets(sessions, [group, group]);
+  assert.deepEqual(JSON.parse(JSON.stringify(targets)), {
+    session_ids: ['finished'], merge_history: [{ owner: 'example', repo: 'project', number: 1 }],
+    closed_pull_requests: [{ owner: 'example', repo: 'project', number: 3 }],
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedHiddenCounts(sessions, [group, group]))), { sessions: 1, pullRequests: 2 });
+});
+
+function recordDeletionHarness(sessions, postUiAction = async () => ({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) })) {
+  let activeElement = null;
+  class Node {
+    constructor(tag, className = '', textContent = '') {
+      Object.assign(this, { tag, className, textContent, dataset: {}, children: [], attributes: {}, listeners: {} });
+      this.classList = { add: value => { this.className += ` ${value}`; } };
+    }
+    setAttribute(key, value) { this.attributes[key] = value; }
+    hasAttribute(key) { return Object.hasOwn(this.attributes, key); }
+    addEventListener(key, callback) { this.listeners[key] = callback; }
+    append(...children) { this.children.push(...children); }
+    replaceChildren(...children) { this.children = children; }
+    focus() { if (!this.disabled) activeElement = this; }
+  }
+  const notes = Object.fromEntries(['excluded-note', 'finished-note', 'idle-note'].map(id => [id, new Node('div')]));
+  const flatten = node => [node, ...node.children.flatMap(flatten)];
+  const mode = new Node('button');
+  const buttons = () => Object.values(notes).flatMap(flatten).filter(node => node.tag === 'button');
+  const context = pageContext(pageHtml, {
+    lastState: { sessions, pullRequests: [] }, displayPreferences: { mode: 'product', idleHideMinutes: 30, hideFinished: true },
+    answerNoteComposing: false,
+    hiddenSessionsUndo: null, recordDeletionConfirmations: new Map(), showIdleSessions: false,
+    element: (tag, className, text) => new Node(tag, className, text),
+    HTMLTextAreaElement: class TextArea {},
+    document: {
+      get activeElement() { return activeElement; }, getElementById: id => notes[id],
+      querySelectorAll: selector => selector === 'button' ? buttons() : selector === '[data-record-band]' ? buttons().filter(button => button.dataset.recordBand) : [],
+      querySelector: () => mode,
+    },
+    root: { replaceChildren() {} },
+    renderRouting() {}, renderSummary() {}, updateTitle() {}, visibleSinceSeen: () => [], orderedProducts: () => [],
+    isActiveDecision: () => false, isEndedAgent: () => true, isFinishedSession: session => session.finished === true,
+    countJudgments: () => ({ permission: 0, blocking: 0 }), liveStatus: { textContent: '' },
+    postUiAction, refresh: async () => {},
+  });
+  vm.runInContext(['isIdleHiddenSession', 'idleHiddenSessions', 'sessionsAfterIdleFilter',
+    'renderExcludedNote', 'renderFinishedNote', 'renderIdleNote', 'finishedHiddenCounts', 'finishedDeletionTargets',
+    'appendRecordDeletion', 'focusRecordDeletion', 'deleteNoteRecords', 'render'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  context.render(context.lastState);
+  return { context, notes, buttons, get activeElement() { return activeElement; } };
+}
+
+test('帯の削除確認は再描画でも対象とフォーカスを保ち、やめるでは送信しない', () => {
+  let requests = 0;
+  const harness = recordDeletionHarness([{ session_id: 'excluded', hidden: true, hiddenAt: new Date().toISOString() }], () => { requests += 1; });
+  const open = harness.buttons().find(button => button.dataset.recordAction === 'open');
+  assert.equal(open.attributes['aria-label'], 'この 1 件の記録を削除する');
+  open.listeners.click();
+  assert.equal(harness.activeElement.dataset.recordAction, 'cancel');
+  const confirmation = harness.context.recordDeletionConfirmations.get('excluded');
+  harness.context.render({ sessions: [], pullRequests: [] });
+  assert.equal(harness.context.recordDeletionConfirmations.get('excluded'), confirmation);
+  assert.equal(harness.notes['excluded-note'].hidden, false);
+  assert.equal(harness.activeElement.dataset.recordAction, 'cancel');
+  assert.ok(harness.buttons().includes(harness.activeElement));
+  harness.activeElement.listeners.click();
+  assert.equal(requests, 0);
+  assert.equal(harness.context.recordDeletionConfirmations.size, 0);
+});
+
+test('帯の削除は50件ずつ送信し、削除したIDを元に戻す記録から除く', async () => {
+  const bodies = [];
+  const sessions = Array.from({ length: 51 }, (_, index) => ({ session_id: `session-${index}`, hidden: true, hiddenAt: new Date().toISOString() }));
+  const harness = recordDeletionHarness(sessions, async (url, body) => {
+    assert.equal(url, '/api/record-deletions');
+    bodies.push(body);
+    return { ok: true, json: async () => ({ deleted: { sessions: body.session_ids.length, pullRequests: 0 } }) };
+  });
+  harness.context.hiddenSessionsUndo = { productName: '作業', sessionIds: ['session-0', 'other'] };
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  await harness.context.deleteNoteRecords('excluded');
+  assert.deepEqual(bodies.map(body => body.session_ids.length), [50, 1]);
+  assert.deepEqual(Array.from(harness.context.hiddenSessionsUndo.sessionIds), ['other']);
+  assert.equal(harness.context.recordDeletionConfirmations.size, 0);
+  assert.equal(harness.context.liveStatus.textContent, '51 件の記録を削除しました。');
+});
+
+test('帯の削除に失敗したら確認対象と元に戻す記録を残して再試行できる', async () => {
+  const harness = recordDeletionHarness([{ session_id: 'retry', hidden: true, hiddenAt: new Date().toISOString() }], async () => { throw new Error('network'); });
+  harness.context.hiddenSessionsUndo = { productName: '作業', sessionIds: ['retry'] };
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  await harness.context.deleteNoteRecords('excluded');
+  const confirmation = harness.context.recordDeletionConfirmations.get('excluded');
+  assert.equal(confirmation.pending, false);
+  assert.match(confirmation.error, /削除できませんでした/);
+  assert.deepEqual(Array.from(harness.context.hiddenSessionsUndo.sessionIds), ['retry']);
+  assert.equal(harness.buttons().find(button => button.dataset.recordAction === 'confirm').attributes['aria-disabled'], 'false');
+});
+
+test('削除の通信中も再描画でフォーカスを保ち、二重送信と取消を防ぐ', async () => {
+  let resolveResponse;
+  let requests = 0;
+  const harness = recordDeletionHarness([{ session_id: 'pending', hidden: true, hiddenAt: new Date().toISOString() }], () => {
+    requests += 1;
+    return new Promise(resolve => { resolveResponse = resolve; });
+  });
+  harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
+  harness.buttons().find(button => button.dataset.recordAction === 'confirm').focus();
+  const request = harness.context.deleteNoteRecords('excluded');
+  harness.context.render(harness.context.lastState);
+  assert.equal(harness.activeElement.dataset.recordAction, 'confirm');
+  assert.ok(harness.buttons().includes(harness.activeElement));
+  assert.equal(harness.activeElement.attributes['aria-disabled'], 'true');
+  await harness.context.deleteNoteRecords('excluded');
+  harness.buttons().find(button => button.dataset.recordAction === 'cancel').listeners.click();
+  assert.equal(requests, 1);
+  assert.equal(harness.context.recordDeletionConfirmations.has('excluded'), true);
+  resolveResponse({ ok: true, json: async () => ({ deleted: { sessions: 1, pullRequests: 0 } }) });
+  await request;
+});
+
 test('設定画面から設定のマニュアルを新しいウィンドウで開く', () => {
   const settingsDialog = pageHtml.match(/<dialog class="settings-dialog" id="settings-dialog"[\s\S]*?<\/dialog>/)?.[0];
   assert.ok(settingsDialog);
@@ -307,9 +456,11 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     renderSummary() {},
     renderExcludedNote() {},
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     renderIdleNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
     renderFinishedNote() {},
     updateTitle() {},
     orderedProducts: (_sessions, _pullRequests, sinceSeen) => {
@@ -1567,6 +1718,7 @@ test('履歴だけのプロダクトも稼働中の一覧と同じ順で上下�
     sinceSeenMode: 'always',
     header: { dataset: { away: 'false' } },
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     isFilterShown: () => true,
     handleExternalLink: () => false,
@@ -1606,6 +1758,7 @@ test('表示中のセッション、PR、PR のエラー、未読の変化が無
   const context = pageContext(pageHtml, {
     displayPreferences: { order: [], pinned: [], collapsed: [] },
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: (key) => key !== 'prs' || pullRequestsShown,
@@ -1725,6 +1878,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
     displayPreferences: { hideFinished: true, order: [], pinned: [], collapsed: [] },
     showIdleSessions: false,
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
     isFilterShown: () => true,
@@ -1918,9 +2072,11 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
     displayPreferences: { mode: 'product', pinned: [], idleHideMinutes: 30 },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     renderIdleNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
     renderFinishedNote() {},
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
@@ -3048,11 +3204,13 @@ test('衝突の依頼の確認欄では、描き直しの後も同じ操作の�
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       idleHiddenSessions: () => [],
+      isIdleHiddenSession: () => false,
       sessionsAfterIdleFilter: (sessions) => sessions,
       renderIdleNote() {},
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
-      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
@@ -3096,11 +3254,13 @@ test('マージ操作ボタンにフォーカスがある描き直しでは同�
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
       idleHiddenSessions: () => [],
+      isIdleHiddenSession: () => false,
       sessionsAfterIdleFilter: (sessions) => sessions,
       renderIdleNote() {},
       renderRouting() {},
       renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
-      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {},
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
     });
@@ -3177,9 +3337,11 @@ test('レビュー不要の通信後は有効な同じPRの操作へフォーカ
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: () => [],
       idleHiddenSessions: () => [],
+      isIdleHiddenSession: () => false,
       sessionsAfterIdleFilter: (sessions) => sessions,
       renderIdleNote() {},
-      renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, renderFinishedNote() {}, updateTitle() {},
+      renderRouting() {}, renderSummary() {}, renderExcludedNote() {}, finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+      renderFinishedNote() {}, updateTitle() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
       orderedProducts: () => [{ key: 'product-ui' }],
       productSection: () => ({}),
@@ -3251,11 +3413,13 @@ test('古い PR の開閉ボタンにフォーカスがある描き直しでは�
     displayPreferences: { mode: 'product', pinned: [] },
     visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
     idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
     sessionsAfterIdleFilter: (sessions) => sessions,
     renderIdleNote() {},
     renderRouting() {},
     renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
-    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), renderFinishedNote() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }), finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+    renderFinishedNote() {},
     orderedProducts: () => [{ key: 'product-ui' }],
     productSection: () => ({}),
   });

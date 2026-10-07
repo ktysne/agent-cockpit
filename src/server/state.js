@@ -199,6 +199,7 @@ function validMergedPullRequest(record) {
     (record.mergedHeadRefOid !== undefined && record.mergedHeadRefOid !== null && !isCompleteCommitSha(record.mergedHeadRefOid)) ||
     (record.headMismatch !== undefined && typeof record.headMismatch !== 'boolean') ||
     (record.mergeResultClosedAt !== undefined && !validTimestamp(record.mergeResultClosedAt)) ||
+    (record.historyDismissedAt !== undefined && !validTimestamp(record.historyDismissedAt)) ||
     (record.automaticResult !== undefined && !validPullRequestMergeResult(record.automaticResult))) return false;
   const parsedUrl = parsePullRequestUrl(record.url);
   return Boolean(parsedUrl && parsedUrl.owner === record.owner && parsedUrl.repo === record.repo && parsedUrl.number === record.number);
@@ -320,6 +321,12 @@ function normalizeStore(value) {
     hiddenSessions.push({ session_id: record.session_id, updatedAt: record.updatedAt });
   }
   const prs = value.prs === undefined ? [] : value.prs;
+  const deletedSessions = new Map();
+  if (value.deletedSessions !== undefined && !isRecord(value.deletedSessions)) throw new Error('Invalid deleted sessions');
+  for (const [sessionId, deletedAt] of Object.entries(value.deletedSessions || {})) {
+    if (!validStoredSessionId(sessionId) || !validTimestamp(deletedAt)) throw new Error('Invalid deleted session');
+    deletedSessions.set(sessionId, deletedAt);
+  }
   const relatedPrs = value.relatedPrs === undefined ? [] : value.relatedPrs;
   const retargetedPrs = value.retargetedPrs === undefined ? [] : value.retargetedPrs;
   const mergedPrs = value.mergedPrs === undefined ? [] : value.mergedPrs;
@@ -354,6 +361,7 @@ function normalizeStore(value) {
     decisionLifecycles,
     closedTasks,
     hiddenSessions,
+    deletedSessions,
     prs: prs.map(normalizePullRequestRecord),
     relatedPrs: relatedPrs.map(normalizeRelatedPullRequestRecord),
     retargetedPrs: retargetedPrs.map((record) => ({ ...record })),
@@ -1080,6 +1088,7 @@ class DashboardState {
     this.estimates = new Map();
     this.hiddenSessions = new Set();
     this.hiddenSessionUpdatedAt = new Map();
+    this.deletedSessions = new Map();
     this.closedTasks = new Map();
     this.pullRequests = new Map();
     this.relatedPullRequests = new Map();
@@ -1138,6 +1147,7 @@ class DashboardState {
     this.restoreSessionCleanupPending = true;
     this.restoredAt = now;
     this.display = store.display;
+    this.deletedSessions = store.deletedSessions;
     this.plans = store.plans;
     this.askDecisionBindings = store.askDecisionBindings;
     this.finishedOutsideEventsAskDecisionIds = new Map([...this.plans].flatMap(([sessionId, plan]) => {
@@ -1217,6 +1227,11 @@ class DashboardState {
   pruneExpiredStoreRecords(now) {
     let mergeHistoryChanged = false;
     let sessionRecordsChanged = false;
+    for (const [sessionId, deletedAt] of this.deletedSessions) {
+      if (now - Date.parse(deletedAt) <= STORE_RETENTION_MS) continue;
+      this.deletedSessions.delete(sessionId);
+      sessionRecordsChanged = true;
+    }
     let relatedPullRequestsChanged = false;
     let crossReviewSkipsChanged = false;
     // セッションファイルを読めない環境では同期が来ないので、猶予の後はフックで届いたセッションだけで生死を判定する。
@@ -1285,13 +1300,37 @@ class DashboardState {
     return finite.length ? Math.max(...finite) : NaN;
   }
 
-  deleteStoredSession(sessionId) {
+  deleteStoredSession(sessionId, { keepPullRequests = false } = {}) {
     this.plans.delete(sessionId);
     this.askDecisionBindings.delete(sessionId);
     this.finishedOutsideEventsAskDecisionIds.delete(sessionId);
     this.decisionLifecycles.delete(sessionId);
     this.closedTasks.delete(sessionId);
-    this.pullRequests.delete(sessionId);
+    if (!keepPullRequests) this.pullRequests.delete(sessionId);
+  }
+
+  deleteSession(sessionId, now = Date.now()) {
+    if (!this.snapshot().sessions.some((session) => session.session_id === sessionId)) return false;
+    for (const records of [this.entries, this.sessions, this.endedAt, this.endedByAbsence,
+      this.decisionOverrides, this.estimates, this.hiddenSessions, this.hiddenSessionUpdatedAt,
+      this.closedAgents, this.sessionFileLastSeenAt]) records.delete(sessionId);
+    this.deleteStoredSession(sessionId, { keepPullRequests: true });
+    this.deletedSessions.set(sessionId, isoTime(now));
+    this.onSessionEndedByAbsence?.(sessionId, now);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  acceptSessionWrite(sessionId, at = Infinity) {
+    const deletedAt = this.deletedSessions.get(sessionId);
+    if (!deletedAt) return true;
+    if (at <= Date.parse(deletedAt)) return false;
+    this.deletedSessions.delete(sessionId);
+    this.onSessionReopened?.(sessionId);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
   }
 
   serializeStore() {
@@ -1333,6 +1372,7 @@ class DashboardState {
       decisionLifecycles,
       closedTasks,
       hiddenSessions,
+      deletedSessions: Object.fromEntries(this.deletedSessions),
       prs: this.pullRequestRegistrations(),
       relatedPrs: [...this.relatedPullRequests.values()].map(normalizeRelatedPullRequestRecord),
       retargetedPrs: this.pullRequestRetargets.map((record) => ({ ...record })),
@@ -1485,6 +1525,9 @@ class DashboardState {
     if (previous?.mergedAt === next.mergedAt && previous.mergeResultClosedAt) {
       next.mergeResultClosedAt = previous.mergeResultClosedAt;
     }
+    if (previous?.mergedAt === next.mergedAt && previous.historyDismissedAt) {
+      next.historyDismissedAt = previous.historyDismissedAt;
+    }
     if (previous && stableStringify(previous) === stableStringify(next)) return false;
     this.mergedPullRequests.set(key, next);
     const registrationChanges = { state: 'merged', mergedAt: next.mergedAt };
@@ -1504,9 +1547,39 @@ class DashboardState {
   mergedPullRequestHistoryForRepo(owner, repo, now = Date.now()) {
     this.pruneExpiredStoreRecords(now);
     return [...this.mergedPullRequests.values()]
+      .filter((record) => !record.historyDismissedAt)
       .filter((record) => record.owner.toLowerCase() === owner.toLowerCase() && record.repo.toLowerCase() === repo.toLowerCase())
       .sort((left, right) => Date.parse(right.mergedAt) - Date.parse(left.mergedAt) || right.number - left.number)
       .map((record) => ({ ...record }));
+  }
+
+  dismissMergedPullRequestHistory(owner, repo, number, now = Date.now()) {
+    const record = this.mergedPullRequests.get(relatedPullRequestRecordKey(owner, repo, number));
+    if (!record || record.headMismatch === true || record.historyDismissedAt) return false;
+    record.historyDismissedAt = isoTime(now);
+    this.touch();
+    this.requestStoreWrite();
+    return true;
+  }
+
+  deleteClosedPullRequest(owner, repo, number) {
+    const key = pullRequestRecordKey(owner, repo, number);
+    let deleted = false;
+    for (const [sessionId, records] of this.pullRequests) {
+      if (records.get(key)?.state !== 'closed') continue;
+      records.delete(key);
+      if (!records.size) this.pullRequests.delete(sessionId);
+      deleted = true;
+    }
+    if (this.relatedPullRequests.get(key)?.state === 'closed') {
+      this.relatedPullRequests.delete(key);
+      deleted = true;
+    }
+    if (deleted) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+    return deleted;
   }
 
   closeAutomaticPullRequestMergeResult(owner, repo, number, now = Date.now()) {
@@ -1721,6 +1794,7 @@ class DashboardState {
     const parsedUrl = parsePullRequestUrl(input?.url);
     if (!parsedUrl || (input.owner && input.owner !== parsedUrl.owner) || (input.repo && input.repo !== parsedUrl.repo) ||
       (input.number && input.number !== parsedUrl.number)) return null;
+    if (!this.acceptSessionWrite(sessionId, now)) return null;
     let records = this.pullRequests.get(sessionId);
     if (!records) {
       records = new Map();
@@ -1856,6 +1930,17 @@ class DashboardState {
     let changed = JSON.stringify([...next.entries()]) !== JSON.stringify([...previous.entries()]);
     let persistentChanged = false;
     this.sessionFiles = next;
+    for (const sessionId of this.deletedSessions.keys()) {
+      const file = next.get(sessionId);
+      if (!file && !this.sessions.has(sessionId)) {
+        this.deletedSessions.delete(sessionId);
+        persistentChanged = true;
+        changed = true;
+      } else if (file && Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(sessionId))) {
+        this.acceptSessionWrite(sessionId, Date.parse(file.updatedAt));
+        changed = true;
+      }
+    }
 
     for (const [sessionId, plan] of this.plans) {
       const product = cloneProduct(next.get(sessionId)?.product || this.sessions.get(sessionId)?.product);
@@ -2018,6 +2103,7 @@ class DashboardState {
   addEvent(input, metadata = {}) {
     const event = sanitizeEvent(input, metadata);
     if (!event) return false;
+    if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return true;
 
     const endedAt = this.endedAt.get(event.session_id);
     if (endedAt !== undefined && event.hook_event_name !== 'SessionStart') return true;
@@ -2179,6 +2265,7 @@ class DashboardState {
   }
 
   setTasks(sessionId, tasks, now = Date.now()) {
+    this.acceptSessionWrite(sessionId);
     const plan = this.planFor(sessionId);
     const previousTasks = new Map(plan.tasks.map((task) => [task.title, task]));
     const previousUpdatedAt = plan.tasksUpdatedAt;
@@ -2209,6 +2296,7 @@ class DashboardState {
   }
 
   addDecision(sessionId, input, now = Date.now()) {
+    this.acceptSessionWrite(sessionId);
     const plan = this.planFor(sessionId);
     const timestamp = isoTime(now);
     plan.product ||= cloneProduct(this.productForSession(sessionId));
@@ -2399,6 +2487,8 @@ class DashboardState {
     const fileOnlySessions = [...this.sessionFiles.values()]
       .filter((file) => (
         !this.sessions.has(file.session_id) && !this.endedAt.has(file.session_id) && !this.endedByAbsence.has(file.session_id)
+        && (!this.deletedSessions.has(file.session_id)
+          || Date.parse(file.updatedAt) > Date.parse(this.deletedSessions.get(file.session_id)))
       ))
       .map((file) => ({
         session_id: file.session_id,
@@ -2472,7 +2562,10 @@ class DashboardState {
       };
       const estimate = this.estimates.get(sessionId);
       if (estimate) current.estimate = { ...estimate };
-      if (this.hiddenSessions.has(sessionId)) current.hidden = true;
+      if (this.hiddenSessions.has(sessionId)) {
+        current.hidden = true;
+        current.hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
+      }
       return current;
     });
     return {

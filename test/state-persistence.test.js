@@ -9,6 +9,29 @@ const { temporaryDirectory } = require('./support/temp');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+test('削除印を保存して復元し、旧形式は空として読む', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  const file = { session_id: 'deleted-persisted', updatedAt: new Date(now - 100).toISOString() };
+  state.syncSessionFiles([file], now);
+  state.registerPullRequest(file.session_id, { url: 'https://github.com/example/project/pull/1' }, {}, now);
+  state.deleteSession(file.session_id, now);
+  await state.flushPersistence();
+  const restored = await DashboardState.load(homeDir, { now: now + 1 });
+  assert.equal(restored.deletedSessions.get(file.session_id), new Date(now).toISOString());
+  restored.syncSessionFiles([file], now + 1);
+  assert.deepEqual(restored.snapshot().sessions, []);
+  assert.equal(restored.pullRequestRegistrations().length, 1);
+  await restored.flushPersistence();
+  const legacy = restored.serializeStore();
+  delete legacy.deletedSessions;
+  await fs.writeFile(path.join(homeDir, 'store.json'), JSON.stringify(legacy));
+  const old = await DashboardState.load(homeDir, { now: now + 2 });
+  assert.equal(old.deletedSessions.size, 0);
+  await old.flushPersistence();
+});
+
 async function temporaryHome(testContext) {
   return temporaryDirectory(testContext, 'agent-cockpit-store-test-').directory;
 }

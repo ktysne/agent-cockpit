@@ -8,6 +8,96 @@ const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+test('セッション削除は作業記録を消し、PR 登録と予約と意図を残す', () => {
+  const ended = [];
+  const state = new DashboardState({ onSessionEndedByAbsence: (...args) => ended.push(args) });
+  const id = 'deleted-session';
+  state.addEvent({ session_id: id, hook_event_name: 'SessionStart', hookAt: 100 });
+  state.syncSessionFiles([{ session_id: id, updatedAt: new Date(100).toISOString() }], 100);
+  state.setTasks(id, [{ title: '作業', state: 'doing', criteria: [] }], 100);
+  state.registerPullRequest(id, { url: 'https://github.com/example/project/pull/1' }, {}, 100);
+  state.hideSession(id, 150);
+  assert.equal(state.snapshot().sessions[0].hiddenAt, new Date(150).toISOString());
+  for (const records of [state.decisionOverrides, state.estimates, state.closedAgents,
+    state.askDecisionBindings, state.finishedOutsideEventsAskDecisionIds, state.decisionLifecycles, state.closedTasks]) {
+    records.set(id, new Map());
+  }
+  state.pullRequestMergeReservationRecords.set('reservation', { session_id: id });
+  state.pullRequestMergeIntentRecords.set('intent', { session_id: id });
+  assert.equal(state.deleteSession('unknown', 200), false);
+  assert.equal(state.deleteSession(id, 200), true);
+  for (const records of [state.entries, state.sessions, state.endedAt, state.endedByAbsence,
+    state.decisionOverrides, state.estimates, state.hiddenSessions, state.hiddenSessionUpdatedAt,
+    state.closedAgents, state.sessionFileLastSeenAt, state.plans, state.askDecisionBindings,
+    state.finishedOutsideEventsAskDecisionIds, state.decisionLifecycles, state.closedTasks]) {
+    assert.equal(records.has(id), false);
+  }
+  assert.equal(state.pullRequestRegistrations().length, 1);
+  assert.equal(state.pullRequestMergeReservationRecords.size, 1);
+  assert.equal(state.pullRequestMergeIntentRecords.size, 1);
+  assert.deepEqual(ended, [[id, 200]]);
+  assert.deepEqual(state.snapshot().sessions, []);
+  assert.equal(state.deleteSession(id, 201), false);
+});
+
+test('削除時刻以前と更新時刻の無いファイルは隠し、新しいファイルで復活する', () => {
+  const state = new DashboardState();
+  const file = { session_id: 'deleted-file', updatedAt: new Date(100).toISOString() };
+  state.syncSessionFiles([file], 100);
+  state.deleteSession(file.session_id, 200);
+  for (const updatedAt of [file.updatedAt, new Date(200).toISOString(), undefined]) {
+    state.syncSessionFiles([{ ...file, updatedAt }], 201);
+    assert.deepEqual(state.snapshot().sessions, []);
+    assert.equal(state.deletedSessions.has(file.session_id), true);
+  }
+  state.syncSessionFiles([{ ...file, updatedAt: new Date(201).toISOString() }], 202);
+  assert.equal(state.snapshot().sessions[0].session_id, file.session_id);
+  assert.equal(state.deletedSessions.has(file.session_id), false);
+});
+
+test('削除時刻以前のイベントを捨て、新しいイベントで新しい記録を作る', () => {
+  const reopened = [];
+  const state = new DashboardState({ onSessionReopened: (id) => reopened.push(id) });
+  const id = 'deleted-event';
+  state.addEvent({ session_id: id, hook_event_name: 'SessionStart', hookAt: 100 });
+  state.deleteSession(id, 200);
+  for (const hookAt of [100, 200]) {
+    state.addEvent({ session_id: id, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'old', hookAt });
+    assert.deepEqual(state.snapshot().sessions, []);
+    assert.equal(state.entries.has(id), false);
+  }
+  state.addEvent({ session_id: id, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'new', hookAt: 201 });
+  assert.equal(state.deletedSessions.has(id), false);
+  assert.equal(state.entries.get(id).length, 1);
+  assert.deepEqual(reopened, [id]);
+});
+
+test('削除印はファイル消滅と保存期限超過で掃除する', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([{ session_id: 'gone' }], 100);
+  state.deleteSession('gone', 200);
+  state.syncSessionFiles([], 201);
+  assert.equal(state.deletedSessions.has('gone'), false);
+  state.deletedSessions.set('expired', new Date(0).toISOString());
+  state.pruneExpiredStoreRecords(15 * 24 * 60 * 60_000);
+  assert.equal(state.deletedSessions.has('expired'), false);
+});
+
+test('MCP のタスクと判断事項と PR の書き込みで削除印を解除する', () => {
+  for (const write of [
+    (state, id) => state.setTasks(id, [{ title: '新しい作業', state: 'doing', criteria: [] }], 200),
+    (state, id) => state.addDecision(id, { title: '新しい判断', state: 'waiting', context: '', options: [] }, 200),
+    (state, id) => state.registerPullRequest(id, { url: 'https://github.com/example/project/pull/2' }, {}, 201),
+  ]) {
+    const state = new DashboardState();
+    state.syncSessionFiles([{ session_id: 'mcp-reopen' }], 100);
+    state.deleteSession('mcp-reopen', 200);
+    assert.ok(write(state, 'mcp-reopen'));
+    assert.equal(state.deletedSessions.has('mcp-reopen'), false);
+    assert.equal(state.snapshot().sessions.length, 1);
+  }
+});
+
 async function temporaryHome(testContext) {
   return createTemporaryHome(testContext, 'agent-cockpit-test-', {
     environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
