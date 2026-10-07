@@ -534,6 +534,7 @@ function createRequestHandler(options) {
   }
 
   function questionRegistrationLink(question, snapshot = registrationRegistry.snapshot()) {
+    if (!snapshot || !Array.isArray(snapshot.executions) || !Array.isArray(snapshot.conversations)) return null;
     const execution = snapshot.executions.find((item) =>
       item.executionId === question.executionId && item.conversationId === question.conversationId);
     const conversation = snapshot.conversations.find((item) => item.conversationId === question.conversationId);
@@ -647,6 +648,98 @@ function createRequestHandler(options) {
       instruction.sessionId === link.execution.sessionId &&
       instruction.executionId === link.launch.executionBinding.periodId &&
       instruction.origin === link.launch.origin && sameQuestionIdentity(instruction.identity, link.launch.identity));
+  }
+
+  function validatedSessionProjectionRecords(questionSnapshot, questionRegistrySnapshot, instructionDashboard, instructionRegistrySnapshot) {
+    const questions = [];
+    const orphanedCommonQuestions = [];
+    for (const question of questionSnapshot?.questions || []) {
+      const link = questionRegistrationLink(question, questionRegistrySnapshot);
+      const provider = link?.conversation.identity?.provider;
+      if (!link || !['claude', 'codex'].includes(provider) || !validSessionId(link.sessionId)) {
+        orphanedCommonQuestions.push({ ...question, orphaned: true });
+        continue;
+      }
+      questions.push({ question, link, provider, sessionId: link.sessionId });
+    }
+
+    const instructions = [];
+    let unmatchedInstructions = 0;
+    for (const rawInstruction of instructionDashboard?.instructions || []) {
+      const instruction = instructionProjection(rawInstruction);
+      if (!instruction || !instructionRegistrySnapshot) { unmatchedInstructions += 1; continue; }
+      const link = linkInstructionLaunch(instruction.launchRef, instructionRegistrySnapshot, false);
+      const provider = link?.launch.identity?.provider;
+      if (!link || !instructionMatchesLaunch(instruction, link) ||
+          !['claude', 'codex'].includes(provider) || !validSessionId(link.execution.sessionId)) {
+        unmatchedInstructions += 1;
+        continue;
+      }
+      instructions.push({ instruction, link, provider, sessionId: link.execution.sessionId });
+    }
+    return { questions, instructions, orphanedCommonQuestions, unmatchedInstructions };
+  }
+
+  async function currentValidatedSessionProjectionRecords() {
+    let questionSnapshot = null;
+    let questionRegistrySnapshot = null;
+    let configuredSourceUnavailable = false;
+    if (questionService) {
+      try {
+        if (!questionServiceReady) throw new Error();
+        const value = await questionService.dashboardSnapshot();
+        const registrySnapshot = registrationSnapshotForInstructions();
+        if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.questions) ||
+            !value.questions.every((question) => question && typeof question === 'object' && !Array.isArray(question)) ||
+            !registrySnapshot) throw new Error();
+        questionSnapshot = value;
+        questionRegistrySnapshot = registrySnapshot;
+      } catch {
+        questionSnapshot = null;
+        questionRegistrySnapshot = null;
+        configuredSourceUnavailable = true;
+      }
+    }
+    let instructionDashboard = null;
+    let instructionRegistrySnapshot = null;
+    if (launchRegistry || instructionService) {
+      try {
+        if (!launchRegistry || !instructionService || !instructionServiceReady) throw new Error();
+        instructionRegistrySnapshot = registrationSnapshotForInstructions();
+        if (!instructionRegistrySnapshot) throw new Error();
+        const value = await instructionService.dashboardSnapshot();
+        if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.instructions)) throw new Error();
+        instructionDashboard = value;
+      } catch {
+        instructionDashboard = null;
+        instructionRegistrySnapshot = null;
+        configuredSourceUnavailable = true;
+      }
+    }
+    return {
+      ...validatedSessionProjectionRecords(
+        questionSnapshot, questionRegistrySnapshot, instructionDashboard, instructionRegistrySnapshot),
+      configuredSourceUnavailable,
+    };
+  }
+
+  function projectionProvidersForSession(projections, sessionId) {
+    return [...new Set([
+      ...[...projections.questions, ...projections.instructions]
+        .filter((projection) => projection.sessionId === sessionId)
+        .map((projection) => projection.provider),
+      ...state.projectionDisplayRecordsForSession(sessionId).map((record) => record.provider),
+    ])];
+  }
+
+  function resolveProjectionProvidersForSession(projections, sessionId) {
+    const providers = projectionProvidersForSession(projections, sessionId);
+    if (providers.length !== 1) return providers;
+    const realRow = state.snapshot().sessions.find((session) => session.session_id === sessionId);
+    if (!realRow) return providers;
+    const rowProviders = state.sessionProviderSourcesFor?.(sessionId) || [];
+    if (rowProviders.length !== 1 || rowProviders[0] !== providers[0]) return ['ambiguous', ...providers];
+    return providers;
   }
 
   function safeInstructionRecovery(recovery) {
@@ -997,11 +1090,16 @@ function createRequestHandler(options) {
       let instructionDashboardUnavailable = !instructionService || !instructionServiceReady;
       let instructionTargetsUnavailable = !launchRegistry;
       if (launchRegistry) {
-        instructionRegistrationSnapshot = registrationSnapshotForInstructions();
-        if (instructionRegistrationSnapshot) {
+        try {
+          instructionRegistrationSnapshot = registrationSnapshotForInstructions();
+          if (!instructionRegistrationSnapshot) throw new Error();
           instructionTargets = instructionTargetList(instructionRegistrationSnapshot);
           instructionTargetsUnavailable = false;
-        } else instructionTargetsUnavailable = true;
+        } catch {
+          instructionRegistrationSnapshot = null;
+          instructionTargets = [];
+          instructionTargetsUnavailable = true;
+        }
       }
       if (instructionService && instructionServiceReady) {
         try {
@@ -1011,6 +1109,11 @@ function createRequestHandler(options) {
           instructionDashboardUnavailable = false;
         } catch { instructionDashboardUnavailable = true; }
       }
+      if (launchRegistry && instructionService && instructionServiceReady &&
+          (!instructionDashboard || !instructionRegistrationSnapshot)) {
+        instructionDashboard = null;
+        instructionRegistrationSnapshot = null;
+      }
       const pullRequests = pullRequestTracker?.snapshot() || [];
       const now = Date.now();
       const awayState = away.snapshot();
@@ -1019,7 +1122,12 @@ function createRequestHandler(options) {
       snapshot.version = state.version;
       snapshot.generatedAt = state.generatedAt;
       void away.prune?.([...state.seenAtByProduct.values()], now);
-      const sessions = snapshot.sessions.map((session) => {
+      const stateSessionIds = new Set(snapshot.sessions.map((session) => session.session_id));
+      const sessions = snapshot.sessions.filter((session) => {
+        const rowProviders = state.sessionProviderSourcesFor?.(session.session_id) || [];
+        return !(rowProviders.length === 1 && state.projectionDisplayRecordsForSession(session.session_id)
+          .some((record) => record.provider === rowProviders[0] && record.deletedAt !== undefined));
+      }).map((session) => {
         const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
         const seenMilliseconds = Date.parse(seenAt || '');
         return {
@@ -1031,17 +1139,34 @@ function createRequestHandler(options) {
         };
       });
       const sessionsById = new Map(sessions.map((session) => [session.session_id, session]));
-      const orphanedCommonQuestions = [];
-      for (const question of commonQuestionSnapshot?.questions || []) {
-        const link = questionRegistrationLink(question, questionRegistrationSnapshot);
-        if (!link) {
-          orphanedCommonQuestions.push({ ...question, orphaned: true });
-          continue;
-        }
-        let session = sessionsById.get(link.sessionId);
+      const projectionRecords = validatedSessionProjectionRecords(
+        commonQuestionSnapshot, questionRegistrationSnapshot, instructionDashboard, instructionRegistrationSnapshot);
+      const projectionProvidersBySession = new Map();
+      for (const projection of [...projectionRecords.questions, ...projectionRecords.instructions]) {
+        const providers = projectionProvidersBySession.get(projection.sessionId) || new Set();
+        providers.add(projection.provider);
+        projectionProvidersBySession.set(projection.sessionId, providers);
+      }
+      function projectionCanMerge(sessionId, provider) {
+        const providers = new Set([
+          ...(projectionProvidersBySession.get(sessionId) || []),
+          ...state.projectionDisplayRecordsForSession(sessionId).map((record) => record.provider),
+        ]);
+        if (providers.size !== 1 || !providers.has(provider)) return false;
+        const rowProviders = state.sessionProviderSourcesFor?.(sessionId) || [];
+        if (stateSessionIds.has(sessionId)) return rowProviders.length === 1 && rowProviders[0] === provider;
+        return rowProviders.length === 0 || (rowProviders.length === 1 && rowProviders[0] === provider);
+      }
+      const orphanedCommonQuestions = projectionRecords.orphanedCommonQuestions;
+      for (const { question, link, provider, sessionId } of projectionRecords.questions) {
+        if (!projectionCanMerge(sessionId, provider)) continue;
+        const display = state.projectionDisplayFor(provider, sessionId);
+        if (display?.deletedAt) continue;
+        let session = sessionsById.get(sessionId);
         if (!session) {
           session = {
-            session_id: link.sessionId,
+            session_id: sessionId,
+            provider,
             title: question.identity.nativeId,
             product: null,
             status: '待機中',
@@ -1052,31 +1177,38 @@ function createRequestHandler(options) {
             tasks: [],
             tasksUpdatedAt: null,
           };
-          sessionsById.set(link.sessionId, session);
+          sessionsById.set(sessionId, session);
           sessions.push(session);
+        }
+        if (display?.hiddenAt) {
+          session.hidden = true;
+          if (!session.hiddenAt || Date.parse(display.hiddenAt) > Date.parse(session.hiddenAt)) session.hiddenAt = display.hiddenAt;
         }
         if (!Array.isArray(session.commonQuestions)) session.commonQuestions = [];
         const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
         const seenMilliseconds = Date.parse(seenAt || '');
         session.commonQuestions.push({
           ...question,
-          sessionId: link.sessionId,
+          sessionId,
           executionState: link.execution.state,
           isNew: Number.isFinite(seenMilliseconds) && question.createdAt > seenMilliseconds,
         });
       }
-      let unmatchedInstructions = 0;
-      for (const rawInstruction of instructionDashboard?.instructions || []) {
-        const instruction = instructionProjection(rawInstruction);
-        if (!instruction || !instructionRegistrationSnapshot) { unmatchedInstructions += 1; continue; }
-        const link = linkInstructionLaunch(instruction.launchRef, instructionRegistrationSnapshot, false);
-        if (!link || !instructionMatchesLaunch(instruction, link)) { unmatchedInstructions += 1; continue; }
-        let session = sessionsById.get(link.execution.sessionId);
+      const unmatchedInstructions = projectionRecords.unmatchedInstructions;
+      for (const { instruction, link, provider, sessionId } of projectionRecords.instructions) {
+        if (!projectionCanMerge(sessionId, provider)) continue;
+        const display = state.projectionDisplayFor(provider, sessionId);
+        if (display?.deletedAt) continue;
+        let session = sessionsById.get(sessionId);
         if (!session) {
-          session = { session_id: link.execution.sessionId, title: instruction.identity.nativeId, product: null,
+          session = { session_id: sessionId, provider, title: instruction.identity.nativeId, product: null,
             status: "待機中", tools: [], agents: [], permissionWaits: [], decisions: [], tasks: [], tasksUpdatedAt: null };
-          sessionsById.set(link.execution.sessionId, session);
+          sessionsById.set(sessionId, session);
           sessions.push(session);
+        }
+        if (display?.hiddenAt) {
+          session.hidden = true;
+          if (!session.hiddenAt || Date.parse(display.hiddenAt) > Date.parse(session.hiddenAt)) session.hiddenAt = display.hiddenAt;
         }
         if (!Array.isArray(session.instructions)) session.instructions = [];
         session.instructions.push({ ...instruction, registrationExecutionId: link.execution.executionId,
@@ -1656,10 +1788,26 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
+      const sessionIds = [...new Set(body.session_ids || [])];
+      const projections = sessionIds.length ? await currentValidatedSessionProjectionRecords() : null;
+      if (projections?.configuredSourceUnavailable) {
+        jsonResponse(response, 503, { error: 'Session target is unavailable' });
+        return;
+      }
+      const projectionProviders = new Map(sessionIds.map((sessionId) => [
+        sessionId, projections ? resolveProjectionProvidersForSession(projections, sessionId) : [],
+      ]));
+      if ([...projectionProviders.values()].some((providers) => providers.length > 1)) {
+        jsonResponse(response, 409, { error: 'Session target is ambiguous' });
+        return;
+      }
       const now = Date.now();
       let sessions = 0;
-      for (const sessionId of new Set(body.session_ids || [])) {
-        if (state.deleteSession(sessionId, now)) sessions += 1;
+      for (const sessionId of sessionIds) {
+        const provider = projectionProviders.get(sessionId)?.[0];
+        if (provider) {
+          if (state.deleteProjectionDisplay(provider, sessionId, now)) sessions += 1;
+        } else if (state.deleteSession(sessionId, now)) sessions += 1;
       }
       const deletedPullRequests = new Set();
       const changedRepositories = new Map();
@@ -1719,7 +1867,33 @@ function createRequestHandler(options) {
           jsonResponse(response, 400, { error: 'Invalid request' });
           return;
         }
-        jsonResponse(response, 200, { unhidden: state.unhideSessions(body.session_ids) });
+        const sessionIds = [...new Set(body.session_ids)];
+        const projections = await currentValidatedSessionProjectionRecords();
+        if (projections.configuredSourceUnavailable) {
+          jsonResponse(response, 503, { error: 'Session target is unavailable' });
+          return;
+        }
+        const projectionProviders = new Map();
+        for (const sessionId of sessionIds) {
+          const currentProviders = resolveProjectionProvidersForSession(projections, sessionId);
+          const hiddenProviders = state.projectionDisplayRecordsForSession(sessionId)
+            .filter((record) => record.hiddenAt !== undefined).map((record) => record.provider);
+          const providers = currentProviders.length ? currentProviders : [...new Set(hiddenProviders)];
+          if (providers.length > 1) {
+            jsonResponse(response, 409, { error: 'Session target is ambiguous' });
+            return;
+          }
+          projectionProviders.set(sessionId, providers[0] || null);
+        }
+        const unhiddenIds = new Set();
+        const stateHiddenIds = new Set(sessionIds.filter((sessionId) => state.hiddenSessions.has(sessionId)));
+        state.unhideSessions(sessionIds);
+        for (const sessionId of sessionIds) {
+          const provider = projectionProviders.get(sessionId);
+          const projectionUnhidden = provider && state.setProjectionHidden(provider, sessionId, false);
+          if (projectionUnhidden || stateHiddenIds.has(sessionId)) unhiddenIds.add(sessionId);
+        }
+        jsonResponse(response, 200, { unhidden: unhiddenIds.size });
         return;
       }
       const isSingleHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_id' && validHiddenSessionId(body.session_id);
@@ -1730,10 +1904,25 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const sessionIds = isSingleHide ? [body.session_id] : body.session_ids;
+      const sessionIds = [...new Set(isSingleHide ? [body.session_id] : body.session_ids)];
+      const projections = await currentValidatedSessionProjectionRecords();
+      if (projections.configuredSourceUnavailable) {
+        jsonResponse(response, 503, { error: 'Session target is unavailable' });
+        return;
+      }
+      const projectionProviders = new Map(sessionIds.map((sessionId) => [
+        sessionId, resolveProjectionProvidersForSession(projections, sessionId),
+      ]));
+      if ([...projectionProviders.values()].some((providers) => providers.length > 1)) {
+        jsonResponse(response, 409, { error: 'Session target is ambiguous' });
+        return;
+      }
       let hiddenCount = 0;
-      for (const sessionId of new Set(sessionIds)) {
-        if (state.hideSession(sessionId) !== null) hiddenCount += 1;
+      for (const sessionId of sessionIds) {
+        const provider = projectionProviders.get(sessionId)?.[0];
+        const projectionHidden = provider ? state.setProjectionHidden(provider, sessionId, true) : false;
+        const stateHidden = state.hideSession(sessionId) !== null;
+        if (projectionHidden || stateHidden) hiddenCount += 1;
       }
       if (hiddenCount === 0) {
         jsonResponse(response, 404, { error: 'Session not found' });
@@ -2148,13 +2337,24 @@ function createRequestHandler(options) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
       }
+      if (registration) {
+        const display = state.projectionDisplayFor(registration.provider, stateEventBody.session_id);
+        if (display?.deletedAt && (typeof stateEventBody.hookAt !== 'number' || !Number.isFinite(stateEventBody.hookAt) ||
+            stateEventBody.hookAt <= Date.parse(display.deletedAt))) {
+          jsonResponse(response, 202, { accepted: true });
+          return;
+        }
+      }
       state.captureFieldNames(stateEventBody);
       const eventMetadata = {
         product,
+        ...(registration ? { provider: registration.provider } : {}),
         sessionName,
         agentDefinition,
         codexAgentDefinition: codexDefinitionMetadata,
         ...(preserveProjectionOrder ? { preserveProjectionOrder: true } : {}),
+        ...(registration ? { onVerifiedStateWrite: (event) => event.hook_event_name !== 'SessionEnd' &&
+          state.clearProjectionDeletionAfterVerifiedWrite(registration.provider, event.session_id, event.hookAt) } : {}),
       };
       state.addEvent(stateEventBody, eventMetadata);
       const event = sanitizeEvent(stateEventBody, eventMetadata);
@@ -2601,7 +2801,7 @@ async function startServer(options = {}) {
         native_session_id: file.session_id,
         session_id: claudeIssuer?.activeProjectionFor({ sessionId: file.session_id, pid: file.pid }) || file.session_id,
         product: productFromCwd(file.cwd),
-      })));
+      })), Date.now(), 'claude');
     }
     // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
     else state.pruneExpiredStoreRecords(Date.now());
