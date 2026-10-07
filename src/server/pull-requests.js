@@ -192,7 +192,8 @@ function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBra
     const openParent = openPullRequests.find((candidate) => (
       candidate.number !== pr.number && candidate.headRefName === compareBase
     ));
-    const parent = openParent || mergedPullRequests?.find((candidate) => candidate.headRefName === compareBase);
+    // 同じ head ブランチ名が再利用されることがあるので、マージ済みの親は最も新しいマージを採る。
+    const parent = openParent || mergedPullRequests?.findLast((candidate) => candidate.headRefName === compareBase);
     if (!parent) break;
     compareBase = asText(parent.baseRefName);
   }

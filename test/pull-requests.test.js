@@ -464,6 +464,21 @@ test('base がマージ済み PR の head なら、その PR の base までた�
   assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/codex%2Ffeature...${childSha}`)));
 });
 
+test('同じ head ブランチ名のマージ済み PR が複数あれば、最も新しいマージの base までたどる', async (t) => {
+  const { calls, github, tracker } = await trackerFixture(t);
+  const childSha = 'b'.repeat(40);
+  github.openPullRequests = [ghPullRequest(31, 'feat/child', 'feat/reused', childSha)];
+  github.mergedPullRequests = [
+    mergedPullRequest(29, 'c'.repeat(40), '2026-10-03T10:00:00.000Z', 'feat/reused', 'release/old'),
+    mergedPullRequest(30, 'a'.repeat(40), '2026-10-03T11:00:00.000Z', 'feat/reused', 'codex/feature'),
+  ];
+
+  await tracker.refreshRepo('example', 'project');
+
+  assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/codex%2Ffeature...${childSha}`)));
+  assert.ok(!calls.some((args) => args[0] === 'api' && args[1].includes('/compare/release%2Fold...')));
+});
+
 test('マージ済み一覧の head/base 名が文字列でなくても積み直しを判定する', async (t) => {
   const { github, tracker } = await trackerFixture(t);
   const childSha = 'b'.repeat(40);
