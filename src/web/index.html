@@ -3567,6 +3567,32 @@ function updateAnswerSubmit(card) {
   button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
 }
 
+function clearSelectedAnswerPick(pick) {
+  const sessionId = pick.dataset.sessionId;
+  const decisionId = pick.dataset.decisionId;
+  const decision = findDecision(sessionId, decisionId);
+  if (!decision) return false;
+  const questionIndex = Number(pick.dataset.answerQuestion);
+  const optionIndex = Number(pick.dataset.answerOption);
+  const question = decision.questions?.[questionIndex];
+  const option = question?.options?.[optionIndex];
+  if (!option) return false;
+  const current = answerDraftFor(decision, { session_id: sessionId });
+  if (!current.picks[questionIndex]?.includes(option.label)) return false;
+  const picks = copyAnswerPicks(current.picks, (decision.questions || []).length);
+  picks[questionIndex] = [];
+  const next = { ...current, choice: picks.some((labels) => labels.length) ? 'pick' : null, picks };
+  const key = answerDraftKey(sessionId, decisionId);
+  answerDrafts.set(key, next);
+  pick.checked = false;
+  const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
+  if (card) {
+    clearAnswerErrorWhenDraftChanges(key, current, next, card);
+    updateAnswerSubmit(card);
+  }
+  return true;
+}
+
 function showAnswerError(sessionId, decisionId, message) {
   answerErrors.set(answerDraftKey(sessionId, decisionId), message);
   const card = [...root.querySelectorAll('.decision-answer')].find((item) => (
@@ -4221,6 +4247,17 @@ document.addEventListener('click', (event) => {
     saveDisplayPreferences({ [changedKey]: changedValue });
     if (lastState) render(lastState);
   }
+});
+
+document.addEventListener('click', (event) => {
+  const pick = event.target.closest('[data-answer-pick]');
+  if (pick?.type === 'radio') clearSelectedAnswerPick(pick);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== ' ' && event.code !== 'Space') return;
+  const pick = event.target.closest('[data-answer-pick]');
+  if (pick?.type === 'radio' && clearSelectedAnswerPick(pick)) event.preventDefault();
 });
 
 document.addEventListener('auxclick', (event) => {

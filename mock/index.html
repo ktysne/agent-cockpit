@@ -2421,6 +2421,36 @@ document.addEventListener('click', e => {
   save(); render();
 });
 
+function clearSelectedMockPick(pick) {
+  const card = pick.closest('.decision');
+  const id = card.dataset.id;
+  const key = answerDraftKey(card.dataset.sessionId, id);
+  const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === id);
+  if (!decision) return false;
+  const i = Number(pick.dataset.pick);
+  const a = answerForUi(answerOf(id), decision);
+  const previous = { ...a, picks: [...picksOf(a)] };
+  if (!picksOf(a).includes(i)) return false;
+  a.picks = picksOf(a).filter(x => x !== i);
+  a.choice = a.picks.length ? 'pick' : null;
+  pick.checked = false;
+  ui.answers[id] = a;
+  clearAnswerErrorWhenDraftChanges(key, previous, a, card);
+  save(); render();
+  return true;
+}
+
+document.addEventListener('click', e => {
+  const pick = e.target.closest('input[data-pick]');
+  if (pick?.type === 'radio') clearSelectedMockPick(pick);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== ' ' && e.code !== 'Space') return;
+  const pick = e.target.closest('input[data-pick]');
+  if (pick?.type === 'radio' && clearSelectedMockPick(pick)) e.preventDefault();
+});
+
 document.addEventListener('change', e => {
   const reservationToggle = e.target.closest('input[data-reservation-toggle]');
   if (reservationToggle) {
