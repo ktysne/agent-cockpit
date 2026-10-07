@@ -2067,8 +2067,13 @@ function appendPullRequestTree(target, group, pullRequest) {
   }
   text.append(badges);
   if (pullRequest.crossReview !== undefined) text.append(crossReviewLine(pullRequest));
+  // クロスレビューの行が黄の札で同じ待ちを示すときは、待ちの行から外して二重に出さない。
+  const crossReviewShownAsWait = pullRequest.crossReview !== undefined && crossReviewState(pullRequest).cls === 'warn';
+  const shownWaits = crossReviewShownAsWait
+    ? waiting.filter((reason) => reason !== pullRequestCrossReviewWaitReason(pullRequest))
+    : waiting;
   if (!reservation && !pullRequest.canMerge && pullRequest.blocker) text.append(element('div', 'why-not', `マージできない理由: ${pullRequest.blocker}`));
-  else if (!reservation && waiting.length) text.append(element('div', 'why-not merge-wait', `待ち: ${waiting.join('、')}`));
+  else if (!reservation && shownWaits.length) text.append(element('div', 'why-not merge-wait', `待ち: ${shownWaits.join('、')}`));
   body.append(text);
   item.append(body);
   if (pullRequest.conflict) appendPullRequestConflictControls(actions, text, item, group, pullRequest);

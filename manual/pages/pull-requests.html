@@ -106,7 +106,7 @@
       <li data-part="row.rounds"><b>往復の目盛りと数</b>：クロスレビューを何往復したかです。目盛りは上限の 3 往復で、済んだ往復が塗られます。数は「2 / 3 往復、非対応 1」の形で、往復の数と、指摘のうち対応しないと決めた数が出ます。</li>
       <li data-part="row.xr-state"><b>クロスレビューの状態</b>：結論と、head との関係です(<a href="#pr-cross-review">クロスレビューの行</a>)。</li>
       <li data-part="row.skip"><b><span class="ui">レビュー不要にする</span></b>：この PR の今の head について、クロスレビューを不要と記録します(<a href="#pr-skip">レビュー不要の記録</a>)。クロスレビューの状態が黄の札のときだけ出ます。</li>
-      <li data-part="row.wait" data-place="left"><b>待ち</b>：<span class="ui">待ち:</span> に、設定で選んだ条件のうち、まだ満たしていないものが出ます。</li>
+      <li data-part="row.wait" data-place="left"><b>待ち</b>：<span class="ui">待ち:</span> に、設定で選んだ条件のうち、まだ満たしていないものが出ます。クロスレビューの状態が黄の札のときは、その札が待ちを示すので、<span class="ui">待ち:</span> にはクロスレビューを出しません。</li>
     </ol>
   </figure>
   <details class="more">
@@ -232,6 +232,7 @@
     <li><span class="ui">クロスレビューも済んでいる(不要としたものを含む)</span>：マージの操作ができ、<span class="ui">CI 成功</span> で、クロスレビューが <span class="ui">レビュー済み</span> か <span class="ui">レビュー不要</span> のときに出します。既定の選択です</li>
   </ul>
   <p>条件が残っている PR は <span class="ui">マージ操作は可能</span> のまま、<span class="ui">待ち:</span> の行に、満たしていない条件が出ます。
+  ただし、クロスレビューの状態が黄の札のときは、クロスレビューの行が待ちを示すので、<span class="ui">待ち:</span> の行には出しません。
   この PR も、確認欄から手でマージできます。
   確認欄の先頭に、満たしていない条件を警告します(<a href="#pr-merge">マージする</a>)。</p>
   <p><span class="ui">マージできます</span> と出ている PR の数は、画面上部の <span class="ui">マージできる PR</span> の札、プロダクトのカードの見出し、リポジトリの枠の見出しに出ます(<a href="screen.html#screen-summary">件数の札</a>)。

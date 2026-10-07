@@ -2,7 +2,7 @@
   "name": "squash",
   "target": "#root > section.section:nth-child(2) .pr-repo-group",
   "width": 1576,
-  "height": 1734,
+  "height": 1772,
   "parts": [
     {
       "key": "squash.methods",
@@ -38,7 +38,7 @@
       "key": "squash.go",
       "bounds": {
         "x": 52,
-        "y": 718,
+        "y": 757,
         "width": 223,
         "height": 80
       },
