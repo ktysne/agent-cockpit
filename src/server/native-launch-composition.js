@@ -18,6 +18,7 @@ const MAX_PROFILES = 16;
 const OWNED_SOURCE_ATTACH_TIMEOUT_MS = 5000;
 const MAX_ATTEMPTS = 256;
 const MAX_PENDING_CONTEXTS = 16;
+const MAX_NATIVE_PENDING_REQUESTS = 128;
 const MAX_ENDED_CONTEXT_IDS = MAX_INSTRUCTION_DISPATCHES + 1;
 const MAX_INPUT_TEXT_BYTES = 1024 * 1024;
 const IDENTIFIER_MAX = 512;
@@ -1743,6 +1744,82 @@ function createNativeLaunchComposition(options = {}) {
         } catch { return false; }
       } };
     }
+    function eligibilityMetadata(mode, expectedTurnId) {
+      const projected = projection();
+      if (!projected) return null;
+      return {
+        deliveryAttemptId: 'native-target-state-probe',
+        revision: 0,
+        payloadDigest: '0'.repeat(64),
+        nativeContentDigest: '0'.repeat(64),
+        source: projected,
+        target: { kind: 'execution', launchRef: projected.launchRef, claims: projected.claims,
+          identity: projected.identity, periodId: projected.executionBinding.periodId,
+          actor: projected.executionBinding.actor, conversationId: projected.conversationId,
+          sessionId: projected.sessionId },
+        mode,
+        expectedTurnId,
+      };
+    }
+    function canPrepareInstruction(mode, expectedTurnId) {
+      const metadata = eligibilityMetadata(mode, expectedTurnId);
+      if (!metadata) return false;
+      const authorization = capture(metadata);
+      if (!authorization || authorization.checkFinal() !== true) return false;
+      try {
+        if (record.runner?.canPrepareInstruction(metadata) !== true) return false;
+        return authorization.checkFinal() === true;
+      } catch { return false; }
+    }
+    function instructionTargetState() {
+      const unverified = (reason = 'instruction_target_unverified') =>
+        Object.freeze({ status: 'unverified', nativeTurnId: null, reason });
+      if (!record.runner || record.processState !== 'running' || !record.identity || !record.registration ||
+          !record.executionBinding || record.claims.purpose !== 'agent' || record.claims.origin === 'review') {
+        return unverified();
+      }
+      if (record.profile.provider === 'codex' && record.currentContextId &&
+          !record.terminalContextIds.has(record.currentContextId)) {
+        const metadata = eligibilityMetadata('steer', record.currentContextId);
+        const authorization = metadata && capture(metadata);
+        if (!authorization || authorization.checkFinal() !== true ||
+            typeof record.runner.captureNativePendingSummary !== 'function') return unverified();
+        let pendingCapture;
+        try { pendingCapture = record.runner.captureNativePendingSummary(record.identity.nativeId, record.currentContextId); }
+        catch { return unverified(); }
+        if (!hasExactKeys(pendingCapture, ['pending', 'checkCurrent']) ||
+            !Array.isArray(pendingCapture.pending) || typeof pendingCapture.checkCurrent !== 'function') return unverified();
+        const nativeWaiting = [];
+        const seenKinds = new Set();
+        let pendingCount = 0;
+        for (const item of pendingCapture.pending) {
+          if (!hasExactKeys(item, ['kind', 'count']) || !['question', 'approval'].includes(item.kind) ||
+              !Number.isSafeInteger(item.count) || item.count < 1 || seenKinds.has(item.kind)) return unverified();
+          pendingCount += item.count;
+          if (pendingCount > MAX_NATIVE_PENDING_REQUESTS) return unverified();
+          seenKinds.add(item.kind);
+          nativeWaiting.push(Object.freeze({ kind: item.kind, count: item.count }));
+        }
+        if (!pendingCapture.checkCurrent() || authorization.checkFinal() !== true || !pendingCapture.checkCurrent()) {
+          return unverified();
+        }
+        if (nativeWaiting.length) {
+          return Object.freeze({ status: 'waiting', nativeTurnId: record.currentContextId,
+            reason: 'native_request_pending', nativeWaiting: Object.freeze(nativeWaiting) });
+        }
+        if (canPrepareInstruction('steer', record.currentContextId)) {
+          return Object.freeze({ status: 'working', nativeTurnId: record.currentContextId, reason: null });
+        }
+      }
+      if (record.profile.provider === 'claude' && record.currentContextId) {
+        return unverified('instruction_steer_unsupported');
+      }
+      if (!record.currentContextId && record.lastTerminalContextId && record.claims.origin === 'standalone' &&
+          canPrepareInstruction('start', null)) {
+        return Object.freeze({ status: 'stopped', nativeTurnId: null, reason: null });
+      }
+      return unverified();
+    }
     const pendingSubscribers = new Set();
     let subscribedWriter = null;
     function ensureEvidenceSubscription() {
@@ -1753,7 +1830,7 @@ function createNativeLaunchComposition(options = {}) {
       }
       return currentWriter;
     }
-    record.instructionOwner = createOwnedInstructionDispatch({
+    const dispatch = createOwnedInstructionDispatch({
       capture,
       prepareNative(metadata) { return ensureEvidenceSubscription()?.prepare(metadata) || null; },
       checkNative(token) { return writer()?.check(token) === true; },
@@ -1770,6 +1847,7 @@ function createNativeLaunchComposition(options = {}) {
         return native.consumeEvidence(token, receipt);
       },
     });
+    record.instructionOwner = Object.freeze({ ...dispatch, instructionTargetState });
     return record.instructionOwner;
   }
 
@@ -1784,6 +1862,14 @@ function createNativeLaunchComposition(options = {}) {
     admitLaunch,
     createOwnedCollector,
     createInstructionOwner,
+    instructionTargetState(launchRef) {
+      const record = launchRecords.get(launchRef);
+      if (!record || !record.instructionOwner) {
+        return Object.freeze({ status: 'unverified', nativeTurnId: null, reason: 'instruction_target_unverified' });
+      }
+      try { return record.instructionOwner.instructionTargetState(); }
+      catch { return Object.freeze({ status: 'unverified', nativeTurnId: null, reason: 'instruction_target_unverified' }); }
+    },
     createWaitOwner,
     start,
     stop,

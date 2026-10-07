@@ -607,6 +607,7 @@ const instructionAlternatives = new Map();
 const instructionAlternativeInFlight = new Set();
 const INSTRUCTION_MODES = new Set(['steer', 'start', 'next-user-input']);
 const MAX_PENDING_INSTRUCTION_ALTERNATIVES = 64;
+const MAX_NATIVE_PENDING_REQUESTS = 128;
 const MAX_INSTRUCTION_TEXT_BYTES = 64 * 1024;
 const INSTRUCTION_PREVIEW_STORAGE_KEY = 'agent-cockpit.instruction-previews';
 const INSTRUCTION_ALTERNATIVE_STORAGE_KEY = 'agent-cockpit.instruction-alternative-requests';
@@ -615,6 +616,7 @@ const instructionPreviewSavePending = new Map();
 const instructionPreviews = new Map();
 const instructionAlternativeDiscardConfirmations = new Set();
 let observedInstructionStates = new Map();
+let observedInstructionTargetStates = new Map();
 let renderedInstructionSignature = null;
 try {
   const saved = JSON.parse(globalThis.sessionStorage?.getItem(INSTRUCTION_PREVIEW_STORAGE_KEY) || '{}');
@@ -1561,6 +1563,41 @@ function instructionTargetMode(target, mode) {
   if (mode === 'steer') return target.status === 'working' && Boolean(target.nativeTurnId);
   if (mode === 'next-user-input') return target.status === 'stopped' && target.origin === 'standalone';
   return mode === 'start' && target.status === 'stopped' && target.origin === 'standalone';
+}
+
+function instructionTargetWaitingSummary(target) {
+  const pending = target?.nativeWaiting;
+  if (target?.status !== 'waiting' || !Array.isArray(pending) || pending.length < 1 || pending.length > 2) return null;
+  const seen = new Set();
+  let total = 0;
+  const labels = [];
+  for (const item of pending) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).length !== 2 ||
+        !['question', 'approval'].includes(item.kind) || !Number.isSafeInteger(item.count) || item.count < 1 ||
+        seen.has(item.kind)) return null;
+    seen.add(item.kind);
+    total += item.count;
+    if (total > MAX_NATIVE_PENDING_REQUESTS) return null;
+    labels.push(`${item.kind === 'question' ? '質問' : '許可'} ${item.count} 件`);
+  }
+  return labels.join('、');
+}
+
+function instructionTargetStatusText(target) {
+  if (target?.status === 'working') return '作業中';
+  if (target?.status === 'stopped') return '停止中';
+  if (target?.status === 'waiting') {
+    const summary = instructionTargetWaitingSummary(target);
+    return summary ? `${summary}待ち` : '確認待ち';
+  }
+  return '確認待ち';
+}
+
+function instructionTargetWaitingNotice(target) {
+  const summary = instructionTargetWaitingSummary(target);
+  return summary
+    ? `Codex の${summary}待ちです。追加の指示は保留されています。入力内容は保持されます。`
+    : 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。';
 }
 
 function instructionModeLabel(mode) {
@@ -3554,8 +3591,13 @@ function instructionCard(session, state, instruction) {
     else previewPanel.append(element('p', 'instruction-reason', 'このタブで内容を確認できないため送信できません。作成したタブで開いてください。'));
     card.append(previewPanel);
   }
+  if (target?.status === 'waiting' && ['available', 'claimed'].includes(instruction.state)) {
+    card.append(element('p', 'instruction-reason', instructionTargetWaitingNotice(target)));
+  }
   if (instruction.heldReason) card.append(element('p', 'instruction-reason', instructionReasonLabel(instruction.heldReason)));
-  else if (!targetReady && ['available', 'claimed'].includes(instruction.state)) card.append(element('p', 'instruction-reason', '実行先の状態を確認できないため、送信を保留しています。'));
+  else if (!targetReady && target?.status !== 'waiting' && ['available', 'claimed'].includes(instruction.state)) {
+    card.append(element('p', 'instruction-reason', '実行先の状態を確認できないため、送信を保留しています。'));
+  }
   const actionError = instructionErrors.get(`action:${instruction.deliveryAttemptId}`);
   if (actionError) card.append(element('p', 'instruction-reason', actionError));
   const actions = element('div', 'instruction-actions');
@@ -3664,7 +3706,7 @@ function instructionComposer(session, state) {
     placeholder.value = '';
     targetSelect.append(placeholder);
     for (const target of targets) {
-      const option = element('option', '', `${instructionTargetName(target)} · ${target.status === 'working' ? '作業中' : target.status === 'stopped' ? '停止中' : '確認待ち'}`);
+      const option = element('option', '', `${instructionTargetName(target)} · ${instructionTargetStatusText(target)}`);
       option.value = target.launchRef;
       targetSelect.append(option);
     }
@@ -3708,10 +3750,21 @@ function instructionComposer(session, state) {
     textarea.disabled = instructionInFlight.has(session.session_id);
     textareaLabel.append(textarea);
     form.append(textareaLabel);
-    const expected = target && draft.mode === 'steer' && target.nativeTurnId
-      ? '選択した実行が作業中の場合に送信します。'
-      : target?.reason || '実行先と指示の種類を選んでください。';
-    form.append(element('p', 'instruction-reason', expected));
+    const expected = target?.status === 'waiting'
+      ? instructionTargetWaitingNotice(target)
+      : target?.status === 'unverified'
+        ? '実行状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。'
+      : target && draft.mode === 'steer' && target.nativeTurnId
+        ? '選択した実行が作業中の場合に送信します。'
+        : target?.reason || '実行先と指示の種類を選んでください。';
+    const targetReason = element('p', 'instruction-reason', expected);
+    if (target?.status === 'waiting') {
+      targetReason.id = `instruction-target-waiting-${encodeURIComponent(session.session_id)}`;
+      for (const control of [targetSelect, modeSelect, textarea]) {
+        control.setAttribute('aria-describedby', targetReason.id);
+      }
+    }
+    form.append(targetReason);
     const error = element('p', 'instruction-reason', instructionErrors.get(session.session_id) || '');
     error.hidden = !error.textContent;
     error.setAttribute('role', 'alert');
@@ -4266,6 +4319,24 @@ function observeInstructionStates(state) {
       }
     }
   }
+  const currentTargets = new Map();
+  for (const target of state?.instructionTargets || []) {
+    if (typeof target?.launchRef !== 'string') continue;
+    const summary = target.status === 'waiting' ? instructionTargetWaitingSummary(target) : null;
+    const signature = target.status === 'waiting' ? `waiting:${summary || 'unknown'}` : String(target.status || 'unknown');
+    const previous = observedInstructionTargetStates.get(target.launchRef);
+    currentTargets.set(target.launchRef, signature);
+    if (previous !== undefined && previous !== signature && target.status === 'waiting' && !announcement) {
+      announcement = instructionTargetWaitingNotice(target);
+    } else if (previous?.startsWith('waiting:') && previous !== signature && !announcement) {
+      if (target.status === 'working') {
+        announcement = 'Codex の質問待ちまたは許可待ちがなくなりました。追加指示の送信条件を再確認してください。';
+      } else if (target.status === 'unverified') {
+        announcement = 'Codex の質問待ちまたは許可待ちが解消したか確認できません。追加の指示は保留されています。';
+      }
+    }
+  }
+  observedInstructionTargetStates = currentTargets;
   observedInstructionStates = current;
   return announcement;
 }

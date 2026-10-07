@@ -27,6 +27,7 @@ const APP_NAME = 'agent-cockpit';
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_EXTERNAL_URL_LENGTH = 2048;
+const MAX_NATIVE_PENDING_REQUESTS = 128;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const WRITER_CLAIM_FIELDS = Object.freeze([
@@ -587,10 +588,27 @@ function createRequestHandler(options) {
       const value = instructionTargetState(launchRef);
       if (value instanceof Promise) { value.catch(() => {}); return unavailable; }
       if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.then === "function" ||
-          !hasExactKeys(value, ["status", "nativeTurnId", "reason"]) ||
           !["working", "stopped", "waiting", "unverified"].includes(value.status) ||
-          (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId)) ||
           (value.reason !== null && !validText(value.reason, 512, true))) return unavailable;
+      if (value.status === "waiting") {
+        if (!hasExactKeys(value, ["status", "nativeTurnId", "reason", "nativeWaiting"]) ||
+            !validScopedIdentifier(value.nativeTurnId) || !Array.isArray(value.nativeWaiting) ||
+            value.nativeWaiting.length < 1 || value.nativeWaiting.length > 2) return unavailable;
+        const nativeWaiting = [];
+        const seenKinds = new Set();
+        let pendingCount = 0;
+        for (const item of value.nativeWaiting) {
+          if (!hasExactKeys(item, ["kind", "count"]) || !["question", "approval"].includes(item.kind) ||
+              !Number.isSafeInteger(item.count) || item.count < 1 || seenKinds.has(item.kind)) return unavailable;
+          pendingCount += item.count;
+          if (pendingCount > MAX_NATIVE_PENDING_REQUESTS) return unavailable;
+          seenKinds.add(item.kind);
+          nativeWaiting.push({ kind: item.kind, count: item.count });
+        }
+        return { status: value.status, nativeTurnId: value.nativeTurnId, reason: value.reason, nativeWaiting };
+      }
+      if (!hasExactKeys(value, ["status", "nativeTurnId", "reason"]) ||
+          (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId))) return unavailable;
       return { status: value.status, nativeTurnId: value.nativeTurnId, reason: value.reason };
     } catch { return unavailable; }
   }
@@ -618,7 +636,8 @@ function createRequestHandler(options) {
         return [{ launchRef: link.launch.launchRef, sessionId: link.execution.sessionId,
           executionId: link.execution.executionId, identity: { ...link.launch.identity },
           origin: link.launch.origin, purpose: link.launch.purpose,
-          status: target.status, nativeTurnId: target.nativeTurnId, reason: target.reason }];
+          status: target.status, nativeTurnId: target.nativeTurnId, reason: target.reason,
+          ...(target.status === "waiting" ? { nativeWaiting: target.nativeWaiting } : {}) }];
       });
     } catch { return []; }
   }
@@ -2315,6 +2334,9 @@ async function hasSessionJsonFiles(claudeHome) {
 }
 
 async function startServer(options = {}) {
+  if (options.onShutdown !== undefined && typeof options.onShutdown !== 'function') {
+    throw new TypeError('onShutdown must be a function');
+  }
   for (const key of Object.keys(process.env)) {
     if (isGithubCredentialEnvironmentVariable(key)) delete process.env[key];
   }
@@ -2397,6 +2419,7 @@ async function startServer(options = {}) {
   pullRequestTracker.onRefreshed = (owner, repo) => pullRequestMergeManager.checkReservations?.(owner, repo);
   let info = null;
   let closing = null;
+  let shutdownError = null;
   let lastRequestAt = Date.now();
   const server = options.server || http.createServer((request, response) => {
     Promise.resolve(handler(request, response)).catch((error) => {
@@ -2455,6 +2478,11 @@ async function startServer(options = {}) {
     if (server.listening) await new Promise((resolve) => server.close(resolve));
     try { await questionService?.close?.(); } catch {}
     try { await instructionService?.close?.(); } catch {}
+    let shutdownFailure = null;
+    try { await options.onShutdown?.(); } catch (shutdownError) { shutdownFailure = shutdownError; }
+    if (shutdownFailure) {
+      throw new AggregateError([error, shutdownFailure], 'server startup and shutdown failed', { cause: error });
+    }
     throw error;
   }
 
@@ -2487,32 +2515,46 @@ async function startServer(options = {}) {
     if (state.snapshot().sessions.length > 0) return;
     if (await hasSessionJsonFiles(claudeHome)) return;
     logLine(homeDir, 'stopping after idle timeout');
-    await close();
+    await close().catch((error) => { shutdownError ||= error; });
   }, 60_000);
   idleTimer.unref();
 
   async function close() {
     if (closing) return closing;
     closing = (async () => {
+      let failure = null;
+      const attempt = async (operation) => {
+        try { await operation(); } catch (error) { failure ||= error; }
+      };
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
-      answerDelivery.close();
-      pullRequestMergeManager.close?.();
-      pullRequestTracker.close();
-      if (server.listening) await new Promise((resolve) => server.close(resolve));
-      await handler.flushQuestionLosses();
-      await handler.flushInstructionLosses();
-      try { await instructionService?.flush?.(); } catch {}
-      try { await instructionService?.close?.(); } catch {}
-      try { await questionService?.close?.(); } catch {}
-      await Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean));
-      await removeServerInfoIfOwned(homeDir, info);
+      await attempt(() => answerDelivery.close());
+      await attempt(() => pullRequestMergeManager.close?.());
+      await attempt(() => pullRequestTracker.close());
+      if (server.listening) {
+        await attempt(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+      }
+      await attempt(() => handler.flushQuestionLosses());
+      await attempt(() => handler.flushInstructionLosses());
+      await attempt(() => instructionService?.flush?.());
+      await attempt(() => instructionService?.close?.());
+      await attempt(() => questionService?.close?.());
+      await attempt(() => Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean)));
+      await attempt(() => removeServerInfoIfOwned(homeDir, info));
+      await attempt(() => options.onShutdown?.());
+      if (failure) {
+        shutdownError = failure;
+        logLine(homeDir, 'shutdown incomplete');
+        throw failure;
+      }
       logLine(homeDir, 'stopped');
     })();
     return closing;
   }
 
-  return { server, state, away, routing, answerDelivery, questionService, instructionService, pullRequestTracker, pullRequestMergeManager, info, homeDir, close };
+  return { server, state, away, routing, answerDelivery, questionService, instructionService, pullRequestTracker,
+    pullRequestMergeManager, info, homeDir, close,
+    get shutdownError() { return shutdownError ? 'shutdown_incomplete' : null; } };
 }
 
 function parseArguments(argv) {
@@ -2528,7 +2570,13 @@ if (require.main === module) {
   startServer(parseArguments(process.argv.slice(2)))
     .then((runtime) => {
       console.log(`Agent Cockpit listening at http://127.0.0.1:${runtime.info.port}/`);
-      const stop = () => runtime.close().finally(() => { process.exitCode = 0; });
+      const stop = () => runtime.close().then(
+        () => { process.exitCode = 0; },
+        () => {
+          console.error('Agent Cockpit shutdown incomplete.');
+          process.exitCode = 1;
+        },
+      );
       process.once('SIGINT', stop);
       process.once('SIGTERM', stop);
     })

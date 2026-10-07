@@ -109,7 +109,7 @@ async function createRuntime(t, options = {}) {
     registrationRegistry: registrationView(harness, options.registrationSnapshot),
     launchRegistry: instructionTargetsConfigured ? harness.launchRegistry : null,
     instructionService,
-    instructionTargetState: instructionTargetsConfigured ? harness.targetState : null,
+    instructionTargetState: options.instructionTargetState || (instructionTargetsConfigured ? harness.targetState : null),
     questionService,
   });
   t.after(async () => {
@@ -607,6 +607,35 @@ test('waiting target and a lost HTTP response leave no retry path or duplicate d
   assert.equal(retry.status, 409);
   assert.equal((await harness.service.get(body.delivery_attempt_id)).delivery.state, 'unknown');
   assert.equal(harness.writes.length, 0);
+});
+
+test('HTTP target projection accepts only bounded question and approval counts', async (t) => {
+  let projected = {
+    status: 'waiting', nativeTurnId: 'native-turn-1', reason: 'native_request_pending',
+    nativeWaiting: [{ kind: 'question', count: 1 }, { kind: 'approval', count: 1 }],
+  };
+  const { runtime } = await createRuntime(t, { instructionTargetState: () => projected });
+  const stateForTarget = async () => {
+    const response = await request(runtime.info.port, { path: '/api/state' });
+    assert.equal(response.status, 200);
+    return jsonBody(response).instructionTargets[0];
+  };
+
+  assert.deepEqual((await stateForTarget()).nativeWaiting, projected.nativeWaiting);
+  const invalidTargets = [
+    { ...projected, nativeWaiting: [{ kind: 'question', count: 129 }] },
+    { ...projected, nativeWaiting: [{ kind: 'question', count: 1, requestId: 'private-request' }] },
+    { ...projected, nativeWaiting: [{ kind: 'question', count: 1 }, { kind: 'question', count: 1 }] },
+    { ...projected, nativeWaiting: [{ kind: 'question', count: 1 }, { kind: 'approval', count: 128 }] },
+    { ...projected, privateField: 'private-value' },
+  ];
+  for (const invalid of invalidTargets) {
+    projected = invalid;
+    const target = await stateForTarget();
+    assert.equal(target.status, 'unverified');
+    assert.equal(Object.hasOwn(target, 'nativeWaiting'), false);
+    assert.equal(JSON.stringify(target).includes('private'), false);
+  }
 });
 
 test('an HTTP response lost after native dispatch leaves unknown and cannot dispatch again', async (t) => {
