@@ -1821,12 +1821,14 @@ function createNativeLaunchComposition(options = {}) {
       return unverified();
     }
     const pendingSubscribers = new Set();
+    const pendingClosedSubscribers = new Set();
     let subscribedWriter = null;
     function ensureEvidenceSubscription() {
       const currentWriter = writer();
       if (currentWriter && currentWriter !== subscribedWriter) {
         subscribedWriter = currentWriter;
         currentWriter.subscribeEvidence((token, receipt) => { for (const callback of [...pendingSubscribers]) callback(token, receipt); });
+        currentWriter.subscribeClosed((token, reason) => { for (const callback of [...pendingClosedSubscribers]) callback(token, reason); });
       }
       return currentWriter;
     }
@@ -1839,6 +1841,8 @@ function createNativeLaunchComposition(options = {}) {
         return native.dispatchNow(token, command, finalGuard);
       },
       subscribeNative(callback) { pendingSubscribers.add(callback); return () => pendingSubscribers.delete(callback); },
+      subscribeNativeClosed(callback) { pendingClosedSubscribers.add(callback); return () => pendingClosedSubscribers.delete(callback); },
+      closeNative(token) { return writer()?.closeObservation(token) === true; },
       consumeEvidence(token, receipt) {
         const native = writer(); const observation = native?.inspectEvidence(token, receipt);
         if (!observation) return null;

@@ -24,6 +24,7 @@ const ROUTER_METADATA_FIELDS = [
   'source', 'target', 'mode', 'expectedTurnId',
 ];
 const RETIRED_CAPABILITY = Symbol('retired native instruction capability');
+const MAX_OBSERVATION_CAPABILITIES = 128;
 const PROFILE_FIELDS = ['provider', 'executablePath', 'homePath', 'homeScopeId', 'cwd'];
 const PROFILE_FIELDS_WITH_RUNNER = [...PROFILE_FIELDS, 'runnerProfile'];
 const FACTORY_FIELDS = [
@@ -565,10 +566,12 @@ function createNativeInstructionOwnerRouter(options) {
   const capabilities = new WeakMap();
   const entries = new Set();
   const listeners = new Set();
+  const closedListeners = new Set();
   let closed = false;
 
   function ownerMethods(owner) {
     const methods = Object.fromEntries(ROUTER_METHODS.map((name) => [name, dataMethod(owner, name)]));
+    for (const name of ['closeInstructionObservation', 'subscribeInstructionClosed']) methods[name] = dataMethod(owner, name);
     if (ROUTER_METHODS.some((name) => typeof methods[name] !== 'function') ||
         ROUTER_METHODS.some((name) => utilTypes.isAsyncFunction(methods[name]))) {
       throw integrationError('native_instruction_owner_invalid');
@@ -594,6 +597,10 @@ function createNativeInstructionOwnerRouter(options) {
   function retireEntry(entry) {
     if (!entry.active) return false;
     entry.active = false;
+    for (const capability of entry.capabilities || []) {
+      for (const listener of [...closedListeners]) { try { listener(capability, 'instruction_source_invalid'); } catch {} }
+    }
+    entry.unsubscribeClosed?.();
     entries.delete(entry);
     const unsubscribe = entry.unsubscribe;
     entry.unsubscribe = null;
@@ -614,13 +621,22 @@ function createNativeInstructionOwnerRouter(options) {
 
     const owner = createOwner.call(composition, admissionReceipt);
     const methods = ownerMethods(owner);
-    const entry = { owner, methods, active: false, retired: false, unsubscribe: null };
+    const entry = { owner, methods, active: false, retired: false, unsubscribe: null, unsubscribeClosed: null, capabilities: new Set() };
     const detach = () => retireEntry(entry);
     const onEvidence = (capability, evidence) => emitEvidence(entry, capability, evidence);
     const unsubscribe = methods.subscribeInstructionEvidence.call(owner, onEvidence);
     if (typeof unsubscribe !== 'function') throw integrationError('native_instruction_owner_invalid');
 
     entry.unsubscribe = unsubscribe;
+    if (['subscribeInstructionClosed', 'closeInstructionObservation'].every(name =>
+      typeof methods[name] === 'function' && !utilTypes.isAsyncFunction(methods[name]))) {
+      entry.unsubscribeClosed = methods.subscribeInstructionClosed.call(owner, (capability, reason) => {
+        const route = capabilities.get(capability);
+        if (!route || route === RETIRED_CAPABILITY || route.entry !== entry || !entry.active) return;
+        for (const listener of [...closedListeners]) { try { listener(capability, reason); } catch {} }
+      });
+      if (typeof entry.unsubscribeClosed !== 'function') { unsubscribe(); throw integrationError('native_instruction_owner_invalid'); }
+    }
     entry.active = true;
     entries.add(entry);
     admissions.set(admissionReceipt, { entry, detach });
@@ -666,7 +682,12 @@ function createNativeInstructionOwnerRouter(options) {
         capabilities.set(capability, RETIRED_CAPABILITY);
         return null;
       }
+      if (entry.unsubscribeClosed && entry.capabilities.size >= MAX_OBSERVATION_CAPABILITIES) {
+        try { entry.methods.closeInstructionObservation.call(entry.owner, capability, metadata); } catch {}
+        return null;
+      }
       capabilities.set(capability, { entry, metadataFingerprint });
+      if (entry.unsubscribeClosed) entry.capabilities.add(capability);
       return capability;
     }
     return null;
@@ -705,11 +726,30 @@ function createNativeInstructionOwnerRouter(options) {
     return () => listeners.delete(listener);
   }
 
+  function supportsLateInstructionEvidence(capability) {
+    const route = isOpaqueCapability(capability) ? capabilities.get(capability) : null;
+    return Boolean(route && route !== RETIRED_CAPABILITY && route.entry.active && !route.entry.retired && route.entry.unsubscribeClosed);
+  }
+  function closeInstructionObservation(capability, metadata) {
+    const route = isOpaqueCapability(capability) ? capabilities.get(capability) : null;
+    if (!route || route === RETIRED_CAPABILITY || route.metadataFingerprint !== fingerprintMetadata(metadata)) return false;
+    const method = route.entry.methods.closeInstructionObservation;
+    if (typeof method !== 'function') return false;
+    capabilities.set(capability, RETIRED_CAPABILITY);
+    route.entry.capabilities.delete(capability);
+    return method.call(route.entry.owner, capability, metadata) === true;
+  }
+  function subscribeInstructionClosed(listener) {
+    if (closed || typeof listener !== 'function') throw integrationError('instruction_evidence_source_unavailable');
+    closedListeners.add(listener); return () => closedListeners.delete(listener);
+  }
+
   function close() {
     if (closed) return;
     closed = true;
     for (const entry of [...entries]) retireEntry(entry);
     listeners.clear();
+    closedListeners.clear();
   }
 
   return Object.freeze({
@@ -720,6 +760,9 @@ function createNativeInstructionOwnerRouter(options) {
     checkInstructionDispatch,
     dispatchInstructionNow,
     subscribeInstructionEvidence,
+    supportsLateInstructionEvidence,
+    closeInstructionObservation,
+    subscribeInstructionClosed,
     close,
   });
 }

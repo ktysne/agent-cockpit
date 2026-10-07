@@ -62,6 +62,14 @@ adapterはnativeの完全inputを正規化してdigestを計算し、非text/要
 adapterはprepareが返した同一opaque capability参照をWeakMapで照合し、未知または別sourceのcapabilityを拒否する。
 native writeを開始する前の証拠は採用せず、writeの同期呼出し中に届く証拠からpending entryへ相関する。
 受付前evidenceのbufferは最大128件、256KiB、60秒まで。超過/期限切れは未適用試行をunknownにし、自動再送しない。
+未使用capabilityの60秒期限と、受付応答を確定する5秒期限は維持する。
+ACK未確定のタイムアウトは後着証拠による回復の対象にしない。
+ACK確定後は、終了通知と閉鎖操作を上下に伝えられるowned native経路に限り、観測期限後のunknown相関と入力を現在turnの終了まで保持する。
+観測期限ではunknownを一度通知し、同じsource token、実行、thread、turn、request、入力全文に一致する後着証拠だけを保存してappliedへ進める。
+終端、停止、source失効、明示的RPC拒否、不一致では受付を閉じ、入力予約を回収する。
+保持するunknownも128件と256KiBの容量制約に含め、容量を増やしたり自動再送したりしない。
+閉鎖通知を持たない既存ownerは60秒で相関を回収する。
+閉鎖操作は同じcapability、metadata、source tokenを照合し、古いcontextの完了で後続contextを閉じない。
 旧source/period/differentidentityは拒否する。適用保存開始前に同requestの内容/turn矛盾を検出した場合はunknownで閉じ、後着一致で解除しない。
 既にappliedは巻き戻さず、矛盾診断だけを残す。
 同nativeitemを別requestへ再利用せず台帳のitem所有検査を使用する。
@@ -149,13 +157,14 @@ expected turnを利用者に手入力させないため、信頼済み組立は�
 
 correlatorのapplyingは保存待ちであり、反映確定ではない。
 台帳writerがprovider、instruction kind、配送相関、遷移候補を検証した後、保存開始直前に同期beginCommitを呼ぶ。
-beginCommitは同一pending entry、source token、証拠、applying状態、未失効を検査し、成功時にcommittingへ一回だけ進める。
+beginCommitは同一pending entry、source token、証拠、applying状態、矛盾がないことを検査し、成功時にcommittingへ一回だけ進める。
 false、例外、Promise、thenableは保存を開始せず拒否する。
 この成功が証拠採用の線形化点であり、保存呼出しまでawaitを挟まない。
 
 service queue、get、store writerの待機中に届いた矛盾は、この境界より前なのでunknownで閉じる。
 境界を越えて保存中に届いた矛盾は後着診断として保持し、終端を二重に確定しない。
 TTL、応答喪失、closeもcommitting中の保存結果を先回りして確定しない。
+観測期限はapplyingに入った証拠の保存待ちも打ち切らない。
 appliedは保存成功後にだけ公開する。
 保存失敗や結果不明時はappliedの成功を通知せず、unknownまたはwriter blockedとして再送を禁止する。
 既存question/result/PR通知のrecordAppliedにはこのinstruction専用guardを適用しない。

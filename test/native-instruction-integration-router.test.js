@@ -84,6 +84,25 @@ function createRouter(ownersByReceipt, provider = 'claude') {
   });
 }
 
+test('observation closure checks the exact capability metadata and admission before reaching an owner', () => {
+  const receipt = makeReceipt(); const legacy = createOwner('claude', 'launch-a'); const closed = [];
+  let closeListener; let closes = 0;
+  const owner = { ...legacy.owner, subscribeInstructionClosed(listener) { closeListener = listener; return () => {}; },
+    closeInstructionObservation(capability) { closes += 1; assert.equal(capability, legacy.capability); return true; } };
+  const router = createRouter(new Map([[receipt, owner]])); router.attachAdmission(receipt);
+  router.subscribeInstructionClosed((capability, reason) => closed.push({ capability, reason }));
+  const metadata = makeMetadata('claude', 'launch-a'); const capability = router.prepareInstructionDispatch(metadata);
+  assert.equal(router.supportsLateInstructionEvidence(capability), true);
+  assert.equal(router.closeInstructionObservation({}, metadata), false);
+  assert.equal(router.closeInstructionObservation(capability, { ...metadata, deliveryAttemptId: 'different' }), false);
+  closeListener({}, 'instruction_context_ended'); assert.equal(closed.length, 0);
+  closeListener(capability, 'instruction_context_ended'); assert.equal(closed.length, 1);
+  assert.equal(router.closeInstructionObservation(capability, metadata), true);
+  assert.equal(router.closeInstructionObservation(capability, metadata), false); assert.equal(closes, 1);
+  closeListener(capability, 'instruction_context_ended'); assert.equal(closed.length, 1);
+  router.close();
+});
+
 test('provider router fixes an opaque capability to its originating owner', () => {
   const receiptA = makeReceipt();
   const receiptB = makeReceipt();

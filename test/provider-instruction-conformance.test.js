@@ -9,9 +9,9 @@ const { createInstructionEnvelope } = require('../src/server/instruction-envelop
 const { createProviderInstructionAdapter } = require('../src/server/provider-instruction-adapter');
 const { createInstructionHarness, PROVIDERS } = require('./support/instruction-harness');
 
-async function withHarness(t, provider) {
+async function withHarness(t, provider, options = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-cockpit-provider-instruction-'));
-  const harness = createInstructionHarness({ provider, origin: 'standalone', directory, state: 'stopped' });
+  const harness = createInstructionHarness({ ...options, provider, origin: 'standalone', directory, state: 'stopped' });
   t.after(async () => {
     await harness.close();
     await fs.rm(directory, { recursive: true, force: true });
@@ -27,6 +27,58 @@ async function withHarness(t, provider) {
     expectedTurnId: null,
   });
   return { harness, created };
+}
+
+for (const provider of PROVIDERS) {
+  test(`${provider} ID-F08-NI14 late exact evidence commits observation unknown to applied without resending`, async t => {
+    let now = 1000; const jobs = new Set();
+    const { harness, created } = await withHarness(t, provider, { lateObservation: true, now: () => now,
+      setTimeoutImpl(callback, delay) { const job = { callback, delay, unref() {} }; jobs.add(job); return job; }, clearTimeoutImpl(job) { jobs.delete(job); } });
+    await harness.service.send(created.delivery.deliveryAttemptId);
+    for (let index = 0; index < 100; index += 1) {
+      if ((await harness.service.get(created.delivery.deliveryAttemptId)).delivery.state === 'accepted') break;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal((await harness.service.get(created.delivery.deliveryAttemptId)).delivery.state, 'accepted');
+    now += 60001; const expiry = [...jobs].find(job => job.delay === 60000); assert.ok(expiry); expiry.callback();
+    assert.equal((await harness.service.get(created.delivery.deliveryAttemptId)).delivery.state, 'unknown');
+    assert.equal(harness.owner.emitInputEvidence(created.delivery.deliveryAttemptId), true);
+    for (let index = 0; index < 100; index += 1) {
+      if ((await harness.service.get(created.delivery.deliveryAttemptId)).delivery.state === 'applied') break;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal((await harness.service.get(created.delivery.deliveryAttemptId)).delivery.state, 'applied');
+    assert.equal(harness.writes.length, 1);
+    assert.equal(harness.owner.emitInputEvidence(created.delivery.deliveryAttemptId), false);
+  });
+  test(`${provider} observation expiry is recoverable only with an owner close subscription and stale source closure is rejected`, async t => {
+    const { harness, created } = await withHarness(t, provider);
+    const envelope = createInstructionEnvelope({ mode: 'start', expectedTurnId: null, text: 'fixture instruction' });
+    const intent = { envelope: envelope.serialized, envelopeDigest: envelope.envelopeDigest, nativeContentDigest: envelope.nativeContentDigest };
+    for (const extended of [false, true]) {
+      let capability; let evidenceListener; let closedListener; let writes = 0; let closes = 0; const jobs = new Set();
+      const owner = {
+        prepareInstructionDispatch() { capability = Object.freeze({}); return capability; }, checkInstructionDispatch() { return true; },
+        dispatchInstructionNow(cap, command) { writes += 1; return Promise.resolve({ clientRequestId: command.deliveryAttemptId, nativeTurnId: 'turn-observed', nativeItemId: null }); },
+        subscribeInstructionEvidence(listener) { evidenceListener = listener; return () => {}; },
+        ...(extended ? { subscribeInstructionClosed(listener) { closedListener = listener; return () => {}; }, closeInstructionObservation() { closes += 1; return true; } } : {}),
+      };
+      const adapter = createProviderInstructionAdapter(provider, { deliveryAdapter: harness.providerAdapters[provider], nativeOwner: owner,
+        setTimeoutImpl(callback, delay) { const job = { callback, delay, unref() {} }; jobs.add(job); return job; }, clearTimeoutImpl(job) { jobs.delete(job); } });
+      const unknown = []; let observed = 0; adapter.onUnknown((id, reason) => unknown.push(reason)); adapter.onAccepted(() => true); adapter.onEvidence(() => { observed += 1; return true; });
+      const old = await adapter.prepareInstructionDispatch(created.delivery, intent); adapter.abandon(created.delivery.deliveryAttemptId);
+      const prepared = await adapter.prepareInstructionDispatch(created.delivery, intent);
+      assert.equal(prepared.recoverAfterExpiry, extended);
+      assert.equal(adapter.closeInstructionObservation(created.delivery.deliveryAttemptId, old.sourceToken), false);
+      await adapter.dispatchInstructionNow(created.delivery, envelope.serialized, () => true);
+      const expiry = [...jobs].find(job => job.delay === 60000); assert.ok(expiry); expiry.callback();
+      assert.equal(evidenceListener(capability, {}), extended); assert.equal(observed, extended ? 1 : 0); assert.equal(writes, 1);
+      if (extended) { closedListener(capability, 'instruction_context_ended'); assert.equal(evidenceListener(capability, {}), false); assert.equal(adapter.closeInstructionObservation(created.delivery.deliveryAttemptId, prepared.sourceToken), false); assert.equal(closes, 2); }
+      assert.deepEqual(unknown, extended ? ['instruction_evidence_expired', 'instruction_context_ended'] : ['instruction_capability_expired']);
+      adapter.close();
+    }
+  });
 }
 
 for (const provider of PROVIDERS) {
