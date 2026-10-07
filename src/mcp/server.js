@@ -8,7 +8,9 @@ const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
 const PROTOCOL_VERSION = '2025-06-18';
 const MCP_TIMEOUT_MS = 5000;
+const MCP_GITHUB_TIMEOUT_MS = 60000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
+const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、記録できたかを確かめられなかった。処理が続いている可能性があるため、ダッシュボードで確かめてほしい';
 const MAX_RESULT_ITEMS = 10;
 const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
@@ -169,7 +171,7 @@ function shortSavedList(toolName, saved) {
   return `${action}: ${summary}${remainder}`;
 }
 
-function postMcpRequest(requestPath, body, options, deadline) {
+function postMcpRequest(requestPath, body, options, deadline, attemptTimeoutMs = 2000) {
   return postToServer(requestPath, body, {
     homeDir: options.homeDir || cockpitHomeFromOptions(options),
     environment: options.environment || process.env,
@@ -178,14 +180,22 @@ function postMcpRequest(requestPath, body, options, deadline) {
     ensureServerRunning: options.ensureServerRunning,
     readServerInfo: options.readServerInfo,
     deadline,
-    attemptTimeoutMs: 2000,
+    now: options.now || Date.now,
+    attemptTimeoutMs,
+    // タイムアウト後も常駐サーバーで処理が続くため、同じ書き込みを再送しない。
+    retryAfterTimeout: false,
     ensure: true,
   });
 }
 
+function requestDeadline(options, timeoutMs) {
+  const now = options.now || Date.now;
+  return options.deadline ?? now() + timeoutMs;
+}
+
 async function postPlan(toolName, args, options = {}) {
   const environment = options.environment || process.env;
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
     ? environment.CLAUDE_CODE_SESSION_ID
     : '';
@@ -197,6 +207,7 @@ async function postPlan(toolName, args, options = {}) {
   };
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/plan`, body, options, deadline);
   if (result.ok) return result.json;
+  if (result.timedOut) return { timedOut: true };
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -205,7 +216,7 @@ async function postPullRequest(args, options = {}) {
   const pullRequest = parsePullRequestUrl(args.url);
   if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
   const environment = options.environment || process.env;
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string'
     ? environment.CLAUDE_CODE_SESSION_ID
     : '';
@@ -219,6 +230,7 @@ async function postPullRequest(args, options = {}) {
   };
   const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
   if (result.ok) return result.json;
+  if (result.timedOut) return { timedOut: true };
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -229,7 +241,7 @@ async function postCrossReviewSkip(args, options = {}) {
     return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
   const environment = options.environment || process.env;
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_GITHUB_TIMEOUT_MS);
   const sessionId = typeof environment.CLAUDE_CODE_SESSION_ID === 'string' ? environment.CLAUDE_CODE_SESSION_ID : '';
   const routeSessionId = isHookSessionId(sessionId) ? sessionId : 'pending';
   const body = {
@@ -242,8 +254,15 @@ async function postCrossReviewSkip(args, options = {}) {
     ppid: options.ppid === undefined ? process.ppid : options.ppid,
     claudeCodeSessionId: sessionId || null,
   };
-  const result = await postMcpRequest(`/api/sessions/${encodeURIComponent(routeSessionId)}/prs`, body, options, deadline);
+  const result = await postMcpRequest(
+    `/api/sessions/${encodeURIComponent(routeSessionId)}/prs`,
+    body,
+    options,
+    deadline,
+    MCP_GITHUB_TIMEOUT_MS,
+  );
   if (result.ok) return result.json;
+  if (result.timedOut) return { timedOut: true };
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -254,17 +273,20 @@ async function callTool(name, args, options = {}) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
+    if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
   }
   if (name === 'cockpit_skip_review') {
     const saved = await postCrossReviewSkip(args, options);
+    if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
+  if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
   if (saved.errorMessage) return toolResult(saved.errorMessage, true);
   return toolResult(shortSavedList(name, saved));
@@ -341,7 +363,9 @@ module.exports = {
   SERVER_VERSION,
   PROTOCOL_VERSION,
   MCP_TIMEOUT_MS,
+  MCP_GITHUB_TIMEOUT_MS,
   UNREACHABLE_MESSAGE,
+  TIMEOUT_MESSAGE,
   TOOL_DEFINITIONS,
   PR_ERROR_MESSAGES,
   REVIEW_SKIP_ERROR_MESSAGES,

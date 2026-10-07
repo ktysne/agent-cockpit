@@ -480,6 +480,44 @@ test('閉じた時刻と PR のマージ時刻をセッション保持期限の�
   assert.equal(state.pullRequests.get(sessionIdForMergedPr)?.size, 1);
 });
 
+test('確定済みのマージ head は保存して読み直しても残る', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-03T00:00:00.000Z');
+  const state = await DashboardState.load(homeDir, { now });
+  const mergedAt = new Date(now).toISOString();
+  const mergedHead = {
+    headRefOid: 'b'.repeat(40),
+    headRefName: 'feat/final',
+    baseRefName: 'main',
+  };
+  const lastOpen = {
+    title: 'PR 51',
+    url: 'https://github.com/example/project/pull/51',
+    headRefName: 'feat/final',
+    baseRefName: 'main',
+    headRefOid: 'a'.repeat(40),
+  };
+  state.registerPullRequest('persisted-merged-head', { url: lastOpen.url }, { product: { key: 'project', name: 'Project' } }, now);
+  state.updatePullRequest('persisted-merged-head', 'example', 'project', 51, {
+    state: 'merged', mergedAt, lastOpen, mergedHead,
+  }, now);
+  const relatedUrl = 'https://github.com/example/project/pull/52';
+  state.rememberRelatedPullRequest({
+    owner: 'example', repo: 'project', number: 52, url: relatedUrl, lastOpen: { ...lastOpen, url: relatedUrl },
+  }, now);
+  state.updateRelatedPullRequest('example', 'project', 52, { state: 'merged', mergedAt, mergedHead }, now);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now });
+
+  assert.deepEqual(
+    restored.pullRequestRegistrationForSession('persisted-merged-head', 'example', 'project', 51).mergedHead,
+    mergedHead,
+  );
+  assert.deepEqual(restored.relatedPullRequestRegistrationsForRepo('example', 'project')
+    .find((record) => record.number === 52).mergedHead, mergedHead);
+});
+
 test('実行中の prune でセッション記録を削除すると version を進める', () => {
   const state = new DashboardState();
   const sessionId = 'expired-prune-version';

@@ -861,6 +861,35 @@ test('ダッシュボード外でマージされた PR は方式なしで履歴�
   assert.match(fixture.notices[0].message, /方式は取得できませんでした/);
 });
 
+test('processMergedPullRequest は push 後の最終 head を確定済みとして保存する', async (t) => {
+  const fixture = await mergeFixture(t);
+  const previousHead = 'a'.repeat(40);
+  const mergedHead = 'b'.repeat(40);
+  const previousPullRequest = ghPullRequest(1, 'feature/one', 'main', previousHead);
+  fixture.state.updatePullRequest('session-1', 'example', 'project', 1, {
+    state: 'open',
+    lastOpen: {
+      title: previousPullRequest.title,
+      url: previousPullRequest.url,
+      headRefName: previousPullRequest.headRefName,
+      baseRefName: previousPullRequest.baseRefName,
+      headRefOid: previousHead,
+    },
+  });
+
+  await fixture.manager.processMergedPullRequest(
+    'example', 'project', ghPullRequest(1, 'feature/one', 'main', mergedHead), new Date(NOW).toISOString(),
+  );
+
+  const record = fixture.state.pullRequestRegistrationForSession('session-1', 'example', 'project', 1);
+  assert.equal(record.lastOpen.headRefOid, previousHead);
+  assert.deepEqual(record.mergedHead, {
+    headRefOid: mergedHead,
+    headRefName: 'feature/one',
+    baseRefName: 'main',
+  });
+});
+
 test('スカッシュまたはリベースで上に積んだ PR の作成元へ積み直しを依頼する', async (t) => {
   const fixture = await mergeFixture(t, [
     ghPullRequest(1, 'feature/one', 'main'),
@@ -874,6 +903,26 @@ test('スカッシュまたはリベースで上に積んだ PR の作成元へ�
   assert.deepEqual(new Set(notice.sessionIds), new Set(['session-1', 'session-2']));
   assert.match(notice.message, /PR #1 が main に入りました/);
   assert.match(notice.message, /#2 を `git rebase --onto main feature\/one` で積み直して push する/);
+});
+
+test('集約ブランチにマージされた PR はそのブランチを通知と積み直しに使う', async (t) => {
+  const fixture = await mergeFixture(t, [
+    ghPullRequest(1, 'feature/one', 'codex/feature'),
+    ghPullRequest(2, 'feature/two', 'feature/one'),
+  ]);
+  const pr = fixture.github.openPullRequests[0];
+
+  await fixture.manager.handleDetectedMerge({
+    owner: 'example',
+    repo: 'project',
+    pullRequest: pr,
+    mergedAt: new Date(NOW).toISOString(),
+    confirmedIntent: { method: 'squash' },
+    stackedPullRequests: [{ number: 2, baseRefName: 'feature/one' }],
+  });
+
+  assert.match(fixture.notices[0].message, /PR #1 が codex\/feature に入りました/);
+  assert.match(fixture.notices[0].message, /#2 を `git rebase --onto codex\/feature feature\/one` で積み直して push する/);
 });
 
 test('マージコミットでは上の PR に積み直しを依頼しない', async (t) => {
