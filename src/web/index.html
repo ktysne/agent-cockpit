@@ -4199,7 +4199,8 @@ function commonQuestionDiagnosticsNotice(diagnostics) {
 }
 
 function instructionDiagnosticsNotice(diagnostics) {
-  if (!diagnostics || (diagnostics.service === 'ready' && diagnostics.blocked !== true &&
+  if (!diagnostics || diagnostics.configuration === 'unconfigured' ||
+      (diagnostics.service === 'ready' && diagnostics.blocked !== true &&
       diagnostics.targets === 'available' && !diagnostics.errorCode && !diagnostics.unmatchedCount)) return null;
   const notice = element('section', 'instruction-diagnostics');
   notice.setAttribute('role', 'status');
