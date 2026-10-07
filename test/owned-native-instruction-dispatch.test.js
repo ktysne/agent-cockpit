@@ -37,6 +37,8 @@ function fixture(t, provider, options = {}) {
   let currentNativeContext = 'native-context';
   let terminalCount = 0;
   let collector, capability, runnerOptionsCaptured;
+  let runnerOwnerFresh = true;
+  let parentRunReceipt = null, targetOwnerNext = false;
   let resolveHeldContext;
   const heldContextReady = new Promise((resolve) => { resolveHeldContext = resolve; });
   const child = new EventEmitter();
@@ -95,19 +97,27 @@ function fixture(t, provider, options = {}) {
     getAuthentication: () => ({ oauthToken: 'fixture-token' }),
     onAuthenticationRequired: ({ loginId }) => child.send({ method: 'account/login/completed', params: { loginId, success: true } }),
     runnerFactory(runnerOptions) {
-      if (options.childOrigin && !parentCreated) {
-        parentCreated = true;
+      function mockNativeRunner(nativeId, contextId) {
+        const identity = { provider, nativeIdKind: provider === 'codex' ? 'thread' : 'session',
+          hostId: 'fixture-host', homeScopeId: 'fixture-home', nativeId };
         return { async start() {
-          runnerOptions.onNative({ type: 'identity', provider, identity: { provider, nativeIdKind: provider === 'codex' ? 'thread' : 'session',
-            hostId: 'fixture-host', homeScopeId: 'fixture-home', nativeId: 'parent-native' } });
-          runnerOptions.onNative({ type: 'context', provider, identity: { provider, nativeIdKind: provider === 'codex' ? 'thread' : 'session',
-            hostId: 'fixture-host', homeScopeId: 'fixture-home', nativeId: 'parent-native' },
-            context: { kind: provider === 'codex' ? 'turn' : 'assistant_message', nativeContextId: 'parent-context', parentToolUseId: null } });
+          runnerOptions.onNative({ type: 'identity', provider, identity });
+          runnerOptions.onNative({ type: 'context', provider, identity,
+            context: { kind: provider === 'codex' ? 'turn' : 'assistant_message', nativeContextId: contextId, parentToolUseId: null } });
           return this.snapshot();
         }, async stop() { return { state: 'stopped', childExited: true }; }, snapshot() { return { state: 'running', ownedChildActive: true }; } };
       }
+      if (targetOwnerNext) {
+        targetOwnerNext = false;
+        return mockNativeRunner('target-native', 'target-context');
+      }
+      if (options.childOrigin && !parentCreated) {
+        parentCreated = true;
+        return mockNativeRunner('parent-native', 'parent-context');
+      }
       runnerOptionsCaptured = runnerOptions;
       return createOwnedNativeRunner({ ...runnerOptions,
+        isCurrent: () => runnerOwnerFresh && runnerOptions.isCurrent(),
         ...(options.wait ? { profile: 'cockpit-native-wait-v1', onWaitRequired() {} } : {}),
         onSourceReady(cap) { capability = cap; runnerOptions.onSourceReady(cap); },
         onNative(event) {
@@ -125,6 +135,14 @@ function fixture(t, provider, options = {}) {
   return { composition, requests, get collector() { return collector; }, get receipt() { return receipt; }, registrationKernel, launchKernel, runtimeKernel, child, children, methods, observations, directory,
     onKernelRead(callback) { onKernelRead = callback; },
     runnerOptions: () => runnerOptionsCaptured,
+    setRunnerOwnerFresh(value) { runnerOwnerFresh = value; },
+    parentRunReceipt: () => parentRunReceipt,
+    async startTargetOwner() {
+      targetOwnerNext = true;
+      const targetReceipt = composition.admitLaunch({ launchId: 'target-launch', runId: 'target-run', attemptId: 'target-attempt',
+        profileId: provider, origin: 'standalone', purpose: 'agent' });
+      return composition.start(targetReceipt, { inputText: 'target fixture input' });
+    },
     capability: () => capability,
     actorHandles, connectionHandles, actualRuntime, instructionWrites: () => instructionWrites, instructionRequest: () => instructionRequest,
     terminal(uuid = undefined, extra = {}) {
@@ -135,6 +153,7 @@ function fixture(t, provider, options = {}) {
     start: async () => {
       if (options.childOrigin) {
         const parent = await composition.start(receipt, { inputText: 'parent fixture input' });
+        parentRunReceipt = parent.runReceipt;
         receipt = composition.admitLaunch({ launchId: 'child-launch', runId: 'child-run', attemptId: 'child-attempt', profileId: provider,
           origin: options.childOrigin, purpose: options.childOrigin === 'review' ? 'cross-review' : 'agent', originReceipt: parent.runReceipt });
         collector = composition.createOwnedCollector(receipt);
@@ -159,6 +178,22 @@ function commandFor(f, launchRef, mode = 'steer', deliveryAttemptId = 'delivery'
     payloadDigest: sha256(JSON.stringify({ schemaVersion: 1, mode, expectedTurnId, input })),
     nativeContentDigest: sha256(JSON.stringify(input)), source, target, mode, expectedTurnId };
   return { metadata, command: { ...metadata, input } };
+}
+
+function nativeHoldRequest(id, method = 'item/tool/requestUserInput', options = {}) {
+  const params = {
+    threadId: 'native-id', turnId: 'native-context', itemId: 'native-item',
+    ...(method === 'item/tool/requestUserInput'
+      ? { isBlocking: options.isBlocking ?? true, questions: [{ header: 'Choice', id: 'choice', question: 'Choose one' }] }
+      : method === 'item/permissions/requestApproval'
+        ? { cwd: 'C:\\workspace', permissions: {}, startedAtMs: 1 }
+        : { startedAtMs: 1 }),
+  };
+  return { jsonrpc: '2.0', id, method, params };
+}
+
+function nativeHoldResolved(requestId) {
+  return { method: 'serverRequest/resolved', params: { requestId, threadId: 'native-id' } };
 }
 
 for (const provider of ['codex', 'claude']) {
@@ -244,6 +279,102 @@ test('ID-F08-NI03 Codex wait holds an otherwise current steer with write zero', 
   f.child.send({ id: 501, method: 'item/tool/call', params: { threadId: 'native-id', turnId: 'native-context', callId: 'wait-call', namespace: null, tool: 'cockpit_wait', arguments: {} } });
   const owner = f.composition.createInstructionOwner(f.receipt); const { metadata } = commandFor(f, started.launchRef);
   assert.equal(owner.prepareInstructionDispatch(metadata), null); assert.equal(f.instructionWrites(), 0);
+});
+
+test('Codex native question and permission holds block a prepared steer until individually resolved', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  const owner = f.composition.createInstructionOwner(f.receipt);
+  const { metadata, command } = commandFor(f, started.launchRef);
+  const cap = owner.prepareInstructionDispatch(metadata); assert.ok(cap);
+  f.child.send(nativeHoldRequest('question-hold', 'item/tool/requestUserInput', { isBlocking: false }));
+  assert.equal(owner.checkInstructionDispatch(cap, metadata), false);
+  assert.throws(() => owner.dispatchInstructionNow(cap, command)); assert.equal(f.instructionWrites(), 0);
+  f.child.send(nativeHoldRequest(12, 'item/permissions/requestApproval'));
+  f.child.send(nativeHoldResolved('question-hold'));
+  assert.equal(owner.prepareInstructionDispatch(commandFor(f, started.launchRef, 'steer', 'after-one-resolution').metadata), null);
+  f.child.send(nativeHoldResolved(12));
+  assert.equal(owner.checkInstructionDispatch(cap, metadata), true);
+  const ack = await owner.dispatchInstructionNow(cap, command);
+  assert.equal(ack.clientRequestId, 'delivery'); assert.equal(f.instructionWrites(), 1);
+  assert.equal(f.child.killCalls, 0);
+});
+
+test('a native hold recorded while owner freshness is false remains blocking after freshness returns', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  const owner = f.composition.createInstructionOwner(f.receipt);
+  const { metadata, command } = commandFor(f, started.launchRef);
+  const cap = owner.prepareInstructionDispatch(metadata); assert.ok(cap);
+  f.setRunnerOwnerFresh(false);
+  f.child.send(nativeHoldRequest('owner-transition-hold'));
+  f.setRunnerOwnerFresh(true);
+  assert.equal(owner.checkInstructionDispatch(cap, metadata), false);
+  assert.throws(() => owner.dispatchInstructionNow(cap, command)); assert.equal(f.instructionWrites(), 0);
+  f.child.send(nativeHoldResolved('owner-transition-hold'));
+  assert.equal(owner.checkInstructionDispatch(cap, metadata), true);
+  assert.equal(f.instructionWrites(), 0);
+});
+
+test('a native hold remains attached to its process across a real composition owner handoff', async t => {
+  const f = fixture(t, 'codex', { childOrigin: 'delegated' }); const started = await f.start();
+  const owner = f.composition.createInstructionOwner(f.receipt);
+  const { metadata } = commandFor(f, started.launchRef);
+  f.child.send(nativeHoldRequest('handoff-hold'));
+  assert.equal(owner.prepareInstructionDispatch(metadata), null);
+  const target = await f.startTargetOwner();
+  f.composition.handoff(started.runReceipt, f.parentRunReceipt(), target.runReceipt,
+    { handoffId: 'handoff-with-pending-native-request', expectedOwnerGeneration: 0 });
+  assert.equal(f.composition.resolveProof(started.launchRef), null);
+  f.child.send(nativeHoldResolved('handoff-hold'));
+  assert.equal(f.child.killCalls, 0);
+  assert.equal(owner.prepareInstructionDispatch(commandFor(f, started.launchRef, 'steer', 'after-handoff-resolution').metadata), null);
+  assert.equal(f.instructionWrites(), 0);
+});
+
+test('a matching terminal resolution clears only the hold and leaves the final actor guard active', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  const owner = f.composition.createInstructionOwner(f.receipt);
+  f.child.send(nativeHoldRequest('terminal-hold'));
+  f.terminal();
+  const { metadata, command } = commandFor(f, started.launchRef, 'start');
+  assert.equal(owner.prepareInstructionDispatch(metadata), null);
+  f.child.send(nativeHoldResolved('terminal-hold'));
+  const cap = owner.prepareInstructionDispatch(metadata); assert.ok(cap);
+  f.actualRuntime.authority.endActor(f.actorHandles[0]);
+  assert.equal(owner.checkInstructionDispatch(cap, metadata), false);
+  assert.throws(() => owner.dispatchInstructionNow(cap, command));
+  assert.equal(f.instructionWrites(), 0); assert.equal(f.child.killCalls, 0);
+  assert.equal(f.composition.resolveProof(started.launchRef), null);
+});
+
+test('a native hold survives collector reconnect and blocks after a fresh native read', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  const owner = f.composition.createInstructionOwner(f.receipt);
+  const first = commandFor(f, started.launchRef);
+  const cap = owner.prepareInstructionDispatch(first.metadata); assert.ok(cap);
+  f.child.send(nativeHoldRequest('reconnect-hold'));
+  await f.collector.disconnect(); await f.collector.connect();
+  const read = await f.collector.observeKnownThread('native-id');
+  assert.equal(read.status, 'observed');
+  assert.equal(owner.checkInstructionDispatch(cap, first.metadata), false);
+  assert.equal(owner.prepareInstructionDispatch(commandFor(f, started.launchRef, 'steer', 'fresh-read-held').metadata), null);
+  f.child.send(nativeHoldResolved('reconnect-hold'));
+  const fresh = commandFor(f, started.launchRef, 'steer', 'fresh-after-resolution');
+  const freshCap = owner.prepareInstructionDispatch(fresh.metadata); assert.ok(freshCap);
+  await owner.dispatchInstructionNow(freshCap, fresh.command);
+  assert.equal(f.instructionWrites(), 1); assert.equal(f.child.killCalls, 0);
+});
+
+test('a late native resolution after stop cannot revive proof or dispatch authority', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  const owner = f.composition.createInstructionOwner(f.receipt);
+  const { metadata, command } = commandFor(f, started.launchRef);
+  f.child.send(nativeHoldRequest('late-after-stop'));
+  assert.ok(f.composition.resolveProof(started.launchRef));
+  await f.composition.stop(f.receipt);
+  f.child.send(nativeHoldResolved('late-after-stop'));
+  assert.equal(f.composition.resolveProof(started.launchRef), null);
+  assert.equal(owner.prepareInstructionDispatch(metadata), null);
+  assert.equal(f.instructionWrites(), 0);
 });
 
 test('ID-F08-NI06 Codex terminal before start ack accepts no active proof or applied evidence', async t => {
