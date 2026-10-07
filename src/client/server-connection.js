@@ -101,11 +101,9 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
   }
   const controller = new AbortController();
   let timeout;
-  let requestStarted = false;
   try {
     return await Promise.race([
       (async () => {
-        requestStarted = true;
         const response = await fetchImpl(url, { ...options, signal: controller.signal });
         return readResponse ? readResponse(response) : response;
       })(),
@@ -116,7 +114,7 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
             ? 'server request deadline elapsed'
             : 'server request attempt timed out');
           error.code = deadlineReached ? 'DEADLINE_TIMEOUT' : 'ATTEMPT_TIMEOUT';
-          error.requestStarted = requestStarted;
+          error.requestStarted = true;
           reject(error);
           controller.abort();
         }, Math.min(attemptTimeoutMs, remaining));
@@ -280,6 +278,9 @@ async function postToServer(requestPath, body, options = {}) {
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
     } catch (error) {
+      if (error?.requestStarted === false && error.code === 'DEADLINE_TIMEOUT') {
+        return { ok: false, status: null, json: null };
+      }
       if (retryAfterTimeout === false && error?.requestStarted === true &&
           (error.code === 'ATTEMPT_TIMEOUT' || error.code === 'DEADLINE_TIMEOUT')) {
         return { ok: false, status: null, json: null, timedOut: true };

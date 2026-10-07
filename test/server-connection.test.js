@@ -182,28 +182,34 @@ test('retryAfterTimeout が false のとき試行タイムアウトを再送せ�
   assert.equal(ensureCalls, 1);
 });
 
-test('送信開始前に期限が尽きた場合は timedOut を返さない', async () => {
-  let now = 0;
-  let requests = 0;
-  const body = {
-    toJSON: () => {
-      now = 100;
-      return { value: 1 };
-    },
-  };
-  const result = await postToServer('/api/test', body, {
-    homeDir: 'unused',
-    initialInfo: serverInfo(41001, 'secret'),
-    ensure: false,
-    deadline: 100,
-    retryAfterTimeout: false,
-    now: () => now,
-    readServerInfo: async () => serverInfo(41001, 'secret'),
-    fetchImpl: async () => { requests += 1; return successResponse(); },
-  });
+test('本文準備中に期限が尽きた場合は再試行せず未到達として返す', async () => {
+  for (const retryAfterTimeout of [false, true]) {
+    let now = 0;
+    let ensureCalls = 0;
+    let readCalls = 0;
+    let requests = 0;
+    const body = {
+      toJSON: () => {
+        now = 100;
+        return { value: 1 };
+      },
+    };
+    const result = await postToServer('/api/test', body, {
+      homeDir: 'unused',
+      initialInfo: serverInfo(41001, 'secret'),
+      deadline: 100,
+      retryAfterTimeout,
+      now: () => now,
+      ensure: async () => { ensureCalls += 1; return serverInfo(41002, 'new-secret'); },
+      readServerInfo: async () => { readCalls += 1; return serverInfo(41002, 'new-secret'); },
+      fetchImpl: async () => { requests += 1; return successResponse(); },
+    });
 
-  assert.deepEqual(result, { ok: false, status: null, json: null });
-  assert.equal(requests, 0);
+    assert.deepEqual(result, { ok: false, status: null, json: null });
+    assert.equal(ensureCalls, 0);
+    assert.equal(readCalls, 0);
+    assert.equal(requests, 0);
+  }
 });
 
 test('初回のensureが期限を使い切った場合は未到達として返す', async () => {
@@ -252,6 +258,34 @@ test('接続拒否後のensureが期限を使い切った場合は未到達と�
   assert.deepEqual(result, { ok: false, status: null, json: null });
   assert.equal(ensureCalls, 1);
   assert.equal(requests, 1);
+});
+
+test('送信開始後に全体期限を超えた場合は timedOut を返す', async () => {
+  let ensureCalls = 0;
+  let requests = 0;
+  let requestSignal;
+  const result = await postToServer('/api/test', {}, {
+    homeDir: 'unused',
+    timeoutMs: 200,
+    attemptTimeoutMs: 500,
+    retryAfterTimeout: false,
+    ensure: async () => {
+      ensureCalls += 1;
+      return serverInfo(41001, 'secret');
+    },
+    fetchImpl: async (_url, options) => {
+      requests += 1;
+      requestSignal = options.signal;
+      return new Promise((_, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, status: null, json: null, timedOut: true });
+  assert.equal(requests, 1);
+  assert.equal(ensureCalls, 1);
+  assert.equal(requestSignal.aborted, true);
 });
 
 test('既定の retryAfterTimeout はタイムアウト後に再送する', async () => {
