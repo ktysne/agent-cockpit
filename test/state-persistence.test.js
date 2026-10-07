@@ -32,6 +32,40 @@ test('削除印を保存して復元し、旧形式は空として読む', async
   await old.flushPersistence();
 });
 
+test('provider別projection表示記録は旧storeとsession file cleanupから独立して復元する', async (t) => {
+  const homeDir = await temporaryHome(t);
+  const now = Date.parse('2026-10-08T00:00:00.000Z');
+  const state = new DashboardState({ homeDir });
+  assert.equal(state.setProjectionHidden('codex', 'projection-hidden', true, now), true);
+  assert.equal(state.deleteProjectionDisplay('claude', 'projection-deleted', now), true);
+  await state.flushPersistence();
+
+  const restored = await DashboardState.load(homeDir, { now: now + 15 * DAY_MS });
+  assert.deepEqual(restored.projectionDisplayFor('codex', 'projection-hidden'), {
+    provider: 'codex', session_id: 'projection-hidden', hiddenAt: new Date(now).toISOString(),
+  });
+  assert.deepEqual(restored.projectionDisplayFor('claude', 'projection-deleted'), {
+    provider: 'claude', session_id: 'projection-deleted', deletedAt: new Date(now).toISOString(),
+  });
+  restored.syncSessionFiles([{
+    session_id: 'projection-deleted', updatedAt: new Date(now + 1).toISOString(),
+  }], now + 2, 'claude');
+  assert.equal(restored.projectionDisplayFor('claude', 'projection-deleted')?.deletedAt, new Date(now).toISOString());
+  assert.equal(restored.sessionFiles.has('projection-deleted'), true);
+  assert.equal(restored.snapshot().sessions[0]?.session_id, 'projection-deleted');
+  assert.equal(restored.clearHiddenSessions(), 1);
+  assert.equal(restored.projectionDisplayFor('codex', 'projection-hidden'), null);
+  assert.equal(restored.projectionDisplayFor('claude', 'projection-deleted')?.deletedAt, new Date(now).toISOString());
+
+  const legacyHome = await temporaryHome(t);
+  await fs.writeFile(path.join(legacyHome, 'store.json'), JSON.stringify({
+    version: 1, display: null, plans: {}, decisionLifecycles: {}, closedTasks: [], hiddenSessions: [],
+  }));
+  const legacy = await DashboardState.load(legacyHome, { now });
+  assert.equal(legacy.projectionDisplaySettings.size, 0);
+  assert.equal((await fs.readdir(legacyHome)).some((name) => name.startsWith('store.json.broken-')), false);
+});
+
 for (const branchKept of [true, false]) {
   test(`mergedHead の branchKept=${branchKept} を登録と関連の保存と復元で保持する`, async (t) => {
     const homeDir = await temporaryHome(t);
