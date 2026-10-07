@@ -6,25 +6,40 @@ const path = require('node:path');
 const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTaskNotifications } = require('../src/server/transcript');
 const { temporaryDirectory } = require('./support/temp');
 
-test('queue-operation 行と user 行の両方から終了通知を読む', async (t) => {
+const notification = (id, status) => `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n</task-notification>`;
+const enqueued = (id, status, timestamp) => JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp, content: notification(id, status) });
+
+test('通知を積んだ queue-operation 行から終了通知を読む', async (t) => {
   const fixture = await transcriptFixture(t);
-  const notification = (id, status) => `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>`;
   await fs.writeFile(fixture.filePath, [
-    JSON.stringify({ type: 'queue-operation', timestamp: '2026-10-08T01:00:00.000Z', content: notification('queue-1', 'killed') }),
-    JSON.stringify({ type: 'user', message: { content: [{ text: notification('user_1', 'completed') + notification('failed-1', 'failed') }] } }),
+    enqueued('queue-1', 'killed', '2026-10-08T01:00:00.000Z'),
+    enqueued('done_1', 'completed'),
+    enqueued('failed-1', 'failed', '2026-10-08T01:00:02.000Z'),
   ].join('\n'));
   assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
     ['queue-1', { status: 'killed', recordedAt: '2026-10-08T01:00:00.000Z' }],
-    ['user_1', { status: 'completed', recordedAt: null }],
-    ['failed-1', { status: 'failed', recordedAt: null }],
+    ['done_1', { status: 'completed', recordedAt: null }],
+    ['failed-1', { status: 'failed', recordedAt: '2026-10-08T01:00:02.000Z' }],
   ]));
+});
+
+test('ツールの入出力や本文に写った終了通知と取り出しの行は読まない', async (t) => {
+  const fixture = await transcriptFixture(t);
+  await fs.writeFile(fixture.filePath, [
+    JSON.stringify({ type: 'queue-operation', operation: 'remove', content: notification('removed', 'killed') }),
+    JSON.stringify({ type: 'attachment', attachment: { type: 'queued_command', prompt: notification('attachment', 'killed') } }),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: `grep の結果 ${notification('tool-result', 'killed')}` }] } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', input: { content: notification('tool-use', 'completed') } }] } }),
+    JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: `前置き ${notification('not-leading', 'killed')}` }),
+  ].join('\n'));
+  assert.equal((await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)).size, 0);
 });
 
 test('終了通知は対象外の status と形の合わない id を捨て壊れた行を飛ばす', async (t) => {
   const fixture = await transcriptFixture(t);
   const lines = ['{壊れた行}'];
   for (const [id, status] of [['waiting', 'running'], ['../bad', 'killed'], ['x'.repeat(65), 'failed'], ['valid', 'completed']]) {
-    lines.push(JSON.stringify({ data: `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>` }));
+    lines.push(enqueued(id, status));
   }
   await fs.writeFile(fixture.filePath, lines.join('\n'));
   assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
@@ -34,8 +49,7 @@ test('終了通知は対象外の status と形の合わない id を捨て壊�
 
 test('終了通知は末尾の上限内だけを読み読めない記録は空で返す', async (t) => {
   const fixture = await transcriptFixture(t);
-  const record = id => JSON.stringify({ data: `<task-notification><task-id>${id}</task-id><status>killed</status></task-notification>` });
-  await fs.writeFile(fixture.filePath, `${record('old')}\n${'x'.repeat(MAX_TRANSCRIPT_BYTES)}\n${record('new')}\n`);
+  await fs.writeFile(fixture.filePath, `${enqueued('old', 'killed')}\n${'x'.repeat(MAX_TRANSCRIPT_BYTES)}\n${enqueued('new', 'killed')}\n`);
   assert.deepEqual([...await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)].map(([id]) => id), ['new']);
   assert.equal((await readTaskNotifications(fixture.claudeHome, fixture.cwd, 'missing')).size, 0);
 });

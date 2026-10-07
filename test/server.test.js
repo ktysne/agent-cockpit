@@ -14,7 +14,7 @@ const {
 const { hookHeaders, jsonBody, request, startTestServer, uiHeaders } = require('./support/server');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
-test('待機中で稼働中の Claude サブエージェントがあるセッションだけ記録を読む', async (t) => {
+test('待機中で稼働中の Claude サブエージェントがあるセッションだけ、メインのイベントの後に記録を読む', async (t) => {
   const state = new DashboardState();
   const reads = [];
   const runtime = await runningServer(t, {
@@ -24,7 +24,7 @@ test('待機中で稼働中の Claude サブエージェントがあるセッシ
       return new Map([['claude-task', { status: 'killed', recordedAt: null }]]);
     },
   });
-  state.syncSessionFiles(['waiting-claude', 'working-claude', 'ended-claude', 'waiting-codex'].map(session_id => ({ session_id, cwd: runtime.homeDir })));
+  state.syncSessionFiles(['waiting-claude', 'working-claude', 'ended-claude', 'waiting-codex', 'agent-event-only'].map(session_id => ({ session_id, cwd: runtime.homeDir })));
   const send = async (session_id, event) => {
     const response = await request(runtime.info.port, {
       method: 'POST', path: '/api/events', headers: hookHeaders(runtime.info.secret),
@@ -41,6 +41,8 @@ test('待機中で稼働中の Claude サブエージェントがあるセッシ
   await send('waiting-codex', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch' });
   await send('waiting-codex', { hook_event_name: 'Stop' });
   await send('waiting-claude', { hook_event_name: 'Stop' });
+  await send('agent-event-only', { hook_event_name: 'Stop' });
+  await send('agent-event-only', { hook_event_name: 'SubagentStart', agent_id: 'claude-task' });
   await new Promise(resolve => setTimeout(resolve, 80));
   assert.deepEqual(reads, [{ cwd: runtime.homeDir, id: 'waiting-claude' }]);
   assert.equal(state.snapshot().sessions.find(session => session.session_id === 'waiting-claude').status, '待機中');

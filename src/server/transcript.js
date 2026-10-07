@@ -121,17 +121,6 @@ async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs
   const notifications = new Map();
   const filePath = transcriptPathFor(claudeHome, cwd, sessionId);
   if (!filePath) return notifications;
-  function visit(value, recordedAt, depth = 0) {
-    if (depth > 8) return;
-    if (typeof value === 'string' && value.includes('<task-notification>')) {
-      for (const block of value.split('<task-notification>').slice(1)) {
-        const match = block.split('</task-notification>')[0].match(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]*?<status>(completed|killed|failed)<\/status>/);
-        if (match) notifications.set(match[1], { status: match[2], recordedAt });
-      }
-    } else if (value && typeof value === 'object') {
-      for (const item of Object.values(value)) visit(item, recordedAt, depth + 1);
-    }
-  }
   try {
     const tail = await readTail(fileSystem, filePath);
     if (!tail) return notifications;
@@ -140,7 +129,12 @@ async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs
     for (const line of lines) {
       let record;
       try { record = JSON.parse(line); } catch { continue; }
-      visit(record, typeof record?.timestamp === 'string' ? record.timestamp : null);
+      // ツールの入出力や本文に写った通知の文字列を終了と取り違えないため、Claude Code が通知を積む行だけを読む。
+      if (record?.type !== 'queue-operation' || record.operation !== 'enqueue') continue;
+      if (typeof record.content !== 'string' || !record.content.startsWith('<task-notification>')) continue;
+      const block = record.content.split('</task-notification>')[0];
+      const match = block.match(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]*?<status>(completed|killed|failed)<\/status>/);
+      if (match) notifications.set(match[1], { status: match[2], recordedAt: typeof record.timestamp === 'string' ? record.timestamp : null });
     }
   } catch {}
   return notifications;

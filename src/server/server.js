@@ -1152,7 +1152,8 @@ function createRequestHandler(options) {
       const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
       state.addEvent(body, eventMetadata);
       const event = sanitizeEvent(body, eventMetadata);
-      if (event) options.scheduleTaskNotifications?.(event.session_id);
+      // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
+      if (event && !event.agent_id) options.scheduleTaskNotifications?.(event.session_id);
       if (event && state.deletedSessions.has(event.session_id)
         && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
         jsonResponse(response, 202, { accepted: true });

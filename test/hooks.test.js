@@ -15,6 +15,13 @@ const {
 } = require('../src/hooks/event');
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
+const { temporaryHome: createTemporaryHome } = require('./support/temp');
+
+async function temporaryHome(testContext) {
+  return createTemporaryHome(testContext, 'agent-cockpit-test-', {
+    environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
+  });
+}
 
 test('TaskStop の成功だけに形の合う停止タスク ID を載せて正規化する', () => {
   for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
@@ -28,13 +35,6 @@ test('TaskStop の成功だけに形の合う停止タスク ID を載せて正�
   }
   assert.equal(sanitizeEvent({ session_id: 'stop-task', hook_event_name: 'PostToolUse', tool_name: 'Read', stoppedTaskId: 'task_1-2' }).stoppedTaskId, undefined);
 });
-const { temporaryHome: createTemporaryHome } = require('./support/temp');
-
-async function temporaryHome(testContext) {
-  return createTemporaryHome(testContext, 'agent-cockpit-test-', {
-    environment: { AGENT_COCKPIT_HOME: (homeDir) => homeDir },
-  });
-}
 
 test('フックは入力全文を送らず、任意のツール出力から Codex の行だけを抽出する', async (t) => {
   await temporaryHome(t);
