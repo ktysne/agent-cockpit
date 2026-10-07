@@ -346,6 +346,25 @@ test('結合 5: 同じ親のセッション ID が変わると(/clear)、古い�
   assert.equal(server.runtime.state.isSessionAbsenceProtected(SESSION_B), true);
 });
 
+test('結合 5b: /clear の直後、失効の検出より先に MCP で書くと、古いセッションではなく新しいセッションへ入る', async (t) => {
+  const server = await startIntegrationServer(t, { sessionScanIntervalMs: 600_000 });
+  const claude = await startFakeClaude(t, { claudeHome: server.claudeHome, homeDir: server.homeDir, sessionId: SESSION_A });
+  const mcp = await claude.startMcp();
+  const before = await claude.callTool(mcp, 'cockpit_set_tasks', { tasks: [{ title: 'clear の前', state: 'doing', criteria: [] }] });
+  assert.equal(before.result.isError, undefined, toolText(before));
+  assert.equal(server.runtime.state.isSessionAbsenceProtected(SESSION_A), true);
+
+  await claude.setSession(SESSION_B);
+  const after = await claude.callTool(mcp, 'cockpit_set_tasks', { tasks: [{ title: 'clear の後', state: 'doing', criteria: [] }] });
+  assert.equal(after.result.isError, undefined, toolText(after));
+
+  const tasksOf = (sessionId) => server.runtime.state.planSummary(sessionId).tasks.map((task) => task.title);
+  assert.deepEqual(tasksOf(SESSION_A), ['clear の前']);
+  assert.deepEqual(tasksOf(SESSION_B), ['clear の後']);
+  assert.equal(server.runtime.state.isSessionAbsenceProtected(SESSION_A), false);
+  assert.equal(server.runtime.state.isSessionAbsenceProtected(SESSION_B), true);
+});
+
 test('結合 6: 親が終了すると writer が失効し、不在の判定による終了の表示が従来どおり動く', async (t) => {
   const server = await startIntegrationServer(t);
   const claude = await startFakeClaude(t, { claudeHome: server.claudeHome, homeDir: server.homeDir, sessionId: SESSION_A });

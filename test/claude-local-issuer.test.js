@@ -316,3 +316,99 @@ test('issuer は registry と authority と Claude のホームを要求する',
   assert.throws(() => createClaudeLocalIssuer({ registry: kernel.registry, authority: kernel.authority }), TypeError);
   assert.throws(() => createClaudeLocalIssuer({ registry: kernel.registry, claudeHome: CLAUDE_HOME }), TypeError);
 });
+
+function createHeldListing(initialFiles) {
+  const controller = { files: initialFiles, held: null };
+  controller.list = () => {
+    const snapshot = controller.files.map((file) => ({ ...file }));
+    if (!controller.held) return Promise.resolve(snapshot);
+    const { gate } = controller.held;
+    controller.held = null;
+    return gate.then(() => snapshot);
+  };
+  // 次の 1 回の読み取りを、いまの一覧の内容のまま遅らせる。
+  controller.holdNext = () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    controller.held = { gate };
+    return release;
+  };
+  return controller;
+}
+
+test('セッション変更前の一覧を読んだ遅い照合は、新しい期間を終えも作り直しもしない', async (t) => {
+  for (const kind of ['mcp', 'hook']) {
+    await t.test(kind, async () => {
+      const listing = createHeldListing([sessionFile(100, 'session-a')]);
+      const kernel = createRegistrationKernel();
+      const issuer = createClaudeLocalIssuer({
+        registry: kernel.registry, authority: kernel.authority, claudeHome: CLAUDE_HOME, hostname: () => 'test-host',
+        listSessionFiles: listing.list,
+      });
+      const first = await issuer.attestMcp({ ppid: 100, contextPid: 7 });
+
+      const release = listing.holdNext();
+      const late = kind === 'mcp'
+        ? issuer.attestMcp({ ppid: 100, contextPid: 8 })
+        : issuer.attachHookWriter({ ppid: 100, sessionId: 'session-a' });
+      listing.files = [sessionFile(100, 'session-b')];
+      const current = await issuer.attachHookWriter({ ppid: 100, sessionId: 'session-b' });
+      assert.equal(current.ok, true);
+      release();
+      const result = await late;
+
+      assert.equal(kernel.registry.authorizeEvent(current.writer).ok, true);
+      assert.equal(issuer.isActiveSession('session-b'), true);
+      assert.equal(issuer.isActiveSession('session-a'), false);
+      assert.equal(kernel.registry.authorizeWriter(first.writer).ok, false);
+      const states = kernel.registry.snapshot().executions.map((item) => item.state).sort();
+      assert.deepEqual(states, ['active', 'ended']);
+      if (kind === 'mcp') {
+        assert.equal(result.ok, true);
+        assert.equal(result.writer.identity.nativeId, 'session-b');
+        assert.equal(result.writer.executionId, current.writer.executionId);
+      } else {
+        assert.deepEqual(result, { ok: false, reason: 'claude_session_mismatch' });
+      }
+    });
+  }
+});
+
+test('writer の再確認は、親のセッションが変わっていれば期間を終え、変わらなければ何もしない', async () => {
+  const fixture = createFixture({ files: [sessionFile(100, 'session-a')] });
+  const attested = await fixture.issuer.attestMcp({ ppid: 100, contextPid: 7 });
+
+  await fixture.issuer.revalidateWriter(attested.writer);
+  assert.equal(fixture.registry.authorizeWriter(attested.writer).ok, true);
+
+  fixture.state.failure = 'null';
+  fixture.state.files = [sessionFile(100, 'session-b')];
+  await fixture.issuer.revalidateWriter(attested.writer);
+  fixture.state.failure = 'throw';
+  await fixture.issuer.revalidateWriter(attested.writer);
+  assert.equal(fixture.registry.authorizeWriter(attested.writer).ok, true, '読めないときは登録核の照合に任せる');
+
+  fixture.state.failure = null;
+  await fixture.issuer.revalidateWriter({ executionId: 'exec-unknown' });
+  await fixture.issuer.revalidateWriter(null);
+  assert.equal(fixture.registry.authorizeWriter(attested.writer).ok, true);
+  await fixture.issuer.revalidateWriter(attested.writer);
+  assert.equal(fixture.registry.authorizeWriter(attested.writer).ok, false);
+});
+
+test('active な期間の表示用 sessionId を native の sessionId から引く', async () => {
+  const fixture = createFixture({ files: [sessionFile(100, 'session-a')] });
+  await fixture.issuer.attestMcp({ ppid: 100, contextPid: 7 });
+  assert.equal(fixture.issuer.activeProjectionFor({ sessionId: 'session-a' }), 'session-a');
+  assert.equal(fixture.issuer.activeProjectionFor({ sessionId: 'session-a', pid: 100 }), 'session-a');
+  assert.equal(fixture.issuer.activeProjectionFor({ sessionId: 'session-a', pid: 101 }), null);
+  assert.equal(fixture.issuer.activeProjectionFor({ sessionId: 'other' }), null);
+
+  fixture.issuer.syncSessionFiles([]);
+  fixture.state.files = [sessionFile(300, 'session-a')];
+  const resumed = await fixture.issuer.attestMcp({ ppid: 300, contextPid: 9 });
+  assert.equal(fixture.issuer.activeProjectionFor({ sessionId: 'session-a' }), resumed.writer.executionId);
+
+  fixture.issuer.syncSessionFiles([]);
+  assert.equal(fixture.issuer.activeProjectionFor({ sessionId: 'session-a' }), null);
+});

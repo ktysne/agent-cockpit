@@ -205,3 +205,25 @@ test('一覧を読めなかったときは、期間を終えず、不在の保�
 
   assert.equal(server.runtime.state.isSessionAbsenceProtected('session-a'), true);
 });
+
+test('再開した期間は、親が SessionEnd なしに終わっても不在の判定で終了扱いになり、native の ID で context を引ける', async (t) => {
+  const listing = fakeListing([sessionFile(100, 'session-a', 'start-1')]);
+  const server = await startLineageServer(t, listing);
+  assert.equal((await post(server, '/api/events', { ...hookEvent('session-a'), claudeLineage: { ppid: 100 } })).status, 202);
+  listing.files = [];
+  await waitFor(() => !server.runtime.state.isSessionAbsenceProtected('session-a'), 'first period to end');
+  listing.files = [sessionFile(300, 'session-a', 'start-3')];
+  assert.equal((await post(server, '/api/events', { ...hookEvent('session-a'), claudeLineage: { ppid: 300 } })).status, 202);
+  const resumedId = server.runtime.state.snapshot().sessions.map((session) => session.session_id).find((id) => id.startsWith('exec-'));
+  assert.ok(resumedId);
+  await waitFor(() => server.runtime.state.sessionFileLastSeenAt.has(resumedId), 'resumed session file to be seen');
+  server.runtime.state.setTasks(resumedId, [{ title: '再開後のタスク', state: 'doing', criteria: [] }]);
+
+  const context = jsonBody(await request(server.info.port, { path: '/api/sessions/session-a/context' }));
+  assert.deepEqual(context.tasks.map((task) => task.title), ['再開後のタスク']);
+
+  listing.files = [];
+  await waitFor(() => !server.runtime.state.isSessionAbsenceProtected(resumedId), 'resumed period to end');
+  server.runtime.state.syncSessionFiles([], Date.now() + 61_000);
+  assert.equal(server.runtime.state.endedByAbsence.has(resumedId), true);
+});

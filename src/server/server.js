@@ -497,6 +497,14 @@ function createRequestHandler(options) {
     return authorization.sessionId;
   }
 
+  // Claude の writer は、書き込みの前に親のセッションが変わっていないかを一覧の読み直しで確かめる。
+  // 失効の検出を待つ間に、古いセッションへ書き込めてしまうためである。
+  async function resolveFreshWriterSessionId(routeId, body) {
+    if (!resolveWriterSessionId(routeId, body)) return null;
+    if (claudeIssuer) await claudeIssuer.revalidateWriter(body.writer);
+    return resolveWriterSessionId(routeId, body);
+  }
+
   // フックが申告した親プロセスを照合し、通ればフック用の writer と表示用の sessionId を本文に付ける。
   // 照合が通らない申告と、issuer の無い構成(registry を注入した構成)では申告を捨て、未登録の Claude 向けの観測の経路で扱う。
   // 観測の経路は登録済みの sessionId を拒否するので、照合に失敗したフックが登録済みの期間へ書くことはない。
@@ -1119,7 +1127,7 @@ function createRequestHandler(options) {
         return;
       }
       let writerSessionId = null;
-      try { writerSessionId = resolveWriterSessionId('pending', body); } catch {}
+      try { writerSessionId = await resolveFreshWriterSessionId('pending', body); } catch {}
       if (!writerSessionId) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
@@ -1214,7 +1222,8 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid session id' });
         return;
       }
-      jsonResponse(response, 200, { ...away.snapshot(), ...state.planSummary(sessionId) });
+      const displayId = claudeIssuer?.activeProjectionFor({ sessionId }) || sessionId;
+      jsonResponse(response, 200, { ...away.snapshot(), ...state.planSummary(displayId) });
       return;
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/dev/fields') {
@@ -2114,7 +2123,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const sessionId = resolveWriterSessionId(routeSessionId, body);
+      const sessionId = await resolveFreshWriterSessionId(routeSessionId, body);
       if (!sessionId) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
@@ -2211,7 +2220,7 @@ function createRequestHandler(options) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
-      const sessionId = resolveWriterSessionId(routeSessionId, body);
+      const sessionId = await resolveFreshWriterSessionId(routeSessionId, body);
       if (!sessionId) {
         jsonResponse(response, 403, { error: 'Writer unavailable' });
         return;
@@ -2448,7 +2457,12 @@ async function startServer(options = {}) {
     const files = await listSessionFiles(claudeHome);
     if (files) {
       claudeIssuer?.syncSessionFiles(files, listingToken);
-      state.syncSessionFiles(files.map((file) => ({ ...file, product: productFromCwd(file.cwd) })));
+      // 再開した期間の表示用 sessionId は native の ID と違うので、状態の同期にはその ID を使う。
+      state.syncSessionFiles(files.map((file) => ({
+        ...file,
+        session_id: claudeIssuer?.activeProjectionFor({ sessionId: file.session_id, pid: file.pid }) || file.session_id,
+        product: productFromCwd(file.cwd),
+      })));
     }
     // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
     else state.pruneExpiredStoreRecords(Date.now());

@@ -150,7 +150,8 @@ function createClaudeLocalIssuer({
   }
 
   // 親が条件に合うときだけ、その期間(未登録なら登録して)を返す。
-  async function resolvePeriod(ppid, expectedSessionId) {
+  // 既存の期間より前に読み始めた一覧がセッションの変更を示しても、古い一覧とみなして期間を終えない。
+  async function resolvePeriod(ppid, expectedSessionId, canRetry = true) {
     if (!isPositiveInteger(ppid)) return rejection(REASON_PARENT_UNVERIFIED);
     const seq = ++listingSeq;
     let files;
@@ -172,6 +173,9 @@ function createClaudeLocalIssuer({
     }
     let period = periods.get(periodKey(file));
     if (period && period.nativeId !== file.session_id) {
+      if (seq <= period.createdAfterSeq) {
+        return canRetry ? resolvePeriod(ppid, expectedSessionId, false) : rejection(REASON_SESSION_MISMATCH);
+      }
       endPeriod(periodKey(file), 'session changed');
       period = null;
     }
@@ -255,6 +259,32 @@ function createClaudeLocalIssuer({
         },
         actor: { kind: 'agent', id: agentId },
       };
+    },
+
+    /**
+     * MCP の書き込みの前に、writer の期間の親が今の一覧に同じ sessionId で残っているかを確かめ、変わっていれば期間を終える。
+     * 一覧を読めないときは何もせず、登録核の照合に任せる。
+     */
+    async revalidateWriter(writer) {
+      const period = typeof writer?.executionId === 'string'
+        ? [...periods.values()].find((item) => item.executionId === writer.executionId)
+        : null;
+      if (!period) return;
+      const seq = ++listingSeq;
+      let files;
+      try {
+        files = await listSessionFiles(claudeHome);
+      } catch {
+        return;
+      }
+      if (Array.isArray(files)) applyListing(files, seq);
+    },
+
+    /** native の sessionId から、今 active の期間の表示用 sessionId を返す。無ければ null。 */
+    activeProjectionFor({ sessionId, pid } = {}) {
+      const period = [...periods.values()].find((item) => item.nativeId === sessionId &&
+        (pid === undefined || item.pid === pid));
+      return period ? period.projectionId : null;
     },
 
     /** 画面に出す sessionId の期間が、今 active かどうか。 */
