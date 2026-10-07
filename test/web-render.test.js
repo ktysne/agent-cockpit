@@ -68,12 +68,14 @@ test('外したセッションだけのプロダクトには閉じるボタン�
   assert.equal(context.productCloseButton({ sessions: [{ hidden: true }] }), null);
   assert.equal(context.productCloseButton({ sessions: [{ hidden: false }] }).textContent, '×');
 
+  // 更新の無いセッションを表示しているときは、外したセッションも visibleSessions に入る。
   const mockContext = pageContext(mockHtml, {
-    visibleSessions: product => product.sessions.filter(session => session.hidden !== true),
+    ui: { hiddenSessions: ['hidden-idle'] },
+    visibleSessions: product => product.sessions,
   });
   vm.runInContext(functionSource(mockHtml, 'productCloseButton'), mockContext);
-  assert.equal(mockContext.productCloseButton({ id: 'product', sessions: [{ hidden: true }] }), '');
-  assert.match(mockContext.productCloseButton({ id: 'product', sessions: [{ hidden: false }] }), /data-close-product/);
+  assert.equal(mockContext.productCloseButton({ id: 'product', sessions: [{ id: 'hidden-idle' }] }), '');
+  assert.match(mockContext.productCloseButton({ id: 'product', sessions: [{ id: 'hidden-idle' }, { id: 'shown' }] }), /data-close-product/);
 });
 
 test('モックの削除確認は押した時点で残っている対象だけを数えて削除する', () => {
@@ -141,9 +143,9 @@ test('モックの終わった帯は表示中の自動マージ結果を削除�
 });
 
 test('モックの削除確認から通信中と失敗の状態を表示できる', () => {
-  const recordDeletionConfirmations = new Map([['finished', { targets: {}, count: 2, pending: false, error: '' }]]);
+  const recordDeletionConfirmations = new Map([['finished', { targets: { sessions: ['a', 'b'] }, count: 2, pending: false, error: '' }]]);
   const context = pageContext(mockHtml, {
-    recordDeletionTargets: new Map([['finished', { targets: {}, count: 2 }]]),
+    recordDeletionTargets: new Map([['finished', { targets: { sessions: ['a', 'b'] }, count: 2 }]]),
     recordDeletionConfirmations,
     esc: value => String(value),
     document: { addEventListener: (_name, callback) => { context.handleClick = callback; } },
@@ -158,11 +160,11 @@ test('モックの削除確認から通信中と失敗の状態を表示でき�
   };
 
   press('mock-pending');
-  const pending = context.recordDeletionControls('finished', {}, 2);
+  const pending = context.recordDeletionControls('finished', { sessions: ['a', 'b'] }, 2);
   assert.match(pending, /削除中…/);
   assert.match(pending, /aria-disabled="true"/);
   press('mock-error');
-  const failed = context.recordDeletionControls('finished', {}, 2);
+  const failed = context.recordDeletionControls('finished', { sessions: ['a', 'b'] }, 2);
   assert.match(failed, /role="alert"/);
   assert.match(failed, /記録を削除できませんでした/);
 });
@@ -218,7 +220,7 @@ test('帯の削除確認は再描画でも対象とフォーカスを保ち、�
   open.listeners.click();
   assert.equal(harness.activeElement.dataset.recordAction, 'cancel');
   const confirmation = harness.context.recordDeletionConfirmations.get('excluded');
-  harness.context.render({ sessions: [], pullRequests: [] });
+  harness.context.render(harness.context.lastState);
   assert.equal(harness.context.recordDeletionConfirmations.get('excluded'), confirmation);
   assert.equal(harness.notes['excluded-note'].hidden, false);
   assert.equal(harness.activeElement.dataset.recordAction, 'cancel');
@@ -262,14 +264,14 @@ test('削除確認は現在の帯との交わりだけを数えて送る', async
   assert.deepEqual(bodies.map(body => body.session_ids), [['still-hidden']]);
 });
 
-test('削除確認を開いた後に対象がなくなったら送らず確認を閉じる', async () => {
+test('削除確認を開いた後に対象がなくなったら、描き直しで送らずに確認と帯を閉じる', async () => {
   let requests = 0;
   const session = { session_id: 'active-again', hidden: true, hiddenAt: new Date().toISOString() };
   const harness = recordDeletionHarness([session], async () => { requests += 1; });
   harness.buttons().find(button => button.dataset.recordAction === 'open').listeners.click();
   harness.context.render({ sessions: [{ ...session, hidden: false }], pullRequests: [] });
-  assert.equal(harness.nodes().find(node => node.tag === 'span' && node.textContent.includes('件の記録を削除します')).textContent,
-    '0 件の記録を削除します。元に戻せません');
+  assert.equal(harness.nodes().some(node => node.tag === 'span' && node.textContent.includes('件の記録を削除します')), false);
+  assert.equal(harness.notes['excluded-note'].hidden, true);
 
   await harness.context.deleteNoteRecords('excluded');
 

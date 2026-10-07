@@ -1038,16 +1038,23 @@ function finishedDeletionTargets() {
     }
     for (const pr of visibleClosedPrs(product)) targets.closed.push(`${product.repo.name}#${pr.number}`.toLowerCase());
   }
+  // 同じリポジトリを複数のプロダクトが共有しても、件数の Set と同じく 1 件に数える。
+  targets.prs = [...new Set(targets.prs)];
+  targets.closed = [...new Set(targets.closed)];
   return targets;
 }
 function recordDeletionControls(band, targets, count) {
   recordDeletionTargets.set(band, { targets, count });
-  const confirmation = recordDeletionConfirmations.get(band);
-  if (!count && !confirmation) return '';
-  const attrs = action => `type="button" class="link-btn${action === 'open' ? ' record-delete-icon' : ''}" data-record-band="${band}" data-record-action="${action}" aria-disabled="${confirmation?.pending === true && !action.startsWith('mock-')}"`;
+  let confirmation = recordDeletionConfirmations.get(band);
   if (confirmation) confirmation.count = countRecordDeletionTargets(
     intersectRecordDeletionTargets(confirmation.targets, targets),
   );
+  if (confirmation && !confirmation.count && !confirmation.pending) {
+    recordDeletionConfirmations.delete(band);
+    confirmation = null;
+  }
+  if (!count && !confirmation) return '';
+  const attrs = action => `type="button" class="link-btn${action === 'open' ? ' record-delete-icon' : ''}" data-record-band="${band}" data-record-action="${action}" aria-disabled="${confirmation?.pending === true && !action.startsWith('mock-')}"`;
   return confirmation
     ? `<span class="record-deletion"><span>${confirmation.count} 件の記録を削除します。元に戻せません</span>${confirmation.error ? `<span class="error" role="alert">${esc(confirmation.error)}</span>` : ''}<button ${attrs('confirm')}>${confirmation.pending ? '削除中…' : '削除する'}</button><button ${attrs('cancel')}>やめる</button><button ${attrs('mock-pending')}>モック: 通信中を表示</button><button ${attrs('mock-error')}>モック: 失敗の知らせを表示</button></span>`
     : `<span class="record-deletion"><button ${attrs('open')} aria-label="この ${count} 件の記録を削除する" title="この ${count} 件の記録を削除する"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button></span>`;
@@ -1127,7 +1134,6 @@ function renderSummary() {
   note.innerHTML = `<span>非表示: ${FILTERS.filter(x => !isShown(x.key)).map(x => x.label).join('、')} (${hiddenCount} 件)</span><button type="button" class="link-btn" data-show-all>隠した種類をすべて表示する</button>`;
   const excluded = document.getElementById('excluded-note');
   const hiddenSessions = allSessions().filter(s => ui.hiddenSessions.includes(s.id) && !isIdleHiddenSession(s));
-  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   const hiddenJudgmentCounts = countJudgments(hiddenSessions);
   const pendingCounts = [
     hiddenJudgmentCounts.permission ? `許可待ち ${hiddenJudgmentCounts.permission} 件` : '',
@@ -1141,24 +1147,25 @@ function renderSummary() {
     ? `<span>外したセッション (${hiddenSessions.length} 件)${countNote}</span><button type="button" class="link-btn" data-show-hidden-sessions>外したセッションを戻す</button>`
     : '';
   excluded.innerHTML = `${undo}${showHidden}${recordDeletionControls('excluded', { sessions: hiddenSessions.map(s => s.id), prs: [], closed: [] }, hiddenSessions.length)}`;
+  excluded.hidden = hiddenSessions.length === 0 && !hiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   const hiddenFinished = finishedHiddenCounts();
   const finishedParts = [
     hiddenFinished.sessions ? `セッション ${hiddenFinished.sessions} 件` : '',
     hiddenFinished.pullRequests ? `PR ${hiddenFinished.pullRequests} 件` : '',
   ].filter(Boolean);
   const finished = document.getElementById('finished-note');
-  finished.hidden = finishedParts.length === 0 && !recordDeletionConfirmations.has('finished');
   finished.innerHTML = finishedParts.length
     ? `<span>終わったものを隠しています (${finishedParts.join('、')})</span><button type="button" class="link-btn" data-show-finished>表示する</button>`
     : '';
   finished.innerHTML += recordDeletionControls('finished', finishedDeletionTargets(), hiddenFinished.sessions + hiddenFinished.pullRequests);
+  finished.hidden = finishedParts.length === 0 && !recordDeletionConfirmations.has('finished');
   const idleHiddenCount = idleHiddenSessions().length;
   const idle = document.getElementById('idle-note');
-  idle.hidden = idleHiddenCount === 0 && !recordDeletionConfirmations.has('idle');
   idle.innerHTML = idleHiddenCount
     ? `<span>${showIdleSessions ? '更新の無いセッションを表示しています' : `更新の無いセッションを隠しています (${idleHiddenCount} 件)`}</span><button type="button" class="link-btn" data-show-idle>${showIdleSessions ? '隠す' : '表示する'}</button>`
     : '';
   idle.innerHTML += recordDeletionControls('idle', { sessions: idleHiddenSessions().map(s => s.id), prs: [], closed: [] }, idleHiddenCount);
+  idle.hidden = idleHiddenCount === 0 && !recordDeletionConfirmations.has('idle');
 }
 
 // Claude のモデルが分からないサブエージェントでも、GPT の札だけは出す。
@@ -2052,7 +2059,7 @@ function orderControls(p, idx, total, pinnedCount) {
 
 // 「×」は外すセッションがあるときだけ出す。セッションの無いカードは、PR が閉じるか未読を既読にすれば消える。
 function productCloseButton(p, describedById) {
-  if (!visibleSessions(p).length) return '';
+  if (!visibleSessions(p).some(s => !ui.hiddenSessions.includes(s.id))) return '';
   return `<button type="button" class="icon-btn" data-close-product="${p.id}" aria-label="このプロダクトのセッションを一覧から外す" aria-describedby="${describedById}" title="このプロダクトのセッションを一覧から外す">×</button>`;
 }
 

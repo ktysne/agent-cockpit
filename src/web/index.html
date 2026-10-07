@@ -1401,7 +1401,14 @@ function countRecordDeletionTargets(targets) {
 
 function appendRecordDeletion(note, band, targets, count) {
   recordDeletionTargets.set(band, targets);
-  const confirmation = recordDeletionConfirmations.get(band);
+  let confirmation = recordDeletionConfirmations.get(band);
+  if (confirmation && !confirmation.pending
+    && !countRecordDeletionTargets(intersectRecordDeletionTargets(confirmation.targets, targets))) {
+    recordDeletionConfirmations.delete(band);
+    confirmation = null;
+    // 確認を開いていたために出していた帯は、対象が無くなったら閉じる。
+    if (!count && !(band === 'excluded' && hiddenSessionsUndo)) note.hidden = true;
+  }
   if (!count && !confirmation) return;
   const controls = element('span', 'record-deletion');
   const buttonFor = (action, label) => {
