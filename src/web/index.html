@@ -354,6 +354,35 @@ h3.sub .count { font-weight: normal; }
 .product-remove { margin-left: 12px; }
 /* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
 .session-tag.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
+.common-question-list { display: grid; gap: 10px; }
+.common-question { margin: 0 0 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
+.common-question-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
+.common-question-head h4 { margin: 0; font-size: 14px; }
+.common-question-status, .common-question-selection, .common-question-note { margin: 6px 0; color: var(--text-2); font-size: 12px; }
+.common-question-form { display: grid; gap: 10px; margin-top: 10px; }
+.common-question-fieldset { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.common-question-fieldset legend { padding: 0 4px; font-weight: 600; }
+.common-question-option { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+.common-question-option input { width: 20px; height: 20px; flex: 0 0 auto; }
+.common-question-option small { color: var(--text-2); }
+.common-question-recommended { color: var(--accent) !important; font-weight: 600; }
+.common-question-free-label { display: grid; gap: 4px; margin-top: 4px; font-size: 12px; }
+.common-question-free { width: 100%; min-height: 52px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
+.common-question-free:focus-visible, .common-question-option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.common-question-help { color: var(--text-2); font-size: 12px; }
+.common-question-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.common-question-actions button { min-height: 40px; padding: 7px 12px; font: inherit; cursor: pointer; }
+.common-question-actions .primary { border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); }
+.common-question-actions .secondary { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
+.common-question-actions button:disabled { opacity: .45; cursor: default; }
+.common-question-confirmation { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--danger); border-radius: 8px; background: var(--surface-2); }
+.common-question-confirmation p { margin: 0; }
+.common-question-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.common-question-confirm-actions button { min-height: 40px; padding: 7px 12px; font: inherit; cursor: pointer; }
+.common-question-confirm-actions .confirm { border: 1px solid var(--danger); border-radius: 8px; background: var(--surface); color: var(--danger); }
+.common-question-confirm-actions .secondary { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.common-question-confirm-actions button:disabled { opacity: .45; cursor: default; }
+.common-question-error { margin: 0; color: var(--danger); font-size: 12px; }.common-question-diagnostics { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
 .kind-empty { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .kind-empty h2 { margin: 0; color: var(--text-2); font-size: 15px; }
 @media (max-width: 640px) {
@@ -508,6 +537,7 @@ const FILTERS = [
   { key: 'permission', label: '許可待ち', color: 'danger' },
   { key: 'blocking', label: '止めて待っている', color: 'danger' },
   { key: 'provisional', label: '仮に推奨案で進行中', color: 'warn' },
+  { key: 'questions', label: '質問対応', color: 'warn' },
   { key: 'agents', label: '稼働中のサブエージェント', color: 'accent' },
   { key: 'prs', label: 'マージできる PR', color: 'ok' },
 ];
@@ -522,6 +552,7 @@ let sinceSeenMode = 'always';
 let showIdleSessions = false;
 let hasRenderedState = false;
 let answerNoteComposing = false;
+let commonQuestionComposing = false;
 let deferredRenderPending = false;
 let connectionLost = false;
 let lastStateAt = new Date();
@@ -536,6 +567,12 @@ const expandedPrLines = new Set();
 const expandedKindSections = new Set();
 const answerDrafts = new Map();
 const answerErrors = new Map();
+const commonQuestionDrafts = new Map();
+const commonQuestionErrors = new Map();
+const commonQuestionNotices = new Map();
+const commonQuestionSubmittedDrafts = new Map();
+const commonQuestionInFlight = new Set();
+const commonQuestionCancelConfirmations = new Set();
 const pendingTaskCloseActions = new Map();
 const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
@@ -1212,7 +1249,7 @@ function appendModelLine(target, agent) {
 
 function updateTitle(sessions) {
   const judgments = countJudgments(sessions);
-  const pendingCount = judgments.permission + judgments.blocking;
+  const pendingCount = judgments.permission + judgments.blocking + judgments.questions + judgments.questionProvisional;
   document.title = pendingCount ? `(${pendingCount}) Agent Cockpit` : 'Agent Cockpit';
 }
 
@@ -1228,22 +1265,68 @@ function isPendingDecision(decision) {
   return decision.state === 'waiting' && !hasEffectiveAnswer(decision);
 }
 
+function commonQuestionKey(question) {
+  return `${question.sessionId}\0${question.internalQuestionId}`;
+}
+
+function isFinishedCommonQuestion(question) {
+  return question.cancelled === true
+    || (question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
+}
+
+function shownCommonQuestions(session) {
+  const questions = Array.isArray(session.commonQuestions) ? session.commonQuestions : [];
+  return questions.filter((question) => (!displayPreferences.hideFinished || !isFinishedCommonQuestion(question))
+    && isFilterShown(question.selectionSource === 'away-default' ? 'provisional' : 'questions'));
+}
+
+function commonQuestionDraft(question) {
+  const key = commonQuestionKey(question);
+  if (!commonQuestionDrafts.has(key)) {
+    const selected = question.selectionSource ? new Map() : new Map((question.selectedOptionIds || []).map((answer) => [answer.questionId, answer.optionIds]));
+    commonQuestionDrafts.set(key, question.questions.map((item) => ({
+      questionId: item.id,
+      optionIds: [...(selected.get(item.id) || [])],
+      freeText: '',
+    })));
+  }
+  return commonQuestionDrafts.get(key).map((answer) => ({ ...answer, optionIds: [...answer.optionIds] }));
+}
+
+function commonQuestionDeliveryText(question) {
+  if (question.cancelled) return question.cancelHistoryMissing ? '質問は取り下げ済みです。記録時刻はありません。' : '質問は取り下げ済みです。';
+  if (question.cancelRequested) return '取消を要求しました。送信済みの回答は止められない場合があります。';
+  if (question.externalResolution && question.deliveryState === 'cancelled_before_send') return '外部で解決済みのため、元の回答の配送を停止しました。';
+  if (question.deliveryState === 'available') return '回答を保存済みです。配送待ちです。';
+  if (question.deliveryState === 'claimed') return '配送を準備しています。';
+  if (question.deliveryState === 'sending') return '送信開始済みです。返却結果を確認しています。';
+  if (question.deliveryState === 'accepted') return '受付済みです。適用は未確認です。';
+  if (question.deliveryState === 'applied') return '適用が確認されています。';
+  if (question.deliveryState === 'unknown') return '配送結果が不明です。自動再送はしません。';
+  return question.selectionSource ? '回答は保存済みです。配送状態を確認しています。' : '回答はまだ保存されていません。';
+}
 // 回答を送ったものはセッションの反映を待つだけなので数えない。
 function isAwaitingDecision(decision) {
   return isActiveDecision(decision) && !hasEffectiveAnswer(decision);
 }
 
 function countJudgments(sessions) {
-  const counts = { permission: 0, blocking: 0, provisional: 0 };
+  const counts = { permission: 0, blocking: 0, provisional: 0, questions: 0, questionProvisional: 0 };
   for (const session of sessions) {
     counts.permission += session.permissionWaits.length;
+    for (const question of session.commonQuestions || []) {
+      if (isFinishedCommonQuestion(question)) continue;
+      if (question.selectionSource === 'away-default') counts.questionProvisional += 1;
+      else counts.questions += 1;
+    }
     for (const decision of session.decisions) {
       if (!isAwaitingDecision(decision)) continue;
       counts[isPendingDecision(decision) ? 'blocking' : 'provisional'] += 1;
     }
   }
-  counts.decisions = counts.blocking + counts.provisional;
-  counts.total = counts.permission + counts.decisions;
+  counts.provisional += counts.questionProvisional;
+  counts.decisions = counts.blocking + counts.provisional - counts.questionProvisional;
+  counts.total = counts.permission + counts.decisions + counts.questions + counts.questionProvisional;
   return counts;
 }
 
@@ -1263,6 +1346,7 @@ function renderSummary(sessions, pullRequestGroups = []) {
     permission: judgmentCounts.permission,
     blocking: judgmentCounts.blocking,
     provisional: judgmentCounts.provisional,
+    questions: judgmentCounts.questions,
     agents: agentCount,
     prs: pullRequestMergeableCount(pullRequestGroups),
   };
@@ -1373,6 +1457,7 @@ function renderFinishedNote(counts) {
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
+  if ((session.commonQuestions || []).some((question) => !isFinishedCommonQuestion(question))) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
   const updatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
   return Number.isFinite(updatedAt) && now - updatedAt > displayPreferences.idleHideMinutes * 60_000;
@@ -1446,7 +1531,8 @@ function hasHiddenJudgmentItems(session) {
   return (!isFilterShown('permission') && session.permissionWaits.length > 0)
     || session.decisions.some((decision) => (
       isActiveDecision(decision) && !shownActiveDecisions(session).includes(decision)
-    ));
+    ))
+    || (session.commonQuestions || []).some((question) => !shownCommonQuestions(session).includes(question));
 }
 
 function pullRequestOpenCount(groups) {
@@ -2293,7 +2379,8 @@ function isFinishedSession(session) {
     && session.tasks.every((task) => task.state === 'done')
     && session.decisions.every(isEndedDecision)
     && session.permissionWaits.length === 0
-    && !session.agents.some((agent) => !isEndedAgent(agent));
+    && !session.agents.some((agent) => !isEndedAgent(agent))
+    && (session.commonQuestions || []).every(isFinishedCommonQuestion);
 }
 
 function mainRow(session, product, withTags = false, multipleSessions = false) {
@@ -2741,10 +2828,199 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     const list = element('div', 'decision-list');
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
-  } else if (!shownPermissions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
+  } else if (!shownPermissions(session).length && !shownCommonQuestions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
+function commonQuestionSelectedLabels(question) {
+  const selected = new Map((question.selectedOptionIds || []).map((answer) => [answer.questionId, new Set(answer.optionIds)]));
+  return question.questions.flatMap((item) => item.options.filter((option) => selected.get(item.id)?.has(option.id))
+    .map((option) => option.label));
+}
+
+function sameCommonQuestionAnswers(left, right) {
+  return left.length === right.length && left.every((answer, index) => answer.questionId === right[index].questionId
+    && answer.freeText === right[index].freeText
+    && answer.optionIds.length === right[index].optionIds.length
+    && answer.optionIds.every((id) => right[index].optionIds.includes(id)));
+}
+
+function commonQuestionAnswersValid(questions, answers) {
+  return questions.every((question) => {
+    const answer = answers.find((item) => item.questionId === question.id);
+    const count = answer?.optionIds.length || 0;
+    const hasFreeText = Boolean(answer?.freeText.trim());
+    if (!question.options.length) return hasFreeText;
+    if (question.mode === 'single' && count > 1) return false;
+    return count > 0 || hasFreeText;
+  });
+}
+
+function readCommonQuestionDraft(card) {
+  const answers = (lastState?.sessions || [])
+    .find((session) => session.session_id === card.dataset.sessionId)?.commonQuestions
+    ?.find((question) => question.internalQuestionId === card.dataset.internalQuestionId)?.questions || [];
+  return answers.map((question) => ({
+    questionId: question.id,
+    optionIds: [...card.querySelectorAll('[data-common-option]')]
+      .filter((input) => input.dataset.questionId === question.id && input.checked)
+      .map((input) => input.dataset.optionId),
+    freeText: [...card.querySelectorAll('[data-common-free-text]')].find((input) => input.dataset.commonFreeText === question.id)?.value || '',
+  }));
+}
+
+function updateCommonQuestionSubmit(card) {
+  const question = (lastState?.sessions || [])
+    .find((session) => session.session_id === card.dataset.sessionId)?.commonQuestions
+    ?.find((item) => item.internalQuestionId === card.dataset.internalQuestionId);
+  const button = card.querySelector('[data-common-submit]');
+  if (!question || !button) return;
+  const answers = readCommonQuestionDraft(card);
+  commonQuestionDrafts.set(commonQuestionKey(question), answers.map((answer) => ({ ...answer, optionIds: [...answer.optionIds] })));
+  const submittedLate = commonQuestionSubmittedDrafts.get(commonQuestionKey(question));
+  button.disabled = commonQuestionInFlight.has(commonQuestionKey(question)) || !commonQuestionAnswersValid(question.questions, answers)
+    || Boolean(submittedLate && sameCommonQuestionAnswers(answers, submittedLate));
+}
+
+function appendCommonQuestions(body, session, product, withTags = false, multipleSessions = false) {
+  const questions = shownCommonQuestions(session);
+  if (!questions.length) return;
+  body.append(element('h3', 'sub', '共通質問'));
+  const list = element('div', 'common-question-list');
+  for (const question of questions) {
+    const key = commonQuestionKey(question);
+    const card = element('article', 'common-question');
+    card.dataset.sessionId = session.session_id;
+    card.dataset.internalQuestionId = question.internalQuestionId;
+    const head = element('div', 'common-question-head');
+    head.append(element('h4', '', question.questionId));
+    appendContextTags(head, product, session, withTags, multipleSessions);
+    card.append(head);
+    card.append(element('p', 'common-question-status', commonQuestionDeliveryText(question)));
+    if (!question.selectionSource && !question.cancelled) {
+      const deadline = absoluteTimeLabel(question.deadlineAt);
+      card.append(element('p', 'common-question-note', question.held
+        ? `保留中です。回答期限 ${deadline}。保留を解除するまで自動選択しません。`
+        : `回答期限 ${deadline}。離席中は期限後、すべての質問が単一選択で推奨案を持つ場合だけ仮選択します。`));
+    }
+    if (question.selectionSource) {
+      const labels = commonQuestionSelectedLabels(question);
+      card.append(element('p', 'common-question-selection', labels.length
+        ? question.selectionSource === 'away-default' ? `離席時の推奨で仮選択: ${labels.join('、')}` : `保存した選択: ${labels.join('、')}`
+        : '自由記入を含む回答を保存しました。'));
+    }
+    if (question.externalResolution) card.append(element('p', 'common-question-note', '元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。'));
+    if (question.lateAnswerCount > 0) card.append(element('p', 'common-question-note', `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`));
+    const formAvailable = !question.cancelled
+      && !(question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
+    if (formAvailable) {
+      const draft = commonQuestionDraft(question);
+      const form = element('div', 'common-question-form');
+      for (const item of question.questions) {
+        const fieldset = element('fieldset', 'common-question-fieldset');
+        fieldset.append(element('legend', '', item.text));
+        if (item.options.length) {
+          const choiceHelp = item.allowFreeText
+            ? item.mode === 'multi' ? '複数選択するか、自由記入で回答してください。' : '1つ選択するか、自由記入で回答してください。'
+            : item.mode === 'multi' ? '複数選択できます。' : '1つ選択してください。';
+          fieldset.append(element('small', 'common-question-help', choiceHelp));
+        }
+        const answer = draft.find((entry) => entry.questionId === item.id);
+        for (const option of item.options) {
+          const label = element('label', 'common-question-option');
+          const input = element('input');
+          input.type = item.mode === 'single' ? 'radio' : 'checkbox';
+          input.name = `${question.internalQuestionId}-${item.id}`;
+          input.dataset.commonOption = 'true';
+          input.dataset.questionId = item.id;
+          input.dataset.optionId = option.id;
+          input.checked = answer.optionIds.includes(option.id);
+          input.disabled = commonQuestionInFlight.has(key);
+          label.append(input, element('span', '', option.label));
+          if (option.description) label.append(element('small', '', option.description));
+          if (option.id === item.recommendedOptionId) label.append(element('small', 'common-question-recommended', '推奨'));
+          fieldset.append(label);
+        }
+        if (item.allowFreeText) {
+          const freeLabel = element('label', 'common-question-free-label', '自由記入');
+          const textarea = element('textarea', 'common-question-free');
+          textarea.rows = 2;
+          textarea.maxLength = 2000;
+          textarea.dataset.commonFreeText = item.id;
+          textarea.setAttribute('aria-label', `${item.text}の自由記入`);
+          textarea.value = answer.freeText;
+          textarea.disabled = commonQuestionInFlight.has(key);
+          freeLabel.append(textarea);
+          fieldset.append(freeLabel, element('small', 'common-question-help', '下書きはこのページを開いている間だけ保持します。'));
+        }
+        form.append(fieldset);
+      }
+      const error = element('p', 'common-question-error', commonQuestionErrors.get(key) || '');
+      error.hidden = !error.textContent;
+      error.setAttribute('role', 'alert');
+      const notice = element('p', 'common-question-note', commonQuestionNotices.get(key) || '');
+      notice.hidden = !notice.textContent;
+      const actions = element('div', 'common-question-actions');
+      const submit = element('button', 'primary', question.selectionSource ? '後続の回答を保存' : '回答を保存');
+      submit.type = 'button';
+      submit.dataset.commonSubmit = question.internalQuestionId;
+      submit.dataset.sessionId = session.session_id;
+      const submittedLate = commonQuestionSubmittedDrafts.get(key);
+      submit.disabled = commonQuestionInFlight.has(key) || !commonQuestionAnswersValid(question.questions, draft)
+        || Boolean(submittedLate && sameCommonQuestionAnswers(draft, submittedLate));
+      actions.append(submit);
+      if (!question.selectionSource) {
+        const hold = element('button', 'secondary', question.held ? '保留を解除' : '質問を保留');
+        hold.type = 'button';
+        hold.dataset.commonHold = question.internalQuestionId;
+        hold.dataset.sessionId = session.session_id;
+        hold.dataset.held = String(!question.held);
+        hold.disabled = commonQuestionInFlight.has(key);
+        actions.append(hold);
+      }
+      let cancelConfirmation = null;
+      if (!question.cancelled && question.deliveryState !== 'applied') {
+        if (commonQuestionCancelConfirmations.has(key)) {
+          const sent = ['sending', 'accepted', 'unknown', 'applied'].includes(question.deliveryState);
+          const topics = question.questions.map((item) => item.text).join(' / ');
+          cancelConfirmation = element('div', 'common-question-confirmation');
+          cancelConfirmation.setAttribute('role', 'group');
+          cancelConfirmation.setAttribute('aria-label', '質問の取り下げ確認');
+          cancelConfirmation.append(element('p', '', '質問「' + question.questionId + '」を取り下げますか。'));
+          cancelConfirmation.append(element('p', '', '対象: ' + topics + '。質問履歴は削除しません。'));
+          cancelConfirmation.append(element('p', '', sent
+            ? '送信開始後のため配送を止められず、取消要求のみを記録します。'
+            : '送信前のため、未送信回答の配送を止めます。'));
+          const confirmActions = element('div', 'common-question-confirm-actions');
+          const confirm = element('button', 'confirm', '取り下げる');
+          confirm.type = 'button';
+          confirm.dataset.commonCancelConfirm = question.internalQuestionId;
+          confirm.dataset.sessionId = session.session_id;
+          confirm.disabled = commonQuestionInFlight.has(key);
+          const dismiss = element('button', 'secondary', '戻る');
+          dismiss.type = 'button';
+          dismiss.dataset.commonCancelDismiss = question.internalQuestionId;
+          dismiss.dataset.sessionId = session.session_id;
+          dismiss.disabled = commonQuestionInFlight.has(key);
+          confirmActions.append(confirm, dismiss);
+          cancelConfirmation.append(confirmActions);
+        } else {
+          const cancel = element('button', 'secondary', question.cancelRequested ? '取消要求済み' : '質問を取り下げる');
+          cancel.type = 'button';
+          cancel.dataset.commonCancel = question.internalQuestionId;
+          cancel.dataset.sessionId = session.session_id;
+          cancel.disabled = commonQuestionInFlight.has(key);
+          actions.append(cancel);
+        }
+      }
+      form.append(element('small', 'common-question-help', 'すべての質問に回答すると保存できます。'), error, notice, actions);
+      if (cancelConfirmation) form.append(cancelConfirmation);
+      card.append(form);
+    }
+    list.append(card);
+  }
+  body.append(list);
+}
 function appendTaskItem(list, task, product, session, withTags = false, multipleSessions = false) {
   const labels = { todo: '未着手', doing: '作業中', done: '完了' };
   const item = element('li', `task-item ${task.state}`);
@@ -2884,7 +3160,7 @@ function sessionBlock(product, session, multipleSessions) {
 
   const body = element('div', 'session-body');
   if (!multipleSessions) body.append(element('div', 'session-tag session-context', sessionDisplayName(session)));
-  const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length;
+  const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length + shownCommonQuestions(session).length;
   const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some(isEndedDecision);
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
   const sections = { judgment: [], tasks: [], now: [] };
@@ -2894,6 +3170,7 @@ function sessionBlock(product, session, multipleSessions) {
     sections.judgment.push(judgmentHeading);
     const judgmentContent = element('div');
     appendPermissionWaits(judgmentContent, session, product);
+    appendCommonQuestions(judgmentContent, session, product);
     appendDecisions(judgmentContent, session, product);
     sections.judgment.push(...judgmentContent.childNodes);
   }
@@ -2980,6 +3257,8 @@ function productSection(product, index, products, pinnedCount) {
   const decisionCount = judgmentCounts.decisions;
   const pullRequestGroups = product.pullRequestGroups || [];
   if (judgmentCounts.permission) head.append(element('span', 'chip danger', `許可待ち (${judgmentCounts.permission} 件)`));
+  if (judgmentCounts.questions) head.append(element('span', 'chip warn', `質問対応 (${judgmentCounts.questions} 件)`));
+  if (judgmentCounts.questionProvisional) head.append(element('span', 'chip warn', `仮に推奨案で進行中 (${judgmentCounts.questionProvisional} 件)`));
   if (decisionCount) {
     const decisionChip = element('span', 'chip danger', `判断待ち (${decisionCount} 件)`);
     decisionChip.title = decisionCountTitle(awaitingDecisions);
@@ -3070,9 +3349,13 @@ function kindEndedDecisionEntries(references) {
   return entries.sort((left, right) => itemTimestamp(right.decision) - itemTimestamp(left.decision));
 }
 
+function kindWaitTimestamp(value) {
+  return typeof value === 'number' ? value : Date.parse(value || '');
+}
+
 function kindDecisionWaitAge(decision) {
   if (hasEffectiveAnswer(decision)) return -1;
-  const timestamp = Date.parse(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
+  const timestamp = kindWaitTimestamp(decision.state === 'waiting' ? decision.createdAt : decision.updatedAt);
   return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : 0;
 }
 
@@ -3090,12 +3373,19 @@ function renderKindSections(products) {
       const holder = element('div');
       appendPermissionWaits(holder, { ...session, permissionWaits: [wait] }, product, true, multipleSessions);
       const card = holder.firstElementChild?.firstElementChild;
-      if (card) waitingItems.push({ age: Date.now() - Date.parse(wait.startedAt), card });
+      const timestamp = kindWaitTimestamp(wait.startedAt);
+      if (card) waitingItems.push({ age: Number.isFinite(timestamp) ? Date.now() - timestamp : 0, card });
     }
     for (const decision of shownActiveDecisions(session)) {
       const list = element('div', 'decision-list');
       appendDecisionCard(list, decision, product, session, true, multipleSessions);
       waitingItems.push({ age: kindDecisionWaitAge(decision), card: list.firstElementChild });
+    }
+    for (const question of shownCommonQuestions(session)) {
+      const holder = element('div');
+      appendCommonQuestions(holder, { ...session, commonQuestions: [question] }, product, true, multipleSessions);
+      const timestamp = kindWaitTimestamp(question.createdAt);
+      waitingItems.push({ age: Number.isFinite(timestamp) ? Date.now() - timestamp : 0, card: holder.querySelector('.common-question') });
     }
 
   }
@@ -3174,8 +3464,20 @@ function renderKindSections(products) {
   return orderedSectionKeys(DEFAULT_SECTION_ORDER).map((key) => sections[key]).filter(Boolean);
 }
 
+function commonQuestionDiagnosticsNotice(diagnostics) {
+  if (!diagnostics) return null;
+  const orphanCount = Array.isArray(diagnostics.orphanedQuestions) ? diagnostics.orphanedQuestions.length : 0;
+  if (!diagnostics.recovery && !orphanCount) return null;
+  const notice = element('section', 'common-question-diagnostics');
+  notice.setAttribute('role', 'status');
+  notice.append(element('strong', '', '質問の状態を確認できません。'));
+  notice.append(element('span', '', orphanCount
+    ? `保存済み質問 ${orphanCount} 件の復旧確認が必要です。新しい送信は保留されています。`
+    : '保存済み質問の復旧確認が必要です。新しい送信は保留されています。'));
+  return notice;
+}
 function render(state) {
-  if (answerNoteComposing) {
+  if (answerNoteComposing || commonQuestionComposing) {
     deferredRenderPending = true;
     return;
   }
@@ -3188,6 +3490,7 @@ function render(state) {
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
+  const activeCommonField = active instanceof HTMLElement && active.matches('[data-common-option], [data-common-free-text]') ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
@@ -3204,6 +3507,7 @@ function render(state) {
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
           : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
+         : activeCommonField ? { kind: 'common-input', sessionId: activeCommonField.closest('.common-question')?.dataset.sessionId, internalQuestionId: activeCommonField.closest('.common-question')?.dataset.internalQuestionId, questionId: activeCommonField.dataset.questionId || activeCommonField.dataset.commonFreeText, optionId: activeCommonField.dataset.optionId || '', start: activeCommonField instanceof HTMLTextAreaElement ? activeCommonField.selectionStart : 0, end: activeCommonField instanceof HTMLTextAreaElement ? activeCommonField.selectionEnd : 0 }
          : active?.dataset?.showFinished ? { kind: 'show-finished' }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
            : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
@@ -3232,6 +3536,8 @@ function render(state) {
         ? '更新の無いセッションを隠しています。下の「表示する」から表示できます。'
       : '表示するセッションがありません。Claude Code でセッションを開始すると、ここに表示されます。';
     root.replaceChildren(element('section', 'section empty', emptyText));
+    const questionNotice = commonQuestionDiagnosticsNotice(state.commonQuestionDiagnostics);
+    if (questionNotice) root.prepend(questionNotice);
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
     else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
@@ -3246,6 +3552,8 @@ function render(state) {
   } else {
     root.replaceChildren(...renderKindSections(products));
   }
+  const questionNotice = commonQuestionDiagnosticsNotice(state.commonQuestionDiagnostics);
+  if (questionNotice) root.prepend(questionNotice);
 
   if (focusData?.kind?.startsWith('merge-')) {
     const controls = [...root.querySelectorAll('[data-merge-method], [data-reservation-toggle], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-merge-go], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
@@ -3274,6 +3582,22 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'common-input') {
+      const control = [...root.querySelectorAll('[data-common-option], [data-common-free-text]')].find((item) => {
+        const card = item.closest('.common-question');
+        return card?.dataset.sessionId === focusData.sessionId
+          && card.dataset.internalQuestionId === focusData.internalQuestionId
+          && (item.dataset.questionId || item.dataset.commonFreeText) === focusData.questionId
+          && (item.dataset.optionId || '') === focusData.optionId;
+      });
+      if (activeCommonField instanceof HTMLTextAreaElement && control instanceof HTMLTextAreaElement) {
+        control.replaceWith(activeCommonField);
+        updateCommonQuestionSubmit(activeCommonField.closest('.common-question'));
+        activeCommonField.focus({ preventScroll: true });
+        activeCommonField.setSelectionRange(focusData.start, focusData.end);
+      } else control?.focus({ preventScroll: true });
+      return;
+    }
     if (['answer-pick', 'answer-choice', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
       const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-choice], [data-answer-note], [data-send-answer]')].find((item) => (
         item.dataset.sessionId === focusData.sessionId &&
@@ -3411,6 +3735,11 @@ async function sendDecisionAnswer(button) {
 }
 
 document.addEventListener('change', (event) => {
+  const commonOption = event.target.closest('[data-common-option]');
+  if (commonOption) {
+    updateCommonQuestionSubmit(commonOption.closest('.common-question'));
+    return;
+  }
   const choice = event.target.closest('[data-answer-choice]');
   if (choice) {
     if (choice.disabled) return;
@@ -3460,6 +3789,11 @@ document.addEventListener('change', (event) => {
 });
 
 document.addEventListener('input', (event) => {
+  const commonText = event.target.closest('[data-common-free-text]');
+  if (commonText) {
+    updateCommonQuestionSubmit(commonText.closest('.common-question'));
+    return;
+  }
   const note = event.target.closest('[data-answer-note]');
   if (!note) return;
   const key = answerDraftKey(note.dataset.sessionId, note.dataset.decisionId);
@@ -3473,15 +3807,118 @@ document.addEventListener('input', (event) => {
 });
 
 document.addEventListener('compositionstart', (event) => {
+  if (event.target.matches?.('[data-common-free-text]')) commonQuestionComposing = true;
   if (event.target.matches?.('[data-answer-note]')) answerNoteComposing = true;
 }, true);
 
 document.addEventListener('compositionend', (event) => {
+  if (event.target.matches?.('[data-common-free-text]')) {
+    commonQuestionComposing = false;
+    updateCommonQuestionSubmit(event.target.closest('.common-question'));
+    renderDeferredState();
+  }
   if (!event.target.matches?.('[data-answer-note]')) return;
   answerNoteComposing = false;
   renderDeferredState();
 }, true);
 
+async function runCommonQuestionAction(button, action) {
+  const sessionId = button.dataset.sessionId;
+  const internalQuestionId = button.dataset.commonSubmit || button.dataset.commonHold || button.dataset.commonCancel || button.dataset.commonCancelConfirm || button.dataset.commonCancelDismiss;
+  const session = (lastState?.sessions || []).find((item) => item.session_id === sessionId);
+  const question = session?.commonQuestions?.find((item) => item.internalQuestionId === internalQuestionId);
+  if (!question) return;
+  const key = commonQuestionKey(question);
+  const card = button.closest('.common-question');
+  const error = card?.querySelector('.common-question-error');
+  const notice = card?.querySelector('.common-question-note');
+  const confirmedCancel = action === 'cancel-confirm';
+  const dismissCancel = action === 'cancel-dismiss';
+  if (dismissCancel) {
+    if (commonQuestionInFlight.has(key)) return;
+    commonQuestionCancelConfirmations.delete(key);
+    if (lastState) render(lastState);
+    [...document.querySelectorAll('[data-common-cancel]')]
+      .find((candidate) => candidate.dataset.commonCancel === internalQuestionId && candidate.dataset.sessionId === sessionId)?.focus({ preventScroll: true });
+    return;
+  }
+  if (action === 'cancel' && !confirmedCancel) {
+    commonQuestionCancelConfirmations.add(key);
+    if (lastState) render(lastState);
+    [...document.querySelectorAll('[data-common-cancel-confirm]')]
+      .find((candidate) => candidate.dataset.commonCancelConfirm === internalQuestionId && candidate.dataset.sessionId === sessionId)?.focus({ preventScroll: true });
+    return;
+  }
+  if (confirmedCancel) {
+    if (!commonQuestionCancelConfirmations.has(key)) return;
+    action = 'cancel';
+  }
+  commonQuestionInFlight.add(key);
+  if (action === 'cancel') card?.querySelectorAll('[data-common-cancel-confirm], [data-common-cancel-dismiss]').forEach((control) => { control.disabled = true; });
+  commonQuestionErrors.delete(key);
+  if (error) { error.textContent = ''; error.hidden = true; }
+  button.disabled = true;
+  let url = `/api/decisions/${encodeURIComponent(internalQuestionId)}/${action}`;
+  let body = { session_id: sessionId, execution_id: question.executionId };
+  let submittedDraft = null;
+  if (action === 'answer') {
+    const answers = readCommonQuestionDraft(card);
+    if (!commonQuestionAnswersValid(question.questions, answers)) {
+      commonQuestionErrors.set(key, '各質問に選択肢か自由記入を入力してください。');
+      if (lastState) render(lastState);
+      commonQuestionInFlight.delete(key);
+      return;
+    }
+    submittedDraft = answers.map((answer) => ({ ...answer, optionIds: [...answer.optionIds] }));
+    card.querySelectorAll('input, textarea').forEach((control) => { control.disabled = true; });
+    body.answers = answers.map((answer) => ({ ...answer, freeText: answer.freeText.trim() ? answer.freeText : null }));
+  } else if (action === 'hold') body.held = button.dataset.held === 'true';
+  try {
+    const response = await postUiAction(url, body);
+    if (response.status === 404 || response.status === 409) {
+      commonQuestionErrors.set(key, '質問の状態が変わりました。最新の状態を確認してください。');
+      await refresh();
+      if (lastState) render(lastState);
+      return;
+    }
+    if (response.status === 400) {
+      commonQuestionErrors.set(key, '回答内容を確認してください。');
+      if (lastState) render(lastState);
+      return;
+    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json().catch(() => ({}));
+    if (action === 'answer') {
+      const lateAnswer = result.outcome === 'late';
+      const duplicateAnswer = result.outcome === 'duplicate';
+      if (lateAnswer || duplicateAnswer) commonQuestionSubmittedDrafts.set(key, submittedDraft);
+      if (result.outcome === 'selected') {
+        commonQuestionDrafts.delete(key);
+        commonQuestionSubmittedDrafts.delete(key);
+      }
+      commonQuestionNotices.set(key, lateAnswer
+        ? '後続の回答を保存しました。配送は保留しています。'
+        : duplicateAnswer ? '同じ回答は保存済みです。追加の回答は保存していません。'
+          : '回答を保存しました。配送状態は別に表示します。');
+    } else if (action === 'hold') {
+      commonQuestionNotices.set(key, body.held ? '質問を保留しました。' : '質問の保留を解除しました。');
+    } else {
+      commonQuestionCancelConfirmations.delete(key);
+      commonQuestionNotices.set(key, result.outcome === 'too_late' && result.question?.cancelRequested === true
+        ? '送信開始後のため、取り下げできず取消要求として記録しました。'
+        : result.outcome === 'too_late' ? '送信開始後のため、質問を取り下げできませんでした。' : '質問を取り下げました。');
+    }
+    await refresh();
+    liveStatus.textContent = action === 'answer' ? '回答を保存しました。' : action === 'hold' ? '質問の状態を保存しました。' : '取り下げ状態を保存しました。';
+  } catch {
+    commonQuestionErrors.set(key, '保存できませんでした。入力内容を保持しています。');
+    showWriteError('質問の状態を保存できませんでした');
+    if (lastState) render(lastState);
+  } finally {
+    commonQuestionInFlight.delete(key);
+    if (lastState) render(lastState);
+  }
+}
 async function sendCloseAction(button, url, body, errorMessage, taskCloseKey = null) {
   button.disabled = true;
   try {
@@ -3862,6 +4299,11 @@ document.addEventListener('click', (event) => {
   if (event.button === 0 && handleExternalLink(event)) return;
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.commonSubmit) { void runCommonQuestionAction(button, 'answer'); return; }
+  if (button.dataset.commonHold) { void runCommonQuestionAction(button, 'hold'); return; }
+  if (button.dataset.commonCancel) { void runCommonQuestionAction(button, 'cancel'); return; }
+  if (button.dataset.commonCancelConfirm) { void runCommonQuestionAction(button, 'cancel-confirm'); return; }
+  if (button.dataset.commonCancelDismiss) { void runCommonQuestionAction(button, 'cancel-dismiss'); return; }
   if (button.dataset.route) {
     void updateRouting(button);
     return;
@@ -4131,7 +4573,7 @@ async function refresh() {
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
       const judgmentCounts = countJudgments(visibleSessions);
-      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions} 件)。`;
+      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions + judgmentCounts.questions + judgmentCounts.questionProvisional} 件)。`;
     }
   } catch {
     connectionLost = true;

@@ -66,6 +66,7 @@ const BROWSER_GLOBALS = new Set([
   'document',
   'fetch',
   'getComputedStyle',
+  'HTMLElement',
   'HTMLTextAreaElement',
   'localStorage',
   'location',

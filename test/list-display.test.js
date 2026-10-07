@@ -125,6 +125,8 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     sharedBranch: () => '',
     shownPermissions: () => [],
     shownActiveDecisions: () => [],
+    shownCommonQuestions: () => [],
+    appendCommonQuestions() {},
     hasHiddenJudgmentItems: () => false,
     orderedSectionKeys: (keys) => keys,
     appendPermissionWaits() {},
@@ -144,6 +146,8 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     sharedBranch: () => '',
     visibleDecisions: () => [],
     visiblePerms: () => [],
+    commonQuestionsOf: (session) => session.commonQuestions || [],
+    visibleCommonQuestions: () => [],
     hasHiddenJudgmentItems: () => false,
     taskSessionBlock: () => '<div class="task-list"></div>',
     orderedSectionKeys: (keys) => keys,
@@ -169,6 +173,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     shownPermissions: () => [],
     shownActiveDecisions: () => [],
     kindEndedDecisionEntries: () => [],
+    shownCommonQuestions: () => [],
     kindEndedAgentCount: () => 1,
     kindTodoTaskCount: () => 0,
     kindDoneTaskCount: () => 0,
@@ -401,6 +406,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
     shownPermissions: () => [],
     shownActiveDecisions: () => [],
     kindEndedDecisionEntries: () => [],
+    shownCommonQuestions: () => [],
     kindEndedAgentCount: () => 1,
     kindTodoTaskCount: () => 1,
     kindDoneTaskCount: () => 1,
@@ -437,7 +443,7 @@ test('種類別のセッションごとのタスクは PR と同じ枠で、欄�
   assert.match(mockKind, /const taskControls = todoTaskToggle \|\| doneTaskToggle[\s\S]*?<div class="kind-section-controls">\$\{todoTaskToggle\}\$\{doneTaskToggle\}/);
   assert.match(mockKind, /tasks: section\('タスクと完了条件', tasks, taskControls, todoTaskCount \+ doneTaskCount\)/);
   assert.match(mockKind, /now: section\('今やっていること', now, activityControls, nowRowsByAge\.length \+ endedAgentCount\)/);
-  assert.match(mockKind, /judgment: showJudgment \? section\('あなたの判断が必要なこと', decisions, decisionControls, waits\.length \+ endedDecisionEntries\.length\)/);
+  assert.match(mockKind, /judgment: showJudgment \? section\('あなたの判断が必要なこと', decisions, decisionControls, waits\.length \+ endedDecisionEntries\.length, true\)/);
 });
 
 test('種類別の空欄は本文と枠を省き、件数付きの見出し一行を表示する', () => {
@@ -808,6 +814,8 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   const mockContext = pageContext(mock, {
     ui: { idleHideMinutes: 30 },
     effectiveDecisionState: (decision) => decision.kind,
+    commonQuestionsOf: (session) => session.commonQuestions || [],
+    isFinishedCommonQuestion: () => false,
   });
   vm.runInContext(`${mockActiveDecision}\n${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
   assert.equal(mockContext.isIdle({
@@ -1338,6 +1346,8 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
   class FakeTextArea {}
   const context = pageContext(web, {
     answerNoteComposing: false,
+    commonQuestionComposing: false,
+    commonQuestionDiagnosticsNotice: () => null,
     renderRouting() {},
     idleHiddenSessions: () => [{}],
     sessionsAfterIdleFilter: () => [],
@@ -1353,6 +1363,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
       querySelector: (selector) => selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
     },
     HTMLTextAreaElement: FakeTextArea,
+    HTMLElement: class FakeHTMLElement {},
     displayPreferences: { mode: 'product' },
     visibleSinceSeen: () => [],
     orderedProducts: () => [],
@@ -1386,6 +1397,8 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
     class FakeTextArea {}
     const context = pageContext(web, {
       answerNoteComposing: false,
+      commonQuestionComposing: false,
+      commonQuestionDiagnosticsNotice: () => null,
       renderRouting() {},
       idleHiddenSessions: () => [],
       sessionsAfterIdleFilter: (sessions) => sessions,
@@ -1403,6 +1416,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
           : selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
       },
       HTMLTextAreaElement: FakeTextArea,
+      HTMLElement: class FakeHTMLElement {},
       displayPreferences: { mode: 'product', pinned: [] },
       visibleSinceSeen: () => [],
       orderedProducts: () => [{}],

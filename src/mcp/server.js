@@ -2,6 +2,7 @@ const readline = require('node:readline');
 const { cockpitHomeFromOptions } = require('../server/identity');
 const { postToServer } = require('../client/server-connection');
 const { COMPLETE_COMMIT_SHA_PATTERN, isCompleteCommitSha, parsePullRequestUrl, validRepositoryPart } = require('../server/pull-request-utils');
+const { isIdentifier, normalizeQuestions } = require('../server/common-question-kernel');
 
 const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
@@ -21,6 +22,8 @@ const REVIEW_SKIP_ERROR_MESSAGES = new Map([
   [409, 'PR の head が変わったか、オープンではありません。現在の状態を確認してください'],
   [502, 'GitHub から PR の状態を確認できませんでした'],
 ]);
+
+const OUTPUT_FAILURE_HANDLERS = new WeakMap();
 
 const TOOL_DEFINITIONS = [
   {
@@ -101,6 +104,67 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'cockpit_register_question',
+    description: '通常判断の質問をこの実行期間に登録します。回答はダッシュボードで選択し、回答pollで一度だけ取得します。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        questionId: { type: 'string', minLength: 1, maxLength: 512 },
+        questions: {
+          type: 'array', minItems: 1, maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', minLength: 1, maxLength: 512 },
+              text: { type: 'string', minLength: 1, maxLength: 2000 },
+              mode: { type: 'string', enum: ['single', 'multi'] },
+              options: {
+                type: 'array', maxItems: 6,
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', minLength: 1, maxLength: 512 },
+                    label: { type: 'string', minLength: 1, maxLength: 200 },
+                    description: { type: 'string', maxLength: 2000 },
+                  },
+                  required: ['id', 'label', 'description'],
+                  additionalProperties: false,
+                },
+              },
+              allowFreeText: { type: 'boolean' },
+              recommendedOptionId: { oneOf: [{ type: 'string', maxLength: 512 }, { type: 'null' }] },
+            },
+            required: ['id', 'text', 'mode', 'options', 'allowFreeText', 'recommendedOptionId'],
+            additionalProperties: false,
+          },
+        },
+        timeoutMinutes: { type: 'integer', minimum: 1, maximum: 30 },
+      },
+      required: ['questionId', 'questions', 'timeoutMinutes'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cockpit_question_status',
+    description: '質問の受付、選択、配信状態だけを確認します。回答内容や自由記入は返しません。',
+    inputSchema: {
+      type: 'object',
+      properties: { questionId: { type: 'string', minLength: 1, maxLength: 512 } },
+      required: ['questionId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cockpit_answer_poll',
+    description: '保存済み回答を一度だけ取得します。本文は送信開始が永続化された場合にだけ返り、再送しません。',
+    inputSchema: {
+      type: 'object',
+      properties: { questionId: { type: 'string', minLength: 1, maxLength: 512 } },
+      required: ['questionId'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'cockpit_add_pr',
     description: 'このセッションが作成した GitHub のプルリクエストをダッシュボードに登録します。',
     inputSchema: {
@@ -173,9 +237,49 @@ function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isPlainDataRecord(value, fields) {
+  try {
+    if (!isRecord(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== fields.length || fields.some((field) => !keys.includes(field))) return false;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    return fields.every((field) => Object.hasOwn(descriptors[field], 'value') && descriptors[field].enumerable);
+  } catch { return false; }
+}
+
+function copiedWriterEnvelope(input) {
+  const writerFields = ['token', 'identity', 'contextId', 'executionId'];
+  const identityFields = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
+  if (!isPlainDataRecord(input, writerFields) || !isPlainDataRecord(input.identity, identityFields)) return null;
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const identityDescriptors = Object.getOwnPropertyDescriptors(input.identity);
+  const writer = Object.fromEntries(writerFields.map((field) => [field, descriptors[field].value]));
+  writer.identity = Object.fromEntries(identityFields.map((field) => [field, identityDescriptors[field].value]));
+  return writer;
+}
+
 function resolveMcpWriter(options = {}) {
-  const writer = options.writer;
-  if (!isRecord(writer) || !isRecord(writer.identity)) return null;
+  const hasGetter = Object.hasOwn(options, 'getWriter');
+  const hasFixedWriter = Object.hasOwn(options, 'writer');
+  if (hasGetter && hasFixedWriter) return null;
+  let source;
+  if (hasGetter) {
+    if (typeof options.getWriter !== 'function') return null;
+    try { source = options.getWriter(); } catch { return null; }
+    try {
+      if (source instanceof Promise) {
+        Promise.prototype.then.call(source, undefined, () => {});
+        return null;
+      }
+      if (source && typeof source.then === 'function') return null;
+    } catch { return null; }
+  } else {
+    source = options.writer;
+  }
+  const writer = copiedWriterEnvelope(source);
+  if (!writer) return null;
 
   const { provider, nativeIdKind, hostId, homeScopeId, nativeId } = writer.identity;
   if (typeof writer.token !== 'string' || writer.token.length === 0 ||
@@ -217,7 +321,7 @@ function writerError() {
   return { errorMessage: WRITER_REQUIRED_MESSAGE };
 }
 
-function postMcpRequest(requestPath, body, options, deadline) {
+function postMcpRequest(requestPath, body, options, deadline, maxAttempts = 2) {
   return postToServer(requestPath, body, {
     homeDir: options.homeDir || cockpitHomeFromOptions(options),
     environment: options.environment || process.env,
@@ -227,6 +331,7 @@ function postMcpRequest(requestPath, body, options, deadline) {
     readServerInfo: options.readServerInfo,
     deadline,
     attemptTimeoutMs: 2000,
+    maxAttempts,
     ensure: true,
   });
 }
@@ -286,12 +391,112 @@ async function postCrossReviewSkip(args, options = {}) {
   return errorMessage ? { errorMessage } : null;
 }
 
+function exactArgumentKeys(args, expected) {
+  return Object.keys(args).length === expected.length && expected.every((key) => Object.hasOwn(args, key));
+}
+
+function validCommonQuestionArguments(name, args) {
+  if (name === 'cockpit_register_question') {
+    if (!exactArgumentKeys(args, ['questionId', 'questions', 'timeoutMinutes']) ||
+        !isIdentifier(args.questionId) || !Number.isSafeInteger(args.timeoutMinutes) ||
+        args.timeoutMinutes < 1 || args.timeoutMinutes > 30) return false;
+    try { normalizeQuestions(args.questions); return true; } catch { return false; }
+  }
+  return exactArgumentKeys(args, ['questionId']) && isIdentifier(args.questionId);
+}
+
+function questionStatusText(question, registered = false) {
+  if (!question || typeof question !== 'object') return registered ? '質問を登録しました。' : '質問が見つかりません。';
+  return JSON.stringify({
+    questionId: question.questionId,
+    revision: question.revision,
+    createdAt: question.createdAt,
+    deadlineAt: question.deadlineAt,
+    held: question.held,
+    selectionSource: question.selectionSource,
+    deliveryAttemptId: question.deliveryAttemptId,
+    deliveryState: question.deliveryState,
+  });
+}
+
+async function notifyQuestionResponseLost(questionId, writer, options) {
+  try {
+    await postMcpRequest('/api/sessions/pending/questions/response-lost', {
+      writer, questionId,
+    }, options, Date.now() + MCP_TIMEOUT_MS, 1);
+  } catch {}
+}
+
+async function postCommonQuestion(name, args, options = {}) {
+  const writer = resolveMcpWriter(options);
+  if (!writer) return toolResult(WRITER_REQUIRED_MESSAGE, true);
+  if (!validCommonQuestionArguments(name, args)) return toolResult('入力が正しくありません。', true);
+
+  const maxAttempts = name === 'cockpit_answer_poll' ? 1 : 2;
+  const routes = {
+    cockpit_register_question: '/api/sessions/pending/questions/register',
+    cockpit_question_status: '/api/sessions/pending/questions/status',
+    cockpit_answer_poll: '/api/sessions/pending/questions/answer-poll',
+  };
+  const body = name === 'cockpit_register_question'
+    ? { writer, questionId: args.questionId, questions: args.questions, timeoutMinutes: args.timeoutMinutes }
+    : { writer, questionId: args.questionId };
+  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  let response;
+  try { response = await postMcpRequest(routes[name], body, options, deadline, maxAttempts); }
+  catch { response = null; }
+
+  if (!response || !response.ok) {
+    if (name === 'cockpit_answer_poll' && (!response || response.status === null || response.status >= 500)) {
+      await notifyQuestionResponseLost(args.questionId, writer, options);
+    }
+    const message = response?.status === 400 ? '質問の入力を確認してください。'
+      : response?.status === 403 ? WRITER_REQUIRED_MESSAGE
+        : response?.status === 404 ? 'この実行期間の質問が見つかりません。'
+          : response?.status === 409 ? '質問の内容が変わったため登録できません。'
+            : response?.status === 503 ? '質問サービスを利用できません。'
+              : UNREACHABLE_MESSAGE;
+    return toolResult(message, true);
+  }
+
+  const result = response.json;
+  if (name === 'cockpit_register_question') {
+    return toolResult(questionStatusText(result?.question || result, true));
+  }
+  if (name === 'cockpit_question_status') {
+    return toolResult(questionStatusText(result));
+  }
+
+  const status = result?.status || result;
+  const delivery = result?.delivery || null;
+  if (!delivery || !Array.isArray(delivery.answers)) {
+    return toolResult(JSON.stringify({
+      questionId: status?.questionId || args.questionId,
+      deliveryAttemptId: status?.deliveryAttemptId || null,
+      state: status?.deliveryState || status?.state || null,
+      delivered: false,
+    }));
+  }
+  const delivered = {
+    questionId: delivery.questionId,
+    revision: delivery.revision,
+    deliveryAttemptId: delivery.deliveryAttemptId,
+    answers: delivery.answers,
+  };
+  const toolResponse = toolResult(JSON.stringify(delivered));
+  OUTPUT_FAILURE_HANDLERS.set(toolResponse, () => notifyQuestionResponseLost(args.questionId, writer, options));
+  return toolResponse;
+}
+
 async function callTool(name, args, options = {}) {
   const tool = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!tool) return toolResult('指定されたツールはありません。', true);
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolResult('入力が正しくありません。', true);
   if (!Object.keys(args).every((key) => Object.hasOwn(tool.inputSchema.properties, key))) {
     return toolResult('入力が正しくありません。', true);
+  }
+  if (['cockpit_register_question', 'cockpit_question_status', 'cockpit_answer_poll'].includes(name)) {
+    return postCommonQuestion(name, args, options);
   }
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
@@ -335,7 +540,10 @@ async function handleRequest(request, options = {}) {
     const name = request.params?.name;
     const callOptions = { ...options, runtimeMeta: request.params?._meta };
     const result = await callTool(name, request.params?.arguments || {}, callOptions);
-    return { jsonrpc: '2.0', id: request.id, result };
+    const response = { jsonrpc: '2.0', id: request.id, result };
+    const outputFailure = OUTPUT_FAILURE_HANDLERS.get(result);
+    if (outputFailure) OUTPUT_FAILURE_HANDLERS.set(response, outputFailure);
+    return response;
   }
   return { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } };
 }
@@ -345,12 +553,43 @@ function startMcpServer(options = {}) {
   const output = options.output || process.stdout;
   const reader = readline.createInterface({ input });
   const pending = new Set();
+  const outputFailures = new Set();
+  const onOutputError = () => {
+    for (const fail of [...outputFailures]) fail();
+  };
+  output.on('error', onOutputError);
+
+  function writeResponse(response) {
+    if (!response) return Promise.resolve();
+    const line = JSON.stringify(response) + '\n';
+    const reportLost = OUTPUT_FAILURE_HANDLERS.get(response);
+    return new Promise((resolve) => {
+      let settled = false;
+      const fail = () => {
+        if (settled) return;
+        settled = true;
+        outputFailures.delete(fail);
+        Promise.resolve(reportLost?.()).catch(() => {}).finally(resolve);
+      };
+      const complete = (error) => {
+        if (error) { fail(); return; }
+        if (settled) return;
+        settled = true;
+        outputFailures.delete(fail);
+        resolve();
+      };
+      outputFailures.add(fail);
+      try { output.write(line, complete); }
+      catch { fail(); }
+    });
+  }
+
   reader.on('line', (line) => {
     let request;
     try {
       request = JSON.parse(line);
     } catch {
-      output.write(`${JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })}\n`);
+      void writeResponse({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
       return;
     }
     if (request?.method === 'exit' && request.id === undefined) {
@@ -359,19 +598,18 @@ function startMcpServer(options = {}) {
     }
     if (request?.id === undefined) return;
     const operation = handleRequest(request, options)
-      .then((response) => { if (response) output.write(`${JSON.stringify(response)}\n`); })
-      .catch(() => {
-        output.write(`${JSON.stringify({
-          jsonrpc: '2.0',
-          id: request.id,
-          result: toolResult(UNREACHABLE_MESSAGE, true),
-        })}\n`);
-      });
+      .then((response) => writeResponse(response))
+      .catch(() => writeResponse({
+        jsonrpc: '2.0',
+        id: request.id,
+        result: toolResult(UNREACHABLE_MESSAGE, true),
+      }));
     pending.add(operation);
     operation.finally(() => pending.delete(operation));
   });
   return new Promise((resolve) => reader.once('close', async () => {
     await Promise.all([...pending]);
+    output.removeListener('error', onOutputError);
     resolve();
   }));
 }
