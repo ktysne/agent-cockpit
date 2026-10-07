@@ -203,10 +203,9 @@ owned processのexitとcloseを確認して非稼働を確かめた後にHOMEを
 
 #213ではconversationIdごとに1行を表示し、委譲された子を親へまとめる。
 内部execution、period、古い質問の宛先は維持する。
-#216の新しい共通質問serviceとMCPは、ClaudeとCodexの両方で明示opt-inを既定offにする。
-既存Claude hookのdecision-answersとaway設定は変更対象外とする。
-現在両経路が併存する場合は登録経路と配信経路を一つに選び、二重登録と二重配信を防ぐ。
-将来、新しい共通質問経路を既存Claude経路へ統合する場合は、設定移行と利用者への告知を完了条件とする。
+#216の新しい共通質問serviceとMCPは、ClaudeとCodexの両方で推奨自動適用を明示opt-inとし、既定off、最短待ちを既定5分とする。登録時opt-inと適用時の現在設定がともに有効で、離席開始を起点に質問期限と開発者の最短待ちの長い方を待ち、実行中の現在bindingを確認した質問だけを対象にする。離席時点で期限が過ぎた質問には適用しない。
+既存Claude hookの`decision-answers`と離席設定は変更対象外とし、native `AskUserQuestion`と許可要求はlegacy経路だけで扱い、共通質問へ再登録しない。MCPモデル引数からopt-inを指定させない。
+現行のlegacy hookと共通MCPには共有native質問source keyやproducer側の排他的経路選択がなく、厳密な横断二重登録防止は未達である。共通の登録・配送入口を一つに選ぶ完了条件は維持し、製品compositionのruntime試験と設定移行・利用者告知が終わるまで達成扱いにしない。
 期限やordinary分類のモデル申告だけで自動適用しない。
 生存確認、開発者設定、古い質問の除外を条件とする。
 

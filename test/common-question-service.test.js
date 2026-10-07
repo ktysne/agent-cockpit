@@ -142,6 +142,7 @@ async function createFixture(t, overrides = {}) {
   };
   let now = 1_000;
   let awayEnabled = false;
+  let awaySince = null;
   let nextTimerId = 0;
   const timers = new Map();
   const timeout = (callback, delay) => {
@@ -158,8 +159,9 @@ async function createFixture(t, overrides = {}) {
     launchRegistry,
     runtimeRegistry,
     deliveryStore,
-    away: { snapshot: () => ({ enabled: awayEnabled }) },
+    away: { snapshot: () => ({ enabled: awayEnabled, since: awaySince }) },
     now: () => now,
+    ...(overrides.questionServiceOptions || {}),
     setTimeoutImpl: timeout,
     clearTimeoutImpl: clearTimeout,
     ...(overrides.atomicWrite ? { atomicWrite: overrides.atomicWrite } : {}),
@@ -171,7 +173,8 @@ async function createFixture(t, overrides = {}) {
     directory, journalPath, identity, binding, launch, launchRef, writer, registrationRegistry, actor, connection,
     delivery, service, createService, timers,
     setRuntime(actors, connections) { runtimeActors = actors; runtimeConnections = connections; },
-    setNow(value) { now = value; }, setAway(value) { awayEnabled = value; },
+    setNow(value) { now = value; },
+    setAway(value, since = now) { awayEnabled = value; awaySince = value ? since : null; },
     invalidateWriter() { writerValid = false; },
   };
 }
@@ -215,6 +218,9 @@ test('registration fixes its identity, content, and original deadline without ex
   const same = await register(fixture, { ...question(), timeoutMinutes: 2 });
   assert.equal(same.outcome, 'existing');
   assert.equal(same.question.deadlineAt, created.question.deadlineAt);
+  const sameContentDifferentId = await register(fixture, question('question-2'));
+  assert.equal(sameContentDifferentId.outcome, 'created');
+  assert.notEqual(sameContentDifferentId.question.internalQuestionId, created.question.internalQuestionId);
   await assert.rejects(register(fixture, question('question-1', { allowFreeText: true })),
     errorCode('question_conflict'));
   const status = await fixture.service.status(fixture.writer, 'question-1');
@@ -326,31 +332,151 @@ test('cancelling an unsent selection removes its payload and is idempotent', asy
   assert.equal((await fixture.service.dashboardSnapshot()).questions[0].cancelled, true);
 });
 
-test('an expired pending question is rechecked after away changes without a dashboard poll', async (t) => {
-  const fixture = await createFixture(t);
-  const input = question('question-default', { recommendation: 'continue' });
-  await register(fixture, input);
-  fixture.setNow(61_001);
-  assert.equal(fireNextTimer(fixture), 60_000);
-  await fixture.service.flush();
-  assert.equal([...fixture.timers.values()][0].delay, 1_000);
-  fixture.setAway(true);
-  assert.equal(fireNextTimer(fixture), 1_000);
-  await fixture.service.flush();
+test('a live opted-in question waits the larger of its deadline and the five-minute minimum', async (t) => {
+  const fixture = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+  } });
+  await register(fixture, question('question-default', { recommendation: 'continue' }));
+  fixture.setNow(10_000);
+  fixture.setAway(true, 10_000);
+  await fixture.service.notifyAwayChanged();
+  assert.equal([...fixture.timers.values()][0].delay, 300_000);
+  fixture.setNow(309_999);
+  await fixture.service.tick();
+  assert.equal((await fixture.service.status(fixture.writer, 'question-default')).selectionSource, null);
+  fixture.setNow(310_000);
+  await fixture.service.tick();
   const status = await fixture.service.status(fixture.writer, 'question-default');
   assert.equal(status.selectionSource, 'away-default');
   assert.equal(status.deliveryState, 'available');
 });
 
+test('default-off and questions already expired when away begins do not auto-apply or poll', async (t) => {
+  const fixture = await createFixture(t);
+  await register(fixture, question('question-default-off', { recommendation: 'continue' }));
+  fixture.setNow(61_001);
+  assert.equal(fixture.timers.size, 0);
+  fixture.setAway(true);
+  await fixture.service.notifyAwayChanged();
+  const status = await fixture.service.status(fixture.writer, 'question-default-off');
+  assert.equal(status.selectionSource, null);
+  assert.equal(fixture.timers.size, 0);
+});
+
+test('an opted-in question does not poll after expiry while the developer is present', async (t) => {
+  const fixture = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+  } });
+  await register(fixture, question('question-present', { recommendation: 'continue' }));
+  fixture.setNow(61_001);
+  await fixture.service.tick();
+  assert.equal(fixture.timers.size, 0);
+  assert.equal((await fixture.service.status(fixture.writer, 'question-present')).selectionSource, null);
+});
+
+test('a manual answer after the model deadline remains manual until the shared auto-apply deadline', async (t) => {
+  const fixture = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+  } });
+  const created = await register(fixture, question('question-manual-before-minimum', { recommendation: 'continue' }));
+  fixture.setAway(true, 1_000);
+  await fixture.service.notifyAwayChanged();
+  fixture.setNow(created.question.deadlineAt);
+  const selected = await fixture.service.submitAnswer(created.question.internalQuestionId, answers('stop'));
+  assert.equal(selected.outcome, 'selected');
+  assert.equal(selected.question.selectionSource, 'manual');
+});
+
+test('invalid trusted settings and future away timestamps disable automatic application', async (t) => {
+  const fixture = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 299_999 }),
+  } });
+  await register(fixture, question('question-invalid-settings', { recommendation: 'continue' }));
+  fixture.setAway(true, 1_000);
+  await fixture.service.notifyAwayChanged();
+  fixture.setNow(301_000);
+  await fixture.service.tick();
+  assert.equal((await fixture.service.status(fixture.writer, 'question-invalid-settings')).selectionSource, null);
+
+  const future = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+  } });
+  await register(future, question('question-future-away', { recommendation: 'continue' }));
+  future.setAway(true, 999_999);
+  await future.service.notifyAwayChanged();
+  future.setNow(301_000);
+  await future.service.tick();
+  assert.equal((await future.service.status(future.writer, 'question-future-away')).selectionSource, null);
+
+  const negative = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+  } });
+  await register(negative, question('question-negative-away', { recommendation: 'continue' }));
+  negative.setAway(true, -1);
+  await negative.service.notifyAwayChanged();
+  negative.setNow(301_000);
+  await negative.service.tick();
+  assert.equal((await negative.service.status(negative.writer, 'question-negative-away')).selectionSource, null);
+});
+
+test('registration opt-in stays fixed and current opt-in is required', async (t) => {
+  let enabled = false;
+  const fixture = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled, minimumWaitMs: 300_000 }),
+  } });
+  await register(fixture, question('question-fixed-opt-in', { recommendation: 'continue' }));
+  enabled = true;
+  fixture.setAway(true, 1_000);
+  await fixture.service.notifyAwayChanged();
+  fixture.setNow(301_000);
+  await fixture.service.tick();
+  assert.equal((await fixture.service.status(fixture.writer, 'question-fixed-opt-in')).selectionSource, null);
+  assert.equal(fixture.timers.size, 0);
+
+  let currentEnabled = true;
+  const currentOff = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: currentEnabled, minimumWaitMs: 300_000 }),
+  } });
+  await register(currentOff, question('question-current-opt-in-off', { recommendation: 'continue' }));
+  currentEnabled = false;
+  currentOff.setAway(true, 1_000);
+  await currentOff.service.notifyAwayChanged();
+  currentOff.setNow(301_000);
+  await currentOff.service.tick();
+  assert.equal((await currentOff.service.status(currentOff.writer, 'question-current-opt-in-off')).selectionSource, null);
+  assert.equal(currentOff.timers.size, 0);
+});
+
+test('away defaults require a live execution and can be reconsidered after it returns', async (t) => {
+  const fixture = await createFixture(t, { questionServiceOptions: {
+    getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+  } });
+  await register(fixture, question('question-live-binding', { recommendation: 'continue' }));
+  fixture.setAway(true, 1_000);
+  await fixture.service.notifyAwayChanged();
+  fixture.setNow(301_000);
+  fixture.setRuntime([{ ...clone(fixture.actor), state: 'unknown' }], [
+    { ...clone(fixture.connection), state: 'inactive' },
+  ]);
+  await fixture.service.tick();
+  assert.equal((await fixture.service.dashboardSnapshot()).questions[0].selectionSource, null);
+  fixture.setRuntime([clone(fixture.actor)], [clone(fixture.connection)]);
+  await fixture.service.tick();
+  assert.equal((await fixture.service.status(fixture.writer, 'question-live-binding')).selectionSource, 'away-default');
+});
+
 test('one timeout delivery creation failure reschedules other expired questions', async (t) => {
   let failures = 1;
-  const fixture = await createFixture(t, { delivery: { beforeCreate: async () => {
-    if (failures-- > 0) throw new Error('temporary delivery failure');
-  } } });
+  const fixture = await createFixture(t, {
+    questionServiceOptions: { getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }) },
+    delivery: { beforeCreate: async () => {
+      if (failures-- > 0) throw new Error('temporary delivery failure');
+    } },
+  });
   await register(fixture, question('question-timeout-first', { recommendation: 'continue' }));
   await register(fixture, question('question-timeout-next', { recommendation: 'stop' }));
-  fixture.setNow(61_001);
-  fixture.setAway(true);
+  fixture.setAway(true, 1_000);
+  fixture.setNow(301_000);
 
   await assert.rejects(fixture.service.tick(), /temporary delivery failure/);
   assert.equal([...fixture.timers.values()][0].delay, 1_000);

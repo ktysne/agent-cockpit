@@ -48,6 +48,19 @@ test('journal writes strict records to a real file and releases path ownership o
   assert.deepEqual(await reopened.load(), candidate);
 });
 
+test('journal reads schema-version-one records without opt-in as disabled', async (t) => {
+  const directory = await tempDir(t);
+  const filePath = path.join(directory, 'questions.json');
+  const question = questionRecord();
+  delete question.autoApplyEnabledAtRegistration;
+  await fs.writeFile(filePath, JSON.stringify({ schemaVersion: 1, revision: 1, questions: [question] }));
+  const journal = createCommonQuestionJournal({ filePath });
+  t.after(() => journal.close());
+  const loaded = await journal.load();
+  assert.equal(loaded.questions[0].autoApplyEnabledAtRegistration, false);
+  assert.equal(loaded.schemaVersion, 1);
+});
+
 test('journal reserves room for a complete answer, cancellation, and late-answer history', async (t) => {
   const directory = await tempDir(t);
   const candidate = kernel.addQuestion(kernel.createEmptyJournal(), questionRecord());

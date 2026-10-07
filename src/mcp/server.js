@@ -113,7 +113,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'cockpit_register_question',
-    description: '通常判断の質問をこの実行期間に登録します。回答はダッシュボードで選択し、回答pollで一度だけ取得します。',
+    description: '通常判断の質問をこの実行期間に登録します。回答はダッシュボードで選択し、回答pollで一度だけ取得します。許可や承認の要求、nativeの待機には使用しません。Claudeのnative AskUserQuestionも共通質問へ再登録しません。推奨案の自動適用は信頼済み設定で明示的に有効化した場合だけ行います。',
     inputSchema: {
       type: 'object',
       properties: {

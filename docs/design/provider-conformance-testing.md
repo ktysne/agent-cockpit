@@ -91,6 +91,16 @@ ID-F12-D01は、共通質問と指示の検証済みprojectionに対する表示
 
 HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-projection-display.test.js)で17件、保存形式と旧store復元は[test/state-persistence.test.js](../../test/state-persistence.test.js)の対象テスト1件が成功した。実Claude/Codex runtimeでの表示・削除動作は未確認である。
 
+## 共通質問の推奨自動適用
+
+`ID-F08-A01/A02`では、ClaudeとCodexの同じ質問状態に対して、trusted opt-inの登録時固定と適用時確認を検証する。
+5分以上の最短待ちが質問期限を短縮しないこと、離席開始時刻、登録済み実行と現在接続中のactorのbinding、手動回答との直列化も検証する。
+許可や承認の要求、nativeの待機には共通質問MCPを使用しない。
+Claudeのnative `AskUserQuestion`も既存hook経路で扱い、共通MCPへ再登録しない。
+MCPモデル引数にopt-in設定を持たせない。
+共通service fixtureでの合格は製品MCP compositionや実runtimeでの接続証拠ではない。
+Claude legacy経路と共通質問経路には共有native source keyも排他的producer選択もないため、厳密な横断重複防止は未達として追跡する。
+
 ## Codex native pendingの表示
 
 `ID-F08-NS09`はCodex nativeの質問要求と許可要求をCockpitで表示するシナリオである。

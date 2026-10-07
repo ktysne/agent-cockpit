@@ -25,7 +25,7 @@ const RECORD_FIELDS = [
   'internalQuestionId', 'questionId', 'identity', 'periodId', 'executionId', 'conversationId',
   'launchRef', 'executionBinding', 'category', 'contentDigest', 'questions', 'createdAt',
   'deadlineAt', 'timeoutMinutes', 'revision', 'held', 'selection', 'deliveryIntent',
-  'externalResolution', 'lateAnswers', 'cancelledAt',
+  'autoApplyEnabledAtRegistration', 'externalResolution', 'lateAnswers', 'cancelledAt',
 ];
 const PROVIDER_NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
 
@@ -55,6 +55,27 @@ function exactObject(value, fields, code = 'invalid_question') {
     let descriptor;
     try { descriptor = Object.getOwnPropertyDescriptor(value, field); } catch { throw questionError(code); }
     if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) throw questionError(code);
+    clone[field] = descriptor.value;
+  }
+  return clone;
+}
+
+function exactObjectWithDefault(value, fields, optionalDefaults, code) {
+  if (!isPlainObject(value)) throw questionError(code);
+  let keys;
+  try { keys = Reflect.ownKeys(value); } catch { throw questionError(code); }
+  const missing = fields.filter((field) => !keys.includes(field));
+  if (keys.some((key) => typeof key !== 'string' || !fields.includes(key)) ||
+      missing.some((field) => !Object.hasOwn(optionalDefaults, field))) throw questionError(code);
+  const clone = {};
+  for (const field of fields) {
+    let descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(value, field); } catch { throw questionError(code); }
+    if (!descriptor) {
+      clone[field] = optionalDefaults[field];
+      continue;
+    }
+    if (!Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) throw questionError(code);
     clone[field] = descriptor.value;
   }
   return clone;
@@ -226,7 +247,7 @@ function normalizeLateAnswer(value, questions, createdAt) {
 }
 
 function normalizeQuestionRecord(value) {
-  const record = exactObject(value, RECORD_FIELDS, 'invalid_journal');
+  const record = exactObjectWithDefault(value, RECORD_FIELDS, { autoApplyEnabledAtRegistration: false }, 'invalid_journal');
   if (!isIdentifier(record.internalQuestionId) || !isIdentifier(record.questionId) ||
       !isIdentifier(record.periodId) || !isIdentifier(record.executionId) ||
       !isIdentifier(record.conversationId) || !isIdentifier(record.launchRef) ||
@@ -234,6 +255,7 @@ function normalizeQuestionRecord(value) {
       !/^[a-f0-9]{64}$/.test(record.contentDigest) || !Number.isSafeInteger(record.timeoutMinutes) ||
       record.timeoutMinutes < 1 || record.timeoutMinutes > 30 || !Number.isSafeInteger(record.revision) ||
       record.revision < 0 || typeof record.held !== 'boolean' ||
+      typeof record.autoApplyEnabledAtRegistration !== 'boolean' ||
       (record.cancelledAt !== null && (!Number.isSafeInteger(record.cancelledAt) || record.cancelledAt < 0))) {
     throw questionError('invalid_journal');
   }
@@ -303,8 +325,9 @@ function createQuestionRecord(input) {
   const fields = [
     'internalQuestionId', 'questionId', 'identity', 'periodId', 'executionId', 'conversationId',
     'launchRef', 'executionBinding', 'category', 'questions', 'timeoutMinutes', 'createdAt',
+    'autoApplyEnabledAtRegistration',
   ];
-  const value = exactObject(input, fields, 'invalid_question_registration');
+  const value = exactObjectWithDefault(input, fields, { autoApplyEnabledAtRegistration: false }, 'invalid_question_registration');
   if (!isIdentifier(value.internalQuestionId) || !isIdentifier(value.questionId) ||
       !isIdentifier(value.periodId) || !isIdentifier(value.executionId) ||
       !isIdentifier(value.conversationId) || !isIdentifier(value.launchRef) ||
