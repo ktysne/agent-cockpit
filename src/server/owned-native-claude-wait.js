@@ -96,7 +96,9 @@ function createOwnedNativeClaudeWait(sourceCapability, options) {
     let tool = null;
     for (const item of native.content) {
       if (item?.type !== 'tool_use') continue;
-      if (tool || !exact(item, ['type', 'id', 'name', 'input']) || item.name !== TOOL_NAME || !identifier(item.id) || !input(item.input)) return unknown();
+      const fields = Object.hasOwn(item, 'caller') ? ['type', 'id', 'name', 'input', 'caller'] : ['type', 'id', 'name', 'input'];
+      if (tool || !exact(item, fields) || Object.hasOwn(item, 'caller') && (!exact(item.caller, ['type']) || item.caller.type !== 'direct') ||
+          item.name !== TOOL_NAME || !identifier(item.id) || !input(item.input)) return unknown();
       tool = item;
     }
     if (!tool) return true;

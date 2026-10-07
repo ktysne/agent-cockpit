@@ -185,6 +185,7 @@ function createOwnedNativeMcpWait(sourceCapability, options) {
         if (!body || Array.isArray(body) || body.jsonrpc !== '2.0' || typeof body.method !== 'string') throw new Error();
         if (body.method === 'notifications/initialized' && !Object.hasOwn(body, 'id') && initialized) { response.writeHead(202); response.end(); return; }
         if (!(identifier(body.id) || Number.isSafeInteger(body.id) && body.id >= 0)) throw new Error();
+        if (body.method === 'server/discover' && !initialized) { reject(400); return; }
         if (body.method === 'initialize') {
           if (initialized || typeof body.params?.protocolVersion !== 'string') throw new Error();
           initialized = true;

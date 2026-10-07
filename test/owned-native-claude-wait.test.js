@@ -14,7 +14,7 @@ const { createRuntimeBindingKernel } = require('../src/server/runtime-binding');
 const { createNativeLaunchComposition } = require('../src/server/native-launch-composition');
 const { createOwnedNativeRunner } = require('../src/server/owned-native-runner');
 
-async function fixture(t, { spawnFailure = false } = {}) {
+async function fixture(t, { spawnFailure = false, discoveryBeforeInit = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-wait-'));
   const homePath = path.join(directory, 'home'), cwd = path.join(directory, 'cwd'), executablePath = path.join(directory, 'native.exe');
   fs.mkdirSync(homePath); fs.mkdirSync(cwd); fs.writeFileSync(executablePath, 'fixture');
@@ -80,6 +80,7 @@ async function fixture(t, { spawnFailure = false } = {}) {
       req.on('error', reject); req.setTimeout(2000, () => req.destroy(new Error('fixture HTTP timeout'))); req.end(JSON.stringify(body));
     });
   }
+  if (discoveryBeforeInit) assert.equal((await request({ jsonrpc: '2.0', id: 'discovery', method: 'server/discover' })).status, 400);
   await request({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } });
   await request({ jsonrpc: '2.0', method: 'notifications/initialized' });
   const stream = event => child.send({ type: 'stream_event', session_id: 'native-id', parent_tool_use_id: null, event });
@@ -518,3 +519,28 @@ test('CW09 stop before the listen callback completes cannot leave a late owned e
   assert.equal(c.wait.controller.isListening(), false);
   assert.equal(c.wait.controller.stop(), c.stopping); await c.wait.controller.stop();
 });
+
+test('CW01 authenticated discovery fallback preserves initialization and current proof', async t => {
+  const f = await fixture(t, { discoveryBeforeInit: true });
+  assert.ok(f.composition.resolveProof(f.started.launchRef));
+  assert.equal(f.waits.length, 0);
+  assert.equal(f.child.killCalls, 0);
+});
+for (const caller of [{ type: 'direct' }, { type: 'code_execution' }, { type: 'direct', extra: true }]) {
+  test('CW02 caller shape ' + JSON.stringify(caller) + ' preserves only direct authority', async t => {
+    const f = await fixture(t), nonce = 'd'.repeat(48);
+    f.child.send({ type: 'assistant', session_id: 'native-id', parent_tool_use_id: null,
+      message: { role: 'assistant', id: 'context-a', content: [{ type: 'tool_use', id: 'direct-tool',
+        name: 'mcp__cockpit_wait__cockpit_wait', input: { nonce }, caller }] } });
+    if (caller.type === 'direct' && !Object.hasOwn(caller, 'extra')) {
+      const pending = f.call(nonce);
+      await f.until(() => f.waits.length === 1);
+      assert.equal(f.owner.checkWait(f.waits[0].handle), true);
+      assert.equal(f.owner.settleWait(f.waits[0].handle, 'released'), true);
+      await pending;
+    } else {
+      assert.equal(f.composition.resolveProof(f.started.launchRef), null);
+      assert.equal(f.waits.length, 0);
+    }
+  });
+}
