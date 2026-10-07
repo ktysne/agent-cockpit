@@ -25,6 +25,10 @@ ownerが不明または終了していても質問を解決済みにせず、質
 
 checkpoint v1は変更せず、質問journalを別の厳密なversion付きファイルとして保存する。
 journalは質問内容、完全identity、period、固定launch/binding、初回時刻、deadline、保留状態、選択と離席仮選択の区別、固定配信意図、外部解決、遅い回答を保持する。
+自動適用の登録時opt-inも質問recordに保存し、既存journalで欠けるflagはfalseとして読む。
+新しいflagを書き込んだjournalは旧版が読めないため、旧binaryへのrollbackをサポートしない。
+journalを手動削除して復旧させない。
+障害時は保存データを保全し、対応版で復旧する。
 配信意図はdeliveryAttemptId、logicalMessageId、revision、payloadDigestを含む。
 選択と配信意図のjournal保存を終えてから、同じIDと内容で193のcreateQuestionDeliveryを呼ぶ。
 二つのファイルを同時にcommitしたと扱わない。
@@ -65,7 +69,12 @@ opt-inは登録時に質問recordへ固定し、その後に設定を有効化�
 待機の起点は登録時刻と現在の離席開始時刻の遅い方、待ち時間は質問のtimeoutと開発者設定の最短待ち時間の長い方とする。
 開発者の最短待ちは5分未満に設定できず、モデル期限より短くならない。
 離席開始時に質問期限がすでに過ぎていた質問は対象から除外する。
+policy期限前は期限timerを維持し、期限後にbindingだけが不成立なら30秒ごとに再確認する。
+明示終了がregistryに記録された実行は再確認から除外する。
+bindingはregistry上の実行状態と現在接続中actorの一致を指し、OS processの生存を証明しない。
+期限到達時の手動回答でも同じ現在bindingを確認し、不成立なら仮選択しない。
 離席中の切替は`POST /api/away`からserviceへ通知し、在席中は期限後の1秒ポーリングを行わない。
+設定の供給元と製品導線は未実装で、trusted設定をserviceへ注入する経路だけがあるため、製品では既定offのままである。
 不正または未来の離席時刻、壊れた設定は自動適用を無効にする。
 許可や承認の要求、nativeの待機には共通質問MCPを使用しない。
 Claudeのnative `AskUserQuestion`も既存hook経路で扱い、共通質問へ再登録しない。

@@ -13,6 +13,7 @@ const CLAIM_FIELDS = ['launchId', 'runId', 'attemptId', 'provider', 'nativeIdKin
 const CONNECTION_SCOPE_FIELDS = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId'];
 const MAX_EXTERNAL_EVIDENCE_BYTES = 64 * 1024;
 const DEFAULT_AUTO_APPLY_MINIMUM_WAIT_MS = 5 * 60_000;
+const AUTO_APPLY_BINDING_RECHECK_MS = 30_000;
 
 function serviceError(code) {
   const error = new Error(code);
@@ -258,38 +259,44 @@ function createCommonQuestionService(options = {}) {
       record.identity, record.executionBinding, record.conversationId);
   }
 
-  function hasCurrentExecutionBinding(record) {
+  function currentExecutionBindingStatus(record) {
     try {
       const registration = syncCall(options.registrationRegistry, 'snapshot', [], 'question_binding_unavailable');
-      if (!Array.isArray(registration?.conversations) || !Array.isArray(registration?.executions)) return false;
+      if (!Array.isArray(registration?.conversations) || !Array.isArray(registration?.executions)) return 'unavailable';
       const conversations = registration.conversations.filter((item) => item.conversationId === record.conversationId &&
         sameIdentity(item.identity, record.identity));
       const executions = registration.executions.filter((item) => item.executionId === record.executionId &&
-        item.conversationId === record.conversationId && item.state === 'active');
-      if (conversations.length !== 1 || executions.length !== 1) return false;
+        item.conversationId === record.conversationId);
+      if (conversations.length !== 1 || executions.length !== 1) return 'unavailable';
+      if (executions[0].state === 'ended') return 'ended';
+      if (executions[0].state !== 'active') return 'unavailable';
       const runtime = syncCall(options.runtimeRegistry, 'snapshot', [], 'question_binding_unavailable');
-      if (!Array.isArray(runtime?.actors) || !Array.isArray(runtime?.connections)) return false;
+      if (!Array.isArray(runtime?.actors) || !Array.isArray(runtime?.connections)) return 'unavailable';
       const liveActors = runtime.actors.filter((actor) => actor.state === 'active' &&
         actor.launchRef === record.launchRef && actor.periodId === record.periodId &&
         sameIdentity(actor.identity, record.identity) &&
         sameBinding({ periodId: actor.periodId, actor: actor.actor }, record.executionBinding) &&
         connectionIsCurrent(actor, runtime));
-      if (liveActors.length !== 1) return false;
+      if (liveActors.length !== 1) return 'unavailable';
       validatePersistedBinding(record);
-      return true;
+      return 'current';
     } catch {
-      return false;
+      return 'unavailable';
     }
+  }
+
+  function hasCurrentExecutionBinding(record) {
+    return currentExecutionBindingStatus(record) === 'current';
   }
 
   function currentAwayState() {
     try { return options.away.snapshot(); } catch { return null; }
   }
 
-  function autoApplyDeadline(record, awayState, settings = getAutoApplySettings(), at = nowValue()) {
+  function autoApplyPolicyDeadline(record, awayState, settings = getAutoApplySettings(), at = nowValue()) {
     if (!record.autoApplyEnabledAtRegistration || !settings.enabled || awayState?.enabled !== true ||
         !Number.isSafeInteger(awayState.since) || awayState.since < 0 || awayState.since > at ||
-        !kernel.canApplyAwayDefault(record) || !hasCurrentExecutionBinding(record)) return null;
+        !kernel.canApplyAwayDefault(record)) return null;
     if (awayState.since > record.createdAt && record.deadlineAt <= awayState.since) return null;
     const start = Math.max(record.createdAt, awayState.since);
     const waitMs = Math.max(record.timeoutMinutes * 60_000, settings.minimumWaitMs);
@@ -475,10 +482,20 @@ function createCommonQuestionService(options = {}) {
     const at = nowValue();
     const settings = getAutoApplySettings();
     const awayState = currentAwayState();
-    const deadlines = journalState.questions.map((record) => autoApplyDeadline(record, awayState, settings, at))
-      .filter((deadline) => deadline !== null);
-    if (!deadlines.length) return;
-    const delay = Math.min(2_147_483_647, Math.max(1_000, Math.min(...deadlines) - at));
+    const delays = [];
+    for (const record of journalState.questions) {
+      const deadline = autoApplyPolicyDeadline(record, awayState, settings, at);
+      if (deadline === null) continue;
+      if (deadline > at) {
+        delays.push(deadline - at);
+        continue;
+      }
+      const bindingStatus = currentExecutionBindingStatus(record);
+      if (bindingStatus === 'ended') continue;
+      delays.push(bindingStatus === 'current' ? 1_000 : AUTO_APPLY_BINDING_RECHECK_MS);
+    }
+    if (!delays.length) return;
+    const delay = Math.min(2_147_483_647, Math.max(1_000, Math.min(...delays)));
     timer = setTimeoutImpl(() => {
       timer = null;
       void enqueue(tickNow).catch(() => {});
@@ -495,9 +512,10 @@ function createCommonQuestionService(options = {}) {
     if (record.selection && kernel.sameAnswers(record.selection.answers, answers)) {
       return { outcome: 'duplicate', record };
     }
-    const autoDeadline = autoApplyDeadline(record, currentAwayState(), getAutoApplySettings(), at);
+    const autoDeadline = autoApplyPolicyDeadline(record, currentAwayState(), getAutoApplySettings(), at);
     if (source === 'manual' && !record.selection && record.externalResolution === null &&
-        record.cancelledAt === null && !record.held && autoDeadline !== null && autoDeadline <= at) {
+        record.cancelledAt === null && !record.held && autoDeadline !== null && autoDeadline <= at &&
+        hasCurrentExecutionBinding(record)) {
       const defaulted = kernel.selectionFor(record, kernel.awayDefaultAnswers(record), 'away-default', at,
         crypto.randomUUID());
       const savedDefault = await commitRecord(defaulted.record);
@@ -514,8 +532,8 @@ function createCommonQuestionService(options = {}) {
   }
 
   async function maybeTimeout(record, at) {
-    const deadline = autoApplyDeadline(record, currentAwayState(), getAutoApplySettings(), at);
-    if (deadline === null || deadline > at) return record;
+    const deadline = autoApplyPolicyDeadline(record, currentAwayState(), getAutoApplySettings(), at);
+    if (deadline === null || deadline > at || !hasCurrentExecutionBinding(record)) return record;
     const selected = kernel.selectionFor(record, kernel.awayDefaultAnswers(record), 'away-default', at,
       crypto.randomUUID());
     const saved = await commitRecord(selected.record);

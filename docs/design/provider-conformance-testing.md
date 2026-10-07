@@ -94,10 +94,13 @@ HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-p
 ## 共通質問の推奨自動適用
 
 `ID-F08-A01/A02`では、ClaudeとCodexの同じ質問状態に対して、trusted opt-inの登録時固定と適用時確認を検証する。
-5分以上の最短待ちが質問期限を短縮しないこと、離席開始時刻、登録済み実行と現在接続中のactorのbinding、手動回答との直列化も検証する。
+5分以上の最短待ちが質問期限を短縮しないこと、離席開始時刻、登録状態と現在接続中actorのbinding、手動回答との直列化も検証する。
+期限前の一時的なbinding不成立でpolicy期限timerを維持し、期限後は30秒ごとに再確認して、binding回復後に手動tickなしで仮選択することも検証する。
+離席開始時に期限と一致または経過した質問は、opt-in有効でも対象外とする。
 許可や承認の要求、nativeの待機には共通質問MCPを使用しない。
 Claudeのnative `AskUserQuestion`も既存hook経路で扱い、共通MCPへ再登録しない。
 MCPモデル引数にopt-in設定を持たせない。
+trusted設定の供給元と製品導線は未実装で、現状はservice注入だけであり、製品既定はoffである。
 共通service fixtureでの合格は製品MCP compositionや実runtimeでの接続証拠ではない。
 Claude legacy経路と共通質問経路には共有native source keyも排他的producer選択もないため、厳密な横断重複防止は未達として追跡する。
 
