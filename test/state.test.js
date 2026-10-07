@@ -8,6 +8,100 @@ const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+function backgroundClaudeState(sessionId = 'task-stop') {
+  const state = new DashboardState();
+  state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'launch', hookAt: 100 });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStart', agent_id: 'task-1', agent_type: 'impl-standard', hookAt: 200 });
+  state.addEvent({ session_id: sessionId, hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'launch', hookAt: 300 });
+  return state;
+}
+
+test('TaskStop で一致する背景サブエージェントを終了にし Stop 後は待機中になる', () => {
+  const state = backgroundClaudeState();
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'PostToolUse', tool_name: 'TaskStop', stoppedTaskId: 'task-1', hookAt: 400 });
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'Stop', hookAt: 500 });
+  const session = state.snapshot().sessions[0];
+  assert.equal(session.agents[0].active, false);
+  assert.equal(session.agents[0].unconfirmed, false);
+  assert.equal(session.status, '待機中');
+});
+
+test('一致しない task_id と PostToolUseFailure はサブエージェントを終了にしない', () => {
+  for (const [hook_event_name, stoppedTaskId] of [['PostToolUse', 'other'], ['PostToolUseFailure', 'task-1']]) {
+    const state = backgroundClaudeState();
+    state.addEvent({ session_id: 'task-stop', hook_event_name, tool_name: 'TaskStop', stoppedTaskId, hookAt: 400 });
+    assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  }
+});
+
+test('TaskStop と SubagentStop は未完了ツールと許可待ちを消す', () => {
+  for (const stop of [
+    { hook_event_name: 'PostToolUse', tool_name: 'TaskStop', stoppedTaskId: 'task-1' },
+    { hook_event_name: 'SubagentStop', agent_id: 'task-1' },
+  ]) {
+    const state = backgroundClaudeState();
+    state.addEvent({ session_id: 'task-stop', hook_event_name: 'PreToolUse', agent_id: 'task-1', tool_name: 'Bash', tool_use_id: 'pending', hookAt: 350 });
+    state.addEvent({ session_id: 'task-stop', hook_event_name: 'Notification', notification_type: 'permission_prompt', agent_id: 'task-1', hookAt: 360 });
+    assert.equal(state.snapshot().sessions[0].permissionWaits.length, 1);
+    state.addEvent({ session_id: 'task-stop', ...stop, hookAt: 400 });
+    assert.deepEqual(state.snapshot().sessions[0].tools, []);
+    assert.deepEqual(state.snapshot().sessions[0].permissionWaits, []);
+  }
+});
+
+test('TaskStop で窓口配下の背景 Codex は終了未確認になる', () => {
+  const state = backgroundClaudeState();
+  launchCodex(state, 'task-stop', 'codex-launch', 350, 'task-1');
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'codex-launch', agent_id: 'task-1', hookAt: 360 });
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'PostToolUse', tool_name: 'TaskStop', stoppedTaskId: 'task-1', hookAt: 400 });
+  assert.deepEqual([state.snapshot().sessions[0].agents[0].gpt.active, state.snapshot().sessions[0].agents[0].gpt.unconfirmed], [false, true]);
+});
+
+test('TaskStop 後の遅延イベントでは復活せず SubagentStart で再開する', () => {
+  const state = backgroundClaudeState();
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'PostToolUse', tool_name: 'TaskStop', stoppedTaskId: 'task-1', hookAt: 400 });
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'late', agent_id: 'task-1', hookAt: 500 });
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'Notification', notification_type: 'permission_prompt', agent_id: 'task-1', hookAt: 510 });
+  assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+  assert.deepEqual(state.snapshot().sessions[0].tools, []);
+  assert.deepEqual(state.snapshot().sessions[0].permissionWaits, []);
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'SubagentStart', agent_id: 'task-1', hookAt: 600 });
+  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  assert.equal(state.snapshot().sessions[0].agents[0].startedAt, new Date(600).toISOString());
+});
+
+test('合成 SubagentStop で終了にし二度合成せず開始より前の通知は無視する', () => {
+  const state = backgroundClaudeState();
+  const notifications = new Map([['task-1', { status: 'killed', recordedAt: new Date(199).toISOString() }]]);
+  state.applyTaskNotifications('task-stop', notifications, 400);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  notifications.get('task-1').recordedAt = new Date(200).toISOString();
+  state.applyTaskNotifications('task-stop', notifications, 400);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+  const count = state.entries.get('task-stop').length;
+  state.applyTaskNotifications('task-stop', notifications, 500);
+  assert.equal(state.entries.get('task-stop').length, count);
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'SubagentStart', agent_id: 'task-1', hookAt: 600 });
+  state.applyTaskNotifications('task-stop', notifications, 700);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  notifications.get('task-1').recordedAt = null;
+  state.applyTaskNotifications('task-stop', notifications, 800);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+});
+
+test('背景起動した Claude サブエージェントは閉じられ閉じた後にイベントが来たら戻る', () => {
+  const state = backgroundClaudeState();
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'Stop', hookAt: 400 });
+  assert.equal(state.snapshot().sessions[0].agents[0].closable, true);
+  assert.equal(state.closeAgent('task-stop', 'task-1'), true);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, false);
+  assert.equal(state.snapshot().sessions[0].status, '待機中');
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'new-tool', agent_id: 'task-1', hookAt: 500 });
+  assert.equal(state.closedAgents.get('task-stop')?.has('task-1') || false, false);
+  assert.equal(state.snapshot().sessions[0].agents[0].active, true);
+  assert.equal(state.snapshot().sessions[0].status, '待機中(サブエージェント稼働中)');
+});
+
 test('セッション削除は作業記録を消し、PR 登録と予約と意図を残す', () => {
   const ended = [];
   const state = new DashboardState({ onSessionEndedByAbsence: (...args) => ended.push(args) });

@@ -117,4 +117,33 @@ async function estimateTranscript(claudeHome, cwd, sessionId, fileSystem = fs) {
   }
 }
 
-module.exports = { MAX_TRANSCRIPT_BYTES, estimateTranscript, transcriptPathFor };
+async function readTaskNotifications(claudeHome, cwd, sessionId, fileSystem = fs) {
+  const notifications = new Map();
+  const filePath = transcriptPathFor(claudeHome, cwd, sessionId);
+  if (!filePath) return notifications;
+  function visit(value, recordedAt, depth = 0) {
+    if (depth > 8) return;
+    if (typeof value === 'string' && value.includes('<task-notification>')) {
+      for (const block of value.split('<task-notification>').slice(1)) {
+        const match = block.split('</task-notification>')[0].match(/<task-id>([A-Za-z0-9_-]{1,64})<\/task-id>[\s\S]*?<status>(completed|killed|failed)<\/status>/);
+        if (match) notifications.set(match[1], { status: match[2], recordedAt });
+      }
+    } else if (value && typeof value === 'object') {
+      for (const item of Object.values(value)) visit(item, recordedAt, depth + 1);
+    }
+  }
+  try {
+    const tail = await readTail(fileSystem, filePath);
+    if (!tail) return notifications;
+    const lines = tail.text.split(/\r?\n/);
+    if (tail.startedMidFile) lines.shift();
+    for (const line of lines) {
+      let record;
+      try { record = JSON.parse(line); } catch { continue; }
+      visit(record, typeof record?.timestamp === 'string' ? record.timestamp : null);
+    }
+  } catch {}
+  return notifications;
+}
+
+module.exports = { MAX_TRANSCRIPT_BYTES, estimateTranscript, transcriptPathFor, readTaskNotifications };

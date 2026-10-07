@@ -582,6 +582,7 @@ function sameAgent(left, right) {
 
 function isClosableAgent(agent) {
   return (!agent.active && agent.unconfirmed)
+    || (!agent.isCodex && agent.backgrounded && agent.active)
     || (agent.isCodex && agent.backgrounded && !agent.parent_agent_id && agent.active);
 }
 
@@ -597,6 +598,18 @@ function deactivateBackgroundedCodex(session, parentAgentId) {
       agent.unconfirmed = true;
     }
   }
+}
+
+function stopAgent(session, agentId, stoppedAgentIds) {
+  const agent = agentFor(session, agentId);
+  if (agent) {
+    agent.active = false;
+    agent.unconfirmed = false;
+  }
+  stoppedAgentIds.add(agentId);
+  deactivateBackgroundedCodex(session, agentId);
+  session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
+  session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
 }
 
 // 実行 ID で直接特定できない結果行は、条件に合う行が一つの場合だけ割り当てる。
@@ -862,6 +875,8 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       const definition = event.agentDefinition || {};
       if (agent) {
         agent.active = true;
+        agent.unconfirmed = false;
+        agent.startedAt = isoTime(event.hookAt);
         agent.agent_type = event.agent_type || agent.agent_type;
         if (event.route) agent.route = event.route;
       } else {
@@ -880,9 +895,11 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     }
 
     if (eventName === 'SubagentStop' && agentId) {
-      const agent = agentFor(session, agentId);
-      if (agent) agent.active = false;
-      deactivateBackgroundedCodex(session, agentId);
+      stopAgent(session, agentId, stoppedAgentIds);
+    }
+    if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
+      const agent = agentFor(session, event.stoppedTaskId);
+      if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, stoppedAgentIds);
     }
 
     if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
@@ -891,10 +908,11 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
         session.completedToolIds.add(toolUseId);
       }
 
-      if (eventName === 'PostToolUse' && event.tool_name === 'Agent' && event.resolvedModel) {
+      if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
         const boundAgentId = session.agentToolBindings[toolUseId];
         const targetAgent = agentFor(session, boundAgentId);
-        if (targetAgent) {
+        if (targetAgent?.active) targetAgent.backgrounded = true;
+        if (targetAgent && event.resolvedModel) {
           targetAgent.model = event.resolvedModel;
           targetAgent.source = 'Agent tool response';
         }
@@ -1010,6 +1028,10 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       session.stopped = true;
     }
     if (eventName === 'SessionEnd') session.ended = true;
+    if (agentId && stoppedAgentIds.has(agentId)) {
+      session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
+      session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
+    }
   }
 
   return [...sessions.values()]
@@ -2142,11 +2164,27 @@ class DashboardState {
       this.endSession(event.session_id, event.hookAt);
     }
 
-    const clearedClosedAgent = this.reconcileClosedAgents(event.session_id);
+    const reopenedClosedAgent = event.agent_id && event.hook_event_name !== 'SubagentStop'
+      ? this.closedAgents.get(event.session_id)?.delete(event.agent_id) : false;
+    const clearedClosedAgent = this.reconcileClosedAgents(event.session_id) || reopenedClosedAgent;
     if (JSON.stringify([...this.sessions.values()]) !== before || hadEstimate || wasHidden || clearedClosedAgent) this.touch();
     if (wasHidden) this.requestStoreWrite();
     if (askDecisionStateChanged) this.requestStoreWrite();
     return true;
+  }
+
+  applyTaskNotifications(sessionId, notifications, now = Date.now()) {
+    const agents = this.sessions.get(sessionId)?.agents || [];
+    for (const agent of agents) {
+      if (agent.isCodex || !agent.active) continue;
+      const notification = notifications.get(agent.agent_id);
+      if (!notification) continue;
+      const recordedAt = Date.parse(notification.recordedAt);
+      if (Number.isFinite(recordedAt) && recordedAt < Date.parse(agent.startedAt)) continue;
+      if (!this.sessions.get(sessionId)?.agents.some((current) => current.agent_id === agent.agent_id && current.active)) continue;
+      this.addEvent({ session_id: sessionId, hook_event_name: 'SubagentStop', agent_id: agent.agent_id,
+        hookAt: Number.isFinite(recordedAt) ? recordedAt : now });
+    }
   }
 
   // 推定の読み取り中にイベントが届いたセッションは状態が分かったので、古い推定を残さない。

@@ -3,8 +3,42 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { MAX_TRANSCRIPT_BYTES, estimateTranscript } = require('../src/server/transcript');
+const { MAX_TRANSCRIPT_BYTES, estimateTranscript, readTaskNotifications } = require('../src/server/transcript');
 const { temporaryDirectory } = require('./support/temp');
+
+test('queue-operation 行と user 行の両方から終了通知を読む', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const notification = (id, status) => `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>`;
+  await fs.writeFile(fixture.filePath, [
+    JSON.stringify({ type: 'queue-operation', timestamp: '2026-10-08T01:00:00.000Z', content: notification('queue-1', 'killed') }),
+    JSON.stringify({ type: 'user', message: { content: [{ text: notification('user_1', 'completed') + notification('failed-1', 'failed') }] } }),
+  ].join('\n'));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['queue-1', { status: 'killed', recordedAt: '2026-10-08T01:00:00.000Z' }],
+    ['user_1', { status: 'completed', recordedAt: null }],
+    ['failed-1', { status: 'failed', recordedAt: null }],
+  ]));
+});
+
+test('終了通知は対象外の status と形の合わない id を捨て壊れた行を飛ばす', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const lines = ['{壊れた行}'];
+  for (const [id, status] of [['waiting', 'running'], ['../bad', 'killed'], ['x'.repeat(65), 'failed'], ['valid', 'completed']]) {
+    lines.push(JSON.stringify({ data: `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>` }));
+  }
+  await fs.writeFile(fixture.filePath, lines.join('\n'));
+  assert.deepEqual(await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId), new Map([
+    ['valid', { status: 'completed', recordedAt: null }],
+  ]));
+});
+
+test('終了通知は末尾の上限内だけを読み読めない記録は空で返す', async (t) => {
+  const fixture = await transcriptFixture(t);
+  const record = id => JSON.stringify({ data: `<task-notification><task-id>${id}</task-id><status>killed</status></task-notification>` });
+  await fs.writeFile(fixture.filePath, `${record('old')}\n${'x'.repeat(MAX_TRANSCRIPT_BYTES)}\n${record('new')}\n`);
+  assert.deepEqual([...await readTaskNotifications(fixture.claudeHome, fixture.cwd, fixture.sessionId)].map(([id]) => id), ['new']);
+  assert.equal((await readTaskNotifications(fixture.claudeHome, fixture.cwd, 'missing')).size, 0);
+});
 
 async function transcriptFixture(testContext, sessionId = 'session_1') {
   const home = temporaryDirectory(testContext, 'agent-cockpit-transcript-').directory;

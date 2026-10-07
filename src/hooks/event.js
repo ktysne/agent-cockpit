@@ -304,6 +304,8 @@ function makeHookEvent(input, now = Date.now()) {
     }
     const backgroundTaskId = event.tool_name === 'Bash' ? input.tool_response?.backgroundTaskId : null;
     if (typeof backgroundTaskId === 'string' && BACKGROUND_TASK_ID.test(backgroundTaskId)) event.backgroundTaskId = backgroundTaskId;
+    const stoppedTaskId = eventName === 'PostToolUse' && event.tool_name === 'TaskStop' ? input.tool_input?.task_id : null;
+    if (typeof stoppedTaskId === 'string' && BACKGROUND_TASK_ID.test(stoppedTaskId)) event.stoppedTaskId = stoppedTaskId;
     const backgroundOutputTaskId = backgroundOutputTaskIdOf(event.tool_name, input.tool_input);
     if (backgroundOutputTaskId) event.backgroundOutputTaskId = backgroundOutputTaskId;
     // 終了コードが 0 以外の Bash は PostToolUseFailure の error に出力が載ることがある。

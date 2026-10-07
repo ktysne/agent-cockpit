@@ -15,6 +15,19 @@ const {
 } = require('../src/hooks/event');
 const { postHookRequest } = require('../src/hooks/answer');
 const { sanitizeEvent } = require('../src/server/events');
+
+test('TaskStop の成功だけに形の合う停止タスク ID を載せて正規化する', () => {
+  for (const hook_event_name of ['PostToolUse', 'PostToolUseFailure']) {
+    for (const task_id of ['task_1-2', '', '../bad', 'x'.repeat(65), 42]) {
+      const valid = hook_event_name === 'PostToolUse' && task_id === 'task_1-2';
+      const event = makeHookEvent({ session_id: 'stop-task', hook_event_name, tool_name: 'TaskStop', tool_input: { task_id } });
+      assert.equal(event.stoppedTaskId, valid ? task_id : undefined);
+      assert.equal(sanitizeEvent(event).stoppedTaskId, valid ? task_id : undefined);
+      assert.equal(sanitizeEvent({ ...event, stoppedTaskId: task_id }).stoppedTaskId, valid ? task_id : undefined);
+    }
+  }
+  assert.equal(sanitizeEvent({ session_id: 'stop-task', hook_event_name: 'PostToolUse', tool_name: 'Read', stoppedTaskId: 'task_1-2' }).stoppedTaskId, undefined);
+});
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
 async function temporaryHome(testContext) {
