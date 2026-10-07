@@ -71,6 +71,9 @@ header.top {
 .settings-button, .settings-dialog button, .settings-dialog select, .settings-dialog input[type="number"] { min-height: 36px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
 .settings-button { position: absolute; top: 10px; right: 16px; display: inline-flex; align-items: center; justify-content: center; width: 40px; min-height: 40px; padding: 0; cursor: pointer; color: var(--text-2); }
 .settings-button:hover { color: var(--text); }
+.settings-button.has-notice::after { content: ""; position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.lineage-list { margin: 0; padding-left: 18px; }
+.lineage-list li + li { margin-top: 8px; }
 .settings-button:focus-visible, .settings-dialog button:focus-visible, .settings-dialog select:focus-visible, .settings-dialog input[type="number"]:focus-visible, .settings-dialog .settings-manual-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .away-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); cursor: pointer; white-space: nowrap; }
 .away-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--warn); }
@@ -395,6 +398,10 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 </header>
 <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
   <h2 id="settings-title">設定</h2>
+  <section id="settings-diagnostics" aria-labelledby="settings-diagnostics-title" hidden>
+    <h3 id="settings-diagnostics-title">診断</h3>
+    <ul class="lineage-list" id="settings-diagnostics-list"></ul>
+  </section>
   <section aria-labelledby="settings-display-title">
     <h3 id="settings-display-title">表示</h3>
     <div class="settings-theme-row">
@@ -656,6 +663,10 @@ const DATA = {
   // commonQuestions と instructions は、その機能が構成済みか。未構成なら「質問対応」のチップ、共通質問、指示の入力欄を出さない。
   // 確認用に、URL へ ?commonQuestions=off や ?instructions=off を付けると未構成の見え方になる。
   integrations: { codexAgent: true, crossReview: true, commonQuestions: true, instructions: true },
+  // セッションファイルに無い親から来て、どのカードにも付けられない照合の失敗。親の pid ごとに 1 件。
+  claudeLineageIssues: [
+    { reason: 'claude_parent_unverified', source: 'hook', ppid: 31872, since: new Date(Date.now() - 6 * 60_000).toISOString(), lastAt: new Date(Date.now() - 30_000).toISOString() },
+  ],
 };
 try {
   const params = new URLSearchParams(location.search);
@@ -670,8 +681,8 @@ for (const p of DATA.products) {
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
-  // 常駐サーバーは、直近のフックの照合の失敗を覚え、照合が通ったら消す。
-  if (p.id === 'agent-cockpit') mainSession.claudeLineageIssue = { reason: 'claude_parent_unverified', at: updatedAt(5) };
+  // 親の pid がセッションファイルに載っているときだけ、そのセッションに失敗を付ける。照合が通ったら消す。
+  if (p.id === 'agent-cockpit') mainSession.claudeLineageIssue = { reason: 'claude_session_mismatch', since: updatedAt(4), lastAt: updatedAt(1) };
   if (p.id === 'agent-cockpit') mainSession.commonQuestions = [
     {
       internalQuestionId: 'cq-mock-formats', questionId: '回答形式の確認', createdAt: new Date(Date.now() - 3 * 60_000).toISOString(),
@@ -1640,22 +1651,41 @@ function sessionTag(p, session, withTag, includeSession = false) {
   return `${product}${title}`;
 }
 
-// フックの照合に失敗した理由ごとの直し方。session_mismatch は /clear の直後に一時的に起きうるので、続いたときだけ札を出す。
+// 照合の失敗の理由ごとの直し方。
 const LINEAGE_ISSUES = {
-  claude_parent_unverified: { transient: false, hint: '親プロセスを Claude と確認できません。フックを exec 形式(command と args)で設定し、node を絶対パスで指定してください。シムやシェルを挟まない形にします。' },
-  claude_session_mismatch: { transient: true, hint: 'フックの session_id が親の Claude のセッションファイルと合いません。/clear の直後は一時的に起きます。続く場合は Claude を起動し直してください。' },
-  claude_sessions_unreadable: { transient: false, hint: '~/.claude/sessions のセッションファイルを読めません。ファイルの権限と置き場所を確認してください。' },
-  claude_registration_failed: { transient: false, hint: 'フックからのセッションの登録に失敗しました。常駐サーバーのログ (server.log) で原因を確認してください。' },
+  claude_parent_unverified: { hint: '親プロセスを Claude と確認できません。フックと MCP サーバーを exec 形式(command と args)で設定し、node を絶対パスで指定してください。シムやシェルを挟まない形にします。' },
+  claude_session_mismatch: { hint: 'フックの session_id が親の Claude のセッションファイルと合いません。Claude を起動し直してください。' },
+  claude_sessions_unreadable: { hint: '~/.claude/sessions のセッションファイルを読めません。ファイルの権限と置き場所を確認してください。' },
+  claude_registration_failed: { hint: 'セッションの登録に失敗しました。常駐サーバーのログ (server.log) で原因を確認してください。' },
 };
-const LINEAGE_TRANSIENT_MS = 60_000;
+// /clear や起動の直後は、セッションファイルが無い瞬間に照合して 1 回だけ失敗する。失敗が 1 分続いたものだけを出す。
+const LINEAGE_PERSIST_MS = 60_000;
 
-function lineageNotice(session, now = Date.now()) {
+function lineagePersisted(issue) {
+  if (!issue || !LINEAGE_ISSUES[issue.reason]) return false;
+  return new Date(issue.lastAt).getTime() - new Date(issue.since).getTime() >= LINEAGE_PERSIST_MS;
+}
+
+function lineageNotice(session) {
   const issue = session.claudeLineageIssue;
-  const info = issue && LINEAGE_ISSUES[issue.reason];
-  if (!info) return '';
-  const at = new Date(issue.at).getTime();
-  if (info.transient && !(now - at >= LINEAGE_TRANSIENT_MS)) return '';
-  return `<span class="lineage-tag" tabindex="0" title="${esc(info.hint)}" data-lineage-reason="${esc(issue.reason)}">フックを照合できません</span>`;
+  if (!lineagePersisted(issue)) return '';
+  return `<span class="lineage-tag" tabindex="0" title="${esc(LINEAGE_ISSUES[issue.reason].hint)}" data-lineage-reason="${esc(issue.reason)}">フックを照合できません</span>`;
+}
+
+function lineageDiagnosticItems(issues) {
+  return (issues || []).filter(lineagePersisted).map(issue => {
+    const source = issue.source === 'mcp' ? 'MCP サーバー' : 'フック';
+    return `<li data-lineage-reason="${esc(issue.reason)}">親の pid ${esc(issue.ppid)} から来た${source}を照合できません。${esc(LINEAGE_ISSUES[issue.reason].hint)}</li>`;
+  });
+}
+
+function renderLineageDiagnostics() {
+  const items = lineageDiagnosticItems(DATA.claudeLineageIssues);
+  document.getElementById('settings-diagnostics-list').innerHTML = items.join('');
+  document.getElementById('settings-diagnostics').hidden = items.length === 0;
+  settingsButton.classList.toggle('has-notice', items.length > 0);
+  settingsButton.setAttribute('aria-label', items.length ? '設定(診断に警告があります)' : '設定');
+  settingsButton.title = settingsButton.getAttribute('aria-label');
 }
 
 function mainRow(p, session, withTag) {
@@ -2621,6 +2651,7 @@ function render() {
   renderConnectionNote();
   renderReloadNote();
   renderRouting();
+  renderLineageDiagnostics();
   const root = document.getElementById('root');
   root.innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
   const recovery = DATA.integrations.instructions && typeof instructionAlternativeRecoveryPanel === 'function' ? instructionAlternativeRecoveryPanel() : '';
