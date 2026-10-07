@@ -110,7 +110,7 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
     assert.equal(Object.fromEntries(cssDeclarations(source, `${row} > *`)).flex, 'none');
     assert.match(source, new RegExp(`${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^{]*\\{[^}]*flex: 0 1 auto; min-width: 0;`));
   }
-  for (const selector of ['.task-body', '.task-text', '.task-actions', '.task-actions .link-btn', '.task-actions .link-btn:hover', '.pr-body', '.pr-text','.pr-text > .badges', '.pr-actions', '.pr-actions .merge-btn, .pr-actions .conflict-btn', '.merge-state', '.merge-state.ok', '.pr .pline', '.pr .pline > *', '.pr .pline > .ptitle']) {
+  for (const selector of ['.task-body', '.task-text', '.task-actions', '.task-actions .link-btn', '.task-actions .link-btn:hover', '.close-note > span', '.pr-body', '.pr-text','.pr-text > .badges', '.pr-actions', '.pr-actions .merge-btn, .pr-actions .conflict-btn', '.merge-state', '.merge-state.ok', '.pr .pline', '.pr .pline > *', '.pr .pline > .ptitle']) {
     assert.deepEqual(cssDeclarations(web, selector), cssDeclarations(mock, selector), `${selector} はモックとそろえる`);
   }
   assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-text'))['min-width'], '0', '題は左の列の中で折り返す');
