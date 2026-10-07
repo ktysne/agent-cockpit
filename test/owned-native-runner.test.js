@@ -861,6 +861,28 @@ function waitReplies(harness, requestId = 'wait_request_1') {
     .filter((message) => message.id === requestId && Object.hasOwn(message, 'result'));
 }
 
+function deferNextWaitResponseWrite(harness) {
+  const stdin = harness.child.stdin;
+  const write = stdin.write.bind(stdin);
+  let complete = null;
+  stdin.write = (value, callback) => {
+    const line = value.toString();
+    const message = JSON.parse(line);
+    if (Object.hasOwn(message, 'result') && Object.hasOwn(message, 'id')) {
+      stdin.writes.push(line);
+      complete = callback;
+      return true;
+    }
+    return write(value, callback);
+  };
+  return (error) => {
+    const callback = complete;
+    complete = null;
+    assert.equal(typeof callback, 'function');
+    callback(error);
+  };
+}
+
 test('native questions and approvals bind to the current turn and accept matching terminal resolutions', async (t) => {
   const workspace = createWorkspace(t);
   const harness = createWaitProfileHarness(workspace);
@@ -1104,6 +1126,165 @@ test('a wait request without jsonrpc is accepted only with exact native correlat
     id: 'wait_request_1',
     result: { contentItems: [{ type: 'inputText', text: 'cancelled' }], success: false },
   });
+  await runner.stop();
+});
+
+test('a resolved notification confirms only a written owned wait and remains scoped after turn end', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  assert.equal(runner.releaseWait(receipt), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(waitReplies(harness).length, 1);
+
+  harness.child.send(codexTurnCompleted());
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().failureCode, 'native_server_resolution_unmatched');
+  await runner.stop();
+});
+
+test('a resolved notification may precede the owned wait write callback but cannot confirm a failed write', async (t) => {
+  for (const writeError of [null, new Error('private write failure')]) {
+    const workspace = createWorkspace(t);
+    let receipt = null;
+    const harness = createWaitProfileHarness(workspace, {
+      waitCallsAfterTurnResponse: [makeWaitRequest()],
+    });
+    const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+
+    await runner.start({ inputText: 'fixed task' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(receipt);
+    const completeWrite = deferNextWaitResponseWrite(harness);
+    assert.equal(runner.releaseWait(receipt), true);
+    harness.child.send(nativeHoldResolved('wait_request_1'));
+    assert.equal(runner.snapshot().state, 'running');
+    completeWrite(writeError);
+    if (writeError) {
+      assert.equal(runner.snapshot().failureCode, 'wait_response_write_failed');
+    } else {
+      assert.equal(runner.snapshot().state, 'running');
+      assert.equal(waitReplies(harness).length, 1);
+    }
+    await runner.stop();
+  }
+});
+
+test('late wait resolution and write callback cannot restore a stopped runner', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  const completeWrite = deferNextWaitResponseWrite(harness);
+  assert.equal(runner.releaseWait(receipt), true);
+
+  await runner.stop();
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  completeWrite();
+  assert.equal(runner.snapshot().state, 'stopped');
+  assert.equal(runner.snapshot().failureCode, null);
+});
+
+test('resolving an owned wait after turn end leaves a different native hold independently resolvable', async (t) => {
+  const workspace = createWorkspace(t);
+  let receipt = null;
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+  await runner.start({ inputText: 'fixed task' });
+  harness.child.send(makeNativeHoldRequest('pending-question'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
+  assert.equal(runner.releaseWait(receipt), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const pending = runner.captureNativePendingSummary('thread_native_1', 'turn_native_1');
+  assert.deepEqual(pending.pending, [{ kind: 'question', count: 1 }]);
+  harness.child.send(codexTurnCompleted());
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(pending.checkCurrent(), false);
+  harness.child.send(nativeHoldResolved('pending-question'));
+  assert.equal(runner.snapshot().state, 'running');
+  await runner.stop();
+});
+
+test('owned wait resolutions reject different IDs, ID types, and threads', async (t) => {
+  const cases = [
+    { waitId: 'owned-wait', resolution: nativeHoldResolved('other-wait'), failureCode: 'native_server_resolution_unmatched' },
+    { waitId: 7, resolution: nativeHoldResolved('7'), failureCode: 'native_server_resolution_unmatched' },
+    { waitId: 'wrong-thread-wait', resolution: nativeHoldResolved('wrong-thread-wait', 'thread_other'), failureCode: 'native_server_resolution_scope_mismatch' },
+  ];
+  for (const scenario of cases) {
+    const workspace = createWorkspace(t);
+    let receipt = null;
+    const harness = createWaitProfileHarness(workspace, {
+      waitCallsAfterTurnResponse: [makeWaitRequest({}, { requestId: scenario.waitId })],
+    });
+    const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
+    await runner.start({ inputText: 'fixed task' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(receipt);
+    assert.equal(runner.releaseWait(receipt), true);
+    await new Promise((resolve) => setImmediate(resolve));
+    harness.child.send(scenario.resolution);
+    assert.equal(runner.snapshot().failureCode, scenario.failureCode);
+    await runner.stop();
+  }
+});
+
+test('native request IDs cannot collide with an owned wait in either arrival order', async (t) => {
+  const scenarios = [
+    {
+      events: [makeWaitRequest({}, { requestId: 'shared-request-id' }), makeNativeHoldRequest('shared-request-id')],
+      expectedCallbacks: 1,
+    },
+    {
+      events: [makeNativeHoldRequest('shared-request-id'), makeWaitRequest({}, { requestId: 'shared-request-id' })],
+      expectedCallbacks: 0,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const workspace = createWorkspace(t);
+    let callbacks = 0;
+    const harness = createWaitProfileHarness(workspace, { waitCallsAfterTurnResponse: scenario.events });
+    const runner = createWaitRunner(workspace, harness, { onWaitRequired: () => { callbacks += 1; } });
+    await runner.start({ inputText: 'fixed task' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(runner.snapshot().failureCode, 'native_server_request_id_reused');
+    assert.equal(callbacks, scenario.expectedCallbacks);
+    assert.equal(waitReplies(harness).length, 0);
+    await runner.stop();
+  }
+});
+
+test('owned wait request IDs share the bounded runner lifetime limit', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.child.send(...Array.from({ length: 127 }, (_, index) => makeNativeHoldRequest(`request-${index}`)));
+  assert.equal(runner.snapshot().state, 'running');
+  harness.child.send(makeNativeHoldRequest('request-overflow'));
+  assert.equal(runner.snapshot().failureCode, 'native_server_request_limit');
   await runner.stop();
 });
 

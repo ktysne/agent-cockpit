@@ -44,7 +44,13 @@ wait profileだけが releaseWait(receipt) と cancelWait(receipt) を返す。
 receiptは一回だけ使え、別runnerや別contextへ移せない。
 releaseWait() のtrueはlatchがterminal操作を受け付けたことを示し、native pipeへのresponse成功は保証しない。
 release、cancel、deadlineの応答にはrunnerが固定したstatusとsuccessだけを含める。
-request IDはmatching requestへ応答する間だけメモリーに保持し、snapshotやlogには含めない。
+native request IDは文字列と整数を区別し、runner寿命中の一意ID集合で再利用を拒否する。
+native hold requestとowned wait requestは同じrunner寿命中128件の上限を使い、上限到達時はrunnerをfail closedにする。この上限は長い実行に対する可用性上の制約となる。
+wait responseのwrite直前に既存のwait gateを再確認し、型付きrequest ID、child、generation、thread、元turnだけを非公開のresponse記録へ保存する。
+`serverRequest/resolved`は同じchild、generation、threadに対応するowned wait responseだけを確認し、pending hold requestの既存照合条件は別に維持する。
+resolution通知がwrite callbackより先に届いた場合は両方の到着まで記録を保持し、write errorはresponse失敗としてrunnerを停止する。
+resolution時に現在turnとの一致は求めないため、wait response後にturnが進んでも元のscopeで確認できる。
+response記録はwrite成功と対応通知の両方を確認した後、またはrunnerの失敗・停止時に破棄し、request IDやresponse本文はsnapshotやlogへ含めない。
 
 ## deadlineとprocess寿命
 
