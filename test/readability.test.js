@@ -55,7 +55,7 @@ test('ライトとダークの状態色およびボタン文字のコントラ�
     {
       html: web,
       statuses: [
-        ['--ok-text', '--ok-soft', ['.badge.done', '.badge.ok', '.chip.ok', '.answer-choice.ok:has(input:checked)']],
+        ['--ok-text', '--ok-soft', ['.badge.done', '.badge.ok', '.chip.ok']],
         ['--warn-text', '--warn-soft', ['.badge.wait', '.badge.warn', '.chip.warn']],
         ['--accent-text', '--accent-soft', ['.badge.busy', '.badge.accent', '.chip.accent', '.news-head']],
       ],
@@ -63,7 +63,7 @@ test('ライトとダークの状態色およびボタン文字のコントラ�
     {
       html: mock,
       statuses: [
-        ['--ok-text', '--ok-soft', ['.badge.done', '.badge.ok', '.state.done', '.chip.ok', '.check.ok:has(input:checked)']],
+        ['--ok-text', '--ok-soft', ['.badge.done', '.badge.ok', '.state.done', '.chip.ok']],
         ['--warn-text', '--warn-soft', ['.badge.wait', '.badge.warn', '.chip.warn']],
         ['--accent-text', '--accent-soft', ['.badge.busy', '.badge.accent', '.state.doing', '.chip.accent', '.news .nhead']],
       ],

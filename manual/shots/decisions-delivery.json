@@ -25,7 +25,6 @@
         "awaiting.time": ".decision-list > .decision-card:nth-child(1) .decision-head time",
         "awaiting.remaining": ".decision-list > .decision-card:nth-child(1) .awaiting-min",
         "awaiting.options": ".decision-list > .decision-card:nth-child(1) .decision-options",
-        "awaiting.ok": ".decision-list > .decision-card:nth-child(1) .answer-choice.ok",
         "awaiting.send": ".decision-list > .decision-card:nth-child(1) [data-send-answer]"
       }
     },

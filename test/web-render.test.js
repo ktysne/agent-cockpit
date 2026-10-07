@@ -496,7 +496,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
 
 function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
+  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'answerValueFor', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks', 'recommendedOptionsForQuestions']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
@@ -2293,7 +2293,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
 test('選択肢を押すと送る答えが表示され、回答を送るが有効になる', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functionNames = [
-    'answerDraftKey', 'answerDraftFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
+    'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
     'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
     'answerMetaText', 'canSendDecisionAnswer', 'updateAnswerSubmit',
@@ -2316,10 +2316,8 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   // 単一選択で選び直したときに、前の選択が残らないことも確かめるため、推奨を選んだ状態から始める。
   const answerDrafts = new Map([[key, { choice: 'pick', picks: [['JSON (推奨)']], note: '' }]]);
   const button = { disabled: true };
-  // 推奨の無い質問を未選択で描くと、送る答えの欄は空で隠れている。
   const meta = { textContent: '', hidden: true };
   const error = { textContent: '' };
-  const answerChoices = [{ checked: true }, { checked: true }];
   const card = {
     dataset: { sessionId: 'session-ui', decisionId: 'decision-ui' },
     querySelector(selector) {
@@ -2328,9 +2326,6 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
       if (selector === '.answer-error') return error;
       return null;
     },
-    querySelectorAll(selector) {
-      return selector === '[data-answer-choice]' ? answerChoices : [];
-    },
   };
   const pick = {
     type: 'radio', checked: true,
@@ -2338,7 +2333,6 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
       sessionId: 'session-ui', decisionId: 'decision-ui', answerQuestion: '0', answerOption: '1',
     },
     closest(selector) {
-      if (selector === '[data-answer-choice]') return null;
       if (selector === '[data-answer-pick]') return this;
       if (selector === '.decision-card') return { querySelector: (inner) => (inner === '.decision-answer' ? card : null) };
       return null;
@@ -2359,8 +2353,45 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   assert.equal(meta.textContent, '送る答え: CSV');
   assert.equal(meta.hidden, false);
   assert.equal(button.disabled, false);
-  assert.deepEqual(answerChoices.map((choice) => choice.checked), [false, false]);
   assert.equal(error.textContent, '');
+});
+
+test('送信済みの推奨案で OK は推奨選択肢を選んだ下書きとして表示する', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const names = [
+    'answerDraftFor', 'answerValueFor', 'copyAnswerPicks', 'recommendedOptionsForQuestions',
+    'answerDraftChanged', 'sameAnswerPicks', 'displayRecommendedLabel', 'selectedAnswerLabels', 'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText',
+  ];
+  const functions = names.map((name) => functionSource(html, name));
+  assert.ok(functions.every(Boolean));
+
+  const decision = {
+    id: 'decision-legacy',
+    questions: [
+      {
+        question: '形式を決める', multiSelect: false,
+        options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+      },
+      {
+        question: '排他制御の方式を決める', multiSelect: false,
+        options: [{ label: '行ロック', recommended: true }, { label: '楽観ロック', recommended: false }],
+      },
+    ],
+    answer: { choice: 'ok', picks: [], note: '保存済みの指示', sentAt: '2026-10-03T00:00:00.000Z' },
+  };
+  const context = pageContext(html, {
+    answerDrafts: new Map(),
+    absoluteTimeLabel: () => '保存済みの時刻',
+  });
+  vm.runInContext(`${functions.join('\n')}\nthis.makeDraft = answerDraftFor; this.changed = answerDraftChanged; this.meta = answerMetaText; this.canSend = canSendDecisionAnswer; this.status = answerStatusText;`, context);
+  const draft = context.makeDraft(decision, { session_id: 'session-legacy' });
+
+  assert.equal(draft.choice, 'pick');
+  assert.deepEqual(JSON.parse(JSON.stringify(draft.picks)), [['JSON (推奨)'], ['行ロック']]);
+  assert.equal(context.changed(decision, draft), false);
+  assert.equal(context.meta(decision, draft), '送る答え: JSON、行ロック');
+  assert.equal(context.canSend(decision, draft), true);
+  assert.equal(context.status(decision.answer, decision), '保存済みの時刻 に送信済み: 推奨案で OK (指示あり)');
 });
 
 test('指示欄の変換中は描き直しを保留し、変換終了後に反映する', () => {
