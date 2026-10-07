@@ -91,7 +91,10 @@ async function createRuntime(t, options = {}) {
     },
     close: async () => {},
   } : null;
-  const instructionService = options.instructionServiceFactory
+  const instructionConfigured = options.withInstruction !== false;
+  const instructionServiceConfigured = instructionConfigured && options.withInstructionService !== false;
+  const instructionTargetsConfigured = instructionConfigured && options.withInstructionTargets !== false;
+  const instructionService = !instructionServiceConfigured ? null : options.instructionServiceFactory
     ? options.instructionServiceFactory(harness.service)
     : harness.service;
   const runtime = await startServer({
@@ -100,9 +103,9 @@ async function createRuntime(t, options = {}) {
     userHome: temporary.homeDir,
     port: 0,
     registrationRegistry: registrationView(harness),
-    launchRegistry: harness.launchRegistry,
+    launchRegistry: instructionTargetsConfigured ? harness.launchRegistry : null,
     instructionService,
-    instructionTargetState: harness.targetState,
+    instructionTargetState: instructionTargetsConfigured ? harness.targetState : null,
     questionService,
   });
   t.after(async () => {
@@ -185,6 +188,42 @@ function createBody(harness, overrides = {}) {
   };
 }
 
+test('未構成の指示機能を診断状態で区別する', async (t) => {
+  const { runtime } = await createRuntime(t, { withInstruction: false });
+  const state = await request(runtime.info.port, { path: '/api/state' });
+  assert.equal(state.status, 200);
+  const snapshot = jsonBody(state);
+  assert.deepEqual(snapshot.instructionDiagnostics, {
+    configuration: 'unconfigured', service: 'unavailable', targets: 'unavailable',
+  });
+  assert.equal(snapshot.commonQuestionDiagnostics, undefined);
+});
+
+test('対象だけ構成された指示機能は未構成ではなく対象利用不能を診断する', async (t) => {
+  const { runtime } = await createRuntime(t, { withInstructionService: false });
+  const state = await request(runtime.info.port, { path: '/api/state' });
+  assert.equal(state.status, 200);
+  assert.deepEqual(jsonBody(state).instructionDiagnostics, {
+    configuration: 'configured', service: 'unavailable', targets: 'available',
+  });
+});
+
+test('構成済み指示サービスの起動失敗を診断に残す', async (t) => {
+  const { runtime } = await createRuntime(t, {
+    instructionServiceFactory: (service) => ({
+      ready: async () => { throw new Error('service unavailable'); },
+      dashboardSnapshot: () => service.dashboardSnapshot(),
+      close: () => service.close(),
+    }),
+  });
+  const state = await request(runtime.info.port, { path: '/api/state' });
+  assert.equal(state.status, 200);
+  const diagnostics = jsonBody(state).instructionDiagnostics;
+  assert.equal(diagnostics.configuration, 'configured');
+  assert.equal(diagnostics.service, 'unavailable');
+  assert.equal(diagnostics.targets, 'available');
+});
+
 for (const provider of PROVIDERS) {
   for (const origin of ['standalone', 'delegated']) {
     test(`${provider} ${origin} instruction create is scoped, idempotent, and payload-free`, async (t) => {
@@ -213,6 +252,11 @@ for (const provider of PROVIDERS) {
       const state = await request(runtime.info.port, { path: '/api/state' });
       assert.equal(state.status, 200);
       assert.equal(state.body.includes(body.text), false);
+      assert.deepEqual({
+        configuration: jsonBody(state).instructionDiagnostics.configuration,
+        service: jsonBody(state).instructionDiagnostics.service,
+        targets: jsonBody(state).instructionDiagnostics.targets,
+      }, { configuration: 'configured', service: 'ready', targets: 'available' });
       const projection = jsonBody(state).sessions.find((item) => item.session_id === body.session_id)?.instructions?.[0];
       assert.ok(projection);
       assert.equal(projection.executionId, harness.launch.executionBinding.periodId);

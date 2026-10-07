@@ -598,6 +598,58 @@ test('指示対象や診断だけが変わっても画面署名が変わる', ()
   }));
 });
 
+test('指示診断noticeは明示的な未構成時だけ隠す', () => {
+  const element = functionSource(pageHtml, 'element');
+  const noticeSource = functionSource(pageHtml, 'instructionDiagnosticsNotice');
+  assert.ok(element && noticeSource);
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.attributes = {};
+      this.className = '';
+      this.textContent = '';
+    }
+    append(...nodes) { this.children.push(...nodes); }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  const context = pageContext(pageHtml, { document: { createElement: (tagName) => new FakeElement(tagName) } });
+  vm.runInContext(`${element}\n${noticeSource}`, context);
+
+  const textOf = (node) => [node.textContent, ...node.children.map(textOf)].join('');
+
+  assert.equal(context.instructionDiagnosticsNotice({
+    configuration: 'unconfigured', service: 'unavailable', targets: 'unavailable',
+  }), null);
+
+  const unavailable = context.instructionDiagnosticsNotice({
+    configuration: 'configured', service: 'unavailable', targets: 'unavailable',
+  });
+  assert.equal(unavailable.tagName, 'section');
+  assert.equal(unavailable.className, 'instruction-diagnostics');
+  assert.equal(unavailable.attributes.role, 'status');
+  assert.match(textOf(unavailable), /保存サービスに接続できません/);
+  assert.match(textOf(unavailable), /不明な指示は自動再送しません/);
+  const legacyUnavailable = context.instructionDiagnosticsNotice({ service: 'unavailable', targets: 'unavailable' });
+  assert.ok(legacyUnavailable);
+  assert.match(textOf(legacyUnavailable), /保存サービスに接続できません/);
+  assert.match(textOf(legacyUnavailable), /不明な指示は自動再送しません/);
+
+  assert.equal(context.instructionDiagnosticsNotice({
+    configuration: 'configured', service: 'ready', targets: 'available', blocked: false,
+  }), null);
+
+  const unknownRecovery = context.instructionDiagnosticsNotice({
+    configuration: 'configured', service: 'unknown', targets: 'available', errorCode: 'instruction_state_unknown',
+  });
+  assert.match(textOf(unknownRecovery), /復旧確認が必要です/);
+
+  const unknownConfiguration = context.instructionDiagnosticsNotice({
+    configuration: 'future-value', service: 'unknown', targets: 'available',
+  });
+  assert.ok(unknownConfiguration);
+});
+
 test('同じ実行の一時的な待機中は入力下書きを保ち、対象消失後は版更新を許す', () => {
   const draft = [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '入力中' }]];
   const waiting = reloadHarness('v1', [], { drafts: draft });
