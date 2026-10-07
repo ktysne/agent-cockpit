@@ -5,7 +5,7 @@
     ".session-body > ul.task-list + .ended-toggle + .ended-toggle"
   ],
   "width": 1524,
-  "height": 344,
+  "height": 324,
   "parts": [
     {
       "key": "task.heading",
@@ -21,7 +21,7 @@
       "key": "task.state",
       "bounds": {
         "x": 20,
-        "y": 80,
+        "y": 69,
         "width": 98,
         "height": 44
       },
@@ -31,7 +31,7 @@
       "key": "task.title",
       "bounds": {
         "x": 134,
-        "y": 78,
+        "y": 67,
         "width": 323,
         "height": 45
       },
@@ -40,8 +40,8 @@
     {
       "key": "task.count",
       "bounds": {
-        "x": 473,
-        "y": 82,
+        "x": 1300,
+        "y": 98,
         "width": 138,
         "height": 38
       },
@@ -50,8 +50,8 @@
     {
       "key": "task.close",
       "bounds": {
-        "x": 1384,
-        "y": 67,
+        "x": 1309,
+        "y": 141,
         "width": 120,
         "height": 64
       },
@@ -61,8 +61,8 @@
       "key": "task.criteria",
       "bounds": {
         "x": 20,
-        "y": 139,
-        "width": 1484,
+        "y": 121,
+        "width": 1164,
         "height": 115
       },
       "visible": true
@@ -71,7 +71,7 @@
       "key": "task.todo-toggle",
       "bounds": {
         "x": 0,
-        "y": 278,
+        "y": 260,
         "width": 321,
         "height": 64
       },
@@ -81,7 +81,7 @@
       "key": "task.done-toggle",
       "bounds": {
         "x": 321,
-        "y": 278,
+        "y": 260,
         "width": 313,
         "height": 64
       },

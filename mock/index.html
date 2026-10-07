@@ -178,7 +178,12 @@ h3.sub .count { font-weight: normal; }
 .kind-task-head .session-tag { color: var(--text); font-size: 13px; font-weight: 600; }
 .task { padding: 6px 10px; border-radius: 8px; }
 .task:hover { background: var(--surface-2); }
-/* 幅が足りないときは題の中で折り返し、状態の札、完了条件の数、完了にするを同じ行に残す。 */
+/* PR の行と同じく、文字は左の列で折り返し、完了条件の数と完了にするは右の列に縦に積む。 */
+.task-body { display: flex; gap: 12px; align-items: stretch; }
+.task-text { flex: 1 1 auto; min-width: 0; }
+.task-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
+.task-actions .link-btn { color: var(--text-2); font-size: 12px; }
+.task-actions .link-btn:hover { color: var(--text); }
 .task .line { display: flex; gap: 4px 8px; align-items: baseline; min-width: 0; }
 .task .line > * { flex: none; }
 .task .line > .title, .task .line > .prod-tag, .task .line > .session-tag { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
@@ -187,8 +192,6 @@ h3.sub .count { font-weight: normal; }
 .state.doing { background: var(--accent-soft); color: var(--accent-text); }
 .state.todo { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
 .task.done .title { color: var(--text-2); }
-.task .line .link-btn { margin-left: auto; flex: none; color: var(--text-2); font-size: 12px; }
-.task .line .link-btn:hover { color: var(--text); }
 .close-agent { margin-left: auto; color: var(--text-2); font-size: 12px; }
 .close-agent:hover { color: var(--text); }
 .criteria { margin: 4px 0 0 0; padding-left: 20px; font-size: 12px; color: var(--text-2); }
@@ -1262,10 +1265,11 @@ function taskItem(p, session, t, withTag) {
   const close = state === 'done' ? '' : pending
     ? `<button type="button" class="link-btn" data-cancel-close-task="${esc(key)}">取り消す</button><span class="meta">5 秒後に完了にします。</span>`
     : `<button type="button" class="link-btn" data-close-task="${esc(key)}">完了にする</button>`;
-  return `<li class="task ${state}">
+  return `<li class="task ${state}"><div class="task-body"><div class="task-text">
     <div class="line"><span class="state ${state}">${label}</span>${sessionTag(p, session, withTag)}
-      <span class="title">${esc(t.title)}</span><span class="meta">完了条件 ${met}/${t.criteria.length}${closedHere ? '、画面で完了にした' : ''}</span>${close}</div>
-    <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></li>`;
+      <span class="title">${esc(t.title)}</span></div>
+    <ul class="criteria">${t.criteria.map(c => `<li class="${c.met ? 'met' : ''}">${esc(c.t)}</li>`).join('')}</ul></div>
+    <div class="task-actions"><span class="meta">完了条件 ${met}/${t.criteria.length}</span>${closedHere ? '<span class="meta">画面で完了にした</span>' : ''}${close}</div></div></li>`;
 }
 
 function isLongWait(minutes) {

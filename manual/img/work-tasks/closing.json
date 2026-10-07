@@ -1,14 +1,14 @@
 {
   "name": "closing",
-  "target": ".session-body > ul.task-list > .task-item:nth-child(1) .task-head",
+  "target": ".session-body > ul.task-list > .task-item:nth-child(1) .task-body",
   "width": 1484,
-  "height": 66,
+  "height": 170,
   "parts": [
     {
       "key": "closing.cancel",
       "bounds": {
-        "x": 1149,
-        "y": 1,
+        "x": 1301,
+        "y": 54,
         "width": 96,
         "height": 64
       },
@@ -17,8 +17,8 @@
     {
       "key": "closing.note",
       "bounds": {
-        "x": 1261,
-        "y": 16,
+        "x": 1237,
+        "y": 122,
         "width": 223,
         "height": 38
       },

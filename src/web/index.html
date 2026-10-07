@@ -201,7 +201,12 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .task-item { min-width: 0; overflow-wrap: anywhere; padding: 6px 10px; border-radius: 8px; }
 .task-item:hover { background: var(--surface-2); }
 .task-item.done .task-title { color: var(--text-2); }
-/* 幅が足りないときは題の中で折り返し、状態の札、完了条件の数、完了にするを同じ行に残す。狭い画面での戻し方は @media (max-width: 480px) にある。 */
+/* PR の行と同じく、文字は左の列で折り返し、完了条件の数と完了にするは右の列に縦に積む。 */
+.task-body { display: flex; gap: 12px; align-items: stretch; }
+.task-text { flex: 1 1 auto; min-width: 0; }
+.task-actions { flex: none; width: 148px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; text-align: center; font-size: 12px; }
+.task-actions .link-btn { color: var(--text-2); font-size: 12px; }
+.task-actions .link-btn:hover { color: var(--text); }
 .task-head { display: flex; align-items: baseline; gap: 6px 8px; }
 .task-head > * { flex: none; }
 .task-head > .prod-tag, .task-head > .session-tag { flex: 0 1 auto; min-width: 0; }
@@ -230,8 +235,7 @@ button.chip[aria-pressed="false"] strong { color: var(--text-2); }
 .filter-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; background: var(--surface); color: var(--text-2); font-size: 12px; }
 .filter-note[hidden], .body[hidden] { display: none; }
 .link-btn { min-height: 32px; padding: 4px 0; border: 0; background: none; color: var(--accent); cursor: pointer; font-size: 12px; text-decoration: underline; }
-.task-item .close-task { margin-left: auto; flex: none; color: var(--text-2); }
-.task-item .close-task:hover, .close-agent:hover { color: var(--text); }
+.close-agent:hover { color: var(--text); }
 .close-agent { margin-left: auto; color: var(--text-2); font-size: 12px; }
 .section { overflow: visible; }
 .section > .head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -2765,8 +2769,12 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
   header.append(badge(labels[task.state] || task.state, task.state === 'done' ? 'done' : task.state === 'doing' ? 'busy' : ''));
   appendContextTags(header, product, session, withTags, multipleSessions);
   header.append(element('span', 'task-title', task.title));
+  const body = element('div', 'task-body');
+  const text = element('div', 'task-text');
+  const actions = element('div', 'task-actions');
   const met = task.criteria.filter((criterion) => criterion.met).length;
-  header.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}${task.closedByUser ? '、画面で完了にした' : ''}`));
+  actions.append(element('span', 'meta', `完了条件 ${met}/${task.criteria.length}`));
+  if (task.closedByUser) actions.append(element('span', 'meta', '画面で完了にした'));
   if (task.state !== 'done') {
     const closeKey = `${session.session_id}::${task.title}`;
     const pending = pendingTaskCloseActions.has(closeKey);
@@ -2776,18 +2784,20 @@ function appendTaskItem(list, task, product, session, withTags = false, multiple
     close.disabled = sending;
     if (pending) close.dataset.cancelCloseTask = closeKey;
     else if (!sending) close.dataset.closeTask = closeKey;
-    header.append(close);
-    if (pending) header.append(element('span', 'meta', '5 秒後に完了にします。'));
+    actions.append(close);
+    if (pending) actions.append(element('span', 'meta', '5 秒後に完了にします。'));
   }
-  item.append(header);
+  text.append(header);
   if (task.criteria.length) {
     const criteria = element('ul', 'criteria-list');
     for (const criterion of task.criteria) {
       const row = element('li', criterion.met ? 'met' : '', criterion.text);
       criteria.append(row);
     }
-    item.append(criteria);
+    text.append(criteria);
   }
+  body.append(text, actions);
+  item.append(body);
   list.append(item);
 }
 
