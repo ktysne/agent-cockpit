@@ -172,6 +172,48 @@ function mergeInput(number = 1, changes = {}) {
   };
 }
 
+for (const scenario of [
+  { name: '削除オフ', deleteBranch: false, autoDeleteBranch: false, fork: false, kept: true },
+  { name: '自動削除', deleteBranch: false, autoDeleteBranch: true, fork: false, kept: false },
+  { name: 'fork と自動削除', deleteBranch: false, autoDeleteBranch: true, fork: true, kept: true },
+  { name: '削除オン', deleteBranch: true, autoDeleteBranch: false, fork: false, kept: false },
+]) {
+  for (const reserved of [false, true]) {
+    test(`${scenario.name} の${reserved ? '予約' : '即時'}マージは削除の選択に従って子の base と通知を決める`, async (t) => {
+      const fixture = await mergeFixture(t, [
+        ghPullRequest(1, 'feature/one', 'main', { fields: { isCrossRepository: scenario.fork } }),
+        ghPullRequest(2, 'feature/two', 'feature/one'),
+      ]);
+      fixture.control.autoDeleteBranch = scenario.autoDeleteBranch;
+      const input = mergeInput(1, { deleteBranch: scenario.deleteBranch });
+      const result = reserved ? await fixture.manager.reserve(input) : await fixture.manager.merge(input);
+      assert.equal(result.ok, true);
+      if (reserved) {
+        await primeReadyReservation(fixture);
+        fixture.github.openPullRequests.find((item) => item.number === 1).isCrossRepository = scenario.fork;
+        await fixture.manager.checkReservations();
+      }
+      const child = fixture.github.openPullRequests.find((item) => item.number === 2);
+      assert.equal(child.baseRefName, scenario.kept ? 'feature/one' : 'main');
+      assert.equal(fixture.calls.some((args) => args[0] === 'pr' && args[1] === 'edit'), !scenario.kept);
+      const history = fixture.state.mergedPullRequestHistoryForRepo('example', 'project', NOW)[0];
+      assert.equal(fixture.state.pullRequestRegistrationForSession('session-1', 'example', 'project', 1).mergedHead.branchKept, scenario.kept ? true : undefined);
+      if (reserved) {
+        assert.equal(history.automaticResult.retargetedBase, scenario.kept ? null : 'main');
+        assert.deepEqual(history.automaticResult.retargetedNumbers, scenario.kept ? [] : [2]);
+      }
+      const notice = fixture.notices.at(-1).message;
+      if (scenario.kept) {
+        assert.doesNotMatch(notice, /git rebase --onto/);
+        if (!scenario.fork) assert.match(notice, /feature\/one は残したので、#2 の base は feature\/one のまま/);
+        assert.match(notice, /マージコミットを推奨/);
+      } else {
+        assert.match(notice, /git rebase --onto main feature\/one/);
+      }
+    });
+  }
+}
+
 function setCandidateMergeable(tracker) {
   const mergeCandidate = tracker.mergeCandidate.bind(tracker);
   tracker.mergeCandidate = (...args) => {
@@ -485,7 +527,7 @@ test('子 PR の base の付け替えに失敗したらマージせず完了位�
   ]);
   fixture.control.failEditNumber = 2;
 
-  const result = await fixture.manager.merge(mergeInput(1));
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 502);
@@ -569,7 +611,7 @@ test('子 PR を付け替えた後に新しいマージ理由が出たら再確�
   ]);
   fixture.control.blockAfterEdit = true;
 
-  const result = await fixture.manager.merge(mergeInput(1));
+  const result = await fixture.manager.merge(mergeInput(1, { deleteBranch: true }));
 
   assert.equal(result.ok, false);
   assert.match(result.error, /#2 の base は付け替え済み/);
@@ -585,12 +627,12 @@ test('base 付け替え後にマージが失敗しても再試行時に開いた
   ]);
   fixture.control.failMerge = true;
 
-  const failed = await fixture.manager.merge(mergeInput(1, { method: 'rebase' }));
+  const failed = await fixture.manager.merge(mergeInput(1, { method: 'rebase', deleteBranch: true }));
   assert.equal(failed.ok, false);
   assert.equal(fixture.github.openPullRequests.find((item) => item.number === 2).baseRefName, 'main');
   fixture.control.failMerge = false;
 
-  const retried = await fixture.manager.merge(mergeInput(1, { method: 'rebase' }));
+  const retried = await fixture.manager.merge(mergeInput(1, { method: 'rebase', deleteBranch: true }));
 
   assert.equal(retried.ok, true);
   assert.equal(fixture.calls.filter((args) => args[0] === 'pr' && args[1] === 'edit').length, 1);
@@ -896,7 +938,7 @@ test('スカッシュまたはリベースで上に積んだ PR の作成元へ�
     ghPullRequest(2, 'feature/two', 'feature/one'),
   ]);
 
-  const result = await fixture.manager.merge(mergeInput(1, { method: 'rebase' }));
+  const result = await fixture.manager.merge(mergeInput(1, { method: 'rebase', deleteBranch: true }));
 
   assert.equal(result.ok, true);
   const notice = fixture.notices[0];

@@ -101,6 +101,80 @@ async function trackerFixture(testContext, registeredNumbers = [31], cwd = proce
   return { state, github, calls, unexpectedCalls, tracker };
 }
 
+for (const exists of [true, false]) {
+  test(`残す選択をしたマージ済みブランチが${exists ? '同じ head で実在すれば追跡を止める' : '404 なら base をたどる'}`, async (t) => {
+    const { state, github, calls, tracker } = await trackerFixture(t);
+    const branch = 'codex/feature';
+    const mergedSha = 'a'.repeat(40);
+    const childSha = 'b'.repeat(40);
+    rememberHistoricalMerge(state, 30, branch, 'main', mergedSha, '2026-10-03T11:00:00.000Z', true);
+    state.updatePullRequest('session-30', 'example', 'project', 30, {
+      mergedHead: { headRefOid: mergedSha, headRefName: branch, baseRefName: 'main', branchKept: true },
+    });
+    github.openPullRequests = [ghPullRequest(31, 'feat/child', branch, childSha)];
+    github.mergedPullRequests = [mergedPullRequest(30, mergedSha, '2026-10-03T11:00:00.000Z', branch, 'main')];
+    if (exists) github.branchHeads.set(branch, mergedSha);
+    github.comparisons.set(`main...${childSha}`, compareResult([mergedSha, childSha]));
+    github.comparisons.set(`${branch}...${childSha}`, compareResult([childSha]));
+
+    await tracker.refreshRepo('example', 'project');
+
+    const tree = tracker.snapshot()[0].trees[0];
+    assert.equal(tree.effectiveBase, exists ? branch : 'main');
+    assert.equal(tree.needsRestack, !exists);
+    if (exists) assert.match(tree.blocker, /base の codex\/feature は既定ブランチではない/);
+    assert.ok(calls.some((args) => args[0] === 'api' && args[1].endsWith(`/compare/${exists ? 'codex%2Ffeature' : 'main'}...${childSha}`)));
+  });
+}
+
+test('旧マージ済み記録を refresh ごとに最大5件補完し onMerged を再発火しない', async (t) => {
+  const { state, github, calls, tracker } = await trackerFixture(t, [1, 2, 3, 4, 5, 6]);
+  let mergedEvents = 0;
+  tracker.onMerged = () => { mergedEvents += 1; };
+  for (let number = 1; number <= 6; number += 1) {
+    state.updatePullRequest(`session-${number}`, 'example', 'project', number, { state: 'merged', mergedAt: '2026-10-03T11:00:00.000Z' });
+    github.views.set(number, { ...ghPullRequest(number, `feat/${number}`, 'main', 'a'.repeat(40)), state: 'MERGED', mergedAt: '2026-10-03T11:00:00.000Z' });
+  }
+  await tracker.refreshRepo('example', 'project');
+  assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'view').length, 5);
+  assert.equal(state.pullRequestRegistrationsForRepo('example', 'project').filter((record) => record.mergedHead).length, 5);
+  await tracker.refreshRepo('example', 'project');
+  assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'view').length, 6);
+  assert.equal(state.pullRequestRegistrationsForRepo('example', 'project').filter((record) => record.mergedHead).length, 6);
+  assert.equal(mergedEvents, 0);
+});
+
+for (const response of ['failure', 'OPEN', 'invalid-head']) {
+  test(`旧記録の補完が ${response} なら記録を保ちエラーを出さず再試行は1回に限る`, async (t) => {
+    const { state, github, calls, tracker } = await trackerFixture(t, [30, 31]);
+    state.updatePullRequest('session-30', 'example', 'project', 30, { state: 'merged', mergedAt: '2026-10-03T11:00:00.000Z' });
+    const before = state.pullRequestRegistrationForSession('session-30', 'example', 'project', 30);
+    github.openPullRequests = [ghPullRequest(31, 'feat/child', 'main')];
+    if (response !== 'failure') github.views.set(30, {
+      ...ghPullRequest(30, 'feat/parent', 'main', response === 'invalid-head' ? 'bad' : 'a'.repeat(40)),
+      state: response === 'OPEN' ? 'OPEN' : 'MERGED', mergedAt: '2026-10-03T11:00:00.000Z',
+    });
+    for (let round = 0; round < 3; round += 1) {
+      await tracker.refreshRepo('example', 'project');
+      assert.equal(tracker.snapshot()[0].error, null);
+      assert.equal(tracker.snapshot()[0].openStateUnknown, false);
+      assert.deepEqual(state.pullRequestRegistrationForSession('session-30', 'example', 'project', 30), before);
+    }
+    assert.equal(calls.filter((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '30').length, 2);
+  });
+}
+
+test('旧記録の補完失敗後の1回の再試行で mergedHead を保存できる', async (t) => {
+  const { state, github, tracker } = await trackerFixture(t, [30]);
+  state.updatePullRequest('session-30', 'example', 'project', 30, { state: 'merged', mergedAt: '2026-10-03T11:00:00.000Z' });
+  await tracker.refreshRepo('example', 'project');
+  github.views.set(30, { ...ghPullRequest(30, 'feat/parent', 'main', 'a'.repeat(40)), state: 'MERGED', mergedAt: '2026-10-03T11:00:00.000Z' });
+  await tracker.refreshRepo('example', 'project');
+  assert.deepEqual(state.pullRequestRegistrationForSession('session-30', 'example', 'project', 30).mergedHead, {
+    headRefOid: 'a'.repeat(40), headRefName: 'feat/parent', baseRefName: 'main',
+  });
+});
+
 function rememberHistoricalMerge(state, number, headRefName, baseRefName, headRefOid, mergedAt, registered = false) {
   const url = `https://github.com/example/project/pull/${number}`;
   const lastOpen = { title: `PR ${number}`, url, headRefName, baseRefName, headRefOid };

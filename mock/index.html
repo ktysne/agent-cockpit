@@ -1646,11 +1646,16 @@ function mergeConfirm(p, pr) {
   const conditionPending = waiting.length > 0;
   const kids = childPrs(p, pr);
   const kidNames = kids.map(k => `#${k.number}`).join('、');
+  const branchDeleted = !pr.isCrossRepository && (p.repo.autoDeleteBranch || o.del);
   const reviewWarning = crossReviewState(pr).warn;
   const effects = [
     reviewWarning ? `<span>${esc(reviewWarning)}</span>` : '',
     `照合する head SHA: ${shortShaLabel(pr.sha)}`,
-    kids.length && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する。</span>` : '',
+    kids.length ? esc(branchDeleted
+      ? `${kidNames} の base を ${p.repo.defaultBranch} に付け替える`
+      : `ブランチを残すので、${kidNames} の base は ${pr.head} のまま付け替えない`) : '',
+    kids.length && !branchDeleted && ['squash', 'rebase'].includes(o.method) ? `<span>${esc(`次に ${pr.head} を既定ブランチへマージするときは、同じ変更が再び差分に入らないようマージコミットを推奨します。`)}</span>` : '',
+    kids.length && branchDeleted && ['squash', 'rebase'].includes(o.method) ? `<span>スカッシュまたはリベースでは ${kidNames} に #${pr.number} のコミットが残るため、セッションに積み直しを依頼する。</span>` : '',
   ].filter(Boolean);
   return `<div class="merge-confirm ${conditionPending ? 'pending' : ''}" data-pr="${prKey(p, pr.number)}">
     <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へマージする</div>
