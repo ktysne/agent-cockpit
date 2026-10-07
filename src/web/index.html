@@ -1503,7 +1503,9 @@ function finishedHiddenCounts(sessions, groups) {
   for (const group of groups) {
     const repository = `${group.owner}/${group.repo}`.toLowerCase();
     for (const record of group.mergeHistory || []) {
-      if (record.headMismatch !== true) hiddenPullRequests.add(`${repository}#${record.number}`);
+      const visibleAutomaticResult = record.automatic === true && record.automaticResult
+        && pullRequestMergeResultVisible(record, record.mergedAt);
+      if (record.headMismatch !== true && !visibleAutomaticResult) hiddenPullRequests.add(`${repository}#${record.number}`);
     }
     for (const pullRequest of group.merged || []) {
       if (pullRequest.state === 'closed') hiddenPullRequests.add(`${repository}#${pullRequest.number}`);
@@ -3140,7 +3142,7 @@ function productControls(product, index, total, pinnedCount, headingId) {
 
 // 「×」は外すセッションがあるときだけ出す。セッションの無いカードは、PR が閉じるか未読を既読にすれば消える。
 function productCloseButton(product, describedById) {
-  if (!product.sessions.length) return null;
+  if (!product.sessions.some((session) => session.hidden !== true)) return null;
   const close = element('button', 'icon-btn', '×');
   close.type = 'button';
   close.dataset.productAction = 'close';

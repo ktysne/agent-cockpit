@@ -1045,6 +1045,9 @@ function recordDeletionControls(band, targets, count) {
   const confirmation = recordDeletionConfirmations.get(band);
   if (!count && !confirmation) return '';
   const attrs = action => `type="button" class="link-btn${action === 'open' ? ' record-delete-icon' : ''}" data-record-band="${band}" data-record-action="${action}" aria-disabled="${confirmation?.pending === true && !action.startsWith('mock-')}"`;
+  if (confirmation) confirmation.count = countRecordDeletionTargets(
+    intersectRecordDeletionTargets(confirmation.targets, targets),
+  );
   return confirmation
     ? `<span class="record-deletion"><span>${confirmation.count} 件の記録を削除します。元に戻せません</span>${confirmation.error ? `<span class="error" role="alert">${esc(confirmation.error)}</span>` : ''}<button ${attrs('confirm')}>${confirmation.pending ? '削除中…' : '削除する'}</button><button ${attrs('cancel')}>やめる</button><button ${attrs('mock-pending')}>モック: 通信中を表示</button><button ${attrs('mock-error')}>モック: 失敗の知らせを表示</button></span>`
     : `<span class="record-deletion"><button ${attrs('open')} aria-label="この ${count} 件の記録を削除する" title="この ${count} 件の記録を削除する"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button></span>`;
@@ -1055,6 +1058,15 @@ function hasVisibleAutomaticMergeResult(product, pullRequest) {
   return (pullRequestMergeResults.get(product.repo.name) || []).some(result => result.productId === product.id
     && result.number === pullRequest.number && pullRequestMergeResultVisible(result));
 }
+function intersectRecordDeletionTargets(selected, current) {
+  return Object.fromEntries(Object.keys(selected).map(field => {
+    const currentTargets = new Set(current[field] || []);
+    return [field, (selected[field] || []).filter(target => currentTargets.has(target))];
+  }));
+}
+function countRecordDeletionTargets(targets) {
+  return Object.values(targets).reduce((total, items) => total + items.length, 0);
+}
 function focusRecordDeletion(band, action) {
   (document.querySelector(`[data-record-band="${band}"][data-record-action="${action}"]`)
     || document.querySelector(`[data-mode="${ui.mode}"]`))?.focus({ preventScroll: true });
@@ -1062,7 +1074,12 @@ function focusRecordDeletion(band, action) {
 function deleteNoteRecords(band) {
   const confirmation = recordDeletionConfirmations.get(band);
   if (!confirmation || confirmation.pending) return;
-  const { sessions, prs, closed } = confirmation.targets;
+  const targets = intersectRecordDeletionTargets(confirmation.targets, recordDeletionTargets.get(band)?.targets || {});
+  if (!countRecordDeletionTargets(targets)) {
+    recordDeletionConfirmations.delete(band);
+    return;
+  }
+  const { sessions, prs, closed } = targets;
   ui.deletedSessionIds = [...new Set([...ui.deletedSessionIds, ...sessions])];
   ui.hiddenSessions = ui.hiddenSessions.filter(id => !sessions.includes(id));
   for (const id of sessions) delete ui.hiddenSessionUpdatedAt[id];
@@ -1079,7 +1096,9 @@ function finishedHiddenCounts() {
   if (!ui.hideFinished) return { sessions: 0, pullRequests: 0 };
   const pullRequests = new Set();
   for (const product of DATA.products) {
-    for (const pr of product.prs.filter(item => isMerged(product, item) && item.headMismatch !== true && !ui.dismissedMergeHistory.includes(`${product.repo.name}#${item.number}`.toLowerCase()))) {
+    for (const pr of product.prs.filter(item => isMerged(product, item) && item.headMismatch !== true
+      && !hasVisibleAutomaticMergeResult(product, item)
+      && !ui.dismissedMergeHistory.includes(`${product.repo.name}#${item.number}`.toLowerCase()))) {
       pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
     }
     for (const pr of visibleClosedPrs(product)) pullRequests.add(`${product.repo.name}#${pr.number}`.toLowerCase());
@@ -2189,7 +2208,7 @@ document.addEventListener('click', e => {
   if (t.dataset.recordBand) {
     const band = t.dataset.recordBand;
     if (t.dataset.recordAction === 'open') {
-      recordDeletionConfirmations.set(band, { ...recordDeletionTargets.get(band), pending: false, error: '' });
+      recordDeletionConfirmations.set(band, { ...recordDeletionTargets.get(band), targets: { ...recordDeletionTargets.get(band).targets }, pending: false, error: '' });
       render();
       focusRecordDeletion(band, 'cancel');
     } else if (t.dataset.recordAction === 'cancel') {

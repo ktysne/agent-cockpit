@@ -52,7 +52,60 @@ test('終わった帯の削除対象は表示件数と一致し、警告履歴�
     ],
     closed_pull_requests: [{ owner: 'example', repo: 'project', number: 3 }],
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedHiddenCounts(sessions, [group, group]))), { sessions: 1, pullRequests: 4 });
+  const counts = context.finishedHiddenCounts(sessions, [group, group]);
+  assert.deepEqual(JSON.parse(JSON.stringify(counts)), { sessions: 1, pullRequests: 3 });
+  assert.equal(counts.pullRequests, targets.merge_history.length + targets.closed_pull_requests.length);
+});
+
+test('外したセッションだけのプロダクトには閉じるボタンを表示しない', () => {
+  class FakeElement {
+    constructor(tagName, className, textContent) { Object.assign(this, { tagName, className, textContent, dataset: {} }); }
+    setAttribute() {}
+  }
+  const source = functionSource(pageHtml, 'productCloseButton');
+  const context = pageContext(pageHtml, { element: (...args) => new FakeElement(...args) });
+  vm.runInContext(source, context);
+  assert.equal(context.productCloseButton({ sessions: [{ hidden: true }] }), null);
+  assert.equal(context.productCloseButton({ sessions: [{ hidden: false }] }).textContent, '×');
+
+  const mockContext = pageContext(mockHtml, {
+    visibleSessions: product => product.sessions.filter(session => session.hidden !== true),
+  });
+  vm.runInContext(functionSource(mockHtml, 'productCloseButton'), mockContext);
+  assert.equal(mockContext.productCloseButton({ id: 'product', sessions: [{ hidden: true }] }), '');
+  assert.match(mockContext.productCloseButton({ id: 'product', sessions: [{ hidden: false }] }), /data-close-product/);
+});
+
+test('モックの削除確認は押した時点で残っている対象だけを数えて削除する', () => {
+  const ui = { deletedSessionIds: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, dismissedMergeHistory: [], deletedClosedPrs: [] };
+  const recordDeletionConfirmations = new Map([['finished', {
+    targets: { sessions: ['old', 'current'], prs: ['example/project#1'], closed: [] },
+    pending: false, error: '',
+  }]]);
+  const recordDeletionTargets = new Map([['finished', {
+    targets: { sessions: ['current'], prs: [], closed: [] }, count: 1,
+  }]]);
+  const context = pageContext(mockHtml, { ui, hiddenSessionsUndo: null, recordDeletionConfirmations, recordDeletionTargets });
+  vm.runInContext([
+    functionSource(mockHtml, 'intersectRecordDeletionTargets'),
+    functionSource(mockHtml, 'countRecordDeletionTargets'),
+    functionSource(mockHtml, 'recordDeletionControls'),
+    functionSource(mockHtml, 'deleteNoteRecords'),
+  ].join('\n'), context);
+
+  assert.match(context.recordDeletionControls('finished', recordDeletionTargets.get('finished').targets, 1),
+    /1 件の記録を削除します/);
+  assert.deepEqual(JSON.parse(JSON.stringify(recordDeletionConfirmations.get('finished').targets.sessions)), ['old', 'current']);
+  assert.deepEqual(JSON.parse(JSON.stringify(recordDeletionTargets.get('finished').targets.sessions)), ['current']);
+  context.deleteNoteRecords('finished');
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.deletedSessionIds)), ['current']);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.dismissedMergeHistory)), []);
+
+  recordDeletionConfirmations.set('finished', { targets: { sessions: ['gone'], prs: [], closed: [] }, pending: false });
+  recordDeletionTargets.set('finished', { targets: { sessions: [], prs: [], closed: [] }, count: 0 });
+  context.deleteNoteRecords('finished');
+  assert.equal(recordDeletionConfirmations.has('finished'), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.deletedSessionIds)), ['current']);
 });
 
 test('モックの終わった帯は表示中の自動マージ結果を削除対象から除く', () => {
@@ -72,19 +125,23 @@ test('モックの終わった帯は表示中の自動マージ結果を削除�
     prKey: (item, number) => `${item.id}#${number}`,
     isMerged: (item, pullRequest) => Boolean(ui.merged[`${item.id}#${pullRequest.number}`]),
     pullRequestMergeResultVisible: result => result.visible === true,
+    allSessions: () => [], isFinishedSession: () => false, visibleClosedPrs: () => [],
   });
   vm.runInContext([
     functionSource(mockHtml, 'finishedDeletionTargets'),
+    functionSource(mockHtml, 'finishedHiddenCounts'),
     functionSource(mockHtml, 'hasVisibleAutomaticMergeResult'),
   ].join('\n'), context);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedDeletionTargets())), {
+  const targets = context.finishedDeletionTargets();
+  assert.deepEqual(JSON.parse(JSON.stringify(targets)), {
     sessions: [], prs: ['example/project#1', 'example/project#3'], closed: [],
   });
+  assert.equal(context.finishedHiddenCounts().pullRequests, targets.prs.length + targets.closed.length);
 });
 
 test('モックの削除確認から通信中と失敗の状態を表示できる', () => {
-  const recordDeletionConfirmations = new Map([['finished', { count: 2, pending: false, error: '' }]]);
+  const recordDeletionConfirmations = new Map([['finished', { targets: {}, count: 2, pending: false, error: '' }]]);
   const context = pageContext(mockHtml, {
     recordDeletionTargets: new Map([['finished', { targets: {}, count: 2 }]]),
     recordDeletionConfirmations,
@@ -94,7 +151,7 @@ test('モックの削除確認から通信中と失敗の状態を表示でき�
   });
   const clickListener = mockHtml.match(/document\.addEventListener\('click', e => \{[\s\S]*?^\}\);/m)?.[0];
   assert.ok(clickListener);
-  vm.runInContext(`${functionSource(mockHtml, 'recordDeletionControls')}\n${clickListener}`, context);
+  vm.runInContext(`${functionSource(mockHtml, 'intersectRecordDeletionTargets')}\n${functionSource(mockHtml, 'countRecordDeletionTargets')}\n${functionSource(mockHtml, 'recordDeletionControls')}\n${clickListener}`, context);
   const press = action => {
     const button = { dataset: { recordBand: 'finished', recordAction: action }, closest: () => button };
     context.handleClick({ target: button });
