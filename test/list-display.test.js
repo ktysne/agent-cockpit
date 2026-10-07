@@ -199,7 +199,7 @@ test('モックでも終わったセッションはタスクの有無にかか�
   const visibleSource = mock.match(/const visibleSessions = p => p\.sessions\.filter\([\s\S]*?\);/)?.[0];
   assert.ok(visibleSource);
   const context = pageContext(mock, {
-    ui: { hideFinished: true, hiddenSessions: [] },
+    ui: { hideFinished: true, hiddenSessions: [], deletedSessionIds: [] },
     showIdleSessions: false,
     isFinishedSession: (session) => session.finished,
     isIdleHiddenSession: () => false,
@@ -269,7 +269,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
   const mockReservationNotices = functionSource(mock, 'reservationNoticeRows');
   assert.ok(mockPr && mockReservationNotices);
   const mockContext = pageContext(mock, {
-    ui: { hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
+    ui: { dismissedMergeHistory: [], deletedClosedPrs: [], hideFinished: false, merged: { '2': { method: 'squash', at: '10:00', auto: false } }, expandedMerged: [], reservationNotices: {} },
     pullRequestMergeResults: new Map(),
     openPrs: () => [{ number: 1 }],
     parentPr: () => null,
@@ -285,7 +285,7 @@ test('リポジトリごとの PR は見出し付きの枠に同じ左端で順�
     absoluteTimeLabel: (value) => value,
     transientMessageVisible: () => false,
   });
-  vm.runInContext(`${mockReservationNotices}\n${mockPr}\nthis.renderPr = prBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'visibleClosedPrs')}\n${mockReservationNotices}\n${mockPr}\nthis.renderPr = prBlock;`, mockContext);
   const mockProduct = {
     id: 'product', name: 'Product', repo: { name: 'owner/repo', fetched: '少し前' },
     prs: [{ number: 2, state: 'merged' }, { number: 3, state: 'closed' }],
@@ -723,6 +723,7 @@ test('完了済みを隠した件数を知らせ、表示する操作で設定�
     element: fakeElement,
     document: { getElementById: () => note },
     hideFinishedInput,
+    recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
     changeDisplaySetting: (key, input) => changes.push([key, input.checked]),
   });
   vm.runInContext(`${countsSource}\n${noteSource}\nthis.countHidden = finishedHiddenCounts; this.renderFinished = renderFinishedNote;`, context);
@@ -763,6 +764,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
     element: fakeElement,
     document: { getElementById: () => note },
     lastState: {},
+    recordDeletionConfirmations: new Map(), appendRecordDeletion() {},
     render: () => { renders += 1; },
   });
   vm.runInContext(`${endedAgentSource}\n${activeDecisionSource}\n${idleSource}\n${countsSource}\n${noteSource}\nthis.isIdle = isIdleHiddenSession; this.idleCount = idleHiddenSessions; this.renderIdle = renderIdleNote;`, context);
@@ -788,15 +790,15 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
 
   const finished = { ...stale, session_id: 'finished', finished: true };
   const manuallyHidden = { ...stale, session_id: 'manual', hidden: true };
-  assert.deepEqual(JSON.parse(JSON.stringify(context.idleCount([stale, finished, manuallyHidden], now))), [stale]);
-  context.renderIdle(1);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.idleCount([stale, finished, manuallyHidden], now))), [stale, manuallyHidden]);
+  context.renderIdle(1, [stale]);
   assert.equal(note.hidden, false);
   assert.equal(note.children[0].textContent, '更新の無いセッションを隠しています (1 件)');
   assert.equal(note.children[1].textContent, '表示する');
   note.children[1].listeners.get('click')();
   assert.equal(context.showIdleSessions, true);
   assert.equal(renders, 1);
-  context.renderIdle(1);
+  context.renderIdle(1, [stale]);
   assert.equal(note.children[0].textContent, '更新の無いセッションを表示しています');
   assert.equal(note.children[1].textContent, '隠す');
   note.children[1].listeners.get('click')();
@@ -807,7 +809,7 @@ test('更新の無いセッションを隠す条件、件数、ページ内の�
   const mockIdle = functionSource(mock, 'isIdleHiddenSession');
   const mockActiveDecision = functionSource(mock, 'isActiveDecision');
   const mockContext = pageContext(mock, {
-    ui: { idleHideMinutes: 30 },
+    ui: { idleHideMinutes: 30, hiddenSessions: [], hiddenSessionUpdatedAt: {} },
     effectiveDecisionState: (decision) => decision.kind,
   });
   vm.runInContext(`${mockActiveDecision}\n${mockIdle}\nthis.isIdle = isIdleHiddenSession;`, mockContext);
@@ -1345,6 +1347,7 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
     renderSummary() {},
     renderExcludedNote() {},
     finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
     renderFinishedNote() {},
     renderIdleNote() {},
     updateTitle() {},
@@ -1383,6 +1386,7 @@ test('一覧が空になる描き直しで札が消えたら残る札か表示�
       renderSummary() {},
       renderExcludedNote() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
       renderFinishedNote() {},
       renderIdleNote() {},
       updateTitle() {},
@@ -1436,6 +1440,7 @@ test('一覧が残る再描画で表示設定のボタンが消えたらマー�
       renderSummary() {},
       renderExcludedNote() {},
       finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
       renderFinishedNote() {},
       renderIdleNote() {},
       updateTitle() {},

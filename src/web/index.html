@@ -365,6 +365,10 @@ h3.sub .count { font-weight: normal; }
 .session-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .excluded-note { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text-2); background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 12px; }
 .excluded-note[hidden] { display: none; }
+.record-deletion { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.record-delete-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; }
+.record-delete-icon svg { width: 16px; height: 16px; }
+.record-deletion [aria-disabled="true"] { opacity: .6; cursor: wait; }
 .product-remove { margin-left: 12px; }
 /* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
 .session-tag.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
@@ -558,6 +562,8 @@ const TRANSIENT_NOTICE_MS = 60_000;
 let renderedPullRequestExpirySignature = '';
 let nextPullRequestMergeResultId = 0;
 let hiddenSessionsUndo = null;
+const recordDeletionTargets = new Map();
+const recordDeletionConfirmations = new Map();
 let uiUpdatePending = false;
 const pullRequestMergeConfirmations = new Map();
 const pullRequestMergeOptions = new Map();
@@ -1326,9 +1332,9 @@ function renderSummary(sessions, pullRequestGroups = []) {
 
 function renderExcludedNote(sessions) {
   const note = document.getElementById('excluded-note');
-  const hiddenSessions = sessions.filter((session) => session.hidden === true);
+  const hiddenSessions = sessions.filter((session) => session.hidden === true && !isIdleHiddenSession(session));
   const hiddenCount = hiddenSessions.length;
-  note.hidden = hiddenCount === 0 && !hiddenSessionsUndo;
+  note.hidden = hiddenCount === 0 && !hiddenSessionsUndo && !recordDeletionConfirmations.has('excluded');
   if (note.hidden) {
     note.replaceChildren();
     return;
@@ -1353,6 +1359,149 @@ function renderExcludedNote(sessions) {
     children.push(element('span', '', `外したセッション (${hiddenCount} 件)${countNote}`), showAll);
   }
   note.replaceChildren(...children);
+  appendRecordDeletion(note, 'excluded', { session_ids: hiddenSessions.map((session) => session.session_id) }, hiddenCount);
+}
+
+function finishedDeletionTargets(sessions, groups) {
+  const targets = { session_ids: [], merge_history: [], closed_pull_requests: [] };
+  if (!displayPreferences.hideFinished) return targets;
+  targets.session_ids = sessions.filter((session) => session.hidden !== true && isFinishedSession(session)).map((session) => session.session_id);
+  for (const [field, source] of [['merge_history', 'mergeHistory'], ['closed_pull_requests', 'merged']]) {
+    const seen = new Set();
+    for (const group of groups) {
+      for (const record of group[source] || []) {
+        const visibleAutomaticResult = record.automatic === true && record.automaticResult
+          && pullRequestMergeResultVisible(record, record.mergedAt);
+        if (field === 'merge_history' ? record.headMismatch === true || visibleAutomaticResult : record.state !== 'closed') continue;
+        const key = `${group.owner}/${group.repo}#${record.number}`.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        targets[field].push({ owner: group.owner, repo: group.repo, number: record.number });
+      }
+    }
+  }
+  return targets;
+}
+
+function recordDeletionTargetKey(field, target) {
+  if (field === 'session_ids') return target;
+  return `${target.owner}/${target.repo}#${target.number}`.toLowerCase();
+}
+
+function intersectRecordDeletionTargets(selected, current) {
+  return Object.fromEntries(Object.keys(selected).map((field) => {
+    const currentKeys = new Set((current[field] || []).map((target) => recordDeletionTargetKey(field, target)));
+    return [field, (selected[field] || []).filter((target) => currentKeys.has(recordDeletionTargetKey(field, target)))];
+  }));
+}
+
+function countRecordDeletionTargets(targets) {
+  return Object.values(targets).reduce((total, items) => total + items.length, 0);
+}
+
+function appendRecordDeletion(note, band, targets, count) {
+  recordDeletionTargets.set(band, targets);
+  let confirmation = recordDeletionConfirmations.get(band);
+  if (confirmation && !confirmation.pending
+    && !countRecordDeletionTargets(intersectRecordDeletionTargets(confirmation.targets, targets))) {
+    recordDeletionConfirmations.delete(band);
+    confirmation = null;
+    // 確認を開いていたために出していた帯は、対象が無くなったら閉じる。
+    if (!count && !(band === 'excluded' && hiddenSessionsUndo)) note.hidden = true;
+  }
+  if (!count && !confirmation) return;
+  const controls = element('span', 'record-deletion');
+  const buttonFor = (action, label) => {
+    const button = element('button', 'link-btn', label);
+    button.type = 'button';
+    button.dataset.recordBand = band;
+    button.dataset.recordAction = action;
+    button.setAttribute('aria-disabled', String(confirmation?.pending === true));
+    return button;
+  };
+  if (confirmation) {
+    confirmation.count = countRecordDeletionTargets(intersectRecordDeletionTargets(
+      confirmation.targets, recordDeletionTargets.get(band),
+    ));
+    controls.append(element('span', '', `${confirmation.count} 件の記録を削除します。元に戻せません`));
+    if (confirmation.error) {
+      const error = element('span', 'error', confirmation.error);
+      error.setAttribute('role', 'alert');
+      controls.append(error);
+    }
+    const remove = buttonFor('confirm', confirmation.pending ? '削除中…' : '削除する');
+    const cancel = buttonFor('cancel', 'やめる');
+    remove.addEventListener('click', () => { void deleteNoteRecords(band); });
+    cancel.addEventListener('click', () => {
+      if (confirmation.pending) return;
+      recordDeletionConfirmations.delete(band);
+      render(lastState);
+      focusRecordDeletion(band, 'open');
+    });
+    controls.append(remove, cancel);
+  } else {
+    const open = buttonFor('open', '');
+    open.classList.add('record-delete-icon');
+    open.setAttribute('aria-label', `この ${count} 件の記録を削除する`);
+    open.title = `この ${count} 件の記録を削除する`;
+    open.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
+    open.addEventListener('click', () => {
+      recordDeletionConfirmations.set(band, { targets, count, pending: false, error: '' });
+      render(lastState);
+      focusRecordDeletion(band, 'cancel');
+    });
+    controls.append(open);
+  }
+  note.append(controls);
+}
+
+function focusRecordDeletion(band, action) {
+  const controls = [...document.querySelectorAll('[data-record-band]')];
+  (controls.find((button) => button.dataset.recordBand === band && button.dataset.recordAction === action)
+    || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
+}
+
+async function deleteNoteRecords(band) {
+  const confirmation = recordDeletionConfirmations.get(band);
+  if (!confirmation || confirmation.pending) return;
+  const targets = intersectRecordDeletionTargets(confirmation.targets, recordDeletionTargets.get(band) || {});
+  if (!countRecordDeletionTargets(targets)) {
+    recordDeletionConfirmations.delete(band);
+    render(lastState);
+    focusRecordDeletion(band, 'open');
+    return;
+  }
+  confirmation.count = countRecordDeletionTargets(targets);
+  confirmation.pending = true;
+  confirmation.error = '';
+  render(lastState);
+  let deleted = 0;
+  try {
+    const batches = Math.ceil(Math.max(...Object.values(targets).map((items) => items.length)) / 50);
+    for (let index = 0; index < batches; index += 1) {
+      const body = Object.fromEntries(Object.entries(targets).map(([key, items]) => [key, items.slice(index * 50, (index + 1) * 50)]));
+      const response = await postUiAction('/api/record-deletions', body);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      deleted += result.deleted.sessions + result.deleted.pullRequests;
+      if (hiddenSessionsUndo) {
+        const ids = new Set(body.session_ids || []);
+        hiddenSessionsUndo.sessionIds = hiddenSessionsUndo.sessionIds.filter((id) => !ids.has(id));
+        if (!hiddenSessionsUndo.sessionIds.length) hiddenSessionsUndo = null;
+      }
+    }
+    recordDeletionConfirmations.delete(band);
+    await refresh();
+    render(lastState);
+    focusRecordDeletion(band, 'open');
+    liveStatus.textContent = `${deleted} 件の記録を削除しました。`;
+  } catch {
+    confirmation.error = '記録を削除できませんでした。もう一度お試しください。';
+    liveStatus.textContent = confirmation.error;
+  } finally {
+    confirmation.pending = false;
+    render(lastState);
+  }
 }
 
 function finishedHiddenCounts(sessions, groups) {
@@ -1361,26 +1510,28 @@ function finishedHiddenCounts(sessions, groups) {
   for (const group of groups) {
     const repository = `${group.owner}/${group.repo}`.toLowerCase();
     for (const record of group.mergeHistory || []) {
-      if (record.headMismatch !== true) hiddenPullRequests.add(`${repository}#${record.number}`);
+      const visibleAutomaticResult = record.automatic === true && record.automaticResult
+        && pullRequestMergeResultVisible(record, record.mergedAt);
+      if (record.headMismatch !== true && !visibleAutomaticResult) hiddenPullRequests.add(`${repository}#${record.number}`);
     }
     for (const pullRequest of group.merged || []) {
       if (pullRequest.state === 'closed') hiddenPullRequests.add(`${repository}#${pullRequest.number}`);
     }
   }
   return {
-    sessions: sessions.filter(isFinishedSession).length,
+    sessions: sessions.filter((session) => session.hidden !== true && isFinishedSession(session)).length,
     pullRequests: hiddenPullRequests.size,
   };
 }
 
-function renderFinishedNote(counts) {
+function renderFinishedNote(counts, targets) {
   const note = document.getElementById('finished-note');
   const parts = [
     counts.sessions ? `セッション ${counts.sessions} 件` : '',
     counts.pullRequests ? `PR ${counts.pullRequests} 件` : '',
   ].filter(Boolean);
-  note.hidden = parts.length === 0;
-  if (!parts.length) {
+  note.hidden = parts.length === 0 && !recordDeletionConfirmations.has('finished');
+  if (note.hidden) {
     note.replaceChildren();
     return;
   }
@@ -1392,19 +1543,21 @@ function renderFinishedNote(counts) {
     void changeDisplaySetting('hideFinished', hideFinishedInput);
   });
   note.replaceChildren(element('span', '', `終わったものを隠しています (${parts.join('、')})`), show);
+  appendRecordDeletion(note, 'finished', targets, counts.sessions + counts.pullRequests);
 }
 
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
-  const updatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
+  const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
+  const hiddenAt = session.hidden === true ? Date.parse(session.hiddenAt || '') : NaN;
+  const updatedAt = Number.isFinite(hiddenAt) ? Math.max(Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : hiddenAt, hiddenAt) : lastUpdatedAt;
   return Number.isFinite(updatedAt) && now - updatedAt > displayPreferences.idleHideMinutes * 60_000;
 }
 
 function idleHiddenSessions(sessions, now = Date.now()) {
-  return sessions.filter((session) => session.hidden !== true
-    && !(displayPreferences.hideFinished && isFinishedSession(session))
+  return sessions.filter((session) => !(session.hidden !== true && displayPreferences.hideFinished && isFinishedSession(session))
     && isIdleHiddenSession(session, now));
 }
 
@@ -1414,9 +1567,9 @@ function sessionsAfterIdleFilter(sessions) {
   return sessions.filter((session) => !hiddenSessionIds.has(session.session_id));
 }
 
-function renderIdleNote(hiddenCount) {
+function renderIdleNote(hiddenCount, sessions) {
   const note = document.getElementById('idle-note');
-  note.hidden = hiddenCount === 0;
+  note.hidden = hiddenCount === 0 && !recordDeletionConfirmations.has('idle');
   if (note.hidden) {
     note.replaceChildren();
     return;
@@ -1432,6 +1585,7 @@ function renderIdleNote(hiddenCount) {
     ? '更新の無いセッションを表示しています'
     : `更新の無いセッションを隠しています (${hiddenCount} 件)`;
   note.replaceChildren(element('span', '', message), toggle);
+  appendRecordDeletion(note, 'idle', { session_ids: sessions.map((session) => session.session_id) }, hiddenCount);
 }
 
 function isFilterShown(key) {
@@ -2275,7 +2429,7 @@ function sessionActivityTime(session) {
 function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
   const idleFilteredSessions = sessionsAfterIdleFilter(sessions);
   const visibleSessions = displayPreferences.hideFinished
-    ? idleFilteredSessions.filter((session) => !isFinishedSession(session))
+    ? idleFilteredSessions.filter((session) => session.hidden === true || !isFinishedSession(session))
     : idleFilteredSessions;
   const grouped = productGroups(visibleSessions, pullRequestGroups);
   for (const entry of sinceSeen) {
@@ -2995,7 +3149,7 @@ function productControls(product, index, total, pinnedCount, headingId) {
 
 // 「×」は外すセッションがあるときだけ出す。セッションの無いカードは、PR が閉じるか未読を既読にすれば消える。
 function productCloseButton(product, describedById) {
-  if (!product.sessions.length) return null;
+  if (!product.sessions.some((session) => session.hidden !== true)) return null;
   const close = element('button', 'icon-btn', '×');
   close.type = 'button';
   close.dataset.productAction = 'close';
@@ -3229,14 +3383,16 @@ function render(state) {
   deferredRenderPending = false;
   renderRouting(state.routing, state.integrations);
   const allSessions = Array.isArray(state.sessions) ? state.sessions : [];
-  const sessions = allSessions.filter((session) => session.hidden !== true);
-  const idleHiddenCount = idleHiddenSessions(sessions).length;
+  const sessions = allSessions.filter((session) => (session.hidden !== true || isIdleHiddenSession(session)));
+  const idleSessions = idleHiddenSessions(sessions);
+  const idleHiddenCount = idleSessions.length;
   const displayedSessions = sessionsAfterIdleFilter(sessions);
   const pullRequestGroups = Array.isArray(state.pullRequests) ? state.pullRequests : [];
   const active = document.activeElement;
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
-  const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
+  const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
+    : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
          : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
@@ -3264,8 +3420,9 @@ function render(state) {
   renderSummary(displayedSessions, pullRequestGroups);
   renderExcludedNote(allSessions);
   const hiddenFinished = finishedHiddenCounts(sessions, pullRequestGroups);
-  renderFinishedNote(hiddenFinished);
-  renderIdleNote(idleHiddenCount);
+  renderFinishedNote(hiddenFinished, finishedDeletionTargets(sessions, pullRequestGroups));
+  renderIdleNote(idleHiddenCount, idleSessions);
+  if (focusData?.kind === 'record-deletion') focusRecordDeletion(focusData.band, focusData.action);
   updateTitle(displayedSessions);
   document.querySelectorAll('[data-action="mode"]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.mode === displayPreferences.mode));
@@ -3355,6 +3512,7 @@ function render(state) {
     }
     const buttons = [...document.querySelectorAll('button')];
     const button = buttons.find((item) => {
+      if (focusData.kind === 'record-deletion') return item.dataset.recordBand === focusData.band && item.dataset.recordAction === focusData.action;
       if (focusData.kind === 'toggle') return item.getAttribute(focusData.attribute) === focusData.value;
       if (focusData.kind === 'filter') return item.dataset.filter === focusData.key;
       if (focusData.kind === 'show-all') return item.hasAttribute('data-show-all');
@@ -4035,16 +4193,18 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (button.dataset.productAction === 'close') {
-    const product = productGroups(lastState.sessions.filter((session) => session.hidden !== true))
+    const product = productGroups(lastState.sessions.filter((session) => (session.hidden !== true || isIdleHiddenSession(session))))
       .find((item) => item.key === button.dataset.productKey);
-    if (!product?.sessions.length) return;
+    if (!product) return;
+    const sessionIds = product.sessions.filter((session) => session.hidden !== true).map((session) => session.session_id);
+    if (!sessionIds.length) return;
     void runSessionAction(
       button,
       '/api/hidden-sessions',
-      { action: 'hide', session_ids: product.sessions.map((session) => session.session_id) },
+      { action: 'hide', session_ids: sessionIds },
       'プロダクトのセッションを一覧から外せませんでした',
       true,
-      { productName: product.name, sessionIds: product.sessions.map((session) => session.session_id) },
+      { productName: product.name, sessionIds },
     );
     return;
   }
@@ -4064,7 +4224,7 @@ document.addEventListener('click', (event) => {
       changedKey = 'pinned';
     } else {
       const state = lastState || {};
-      const sessions = (Array.isArray(state.sessions) ? state.sessions : []).filter((session) => session.hidden !== true);
+      const sessions = (Array.isArray(state.sessions) ? state.sessions : []).filter((session) => (session.hidden !== true || isIdleHiddenSession(session)));
       const pullRequests = Array.isArray(state.pullRequests) ? state.pullRequests : [];
       const sinceSeen = visibleSinceSeen(state);
       const products = orderedProducts(sessions, pullRequests, sinceSeen);
@@ -4182,7 +4342,7 @@ async function refresh() {
       renderedPullRequestExpirySignature = pullRequestExpiry;
       lastVersion = state.version;
       hasRenderedState = true;
-      const visibleSessions = state.sessions.filter((session) => session.hidden !== true);
+      const visibleSessions = state.sessions.filter((session) => (session.hidden !== true || isIdleHiddenSession(session)));
       const judgmentCounts = countJudgments(visibleSessions);
       liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions} 件)。`;
     }
