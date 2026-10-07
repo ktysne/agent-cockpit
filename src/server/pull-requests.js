@@ -184,7 +184,35 @@ function restackResult(commits, mergedPullRequests, mergedListComplete = true) {
   return { checked: Boolean(parent) || mergedListComplete, parent };
 }
 
-function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBranch) {
+function historicalMergedPullRequests(registrations, relatedPullRequests, openPullRequests) {
+  const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
+  const byNumber = new Map();
+  for (const record of [...registrations, ...relatedPullRequests]) {
+    if (record.state !== 'merged' || openNumbers.has(record.number)) continue;
+    const pullRequest = record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record);
+    if (!pullRequest?.headRefName || !pullRequest.baseRefName || !isCompleteCommitSha(pullRequest.headRefOid) ||
+      !Number.isFinite(Date.parse(pullRequest.mergedAt || ''))) continue;
+    const previous = byNumber.get(pullRequest.number);
+    if (!previous || Date.parse(pullRequest.mergedAt) > Date.parse(previous.mergedAt)) {
+      byNumber.set(pullRequest.number, {
+        number: pullRequest.number,
+        headRefOid: pullRequest.headRefOid.toLowerCase(),
+        headRefName: pullRequest.headRefName,
+        baseRefName: pullRequest.baseRefName,
+        mergedAt: pullRequest.mergedAt,
+      });
+    }
+  }
+  return [...byNumber.values()].sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
+}
+
+function mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests) {
+  const byNumber = new Map(historicalPullRequests.map((pullRequest) => [pullRequest.number, pullRequest]));
+  for (const pullRequest of mergedPullRequests || []) byNumber.set(pullRequest.number, pullRequest);
+  return [...byNumber.values()].sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
+}
+
+async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBranch, readBranchHead, liveMergedBranches) {
   let compareBase = asText(pr.baseRefName);
   const visitedBranches = new Set();
   while (compareBase && compareBase !== defaultBranch && !visitedBranches.has(compareBase)) {
@@ -192,10 +220,21 @@ function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBra
     const openParent = openPullRequests.find((candidate) => (
       candidate.number !== pr.number && candidate.headRefName === compareBase
     ));
+    if (openParent) {
+      compareBase = asText(openParent.baseRefName);
+      continue;
+    }
+    if (openPullRequests.some((candidate) => candidate.headRefName === compareBase)) break;
     // 同じ head ブランチ名が再利用されることがあるので、マージ済みの親は最も新しいマージを採る。
-    const parent = openParent || mergedPullRequests?.findLast((candidate) => candidate.headRefName === compareBase);
-    if (!parent) break;
-    compareBase = asText(parent.baseRefName);
+    const mergedParent = mergedPullRequests.findLast((candidate) => candidate.headRefName === compareBase);
+    if (!mergedParent) break;
+    const currentHead = await readBranchHead(compareBase);
+    // 積んだ親はマージ後に head が進まないため、異なる head は同名の現行ブランチとして扱う。
+    if (currentHead && currentHead !== mergedParent.headRefOid) {
+      liveMergedBranches.add(compareBase);
+      break;
+    }
+    compareBase = asText(mergedParent.baseRefName);
   }
   return compareBase || defaultBranch;
 }
@@ -215,6 +254,7 @@ function assemblePullRequestStacks({
   retargetedPrs = [],
   relatedPullRequests = [],
   restackResults = new Map(),
+  liveMergedBranches = new Set(),
 }) {
   const open = openPullRequests.map((pr) => ({ ...pr })).sort((left, right) => left.number - right.number);
   const openByNumber = mapByNumber(open);
@@ -231,8 +271,10 @@ function assemblePullRequestStacks({
     let base = explicit?.base || pr.baseRefName;
     const seen = new Set([pr.number]);
     while (base) {
+      if (liveMergedBranches.has(base)) break;
       const merged = historical.find((candidate) => candidate.state === 'merged' &&
-        candidate.headRefName === base && candidate.number !== pr.number);
+        candidate.headRefName === base && isCompleteCommitSha(candidate.headRefOid) && candidate.baseRefName &&
+        candidate.number !== pr.number);
       if (!merged || seen.has(merged.number)) break;
       seen.add(merged.number);
       base = merged.baseRefName;
@@ -400,6 +442,11 @@ function ghErrorMessage(error) {
   if (error?.code === 'ETIMEDOUT' || error?.killed) return 'gh の取得がタイムアウトしました';
   if (error?.code === 'EPERM' || error?.code === 'EACCES') return 'gh を実行できません';
   return 'gh の認証、通信、または取得結果を確認してください';
+}
+
+function isGitHubNotFoundError(error) {
+  const text = [error?.message, error?.stderr].filter((value) => typeof value === 'string').join('\n');
+  return /(?:http\s+404|\b404 not found\b)/i.test(text);
 }
 
 function ghEnvironment(environment = process.env) {
@@ -712,6 +759,7 @@ class PullRequestTracker {
       relatedPullRequests: this.state.relatedPullRequestRegistrationsForRepo(registration.owner, registration.repo),
       retargetedPrs: this.state.pullRequestRetargetsForRepo(registration.owner, registration.repo),
       restackResults: repository.restackResults,
+      liveMergedBranches: repository.liveMergedBranches,
     });
     const find = (items) => {
       for (const item of items) {
@@ -754,6 +802,19 @@ class PullRequestTracker {
       pullRequest,
       mergedAt: typeof value.mergedAt === 'string' && Number.isFinite(Date.parse(value.mergedAt)) ? value.mergedAt : null,
     };
+  }
+
+  async readRemoteBranchHead(repository, branch) {
+    const encodedBranch = branch.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    try {
+      const output = await this.execute(['api', `repos/${repository}/git/ref/heads/${encodedBranch}`]);
+      const headRefOid = JSON.parse(output)?.object?.sha;
+      if (!isCompleteCommitSha(headRefOid)) throw new Error('invalid branch ref');
+      return headRefOid.toLowerCase();
+    } catch (error) {
+      if (isGitHubNotFoundError(error)) return null;
+      throw error;
+    }
   }
 
   async fetchRepository(owner, repo, repository) {
@@ -919,19 +980,34 @@ class PullRequestTracker {
       }
     }
 
+    const historicalPullRequests = historicalMergedPullRequests(
+      this.state.pullRequestRegistrationsForRepo(owner, repo),
+      this.state.relatedPullRequestRegistrationsForRepo(owner, repo),
+      openPullRequests,
+    );
+    const mergedCandidates = mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests);
+    const liveMergedBranches = new Set();
+    const branchHeadRequests = new Map();
+    const readBranchHead = (branch) => {
+      if (!branchHeadRequests.has(branch)) {
+        branchHeadRequests.set(branch, this.readRemoteBranchHead(repository, branch));
+      }
+      return branchHeadRequests.get(branch);
+    };
     const restackResults = new Map();
     const comparisons = listAvailable && defaultBranch
       ? await Promise.all(openPullRequests.map(async (pr) => {
         if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
         try {
+          const compareBase = await restackCompareBase(
+            pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
+          );
           const output = await this.execute([
             'api',
-            `repos/${repository}/compare/${encodeURIComponent(restackCompareBase(
-              pr, openPullRequests, mergedPullRequests, defaultBranch,
-            ))}...${pr.headRefOid}`,
+            `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${pr.headRefOid}`,
           ]);
           const commits = parseCompareResult(output);
-          const result = mergedPullRequests ? restackResult(commits, mergedPullRequests, mergedListComplete) : { checked: false, parent: null };
+          const result = restackResult(commits, mergedCandidates, mergedListComplete);
           if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
           return [pr.number, result];
         } catch (error) {
@@ -971,6 +1047,7 @@ class PullRequestTracker {
           relatedPullRequests,
           retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
           restackResults,
+          liveMergedBranches,
         });
         groupAssemblies.push({ group, assembled });
         const visit = (pullRequest) => {
@@ -1023,6 +1100,7 @@ class PullRequestTracker {
       listAvailable,
       uninspectedNumbers,
       restackResults,
+      liveMergedBranches,
     });
     await this.refreshReviewGroups(owner, repo);
     this.state.touch();
@@ -1082,6 +1160,7 @@ class PullRequestTracker {
         relatedPullRequests,
         retargetedPrs: this.state.pullRequestRetargetsForRepo(owner, repo),
         restackResults: repositoryState.restackResults,
+        liveMergedBranches: repositoryState.liveMergedBranches,
       });
       const condition = this.state.getDisplayPreferences?.().mergeableCondition || 'cross-review';
       const trees = assembled.trees.map((tree) => applyMergeCondition(attachCrossReviewState(
