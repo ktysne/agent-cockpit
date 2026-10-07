@@ -1368,6 +1368,49 @@ test('更新の無いセッションの「表示する」「隠す」が描き�
   assert.equal(root.children[0].textContent, '更新の無いセッションを隠しています。下の「表示する」から表示できます。');
 });
 
+test('一覧が空になる描き直しで札が消えたら残る札か表示切り替えへフォーカスを移す', () => {
+  const render = functionSource(web, 'render');
+  const filters = web.match(/const FILTERS = \[[\s\S]*?\n\];/)?.[0];
+  const exercise = (chipKeys) => {
+    const focusable = (dataset) => ({ dataset, setAttribute() {}, focus(options) { this.focusOptions = options; } });
+    const modeButton = focusable({ mode: 'product' });
+    const chips = chipKeys.map((filter) => focusable({ filter }));
+    const context = pageContext(web, {
+      answerNoteComposing: false,
+      renderRouting() {},
+      idleHiddenSessions: () => [],
+      sessionsAfterIdleFilter: () => [],
+      renderSummary() {},
+      renderExcludedNote() {},
+      finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+      renderFinishedNote() {},
+      renderIdleNote() {},
+      updateTitle() {},
+      summary: { querySelectorAll: () => chips },
+      document: {
+        activeElement: { dataset: { filter: 'prs' }, hasAttribute: () => false },
+        querySelectorAll: () => [modeButton],
+        querySelector: (selector) => selector === '[data-action="mode"][data-mode="product"]' ? modeButton : null,
+      },
+      HTMLTextAreaElement: class {},
+      displayPreferences: { mode: 'product' },
+      visibleSinceSeen: () => [],
+      orderedProducts: () => [],
+      root: { replaceChildren() {} },
+      element: (tag, className, textContent) => ({ tag, className, textContent }),
+    });
+    vm.runInContext(`${filters}\n${functionSource(web, 'filterFocusFallback')}\n${render}\nthis.render = render;`, context);
+    context.render({ sessions: [], pullRequests: [] });
+    return { modeButton, chips };
+  };
+
+  const withChip = exercise(['agents']);
+  assert.ok(withChip.chips[0].focusOptions);
+  assert.equal(withChip.modeButton.focusOptions, undefined);
+  const withoutChip = exercise([]);
+  assert.deepEqual(JSON.parse(JSON.stringify(withoutChip.modeButton.focusOptions)), { preventScroll: true });
+});
+
 test('一覧が残る再描画で表示設定のボタンが消えたらマージ結果か表示切り替えへフォーカスを戻す', () => {
   const render = functionSource(web, 'render');
   assert.ok(render);

@@ -3275,7 +3275,11 @@ function render(state) {
     root.replaceChildren(element('section', 'section empty', emptyText));
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
-    else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
+    else if (focusData?.kind === 'filter') {
+      const chips = [...summary.querySelectorAll('button')];
+      (chips.find((item) => item.dataset.filter === focusData.key) || filterFocusFallback(chips, focusData.key)
+        || document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]'))?.focus({ preventScroll: true });
+    } else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
     return;
