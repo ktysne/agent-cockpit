@@ -394,6 +394,7 @@ h3.sub .count { font-weight: normal; }
 .instruction-status, .instruction-reason, .instruction-target { margin: 0; color: var(--text-2); font-size: 12px; }
 .instruction-preview { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 6px; background: var(--surface); }
 .instruction-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.instruction-preview textarea { min-width: 0; width: 100%; min-height: 72px; resize: vertical; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--surface); color: var(--text); font: inherit; }
 .instruction-diagnostics { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; background: var(--warn-soft); color: var(--text-2); }
 .kind-empty { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .kind-empty h2 { margin: 0; color: var(--text-2); font-size: 15px; }
@@ -593,8 +594,12 @@ const instructionInFlight = new Set();
 const instructionAlternatives = new Map();
 const instructionAlternativeInFlight = new Set();
 const INSTRUCTION_MODES = new Set(['steer', 'start', 'next-user-input']);
+const MAX_PENDING_INSTRUCTION_ALTERNATIVES = 64;
+const MAX_INSTRUCTION_TEXT_BYTES = 64 * 1024;
 const INSTRUCTION_PREVIEW_STORAGE_KEY = 'agent-cockpit.instruction-previews';
+const INSTRUCTION_ALTERNATIVE_STORAGE_KEY = 'agent-cockpit.instruction-alternative-requests';
 const instructionPreviews = new Map();
+const instructionAlternativeDiscardConfirmations = new Set();
 let observedInstructionStates = new Map();
 let renderedInstructionSignature = null;
 try {
@@ -606,6 +611,69 @@ try {
           Number.isSafeInteger(preview.revision) && typeof preview.text === 'string') {
         instructionPreviews.set(id, preview);
       }
+    }
+  }
+} catch {}
+
+function normalizeInstructionAlternativeRequest(oldId, value) {
+  const fields = ['oldDeliveryAttemptId', 'launchRef', 'sessionId', 'executionId', 'newDeliveryAttemptId',
+    'registrationExecutionId', 'logicalMessageId', 'revision', 'text', 'mode', 'expectedTurnId', 'createdAt'];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  let keys;
+  try { keys = Reflect.ownKeys(value); } catch { return null; }
+  if (keys.length !== fields.length || keys.some((key) => typeof key !== 'string' || !fields.includes(key))) return null;
+  if (value.oldDeliveryAttemptId !== oldId || !validScopedInstructionId(oldId) ||
+      !validScopedInstructionId(value.launchRef) || !validScopedInstructionId(value.sessionId) ||
+      !validScopedInstructionId(value.executionId) || !validScopedInstructionId(value.newDeliveryAttemptId) ||
+      !validScopedInstructionId(value.registrationExecutionId) ||
+      !validScopedInstructionId(value.logicalMessageId) || !Number.isSafeInteger(value.revision) || value.revision < 1 ||
+      instructionTextByteLength(value.text) === null || instructionTextByteLength(value.text) > MAX_INSTRUCTION_TEXT_BYTES ||
+      value.mode !== 'next-user-input' || value.expectedTurnId !== null || !Number.isSafeInteger(value.createdAt)) return null;
+  return Object.freeze(Object.fromEntries(fields.map((field) => [field, value[field]])));
+}
+
+function instructionTextByteLength(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  let byteLength = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (index + 1 >= text.length || !(next >= 0xdc00 && next <= 0xdfff)) return null;
+      byteLength += 4;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return null;
+    else byteLength += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
+  }
+  return byteLength;
+}
+
+function persistInstructionAlternativeRequests() {
+  try {
+    const storage = globalThis.sessionStorage;
+    if (!storage) return false;
+    const requests = Object.fromEntries([...instructionAlternatives]
+      .filter(([, draft]) => draft?.pendingRequest)
+      .map(([id, draft]) => [id, draft.pendingRequest]));
+    if (Object.keys(requests).length > MAX_PENDING_INSTRUCTION_ALTERNATIVES) return false;
+    if (Object.keys(requests).length) {
+      const serialized = JSON.stringify(requests);
+      storage.setItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY, serialized);
+      return storage.getItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY) === serialized;
+    }
+    storage.removeItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY);
+    return storage.getItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY) === null;
+  } catch { return false; }
+}
+
+try {
+  const saved = JSON.parse(globalThis.sessionStorage?.getItem(INSTRUCTION_ALTERNATIVE_STORAGE_KEY) || '{}');
+  if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+    for (const [oldId, item] of Object.entries(saved).slice(0, MAX_PENDING_INSTRUCTION_ALTERNATIVES)) {
+      const request = normalizeInstructionAlternativeRequest(oldId, item);
+      if (request) instructionAlternatives.set(oldId, {
+        open: true, text: request.text, deliveryAttemptId: request.newDeliveryAttemptId, pendingRequest: request,
+      });
     }
   }
 } catch {}
@@ -3213,6 +3281,115 @@ function instructionTargetName(target) {
   return `${target.identity?.nativeId || target.launchRef} · ${origin}`;
 }
 
+function findInstructionRecord(state, id) {
+  return (state?.sessions || []).flatMap((session) => (session.instructions || []).map((instruction) => ({
+    ...instruction, ownerSessionId: session.session_id,
+  }))).find((instruction) => instruction.deliveryAttemptId === id) || null;
+}
+
+function sameInstructionIdentity(left, right) {
+  return Boolean(left && right && ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId']
+    .every((key) => left[key] === right[key]));
+}
+
+function instructionAlternativeRetryState(state, request) {
+  const diagnostics = state?.instructionDiagnostics;
+  const target = instructionTargetFor(state, request.launchRef);
+  const old = findInstructionRecord(state, request.oldDeliveryAttemptId);
+  const created = findInstructionRecord(state, request.newDeliveryAttemptId);
+  const targetMatches = Boolean(target && target.sessionId === request.sessionId &&
+    target.executionId === request.registrationExecutionId && target.origin === 'standalone');
+  const oldMatches = Boolean(old && old.ownerSessionId === request.sessionId && old.launchRef === request.launchRef &&
+    old.executionId === request.executionId && old.registrationExecutionId === request.registrationExecutionId &&
+    old.logicalMessageId === request.logicalMessageId && old.origin === 'standalone' && old.revision < request.revision &&
+    ['available', 'claimed', 'superseded_before_send'].includes(old.state));
+  const createdMatches = !created || (created.ownerSessionId === request.sessionId &&
+    created.launchRef === request.launchRef && created.executionId === request.executionId &&
+    created.registrationExecutionId === request.registrationExecutionId &&
+    created.logicalMessageId === request.logicalMessageId && created.revision === request.revision &&
+    created.origin === 'standalone' && created.mode === 'next-user-input' &&
+    ['available', 'claimed'].includes(created.state));
+  const allowed = diagnostics?.service === 'ready' && diagnostics.blocked !== true &&
+    diagnostics.targets === 'available' && targetMatches && target?.status === 'stopped' &&
+    instructionTargetMode(target, 'next-user-input') && oldMatches && createdMatches;
+  let reason = null;
+  if (!targetMatches && diagnostics?.targets !== 'available') {
+    reason = '実行先の状態を確認できません。内容はこの画面に保持しています。';
+  } else if (!targetMatches || !oldMatches || !createdMatches) {
+    reason = '対象の状態が変わったため、保存結果を確認できません。内容はこの画面に保持しています。';
+  } else if (!allowed) {
+    reason = diagnostics?.service !== 'ready' || diagnostics?.blocked === true
+      ? '保存機能の復旧後に、同じ内容で結果を確認できます。'
+      : '対象の実行が確認待ちです。状態が戻るまで、内容をこの画面に保持しています。';
+  }
+  return { allowed, reason, target };
+}
+
+function instructionAlternativeRecoveryPanel(state) {
+  const pending = [...instructionAlternatives.entries()]
+    .filter(([, draft]) => draft?.pendingRequest);
+  if (!pending.length) return null;
+  const panel = element('section', 'instruction-composer instruction-recovery');
+  panel.setAttribute('aria-label', '保存結果を確認する指示');
+  const panelHeading = element('h2', '', '差し替えの保存結果を確認');
+  panelHeading.dataset.instructionRecoveryHeading = 'true';
+  panelHeading.tabIndex = -1;
+  panel.append(panelHeading);
+  panel.append(element('p', 'instruction-reason', '保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。'));
+  for (const [oldId, draft] of pending) {
+    const request = draft.pendingRequest;
+    const retry = instructionAlternativeRetryState(state, request);
+    const item = element('article', 'instruction-card');
+    const targetName = retry.target ? instructionTargetName(retry.target) : '実行先を確認できません';
+    const heading = element('h3', '', `${targetName} · 次の入力へ差し替え`);
+    heading.dataset.instructionAlternativeTitle = oldId;
+    heading.tabIndex = -1;
+    item.append(heading);
+    const preview = element('section', 'instruction-preview');
+    preview.append(element('strong', '', '保存要求に固定した内容'));
+    const fixedText = element('textarea');
+    fixedText.value = request.text;
+    fixedText.readOnly = true;
+    fixedText.rows = 4;
+    fixedText.dataset.instructionRecoveryText = oldId;
+    fixedText.setAttribute('aria-label', '保存要求に固定した内容');
+    preview.append(fixedText);
+    item.append(preview);
+    const errorMessage = instructionErrors.get('alternative:' + oldId);
+    if (errorMessage) {
+      const error = element('p', 'instruction-reason', errorMessage);
+      error.setAttribute('role', 'alert');
+      item.append(error);
+    }
+    if (retry.reason) item.append(element('p', 'instruction-reason', retry.reason));
+    const actions = element('div', 'instruction-actions');
+    const retryButton = element('button', '', '同じ内容で保存結果を確認する');
+    retryButton.type = 'button';
+    retryButton.dataset.instructionAlternativeRetry = oldId;
+    retryButton.disabled = !retry.allowed;
+    if (instructionAlternativeInFlight.has(oldId)) retryButton.textContent = '保存結果を確認中…';
+    actions.append(retryButton);
+    if (instructionAlternativeDiscardConfirmations.has(oldId)) {
+      const confirmation = element('p', 'instruction-reason', 'この要求内容だけをこの画面から破棄します。サーバーの履歴は削除されません。');
+      const discard = element('button', '', '要求内容を破棄する');
+      discard.type = 'button';
+      discard.dataset.instructionAlternativeDiscard = oldId;
+      const keep = element('button', '', '戻る');
+      keep.type = 'button';
+      keep.dataset.instructionAlternativeDiscardDismiss = oldId;
+      actions.append(confirmation, discard, keep);
+    } else {
+      const askDiscard = element('button', '', 'この要求内容を破棄');
+      askDiscard.type = 'button';
+      askDiscard.dataset.instructionAlternativeDiscardAsk = oldId;
+      actions.append(askDiscard);
+    }
+    item.append(actions);
+    panel.append(item);
+  }
+  return panel;
+}
+
 function instructionCard(session, state, instruction) {
   const card = element('article', 'instruction-card');
   const target = instructionTargetFor(state, instruction.launchRef);
@@ -3221,6 +3398,8 @@ function instructionCard(session, state, instruction) {
   const preview = instructionPreviewFor(instruction);
   const targetLabel = target ? instructionTargetName(target) : '実行先を確認できません';
   const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
+  const alternativeDraft = instructionAlternatives.get(instruction.deliveryAttemptId);
+  const alternativePending = Boolean(alternativeDraft?.pendingRequest);
   card.append(element('h4', '', `${instructionModeLabel(instruction.mode)} · ${targetLabel} · ${createdAt}`));
   card.append(element('p', 'instruction-status', instructionStateLabel(instruction)));
   if (!isFinishedInstruction(instruction)) {
@@ -3236,7 +3415,7 @@ function instructionCard(session, state, instruction) {
   if (actionError) card.append(element('p', 'instruction-reason', actionError));
   const actions = element('div', 'instruction-actions');
   const operationKey = instruction.deliveryAttemptId;
-  const busy = instructionInFlight.has(operationKey);
+  const busy = instructionInFlight.has(operationKey) || instructionAlternativeInFlight.has(operationKey) || alternativePending;
   if (['available', 'claimed'].includes(instruction.state)) {
     const send = element('button', '', preview
       ? instruction.mode === 'start' ? '同じ実行で次の入力を開始' : 'この実行へ送る'
@@ -3256,7 +3435,7 @@ function instructionCard(session, state, instruction) {
     cancel.dataset.instructionExecution = instruction.registrationExecutionId;
     cancel.disabled = busy || !serviceReady;
     actions.append(cancel);
-    if (instruction.origin === 'standalone' && instruction.executionState === 'active' && target?.status === 'stopped' && serviceReady) {
+    if (!alternativePending && instruction.origin === 'standalone' && instruction.executionState === 'active' && target?.status === 'stopped' && serviceReady) {
       const alternative = element('button', '', '次の入力へ差し替える');
       alternative.type = 'button';
       alternative.dataset.instructionAlternativeOpen = instruction.deliveryAttemptId;
@@ -3267,9 +3446,12 @@ function instructionCard(session, state, instruction) {
     }
   }
   if (actions.childNodes.length) card.append(actions);
-  const alternativeDraft = instructionAlternatives.get(operationKey);
-  if (alternativeDraft?.open && ['available', 'claimed'].includes(instruction.state) &&
-      instruction.origin === 'standalone' && instruction.executionState === 'active' && target?.status === 'stopped' && serviceReady) {
+  const alternativeTargetMatches = Boolean(target && target.sessionId === session.session_id &&
+    target.executionId === instruction.registrationExecutionId && target.origin === 'standalone');
+  const alternativeCanSubmit = serviceReady && state?.instructionDiagnostics?.targets === 'available' &&
+    alternativeTargetMatches && target?.status === 'stopped' && instructionTargetMode(target, 'next-user-input');
+  if (alternativeDraft?.open && !alternativePending && ['available', 'claimed'].includes(instruction.state) &&
+      instruction.origin === 'standalone' && instruction.executionState === 'active' && alternativeTargetMatches) {
     const form = element('form', 'instruction-form');
     form.dataset.instructionAlternativeForm = instruction.deliveryAttemptId;
     form.dataset.instructionSession = session.session_id;
@@ -3283,15 +3465,20 @@ function instructionCard(session, state, instruction) {
     textarea.dataset.instructionSession = session.session_id;
     textarea.dataset.instructionId = instruction.deliveryAttemptId;
     textarea.value = alternativeDraft.text;
-    textarea.disabled = instructionAlternativeInFlight.has(operationKey);
+    textarea.readOnly = instructionAlternativeInFlight.has(operationKey);
     label.append(textarea);
     form.append(label);
+    if (!alternativeCanSubmit) {
+      form.append(element('p', 'instruction-reason', state?.instructionDiagnostics?.service !== 'ready' || state?.instructionDiagnostics?.blocked === true
+        ? '保存機能の復旧後に続けられます。入力内容は保持しています。'
+        : '対象の実行が確認待ちです。状態が戻るまで入力内容を保持しています。'));
+    }
     const error = element('p', 'instruction-reason', instructionErrors.get('alternative:' + operationKey) || '');
     error.hidden = !error.textContent;
     error.setAttribute('role', 'alert');
     const submit = element('button', '', '差し替えを保存する');
     submit.type = 'submit';
-    submit.disabled = instructionAlternativeInFlight.has(operationKey) || !alternativeDraft.text.trim();
+    submit.disabled = instructionAlternativeInFlight.has(operationKey) || !alternativeCanSubmit || !alternativeDraft.text.trim();
     form.append(error, submit);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -3927,9 +4114,28 @@ function observeInstructionStates(state) {
 }
 
 function instructionProjectionSignature(state) {
-  return JSON.stringify((state?.sessions || []).map((session) => [
-    session.session_id, session.instructions || [],
-  ]));
+  return JSON.stringify({
+    sessions: (state?.sessions || []).map((session) => [session.session_id, session.instructions || []]),
+    targets: state?.instructionTargets || [],
+    diagnostics: state?.instructionDiagnostics || null,
+  });
+}
+
+function restoreInstructionAlternativeFocus(focusData) {
+  const id = focusData.id;
+  const escapedId = CSS.escape(id);
+  const selectors = focusData.kind === 'instruction-alt-retry'
+    ? [`[data-instruction-alternative-retry="${escapedId}"]`]
+    : focusData.kind === 'instruction-alt-discard-ask'
+      ? [`[data-instruction-alternative-discard-ask="${escapedId}"]`, `[data-instruction-alternative-discard="${escapedId}"]`]
+      : focusData.kind === 'instruction-alt-discard-dismiss'
+        ? [`[data-instruction-alternative-discard-dismiss="${escapedId}"]`, `[data-instruction-alternative-discard-ask="${escapedId}"]`]
+        : focusData.kind === 'instruction-alt-discard'
+          ? [`[data-instruction-alternative-discard="${escapedId}"]`]
+          : [];
+  const control = selectors.map((selector) => root.querySelector(selector)).find((item) => item && !item.disabled);
+  if (control) control.focus({ preventScroll: true });
+  else root.querySelector(`[data-instruction-alternative-title="${escapedId}"]`)?.focus({ preventScroll: true });
 }
 
 function render(state) {
@@ -3948,6 +4154,7 @@ function render(state) {
   const activeAnswerNote = active instanceof HTMLTextAreaElement && active.hasAttribute('data-answer-note') ? active : null;
   const activeCommonField = active instanceof HTMLElement && active.matches('[data-common-option], [data-common-free-text]') ? active : null;
   const activeInstructionField = active instanceof HTMLElement && active.matches('[data-instruction-field]') ? active : null;
+  const activeInstructionRecoveryText = active instanceof HTMLTextAreaElement && active.dataset.instructionRecoveryText ? active : null;
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
@@ -3968,6 +4175,12 @@ function render(state) {
            field: activeInstructionField.dataset.instructionField, id: activeInstructionField.dataset.instructionId || '',
            start: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionStart : 0,
            end: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionEnd : 0 }
+         : activeInstructionRecoveryText ? { kind: 'instruction-alt-preview', id: activeInstructionRecoveryText.dataset.instructionRecoveryText,
+           start: activeInstructionRecoveryText.selectionStart, end: activeInstructionRecoveryText.selectionEnd }
+         : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
+         : active?.dataset?.instructionAlternativeDiscardAsk ? { kind: 'instruction-alt-discard-ask', id: active.dataset.instructionAlternativeDiscardAsk }
+         : active?.dataset?.instructionAlternativeDiscard ? { kind: 'instruction-alt-discard', id: active.dataset.instructionAlternativeDiscard }
+         : active?.dataset?.instructionAlternativeDiscardDismiss ? { kind: 'instruction-alt-discard-dismiss', id: active.dataset.instructionAlternativeDiscardDismiss }
          : activeCommonField ? { kind: 'common-input', sessionId: activeCommonField.closest('.common-question')?.dataset.sessionId, internalQuestionId: activeCommonField.closest('.common-question')?.dataset.internalQuestionId, questionId: activeCommonField.dataset.questionId || activeCommonField.dataset.commonFreeText, optionId: activeCommonField.dataset.optionId || '', start: activeCommonField instanceof HTMLTextAreaElement ? activeCommonField.selectionStart : 0, end: activeCommonField instanceof HTMLTextAreaElement ? activeCommonField.selectionEnd : 0 }
          : active?.dataset?.showFinished ? { kind: 'show-finished' }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
@@ -4001,8 +4214,19 @@ function render(state) {
     if (questionNotice) root.prepend(questionNotice);
     const instructionNotice = instructionDiagnosticsNotice(state.instructionDiagnostics);
     if (instructionNotice) root.prepend(instructionNotice);
+    const alternativeRecovery = instructionAlternativeRecoveryPanel(state);
+    if (alternativeRecovery) root.prepend(alternativeRecovery);
     const topFocusAttribute = { 'show-all': 'data-show-all', 'clear-hidden': 'data-clear-hidden-sessions', 'undo-hidden': 'data-undo-hidden-sessions' }[focusData?.kind];
     if (topFocusAttribute) document.querySelector(`[${topFocusAttribute}]`)?.focus({ preventScroll: true });
+    else if (focusData?.kind === 'instruction-alt-preview') {
+      const control = root.querySelector(`[data-instruction-recovery-text="${CSS.escape(focusData.id)}"]`);
+      if (control) {
+        control.replaceWith(activeInstructionRecoveryText);
+        activeInstructionRecoveryText.focus({ preventScroll: true });
+        activeInstructionRecoveryText.setSelectionRange(focusData.start, focusData.end);
+      }
+    }
+    else if (focusData?.kind?.startsWith('instruction-alt-')) restoreInstructionAlternativeFocus(focusData);
     else if (['show-finished', 'show-idle', 'merge-result-close'].includes(focusData?.kind)) {
       document.querySelector('[data-action="mode"][data-mode="' + displayPreferences.mode + '"]')?.focus({ preventScroll: true });
     }
@@ -4019,6 +4243,8 @@ function render(state) {
   if (questionNotice) root.prepend(questionNotice);
   const instructionNotice = instructionDiagnosticsNotice(state.instructionDiagnostics);
   if (instructionNotice) root.prepend(instructionNotice);
+  const alternativeRecovery = instructionAlternativeRecoveryPanel(state);
+  if (alternativeRecovery) root.prepend(alternativeRecovery);
 
   if (focusData?.kind?.startsWith('merge-')) {
     const controls = [...root.querySelectorAll('[data-merge-method], [data-reservation-toggle], [data-merge-delete], [data-merge-cancel], [data-open-merge], [data-merge-go], [data-conflict-open], [data-conflict-go], [data-conflict-cancel]')];
@@ -4047,6 +4273,19 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'instruction-alt-preview') {
+      const control = root.querySelector(`[data-instruction-recovery-text="${CSS.escape(focusData.id)}"]`);
+      if (activeInstructionRecoveryText && control) {
+        control.replaceWith(activeInstructionRecoveryText);
+        activeInstructionRecoveryText.focus({ preventScroll: true });
+        activeInstructionRecoveryText.setSelectionRange(focusData.start, focusData.end);
+      } else control?.focus({ preventScroll: true });
+      return;
+    }
+    if (focusData.kind.startsWith('instruction-alt-')) {
+      restoreInstructionAlternativeFocus(focusData);
+      return;
+    }
     if (focusData.kind === 'instruction-input') {
       const control = [...root.querySelectorAll('[data-instruction-field]')].find((item) =>
         item.dataset.instructionSession === focusData.sessionId &&
@@ -4279,7 +4518,7 @@ document.addEventListener('input', (event) => {
     const field = instructionField.dataset.instructionField;
     if (field === 'alternative-text') {
       const draft = instructionAlternatives.get(instructionField.dataset.instructionId);
-      if (draft && draft.text !== instructionField.value) {
+      if (draft && !draft.pendingRequest && draft.text !== instructionField.value) {
         draft.text = instructionField.value;
         draft.deliveryAttemptId = null;
         instructionErrors.delete('alternative:' + instructionField.dataset.instructionId);
@@ -4528,36 +4767,109 @@ function validScopedInstructionId(value) {
   return typeof value === 'string' && value.length > 0 && value.length <= 512 && value === value.trim();
 }
 
-async function runInstructionAlternative(form) {
-  const oldId = form.dataset.instructionAlternativeForm;
-  const sessionId = form.dataset.instructionSession;
-  const instruction = (lastState?.sessions || []).flatMap((session) => session.instructions || [])
-    .find((item) => item.deliveryAttemptId === oldId);
+function instructionAlternativeResultMatches(result, request, target) {
+  const instruction = result?.instruction;
+  return ['created', 'existing', 'superseded'].includes(result?.outcome) && instruction &&
+    instruction.deliveryAttemptId === request.newDeliveryAttemptId &&
+    instruction.logicalMessageId === request.logicalMessageId && instruction.revision === request.revision &&
+    instruction.launchRef === request.launchRef && instruction.sessionId === request.sessionId &&
+    instruction.executionId === request.executionId && instruction.origin === 'standalone' &&
+    instruction.mode === 'next-user-input' && ['available', 'claimed'].includes(instruction.state) &&
+    Number.isSafeInteger(instruction.createdAt) && sameInstructionIdentity(instruction.identity, target?.identity);
+}
+
+async function runInstructionAlternative(formOrId) {
+  const oldId = typeof formOrId === 'string' ? formOrId : formOrId?.dataset.instructionAlternativeForm;
+  const form = typeof formOrId === 'string' ? null : formOrId;
   const draft = instructionAlternatives.get(oldId);
-  if (!instruction || !draft?.text.trim() || instructionAlternativeInFlight.has(oldId)) return;
-  if (!draft.deliveryAttemptId) draft.deliveryAttemptId = instructionIds().deliveryAttemptId;
-  instructionAlternativeInFlight.add(oldId);
-  instructionErrors.delete('alternative:' + oldId);
-  for (const control of form.elements) control.disabled = true;
-  try {
-    const result = await instructionResponse(await postUiAction(`/api/instructions/${encodeURIComponent(oldId)}/alternative`, {
-      session_id: sessionId,
-      execution_id: form.dataset.instructionExecution,
-      new_delivery_attempt_id: draft.deliveryAttemptId,
-      logical_message_id: instruction.logicalMessageId,
+  if (!draft || instructionAlternativeInFlight.has(oldId)) return;
+  let request = draft.pendingRequest;
+  if (!request) {
+    const instruction = findInstructionRecord(lastState, oldId);
+    if (!instruction || !draft.text.trim() || instruction.ownerSessionId !== form?.dataset.instructionSession ||
+        instruction.registrationExecutionId !== form?.dataset.instructionExecution) return;
+    const textBytes = instructionTextByteLength(draft.text);
+    if (textBytes === null || textBytes > MAX_INSTRUCTION_TEXT_BYTES) {
+      instructionErrors.set('alternative:' + oldId, '指示は UTF-8 で 64 KiB 以下、正しい文字列で入力してください。内容は入力欄に保持しています。');
+      if (lastState) render(lastState);
+      return;
+    }
+    const pendingCount = [...instructionAlternatives.values()].filter((item) => item?.pendingRequest).length;
+    if (pendingCount >= MAX_PENDING_INSTRUCTION_ALTERNATIVES) {
+      instructionErrors.set('alternative:' + oldId, '保存結果の確認待ちは 64 件までです。先に確認待ちの要求を整理してください。本文は入力欄に保持しています。');
+      if (lastState) render(lastState);
+      return;
+    }
+    if (!draft.deliveryAttemptId) draft.deliveryAttemptId = instructionIds().deliveryAttemptId;
+    request = normalizeInstructionAlternativeRequest(oldId, {
+      oldDeliveryAttemptId: oldId,
+      launchRef: instruction.launchRef,
+      sessionId: instruction.ownerSessionId,
+      executionId: instruction.executionId,
+      newDeliveryAttemptId: draft.deliveryAttemptId,
+      registrationExecutionId: instruction.registrationExecutionId,
+      logicalMessageId: instruction.logicalMessageId,
       revision: instruction.revision + 1,
       text: draft.text,
       mode: 'next-user-input',
-      expected_turn_id: null,
+      expectedTurnId: null,
+      createdAt: Date.now(),
+    });
+    if (!request) {
+      instructionErrors.set('alternative:' + oldId, '指示の保存要求を作れません。入力内容を確認してください。');
+      if (lastState) render(lastState);
+      return;
+    }
+    draft.pendingRequest = request;
+    if (!persistInstructionAlternativeRequests()) {
+      delete draft.pendingRequest;
+      instructionErrors.set('alternative:' + oldId, 'このタブに要求内容を保存できないため、送信を開始しませんでした。');
+      if (lastState) render(lastState);
+      return;
+    }
+  }
+  const retryState = instructionAlternativeRetryState(lastState, request);
+  if (!retryState.allowed) {
+    instructionErrors.set('alternative:' + oldId, retryState.reason || '対象を確認できません。');
+    if (lastState) render(lastState);
+    return;
+  }
+  instructionAlternativeInFlight.add(oldId);
+  instructionErrors.delete('alternative:' + oldId);
+  if (form) for (const control of form.elements) control.disabled = true;
+  try {
+    const result = await instructionResponse(await postUiAction(`/api/instructions/${encodeURIComponent(oldId)}/alternative`, {
+      session_id: request.sessionId,
+      execution_id: request.registrationExecutionId,
+      new_delivery_attempt_id: request.newDeliveryAttemptId,
+      logical_message_id: request.logicalMessageId,
+      revision: request.revision,
+      text: request.text,
+      mode: request.mode,
+      expected_turn_id: request.expectedTurnId,
     }));
-    rememberInstructionPreview(result.instruction, draft.text);
+    if (!instructionAlternativeResultMatches(result, request, retryState.target) ||
+        !rememberInstructionPreview(result.instruction, request.text)) {
+      throw Object.assign(new Error('instruction_response_mismatch'), { code: 'instruction_response_mismatch' });
+    }
     instructionAlternatives.delete(oldId);
-    instructionNotices.set(sessionId, '差し替えた指示を保存しました。送信は別操作です。');
+    instructionAlternativeDiscardConfirmations.delete(oldId);
+    if (!persistInstructionAlternativeRequests()) {
+      instructionAlternatives.set(oldId, draft);
+      throw Object.assign(new Error('instruction_local_request_retained'), { code: 'instruction_local_request_retained' });
+    }
+    draft.pendingRequest = null;
+    instructionNotices.set(request.sessionId, '差し替えた指示を保存しました。送信は別操作です。');
     liveStatus.textContent = '差し替えた指示を保存しました。送信は別操作です。';
     await refresh();
     if (lastState) render(lastState);
   } catch (error) {
-    instructionErrors.set('alternative:' + oldId, instructionErrorText(error.code));
+    const message = error.code === 'instruction_response_mismatch'
+      ? '保存応答の対象が一致しないため、内容を保持しています。'
+      : error.code === 'instruction_local_request_retained'
+        ? '保存結果は確認できましたが、このタブの復旧情報を更新できません。内容を保持しています。'
+        : instructionErrorText(error.code);
+    instructionErrors.set('alternative:' + oldId, message);
     showWriteError('差し替えた指示を保存できませんでした');
     await refresh();
     if (lastState) render(lastState);
@@ -4999,9 +5311,47 @@ document.addEventListener('click', (event) => {
     const id = button.dataset.instructionAlternativeOpen;
     const draft = instructionAlternatives.get(id) || { text: '', deliveryAttemptId: null };
     draft.open = !draft.open;
+    if (draft.open) {
+      const instruction = findInstructionRecord(lastState, id);
+      if (instruction) Object.assign(draft, {
+        launchRef: instruction.launchRef,
+        sessionId: instruction.ownerSessionId,
+        executionId: instruction.executionId,
+        registrationExecutionId: instruction.registrationExecutionId,
+      });
+    }
     instructionAlternatives.set(id, draft);
     if (lastState) render(lastState);
     if (draft.open) document.querySelector(`[data-instruction-field="alternative-text"][data-instruction-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (button.dataset.instructionAlternativeRetry) {
+    void runInstructionAlternative(button.dataset.instructionAlternativeRetry);
+    return;
+  }
+  if (button.dataset.instructionAlternativeDiscardAsk) {
+    instructionAlternativeDiscardConfirmations.add(button.dataset.instructionAlternativeDiscardAsk);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.instructionAlternativeDiscardDismiss) {
+    instructionAlternativeDiscardConfirmations.delete(button.dataset.instructionAlternativeDiscardDismiss);
+    if (lastState) render(lastState);
+    return;
+  }
+  if (button.dataset.instructionAlternativeDiscard) {
+    const id = button.dataset.instructionAlternativeDiscard;
+    const draft = instructionAlternatives.get(id);
+    if (!draft?.pendingRequest || instructionAlternativeInFlight.has(id)) return;
+    instructionAlternatives.delete(id);
+    if (!persistInstructionAlternativeRequests()) {
+      instructionAlternatives.set(id, draft);
+      instructionErrors.set('alternative:' + id, 'このタブの復旧情報を削除できません。要求内容は保持しています。');
+    } else {
+      instructionAlternativeDiscardConfirmations.delete(id);
+      instructionErrors.delete('alternative:' + id);
+    }
+    if (lastState) render(lastState);
     return;
   }
   if (button.dataset.lateInstruction) { void runLateInstruction(button); return; }
@@ -5213,7 +5563,7 @@ document.addEventListener('change', (event) => {
 function renderReloadNote(pending) {
   reloadNote.hidden = !pending;
   reloadNote.innerHTML = pending
-    ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
+    ? '<span>画面が新しくなりました。書きかけの回答や指示があるため、読み込みを保留しています。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
     : '';
 }
 
@@ -5229,6 +5579,41 @@ function hasUnsentAnswerDraft(state) {
   return false;
 }
 
+function instructionTargetStillBound(state, sessionId, launchRef, registrationExecutionId = null) {
+  const diagnostics = state?.instructionDiagnostics;
+  const targets = state?.instructionTargets;
+  if (!Array.isArray(targets)) return diagnostics?.targets !== 'available';
+  const target = targets.find((item) => item.launchRef === launchRef);
+  if (!target) return diagnostics?.targets !== 'available';
+  return target.sessionId === sessionId &&
+    (!registrationExecutionId || target.executionId === registrationExecutionId);
+}
+
+function hasUnsentInstructionWork(state) {
+  if (instructionComposing || instructionInFlight.size || instructionAlternativeInFlight.size) return true;
+  for (const draft of instructionAlternatives.values()) {
+    if (draft?.pendingRequest) return true;
+  }
+  for (const [sessionId, draft] of instructionDrafts) {
+    if (typeof draft?.text !== 'string' || !draft.text.trim()) continue;
+    if (draft.targetLaunchRef) {
+      if (instructionTargetStillBound(state, sessionId, draft.targetLaunchRef)) return true;
+    } else if (state?.instructionDiagnostics?.targets !== 'available' ||
+        (state?.instructionTargets || []).some((target) => target.sessionId === sessionId)) {
+      return true;
+    }
+  }
+  for (const [oldId, draft] of instructionAlternatives) {
+    if (!draft?.open || typeof draft.text !== 'string' || !draft.text.trim()) continue;
+    const old = findInstructionRecord(state, oldId);
+    const launchRef = draft.launchRef || old?.launchRef;
+    const sessionId = draft.sessionId || old?.ownerSessionId;
+    const executionId = draft.registrationExecutionId || old?.registrationExecutionId;
+    if (launchRef && sessionId && instructionTargetStillBound(state, sessionId, launchRef, executionId)) return true;
+  }
+  return false;
+}
+
 function checkUiVersion(state) {
   if (!initialUiVersion || state.uiVersion == null) return false;
   if (state.uiVersion === initialUiVersion) {
@@ -5236,7 +5621,7 @@ function checkUiVersion(state) {
     uiUpdatePending = false;
     return false;
   }
-  if (!hasUnsentAnswerDraft(state)) {
+  if (!hasUnsentAnswerDraft(state) && !hasUnsentInstructionWork(state)) {
     location.reload();
     return true;
   }

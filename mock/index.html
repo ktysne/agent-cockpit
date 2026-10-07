@@ -1221,15 +1221,81 @@ function instructionStateText(record) {
 function instructionCard(session, record) {
   const terminal = isFinishedInstructionRecord(record);
   const savedAlternative = ui.instructionAlternatives[record.deliveryAttemptId] || {};
-  const alternative = savedAlternative.open && record.state === 'available' && record.origin === 'standalone'
-    && instructionTargetAvailability(session).mode === 'start'
-    ? `<form class="instruction-alternative"><label>次に送る指示<textarea rows="2" maxlength="65536" data-instruction-alternative="${esc(record.deliveryAttemptId)}">${esc(savedAlternative.text || '')}</textarea></label><button type="button" data-instruction-alternative-save="${esc(record.deliveryAttemptId)}" ${savedAlternative.text?.trim() ? '' : 'disabled'}>差し替えを保存する</button><button type="button" class="ghost" data-instruction-alternative-close="${esc(record.deliveryAttemptId)}">戻る</button></form>` : '';
+  const availability = instructionTargetAvailability(session);
+  const alternativeOpen = savedAlternative.open && !savedAlternative.pendingRequest && record.state === 'available' && record.origin === 'standalone';
+  const alternative = alternativeOpen
+    ? `<form class="instruction-alternative"><label>次に送る指示<textarea rows="2" maxlength="65536" data-instruction-alternative="${esc(record.deliveryAttemptId)}">${esc(savedAlternative.text || '')}</textarea></label>${availability.mode !== 'start' ? '<small class="instruction-reason">対象の実行が確認待ちです。状態が戻るまで入力内容を保持しています。</small>' : ''}<button type="button" data-instruction-alternative-save="${esc(record.deliveryAttemptId)}" ${savedAlternative.text?.trim() && availability.mode === 'start' ? '' : 'disabled'}>差し替えを保存する</button><button type="button" class="ghost" data-instruction-alternative-close="${esc(record.deliveryAttemptId)}">戻る</button></form>` : '';
   const preview = !terminal && typeof record.text === 'string'
     ? `<section class="instruction-preview"><strong>送信内容</strong><pre>${esc(record.text)}</pre></section>` : '';
   const actions = record.state === 'available'
     ? `<div class="instruction-actions"><button type="button" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}">${record.mode === 'start' || record.mode === 'next-user-input' ? '同じ実行で次の入力を開始' : 'この実行へ送る'}</button><button type="button" class="ghost" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button>${record.origin === 'standalone' && instructionTargetAvailability(session).mode === 'start' ? `<button type="button" class="ghost" data-instruction-alternative-open="${esc(record.deliveryAttemptId)}">次の入力へ差し替える</button>` : ''}</div>` : '';
   const reason = record.state === 'unknown' ? '<p class="instruction-reason">モックでは送信結果を確認できません。再送は保留しています。</p>' : '';
   return `<article class="instruction-card" data-instruction-id="${esc(record.deliveryAttemptId)}"><h4>${esc(instructionModeText(record.mode))} · ${esc(session.title)} · ${esc(absoluteTimeLabel(record.createdAt))}</h4><p class="instruction-status">${esc(instructionStateText(record))}</p>${reason}${preview}${actions}${alternative}</article>`;
+}
+
+function applyMockInstructionAlternative(oldId, request) {
+  const oldRecord = ui.instructionRecords.find(record => record.deliveryAttemptId === oldId);
+  const session = oldRecord && allSessions().find(item => item.id === oldRecord.sessionId);
+  if (!oldRecord || !session || !request || request.oldDeliveryAttemptId !== oldId ||
+      request.sessionId !== session.id || request.registrationExecutionId !== session.id ||
+      request.logicalMessageId !== oldRecord.logicalMessageId || request.revision !== oldRecord.revision + 1 ||
+      request.mode !== 'next-user-input' || request.expectedTurnId !== null ||
+      instructionTargetAvailability(session).mode !== 'start') return false;
+  const existing = ui.instructionRecords.find(record => record.deliveryAttemptId === request.newDeliveryAttemptId);
+  if (existing) {
+    if (existing.sessionId !== session.id || existing.logicalMessageId !== request.logicalMessageId ||
+        existing.revision !== request.revision || existing.mode !== request.mode || existing.text !== request.text ||
+        !['available', 'claimed'].includes(existing.state)) return false;
+  } else {
+    if (!['available', 'superseded_before_send'].includes(oldRecord.state)) return false;
+    oldRecord.state = 'superseded_before_send';
+    oldRecord.text = '';
+    ui.instructionRecords.push({
+      deliveryAttemptId: request.newDeliveryAttemptId,
+      logicalMessageId: request.logicalMessageId,
+      productId: oldRecord.productId,
+      sessionId: oldRecord.sessionId,
+      origin: oldRecord.origin,
+      mode: request.mode,
+      revision: request.revision,
+      text: request.text,
+      createdAt: request.createdAt,
+      state: 'available',
+    });
+  }
+  oldRecord.state = 'superseded_before_send';
+  oldRecord.text = '';
+  return true;
+}
+
+function instructionAlternativeRecoveryPanel() {
+  const pending = Object.entries(ui.instructionAlternatives).filter(([, item]) => item?.pendingRequest);
+  if (!pending.length) return '';
+  const rows = pending.map(([oldId, saved]) => {
+    const request = saved.pendingRequest;
+    const oldRecord = ui.instructionRecords.find(record => record.deliveryAttemptId === oldId);
+    const session = oldRecord && allSessions().find(item => item.id === oldRecord.sessionId);
+    const availability = session ? instructionTargetAvailability(session) : { mode: '', reason: '' };
+    const existing = ui.instructionRecords.find(record => record.deliveryAttemptId === request.newDeliveryAttemptId);
+    const requestMatches = oldRecord && session && request.sessionId === session.id &&
+      request.registrationExecutionId === session.id && request.logicalMessageId === oldRecord.logicalMessageId &&
+      request.revision === oldRecord.revision + 1 && request.mode === 'next-user-input' && request.expectedTurnId === null &&
+      (['available', 'superseded_before_send'].includes(oldRecord.state)) &&
+      (!existing || existing.logicalMessageId === request.logicalMessageId && existing.revision === request.revision &&
+        existing.mode === request.mode && existing.text === request.text && ['available', 'claimed'].includes(existing.state));
+    const canRetry = Boolean(requestMatches && availability.mode === 'start');
+    const reason = saved.error || (!session
+      ? '対象の実行を確認できません。要求内容はこのモックに保持しています。'
+      : availability.mode !== 'start'
+        ? '対象の実行が確認待ちです。状態が戻るまで要求内容を保持しています。'
+        : !requestMatches ? '保存要求の対象が一致しません。要求内容を確認してください。'
+          : '同じ内容の保存結果を確認できます。');
+    const confirmation = saved.discardConfirm === true
+      ? `<small class="instruction-reason">この要求内容だけをモックから破棄します。指示履歴は削除しません。</small><button type="button" class="ghost" data-instruction-alternative-discard="${esc(oldId)}">要求内容を破棄する</button><button type="button" class="ghost" data-instruction-alternative-discard-dismiss="${esc(oldId)}">戻る</button>`
+      : `<button type="button" class="ghost" data-instruction-alternative-discard-ask="${esc(oldId)}">この要求内容を破棄</button>`;
+    return `<article class="instruction-card"><h3 data-instruction-alternative-title="${esc(oldId)}" tabindex="-1">${esc(session?.title || '実行先を確認できません')} · 次の入力へ差し替え</h3><section class="instruction-preview"><strong>保存要求に固定した内容</strong><textarea rows="4" readonly data-instruction-recovery-text="${esc(oldId)}" aria-label="保存要求に固定した内容">${esc(request.text)}</textarea></section><p class="instruction-reason" role="status">${esc(reason)}</p>${saved.error ? `<p class="instruction-reason" role="alert">${esc(saved.error)}</p>` : ''}<div class="instruction-actions"><button type="button" data-instruction-alternative-retry="${esc(oldId)}" ${canRetry ? '' : 'disabled'}>同じ内容で保存結果を確認する</button>${confirmation}</div></article>`;
+  }).join('');
+  return `<section class="instruction-composer instruction-recovery" role="region" aria-label="保存結果を確認する指示"><h2>差し替えの保存結果を確認</h2><p class="instruction-reason">保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。</p>${rows}</section>`;
 }
 
 function instructionComposer(p, session) {
@@ -2355,11 +2421,31 @@ function renderKindMode() {
   return orderedSectionKeys(DEFAULT_SECTION_ORDER).map(key => sections[key]).join('');
 }
 
+function restoreInstructionAlternativeFocus(root, focusData) {
+  const id = esc(focusData.id);
+  const selectors = focusData.kind === 'instruction-alt-retry'
+    ? [`[data-instruction-alternative-retry="${id}"]`]
+    : focusData.kind === 'instruction-alt-discard-ask'
+      ? [`[data-instruction-alternative-discard-ask="${id}"]`, `[data-instruction-alternative-discard="${id}"]`]
+      : focusData.kind === 'instruction-alt-discard-dismiss'
+        ? [`[data-instruction-alternative-discard-dismiss="${id}"]`, `[data-instruction-alternative-discard-ask="${id}"]`]
+        : focusData.kind === 'instruction-alt-discard'
+          ? [`[data-instruction-alternative-discard="${id}"]`]
+          : [];
+  const control = selectors.map(selector => root.querySelector(selector)).find(item => item && !item.disabled);
+  if (control) control.focus({ preventScroll: true });
+  else root.querySelector(`[data-instruction-alternative-title="${id}"]`)?.focus({ preventScroll: true });
+}
+
 function render() {
   const active = document.activeElement;
   const focusAttribute = ['data-ended-agents', 'data-ended-decisions', 'data-done-tasks', 'data-kind-toggle', 'data-older-merged'].find(attribute => active?.hasAttribute(attribute));
   const focusData = focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
+       : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
+       : active?.dataset?.instructionAlternativeDiscardAsk ? { kind: 'instruction-alt-discard-ask', id: active.dataset.instructionAlternativeDiscardAsk }
+       : active?.dataset?.instructionAlternativeDiscard ? { kind: 'instruction-alt-discard', id: active.dataset.instructionAlternativeDiscard }
+       : active?.dataset?.instructionAlternativeDiscardDismiss ? { kind: 'instruction-alt-discard-dismiss', id: active.dataset.instructionAlternativeDiscardDismiss }
        : active?.dataset?.showFinished ? { kind: 'show-finished' }
        : active?.dataset?.showIdle ? { kind: 'show-idle' }
       : active?.dataset?.closeMergeResult ? { kind: 'close-merge-result', id: active.dataset.closeMergeResult }
@@ -2371,8 +2457,13 @@ function render() {
   renderConnectionNote();
   renderReloadNote();
   renderRouting();
-  document.getElementById('root').innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
-  if (focusData?.attribute) {
+  const root = document.getElementById('root');
+  root.innerHTML = ui.mode === 'product' ? renderProductMode() : renderKindMode();
+  const recovery = typeof instructionAlternativeRecoveryPanel === 'function' ? instructionAlternativeRecoveryPanel() : '';
+  if (recovery) root.insertAdjacentHTML('afterbegin', recovery);
+  if (focusData?.kind?.startsWith('instruction-alt-')) {
+    restoreInstructionAlternativeFocus(root, focusData);
+  } else if (focusData?.attribute) {
     [...document.querySelectorAll(`[${focusData.attribute}]`)].find(button => button.getAttribute(focusData.attribute) === focusData.value)?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'show-finished') {
     (document.querySelector('[data-show-finished]') || document.querySelector('[data-mode="' + ui.mode + '"]'))?.focus({ preventScroll: true });
@@ -2481,9 +2572,40 @@ document.addEventListener('click', e => {
     const session = record && allSessions().find(item => item.id === record.sessionId);
     if (!record || !session) return;
     const availability = instructionTargetAvailability(session);
-    if (record.state !== 'available' || record.origin !== 'standalone' || availability.mode !== 'start') return;
-    ui.instructionAlternatives[id] = t.dataset.instructionAlternativeOpen
-      ? { open: true, text: '' } : { open: false, text: '' };
+    if (t.dataset.instructionAlternativeOpen &&
+        (record.state !== 'available' || record.origin !== 'standalone' || availability.mode !== 'start')) return;
+    ui.instructionAlternatives[id] = { ...(ui.instructionAlternatives[id] || {}),
+      open: Boolean(t.dataset.instructionAlternativeOpen), text: t.dataset.instructionAlternativeOpen ? '' : '' };
+    save(); render();
+    return;
+  }
+  if (t.dataset.instructionAlternativeRetry) {
+    const oldId = t.dataset.instructionAlternativeRetry;
+    const saved = ui.instructionAlternatives[oldId];
+    if (!saved?.pendingRequest) return;
+    if (applyMockInstructionAlternative(oldId, saved.pendingRequest)) {
+      delete ui.instructionAlternatives[oldId];
+      const session = allSessions().find(item => item.id === saved.pendingRequest.sessionId);
+      if (session) ui.instructionNotices[session.id] = '新しい指示を保存しました。送信は別操作です。';
+    } else saved.error = '対象の状態が戻った後、同じ内容で保存結果を確認してください。要求本文は保持しています。';
+    save(); render();
+    return;
+  }
+  if (t.dataset.instructionAlternativeDiscardAsk || t.dataset.instructionAlternativeDiscardDismiss) {
+    const id = t.dataset.instructionAlternativeDiscardAsk || t.dataset.instructionAlternativeDiscardDismiss;
+    const saved = ui.instructionAlternatives[id];
+    if (!saved?.pendingRequest) return;
+    saved.discardConfirm = Boolean(t.dataset.instructionAlternativeDiscardAsk);
+    save(); render();
+    return;
+  }
+  if (t.dataset.instructionAlternativeDiscard) {
+    const id = t.dataset.instructionAlternativeDiscard;
+    const saved = ui.instructionAlternatives[id];
+    if (!saved?.pendingRequest || saved.discardConfirm !== true) return;
+    const session = allSessions().find(item => item.id === saved.pendingRequest.sessionId);
+    delete ui.instructionAlternatives[id];
+    if (session) ui.instructionNotices[session.id] = 'この画面の要求内容を破棄しました。指示履歴は残っています。';
     save(); render();
     return;
   }
@@ -2494,23 +2616,29 @@ document.addEventListener('click', e => {
     const alternative = ui.instructionAlternatives[oldId] || {};
     if (!oldRecord || !session || oldRecord.state !== 'available' || oldRecord.origin !== 'standalone'
       || instructionTargetAvailability(session).mode !== 'start' || !String(alternative.text || '').trim()) return;
-    oldRecord.state = 'superseded_before_send';
-    oldRecord.text = '';
     const deliveryAttemptId = `mock-instruction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    ui.instructionRecords.push({
-      deliveryAttemptId,
+    const request = {
+      oldDeliveryAttemptId: oldId,
+      newDeliveryAttemptId: deliveryAttemptId,
+      launchRef: `mock-launch-${session.id}`,
+      sessionId: session.id,
+      executionId: session.id,
+      registrationExecutionId: session.id,
       logicalMessageId: oldRecord.logicalMessageId,
-      productId: oldRecord.productId,
-      sessionId: oldRecord.sessionId,
-      origin: oldRecord.origin,
-      mode: 'next-user-input',
       revision: oldRecord.revision + 1,
-      text: String(alternative.text).trim(),
+      text: String(alternative.text),
+      mode: 'next-user-input',
+      expectedTurnId: null,
       createdAt: Date.now(),
-      state: 'available',
-    });
-    ui.instructionAlternatives[oldId] = { open: false, text: '' };
-    ui.instructionNotices[session.id] = '新しい指示を保存しました。送信前に内容を確認してください。';
+    };
+    ui.instructionAlternatives[oldId] = { ...alternative, open: false, pendingRequest: request, error: null };
+    save();
+    if (applyMockInstructionAlternative(oldId, request)) {
+      delete ui.instructionAlternatives[oldId];
+      ui.instructionNotices[session.id] = '新しい指示を保存しました。送信前に内容を確認してください。';
+    } else {
+      ui.instructionAlternatives[oldId].error = '対象の状態を確認できません。要求内容はこのモックに保持しています。';
+    }
     save(); render();
     return;
   }

@@ -11,7 +11,7 @@ const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 
 
 function pageContext(html, sandbox = {}) {
   const instructionState = html.includes('let instructionComposing = false;')
-    ? { instructionComposing: false, instructionDiagnosticsNotice: () => null }
+    ? { instructionComposing: false, instructionDiagnosticsNotice: () => null, instructionAlternativeRecoveryPanel: () => null }
     : {};
   return createPageContext(html, { ...instructionState, ...sandbox });
 }
@@ -200,9 +200,10 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
   assert.equal(now.body.children.length, 0);
 });
 
-function reloadHarness(initialUiVersion, drafts = []) {
+function reloadHarness(initialUiVersion, drafts = [], instructionState = {}) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
+  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'instructionTargetStillBound', 'hasUnsentInstructionWork',
+    'findInstructionRecord', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
@@ -212,6 +213,11 @@ function reloadHarness(initialUiVersion, drafts = []) {
     initialUiVersion,
     uiUpdatePending: false,
     answerDrafts: new Map(drafts),
+    instructionComposing: instructionState.composing === true,
+    instructionDrafts: new Map(instructionState.drafts || []),
+    instructionAlternatives: new Map(instructionState.alternatives || []),
+    instructionInFlight: new Set(instructionState.inFlight || []),
+    instructionAlternativeInFlight: new Set(instructionState.alternativeInFlight || []),
     reloadNote,
     location: { reload: () => { reloadCount += 1; } },
   });
@@ -292,6 +298,7 @@ function renderHarness(initialDraftNote = '保存済みの下書き') {
     commonQuestionComposing: false,
     HTMLElement: class FakeHTMLElement {},
     commonQuestionDiagnosticsNotice: () => null,
+    instructionAlternativeRecoveryPanel: () => null,
     deferredRenderPending: false,
     lastState: { sessions: [{ session_id: 'session-ui' }] },
     sinceSeenMode: 'always',
@@ -547,7 +554,7 @@ test('新しい画面の版は書きかけがあれば知らせ、書きかけ�
   assert.equal(harness.context.checkUiVersion(answerableState()), false);
   assert.equal(harness.reloadCount, 0);
   assert.equal(harness.reloadNote.hidden, false);
-  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
+  assert.equal(harness.reloadNote.innerHTML, '<span>画面が新しくなりました。書きかけの回答や指示があるため、読み込みを保留しています。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>');
 
   harness.context.answerDrafts.set(DRAFT_KEY, { choice: null, note: '', picks: [] });
   assert.equal(harness.context.checkUiVersion(answerableState()), true);
@@ -570,6 +577,71 @@ test('回答できなくなった判断事項と消えた判断事項の下書�
   const draft = [[DRAFT_KEY, { choice: 'ok', note: '書きかけ', picks: [] }]];
   assert.equal(reloadHarness('v1', draft).context.checkUiVersion(answerableState(null, 'resolved')), true);
   assert.equal(reloadHarness('v1', draft).context.checkUiVersion({ uiVersion: 'v2', sessions: [] }), true);
+});
+
+test('指示対象や診断だけが変わっても画面署名が変わる', () => {
+  const signature = functionSource(pageHtml, 'instructionProjectionSignature');
+  assert.ok(signature);
+  const context = pageContext(pageHtml);
+  vm.runInContext(signature, context);
+  const base = {
+    sessions: [{ session_id: 'session-1', instructions: [] }],
+    instructionTargets: [{ launchRef: 'launch-1', sessionId: 'session-1', executionId: 'exec-1', status: 'working', nativeTurnId: 'turn-1' }],
+    instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false },
+  };
+  assert.notEqual(context.instructionProjectionSignature(base), context.instructionProjectionSignature({
+    ...base, instructionTargets: [{ ...base.instructionTargets[0], status: 'waiting', nativeTurnId: null }],
+  }));
+  assert.notEqual(context.instructionProjectionSignature(base), context.instructionProjectionSignature({
+    ...base, instructionDiagnostics: { ...base.instructionDiagnostics, blocked: true, errorCode: 'instruction_journal_blocked' },
+  }));
+});
+
+test('同じ実行の一時的な待機中は入力下書きを保ち、対象消失後は版更新を許す', () => {
+  const draft = [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '入力中' }]];
+  const waiting = reloadHarness('v1', [], { drafts: draft });
+  const state = {
+    uiVersion: 'v2', sessions: [],
+    instructionTargets: [{ launchRef: 'launch-1', sessionId: 'session-1', executionId: 'exec-1', status: 'waiting' }],
+    instructionDiagnostics: { targets: 'available' },
+  };
+  assert.equal(waiting.context.checkUiVersion(state), false);
+  assert.equal(waiting.reloadCount, 0);
+
+  const unverified = reloadHarness('v1', [], { drafts: draft });
+  assert.equal(unverified.context.checkUiVersion({ ...state,
+    instructionTargets: [{ ...state.instructionTargets[0], status: 'unverified' }],
+  }), false);
+  assert.equal(unverified.reloadCount, 0);
+
+  const ended = reloadHarness('v1', [], { drafts: draft });
+  assert.equal(ended.context.checkUiVersion({ ...state, instructionTargets: [] }), true);
+  assert.equal(ended.reloadCount, 1);
+});
+
+test('保留中の代替要求と送信中の指示は対象消失後も版更新を止める', () => {
+  const state = { uiVersion: 'v2', sessions: [], instructionTargets: [], instructionDiagnostics: { targets: 'available' } };
+  const pending = reloadHarness('v1', [], { alternatives: [['old-1', { pendingRequest: { text: '固定した本文' } }]] });
+  assert.equal(pending.context.checkUiVersion(state), false);
+  assert.equal(pending.reloadCount, 0);
+
+  const inflight = reloadHarness('v1', [], { inFlight: ['session-1'] });
+  assert.equal(inflight.context.checkUiVersion(state), false);
+  assert.equal(inflight.reloadCount, 0);
+
+  const composing = reloadHarness('v1', [], { composing: true });
+  assert.equal(composing.context.checkUiVersion(state), false);
+  assert.equal(composing.reloadCount, 0);
+});
+
+test('文字が残っていない対象とモードだけの下書きは版更新を止めない', () => {
+  const harness = reloadHarness('v1', [], {
+    drafts: [['session-1', { targetLaunchRef: 'launch-1', mode: 'start', text: '' }]],
+  });
+  assert.equal(harness.context.checkUiVersion({
+    uiVersion: 'v2', sessions: [], instructionTargets: [], instructionDiagnostics: { targets: 'available' },
+  }), true);
+  assert.equal(harness.reloadCount, 1);
 });
 
 test('自分の画面の版が空なら読み込み直さない', () => {
