@@ -80,6 +80,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.ok(mockFunctions.every(Boolean));
   const mockContext = pageContext(mock, {
     ui: { estimatedSessions: ['unknown'] },
+    nativeStopState: () => '',
     taskState: (_session, task) => task.state,
     sessionTag: () => '<span class="session-tag">session</span>',
     esc: (value) => String(value ?? ''),
@@ -133,6 +134,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     orderedSectionKeys: (keys) => keys,
     appendPermissionWaits() {},
     appendDecisions() {},
+    appendOwnedExecutionStopCards() {},
     appendTasks(target) { target.append(fakeElement('div', 'task-list')); },
     mainRow: () => fakeElement('div', 'now-row main-row'),
     appendAgents() {},
@@ -145,6 +147,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
 
   const mockContext = pageContext(mock, {
     ui: { hideFinished: true },
+    nativeStopState: () => '',
     instructionComposer: () => '',
     sharedBranch: () => '',
     visibleDecisions: () => [],
@@ -159,7 +162,7 @@ test('セッション見出しと種類別表示の欄配置を保つ', () => {
     agentSection: () => '',
     esc: (value) => String(value ?? ''),
   });
-  vm.runInContext(`${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
+  vm.runInContext(`${functionSource(mock, 'nativeWaitCard')}\n${mockSession}\nthis.renderSession = sessionBlock;`, mockContext);
   const mockVisible = mockContext.renderSession({ sessions: [{}, {}] }, {
     id: 'active', status: 'unknown', title: '稼働中', decisions: [], tasks: [], perms: [], subagents: [],
   });
