@@ -1204,6 +1204,13 @@ function routeTag(agent) {
   return tag;
 }
 
+// セッションにモデル名が無いときは、非対話の実行を API として札に出す。
+function appendSessionModelLine(target, session) {
+  const models = element('div', 'models');
+  models.append(element('span', 'model claude', session.modelName ? `Claude ${session.modelName}` : 'Claude (API)'));
+  target.append(models);
+}
+
 function appendModelLine(target, agent) {
   const claudeModel = !agent.isCodex && agent.model ? (agent.modelName || agent.model) : '';
   const gpt = agent.isCodex
@@ -1548,7 +1555,9 @@ function renderFinishedNote(counts, targets) {
 }
 
 function isIdleHiddenSession(session, now = Date.now()) {
-  if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
+  // 非対話の実行中は作業中として見せるので、更新時刻が古くても隠さない。
+  if (session.status === '作業中' || (session.status === '不明' && session.nonInteractive)
+    || (session.permissionWaits || []).length > 0) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.agents || []).some((agent) => !isEndedAgent(agent))) return false;
   const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
@@ -2488,6 +2497,7 @@ function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
 
 function activityStatus(session) {
   if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
+  if (session.status === '不明' && session.nonInteractive) return { label: '非対話の実行中', tone: 'busy' };
   if (session.status === '不明') return { label: '状態不明', tone: 'unknown' };
   return { label: '待機中', tone: 'wait' };
 }
@@ -2514,9 +2524,12 @@ function mainRow(session, product, withTags = false, multipleSessions = false) {
   const detail = element('div', 'detail');
   if (doingTask) detail.append(element('div', 'activity-title', doingTask.title));
   if (mainTool) appendToolLine(detail, mainTool);
+  if (session.nonInteractive) appendSessionModelLine(detail, session);
   row.append(who);
   if (!isUnknown) {
-    const elapsedAt = mainTool?.startedAt || session.lastActivityAt;
+    // 非対話の行は hook の時刻が無いことがあるので、セッションファイルの更新時刻で代える。
+    const nonInteractiveAt = session.nonInteractive ? (session.lastUpdatedAt || session.sessionFileUpdatedAt) : null;
+    const elapsedAt = mainTool?.startedAt || session.lastActivityAt || nonInteractiveAt;
     row.append(relativeTimeElement(elapsedAt, 'since', durationAgoLabel(elapsedAt)));
   }
   if (detail.childNodes.length) row.append(detail);
@@ -3049,7 +3062,8 @@ function appendKindTaskSession(body, reference, showTodo, showDone) {
 }
 
 function unknownSessionControls(session) {
-  if (session.status !== '不明') return null;
+  // 非対話の実行はプロセスが終われば行ごと消えるので、推定と一覧からの除外は出さない。
+  if (session.status !== '不明' || session.nonInteractive) return null;
   const extra = element('div', 'session-extra');
   const actions = element('div', 'session-actions');
   const estimateButton = element('button', 'ended-toggle', '状態を推定');
