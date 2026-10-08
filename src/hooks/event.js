@@ -298,8 +298,9 @@ function makeHookEvent(input, now = Date.now()) {
     }
     if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
       const response = input.tool_response;
-      if (response && typeof response === 'object' && typeof response.resolvedModel === 'string') {
-        event.resolvedModel = response.resolvedModel.slice(0, 160);
+      if (response && typeof response === 'object') {
+        if (typeof response.agentId === 'string') event.agentId = response.agentId.slice(0, 256);
+        if (typeof response.resolvedModel === 'string') event.resolvedModel = response.resolvedModel.slice(0, 160);
       }
     }
     const backgroundTaskId = event.tool_name === 'Bash' ? input.tool_response?.backgroundTaskId : null;

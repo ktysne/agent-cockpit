@@ -140,6 +140,24 @@ test('Agent の説明は 200 文字までフックイベントに含める', asy
   assert.ok(!JSON.stringify(event).includes('送信しない本文'));
 });
 
+test('Agent の PostToolUse は tool_response の agentId を文字列かつ 256 文字まで含める', async (t) => {
+  await temporaryHome(t);
+  const makeAgentResponse = (agentId) => makeHookEvent({
+    session_id: 'agent-response-id', hook_event_name: 'PostToolUse',
+    tool_name: 'Agent', tool_use_id: 'agent-call',
+    tool_response: { agentId, resolvedModel: 'claude-resolved' },
+  });
+  const event = makeAgentResponse('agent-1');
+  assert.equal(event.agentId, 'agent-1');
+  assert.equal(event.resolvedModel, 'claude-resolved');
+  assert.equal(sanitizeEvent(event).agentId, 'agent-1');
+
+  const invalid = makeAgentResponse(42);
+  assert.equal(Object.hasOwn(invalid, 'agentId'), false);
+  assert.equal(sanitizeEvent({ ...event, agentId: 42 }).agentId, '');
+  assert.equal(makeAgentResponse('a'.repeat(300)).agentId.length, 256);
+});
+
 test('入力要約は切り詰めた場合にだけ80文字以内で省略記号を付ける', async (t) => {
   await temporaryHome(t);
   const cases = [

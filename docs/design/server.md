@@ -69,12 +69,15 @@ managed collectorはserverの通常起動では作成・接続しない。注入
 
 ## 状態不明のセッション
 
+- ターンの状態を確定するイベントが届いていない行は「不明」にする。
+  セッションファイルの `status` が `idle` なら「待機中」で補い、画面で終了にしたものを除く稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。
+  それ以外の値や項目の欠落では補わず、補った行には会話記録からの推定結果を付けない。
 - 常駐サーバーは、正規登録されていないClaude互換セッションについて、定期取得したライブセッションファイルの一覧から消えたイベント由来のセッションを、最後に一覧で確認してから 60 秒経過した時点で終了扱いにする。一度も一覧に載らなかったセッションは対象にせず、一覧を読めなかった取得では判定しない。時刻には `syncSessionFiles` の `now` を使う。正規登録された期間はこの判定から除外し、session fileの消失を期間終了の証拠にしない。
 - `POST /api/sessions/<session_id>/estimate` は、現在の一覧に存在する状態不明のセッションだけを推定する。存在しない ID は `404`、状態が不明でなければ `409` を返す。ID は `[A-Za-z0-9_-]` の 1〜100 文字に限る。
 - 会話記録の場所は、常駐サーバーが登録済みセッションの `cwd` と ID から `~/.claude/projects/<cwd の英数字以外を '-' に置換した値>/<session_id>.jsonl` として決める。画面からパスは受け取らない。解決したパスは `projects` の直下にある 1 階層のプロジェクトディレクトリ内に限る。
 - 推定ではファイルの末尾 256KB だけを位置指定で読み、途中から読んだ場合は先頭の行を捨てる。assistant と user のうちサイドチェーンでない行を使い、会話本文は返さない。記録を読めない場合や対象行の形式が合わない場合は、推定不可として保存する。user の行の `content` は文字列のこともある。知らない種類の要素は推定に使わずに飛ばす。`isMeta` の user の行(スラッシュコマンドの出力など)は対象にしない。中断の行(`[Request interrupted` で始まる user の行)で終わる場合は `input` とする。長い cwd では Claude Code が記録の置き場の名前を縮めるので、場所が合わずに推定できないことがある。
 - assistant の最後の行が `end_turn` で終わる場合、または `tool_use` を含まず stop reason も `tool_use` でない場合は `input` とする。user の行が最後なら `model`、それ以外の assistant の行なら `tool` とする。最後のツール名は末尾の読取範囲内で最後に現れる `tool_use` から求める。
-- 推定結果はセッションごとにメモリーへ持ち、そのセッションのイベントで消す。読み取り中にイベントが届いて状態が分かったときは保存せず `409` を返す。結果を保存した後は `version` を進め、推定結果を応答と `GET /api/state` に含める。
+- 推定結果はセッションごとにメモリーへ持ち、ターンの状態を確定するイベント(「状態」の項目)で消す。Notification などほかのイベントでは残す。読み取り中にイベントが届いて状態が分かったときは保存せず `409` を返す。結果を保存した後は `version` を進め、推定結果を応答と `GET /api/state` に含める。
 - `POST /api/hidden-sessions` は `{action: "hide", session_id}` または `{action: "hide", session_ids}` で、一覧にあるセッションを状態にかかわらず外す。`session_ids` は ID を 1〜50 件含み、各 ID は `[A-Za-z0-9_-]` の 1〜100 文字に限る。知らない ID は無視し、1 件も一覧に無ければ `404` を返す。本文が仕様に合わない場合は `400` を返す。状態不明カードの「一覧から外す」とプロダクト見出しの「×」は同じ操作を使う。
 - `{action: "clear"}` はすべて表示する。外した ID と時刻は `store.json` に保存し、セッションのイベントが届いたとき、またはセッションが終了扱いになったときに集合から削除する。`GET /api/state` では外したセッションに `hidden: true` と `hiddenAt` を付ける。
   `hiddenAt` は保存済みの `hiddenSessionUpdatedAt` である。
@@ -157,7 +160,7 @@ state が `merged` の登録は残す。
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
 | PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex を終了と判定するのは結果行を受けたときだけで、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex を終了と判定するのは結果行を受けたときだけで、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
@@ -190,8 +193,8 @@ PostToolUse の出力全文は送らない。
 
 - プロダクト: 鍵はリポジトリのルートの絶対パス(Windows では小文字にする)、表示名はそのフォルダー名。`cwd` が `<ルート>/.claude/worktrees/<名前>` の下なら、`<ルート>` をリポジトリのルートとする。ブランチ名は `cwd` から上へ探した `.git/HEAD` から読む。`.git` が worktree のポインター ファイルなら `gitdir:` の場所にある `HEAD` を読む。`ref: refs/heads/<名前>` はブランチ名、detached HEAD は短い SHA とし、読めなければ `null` にする。子プロセスは起動せず、同じ `cwd` の結果を 10 秒間キャッシュする。読み取るファイルは `.git` のポインターと `HEAD` に限り、どちらも 4 KB を上限とする。
 - 最終イベント時刻: `lastActivityAt` にセッションの最新フック時刻を ISO 形式で持ち、メイン行の経過表示に使う。
-- セッションファイル: `~/.claude/sessions/*.json` の `procStart` は Claude の writer の発行で期間の鍵に使い、文字列か有限の数値以外は `null` にする。`name` を題名に使い、有限の数値 `updatedAt` は ISO 形式にして `sessionFileUpdatedAt` に載せる。状態不明のセッションを隠す判定に使う。
-- 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。Claude の writer の発行で期間が active のセッションは、この終了の対象にしない。期間は、親のプロセスが一覧から消えるか、同じ親のセッション ID が変わったときに終える。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
+- セッションファイル: `~/.claude/sessions/*.json` の `procStart` は Claude の writer の発行で期間の鍵に使い、文字列か有限の数値以外は `null` にする。`name` を題名に使い、有限の数値 `updatedAt` は ISO 形式にして `sessionFileUpdatedAt` に載せる。状態不明のセッションを隠す判定に使う。 `status` は文字列の場合だけ先頭 50 文字を読み、文字列でない値は捨てる。項目が無い場合やファイルを読めない場合も動作を続ける。
+- 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち、中断、不明。ターンの状態は、agent_id の無い PreToolUse、PostToolUse、PostToolUseFailure、UserPromptSubmit、Stop、Interrupt、source が startup、resume、clear の SessionStart で確定する。許可待ちと中断を優先し、それ以外で未確定なら「不明」にする。SessionStart の compact、Notification、サブエージェントのイベント、PostToolBatch では確定しない。イベント由来とセッションファイルだけの行のどちらも、「不明」でセッションファイルの status が idle なら待機中で補う。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。agent_id の無い SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。Claude の writer の発行で期間が active のセッションは、この終了の対象にしない。期間は、親のプロセスが一覧から消えるか、同じ親のセッション ID が変わったときに終える。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
 - 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。メインの Stop と UserPromptSubmit ではメインのツールを消し、PostToolBatch ではその時刻より前に始まった、同じエージェント(メインかサブエージェント)のツールを消す。拒否されたツールには PostToolUse も PostToolUseFailure も届かないためである。サブエージェントの PostToolBatch では、そのサブエージェントの、その時刻より前に始まった許可待ちも消す。メインの許可待ちは PostToolBatch では消さず、Stop と UserPromptSubmit で消す。
 - サブエージェント: `agent_id` ごとに、`agent_type`、作業の説明、開始時刻、最後のツール、モデル、effort。
 - `SubagentStart` が記録されていなくても、`SubagentStop` 以外のイベントで初めて届いた `agent_id` から行を作る。
@@ -267,7 +270,9 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 
 - Agent ツールの PreToolUse で受けた説明は、`tool_use_id` と `agent_id` の結び付けから対象のサブエージェントへ持たせる。
 - `SubagentStart`、または `SubagentStop` 以外で `agent_id` と `agent_type` を含むイベントでは、`~/.claude/agents/<agent_type>.md` の frontmatter の `model` と `effort` を仮の値として出す。
-- Agent ツールの PostToolUse の `resolvedModel` が来たら、モデルを置き換える。
+- Agent ツールの PostToolUse の `agentId` が既存の結び付けと異なるか、結び付けが曖昧なら、その ID からサブエージェント行を引き直して結び付けを更新する。
+- PostToolUse の `resolvedModel` は、その行のモデルに反映する。
+- Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、対象の行へ書く。SubagentStart の時点の結び付けは到着順で誤ることがあるので、既に説明があっても呼び出し自身の説明で上書きする。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
 - Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
 - Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。

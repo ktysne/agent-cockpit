@@ -445,7 +445,7 @@ test('状態推定 API は画面の認証とセッション状態を照合し、
     { session_id: 'estimate_unknown', cwd, name: '不明なセッション' },
     { session_id: 'estimate_known', cwd, name: '既知のセッション' },
   ]);
-  state.addEvent({ session_id: 'estimate_known', hook_event_name: 'SessionStart', hookAt: 100 });
+  state.addEvent({ session_id: 'estimate_known', hook_event_name: 'SessionStart', source: 'startup', hookAt: 100 });
   const projectDirectory = path.join(claudeHome, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
   await fs.mkdir(projectDirectory, { recursive: true });
   await fs.writeFile(path.join(projectDirectory, 'estimate_unknown.jsonl'), `${JSON.stringify({
