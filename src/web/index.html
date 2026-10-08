@@ -549,6 +549,7 @@ const expandedPrLines = new Set();
 const expandedKindSections = new Set();
 const answerDrafts = new Map();
 const answerErrors = new Map();
+const decisionAnswerInFlight = new Set();
 const pendingTaskCloseActions = new Map();
 const taskCloseActionsInFlight = new Set();
 const pullRequestMergeResults = new Map();
@@ -584,6 +585,7 @@ const pullRequestConflictConfirmations = new Set();
 const pullRequestConflictMessages = new Map();
 const pullRequestConflictInFlight = new Set();
 let routing = { agents: 'default', review: 'default' };
+const routingInFlight = new Set();
 let codexAgentAvailable = false;
 let crossReviewAvailable = false;
 
@@ -1072,6 +1074,7 @@ function renderRouting(settings = {}, integrations = {}) {
   }
   for (const button of root.querySelectorAll('[data-route]')) {
     button.setAttribute('aria-pressed', String(button.dataset.v === routing[button.dataset.route]));
+    button.disabled = routingInFlight.has(button.dataset.route);
   }
   layoutRouting();
 }
@@ -1081,8 +1084,10 @@ renderRouting(routing);
 
 async function updateRouting(button) {
   const { route: key, v: value } = button.dataset;
-  button.disabled = true;
+  if (routingInFlight.has(key)) return;
+  routingInFlight.add(key);
   try {
+    renderRouting(routing, { codexAgent: codexAgentAvailable, crossReview: crossReviewAvailable });
     const response = await postUiAction('/api/routing', { key, value });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const updated = await response.json();
@@ -1095,7 +1100,8 @@ async function updateRouting(button) {
   } catch {
     showWriteError('経路の設定を保存できませんでした。');
   } finally {
-    button.disabled = false;
+    routingInFlight.delete(key);
+    renderRouting(routing, { codexAgent: codexAgentAvailable, crossReview: crossReviewAvailable });
   }
 }
 
@@ -2107,6 +2113,7 @@ function appendPullRequestConflictConfirmation(target, group, pullRequest, uiKey
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
   cancel.dataset.conflictCancel = uiKey;
+  cancel.disabled = pullRequestConflictInFlight.has(uiKey);
   row.append(go, cancel);
   panel.append(row);
   target.append(panel);
@@ -2791,13 +2798,14 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   note.setAttribute('aria-label', '指示');
   note.placeholder = '指示があれば書く (例: 2 番目の案で。理由は…)';
   note.value = draft.note;
+  note.disabled = decisionAnswerInFlight.has(key);
   answerBox.append(note);
   const foot = element('div', 'answer-foot');
   const send = element('button', 'primary', '回答を送る');
   send.type = 'button';
   send.dataset.sendAnswer = decision.id;
   send.dataset.sessionId = session.session_id;
-  send.disabled = !canSendDecisionAnswer(decision, draft) || !dirty;
+  send.disabled = decisionAnswerInFlight.has(key) || !canSendDecisionAnswer(decision, draft) || !dirty;
   foot.append(send, element('span', 'answer-status', dirty && answer?.sentAt ? '変更は未送信' : answerStatusText(answer, decision)));
   const error = element('div', 'answer-error', savedError);
   error.setAttribute('role', 'alert');
@@ -2811,6 +2819,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
   const card = element('article', `decision-card ${decision.state} ${longWait ? 'long-wait' : ''}`.trim());
   const answerActive = decisionAnswerAvailability(decision).active;
   const optionDraft = answerActive ? answerDraftFor(decision, session) : null;
+  const answerSending = answerActive && decisionAnswerInFlight.has(answerDraftKey(session.session_id, decision.id));
   const header = element('div', 'decision-head');
   if (decision.isNew) header.append(badge('新着', 'new-mark'));
   appendContextTags(header, product, session, withTags, multipleSessions);
@@ -2855,6 +2864,7 @@ function appendDecisionCard(list, decision, product, session, withTags = false, 
           input.name = `decision-answer:${encodeURIComponent(session.session_id)}:${encodeURIComponent(decision.id)}:${questionIndex}`;
           input.value = option.label;
           input.checked = optionDraft.picks[questionIndex].includes(option.label);
+          input.disabled = answerSending;
           input.dataset.answerPick = 'true';
           input.dataset.answerQuestion = String(questionIndex);
           input.dataset.answerOption = String(optionIndex);
@@ -3565,6 +3575,11 @@ function updateAnswerSubmit(card) {
   const draft = answerDraftFor(decision, { session_id: sessionId });
   const answer = decision.answer;
   const changed = answerDraftChanged(decision, draft);
+  const sending = decisionAnswerInFlight.has(answerDraftKey(sessionId, decisionId));
+  const decisionCard = card.closest?.('.decision-card');
+  for (const control of decisionCard?.querySelectorAll('[data-answer-pick], [data-answer-note]') || []) {
+    control.disabled = sending;
+  }
   const meta = card.querySelector('[data-answer-meta]');
   if (meta) {
     meta.textContent = answerMetaText(decision, draft);
@@ -3572,12 +3587,17 @@ function updateAnswerSubmit(card) {
   }
   const status = card.querySelector('.answer-foot .answer-status');
   if (status) status.textContent = answer?.sentAt && changed ? '変更は未送信' : answerStatusText(answer, decision);
-  button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
+  button.disabled = sending || !canSendDecisionAnswer(decision, draft) || !changed;
 }
 
 function clearSelectedAnswerPick(pick) {
   const sessionId = pick.dataset.sessionId;
   const decisionId = pick.dataset.decisionId;
+  const key = answerDraftKey(sessionId, decisionId);
+  if (decisionAnswerInFlight.has(key)) {
+    if (lastState) render(lastState);
+    return false;
+  }
   const decision = findDecision(sessionId, decisionId);
   if (!decision) return false;
   const questionIndex = Number(pick.dataset.answerQuestion);
@@ -3590,7 +3610,6 @@ function clearSelectedAnswerPick(pick) {
   const picks = copyAnswerPicks(current.picks, (decision.questions || []).length);
   picks[questionIndex] = [];
   const next = { ...current, choice: picks.some((labels) => labels.length) ? 'pick' : null, picks };
-  const key = answerDraftKey(sessionId, decisionId);
   answerDrafts.set(key, next);
   pick.checked = false;
   const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
@@ -3613,11 +3632,14 @@ function showAnswerError(sessionId, decisionId, message) {
 async function sendDecisionAnswer(button) {
   const sessionId = button.dataset.sessionId;
   const decisionId = button.dataset.sendAnswer;
+  const key = answerDraftKey(sessionId, decisionId);
+  if (decisionAnswerInFlight.has(key)) return;
   const decision = findDecision(sessionId, decisionId);
   if (!decision) return;
   const draft = answerDraftFor(decision, { session_id: sessionId });
-  button.disabled = true;
+  decisionAnswerInFlight.add(key);
   try {
+    updateAnswerSubmit(button.closest('.decision-answer'));
     const response = await postUiAction(`/api/decisions/${encodeURIComponent(decisionId)}/answer`, {
       session_id: sessionId,
       choice: draft.choice,
@@ -3642,7 +3664,14 @@ async function sendDecisionAnswer(button) {
     showAnswerError(sessionId, decisionId, '回答を送信できませんでした。');
     showWriteError('回答を送信できませんでした');
   } finally {
-    if (button.isConnected) updateAnswerSubmit(button.closest('.decision-answer'));
+    decisionAnswerInFlight.delete(key);
+    const answerCard = button.isConnected
+      ? button.closest('.decision-answer')
+      : [...root.querySelectorAll('.decision-answer')].find((card) => (
+        card.dataset.sessionId === sessionId && card.dataset.decisionId === decisionId
+      ));
+    if (answerCard) updateAnswerSubmit(answerCard);
+    else if (lastState) render(lastState);
   }
 }
 
@@ -3651,6 +3680,11 @@ document.addEventListener('change', (event) => {
   if (!pick) return;
   const sessionId = pick.dataset.sessionId;
   const decisionId = pick.dataset.decisionId;
+  const key = answerDraftKey(sessionId, decisionId);
+  if (decisionAnswerInFlight.has(key)) {
+    if (lastState) render(lastState);
+    return;
+  }
   const decision = findDecision(sessionId, decisionId);
   if (!decision) return;
   const questionIndex = Number(pick.dataset.answerQuestion);
@@ -3665,7 +3699,6 @@ document.addEventListener('change', (event) => {
   else selectedLabels.delete(option.label);
   picks[questionIndex] = [...new Set(question.options.map((item) => item.label).filter((label) => selectedLabels.has(label)))];
   const choiceValue = picks.some((labels) => labels.length) ? 'pick' : null;
-  const key = answerDraftKey(sessionId, decisionId);
   const next = { ...current, choice: choiceValue, picks };
   answerDrafts.set(key, next);
   // 選択肢は回答欄の外(質問の区画)にあるので、判断事項のカードから回答欄を引く。
@@ -3679,6 +3712,10 @@ document.addEventListener('input', (event) => {
   const note = event.target.closest('[data-answer-note]');
   if (!note) return;
   const key = answerDraftKey(note.dataset.sessionId, note.dataset.decisionId);
+  if (decisionAnswerInFlight.has(key)) {
+    if (lastState) render(lastState);
+    return;
+  }
   const decision = findDecision(note.dataset.sessionId, note.dataset.decisionId);
   const current = decision ? answerDraftFor(decision, { session_id: note.dataset.sessionId }) : { choice: null, note: '' };
   const next = { ...current, note: note.value };
@@ -4102,6 +4139,7 @@ document.addEventListener('click', (event) => {
   }
   if (button.dataset.conflictCancel) {
     const uiKey = button.dataset.conflictCancel;
+    if (pullRequestConflictInFlight.has(uiKey)) return;
     pullRequestConflictConfirmations.delete(uiKey);
     pullRequestConflictMessages.delete(uiKey);
     if (lastState) render(lastState);
