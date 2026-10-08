@@ -1384,7 +1384,11 @@ function instructionTargetName(session, target) {
   return target?.identity?.nativeId ? `${target.identity.nativeId} · ${origin}` : target?.launchRef || session?.title || session?.id || '実行先';
 }
 
-function instructionTargetStatusText(target) {
+function instructionTargetStatusText(target, session = null) {
+  const stopState = session ? nativeStopState(session) : '';
+  if (stopState === 'native-stopping') return '停止確認中';
+  if (stopState === 'native-stop-unconfirmed') return '停止未確認';
+  if (stopState === 'native-stopped') return '停止済み（確認済み）';
   return target?.status === 'working' ? '作業中'
     : target?.status === 'stopped' ? '停止中'
       : target?.status === 'waiting' ? '質問・許可待ち'
@@ -1393,6 +1397,16 @@ function instructionTargetStatusText(target) {
 
 function instructionTargetAvailability(session, target = null) {
   if (!DATA.integrations.instructions) return { mode: '', reason: '' };
+  const stopState = nativeStopState(session);
+  if (stopState === 'native-stopping') {
+    return { mode: '', reason: '停止の確認中のため、追加指示を保留しています。旧実行への送信を再開せず、確認後は新しい実行からのみ再開できます。' };
+  }
+  if (stopState === 'native-stop-unconfirmed') {
+    return { mode: '', reason: '停止を確認できないため、追加指示を保留しています。旧実行へ送信せず、新しい実行も開始できません。' };
+  }
+  if (stopState === 'native-stopped') {
+    return { mode: '', reason: 'この実行は停止確認済みです。保存した追加指示は旧実行へ送信できません。再開する場合は新しい実行を開始してください。' };
+  }
   let scopedSession = session;
   if (target) {
     if (!['working', 'stopped', 'waiting'].includes(target.status)) {
@@ -1728,10 +1742,14 @@ function instructionComposer(p, session) {
   const canRebind = Boolean(!emptyDraft && !bindingMatches && availability.mode && target);
   const notice = ui.instructionNotices[session.id] || '';
   const text = String(draft.text || '');
+  const stopState = nativeStopState(session);
   const mode = availability.mode ? instructionModeText(availability.mode)
-    : session.nativeRequestCapacityHeld ? '要求IDの上限で保留中' : '送信方法を確認できません';
+    : stopState === 'native-stopping' ? '停止確認中・旧実行へ送信不可'
+      : stopState === 'native-stop-unconfirmed' ? '停止未確認・送信保留中'
+        : stopState === 'native-stopped' ? '停止済み・旧実行へ送信不可'
+          : session.nativeRequestCapacityHeld ? '要求IDの上限で保留中' : '送信方法を確認できません';
   const targetText = target
-    ? `${esc(instructionTargetName(session, target))} · ${esc(instructionTargetStatusText(target))}`
+    ? `${esc(instructionTargetName(session, target))} · ${esc(instructionTargetStatusText(target, session))}`
     : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
       : targets.length ? '選択した実行先を一意に確認できません' : '実行先を確認できません';
   const bindingNotice = draft.text && !bindingMatches
@@ -1743,7 +1761,7 @@ function instructionComposer(p, session) {
       const candidateAvailability = instructionTargetAvailability(session, candidate);
       const candidateMode = candidateAvailability.mode ? instructionModeText(candidateAvailability.mode) : '現在は送信できません';
       const checked = targets.filter(item => item.launchRef === candidate.launchRef).length === 1 && draft.targetLaunchRef === candidate.launchRef;
-      const summary = `${instructionTargetName(session, candidate)} · ${instructionTargetStatusText(candidate)} · ${candidateMode}`;
+      const summary = `${instructionTargetName(session, candidate)} · ${instructionTargetStatusText(candidate, session)} · ${candidateMode}`;
       const waiting = candidate.status === 'waiting' ? `<small class="why">${esc(candidateAvailability.reason || 'Codex の質問または許可を待っています。追加の指示は保留されています。')}</small>`
         : candidate.status === 'unverified' ? '<small class="why">実行状態を確認できません。</small>' : '';
       return `<li class="pickable"><label class="pick"><input type="radio" name="instruction-target-${esc(session.id)}" value="${esc(candidate.launchRef)}" data-instruction-target-select="${esc(session.id)}" data-instruction-target-launch-ref="${esc(candidate.launchRef)}" ${checked ? 'checked' : ''}><span class="body">${esc(summary)}</span></label>${waiting}</li>`;
