@@ -3,6 +3,7 @@
 ## 保存形式
 
 設定はcompositionから渡された`dataDirectory`直下の`common-question-settings.json`へ保存する。
+呼出し側が`dataDirectory`を事前に作成する。`atomicWriteJson`はディレクトリを作らない。
 モデルの登録引数から保存先を指定する機能は設けない。
 
 ```json

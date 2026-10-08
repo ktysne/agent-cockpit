@@ -93,6 +93,27 @@ test('concurrent updates serialize and reject a stale revision', async (t) => {
   assert.deepEqual(reopened.getAutoApplySettings(), settings.getAutoApplySettings());
 });
 
+test('one instance can save enabled then disabled settings without a false external-change diagnosis', async (t) => {
+  const directory = await tempDir(t);
+  const settings = await createCommonQuestionSettings({ dataDirectory: directory });
+  const revision0 = settings.getStatus().revision;
+
+  await settings.updateSettings({ expectedRevision: revision0, enabled: true });
+  const revision1 = settings.getStatus().revision;
+  assert.notEqual(revision1, revision0);
+  assert.equal(settings.getStatus().status, 'ready');
+  assert.equal(settings.getAutoApplySettings().enabled, true);
+
+  await settings.updateSettings({ expectedRevision: revision1, enabled: false });
+  const revision2 = settings.getStatus().revision;
+  assert.notEqual(revision2, revision1);
+  assert.notEqual(revision2, revision0);
+  assert.deepEqual(settings.getStatus(), { status: 'ready', revision: revision2, reason: null });
+  assert.equal(settings.getAutoApplySettings().enabled, false);
+  assert.deepEqual(JSON.parse(await fs.readFile(settingsPath(directory), 'utf8')),
+    { schemaVersion: 1, autoApply: { enabled: false } });
+});
+
 test('external edits are detected before saving and require restart to reload', async (t) => {
   const directory = await tempDir(t);
   const settings = await createCommonQuestionSettings({ dataDirectory: directory });
