@@ -136,6 +136,7 @@ function composerContext(session, draft = {}) {
   };
   const context = pageContext(mock, {
     ui,
+    allSessions: () => [session],
     MAX_NATIVE_PENDING_REQUESTS: Number(mock.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
     DATA: { integrations: { instructions: true } },
     commonQuestionsOf: item => item.commonQuestions || [],
@@ -144,7 +145,9 @@ function composerContext(session, draft = {}) {
     instructionCard: () => '',
     esc: value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]),
   });
-  for (const name of ['isFinishedInstructionRecord', 'instructionRecordsForSession', 'instructionTargetAvailability', 'instructionModeText', 'instructionComposer']) {
+  for (const name of ['isFinishedInstructionRecord', 'instructionRecordsForSession', 'instructionTargetAvailability',
+    'instructionDraftBinding', 'sameInstructionDraftBinding', 'instructionDraftCanSave', 'rebindInstructionDraft',
+    'instructionModeText', 'instructionComposer']) {
     const source = functionSource(mock, name);
     assert.ok(source, `${name} source`);
     vm.runInContext(source, context);
@@ -165,39 +168,69 @@ test('mock composer is hidden when instructions are not configured and starts an
   const session = { id: 'session-a', title: 'Session A', status: 'interrupted', perms: [], decisions: [], commonQuestions: [] };
   const { context, product } = composerContext(session);
   assert.equal(context.instructionTargetAvailability(session).mode, 'start');
-  assert.match(context.instructionComposer(product, session), /data-instruction-session="session-a"/);
+  assert.match(context.instructionComposer(product, session), /data-instruction-create-form="session-a"/);
   context.DATA.integrations.instructions = false;
   assert.equal(context.instructionComposer(product, session), '');
   assert.equal(context.instructionTargetAvailability(session).mode, '');
 });
 
-test('mock composer requires explicit target and mode selections and holds while session work is pending', () => {
+test('mock composer fixes the target and derives the mode while retaining drafts across pending work', () => {
   const session = { id: 'session-a', title: 'Session A', status: 'busy', perms: [], decisions: [], commonQuestions: [] };
   const { context, ui, product } = composerContext(session);
   const initial = context.instructionComposer(product, session);
   assert.match(initial, /role="region" aria-label="指示の保存と送信"/);
-  assert.match(initial, /<h4>指示を保存して届ける<\/h4>/);
-  assert.match(initial, /<option value="" selected>実行を選択してください<\/option>/);
-  assert.match(initial, /<option value="" selected>指示の種類を選択してください<\/option>/);
-  assert.match(initial, /<select data-instruction-mode="session-a" disabled>/);
+  assert.match(initial, /<article class="decision" data-instruction-composer><div class="dhead"><span class="dtitle">追加指示/);
+  assert.match(initial, /data-instruction-create-form="session-a"[\s\S]*?class="answer-foot"[\s\S]*?下書き（未送信）/);
+  assert.match(initial, /現在の宛先: Session A · 作業中 · 送信方法: 実行中へ伝える/);
+  assert.doesNotMatch(initial, /<select/);
+  assert.doesNotMatch(initial, /指示の種類を選択/);
   assert.match(initial, /data-instruction-save="session-a" disabled/);
 
   ui.instructionDrafts['session-a'] = { targetSessionId: 'session-a', mode: '', text: '次へ進む' };
   const targetSelected = context.instructionComposer(product, session);
-  assert.match(targetSelected, /<option value="steer" >実行中へ伝える<\/option>/);
+  assert.match(targetSelected, /現在の宛先: Session A · 作業中 · 送信方法: 実行中へ伝える/);
+  assert.match(targetSelected, /data-instruction-rebind="session-a"/);
   assert.match(targetSelected, /data-instruction-save="session-a" disabled/);
 
-  ui.instructionDrafts['session-a'].mode = 'steer';
-  const explicitChoice = context.instructionComposer(product, session);
-  assert.match(explicitChoice, /data-instruction-save="session-a"(?:[^>]*)>指示を保存する<\/button>/);
-  assert.doesNotMatch(explicitChoice, /data-instruction-save="session-a" disabled/);
+  assert.equal(context.rebindInstructionDraft('session-a'), true);
+  const rebound = context.instructionComposer(product, session);
+  assert.match(rebound, /data-instruction-save="session-a"(?:[^>]*)>指示を保存する<\/button>/);
+  assert.doesNotMatch(rebound, /data-instruction-save="session-a" disabled/);
+  assert.equal(ui.instructionDrafts['session-a'].text, '次へ進む');
 
   session.perms = [{ id: 'permission-a' }];
   const permissionHold = context.instructionComposer(product, session);
   assert.match(permissionHold, /質問・許可・判断待ちがあるため、指示を保留中です。/);
-  assert.doesNotMatch(permissionHold, /value="steer"/);
-  assert.match(permissionHold, /<textarea[^>]*disabled>/);
+  assert.doesNotMatch(permissionHold, /<select/);
+  assert.match(permissionHold, /<textarea[^>]*>次へ進む<\/textarea>/);
   assert.match(permissionHold, /data-instruction-save="session-a" disabled/);
+});
+
+test('mock draft that observed a state change stays held after returning to the old state until explicit rebind', () => {
+  const session = { id: 'session-aba', title: 'Session ABA', status: 'busy', executionId: 'exec-a', nativeTurnId: 'turn-a', perms: [], decisions: [], commonQuestions: [] };
+  const { context, ui, product } = composerContext(session, {
+    'session-aba': { targetSessionId: 'session-aba', mode: 'steer', text: '保持する本文' },
+  });
+  const draft = ui.instructionDrafts['session-aba'];
+  draft.binding = context.instructionDraftBinding(session, 'steer');
+  assert.match(context.instructionComposer(product, session), /data-instruction-save="session-aba"/);
+  assert.equal(draft.needsRebind, undefined);
+
+  session.status = 'wait';
+  context.instructionComposer(product, session);
+  assert.equal(draft.needsRebind, true);
+  assert.equal(context.instructionDraftCanSave(session, draft), false);
+
+  session.status = 'busy';
+  session.nativeTurnId = 'turn-a';
+  const returned = context.instructionComposer(product, session);
+  assert.match(returned, /data-instruction-rebind="session-aba"/);
+  assert.match(returned, /data-instruction-save="session-aba" disabled/);
+  assert.equal(context.instructionDraftCanSave(session, draft), false);
+  assert.equal(context.rebindInstructionDraft('session-aba'), true);
+  assert.equal(draft.needsRebind, false);
+  assert.equal(draft.text, '保持する本文');
+  assert.equal(context.instructionDraftCanSave(session, draft), true);
 });
 
 test('stopped mock session with an open question cannot select a start instruction', () => {
@@ -208,8 +241,8 @@ test('stopped mock session with an open question cannot select a start instructi
   const { context, product } = composerContext(session);
   const html = context.instructionComposer(product, session);
   assert.match(html, /質問・許可・判断待ちがあるため、指示を保留中です。/);
-  assert.doesNotMatch(html, /value="start"/);
-  assert.match(html, /data-instruction-mode="session-waiting" disabled/);
+  assert.doesNotMatch(html, /<select/);
+  assert.match(html, /data-instruction-save="session-waiting" disabled/);
 });
 
 test('native waiting target explains the hold accessibly while preserving the instruction draft', () => {
@@ -234,6 +267,7 @@ test('native waiting target explains the hold accessibly while preserving the in
   };
   const context = pageContext(product, {
     instructionDraftFor: () => draft,
+    instructionDrafts: new Map([['session-wait', draft]]),
     MAX_NATIVE_PENDING_REQUESTS: Number(product.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
     instructionTargetsForSession: () => [target],
     instructionErrors: new Map(),
@@ -241,7 +275,8 @@ test('native waiting target explains the hold accessibly while preserving the in
     instructionInFlight: new Set(),
     element,
   });
-  const sources = ['instructionComposer', 'instructionTargetMode', 'instructionTargetName', 'instructionTargetWaitingSummary',
+  const sources = ['instructionComposer', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
+    'sameInstructionBinding', 'instructionTargetsForSession', 'instructionTargetName', 'instructionTargetWaitingSummary',
     'instructionTargetStatusText', 'instructionTargetWaitingNotice', 'instructionModeLabel']
     .map(name => functionSource(product, name));
   assert.ok(sources.every(Boolean));
@@ -249,20 +284,19 @@ test('native waiting target explains the hold accessibly while preserving the in
 
   context.instructionComposer({ session_id: 'session-wait', instructions: [] }, {
     session_id: 'session-wait', instructions: [],
+    instructionTargets: [target],
     instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false },
   });
   const textarea = nodes.find(node => node.tagName === 'textarea');
   const selects = nodes.filter(node => node.tagName === 'select');
-  const reason = nodes.find(node => node.className === 'instruction-reason');
+  const reason = nodes.find(node => node.className.includes('instruction-reason') && /質問 1 件/.test(node.textContent));
   const save = nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する');
 
   assert.equal(textarea.value, 'この下書きを保持する');
   assert.equal(textarea.disabled, false);
   assert.match(reason.textContent, /質問 1 件、許可 1 件/);
   assert.match(reason.textContent, /追加の指示は保留されています。入力内容は保持されます。/);
-  assert.equal(textarea.attributes['aria-describedby'], reason.id);
-  assert.equal(selects.every(node => node.attributes['aria-describedby'] === reason.id), true);
-  assert.equal(selects[1].children.length, 1);
+  assert.equal(selects.length, 0);
   assert.equal(save.disabled, true);
   assert.equal(context.instructionTargetMode(target, 'start'), false);
   assert.equal(context.instructionTargetMode(target, 'steer'), false);
@@ -272,14 +306,173 @@ test('native waiting target explains the hold accessibly while preserving the in
   target.reason = 'instruction_target_unverified';
   context.instructionComposer({ session_id: 'session-wait', instructions: [] }, {
     session_id: 'session-wait', instructions: [],
+    instructionTargets: [target],
     instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false },
   });
-  const unverifiedReason = nodes.filter(node => node.className === 'instruction-reason').at(-2);
+  const unverifiedReason = nodes.filter(node => node.className.includes('instruction-reason')).at(-2);
   const unverifiedTextarea = nodes.filter(node => node.tagName === 'textarea').at(-1);
-  assert.match(unverifiedReason.textContent, /実行状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。/);
+  assert.match(unverifiedReason.textContent, /宛先または実行状態が変わりました。下書きは保持し、対象を確認できるまで保存を保留しています。/);
   assert.doesNotMatch(unverifiedReason.textContent, /instruction_target_unverified/);
   assert.equal(unverifiedTextarea.value, 'この下書きを保持する');
   assert.equal(unverifiedTextarea.disabled, false);
+});
+
+test('product instruction draft never binds to the first of multiple current targets', () => {
+  const nodes = [];
+  const element = (tagName, className = '', text = '') => {
+    const children = [];
+    const node = {
+      tagName, className, textContent: String(text ?? ''), children, childNodes: children, dataset: {}, attributes: {},
+      append(...items) { children.push(...items); },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      addEventListener() {},
+    };
+    nodes.push(node);
+    return node;
+  };
+  const draft = { targetLaunchRef: '', mode: '', text: '候補を選べない間も保持する' };
+  const targets = [
+    { launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a' },
+    { launchRef: 'launch-b', sessionId: 'session-a', executionId: 'exec-b', origin: 'standalone', status: 'stopped' },
+  ];
+  const context = pageContext(product, {
+    instructionDraftFor: () => draft,
+    instructionDrafts: new Map([['session-a', draft]]),
+    instructionTargetsForSession: () => targets,
+    instructionErrors: new Map(), instructionNotices: new Map(), instructionInFlight: new Set(), element,
+  });
+  const sources = ['instructionComposer', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
+    'sameInstructionBinding', 'instructionTargetName', 'instructionTargetStatusText', 'instructionModeLabel', 'instructionTargetWaitingNotice']
+    .map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+  context.instructionComposer({ session_id: 'session-a', instructions: [] }, {
+    session_id: 'session-a', instructions: [], instructionDiagnostics: { service: 'ready', blocked: false, targets: 'available' },
+  });
+
+  assert.equal(draft.targetLaunchRef, '');
+  assert.equal(draft.binding, undefined);
+  assert.match(nodes.map(node => node.textContent).join(' '), /候補 2 件/);
+  assert.equal(nodes.some(node => node.dataset.instructionRebind), false);
+  assert.equal(nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する')?.disabled, true);
+});
+
+test('product draft rebind requires one safe current target and preserves its text', () => {
+  const draft = { targetLaunchRef: 'launch-a', mode: 'steer', text: '保留していた本文' };
+  const target = {
+    launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone',
+    status: 'waiting', nativeWaiting: [{ kind: 'question', count: 1 }],
+  };
+  const state = { instructionTargets: [target], instructionDiagnostics: { service: 'ready', blocked: false, targets: 'available' } };
+  const context = pageContext(product, {
+    instructionDraftFor: () => draft,
+    instructionDrafts: new Map([['session-a', draft]]),
+    instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(),
+  });
+  const names = ['instructionTargetsForSession', 'instructionModeForTarget', 'instructionTargetMode',
+    'instructionBindingForTarget', 'rebindInstructionDraft'];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  assert.equal(context.rebindInstructionDraft('session-a', state), false);
+  target.status = 'working';
+  target.nativeTurnId = 'turn-a';
+  assert.equal(context.rebindInstructionDraft('session-a', state), true);
+  assert.equal(draft.targetLaunchRef, 'launch-a');
+  assert.equal(draft.mode, 'steer');
+  assert.equal(draft.binding.executionId, 'exec-a');
+  assert.equal(draft.binding.nativeTurnId, 'turn-a');
+  assert.equal(draft.text, '保留していた本文');
+
+  draft.deliveryAttemptId = 'uncertain-save';
+  target.executionId = 'exec-b';
+  assert.equal(context.rebindInstructionDraft('session-a', state), false);
+  assert.equal(draft.text, '保留していた本文');
+});
+
+test('product draft observed through waiting, unverified, and multiple targets stays held across ABA until confirmed', async () => {
+  const target = {
+    launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone',
+    status: 'working', nativeTurnId: 'turn-a',
+  };
+  const secondTarget = {
+    launchRef: 'launch-b', sessionId: 'session-a', executionId: 'exec-b', origin: 'standalone',
+    status: 'working', nativeTurnId: 'turn-b',
+  };
+  const state = {
+    instructionTargets: [target],
+    instructionDiagnostics: { service: 'ready', blocked: false, targets: 'available' },
+  };
+  const session = { session_id: 'session-a', instructions: [] };
+  const draft = { targetLaunchRef: 'launch-a', mode: 'steer', text: '保持する本文' };
+  const nodes = [];
+  const element = (tagName, className = '', text = '') => {
+    const children = [];
+    const node = {
+      tagName, className, textContent: String(text ?? ''), children, childNodes: children, dataset: {}, attributes: {},
+      append(...items) { children.push(...items); },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      addEventListener() {},
+    };
+    nodes.push(node);
+    return node;
+  };
+  const posts = [];
+  const context = pageContext(product, {
+    instructionDraftFor: () => draft,
+    instructionDrafts: new Map([['session-a', draft]]),
+    instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(),
+    instructionPreviewSavePending: new Map(), instructionAlternatives: new Map(),
+    MAX_NATIVE_PENDING_REQUESTS: Number(product.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
+    postUiAction: (...args) => { posts.push(args); },
+    element,
+  });
+  const names = [
+    'instructionTargetsForSession', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
+    'sameInstructionBinding', 'instructionTargetName', 'instructionTargetStatusText', 'instructionTargetWaitingSummary',
+    'instructionTargetWaitingNotice', 'instructionModeLabel', 'instructionComposer', 'rebindInstructionDraft', 'runInstructionCreate',
+  ];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+  draft.binding = context.instructionBindingForTarget(target, 'steer');
+
+  const render = () => {
+    nodes.length = 0;
+    context.instructionComposer(session, state);
+  };
+  render();
+  assert.equal(draft.needsRebind, undefined);
+
+  target.status = 'waiting';
+  target.nativeWaiting = [{ kind: 'question', count: 1 }];
+  render();
+  target.status = 'unverified';
+  target.nativeWaiting = [];
+  render();
+  state.instructionTargets.push(secondTarget);
+  render();
+  assert.equal(draft.needsRebind, true);
+  assert.equal(nodes.some(node => node.dataset.instructionRebind), false);
+
+  state.instructionTargets = [target];
+  target.status = 'working';
+  target.nativeTurnId = 'turn-a';
+  delete target.nativeWaiting;
+  render();
+  const save = nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する');
+  const form = nodes.find(node => node.tagName === 'form');
+  assert.equal(save.disabled, true);
+  assert.equal(nodes.some(node => node.dataset.instructionRebind === 'session-a'), true);
+  await context.runInstructionCreate(form);
+  assert.equal(posts.length, 0);
+
+  assert.equal(context.rebindInstructionDraft('session-a', state), true);
+  assert.equal(draft.needsRebind, false);
+  assert.equal(draft.text, '保持する本文');
+  render();
+  assert.equal(nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する').disabled, false);
 });
 
 test('saved instruction card explains native waiting while preserving missing-content and send holds', () => {
@@ -328,14 +521,34 @@ test('saved instruction card explains native waiting while preserving missing-co
   });
   const cardText = [card, ...card.children, ...card.children.flatMap(child => child.children || [])]
     .map(node => node.textContent).join(' ');
-  const reasons = card.children.filter(node => node.className === 'instruction-reason').map(node => node.textContent);
+  const reasons = card.children.filter(node => node.className.includes('instruction-reason')).map(node => node.textContent);
   const send = card.children.flatMap(node => node.children || []).find(node => node.dataset.instructionAction === 'send');
 
-  assert.match(reasons.join(' '), /質問 1 件、許可 1 件/);
-  assert.match(reasons.join(' '), /Codex の質問 1 件、許可 1 件待ちです。追加の指示は保留されています。入力内容は保持されます。/);
+  assert.doesNotMatch(reasons.join(' '), /質問 1 件、許可 1 件/);
+  assert.doesNotMatch(reasons.join(' '), /Codex の質問 1 件、許可 1 件待ちです/);
   assert.match(cardText, /このタブで内容を確認できないため送信できません。作成したタブで開いてください。/);
   assert.equal(send.disabled, true);
   assert.doesNotMatch(cardText, /native_request_pending|回答する|許可する/);
+});
+
+test('unconfigured instruction integration hides composers and recovery panels without clearing pending data', () => {
+  const pendingPreview = new Map([['attempt-a', { phase: 'pending', text: '保持する本文', instruction: {} }]]);
+  const pendingAlternative = new Map([['attempt-b', { pendingRequest: { text: '別の本文' } }]]);
+  const context = pageContext(product, {
+    instructionPreviewSavePending: pendingPreview,
+    instructionAlternatives: pendingAlternative,
+  });
+  const names = ['instructionPreviewRecoveryPanel', 'instructionAlternativeRecoveryPanel', 'instructionComposer'];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  const state = { instructionDiagnostics: { configuration: 'unconfigured' } };
+  assert.equal(context.instructionComposer({}, state), null);
+  assert.equal(context.instructionPreviewRecoveryPanel(state), null);
+  assert.equal(context.instructionAlternativeRecoveryPanel(state), null);
+  assert.equal(pendingPreview.size, 1);
+  assert.equal(pendingAlternative.size, 1);
 });
 
 test('mock Codex native question and approval wait keeps the draft and blocks instruction send', () => {
@@ -353,6 +566,33 @@ test('mock Codex native question and approval wait keeps the draft and blocks in
   assert.doesNotMatch(html, /value="steer"/);
   assert.match(html, /data-instruction-save="session-native-wait" disabled/);
   assert.doesNotMatch(html, /回答する|許可する/);
+});
+
+test('mock saved instruction stays unsendable during native waiting without duplicating the composer notice', () => {
+  const session = {
+    id: 'session-native-wait', title: 'Codex native wait', status: 'busy', perms: [], decisions: [], commonQuestions: [],
+    nativeInstructionWaiting: [{ kind: 'question', count: 1 }],
+  };
+  const record = {
+    deliveryAttemptId: 'attempt-a', executionId: session.id, sessionId: session.id, origin: 'standalone',
+    mode: 'steer', state: 'available', createdAt: 1, text: '保存済みの本文',
+  };
+  const ui = { instructionPreviewRecoveries: {}, instructionPreviews: {}, instructionAlternatives: {} };
+  const context = pageContext(mock, {
+    ui, DATA: { integrations: { instructions: true } }, MAX_NATIVE_PENDING_REQUESTS: 16,
+    instructionModeText: mode => mode, instructionStateText: () => '保存済みです。送信前です。',
+    absoluteTimeLabel: () => '作成時刻',
+    isFinishedInstructionRecord: () => false,
+    esc: value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]),
+  });
+  const sources = ['instructionTargetAvailability', 'instructionPreviewText', 'canSendSavedInstruction', 'instructionCard']
+    .map(name => functionSource(mock, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  const html = context.instructionCard(session, record);
+  assert.match(html, /data-instruction-action="send"[^>]*disabled/);
+  assert.doesNotMatch(html, /質問 1 件待ちです/);
 });
 
 test('mock preview recovery keeps the saved instruction and body until local storage succeeds', () => {
@@ -379,8 +619,8 @@ test('mock preview recovery keeps the saved instruction and body until local sto
     MAX_PENDING_INSTRUCTION_PREVIEWS: 64,
   });
   const names = [
-    'registerMockInstructionPreviewRecovery', 'instructionPreviewText', 'saveMockInstructionPreviewRecovery',
-    'instructionPreviewRecoveryPanel', 'instructionCard',
+    'registerMockInstructionPreviewRecovery', 'instructionPreviewText', 'canSendSavedInstruction',
+    'saveMockInstructionPreviewRecovery', 'instructionPreviewRecoveryPanel', 'instructionCard',
   ];
   const sources = names.map(name => functionSource(mock, name));
   assert.ok(sources.every(Boolean));
@@ -388,12 +628,15 @@ test('mock preview recovery keeps the saved instruction and body until local sto
 
   assert.match(context.instructionPreviewRecoveryPanel(), /保存済みの指示本文/);
   assert.match(context.instructionPreviewRecoveryPanel(), new RegExp(body));
+  assert.match(context.instructionPreviewRecoveryPanel(), /<section class="instruction-recovery"[^>]*>[\s\S]*<article class="decision"/);
+  assert.match(context.instructionPreviewRecoveryPanel(), /class="decision-summary instruction-preview"[\s\S]*class="answer-foot"/);
+  assert.doesNotMatch(context.instructionPreviewRecoveryPanel(), /class="instruction-card|class="instruction-actions/);
   const render = functionSource(mock, 'render');
   assert.ok(render);
   assert.match(render, /instructionPreviewRecoveryPanel\(\)/);
   assert.match(render, /insertAdjacentHTML\('afterbegin', previewRecovery\)/);
   assert.match(render, /active\?\.dataset\?\.instructionPreviewRecovery/);
-  assert.match(functionSource(mock, 'instructionCard'), /<h4 tabindex="-1">/);
+  assert.match(functionSource(mock, 'instructionCard'), /class="dtitle" tabindex="-1"/);
   const pendingCard = context.instructionCard({ id: 'session-a', title: 'Session A' }, record);
   assert.match(pendingCard, /data-instruction-action="send"[^>]*disabled/);
   assert.match(pendingCard, /data-instruction-action="cancel"/);
@@ -414,7 +657,7 @@ test('mock preview recovery keeps the saved instruction and body until local sto
   assert.equal(context.instructionPreviewText(record), body);
   assert.match(context.instructionCard({ id: 'session-a', title: 'Session A' }, record), /送信内容/);
   const recoveredCard = context.instructionCard({ id: 'session-a', title: 'Session A' }, record);
-  assert.match(recoveredCard, /data-instruction-action="send" data-instruction-id="mock-instruction-preview-recovery">/);
+  assert.match(recoveredCard, /data-instruction-action="send" data-instruction-id="mock-instruction-preview-recovery"\s*>/);
   assert.match(recoveredCard, /data-instruction-action="cancel"/);
   assert.equal(errors.has(id), false);
 });
@@ -596,15 +839,18 @@ test('preview storage failure keeps the fixed alternative request through reload
 test('通常指示の成功後は本文だけをローカル復旧し、新しい下書きを残す', async () => {
   const storage = instructionStorage();
   storage.setPreviewFailure('throw');
-  const draft = { targetLaunchRef: 'launch-a', mode: 'steer', text: '通常の指示', deliveryAttemptId: 'stable-attempt', logicalMessageId: 'stable-logical' };
-  const instructionDrafts = new Map([['session-a', draft]]);
-  const instructionPreviews = new Map();
-  const instructionPreviewSavePending = new Map();
   const target = {
     launchRef: 'launch-a', sessionId: 'session-a', executionId: 'execution-a', origin: 'standalone',
     status: 'working', nativeTurnId: 'turn-a',
   };
-  const state = { instructionTargets: [target] };
+  const draft = {
+    targetLaunchRef: 'launch-a', mode: 'steer', text: '通常の指示', deliveryAttemptId: 'stable-attempt', logicalMessageId: 'stable-logical',
+    binding: { launchRef: target.launchRef, executionId: target.executionId, origin: target.origin, status: target.status, nativeTurnId: target.nativeTurnId, mode: 'steer' },
+  };
+  const instructionDrafts = new Map([['session-a', draft]]);
+  const instructionPreviews = new Map();
+  const instructionPreviewSavePending = new Map();
+  const state = { instructionTargets: [target], instructionDiagnostics: { service: 'ready', blocked: false, targets: 'available' } };
   const posts = [];
   const errors = new Map();
   const notices = new Map();
@@ -632,7 +878,8 @@ test('通常指示の成功後は本文だけをローカル復旧し、新し�
     showWriteError() {},
   });
   const names = [
-    'validScopedInstructionId', 'instructionDraftFor', 'instructionTargetFor', 'instructionTargetMode',
+    'validScopedInstructionId', 'instructionDraftFor', 'instructionTargetFor', 'instructionTargetsForSession',
+    'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget', 'sameInstructionBinding',
     'instructionResponse', 'instructionErrorText', 'persistInstructionPreviews', 'rememberInstructionPreview',
     'reserveInstructionPreviewSave', 'completeInstructionPreviewSave', 'releaseInstructionPreviewSave',
     'retryInstructionPreviewSave', 'runInstructionPreviewSaveRetry', 'runInstructionCreate',
@@ -658,6 +905,7 @@ test('通常指示の成功後は本文だけをローカル復旧し、新し�
   draft.mode = 'start';
   target.status = 'stopped';
   target.nativeTurnId = null;
+  draft.binding = { launchRef: target.launchRef, executionId: target.executionId, origin: target.origin, status: 'stopped', nativeTurnId: null, mode: 'start' };
   storage.setPreviewFailure(null);
   await context.runInstructionPreviewSaveRetry('stable-attempt');
   assert.equal(posts.length, 1);

@@ -2719,7 +2719,7 @@ test('モックでも保存済みの choice ok は推奨選択肢を押すと外
   const html = mockHtml.replace(/\r\n/g, '\n');
   const helpers = sourceBetween(html, 'function answerOf(id)', '\n\nconst allSessions');
   const clearPick = functionSource(html, 'clearSelectedMockPick');
-  const clickHandler = html.match(/document\.addEventListener\('click', e => \{\n  const pick = e\.target\.closest\('input\[data-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
+  const clickHandler = html.match(/document\.addEventListener\('click', e => \{\n  const commonOption = e\.target\.closest\('\[data-common-option\]'\);[\s\S]*?\n  const pick = e\.target\.closest\('input\[data-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
   const keydownHandler = html.match(/document\.addEventListener\('keydown', e => \{\n  if \(e\.key !== ' ' && e\.code !== 'Space'\) return;[\s\S]*?\n\}\);/)?.[0];
   assert.ok(helpers);
   assert.ok(clearPick && clickHandler && keydownHandler);
