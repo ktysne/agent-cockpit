@@ -601,9 +601,14 @@ const DATA = {
       extraSessions: [
         {
           id: 'agent-cockpit-unknown', title: 'ターミナルから起動したセッション', status: 'unknown', branch: 'plan/pr-stack-view',
-          main: { tool: 'Read: mock/index.html', since: '記録時刻不明' },
+          main: { tool: 'Read: mock/index.html', since: '' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 45,
           estimate: { canEstimate: true, recordedAt: '14:21', tool: 'Read', state: 'input' },
+        },
+        {
+          id: 'agent-cockpit-notify', title: 'Notification だけ届いたセッション', status: 'unknown', branch: 'feature/notification-only',
+          main: { tool: '', since: '5 分前' },
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 5,
         },
       ],
     },
@@ -1258,7 +1263,8 @@ function mainRow(p, session, withTag) {
   const unknown = session.status === 'unknown';
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
-  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : '状態不明 (時刻不明)';
+  // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
+  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
   const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}`;

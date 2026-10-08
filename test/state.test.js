@@ -65,9 +65,9 @@ test('idle の補完は稼働中のサブエージェントを含み画面で終
   state.addEvent({ session_id: 'unknown', hook_event_name: 'SubagentStop', agent_id: 'sub', hookAt: 200 });
   assert.equal(state.snapshot().sessions[0].status, '待機中');
 
-  const background = new DashboardState();
-  background.addEvent({ session_id: 'closed', hook_event_name: 'SubagentStart', agent_id: 'task-1', hookAt: 100 });
-  background.sessions.get('closed').agents[0].backgrounded = true;
+  // 背景のサブエージェントは確定したターンの PostToolUse(Agent)で付くため、ここでは Stop の後に作る。
+  const background = backgroundClaudeState('closed');
+  background.addEvent({ session_id: 'closed', hook_event_name: 'Stop', hookAt: 400 });
   background.syncSessionFiles([{ session_id: 'closed', status: 'idle' }]);
   assert.equal(background.snapshot().sessions[0].status, '待機中(サブエージェント稼働中)');
   assert.equal(background.closeAgent('closed', 'task-1'), true);
@@ -424,8 +424,27 @@ test('状態の推定結果はイベント到着後に消える', async (t) => {
   assert.equal(state.version, originalVersion + 1);
   assert.equal(state.snapshot().sessions[0].estimate.canEstimate, true);
 
-  state.addEvent({ session_id: 'estimated-event', hook_event_name: 'SessionStart', hookAt: 100 });
+  state.addEvent({ session_id: 'estimated-event', hook_event_name: 'SessionStart', source: 'startup', hookAt: 100 });
   assert.equal(state.snapshot().sessions[0].estimate, undefined);
+});
+
+test('推定は不明のままのイベントでは残し、ターンが確定した Stop で消す', async (t) => {
+  await temporaryHome(t);
+  for (const [event, kept] of [
+    [{ hook_event_name: 'Notification' }, true],
+    [{ hook_event_name: 'SubagentStart', agent_id: 'sub' }, true],
+    [{ hook_event_name: 'PreToolUse', agent_id: 'sub', tool_name: 'Read', tool_use_id: 'sub-tool' }, true],
+    [{ hook_event_name: 'PostToolBatch' }, true],
+    [{ hook_event_name: 'Stop' }, false],
+  ]) {
+    const state = new DashboardState();
+    state.syncSessionFiles([{ session_id: 'estimate-kept', cwd: 'C:\\project', name: '作業中' }]);
+    state.addEvent({ session_id: 'estimate-kept', hook_event_name: 'Notification', hookAt: 50 });
+    state.saveEstimate('estimate-kept', { recordedAt: '2026-10-02T01:02:03.000Z', lastTool: 'Read', state: 'input' });
+    state.addEvent({ session_id: 'estimate-kept', hookAt: 100, ...event });
+    assert.equal(state.estimates.has('estimate-kept'), kept, JSON.stringify(event));
+    assert.equal(state.snapshot().sessions[0].estimate?.canEstimate, kept ? true : undefined, JSON.stringify(event));
+  }
 });
 
 test('セッションファイルから60秒間消えたイベントセッションを終了扱いにする', async (t) => {

@@ -2332,7 +2332,6 @@ class DashboardState {
     if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return true;
 
     const before = JSON.stringify([...this.sessions.values()]);
-    const hadEstimate = this.estimates.delete(event.session_id);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (wasHidden) this.hiddenSessionUpdatedAt.delete(event.session_id);
     if (endedAt !== undefined) {
@@ -2358,6 +2357,8 @@ class DashboardState {
       askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
     }
     else this.sessions.delete(event.session_id);
+    // 推定はターンが不明な間の補助なので、状態が確定したら消す。不明のままのイベントでは残す。
+    const hadEstimate = nextSessions[0]?.status !== '不明' && this.estimates.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd') {
       this.endSession(event.session_id, event.hookAt);
