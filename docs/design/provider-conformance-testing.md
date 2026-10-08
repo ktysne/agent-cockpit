@@ -25,6 +25,7 @@ Claude側とCodex側で適用する共通シナリオには共有IDを付け、�
 
 | シナリオID | 機能とIssue | 区分 | 能力条件 | 操作 | 観測点と期限 | 共通期待値 | 許容差 | 禁止副作用 |
 |---|---|---|---|---|---|---|---|---|
+| ID-F12-D01 | provider別の共通質問・指示projection表示 (#247) | Cockpitの共通結果 | Claude/Codexのregistrationと一致する質問・指示snapshot fixture | 合成行を非表示・復元・削除し、削除後にsnapshotが消えるケースと新しい検証済みstate writeを確認する | HTTP応答、GET `/api/state`、保存済み表示記録、実session状態と終了callback | 操作対象のprovider表示だけを変える。削除tombstoneは後から消えたprojectionで解除せず、削除より新しい検証済みstate writeだけで解除する。対象取得に失敗した変更操作は503で状態を変えず、GETは利用可能な実rowを返す | native ID、session ID、時刻はprovider fixtureごとに異なる。実runtime適合は別途確認 | projection操作から実session削除、終了callback、他providerへの変更、authorityまたはdeliveryの変更を起こさない |
 | 実装前に機能ごとに定義 | 対象機能と関連Issue | 共通結果、仕様差、未確認 | 実行条件 | 入力と操作 | 状態・宛先・期限 | 仕様に基づいて実装から独立に定める | 意味を変えない差だけ記載 | 起きてはならない副作用 |
 
 ClaudeとCodexの両方が対象機能を実装するまでは、未実装側を未確認とする。
@@ -73,6 +74,14 @@ fixtureを使った試験と実runtime試験の結果を分けて記録する。
 すべての機能へ一律に不要なケースを網羅しない。
 候補には正常系、誤配信、重複、取消前後、送信後の応答喪失や再起動、owner handoff、旧期間と新期間の分離がある。
 適用しない候補は、その機能の契約上不要である理由を記録する。
+
+## provider別projection表示
+
+ID-F12-D01は、共通質問と指示の検証済みprojectionに対する表示設定を扱う。Claude/Codexそれぞれのfixtureで非表示・復元・削除を確認し、同providerの実rowがある場合も削除はprojection表示だけに作用する。providerの起源が複数または不明な実rowと重なる対象は変更を拒否する。
+
+古い・unknown event、session fileの再走査、projection取得中の失敗は削除tombstoneを解除しない。snapshotまたはregistryを取得できない間のhide/unhide/deleteは503で状態を変えず、GETは200を返して他の表示を維持する。新しい検証済みstate writeだけが、同providerのtombstoneを解除する。
+
+HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-projection-display.test.js)で19件、保存形式と旧store復元は[test/state-persistence.test.js](../../test/state-persistence.test.js)の対象テスト1件が成功した。実Claude/Codex runtimeでの表示・削除動作は未確認である。
 
 ## Codex native pendingの表示
 
