@@ -667,10 +667,23 @@ const DATA = {
     { reason: 'claude_parent_unverified', source: 'hook', ppid: 31872, since: new Date(Date.now() - 6 * 60_000).toISOString(), lastAt: new Date(Date.now() - 30_000).toISOString() },
   ],
 };
+let mockInstructionTargetFixture = '';
 try {
   const params = new URLSearchParams(location.search);
+  mockInstructionTargetFixture = params.get('state') || '';
   for (const key of ['commonQuestions', 'instructions']) if (params.get(key) === 'off') DATA.integrations[key] = false;
 } catch {}
+
+function applyMockInstructionTargetFixture(session, fixture) {
+  if (session.id !== 'rec-studio-main' || fixture !== 'instruction-multiple-targets') return session;
+  const executionId = 'period-rec-studio-demo';
+  session.decisions = [];
+  session.instructionTargets = [
+    { launchRef: 'launch-rec-studio-main', executionId, origin: 'standalone', status: 'working', nativeTurnId: 'turn-rec-studio-main', identity: { nativeId: 'Claude メイン' } },
+    { launchRef: 'launch-rec-studio-agent', executionId, origin: 'delegated', status: 'working', nativeTurnId: 'turn-rec-studio-agent', identity: { nativeId: 'Codex 実装担当' } },
+  ];
+  return session;
+}
 
 for (const p of DATA.products) {
   const updatedAt = (minutesAgo) => new Date(Date.now() - Math.max(0, minutesAgo) * 60_000).toISOString();
@@ -680,6 +693,7 @@ for (const p of DATA.products) {
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
+  applyMockInstructionTargetFixture(mainSession, mockInstructionTargetFixture);
   // 親の pid がセッションファイルに載っているときだけ、そのセッションに失敗を付ける。照合が通ったら消す。
   if (p.id === 'agent-cockpit') mainSession.claudeLineageIssue = { reason: 'claude_session_mismatch', since: updatedAt(4), lastAt: updatedAt(1) };
   if (p.id === 'agent-cockpit') mainSession.commonQuestions = [
@@ -1325,10 +1339,60 @@ function saveMockInstructionPreviewRecovery(id) {
   return false;
 }
 
-function instructionTargetAvailability(session) {
+function instructionTargetsForSession(session) {
+  if (Array.isArray(session?.instructionTargets)) return session.instructionTargets;
+  const status = session?.status === 'busy' ? 'working'
+    : ['wait', 'interrupted'].includes(session?.status) ? 'stopped' : 'unverified';
+  return [{
+    launchRef: session?.launchRef || `${session?.id || ''}-launch`,
+    executionId: session?.executionId || session?.id,
+    origin: session?.origin === 'delegated' ? 'delegated' : 'standalone',
+    label: session?.title || session?.id || '実行先',
+    status,
+    nativeTurnId: status === 'working' ? session?.nativeTurnId || `${session.id}-turn` : null,
+    identity: { nativeId: session?.title || session?.id || '実行先' },
+    ...(Object.hasOwn(session || {}, 'nativeInstructionWaiting') ? { nativeWaiting: session.nativeInstructionWaiting } : {}),
+  }];
+}
+
+function instructionDraftTargetFor(session, draft, allowSingleFallback = false) {
+  const targets = instructionTargetsForSession(session);
+  const matches = targets.filter(target => target.launchRef === draft?.targetLaunchRef);
+  if (matches.length === 1) return matches[0];
+  return allowSingleFallback && targets.length === 1 && matches.length === 0 ? targets[0] : null;
+}
+
+function instructionTargetName(session, target) {
+  if (target?.label) return target.label;
+  const origin = target?.origin === 'standalone' ? '独立実行' : target?.origin === 'delegated' ? '委譲実行' : '確認対象';
+  return target?.identity?.nativeId ? `${target.identity.nativeId} · ${origin}` : target?.launchRef || session?.title || session?.id || '実行先';
+}
+
+function instructionTargetStatusText(target) {
+  return target?.status === 'working' ? '作業中'
+    : target?.status === 'stopped' ? '停止中'
+      : target?.status === 'waiting' ? '質問・許可待ち'
+        : '確認待ち';
+}
+
+function instructionTargetAvailability(session, target = null) {
   if (!DATA.integrations.instructions) return { mode: '', reason: '' };
-  if (Object.hasOwn(session, 'nativeInstructionWaiting')) {
-    const pending = session.nativeInstructionWaiting;
+  let scopedSession = session;
+  if (target) {
+    if (!['working', 'stopped', 'waiting'].includes(target.status)) {
+      return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
+    }
+    scopedSession = {
+      ...session,
+      status: target.status === 'working' || target.status === 'waiting' ? 'busy' : 'interrupted',
+      origin: target.origin,
+      executionId: target.executionId,
+      nativeTurnId: target.nativeTurnId,
+    };
+    if (target.status === 'waiting') scopedSession.nativeInstructionWaiting = target.nativeWaiting ?? [];
+  }
+  if (Object.hasOwn(scopedSession, 'nativeInstructionWaiting')) {
+    const pending = scopedSession.nativeInstructionWaiting;
     if (!Array.isArray(pending) || pending.length < 1 || pending.length > 2) {
       return { mode: '', reason: 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。' };
     }
@@ -1348,58 +1412,136 @@ function instructionTargetAvailability(session) {
     }
     return { mode: '', reason: `Codex の${labels.join('、')}待ちです。追加の指示は保留されています。入力内容は保持されます。` };
   }
-  const hasPendingWork = session.perms.length > 0
-    || session.decisions.some(isActiveDecision)
-    || commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question));
+  const hasPendingWork = (scopedSession.perms || []).length > 0
+    || (scopedSession.decisions || []).some(isActiveDecision)
+    || commonQuestionsOf(scopedSession).some(question => !isFinishedCommonQuestion(question));
   if (hasPendingWork) return { mode: '', reason: '質問・許可・判断待ちがあるため、指示を保留中です。' };
-  if (session.status === 'busy') return { mode: 'steer', reason: '' };
-  if (session.status === 'wait' || session.status === 'interrupted') return { mode: 'start', reason: '' };
+  if (scopedSession.status === 'busy') {
+    if (target && target.status === 'working' && !target.nativeTurnId) return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
+    return { mode: 'steer', reason: '' };
+  }
+  if ((scopedSession.status === 'wait' || scopedSession.status === 'interrupted') && (!target || target.origin === 'standalone')) return { mode: 'start', reason: '' };
   return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
 }
 
-function instructionDraftBinding(session, mode) {
+function instructionDraftBinding(session, mode, target = null) {
+  const currentTarget = target || instructionTargetsForSession(session)[0] || null;
   return {
-    executionId: session.executionId || session.id,
-    origin: session.origin === 'delegated' ? 'delegated' : 'standalone',
-    status: session.status,
-    nativeTurnId: session.nativeTurnId || null,
-    nativeWaiting: Object.hasOwn(session, 'nativeInstructionWaiting') ? JSON.stringify(session.nativeInstructionWaiting) : null,
+    launchRef: currentTarget?.launchRef || null,
+    executionId: currentTarget?.executionId || session.executionId || session.id,
+    origin: currentTarget?.origin === 'delegated' ? 'delegated' : 'standalone',
+    status: currentTarget?.status || session.status,
+    nativeTurnId: currentTarget?.nativeTurnId || null,
+    nativeWaiting: Object.hasOwn(currentTarget || {}, 'nativeWaiting') ? JSON.stringify(currentTarget.nativeWaiting)
+      : Object.hasOwn(session, 'nativeInstructionWaiting') ? JSON.stringify(session.nativeInstructionWaiting) : null,
     mode: mode || '',
   };
 }
 
 function sameInstructionDraftBinding(left, right) {
-  return Boolean(left && right && left.executionId === right.executionId && left.origin === right.origin &&
+  return Boolean(left && right && left.launchRef === right.launchRef && left.executionId === right.executionId && left.origin === right.origin &&
     left.status === right.status && left.nativeTurnId === right.nativeTurnId &&
     left.nativeWaiting === right.nativeWaiting && left.mode === right.mode);
 }
 
+function instructionDraftMatchesTarget(session, draft, target) {
+  const targets = instructionTargetsForSession(session);
+  const uniqueTarget = targets.filter(item => item.launchRef === target?.launchRef).length === 1;
+  const fixedSingleTarget = !draft?.targetLaunchRef && targets.length === 1 && targets[0] === target;
+  const availability = instructionTargetAvailability(session, target);
+  return Boolean(target && (uniqueTarget || fixedSingleTarget) &&
+    (!draft?.targetLaunchRef || draft.targetLaunchRef === target.launchRef) && draft.mode === availability.mode &&
+    sameInstructionDraftBinding(draft.binding, instructionDraftBinding(session, availability.mode, target)));
+}
+
 function instructionDraftCanSave(session, draft) {
-  const availability = instructionTargetAvailability(session);
-  return draft?.needsRebind !== true && draft?.targetSessionId === session.id && availability.mode && draft.mode === availability.mode &&
-    sameInstructionDraftBinding(draft.binding, instructionDraftBinding(session, availability.mode)) &&
+  const targets = instructionTargetsForSession(session);
+  const target = targets.length === 1 && !draft?.targetLaunchRef ? targets[0] : instructionDraftTargetFor(session, draft);
+  const availability = instructionTargetAvailability(session, target);
+  return draft?.needsRebind !== true && draft?.targetSessionId === session.id && target && availability.mode &&
+    instructionDraftMatchesTarget(session, draft, target) &&
     typeof draft.text === 'string' && Boolean(draft.text.trim());
 }
 
+function instructionRecordTargetFor(session, record) {
+  const targets = instructionTargetsForSession(session);
+  if (!record?.launchRef && targets.length === 1) return targets[0];
+  const matches = targets.filter(target => target.launchRef === record?.launchRef);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function canSendSavedInstruction(session, record) {
-  const availability = instructionTargetAvailability(session);
-  const executionId = session.executionId || session.id;
+  const target = instructionRecordTargetFor(session, record);
+  const availability = instructionTargetAvailability(session, target);
+  if (!target) return false;
+  const executionId = target.executionId || session.executionId || session.id;
   const modeMatches = record.mode === 'steer'
     ? availability.mode === 'steer'
-    : ['start', 'next-user-input'].includes(record.mode) && availability.mode === 'start' && record.origin === 'standalone';
+    : ['start', 'next-user-input'].includes(record.mode) && availability.mode === 'start' && record.origin === 'standalone' && target.origin === 'standalone';
   return record.state === 'available' && modeMatches && (record.executionId === undefined || record.executionId === executionId) &&
     !Object.hasOwn(ui.instructionPreviewRecoveries, record.deliveryAttemptId) && typeof instructionPreviewText(record) === 'string';
+}
+
+function selectInstructionDraftTarget(sessionId, launchRef) {
+  const session = allSessions().find(item => item.id === sessionId);
+  const draft = ui.instructionDrafts[sessionId] || { targetSessionId: sessionId, text: '' };
+  const matches = instructionTargetsForSession(session).filter(target => target.launchRef === launchRef);
+  if (!session || matches.length !== 1) return false;
+  const target = matches[0];
+  const availability = instructionTargetAvailability(session, target);
+  draft.targetSessionId = session.id;
+  draft.targetLaunchRef = launchRef;
+  if (String(draft.text || '').trim()) {
+    if (!instructionDraftMatchesTarget(session, draft, target)) draft.needsRebind = true;
+  } else {
+    draft.mode = availability.mode;
+    draft.binding = instructionDraftBinding(session, availability.mode, target);
+    draft.needsRebind = false;
+  }
+  ui.instructionDrafts[sessionId] = draft;
+  delete ui.instructionNotices[sessionId];
+  return true;
 }
 
 function rebindInstructionDraft(sessionId) {
   const session = allSessions().find(item => item.id === sessionId);
   const draft = ui.instructionDrafts[sessionId];
-  if (!session || !draft || !draft.text || !instructionTargetAvailability(session).mode) return false;
-  const mode = instructionTargetAvailability(session).mode;
+  if (!session || !draft || !String(draft.text || '').trim()) return false;
+  const target = instructionDraftTargetFor(session, draft, true);
+  const mode = instructionTargetAvailability(session, target).mode;
+  if (!target || !mode) return false;
   draft.targetSessionId = session.id;
+  draft.targetLaunchRef = target.launchRef;
   draft.mode = mode;
-  draft.binding = instructionDraftBinding(session, mode);
+  draft.binding = instructionDraftBinding(session, mode, target);
   draft.needsRebind = false;
+  return true;
+}
+
+function saveMockInstructionDraft(sessionId) {
+  const session = allSessions().find(item => item.id === sessionId);
+  const product = DATA.products.find(item => item.sessions.some(candidate => candidate.id === sessionId));
+  const draft = ui.instructionDrafts[sessionId] || {};
+  const target = session && instructionDraftTargetFor(session, draft, true);
+  if (!session || !product || !target || !instructionDraftCanSave(session, draft)) return false;
+  const deliveryAttemptId = `mock-instruction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  ui.instructionRecords.push({
+    deliveryAttemptId,
+    logicalMessageId: deliveryAttemptId,
+    productId: product.id,
+    sessionId,
+    launchRef: target.launchRef,
+    executionId: target.executionId || session.executionId || session.id,
+    targetName: instructionTargetName(session, target),
+    origin: target.origin,
+    mode: draft.mode,
+    revision: 0,
+    text: String(draft.text).trim(),
+    createdAt: Date.now(),
+    state: 'available',
+  });
+  ui.instructionDrafts[sessionId] = { ...draft, text: '' };
+  ui.instructionNotices[sessionId] = '指示を保存しました。送信前に内容を確認してください。';
   return true;
 }
 
@@ -1437,7 +1579,7 @@ function instructionCard(session, record) {
       ? `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" disabled>内容を確認できないため送信できません</button><button type="button" class="secondary" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button></div>`
       : `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" ${canSend ? '' : 'disabled'}>${record.mode === 'start' || record.mode === 'next-user-input' ? '同じ実行で次の入力を開始' : 'この実行へ送る'}</button><button type="button" class="secondary" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button>${record.origin === 'standalone' && instructionTargetAvailability(session).mode === 'start' ? `<button type="button" class="secondary" data-instruction-alternative-open="${esc(record.deliveryAttemptId)}">次の入力へ差し替える</button>` : ''}</div>` : '';
   const reason = record.state === 'unknown' ? '<p class="instruction-reason">モックでは送信結果を確認できません。再送は保留しています。</p>' : '';
-  return `<article class="decision" data-instruction-id="${esc(record.deliveryAttemptId)}"><div class="dhead"><span class="dtitle" tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(session.title)} · ${esc(absoluteTimeLabel(record.createdAt))}</span></div><p class="ctx instruction-status">${esc(instructionStateText(record))}</p>${reason}${preview}${actions}${alternative}</article>`;
+  return `<article class="decision" data-instruction-id="${esc(record.deliveryAttemptId)}"><div class="dhead"><span class="dtitle" tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(record.targetName || session.title)} · ${esc(absoluteTimeLabel(record.createdAt))}</span></div><p class="ctx instruction-status">${esc(instructionStateText(record))}</p>${reason}${preview}${actions}${alternative}</article>`;
 }
 
 function applyMockInstructionAlternative(oldId, request) {
@@ -1541,36 +1683,56 @@ function instructionPreviewRecoveryPanel() {
 
 function instructionComposer(p, session) {
   if (!DATA.integrations.instructions) return '';
-  const draft = ui.instructionDrafts[session.id] || { targetSessionId: '', mode: '', text: '' };
-  const availability = instructionTargetAvailability(session);
+  const draft = ui.instructionDrafts[session.id] || { targetSessionId: session.id, mode: '', text: '' };
+  const targets = instructionTargetsForSession(session);
   const records = instructionRecordsForSession(session)
     .filter(record => !ui.hideFinished || !isFinishedInstructionRecord(record))
     .map(record => instructionCard(session, record)).join('');
   if (!['busy', 'wait', 'interrupted'].includes(session.status) && !records && !draft.text) return '';
-  const emptyDraft = !draft.text;
+  const emptyDraft = !String(draft.text || '').trim();
+  let target = targets.length === 1 ? targets[0] : instructionDraftTargetFor(session, draft);
   if (emptyDraft) {
     draft.needsRebind = false;
-    draft.targetSessionId = session.id;
-    draft.mode = availability.mode;
-    draft.binding = instructionDraftBinding(session, availability.mode);
+    if (target) {
+      const availability = instructionTargetAvailability(session, target);
+      draft.targetSessionId = session.id;
+      draft.targetLaunchRef = target.launchRef;
+      draft.mode = availability.mode;
+      draft.binding = instructionDraftBinding(session, availability.mode, target);
+    }
     ui.instructionDrafts[session.id] = draft;
   }
-  const targetSelected = draft.targetSessionId === session.id;
-  const currentBindingMatches = targetSelected && draft.mode === availability.mode &&
-    sameInstructionDraftBinding(draft.binding, instructionDraftBinding(session, availability.mode));
-  if (draft.text && !currentBindingMatches) draft.needsRebind = true;
+  const availability = target ? instructionTargetAvailability(session, target) : { mode: '', reason: '実行先を確認できないため、指示を保存できません。' };
+  const currentBindingMatches = Boolean(target && draft.targetSessionId === session.id && instructionDraftMatchesTarget(session, draft, target));
+  if (!emptyDraft && !currentBindingMatches) draft.needsRebind = true;
   const bindingMatches = currentBindingMatches && draft.needsRebind !== true;
-  const canRebind = Boolean(draft.text && !bindingMatches && availability.mode);
+  const canRebind = Boolean(!emptyDraft && !bindingMatches && availability.mode && target);
   const notice = ui.instructionNotices[session.id] || '';
   const text = String(draft.text || '');
-  const target = `${esc(session.title)} · ${esc(session.status === 'busy' ? '作業中' : session.status === 'interrupted' || session.status === 'wait' ? '停止中' : '確認待ち')}`;
   const mode = availability.mode ? instructionModeText(availability.mode) : '送信方法を確認できません';
+  const targetText = target
+    ? `${esc(instructionTargetName(session, target))} · ${esc(instructionTargetStatusText(target))}`
+    : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
+      : targets.length ? '選択した実行先を一意に確認できません' : '実行先を確認できません';
   const bindingNotice = draft.text && !bindingMatches
-    ? `<p class="ctx instruction-reason">${canRebind ? `この下書きは実行状態の変化を確認しました。現在の宛先は ${target}、送信方法は ${esc(instructionModeText(availability.mode))} です。` : 'この下書きの宛先または実行状態が変わりました。本文を保持し、対象を確認できるまで保存を保留しています。'}</p>` : '';
+    ? `<p class="ctx instruction-reason">${canRebind ? `この下書きは実行状態の変化を確認しました。現在の宛先は ${targetText}、送信方法は ${esc(instructionModeText(availability.mode))} です。` : 'この下書きの宛先または実行状態が変わりました。本文を保持し、対象を確認できるまで保存を保留しています。'}</p>` : '';
   const rebind = canRebind
     ? `<div class="answer-foot"><button type="button" class="secondary" data-instruction-rebind="${esc(session.id)}">現在の実行状態で下書きを続ける</button></div>` : '';
-  const form = `<form class="answer" data-instruction-create-form="${esc(session.id)}"><label>追加指示の内容<textarea rows="3" maxlength="65536" data-instruction-draft="${esc(session.id)}">${esc(text)}</textarea></label><div class="answer-foot"><button type="button" class="primary" data-instruction-save="${esc(session.id)}" ${instructionDraftCanSave(session, draft) ? '' : 'disabled'}>指示を保存する</button><span class="sent" role="status" data-instruction-draft-status>${esc(notice || '下書き（未送信）')}</span></div></form>`;
-  const composer = `<article class="decision" data-instruction-composer><div class="dhead"><span class="dtitle">追加指示</span><span class="meta">${esc(mode)}</span></div><p class="ctx instruction-target">現在の宛先: ${target} · 送信方法: ${esc(mode)}</p>${availability.reason ? `<p class="ctx instruction-reason">${esc(availability.reason)}</p>` : ''}${bindingNotice}${rebind}${form}</article>`;
+  const targetChoices = targets.length > 1
+    ? `<section class="decision-question instruction-target-choices" role="group" aria-label="対象の実行"><div class="decision-question-title">対象の実行</div><ul class="options">${targets.map(candidate => {
+      const candidateAvailability = instructionTargetAvailability(session, candidate);
+      const candidateMode = candidateAvailability.mode ? instructionModeText(candidateAvailability.mode) : '現在は送信できません';
+      const checked = targets.filter(item => item.launchRef === candidate.launchRef).length === 1 && draft.targetLaunchRef === candidate.launchRef;
+      const summary = `${instructionTargetName(session, candidate)} · ${instructionTargetStatusText(candidate)} · ${candidateMode}`;
+      const waiting = candidate.status === 'waiting' ? `<small class="why">${esc(candidateAvailability.reason || 'Codex の質問または許可を待っています。追加の指示は保留されています。')}</small>`
+        : candidate.status === 'unverified' ? '<small class="why">実行状態を確認できません。</small>' : '';
+      return `<li class="pickable"><label class="pick"><input type="radio" name="instruction-target-${esc(session.id)}" value="${esc(candidate.launchRef)}" data-instruction-target-select="${esc(session.id)}" data-instruction-target-launch-ref="${esc(candidate.launchRef)}" ${checked ? 'checked' : ''}><span class="body">${esc(summary)}</span></label>${waiting}</li>`;
+    }).join('')}</ul></section>` : '';
+  const targetReason = !target && targets.length > 1
+    ? '対象の実行を選ぶまで、指示の保存を保留しています。下書きは保持されます。'
+    : availability.reason;
+  const form = `<form class="answer" data-instruction-create-form="${esc(session.id)}">${targetChoices}${targetReason ? `<p class="ctx instruction-reason">${esc(targetReason)}</p>` : ''}${bindingNotice}${rebind}<label>追加指示の内容<textarea rows="3" maxlength="65536" data-instruction-draft="${esc(session.id)}">${esc(text)}</textarea></label><div class="answer-foot"><button type="button" class="primary" data-instruction-save="${esc(session.id)}" ${instructionDraftCanSave(session, draft) ? '' : 'disabled'}>指示を保存する</button><span class="sent" role="status" data-instruction-draft-status>${esc(notice || '下書き（未送信）')}</span></div></form>`;
+  const composer = `<article class="decision" data-instruction-composer><div class="dhead"><span class="dtitle">追加指示</span><span class="meta">${esc(mode)}</span></div><p class="ctx instruction-target">現在の宛先: ${targetText} · 送信方法: ${esc(mode)}</p>${form}</article>`;
   return `<section role="region" aria-label="指示の保存と送信">${composer}${records}</section>`;
 }
 
@@ -2831,6 +2993,7 @@ function render() {
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
     : focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
+       : active?.dataset?.instructionTargetSelect ? { kind: 'instruction-target-select', sessionId: active.dataset.instructionTargetSelect, launchRef: active.dataset.instructionTargetLaunchRef }
        : active?.dataset?.instructionPreviewRecovery ? { kind: 'mock-instruction-preview-recovery', id: active.dataset.instructionPreviewRecovery }
        : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
        : active?.dataset?.instructionAlternativeDiscardAsk ? { kind: 'instruction-alt-discard-ask', id: active.dataset.instructionAlternativeDiscardAsk }
@@ -2856,6 +3019,10 @@ function render() {
   if (previewRecovery) root.insertAdjacentHTML('afterbegin', previewRecovery);
   if (focusData?.kind?.startsWith('instruction-alt-')) {
     restoreInstructionAlternativeFocus(root, focusData);
+  } else if (focusData?.kind === 'instruction-target-select') {
+    [...root.querySelectorAll('[data-instruction-target-select]')]
+      .find(input => input.dataset.instructionTargetSelect === focusData.sessionId && input.dataset.instructionTargetLaunchRef === focusData.launchRef)
+      ?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'mock-instruction-preview-recovery') {
     const id = CSS.escape(focusData.id);
     const recoveryButton = root.querySelector(`[data-instruction-preview-recovery="${id}"]`);
@@ -2931,29 +3098,9 @@ document.addEventListener('click', e => {
   }
 
   if (t.dataset.instructionSave) {
-    const sessionId = t.dataset.instructionSave;
-    const session = allSessions().find(item => item.id === sessionId);
-    const product = DATA.products.find(item => item.sessions.some(candidate => candidate.id === sessionId));
-    const draft = ui.instructionDrafts[sessionId] || {};
-    const availability = session ? instructionTargetAvailability(session) : { mode: '' };
-    if (!session || !product || !availability.mode || !instructionDraftCanSave(session, draft)) return;
-    const deliveryAttemptId = `mock-instruction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    ui.instructionRecords.push({
-      deliveryAttemptId,
-      logicalMessageId: deliveryAttemptId,
-      productId: product.id,
-      sessionId,
-      executionId: draft.binding.executionId,
-      origin: session.origin === 'delegated' ? 'delegated' : 'standalone',
-      mode: draft.mode,
-      revision: 0,
-      text: String(draft.text).trim(),
-      createdAt: Date.now(),
-      state: 'available',
-    });
-    ui.instructionDrafts[sessionId] = { ...draft, text: '' };
-    ui.instructionNotices[sessionId] = '指示を保存しました。送信前に内容を確認してください。';
-    save(); render();
+    if (saveMockInstructionDraft(t.dataset.instructionSave)) {
+      save(); render();
+    }
     return;
   }
   if (t.dataset.instructionAction) {
@@ -3309,20 +3456,11 @@ document.addEventListener('change', e => {
     updateCommonQuestionSubmit(commonOption.closest('.common-question'));
     return;
   }
-  const instructionTarget = e.target.closest('select[data-instruction-target]');
+  const instructionTarget = e.target.closest('input[data-instruction-target-select]');
   if (instructionTarget) {
-    const sessionId = instructionTarget.dataset.instructionTarget;
-    const draft = ui.instructionDrafts[sessionId] || { text: '' };
-    ui.instructionDrafts[sessionId] = { ...draft, targetSessionId: instructionTarget.value, mode: '' };
-    save(); render();
-    return;
-  }
-  const instructionMode = e.target.closest('select[data-instruction-mode]');
-  if (instructionMode) {
-    const sessionId = instructionMode.dataset.instructionMode;
-    const draft = ui.instructionDrafts[sessionId] || { text: '' };
-    ui.instructionDrafts[sessionId] = { ...draft, mode: instructionMode.value };
-    save(); render();
+    if (selectInstructionDraftTarget(instructionTarget.dataset.instructionTargetSelect, instructionTarget.dataset.instructionTargetLaunchRef)) {
+      save(); render();
+    }
     return;
   }
   const reservationToggle = e.target.closest('input[data-reservation-toggle]');

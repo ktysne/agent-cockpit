@@ -139,6 +139,8 @@ featureをmainへ提出する前に、採用対象の共通機能について両
 既存の判断事項カードを使う画面の期待値は、合意済みモックと[指示配送の画面契約](instruction-delivery.md#画面の保存要求と復旧)から定める。
 `test/instruction-web.test.js`、`test/common-question-web.test.js`、`test/common-question-mock.test.js`、`test/web-render.test.js`で製品とモックの実装関数を通す。
 この画面の試験はproviderの実runtimeへ送信せず、native質問への回答や許可能力の実証には含めない。
+複数宛先の操作は、`mock/index.html?state=instruction-multiple-targets`で確認できる。
+この確認例だけ、同じ実行期間に異なる実行先を2件用意し、選択前の保留から保存前の明示再確認までを再現する。
 
 | ID | 入力と操作 | 独立した期待値 |
 |---|---|---|

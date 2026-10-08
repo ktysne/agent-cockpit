@@ -2625,7 +2625,7 @@ function decisionAnswerPickHarness(decision) {
   const functions = functionNames.map((name) => functionSource(html, name));
   const clickHandler = html.match(/document\.addEventListener\('click', \(event\) => \{\n  const pick = event\.target\.closest\('\[data-answer-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
   const keydownHandler = html.match(/document\.addEventListener\('keydown', \(event\) => \{\n  if \(event\.key !== ' ' && event\.code !== 'Space'\) return;[\s\S]*?\n\}\);/)?.[0];
-  const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{\n  const instructionTargetSelect = event\.target\.closest\('\[data-instruction-target-select\]'\);[\s\S]*?\n\}\);/)?.[0];
   const inputHandler = html.match(/document\.addEventListener\('input', \(event\) => \{\n  const instructionField = event\.target\.closest\('\[data-instruction-field\]'\);[\s\S]*?\n\}\);/)?.[0];
   assert.ok(functions.every(Boolean));
   assert.ok(clickHandler && keydownHandler && changeHandler && inputHandler);

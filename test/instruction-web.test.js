@@ -128,31 +128,38 @@ function evaluateAlternativeRetryState({ diagnostics, target, old, created }) {
 }
 
 function composerContext(session, draft = {}) {
+  const product = { id: 'product-a', sessions: [session] };
   const ui = {
     hideFinished: true,
     instructionDrafts: draft,
     instructionNotices: {},
     instructionRecords: [],
+    instructionPreviewRecoveries: {},
+    instructionPreviews: {},
+    instructionAlternatives: {},
   };
   const context = pageContext(mock, {
     ui,
     allSessions: () => [session],
     MAX_NATIVE_PENDING_REQUESTS: Number(mock.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
-    DATA: { integrations: { instructions: true } },
+    DATA: { products: [product], integrations: { instructions: true } },
+    instructionPreviewText: record => record.text,
     commonQuestionsOf: item => item.commonQuestions || [],
     isFinishedCommonQuestion: question => question.cancelled || question.deliveryState === 'applied',
     isActiveDecision: decision => decision.kind === 'waiting' || decision.kind === 'provisional',
     instructionCard: () => '',
     esc: value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]),
   });
-  for (const name of ['isFinishedInstructionRecord', 'instructionRecordsForSession', 'instructionTargetAvailability',
-    'instructionDraftBinding', 'sameInstructionDraftBinding', 'instructionDraftCanSave', 'rebindInstructionDraft',
-    'instructionModeText', 'instructionComposer']) {
+  for (const name of ['isFinishedInstructionRecord', 'instructionRecordsForSession', 'instructionTargetsForSession',
+    'instructionDraftTargetFor', 'instructionTargetAvailability', 'instructionTargetName', 'instructionTargetStatusText',
+    'instructionDraftBinding', 'sameInstructionDraftBinding', 'instructionDraftMatchesTarget', 'instructionDraftCanSave',
+    'instructionRecordTargetFor', 'canSendSavedInstruction', 'selectInstructionDraftTarget', 'rebindInstructionDraft',
+    'saveMockInstructionDraft', 'instructionModeText', 'instructionComposer']) {
     const source = functionSource(mock, name);
     assert.ok(source, `${name} source`);
     vm.runInContext(source, context);
   }
-  return { context, ui, product: { id: 'product-a' }, session };
+  return { context, ui, product, session };
 }
 
 test('mock instruction composer is nested in each session work region in both display modes', () => {
@@ -204,6 +211,95 @@ test('mock composer fixes the target and derives the mode while retaining drafts
   assert.doesNotMatch(permissionHold, /<select/);
   assert.match(permissionHold, /<textarea[^>]*>次へ進む<\/textarea>/);
   assert.match(permissionHold, /data-instruction-save="session-a" disabled/);
+});
+
+test('mock multiple-target fixture starts unselected and requires explicit safe rebinding for dirty drafts', () => {
+  const fixtureContext = vm.createContext({});
+  vm.runInContext(functionSource(mock, 'applyMockInstructionTargetFixture'), fixtureContext);
+  const ordinarySession = { id: 'rec-studio-main', title: 'Session Score', status: 'busy' };
+  fixtureContext.applyMockInstructionTargetFixture(ordinarySession, '');
+  assert.equal(Object.hasOwn(ordinarySession, 'instructionTargets'), false);
+
+  const session = fixtureContext.applyMockInstructionTargetFixture(
+    { ...ordinarySession }, 'instruction-multiple-targets');
+  assert.equal(session.instructionTargets.length, 2);
+  assert.equal(session.instructionTargets[0].executionId, session.instructionTargets[1].executionId);
+  assert.notEqual(session.instructionTargets[0].launchRef, session.instructionTargets[1].launchRef);
+  assert.match(mock, /params\.get\('state'\)\s*\|\|\s*''/);
+  assert.match(mock, /applyMockInstructionTargetFixture\(mainSession, mockInstructionTargetFixture\)/);
+
+  const { context, ui, product } = composerContext(session);
+  let html = context.instructionComposer(product, session);
+  assert.match(html, /実行先を選択してください（候補 2 件）/);
+  assert.match(html, /対象の実行を選ぶまで、指示の保存を保留しています。下書きは保持されます。/);
+  assert.equal((html.match(/type="radio" name="instruction-target-rec-studio-main"/g) || []).length, 2);
+  assert.doesNotMatch(html, /type="radio"[^>]*checked/);
+  assert.match(html, /data-instruction-save="rec-studio-main" disabled/);
+
+  const draft = ui.instructionDrafts['rec-studio-main'] = {
+    targetSessionId: 'rec-studio-main', mode: '', text: '保持する本文',
+  };
+  html = context.instructionComposer(product, session);
+  assert.equal(context.selectInstructionDraftTarget(session.id, session.instructionTargets[1].launchRef), true);
+  html = context.instructionComposer(product, session);
+  assert.equal(draft.targetLaunchRef, session.instructionTargets[1].launchRef);
+  assert.equal(draft.needsRebind, true);
+  assert.equal(draft.text, '保持する本文');
+  assert.match(html, /data-instruction-rebind="rec-studio-main"/);
+  assert.match(html, /data-instruction-save="rec-studio-main" disabled/);
+
+  const selected = session.instructionTargets[1];
+  selected.status = 'waiting';
+  selected.nativeWaiting = [{ kind: 'question', count: 1 }];
+  html = context.instructionComposer(product, session);
+  assert.match(html, /Codex の質問 1 件待ちです。追加の指示は保留されています。入力内容は保持されます。/);
+  assert.equal(context.rebindInstructionDraft(session.id), false);
+  assert.match(html, /data-instruction-save="rec-studio-main" disabled/);
+
+  selected.status = 'working';
+  delete selected.nativeWaiting;
+  session.instructionTargets.push({ ...selected, launchRef: 'launch-c', identity: { nativeId: '追加候補' } });
+  html = context.instructionComposer(product, session);
+  assert.equal(draft.targetLaunchRef, selected.launchRef);
+  assert.equal(context.instructionDraftCanSave(session, draft), false);
+  assert.equal(context.rebindInstructionDraft(session.id), true);
+  assert.equal(context.instructionDraftCanSave(session, draft), true);
+  html = context.instructionComposer(product, session);
+  assert.match(html, new RegExp(`data-instruction-target-launch-ref="${selected.launchRef}" checked`));
+  assert.doesNotMatch(html, /data-instruction-save="rec-studio-main" disabled/);
+
+  const saved = {
+    deliveryAttemptId: 'saved-target-b', launchRef: selected.launchRef, executionId: selected.executionId,
+    origin: selected.origin, mode: 'steer', state: 'available', text: '保存済み',
+  };
+  const savedTarget = {
+    ...saved, state: 'unknown',
+  };
+  assert.equal(context.canSendSavedInstruction(session, saved), true);
+  assert.equal(context.canSendSavedInstruction(session, savedTarget), false);
+});
+
+test('mock saves the selected launch explicitly and never enables an unknown result for resend', () => {
+  const fixtureContext = vm.createContext({});
+  vm.runInContext(functionSource(mock, 'applyMockInstructionTargetFixture'), fixtureContext);
+  const session = fixtureContext.applyMockInstructionTargetFixture(
+    { id: 'rec-studio-main', title: 'Session Score', status: 'busy', perms: [], decisions: [], commonQuestions: [] },
+    'instruction-multiple-targets');
+  const { context, ui } = composerContext(session);
+  context.instructionComposer({ id: 'product-a' }, session);
+  const selected = session.instructionTargets[1];
+  assert.equal(context.selectInstructionDraftTarget(session.id, selected.launchRef), true);
+  ui.instructionDrafts[session.id].text = '対象を固定して保存する';
+  assert.equal(context.instructionDraftCanSave(session, ui.instructionDrafts[session.id]), true);
+  assert.equal(context.saveMockInstructionDraft(session.id), true);
+
+  const [record] = ui.instructionRecords;
+  assert.equal(record.launchRef, selected.launchRef);
+  assert.equal(record.executionId, selected.executionId);
+  assert.equal(record.targetName, 'Codex 実装担当 · 委譲実行');
+  assert.equal(context.canSendSavedInstruction(session, record), true);
+  record.state = 'unknown';
+  assert.equal(context.canSendSavedInstruction(session, record), false);
 });
 
 test('mock draft that observed a state change stays held after returning to the old state until explicit rebind', () => {
@@ -686,7 +782,7 @@ test('product draft observed through waiting, unverified, and multiple targets s
   const names = [
     'instructionDraftFor', 'instructionTargetsForSession', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
     'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget',
-    'sameInstructionBinding', 'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget',
+    'sameInstructionBinding',
     'instructionTargetName', 'instructionTargetStatusText', 'instructionTargetWaitingSummary',
     'instructionTargetWaitingNotice', 'instructionModeLabel', 'instructionComposer', 'rebindInstructionDraft', 'runInstructionCreate',
   ];
@@ -842,7 +938,8 @@ test('mock saved instruction stays unsendable during native waiting without dupl
     isFinishedInstructionRecord: () => false,
     esc: value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]),
   });
-  const sources = ['instructionTargetAvailability', 'instructionPreviewText', 'canSendSavedInstruction', 'instructionCard']
+  const sources = ['instructionTargetsForSession', 'instructionRecordTargetFor', 'instructionTargetAvailability',
+    'instructionPreviewText', 'canSendSavedInstruction', 'instructionCard']
     .map(name => functionSource(mock, name));
   assert.ok(sources.every(Boolean));
   vm.runInContext(sources.join('\n'), context);
@@ -876,7 +973,8 @@ test('mock preview recovery keeps the saved instruction and body until local sto
     MAX_PENDING_INSTRUCTION_PREVIEWS: 64,
   });
   const names = [
-    'registerMockInstructionPreviewRecovery', 'instructionPreviewText', 'canSendSavedInstruction',
+    'registerMockInstructionPreviewRecovery', 'instructionTargetsForSession', 'instructionRecordTargetFor',
+    'instructionPreviewText', 'canSendSavedInstruction',
     'saveMockInstructionPreviewRecovery', 'instructionPreviewRecoveryPanel', 'instructionCard',
   ];
   const sources = names.map(name => functionSource(mock, name));
