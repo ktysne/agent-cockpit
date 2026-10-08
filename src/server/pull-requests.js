@@ -190,11 +190,77 @@ function parseCompareResult(stdout) {
   return new Set(value.commits.map((commit) => commit.sha.toLowerCase()));
 }
 
-// 親が見つからなくても、マージ済みの一覧が上限で切れていれば見逃しを否定できないので確かめられない扱いにする。
-function restackResult(commits, mergedPullRequests, mergedListComplete = true) {
+function mergedBaseReachesComparison(
+  branch,
+  mergedAt,
+  mergedPullRequests,
+  comparisonBranches,
+  defaultBranch,
+  visitedPrs = new Set(),
+  memo = new Map(),
+) {
+  if (comparisonBranches.has(branch)) return 'matched';
+  if (branch === defaultBranch) return 'none';
+  const key = `${branch}\0${Date.parse(mergedAt)}`;
+  if (memo.has(key)) return memo.get(key);
+
+  const successors = mergedPullRequests.filter((candidate) => (
+    candidate.headRefName === branch && Date.parse(candidate.mergedAt) > Date.parse(mergedAt)
+  ));
+  if (!successors.length) return 'none';
+
+  const outcomes = [];
+  for (const successor of successors) {
+    if (visitedPrs.has(successor.number) || !successor.baseRefName) {
+      outcomes.push('unknown');
+      continue;
+    }
+    const nextVisited = new Set(visitedPrs).add(successor.number);
+    outcomes.push(mergedBaseReachesComparison(
+      successor.baseRefName,
+      successor.mergedAt,
+      mergedPullRequests,
+      comparisonBranches,
+      defaultBranch,
+      nextVisited,
+      memo,
+    ));
+  }
+
+  const matchedCount = outcomes.filter((outcome) => outcome === 'matched').length;
+  const result = matchedCount > 1 || outcomes.includes('unknown')
+    ? 'unknown'
+    : matchedCount === 1 ? 'matched' : 'none';
+  memo.set(key, result);
+  return result;
+}
+
+function restackResult(commits, mergedPullRequests, comparisonBranches, defaultBranch, mergedListComplete = true) {
   if (!commits) return { checked: false, parent: null };
-  const parent = mergedPullRequests.find((candidate) => commits.has(candidate.headRefOid)) || null;
-  return { checked: Boolean(parent) || mergedListComplete, parent };
+  const candidates = mergedPullRequests.filter((candidate) => commits.has(candidate.headRefOid));
+  const directParent = candidates.find((candidate) => (
+    !candidate.baseRefName || comparisonBranches.has(candidate.baseRefName)
+  ));
+  if (directParent) return { checked: true, parent: directParent };
+  if (!mergedListComplete) return { checked: false, parent: null };
+
+  const indirectParents = [];
+  const lineageMemo = new Map();
+  for (const candidate of candidates) {
+    if (!candidate.baseRefName) continue;
+    const lineage = mergedBaseReachesComparison(
+      candidate.baseRefName,
+      candidate.mergedAt,
+      mergedPullRequests,
+      comparisonBranches,
+      defaultBranch,
+      new Set([candidate.number]),
+      lineageMemo,
+    );
+    if (lineage === 'unknown') return { checked: false, parent: null };
+    if (lineage === 'matched') indirectParents.push(candidate);
+  }
+  return { checked: true, parent: indirectParents[0] || null };
 }
 
 function historicalMergedPullRequests(registrations, relatedPullRequests, openPullRequests) {
@@ -228,6 +294,7 @@ function mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests)
 
 async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBranch, readBranchHead, liveMergedBranches) {
   let compareBase = asText(pr.baseRefName);
+  const comparisonBranches = new Set(compareBase ? [compareBase] : []);
   const visitedBranches = new Set();
   while (compareBase && compareBase !== defaultBranch && !visitedBranches.has(compareBase)) {
     visitedBranches.add(compareBase);
@@ -236,6 +303,7 @@ async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defa
     ));
     if (openParent) {
       compareBase = asText(openParent.baseRefName);
+      if (compareBase) comparisonBranches.add(compareBase);
       continue;
     }
     if (openPullRequests.some((candidate) => candidate.headRefName === compareBase)) break;
@@ -249,8 +317,11 @@ async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defa
       break;
     }
     compareBase = asText(mergedParent.baseRefName);
+    if (compareBase) comparisonBranches.add(compareBase);
   }
-  return compareBase || defaultBranch;
+  compareBase = compareBase || defaultBranch;
+  if (compareBase) comparisonBranches.add(compareBase);
+  return { compareBase, comparisonBranches };
 }
 
 // 積まれた子の親は子が作られた後にマージされるので、オープンの PR の最も古い作成日より後のマージだけを取る。
@@ -1032,7 +1103,7 @@ class PullRequestTracker {
       ? await Promise.all(openPullRequests.map(async (pr) => {
         if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
         try {
-          const compareBase = await restackCompareBase(
+          const { compareBase, comparisonBranches } = await restackCompareBase(
             pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
           );
           const output = await this.execute([
@@ -1040,7 +1111,7 @@ class PullRequestTracker {
             `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${pr.headRefOid}`,
           ]);
           const commits = parseCompareResult(output);
-          const result = restackResult(commits, mergedCandidates, mergedListComplete);
+          const result = restackResult(commits, mergedCandidates, comparisonBranches, defaultBranch, mergedListComplete);
           if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
           return [pr.number, result];
         } catch (error) {
