@@ -40,9 +40,10 @@ input textはhashで重複判定し、composition snapshot、evidence、kernel c
 
 target ownerのcurrent-owner chainがexecution自身へ到達するhandoff、既存cycle、上限超過はauthorityを呼ぶ前に拒否する。
 
-`stop`はproofを先に失効し、子終了が確認されるまで`stopping`、確認できない場合は`stop_unconfirmed`を表示する。同じ停止処理の再呼出しは進行中のpromiseを共有する。
+`stop`はproofを先に失効し、runner snapshotが`childExited === true`、`childClosed === true`、`ownedChildActive === false`をすべて示した場合だけ`stopped`にする。
+いずれかの証拠が欠ける場合は`stop_unconfirmed`を表示し、同じ停止処理の再呼出しは進行中のpromiseを共有する。
 
-遅延した`exit`または`close`は、runner snapshotが該当イベントを確認した後のcomposition snapshotで`stopped`へ反映する。
+遅れて届いた`exit`または`close`の片方だけでは状態を変えず、三つの証拠がそろった後のcomposition snapshotで`stopped`へ反映する。
 
 ## runner接続と認証
 
