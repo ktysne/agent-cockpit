@@ -183,7 +183,7 @@
   <ul>
     <li><span class="ui">作業中</span>：セッションがターンの途中です。</li>
     <li><span class="ui">待機中</span>：ターンが終わり、次の入力を待っています。ツールの実行許可を待っているときも、<span class="ui">待機中</span> と出ます。許可待ちは、判断が必要なことの欄に別のカードで出ます(<a href="permission.html">許可待ち</a>)。</li>
-    <li><span class="ui">状態不明</span>：セッションは見つかっているものの、動きを伝えるイベントが届いていません(<a href="#work-unknown">状態不明のセッション</a>)。</li>
+    <li><span class="ui">状態不明</span>：セッションは見つかっているものの、ターンの状態を確定するイベントが届いていません(<a href="#work-unknown">状態不明のセッション</a>)。</li>
   </ul>
   <p>実行中のツールが複数あるときは、いちばん新しく始まったものを出します。
   経過時間は「1 分以内」「5 分前」「1 時間 10 分前」のように出て、1 分ごとに更新します。
@@ -191,7 +191,8 @@
   <details class="more">
     <summary>メインの作業行の詳細</summary>
     <p>作業中と待機中は、セッションのフックが送るイベントで決まります。
-    プロンプトの送信やツールの開始で作業中になり、ターンの終了で待機中になります。
+    プロンプトの送信やメインのツールの開始で作業中になり、ターンの終了で待機中になります。
+    起動、再開、クリアによるセッションの開始は、入力を待つ状態で始まるので待機中になります。
     ターンが終わると、実行中のツールの行は消えます。</p>
     <p>ツールの札の後ろに出る要約は、コマンドか、ファイルのパスです。
     80 文字を超えるときは、79 文字までで切って「…」を付けます。
@@ -199,10 +200,12 @@
   </details>
 
   <h3 id="work-unknown">状態不明のセッション</h3>
-  <p>セッションのファイルは見つかるのに、フックのイベントが届いていないセッションは、<span class="ui">状態不明</span> と出ます。
-  常駐サーバーを起動する前から動いていたセッションや、再起動の後でまだイベントが届いていないセッションがこうなります。
-  イベントが届いていないため、作業行には最後の更新時刻を表示しません。</p>
-  <figure class="guide-map" id="work-unknown-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/148"><div class="gm-clip"><img src="img/work-states/unknown.png" width="762" height="74" alt="状態不明のセッションの作業行。1行目にメインと状態不明が並び、その下に状態を推定と一覧から外すのボタンが全幅で並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-unknown-map-1" style="left:15.486%;top:8.784%" aria-label="1. 状態">1</a><a class="gm-badge gm-place-bottom" data-gm="2" href="#work-unknown-map-2" style="left:6.496%;top:91.216%" aria-label="2. 状態を推定">2</a><a class="gm-badge gm-place-bottom" data-gm="3" href="#work-unknown-map-3" style="left:18.373%;top:91.216%" aria-label="3. 一覧から外す">3</a></div></div></div><ol class="gm-list"><li id="work-unknown-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態</b>：<span class="ui">状態不明</span> と、<span class="ui">時刻不明</span> が出ます。イベントが届いていないので、経過時間は出ません。</div></li><li id="work-unknown-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">状態を推定</span></b>：セッションの会話の記録の末尾を読み、入力待ちかどうかを推測します。</div></li><li id="work-unknown-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">一覧から外す</span></b>：このセッションを一覧から外します。外したセッションは、一覧の最下部で戻せます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</div></li></ol></figure>
+  <p>セッションのファイルは見つかるのに、ターンの状態を確定するイベントが届いていないセッションは、<span class="ui">状態不明</span> と出ます。
+  ターンの状態を確定するイベントは、プロンプトの送信、メインのツールの開始と終了、ターンの終了、起動・再開・クリアによるセッションの開始です。
+  常駐サーバーを起動する前から動いていたセッションや、再起動の後でまだこれらのイベントが届いていないセッションがこうなります。</p>
+  <figure class="guide-map" id="work-unknown-map" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1524"><div class="gm-segment" style="flex-grow:1524;aspect-ratio:1524/148"><div class="gm-clip"><img src="img/work-states/unknown.png" width="762" height="74" alt="状態不明のセッションの作業行。1行目にメインと状態不明が並び、その下に状態を推定と一覧から外すのボタンが全幅で並ぶ" loading="lazy" decoding="async"></div><a class="gm-badge gm-place-top" data-gm="1" href="#work-unknown-map-1" style="left:15.486%;top:8.784%" aria-label="1. 状態">1</a><a class="gm-badge gm-place-bottom" data-gm="2" href="#work-unknown-map-2" style="left:6.496%;top:91.216%" aria-label="2. 状態を推定">2</a><a class="gm-badge gm-place-bottom" data-gm="3" href="#work-unknown-map-3" style="left:18.373%;top:91.216%" aria-label="3. 一覧から外す">3</a></div></div></div><ol class="gm-list"><li id="work-unknown-map-1" data-gm="1"><span class="gm-num" aria-hidden="true">1</span><div class="gm-body"><b>状態</b>：<span class="ui">状態不明</span> と、<span class="ui">時刻不明</span> が出ます。イベントが 1 件も届いていないので、経過時間は出ません。</div></li><li id="work-unknown-map-2" data-gm="2"><span class="gm-num" aria-hidden="true">2</span><div class="gm-body"><b><span class="ui">状態を推定</span></b>：セッションの会話の記録の末尾を読み、入力待ちかどうかを推測します。</div></li><li id="work-unknown-map-3" data-gm="3"><span class="gm-num" aria-hidden="true">3</span><div class="gm-body"><b><span class="ui">一覧から外す</span></b>：このセッションを一覧から外します。外したセッションは、一覧の最下部で戻せます(<a href="screen.html#screen-bottom">一覧の最下部</a>)。</div></li></ol></figure>
+  <p>Notification やサブエージェントのイベントなど、ターンの状態を確定しないイベントだけが届いた行は、<span class="ui">状態不明</span> の後ろに最後のイベントからの経過時間を出します(例: <span class="ui">状態不明</span> (5 分前))。
+  セッションのファイルが入力待ち(idle)を示すときは、イベントの有無にかかわらず <span class="ui">待機中</span> と出します。稼働中のサブエージェントがあれば、<span class="ui">待機中</span>(サブエージェント稼働中)と出します。</p>
   <details class="more">
     <summary>状態を推定の詳細</summary>
     <p>推定は、会話の記録の末尾(最大 256KB)の最後のやり取りから判断します。
