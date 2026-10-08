@@ -1970,6 +1970,8 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   const options = pullRequestMergeOptionsFor(group, pullRequest);
   const waiting = pullRequestMergeConditionWaits(pullRequest);
   const conditionPending = waiting.length > 0;
+  // 実行中に方式や削除の選択を変えると、送った内容と画面の表示が食い違う。
+  const merging = pullRequestMergeInFlight.has(key);
   const panel = element('section', `merge-confirm ${conditionPending ? 'pending' : ''}`.trim());
   panel.dataset.mergeConfirm = key;
   panel.setAttribute('aria-label', `PR #${pullRequest.number} のマージ確認`);
@@ -1992,6 +1994,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
     input.name = `merge-${key}`;
     input.value = method;
     input.checked = options.method === method;
+    input.disabled = merging;
     input.dataset.mergeMethod = method;
     input.dataset.mergeKey = key;
     label.append(input, document.createTextNode(MERGE_METHOD_LABELS[method] || method));
@@ -2005,7 +2008,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
     const deleteBranch = element('input');
     deleteBranch.type = 'checkbox';
     deleteBranch.checked = pullRequest.isCrossRepository ? false : options.deleteBranch;
-    deleteBranch.disabled = pullRequest.isCrossRepository === true;
+    deleteBranch.disabled = pullRequest.isCrossRepository === true || merging;
     deleteBranch.dataset.mergeDelete = 'true';
     deleteBranch.dataset.mergeKey = key;
     branchChoice.append(deleteBranch, document.createTextNode('マージ後にリモートブランチを削除する'));
@@ -2042,8 +2045,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   panel.append(effects);
 
   const row = element('div', 'row');
-  const merging = pullRequestMergeInFlight.has(key);
-  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : 'マージを実行');
+  const go =element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : 'マージを実行');
   go.type = 'button';
   go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
@@ -4282,6 +4284,10 @@ document.addEventListener('change', (event) => {
   const deleteBranch = event.target.closest('[data-merge-delete]');
   const control = method || deleteBranch;
   if (!control) return;
+  if (pullRequestMergeInFlight.has(control.dataset.mergeKey)) {
+    if (lastState) render(lastState);
+    return;
+  }
   const target = findPullRequestMergeTarget(control.dataset.mergeKey || '');
   if (!target) return;
   const options = pullRequestMergeOptionsFor(target.group, target.pullRequest);

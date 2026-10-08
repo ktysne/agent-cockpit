@@ -1316,8 +1316,21 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
   assert.equal(button.disabled, true);
   const cancel = descendants(target).find((node) => node.dataset.mergeCancel === 'merge-key');
   assert.equal(cancel.disabled, true);
+  const method = descendants(target).find((node) => node.dataset.mergeMethod === 'merge');
+  assert.equal(method.disabled, true);
+  const deleteBranch = descendants(target).find((node) => node.dataset.mergeDelete === 'true');
+  assert.equal(deleteBranch.disabled, true);
   assert.match(mock, /merging \? '処理中…'/);
   assert.match(mock, /data-merge-cancel \$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-method="\$\{m\}" [^>]*\$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-del [^>]*\$\{merging \? 'disabled' : ''\}/);
+});
+
+test('マージの実行中は方式とブランチ削除の変更を受け付けない', () => {
+  const handler = web.match(/const method = event\.target\.closest\('\[data-merge-method\]'\);[^]*?\n\}\);/)?.[0];
+  assert.ok(handler);
+  assert.match(handler, /if \(pullRequestMergeInFlight\.has\(control\.dataset\.mergeKey\)\) \{[^}]*return;/);
+  assert.match(mock, /if \(pullRequestMergeInFlight\.has\(k\)\) \{ render\(\); return; \}/);
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {
