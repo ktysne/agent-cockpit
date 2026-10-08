@@ -2804,61 +2804,13 @@ class DashboardState {
       ...this.mergedPullRequestCandidates(sources),
     ];
     const eventsByProduct = groupSinceSeenEvents(candidates, products);
-    const happenedWhileAway = (timestamp) => awayPeriods.some((period) => {
-      if (!Number.isFinite(period.start)) return false;
-      const end = period.end === null ? now : period.end;
-      return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
-    });
 
     const sinceSeen = [];
     for (const product of products.values()) {
       const seenAt = this.seenAtByProduct.get(product.key);
       if (!seenAt) continue;
-      const seenMilliseconds = Date.parse(seenAt || '');
-      const events = (eventsByProduct.get(product.key) || [])
-        .filter((event) => {
-          const timestamp = Date.parse(event.at);
-          return timestamp > seenMilliseconds && happenedWhileAway(timestamp);
-        });
-      const pullRequestSummaries = new Map();
-      const items = [];
-      for (const event of events) {
-        if (!event.pullRequest) {
-          items.push(event);
-          continue;
-        }
-        const { identity, number, action, title } = event.pullRequest;
-        let summary = pullRequestSummaries.get(identity);
-        if (!summary) {
-          summary = { at: event.at, number, title, actions: new Set() };
-          pullRequestSummaries.set(identity, summary);
-        }
-        if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
-        if (!summary.title && title) summary.title = title;
-        summary.actions.add(action);
-      }
-      for (const summary of pullRequestSummaries.values()) {
-        const { number, title, actions } = summary;
-        const prefix = `PR #${number}${title ? `(${title})` : ''}`;
-        const hasCreated = actions.has('created');
-        const hasMerged = actions.has('merged');
-        const hasCiFailure = actions.has('ci-failure');
-        let text;
-        if (hasCiFailure) {
-          const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
-          const outcome = hasCreated && hasMerged
-            ? '作成し、マージした'
-            : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
-          text = `${failure}${outcome ? `。${outcome}` : ''}`;
-        } else if (hasCreated && hasMerged) {
-          text = `${prefix}を作成し、マージした`;
-        } else if (hasCreated) {
-          text = `${prefix}を作成した`;
-        } else {
-          text = `${prefix}をマージした`;
-        }
-        items.push({ at: summary.at, type: 'pull-request-summary', text });
-      }
+      const events = eventsSinceSeenWhileAway(eventsByProduct.get(product.key) || [], Date.parse(seenAt), awayPeriods, now);
+      const items = foldPullRequestEvents(events);
       items.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       if (items.length) sinceSeen.push({ product, seenAt, items });
     }
@@ -2943,6 +2895,64 @@ function groupSinceSeenEvents(candidates, products) {
   return eventsByProduct;
 }
 
+function isAwayAt(timestamp, awayPeriods, now) {
+  return awayPeriods.some((period) => {
+    if (!Number.isFinite(period.start)) return false;
+    const end = period.end === null ? now : period.end;
+    return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
+  });
+}
+
+// 絞り込みの後でまとめる。先にまとめると、範囲外の変化がまとめた行の時刻と文に混ざる。
+function eventsSinceSeenWhileAway(events, seenMilliseconds, awayPeriods, now) {
+  return events.filter((event) => {
+    const timestamp = Date.parse(event.at);
+    return timestamp > seenMilliseconds && isAwayAt(timestamp, awayPeriods, now);
+  });
+}
+
+// 同じ PR の作成、CI の失敗、マージを 1 行にまとめ、PR に紐づかない変化はそのまま返す。
+function foldPullRequestEvents(events) {
+  const pullRequestSummaries = new Map();
+  const items = [];
+  for (const event of events) {
+    if (!event.pullRequest) {
+      items.push(event);
+      continue;
+    }
+    const { identity, number, action, title } = event.pullRequest;
+    let summary = pullRequestSummaries.get(identity);
+    if (!summary) {
+      summary = { at: event.at, number, title, actions: new Set() };
+      pullRequestSummaries.set(identity, summary);
+    }
+    if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
+    if (!summary.title && title) summary.title = title;
+    summary.actions.add(action);
+  }
+  for (const summary of pullRequestSummaries.values()) {
+    items.push({ at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary) });
+  }
+  return items;
+}
+
+// 題が無いときは「の CI」の前に空白を置く。全角括弧の書式をテストが完全一致で確かめる。
+function pullRequestSummaryText({ number, title, actions }) {
+  const prefix = pullRequestLabel(number, title);
+  const hasCreated = actions.has('created');
+  const hasMerged = actions.has('merged');
+  if (actions.has('ci-failure')) {
+    const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
+    const outcome = hasCreated && hasMerged
+      ? '作成し、マージした'
+      : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
+    return `${failure}${outcome ? `。${outcome}` : ''}`;
+  }
+  if (hasCreated && hasMerged) return `${prefix}を作成し、マージした`;
+  if (hasCreated) return `${prefix}を作成した`;
+  return `${prefix}をマージした`;
+}
+
 function cloneResolution(resolution) {
   if (!resolution) return null;
   return {
@@ -2966,4 +2976,4 @@ function cloneDecision(decision) {
   };
 }
 
-module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName };
+module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName, isAwayAt, pullRequestSummaryText };
