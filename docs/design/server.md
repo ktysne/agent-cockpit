@@ -179,6 +179,7 @@ PostToolUse の出力全文は送らない。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 30 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 30 分へ戻し、書き込み時は拒む。
 - `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, routing, integrations, uiVersion, ownedExecutions, ownedExecutionDiagnostics}` を返す。`ownedExecutions` は所有する実行の表示用状態で、保留理由、保持件数、残容量を含む。`ownedExecutionDiagnostics.status` は `ready`、`unavailable`、`unconfigured` のいずれかで、状態を安全に投影できないときは `ownedExecutions` を空にして `unavailable` とする。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 - `instructionTargets` はlaunch registryから登録済みexecutionへ結び付いたCockpit所有の実行だけを投影する。各対象の追加指示は`ownedExecutionDiagnostics.status === 'ready'`を前提とし、診断を利用できないときは送信を保留する。
+- 所有実行サービスの終了処理中も、停止状態を安全に取得できないため診断を`unavailable`とし、空の`ready`とは扱わない。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存
