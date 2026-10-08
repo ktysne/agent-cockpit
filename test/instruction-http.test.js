@@ -109,7 +109,7 @@ async function createRuntime(t, options = {}) {
     registrationRegistry: registrationView(harness, options.registrationSnapshot),
     launchRegistry: instructionTargetsConfigured ? harness.launchRegistry : null,
     instructionService,
-    instructionTargetState: options.instructionTargetState || (instructionTargetsConfigured ? harness.targetState : null),
+    instructionTargetState: instructionTargetsConfigured ? (options.instructionTargetState || harness.targetState) : null,
     questionService,
   });
   t.after(async () => {
