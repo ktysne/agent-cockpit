@@ -20,12 +20,8 @@ Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照�
 
 | 日付 | 判断 | 理由と適用範囲 |
 |---|---|---|
-| 2026-10-08 | fixtureで契約を検証した変更は `codex/feature-codex-support` へ集約する。実runtime未確認はfeatureからmainへ採用する条件として残す。 | fixtureはコードと契約の回帰を確かめるが、製品compositionや実runtimeの挙動までは証明しないため。#175、#211、#216、#217は、この集約だけでは閉じない。fixtureの成功を実runtimeの成功へ読み替えない。 |
+| 2026-10-08 | 案Aとしてfixtureで契約を検証した変更をfeatureへ集約し、実runtime未確認はfeatureからmainへの採用条件として残す。 | レビュー済みコードの確認起点をそろえるため。fixtureは製品compositionやruntimeの挙動を証明しないので、#175、#211、#216、#217をこの集約だけで閉じない。確認手順は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。 |
 
-この判断はG2の実接続条件を緩和しない。
-再接続時の接続世代更新と旧currentProofの失効は、対象runtimeで別途確かめる。
-G4では質問応答と通常指示のtransportを分け、質問の宛先、owner保留、late answer、受付と適用の区別を維持する。
-fixtureでこれらの境界を検証しても、実runtimeの適合を確認したことにはならない。
 採用前に残る確認の順序、操作、観測点と合格条件は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。
 不足機能の実装と実runtime試験は、この計画を開発者が確認してから着手する。
 
