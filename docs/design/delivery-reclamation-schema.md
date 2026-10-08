@@ -62,15 +62,20 @@ checkpoint v3のouter objectとinstruction journal v2のtop-level objectは、�
 |---|---|
 | `operationId` | anchor migrationと同じoperationの小文字UUIDv4 |
 | `sourceSchemaVersion` | checkpointでは2、instruction journalでは1 |
-| `sourceSizeBytes` | 対応する旧source slotの固定実byte size。安全な整数で`N_checkpoint`または`N_instructions`以下 |
+| `sourceSizeBytes` | 対応する旧source slotの固定実byte size。安全な整数で`0..B_i`。旧source schemaの制約も満たす |
 | `sourceSha256` | 対応するanchor source fingerprintと同じ、旧source実byteの小文字SHA-256 hex 64文字 |
-| `maxExtraBytes` | 安全な整数で`0..H_checkpoint`または`0..H_instructions`。発行後不変 |
+| `maxExtraBytes` | 正の安全な整数でslot固有の`H_i`以下。算出値0ならgrantはnull。発行後不変 |
 | `eligibleAttemptIds` | dense array。重複のない最大20,000件のidentifierで、各512 UTF-16 code unit以下 |
 
 移行coordinatorだけが、旧sourceのschema、size、SHA-256がanchorの固定fingerprintと一致した後にgrantを発行する。
 checkpoint grantのrosterは旧checkpoint v2 ledgerに存在したdelivery attempt ID、instruction grantのrosterは旧journal v1に存在したinstruction attempt IDから固定する。
 grantのoperation ID、source fingerprint、rosterを後から追記・差替え・再利用せず、同じsourceへのpartial grant積上げやgrantの重ね掛けを拒否する。
-`maxExtraBytes`がslot固有の固定`H_i`を超えるobjectも拒否する。
+受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes_i(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
+`b`はそのslotの移行、保持、回収の各到達可能snapshotと許可された将来遷移を表す。
+`projectedReserveBytes_i`は実serializer byte、grantとroster、まだ使用していない合法な将来増分を一度だけ含め、別々の到達状態の最大値を使い、合計しない。
+計算中はgrant内の数値を16桁の最大幅でprojectionして自己参照を避ける。
+算出値が0またはsourcePresent=falseならgrantをnullにし、固定`H_i`を超えれば移行を拒否する。
+非null grantの`maxExtraBytes`が0または固定`H_i`を超えるobjectも拒否する。
 
 `eligibleAttemptIds`は移行時点の上限対象を固定するrosterであり、移行後のrecordsと件数が完全一致する必要はない。
 保持期限などで旧recordが削除されてもrosterを縮めず、追加枠を使えるのはroster内IDに対応する現存recordだけとする。
@@ -78,8 +83,10 @@ grantのoperation ID、source fingerprint、rosterを後から追記・差替え
 `migrationAllowance` object、roster、schema wrapperの必須追加byteは対応する`H_i`の計算に含める。
 
 anchor migrationが`null`になってもfile内の`migrationAllowance`を維持する。
-各現存recordとその未完了state transitionと相関予約が通常`B_i`内で完結でき、file全体も通常byte budgetに収まるときだけ、grantの削除と通常budget検査を同じatomic file saveで行う。
+対応する形式移行が完了してanchorの`migration === null`となり、各現存recordとその未完了state transitionと相関予約が通常`B_i`内で完結でき、file全体も通常byte budgetに収まるときだけ、grantの削除と通常budget検査を同じatomic file saveで行う。
+manifestがprepared、guarded、installing、またはcompletedのままなら、通常枠に収まっていてもgrantを消さない。
 移行manifestの完了だけではgrantを消さず、grantを部分更新または後続migrationで積み増してHを再拡張しない。
+
 ## ledger v2のrecord variant
 
 ledger外側は`schemaVersion`、`revision`、`deliveries`、`notificationTargets`、`logicalTombstones`を保つ。
@@ -275,7 +282,8 @@ atomic置換中は既存anchor `A`と一時anchor `M`、各旧data file `N_i`と
 旧source `A`と`N_i`は既存fileが占有する通常容量に含め、追加予約へ二重計上しない。
 追加予約は`M + Σ(N_i + H_i)`で、一時targetの全byteを保持できる枠を別に確保する。
 `H_used_i`は現行recordsをdetail/grave variantへ投影した実serializer byteから算出し、manifestの有無に依存させない。
-`migration: null`後も`H_used_i`が残る間は通常`B_i`に`H_i`を加えたload/writeを許し、圧縮で通常budget内へ収束するまでgrant対象の既存recordを保持、更新できるようにする。
+`migration: null`後も`H_used_i`が残る間は通常`B_i`にgrantの`maxExtraBytes`を加えたload/writeを許し、圧縮で通常budget内へ収束するまでgrant対象の既存recordを保持、更新できるようにする。
+grantがnullなら全load/writeを通常`B_i`内に制限する。固定`H_i`は発行上限であり、保存されたgrantの値を拡張する根拠にしない。
 `H_i`を新規受付の予約や通常容量として使わず、次の移行でHを再帰的に加算しない。
 この枠を許さなければ、通常上限いっぱいの旧形式へ必須fieldを足せない。
 容量不足時は旧sourceと拒否情報を保持し、migrationと受付を再開しない。

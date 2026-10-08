@@ -142,7 +142,8 @@ grantはcoordinatorだけがsource fingerprintを照合して発行し、初回�
 manifestを `null` にした後もgrantを残し、対象IDの追記、差替え、再利用、複数grantの積み上げを拒否する。
 保存された `maxExtraBytes` を固定 `H_i` より大きい値へ読み替えず、grant外の新規記録には追加枠を適用しない。
 対象slotのgrantが共に存在する間は同じ移行操作IDを要求するが、追加枠が不要なslotまたは収束後にgrantを消したslotは `null` を許す。
-全記録の将来予約が通常枠に収まり、以後も通常枠で既存操作を完結できるときだけ、そのslotのgrant全体をatomicに `null` にできる。
+対応する形式移行が完了してanchorの`migration === null`となり、全記録の将来予約が通常枠に収まり、以後も通常枠で既存操作を完結できるときだけ、そのslotのgrant全体をatomicに `null` にできる。
+manifestがprepared、guarded、installing、またはcompletedのままなら、通常枠に収まっていてもgrantを消さない。
 移行中の専用枠を診断に出し、7日経過前に満杯なら新規受付停止を維持する。
 容量を空けるために保持期間を短縮しない。
 新形式が通常枠に収束した後は、追加移行枠を通常受付へ転用しない。
