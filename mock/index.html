@@ -223,11 +223,6 @@ h3.sub .count { font-weight: normal; }
 .options .pick:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .options .pick .body { min-width: 0; }
 .answer { display: grid; gap: 8px; }
-.checks { display: flex; gap: 8px; flex-wrap: wrap; }
-.check { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; min-height: 40px; }
-.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.check.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-text); }
-.check.ok input { accent-color: var(--ok); }
 textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
@@ -930,8 +925,17 @@ function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
   card?.querySelector('.answer-error')?.remove();
 }
 const picksOf = a => a.choice === 'pick' ? (a.picks || []) : [];
-const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) || !!a.note.trim();
-const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
+const recommendedPicks = decision => decision.options.flatMap((option, index) => option.rec ? [index] : []);
+const answerForUi = (answer, decision) => answer.choice === 'ok'
+  ? { ...answer, choice: 'pick', picks: recommendedPicks(decision) }
+  : answer;
+const canSend = a => (a.choice === 'pick' && picksOf(a).length > 0) || !!a.note.trim();
+const answerDirty = (answer, decision) => {
+  if (!answer.sent) return true;
+  const current = answerForUi(answer, decision);
+  const sent = answerForUi(answer.sent, decision);
+  return sent.choice !== current.choice || sent.note !== current.note || picksOf(sent).join() !== picksOf(current).join();
+};
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions).filter(s => !ui.deletedSessionIds.includes(s.id));
 function isIdleHiddenSession(session, now = Date.now()) {
@@ -1396,6 +1400,7 @@ function newsBox(p, withTag) {
 
 function decisionCard(p, session, d, withTag) {
   const a = answerOf(d.id);
+  const draft = answerForUi(a, d);
   const state = effectiveDecisionState(d);
   const stateClass = { waiting: 'blocking', provisional: 'provisional', resolved: 'state-ok', withdrawn: 'withdrawn' }[state];
   const stateLabel = { waiting: '止めて待っている', provisional: '仮に推奨案で進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
@@ -1406,15 +1411,13 @@ function decisionCard(p, session, d, withTag) {
   // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
   const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
-  const recommended = d.options.find(o => o.rec);
-  const picked = picksOf(a).map(i => d.options[i].t);
-  const answerMeta = picked.length ? `送る答え: ${esc(picked.join('、'))}`
-    : recommended ? `OK で送る答え: ${esc(recommended.t)}` : '';
+  const picked = picksOf(draft).map(i => d.options[i].t);
+  const answerMeta = picked.length ? `送る答え: ${esc(picked.join('、'))}` : '';
   const sentKind = s => s.choice === 'ok' ? '推奨案で OK' : s.choice === 'pick' ? `「${picksOf(s).map(i => d.options[i].t).join('」「')}」を選択` : '指示のみ';
   const sentLine = a.sent
     ? `<span class="sent answer-status">${esc(absoluteTimeLabel(a.sent.at, Date.now(), a.sent.at))} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${esc(absoluteTimeLabel(a.sent.deliveredAt, Date.now(), a.sent.deliveredAt))} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
-  const dirty = answerDirty(a);
+  const dirty = answerDirty(a, d);
   const answerError = answerErrors.get(answerDraftKey(session.id, d.id)) || '';
   const statusLine = a.sent && dirty ? '<span class="sent answer-status">変更は未送信</span>' : sentLine;
   const long = state === 'waiting' && !a.sent && isLongWait(d.waitMin);
@@ -1433,17 +1436,14 @@ function decisionCard(p, session, d, withTag) {
       const body = `${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span>`;
       // 答えられるあいだは、選択肢そのものを押して答えに選べる。複数選択の質問だけ複数を選べる。
       return active
-        ? `<li class="pickable ${o.rec ? 'rec' : ''}"><label class="pick"><input type="${d.multi ? 'checkbox' : 'radio'}" name="pick-${d.id}" data-pick="${i}" ${picksOf(a).includes(i) ? 'checked' : ''}><span class="body">${body}</span></label></li>`
+        ? `<li class="pickable ${o.rec ? 'rec' : ''}"><label class="pick"><input type="${d.multi ? 'checkbox' : 'radio'}" name="pick-${d.id}" data-pick="${i}" ${picksOf(draft).includes(i) ? 'checked' : ''}><span class="body">${body}</span></label></li>`
         : `<li class="${o.rec ? 'rec' : ''}">${body}</li>`;
     }).join('')}</ul>
     ${active ? `<div class="answer">
-      <div class="checks">
-        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''} ${recommended ? '' : 'disabled'}>推奨案で OK</label>
-      </div>
       ${answerMeta ? `<div class="meta">${answerMeta}</div>` : ''}
       <textarea data-note placeholder="指示があれば書く (例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
-        <button type="button" class="primary" data-send ${!canSend(a) || !dirty ? 'disabled' : ''}>回答を送る</button>
+        <button type="button" class="primary" data-send ${!canSend(draft) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${statusLine}
       </div>
       ${answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
@@ -2408,7 +2408,9 @@ document.addEventListener('click', e => {
     const card = t.closest('.decision');
     const id = card.dataset.id;
     const key = answerDraftKey(card.dataset.sessionId, id);
-    const a = answerOf(id);
+    const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === id);
+    if (!decision) return;
+    const a = answerForUi(answerOf(id), decision);
     const now = new Date();
     const at = absoluteTimeLabel(now);
     // 渡した時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ渡したものとして出す。
@@ -2417,6 +2419,36 @@ document.addEventListener('click', e => {
     answerErrors.delete(key);
   } else return;
   save(); render();
+});
+
+function clearSelectedMockPick(pick) {
+  const card = pick.closest('.decision');
+  const id = card.dataset.id;
+  const key = answerDraftKey(card.dataset.sessionId, id);
+  const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === id);
+  if (!decision) return false;
+  const i = Number(pick.dataset.pick);
+  const a = answerForUi(answerOf(id), decision);
+  const previous = { ...a, picks: [...picksOf(a)] };
+  if (!picksOf(a).includes(i)) return false;
+  a.picks = picksOf(a).filter(x => x !== i);
+  a.choice = a.picks.length ? 'pick' : null;
+  pick.checked = false;
+  ui.answers[id] = a;
+  clearAnswerErrorWhenDraftChanges(key, previous, a, card);
+  save(); render();
+  return true;
+}
+
+document.addEventListener('click', e => {
+  const pick = e.target.closest('input[data-pick]');
+  if (pick?.type === 'radio') clearSelectedMockPick(pick);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== ' ' && e.code !== 'Space') return;
+  const pick = e.target.closest('input[data-pick]');
+  if (pick?.type === 'radio' && clearSelectedMockPick(pick)) e.preventDefault();
 });
 
 document.addEventListener('change', e => {
@@ -2473,31 +2505,21 @@ document.addEventListener('change', e => {
     save(); render();
     return;
   }
-  const cb = e.target.closest('input[data-choice]');
-  if (!cb) return;
-  const card = cb.closest('.decision');
-  const id = card.dataset.id;
-  const key = answerDraftKey(card.dataset.sessionId, id);
-  const a = answerOf(id);
-  const previous = { ...a, picks: [...picksOf(a)] };
-  a.choice = cb.checked ? cb.dataset.choice : null;
-  a.picks = [];
-  ui.answers[id] = a;
-  clearAnswerErrorWhenDraftChanges(key, previous, a);
-  save(); render();
 });
 
 document.addEventListener('input', e => {
   if (!e.target.matches('textarea[data-note]')) return;
   const card = e.target.closest('.decision');
-  const a = answerOf(card.dataset.id);
+  const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === card.dataset.id);
+  if (!decision) return;
+  const a = answerForUi(answerOf(card.dataset.id), decision);
   const key = answerDraftKey(card.dataset.sessionId, card.dataset.id);
   const previous = { ...a, picks: [...picksOf(a)] };
   a.note = e.target.value;
   ui.answers[card.dataset.id] = a;
   clearAnswerErrorWhenDraftChanges(key, previous, a, card);
   save();
-  card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a);
+  card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a, decision);
 });
 
 const expiredTransientNoticeSignature = () => [...Object.entries(ui.reservationNotices), ...Object.entries(ui.mergeErrors)]
