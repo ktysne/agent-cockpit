@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
-const { functionSource, pageContext } = require('./support/page-context');
+const { functionSource, pageContext, sourceBetween } = require('./support/page-context');
 
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const filterDeclaration = pageHtml.match(/^const FILTERS = \[[\s\S]*?^\];/m)?.[0];
@@ -31,6 +31,7 @@ class FakeElement {
   }
 
   get firstElementChild() { return this.children[0] || null; }
+  get childNodes() { return this.children; }
 
   replaceChildren(...nodes) {
     this.children = [];
@@ -44,6 +45,12 @@ class FakeElement {
   closest(selector) {
     for (let node = this; node; node = node.parentNode) {
       if (selector.startsWith('.') && node.className.split(/\s+/).includes(selector.slice(1))) return node;
+      if (selector === 'button' && node.tagName === 'button') return node;
+      const dataAttribute = selector.match(/^\[data-([a-z0-9-]+)\]$/i);
+      if (dataAttribute) {
+        const property = dataAttribute[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+        if (Object.hasOwn(node.dataset, property)) return node;
+      }
     }
     return null;
   }
@@ -83,7 +90,7 @@ const FUNCTION_NAMES = [
   'commonQuestionKey', 'isFinishedCommonQuestion', 'isFilterShown', 'shownCommonQuestions',
   'commonQuestionDraft', 'commonQuestionDeliveryText', 'commonQuestionSelectedLabels',
   'sameCommonQuestionAnswers', 'commonQuestionAnswersValid', 'readCommonQuestionDraft',
-  'updateCommonQuestionSubmit', 'appendCommonQuestions', 'commonQuestionDiagnosticsNotice',
+  'updateCommonQuestionSubmit', 'clearSelectedCommonQuestionOption', 'appendCommonQuestions', 'commonQuestionDiagnosticsNotice',
   'countJudgments', 'renderSummary',
   'runCommonQuestionAction',
 ];
@@ -93,6 +100,7 @@ function createUiContext(options = {}) {
   const sources = FUNCTION_NAMES.map((name) => functionSource(pageHtml, name));
   assert.ok(sources.every(Boolean), 'production common-question functions exist');
   let nativeConfirmCalls = 0;
+  const listeners = new Map();
   const summary = new FakeElement('div');
   const filterNote = new FakeElement('div');
   const context = pageContext(pageHtml, {
@@ -101,6 +109,7 @@ function createUiContext(options = {}) {
       createTextNode: (text) => new FakeText(text),
       getElementById: () => filterNote,
       querySelectorAll: () => [],
+      addEventListener: (name, handler) => listeners.set(name, handler),
     },
     window: { confirm: () => { nativeConfirmCalls += 1; throw new Error('native confirmation is unavailable'); } },
     confirm: () => { nativeConfirmCalls += 1; throw new Error('native confirmation is unavailable'); },
@@ -115,6 +124,7 @@ function createUiContext(options = {}) {
     commonQuestionInFlight: new Set(),
     commonQuestionCancelConfirmations: new Set(),
     appendContextTags() {},
+    badge: (text, className = '') => Object.assign(new FakeElement('span'), { textContent: text, className }),
     absoluteTimeLabel: () => '期限',
     pullRequestMergeableCount: () => 0,
     pullRequestOpenCount: () => 0,
@@ -125,9 +135,49 @@ function createUiContext(options = {}) {
     liveStatus: { textContent: '' },
   });
   context.nativeConfirmCalls = () => nativeConfirmCalls;
+  context.listeners = listeners;
   context.filterNote = filterNote;
   require('node:vm').runInContext(`${filterDeclaration}\n${sources.join('\n')}`, context);
   return context;
+}
+
+function loadCommonQuestionListeners(context) {
+  const sources = [
+    sourceBetween(pageHtml, "document.addEventListener('change', (event) => {", "\ndocument.addEventListener('input'"),
+    sourceBetween(pageHtml, "document.addEventListener('input', (event) => {", "\ndocument.addEventListener('compositionstart'"),
+    sourceBetween(pageHtml, "document.addEventListener('click', (event) => {", "\ndocument.addEventListener('click'"),
+    sourceBetween(pageHtml, "document.addEventListener('keydown', (event) => {", "\ndocument.addEventListener('auxclick'"),
+  ];
+  assert.ok(sources.every(Boolean), 'production common-question event handlers exist');
+  require('node:vm').runInContext(sources.join('\n'), context);
+}
+
+function commonQuestionInteractionCard() {
+  const card = new FakeElement('article');
+  card.className = 'common-question';
+  card.dataset.sessionId = 'session-question';
+  card.dataset.internalQuestionId = 'cq-interaction';
+  const option = (questionId, optionId, type, checked = false) => {
+    const input = new FakeElement('input');
+    input.type = type;
+    input.dataset.commonOption = 'true';
+    input.dataset.questionId = questionId;
+    input.dataset.optionId = optionId;
+    input.checked = checked;
+    card.append(input);
+    return input;
+  };
+  const singleSelected = option('single', 'keep', 'radio', true);
+  const singleAlternative = option('single', 'alternate', 'radio');
+  const multiSelected = option('multi', 'two', 'checkbox', true);
+  const freeText = new FakeElement('textarea');
+  freeText.dataset.commonFreeText = 'single';
+  freeText.value = '保持する入力';
+  card.append(freeText);
+  const submit = new FakeElement('button');
+  submit.dataset.commonSubmit = 'cq-interaction';
+  card.append(submit);
+  return { card, singleSelected, singleAlternative, multiSelected, freeText, submit };
 }
 
 function commonQuestion(overrides = {}) {
@@ -548,4 +598,69 @@ test('回答保存に失敗しても選択と自由記入の下書きを再描�
   assert.equal(card.querySelector('[data-common-free-text]').value, 'keep this draft');
   assert.equal(card.querySelector('.common-question-error').textContent, '保存できませんでした。入力内容を保持しています。');
   assert.equal(context.nativeConfirmCalls(), 0);
+});
+
+test('共通質問の単一選択は再クリックとSpaceで解除し、独立回答と後続回答の重複防止を保つ', () => {
+  const context = createUiContext();
+  const question = commonQuestion({
+    internalQuestionId: 'cq-interaction',
+    questions: [
+      { id: 'single', text: '単一選択', mode: 'single', allowFreeText: true, options: [
+        { id: 'keep', label: '維持', description: '' }, { id: 'alternate', label: '別案', description: '' },
+      ] },
+      { id: 'multi', text: '複数選択', mode: 'multi', allowFreeText: false, options: [
+        { id: 'one', label: '一つ目', description: '' }, { id: 'two', label: '二つ目', description: '' },
+      ] },
+    ],
+  });
+  context.lastState = { sessions: [{ session_id: question.sessionId, commonQuestions: [question] }] };
+  const key = context.commonQuestionKey(question);
+  context.commonQuestionDrafts.set(key, [
+    { questionId: 'single', optionIds: ['keep'], freeText: '保持する入力' },
+    { questionId: 'multi', optionIds: ['two'], freeText: '' },
+  ]);
+  const controls = commonQuestionInteractionCard();
+  loadCommonQuestionListeners(context);
+
+  let prevented = false;
+  context.listeners.get('click')({
+    button: 1,
+    target: controls.singleSelected,
+    preventDefault: () => { prevented = true; },
+  });
+  assert.equal(controls.singleSelected.checked, false);
+  assert.equal(prevented, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.commonQuestionDrafts.get(key))), [
+    { questionId: 'single', optionIds: [], freeText: '保持する入力' },
+    { questionId: 'multi', optionIds: ['two'], freeText: '' },
+  ]);
+  assert.equal(controls.submit.disabled, false);
+
+  controls.singleSelected.checked = true;
+  context.listeners.get('change')({ target: controls.singleSelected });
+  prevented = false;
+  context.listeners.get('keydown')({
+    target: controls.singleSelected, key: ' ', code: 'Space',
+    preventDefault: () => { prevented = true; },
+  });
+  assert.equal(controls.singleSelected.checked, false);
+  assert.equal(prevented, true);
+  assert.equal(context.commonQuestionDrafts.get(key)[1].optionIds[0], 'two');
+
+  controls.singleAlternative.checked = true;
+  context.listeners.get('change')({ target: controls.singleAlternative });
+  const submitted = JSON.parse(JSON.stringify(context.commonQuestionDrafts.get(key)));
+  context.commonQuestionSubmittedDrafts.set(key, submitted);
+  context.updateCommonQuestionSubmit(controls.card);
+  assert.equal(controls.submit.disabled, true);
+  context.listeners.get('click')({ button: 1, target: controls.singleAlternative });
+  assert.equal(controls.singleAlternative.checked, false);
+  assert.equal(controls.submit.disabled, false);
+
+  let renderCount = 0;
+  context.render = () => { renderCount += 1; };
+  controls.freeText.value = '日本語入力中';
+  context.listeners.get('input')({ target: controls.freeText });
+  assert.equal(context.commonQuestionDrafts.get(key)[0].freeText, '日本語入力中');
+  assert.equal(renderCount, 0);
 });

@@ -527,6 +527,37 @@ test('PostToolBatch はその時刻より前に始まったメインツールだ
   ]);
 });
 
+test('サブエージェントの PostToolBatch は拒否されたツールと許可待ちを消し、ほかのエージェントの分は残す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'rejected-tool', ...event });
+  add({ hook_event_name: 'SubagentStart', hookAt: 50, agent_id: 'agent-1', agent_type: 'general-purpose' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 100, agent_id: 'agent-1', tool_name: 'Bash', tool_use_id: 'rejected' });
+  add({ hook_event_name: 'Notification', hookAt: 110, agent_id: 'agent-1', notification_type: 'permission_prompt', message: '許可が必要です' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 120, agent_id: 'agent-2', tool_name: 'Read', tool_use_id: 'other-agent-tool' });
+  add({ hook_event_name: 'Notification', hookAt: 130, agent_id: 'agent-2', notification_type: 'permission_prompt', message: '許可が必要です' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 140, tool_name: 'Agent', tool_use_id: 'main-agent-call' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 200, agent_id: 'agent-1', tool_name: 'Read', tool_use_id: 'next-tool' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 210, agent_id: 'agent-1', tool_name: 'Read', tool_use_id: 'next-tool' });
+  add({ hook_event_name: 'PostToolBatch', hookAt: 220, agent_id: 'agent-1' });
+
+  const session = state.snapshot().sessions[0];
+  assert.deepEqual(session.tools.map((tool) => tool.tool_use_id), ['other-agent-tool', 'main-agent-call']);
+  assert.deepEqual(session.permissionWaits.map((wait) => wait.agent_id), ['agent-2']);
+});
+
+test('メインの PostToolBatch では許可待ちを消さない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'main-wait', ...event });
+  add({ hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Bash', tool_use_id: 'main-tool' });
+  add({ hook_event_name: 'Notification', hookAt: 110, notification_type: 'permission_prompt', message: '許可が必要です' });
+  add({ hook_event_name: 'Notification', hookAt: 120, agent_id: 'agent-1', notification_type: 'permission_prompt', message: '許可が必要です' });
+  add({ hook_event_name: 'PostToolBatch', hookAt: 200 });
+
+  assert.deepEqual(state.snapshot().sessions[0].permissionWaits.map((wait) => wait.agent_id), [null, 'agent-1']);
+});
+
 test('許可待ちは同じ対象ツールの PostToolUse で解消する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

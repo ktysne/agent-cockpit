@@ -227,11 +227,6 @@ h3.sub .count { font-weight: normal; }
 .options .pick:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .options .pick .body { min-width: 0; }
 .answer { display: grid; gap: 8px; }
-.checks { display: flex; gap: 8px; flex-wrap: wrap; }
-.check { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; min-height: 40px; }
-.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.check.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-text); }
-.check.ok input { accent-color: var(--ok); }
 textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
@@ -243,20 +238,9 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .common-question-confirm-actions button { min-height: 40px; padding: 7px 12px; cursor: pointer; }
 .common-question-confirm-actions .confirm { border: 1px solid var(--danger); border-radius: 8px; background: var(--surface); color: var(--danger); }
 .common-question-confirm-actions .back { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
-.instruction-composer, .instruction-card { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
-.instruction-composer h4, .instruction-card h4 { margin: 0; font-size: 13px; }
-.instruction-form { display: grid; gap: 8px; }
-.instruction-form label { display: grid; gap: 3px; font-size: 12px; }
-.instruction-form select, .instruction-form textarea { min-width: 0; width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
-.instruction-form textarea { min-height: 72px; resize: vertical; }
 .instruction-alternative textarea { width: 100%; }
 .instruction-preview { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 6px; background: var(--surface); }
 .instruction-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-.instruction-recovery h2 { margin: 0; font-size: 18px; }
-.instruction-recovery h3 { margin: 0; font-size: 14px; }
-.instruction-recovery textarea { min-height: 80px; resize: vertical; }
-.instruction-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.instruction-actions button, .instruction-composer button { min-height: 36px; padding: 5px 10px; }
 .instruction-status, .instruction-reason { margin: 0; color: var(--text-2); font-size: 12px; }
 .sent { font-size: 12px; color: var(--text-2); }
 .merge-result { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 6px 0; color: var(--text-2); font-size: 12px; }
@@ -683,10 +667,23 @@ const DATA = {
     { reason: 'claude_parent_unverified', source: 'hook', ppid: 31872, since: new Date(Date.now() - 6 * 60_000).toISOString(), lastAt: new Date(Date.now() - 30_000).toISOString() },
   ],
 };
+let mockInstructionTargetFixture = '';
 try {
   const params = new URLSearchParams(location.search);
+  mockInstructionTargetFixture = params.get('state') || '';
   for (const key of ['commonQuestions', 'instructions']) if (params.get(key) === 'off') DATA.integrations[key] = false;
 } catch {}
+
+function applyMockInstructionTargetFixture(session, fixture) {
+  if (session.id !== 'rec-studio-main' || fixture !== 'instruction-multiple-targets') return session;
+  const executionId = 'period-rec-studio-demo';
+  session.decisions = [];
+  session.instructionTargets = [
+    { launchRef: 'launch-rec-studio-main', executionId, origin: 'standalone', status: 'working', nativeTurnId: 'turn-rec-studio-main', identity: { nativeId: 'Claude メイン' } },
+    { launchRef: 'launch-rec-studio-agent', executionId, origin: 'delegated', status: 'working', nativeTurnId: 'turn-rec-studio-agent', identity: { nativeId: 'Codex 実装担当' } },
+  ];
+  return session;
+}
 
 for (const p of DATA.products) {
   const updatedAt = (minutesAgo) => new Date(Date.now() - Math.max(0, minutesAgo) * 60_000).toISOString();
@@ -696,6 +693,7 @@ for (const p of DATA.products) {
     tasks: p.tasks.map(task => ({ ...task, updatedMin: task.updatedMin ?? 5 })),
     tasksUpdatedMin: 5, decisions: p.decisions, lastUpdatedAt: updatedAt(p.lastUpdatedMin ?? 2),
   };
+  applyMockInstructionTargetFixture(mainSession, mockInstructionTargetFixture);
   // 親の pid がセッションファイルに載っているときだけ、そのセッションに失敗を付ける。照合が通ったら消す。
   if (p.id === 'agent-cockpit') mainSession.claudeLineageIssue = { reason: 'claude_session_mismatch', since: updatedAt(4), lastAt: updatedAt(1) };
   if (p.id === 'agent-cockpit') mainSession.commonQuestions = [
@@ -1056,8 +1054,17 @@ function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
   card?.querySelector('.answer-error')?.remove();
 }
 const picksOf = a => a.choice === 'pick' ? (a.picks || []) : [];
-const canSend = a => (a.choice === 'pick' ? picksOf(a).length > 0 : !!a.choice) || !!a.note.trim();
-const answerDirty = a => !a.sent || a.sent.choice !== a.choice || a.sent.note !== a.note || picksOf(a.sent).join() !== picksOf(a).join();
+const recommendedPicks = decision => decision.options.flatMap((option, index) => option.rec ? [index] : []);
+const answerForUi = (answer, decision) => answer.choice === 'ok'
+  ? { ...answer, choice: 'pick', picks: recommendedPicks(decision) }
+  : answer;
+const canSend = a => (a.choice === 'pick' && picksOf(a).length > 0) || !!a.note.trim();
+const answerDirty = (answer, decision) => {
+  if (!answer.sent) return true;
+  const current = answerForUi(answer, decision);
+  const sent = answerForUi(answer.sent, decision);
+  return sent.choice !== current.choice || sent.note !== current.note || picksOf(sent).join() !== picksOf(current).join();
+};
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions).filter(s => !ui.deletedSessionIds.includes(s.id));
 function isIdleHiddenSession(session, now = Date.now()) {
@@ -1199,6 +1206,17 @@ function updateCommonQuestionSubmit(card) {
     || !commonQuestionAnswersValid(question.questions, answers)
     || Boolean(submitted && sameCommonQuestionAnswers(answers, submitted));
 }
+function clearSelectedMockCommonQuestionOption(option) {
+  const card = option.closest('.common-question');
+  const question = commonQuestionsOf(allSessions().find(session => session.id === card?.dataset.sessionId) || { commonQuestions: [] })
+    .find(item => item.internalQuestionId === card?.dataset.questionId);
+  const answer = commonQuestionDrafts.get(question && commonQuestionDraftKey(question.internalQuestionId))
+    ?.find(item => item.questionId === option.dataset.questionId);
+  if (!question || !answer?.optionIds.includes(option.dataset.optionId)) return false;
+  option.checked = false;
+  updateCommonQuestionSubmit(card);
+  return true;
+}
 function sameCommonQuestionAnswers(left, right) {
   return left.length === right.length && left.every((answer, index) => answer.questionId === right[index].questionId
     && answer.freeText === right[index].freeText && answer.optionIds.length === right[index].optionIds.length
@@ -1248,30 +1266,30 @@ function commonQuestionCard(p, session, record) {
   const draft = commonQuestionDraft(question);
   const selectedLabels = commonQuestionLabels(question);
   const formAvailable = !question.cancelled && !(question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
-  const topics = question.questions.map(item => `<fieldset class="common-question-fieldset"><legend>${esc(item.text)}</legend>${item.options.length ? `<small class="common-question-help">${item.allowFreeText ? item.mode === 'multi' ? '複数選択するか、自由記入で回答してください。' : '1つ選択するか、自由記入で回答してください。' : item.mode === 'multi' ? '複数選択できます。' : '1つ選択してください。'}</small>` : ''}${item.options.map(option => {
+  const topics = question.questions.map(item => `<section class="decision-question" role="group" aria-label="${esc(item.text)}"><div class="decision-question-title">${esc(item.text)}</div>${item.options.length ? `<small class="meta">${item.allowFreeText ? item.mode === 'multi' ? '複数選択するか、自由記入で回答してください。' : '1つ選択するか、自由記入で回答してください。' : item.mode === 'multi' ? '複数選択できます。' : '1つ選択してください。'}</small>` : ''}${item.options.length ? '<ul class="options">' : ''}${item.options.map(option => {
     const answer = draft.find(entry => entry.questionId === item.id);
     const type = item.mode === 'multi' ? 'checkbox' : 'radio';
     const selected = answer.optionIds.includes(option.id);
-    return `<label class="common-question-option"><input type="${type}" name="${esc(question.internalQuestionId)}-${esc(item.id)}" data-common-option="true" data-question-id="${esc(item.id)}" data-option-id="${esc(option.id)}" ${selected ? 'checked' : ''}><span>${esc(option.label)}${option.description ? `<small>${esc(option.description)}</small>` : ''}</span>${option.id === item.recommendedOptionId ? '<small class="common-question-recommended">推奨</small>' : ''}</label>`;
-  }).join('')}${item.allowFreeText ? `<label class="common-question-free-label">自由記入<textarea rows="2" maxlength="2000" data-common-free-text="${esc(item.id)}" aria-label="${esc(item.text)}の自由記入">${esc(draft.find(entry => entry.questionId === item.id).freeText)}</textarea></label><small class="common-question-help">下書きはこのページを開いている間だけ保持します。</small>` : ''}</fieldset>`).join('');
+    return `<li class="${option.id === item.recommendedOptionId ? 'rec ' : ''}pickable"><label class="pick"><input type="${type}" name="${esc(question.internalQuestionId)}-${esc(item.id)}" data-common-option="true" data-question-id="${esc(item.id)}" data-option-id="${esc(option.id)}" ${selected ? 'checked' : ''}><span class="body">${option.id === item.recommendedOptionId ? '<small class="tag">推奨</small>' : ''}${esc(option.label)}${option.description ? `<small class="why">${esc(option.description)}</small>` : ''}</span></label></li>`;
+  }).join('')}${item.options.length ? '</ul>' : ''}${item.allowFreeText ? `<label class="decision-answer">自由記入<textarea rows="2" maxlength="2000" data-common-free-text="${esc(item.id)}" aria-label="${esc(item.text)}の自由記入">${esc(draft.find(entry => entry.questionId === item.id).freeText)}</textarea></label><small class="meta">下書きはこのページを開いている間だけ保持します。</small>` : ''}</section>`).join('');
   const canSubmit = commonQuestionAnswersValid(question.questions, draft);
   const submitted = commonQuestionSubmittedDrafts.get(key);
   const isRepeated = Boolean(submitted && sameCommonQuestionAnswers(draft, submitted));
   const deadline = absoluteTimeLabel(question.deadlineAt);
   const deadlineNote = !question.selectionSource && !question.cancelled
-    ? `<p class="common-question-note">${question.held ? '保留中です。' : ''}回答期限 ${esc(deadline)}。${question.held ? '保留を解除するまで自動選択しません。' : '離席中は期限後、すべての質問が単一選択で推奨案を持つ場合だけ仮選択します。'}</p>`
+    ? `<p class="ctx common-question-note">${question.held ? '保留中です。' : ''}回答期限 ${esc(deadline)}。</p>`
     : '';
-  const lateNote = question.lateAnswerCount > 0 ? `<p class="common-question-note">後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。</p>` : '';
+  const lateNote = question.lateAnswerCount > 0 ? `<p class="ctx common-question-note">後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。</p>` : '';
   const lateActions = (question.lateAnswerRefs || []).map(ref => {
     const mode = instructionTargetAvailability(session).mode;
     const sourceKey = `${question.internalQuestionId}:${ref.index}:${ref.digest}`;
     const exists = ui.instructionRecords.some(item => item.sourceKey === sourceKey);
     return mode ? `<button type="button" class="secondary" data-mock-late-instruction="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-late-index="${ref.index}" data-late-digest="${esc(ref.digest)}" ${exists ? 'disabled' : ''}>${exists ? '後続の指示を保存済み' : '保存済み回答から後続の指示を作る'}</button>` : '';
   }).join('');
-  const lateActionBlock = lateActions ? `<div class="common-question-actions">${lateActions}</div>` : '';
-  const selection = question.selectionSource ? `<p class="common-question-selection">${selectedLabels.length ? question.selectionSource === 'away-default' ? '離席時の推奨で仮選択: ' : '保存した選択: ' + selectedLabels.join('、') : '自由記入を含む回答を保存しました。'}${question.selectionSource === 'away-default' && selectedLabels.length ? selectedLabels.join('、') : ''}</p>` : '';
-  const actions = formAvailable ? `<div class="common-question-form">${topics}<small class="common-question-help">すべての質問に回答すると保存できます。</small><p class="common-question-error" role="alert">${esc(commonQuestionErrors.get(key) || '')}</p><p class="common-question-note">${esc(commonQuestionNotices.get(key) || '')}</p><div class="common-question-actions"><button type="button" class="primary" data-common-submit="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" ${commonQuestionInFlight.has(key) || !canSubmit || isRepeated ? 'disabled' : ''}>${question.selectionSource ? '後続の回答を保存' : '回答を保存'}</button>${!question.selectionSource ? `<button type="button" class="secondary" data-common-hold="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-held="${!question.held}" ${commonQuestionInFlight.has(key) ? 'disabled' : ''}>${question.held ? '保留を解除' : '質問を保留'}</button>` : ''}${commonQuestionCancelControl(question, session, key)}</div></div>` : '';
-  return `<article class="common-question" data-question-id="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}"><div class="common-question-head"><h4>${esc(question.questionId)}</h4>${sessionTag(p, session, true)}</div><p class="common-question-status">${esc(commonQuestionStatus(question))}</p>${selection}${deadlineNote}${question.externalResolution ? '<p class="common-question-note">元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。</p>' : ''}${lateNote}${lateActionBlock}${actions}</article>`;
+  const lateActionBlock = lateActions ? `<div class="answer-foot">${lateActions}</div>` : '';
+  const selection = question.selectionSource ? `<p class="decision-summary">${selectedLabels.length ? question.selectionSource === 'away-default' ? '離席時の推奨で仮選択: ' + selectedLabels.join('、') : '保存した選択: ' + selectedLabels.join('、') : '自由記入を含む回答を保存しました。'}</p>` : '';
+  const actions = formAvailable ? `<div class="answer">${topics}<small class="meta">すべての質問に回答すると保存できます。</small><p class="answer-error common-question-error" role="alert">${esc(commonQuestionErrors.get(key) || '')}</p><p class="ctx common-question-note">${esc(commonQuestionNotices.get(key) || '')}</p><div class="answer-foot"><button type="button" class="primary" data-common-submit="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" ${commonQuestionInFlight.has(key) || !canSubmit || isRepeated ? 'disabled' : ''}>${question.selectionSource ? '後続の回答を保存' : '回答を保存'}</button>${!question.selectionSource ? `<button type="button" class="secondary" data-common-hold="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-held="${!question.held}" ${commonQuestionInFlight.has(key) ? 'disabled' : ''}>${question.held ? '保留を解除' : '質問を保留'}</button>` : ''}${commonQuestionCancelControl(question, session, key)}</div></div>` : '';
+  return `<article class="decision common-question" data-question-id="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}"><div class="dhead"><span class="dtitle">${esc(question.questionId)}</span>${sessionTag(p, session, true)}</div><p class="ctx common-question-status">${esc(commonQuestionStatus(question))}</p>${selection}${deadlineNote}${question.externalResolution ? '<p class="ctx common-question-note">元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。</p>' : ''}${lateNote}${lateActionBlock}${actions}</article>`;
 }
 
 function isFinishedInstructionRecord(record) {
@@ -1321,10 +1339,60 @@ function saveMockInstructionPreviewRecovery(id) {
   return false;
 }
 
-function instructionTargetAvailability(session) {
+function instructionTargetsForSession(session) {
+  if (Array.isArray(session?.instructionTargets)) return session.instructionTargets;
+  const status = session?.status === 'busy' ? 'working'
+    : ['wait', 'interrupted'].includes(session?.status) ? 'stopped' : 'unverified';
+  return [{
+    launchRef: session?.launchRef || `${session?.id || ''}-launch`,
+    executionId: session?.executionId || session?.id,
+    origin: session?.origin === 'delegated' ? 'delegated' : 'standalone',
+    label: session?.title || session?.id || '実行先',
+    status,
+    nativeTurnId: status === 'working' ? session?.nativeTurnId || `${session.id}-turn` : null,
+    identity: { nativeId: session?.title || session?.id || '実行先' },
+    ...(Object.hasOwn(session || {}, 'nativeInstructionWaiting') ? { nativeWaiting: session.nativeInstructionWaiting } : {}),
+  }];
+}
+
+function instructionDraftTargetFor(session, draft, allowSingleFallback = false) {
+  const targets = instructionTargetsForSession(session);
+  const matches = targets.filter(target => target.launchRef === draft?.targetLaunchRef);
+  if (matches.length === 1) return matches[0];
+  return allowSingleFallback && targets.length === 1 && matches.length === 0 ? targets[0] : null;
+}
+
+function instructionTargetName(session, target) {
+  if (target?.label) return target.label;
+  const origin = target?.origin === 'standalone' ? '独立実行' : target?.origin === 'delegated' ? '委譲実行' : '確認対象';
+  return target?.identity?.nativeId ? `${target.identity.nativeId} · ${origin}` : target?.launchRef || session?.title || session?.id || '実行先';
+}
+
+function instructionTargetStatusText(target) {
+  return target?.status === 'working' ? '作業中'
+    : target?.status === 'stopped' ? '停止中'
+      : target?.status === 'waiting' ? '質問・許可待ち'
+        : '確認待ち';
+}
+
+function instructionTargetAvailability(session, target = null) {
   if (!DATA.integrations.instructions) return { mode: '', reason: '' };
-  if (Object.hasOwn(session, 'nativeInstructionWaiting')) {
-    const pending = session.nativeInstructionWaiting;
+  let scopedSession = session;
+  if (target) {
+    if (!['working', 'stopped', 'waiting'].includes(target.status)) {
+      return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
+    }
+    scopedSession = {
+      ...session,
+      status: target.status === 'working' || target.status === 'waiting' ? 'busy' : 'interrupted',
+      origin: target.origin,
+      executionId: target.executionId,
+      nativeTurnId: target.nativeTurnId,
+    };
+    if (target.status === 'waiting') scopedSession.nativeInstructionWaiting = target.nativeWaiting ?? [];
+  }
+  if (Object.hasOwn(scopedSession, 'nativeInstructionWaiting')) {
+    const pending = scopedSession.nativeInstructionWaiting;
     if (!Array.isArray(pending) || pending.length < 1 || pending.length > 2) {
       return { mode: '', reason: 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。' };
     }
@@ -1344,13 +1412,137 @@ function instructionTargetAvailability(session) {
     }
     return { mode: '', reason: `Codex の${labels.join('、')}待ちです。追加の指示は保留されています。入力内容は保持されます。` };
   }
-  const hasPendingWork = session.perms.length > 0
-    || session.decisions.some(isActiveDecision)
-    || commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question));
+  const hasPendingWork = (scopedSession.perms || []).length > 0
+    || (scopedSession.decisions || []).some(isActiveDecision)
+    || commonQuestionsOf(scopedSession).some(question => !isFinishedCommonQuestion(question));
   if (hasPendingWork) return { mode: '', reason: '質問・許可・判断待ちがあるため、指示を保留中です。' };
-  if (session.status === 'busy') return { mode: 'steer', reason: '' };
-  if (session.status === 'wait' || session.status === 'interrupted') return { mode: 'start', reason: '' };
+  if (scopedSession.status === 'busy') {
+    if (target && target.status === 'working' && !target.nativeTurnId) return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
+    return { mode: 'steer', reason: '' };
+  }
+  if ((scopedSession.status === 'wait' || scopedSession.status === 'interrupted') && (!target || target.origin === 'standalone')) return { mode: 'start', reason: '' };
   return { mode: '', reason: '実行状態を確認できないため、指示を保存できません。' };
+}
+
+function instructionDraftBinding(session, mode, target = null) {
+  const currentTarget = target || instructionTargetsForSession(session)[0] || null;
+  return {
+    launchRef: currentTarget?.launchRef || null,
+    executionId: currentTarget?.executionId || session.executionId || session.id,
+    origin: currentTarget?.origin === 'delegated' ? 'delegated' : 'standalone',
+    status: currentTarget?.status || session.status,
+    nativeTurnId: currentTarget?.nativeTurnId || null,
+    nativeWaiting: Object.hasOwn(currentTarget || {}, 'nativeWaiting') ? JSON.stringify(currentTarget.nativeWaiting)
+      : Object.hasOwn(session, 'nativeInstructionWaiting') ? JSON.stringify(session.nativeInstructionWaiting) : null,
+    mode: mode || '',
+  };
+}
+
+function sameInstructionDraftBinding(left, right) {
+  return Boolean(left && right && left.launchRef === right.launchRef && left.executionId === right.executionId && left.origin === right.origin &&
+    left.status === right.status && left.nativeTurnId === right.nativeTurnId &&
+    left.nativeWaiting === right.nativeWaiting && left.mode === right.mode);
+}
+
+function instructionDraftMatchesTarget(session, draft, target) {
+  const targets = instructionTargetsForSession(session);
+  const uniqueTarget = targets.filter(item => item.launchRef === target?.launchRef).length === 1;
+  const fixedSingleTarget = !draft?.targetLaunchRef && targets.length === 1 && targets[0] === target;
+  const availability = instructionTargetAvailability(session, target);
+  return Boolean(target && (uniqueTarget || fixedSingleTarget) &&
+    (!draft?.targetLaunchRef || draft.targetLaunchRef === target.launchRef) && draft.mode === availability.mode &&
+    sameInstructionDraftBinding(draft.binding, instructionDraftBinding(session, availability.mode, target)));
+}
+
+function instructionDraftCanSave(session, draft) {
+  const targets = instructionTargetsForSession(session);
+  const target = targets.length === 1 && !draft?.targetLaunchRef ? targets[0] : instructionDraftTargetFor(session, draft);
+  const availability = instructionTargetAvailability(session, target);
+  return draft?.needsRebind !== true && draft?.targetSessionId === session.id && target && availability.mode &&
+    instructionDraftMatchesTarget(session, draft, target) &&
+    typeof draft.text === 'string' && Boolean(draft.text.trim());
+}
+
+function instructionRecordTargetFor(session, record) {
+  const targets = instructionTargetsForSession(session);
+  if (!record?.launchRef && targets.length === 1) return targets[0];
+  const matches = targets.filter(target => target.launchRef === record?.launchRef);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function canSendSavedInstruction(session, record) {
+  const target = instructionRecordTargetFor(session, record);
+  const availability = instructionTargetAvailability(session, target);
+  if (!target) return false;
+  const executionId = target.executionId || session.executionId || session.id;
+  const modeMatches = record.mode === 'steer'
+    ? availability.mode === 'steer'
+    : ['start', 'next-user-input'].includes(record.mode) && availability.mode === 'start' && record.origin === 'standalone' && target.origin === 'standalone';
+  return record.state === 'available' && modeMatches && (record.executionId === undefined || record.executionId === executionId) &&
+    !Object.hasOwn(ui.instructionPreviewRecoveries, record.deliveryAttemptId) && typeof instructionPreviewText(record) === 'string';
+}
+
+function selectInstructionDraftTarget(sessionId, launchRef) {
+  const session = allSessions().find(item => item.id === sessionId);
+  const draft = ui.instructionDrafts[sessionId] || { targetSessionId: sessionId, text: '' };
+  const matches = instructionTargetsForSession(session).filter(target => target.launchRef === launchRef);
+  if (!session || matches.length !== 1) return false;
+  const target = matches[0];
+  const availability = instructionTargetAvailability(session, target);
+  draft.targetSessionId = session.id;
+  draft.targetLaunchRef = launchRef;
+  if (String(draft.text || '').trim()) {
+    if (!instructionDraftMatchesTarget(session, draft, target)) draft.needsRebind = true;
+  } else {
+    draft.mode = availability.mode;
+    draft.binding = instructionDraftBinding(session, availability.mode, target);
+    draft.needsRebind = false;
+  }
+  ui.instructionDrafts[sessionId] = draft;
+  delete ui.instructionNotices[sessionId];
+  return true;
+}
+
+function rebindInstructionDraft(sessionId) {
+  const session = allSessions().find(item => item.id === sessionId);
+  const draft = ui.instructionDrafts[sessionId];
+  if (!session || !draft || !String(draft.text || '').trim()) return false;
+  const target = instructionDraftTargetFor(session, draft, true);
+  const mode = instructionTargetAvailability(session, target).mode;
+  if (!target || !mode) return false;
+  draft.targetSessionId = session.id;
+  draft.targetLaunchRef = target.launchRef;
+  draft.mode = mode;
+  draft.binding = instructionDraftBinding(session, mode, target);
+  draft.needsRebind = false;
+  return true;
+}
+
+function saveMockInstructionDraft(sessionId) {
+  const session = allSessions().find(item => item.id === sessionId);
+  const product = DATA.products.find(item => item.sessions.some(candidate => candidate.id === sessionId));
+  const draft = ui.instructionDrafts[sessionId] || {};
+  const target = session && instructionDraftTargetFor(session, draft, true);
+  if (!session || !product || !target || !instructionDraftCanSave(session, draft)) return false;
+  const deliveryAttemptId = `mock-instruction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  ui.instructionRecords.push({
+    deliveryAttemptId,
+    logicalMessageId: deliveryAttemptId,
+    productId: product.id,
+    sessionId,
+    launchRef: target.launchRef,
+    executionId: target.executionId || session.executionId || session.id,
+    targetName: instructionTargetName(session, target),
+    origin: target.origin,
+    mode: draft.mode,
+    revision: 0,
+    text: String(draft.text).trim(),
+    createdAt: Date.now(),
+    state: 'available',
+  });
+  ui.instructionDrafts[sessionId] = { ...draft, text: '' };
+  ui.instructionNotices[sessionId] = '指示を保存しました。送信前に内容を確認してください。';
+  return true;
 }
 
 function instructionModeText(mode) {
@@ -1381,12 +1573,13 @@ function instructionCard(session, record) {
     ? '<section class="instruction-preview"><strong>送信内容</strong><p class="instruction-reason">このタブで内容を確認できないため送信できません。作成したタブで開いてください。</p></section>'
     : !terminal && typeof previewText === 'string'
       ? `<section class="instruction-preview"><strong>送信内容</strong><pre>${esc(previewText)}</pre></section>` : '';
+  const canSend = canSendSavedInstruction(session, record);
   const actions = record.state === 'available'
     ? previewPending
-      ? `<div class="instruction-actions"><button type="button" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" disabled>内容を確認できないため送信できません</button><button type="button" class="ghost" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button></div>`
-      : `<div class="instruction-actions"><button type="button" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}">${record.mode === 'start' || record.mode === 'next-user-input' ? '同じ実行で次の入力を開始' : 'この実行へ送る'}</button><button type="button" class="ghost" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button>${record.origin === 'standalone' && instructionTargetAvailability(session).mode === 'start' ? `<button type="button" class="ghost" data-instruction-alternative-open="${esc(record.deliveryAttemptId)}">次の入力へ差し替える</button>` : ''}</div>` : '';
+      ? `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" disabled>内容を確認できないため送信できません</button><button type="button" class="secondary" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button></div>`
+      : `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" ${canSend ? '' : 'disabled'}>${record.mode === 'start' || record.mode === 'next-user-input' ? '同じ実行で次の入力を開始' : 'この実行へ送る'}</button><button type="button" class="secondary" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button>${record.origin === 'standalone' && instructionTargetAvailability(session).mode === 'start' ? `<button type="button" class="secondary" data-instruction-alternative-open="${esc(record.deliveryAttemptId)}">次の入力へ差し替える</button>` : ''}</div>` : '';
   const reason = record.state === 'unknown' ? '<p class="instruction-reason">モックでは送信結果を確認できません。再送は保留しています。</p>' : '';
-  return `<article class="instruction-card" data-instruction-id="${esc(record.deliveryAttemptId)}"><h4 tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(session.title)} · ${esc(absoluteTimeLabel(record.createdAt))}</h4><p class="instruction-status">${esc(instructionStateText(record))}</p>${reason}${preview}${actions}${alternative}</article>`;
+  return `<article class="decision" data-instruction-id="${esc(record.deliveryAttemptId)}"><div class="dhead"><span class="dtitle" tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(record.targetName || session.title)} · ${esc(absoluteTimeLabel(record.createdAt))}</span></div><p class="ctx instruction-status">${esc(instructionStateText(record))}</p>${reason}${preview}${actions}${alternative}</article>`;
 }
 
 function applyMockInstructionAlternative(oldId, request) {
@@ -1468,11 +1661,11 @@ function instructionAlternativeRecoveryPanel() {
         : !requestMatches ? '保存要求の対象が一致しません。要求内容を確認してください。'
           : '同じ内容の保存結果を確認できます。');
     const confirmation = saved.discardConfirm === true
-      ? `<small class="instruction-reason">この要求内容だけをモックから破棄します。指示履歴は削除しません。</small><button type="button" class="ghost" data-instruction-alternative-discard="${esc(oldId)}">要求内容を破棄する</button><button type="button" class="ghost" data-instruction-alternative-discard-dismiss="${esc(oldId)}">戻る</button>`
+      ? `<small class="ctx instruction-reason">この要求内容だけをモックから破棄します。指示履歴は削除しません。</small><button type="button" class="secondary" data-instruction-alternative-discard="${esc(oldId)}">要求内容を破棄する</button><button type="button" class="secondary" data-instruction-alternative-discard-dismiss="${esc(oldId)}">戻る</button>`
       : `<button type="button" class="ghost" data-instruction-alternative-discard-ask="${esc(oldId)}">この要求内容を破棄</button>`;
-    return `<article class="instruction-card"><h3 data-instruction-alternative-title="${esc(oldId)}" tabindex="-1">${esc(session?.title || '実行先を確認できません')} · 次の入力へ差し替え</h3><section class="instruction-preview"><strong>保存要求に固定した内容</strong><textarea rows="4" readonly data-instruction-recovery-text="${esc(oldId)}" aria-label="保存要求に固定した内容">${esc(request.text)}</textarea></section><p class="instruction-reason" role="status">${esc(reason)}</p>${saved.error ? `<p class="instruction-reason" role="alert">${esc(saved.error)}</p>` : ''}<div class="instruction-actions"><button type="button" data-instruction-alternative-retry="${esc(oldId)}" ${canRetry ? '' : 'disabled'}>同じ内容で保存結果を確認する</button>${confirmation}</div></article>`;
+    return `<article class="decision" data-instruction-alternative="${esc(oldId)}"><div class="dhead"><span class="dtitle" role="heading" aria-level="3" data-instruction-alternative-title="${esc(oldId)}" tabindex="-1">${esc(session?.title || '実行先を確認できません')} · 次の入力へ差し替え</span></div><section class="decision-summary instruction-preview"><strong>保存要求に固定した内容</strong><textarea rows="4" readonly data-instruction-recovery-text="${esc(oldId)}" aria-label="保存要求に固定した内容">${esc(request.text)}</textarea></section><p class="ctx instruction-reason" role="status">${esc(reason)}</p>${saved.error ? `<p class="ctx instruction-reason" role="alert">${esc(saved.error)}</p>` : ''}<div class="answer-foot"><button type="button" class="primary" data-instruction-alternative-retry="${esc(oldId)}" ${canRetry ? '' : 'disabled'}>同じ内容で保存結果を確認する</button>${confirmation}</div></article>`;
   }).join('');
-  return `<section class="instruction-composer instruction-recovery" role="region" aria-label="保存結果を確認する指示"><h2>差し替えの保存結果を確認</h2><p class="instruction-reason">保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。</p>${rows}</section>`;
+  return `<section class="instruction-recovery" role="region" aria-label="保存結果を確認する指示"><div class="dhead"><span class="dtitle" role="heading" aria-level="2" data-instruction-recovery-heading tabindex="-1">差し替えの保存結果を確認</span></div><p class="ctx instruction-reason">保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。</p>${rows}</section>`;
 }
 
 function instructionPreviewRecoveryPanel() {
@@ -1483,29 +1676,64 @@ function instructionPreviewRecoveryPanel() {
     if (!record || typeof text !== 'string') return '';
     const session = allSessions().find(item => item.id === record.sessionId);
     const error = instructionPreviewRecoveryErrors.get(id);
-    return `<article class="instruction-card"><h3 data-mock-instruction-preview-title="${esc(id)}" tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(session?.title || '実行先を確認できません')} · ${esc(absoluteTimeLabel(record.createdAt))}</h3><section class="instruction-preview"><strong>保存済みの指示本文</strong><textarea rows="4" readonly data-mock-instruction-preview-text="${esc(id)}" aria-label="保存済みの指示本文">${esc(text)}</textarea></section>${error ? `<p class="instruction-reason" role="alert">${esc(error)}</p>` : ''}<button type="button" data-instruction-preview-recovery="${esc(id)}">このタブに本文を保存する</button></article>`;
+    return `<article class="decision" data-instruction-preview-recovery-card="${esc(id)}"><div class="dhead"><span class="dtitle" role="heading" aria-level="3" data-mock-instruction-preview-title="${esc(id)}" tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(session?.title || '実行先を確認できません')} · ${esc(absoluteTimeLabel(record.createdAt))}</span></div><section class="decision-summary instruction-preview"><strong>保存済みの指示本文</strong><textarea rows="4" readonly data-mock-instruction-preview-text="${esc(id)}" aria-label="保存済みの指示本文">${esc(text)}</textarea></section>${error ? `<p class="ctx instruction-reason" role="alert">${esc(error)}</p>` : ''}<div class="answer-foot"><button type="button" class="primary" data-instruction-preview-recovery="${esc(id)}">このタブに本文を保存する</button></div></article>`;
   }).filter(Boolean).join('');
-  return rows ? `<section class="instruction-composer instruction-recovery" role="region" aria-label="指示本文の保存を確認"><h2 data-mock-instruction-preview-heading tabindex="-1">このタブへの本文保存を確認</h2><p class="instruction-reason">サーバーへの保存は確認済みです。本文をこのタブに保存するまで、タブを閉じると内容を復元できません。</p>${rows}</section>` : '';
+  return rows ? `<section class="instruction-recovery" role="region" aria-label="指示本文の保存を確認"><div class="dhead"><span class="dtitle" role="heading" aria-level="2" data-mock-instruction-preview-heading tabindex="-1">このタブへの本文保存を確認</span></div><p class="ctx instruction-reason">サーバーへの保存は確認済みです。本文をこのタブに保存するまで、タブを閉じると内容を復元できません。</p>${rows}</section>` : '';
 }
 
 function instructionComposer(p, session) {
   if (!DATA.integrations.instructions) return '';
-  const draft = ui.instructionDrafts[session.id] || { targetSessionId: '', mode: '', text: '' };
-  const availability = instructionTargetAvailability(session);
-  const nativeWaiting = Object.hasOwn(session, 'nativeInstructionWaiting');
-  const targetSelected = draft.targetSessionId === session.id;
-  const modeSelected = targetSelected && draft.mode === availability.mode && Boolean(availability.mode);
+  const draft = ui.instructionDrafts[session.id] || { targetSessionId: session.id, mode: '', text: '' };
+  const targets = instructionTargetsForSession(session);
   const records = instructionRecordsForSession(session)
     .filter(record => !ui.hideFinished || !isFinishedInstructionRecord(record))
     .map(record => instructionCard(session, record)).join('');
-  const canCreate = Boolean(availability.mode);
-  if (!['busy', 'wait', 'interrupted'].includes(session.status) && !records) return '';
-  const modeOption = canCreate
-    ? `<option value="${availability.mode}" ${modeSelected ? 'selected' : ''}>${esc(instructionModeText(availability.mode))}</option>` : '';
+  if (!['busy', 'wait', 'interrupted'].includes(session.status) && !records && !draft.text) return '';
+  const emptyDraft = !String(draft.text || '').trim();
+  let target = targets.length === 1 ? targets[0] : instructionDraftTargetFor(session, draft);
+  if (emptyDraft) {
+    draft.needsRebind = false;
+    if (target) {
+      const availability = instructionTargetAvailability(session, target);
+      draft.targetSessionId = session.id;
+      draft.targetLaunchRef = target.launchRef;
+      draft.mode = availability.mode;
+      draft.binding = instructionDraftBinding(session, availability.mode, target);
+    }
+    ui.instructionDrafts[session.id] = draft;
+  }
+  const availability = target ? instructionTargetAvailability(session, target) : { mode: '', reason: '実行先を確認できないため、指示を保存できません。' };
+  const currentBindingMatches = Boolean(target && draft.targetSessionId === session.id && instructionDraftMatchesTarget(session, draft, target));
+  if (!emptyDraft && !currentBindingMatches) draft.needsRebind = true;
+  const bindingMatches = currentBindingMatches && draft.needsRebind !== true;
+  const canRebind = Boolean(!emptyDraft && !bindingMatches && availability.mode && target);
   const notice = ui.instructionNotices[session.id] || '';
   const text = String(draft.text || '');
-  const form = `<form class="instruction-form" data-instruction-session="${esc(session.id)}"><label>対象の実行<select data-instruction-target="${esc(session.id)}"><option value="" ${targetSelected ? '' : 'selected'}>実行を選択してください</option><option value="${esc(session.id)}" ${targetSelected ? 'selected' : ''}>${esc(session.title)}</option></select></label><label>指示の種類<select data-instruction-mode="${esc(session.id)}" ${targetSelected && canCreate ? '' : 'disabled'}><option value="" ${modeSelected ? '' : 'selected'}>指示の種類を選択してください</option>${modeOption}</select></label><label>指示の内容<textarea rows="3" maxlength="65536" data-instruction-draft="${esc(session.id)}" ${targetSelected && (canCreate || nativeWaiting) ? '' : 'disabled'}>${esc(text)}</textarea></label><small class="instruction-reason">${esc(availability.reason || '下書きはこのモックに保存されます。保存後、送信前に内容を確認できます。')}</small><button type="button" class="primary" data-instruction-save="${esc(session.id)}" ${targetSelected && modeSelected && text.trim() ? '' : 'disabled'}>指示を保存する</button>${notice ? `<p class="instruction-status" role="status">${esc(notice)}</p>` : ''}</form>`;
-  return `<section class="instruction-composer" role="region" aria-label="指示の保存と送信"><h4>指示を保存して届ける</h4>${form}${records}</section>`;
+  const mode = availability.mode ? instructionModeText(availability.mode) : '送信方法を確認できません';
+  const targetText = target
+    ? `${esc(instructionTargetName(session, target))} · ${esc(instructionTargetStatusText(target))}`
+    : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
+      : targets.length ? '選択した実行先を一意に確認できません' : '実行先を確認できません';
+  const bindingNotice = draft.text && !bindingMatches
+    ? `<p class="ctx instruction-reason">${canRebind ? `この下書きは実行状態の変化を確認しました。現在の宛先は ${targetText}、送信方法は ${esc(instructionModeText(availability.mode))} です。` : 'この下書きの宛先または実行状態が変わりました。本文を保持し、対象を確認できるまで保存を保留しています。'}</p>` : '';
+  const rebind = canRebind
+    ? `<div class="answer-foot"><button type="button" class="secondary" data-instruction-rebind="${esc(session.id)}">現在の実行状態で下書きを続ける</button></div>` : '';
+  const targetChoices = targets.length > 1
+    ? `<section class="decision-question instruction-target-choices" role="group" aria-label="対象の実行"><div class="decision-question-title">対象の実行</div><ul class="options">${targets.map(candidate => {
+      const candidateAvailability = instructionTargetAvailability(session, candidate);
+      const candidateMode = candidateAvailability.mode ? instructionModeText(candidateAvailability.mode) : '現在は送信できません';
+      const checked = targets.filter(item => item.launchRef === candidate.launchRef).length === 1 && draft.targetLaunchRef === candidate.launchRef;
+      const summary = `${instructionTargetName(session, candidate)} · ${instructionTargetStatusText(candidate)} · ${candidateMode}`;
+      const waiting = candidate.status === 'waiting' ? `<small class="why">${esc(candidateAvailability.reason || 'Codex の質問または許可を待っています。追加の指示は保留されています。')}</small>`
+        : candidate.status === 'unverified' ? '<small class="why">実行状態を確認できません。</small>' : '';
+      return `<li class="pickable"><label class="pick"><input type="radio" name="instruction-target-${esc(session.id)}" value="${esc(candidate.launchRef)}" data-instruction-target-select="${esc(session.id)}" data-instruction-target-launch-ref="${esc(candidate.launchRef)}" ${checked ? 'checked' : ''}><span class="body">${esc(summary)}</span></label>${waiting}</li>`;
+    }).join('')}</ul></section>` : '';
+  const targetReason = !target && targets.length > 1
+    ? '対象の実行を選ぶまで、指示の保存を保留しています。下書きは保持されます。'
+    : availability.reason;
+  const form = `<form class="answer" data-instruction-create-form="${esc(session.id)}">${targetChoices}${targetReason ? `<p class="ctx instruction-reason">${esc(targetReason)}</p>` : ''}${bindingNotice}${rebind}<label>追加指示の内容<textarea rows="3" maxlength="65536" data-instruction-draft="${esc(session.id)}">${esc(text)}</textarea></label><div class="answer-foot"><button type="button" class="primary" data-instruction-save="${esc(session.id)}" ${instructionDraftCanSave(session, draft) ? '' : 'disabled'}>指示を保存する</button><span class="sent" role="status" data-instruction-draft-status>${esc(notice || '下書き（未送信）')}</span></div></form>`;
+  const composer = `<article class="decision" data-instruction-composer><div class="dhead"><span class="dtitle">追加指示</span><span class="meta">${esc(mode)}</span></div><p class="ctx instruction-target">現在の宛先: ${targetText} · 送信方法: ${esc(mode)}</p>${form}</article>`;
+  return `<section role="region" aria-label="指示の保存と送信">${composer}${records}</section>`;
 }
 
 function saveLateAnswerAsInstruction(session, question, index, digest) {
@@ -1963,6 +2191,7 @@ function newsBox(p, withTag) {
 
 function decisionCard(p, session, d, withTag) {
   const a = answerOf(d.id);
+  const draft = answerForUi(a, d);
   const state = effectiveDecisionState(d);
   const stateClass = { waiting: 'blocking', provisional: 'provisional', resolved: 'state-ok', withdrawn: 'withdrawn' }[state];
   const stateLabel = { waiting: '止めて待っている', provisional: '仮に推奨案で進行中', resolved: '解決済み', withdrawn: '取り下げ' }[state];
@@ -1973,15 +2202,13 @@ function decisionCard(p, session, d, withTag) {
   // ダイアログを出している質問は外から答えられないので、回答欄の代わりに案内を出す。
   // awaitingMin は、離席中に出た質問でフックが回答を待っているときの、推奨に進むまでの残り分。
   const viaDialog = state === 'waiting' && !Number.isFinite(d.awaitingMin);
-  const recommended = d.options.find(o => o.rec);
-  const picked = picksOf(a).map(i => d.options[i].t);
-  const answerMeta = picked.length ? `送る答え: ${esc(picked.join('、'))}`
-    : recommended ? `OK で送る答え: ${esc(recommended.t)}` : '';
+  const picked = picksOf(draft).map(i => d.options[i].t);
+  const answerMeta = picked.length ? `送る答え: ${esc(picked.join('、'))}` : '';
   const sentKind = s => s.choice === 'ok' ? '推奨案で OK' : s.choice === 'pick' ? `「${picksOf(s).map(i => d.options[i].t).join('」「')}」を選択` : '指示のみ';
   const sentLine = a.sent
     ? `<span class="sent answer-status">${esc(absoluteTimeLabel(a.sent.at, Date.now(), a.sent.at))} に送信済み: ${sentKind(a.sent)}${a.sent.note ? ' (指示あり)' : ''}${a.sent.deliveredAt ? `、${esc(absoluteTimeLabel(a.sent.deliveredAt, Date.now(), a.sent.deliveredAt))} に渡した` : ''}</span>`
     : state === 'waiting' || state === 'provisional' ? '<span class="sent">未送信</span>' : '';
-  const dirty = answerDirty(a);
+  const dirty = answerDirty(a, d);
   const answerError = answerErrors.get(answerDraftKey(session.id, d.id)) || '';
   const statusLine = a.sent && dirty ? '<span class="sent answer-status">変更は未送信</span>' : sentLine;
   const long = state === 'waiting' && !a.sent && isLongWait(d.waitMin);
@@ -2000,17 +2227,14 @@ function decisionCard(p, session, d, withTag) {
       const body = `${o.rec ? '<span class="tag">推奨</span>' : ''}${esc(o.t)}<span class="why">${esc(o.why)}</span>`;
       // 答えられるあいだは、選択肢そのものを押して答えに選べる。複数選択の質問だけ複数を選べる。
       return active
-        ? `<li class="pickable ${o.rec ? 'rec' : ''}"><label class="pick"><input type="${d.multi ? 'checkbox' : 'radio'}" name="pick-${d.id}" data-pick="${i}" ${picksOf(a).includes(i) ? 'checked' : ''}><span class="body">${body}</span></label></li>`
+        ? `<li class="pickable ${o.rec ? 'rec' : ''}"><label class="pick"><input type="${d.multi ? 'checkbox' : 'radio'}" name="pick-${d.id}" data-pick="${i}" ${picksOf(draft).includes(i) ? 'checked' : ''}><span class="body">${body}</span></label></li>`
         : `<li class="${o.rec ? 'rec' : ''}">${body}</li>`;
     }).join('')}</ul>
     ${active ? `<div class="answer">
-      <div class="checks">
-        <label class="check ok"><input type="checkbox" data-choice="ok" ${a.choice === 'ok' ? 'checked' : ''} ${recommended ? '' : 'disabled'}>推奨案で OK</label>
-      </div>
       ${answerMeta ? `<div class="meta">${answerMeta}</div>` : ''}
       <textarea data-note placeholder="指示があれば書く (例: 2 番目の案で。理由は…)">${esc(a.note)}</textarea>
       <div class="answer-foot">
-        <button type="button" class="primary" data-send ${!canSend(a) || !dirty ? 'disabled' : ''}>回答を送る</button>
+        <button type="button" class="primary" data-send ${!canSend(draft) || !dirty ? 'disabled' : ''}>回答を送る</button>
         ${statusLine}
       </div>
       ${answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
@@ -2769,6 +2993,7 @@ function render() {
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
     : focusAttribute ? { attribute: focusAttribute, value: active.getAttribute(focusAttribute) }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.reviewKey, action: active.dataset.reviewSkip }
+       : active?.dataset?.instructionTargetSelect ? { kind: 'instruction-target-select', sessionId: active.dataset.instructionTargetSelect, launchRef: active.dataset.instructionTargetLaunchRef }
        : active?.dataset?.instructionPreviewRecovery ? { kind: 'mock-instruction-preview-recovery', id: active.dataset.instructionPreviewRecovery }
        : active?.dataset?.instructionAlternativeRetry ? { kind: 'instruction-alt-retry', id: active.dataset.instructionAlternativeRetry }
        : active?.dataset?.instructionAlternativeDiscardAsk ? { kind: 'instruction-alt-discard-ask', id: active.dataset.instructionAlternativeDiscardAsk }
@@ -2794,6 +3019,10 @@ function render() {
   if (previewRecovery) root.insertAdjacentHTML('afterbegin', previewRecovery);
   if (focusData?.kind?.startsWith('instruction-alt-')) {
     restoreInstructionAlternativeFocus(root, focusData);
+  } else if (focusData?.kind === 'instruction-target-select') {
+    [...root.querySelectorAll('[data-instruction-target-select]')]
+      .find(input => input.dataset.instructionTargetSelect === focusData.sessionId && input.dataset.instructionTargetLaunchRef === focusData.launchRef)
+      ?.focus({ preventScroll: true });
   } else if (focusData?.kind === 'mock-instruction-preview-recovery') {
     const id = CSS.escape(focusData.id);
     const recoveryButton = root.querySelector(`[data-instruction-preview-recovery="${id}"]`);
@@ -2860,29 +3089,18 @@ document.addEventListener('click', e => {
     return;
   }
 
+  if (t.dataset.instructionRebind) {
+    if (rebindInstructionDraft(t.dataset.instructionRebind)) {
+      ui.instructionNotices[t.dataset.instructionRebind] = '現在の宛先と送信方法で下書きを再開しました。保存後に内容を確認してください。';
+      save(); render();
+    }
+    return;
+  }
+
   if (t.dataset.instructionSave) {
-    const sessionId = t.dataset.instructionSave;
-    const session = allSessions().find(item => item.id === sessionId);
-    const product = DATA.products.find(item => item.sessions.some(candidate => candidate.id === sessionId));
-    const draft = ui.instructionDrafts[sessionId] || {};
-    const availability = session ? instructionTargetAvailability(session) : { mode: '' };
-    if (!session || !product || draft.targetSessionId !== sessionId || !availability.mode || draft.mode !== availability.mode || !String(draft.text || '').trim()) return;
-    const deliveryAttemptId = `mock-instruction-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    ui.instructionRecords.push({
-      deliveryAttemptId,
-      logicalMessageId: deliveryAttemptId,
-      productId: product.id,
-      sessionId,
-      origin: session.origin === 'delegated' ? 'delegated' : 'standalone',
-      mode: draft.mode,
-      revision: 0,
-      text: String(draft.text).trim(),
-      createdAt: Date.now(),
-      state: 'available',
-    });
-    ui.instructionDrafts[sessionId] = { ...draft, text: '' };
-    ui.instructionNotices[sessionId] = '指示を保存しました。送信前に内容を確認してください。';
-    save(); render();
+    if (saveMockInstructionDraft(t.dataset.instructionSave)) {
+      save(); render();
+    }
     return;
   }
   if (t.dataset.instructionAction) {
@@ -2890,13 +3108,8 @@ document.addEventListener('click', e => {
     const session = record && allSessions().find(item => item.id === record.sessionId);
     if (!record || !session || record.state !== 'available') return;
     if (t.dataset.instructionAction === 'send') {
-      const availability = instructionTargetAvailability(session);
-      const canSend = record.mode === 'steer'
-        ? availability.mode === 'steer'
-        : record.mode === 'start' || record.mode === 'next-user-input'
-          ? availability.mode === 'start' && record.origin === 'standalone'
-          : false;
-      if (!canSend) {
+      if (!canSendSavedInstruction(session, record)) {
+        const availability = instructionTargetAvailability(session);
         ui.instructionNotices[session.id] = availability.reason || '現在の実行状態では送信できません。';
       } else {
         record.state = 'unknown';
@@ -3185,7 +3398,9 @@ document.addEventListener('click', e => {
     const card = t.closest('.decision');
     const id = card.dataset.id;
     const key = answerDraftKey(card.dataset.sessionId, id);
-    const a = answerOf(id);
+    const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === id);
+    if (!decision) return;
+    const a = answerForUi(answerOf(id), decision);
     const now = new Date();
     const at = absoluteTimeLabel(now);
     // 渡した時刻は常駐サーバーがフックへ渡したときに付く。モックでは送ってすぐ渡したものとして出す。
@@ -3196,21 +3411,56 @@ document.addEventListener('click', e => {
   save(); render();
 });
 
-document.addEventListener('change', e => {
-  const instructionTarget = e.target.closest('select[data-instruction-target]');
-  if (instructionTarget) {
-    const sessionId = instructionTarget.dataset.instructionTarget;
-    const draft = ui.instructionDrafts[sessionId] || { text: '' };
-    ui.instructionDrafts[sessionId] = { ...draft, targetSessionId: instructionTarget.value, mode: '' };
-    save(); render();
+function clearSelectedMockPick(pick) {
+  const card = pick.closest('.decision');
+  const id = card.dataset.id;
+  const key = answerDraftKey(card.dataset.sessionId, id);
+  const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === id);
+  if (!decision) return false;
+  const i = Number(pick.dataset.pick);
+  const a = answerForUi(answerOf(id), decision);
+  const previous = { ...a, picks: [...picksOf(a)] };
+  if (!picksOf(a).includes(i)) return false;
+  a.picks = picksOf(a).filter(x => x !== i);
+  a.choice = a.picks.length ? 'pick' : null;
+  pick.checked = false;
+  ui.answers[id] = a;
+  clearAnswerErrorWhenDraftChanges(key, previous, a, card);
+  save(); render();
+  return true;
+}
+
+document.addEventListener('click', e => {
+  const commonOption = e.target.closest('[data-common-option]');
+  if (commonOption?.type === 'radio' && clearSelectedMockCommonQuestionOption(commonOption)) {
     return;
   }
-  const instructionMode = e.target.closest('select[data-instruction-mode]');
-  if (instructionMode) {
-    const sessionId = instructionMode.dataset.instructionMode;
-    const draft = ui.instructionDrafts[sessionId] || { text: '' };
-    ui.instructionDrafts[sessionId] = { ...draft, mode: instructionMode.value };
-    save(); render();
+  const pick = e.target.closest('input[data-pick]');
+  if (pick?.type === 'radio') clearSelectedMockPick(pick);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== ' ' && e.code !== 'Space') return;
+  const commonOption = e.target.closest('[data-common-option]');
+  if (commonOption?.type === 'radio' && clearSelectedMockCommonQuestionOption(commonOption)) {
+    e.preventDefault();
+    return;
+  }
+  const pick = e.target.closest('input[data-pick]');
+  if (pick?.type === 'radio' && clearSelectedMockPick(pick)) e.preventDefault();
+});
+
+document.addEventListener('change', e => {
+  const commonOption = e.target.closest('[data-common-option]');
+  if (commonOption) {
+    updateCommonQuestionSubmit(commonOption.closest('.common-question'));
+    return;
+  }
+  const instructionTarget = e.target.closest('input[data-instruction-target-select]');
+  if (instructionTarget) {
+    if (selectInstructionDraftTarget(instructionTarget.dataset.instructionTargetSelect, instructionTarget.dataset.instructionTargetLaunchRef)) {
+      save(); render();
+    }
     return;
   }
   const reservationToggle = e.target.closest('input[data-reservation-toggle]');
@@ -3266,31 +3516,26 @@ document.addEventListener('change', e => {
     save(); render();
     return;
   }
-  const cb = e.target.closest('input[data-choice]');
-  if (!cb) return;
-  const card = cb.closest('.decision');
-  const id = card.dataset.id;
-  const key = answerDraftKey(card.dataset.sessionId, id);
-  const a = answerOf(id);
-  const previous = { ...a, picks: [...picksOf(a)] };
-  a.choice = cb.checked ? cb.dataset.choice : null;
-  a.picks = [];
-  ui.answers[id] = a;
-  clearAnswerErrorWhenDraftChanges(key, previous, a);
-  save(); render();
 });
 
 document.addEventListener('input', e => {
+  const commonFreeText = e.target.closest('textarea[data-common-free-text]');
+  if (commonFreeText) {
+    updateCommonQuestionSubmit(commonFreeText.closest('.common-question'));
+    return;
+  }
   const instructionDraft = e.target.closest('textarea[data-instruction-draft]');
   if (instructionDraft) {
     const sessionId = instructionDraft.dataset.instructionDraft;
     const draft = ui.instructionDrafts[sessionId] || {};
     ui.instructionDrafts[sessionId] = { ...draft, text: instructionDraft.value };
+    if (draft.text !== instructionDraft.value) delete ui.instructionNotices[sessionId];
     save();
-    const form = instructionDraft.closest('.instruction-form');
+    const form = instructionDraft.closest('[data-instruction-create-form]');
     const session = allSessions().find(item => item.id === sessionId);
-    const availability = session ? instructionTargetAvailability(session) : { mode: '' };
-    form.querySelector('[data-instruction-save]')?.toggleAttribute('disabled', !(draft.targetSessionId === sessionId && draft.mode === availability.mode && instructionDraft.value.trim()));
+    form?.querySelector('[data-instruction-save]')?.toggleAttribute('disabled', !session || !instructionDraftCanSave(session, ui.instructionDrafts[sessionId]));
+    const status = form?.querySelector('[data-instruction-draft-status]');
+    if (status) status.textContent = ui.instructionNotices[sessionId] || '下書き（未送信）';
     return;
   }
   const instructionAlternative = e.target.closest('textarea[data-instruction-alternative]');
@@ -3303,14 +3548,16 @@ document.addEventListener('input', e => {
   }
   if (!e.target.matches('textarea[data-note]')) return;
   const card = e.target.closest('.decision');
-  const a = answerOf(card.dataset.id);
+  const decision = allSessions().flatMap(item => item.decisions).find(item => item.id === card.dataset.id);
+  if (!decision) return;
+  const a = answerForUi(answerOf(card.dataset.id), decision);
   const key = answerDraftKey(card.dataset.sessionId, card.dataset.id);
   const previous = { ...a, picks: [...picksOf(a)] };
   a.note = e.target.value;
   ui.answers[card.dataset.id] = a;
   clearAnswerErrorWhenDraftChanges(key, previous, a, card);
   save();
-  card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a);
+  card.querySelector('[data-send]').disabled = !canSend(a) || !answerDirty(a, decision);
 });
 
 const expiredTransientNoticeSignature = () => [...Object.entries(ui.reservationNotices), ...Object.entries(ui.mergeErrors)]

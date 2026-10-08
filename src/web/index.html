@@ -180,13 +180,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-pick-body { min-width: 0; }
 .decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
 .decision-answer { display: grid; gap: 8px; margin-top: 10px; }
-.answer-choices { display: flex; gap: 8px; flex-wrap: wrap; }
-.answer-choice { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; }
-.answer-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.answer-choice.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-text); }
-.answer-choice.ok input { accent-color: var(--ok); }
 .decision-answer textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
-.decision-answer textarea:focus-visible, .answer-choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.decision-answer textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .answer-foot .primary { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; }
@@ -343,6 +338,7 @@ h3.sub .count { font-weight: normal; }
 .decision-card.resolved { border-left-color: var(--ok); }
 .decision-card.withdrawn { border-left-color: var(--border); }
 .decision-card.long-wait, .permission.long-wait { background: var(--danger-soft); }
+.decision-card.neutral { border-left-width: 1px; border-left-color: var(--border); }
 .decision-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
 .decision-title { font-weight: 600; }
 .decision-context { margin: 4px 0 8px; color: var(--text-2); }
@@ -373,26 +369,6 @@ h3.sub .count { font-weight: normal; }
 /* .session-tag の nowrap より強くするため、2 つのクラスで指定する */
 .session-tag.session-context { width: fit-content; max-width: 100%; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere; }
 .common-question-list { display: grid; gap: 10px; }
-.common-question { margin: 0 0 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow-wrap: anywhere; }
-.common-question-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
-.common-question-head h4 { margin: 0; font-size: 14px; }
-.common-question-status, .common-question-selection, .common-question-note { margin: 6px 0; color: var(--text-2); font-size: 12px; }
-.common-question-form { display: grid; gap: 10px; margin-top: 10px; }
-.common-question-fieldset { display: grid; gap: 4px; min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
-.common-question-fieldset legend { padding: 0 4px; font-weight: 600; }
-.common-question-option { display: flex; align-items: center; gap: 8px; min-height: 40px; }
-.common-question-option input { width: 20px; height: 20px; flex: 0 0 auto; }
-.common-question-option small { color: var(--text-2); }
-.common-question-recommended { color: var(--accent) !important; font-weight: 600; }
-.common-question-free-label { display: grid; gap: 4px; margin-top: 4px; font-size: 12px; }
-.common-question-free { width: 100%; min-height: 52px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
-.common-question-free:focus-visible, .common-question-option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.common-question-help { color: var(--text-2); font-size: 12px; }
-.common-question-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.common-question-actions button { min-height: 40px; padding: 7px 12px; font: inherit; cursor: pointer; }
-.common-question-actions .primary { border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); }
-.common-question-actions .secondary { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); }
-.common-question-actions button:disabled { opacity: .45; cursor: default; }
 .common-question-confirmation { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--danger); border-radius: 8px; background: var(--surface-2); }
 .common-question-confirmation p { margin: 0; }
 .common-question-confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -400,15 +376,8 @@ h3.sub .count { font-weight: normal; }
 .common-question-confirm-actions .confirm { border: 1px solid var(--danger); border-radius: 8px; background: var(--surface); color: var(--danger); }
 .common-question-confirm-actions .secondary { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 .common-question-confirm-actions button:disabled { opacity: .45; cursor: default; }
-.common-question-error { margin: 0; color: var(--danger); font-size: 12px; }.common-question-diagnostics { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
-.instruction-composer, .instruction-card { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
-.instruction-composer h4, .instruction-card h4 { margin: 0; font-size: 13px; }
-.instruction-form { display: grid; gap: 8px; }
-.instruction-form label { display: grid; gap: 3px; font-size: 12px; }
-.instruction-form select, .instruction-form textarea { min-width: 0; width: 100%; min-height: 36px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
-.instruction-form textarea { min-height: 72px; resize: vertical; }
-.instruction-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.instruction-actions button { min-height: 36px; padding: 5px 10px; cursor: pointer; }
+.common-question-error { margin: 0; color: var(--danger); font-size: 12px; }
+.common-question-diagnostics { display: flex; flex-wrap: wrap; gap: 6px 10px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-2); }
 .instruction-status, .instruction-reason, .instruction-target { margin: 0; color: var(--text-2); font-size: 12px; }
 .instruction-preview { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 6px; background: var(--surface); }
 .instruction-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
@@ -1571,6 +1540,81 @@ function instructionTargetMode(target, mode) {
   if (mode === 'steer') return target.status === 'working' && Boolean(target.nativeTurnId);
   if (mode === 'next-user-input') return target.status === 'stopped' && target.origin === 'standalone';
   return mode === 'start' && target.status === 'stopped' && target.origin === 'standalone';
+}
+
+function instructionModeForTarget(target) {
+  if (!target || target.status === 'unverified' || target.status === 'waiting') return '';
+  if (target.status === 'working' && target.nativeTurnId) return 'steer';
+  if (target.status === 'stopped' && target.origin === 'standalone') return 'start';
+  return '';
+}
+
+function instructionBindingForTarget(target, mode) {
+  if (!target) return null;
+  return {
+    launchRef: target.launchRef,
+    executionId: target.executionId,
+    origin: target.origin,
+    status: target.status,
+    nativeTurnId: target.nativeTurnId || null,
+    mode,
+  };
+}
+
+function sameInstructionBinding(left, right) {
+  return Boolean(left && right && left.launchRef === right.launchRef && left.executionId === right.executionId &&
+    left.origin === right.origin && left.status === right.status && left.nativeTurnId === right.nativeTurnId && left.mode === right.mode);
+}
+
+function instructionDraftTargetFor(state, sessionId, draft, allowSingleFallback = false) {
+  const targets = instructionTargetsForSession(state, sessionId);
+  const matches = targets.filter((target) => target.launchRef === draft?.targetLaunchRef);
+  if (matches.length === 1) return matches[0];
+  return allowSingleFallback && targets.length === 1 && matches.length === 0 ? targets[0] : null;
+}
+
+function instructionDraftMatchesTarget(draft, target) {
+  const mode = instructionModeForTarget(target);
+  return Boolean(target && draft?.targetLaunchRef === target.launchRef && draft.mode === mode &&
+    sameInstructionBinding(draft.binding, instructionBindingForTarget(target, mode)));
+}
+
+function instructionDraftRebindTarget(sessionId, state = lastState) {
+  const draft = instructionDraftFor(sessionId);
+  if (instructionInFlight.has(sessionId) || draft.deliveryAttemptId || draft.logicalMessageId ||
+      state?.instructionDiagnostics?.service !== 'ready' || state?.instructionDiagnostics?.blocked === true ||
+      state?.instructionDiagnostics?.targets !== 'available') return null;
+  const target = instructionDraftTargetFor(state, sessionId, draft, true);
+  const mode = instructionModeForTarget(target);
+  return mode && instructionTargetMode(target, mode) ? { target, mode } : null;
+}
+
+function selectInstructionDraftTarget(sessionId, launchRef, state = lastState) {
+  const draft = instructionDraftFor(sessionId);
+  if (instructionInFlight.has(sessionId) || draft.deliveryAttemptId || draft.logicalMessageId) return false;
+  const matches = instructionTargetsForSession(state, sessionId).filter((target) => target.launchRef === launchRef);
+  if (matches.length !== 1) return false;
+  const target = matches[0];
+  const mode = instructionModeForTarget(target);
+  draft.targetLaunchRef = launchRef;
+  if (draft.text.trim()) {
+    if (!instructionDraftMatchesTarget(draft, target)) draft.needsRebind = true;
+  } else {
+    draft.mode = mode;
+    draft.binding = instructionBindingForTarget(target, mode);
+    draft.needsRebind = false;
+  }
+  instructionErrors.delete(sessionId);
+  instructionNotices.delete(sessionId);
+  return true;
+}
+
+function observeInstructionDraftBindings(state) {
+  for (const [sessionId, draft] of instructionDrafts) {
+    if (!draft?.text?.trim()) continue;
+    const target = instructionDraftTargetFor(state, sessionId, draft);
+    if (!instructionDraftMatchesTarget(draft, target)) draft.needsRebind = true;
+  }
 }
 
 function instructionTargetWaitingSummary(target) {
@@ -3043,9 +3087,22 @@ function answerDraftFor(decision, session) {
   const key = `${session.session_id}\0${decision.id}`;
   const saved = answerDrafts.get(key);
   const answer = saved || decision.answer || {};
+  return answerValueFor(decision, answer);
+}
+
+function answerValueFor(decision, answer) {
+  const questions = decision.questions || [];
+  const picks = copyAnswerPicks(answer.picks, questions.length);
+  const choice = answer.choice === 'ok' ? 'pick' : answer.choice === 'pick' ? 'pick' : null;
+  if (answer.choice === 'ok') {
+    const recommendations = recommendedOptionsForQuestions(questions);
+    recommendations.forEach((option, index) => {
+      if (option) picks[index] = [option.label];
+    });
+  }
   return {
-    choice: ['ok', 'pick'].includes(answer.choice) ? answer.choice : null,
-    picks: copyAnswerPicks(answer.picks, (decision.questions || []).length),
+    choice,
+    picks,
     note: answer.note || '',
   };
 }
@@ -3071,12 +3128,12 @@ function sameAnswerDraft(left, right) {
 }
 
 function answerDraftChanged(decision, draft, ignoreEmptyUnsent = false) {
-  const answer = decision.answer?.sentAt ? decision.answer : {};
-  if (ignoreEmptyUnsent && (draft.choice ?? null) === null && (draft.note || '') === (answer.note || '')) return false;
   const questionCount = (decision.questions || []).length;
-  return !decision.answer?.sentAt || (draft.choice ?? null) !== (answer.choice ?? null) ||
-    (draft.note || '') !== (answer.note || '') ||
-    !sameAnswerPicks(copyAnswerPicks(draft.picks, questionCount), copyAnswerPicks(answer.picks, questionCount));
+  const current = answerValueFor(decision, draft);
+  const sent = decision.answer?.sentAt ? answerValueFor(decision, decision.answer) : answerValueFor(decision, {});
+  if (ignoreEmptyUnsent && current.choice === null && current.note === sent.note) return false;
+  return !decision.answer?.sentAt || current.choice !== sent.choice || current.note !== sent.note ||
+    !sameAnswerPicks(copyAnswerPicks(current.picks, questionCount), copyAnswerPicks(sent.picks, questionCount));
 }
 
 function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
@@ -3121,10 +3178,6 @@ function selectedAnswerLabels(decision, picks) {
 function answerMetaText(decision, draft) {
   const picked = selectedAnswerLabels(decision, draft.picks);
   if (picked.length) return `送る答え: ${picked.join('、')}`;
-  const recommendations = recommendedOptionsForQuestions(decision.questions || []);
-  if (recommendations.length && recommendations.every(Boolean)) {
-    return `OK で送る答え: ${recommendations.map((option) => displayRecommendedLabel(option.label)).join('、')}`;
-  }
   return '';
 }
 
@@ -3135,7 +3188,6 @@ function canSendDecisionAnswer(decision, draft) {
     const recommendations = recommendedOptionsForQuestions(decision.questions || []);
     return draft.picks.every((labels, index) => labels.length > 0 || recommendations[index] || draft.note.trim());
   }
-  if (draft.choice === 'ok') return recommendedOptionsForQuestions(decision.questions || []).every(Boolean);
   return Boolean(draft.note.trim());
 }
 
@@ -3177,24 +3229,9 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   const draft = answerDraftFor(decision, session);
   const answer = decision.answer;
   const dirty = answerDraftChanged(decision, draft);
-  const recommendations = recommendedOptionsForQuestions(questions);
-  const canUseRecommendation = recommendations.length > 0 && recommendations.every(Boolean);
   const answerBox = element('div', 'decision-answer');
   answerBox.dataset.decisionId = decision.id;
   answerBox.dataset.sessionId = session.session_id;
-  const choices = element('div', 'answer-choices');
-  const control = document.createElement('label');
-  control.className = 'answer-choice ok';
-  const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox';
-  checkbox.dataset.answerChoice = 'ok';
-  checkbox.dataset.sessionId = session.session_id;
-  checkbox.dataset.decisionId = decision.id;
-  checkbox.checked = draft.choice === 'ok';
-  checkbox.disabled = !canUseRecommendation;
-  control.append(checkbox, document.createTextNode('推奨案で OK'));
-  choices.append(control);
-  answerBox.append(choices);
   const answerMeta = element('div', 'meta', answerMetaText(decision, draft));
   answerMeta.dataset.answerMeta = 'true';
   answerMeta.hidden = !answerMeta.textContent;
@@ -3401,40 +3438,53 @@ function updateCommonQuestionSubmit(card) {
     || Boolean(submittedLate && sameCommonQuestionAnswers(answers, submittedLate));
 }
 
+function clearSelectedCommonQuestionOption(option) {
+  const card = option.closest('.common-question');
+  const question = (lastState?.sessions || [])
+    .find((session) => session.session_id === card?.dataset.sessionId)?.commonQuestions
+    ?.find((item) => item.internalQuestionId === card?.dataset.internalQuestionId);
+  const answer = commonQuestionDrafts.get(question && commonQuestionKey(question))
+    ?.find((item) => item.questionId === option.dataset.questionId);
+  if (!question || !answer?.optionIds.includes(option.dataset.optionId)) return false;
+  option.checked = false;
+  updateCommonQuestionSubmit(card);
+  return true;
+}
+
 function appendCommonQuestions(body, session, product, withTags = false, multipleSessions = false) {
   const questions = shownCommonQuestions(session);
   if (!questions.length) return;
   body.append(element('h3', 'sub', '共通質問'));
-  const list = element('div', 'common-question-list');
+  const list = element('div', 'decision-list common-question-list');
   for (const question of questions) {
     const key = commonQuestionKey(question);
-    const card = element('article', 'common-question');
+    const card = element('article', 'decision-card neutral common-question');
     card.dataset.sessionId = session.session_id;
     card.dataset.internalQuestionId = question.internalQuestionId;
-    const head = element('div', 'common-question-head');
-    head.append(element('h4', '', question.questionId));
+    const head = element('div', 'decision-head');
+    head.append(element('span', 'decision-title', question.questionId));
     appendContextTags(head, product, session, withTags, multipleSessions);
     card.append(head);
-    card.append(element('p', 'common-question-status', commonQuestionDeliveryText(question)));
+    card.append(element('p', 'decision-context answer-status common-question-status', commonQuestionDeliveryText(question)));
     if (!question.selectionSource && !question.cancelled) {
       const deadline = absoluteTimeLabel(question.deadlineAt);
-      card.append(element('p', 'common-question-note', question.held
-        ? `保留中です。回答期限 ${deadline}。保留を解除するまで自動選択しません。`
-        : `回答期限 ${deadline}。離席中は期限後、すべての質問が単一選択で推奨案を持つ場合だけ仮選択します。`));
+      card.append(element('p', 'decision-context common-question-note', question.held
+        ? `保留中です。回答期限 ${deadline}。`
+        : `回答期限 ${deadline}。`));
     }
     if (question.selectionSource) {
       const labels = commonQuestionSelectedLabels(question);
-      card.append(element('p', 'common-question-selection', labels.length
+      card.append(element('p', 'decision-summary common-question-selection', labels.length
         ? question.selectionSource === 'away-default' ? `離席時の推奨で仮選択: ${labels.join('、')}` : `保存した選択: ${labels.join('、')}`
         : '自由記入を含む回答を保存しました。'));
     }
-    if (question.externalResolution) card.append(element('p', 'common-question-note', '元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。'));
-    if (question.lateAnswerCount > 0) card.append(element('p', 'common-question-note', `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`));
+    if (question.externalResolution) card.append(element('p', 'decision-context common-question-note', '元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。'));
+    if (question.lateAnswerCount > 0) card.append(element('p', 'decision-context common-question-note', `後続の回答を ${question.lateAnswerCount} 件保存しました。配送は保留しています。`));
     for (const ref of question.lateAnswerRefs || []) {
       const target = instructionTargetFor(lastState, question.launchRef);
       const mode = target?.status === 'working' && target.nativeTurnId ? 'steer'
         : target?.status === 'stopped' && target.origin === 'standalone' ? 'start' : null;
-      card.append(element('p', 'common-question-note', `保存した後続回答 ${absoluteTimeLabel(ref.submittedAt)}。回答内容は状態画面に表示しません。`));
+      card.append(element('p', 'decision-context common-question-note', `保存した後続回答 ${absoluteTimeLabel(ref.submittedAt)}。回答内容は状態画面に表示しません。`));
       if (mode) {
         const lateKey = `late:${question.internalQuestionId}:${ref.index}:${ref.digest}`;
         const convert = element('button', 'secondary', 'この保存済み回答から後続の指示を作る');
@@ -3461,19 +3511,23 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
       && !(question.deliveryState === 'applied' && question.selectionSource !== 'away-default');
     if (formAvailable) {
       const draft = commonQuestionDraft(question);
-      const form = element('div', 'common-question-form');
+      const form = element('div', 'decision-answer common-question-form');
       for (const item of question.questions) {
-        const fieldset = element('fieldset', 'common-question-fieldset');
-        fieldset.append(element('legend', '', item.text));
+        const fieldset = element('section', 'decision-question common-question-fieldset');
+        fieldset.setAttribute('role', 'group');
+        fieldset.setAttribute('aria-label', item.text);
+        fieldset.append(element('div', 'decision-question-title', item.text));
         if (item.options.length) {
           const choiceHelp = item.allowFreeText
             ? item.mode === 'multi' ? '複数選択するか、自由記入で回答してください。' : '1つ選択するか、自由記入で回答してください。'
             : item.mode === 'multi' ? '複数選択できます。' : '1つ選択してください。';
-          fieldset.append(element('small', 'common-question-help', choiceHelp));
+          fieldset.append(element('small', 'meta common-question-help', choiceHelp));
         }
+        const options = element('ul', 'decision-options');
         const answer = draft.find((entry) => entry.questionId === item.id);
         for (const option of item.options) {
-          const label = element('label', 'common-question-option');
+          const row = element('li', `decision-option pickable ${option.id === item.recommendedOptionId ? 'recommended' : ''}`.trim());
+          const label = element('label', 'answer-pick common-question-option');
           const input = element('input');
           input.type = item.mode === 'single' ? 'radio' : 'checkbox';
           input.name = `${question.internalQuestionId}-${item.id}`;
@@ -3482,14 +3536,18 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
           input.dataset.optionId = option.id;
           input.checked = answer.optionIds.includes(option.id);
           input.disabled = commonQuestionInFlight.has(key);
-          label.append(input, element('span', '', option.label));
-          if (option.description) label.append(element('small', '', option.description));
-          if (option.id === item.recommendedOptionId) label.append(element('small', 'common-question-recommended', '推奨'));
-          fieldset.append(label);
+          const optionBody = element('span', 'answer-pick-body');
+          if (option.id === item.recommendedOptionId) optionBody.append(badge('推奨', 'busy'));
+          optionBody.append(element('span', '', option.label));
+          if (option.description) optionBody.append(element('span', 'decision-option-description', option.description));
+          label.append(input, optionBody);
+          row.append(label);
+          options.append(row);
         }
+        if (options.childNodes.length) fieldset.append(options);
         if (item.allowFreeText) {
           const freeLabel = element('label', 'common-question-free-label', '自由記入');
-          const textarea = element('textarea', 'common-question-free');
+          const textarea = element('textarea', '');
           textarea.rows = 2;
           textarea.maxLength = 2000;
           textarea.dataset.commonFreeText = item.id;
@@ -3497,16 +3555,16 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
           textarea.value = answer.freeText;
           textarea.disabled = commonQuestionInFlight.has(key);
           freeLabel.append(textarea);
-          fieldset.append(freeLabel, element('small', 'common-question-help', '下書きはこのページを開いている間だけ保持します。'));
+          fieldset.append(freeLabel, element('small', 'meta common-question-help', '下書きはこのページを開いている間だけ保持します。'));
         }
         form.append(fieldset);
       }
-      const error = element('p', 'common-question-error', commonQuestionErrors.get(key) || '');
+      const error = element('p', 'answer-error common-question-error', commonQuestionErrors.get(key) || '');
       error.hidden = !error.textContent;
       error.setAttribute('role', 'alert');
-      const notice = element('p', 'common-question-note', commonQuestionNotices.get(key) || '');
+      const notice = element('p', 'decision-context common-question-note', commonQuestionNotices.get(key) || '');
       notice.hidden = !notice.textContent;
-      const actions = element('div', 'common-question-actions');
+      const actions = element('div', 'answer-foot common-question-actions');
       const submit = element('button', 'primary', question.selectionSource ? '後続の回答を保存' : '回答を保存');
       submit.type = 'button';
       submit.dataset.commonSubmit = question.internalQuestionId;
@@ -3559,7 +3617,7 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
           actions.append(cancel);
         }
       }
-      form.append(element('small', 'common-question-help', 'すべての質問に回答すると保存できます。'), error, notice, actions);
+      form.append(element('small', 'meta common-question-help', 'すべての質問に回答すると保存できます。'), error, notice, actions);
       if (cancelConfirmation) form.append(cancelConfirmation);
       card.append(form);
     }
@@ -3635,28 +3693,36 @@ function instructionAlternativeRetryState(state, request) {
 }
 
 function instructionPreviewRecoveryPanel(state) {
+  if (state?.instructionDiagnostics?.configuration === 'unconfigured') return null;
   const pending = [...instructionPreviewSavePending.entries()]
     .filter(([, record]) => record?.phase === 'pending');
   if (!pending.length) return null;
-  const panel = element('section', 'instruction-composer instruction-recovery');
+  const panel = element('section', 'instruction-recovery');
   panel.setAttribute('aria-label', '指示本文の保存を確認');
-  const heading = element('h2', '', 'このタブへの本文保存を確認');
+  const heading = element('span', 'decision-title', 'このタブへの本文保存を確認');
+  heading.setAttribute('role', 'heading');
+  heading.setAttribute('aria-level', '2');
   heading.dataset.instructionPreviewRecoveryHeading = 'true';
   heading.tabIndex = -1;
-  panel.append(heading);
-  panel.append(element('p', 'instruction-reason',
+  const panelHead = element('div', 'decision-head');
+  panelHead.append(heading);
+  panel.append(panelHead, element('p', 'decision-context instruction-reason',
     'サーバーへの保存は確認済みです。本文をこのタブに保存するまで、タブを閉じると内容を復元できません。'));
   for (const [id, record] of pending) {
     const instruction = record.instruction;
     const target = instructionTargetFor(state, instruction.launchRef);
     const targetName = target ? instructionTargetName(target) : '実行先を確認できません';
     const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
-    const item = element('article', 'instruction-card');
-    const itemHeading = element('h3', '', instructionModeLabel(instruction.mode) + ' · ' + targetName + ' · ' + createdAt);
+    const item = element('article', 'decision-card neutral instruction-recovery-card');
+    const itemHeading = element('span', 'decision-title', instructionModeLabel(instruction.mode) + ' · ' + targetName + ' · ' + createdAt);
+    itemHeading.setAttribute('role', 'heading');
+    itemHeading.setAttribute('aria-level', '3');
     itemHeading.dataset.instructionPreviewTitle = id;
     itemHeading.tabIndex = -1;
-    item.append(itemHeading);
-    const preview = element('section', 'instruction-preview');
+    const itemHead = element('div', 'decision-head');
+    itemHead.append(itemHeading);
+    item.append(itemHead);
+    const preview = element('section', 'decision-summary instruction-preview');
     preview.append(element('strong', '', '保存済みの指示本文'));
     const text = element('textarea');
     text.value = record.text;
@@ -3668,40 +3734,50 @@ function instructionPreviewRecoveryPanel(state) {
     item.append(preview);
     const errorMessage = instructionErrors.get('preview:' + id);
     if (errorMessage) {
-      const error = element('p', 'instruction-reason', errorMessage);
+      const error = element('p', 'decision-context instruction-reason', errorMessage);
       error.setAttribute('role', 'alert');
       item.append(error);
     }
     const retry = element('button', '', 'このタブに本文を保存する');
     retry.type = 'button';
     retry.dataset.instructionPreviewRetry = id;
-    item.append(retry);
+    const actions = element('div', 'answer-foot');
+    actions.append(retry);
+    item.append(actions);
     panel.append(item);
   }
   return panel;
 }
 
 function instructionAlternativeRecoveryPanel(state) {
+  if (state?.instructionDiagnostics?.configuration === 'unconfigured') return null;
   const pending = [...instructionAlternatives.entries()]
     .filter(([, draft]) => draft?.pendingRequest);
   if (!pending.length) return null;
-  const panel = element('section', 'instruction-composer instruction-recovery');
+  const panel = element('section', 'instruction-recovery');
   panel.setAttribute('aria-label', '保存結果を確認する指示');
-  const panelHeading = element('h2', '', '差し替えの保存結果を確認');
+  const panelHeading = element('span', 'decision-title', '差し替えの保存結果を確認');
+  panelHeading.setAttribute('role', 'heading');
+  panelHeading.setAttribute('aria-level', '2');
   panelHeading.dataset.instructionRecoveryHeading = 'true';
   panelHeading.tabIndex = -1;
-  panel.append(panelHeading);
-  panel.append(element('p', 'instruction-reason', '保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。'));
+  const panelHead = element('div', 'decision-head');
+  panelHead.append(panelHeading);
+  panel.append(panelHead, element('p', 'decision-context instruction-reason', '保存結果が返らなかった指示です。同じ内容の保存を明示して結果を確認できます。自動送信はしません。'));
   for (const [oldId, draft] of pending) {
     const request = draft.pendingRequest;
     const retry = instructionAlternativeRetryState(state, request);
-    const item = element('article', 'instruction-card');
+    const item = element('article', 'decision-card neutral instruction-recovery-card');
     const targetName = retry.target ? instructionTargetName(retry.target) : '実行先を確認できません';
-    const heading = element('h3', '', `${targetName} · 次の入力へ差し替え`);
+    const heading = element('span', 'decision-title', `${targetName} · 次の入力へ差し替え`);
+    heading.setAttribute('role', 'heading');
+    heading.setAttribute('aria-level', '3');
     heading.dataset.instructionAlternativeTitle = oldId;
     heading.tabIndex = -1;
-    item.append(heading);
-    const preview = element('section', 'instruction-preview');
+    const itemHead = element('div', 'decision-head');
+    itemHead.append(heading);
+    item.append(itemHead);
+    const preview = element('section', 'decision-summary instruction-preview');
     preview.append(element('strong', '', '保存要求に固定した内容'));
     const fixedText = element('textarea');
     fixedText.value = request.text;
@@ -3713,12 +3789,12 @@ function instructionAlternativeRecoveryPanel(state) {
     item.append(preview);
     const errorMessage = instructionErrors.get('alternative:' + oldId);
     if (errorMessage) {
-      const error = element('p', 'instruction-reason', errorMessage);
+      const error = element('p', 'decision-context instruction-reason', errorMessage);
       error.setAttribute('role', 'alert');
       item.append(error);
     }
-    if (retry.reason) item.append(element('p', 'instruction-reason', retry.reason));
-    const actions = element('div', 'instruction-actions');
+    if (retry.reason) item.append(element('p', 'decision-context instruction-reason', retry.reason));
+    const actions = element('div', 'answer-foot');
     const retryButton = element('button', '', '同じ内容で保存結果を確認する');
     retryButton.type = 'button';
     retryButton.dataset.instructionAlternativeRetry = oldId;
@@ -3747,37 +3823,36 @@ function instructionAlternativeRecoveryPanel(state) {
 }
 
 function instructionCard(session, state, instruction) {
-  const card = element('article', 'instruction-card');
+  const card = element('article', 'decision-card neutral');
   const target = instructionTargetFor(state, instruction.launchRef);
   const serviceReady = state?.instructionDiagnostics?.service === 'ready' && state?.instructionDiagnostics?.blocked !== true;
-  const targetReady = target && instruction.executionState === 'active' && instructionTargetMode(target, instruction.mode);
+  const targetReady = target && target.sessionId === session.session_id && target.executionId === instruction.registrationExecutionId &&
+    instruction.executionState === 'active' && instructionTargetMode(target, instruction.mode);
   const preview = instructionPreviewFor(instruction);
   const targetLabel = target ? instructionTargetName(target) : '実行先を確認できません';
   const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
   const alternativeDraft = instructionAlternatives.get(instruction.deliveryAttemptId);
   const alternativePending = Boolean(alternativeDraft?.pendingRequest);
-  const title = element('h4', '', `${instructionModeLabel(instruction.mode)} · ${targetLabel} · ${createdAt}`);
+  const head = element('div', 'decision-head');
+  const title = element('span', 'decision-title', `${instructionModeLabel(instruction.mode)} · ${targetLabel} · ${createdAt}`);
   title.dataset.instructionPreviewTitle = instruction.deliveryAttemptId;
   title.tabIndex = -1;
-  card.append(title);
-  card.append(element('p', 'instruction-status', instructionStateLabel(instruction)));
+  head.append(title);
+  card.append(head, element('p', 'decision-context answer-status instruction-status', instructionStateLabel(instruction)));
   if (!isFinishedInstruction(instruction)) {
-    const previewPanel = element('section', 'instruction-preview');
+    const previewPanel = element('section', 'decision-summary instruction-preview');
     previewPanel.append(element('strong', '', '送信内容'));
     if (preview) previewPanel.append(element('pre', '', preview));
     else previewPanel.append(element('p', 'instruction-reason', 'このタブで内容を確認できないため送信できません。作成したタブで開いてください。'));
     card.append(previewPanel);
   }
-  if (target?.status === 'waiting' && ['available', 'claimed'].includes(instruction.state)) {
-    card.append(element('p', 'instruction-reason', instructionTargetWaitingNotice(target)));
-  }
   if (instruction.heldReason) card.append(element('p', 'instruction-reason', instructionReasonLabel(instruction.heldReason)));
-  else if (!targetReady && target?.status !== 'waiting' && ['available', 'claimed'].includes(instruction.state)) {
-    card.append(element('p', 'instruction-reason', '実行先の状態を確認できないため、送信を保留しています。'));
+  else if (!targetReady && ['available', 'claimed'].includes(instruction.state)) {
+    card.append(element('p', 'instruction-reason', '現在の状態では送信できません。送信を保留しています。'));
   }
   const actionError = instructionErrors.get(`action:${instruction.deliveryAttemptId}`);
   if (actionError) card.append(element('p', 'instruction-reason', actionError));
-  const actions = element('div', 'instruction-actions');
+  const actions = element('div', 'answer-foot');
   const operationKey = instruction.deliveryAttemptId;
   const busy = instructionInFlight.has(operationKey) || instructionAlternativeInFlight.has(operationKey) || alternativePending;
   if (['available', 'claimed'].includes(instruction.state)) {
@@ -3785,13 +3860,14 @@ function instructionCard(session, state, instruction) {
       ? instruction.mode === 'start' ? '同じ実行で次の入力を開始' : 'この実行へ送る'
       : '内容を確認できないため送信できません');
     send.type = 'button';
+    send.className = 'primary';
     send.dataset.instructionAction = 'send';
     send.dataset.instructionId = instruction.deliveryAttemptId;
     send.dataset.instructionSession = session.session_id;
     send.dataset.instructionExecution = instruction.registrationExecutionId;
     send.disabled = busy || !serviceReady || !targetReady || !preview;
     actions.append(send);
-    const cancel = element('button', '', '保存した指示を取り下げる');
+    const cancel = element('button', 'secondary', '保存した指示を取り下げる');
     cancel.type = 'button';
     cancel.dataset.instructionAction = 'cancel';
     cancel.dataset.instructionId = instruction.deliveryAttemptId;
@@ -3800,7 +3876,7 @@ function instructionCard(session, state, instruction) {
     cancel.disabled = busy || !serviceReady;
     actions.append(cancel);
     if (!alternativePending && instruction.origin === 'standalone' && instruction.executionState === 'active' && target?.status === 'stopped' && serviceReady) {
-      const alternative = element('button', '', '次の入力へ差し替える');
+      const alternative = element('button', 'secondary', '次の入力へ差し替える');
       alternative.type = 'button';
       alternative.dataset.instructionAlternativeOpen = instruction.deliveryAttemptId;
       alternative.dataset.instructionSession = session.session_id;
@@ -3816,7 +3892,7 @@ function instructionCard(session, state, instruction) {
     alternativeTargetMatches && target?.status === 'stopped' && instructionTargetMode(target, 'next-user-input');
   if (alternativeDraft?.open && !alternativePending && ['available', 'claimed'].includes(instruction.state) &&
       instruction.origin === 'standalone' && instruction.executionState === 'active' && alternativeTargetMatches) {
-    const form = element('form', 'instruction-form');
+    const form = element('form', 'decision-answer instruction-alternative-form');
     form.dataset.instructionAlternativeForm = instruction.deliveryAttemptId;
     form.dataset.instructionSession = session.session_id;
     form.dataset.instructionExecution = instruction.registrationExecutionId;
@@ -3843,7 +3919,10 @@ function instructionCard(session, state, instruction) {
     const submit = element('button', '', '差し替えを保存する');
     submit.type = 'submit';
     submit.disabled = instructionAlternativeInFlight.has(operationKey) || !alternativeCanSubmit || !alternativeDraft.text.trim();
-    form.append(error, submit);
+    const alternativeActions = element('div', 'answer-foot');
+    submit.className = 'primary';
+    alternativeActions.append(error, submit);
+    form.append(alternativeActions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       void runInstructionAlternative(form);
@@ -3854,68 +3933,110 @@ function instructionCard(session, state, instruction) {
 }
 
 function instructionComposer(session, state) {
+  if (state?.instructionDiagnostics?.configuration === 'unconfigured') return null;
   const targets = instructionTargetsForSession(state, session.session_id);
   const instructions = Array.isArray(session.instructions) ? session.instructions : [];
+  const existingDraft = instructionDrafts.get(session.session_id);
   const serviceReady = state?.instructionDiagnostics?.service === 'ready' && state?.instructionDiagnostics?.blocked !== true;
-  if (!targets.length && !instructions.length) return null;
-  const panel = element('section', 'instruction-composer');
+  if (!targets.length && !instructions.length && !existingDraft?.text) return null;
+  const panel = element('section');
   panel.setAttribute('aria-label', '指示の保存と送信');
-  panel.append(element('h4', '', '指示を保存して届ける'));
+  const composer = element('article', 'decision-card neutral');
+  const draft = instructionDraftFor(session.session_id);
+  const currentTarget = targets.length === 1 ? targets[0] : instructionDraftTargetFor(state, session.session_id, draft);
+  const currentMode = instructionModeForTarget(currentTarget);
+  const heading = element('div', 'decision-head');
+  heading.append(element('span', 'decision-title', '追加指示'));
+  heading.append(element('span', 'meta', currentMode ? instructionModeLabel(currentMode) : '送信方法を確認できません'));
+  composer.append(heading);
+  const destination = currentTarget
+    ? `${instructionTargetName(currentTarget)} · ${instructionTargetStatusText(currentTarget)}`
+    : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
+      : targets.length ? `実行先を一意に確認できません（候補 ${targets.length} 件）` : '実行先を確認できません';
+  composer.append(element('p', 'decision-context instruction-target', `現在の宛先: ${destination} · 送信方法: ${currentMode ? instructionModeLabel(currentMode) : '確認できません'}`));
   if (!serviceReady) {
     const reason = state?.instructionDiagnostics?.errorCode || state?.instructionDiagnostics?.service || 'instruction_dispatch_unavailable';
-    panel.append(element('p', 'instruction-reason', instructionReasonLabel(reason)));
+    composer.append(element('p', 'decision-context instruction-reason', instructionReasonLabel(reason)));
   } else if (state?.instructionDiagnostics?.targets !== 'available') {
-    panel.append(element('p', 'instruction-reason', '実行先を確認できないため、指示を保存できません。'));
+    composer.append(element('p', 'decision-context instruction-reason', '実行先を確認できないため、指示を保存できません。'));
   }
-  for (const instruction of instructions) panel.append(instructionCard(session, state, instruction));
-  if (serviceReady && state?.instructionDiagnostics?.targets === 'available') {
-    const draft = instructionDraftFor(session.session_id);
-    const form = element('form', 'instruction-form');
+  {
+    const emptyDraft = !draft.text && !draft.deliveryAttemptId && !draft.logicalMessageId;
+    if (emptyDraft) {
+      draft.needsRebind = false;
+      const selectedTarget = targets.length === 1 ? targets[0] : instructionDraftTargetFor(state, session.session_id, draft);
+      if (selectedTarget && state?.instructionDiagnostics?.targets === 'available' && serviceReady) {
+        const target = selectedTarget;
+        const mode = instructionModeForTarget(target);
+        draft.targetLaunchRef = target.launchRef;
+        draft.mode = mode;
+        draft.binding = instructionBindingForTarget(target, mode);
+      }
+    }
+    const currentBindingMatches = instructionDraftMatchesTarget(draft, currentTarget);
+    if (draft.text && !currentBindingMatches) draft.needsRebind = true;
+    const bindingMatches = currentBindingMatches && draft.needsRebind !== true;
+    const form = element('form', 'decision-answer instruction-create-form');
     form.dataset.instructionCreateForm = 'true';
     form.dataset.instructionSession = session.session_id;
-    const targetLabel = element('label', '', '対象の実行');
-    const targetSelect = element('select');
-    targetSelect.name = 'launch_ref';
-    targetSelect.dataset.instructionField = 'target';
-    targetSelect.dataset.instructionSession = session.session_id;
-    targetSelect.disabled = instructionInFlight.has(session.session_id);
-    const placeholder = element('option', '', '実行を選択してください');
-    placeholder.value = '';
-    targetSelect.append(placeholder);
-    for (const target of targets) {
-      const option = element('option', '', `${instructionTargetName(target)} · ${instructionTargetStatusText(target)}`);
-      option.value = target.launchRef;
-      targetSelect.append(option);
+    if (targets.length > 1) {
+      const selection = element('section', 'decision-question instruction-target-choices');
+      selection.setAttribute('role', 'group');
+      selection.setAttribute('aria-label', '対象の実行');
+      selection.append(element('p', 'decision-question-title', '対象の実行'));
+      const options = element('ul', 'decision-options');
+      const selectedCounts = new Map();
+      for (const target of targets) selectedCounts.set(target.launchRef, (selectedCounts.get(target.launchRef) || 0) + 1);
+      for (const target of targets) {
+        const item = element('li', 'decision-option');
+        const label = element('label', 'answer-pick');
+        const input = element('input');
+        input.type = 'radio';
+        input.name = `instruction-target-${session.session_id}`;
+        input.value = target.launchRef;
+        input.checked = selectedCounts.get(target.launchRef) === 1 && draft.targetLaunchRef === target.launchRef;
+        input.disabled = instructionInFlight.has(session.session_id) || Boolean(draft.deliveryAttemptId || draft.logicalMessageId);
+        input.dataset.instructionTargetSelect = session.session_id;
+        input.dataset.instructionTargetLaunchRef = target.launchRef;
+        const targetMode = instructionModeForTarget(target);
+        const targetSummary = `${instructionTargetName(target)} · ${instructionTargetStatusText(target)} · ${targetMode ? instructionModeLabel(targetMode) : '現在は送信できません'}`;
+        label.append(input, element('span', 'answer-pick-body', targetSummary));
+        item.append(label);
+        if (target.status === 'waiting') item.append(element('span', 'decision-option-description', instructionTargetWaitingNotice(target)));
+        else if (target.status === 'unverified') item.append(element('span', 'decision-option-description', '実行状態を確認できません。'));
+        options.append(item);
+      }
+      selection.append(options);
+      form.append(selection);
     }
-    if (draft.targetLaunchRef && !targets.some((target) => target.launchRef === draft.targetLaunchRef)) {
-      const stale = element('option', '', '以前の実行 (現在選択できません)');
-      stale.value = draft.targetLaunchRef;
-      stale.disabled = true;
-      targetSelect.append(stale);
+    if (targets.length !== 1 && !currentTarget) {
+      form.append(element('p', 'decision-context instruction-reason', targets.length > 1
+        ? '対象の実行を選ぶまで、指示の保存を保留しています。下書きは保持されます。'
+        : targets.length
+          ? '選択した実行先を一意に確認できないため、指示の保存を保留しています。下書きは保持されます。'
+        : '実行先を確認できないため、指示の保存を保留しています。下書きは保持されます。'));
+    } else if (currentTarget.status === 'waiting') {
+      form.append(element('p', 'decision-context instruction-reason', instructionTargetWaitingNotice(currentTarget)));
+    } else if (currentTarget.status === 'unverified') {
+      form.append(element('p', 'decision-context instruction-reason', '実行状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。'));
+    } else if (!currentMode) {
+      form.append(element('p', 'decision-context instruction-reason', '現在の実行状態では指示を保存できません。入力内容は保持されます。'));
     }
-    targetSelect.value = draft.targetLaunchRef || '';
-    targetLabel.append(targetSelect);
-    form.append(targetLabel);
-    const target = targets.find((candidate) => candidate.launchRef === draft.targetLaunchRef) || null;
-    const modeLabel = element('label', '', '指示の種類');
-    const modeSelect = element('select');
-    modeSelect.name = 'mode';
-    modeSelect.dataset.instructionField = 'mode';
-    modeSelect.dataset.instructionSession = session.session_id;
-    modeSelect.disabled = instructionInFlight.has(session.session_id);
-    const modePlaceholder = element('option', '', '種類を選択してください');
-    modePlaceholder.value = '';
-    modeSelect.append(modePlaceholder);
-    const modes = target?.status === 'working' ? ['steer']
-      : target?.status === 'stopped' && target.origin === 'standalone' ? ['start'] : [];
-    for (const mode of modes) {
-      const option = element('option', '', instructionModeLabel(mode));
-      option.value = mode;
-      modeSelect.append(option);
+    if (draft.text && !bindingMatches) {
+      const canRebind = instructionDraftRebindTarget(session.session_id, state);
+      const bindingNotice = element('p', 'decision-context instruction-reason', canRebind
+        ? `この下書きは実行状態の変化を確認しました。現在の宛先は ${destination}、送信方法は ${instructionModeLabel(currentMode)} です。`
+        : 'この下書きの宛先または実行状態が変わりました。下書きは保持し、対象を確認できるまで保存を保留しています。');
+      form.append(bindingNotice);
+      if (canRebind) {
+        const rebind = element('button', 'secondary', '現在の実行状態で下書きを続ける');
+        rebind.type = 'button';
+        rebind.dataset.instructionRebind = session.session_id;
+        const rebindActions = element('div', 'answer-foot');
+        rebindActions.append(rebind);
+        form.append(rebindActions);
+      }
     }
-    modeSelect.value = modes.includes(draft.mode) ? draft.mode : '';
-    modeLabel.append(modeSelect);
-    form.append(modeLabel);
     const textareaLabel = element('label', '', '指示の内容');
     const textarea = element('textarea');
     textarea.name = 'text';
@@ -3927,39 +4048,27 @@ function instructionComposer(session, state) {
     textarea.disabled = instructionInFlight.has(session.session_id);
     textareaLabel.append(textarea);
     form.append(textareaLabel);
-    const expected = target?.status === 'waiting'
-      ? instructionTargetWaitingNotice(target)
-      : target?.status === 'unverified'
-        ? '実行状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。'
-      : target && draft.mode === 'steer' && target.nativeTurnId
-        ? '選択した実行が作業中の場合に送信します。'
-        : target?.reason || '実行先と指示の種類を選んでください。';
-    const targetReason = element('p', 'instruction-reason', expected);
-    if (target?.status === 'waiting') {
-      targetReason.id = `instruction-target-waiting-${encodeURIComponent(session.session_id)}`;
-      for (const control of [targetSelect, modeSelect, textarea]) {
-        control.setAttribute('aria-describedby', targetReason.id);
-      }
-    }
-    form.append(targetReason);
     const error = element('p', 'instruction-reason', instructionErrors.get(session.session_id) || '');
     error.hidden = !error.textContent;
     error.setAttribute('role', 'alert');
-    const notice = element('p', 'instruction-status', instructionNotices.get(session.session_id) || '');
-    notice.hidden = !notice.textContent;
-    const actions = element('div', 'instruction-actions');
-    const save = element('button', '', '指示を保存する');
+    const actions = element('div', 'answer-foot');
+    const save = element('button', 'primary', '指示を保存する');
     save.type = 'submit';
-    save.disabled = instructionInFlight.has(session.session_id) || !serviceReady || !target ||
-      !instructionTargetMode(target, draft.mode) || !draft.text.trim();
+    save.disabled = instructionInFlight.has(session.session_id) || !serviceReady || !currentTarget || !bindingMatches ||
+      !instructionTargetMode(currentTarget, draft.mode) || !draft.text.trim();
     actions.append(save);
-    form.append(error, notice, actions);
+    const draftStatus = element('span', 'answer-status instruction-status', instructionNotices.get(session.session_id) || '下書き（未送信）');
+    draftStatus.setAttribute('role', 'status');
+    actions.append(draftStatus);
+    form.append(error, actions);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       void runInstructionCreate(form);
     });
-    panel.append(form);
+    composer.append(form);
   }
+  panel.append(composer);
+  for (const instruction of instructions) panel.append(instructionCard(session, state, instruction));
   return panel;
 }
 
@@ -3977,10 +4086,28 @@ function setInstructionDraftField(sessionId, field, value) {
 function updateInstructionSave(form) {
   const sessionId = form.dataset.instructionSession;
   const draft = instructionDraftFor(sessionId);
-  const target = instructionTargetFor(lastState, draft.targetLaunchRef);
+  const target = instructionDraftTargetFor(lastState, sessionId, draft);
+  const bindingMatches = instructionDraftMatchesTarget(draft, target);
   const submit = form.querySelector('[type="submit"]');
-  if (submit) submit.disabled = instructionInFlight.has(sessionId) || !target ||
+  if (submit) submit.disabled = draft.needsRebind === true || instructionInFlight.has(sessionId) || lastState?.instructionDiagnostics?.service !== 'ready' ||
+    lastState?.instructionDiagnostics?.blocked === true || lastState?.instructionDiagnostics?.targets !== 'available' || !target || !bindingMatches ||
     !instructionTargetMode(target, draft.mode) || !draft.text.trim();
+  const status = form.querySelector('.answer-foot .answer-status');
+  if (status) status.textContent = instructionNotices.get(sessionId) || '下書き（未送信）';
+}
+
+function rebindInstructionDraft(sessionId, state = lastState) {
+  const draft = instructionDraftFor(sessionId);
+  const binding = instructionDraftRebindTarget(sessionId, state);
+  if (!binding) return false;
+  const { target, mode } = binding;
+  draft.targetLaunchRef = target.launchRef;
+  draft.mode = mode;
+  draft.binding = instructionBindingForTarget(target, mode);
+  draft.needsRebind = false;
+  instructionErrors.delete(sessionId);
+  instructionNotices.delete(sessionId);
+  return true;
 }
 function appendTaskItem(list, task, product, session, withTags = false, multipleSessions = false) {
   const labels = { todo: '未着手', doing: '作業中', done: '完了' };
@@ -4605,8 +4732,8 @@ function render(state) {
         : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
-        : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
-         : activeInstructionField ? { kind: 'instruction-input', sessionId: activeInstructionField.dataset.instructionSession,
+        : active?.dataset?.instructionTargetSelect ? { kind: 'instruction-target', sessionId: active.dataset.instructionTargetSelect, launchRef: active.dataset.instructionTargetLaunchRef }
+        : activeInstructionField ? { kind: 'instruction-input', sessionId: activeInstructionField.dataset.instructionSession,
            field: activeInstructionField.dataset.instructionField, id: activeInstructionField.dataset.instructionId || '',
            start: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionStart : 0,
            end: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionEnd : 0 }
@@ -4720,6 +4847,12 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'instruction-target') {
+      const control = [...root.querySelectorAll('[data-instruction-target-select]')].find((item) =>
+        item.dataset.instructionTargetSelect === focusData.sessionId && item.dataset.instructionTargetLaunchRef === focusData.launchRef);
+      control?.focus({ preventScroll: true });
+      return;
+    }
     if (focusData.kind === 'instruction-alt-preview') {
       const control = root.querySelector(`[data-instruction-recovery-text="${CSS.escape(focusData.id)}"]`);
       if (activeInstructionRecoveryText && control) {
@@ -4766,12 +4899,11 @@ function render(state) {
       } else control?.focus({ preventScroll: true });
       return;
     }
-    if (['answer-pick', 'answer-choice', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
-      const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-choice], [data-answer-note], [data-send-answer]')].find((item) => (
+    if (['answer-pick', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
+      const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-note], [data-send-answer]')].find((item) => (
         item.dataset.sessionId === focusData.sessionId &&
         (item.dataset.decisionId || item.dataset.sendAnswer) === focusData.decisionId &&
         (focusData.kind !== 'answer-pick' || (item.dataset.answerQuestion === focusData.questionIndex && item.dataset.answerOption === focusData.optionIndex)) &&
-        (focusData.kind !== 'answer-choice' || item.dataset.answerChoice === focusData.choice) &&
         (focusData.kind !== 'answer-note' || item.hasAttribute('data-answer-note')) &&
         (focusData.kind !== 'answer-submit' || item.hasAttribute('data-send-answer'))
       ));
@@ -4860,6 +4992,32 @@ function updateAnswerSubmit(card) {
   button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
 }
 
+function clearSelectedAnswerPick(pick) {
+  const sessionId = pick.dataset.sessionId;
+  const decisionId = pick.dataset.decisionId;
+  const decision = findDecision(sessionId, decisionId);
+  if (!decision) return false;
+  const questionIndex = Number(pick.dataset.answerQuestion);
+  const optionIndex = Number(pick.dataset.answerOption);
+  const question = decision.questions?.[questionIndex];
+  const option = question?.options?.[optionIndex];
+  if (!option) return false;
+  const current = answerDraftFor(decision, { session_id: sessionId });
+  if (!current.picks[questionIndex]?.includes(option.label)) return false;
+  const picks = copyAnswerPicks(current.picks, (decision.questions || []).length);
+  picks[questionIndex] = [];
+  const next = { ...current, choice: picks.some((labels) => labels.length) ? 'pick' : null, picks };
+  const key = answerDraftKey(sessionId, decisionId);
+  answerDrafts.set(key, next);
+  pick.checked = false;
+  const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
+  if (card) {
+    clearAnswerErrorWhenDraftChanges(key, current, next, card);
+    updateAnswerSubmit(card);
+  }
+  return true;
+}
+
 function showAnswerError(sessionId, decisionId, message) {
   answerErrors.set(answerDraftKey(sessionId, decisionId), message);
   const card = [...root.querySelectorAll('.decision-answer')].find((item) => (
@@ -4906,6 +5064,13 @@ async function sendDecisionAnswer(button) {
 }
 
 document.addEventListener('change', (event) => {
+  const instructionTargetSelect = event.target.closest('[data-instruction-target-select]');
+  if (instructionTargetSelect) {
+    selectInstructionDraftTarget(instructionTargetSelect.dataset.instructionTargetSelect,
+      instructionTargetSelect.dataset.instructionTargetLaunchRef, lastState);
+    if (lastState) render(lastState);
+    return;
+  }
   const instructionField = event.target.closest('[data-instruction-field]');
   if (instructionField && ['target', 'mode'].includes(instructionField.dataset.instructionField)) {
     const fieldName = instructionField.dataset.instructionField === 'target' ? 'targetLaunchRef' : 'mode';
@@ -4918,25 +5083,6 @@ document.addEventListener('change', (event) => {
     updateCommonQuestionSubmit(commonOption.closest('.common-question'));
     return;
   }
-  const choice = event.target.closest('[data-answer-choice]');
-  if (choice) {
-    if (choice.disabled) return;
-    const key = answerDraftKey(choice.dataset.sessionId, choice.dataset.decisionId);
-    const card = choice.closest('.decision-answer');
-    const decision = findDecision(choice.dataset.sessionId, choice.dataset.decisionId);
-    if (!decision) return;
-    const current = answerDraftFor(decision, { session_id: choice.dataset.sessionId });
-    const next = { ...current, choice: choice.checked ? choice.dataset.answerChoice : null, picks: emptyAnswerPicks(decision) };
-    clearAnswerErrorWhenDraftChanges(key, current, next, card);
-    answerDrafts.set(key, next);
-    for (const input of card.querySelectorAll('[data-answer-choice]')) {
-      input.checked = next.choice === input.dataset.answerChoice;
-    }
-    for (const input of choice.closest('.decision-card')?.querySelectorAll('[data-answer-pick]') || []) input.checked = false;
-    updateAnswerSubmit(card);
-    return;
-  }
-
   const pick = event.target.closest('[data-answer-pick]');
   if (!pick) return;
   const sessionId = pick.dataset.sessionId;
@@ -4961,7 +5107,6 @@ document.addEventListener('change', (event) => {
   // 選択肢は回答欄の外(質問の区画)にあるので、判断事項のカードから回答欄を引く。
   const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
   if (!card) return;
-  for (const input of card.querySelectorAll('[data-answer-choice]')) input.checked = false;
   clearAnswerErrorWhenDraftChanges(key, current, next, card);
   updateAnswerSubmit(card);
 });
@@ -5139,16 +5284,22 @@ async function instructionResponse(response) {
 async function runInstructionCreate(form) {
   const sessionId = form.dataset.instructionSession;
   const draft = instructionDraftFor(sessionId);
-  if (!draft.deliveryAttemptId || !draft.logicalMessageId) Object.assign(draft, instructionIds());
-  const reservationKey = draft.deliveryAttemptId;
-  const existingPreview = instructionPreviewSavePending.get(reservationKey);
+  if (draft.needsRebind === true) return;
+  const existingPreview = draft.deliveryAttemptId ? instructionPreviewSavePending.get(draft.deliveryAttemptId) : null;
   if (existingPreview?.phase === 'pending') {
-    await runInstructionPreviewSaveRetry(reservationKey);
+    await runInstructionPreviewSaveRetry(draft.deliveryAttemptId);
     return;
   }
   if (existingPreview?.phase === 'requesting') return;
-  const target = instructionTargetFor(lastState, draft.targetLaunchRef);
-  if (!target || !instructionTargetMode(target, draft.mode) || !draft.text.trim() || instructionInFlight.has(sessionId)) return;
+  const target = instructionDraftTargetFor(lastState, sessionId, draft);
+  const mode = instructionModeForTarget(target);
+  const binding = instructionBindingForTarget(target, mode);
+  if (lastState?.instructionDiagnostics?.service !== 'ready' || lastState?.instructionDiagnostics?.blocked === true ||
+      lastState?.instructionDiagnostics?.targets !== 'available' || !target || draft.targetLaunchRef !== target.launchRef ||
+      draft.mode !== mode || !sameInstructionBinding(draft.binding, binding) || !instructionTargetMode(target, draft.mode) ||
+      !draft.text.trim() || instructionInFlight.has(sessionId)) return;
+  if (!draft.deliveryAttemptId || !draft.logicalMessageId) Object.assign(draft, instructionIds());
+  const reservationKey = draft.deliveryAttemptId;
   const key = sessionId;
   const previewText = draft.text;
   if (!reserveInstructionPreviewSave(reservationKey, previewText)) {
@@ -5823,9 +5974,18 @@ async function runSessionAction(button, url, body, errorMessage, focusExcludedNo
 
 document.addEventListener('click', (event) => {
   if (event.button === 0 && handleExternalLink(event)) return;
+  const commonOption = event.target.closest('[data-common-option]');
+  if (commonOption?.type === 'radio' && clearSelectedCommonQuestionOption(commonOption)) {
+    return;
+  }
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.instructionAction) { void runInstructionAction(button); return; }
+  if (button.dataset.instructionRebind) {
+    const sessionId = button.dataset.instructionRebind;
+    if (rebindInstructionDraft(sessionId) && lastState) render(lastState);
+    return;
+  }
   if (button.dataset.instructionPreviewRetry) { void runInstructionPreviewSaveRetry(button.dataset.instructionPreviewRetry); return; }
   if (button.dataset.instructionAlternativeOpen) {
     const id = button.dataset.instructionAlternativeOpen;
@@ -6059,6 +6219,22 @@ document.addEventListener('click', (event) => {
   }
 });
 
+document.addEventListener('click', (event) => {
+  const pick = event.target.closest('[data-answer-pick]');
+  if (pick?.type === 'radio') clearSelectedAnswerPick(pick);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== ' ' && event.code !== 'Space') return;
+  const commonOption = event.target.closest('[data-common-option]');
+  if (commonOption?.type === 'radio' && clearSelectedCommonQuestionOption(commonOption)) {
+    event.preventDefault();
+    return;
+  }
+  const pick = event.target.closest('[data-answer-pick]');
+  if (pick?.type === 'radio' && clearSelectedAnswerPick(pick)) event.preventDefault();
+});
+
 document.addEventListener('auxclick', (event) => {
   if (event.button === 1) handleExternalLink(event);
 });
@@ -6169,6 +6345,7 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    observeInstructionDraftBindings(state);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
