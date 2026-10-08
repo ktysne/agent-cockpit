@@ -2648,67 +2648,50 @@ class DashboardState {
     }
   }
 
-  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
+  // 変化の元になる記録。種類ごとの取り出しと対象のプロダクトの絞り込みが、同じ記録を見る。
+  sinceSeenSources(pullRequestGroups) {
+    const registrations = this.pullRequestRegistrations();
+    const records = [...registrations, ...this.relatedPullRequestRegistrations()];
+    const storedMerged = [...this.mergedPullRequests.values()];
+    return {
+      registrations,
+      pullRequestGroups,
+      pullRequestTitles: collectPullRequestTitles(records, storedMerged),
+      mergedPullRequests: collectMergedPullRequests(records, storedMerged),
+    };
+  }
+
+  // 変化の元になる記録のどれかに載るプロダクトを集める。取り出しの関数が見る記録は、ここでも対象に加える。
+  // 加え忘れると、その種類の変化は重複の除去で捨てられる。
+  sinceSeenProducts(sessions, sources) {
     const products = new Map();
     const visibleProductKeys = new Set();
-    const registrations = this.pullRequestRegistrations();
-    const relatedRegistrations = this.relatedPullRequestRegistrations();
-    const mergedPullRequests = new Map();
-    const pullRequestTitles = new Map();
-    const rememberPullRequestTitle = (owner, repo, number, title) => {
-      if (typeof title !== 'string' || !title) return;
-      pullRequestTitles.set(relatedPullRequestRecordKey(owner, repo, number), title);
-    };
-    for (const record of [...registrations, ...relatedRegistrations]) {
-      rememberPullRequestTitle(record.owner, record.repo, record.number, record.lastOpen?.title);
-    }
     const addProduct = (value) => {
       const product = cloneProduct(value);
       if (product && !products.has(product.key)) products.set(product.key, product);
       return product;
     };
-    for (const merged of this.mergedPullRequests.values()) {
-      mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
-      if (merged.title !== `#${merged.number}`) rememberPullRequestTitle(merged.owner, merged.repo, merged.number, merged.title);
-    }
-    for (const record of [...registrations, ...relatedRegistrations]) {
-      if (record.state !== 'merged' || !record.mergedAt) continue;
-      const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
-      if (mergedPullRequests.has(key)) continue;
-      mergedPullRequests.set(key, {
-        owner: record.owner,
-        repo: record.repo,
-        number: record.number,
-        title: record.lastOpen?.title,
-        mergedAt: record.mergedAt,
-      });
-    }
-    // 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
-    const productsForMergedPullRequest = (merged) => {
-      const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
-      const found = [
-        ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
-          .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
-        ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
-          .map((group) => cloneProduct(group.product)).filter(Boolean),
-      ];
-      if (!found.length) return [repoProduct(merged.owner, merged.repo)];
-      return [...new Map(found.map((product) => [product.key, product])).values()];
-    };
     for (const session of sessions) {
       const product = addProduct(session.product);
       if (product) visibleProductKeys.add(product.key);
     }
-    for (const group of pullRequestGroups) {
+    for (const group of sources.pullRequestGroups) {
       const product = addProduct(group.product || (group.owner && group.repo ? repoProduct(group.owner, group.repo) : null));
       if (product) visibleProductKeys.add(product.key);
     }
     for (const plan of this.plans.values()) addProduct(plan.product);
-    for (const record of registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
+    for (const record of sources.registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
     for (const record of this.ciFailures) addProduct(record.product);
-    for (const merged of mergedPullRequests.values()) {
-      for (const product of productsForMergedPullRequest(merged)) addProduct(product);
+    for (const merged of sources.mergedPullRequests.values()) {
+      for (const product of mergedPullRequestProducts(merged, sources)) addProduct(product);
     }
+    return { products, visibleProductKeys };
+  }
+
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
+    const sources = this.sinceSeenSources(pullRequestGroups);
+    const { registrations, pullRequestTitles, mergedPullRequests } = sources;
+    const { products, visibleProductKeys } = this.sinceSeenProducts(sessions, sources);
 
     this.refreshSeenTimes(products, visibleProductKeys, now);
 
@@ -2775,7 +2758,7 @@ class DashboardState {
     }
 
     for (const merged of mergedPullRequests.values()) {
-      for (const product of productsForMergedPullRequest(merged)) {
+      for (const product of mergedPullRequestProducts(merged, sources)) {
         const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
         const title = pullRequestTitles.get(identity);
         addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
@@ -2849,6 +2832,52 @@ class DashboardState {
       notificationTypes: [...this.notificationTypes].sort(),
     };
   }
+}
+
+function collectPullRequestTitles(records, storedMerged) {
+  const titles = new Map();
+  const remember = (owner, repo, number, title) => {
+    if (typeof title !== 'string' || !title) return;
+    titles.set(relatedPullRequestRecordKey(owner, repo, number), title);
+  };
+  for (const record of records) remember(record.owner, record.repo, record.number, record.lastOpen?.title);
+  for (const merged of storedMerged) {
+    if (merged.title !== `#${merged.number}`) remember(merged.owner, merged.repo, merged.number, merged.title);
+  }
+  return titles;
+}
+
+function collectMergedPullRequests(records, storedMerged) {
+  const mergedPullRequests = new Map();
+  for (const merged of storedMerged) {
+    mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
+  }
+  for (const record of records) {
+    if (record.state !== 'merged' || !record.mergedAt) continue;
+    const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+    if (mergedPullRequests.has(key)) continue;
+    mergedPullRequests.set(key, {
+      owner: record.owner,
+      repo: record.repo,
+      number: record.number,
+      title: record.lastOpen?.title,
+      mergedAt: record.mergedAt,
+    });
+  }
+  return mergedPullRequests;
+}
+
+// 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
+function mergedPullRequestProducts(merged, { registrations, pullRequestGroups }) {
+  const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
+  const found = [
+    ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
+      .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
+    ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
+      .map((group) => cloneProduct(group.product)).filter(Boolean),
+  ];
+  if (!found.length) return [repoProduct(merged.owner, merged.repo)];
+  return [...new Map(found.map((product) => [product.key, product])).values()];
 }
 
 function cloneResolution(resolution) {
