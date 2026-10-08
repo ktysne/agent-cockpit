@@ -305,6 +305,7 @@ h3.sub .count { font-weight: normal; }
 .pr.merge-pending { margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; background: var(--surface-2); }
 .merge-btn { margin-left: auto; padding: 4px 12px; min-height: 32px; border: 0; border-radius: 8px; background: var(--ok); color: var(--on-ok); cursor: pointer; }
 .merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.merge-btn:disabled { cursor: default; opacity: .55; }
 .reservation-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reservation-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .reservation-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2194,7 +2195,7 @@ function appendPullRequestTree(target, group, pullRequest) {
       left.title = 'GitHub でキューから外れたときに押すと、マージの操作に戻る';
       actions.append(left);
     }
-  } else if (mergeKey && (reservation || pullRequest.canMerge)) {
+  } else if (mergeKey && !shownInConfirmation && (reservation || pullRequest.canMerge)) {
     if (conditionMet) actions.append(element('span', 'merge-state ok', 'マージできます'));
     else if (pullRequest.canMerge) actions.append(element('span', 'merge-state', 'マージ操作は可能'));
     const merge = element('button', `merge-btn ${conditionMet ? '' : 'outline'}`.trim(), 'マージする');

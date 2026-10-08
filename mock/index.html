@@ -282,6 +282,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .pr.merge-pending { background: var(--surface-2); border: 1px solid var(--border); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-btn { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.merge-btn:disabled { cursor: default; opacity: .55; }
 .reservation-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reservation-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .reservation-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1815,14 +1816,15 @@ function prItem(p, pr) {
   const shownWaits = crossReviewState(pr).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
   const queued = Boolean(pr.mergeIntent);
   // 常駐サーバーが gh でマージしている間の印。確認欄から実行中の操作は確認欄の「処理中…」で示す。
-  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !(confirmManual && pullRequestMergeInFlight.has(k));
+  const shownInConfirmation = confirmManual && pullRequestMergeInFlight.has(k);
+  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !shownInConfirmation;
   const mergeIntent = queued || mergeInProgress;
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
-    !mergeIntent && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
+    !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
       <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
     conflictButton(p, pr),
   ].join('').trim();

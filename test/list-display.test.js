@@ -639,6 +639,13 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   });
   assert.match(inFlightTarget.textContent, /処理中…/);
   assert.doesNotMatch(inFlightTarget.textContent, /マージ処理中|マージキューに追加済み/);
+  const mergeableInFlightTarget = fakeElement('div');
+  webContext.renderPullRequest(mergeableInFlightTarget, {}, {
+    number: 1, title: '処理中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'abc', children: [],
+  });
+  assert.match(mergeableInFlightTarget.textContent, /処理中…/);
+  assert.doesNotMatch(mergeableInFlightTarget.textContent, /マージする|マージできます|収束後マージ/);
 
   webContext.pullRequestMergeConfirmations.delete('repo#1');
   const reservingTarget = fakeElement('div');
@@ -697,6 +704,10 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   });
   assert.match(mockInFlight, /処理中…/);
   assert.doesNotMatch(mockInFlight, /マージ処理中|マージキューに追加済み/);
+  const mockMergeableInFlight = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
+    number: 1, title: '処理中', head: 'feature', sha: 'abc', conflict: false,
+  });
+  assert.doesNotMatch(mockMergeableInFlight, /data-merge="|マージできます|収束後マージ/);
   mockContext.ui.confirm = null;
   mockContext.pullRequestMergeInFlight.delete('repo#1');
 
