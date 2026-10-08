@@ -28,6 +28,11 @@ const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_EXTERNAL_URL_LENGTH = 2048;
 const MAX_NATIVE_PENDING_REQUESTS = 128;
+const OWNED_STOP_FIELDS = Object.freeze(['launchRef', 'executionId', 'sessionId', 'expectedContextId',
+  'expectedOwnerGeneration', 'stopRevision']);
+const OWNED_PROCESS_STATES = new Set([
+  'not_started', 'starting', 'running', 'stopping', 'stopped', 'stop_unconfirmed', 'disconnected', 'quarantined', 'failed',
+]);
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_SCAN_INTERVAL_MS = 10_000;
 const WRITER_CLAIM_FIELDS = Object.freeze([
@@ -412,6 +417,39 @@ function instructionProjection(value) {
   };
 }
 
+function ownedExecutionProjection(value) {
+  const fields = ['launchRef', 'executionId', 'sessionId', 'expectedContextId', 'expectedOwnerGeneration',
+    'stopRevision', 'processState', 'canStop', 'stopConfirmed', 'hold'];
+  if (!hasExactKeys(value, fields) || !validScopedIdentifier(value.launchRef) ||
+      !validScopedIdentifier(value.executionId) || !validSessionId(value.sessionId) ||
+      (value.expectedContextId !== null && !validScopedIdentifier(value.expectedContextId)) ||
+      !Number.isSafeInteger(value.expectedOwnerGeneration) || value.expectedOwnerGeneration < 0 ||
+      !Number.isSafeInteger(value.stopRevision) || value.stopRevision < 0 ||
+      !OWNED_PROCESS_STATES.has(value.processState) || typeof value.canStop !== 'boolean' ||
+      typeof value.stopConfirmed !== 'boolean' || value.stopConfirmed && value.processState !== 'stopped' ||
+      value.stopConfirmed && value.canStop) return null;
+  const hold = value.hold;
+  if (!hasExactKeys(hold, ['reason', 'retainedRequestCount', 'remainingRequestCount', 'limit']) ||
+      ![null, 'capacity', 'unknown'].includes(hold.reason) || hold.limit !== MAX_NATIVE_PENDING_REQUESTS ||
+      !Number.isSafeInteger(hold.retainedRequestCount) || hold.retainedRequestCount < 0 ||
+      hold.retainedRequestCount > hold.limit || !Number.isSafeInteger(hold.remainingRequestCount) ||
+      hold.remainingRequestCount < 0 || hold.remainingRequestCount > hold.limit ||
+      hold.retainedRequestCount + hold.remainingRequestCount !== hold.limit ||
+      hold.reason === 'capacity' && (hold.retainedRequestCount !== hold.limit || hold.remainingRequestCount !== 0)) return null;
+  return {
+    launchRef: value.launchRef,
+    executionId: value.executionId,
+    sessionId: value.sessionId,
+    expectedContextId: value.expectedContextId,
+    expectedOwnerGeneration: value.expectedOwnerGeneration,
+    stopRevision: value.stopRevision,
+    processState: value.processState,
+    canStop: value.canStop,
+    stopConfirmed: value.stopConfirmed,
+    hold: { ...hold },
+  };
+}
+
 function instructionErrorStatus(error) {
   const code = typeof error?.code === 'string' ? error.code : '';
   if (code === 'instruction_not_found' || code === 'delivery_not_found') return 404;
@@ -459,6 +497,8 @@ function createRequestHandler(options) {
     instructionService = null,
     instructionServiceReady = false,
     instructionTargetState = null,
+    ownedExecutionSnapshot = null,
+    stopOwnedExecution = null,
     pendingInstructionLosses = new Set(),
     pullRequestTracker,
     pullRequestMergeManager,
@@ -1254,7 +1294,71 @@ function createRequestHandler(options) {
         ? { ...(commonQuestionSnapshot?.recovery ? { recovery: commonQuestionSnapshot.recovery } : {}),
           ...(orphanedCommonQuestions.length ? { orphanedQuestions: orphanedCommonQuestions } : {}) }
         : undefined;
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion, instructionTargets, instructionDiagnostics, ...(commonQuestionDiagnostics ? { commonQuestionDiagnostics } : {}) });
+      let ownedExecutions = [];
+      let ownedExecutionDiagnostics = { status: ownedExecutionSnapshot ? 'unavailable' : 'unconfigured' };
+      if (ownedExecutionSnapshot) {
+        try {
+          const rawOwnedExecutions = await ownedExecutionSnapshot();
+          if (!Array.isArray(rawOwnedExecutions) || rawOwnedExecutions.length > 4096) throw new Error();
+          const seenLaunchRefs = new Set();
+          ownedExecutions = rawOwnedExecutions.map((value) => {
+            const projected = ownedExecutionProjection(value);
+            if (!projected || seenLaunchRefs.has(projected.launchRef)) throw new Error();
+            seenLaunchRefs.add(projected.launchRef);
+            return projected;
+          });
+          ownedExecutionDiagnostics = { status: 'ready' };
+        } catch {
+          ownedExecutions = [];
+        }
+      }
+      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion, instructionTargets, instructionDiagnostics, ownedExecutions, ownedExecutionDiagnostics, ...(commonQuestionDiagnostics ? { commonQuestionDiagnostics } : {}) });
+      return;
+    }
+    if (request.method === 'POST' && requestUrl.pathname === '/api/executions/stop') {
+      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
+        jsonResponse(response, 401, { error: 'Unauthorized' });
+        return;
+      }
+      if (!validRequiredUiOrigin(request, info.port)) {
+        jsonResponse(response, 403, { error: 'Forbidden' });
+        return;
+      }
+      if (!stopOwnedExecution) {
+        jsonResponse(response, 503, { error: 'owned_execution_stop_unavailable' });
+        return;
+      }
+      let body;
+      try { body = JSON.parse(await readJsonBody(request)); }
+      catch (error) {
+        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
+        return;
+      }
+      if (!hasExactKeys(body, OWNED_STOP_FIELDS) || !validScopedIdentifier(body.launchRef) ||
+          !validScopedIdentifier(body.executionId) || !validSessionId(body.sessionId) ||
+          (body.expectedContextId !== null && !validScopedIdentifier(body.expectedContextId)) ||
+          !Number.isSafeInteger(body.expectedOwnerGeneration) || body.expectedOwnerGeneration < 0 ||
+          !Number.isSafeInteger(body.stopRevision) || body.stopRevision < 0) {
+        jsonResponse(response, 400, { error: 'invalid_owned_stop_request' });
+        return;
+      }
+      try {
+        const result = await stopOwnedExecution(body);
+        const ownedExecution = result?.ownedExecution === null ? null : ownedExecutionProjection(result?.ownedExecution);
+        if (result?.status === 'stale') {
+          jsonResponse(response, 409, { error: 'stale_owned_execution', ownedExecution });
+          return;
+        }
+        if (!ownedExecution || !['stop_confirmed', 'stop_unconfirmed'].includes(result?.status) ||
+            (result.status === 'stop_confirmed') !== ownedExecution.stopConfirmed) {
+          jsonResponse(response, 503, { error: 'owned_execution_stop_unavailable' });
+          return;
+        }
+        jsonResponse(response, 200, { status: result.status, ownedExecution });
+      } catch (error) {
+        jsonResponse(response, error?.code === 'invalid_owned_stop_request' ? 400 : 503,
+          { error: error?.code === 'invalid_owned_stop_request' ? 'invalid_owned_stop_request' : 'owned_execution_stop_unavailable' });
+      }
       return;
     }
     if (await handleInstructionRequest(request, response, requestUrl, info)) return;
@@ -2613,6 +2717,10 @@ async function startServer(options = {}) {
   if (options.onShutdown !== undefined && typeof options.onShutdown !== 'function') {
     throw new TypeError('onShutdown must be a function');
   }
+  if ((options.ownedExecutionSnapshot !== undefined && typeof options.ownedExecutionSnapshot !== 'function') ||
+      (options.stopOwnedExecution !== undefined && typeof options.stopOwnedExecution !== 'function')) {
+    throw new TypeError('owned execution handlers must be functions');
+  }
   for (const key of Object.keys(process.env)) {
     if (isGithubCredentialEnvironmentVariable(key)) delete process.env[key];
   }
@@ -2649,6 +2757,8 @@ async function startServer(options = {}) {
   const launchRegistry = options.launchRegistry || null;
   const questionService = options.questionService || null;
   const instructionService = options.instructionService || null;
+  const ownedExecutionSnapshot = options.ownedExecutionSnapshot || null;
+  const stopOwnedExecution = options.stopOwnedExecution || null;
   const pendingInstructionLosses = new Set();
   const pendingQuestionLosses = new Set();
   let questionServiceReady = false;
@@ -2762,6 +2872,8 @@ async function startServer(options = {}) {
     instructionService,
     instructionServiceReady,
     instructionTargetState: options.instructionTargetState,
+    ownedExecutionSnapshot,
+    stopOwnedExecution,
     pendingInstructionLosses,
     providerEventProjection: options.providerEventProjection,
     resolveActorCorrelation: options.resolveActorCorrelation,
