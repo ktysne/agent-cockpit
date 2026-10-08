@@ -883,4 +883,4 @@ function createCommonQuestionService(options = {}) {
     resolveExternal, reportResponseLost, dashboardSnapshot, readLateAnswerDraft, flush, close });
 }
 
-module.exports = { createCommonQuestionService };
+module.exports = { DEFAULT_AUTO_APPLY_MINIMUM_WAIT_MS, createCommonQuestionService };
