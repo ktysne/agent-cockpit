@@ -770,6 +770,22 @@ test('並行した Agent 呼び出しで SubagentStart が入れ替わっても�
   assert.equal(second.model, 'claude-two');
 });
 
+test('agentId で引き直した行は、同じ行を指していた別の呼び出しの agentId の無い応答で書き換えない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'agent-stale', ...event });
+  add({ hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Agent', tool_use_id: 'call-1', description: '一つ目の説明' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 200, agent_id: 'agent-2', agent_type: 'Explore' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 300, tool_name: 'Agent', tool_use_id: 'call-2', description: '二つ目の説明' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 400, agent_id: 'agent-1', agent_type: 'Explore' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 500, tool_name: 'Agent', tool_use_id: 'call-1', agentId: 'agent-1', resolvedModel: 'claude-one' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 600, tool_name: 'Agent', tool_use_id: 'call-2', resolvedModel: 'claude-two' });
+
+  const first = state.snapshot().sessions[0].agents.find((agent) => agent.agent_id === 'agent-1');
+  assert.equal(first.description, '一つ目の説明');
+  assert.equal(first.model, 'claude-one');
+});
+
 test('Agent の PostToolUse の agentId は曖昧な結び付けを解決する', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();

@@ -860,6 +860,14 @@ function applyAgentToolCompletion(session, event) {
       ? responseAgent
       : boundAgent && !boundAgent.isCodex ? boundAgent : null;
     if (!targetAgent) return;
+    if (targetAgent === responseAgent) {
+      // 同じ行を指す別の呼び出しの結び付けは到着順の誤りなので、agentId の無い応答で使わせない。
+      for (const [otherToolUseId, boundAgentId] of Object.entries(session.agentToolBindings)) {
+        if (otherToolUseId !== toolUseId && boundAgentId === targetAgent.agent_id) {
+          session.agentToolBindings[otherToolUseId] = AMBIGUOUS_AGENT_CALL;
+        }
+      }
+    }
     if (toolUseId) session.agentToolBindings[toolUseId] = targetAgent.agent_id;
     const agentTool = toolUseId && session.tools.find((tool) => tool.tool_use_id === toolUseId && tool.tool_name === 'Agent');
     // SubagentStart の時点の結び付けは到着順で誤ることがあるので、呼び出し自身の説明で上書きする。
