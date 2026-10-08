@@ -38,12 +38,16 @@ fixtureで検証した変更をfeatureへ集約し、実runtime確認をfeature�
 |---:|---|---|---|
 | 1 | `codex/sync-main-259-20261008` / #261 | `codex/feature-codex-support` | レビュー2往復で収束。#259の同期と #262 の修正。merge `feb3af4` で集約済み。 |
 | 2 | `codex/plan-a-runtime-gates-20261008` / #263 | `codex/feature-codex-support` | レビュー3往復で収束。計画の明示承認を確認。merge `d079203` で集約済み。 |
-| 3 | `codex/native-capacity-stop-211-20261008` / #269 | `codex/feature-codex-support` | 集約先 `d079203` を起点に#211の容量保留と物理停止の確認条件を実装。クロスレビュー中。製品停止HTTPと実runtimeの条件は後続で確認する。 |
+| 3 | `codex/native-capacity-stop-211-20261008` / #269 | `codex/feature-codex-support` | 容量保留と物理停止の確認条件を実装。Claudeレビュー2往復で収束しDraft解除。fixture全体2146/2146成功。実runtimeは未確認。 |
+| 4 | `codex/native-owned-stop-api-211-20261008` / #273 | `codex/native-capacity-stop-211-20261008` | 六項目の停止対象照合、旧配送の分離、後継開始の確認を製品HTTPへ接続。Claudeレビュー中。実runtimeは未確認。 |
+| 5 | `codex/native-stop-mock-211-20261008` | `codex/native-owned-stop-api-211-20261008` | 採用済みモックと製品画面を同じ判断カード・ボタンへ整合。画面関連fixture216/216成功。製品HTMLのブラウザ表示をfixtureで確認。 |
 
 開発者は下から通常mergeで取り込み、次段のbaseがfeatureへ付け替わったことを確認してから進める。
 以後の実装PRは、計画確認後に最新featureまたは開発者指定の直前PRを起点にする。
 実際のPR番号、head、base、SHAはGitHubとGitで確認した値だけを記録する。
 PRのマージは開発者が行う。
+mainには#272のクロスレビュー状態を他worktreeから取得する修正が追加されている。
+#211の変更とは別の同期PRで通常mergeし、featureからmainへの最終差分で取り込み漏れを確認する。
 
 ## 実runtime計画
 
