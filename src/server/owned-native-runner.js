@@ -538,7 +538,9 @@ function createOwnedNativeRunner(options) {
     if (childExited && childClosed) return Promise.resolve(true);
     if (childStopPromise) return childStopPromise;
     try { childToStop.stdin.end(); } catch {}
-    try { childToStop.kill(); } catch {}
+    if (!childExited && !childClosed) {
+      try { childToStop.kill(); } catch {}
+    }
     const operation = new Promise((resolve) => {
       let settled = false;
       let timer;
