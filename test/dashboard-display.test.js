@@ -646,6 +646,7 @@ test('種類別とプロダクト別のセクションは設定順に並び、�
       appendPermissionWaits(target) { target.append({ marker: 'permission' }); },
       appendCommonQuestions() {},
       appendDecisions(target) { target.append({ marker: 'decision' }); },
+      appendOwnedExecutionStopCards() {},
       appendTasks(target) { target.append({ marker: 'task' }); },
       appendAgents(target) { target.append({ marker: 'agent' }); },
       mainRow: () => ({ marker: 'main' }),

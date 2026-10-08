@@ -262,6 +262,7 @@ test('共通質問の仮選択件数と質問フィルターは既存判断事�
     questions: 1,
     questionProvisional: 1,
     decisions: 1,
+    nativeWaits: 0,
     total: 3,
   });
   assert.deepEqual(context.shownCommonQuestions(session).map((item) => item.internalQuestionId), ['regular', 'provisional']);

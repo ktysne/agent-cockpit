@@ -141,6 +141,7 @@ function composerContext(session, draft = {}) {
   const context = pageContext(mock, {
     ui,
     allSessions: () => [session],
+    nativeStopState: () => '',
     MAX_NATIVE_PENDING_REQUESTS: Number(mock.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
     DATA: { products: [product], integrations: { instructions: true } },
     instructionPreviewText: record => record.text,
@@ -933,6 +934,7 @@ test('mock saved instruction stays unsendable during native waiting without dupl
   const ui = { instructionPreviewRecoveries: {}, instructionPreviews: {}, instructionAlternatives: {} };
   const context = pageContext(mock, {
     ui, DATA: { integrations: { instructions: true } }, MAX_NATIVE_PENDING_REQUESTS: 16,
+    nativeStopState: () => '',
     instructionModeText: mode => mode, instructionStateText: () => '保存済みです。送信前です。',
     absoluteTimeLabel: () => '作成時刻',
     isFinishedInstructionRecord: () => false,

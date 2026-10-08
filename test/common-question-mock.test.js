@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { functionSource, pageContext, sourceBetween } = require('./support/page-context');
 
-const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8');
+const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 function constSource(name) {
   const start = mock.indexOf(`const ${name} = `);
@@ -121,6 +121,7 @@ function createHarness() {
       'countJudgments', 'countHidden', 'hiddenCommonQuestionsOf', 'decisionCountTitle', 'commonQuestionDraft', 'commonQuestionAnswersValid',
       'readCommonQuestionDraft', 'updateCommonQuestionSubmit', 'clearSelectedMockCommonQuestionOption', 'sameCommonQuestionAnswers',
       'commonQuestionStatus', 'commonQuestionLabels', 'commonQuestionCancelControl', 'commonQuestionCard',
+      'nativeWaitCard',
       'isFinishedSession', 'visibleClosedPrs', 'finishedDeletionTargets', 'recordDeletionControls',
       'decisionSessionBlock', 'sessionBlock', 'renderProductMode', 'renderKindMode', 'renderSummary'].map(codeFor),
   ];
@@ -150,6 +151,7 @@ function createHarness() {
     agentSection: () => '',
     sessionDisplayName: candidate => candidate.title,
     instructionComposer: () => '',
+    nativeStopState: () => '',
     orderedSectionKeys: keys => keys,
     isBusyAgent: () => false,
     visibleSubagents: () => [],

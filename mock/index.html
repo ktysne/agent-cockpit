@@ -667,10 +667,17 @@ const DATA = {
     { reason: 'claude_parent_unverified', source: 'hook', ppid: 31872, since: new Date(Date.now() - 6 * 60_000).toISOString(), lastAt: new Date(Date.now() - 30_000).toISOString() },
   ],
 };
+const MAX_NATIVE_PENDING_REQUESTS = 128;
+const NATIVE_WAIT_FIXTURE_SESSION_ID = 'agent-cockpit-codex-pending';
+const NATIVE_WAIT_FIXTURE_STATES = ['native-wait', 'native-capacity', 'native-stopping', 'native-stop-unconfirmed', 'native-stopped'];
 let mockInstructionTargetFixture = '';
+let nativeWaitFixtureState = '';
+let nativeStopInteractionState = null;
+let nativeStopConfirmationOpen = false;
 try {
   const params = new URLSearchParams(location.search);
   mockInstructionTargetFixture = params.get('state') || '';
+  nativeWaitFixtureState = NATIVE_WAIT_FIXTURE_STATES.includes(mockInstructionTargetFixture) ? mockInstructionTargetFixture : '';
   for (const key of ['commonQuestions', 'instructions']) if (params.get(key) === 'off') DATA.integrations[key] = false;
 } catch {}
 
@@ -683,6 +690,16 @@ function applyMockInstructionTargetFixture(session, fixture) {
     { launchRef: 'launch-rec-studio-agent', executionId, origin: 'delegated', status: 'working', nativeTurnId: 'turn-rec-studio-agent', identity: { nativeId: 'Codex 実装担当' } },
   ];
   return session;
+}
+
+function applyMockNativeWaitFixture(session) {
+  if (session.id !== NATIVE_WAIT_FIXTURE_SESSION_ID || nativeWaitFixtureState !== 'native-capacity') return session;
+  return {
+    ...session,
+    nativeRequestIdsHeld: MAX_NATIVE_PENDING_REQUESTS,
+    nativeRequestIdLimit: MAX_NATIVE_PENDING_REQUESTS,
+    nativeRequestCapacityHeld: true,
+  };
 }
 
 for (const p of DATA.products) {
@@ -721,7 +738,7 @@ for (const p of DATA.products) {
         { id: 'recommended', label: '要点のみ', description: '離席中の推奨' }, { id: 'all', label: 'すべて表示', description: '詳細も含める' },
       ] }],
     },
-  ];  p.sessions = [mainSession, ...(p.extraSessions || []).map(session => ({
+  ];  p.sessions = [mainSession, ...(p.extraSessions || []).map(session => applyMockNativeWaitFixture({
     ...session, lastUpdatedAt: updatedAt(session.lastUpdatedMin ?? 2),
   }))];
   for (const key of ['branch', 'sessionTitle', 'status', 'main', 'perms', 'subagents', 'tasks', 'decisions', 'extraSessions', 'lastUpdatedMin']) delete p[key];
@@ -729,7 +746,6 @@ for (const p of DATA.products) {
 
 const STORE_KEY = 'agent-cockpit-mock';
 const MAX_PENDING_INSTRUCTION_PREVIEWS = 64;
-const MAX_NATIVE_PENDING_REQUESTS = 128;
 const MOCK_PREVIEW_RECOVERY_ID = 'mock-instruction-preview-recovery';
 const MOCK_PREVIEW_RECOVERY_TEXT = '既存の指示本文を、このタブで送信前に確認できるよう保存します。';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
@@ -1284,11 +1300,11 @@ function commonQuestionCard(p, session, record) {
     const mode = instructionTargetAvailability(session).mode;
     const sourceKey = `${question.internalQuestionId}:${ref.index}:${ref.digest}`;
     const exists = ui.instructionRecords.some(item => item.sourceKey === sourceKey);
-    return mode ? `<button type="button" class="secondary" data-mock-late-instruction="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-late-index="${ref.index}" data-late-digest="${esc(ref.digest)}" ${exists ? 'disabled' : ''}>${exists ? '後続の指示を保存済み' : '保存済み回答から後続の指示を作る'}</button>` : '';
+    return mode ? `<button type="button" class="ghost" data-mock-late-instruction="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-late-index="${ref.index}" data-late-digest="${esc(ref.digest)}" ${exists ? 'disabled' : ''}>${exists ? '後続の指示を保存済み' : '保存済み回答から後続の指示を作る'}</button>` : '';
   }).join('');
   const lateActionBlock = lateActions ? `<div class="answer-foot">${lateActions}</div>` : '';
   const selection = question.selectionSource ? `<p class="decision-summary">${selectedLabels.length ? question.selectionSource === 'away-default' ? '離席時の推奨で仮選択: ' + selectedLabels.join('、') : '保存した選択: ' + selectedLabels.join('、') : '自由記入を含む回答を保存しました。'}</p>` : '';
-  const actions = formAvailable ? `<div class="answer">${topics}<small class="meta">すべての質問に回答すると保存できます。</small><p class="answer-error common-question-error" role="alert">${esc(commonQuestionErrors.get(key) || '')}</p><p class="ctx common-question-note">${esc(commonQuestionNotices.get(key) || '')}</p><div class="answer-foot"><button type="button" class="primary" data-common-submit="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" ${commonQuestionInFlight.has(key) || !canSubmit || isRepeated ? 'disabled' : ''}>${question.selectionSource ? '後続の回答を保存' : '回答を保存'}</button>${!question.selectionSource ? `<button type="button" class="secondary" data-common-hold="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-held="${!question.held}" ${commonQuestionInFlight.has(key) ? 'disabled' : ''}>${question.held ? '保留を解除' : '質問を保留'}</button>` : ''}${commonQuestionCancelControl(question, session, key)}</div></div>` : '';
+  const actions = formAvailable ? `<div class="answer">${topics}<small class="meta">すべての質問に回答すると保存できます。</small><p class="answer-error common-question-error" role="alert">${esc(commonQuestionErrors.get(key) || '')}</p><p class="ctx common-question-note">${esc(commonQuestionNotices.get(key) || '')}</p><div class="answer-foot"><button type="button" class="primary" data-common-submit="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" ${commonQuestionInFlight.has(key) || !canSubmit || isRepeated ? 'disabled' : ''}>${question.selectionSource ? '後続の回答を保存' : '回答を保存'}</button>${!question.selectionSource ? `<button type="button" class="ghost" data-common-hold="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}" data-held="${!question.held}" ${commonQuestionInFlight.has(key) ? 'disabled' : ''}>${question.held ? '保留を解除' : '質問を保留'}</button>` : ''}${commonQuestionCancelControl(question, session, key)}</div></div>` : '';
   return `<article class="decision common-question" data-question-id="${esc(question.internalQuestionId)}" data-session-id="${esc(session.id)}"><div class="dhead"><span class="dtitle">${esc(question.questionId)}</span>${sessionTag(p, session, true)}</div><p class="ctx common-question-status">${esc(commonQuestionStatus(question))}</p>${selection}${deadlineNote}${question.externalResolution ? '<p class="ctx common-question-note">元の質問は外部で解決済みです。ここで保存する回答は後続の指示として記録します。</p>' : ''}${lateNote}${lateActionBlock}${actions}</article>`;
 }
 
@@ -1368,7 +1384,11 @@ function instructionTargetName(session, target) {
   return target?.identity?.nativeId ? `${target.identity.nativeId} · ${origin}` : target?.launchRef || session?.title || session?.id || '実行先';
 }
 
-function instructionTargetStatusText(target) {
+function instructionTargetStatusText(target, session = null) {
+  const stopState = session ? nativeStopState(session) : '';
+  if (stopState === 'native-stopping') return '停止確認中';
+  if (stopState === 'native-stop-unconfirmed') return '停止未確認';
+  if (stopState === 'native-stopped') return '停止済み（確認済み）';
   return target?.status === 'working' ? '作業中'
     : target?.status === 'stopped' ? '停止中'
       : target?.status === 'waiting' ? '質問・許可待ち'
@@ -1377,6 +1397,16 @@ function instructionTargetStatusText(target) {
 
 function instructionTargetAvailability(session, target = null) {
   if (!DATA.integrations.instructions) return { mode: '', reason: '' };
+  const stopState = nativeStopState(session);
+  if (stopState === 'native-stopping') {
+    return { mode: '', reason: '停止の確認中のため、追加指示を保留しています。旧実行への送信を再開せず、確認後は新しい実行からのみ再開できます。' };
+  }
+  if (stopState === 'native-stop-unconfirmed') {
+    return { mode: '', reason: '停止を確認できないため、追加指示を保留しています。旧実行へ送信せず、新しい実行も開始できません。' };
+  }
+  if (stopState === 'native-stopped') {
+    return { mode: '', reason: 'この実行は停止確認済みです。保存した追加指示は旧実行へ送信できません。再開する場合は新しい実行を開始してください。' };
+  }
   let scopedSession = session;
   if (target) {
     if (!['working', 'stopped', 'waiting'].includes(target.status)) {
@@ -1390,6 +1420,9 @@ function instructionTargetAvailability(session, target = null) {
       nativeTurnId: target.nativeTurnId,
     };
     if (target.status === 'waiting') scopedSession.nativeInstructionWaiting = target.nativeWaiting ?? [];
+  }
+  if (scopedSession.nativeRequestCapacityHeld === true) {
+    return { mode: '', reason: 'この実行で保持中の要求IDが上限に達したため、追加指示の保存を保留しています。入力内容は保持されます。停止を確認後、新しい実行からのみ再開できます。' };
   }
   if (Object.hasOwn(scopedSession, 'nativeInstructionWaiting')) {
     const pending = scopedSession.nativeInstructionWaiting;
@@ -1576,8 +1609,8 @@ function instructionCard(session, record) {
   const canSend = canSendSavedInstruction(session, record);
   const actions = record.state === 'available'
     ? previewPending
-      ? `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" disabled>内容を確認できないため送信できません</button><button type="button" class="secondary" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button></div>`
-      : `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" ${canSend ? '' : 'disabled'}>${record.mode === 'start' || record.mode === 'next-user-input' ? '同じ実行で次の入力を開始' : 'この実行へ送る'}</button><button type="button" class="secondary" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button>${record.origin === 'standalone' && instructionTargetAvailability(session).mode === 'start' ? `<button type="button" class="secondary" data-instruction-alternative-open="${esc(record.deliveryAttemptId)}">次の入力へ差し替える</button>` : ''}</div>` : '';
+      ? `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" disabled>内容を確認できないため送信できません</button><button type="button" class="ghost" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button></div>`
+      : `<div class="answer-foot"><button type="button" class="primary" data-instruction-action="send" data-instruction-id="${esc(record.deliveryAttemptId)}" ${canSend ? '' : 'disabled'}>${record.mode === 'start' || record.mode === 'next-user-input' ? '同じ実行で次の入力を開始' : 'この実行へ送る'}</button><button type="button" class="ghost" data-instruction-action="cancel" data-instruction-id="${esc(record.deliveryAttemptId)}">保存した指示を取り下げる</button>${record.origin === 'standalone' && instructionTargetAvailability(session).mode === 'start' ? `<button type="button" class="ghost" data-instruction-alternative-open="${esc(record.deliveryAttemptId)}">次の入力へ差し替える</button>` : ''}</div>` : '';
   const reason = record.state === 'unknown' ? '<p class="instruction-reason">モックでは送信結果を確認できません。再送は保留しています。</p>' : '';
   return `<article class="decision" data-instruction-id="${esc(record.deliveryAttemptId)}"><div class="dhead"><span class="dtitle" tabindex="-1">${esc(instructionModeText(record.mode))} · ${esc(record.targetName || session.title)} · ${esc(absoluteTimeLabel(record.createdAt))}</span></div><p class="ctx instruction-status">${esc(instructionStateText(record))}</p>${reason}${preview}${actions}${alternative}</article>`;
 }
@@ -1661,7 +1694,7 @@ function instructionAlternativeRecoveryPanel() {
         : !requestMatches ? '保存要求の対象が一致しません。要求内容を確認してください。'
           : '同じ内容の保存結果を確認できます。');
     const confirmation = saved.discardConfirm === true
-      ? `<small class="ctx instruction-reason">この要求内容だけをモックから破棄します。指示履歴は削除しません。</small><button type="button" class="secondary" data-instruction-alternative-discard="${esc(oldId)}">要求内容を破棄する</button><button type="button" class="secondary" data-instruction-alternative-discard-dismiss="${esc(oldId)}">戻る</button>`
+      ? `<small class="ctx instruction-reason">この要求内容だけをモックから破棄します。指示履歴は削除しません。</small><button type="button" class="ghost" data-instruction-alternative-discard="${esc(oldId)}">要求内容を破棄する</button><button type="button" class="ghost" data-instruction-alternative-discard-dismiss="${esc(oldId)}">戻る</button>`
       : `<button type="button" class="ghost" data-instruction-alternative-discard-ask="${esc(oldId)}">この要求内容を破棄</button>`;
     return `<article class="decision" data-instruction-alternative="${esc(oldId)}"><div class="dhead"><span class="dtitle" role="heading" aria-level="3" data-instruction-alternative-title="${esc(oldId)}" tabindex="-1">${esc(session?.title || '実行先を確認できません')} · 次の入力へ差し替え</span></div><section class="decision-summary instruction-preview"><strong>保存要求に固定した内容</strong><textarea rows="4" readonly data-instruction-recovery-text="${esc(oldId)}" aria-label="保存要求に固定した内容">${esc(request.text)}</textarea></section><p class="ctx instruction-reason" role="status">${esc(reason)}</p>${saved.error ? `<p class="ctx instruction-reason" role="alert">${esc(saved.error)}</p>` : ''}<div class="answer-foot"><button type="button" class="primary" data-instruction-alternative-retry="${esc(oldId)}" ${canRetry ? '' : 'disabled'}>同じ内容で保存結果を確認する</button>${confirmation}</div></article>`;
   }).join('');
@@ -1709,21 +1742,26 @@ function instructionComposer(p, session) {
   const canRebind = Boolean(!emptyDraft && !bindingMatches && availability.mode && target);
   const notice = ui.instructionNotices[session.id] || '';
   const text = String(draft.text || '');
-  const mode = availability.mode ? instructionModeText(availability.mode) : '送信方法を確認できません';
+  const stopState = nativeStopState(session);
+  const mode = availability.mode ? instructionModeText(availability.mode)
+    : stopState === 'native-stopping' ? '停止確認中・旧実行へ送信不可'
+      : stopState === 'native-stop-unconfirmed' ? '停止未確認・送信保留中'
+        : stopState === 'native-stopped' ? '停止済み・旧実行へ送信不可'
+          : session.nativeRequestCapacityHeld ? '要求IDの上限で保留中' : '送信方法を確認できません';
   const targetText = target
-    ? `${esc(instructionTargetName(session, target))} · ${esc(instructionTargetStatusText(target))}`
+    ? `${esc(instructionTargetName(session, target))} · ${esc(instructionTargetStatusText(target, session))}`
     : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
       : targets.length ? '選択した実行先を一意に確認できません' : '実行先を確認できません';
   const bindingNotice = draft.text && !bindingMatches
     ? `<p class="ctx instruction-reason">${canRebind ? `この下書きは実行状態の変化を確認しました。現在の宛先は ${targetText}、送信方法は ${esc(instructionModeText(availability.mode))} です。` : 'この下書きの宛先または実行状態が変わりました。本文を保持し、対象を確認できるまで保存を保留しています。'}</p>` : '';
   const rebind = canRebind
-    ? `<div class="answer-foot"><button type="button" class="secondary" data-instruction-rebind="${esc(session.id)}">現在の実行状態で下書きを続ける</button></div>` : '';
+    ? `<div class="answer-foot"><button type="button" class="ghost" data-instruction-rebind="${esc(session.id)}">現在の実行状態で下書きを続ける</button></div>` : '';
   const targetChoices = targets.length > 1
     ? `<section class="decision-question instruction-target-choices" role="group" aria-label="対象の実行"><div class="decision-question-title">対象の実行</div><ul class="options">${targets.map(candidate => {
       const candidateAvailability = instructionTargetAvailability(session, candidate);
       const candidateMode = candidateAvailability.mode ? instructionModeText(candidateAvailability.mode) : '現在は送信できません';
       const checked = targets.filter(item => item.launchRef === candidate.launchRef).length === 1 && draft.targetLaunchRef === candidate.launchRef;
-      const summary = `${instructionTargetName(session, candidate)} · ${instructionTargetStatusText(candidate)} · ${candidateMode}`;
+      const summary = `${instructionTargetName(session, candidate)} · ${instructionTargetStatusText(candidate, session)} · ${candidateMode}`;
       const waiting = candidate.status === 'waiting' ? `<small class="why">${esc(candidateAvailability.reason || 'Codex の質問または許可を待っています。追加の指示は保留されています。')}</small>`
         : candidate.status === 'unverified' ? '<small class="why">実行状態を確認できません。</small>' : '';
       return `<li class="pickable"><label class="pick"><input type="radio" name="instruction-target-${esc(session.id)}" value="${esc(candidate.launchRef)}" data-instruction-target-select="${esc(session.id)}" data-instruction-target-launch-ref="${esc(candidate.launchRef)}" ${checked ? 'checked' : ''}><span class="body">${esc(summary)}</span></label>${waiting}</li>`;
@@ -1995,6 +2033,11 @@ function sessionDisplayName(session) {
   return session.title || session.id;
 }
 
+function nativeStopState(session) {
+  if (session.id !== NATIVE_WAIT_FIXTURE_SESSION_ID || !nativeWaitFixtureState) return '';
+  return nativeStopInteractionState || nativeWaitFixtureState;
+}
+
 function sessionTag(p, session, withTag, includeSession = false) {
   if (!withTag) return '';
   const product = `<span class="prod-tag">${esc(p.name)}</span>`;
@@ -2041,12 +2084,22 @@ function renderLineageDiagnostics() {
 
 function mainRow(p, session, withTag) {
   const unknown = session.status === 'unknown';
+  const nativeState = nativeStopState(session);
+  const nativeStatus = {
+    'native-wait': '質問・許可待ち',
+    'native-capacity': '新しい待ちを保留中',
+    'native-stopping': '停止確認中',
+    'native-stop-unconfirmed': '停止未確認',
+    'native-stopped': '停止済み（確認済み）',
+  }[nativeState];
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
-  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : '状態不明 (時刻不明)';
+  const status = nativeStatus || (session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : '状態不明 (時刻不明)');
   const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
   const conversation = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
-  const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
+  const stateClass = nativeState === 'native-stop-unconfirmed' ? 'unknown'
+    : ['native-wait', 'native-capacity', 'native-stopped'].includes(nativeState) ? 'wait'
+      : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}`;
   return `<div class="now-row main-row">
@@ -2241,6 +2294,69 @@ function decisionCard(p, session, d, withTag) {
     </div>` : viaDialog ? `<div class="meta">${esc(p.name)} 「${esc(sessionDisplayName(session))}」</div>` : ''}
     ${!active && answerError ? `<div class="answer-error" role="alert">${esc(answerError)}</div>` : ''}
     ${summary ? `<div class="decision-summary">${summary}</div>` : ''}</article>`;
+}
+
+function nativeWaitCard(p, session, withTag) {
+  const state = nativeStopState(session);
+  if (!state) return '';
+  const waiting = ['native-wait', 'native-capacity'].includes(state);
+  const requests = session.nativeInstructionWaiting || [];
+  const heldRequestIdCount = session.nativeRequestIdsHeld || 0;
+  const requestIdLimit = session.nativeRequestIdLimit || MAX_NATIVE_PENDING_REQUESTS;
+  const remainingRequestIdCount = Math.max(0, requestIdLimit - heldRequestIdCount);
+  const questionCount = requests.find(item => item.kind === 'question')?.count || 0;
+  const approvalCount = requests.find(item => item.kind === 'approval')?.count || 0;
+  const stateLabel = {
+    'native-wait': '質問・許可待ち',
+    'native-capacity': '受付上限',
+    'native-stopping': '停止確認中',
+    'native-stop-unconfirmed': '停止未確認',
+    'native-stopped': '停止済み（確認済み）',
+  }[state];
+  const stateTone = state === 'native-stopped' ? 'ok' : state === 'native-stopping' ? 'warn' : 'danger';
+  const stateClass = state === 'native-stopped' ? 'state-ok' : state === 'native-stopping' ? 'provisional' : 'blocking';
+  const title = waiting ? 'Codex の質問・許可待ち' : 'Codex 実行の停止';
+  const detail = state === 'native-wait'
+    ? `質問 ${questionCount} 件・許可 ${approvalCount} 件への応答を待っています。回答と許可は Codex 内で行い、追加の指示は保留します。`
+    : state === 'native-capacity' ? ''
+      : state === 'native-stopping'
+        ? '停止を依頼した状態です。停止を確認するまで旧実行への送信と新しい実行の開始を保留します。'
+        : state === 'native-stop-unconfirmed'
+          ? '実行が停止したことを確認できていません。旧実行へ送信せず、新しい実行も開始しません。'
+          : '実行の停止を確認済みです。保留内容は旧実行へ送らず、新しい実行からのみ再開できます。';
+  const details = state === 'native-capacity'
+    ? [
+      `未解決の待ち: 質問 ${questionCount} 件・許可 ${approvalCount} 件。`,
+      `この実行で保持中の要求ID: ${heldRequestIdCount} 件 / 上限: ${requestIdLimit} 件 / 残り: ${remainingRequestIdCount} 件。`,
+      '要求ID容量の上限に達したため、新しい待ちの受付と追加指示の保存を保留しています。既存待ちの解決やターン終了でも上限状態を解除せず、停止確認後、新しい実行からのみ再開します。',
+    ]
+    : [detail];
+  const sessionId = esc(session.id);
+  const confirmation = nativeStopConfirmationOpen && waiting
+    ? `<div class="common-question-confirmation" role="group" aria-labelledby="native-stop-confirm-title-${sessionId}">
+        <p><strong id="native-stop-confirm-title-${sessionId}">停止する対象を確認してください</strong></p>
+        <p>セッション: ${esc(sessionDisplayName(session))}<br>実行: このセッションの現在の Codex 実行</p>
+        <p>停止を確認するまで保留中の要求は送りません。下書きは保持し、旧実行への送信を再開しません。</p>
+        <div class="common-question-confirm-actions">
+          <button type="button" class="confirm" data-native-stop-confirm="${sessionId}">停止を依頼する</button>
+          <button type="button" class="back" data-native-stop-cancel="${sessionId}">取り消す</button>
+        </div>
+      </div>`
+    : '';
+  const actions = confirmation
+    ? confirmation
+    : waiting
+      ? `<div class="answer-foot"><button type="button" class="primary" data-native-stop-open="${sessionId}">この実行を停止する</button></div>`
+      : state === 'native-stopping'
+        ? `<div class="answer-foot"><button type="button" class="primary" data-native-stop-complete="${sessionId}">停止済みの表示へ進む</button></div>`
+        : `<div class="answer-foot"><span class="sent">${state === 'native-stop-unconfirmed' ? '停止の確認が取れるまで、旧実行への送信と新実行の開始を保留します。' : '新しい実行からのみ再開できます。'}</span></div>`;
+  return `<article class="decision ${stateClass}" data-native-stop-state="${state}" data-session-id="${sessionId}">
+    <div class="dhead">${sessionTag(p, session, withTag)}<span class="dtitle" role="heading" aria-level="4" tabindex="-1" data-native-stop-status="${sessionId}">${title}</span><span class="chip ${stateTone}">${stateLabel}</span></div>
+    <div class="ctx">対象セッション: ${esc(sessionDisplayName(session))} · 対象実行: 現在の Codex 実行</div>
+    ${details.map(text => `<div class="ctx">${text}</div>`).join('')}
+    <div class="ctx">表示確認用モックです。実際のプロセス停止や要求送信は行いません。</div>
+    <div class="answer">${actions}</div>
+  </article>`;
 }
 
 const CROSS_REVIEW_MAX_ROUNDS = 3;
@@ -2701,12 +2817,13 @@ function decisionSessionBlock(p, session, withTag) {
   const ended = ui.hideFinished ? [] : session.decisions.filter(isEndedDecision);
   const expanded = !ui.hideFinished && ui.expandedEndedDecisions.includes(session.id);
   const visible = expanded ? [...active, ...ended].sort((a, b) => ageMinutes(a) - ageMinutes(b)) : active;
+  const nativeCard = nativeWaitCard(p, session, withTag);
   const cards = visible.map(d => decisionCard(p, session, d, withTag)).join('');
   const questionCards = commonQuestions.map(question => commonQuestionCard(p, session, question)).join('');
   const empty = ended.length ? '未解決の判断事項はありません。' : 'ありません';
   // 許可待ちのカードが出ているときは、判断事項が無くても「ありません」と出さない。
-  const showEmpty = !cards && !questionCards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
-  return `${cards}${questionCards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
+  const showEmpty = !nativeCard && !cards && !questionCards && !visiblePerms(session).length && !hasHiddenJudgmentItems(session);
+  return `${nativeCard}${cards}${questionCards}${showEmpty ? `<div class="empty">${empty}</div>` : ''}${endedDecisionToggle(session)}`;
 }
 
 // 作業中のタスクがあるときは未着手を畳み、作業中だけを先に見せる。未着手しか無ければ畳まない。
@@ -2796,7 +2913,9 @@ function sessionBlock(p, session) {
   const decisions = visibleDecisions(session).length;
   const permissions = visiblePerms(session).length;
   const commonQuestions = visibleCommonQuestions(session);
-  const showJudgment = decisions + permissions + commonQuestions.length > 0
+  const nativeWaitCount = nativeWaitCard(p, session, false) ? 1 : 0;
+  const judgmentCount = decisions + permissions + commonQuestions.length + nativeWaitCount;
+  const showJudgment = judgmentCount > 0
     || (!ui.hideFinished && session.decisions.some(isEndedDecision))
     || !hasHiddenJudgmentItems(session);
   return `<${groupTag} class="session-group ${multiple ? '' : 'single'}">
@@ -2804,7 +2923,7 @@ function sessionBlock(p, session) {
     <div class="session-body">
       ${multiple ? '' : `<div class="session-tag session-context">${esc(sessionDisplayName(session))}</div>`}
       ${orderedSectionKeys(['judgment', 'tasks', 'now']).map(key => ({
-        judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${decisions + permissions + commonQuestions.length} 件)</span></h3>
+        judgment: showJudgment ? `<h3 class="sub">あなたの判断が必要なこと <span class="count">(${judgmentCount} 件)</span></h3>
       ${visiblePerms(session).map(wait => permCard(p, session, wait, false)).join('')}
       ${decisionSessionBlock(p, session, false)}` : '',
       tasks: taskSessionBlock(p, session, false),
@@ -2909,7 +3028,11 @@ function renderKindMode() {
     ? `<section class="section"><div class="head"><h2>${title}${showCount ? `<span class="count">(${emptyCount} 件)</span>` : ''}</h2>${extra}</div><div class="body">${body}</div></section>`
     : `<section class="kind-empty"><h2>${title}<span class="count">${emptyCount ? `(${emptyCount} 件)` : '（なし）'}</span></h2>${extra}</section>`;
   // 種類別では、許可待ちと判断事項をまとめて待ちの長い順に並べる(送信済みは後ろ)
-  const waits = sessions.flatMap(({ p, session }) => [
+  const nativeWaitEntries = sessions.flatMap(({ p, session }) => {
+    const html = nativeWaitCard(p, session, true);
+    return html ? [{ age: ageMinutes(session.main), html }] : [];
+  });
+  const waits = [...sessions.flatMap(({ p, session }) => [
     ...visiblePerms(session).map(wait => ({ age: wait.waitMin, html: permCard(p, session, wait, true) })),
     ...visibleDecisions(session).map(d => ({ age: answerOf(d.id).sent ? -1 : (d.waitMin || 0), html: decisionCard(p, session, d, true) })),
     ...visibleCommonQuestions(session).map(question => {
@@ -2917,7 +3040,7 @@ function renderKindMode() {
       const age = Number.isFinite(createdAt) ? Math.max(0, (Date.now() - createdAt) / 60_000) : Number.POSITIVE_INFINITY;
       return { age, html: commonQuestionCard(p, session, question) };
     }),
-  ]).sort((a, b) => b.age - a.age);
+  ]), ...nativeWaitEntries].sort((a, b) => b.age - a.age);
   const visibleDecisionItems = waits.map(x => x.html).join('');
   const hiddenJudgmentItems = sessions.some(({ session }) => hasHiddenJudgmentItems(session));
   const endedDecisionEntries = kindEndedDecisionEntries(sessions);
@@ -3055,6 +3178,43 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.dataset.nativeStopOpen) {
+    const sessionId = t.dataset.nativeStopOpen;
+    const session = allSessions().find(item => item.id === sessionId);
+    if (!session || !['native-wait', 'native-capacity'].includes(nativeStopState(session))) return;
+    nativeStopConfirmationOpen = true;
+    render();
+    document.querySelector(`[data-native-stop-confirm="${CSS.escape(sessionId)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (t.dataset.nativeStopCancel) {
+    const sessionId = t.dataset.nativeStopCancel;
+    const session = allSessions().find(item => item.id === sessionId);
+    if (!session || !nativeStopConfirmationOpen) return;
+    nativeStopConfirmationOpen = false;
+    render();
+    document.querySelector(`[data-native-stop-open="${CSS.escape(sessionId)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (t.dataset.nativeStopConfirm) {
+    const sessionId = t.dataset.nativeStopConfirm;
+    const session = allSessions().find(item => item.id === sessionId);
+    if (!session || !nativeStopConfirmationOpen || !['native-wait', 'native-capacity'].includes(nativeStopState(session))) return;
+    nativeStopConfirmationOpen = false;
+    nativeStopInteractionState = 'native-stopping';
+    render();
+    document.querySelector(`[data-native-stop-status="${CSS.escape(sessionId)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
+  if (t.dataset.nativeStopComplete) {
+    const sessionId = t.dataset.nativeStopComplete;
+    const session = allSessions().find(item => item.id === sessionId);
+    if (!session || nativeStopState(session) !== 'native-stopping') return;
+    nativeStopInteractionState = 'native-stopped';
+    render();
+    document.querySelector(`[data-native-stop-status="${CSS.escape(sessionId)}"]`)?.focus({ preventScroll: true });
+    return;
+  }
   if (t.dataset.commonCancel) {
     if (!findCommonQuestion(t.dataset.sessionId, t.dataset.commonCancel)) return;
     commonQuestionCancelConfirmations.add(t.dataset.commonCancel);

@@ -583,6 +583,10 @@ const instructionAlternativeInFlight = new Set();
 const INSTRUCTION_MODES = new Set(['steer', 'start', 'next-user-input']);
 const MAX_PENDING_INSTRUCTION_ALTERNATIVES = 64;
 const MAX_NATIVE_PENDING_REQUESTS = 128;
+const MAX_OWNED_EXECUTION_STOP_CONFIRMATIONS = 4096;
+const OWNED_EXECUTION_PROCESS_STATES = new Set([
+  'not_started', 'starting', 'running', 'stopping', 'stopped', 'stop_unconfirmed', 'disconnected', 'quarantined', 'failed',
+]);
 const MAX_INSTRUCTION_TEXT_BYTES = 64 * 1024;
 const INSTRUCTION_PREVIEW_STORAGE_KEY = 'agent-cockpit.instruction-previews';
 const INSTRUCTION_ALTERNATIVE_STORAGE_KEY = 'agent-cockpit.instruction-alternative-requests';
@@ -590,6 +594,11 @@ const MAX_PENDING_INSTRUCTION_PREVIEWS = 64;
 const instructionPreviewSavePending = new Map();
 const instructionPreviews = new Map();
 const instructionAlternativeDiscardConfirmations = new Set();
+const ownedExecutionStopConfirmations = new Map();
+const ownedExecutionStopInFlight = new Set();
+const ownedExecutionStopErrors = new Map();
+const ownedExecutionStopUnverified = new Map();
+const ownedExecutionStopConfirmed = new Map();
 let observedInstructionStates = new Map();
 let observedInstructionTargetStates = new Map();
 let renderedInstructionSignature = null;
@@ -1346,7 +1355,7 @@ function appendModelLine(target, agent) {
 
 function updateTitle(sessions) {
   const judgments = countJudgments(sessions);
-  const pendingCount = judgments.permission + judgments.blocking + judgments.questions + judgments.questionProvisional;
+  const pendingCount = judgments.permission + judgments.blocking + judgments.questions + judgments.questionProvisional + judgments.nativeWaits;
   document.title = pendingCount ? `(${pendingCount}) Agent Cockpit` : 'Agent Cockpit';
 }
 
@@ -1535,14 +1544,90 @@ function formatLateAnswerPreview(question, answers) {
   return sections.join('\n\n');
 }
 
-function instructionTargetMode(target, mode) {
+function normalizeOwnedExecution(value) {
+  const fields = ['launchRef', 'executionId', 'sessionId', 'expectedContextId', 'expectedOwnerGeneration',
+    'stopRevision', 'processState', 'canStop', 'stopConfirmed', 'hold'];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  let keys;
+  try { keys = Reflect.ownKeys(value); } catch { return null; }
+  if (keys.length !== fields.length || keys.some((key) => typeof key !== 'string' || !fields.includes(key))) return null;
+  const holdFields = ['reason', 'retainedRequestCount', 'remainingRequestCount', 'limit'];
+  const hold = value.hold;
+  if (!hold || typeof hold !== 'object' || Array.isArray(hold)) return null;
+  let holdKeys;
+  try { holdKeys = Reflect.ownKeys(hold); } catch { return null; }
+  if (holdKeys.length !== holdFields.length || holdKeys.some((key) => typeof key !== 'string' || !holdFields.includes(key))) return null;
+  if (!validScopedInstructionId(value.launchRef) || !validScopedInstructionId(value.executionId) ||
+      !validScopedInstructionId(value.sessionId) || !(value.expectedContextId === null || validScopedInstructionId(value.expectedContextId)) ||
+      !Number.isSafeInteger(value.expectedOwnerGeneration) || value.expectedOwnerGeneration < 0 ||
+      !Number.isSafeInteger(value.stopRevision) || value.stopRevision < 0 ||
+      !OWNED_EXECUTION_PROCESS_STATES.has(value.processState) || typeof value.canStop !== 'boolean' ||
+      typeof value.stopConfirmed !== 'boolean' || !(hold.reason === null || hold.reason === 'capacity' || hold.reason === 'unknown') ||
+      !Number.isSafeInteger(hold.retainedRequestCount) || hold.retainedRequestCount < 0 || hold.retainedRequestCount > MAX_NATIVE_PENDING_REQUESTS ||
+      !Number.isSafeInteger(hold.remainingRequestCount) || hold.remainingRequestCount < 0 || hold.remainingRequestCount > MAX_NATIVE_PENDING_REQUESTS ||
+      hold.limit !== MAX_NATIVE_PENDING_REQUESTS || hold.retainedRequestCount + hold.remainingRequestCount !== hold.limit ||
+      (hold.reason === 'capacity' && (hold.retainedRequestCount !== MAX_NATIVE_PENDING_REQUESTS || hold.remainingRequestCount !== 0)) ||
+      (value.stopConfirmed && value.processState !== 'stopped')) return null;
+  return value;
+}
+
+function ownedExecutionStopKey(entry) {
+  return JSON.stringify([entry?.launchRef, entry?.executionId, entry?.sessionId]);
+}
+
+function ownedExecutionCandidatesForTarget(state, target) {
+  if (!Array.isArray(state?.ownedExecutions)) return { entry: null, found: false, invalid: Object.hasOwn(state || {}, 'ownedExecutions') };
+  const matches = state.ownedExecutions.filter((item) => item && typeof item === 'object' && !Array.isArray(item) &&
+    (item.launchRef === target?.launchRef || (item.sessionId === target?.sessionId && item.executionId === target?.executionId)));
+  if (!matches.length) return { entry: null, found: false, invalid: false };
+  if (matches.length !== 1) return { entry: null, found: true, invalid: true };
+  const entry = normalizeOwnedExecution(matches[0]);
+  if (!entry || entry.launchRef !== target?.launchRef || entry.sessionId !== target?.sessionId ||
+      entry.executionId !== target?.executionId) return { entry: null, found: true, invalid: true };
+  return { entry, found: true, invalid: false };
+}
+
+function ownedExecutionGate(state, target) {
+  if (!target) return null;
+  const hasOwnedExecutionContract = Object.hasOwn(state || {}, 'ownedExecutionDiagnostics') || Object.hasOwn(state || {}, 'ownedExecutions');
+  if (!hasOwnedExecutionContract) return { state: 'unknown', entry: null };
+  if (state?.ownedExecutionDiagnostics?.status !== 'ready') {
+    return { state: 'unknown', entry: null };
+  }
+  const matches = ownedExecutionCandidatesForTarget(state, target);
+  if (typeof ownedExecutionStopUnverified !== 'undefined' && ownedExecutionStopUnverified.has(target.launchRef)) {
+    return { state: 'unconfirmed', entry: matches.entry };
+  }
+  if (matches.invalid) {
+    return { state: 'unknown', entry: null };
+  }
+  if (!matches.entry) return matches.found || state?.ownedExecutionDiagnostics?.status === 'ready'
+    ? { state: 'unknown', entry: null } : null;
+  const entry = matches.entry;
+  if (ownedExecutionStopConfirmed.has(ownedExecutionStopKey(entry))) return { state: 'stopped', entry };
+  if (entry.processState === 'stopping') return { state: 'stopping', entry };
+  if (entry.processState === 'stop_unconfirmed' || (entry.processState === 'stopped' && !entry.stopConfirmed)) {
+    return { state: 'unconfirmed', entry };
+  }
+  if (entry.processState === 'stopped' && entry.stopConfirmed) return { state: 'stopped', entry };
+  if (['not_started', 'starting', 'disconnected', 'quarantined', 'failed'].includes(entry.processState)) return { state: 'unknown', entry };
+  if (entry.hold.reason === 'capacity') return { state: 'capacity', entry };
+  if (entry.hold.reason === 'unknown') return { state: 'hold-unknown', entry };
+  return { state: '', entry };
+}
+
+function instructionTargetMode(target, mode, state = null) {
+  const gate = typeof ownedExecutionGate === 'function' ? ownedExecutionGate(state, target) : null;
+  if (gate?.state) return false;
   if (!target || target.status === 'unverified' || target.status === 'waiting') return false;
   if (mode === 'steer') return target.status === 'working' && Boolean(target.nativeTurnId);
   if (mode === 'next-user-input') return target.status === 'stopped' && target.origin === 'standalone';
   return mode === 'start' && target.status === 'stopped' && target.origin === 'standalone';
 }
 
-function instructionModeForTarget(target) {
+function instructionModeForTarget(target, state = null) {
+  const gate = typeof ownedExecutionGate === 'function' ? ownedExecutionGate(state, target) : null;
+  if (gate?.state) return '';
   if (!target || target.status === 'unverified' || target.status === 'waiting') return '';
   if (target.status === 'working' && target.nativeTurnId) return 'steer';
   if (target.status === 'stopped' && target.origin === 'standalone') return 'start';
@@ -1573,8 +1658,8 @@ function instructionDraftTargetFor(state, sessionId, draft, allowSingleFallback 
   return allowSingleFallback && targets.length === 1 && matches.length === 0 ? targets[0] : null;
 }
 
-function instructionDraftMatchesTarget(draft, target) {
-  const mode = instructionModeForTarget(target);
+function instructionDraftMatchesTarget(draft, target, state = null) {
+  const mode = instructionModeForTarget(target, state);
   return Boolean(target && draft?.targetLaunchRef === target.launchRef && draft.mode === mode &&
     sameInstructionBinding(draft.binding, instructionBindingForTarget(target, mode)));
 }
@@ -1585,8 +1670,8 @@ function instructionDraftRebindTarget(sessionId, state = lastState) {
       state?.instructionDiagnostics?.service !== 'ready' || state?.instructionDiagnostics?.blocked === true ||
       state?.instructionDiagnostics?.targets !== 'available') return null;
   const target = instructionDraftTargetFor(state, sessionId, draft, true);
-  const mode = instructionModeForTarget(target);
-  return mode && instructionTargetMode(target, mode) ? { target, mode } : null;
+  const mode = instructionModeForTarget(target, state);
+  return mode && instructionTargetMode(target, mode, state) ? { target, mode } : null;
 }
 
 function selectInstructionDraftTarget(sessionId, launchRef, state = lastState) {
@@ -1595,10 +1680,10 @@ function selectInstructionDraftTarget(sessionId, launchRef, state = lastState) {
   const matches = instructionTargetsForSession(state, sessionId).filter((target) => target.launchRef === launchRef);
   if (matches.length !== 1) return false;
   const target = matches[0];
-  const mode = instructionModeForTarget(target);
+  const mode = instructionModeForTarget(target, state);
   draft.targetLaunchRef = launchRef;
   if (draft.text.trim()) {
-    if (!instructionDraftMatchesTarget(draft, target)) draft.needsRebind = true;
+    if (!instructionDraftMatchesTarget(draft, target, state)) draft.needsRebind = true;
   } else {
     draft.mode = mode;
     draft.binding = instructionBindingForTarget(target, mode);
@@ -1613,7 +1698,7 @@ function observeInstructionDraftBindings(state) {
   for (const [sessionId, draft] of instructionDrafts) {
     if (!draft?.text?.trim()) continue;
     const target = instructionDraftTargetFor(state, sessionId, draft);
-    if (!instructionDraftMatchesTarget(draft, target)) draft.needsRebind = true;
+    if (!instructionDraftMatchesTarget(draft, target, state)) draft.needsRebind = true;
   }
 }
 
@@ -1635,7 +1720,31 @@ function instructionTargetWaitingSummary(target) {
   return labels.join('、');
 }
 
-function instructionTargetStatusText(target) {
+function ownedExecutionGateLabel(gate) {
+  return ({
+    stopping: '停止確認中',
+    unconfirmed: '停止未確認',
+    stopped: '停止済み（確認済み）',
+    capacity: '要求ID上限で保留中',
+    'hold-unknown': '応答待ちの内容を確認できません',
+    unknown: '実行状態を確認できません',
+  })[gate?.state] || '';
+}
+
+function ownedExecutionGateReason(gate) {
+  return ({
+    stopping: '停止の確認中です。旧実行への送信と新しい実行の開始を保留しています。下書きは保持されます。',
+    unconfirmed: '実行の停止を確認できないため、旧実行への送信と新しい実行の開始を保留しています。下書きは保持されます。',
+    stopped: '実行の停止を確認済みです。旧実行へ追加指示は送信できません。再開する場合は新しい実行から始めてください。下書きは保持されます。',
+    capacity: 'この実行で保持中の要求IDが上限（128 件）に達しました。既存の待ちの解決やターン終了では上限状態を解除せず、新しい待ちの受付と追加指示を保留します。停止を確認した後、新しい実行からのみ再開できます。下書きは保持されます。',
+    'hold-unknown': '応答待ちの内容を確認できないため、新しい待ちと追加指示を保留しています。入力内容は保持されます。',
+    unknown: '実行状態を確認できないため、旧実行への送信と新しい実行の開始を保留しています。入力内容は保持されます。',
+  })[gate?.state] || '';
+}
+
+function instructionTargetStatusText(target, state = null) {
+  const gate = typeof ownedExecutionGate === 'function' ? ownedExecutionGate(state, target) : null;
+  if (gate?.state) return ownedExecutionGateLabel(gate);
   if (target?.status === 'working') return '作業中';
   if (target?.status === 'stopped') return '停止中';
   if (target?.status === 'waiting') {
@@ -1645,11 +1754,308 @@ function instructionTargetStatusText(target) {
   return '確認待ち';
 }
 
-function instructionTargetWaitingNotice(target) {
+function instructionTargetWaitingNotice(target, state = null) {
+  const gate = typeof ownedExecutionGate === 'function' ? ownedExecutionGate(state, target) : null;
+  if (gate?.state) return ownedExecutionGateReason(gate);
   const summary = instructionTargetWaitingSummary(target);
+  const provider = target?.identity?.provider;
+  const providerName = provider === 'codex' ? 'Codex' : ['claude', 'claude-code'].includes(provider) ? 'Claude Code' : '実行';
   return summary
-    ? `Codex の${summary}待ちです。追加の指示は保留されています。入力内容は保持されます。`
-    : 'Codex の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。';
+    ? `${providerName} の${summary}待ちです。追加の指示は保留されています。入力内容は保持されます。`
+    : `${providerName} の質問または許可の状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。`;
+}
+
+function ownedExecutionCardsForSession(state, sessionId) {
+  const targets = instructionTargetsForSession(state, sessionId);
+  const targetByLaunchRef = new Map(targets.filter((target) => typeof target?.launchRef === 'string')
+    .map((target) => [target.launchRef, target]));
+  const source = Array.isArray(state?.ownedExecutions) ? state.ownedExecutions : [];
+  const groups = new Map();
+  source.forEach((raw, index) => {
+    const target = targetByLaunchRef.get(raw?.launchRef) || null;
+    if (raw?.sessionId !== sessionId && !target) return;
+    const key = typeof raw?.launchRef === 'string' ? raw.launchRef
+      : typeof raw?.executionId === 'string' ? `${raw?.sessionId || sessionId}\0${raw.executionId}` : `${sessionId}\0invalid-${index}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(raw);
+  });
+  const cards = [];
+  const coveredLaunchRefs = new Set();
+  for (const [key, records] of groups) {
+    const raw = records[0];
+    const entry = records.length === 1 ? normalizeOwnedExecution(raw) : null;
+    const target = targetByLaunchRef.get(raw?.launchRef) || null;
+    const invalid = !entry || entry.sessionId !== sessionId ||
+      (target && (entry.launchRef !== target.launchRef || entry.executionId !== target.executionId || target.sessionId !== sessionId));
+    if (typeof raw?.launchRef === 'string') coveredLaunchRefs.add(raw.launchRef);
+    const gate = invalid ? { state: 'unknown', entry: null } : ownedExecutionGate(state, target || {
+      launchRef: entry.launchRef, executionId: entry.executionId, sessionId: entry.sessionId, identity: { provider: 'codex' },
+    });
+    const shouldShow = invalid || target?.status === 'waiting' || entry?.hold.reason !== null ||
+      ['stopping', 'stop_unconfirmed', 'stopped'].includes(entry?.processState) ||
+      entry?.processState === 'failed' ||
+      (entry && ownedExecutionStopConfirmed.has(ownedExecutionStopKey(entry))) ||
+      (entry?.canStop === true && ['disconnected', 'quarantined', 'failed'].includes(entry.processState));
+    if (shouldShow) cards.push({ key, entry: invalid ? null : entry, invalid, target, gate });
+  }
+  for (const target of targets) {
+    if (target?.status !== 'waiting' || coveredLaunchRefs.has(target.launchRef)) continue;
+    cards.push({ key: target.launchRef, entry: null, invalid: true, target, gate: { state: 'unknown', entry: null } });
+  }
+  return cards;
+}
+
+function ownedExecutionStopRequest(entry) {
+  if (!normalizeOwnedExecution(entry)) return null;
+  return {
+    launchRef: entry.launchRef,
+    executionId: entry.executionId,
+    sessionId: entry.sessionId,
+    expectedContextId: entry.expectedContextId,
+    expectedOwnerGeneration: entry.expectedOwnerGeneration,
+    stopRevision: entry.stopRevision,
+  };
+}
+
+function sameOwnedExecutionStopRequest(left, right) {
+  return Boolean(sameOwnedExecutionStopIdentity(left, right) && left.stopRevision === right.stopRevision);
+}
+
+function sameOwnedExecutionStopIdentity(left, right) {
+  return Boolean(left && right && ['launchRef', 'executionId', 'sessionId', 'expectedContextId',
+    'expectedOwnerGeneration'].every((key) => left[key] === right[key]));
+}
+
+function ownedExecutionForLaunch(state, launchRef) {
+  if (!Array.isArray(state?.ownedExecutions)) return null;
+  const matches = state.ownedExecutions.filter((item) => item?.launchRef === launchRef);
+  return matches.length === 1 ? normalizeOwnedExecution(matches[0]) : null;
+}
+
+function adoptOwnedExecution(state, entry) {
+  const normalized = normalizeOwnedExecution(entry);
+  if (!state || !normalized) return false;
+  const current = Array.isArray(state.ownedExecutions) ? state.ownedExecutions : [];
+  state.ownedExecutions = current.filter((item) => item?.launchRef !== normalized.launchRef &&
+    !(item?.sessionId === normalized.sessionId && item?.executionId === normalized.executionId));
+  state.ownedExecutions.push(normalized);
+  return true;
+}
+
+function reconcileOwnedExecutionStopState(state) {
+  if (state?.ownedExecutionDiagnostics?.status !== 'ready' || !Array.isArray(state.ownedExecutions)) {
+    for (const launchRef of ownedExecutionStopConfirmations.keys()) {
+      ownedExecutionStopConfirmations.delete(launchRef);
+      ownedExecutionStopErrors.set(launchRef, '停止対象を確認できません。最新の状態を取得してから、停止をあらためて依頼してください。');
+    }
+    return;
+  }
+  for (const [launchRef, request] of ownedExecutionStopConfirmations) {
+    const current = ownedExecutionForLaunch(state, launchRef);
+    if (!sameOwnedExecutionStopRequest(request, ownedExecutionStopRequest(current))) {
+      ownedExecutionStopConfirmations.delete(launchRef);
+      ownedExecutionStopErrors.set(launchRef, '実行状態が変わりました。最新の状態を確認してから、停止をあらためて依頼してください。');
+    }
+  }
+  for (const [launchRef, request] of ownedExecutionStopUnverified) {
+    const current = ownedExecutionForLaunch(state, launchRef);
+    if (current && sameOwnedExecutionStopIdentity(request, ownedExecutionStopRequest(current)) &&
+        (current.stopConfirmed || ['stopping', 'stop_unconfirmed', 'stopped'].includes(current.processState))) {
+      ownedExecutionStopUnverified.delete(launchRef);
+    }
+  }
+}
+
+function openOwnedExecutionStopConfirmation(launchRef, sessionId, state = lastState) {
+  const entry = ownedExecutionForLaunch(state, launchRef);
+  const request = ownedExecutionStopRequest(entry);
+  if (!request || entry.sessionId !== sessionId || !ownedExecutionCanStop(state, entry)) {
+    ownedExecutionStopErrors.set(launchRef, '実行状態を確認できません。最新の状態を更新してから確認してください。');
+    if (state) render(state);
+    return false;
+  }
+  ownedExecutionStopErrors.delete(launchRef);
+  ownedExecutionStopConfirmations.set(launchRef, Object.freeze(request));
+  if (state) render(state);
+  return true;
+}
+
+function cancelOwnedExecutionStopConfirmation(launchRef, state = lastState) {
+  ownedExecutionStopConfirmations.delete(launchRef);
+  if (state) render(state);
+}
+
+function ownedExecutionStopConfirmation(session, descriptor, product, withTags = false, multipleSessions = false) {
+  const { entry, key, target } = descriptor;
+  const confirmation = element('div', 'common-question-confirmation');
+  confirmation.setAttribute('role', 'group');
+  confirmation.setAttribute('aria-label', '実行停止の確認');
+  confirmation.append(element('p', '', '停止する対象を確認してください'));
+  confirmation.append(element('p', '', `セッション: ${sessionDisplayName(session)}\n実行: ${target ? instructionTargetName(target) : entry?.executionId || '実行情報を確認できません'}`));
+  confirmation.append(element('p', '', '停止を確認するまで保留中の要求は送りません。下書きは保持し、旧実行への送信を再開しません。'));
+  const actions = element('div', 'common-question-confirm-actions');
+  const confirm = element('button', 'confirm', ownedExecutionStopInFlight.has(key) ? '停止を依頼中…' : '停止を依頼する');
+  confirm.type = 'button';
+  confirm.dataset.ownedExecutionStopConfirm = key;
+  confirm.dataset.ownedExecutionStopSession = session.session_id;
+  confirm.disabled = ownedExecutionStopInFlight.has(key);
+  const cancel = element('button', 'secondary', '取り消す');
+  cancel.type = 'button';
+  cancel.dataset.ownedExecutionStopCancel = key;
+  cancel.dataset.ownedExecutionStopSession = session.session_id;
+  cancel.disabled = ownedExecutionStopInFlight.has(key);
+  actions.append(confirm, cancel);
+  confirmation.append(actions);
+  return confirmation;
+}
+
+function ownedExecutionStopCard(session, product, descriptor, withTags = false, multipleSessions = false, state = typeof lastState === 'undefined' ? null : lastState) {
+  const { entry, key, target, invalid, gate } = descriptor;
+  const status = gate?.state || (target?.status === 'waiting' ? 'waiting' : 'unknown');
+  const statusLabels = {
+    waiting: '質問・許可待ち', stopping: '停止確認中', unconfirmed: '停止未確認', stopped: '停止済み（確認済み）',
+    capacity: '受付上限', 'hold-unknown': '応答待ちの内容を確認できません', unknown: '停止状態を確認できません',
+  };
+  const stateTone = status === 'stopped' ? 'ok' : status === 'stopping' || status === 'waiting' ? 'warn' : 'danger';
+  const stateClass = status === 'stopped' ? 'resolved' : status === 'stopping' ? 'provisional' : '';
+  const card = element('article', `decision-card ${stateClass}`.trim());
+  card.tabIndex = -1;
+  card.dataset.ownedExecutionCard = key;
+  const header = element('div', 'decision-head');
+  appendContextTags(header, product, session, withTags, multipleSessions);
+  const waiting = target?.status === 'waiting' && !['stopping', 'unconfirmed', 'stopped'].includes(status);
+  const provider = target?.identity?.provider;
+  const providerName = provider === 'codex' ? 'Codex' : ['claude', 'claude-code'].includes(provider) ? 'Claude Code' : provider || '実行';
+  header.append(element('span', 'decision-title', waiting ? `${providerName} の質問・許可待ち` : `${providerName} 実行の停止`));
+  header.append(badge(statusLabels[status] || statusLabels.unknown, stateTone));
+  card.append(header);
+  const targetName = target ? instructionTargetName(target) : entry?.executionId || '実行情報を確認できません';
+  card.append(element('div', 'decision-context', `対象セッション: ${sessionDisplayName(session)} · 対象実行: ${targetName}`));
+  if (waiting) {
+    const summary = instructionTargetWaitingSummary(target);
+    card.append(element('div', 'decision-context', summary
+      ? `未解決の待ち: ${summary}。回答と許可は ${providerName} 内で行い、追加の指示は保留します。`
+      : '質問・許可の状態を確認できないため、追加の指示を保留しています。'));
+  }
+  if (entry?.hold.reason === 'capacity') {
+    card.append(element('div', 'decision-context', `この実行で保持中の要求ID: ${entry.hold.retainedRequestCount} 件 / 上限: ${entry.hold.limit} 件 / 残り: ${entry.hold.remainingRequestCount} 件。`));
+  }
+  const detail = invalid ? '実行情報を確認できないため、停止操作と追加指示を保留しています。最新の状態を更新して確認してください。'
+    : ownedExecutionGateReason(gate) || (entry?.hold.reason === 'unknown'
+      ? '応答待ちの内容を確認できないため、新しい待ちと追加指示を保留しています。'
+      : `${providerName} の質問または許可待ちです。回答と許可は ${providerName} 内で行い、追加の指示は保留します。`);
+  card.append(element('div', 'decision-context', detail));
+  const error = ownedExecutionStopErrors.get(key);
+  if (error) {
+    const errorNotice = element('p', 'common-question-error', error);
+    errorNotice.setAttribute('role', 'alert');
+    card.append(errorNotice);
+  }
+  const canStop = state?.ownedExecutionDiagnostics?.status === 'ready' && !invalid && ownedExecutionCanStop(state, entry) &&
+    !ownedExecutionStopInFlight.has(key);
+  if (canStop) {
+    if (ownedExecutionStopConfirmations.has(key)) card.append(ownedExecutionStopConfirmation(session, descriptor, product, withTags, multipleSessions));
+    else {
+      const stop = element('button', 'primary', 'この実行を停止する');
+      stop.type = 'button';
+      stop.dataset.ownedExecutionStopOpen = key;
+      stop.dataset.ownedExecutionStopSession = session.session_id;
+      const actions = element('div', 'answer-foot');
+      actions.append(stop);
+      card.append(actions);
+    }
+  } else if (ownedExecutionStopInFlight.has(key)) {
+    const pending = element('div', 'answer-foot');
+    pending.append(element('span', 'answer-status', '停止を依頼しています。結果を確認しています。'));
+    card.append(pending);
+  }
+  return card;
+}
+
+function appendOwnedExecutionStopCards(body, session, product, withTags = false, multipleSessions = false, state = typeof lastState === 'undefined' ? null : lastState) {
+  const descriptors = typeof ownedExecutionCardsForSession === 'function'
+    ? ownedExecutionCardsForSession(state, session.session_id) : [];
+  for (const descriptor of descriptors) body.append(ownedExecutionStopCard(session, product, descriptor, withTags, multipleSessions, state));
+  return descriptors;
+}
+
+function ownedExecutionCanStop(state, entry) {
+  return state?.ownedExecutionDiagnostics?.status === 'ready' && normalizeOwnedExecution(entry)?.canStop === true &&
+    !entry.stopConfirmed && !ownedExecutionStopConfirmed.has(ownedExecutionStopKey(entry)) &&
+    ownedExecutionStopConfirmed.size + ownedExecutionStopInFlight.size < MAX_OWNED_EXECUTION_STOP_CONFIRMATIONS &&
+    !['not_started', 'starting', 'stopping', 'stopped'].includes(entry.processState);
+}
+
+function ownedExecutionResponseMatchesRequest(request, entry) {
+  return Boolean(request && entry && ['launchRef', 'executionId', 'sessionId', 'expectedContextId', 'expectedOwnerGeneration']
+    .every((key) => request[key] === entry[key]) && Number.isSafeInteger(entry.stopRevision) && entry.stopRevision >= request.stopRevision);
+}
+
+async function runOwnedExecutionStop(button) {
+  const launchRef = button.dataset.ownedExecutionStopConfirm;
+  const captured = ownedExecutionStopConfirmations.get(launchRef);
+  const entry = ownedExecutionForLaunch(lastState, launchRef);
+  const currentRequest = ownedExecutionStopRequest(entry);
+  if (!sameOwnedExecutionStopRequest(captured, currentRequest) || entry?.sessionId !== button.dataset.ownedExecutionStopSession ||
+      !ownedExecutionCanStop(lastState, entry) || ownedExecutionStopInFlight.has(launchRef)) {
+    ownedExecutionStopConfirmations.delete(launchRef);
+    ownedExecutionStopErrors.set(launchRef, '実行状態が変わりました。最新の状態を確認してから、停止をあらためて依頼してください。');
+    if (lastState) render(lastState);
+    liveStatus.textContent = '実行状態が変わったため、停止依頼を送りませんでした。';
+    return;
+  }
+  const request = Object.freeze({ ...captured });
+  ownedExecutionStopConfirmations.delete(launchRef);
+  ownedExecutionStopErrors.delete(launchRef);
+  ownedExecutionStopInFlight.add(launchRef);
+  if (lastState) render(lastState);
+  liveStatus.textContent = '停止を依頼しました。停止と分離の確認を待っています。';
+  try {
+    const response = await postUiAction('/api/executions/stop', request);
+    const result = await response.json().catch(() => null);
+    if (response.status === 409) {
+      if (result?.error !== 'stale_owned_execution' ||
+          (result.ownedExecution !== null && !normalizeOwnedExecution(result.ownedExecution))) {
+        throw new Error('invalid stale stop response');
+      }
+      if (result.ownedExecution && !adoptOwnedExecution(lastState, result.ownedExecution)) throw new Error('invalid stale owner');
+      ownedExecutionStopUnverified.set(launchRef, request);
+      ownedExecutionStopErrors.set(launchRef, '実行状態が変わりました。古い停止依頼は再送していません。最新の状態を確認してください。');
+      await refresh();
+      liveStatus.textContent = '実行状態が変わったため、停止依頼は再送していません。';
+      return;
+    }
+    if (!response.ok || !['stop_confirmed', 'stop_unconfirmed'].includes(result?.status) ||
+        !normalizeOwnedExecution(result.ownedExecution) || !ownedExecutionResponseMatchesRequest(request, result.ownedExecution) ||
+        (result.status === 'stop_confirmed') !== result.ownedExecution.stopConfirmed) {
+      throw new Error('invalid stop response');
+    }
+    if (!adoptOwnedExecution(lastState, result.ownedExecution)) throw new Error('invalid stop owner');
+    if (result.status === 'stop_confirmed') {
+      ownedExecutionStopConfirmed.set(ownedExecutionStopKey(result.ownedExecution), true);
+      ownedExecutionStopUnverified.delete(launchRef);
+      ownedExecutionStopErrors.delete(launchRef);
+      liveStatus.textContent = '実行の停止と分離を確認しました。旧実行への送信はできません。';
+    } else {
+      ownedExecutionStopUnverified.set(launchRef, ownedExecutionStopRequest(result.ownedExecution));
+      ownedExecutionStopErrors.set(launchRef, '停止または旧実行からの分離を確認できていません。旧実行への送信と新しい実行の開始を保留しています。');
+      liveStatus.textContent = '停止を確認できません。旧実行への送信と新しい実行の開始を保留しています。';
+    }
+    if (lastState) render(lastState);
+    await refresh();
+    liveStatus.textContent = result.status === 'stop_confirmed'
+      ? '実行の停止と分離を確認しました。旧実行への送信はできません。'
+      : '停止または分離を確認できません。旧実行への送信と新しい実行の開始を保留しています。';
+  } catch {
+    ownedExecutionStopUnverified.set(launchRef, request);
+    ownedExecutionStopErrors.set(launchRef, '停止結果を確認できません。最新の状態を取得するまで、旧実行への送信と新しい実行の開始を保留しています。');
+    showWriteError('停止結果を確認できませんでした');
+    await refresh();
+    liveStatus.textContent = '停止結果を確認できません。最新の状態を取得するまで、旧実行への送信と新しい実行の開始を保留しています。';
+  } finally {
+    ownedExecutionStopInFlight.delete(launchRef);
+    if (lastState) render(lastState);
+  }
 }
 
 function instructionModeLabel(mode) {
@@ -1697,10 +2103,13 @@ function isAwaitingDecision(decision) {
   return isActiveDecision(decision) && !hasEffectiveAnswer(decision);
 }
 
-function countJudgments(sessions) {
-  const counts = { permission: 0, blocking: 0, provisional: 0, questions: 0, questionProvisional: 0 };
+function countJudgments(sessions, state = typeof lastState === 'undefined' ? null : lastState) {
+  const counts = { permission: 0, blocking: 0, provisional: 0, questions: 0, questionProvisional: 0, nativeWaits: 0 };
   for (const session of sessions) {
     counts.permission += session.permissionWaits.length;
+    if (typeof session.session_id === 'string' && typeof ownedExecutionCardsForSession === 'function') {
+      counts.nativeWaits += ownedExecutionCardsForSession(state, session.session_id).length;
+    }
     for (const question of session.commonQuestions || []) {
       if (isFinishedCommonQuestion(question)) continue;
       if (question.selectionSource === 'away-default') counts.questionProvisional += 1;
@@ -1713,7 +2122,7 @@ function countJudgments(sessions) {
   }
   counts.provisional += counts.questionProvisional;
   counts.decisions = counts.blocking + counts.provisional - counts.questionProvisional;
-  counts.total = counts.permission + counts.decisions + counts.questions + counts.questionProvisional;
+  counts.total = counts.permission + counts.decisions + counts.questions + counts.questionProvisional + counts.nativeWaits;
   return counts;
 }
 
@@ -1999,6 +2408,10 @@ function renderFinishedNote(counts, targets) {
 
 function isIdleHiddenSession(session, now = Date.now()) {
   if (session.status === '作業中' || (session.permissionWaits || []).length > 0) return false;
+  const ownedState = typeof lastState === 'undefined' ? null : lastState;
+  if ((typeof instructionTargetsForSession === 'function' &&
+      instructionTargetsForSession(ownedState, session.session_id).some((target) => target.status === 'waiting')) ||
+      (typeof ownedExecutionCardsForSession === 'function' && ownedExecutionCardsForSession(ownedState, session.session_id).length)) return false;
   if ((session.decisions || []).some(isActiveDecision)) return false;
   if ((session.commonQuestions || []).some((question) => !isFinishedCommonQuestion(question))) return false;
   if ((session.instructions || []).some((instruction) => !isFinishedInstruction(instruction))) return false;
@@ -3374,7 +3787,7 @@ function appendKindToggle(body, sectionKey, expanded, count, label) {
     (isExpanded, itemCount) => kindToggleLabel(label, isExpanded, itemCount), count, 'data-kind-toggle');
 }
 
-function appendDecisions(body, session, product, withTags = false, multipleSessions = false) {
+function appendDecisions(body, session, product, withTags = false, multipleSessions = false, suppressEmpty = false) {
   const decisions = newestFirst(session.decisions);
   const active = newestFirst(shownActiveDecisions(session));
   const ended = displayPreferences.hideFinished ? [] : decisions.filter(isEndedDecision);
@@ -3384,7 +3797,7 @@ function appendDecisions(body, session, product, withTags = false, multipleSessi
     const list = element('div', 'decision-list');
     for (const decision of visible) appendDecisionCard(list, decision, product, session, withTags, multipleSessions);
     body.append(list);
-  } else if (!shownPermissions(session).length && !shownCommonQuestions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
+  } else if (!suppressEmpty && !shownPermissions(session).length && !shownCommonQuestions(session).length && !hasHiddenJudgmentItems(session)) body.append(element('div', 'empty', ended.length ? '未解決の判断事項はありません。' : 'ありません'));
   if (ended.length) appendPlanToggle(body, 'decisions', session.session_id, ended.length, '解決済みと取り下げ', expandedEndedDecisions);
 }
 
@@ -3673,7 +4086,7 @@ function instructionAlternativeRetryState(state, request) {
     created.heldReason === 'instruction_delivery_missing';
   const createdMatches = !created || createdAvailable || createdMissing;
   const commonMatches = diagnostics?.targets === 'available' && targetMatches && target?.status === 'stopped' &&
-    instructionTargetMode(target, 'next-user-input') && oldMatches && createdMatches;
+    instructionTargetMode(target, 'next-user-input', state) && oldMatches && createdMatches;
   const readyRetry = diagnostics?.service === 'ready' && diagnostics.blocked !== true &&
     (!created || createdAvailable);
   const missingDeliveryRecovery = diagnostics?.service === 'blocked' && diagnostics.blocked === true &&
@@ -3827,7 +4240,7 @@ function instructionCard(session, state, instruction) {
   const target = instructionTargetFor(state, instruction.launchRef);
   const serviceReady = state?.instructionDiagnostics?.service === 'ready' && state?.instructionDiagnostics?.blocked !== true;
   const targetReady = target && target.sessionId === session.session_id && target.executionId === instruction.registrationExecutionId &&
-    instruction.executionState === 'active' && instructionTargetMode(target, instruction.mode);
+    instruction.executionState === 'active' && instructionTargetMode(target, instruction.mode, state);
   const preview = instructionPreviewFor(instruction);
   const targetLabel = target ? instructionTargetName(target) : '実行先を確認できません';
   const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
@@ -3889,7 +4302,7 @@ function instructionCard(session, state, instruction) {
   const alternativeTargetMatches = Boolean(target && target.sessionId === session.session_id &&
     target.executionId === instruction.registrationExecutionId && target.origin === 'standalone');
   const alternativeCanSubmit = serviceReady && state?.instructionDiagnostics?.targets === 'available' &&
-    alternativeTargetMatches && target?.status === 'stopped' && instructionTargetMode(target, 'next-user-input');
+    alternativeTargetMatches && target?.status === 'stopped' && instructionTargetMode(target, 'next-user-input', state);
   if (alternativeDraft?.open && !alternativePending && ['available', 'claimed'].includes(instruction.state) &&
       instruction.origin === 'standalone' && instruction.executionState === 'active' && alternativeTargetMatches) {
     const form = element('form', 'decision-answer instruction-alternative-form');
@@ -3944,13 +4357,13 @@ function instructionComposer(session, state) {
   const composer = element('article', 'decision-card neutral');
   const draft = instructionDraftFor(session.session_id);
   const currentTarget = targets.length === 1 ? targets[0] : instructionDraftTargetFor(state, session.session_id, draft);
-  const currentMode = instructionModeForTarget(currentTarget);
+  const currentMode = instructionModeForTarget(currentTarget, state);
   const heading = element('div', 'decision-head');
   heading.append(element('span', 'decision-title', '追加指示'));
   heading.append(element('span', 'meta', currentMode ? instructionModeLabel(currentMode) : '送信方法を確認できません'));
   composer.append(heading);
   const destination = currentTarget
-    ? `${instructionTargetName(currentTarget)} · ${instructionTargetStatusText(currentTarget)}`
+    ? `${instructionTargetName(currentTarget)} · ${instructionTargetStatusText(currentTarget, state)}`
     : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
       : targets.length ? `実行先を一意に確認できません（候補 ${targets.length} 件）` : '実行先を確認できません';
   composer.append(element('p', 'decision-context instruction-target', `現在の宛先: ${destination} · 送信方法: ${currentMode ? instructionModeLabel(currentMode) : '確認できません'}`));
@@ -3967,13 +4380,13 @@ function instructionComposer(session, state) {
       const selectedTarget = targets.length === 1 ? targets[0] : instructionDraftTargetFor(state, session.session_id, draft);
       if (selectedTarget && state?.instructionDiagnostics?.targets === 'available' && serviceReady) {
         const target = selectedTarget;
-        const mode = instructionModeForTarget(target);
+        const mode = instructionModeForTarget(target, state);
         draft.targetLaunchRef = target.launchRef;
         draft.mode = mode;
         draft.binding = instructionBindingForTarget(target, mode);
       }
     }
-    const currentBindingMatches = instructionDraftMatchesTarget(draft, currentTarget);
+    const currentBindingMatches = instructionDraftMatchesTarget(draft, currentTarget, state);
     if (draft.text && !currentBindingMatches) draft.needsRebind = true;
     const bindingMatches = currentBindingMatches && draft.needsRebind !== true;
     const form = element('form', 'decision-answer instruction-create-form');
@@ -3998,11 +4411,13 @@ function instructionComposer(session, state) {
         input.disabled = instructionInFlight.has(session.session_id) || Boolean(draft.deliveryAttemptId || draft.logicalMessageId);
         input.dataset.instructionTargetSelect = session.session_id;
         input.dataset.instructionTargetLaunchRef = target.launchRef;
-        const targetMode = instructionModeForTarget(target);
-        const targetSummary = `${instructionTargetName(target)} · ${instructionTargetStatusText(target)} · ${targetMode ? instructionModeLabel(targetMode) : '現在は送信できません'}`;
+        const targetMode = instructionModeForTarget(target, state);
+        const targetSummary = `${instructionTargetName(target)} · ${instructionTargetStatusText(target, state)} · ${targetMode ? instructionModeLabel(targetMode) : '現在は送信できません'}`;
         label.append(input, element('span', 'answer-pick-body', targetSummary));
         item.append(label);
-        if (target.status === 'waiting') item.append(element('span', 'decision-option-description', instructionTargetWaitingNotice(target)));
+        if (target.status === 'waiting' || (typeof ownedExecutionGate === 'function' && ownedExecutionGate(state, target)?.state)) {
+          item.append(element('span', 'decision-option-description', instructionTargetWaitingNotice(target, state)));
+        }
         else if (target.status === 'unverified') item.append(element('span', 'decision-option-description', '実行状態を確認できません。'));
         options.append(item);
       }
@@ -4016,7 +4431,9 @@ function instructionComposer(session, state) {
           ? '選択した実行先を一意に確認できないため、指示の保存を保留しています。下書きは保持されます。'
         : '実行先を確認できないため、指示の保存を保留しています。下書きは保持されます。'));
     } else if (currentTarget.status === 'waiting') {
-      form.append(element('p', 'decision-context instruction-reason', instructionTargetWaitingNotice(currentTarget)));
+      form.append(element('p', 'decision-context instruction-reason', instructionTargetWaitingNotice(currentTarget, state)));
+    } else if (typeof ownedExecutionGate === 'function' && ownedExecutionGate(state, currentTarget)?.state) {
+      form.append(element('p', 'decision-context instruction-reason', instructionTargetWaitingNotice(currentTarget, state)));
     } else if (currentTarget.status === 'unverified') {
       form.append(element('p', 'decision-context instruction-reason', '実行状態を確認できないため、追加の指示は保留されています。入力内容は保持されます。'));
     } else if (!currentMode) {
@@ -4055,7 +4472,7 @@ function instructionComposer(session, state) {
     const save = element('button', 'primary', '指示を保存する');
     save.type = 'submit';
     save.disabled = instructionInFlight.has(session.session_id) || !serviceReady || !currentTarget || !bindingMatches ||
-      !instructionTargetMode(currentTarget, draft.mode) || !draft.text.trim();
+      !instructionTargetMode(currentTarget, draft.mode, state) || !draft.text.trim();
     actions.append(save);
     const draftStatus = element('span', 'answer-status instruction-status', instructionNotices.get(session.session_id) || '下書き（未送信）');
     draftStatus.setAttribute('role', 'status');
@@ -4087,11 +4504,11 @@ function updateInstructionSave(form) {
   const sessionId = form.dataset.instructionSession;
   const draft = instructionDraftFor(sessionId);
   const target = instructionDraftTargetFor(lastState, sessionId, draft);
-  const bindingMatches = instructionDraftMatchesTarget(draft, target);
+  const bindingMatches = instructionDraftMatchesTarget(draft, target, lastState);
   const submit = form.querySelector('[type="submit"]');
   if (submit) submit.disabled = draft.needsRebind === true || instructionInFlight.has(sessionId) || lastState?.instructionDiagnostics?.service !== 'ready' ||
     lastState?.instructionDiagnostics?.blocked === true || lastState?.instructionDiagnostics?.targets !== 'available' || !target || !bindingMatches ||
-    !instructionTargetMode(target, draft.mode) || !draft.text.trim();
+    !instructionTargetMode(target, draft.mode, lastState) || !draft.text.trim();
   const status = form.querySelector('.answer-foot .answer-status');
   if (status) status.textContent = instructionNotices.get(sessionId) || '下書き（未送信）';
 }
@@ -4249,7 +4666,7 @@ function appendUnknownSessionControls(row, session) {
   if (controls) row.append(controls);
 }
 
-function sessionBlock(product, session, multipleSessions) {
+function sessionBlock(product, session, multipleSessions, state = typeof lastState === 'undefined' ? null : lastState) {
   const block = element(multipleSessions ? 'section' : 'div', `session-group ${multipleSessions ? '' : 'single'}`.trim());
   if (multipleSessions) {
     const head = element('div', 'session-head');
@@ -4260,7 +4677,9 @@ function sessionBlock(product, session, multipleSessions) {
 
   const body = element('div', 'session-body');
   if (!multipleSessions) body.append(element('div', 'session-tag session-context', sessionDisplayName(session)));
-  const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length + shownCommonQuestions(session).length;
+  const nativeExecutionCards = typeof ownedExecutionCardsForSession === 'function'
+    ? ownedExecutionCardsForSession(state, session.session_id) : [];
+  const judgmentCount = shownPermissions(session).length + shownActiveDecisions(session).length + shownCommonQuestions(session).length + nativeExecutionCards.length;
   const hasEndedDecisions = !displayPreferences.hideFinished && session.decisions.some(isEndedDecision);
   const showJudgment = judgmentCount > 0 || hasEndedDecisions || !hasHiddenJudgmentItems(session);
   const sections = { judgment: [], tasks: [], now: [] };
@@ -4271,7 +4690,8 @@ function sessionBlock(product, session, multipleSessions) {
     const judgmentContent = element('div');
     appendPermissionWaits(judgmentContent, session, product);
     appendCommonQuestions(judgmentContent, session, product);
-    appendDecisions(judgmentContent, session, product);
+    appendDecisions(judgmentContent, session, product, false, false, nativeExecutionCards.length > 0);
+    appendOwnedExecutionStopCards(judgmentContent, session, product, false, false, state);
     sections.judgment.push(...judgmentContent.childNodes);
   }
   const taskContent = element('div');
@@ -4282,7 +4702,7 @@ function sessionBlock(product, session, multipleSessions) {
   const now = element('div', 'now');
   now.append(mainRow(session, product));
   nowContent.append(now);
-  const instructions = instructionComposer(session, lastState);
+  const instructions = instructionComposer(session, state);
   if (instructions) nowContent.append(instructions);
   appendAgents(nowContent, session, product);
   sections.now.push(...nowContent.childNodes);
@@ -4343,7 +4763,7 @@ function sharedBranch(product) {
   return product.branches.size === 1 ? [...product.branches][0] : '';
 }
 
-function productSection(product, index, products, pinnedCount) {
+function productSection(product, index, products, pinnedCount, state = typeof lastState === 'undefined' ? null : lastState) {
   const pinned = displayPreferences.pinned.includes(product.key);
   const section = element('section', `section ${pinned ? 'pinned' : ''}`.trim());
   const head = element('div', 'head');
@@ -4354,7 +4774,7 @@ function productSection(product, index, products, pinnedCount) {
   const branch = sharedBranch(product);
   if (branch) head.append(element('span', 'meta branch', branch));
 
-  const judgmentCounts = countJudgments(product.sessions);
+  const judgmentCounts = countJudgments(product.sessions, state);
   const awaitingDecisions = product.sessions.flatMap((session) => session.decisions).filter(isAwaitingDecision);
   const decisionCount = judgmentCounts.decisions;
   const pullRequestGroups = product.pullRequestGroups || [];
@@ -4382,7 +4802,7 @@ function productSection(product, index, products, pinnedCount) {
   const news = sinceSeenBox(product, false);
   if (news) body.append(news);
   const multipleSessions = product.sessions.length > 1;
-  for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions));
+  for (const session of product.sessions) body.append(sessionBlock(product, session, multipleSessions, state));
   if (isFilterShown('prs')) {
     body.append(element('div', 'product-pr-divider'));
     const openCount = pullRequestOpenCount(pullRequestGroups);
@@ -4466,11 +4886,17 @@ function kindEndedAgentCount(references) {
   return references.reduce((count, reference) => count + reference.session.agents.filter(isEndedAgent).length, 0);
 }
 
-function renderKindSections(products) {
+function renderKindSections(products, state = typeof lastState === 'undefined' ? null : lastState) {
   const references = sessionReferences(products);
   const waitingItems = [];
   const endedDecisions = element('div', 'kind-ended');
   for (const { product, session, multipleSessions } of references) {
+    for (const descriptor of (typeof ownedExecutionCardsForSession === 'function'
+      ? ownedExecutionCardsForSession(state, session.session_id) : [])) {
+      const card = ownedExecutionStopCard(session, product, descriptor, true, multipleSessions, state);
+      const timestamp = Date.parse(descriptor.target?.updatedAt || session.lastUpdatedAt || '');
+      waitingItems.push({ age: Number.isFinite(timestamp) ? Date.now() - timestamp : 0, card });
+    }
     for (const wait of shownPermissions(session)) {
       const holder = element('div');
       appendPermissionWaits(holder, { ...session, permissionWaits: [wait] }, product, true, multipleSessions);
@@ -4515,7 +4941,7 @@ function renderKindSections(products) {
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
-    const instructions = instructionComposer(session, lastState);
+    const instructions = instructionComposer(session, state);
     if (instructions) {
       const createdAt = Math.max(...(session.instructions || []).map((item) => item.createdAt).filter(Number.isFinite), 0);
       activityItems.push({ age: createdAt, row: instructions });
@@ -4637,12 +5063,12 @@ function observeInstructionStates(state) {
     const previous = observedInstructionTargetStates.get(target.launchRef);
     currentTargets.set(target.launchRef, signature);
     if (previous !== undefined && previous !== signature && target.status === 'waiting' && !announcement) {
-      announcement = instructionTargetWaitingNotice(target);
+      announcement = instructionTargetWaitingNotice(target, state);
     } else if (previous?.startsWith('waiting:') && previous !== signature && !announcement) {
       if (target.status === 'working') {
-        announcement = 'Codex の質問待ちまたは許可待ちがなくなりました。追加指示の送信条件を再確認してください。';
+        announcement = `${target.identity?.provider === 'codex' ? 'Codex' : '実行'}の質問待ちまたは許可待ちがなくなりました。追加指示の送信条件を再確認してください。`;
       } else if (target.status === 'unverified') {
-        announcement = 'Codex の質問待ちまたは許可待ちが解消したか確認できません。追加の指示は保留されています。';
+        announcement = `${target.identity?.provider === 'codex' ? 'Codex' : '実行'}の質問待ちまたは許可待ちが解消したか確認できません。追加の指示は保留されています。`;
       }
     }
   }
@@ -4656,6 +5082,8 @@ function instructionProjectionSignature(state) {
     sessions: (state?.sessions || []).map((session) => [session.session_id, session.instructions || []]),
     targets: state?.instructionTargets || [],
     diagnostics: state?.instructionDiagnostics || null,
+    ownedExecutions: state?.ownedExecutions || null,
+    ownedExecutionDiagnostics: state?.ownedExecutionDiagnostics || null,
   });
 }
 
@@ -4719,6 +5147,9 @@ function render(state) {
   const toggleAttribute = ['data-ended-toggle', 'data-plan-toggle', 'data-kind-toggle', 'data-estimate-session', 'data-hide-session', 'data-older-pr-line'].find((attribute) => active?.hasAttribute(attribute));
   const focusData = active?.dataset?.recordBand ? { kind: 'record-deletion', band: active.dataset.recordBand, action: active.dataset.recordAction }
     : toggleAttribute ? { kind: 'toggle', attribute: toggleAttribute, value: active.getAttribute(toggleAttribute) }
+    : active?.dataset?.ownedExecutionStopOpen ? { kind: 'owned-execution-stop', launchRef: active.dataset.ownedExecutionStopOpen, action: 'open' }
+    : active?.dataset?.ownedExecutionStopCancel ? { kind: 'owned-execution-stop', launchRef: active.dataset.ownedExecutionStopCancel, action: 'cancel' }
+    : active?.dataset?.ownedExecutionStopConfirm ? { kind: 'owned-execution-stop', launchRef: active.dataset.ownedExecutionStopConfirm, action: 'confirm' }
     : active?.dataset?.reviewSkip ? { kind: 'review-skip', key: active.dataset.mergeKey, action: active.dataset.reviewSkip }
     : active?.dataset?.filter ? { kind: 'filter', key: active.dataset.filter }
          : active?.dataset?.mergeMethod ? { kind: 'merge-method', key: active.dataset.mergeKey, method: active.dataset.mergeMethod }
@@ -4807,9 +5238,9 @@ function render(state) {
 
   if (displayPreferences.mode === 'product') {
     const pinnedCount = products.filter((product) => displayPreferences.pinned.includes(product.key)).length;
-    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount)));
+    root.replaceChildren(...products.map((product, index) => productSection(product, index, products, pinnedCount, state)));
   } else {
-    root.replaceChildren(...renderKindSections(products));
+    root.replaceChildren(...renderKindSections(products, state));
   }
   const questionNotice = commonQuestionDiagnosticsNotice(state.commonQuestionDiagnostics);
   if (questionNotice) root.prepend(questionNotice);
@@ -4843,6 +5274,17 @@ function render(state) {
       control = controls.find((item) => item.dataset.mergeKey === focusData.key && item.hasAttribute('data-merge-method'));
     }
     control?.focus({ preventScroll: true });
+    return;
+  }
+
+  if (focusData?.kind === 'owned-execution-stop') {
+    const escapedLaunchRef = CSS.escape(focusData.launchRef);
+    const selector = focusData.action === 'open'
+      ? `[data-owned-execution-stop-confirm="${escapedLaunchRef}"]`
+      : focusData.action === 'cancel'
+        ? `[data-owned-execution-stop-open="${escapedLaunchRef}"]`
+        : `[data-owned-execution-card="${escapedLaunchRef}"]`;
+    root.querySelector(selector)?.focus({ preventScroll: true });
     return;
   }
 
@@ -5292,11 +5734,11 @@ async function runInstructionCreate(form) {
   }
   if (existingPreview?.phase === 'requesting') return;
   const target = instructionDraftTargetFor(lastState, sessionId, draft);
-  const mode = instructionModeForTarget(target);
+  const mode = instructionModeForTarget(target, lastState);
   const binding = instructionBindingForTarget(target, mode);
   if (lastState?.instructionDiagnostics?.service !== 'ready' || lastState?.instructionDiagnostics?.blocked === true ||
       lastState?.instructionDiagnostics?.targets !== 'available' || !target || draft.targetLaunchRef !== target.launchRef ||
-      draft.mode !== mode || !sameInstructionBinding(draft.binding, binding) || !instructionTargetMode(target, draft.mode) ||
+      draft.mode !== mode || !sameInstructionBinding(draft.binding, binding) || !instructionTargetMode(target, draft.mode, lastState) ||
       !draft.text.trim() || instructionInFlight.has(sessionId)) return;
   if (!draft.deliveryAttemptId || !draft.logicalMessageId) Object.assign(draft, instructionIds());
   const reservationKey = draft.deliveryAttemptId;
@@ -5980,6 +6422,18 @@ document.addEventListener('click', (event) => {
   }
   const button = event.target.closest('button');
   if (!button) return;
+  if (button.dataset.ownedExecutionStopOpen) {
+    openOwnedExecutionStopConfirmation(button.dataset.ownedExecutionStopOpen, button.dataset.ownedExecutionStopSession);
+    return;
+  }
+  if (button.dataset.ownedExecutionStopCancel) {
+    cancelOwnedExecutionStopConfirmation(button.dataset.ownedExecutionStopCancel);
+    return;
+  }
+  if (button.dataset.ownedExecutionStopConfirm) {
+    void runOwnedExecutionStop(button);
+    return;
+  }
   if (button.dataset.instructionAction) { void runInstructionAction(button); return; }
   if (button.dataset.instructionRebind) {
     const sessionId = button.dataset.instructionRebind;
@@ -6346,6 +6800,7 @@ async function refresh() {
     updateConnectionNote();
     lastState = state;
     observeInstructionDraftBindings(state);
+    reconcileOwnedExecutionStopState(state);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
@@ -6366,7 +6821,7 @@ async function refresh() {
       hasRenderedState = true;
       const visibleSessions = state.sessions.filter((session) => (session.hidden !== true || isIdleHiddenSession(session)));
       const judgmentCounts = countJudgments(visibleSessions);
-      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions + judgmentCounts.questions + judgmentCounts.questionProvisional} 件)。`;
+      liveStatus.textContent = `状態を更新しました。セッション (${visibleSessions.length} 件)、許可待ち (${judgmentCounts.permission} 件)、判断待ち (${judgmentCounts.decisions + judgmentCounts.questions + judgmentCounts.questionProvisional} 件)、実行の質問・許可待ち (${judgmentCounts.nativeWaits} 件)。`;
     }
     if (instructionAnnouncement) liveStatus.textContent = instructionAnnouncement;
     if (!deferredRenderPending) renderedInstructionSignature = nextInstructionSignature;

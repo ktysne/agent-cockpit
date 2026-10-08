@@ -1250,6 +1250,7 @@ test('モックの作業行も名前と時刻の後に全幅の詳細を並べ�
   assert.ok(functions.every(Boolean));
   const context = pageContext(mock, {
     ui: { estimatedSessions: [] },
+    nativeStopState: () => '',
     taskState: (session, task) => task.state,
     esc: (value) => String(value),
     sessionTag: () => '<span class="prod-tag">種類</span><span class="session-tag">セッション</span>',
@@ -3618,6 +3619,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     pullRequestExpirySignature: () => signature,
     observeInstructionStates: () => null,
     observeInstructionDraftBindings() {},
+    reconcileOwnedExecutionStopState() {},
     instructionProjectionSignature: () => '',
     renderedInstructionSignature: '',
     deferredRenderPending: false,
@@ -4381,6 +4383,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       pullRequestExpirySignature: () => '',
       observeInstructionStates: () => null,
       observeInstructionDraftBindings() {},
+      reconcileOwnedExecutionStopState() {},
       instructionProjectionSignature: () => '',
       renderedInstructionSignature: '',
       deferredRenderPending: false,
