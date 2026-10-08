@@ -45,7 +45,7 @@ v2の外形はschemaVersion、storeId、revision、questions、reservations、mi
 schemaVersionは2、storeIdはアンカーと同じ小文字UUIDv4、revisionは0以上の安全な整数とする。
 通常はmigrationAllowance=nullとし、初回v1 sourceの追加容量を保持する場合だけ厳密なgrant objectを保存する。
 grant objectはoperationId、sourceSchemaVersion、sourceSizeBytes、sourceSha256、maxExtraBytes、eligibleQuestionIdsを持つ。
-operationIdはanchor migrationと同じoperationの小文字UUIDv4、sourceSchemaVersionは1、sourceSizeBytesは0から16,777,216までの安全な整数、sourceSha256は旧fileの実byteに対するlowercase SHA-256 hex 64文字とする。
+operationIdはanchor migrationと同じoperationの小文字UUIDv4、sourceSchemaVersionは1、sourceSizeBytesは0から通常上限Nまでの安全な整数、sourceSha256は旧fileの実byteに対するlowercase SHA-256 hex 64文字とする。
 maxExtraBytesはsource検査時に一度計算して固定する安全な整数で、1からH_questions以下とし、算出値が0ならgrantをnullにする。
 eligibleQuestionIdsはsource v1のinternalQuestionIdを全て一度だけ並べたdense arrayで、各値は既存identifier規則に従い、最大20,000件とする。
 未知field、重複ID、不正UUID、source version/size/digestの不一致を拒否する。
@@ -130,15 +130,18 @@ deliveryCreationStateは質問intentとcheckpoint recordの保存境界、checkp
 | creatingを保存した同じ稼働操作が継続中 | 4 field | creating | null | migration snapshot対象外 |
 | 保存済checkpointに完全一致するattemptがある | 4 field | checkpointed | 実在する8 state | checkpoint |
 | v1 intentあり、checkpointにattemptがない | 4 field | indeterminate | unknown | indeterminate |
-| v2 creatingの再起動後または退役gateを閉じ、開始済み対象操作の完了を待った後にattemptがない | 4 field | indeterminate | unknown | indeterminate |
+| v2 creatingの再起動後または共有question gateのdrain完了後にattemptがない | 4 field | indeterminate | unknown | indeterminate |
 
 v2のnot_createdと同intentのcheckpoint attemptが同時に存在する組は保存順序上不可能であり、起動時と回収時の両方で拒否する。
-not_createdをcheckpointedへ読み替えない。creatingは再起動または退役gateを閉じ、開始済み対象操作の完了を待った後に、完全一致attemptがあればcheckpointedへ復元する。
+not_createdをcheckpointedへ読み替えない。creatingは再起動または共有question gateのdrain完了後に、完全一致attemptがあればcheckpointedへ復元する。
 
 checkpointStateの許容enumはavailable、claimed、sending、accepted、applied、unknown、cancelled_before_send、superseded_before_sendである。
 not_createdはintentがnullまたは選択済みintentだけを持ち、checkpointStateはnullとする。
 creatingは選択済みintentを必須とし、同じ稼働操作が配信作成を継続している間だけ使う。
-回収準備のsnapshotにはcreatingを残さない。退役gateを閉じ、開始済み対象操作の完了を待ち、完全一致attemptがあればcheckpointed、無ければindeterminateへ確定する。
+共有question gateのdrainは[アンカーの失効とwriterの直列化](question-reclamation-anchor.md#失効とwriterの直列化)に従う。
+対象periodの新しい登録、回答、poll、timer、late answer、配送作成、復元、sendStartを遮断し、受付済みqueue待機操作も含めて完了または副作用なしの拒否を確定させる。
+形式移行では、これに加えて全manifest slotのwriterを停止してdrainする。
+回収準備のsnapshotにはcreatingを残さない。共有question gateをdrainし、完全一致attemptがあればcheckpointed、無ければindeterminateへ確定する。
 indeterminateは選択済みintentとcheckpointState unknownを必須とし、作成・送信・再送を永久に禁止する。
 checkpointedはintent、checkpointState、sourceClaimsDigest、sessionIdを必須とする。
 
@@ -348,9 +351,12 @@ maxReservationBytesは状態別に合法な将来projectionを同じserializer�
 grant本体と最大`eligibleQuestionIds`配列もprojectionに含める。固定値の数値は段階2でserializer fixtureにより決める。
 循環参照を避けるため、`H_questions`の計算中はgrant内の`maxExtraBytes`を最大の16桁safe integerとしてprojectionする。
 
-受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
+まずgrantをnullとした有効な旧source `S`のprojectionを、移行target、保持、回収の全境界と将来予約について測る。
+その最大値が通常上限`N`以内ならgrantをnullとし、追加枠を発行しない。
+通常上限を超える場合だけgrant込みで再測定し、受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
 `b`と将来予約の計上方法は上の固定上界と同じとし、grant内の数値は16桁の最大幅でprojectionして自己参照を避ける。
-算出値が`H_questions`を超えれば移行を拒否し、0ならgrantを`null`にする。
+このsource基準は通常上限を基準にした最小追加量より保守的な移行増加枠であり、固定`H_questions`も同じ基準の上界として維持する。
+未使用分を新規受付へ転用しない。算出値が`H_questions`を超えれば移行を拒否する。
 grantがある間、移行・保持中の既存journal load/writeと回収3境界に`N + maxExtraBytes`を適用する。
 journalの現在・次snapshotが`N`を超えても`N + maxExtraBytes`以内なら、既存の拒否snapshotを維持し、回収境界1を含む既存操作を続けられる。
 grantを越える場合はquestion writerと対象gateを停止し、source/detailと拒否情報を削らず保持する。

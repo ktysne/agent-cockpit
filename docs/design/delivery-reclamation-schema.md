@@ -70,11 +70,16 @@ checkpoint v3のouter objectとinstruction journal v2のtop-level objectは、�
 移行coordinatorだけが、旧sourceのschema、size、SHA-256がanchorの固定fingerprintと一致した後にgrantを発行する。
 checkpoint grantのrosterは旧checkpoint v2 ledgerに存在したdelivery attempt ID、instruction grantのrosterは旧journal v1に存在したinstruction attempt IDから固定する。
 grantのoperation ID、source fingerprint、rosterを後から追記・差替え・再利用せず、同じsourceへのpartial grant積上げやgrantの重ね掛けを拒否する。
-受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes_i(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
+まずgrantをnullとした旧source `S`のprojectionを、移行、保持、回収の全境界と合法な将来予約について測る。
+その最大値が通常上限`B_i`以内ならgrantをnullとし、追加枠を発行しない。
+通常上限を超える場合だけgrant込みで再測定し、受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes_i(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
 `b`はそのslotの移行、保持、回収の各到達可能snapshotと許可された将来遷移を表す。
 `projectedReserveBytes_i`は実serializer byte、grantとroster、まだ使用していない合法な将来増分を一度だけ含め、別々の到達状態の最大値を使い、合計しない。
 計算中はgrant内の数値を16桁の最大幅でprojectionして自己参照を避ける。
-算出値が0またはsourcePresent=falseならgrantをnullにし、固定`H_i`を超えれば移行を拒否する。
+sourcePresent=falseならgrantをnullにする。
+source基準は通常上限を基準にした最小追加量より保守的な移行増加枠であり、固定`H_i`も同じ基準の上界として維持する。未使用分を新規受付へ転用しない。
+算出値が固定`H_i`を超えれば移行を拒否する。
+旧sourceの実byteが現在の`B_i`を超える場合も移行を拒否し、sourceを保持して診断に上限超過の理由を出す。
 非null grantの`maxExtraBytes`が0または固定`H_i`を超えるobjectも拒否する。
 
 `eligibleAttemptIds`は移行時点の上限対象を固定するrosterであり、移行後のrecordsと件数が完全一致する必要はない。
@@ -277,7 +282,7 @@ store ID、delivery creation state、revision増分、最大envelope、最大20,
 #206のmemory ledgerとclaimの回収、および非question unknownの長期占有は段階4の未完了範囲である。
 
 `A`は既存anchorの実byte（初回作成時は0）、`N_i`は各旧data fileの実byte、`H_i = max(0, serializedTargetMax_i - N_i)`とする。
-atomic置換中は既存anchor `A`と一時anchor `M`、各旧data file `N_i`と一時target `N_i + H_i`が同時に存在し得る。
+初回形式移行のatomic置換中は既存anchor `A`と一時anchor `M`、各旧data file `N_i`と一時target `N_i + H_i`が同時に存在し得る。
 総ピーク上界は`A + M + Σ(2N_i + H_i)`である。
 旧source `A`と`N_i`は既存fileが占有する通常容量に含め、追加予約へ二重計上しない。
 追加予約は`M + Σ(N_i + H_i)`で、一時targetの全byteを保持できる枠を別に確保する。
@@ -288,3 +293,6 @@ grantがnullなら全load/writeを通常`B_i`内に制限する。固定`H_i`は
 この枠を許さなければ、通常上限いっぱいの旧形式へ必須fieldを足せない。
 容量不足時は旧sourceと拒否情報を保持し、migrationと受付を再開しない。
 7日経過前に通常上限を超える場合も新規受付を止め、本文保持期限を短縮しない。
+
+この旧source実byteを使う物理ピーク式は初回形式移行の置換に限る。
+移行後の再書込みでは旧fileも増大するため、各slotの旧fileと一時fileの合計は保守的に`2 × (B_i + maxExtraBytes)`を確保し、アンカーと他slotの保持分を別に加える。

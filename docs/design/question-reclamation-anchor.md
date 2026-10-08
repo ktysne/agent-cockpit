@@ -99,10 +99,11 @@ gateは対象の完全identityとperiod IDごとに `active`、`retiring`、`ret
 失効を始める操作は次の順序とする。
 
 1. 同期で `retiring` にし、新しい登録、回答、poll、timer、late answer、配送作成、復元、sendStartを遮断する。
-2. 既に開始した対象操作をdrainし、質問と関連配信のsnapshotを固定する。
+2. 受付済みqueue待機操作も含む対象操作を、完了または副作用なしの拒否までdrainし、質問と関連配信のsnapshotを固定する。
 3. 失効記録と移行intentをアンカーに保存し、保存成功を確認する。
 4. `retired` にし、移行または回収を続ける。保存失敗や結果不明でもgateを開け直さない。
 
+drain中の操作は同じgateの再取得を待たない。
 送信操作はgateの世代番号を捕捉し、最終sinkを呼ぶ直前にも同期で再検査する。
 再検査からsinkの呼び出しまで `await` を挟まない。
 既にsinkを呼んだ配信を取り消せた扱いにはせず、結果不明ならunknownのまま保持する。
