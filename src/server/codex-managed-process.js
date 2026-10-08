@@ -366,6 +366,8 @@ function createCodexManagedProcessManager(options = {}) {
   const startTimeoutMs = normalizeTimeout(options.startTimeoutMs, DEFAULT_START_TIMEOUT_MS, 'start_timeout');
   const stopTimeoutMs = normalizeTimeout(options.stopTimeoutMs, DEFAULT_STOP_TIMEOUT_MS, 'stop_timeout');
   const connectTimeoutMs = normalizeTimeout(options.connectTimeoutMs, DEFAULT_CONNECT_TIMEOUT_MS, 'connect_timeout');
+  const transportTimeoutMs = normalizeTimeout(options.transportTimeoutMs, undefined, 'transport_timeout');
+  const requestTimeoutMs = normalizeTimeout(options.requestTimeoutMs, undefined, 'request_timeout');
   const spawnImpl = options.spawnImpl || spawn;
   const choosePortImpl = options.choosePortImpl || (() => chooseLoopbackPort(options.netImpl || net));
   const transportFactory = options.transportFactory || createCodexManagedTransport;
@@ -474,8 +476,8 @@ function createCodexManagedProcessManager(options = {}) {
       let transport;
       let established = false;
       const remainingMs = deadline - Date.now();
-      const attemptTimeoutMs = Math.min(options.transportTimeoutMs || CONNECT_ATTEMPT_TIMEOUT_MS, remainingMs);
-      if (attemptTimeoutMs < 50) break;
+      const handshakeTimeoutMs = Math.min(transportTimeoutMs === undefined ? CONNECT_ATTEMPT_TIMEOUT_MS : transportTimeoutMs, remainingMs);
+      if (handshakeTimeoutMs < 50) break;
       const onDisconnect = (event) => {
         if (!established) return;
         if (transport) transports.delete(transport);
@@ -485,7 +487,9 @@ function createCodexManagedProcessManager(options = {}) {
         const createdTransport = await transportFactory({
           endpoint,
           capabilityToken,
-          timeoutMs: attemptTimeoutMs,
+          timeoutMs: transportTimeoutMs,
+          handshakeTimeoutMs,
+          requestTimeoutMs,
           onNotification: callbacks.onNotification,
           onServerRequest: callbacks.onServerRequest,
           onDisconnect,
@@ -521,7 +525,8 @@ function createCodexManagedProcessManager(options = {}) {
       const createdTransport = await transportFactory({
         endpoint,
         capabilityToken,
-        timeoutMs: options.transportTimeoutMs,
+        timeoutMs: transportTimeoutMs,
+        requestTimeoutMs,
         onNotification() {},
         onServerRequest() {},
         onDisconnect() {},

@@ -85,6 +85,96 @@ test('wrong bearer is rejected without exposing it and notifies disconnect once'
   assert.deepEqual(fixture.authorizationHeaders, [`Bearer ${wrongToken}`]);
 });
 
+test('managed transport keeps RPC requests alive beyond the handshake deadline', async (t) => {
+  let heldResponse = null;
+  const fixture = await createWebSocketFixture({
+    token: TOKEN,
+    respond(method, params, message, socket) {
+      if (method === 'thread/list') {
+        heldResponse = { message, socket };
+        return null;
+      }
+      return undefined;
+    },
+  });
+  t.after(() => fixture.close());
+  const transport = await createCodexManagedTransport({
+    endpoint: fixture.endpoint,
+    capabilityToken: TOKEN,
+    timeoutMs: 100,
+    handshakeTimeoutMs: 300,
+    requestTimeoutMs: 2000,
+    onNotification() {},
+    onServerRequest() {},
+    onDisconnect() {},
+  });
+  await transport.request('initialize', { clientInfo: { name: 'test' }, capabilities: {} });
+  await transport.notify('initialized', {});
+
+  const pending = transport.request('thread/list', {});
+  await fixture.waitFor(() => heldResponse !== null);
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  writeServerMessage(heldResponse.socket, { id: heldResponse.message.id, result: { data: [] } });
+  assert.deepEqual(await pending, { data: [] });
+  await transport.close();
+});
+
+test('managed transport applies the legacy timeout to RPC requests', async (t) => {
+  const fixture = await createWebSocketFixture({
+    token: TOKEN,
+    respond(method) { return method === 'thread/list' ? null : undefined; },
+  });
+  t.after(() => fixture.close());
+  const transport = await createCodexManagedTransport({
+    endpoint: fixture.endpoint,
+    capabilityToken: TOKEN,
+    timeoutMs: 100,
+    onNotification() {},
+    onServerRequest() {},
+    onDisconnect() {},
+  });
+  await transport.request('initialize', { clientInfo: { name: 'test' }, capabilities: {} });
+  await transport.notify('initialized', {});
+  await assert.rejects(transport.request('thread/list', {}), (error) => error.code === 'request_timeout');
+  assert.equal(transport.snapshot().pendingRequestCount, 0);
+  await transport.close();
+});
+
+test('managed transport applies an explicit request deadline', async (t) => {
+  const fixture = await createWebSocketFixture({
+    token: TOKEN,
+    respond(method) { return method === 'thread/list' ? null : undefined; },
+  });
+  t.after(() => fixture.close());
+  const transport = await createCodexManagedTransport({
+    endpoint: fixture.endpoint,
+    capabilityToken: TOKEN,
+    handshakeTimeoutMs: 500,
+    requestTimeoutMs: 100,
+    onNotification() {},
+    onServerRequest() {},
+    onDisconnect() {},
+  });
+  await transport.request('initialize', { clientInfo: { name: 'test' }, capabilities: {} });
+  await transport.notify('initialized', {});
+  await assert.rejects(transport.request('thread/list', {}), (error) => error.code === 'request_timeout');
+  await transport.close();
+});
+
+test('managed transport rejects malformed legacy and per-phase timeout settings', async () => {
+  const create = (overrides) => createCodexManagedTransport({
+    endpoint: 'ws://127.0.0.1:43210',
+    capabilityToken: TOKEN,
+    onNotification() {},
+    onServerRequest() {},
+    onDisconnect() {},
+    ...overrides,
+  });
+  await assert.rejects(create({ timeoutMs: 49 }), (error) => error.code === 'invalid_timeout');
+  await assert.rejects(create({ handshakeTimeoutMs: 49 }), (error) => error.code === 'invalid_handshake_timeout');
+  await assert.rejects(create({ requestTimeoutMs: 49 }), (error) => error.code === 'invalid_request_timeout');
+});
+
 test('notifications preserve internal params while server requests expose only identifiers and receive no reply', async (t) => {
   const fixture = await createWebSocketFixture({
     token: TOKEN,

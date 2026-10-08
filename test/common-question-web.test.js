@@ -83,7 +83,8 @@ const FUNCTION_NAMES = [
   'commonQuestionKey', 'isFinishedCommonQuestion', 'isFilterShown', 'shownCommonQuestions',
   'commonQuestionDraft', 'commonQuestionDeliveryText', 'commonQuestionSelectedLabels',
   'sameCommonQuestionAnswers', 'commonQuestionAnswersValid', 'readCommonQuestionDraft',
-  'updateCommonQuestionSubmit', 'appendCommonQuestions', 'countJudgments', 'renderSummary',
+  'updateCommonQuestionSubmit', 'appendCommonQuestions', 'commonQuestionDiagnosticsNotice',
+  'countJudgments', 'renderSummary',
   'runCommonQuestionAction',
 ];
 
@@ -172,6 +173,20 @@ function findData(root, name, value = undefined) {
   return root.querySelectorAll(`[data-${name.replace(/[A-Z]/g, (letter) => '-' + letter.toLowerCase())}]`)
     .find((node) => value === undefined || node.dataset[name] === value) || null;
 }
+
+test('質問状態の取得不能と復旧の保留を異なる案内で伝える', () => {
+  const context = createUiContext();
+  const unavailable = context.commonQuestionDiagnosticsNotice({
+    recovery: { status: 'unavailable', errorCode: 'common_question_state_unavailable' },
+  });
+  assert.equal(unavailable.children[0].textContent, '質問の状態を取得できません。');
+  assert.equal(unavailable.children[1].textContent,
+    '質問情報を読み込めないため、現在の状態を表示できません。再読み込みして確認してください。');
+  assert.equal(unavailable.children[1].textContent.includes('保留'), false);
+
+  const blocked = context.commonQuestionDiagnosticsNotice({ recovery: { state: 'blocked', code: 'question_writer_blocked' } });
+  assert.equal(blocked.children[1].textContent, '保存済み質問の復旧確認が必要です。新しい送信は保留されています。');
+});
 
 test('共通質問の仮選択件数と質問フィルターは既存判断事項と二重計上しない', () => {
   const context = createUiContext();

@@ -100,6 +100,14 @@ async function temporaryHome(testContext, { deferCleanup = false } = {}) {
   return createTemporaryHome(testContext, 'agent-cockpit-answer-test-', { deferCleanup });
 }
 
+// フックの親プロセスの申告を照合させるための、擬似の Claude セッションファイルの一覧。
+function claudeLineage(sessions) {
+  const files = Object.entries(sessions).map(([sessionId, pid]) => ({
+    session_id: sessionId, pid, procStart: `start-${pid}`, cwd: '', name: null, updatedAt: null,
+  }));
+  return { listSessionFiles: async () => files };
+}
+
 async function runningServer(testContext, options = {}) {
   return startTestServer(testContext, { temporaryPrefix: 'agent-cockpit-answer-test-', ...options });
 }
@@ -1080,7 +1088,9 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
     snapshot: () => ({ enabled: true, since: NOW }),
     setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
   };
-  const { homeDir, runtime } = await runningServer(t, { state, away });
+  const { homeDir, runtime } = await runningServer(t, {
+    state, away, ...claudeLineage({ 'session-ui': 4101, 'session-other': 4102 }),
+  });
   runtime.answerDelivery.registerAsk({ sessionId: 'session-ui', toolUseId: 'ask-ui', questions: QUESTIONS });
   const url = `/api/decisions/ask-ui/answer`;
   const body = JSON.stringify({ session_id: 'session-ui', choice: 'ok', note: 'UI からの回答本文' });
@@ -1124,7 +1134,7 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
   const askOutput = await runAnswerHook({
     session_id: 'session-ui', tool_use_id: 'ask-ui', hook_event_name: 'PreToolUse',
     tool_name: 'AskUserQuestion', tool_input: { questions: QUESTIONS },
-  }, { homeDir });
+  }, { homeDir, ppid: 4101 });
   assert.deepEqual(askOutput.output.hookSpecificOutput.updatedInput.answers, { 'どの形式にしますか。': 'JSON (推奨)' });
 
   const hookWithUiSecret = await request(runtime.info.port, {
@@ -1146,9 +1156,9 @@ test('UI 回答の Origin と秘密値を照合し、回答を別セッション
     title: '他セッションの設定', context: '', state: 'provisional', options: [],
   }, NOW);
   runtime.answerDelivery.submitAnswer('session-other', privateDecision.id, null, '他セッションだけに渡す本文');
-  const isolated = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-ui' }, { homeDir });
+  const isolated = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-ui' }, { homeDir, ppid: 4101 });
   assert.equal(isolated.output, null);
-  const delivered = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-other' }, { homeDir });
+  const delivered = await runAnswerHook({ hook_event_name: 'PostToolBatch', session_id: 'session-other' }, { homeDir, ppid: 4102 });
   assert.match(delivered.output.hookSpecificOutput.additionalContext, /他セッションだけに渡す本文/);
   assert.doesNotMatch(delivered.output.hookSpecificOutput.additionalContext, /UI からの回答本文/);
   const persistedText = (await Promise.all((await fs.readdir(homeDir))
@@ -1167,7 +1177,7 @@ test('選択肢の回答 API は label と質問ごとの選択数を検査し�
     snapshot: () => ({ enabled: true, since: NOW }),
     setEnabled: async (enabled) => ({ enabled, since: enabled ? NOW : null }),
   };
-  const { homeDir, runtime } = await runningServer(t, { state, away });
+  const { homeDir, runtime } = await runningServer(t, { state, away, ...claudeLineage({ 'session-pick': 4103 }) });
   const questions = [
     { question: '形式を決める', header: '', multiSelect: false, options: [
       { label: 'JSON (推奨)', description: '' }, { label: 'CSV', description: '' },
@@ -1214,7 +1224,7 @@ test('選択肢の回答 API は label と質問ごとの選択数を検査し�
   const asked = await runAnswerHook({
     session_id: 'session-pick', tool_use_id: 'ask-pick', hook_event_name: 'PreToolUse',
     tool_name: 'AskUserQuestion', tool_input: { questions },
-  }, { homeDir });
+  }, { homeDir, ppid: 4103 });
   assert.deepEqual(asked.output.hookSpecificOutput.updatedInput.answers, {
     '形式を決める': 'CSV',
     '追加する確認を選ぶ': 'lint, 型検査',

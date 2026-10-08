@@ -76,7 +76,7 @@ test('状態不明の操作と推定結果は種類別・プロダクト別の�
   assert.equal((estimatedText.match(/10:00/g) || []).length, 1);
   assert.match(estimatedText, /入力待ちらしい: いいえ/);
 
-  const mockFunctions = ['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name));
+  const mockFunctions = ['mainRow', 'unknownSessionControls', 'lineagePersisted', 'lineageNotice'].map((name) => functionSource(mock, name));
   assert.ok(mockFunctions.every(Boolean));
   const mockContext = pageContext(mock, {
     ui: { estimatedSessions: ['unknown'] },

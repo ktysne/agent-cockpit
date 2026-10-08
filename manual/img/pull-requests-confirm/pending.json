@@ -2,13 +2,13 @@
   "name": "pending",
   "target": "#root > section.section:nth-child(1) .pr-repo-group",
   "width": 1576,
-  "height": 1938,
+  "height": 1990,
   "parts": [
     {
       "key": "confirm.heading",
       "bounds": {
         "x": 52,
-        "y": 449,
+        "y": 447,
         "width": 1472,
         "height": 42
       },
@@ -18,7 +18,7 @@
       "key": "confirm.warning",
       "bounds": {
         "x": 52,
-        "y": 507,
+        "y": 505,
         "width": 1472,
         "height": 38
       },
@@ -28,7 +28,7 @@
       "key": "confirm.methods",
       "bounds": {
         "x": 52,
-        "y": 562,
+        "y": 560,
         "width": 1472,
         "height": 72
       },
@@ -38,7 +38,7 @@
       "key": "confirm.delete",
       "bounds": {
         "x": 52,
-        "y": 650,
+        "y": 648,
         "width": 1472,
         "height": 72
       },
@@ -48,7 +48,7 @@
       "key": "confirm.effect-review",
       "bounds": {
         "x": 92,
-        "y": 738,
+        "y": 736,
         "width": 1432,
         "height": 38
       },
@@ -58,7 +58,7 @@
       "key": "confirm.effect-head",
       "bounds": {
         "x": 301,
-        "y": 782,
+        "y": 780,
         "width": 92,
         "height": 28
       },
@@ -68,7 +68,7 @@
       "key": "confirm.go",
       "bounds": {
         "x": 52,
-        "y": 833,
+        "y": 830,
         "width": 227,
         "height": 80
       },
@@ -78,7 +78,7 @@
       "key": "confirm.cancel",
       "bounds": {
         "x": 295,
-        "y": 833,
+        "y": 830,
         "width": 140,
         "height": 80
       },

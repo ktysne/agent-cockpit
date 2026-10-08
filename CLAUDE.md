@@ -15,6 +15,18 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - 許可待ちは表示だけにし、ダッシュボードから許可を出す口は作らない
 - 経路の設定(サブエージェント、クロスレビュー)は全セッション共通で、次に起動するものから効かせる。稼働中のサブエージェントを止めたり切り替えたりしない
 
+## Codex連携の開発
+
+- 集約先の `codex/feature-codex-support` は `main` から作成し、本実装と関連するPoCや修正は集約先の最新headから `codex/` で始まる作業ブランチを作る。
+- PRの作成前とレビュー開始時に、実際のhead、base、headの起点をGitとGitHubで確認する。
+- 通常の作業PRは `codex/feature-codex-support` をbaseにする。
+- 全作業、統合検証、レビューを終えた後に限り、集約先から `main` への最終PRを作る。
+- mainへ直接pushせず、mergeは既存の開発者確認フローで行う。
+- 現在のダッシュボードがマージできるのはbaseが既定ブランチのPRだけである。この制限を迂回せず、モデルの判断だけでfeature向けPRをマージしない。
+- ClaudeとCodexで同じ結果を期待する機能は、[適合試験方針](docs/design/provider-conformance-testing.md)に機能単位のscenarioを追加する。
+- scenarioの期待値は実装から独立に定め、両adapterの結果、fixtureと実runtimeの区別、未確認理由を記録する。
+- 未実装側や未実行runtimeを成功扱いしない。
+
 ## モックとの整合
 
 - GUI のモック([mock/index.html](mock/index.html))は、開発者と合意した最終形の見た目と機能の正本である。実装はモックの見た目と機能にそろえる
@@ -31,9 +43,11 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - 子プロセスを起動できない環境(Codex の Windows サンドボックスなど。`npm test` が `spawn EPERM` で止まる)では、`npm run test:inprocess` を使う。テストファイルを 1 つのプロセスで流すので、テストランナーが子プロセスを起動しない
   - `test/ensure-server.test.js` は常駐サーバーを子プロセスで起動して確かめるので、この環境では失敗する。報告では、その失敗を「子プロセスを起動できないため未確認」と書き、ほかのテストの合否と分ける
 
-## CLAUDE.md と AGENTS.md の同期
+## Claude と Codex の設定文書
 
-`CLAUDE.md`(Claude Code 向け)と `AGENTS.md`(Codex 向け)は同じ内容に保つ。片方を変えたら、もう一方にも同じ変更を入れる。
+`CLAUDE.md`はClaude Code向け、`AGENTS.md`はCodex向けの独立した正本として管理する。
+両方のエージェントが守る規則は、それぞれの正本に記載する。
+片方の変更をもう片方へ自動反映せず、指定されたファイルだけを更新する。
 
 ## リモートセッション時の作業について
 

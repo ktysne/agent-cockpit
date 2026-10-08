@@ -253,13 +253,16 @@ async function postToServer(requestPath, body, options = {}) {
         async (response) => ({
           response,
           json: response.ok && options.parseJson !== false ? await response.json() : undefined,
+          errorJson: !response.ok && options.parseErrorJson ? await response.json().catch(() => null) : undefined,
         }),
       );
-      const { response, json } = result;
+      const { response, json, errorJson } = result;
       if (response.ok) {
         return { ok: true, status: response.status, json };
       }
-      if (response.status !== 401 || attempt + 1 >= maxAttempts) return { ok: false, status: response.status, json: null };
+      if (response.status !== 401 || attempt + 1 >= maxAttempts) {
+        return { ok: false, status: response.status, json: null, ...(errorJson === undefined ? {} : { errorJson }) };
+      }
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
     } catch {

@@ -105,13 +105,19 @@ test('モックに合わせた配色、札、タスク行を表示する', () =>
   assert.equal(taskRowStyle.background, undefined);
   assert.equal(taskTitleStyle['font-weight'], undefined);
   assert.equal(Object.fromEntries(cssDeclarations(web, '.task-item:hover')).background, 'var(--surface-2)');
-  for (const [source, row, title] of [[web, '.task-head', '.task-title'], [web, '.pr .pline', '.pr .pline > .ptitle'], [mock, '.task .line', '.task .line > .title'], [mock, '.pr .pline', '.pr .pline > .ptitle']]) {
+  for (const [source, row, title] of [[web, '.task-head', '.task-title'], [mock, '.task .line', '.task .line > .title']]) {
     assert.equal(Object.fromEntries(cssDeclarations(source, row))['flex-wrap'], undefined, `${row} は題の中で折り返す`);
     assert.equal(Object.fromEntries(cssDeclarations(source, `${row} > *`)).flex, 'none');
     assert.match(source, new RegExp(`${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^{]*\\{[^}]*flex: 0 1 auto; min-width: 0;`));
   }
-  assert.match(web, /@media \(max-width: 480px\) \{\s*\.task-head, \.pr \.pline \{ flex-wrap: wrap; \}/);
-  assert.match(mock, /@media \(max-width: 480px\) \{\s*\.task \.line, \.pr \.pline \{ flex-wrap: wrap; \}/);
+  for (const selector of ['.pr-body', '.pr-text', '.pr-text > .badges', '.pr-actions', '.pr-actions .merge-btn, .pr-actions .conflict-btn', '.merge-state', '.merge-state.ok', '.pr .pline', '.pr .pline > *', '.pr .pline > .ptitle']) {
+    assert.deepEqual(cssDeclarations(web, selector), cssDeclarations(mock, selector), `${selector} はモックとそろえる`);
+  }
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-text'))['min-width'], '0', '題は左の列の中で折り返す');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions')).flex, 'none');
+  assert.equal(Object.fromEntries(cssDeclarations(web, '.pr-actions')).width, '148px', '操作の列の幅を行をまたいでそろえる');
+  assert.match(web, /@media \(max-width: 480px\) \{\s*\.task-head \{ flex-wrap: wrap; \}/);
+  assert.match(mock, /@media \(max-width: 480px\) \{\s*\.task \.line \{ flex-wrap: wrap; \}/);
 
   const appendTaskItem = functionSource(web, 'appendTaskItem');
   const appendDecisionCard = functionSource(web, 'appendDecisionCard');

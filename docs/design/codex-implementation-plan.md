@@ -10,7 +10,7 @@ ClaudeとCodexで同じ結果を期待する機能は、本実装に合わせて
 共通コア、両adapterを通す共通適合、少数の実runtime試験を段階的に追加し、全体完成後に横断runtime統合試験を行う。
 期待値は実装から独立に仕様に基づいて定める。
 LLMが生成する文面やproviderの能力差は同等性の対象にしない。
-試験手順と結果の扱いは[Claude/Codex適合試験方針](https://github.com/ktysne/agent-cockpit/blob/f4460762641d9eef6c0eb0c2c9c55df4f625532e/docs/design/provider-conformance-testing.md)を正本とする。
+試験手順と結果の扱いは[Claude/Codex適合試験方針](provider-conformance-testing.md)を正本とする。
 
 Codexの共有契約は固定版の[共有契約文書](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md)を参照する。
 この契約のモデルは参照用であり、実adapterやruntimeの適合を証明しない。
@@ -146,6 +146,104 @@ dashboardの既定branch向けmerge制限を迂回しない。
 main提出前に、採用対象の共通機能で両adapterの適合試験、必要な実runtime接点試験、横断試験の成功を確認する。
 採用対象に残る未確認は解消し、残す場合は開発者承認のscope縮小または代替仕様で採用対象から外して追跡する。
 代替によって再送禁止、認証、宛先固定などの安全境界を緩和しない。
+
+## 採用条件と未完了範囲
+
+本節の条件は採用ゲートであり、計画やfixtureだけで製品機能の完了を証明しない。
+最終PRに含める採用範囲は、次の条件を満たす。
+
+- #207では、既定オプションで起動するClaudeだけの製品結合試験を行い、writerやregistryを直接注入せず、未登録の旧fallbackを製品入口に残さない。
+- 既定のClaude writer compositionをMCPとhookの製品経路へ接続し、認証済み開始から入力反映までを確認する。
+- 未構成時は現行画面を保ち、採用範囲の画面では既存部品とデザインを再利用してmockと一致させ、#221の機能別UIを構成済みの採用機能だけに表示する。
+- G2のID-F04で再接続時の接続世代更新と旧currentProof失効を実runtimeで確認し、対象機能ごとにClaudeとCodexの両adapter適合、必要なruntime接点、復旧と投影回復を記録する。
+- #216の新しい共通質問経路の推奨自動適用は、開発者が明示的に有効化した場合だけ行う。
+
+NS12のCodex CLI 0.160.1 run4では、本人認証、同一owned processでのstartとsteer、送信前の永続保存、適用相関を観測したが、全体結果は `steer_delivery_validation` の `scenario_gate_not_met` で `unknown` だった。
+固定記録はsource head `e83cf3d116e50c8f2afe8c3436de9606d9917220`、script SHA-256 `7C232D52B0BD892487D355809EEF290AADC97AE9294798E04308A97797CC7B04`、summary SHA-256 `5714A0A8FA8C9346922DE651C3C65AB6A5317376370C860BCEA30329D3F5055C` である。
+この結果はG2のID-F04再接続やcurrentProof失効を確認しておらず、frozen unknownを維持する。
+PR202で記録したClaudeの実runtime結果は起動順修正前のもので、修正後のruntime確認は未実施である。
+
+#206の受動復旧は登録履歴を戻す範囲に限られ、#210の質問serviceに対するlaunchとruntime再照合を証明しない。
+
+#206のreplay claimと実行履歴も、#209の容量予約および終端回収の対象に含める。
+claimと履歴の保持量を無制限に増やさず、終端記録の回収と容量予約の上限に反映する。
+
+#210では、不完全な会話履歴を再照合した後に、その会話を永続checkpointの`incompleteConversationIds`から除く規則を定める。
+新しいkernelで通常のstoreを開いて同じstartを再送する場合も、checkpoint replay claimの不一致で保存が恒久的に拒否されないよう、復旧後の扱いを定める。
+
+[#207の実機確認](https://github.com/ktysne/agent-cockpit/issues/207#issuecomment-6039522384)では、Windows Desktop Claude 2.1.289の2セッションで、MCPとexec形式hookの直接の親が同じ`claude.exe`であり、親PIDがsessionsファイル名と一致した。
+sessionsファイルから取得できるClaude親プロセスの開始時刻はPID再利用の確認候補に限り、今回の試験で検証した証拠ではない。
+親プロセスの照合にはexec形式hookから直接親を確認できる経路を使う。
+文字列形式hookはshellを介してbash toolと区別できないため受け付けず、shell形式へのfallbackを設けない。
+hookを起動するNode実行ファイルは絶対パスで指定し、その設定手順をClaude側の実装で定める。
+再開でnative session IDが変わる場合は#213の会話対応を使い、subagentは同じ親プロセス配下でも`agent_id`で区別する。
+`/clear`、Claude CLI、他OS、session file読取の遅延は未確認である。
+
+#209では、unknownから許される遷移と保持証拠が増やす最大量を予約し、件数、予約量、残容量、閾値を診断する。
+容量が尽きた場合は新規受付を抑え、進行中の確定記録に必要な領域を確保する。
+診断だけで保持証拠の上限や保存予約の容量保証を代替しない。
+確定終端の本文を削除し、表示用詳細は既定7日保持する。
+再送防止に必要な墓標を本文削除と同じatomic更新に含め、7日で削除しない。
+旧epochを永続的に拒否し、再利用や巻戻しができない境界が成立するまで墓標を回収しない。
+sendingやunknownを時間だけで回収しない。
+
+#211では、native要求の待機表示と同じ実行を止める製品経路を確認する。
+authority失効は物理停止を証明しないためpendingを消して配信を再開せず、停止が未確認または失敗した場合も再送を0回にする。
+待機中のturn終了、遅延resolved、停止失敗を個別に検証する。
+PR205の表示fixtureは物理停止の証拠に含めない。
+PR230のマージはnative待ち表示案への合意を意味しない。
+PR205の設計資料は、native waiting状態の戻り値と質問・許可情報の読取範囲を実装に合わせて更新する。
+
+#215では、Cockpit専用の認証保存先を実行HOMEから分け、各runでHOMEを分離する。
+Codex CLI 0.160.1のサポート済み認証経路で、読込と更新、権限、並行refresh、認証直列化を確認するまでは、毎回ログインを暫定経路として残す。
+通常HOME全体は製品実行に流用しない。
+SQLiteに本文が残る経路は隔離HOMEでのみ許容する。
+owned processのexitとcloseを確認して非稼働を確かめた後にHOMEを削除し、次回runでは所有を検証した残留物だけを安全に掃除する。
+認証専用scope、稼働中process、外部pathは掃除しない。
+
+#213ではconversationIdごとに1行を表示し、委譲された子を親へまとめる。
+内部execution、period、古い質問の宛先は維持する。
+#216の新しい共通質問serviceとMCPは、ClaudeとCodexの両方で明示opt-inを既定offにする。
+既存Claude hookのdecision-answersとaway設定は変更対象外とする。
+現在両経路が併存する場合は登録経路と配信経路を一つに選び、二重登録と二重配信を防ぐ。
+将来、新しい共通質問経路を既存Claude経路へ統合する場合は、設定移行と利用者への告知を完了条件とする。
+期限やordinary分類のモデル申告だけで自動適用しない。
+生存確認、開発者設定、古い質問の除外を条件とする。
+
+実Codexの未確認挙動に依存する新規G4経路を抑え、Cockpit内の修正を並行して進める。
+#207の設計と既定テストを早期に進め、#209、#210、#212、#216は本番サービスを有効にする前に完了する。
+#202と#204は既存headを保ち、通常のmerge commitと統合検証を行う。
+`e83cf3d`は既存3往復を維持し、承認済み第4回reviewの例外を記録する。
+新しいbranchやstate resetでreview回数上限を回避しない。
+モデルはfeature PRをmergeしない。
+
+#218の文書条件と#219のtargeted CLAUDE更新は、製品実装やruntime証拠の完了を意味しない。
+最終main PRでは`poc/`全体と`tools/probes/common-question-runtime.js`、`test/common-question-runtime-probe.test.js`を除く。
+`npm test`と`npm run test:inprocess`の対象を`test/**/*.test.js`に明示し、PoCの固定SHA参照を文書に残す。
+この削除は最終main PRの準備段階に限り、現feature branchではPoCを保持する。
+sanitize済みsummaryおよびmanifestの追跡整備も後続条件として残す。
+
+### 監査Issueと対応段階
+
+| 監査Issue | 対応段階 |
+|---|---|
+| #207 | Codex側は#166-Bのdelegated MCP親子binding、#171-B/#180-Aの証拠schemaとruntime接点、#177-Aの復旧後resume/projection、kernel API契約を担当する。Claude側は#202、#205、#227のマージ後にissuer、MCP、hooks、activeな実行だけを不在判定から保護する処理、subagent対応、既定composition、実runtime試験を実装する。 |
+| #208 | #167-B、#175-B |
+| #209 | #177-A/B/C、#174、#175-A、#179 |
+| #210 | #177-B/C、#174、#175-A |
+| #211 | #170、#175-B |
+| #212 | #167-A、#170、#177-B |
+| #213 | #167-B、#171-B、#177-B |
+| #214 | #170 |
+| #215 | #170、#180-A、#175-B |
+| #216 | #174 |
+| #217 | #175-B |
+| #218 | #156の集約条件、#167-B |
+| #219 | 独立した運用文書PR |
+| #220 | #171、#174と横断する文書整備 |
+| #221 | #167-B、#174、#175-B |
+| #222 | #175-Bの追加レビューと統合確認 |
+
 ## 工数の扱い
 
 初期段階の概算26〜42日と管理5〜10日は、残作業の見積もりではない。

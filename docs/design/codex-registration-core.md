@@ -15,7 +15,25 @@ MCPは登録されたwriterと、呼出しのnative metadataを照合してか�
 secret、MCP引数、PID、cwd、時刻、環境変数の値だけではprovider、会話、実行期間への認証済みbindingを証明しない。
 
 #166-Aでは正規会話のidentity tuple、会話内の実行期間、観測と認証済み登録の分離、既存Claude表示データの読取互換、未確認または不一致のMCP書き込み拒否を対象にする。
-#166-Bのdelegated MCP起動登録は#171の認証済みbindingとの結合後に行う。
+#166-BのCodex delegated MCP起動登録はCodexのbindingとの結合後に行う。
+
+[#207で承認されたClaude側の証拠境界](https://github.com/ktysne/agent-cockpit/issues/207#issuecomment-6039078898)は、同じ利用者内で偶発的な混入を防ぐ申告系統の照合であり、認証ではない。
+悪意のある同じ利用者のプロセスは対象外とし、秘密値とOriginの照合は引き続き行う。
+
+Claudeの登録は親プロセスのPIDと作成時刻で識別し、作成時刻を登録時に一度だけ取得する。
+作成時刻を取得できない環境では親プロセスの生存確認にフォールバックする。
+writerはMCPプロセスのPIDと作成時刻に結び付け、Claude親プロセスの終了時に失効させ、MCP再起動時に再発行する。
+Claude会話との結び付けには`sessions/<ppid>.json`を正本として使う。
+MCP環境変数は初回の照合にだけ使い、値が異なる場合はファイルを優先する。
+`/clear`でファイル内のsession IDが変わったらbindingを更新し、hookの`session_id`は登録済みbindingとファイルの現在値の両方に一致させる。
+MCPより先にSessionStart hookが届いた場合は同じファイルから登録し、到着順に依存させない。
+ファイルを読めない場合は旧経路へフォールバックせず拒否し、親をClaudeと確認できない場合とは異なる理由をログと画面に示す。
+この拒否時も表示用の本体は動作を続ける。
+issuerは差し替え可能な境界にし、より強い証拠方式は将来の候補として扱う。
+
+Codexのdelegated MCP親子bindingと証拠形式は#166-B、#171-B、#180-Aで扱う。
+Claude側のissuer、MCP、hooks、activeな実行だけを不在判定から保護する処理、subagent対応、既定composition、実runtime試験は#202、#205、#227のマージ後にClaude側が実装する。
+実機確認の範囲は[#207の追加記録](https://github.com/ktysne/agent-cockpit/issues/207#issuecomment-6039542781)に従い、未検証のruntimeやhook形式へ一般化しない。
 
 ## 判定と計測の共通規則
 
@@ -100,6 +118,8 @@ kernelへ未登録のClaude aliasでは、既存hookの観測経路を維持す�
 新期間から結果を組み直さない。
 未登録MCPはPIDやClaude IDが一致しても拒否する。
 このため通常HOMEへの旧MCP設定だけでは新しい認証済み書込みを開始できない。
+通常のDesktopとCLIのClaudeは、[Claudeのwriterの発行](claude-local-issuer.md)のissuerが申告された親プロセスをセッションファイルと照合して登録する。
+この証拠は認証ではなく、ID-F02-A01とID-F02-A04のPIDに関する期待値に対するClaudeだけの例外である。
 
 ## 検証層と採用条件
 

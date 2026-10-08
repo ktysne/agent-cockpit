@@ -137,6 +137,7 @@ function composerContext(session, draft = {}) {
   const context = pageContext(mock, {
     ui,
     MAX_NATIVE_PENDING_REQUESTS: Number(mock.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
+    DATA: { integrations: { instructions: true } },
     commonQuestionsOf: item => item.commonQuestions || [],
     isFinishedCommonQuestion: question => question.cancelled || question.deliveryState === 'applied',
     isActiveDecision: decision => decision.kind === 'waiting' || decision.kind === 'provisional',
@@ -158,6 +159,16 @@ test('mock instruction composer is nested in each session work region in both di
   assert.match(sessionBlock, /now:[\s\S]*instructionComposer\(p, session\)/);
   assert.doesNotMatch(renderProductMode, /instructionComposer\(p\)/);
   assert.match(renderKindMode, /mainRow\(p, session, true\)[\s\S]*instructionComposer\(p, session\)/);
+});
+
+test('mock composer is hidden when instructions are not configured and starts an interrupted session', () => {
+  const session = { id: 'session-a', title: 'Session A', status: 'interrupted', perms: [], decisions: [], commonQuestions: [] };
+  const { context, product } = composerContext(session);
+  assert.equal(context.instructionTargetAvailability(session).mode, 'start');
+  assert.match(context.instructionComposer(product, session), /data-instruction-session="session-a"/);
+  context.DATA.integrations.instructions = false;
+  assert.equal(context.instructionComposer(product, session), '');
+  assert.equal(context.instructionTargetAvailability(session).mode, '');
 });
 
 test('mock composer requires explicit target and mode selections and holds while session work is pending', () => {
