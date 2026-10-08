@@ -51,6 +51,7 @@ sending、accepted、unknownを復元しても自動再送しない。
 保存記録の整合性と現在の実行権限は別々に検査し、保存ファイルからauthorityを復元しない。
 不正な構造、孤立配送と記録間の矛盾では起動拒否を維持する。
 隔離記録の容量回収は#209で扱い、容量と実runtimeの採用条件は[復旧計画](../handover/2026-10-08-common-question-recovery-plan.md)に従う。
+回収 schema と移行の具体案および未決の判断は[容量回収計画](codex-capacity-reclamation.md)を参照する。
 
 ## pollと競合
 
