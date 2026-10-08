@@ -32,6 +32,11 @@ const FACTORY_FIELDS = [
   'onAuthenticationRequired', 'now', 'checkpointAtomicWrite', 'journalAtomicWrite', 'storeLimits',
 ];
 const START_FIELDS = ['launchId', 'runId', 'attemptId', 'profileId', 'origin', 'purpose', 'inputText'];
+const OWNED_STOP_FIELDS = ['launchRef', 'executionId', 'sessionId', 'expectedContextId',
+  'expectedOwnerGeneration', 'stopRevision'];
+const OWNED_PROCESS_STATES = new Set([
+  'not_started', 'starting', 'running', 'stopping', 'stopped', 'stop_unconfirmed', 'disconnected', 'quarantined', 'failed',
+]);
 
 function integrationError(code) {
   const error = new Error('native instruction service integration rejected the operation');
@@ -212,17 +217,20 @@ function captureLaunchStart(value) {
   let fields;
   try { fields = Reflect.ownKeys(value); } catch { throw integrationError('invalid_native_launch_start'); }
   if (fields.some((field) => typeof field !== 'string' ||
-      ![...START_FIELDS, 'originReceipt'].includes(field))) {
+      ![...START_FIELDS, 'originReceipt', 'predecessorReceipt'].includes(field))) {
     throw integrationError('invalid_native_launch_start');
   }
-  const expected = fields.includes('originReceipt') ? [...START_FIELDS, 'originReceipt'] : START_FIELDS;
+  const expected = [...START_FIELDS,
+    ...(fields.includes('originReceipt') ? ['originReceipt'] : []),
+    ...(fields.includes('predecessorReceipt') ? ['predecessorReceipt'] : [])];
   const input = exactData(value, expected, 'invalid_native_launch_start');
   if (typeof input.inputText !== 'string') throw integrationError('invalid_native_launch_start');
   const admission = {};
   for (const field of ['launchId', 'runId', 'attemptId', 'profileId', 'origin', 'purpose', 'originReceipt']) {
     if (Object.hasOwn(input, field)) admission[field] = input[field];
   }
-  return { admission, inputText: input.inputText };
+  return { admission, inputText: input.inputText,
+    predecessorReceipt: Object.hasOwn(input, 'predecessorReceipt') ? input.predecessorReceipt : null };
 }
 
 async function createNativeInstructionServiceIntegration(inputOptions) {
@@ -333,6 +341,96 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     return entry;
   }
 
+  function ownedExecutionFor(entry) {
+    const state = composition.ownedStopState(entry.receipt);
+    if (!entry.launchRef) entry.launchRef = state.launchRef;
+    if (state.launchRef !== entry.launchRef || !OWNED_PROCESS_STATES.has(state.processState) ||
+        !Number.isSafeInteger(state.expectedOwnerGeneration) || state.expectedOwnerGeneration < 0 ||
+        !Number.isSafeInteger(state.stopRevision) || state.stopRevision < 0 ||
+        !Number.isSafeInteger(state.nativeRequestIdCount) || state.nativeRequestIdCount < 0 || state.nativeRequestIdCount > 128 ||
+        !Number.isSafeInteger(state.nativeRequestIdRemaining) || state.nativeRequestIdRemaining < 0 ||
+        state.nativeRequestIdRemaining > 128 || state.nativeRequestIdCount + state.nativeRequestIdRemaining !== 128 ||
+        state.nativeRequestOverflow && state.nativeRequestIdCount !== 128) {
+      throw integrationError('owned_stop_state_unavailable');
+    }
+    const nativeRequestIdCount = state.nativeRequestIdCount;
+    const nativeRequestIdRemaining = state.nativeRequestIdRemaining;
+    const physicalStopConfirmed = state.processState === 'stopped';
+    const stopConfirmed = physicalStopConfirmed && entry.isolationConfirmed === true;
+    return Object.freeze({
+      launchRef: state.launchRef,
+      executionId: state.executionId,
+      sessionId: state.sessionId,
+      expectedContextId: state.expectedContextId,
+      expectedOwnerGeneration: state.expectedOwnerGeneration,
+      stopRevision: state.stopRevision,
+      processState: state.processState,
+      canStop: !state.explicitStop && !stopConfirmed,
+      stopConfirmed,
+      hold: Object.freeze({
+        reason: state.nativeRequestOverflow ? 'capacity' : state.unknownServerRequestHeld ? 'unknown' : null,
+        retainedRequestCount: nativeRequestIdCount,
+        remainingRequestCount: nativeRequestIdRemaining,
+        limit: 128,
+      }),
+    });
+  }
+
+  function ownedExecutionSnapshot() {
+    if (closing) throw integrationError('owned_stop_state_unavailable');
+    const result = [];
+    for (const entry of admissions) {
+      const state = ownedExecutionFor(entry);
+      if (state.executionId && state.sessionId) result.push(state);
+    }
+    return Object.freeze(result);
+  }
+
+  function getOwnedStopState(receipt) {
+    return ownedExecutionFor(entryFor(receipt));
+  }
+
+  function stopOwnedExecution(value) {
+    const claims = exactData(value, OWNED_STOP_FIELDS, 'invalid_owned_stop_request');
+    if (!isIdentifier(claims.launchRef) || !isIdentifier(claims.executionId) ||
+        !isIdentifier(claims.sessionId) ||
+        (claims.expectedContextId !== null && !isIdentifier(claims.expectedContextId)) ||
+        !Number.isSafeInteger(claims.expectedOwnerGeneration) || claims.expectedOwnerGeneration < 0 ||
+        !Number.isSafeInteger(claims.stopRevision) || claims.stopRevision < 0) {
+      throw integrationError('invalid_owned_stop_request');
+    }
+    const entry = admissionsByLaunchRef.get(claims.launchRef);
+    if (!entry) return Promise.resolve(Object.freeze({ status: 'stale', ownedExecution: null }));
+    let current;
+    try { current = ownedExecutionFor(entry); }
+    catch { return Promise.resolve(Object.freeze({ status: 'stale', ownedExecution: null })); }
+    if (current.executionId !== claims.executionId || current.sessionId !== claims.sessionId) {
+      return Promise.resolve(Object.freeze({ status: 'stale', ownedExecution: null }));
+    }
+    if (current.expectedContextId !== claims.expectedContextId ||
+        current.expectedOwnerGeneration !== claims.expectedOwnerGeneration ||
+        current.stopRevision !== claims.stopRevision) {
+      return Promise.resolve(Object.freeze({ status: 'stale', ownedExecution: current }));
+    }
+    if (current.stopConfirmed) {
+      return Promise.resolve(Object.freeze({ status: 'stop_confirmed', ownedExecution: current }));
+    }
+    if (!current.canStop) {
+      return Promise.resolve(Object.freeze({ status: 'stop_unconfirmed', ownedExecution: current }));
+    }
+    let pending;
+    try { pending = stop(entry.receipt); }
+    catch { pending = Promise.resolve(false); }
+    return Promise.resolve(pending).catch(() => {}).then(() => {
+      let latest;
+      try { latest = ownedExecutionFor(entry); } catch { latest = null; }
+      return Object.freeze({
+        status: latest?.stopConfirmed === true ? 'stop_confirmed' : 'stop_unconfirmed',
+        ownedExecution: latest,
+      });
+    });
+  }
+
   function admitLaunch(value) {
     if (closing) throw integrationError('native_instruction_integration_closed');
     const admission = captureAdmissionInput(value);
@@ -344,13 +442,19 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       if (existing.state !== 'admitted' && existing.state !== 'starting' && existing.state !== 'running') {
         throw integrationError('admission_retired');
       }
+      const state = composition.ownedStopState(receipt);
+      existing.launchRef = state.launchRef;
+      admissionsByLaunchRef.set(state.launchRef, existing);
       existing.detach = routers[provider].attachAdmission(receipt);
       return receipt;
     }
     const entry = { receipt, provider, router: routers[provider], detach: null, collector: null,
-      state: 'admitted', startInputText: null, startPromise: null, stopPromise: null };
+      state: 'admitted', startInputText: null, startPromise: null, stopPromise: null,
+      launchRef: null, isolationConfirmed: false, predecessorReceipt: null, predecessorReceiptBound: false };
+    entry.launchRef = composition.ownedStopState(receipt).launchRef;
     admissionByReceipt.set(receipt, entry);
     admissions.add(entry);
+    admissionsByLaunchRef.set(entry.launchRef, entry);
     try {
       entry.detach = entry.router.attachAdmission(receipt);
     } catch (error) {
@@ -381,18 +485,31 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     const entry = entryFor(receipt);
     if (entry.stopPromise) return entry.stopPromise;
     entry.state = 'stopping';
+    let compositionStop;
+    try { compositionStop = composition.stop(receipt); }
+    catch (error) { compositionStop = Promise.reject(error); }
+    compositionStop.catch(() => {});
+    let routerDetached = false;
     try {
-      if (entry.detach) entry.detach();
-      else entry.router.detachAdmission(receipt);
+      routerDetached = (entry.detach ? entry.detach() : entry.router.detachAdmission(receipt)) === true;
     } catch {}
     entry.detach = null;
+    entry.isolationConfirmed = false;
     entry.stopPromise = (async () => {
       let failure = null;
-      try { await entry.collector?.disconnect?.(); } catch (error) { failure ||= error; }
+      let collectorDetached = !entry.collector;
+      if (entry.collector) {
+        try { collectorDetached = (await entry.collector.disconnect())?.status === 'disconnected'; }
+        catch (error) { failure ||= error; }
+      }
       let snapshot = null;
-      try { snapshot = await composition.stop(receipt); } catch (error) { failure ||= error; }
-      entry.state = snapshot?.processState === 'stopped' ? 'stopped' : 'stop_unconfirmed';
-      if (entry.state !== 'stopped') failure ||= integrationError('native_process_stop_unconfirmed');
+      try { snapshot = await compositionStop; } catch (error) { failure ||= error; }
+      let latest = null;
+      try { latest = composition.ownedStopState(receipt); } catch (error) { failure ||= error; }
+      entry.state = latest?.processState === 'stopped' ? 'stopped' : 'stop_unconfirmed';
+      entry.isolationConfirmed = routerDetached && collectorDetached;
+      if (latest?.processState !== 'stopped') failure ||= integrationError('native_process_stop_unconfirmed');
+      if (!entry.isolationConfirmed) failure ||= integrationError('native_instruction_isolation_unconfirmed');
       if (failure) throw failure;
       return true;
     })();
@@ -400,7 +517,11 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   }
 
   function getLaunchState(receipt) {
-    return Object.freeze({ state: entryFor(receipt).state });
+    const entry = entryFor(receipt);
+    const snapshot = composition.ownedStopState(receipt);
+    if (['stopping', 'stop_unconfirmed'].includes(entry.state) && snapshot.processState === 'stopped' &&
+        entry.isolationConfirmed === true) entry.state = 'stopped';
+    return Object.freeze({ state: entry.state });
   }
 
   function instructionTargetState(launchRef) {
@@ -415,14 +536,32 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   function startLaunch(value) {
     if (closing) throw integrationError('native_instruction_integration_closed');
-    const { admission, inputText } = captureLaunchStart(value);
+    const { admission, inputText, predecessorReceipt } = captureLaunchStart(value);
+    let predecessor = null;
+    if (predecessorReceipt !== null) {
+      if (!isOpaqueCapability(predecessorReceipt)) throw integrationError('predecessor_receipt_unavailable');
+      predecessor = admissionByReceipt.get(predecessorReceipt);
+      if (!predecessor) throw integrationError('predecessor_receipt_unavailable');
+      const priorState = ownedExecutionFor(predecessor);
+      const internalState = composition.ownedStopState(predecessorReceipt);
+      if (internalState.explicitStop !== true || priorState.stopConfirmed !== true ||
+          predecessor.isolationConfirmed !== true) {
+        throw integrationError('predecessor_stop_unconfirmed');
+      }
+    }
     const receipt = admitLaunch(admission);
     const entry = entryFor(receipt);
     if (entry.startPromise) {
-      if (entry.startInputText !== inputText) throw integrationError('attempt_conflict');
+      if (entry.startInputText !== inputText || !entry.predecessorReceiptBound ||
+          entry.predecessorReceipt !== predecessorReceipt) throw integrationError('attempt_conflict');
       return entry.startPromise;
     }
     if (entry.state !== 'admitted') throw integrationError('admission_retired');
+    if (entry.predecessorReceiptBound && entry.predecessorReceipt !== predecessorReceipt) {
+      throw integrationError('attempt_conflict');
+    }
+    entry.predecessorReceipt = predecessorReceipt;
+    entry.predecessorReceiptBound = true;
     entry.startInputText = inputText;
     entry.state = 'starting';
     let collector;
@@ -434,6 +573,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     }
     entry.startPromise = (async () => {
       try {
+        if (predecessor) {
+          const priorState = ownedExecutionFor(predecessor);
+          const internalState = composition.ownedStopState(predecessorReceipt);
+          if (internalState.explicitStop !== true || priorState.stopConfirmed !== true ||
+              predecessor.isolationConfirmed !== true) throw integrationError('predecessor_stop_unconfirmed');
+        }
         const result = await composition.start(receipt, { inputText });
         if (entry.state !== 'starting') throw integrationError('native_launch_invalidated');
         const connection = await collector.connect();
@@ -475,10 +620,10 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         try { await operation(); } catch (error) { failure ||= error; }
       };
       await attempt(() => service.close());
+      for (const entry of [...admissions].reverse()) await attempt(() => stop(entry.receipt));
       for (const router of Object.values(routers)) {
         try { router.close(); } catch (error) { failure ||= error; }
       }
-      for (const entry of [...admissions].reverse()) await attempt(() => stop(entry.receipt));
       await attempt(() => store.flush());
       await attempt(() => store.close());
       if (failure) throw failure;
@@ -486,7 +631,8 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     return closePromise;
   }
 
-  const native = Object.freeze({ admitLaunch, createOwnedCollector, startLaunch, stop, getLaunchState });
+  const native = Object.freeze({ admitLaunch, createOwnedCollector, startLaunch, stop, getLaunchState,
+    ownedExecutionSnapshot, getOwnedStopState, stopOwnedExecution });
   return Object.freeze({
     native,
     service,
@@ -528,6 +674,8 @@ async function startNativeInstructionServer(inputOptions) {
       launchRegistry: integration.launchRegistry,
       instructionService: integration.service,
       instructionTargetState: integration.instructionTargetState,
+      ownedExecutionSnapshot: integration.native.ownedExecutionSnapshot,
+      stopOwnedExecution: integration.native.stopOwnedExecution,
       onShutdown: async () => {
         let failure = null;
         try { await integration.close(); } catch (error) { failure = error; }
