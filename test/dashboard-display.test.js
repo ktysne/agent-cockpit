@@ -33,12 +33,16 @@ test('接続案内は一覧の前に、注記は一覧の後ろに置き、固�
   }
 });
 
-test('回答内容とマージ照合の SHA を表示する', () => {
+test('推奨の札と選択サマリーを保ち、回答欄から推奨チェックを除く', () => {
   for (const html of [mock, web]) {
-    assert.match(html, /OK で送る答え:/);
+    assert.doesNotMatch(html, /OK で送る答え:|answer-choice|data-answer-choice|data-choice="ok"/);
     assert.match(html, /照合する head SHA:/);
     assert.match(html, /選択した条件の未達:/);
   }
+  assert.match(web, /badge\('推奨', 'busy'\)/);
+  assert.match(mock, /<span class="tag">推奨<\/span>/);
+  assert.match(web, /選択: \$\{choices\}/);
+  assert.match(mock, /選択: \$\{esc\(chosen\)\}/);
 });
 
 test('削除済みの説明文と描画要素の名残を含めない', () => {

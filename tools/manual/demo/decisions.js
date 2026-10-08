@@ -93,7 +93,7 @@ module.exports = function decisions() {
         action: 'ask-finish', event_name: 'PreToolUse', id: 'ask-timeout', decision_id: timeoutRegistration.decisionId, outcome: 'timeout',
       });
 
-      // 反映された回答: 推奨案で OK を送り、セッションに渡り、セッションが判断事項を更新した。
+      // 反映された回答: 推奨の選択肢を選んで送り、セッションに渡り、セッションが判断事項を更新した。
       at(90);
       const reflected = await plan(key, {
         kind: 'add_decision',
@@ -106,7 +106,7 @@ module.exports = function decisions() {
         ],
       });
       at(80);
-      await sendAnswer(reflected.decision.id, { choice: 'ok', note: '' });
+      await sendAnswer(reflected.decision.id, { choice: 'pick', note: '', picks: [['30 秒']] });
       at(79);
       await deliverBatch();
       at(75);
