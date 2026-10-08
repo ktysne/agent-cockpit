@@ -676,6 +676,29 @@ test('集約ブランチを base にした PR は集約ブランチとの差分�
   assert.equal(group.trees[0].blocker, 'base の codex/feature は既定ブランチではないため、ダッシュボードではマージしない');
 });
 
+test('比較経路に含まれない既定ブランチへマージした PR の head は積み直し扱いにしない', async (t) => {
+  const { github, tracker } = await trackerFixture(t, [31, 32]);
+  const mainMergedSha = 'a'.repeat(40);
+  const syncSha = 'b'.repeat(40);
+  const childSha = 'c'.repeat(40);
+  const aggregateBranch = 'codex/feature';
+  const syncBranch = 'codex/sync-main-2026-10-03';
+  github.openPullRequests = [
+    ghPullRequest(31, syncBranch, aggregateBranch, syncSha),
+    ghPullRequest(32, 'feat/child', syncBranch, childSha),
+  ];
+  github.mergedPullRequests = [mergedPullRequest(235, mainMergedSha, '2026-10-03T11:00:00.000Z', 'feat/main-pr', 'main')];
+  github.comparisons.set(`${aggregateBranch}...${syncSha}`, compareResult([mainMergedSha, syncSha]));
+  github.comparisons.set(`${aggregateBranch}...${childSha}`, compareResult([mainMergedSha, syncSha, childSha]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const [group] = tracker.snapshot();
+  const pullRequests = [group.trees[0], ...group.trees[0].children];
+  assert.deepEqual(pullRequests.map((pullRequest) => pullRequest.number), [31, 32]);
+  assert.deepEqual(pullRequests.map((pullRequest) => pullRequest.needsRestack), [false, false]);
+});
+
 test('マージ後に head が進んだ集約ブランチは比較 base と実効 base に使う', async (t) => {
   const { state, github, calls, tracker } = await trackerFixture(t);
   const childSha = 'b'.repeat(40);
