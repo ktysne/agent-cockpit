@@ -1,0 +1,214 @@
+# 配信記録の回収 schema
+
+この文書は[容量回収計画](codex-capacity-reclamation.md)の段階1で定める配信側の保存契約である。
+実装時は[質問回収アンカー](question-reclamation-anchor.md)の`storeId`と移行fingerprintを共有する。
+
+## 現行形式と容量上限
+
+| 保存先 | 現行形式 | 現行上限 |
+|---|---|---|
+| 配信ledger | `schemaVersion: 1`、`revision`、`deliveries`、`notificationTargets`、`logicalTombstones` | delivery 20,000件、alias 10,000件、logical tombstone 20,000件。各payload入力は1MiBまで |
+| 配信checkpoint | 外側`schemaVersion: 2`、`revision`、`registrations`、`ledger` | 既定1MiB、設定可能な最大16MiB、registration record 50,000件 |
+| 通常指示journal | `schemaVersion: 1`、`revision`、`instructions` | 20,000件、最大16MiB |
+| 指示envelope | `schemaVersion: 1`、`mode`、`expectedTurnId`、`input` | 本文64KiB、直列化後70KiB |
+
+現行の配信レコードはattempt ID、kind、logical ID、revision、source、target、payload digest、state、cancel flag、accepted correlation、applied correlationを持つ。
+ledgerにはpayload本文を保存せず、入力本文から作ったSHA-256 digestだけを保存する。
+logical tombstoneはattempt IDを持たず、kind、periodまたはlaunch tuple、logical ID、revision、payload digestで論理重複を拒否する。
+
+通常指示journalのrecordはattempt ID、launch reference、logical ID、revision、source projection、envelope、envelope digest、native content digest、作成時刻を持つ。
+指示envelopeとdelivery ledgerは別ファイルであり、journal intentの保存後に配信記録を作る。
+
+`MAX_IDENTIFIER_LENGTH`は512 UTF-16 code unitであり、512 byteではない。
+現行のidentifier検査は単独surrogateを拒否しないため、512個のU+D800を含むIDはJSON上で`\ud800`が512回に展開され、引用符を含めて3,074 byteになる。
+revisionと時刻は安全な整数で、最大値は16桁である。
+配信相関は`deliveryAttemptId`、`revision`、`payloadDigest`、`targetPeriodId`、`nativeTurnId`、`nativeItemId`、`clientRequestId`の7項目を持つ。
+相関内の5つのIDが最大長、revisionが最大値、digestが64桁の場合、相関objectはminified JSONで15,572 byte、単独の2-space JSONで15,601 byteになる。
+`reserveCheckpointBytes`は送信後に増える状態、revision、accepted correlation、applied correlationを見積もり、終端前送信状態ではない配信1件ごとに相関objectを2つ予約する。
+
+上限は独立しているため、件数上限まで保存できる保証にはならない。
+指示journalは1件最大70KiBのenvelopeだけを数えても、16MiBでは234件までしか収まらず、sourceやIDのbyteがさらに減らす。
+配信payloadを1件1MiBで保持する想定と20,000件の同時保証は成立せず、1MiB payloadを20,000件保存するには本文だけで20,971,520,000 byteを要する。
+
+根拠は`src/server/delivery-ledger.js`の上限、正規化、回復処理、`src/server/durable-checkpoint.js`のcheckpoint上限、`src/server/durable-delivery-store.js`の予約byte計算、`src/server/instruction-delivery-journal.js`のjournal上限、`src/server/instruction-envelope.js`の本文上限である。
+
+## 新形式のversionと識別
+
+| 保存先 | 新version | 新しい必須識別子 |
+|---|---:|---|
+| 配信checkpoint | 外側3、内包ledger 2 | anchorと同じ`storeId` |
+| 通常指示journal | 2 | anchorと同じ`storeId` |
+| 配信ledger内のrecord | 2 | 各recordの`recordType` |
+
+`storeId`と回収`operationId`は小文字UUIDv4に固定する。
+新形式のcheckpoint、指示journal、anchorは同一の`storeId`を持つ。
+通常起動時はcheckpoint v3とledger v2、指示journal v2だけを読む。
+checkpoint v2とledger v1、指示journal v1は、anchorが固定したsource fingerprintと一致するときだけ移行入力として読む。
+
+anchorのsource slotは`questions`、`checkpoint`、`instructions`の固定3種を使う。
+checkpoint slotのsource fingerprintは外側version 2とcheckpoint revisionを記録し、内容検査では内包ledger version 1も確認する。
+checkpoint slotのtargetは外側version 3かつ内包ledger version 2である。
+instructions slotはversion 1から2へ移す。
+sourceとtargetのbyte sizeとSHA-256は保存した実byte列で検査し、JSONを再直列化した値で代用しない。
+質問以外の配信対応はanchorの`targets`へ追加せず、3つのsource/target fingerprintとcross-store相関検査で確定する。
+
+## ledger v2のrecord variant
+
+ledger外側は`schemaVersion`、`revision`、`deliveries`、`notificationTargets`、`logicalTombstones`を保つ。
+`deliveries`は次の2 variantを含み、同じattemptを両方へ置かない。
+
+| `recordType` | 内容 |
+|---|---|
+| `detail` | 現行delivery fields、必須`terminalAt`、このdiscriminatorを保持する |
+| `reclaimed` | `terminalAt`と拒否、相関、参照情報を残し、detailを削除したrecord |
+
+`reclaimed`は`deliveryAttemptId`、`kind`、`logicalMessageId`、`revision`、`sourceExecutionId`、`payloadDigest`、`state`、`terminalAt`、`cancelRequested`、`ownerGeneration`、`acceptedCorrelation`、`appliedCorrelation`を保持する。
+stateは元のdelivery stateそのものを残し、`reclaimed`という新stateを作らない。
+`terminalAt`は全recordで必須fieldとし、`applied`、`cancelled_before_send`、`superseded_before_send`では安全なUnix時刻ミリ秒、それ以外では`null`とする。
+最初に終端stateへ変える更新はtrusted clockを一度読み、state、終端相関、`terminalAt`、checkpoint revisionを同じatomic checkpoint保存に含める。
+重複通知、相関の追記、再起動、schema移行、grave化は既存`terminalAt`を書き換えない。
+v1の終端recordには`migration.startedAt`を一度だけ補完し、非終端recordは`null`にする。
+payloadDigestと相関内payloadDigestはpayload本文だけのdigestのまま保ち、`terminalAt`を含めない。
+anchorのtarget byte sizeとSHA-256は`terminalAt`を含む実checkpoint bytesから計算する。
+`sourceRef`は`launchRef`、`launchKey`、`sourceClaimsDigest`、`identity`、`executionBinding`、`conversationId`、`sessionId`を持つ。
+`launchKey`は`[launchId, runId, attemptId]`で、`sourceClaimsDigest`は[質問schema](common-question-reclamation-schema.md)「配信作成とcheckpointの相関」の正規化claimsを`JSON.stringify`したUTF-8 bytesに対するSHA-256 lowercase hex 64文字である。
+claimsのkey順は`launchId`、`runId`、`attemptId`、`provider`、`nativeIdKind`、`hostId`、`homeScopeId`、`origin`、`purpose`、`originBinding`とし、Unicode正規化は行わない。
+`targetRef`は`kind`、`launchRef`、`launchKey`、`targetClaimsDigest`、`identity`、`periodId`、`actor`、`conversationId`、`sessionId`を持つ。
+owner targetでは`launchRef`、`launchKey`、`targetClaimsDigest`を`null`にし、execution targetでは正規化済みtargetの値を保持する。
+`identity`はprovider、native ID種別、host ID、home scope ID、native IDの5項目である。
+`executionBinding`はperiod IDとactorの組であり、actorはkindとIDを持つ。
+`reclamation`はUUIDv4の`operationId`、0以上の安全な整数`reclaimedAt`、固定enumの`reason`を持つ。
+`reason`は`terminal_retention`または`retired_question_period`とする。
+前者は`applied`、`cancelled_before_send`、`superseded_before_send`だけに、後者は退役済みquestion periodの`available`または`unknown`だけに許す。
+全可変identifierは既存validatorと同じ512 UTF-16 code unit上限を使う。
+墓標化では`source`と`target`のraw claimsを残さず、必要な投影値とclaims digestへ置換する。
+
+sourceRefとtargetRefをdigestだけに縮めない。
+質問、指示、PR通知、結果の既存照合に使うidentity、period、launch、execution binding、actor、conversation、sessionを保存し、同じclaims正規化規則の`sourceClaimsDigest`と`targetClaimsDigest`で全fieldの一致を検査する。
+相関objectは既存7 fieldと同じ完全な値を保持し、native IDを相関digestへ置き換えない。
+これにより通常指示とPR通知の遅延accepted/applied通知を現行どおり検査できる。
+
+## 再利用拒否と復元検査
+
+validatorはv2の全objectで既知のfieldだけを受け付け、dense array、enum、識別子、digest、相関、record variantを完全検査する。
+未知version、未知field、疎配列、同一attemptの重複、detailとgraveの重複、相関違い、dangling reference、違うstore IDを読み替えず拒否する。
+v2でterminal stateなのに`terminalAt`が欠落またはnull、またはnonterminal stateに値があるrecordは拒否し、migration以外で時刻を補完しない。
+`deliveries`内でdetailとgraveを合わせたattempt IDは全件一意である。
+logical keyごとの`logicalTombstones`はdetailとgraveを合わせたrecord groupに過不足なく対応し、全recordのpayload digestと一致する。
+同じattempt IDの再利用は同一内容でも拒否する。
+同じlogical keyの新attemptは、現行契約どおり全旧attemptが`superseded_before_send`の場合だけ許す。
+questionの失効periodはanchorが別に拒否するため、同じkeyの再attemptをこの例外で許さない。
+anchorが失効済みにしたperiodのquestion graveはledger stateより先に拒否判定し、登録、claim、sendStart、payload復元、後着更新を拒否する。
+`available`や`unknown`を成功、取消、未送信確定へ読み替えず、対応する質問記録の`terminalResultKind`は`null`のまま保つ。
+
+相関の固定項目はattempt ID、revision、payload digest、target period ID、client request IDである。
+相関のattempt IDとclient request IDはrecordのattempt IDと一致し、revisionとpayload digestはrecordと一致し、target period IDはtargetRefのperiod IDと一致する。
+accepted correlationとapplied correlationのnative turn IDとnative item IDは既存の互換条件で検査する。
+appliedにはnative turn IDとnative item IDの両方を必須とし、native item IDだけがある相関を拒否する。
+`available`はfrozenなまま保持し、`unknown`と`terminalResultKind: null`を含む対応質問記録も変更しない。
+他kindのunknownはdetailを保持し、正しい相関の後着通知によるaccepted/appliedへの更新を現行どおり許す。
+
+instruction journal v2は既存record fieldsに`deliveryCreationState`を加え、`not_created`、`creating`、`checkpointed`、`indeterminate`を使う。
+新規instruction intentは`not_created`を保存し、checkpoint作成前に`creating`を保存して、matching detailまたはgraveのcheckpoint保存後に`checkpointed`を保存する。
+再起動時の`creating`はattemptと全相関が一致するcheckpoint recordがあれば`checkpointed`へ復元し、欠落なら`indeterminate`へ固定して再生成しない。
+一部または全相関が一致しないcheckpoint recordは不整合として拒否する。
+`checkpointed`はdelivery作成保存の証拠であり、sendまたはretryの許可ではない。
+移行するv1 instruction intentはcheckpoint recordと全相関が一致するときだけ`checkpointed`へ移す。
+v1 intentがcheckpointに無い場合は保存順から未作成と消失を区別できないため`indeterminate`へ移し、そのattemptを再生成しない。
+この不明状態は個別attemptの拒否であり、質問periodの永久失効や通常指示の認可変更ではない。
+`checkpointed`なのにcheckpointでattempt IDが見つからない場合はjournalとcheckpointの不整合としてserviceを停止する。
+`reclaimed`を`get(attemptId)`の不在として返さず、serviceはgraveを既存deliveryとして照合する。
+graveのpayload digest、source identityとbindingがjournalと一致しない場合も再生成せず、復元を拒否する。
+
+## PR通知のaliasと履歴
+
+現行PR通知の論理keyはkind、logical ID、revision、target launch tupleで決まり、source execution IDはkeyに入らない。
+既存deliveryには入力の`targetId` aliasが保存されず、logical tombstoneにはtarget launch tupleだけが保存される。
+この互換規則を保ち、graveの`targetRef.launchKey`を既存`logicalTombstones.targetLaunchKey`へ対応させる。
+移行では実際に入力されたaliasを推測して記録しない。
+`notificationTargets`のaliasと`registrations`のlaunch履歴はv2でも維持し、graveまたはlogical tombstoneが参照するlaunch tupleがある間は削除しない。
+aliasを将来削除する場合は、同じtarget IDの別targetへの再割当を拒否するalias墓標を別途定義する。
+aliasまたは履歴の不足、同じtupleに対する異なるprojection、target launch keyの不一致はPR通知を隔離し、再送しない。
+
+## 回収対象と途中復旧
+
+| state | detail削除の扱い |
+|---|---|
+| `applied` | `terminalAt`から7日後に回収できる。隔離questionは`quarantinedAt`からも7日を経てから圧縮する。失効済みquestion periodでは同じ結果の後着も拒否し、他のapplied graveだけ同一結果を冪等に受け付ける |
+| `cancelled_before_send`、`superseded_before_send` | `terminalAt`から7日後に回収できる。隔離questionは`quarantinedAt`からも7日を経てから圧縮し、相関はnullのまま保つ |
+| 退役periodの`available` question | `quarantinedAt`から7日後に本文を圧縮できる。stateはavailableのまま保持し、grave優先でclaim、sendStart、payload復元、後着更新を拒否する |
+| 退役periodの`unknown` question | `quarantinedAt`から7日後に本文を圧縮できる。stateはunknown、質問側`terminalResultKind`はnullのまま保持し、後着更新を拒否する |
+| `unknown` instruction、`unknown` PR通知、`unknown` result | 詳細を保持したままunknownを保ち、正しい後着相関を受け入れる。期限で終端化や本文圧縮を行わず、結果が終端になった後にgrave化する |
+| `claimed` | 回復時はavailableへ戻す。これだけで終端とせず、時間経過だけでreclaim対象へ変えない |
+| `available`、`sending`、`accepted`の他kind | 終端扱いにしない。時間経過だけでreclaim対象へ変えない |
+
+`TERMINAL_RETENTION_MS`は7日分の604,800,000ミリ秒である。
+通常の終端graveは`terminalAt`から7日以上経過し、拒否に必要なlogical tombstoneと相関が整合するときだけ作る。
+隔離questionの終端recordは`terminalAt`とquestion journalの`quarantinedAt`それぞれから7日以上経過してから圧縮する。
+したがって隔離済みterminal questionの最短圧縮時刻は`max(terminalAt, quarantinedAt) + TERMINAL_RETENTION_MS`であり、片方の起算が遅い場合も7日を保つ。
+退役questionの非終端`available`または`unknown`は`terminalAt`を要求せず、`quarantinedAt + TERMINAL_RETENTION_MS`だけで本文回収できる。
+安全な整数範囲を超える加算や時計が起算時刻より前に戻った場合はdetailを残し、起算時刻を更新しない。
+判定は保存されたUnix時刻に基づき、大幅な時計前進後も実時間で7日が経過したことの保証はしない。
+
+checkpoint復旧時は現行どおり`claimed`を`available`へ戻し、`sending`と`accepted`を`unknown`へ戻す。
+退役periodのquestion grave対象は復旧後の`available`または`unknown`だけとし、`claimed`はこの既存回復で`available`になった後に扱う。
+period退役だけを理由に`cancelled_before_send`や成功結果を新しく作らない。
+墓標化は終端化ではないため、`sending`を送信済みまたは未送信へ推定せず、unknownの結果も成功へ読み替えない。
+途中のdetailをgraveへ置換する操作はcheckpoint writer queue内で一件ずつ行い、保存結果が不明なら共有checkpointを使う全kindのwriterを止める。
+質問journalだけの保存結果が不明な場合は質問writerと対象質問gateを止め、通常指示とPR通知のwriterまで一律に止めない。
+
+移行開始時にanchorへoperation IDと各source fingerprintを固定する。
+各fileはsource fingerprintとtarget fingerprintのどちらかに完全一致した場合だけ途中状態として認める。
+phaseはアンカー共通契約の`prepared`、`guarded`、`installing`、`completed`を使う。
+全manifest slotのwriterをdrainして停止してから置換を始め、全target fingerprintを検証して`completed`を保存する。
+続けて`migration: null`の保存成功を確認してからwriterを再開する。
+schema移行中はcheckpointを共有する通常指示とPR通知のwriterも停止する。
+7日後の本文回収はこのmigrationとは別operationであり、本文の保持期限をmigration phaseに含めない。
+隔離された質問に旧形式の`quarantinedAt`が無い場合は`migration.startedAt`を一度だけ保存し、manifest削除後もその時刻を保持する。
+checkpoint v2からv3への変換では、外側revisionとledger revisionを最大安全整数まで予約し、相関とstateの増加分を実serializerで検査する。
+instruction journal v1からv2への変換では、journal revisionの増加分とstore ID、creation state、envelope全体の保存byteを予約する。
+移行の再開では新しいoperation IDやsource snapshotを発行せず、target fingerprintが不一致なら隔離する。
+ファイルごとのatomic置換であり、anchor、checkpoint、journalを横断する同時commitを仮定しない。
+
+## 移行専用枠のbyte計算
+
+現行checkpoint serializerは`JSON.stringify(value, null, 2) + "\n"`である。
+既定上限は1,048,576 byteで、設定可能な最大は16,777,216 byteである。
+指示journalの既定と最大は16,777,216 byteであり、質問journalも既定と設定可能な最大が16,777,216 byteである。
+source slotの実byte sizeはanchorに固定されるが、起動時の固定枠は最大有効sourceについて別に確保する。
+
+| 要素 | 最大長の根拠 | byte計算 |
+|---|---|---:|
+| 既存identifier | 512 UTF-16 code unit。単独surrogateはJSONで6文字へescape | JSON stringの引用符を含め3,074 byte |
+| storeId、operationId | 小文字UUIDv4 | 36 ASCII文字。JSON stringは38 byte |
+| revision、時刻、`terminalAt` | `Number.MAX_SAFE_INTEGER` | decimal 16文字 |
+| SHA-256 digest | lowercase hex固定 | JSON stringは引用符込み66 byte |
+| 最大相関object | 現行7 field、最大5 ID、revision 16桁、digest64桁 | compact 15,572 byte、単独pretty 15,601 byte |
+| 最大reserved state | 現行state enum中の最長値 | `superseded_before_send`、22文字 |
+
+`M`は最大20,000件ずつの失効世代と質問記述子、最大3件ずつのsource/target fingerprintを持つanchorの最大serialized byte数とする。
+`M`にはstore ID、operation ID、anchor revision、開始時刻、各fingerprintの固定slot、`sourcePresent`、source/target version、revision、size、digest、失効記録のidentityとperiod、targetの`internalQuestionId`、`commonKeyDigest`、`periodIndex`、`recordDigest`、`deliveryPresence`、`checkpointState`を含め、実serializerで算出する。
+質問記述子内のdelivery intentは4 field全てを最大値にし、配列要素をdigestへ短縮しない。
+`H_checkpoint`はv2 checkpointからv3への最大schema差分、各detail/graveの`terminalAt`、variantとgrave metadata、revision予約、最大相関2組、保持する旧詳細との一時重複を含むbyte差分である。
+`H_instructions`はv1からv2への最大schema差分、store ID、delivery creation state、revision予約、保持中の最大envelopeと一時重複を含むbyte差分である。
+question journalの`H_questions`は質問schemaの正本で定義し、こちらのcheckpoint式へ二重計上しない。
+512個のID、最大revisionと時刻、最大state、両相関のnative IDを上式に入れ、値の平均や本文の想定値で割り引かない。
+`serializedTargetMax`は現行上限値を上限構造と誤認せず、各保存先の最大件数に最大長recordを配置して実serializerで測る。
+各IDは512 code unit、digestは64 lowercase hex、UUIDは36 ASCII文字、時刻とrevisionは安全な整数上限を使う。
+最大相関は相関内5 ID、最大revision、64桁digestの全値を埋め、pretty serializer内のindent増分も全checkpointへ反映する。
+source/target projectionを墓標と重ねて二重保持する設計を避け、移行中だけのdetailと墓標の同時保持量は別途加算する。
+実使用中の墓標用Hは、現行recordsをdetail/grave variantに投影した実serializer byteから算出し、migration manifestの有無に依存させない。
+
+`M`はanchorのtarget最大byte、`A`は既存anchorの実byte（初回作成時は0）であり、`A`は`M`以下とする。
+data fileごとの`N_i`は旧sourceの実byte、`H_i`は`max(0, serializedTargetMax_i - N_i)`とする。
+atomic置換中はanchorの`A`とtarget `M`、各data fileの`N_i`とtarget temporary `N_i + H_i`が同時に存在し得る。
+総ピーク上界は`A + M + Σ(2N_i + H_i)`である。
+旧source `A`と`N_i`は既存fileが占有する通常容量に含め、追加の移行予約へ二重計上しない。
+専用の追加予約は`M + Σ(N_i + H_i)`とし、満杯のsourceを残したままtargetを置換する空間を確保する。
+移行専用load/write上限は各fileの通常load上限に`H_i`を加えた値とし、targetを読み書きできる間だけ適用する。
+その例外が無ければ、通常上限ぎりぎりのlegacy fileへ必須fieldを追加できず、満杯旧形式からの脱出は保証できない。
+ディスク不足時はsourceを残し、移行と通常受付を再開しない。
+
+現行定数から相関とfield追加分は計算できるが、`H_checkpoint`と`M`の数値は新しいquestion descriptor、target serializer、実際の最大record variantを合わせて算出する。
+最大有効source件数と各recordの最大構造byteを全source fileへ適用した結果を実装計画の容量試験値にする。
+7日経過前に通常上限を超える場合は受付を止め、保持期限を短縮しない。
