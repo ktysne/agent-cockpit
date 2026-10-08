@@ -21,6 +21,7 @@ Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照�
 | 日付 | 判断 | 理由と適用範囲 |
 |---|---|---|
 | 2026-10-08 | 案Aとしてfixtureで契約を検証した変更をfeatureへ集約し、実runtime未確認はfeatureからmainへの採用条件として残す。 | レビュー済みコードの確認起点をそろえるため。fixtureは製品compositionやruntimeの挙動を証明しないので、#175、#211、#216、#217をこの集約だけで閉じない。確認手順は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。 |
+| 2026-10-08 | #211は容量超過時に保留を維持し、明示停止を確認した新世代だけで受付を再開する。実runtime確認計画の順序と合格基準を採用する。 | resolvedでturnを識別できない間はID集合を回収すると遅い通知を区別できないため、turnごとの回収による連続運転は対象外とする。[開発者の明示承認](https://github.com/ktysne/agent-cockpit/pull/263#issuecomment-6054884939)が根拠であり、実装やruntimeの成功を意味しない。 |
 
 この判断はG2の実接続条件を緩和しない。
 再接続時の接続世代更新と旧currentProofの失効は、対象runtimeで別途確かめる。

@@ -120,6 +120,16 @@ runnerの件数投影と置換時失効は[runner test](../../test/owned-native-
 このcheckpointでは関連6ファイルのin-process test 260件が成功した。
 実Codex runtimeは未実施であり、Claude native waitはunsupportedまたは未確認である。
 
+## owned process停止の適合
+
+`ID-F08-NS10`は、CodexとClaudeのowned processを製品経路から停止する共通シナリオである。
+対象の実行が明示的な停止を受けた後、authority失効と物理停止の状態を別々に観測する。
+childのexitとcloseを両方確認し、owned childがinactiveになった場合だけ停止済みとする。
+exitのみ、closeのみ、killのfalse返却、kill例外、またはspawn error後にexitなしでcloseだけが届く場合は停止未確認を維持し、同じ実行への送信を許さない。
+停止を確認できない間は元の実行に紐づく後続受付を許さず、停止確認後の新世代だけで受付を再開する。
+CodexとClaudeのfake child fixtureでevent順序と失敗時の状態を確認する。
+このfixtureは実runtimeにおける製品の停止操作や子プロセス終了の証拠ではなく、両runtimeでの確認は未実施である。
+
 ## 実行と結果の記録
 
 自動適合試験は既存の npm test 経路へ統合する。
