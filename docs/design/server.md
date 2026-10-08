@@ -59,6 +59,13 @@ managed collectorはserverの通常起動では作成・接続しない。注入
 - フックと MCP サーバーからの書き込みは、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。秘密値は常駐サーバーの起動ごとに変わるためである。
 - MCP の全書き込み（共通質問を含む）は、送信開始後の応答待ちがタイムアウトした場合に再送せず、処理結果不明として返す。`cockpit_skip_review` の全体期限は 60 秒で、送信開始前に期限を使い切った場合は未到達として返す。
 - 画面は `uiSecret` を配信時に HTML の meta 属性から受け取る。`401` を受けたら常駐サーバーが再起動して秘密値が変わったとみなし、`GET /` を取り直して新しい値で 1 回だけ送り直す。
+- 要求の処理は `src/server/server.js` のルート表で決める。行ごとに、メソッド、パス、照合の種別(`hook`、`ui`、`ui-optional-origin`、`none`)、本文を読むか、ID の検査を持つ。
+- 前段は、Host、`/manual`、ルートの決定の後に、秘密値(`401`)、Origin(`403`)、ID の検査、サービスの利用可否、本文の順で行う。
+  照合の種別が決まるのはルートを決めた後なので、照合の前に ID や本文の妥当性を応答して漏らさない。
+- ハンドラーは機能ごとに `src/server/routes/` へ置き、前段を通った要求と解析済みの本文を受ける。
+  secret と Origin は前段で照合し、writer とセッションの結び付け、launch の所有権、停止時の世代はハンドラーで照合する。
+  応答待ちのフックと PR レビュー省略は、作用する直前にも writer の有効性を確かめる。
+  新しい書き込み口はルート表に行を足して照合の種別を選ぶ。
 
 ## 状態不明のセッション
 
@@ -202,6 +209,7 @@ PostToolUse の出力全文は送らない。
 PR は Bash の `gh pr create`、GitHub MCP の作成応答、または MCP ツール `cockpit_add_pr` から登録し、`store.json` に保存する。
 常駐サーバーは `gh` の保存済み認証を使い、60 秒ごとと `git push` または `gh pr` の後にリポジトリの状態を取得する。
 base と head の対応から関連するオープン PR を積み上げる。クロスレビュー状態は各オープン PR のスタック木の `crossReview` に `round`、`max`、`dismissed`、`reviewedSha`、`triage` を設定する。`triage` は状態ファイルの `lastTriage` を `{round, sha, outcome}` に検証したもので、`sha` は 40 桁か 64 桁の小文字、`outcome` は `fixing`、`converged`、`halted` のいずれか。無いか形が合わなければ `null` とする。表示の規則は計画書の決定「クロスレビューの結論の表示」を正本とする。セッションが登録したオープン PR で、worktree に `tools/cross-review.js` はあるがそのブランチの記録が無いもの(状態ファイルがまだ無いものを含む)は「レビュー未実施」とする。`tools/cross-review.js` が無い worktree の PR は「レビュー不要」とする。登録の無い関連 PR とマージ済み PR にはレビュー行を出さない。状態ファイルの有無ではなく、追跡される `tools/cross-review.js` の有無で連携を判定する。
+状態ファイルは、登録の `cwd` の worktree に加えて、同じリポジトリのほかの worktree からも探す。PR の head のブランチをチェックアウトしている worktree は記録の有無を問わず候補にし、それ以外の worktree はそのブランチの記録を持つときだけ候補にする。スタックを 1 つの worktree で積むと、下の段のブランチはどこにもチェックアウトされないためである。
 表示設定 `display.mergeableCondition` は「マージ操作が可能」「CI が成功」「現在の head のクロスレビューが収束または不要」の各条件を選ぶ。既定は最後の条件まで求める。収束は `lastTriage.round` と現在の round が一致し、`lastTriage.sha` と現在の head が一致する場合だけ有効とする。操作可否は CI とクロスレビューを含めずに判定し、選択条件を満たすかどうかでカードの緑表示、待ち条件と件数を決める。操作可だが条件が残る場合も、確認欄に警告を出して開発者が実行できる。
 クロスレビュー不要記録は PR の owner/repo/番号、head SHA、理由を `store.json` の `crossReviewSkips` に保存する。MCP の `cockpit_skip_review` は登録元セッションからのみ記録でき、ダッシュボードの操作は起動時の秘密値と必須 Origin を照合して記録または取り消す。どちらもサーバーが最新の PR head を取り直して照合し、別の head には適用しない。head が変われば記録を無効にし、PR 登録の保持期限に合わせて削除する。
 MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り消しは `POST /api/pull-requests/review-skip` を使う。画面からの要求は `uiSecret` と `validRequiredUiOrigin` を通し、登録キーと表示中の head SHA が最新状態と一致することを確かめる。

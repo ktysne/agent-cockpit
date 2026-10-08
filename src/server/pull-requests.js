@@ -627,13 +627,17 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   }
 }
 
-function listWorktreesForBranch(root, branch, execFileImpl = execFile) {
+function listWorktrees(root, execFileImpl = execFile) {
   const parse = (stdout) => {
     const worktrees = [];
     let current = null;
     for (const line of stdout.split(/\r?\n/)) {
-      if (line.startsWith('worktree ')) current = line.slice('worktree '.length);
-      else if (current && line === `branch refs/heads/${branch}`) worktrees.push(path.resolve(current));
+      if (line.startsWith('worktree ')) {
+        current = { path: path.resolve(line.slice('worktree '.length)), branch: null };
+        worktrees.push(current);
+      } else if (current && line.startsWith('branch refs/heads/')) {
+        current.branch = line.slice('branch refs/heads/'.length);
+      }
     }
     return worktrees;
   };
@@ -650,7 +654,8 @@ function listWorktreesForBranch(root, branch, execFileImpl = execFile) {
 }
 
 // PR は登録したセッションとは別の worktree で作られることがあり、フックの cwd はコマンド中の cd を反映しないため、
-// head のブランチをチェックアウトしている worktree の状態ファイルも候補にする。
+// ほかの worktree の状態ファイルも候補にする。スタックを 1 つの worktree で積むと下の段のブランチはどこにもチェックアウトされないので、
+// チェックアウトしていない worktree は、そのブランチの記録を持つときだけ候補にする。読めない worktree で記録なしの表示を上書きしないため。
 async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
   const fileSystem = options.fileSystem || fs;
   let selected = await readCrossReviewState(registration, pullRequest, fileSystem);
@@ -659,9 +664,11 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
   if (!root) return selected;
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
-  for (const worktree of await listWorktreesForBranch(root, branch, options.execFileImpl)) {
-    if (sameRoot(worktree, root)) continue;
-    const candidate = await readCrossReviewState({ ...registration, cwd: worktree }, pullRequest, fileSystem);
+  for (const worktree of await listWorktrees(root, options.execFileImpl)) {
+    if (sameRoot(worktree.path, root)) continue;
+    const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, fileSystem);
+    const hasRecord = Number.isSafeInteger(candidate?.round);
+    if (worktree.branch !== branch && !hasRecord) continue;
     if (shouldReplaceCrossReview(selected, candidate, pullRequest.headRefOid)) selected = candidate;
   }
   return selected;
