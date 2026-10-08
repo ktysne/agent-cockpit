@@ -246,16 +246,17 @@ function mergedBaseReachesComparison(
 function restackResult(commits, mergedPullRequests, comparisonBranches, defaultBranch, mergedListComplete = true) {
   if (!commits) return { checked: false, parent: null };
   const candidates = mergedPullRequests.filter((candidate) => commits.has(candidate.headRefOid));
-  const directParent = candidates.find((candidate) => (
+  const directParents = candidates.filter((candidate) => (
     !candidate.baseRefName || comparisonBranches.has(candidate.baseRefName)
   ));
-  if (directParent) return { checked: true, parent: directParent };
-  if (!mergedListComplete) return { checked: false, parent: null };
+  if (!mergedListComplete) {
+    return directParents.length ? { checked: true, parent: directParents[0] } : { checked: false, parent: null };
+  }
 
-  const indirectParents = [];
+  const parentCandidates = [...directParents];
   const lineageMemo = new Map();
   for (const candidate of candidates) {
-    if (!candidate.baseRefName) continue;
+    if (directParents.includes(candidate) || !candidate.baseRefName) continue;
     const lineage = mergedBaseReachesComparison(
       candidate.baseRefName,
       candidate.mergedAt,
@@ -266,9 +267,10 @@ function restackResult(commits, mergedPullRequests, comparisonBranches, defaultB
       lineageMemo,
     );
     if (lineage === 'unknown') return { checked: false, parent: null };
-    if (lineage === 'matched') indirectParents.push(candidate);
+    if (lineage === 'matched') parentCandidates.push(candidate);
   }
-  return { checked: true, parent: indirectParents[0] || null };
+  parentCandidates.sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
+  return { checked: true, parent: parentCandidates[0] || null };
 }
 
 function historicalMergedPullRequests(registrations, relatedPullRequests, openPullRequests) {
