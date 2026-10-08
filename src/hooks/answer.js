@@ -107,7 +107,15 @@ async function runAskQuestion(input, options) {
 }
 
 async function runPostToolBatch(input, options) {
-  if (input.agent_id || !validSessionId(input.session_id)) return null;
+  if (!validSessionId(input.session_id)) return null;
+  // サブエージェントの区切りは、拒否されて PostToolUse の来ないツールを片付けるために送る。回答はメインにだけ渡す。
+  if (input.agent_id) {
+    if (typeof input.agent_id !== 'string' || input.agent_id.length > 256) return null;
+    await postHookRequest({
+      action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: input.session_id, id: crypto.randomUUID(), agent_id: input.agent_id,
+    }, { ...options, timeoutMs: POST_TOOL_BATCH_TIMEOUT_MS, attemptTimeoutMs: 750 });
+    return null;
+  }
   const result = await postHookRequest({
     action: 'post-tool-batch', event_name: 'PostToolBatch', session_id: input.session_id, id: crypto.randomUUID(),
   }, { ...options, timeoutMs: POST_TOOL_BATCH_TIMEOUT_MS, attemptTimeoutMs: 750 });

@@ -1459,6 +1459,18 @@ function createRequestHandler(options) {
           result = await answerDelivery.waitForAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, authorize: authorizeAnswer });
         } else if (answerRequest.action === 'ask-finish' && answerRequest.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(answerRequest.outcome)) {
           result = answerDelivery.finishAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, decisionId: answerRequest.decision_id, outcome: answerRequest.outcome });
+        } else if (answerRequest.action === 'post-tool-batch' && answerRequest.event_name === 'PostToolBatch' && answerRequest.agent_id !== undefined) {
+          if (!validText(answerRequest.agent_id, 256)) {
+            jsonResponse(response, 400, { error: 'Invalid request' });
+            return;
+          }
+          state.addEvent({
+            session_id: answerRequest.session_id,
+            hook_event_name: 'PostToolBatch',
+            agent_id: answerRequest.agent_id,
+            hookAt: Date.now(),
+          });
+          result = { hookOutput: null };
         } else if (answerRequest.action === 'post-tool-batch' && answerRequest.event_name === 'PostToolBatch') {
           state.addEvent({
             session_id: answerRequest.session_id,

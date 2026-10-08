@@ -95,13 +95,11 @@
     <li><span class="ui">仮に推奨案で進行中</span> の判断事項</li>
     <li>離席中に出た質問のうち、回答を待っているもの(<a href="away.html#away-questions">離席中の質問</a>)</li>
   </ul>
-  <figure class="guide-map" id="decisions-answer-map" data-shot="decisions-answer/initial" data-alt="仮に推奨案で進行中の判断事項の回答欄。選択肢が 2 つ並び、その下に推奨案で OK のチェック、送る答えの表示、指示の入力欄、回答を送るのボタンと送信の状態がある。最下段にセッションが書いた選択と理由がある">
+  <figure class="guide-map" id="decisions-answer-map" data-shot="decisions-answer/initial" data-alt="仮に推奨案で進行中の判断事項の回答欄。推奨の札が付いた選択肢ともう 1 つの選択肢、指示の入力欄、回答を送るボタンと送信の状態がある。最下段にセッションが書いた選択と理由がある">
     <ol class="guide-list">
-      <li data-part="answer.options" data-place="right"><b>選択肢</b>：押して選びます。1 つだけ選ぶ質問では 1 つ、複数選択の質問では複数を選べます。</li>
+      <li data-part="answer.options" data-place="right"><b>選択肢</b>：押して選びます。1 つだけ選ぶ質問では 1 つ、複数選択の質問では複数を選べます。単一選択では、選んだ選択肢をもう一度押すと選択が外れます。</li>
       <li data-part="answer.recommended" data-place="left"><b>推奨の選択肢</b>：<span class="ui">推奨</span> の札が付いた選択肢です。</li>
-      <li data-part="answer.ok"><b><span class="ui">推奨案で OK</span></b>：推奨の選択肢で答えます。すべての質問に推奨があるときだけ押せます。選択肢を選ぶと外れ、これを入れると選んだ選択肢が外れます。</li>
-      <li data-part="answer.meta" data-place="right"><b>送る答え</b>：選んだ選択肢の名前を、<span class="ui">送る答え</span> として出します。何も選んでいないときは、すべての質問に推奨があれば、推奨の名前を <span class="ui">OK で送る答え</span> として出します。</li>
-      <li data-part="answer.note" data-place="right"><b>指示</b>：セッションへの指示を、2000 文字まで書けます。選択肢や <span class="ui">推奨案で OK</span> に添えることも、指示だけで答えることもできます。</li>
+      <li data-part="answer.note" data-place="right"><b>指示</b>：セッションへの指示を、2000 文字まで書けます。選択肢に添えることも、指示だけで答えることもできます。</li>
       <li data-part="answer.send" data-place="bottom"><b><span class="ui">回答を送る</span></b>：回答を送ります。送れる状態になるまでは押せません。</li>
       <li data-part="answer.status"><b>送信の状態</b>：送る前は <span class="ui">未送信</span> です。送った後は、送った時刻などが出ます(<a href="#decisions-status">送信済み、渡した、反映された</a>)。</li>
       <li data-part="answer.summary"><b>セッションが書いた選択と理由</b>：セッションが記録した、推奨案を仮に適用した理由です。回答の内容ではありません。</li>
@@ -109,7 +107,7 @@
   </figure>
   <p>回答の組み合わせは、次のとおりです。</p>
   <ul>
-    <li><span class="ui">推奨案で OK</span> だけを入れて送る。すべての質問に推奨があるときに使えます</li>
+    <li>推奨を受け入れる場合も、<span class="ui">推奨</span> の札が付いた選択肢を選んで送ります</li>
     <li>選択肢を選んで送る。複数の質問がある判断事項で、選ばなかった質問は、推奨があれば推奨の選択肢で、無ければ指示で答えたことになります。推奨も指示も無い質問が残る間は、送れません</li>
     <li>指示だけを書いて送る</li>
     <li>上のどれかに、指示を添えて送る</li>
@@ -144,7 +142,8 @@
   <p>回答を送ると、回答欄の下に、届き具合が時刻つきで増えていきます。
   時刻は、同じ日なら「14:00」の形で、別の日なら日付が付きます。</p>
   <p><b>1. 送信済み</b>：ダッシュボードが回答を受け付けると、<span class="ui">送信済み</span> と、回答の種類が出ます。
-  種類は、<span class="ui">推奨案で OK</span>、選んだ選択肢の名前に <span class="ui">を選択</span> を付けたもの、<span class="ui">指示のみ</span> のどれかです。
+  種類は、選んだ選択肢の名前に <span class="ui">を選択</span> を付けたものか、<span class="ui">指示のみ</span> です。
+  以前に送った回答は、保存済みの種類として <span class="ui">推奨案で OK</span> と表示される場合があります。
   指示を添えたときは、<span class="ui">(指示あり)</span> が付きます。</p>
   <figure class="guide-map" id="decisions-sent-map" data-shot="decisions-delivery/sent" data-alt="回答を送った後の判断事項。送信の状態に、14 時 00 分に送信済みで、残さないを選択し、指示ありと出ている">
     <ol class="guide-list">
@@ -190,7 +189,7 @@
     セッションは、回答に沿って作業を直し、判断事項を更新します。</p>
     <p>回答の種類ごとに、質問への答えは次のとおりです。</p>
     <ul>
-      <li><span class="ui">推奨案で OK</span>：推奨の選択肢の名前を答えにします。指示があれば、追加の文脈として添えます</li>
+      <li>推奨の選択肢を選んだ回答：選んだ選択肢の名前を答えにします。指示があれば、追加の文脈として添えます</li>
       <li>選択肢を選ぶ：選んだ選択肢の名前を答えにします。複数選択で複数を選んだときは、名前を「, 」でつないだ 1 つの文字列にします。選ばなかった質問は、推奨の名前、無ければ指示の文を答えにします</li>
       <li><span class="ui">指示のみ</span>：指示の文を答えにします</li>
     </ul>

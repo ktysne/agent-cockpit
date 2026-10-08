@@ -18,8 +18,6 @@
       "parts": {
         "answer.options": ".decision-card.provisional .decision-options",
         "answer.recommended": ".decision-card.provisional .decision-option.recommended",
-        "answer.ok": ".decision-card.provisional .answer-choice.ok",
-        "answer.meta": ".decision-card.provisional [data-answer-meta]",
         "answer.note": ".decision-card.provisional [data-answer-note]",
         "answer.send": ".decision-card.provisional [data-send-answer]",
         "answer.status": ".decision-card.provisional .answer-foot .answer-status",
@@ -42,7 +40,6 @@
       "parts": {
         "answer.options": ".decision-card.provisional .decision-options",
         "answer.recommended": ".decision-card.provisional .decision-option.recommended",
-        "answer.ok": ".decision-card.provisional .answer-choice.ok",
         "answer.meta": ".decision-card.provisional [data-answer-meta]",
         "answer.note": ".decision-card.provisional [data-answer-note]",
         "answer.send": ".decision-card.provisional [data-send-answer]",

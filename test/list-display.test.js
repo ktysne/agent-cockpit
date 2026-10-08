@@ -516,6 +516,7 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
     answerErrors: new Map(),
     answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
     answerOf: () => answer,
+    answerForUi: (value) => value,
     effectiveDecisionState: () => 'resolved',
     picksOf: (item) => item.picks || [],
     isNew: () => false,
@@ -1056,10 +1057,11 @@ test('GitHub の自動削除設定があるマージ結果はブランチ状態�
 test('回答の送信失敗は再描画後も残り、下書き変更後に送信済み状態を置き換える', () => {
   const keySource = functionSource(web, 'answerDraftKey');
   const sameSource = functionSource(web, 'sameAnswerDraft');
+  const valueSource = functionSource(web, 'answerValueFor');
   const changedSource = functionSource(web, 'answerDraftChanged');
   const clearSource = functionSource(web, 'clearAnswerErrorWhenDraftChanges');
   const appendSource = functionSource(web, 'appendDecisionAnswer');
-  assert.ok(keySource && sameSource && changedSource && clearSource && appendSource);
+  assert.ok(keySource && sameSource && valueSource && changedSource && clearSource && appendSource);
   const errors = new Map();
   const context = pageContext(web, {
     answerErrors: errors,
@@ -1075,7 +1077,7 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
     answerStatusText: () => '前回の回答を送信済み',
     sessionDisplayName: (session) => session.session_id,
   });
-  vm.runInContext(`${keySource}\n${sameSource}\n${changedSource}\n${clearSource}\n${appendSource}\nthis.key = answerDraftKey; this.clearError = clearAnswerErrorWhenDraftChanges; this.appendAnswer = appendDecisionAnswer;`, context);
+  vm.runInContext(`${keySource}\n${sameSource}\n${valueSource}\n${changedSource}\n${clearSource}\n${appendSource}\nthis.key = answerDraftKey; this.clearError = clearAnswerErrorWhenDraftChanges; this.appendAnswer = appendDecisionAnswer;`, context);
   const key = context.key('session-a', 'decision-a');
   errors.set(key, '回答を送信できませんでした。');
   const decision = { id: 'decision-a', questions: [], answer: { choice: 'ok', note: '以前の指示', picks: [], sentAt: '2026-10-04T00:00:00Z' } };
@@ -1091,8 +1093,9 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
 
 test('回答の編集時に送信済み回答の状態表示も更新する', () => {
   const changedSource = functionSource(web, 'answerDraftChanged');
+  const valueSource = functionSource(web, 'answerValueFor');
   const updateSource = functionSource(web, 'updateAnswerSubmit');
-  assert.ok(changedSource && updateSource);
+  assert.ok(changedSource && valueSource && updateSource);
   const decision = {
     id: 'decision-a', questions: [],
     answer: { choice: 'ok', note: '保存済みの指示', picks: [], sentAt: '2026-10-04T00:00:00Z' },
@@ -1117,13 +1120,14 @@ test('回答の編集時に送信済み回答の状態表示も更新する', ()
     answerMetaText: () => '送る答え',
     answerStatusText: () => '前回の回答を送信済み',
     canSendDecisionAnswer: () => true,
+    recommendedOptionsForQuestions: () => [],
   });
-  vm.runInContext(`${changedSource}\n${updateSource}\nthis.update = updateAnswerSubmit;`, context);
+  vm.runInContext(`${valueSource}\n${changedSource}\n${updateSource}\nthis.update = updateAnswerSubmit;`, context);
   context.update(card);
   assert.equal(status.textContent, '変更は未送信');
   assert.equal(button.disabled, false);
 
-  draft = { choice: 'ok', note: '保存済みの指示', picks: [] };
+  draft = { choice: 'pick', note: '保存済みの指示', picks: [] };
   context.update(card);
   assert.equal(status.textContent, '前回の回答を送信済み');
   assert.equal(button.disabled, true);
@@ -1562,6 +1566,8 @@ test('モックで指示欄を編集すると同じカードのエラーを消�
   const document = { activeElement: textarea };
   const context = pageContext(mock, {
     answerErrors: errors, answerOf: () => answer, answerDraftKey: () => key,
+    answerForUi: (value) => value,
+    allSessions: () => [{ decisions: [{ id: 'decision-a', options: [] }] }],
     picksOf: (value) => value.choice === 'pick' ? value.picks || [] : [],
     canSend: () => true, answerDirty: () => true, save() {}, document,
     ui: { answers: {} },
