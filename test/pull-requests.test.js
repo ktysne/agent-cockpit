@@ -710,6 +710,123 @@ test('比較経路に含まれない既定ブランチへマージした PR の 
   assert.deepEqual(pullRequests.map((pullRequest) => pullRequest.needsRestack), [false, false]);
 });
 
+test('親が親ブランチへマージされた後にその親ブランチが既定ブランチへ入っても積み直しを検出する', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const parentHead = 'a'.repeat(40);
+  const intermediateHead = 'b'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(32, 'feat/child', 'main', childHead)];
+  github.mergedPullRequests = [
+    mergedPullRequest(30, parentHead, '2026-10-03T11:00:00.000Z', 'feat/parent', 'feat/intermediate'),
+    mergedPullRequest(31, intermediateHead, '2026-10-03T11:30:00.000Z', 'feat/intermediate', 'main'),
+  ];
+  github.comparisons.set(`main...${childHead}`, compareResult([parentHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const result = tracker.repositoryState('example', 'project').restackResults.get(32);
+  assert.equal(result.checked, true);
+  assert.equal(result.parent.number, 30);
+});
+
+test('過去の既定ブランチから集約ブランチへの同期をたどって無関係な PR を親にしない', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const unrelatedHead = 'a'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  const aggregateBranch = 'codex/feature';
+  github.openPullRequests = [ghPullRequest(32, 'feat/child', aggregateBranch, childHead)];
+  github.mergedPullRequests = [
+    mergedPullRequest(30, unrelatedHead, '2026-10-03T11:00:00.000Z', 'feat/unrelated', 'main'),
+    mergedPullRequest(31, 'b'.repeat(40), '2026-10-03T11:30:00.000Z', 'main', aggregateBranch),
+  ];
+  github.comparisons.set(`${aggregateBranch}...${childHead}`, compareResult([unrelatedHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const result = tracker.repositoryState('example', 'project').restackResults.get(32);
+  assert.equal(result.checked, true);
+  assert.equal(result.parent, null);
+});
+
+test('比較経路より前にマージされた同名ブランチの PR は親経路に使わない', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const parentHead = 'a'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(32, 'feat/child', 'main', childHead)];
+  github.mergedPullRequests = [
+    mergedPullRequest(30, 'b'.repeat(40), '2026-10-03T10:30:00.000Z', 'feat/parent', 'main'),
+    mergedPullRequest(31, parentHead, '2026-10-03T11:00:00.000Z', 'feat/child-parent', 'feat/parent'),
+  ];
+  github.comparisons.set(`main...${childHead}`, compareResult([parentHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const result = tracker.repositoryState('example', 'project').restackResults.get(32);
+  assert.equal(result.checked, true);
+  assert.equal(result.parent, null);
+});
+
+test('同名ブランチのマージ経路が複数成立する場合は確認できない扱いにする', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const parentHead = 'a'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(32, 'feat/child', 'main', childHead)];
+  github.mergedPullRequests = [
+    mergedPullRequest(30, parentHead, '2026-10-03T11:00:00.000Z', 'feat/parent-child', 'feat/parent'),
+    mergedPullRequest(31, 'b'.repeat(40), '2026-10-03T11:30:00.000Z', 'feat/parent', 'main'),
+    mergedPullRequest(33, 'd'.repeat(40), '2026-10-03T11:45:00.000Z', 'feat/parent', 'main'),
+  ];
+  github.comparisons.set(`main...${childHead}`, compareResult([parentHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const result = tracker.repositoryState('example', 'project').restackResults.get(32);
+  assert.deepEqual(result, { checked: false, parent: null });
+});
+
+test('マージ済み PR の一覧が上限で切れている場合は間接の親を確定しない', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const parentHead = 'a'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(32, 'feat/child', 'main', childHead)];
+  github.mergedPullRequests = [
+    mergedPullRequest(30, parentHead, '2026-10-03T11:00:00.000Z', 'feat/parent-child', 'feat/parent'),
+    mergedPullRequest(31, 'b'.repeat(40), '2026-10-03T11:30:00.000Z', 'feat/parent', 'main'),
+    ...Array.from({ length: 998 }, (_, index) => mergedPullRequest(
+      index + 100,
+      (index + 100).toString(16).padStart(40, '0'),
+      `2026-10-03T12:${String(index % 60).padStart(2, '0')}:00.000Z`,
+      `unrelated/${index}`,
+      'main',
+    )),
+  ];
+  github.comparisons.set(`main...${childHead}`, compareResult([parentHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  assert.equal(github.mergedPullRequests.length, 1000);
+  assert.deepEqual(tracker.repositoryState('example', 'project').restackResults.get(32), { checked: false, parent: null });
+});
+
+test('循環するブランチ名のマージ経路を積み直し親として扱わない', async (t) => {
+  const { github, tracker } = await trackerFixture(t);
+  const parentHead = 'a'.repeat(40);
+  const childHead = 'c'.repeat(40);
+  github.openPullRequests = [ghPullRequest(32, 'feat/child', 'main', childHead)];
+  github.mergedPullRequests = [
+    mergedPullRequest(30, parentHead, '2026-10-03T11:00:00.000Z', 'branch/b-child', 'branch/a'),
+    mergedPullRequest(31, 'b'.repeat(40), '2026-10-03T11:30:00.000Z', 'branch/a', 'branch/b'),
+    mergedPullRequest(33, 'd'.repeat(40), '2026-10-03T11:45:00.000Z', 'branch/b', 'branch/a'),
+  ];
+  github.comparisons.set(`main...${childHead}`, compareResult([parentHead, childHead]));
+
+  await tracker.refreshRepo('example', 'project');
+
+  const result = tracker.repositoryState('example', 'project').restackResults.get(32);
+  assert.equal(result.checked, true);
+  assert.equal(result.parent, null);
+});
+
 test('マージ後に head が進んだ集約ブランチは比較 base と実効 base に使う', async (t) => {
   const { state, github, calls, tracker } = await trackerFixture(t);
   const childSha = 'b'.repeat(40);
@@ -1929,28 +2046,84 @@ test('差分に head があり base が鎖に含まれる候補のうち最も�
   const oldest = mergedPullRequest(81, 'a'.repeat(40), '2026-10-01T00:00:00Z', 'old', 'parent');
   const newest = mergedPullRequest(82, 'b'.repeat(40), '2026-10-02T00:00:00Z', 'new', 'main');
   const candidates = mergedPullRequestCandidates([newest, oldest], []);
-  assert.deepEqual(restackResult(new Set([oldest.headRefOid, newest.headRefOid]), candidates, new Set(['parent', 'main']), false),
+  assert.deepEqual(restackResult(new Set([oldest.headRefOid, newest.headRefOid]), candidates, new Set(['parent', 'main']), 'main', false),
     { checked: true, parent: oldest });
+});
+
+test('完全な一覧では直接親と間接親を合わせて最古のマージを選ぶ', () => {
+  const oldestIndirect = mergedPullRequest(81, 'a'.repeat(40), '2026-10-01T00:00:00Z', 'old', 'parent');
+  const newestDirect = mergedPullRequest(83, 'b'.repeat(40), '2026-10-03T00:00:00Z', 'new', 'main');
+  const parent = mergedPullRequest(82, 'c'.repeat(40), '2026-10-02T00:00:00Z', 'parent', 'main');
+  assert.deepEqual(restackResult(new Set([newestDirect.headRefOid, oldestIndirect.headRefOid]),
+    [newestDirect, oldestIndirect, parent], new Set(['main']), 'main', true),
+  { checked: true, parent: oldestIndirect });
+});
+
+test('同時刻の直接親は PR 番号が小さい候補を選ぶ', () => {
+  const higherNumber = mergedPullRequest(82, 'a'.repeat(40), '2026-10-02T00:00:00Z', 'higher', 'main');
+  const lowerNumber = mergedPullRequest(81, 'b'.repeat(40), '2026-10-02T00:00:00Z', 'lower', 'main');
+  assert.deepEqual(restackResult(new Set([higherNumber.headRefOid, lowerNumber.headRefOid]),
+    [higherNumber, lowerNumber], new Set(['main']), 'main', true),
+  { checked: true, parent: lowerNumber });
+});
+
+test('完全な一覧で直接親と未確認の間接候補があれば親を確定しない', () => {
+  const direct = mergedPullRequest(83, 'a'.repeat(40), '2026-10-03T00:00:00Z', 'direct', 'main');
+  const indirect = mergedPullRequest(81, 'b'.repeat(40), '2026-10-01T00:00:00Z', 'child', 'parent');
+  const unknownSuccessor = mergedPullRequest(82, 'c'.repeat(40), '2026-10-02T00:00:00Z', 'parent', '');
+  assert.deepEqual(restackResult(new Set([direct.headRefOid, indirect.headRefOid]),
+    [direct, indirect, unknownSuccessor], new Set(['main']), 'main', true),
+  { checked: false, parent: null });
+});
+
+test('不完全な一覧でも直接親があれば既存どおり返す', () => {
+  const direct = mergedPullRequest(81, 'a'.repeat(40), '2026-10-01T00:00:00Z', 'direct', 'main');
+  assert.deepEqual(restackResult(new Set([direct.headRefOid]), [direct], new Set(['main']), 'main', false),
+    { checked: true, parent: direct });
+});
+
+test('不完全な一覧で間接親しか見つからなければ未確認にする', () => {
+  const indirect = mergedPullRequest(81, 'a'.repeat(40), '2026-10-01T00:00:00Z', 'child', 'parent');
+  const parent = mergedPullRequest(82, 'b'.repeat(40), '2026-10-02T00:00:00Z', 'parent', 'main');
+  assert.deepEqual(restackResult(new Set([indirect.headRefOid]), [indirect, parent], new Set(['main']), 'main', false),
+    { checked: false, parent: null });
 });
 
 test('差分に head があっても base が比較の鎖にない候補は親にしない', () => {
   const candidate = mergedPullRequest(81, 'a'.repeat(40), undefined, 'parent', 'outside');
-  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(['main']), true), { checked: true, parent: null });
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(['main']), 'main', true), { checked: true, parent: null });
+});
+
+test('同時刻に同名headがマージされていればbaseの到達先を未確認にする', () => {
+  const mergedAt = '2026-10-04T11:00:00.000Z';
+  const candidate = mergedPullRequest(81, 'a'.repeat(40), mergedAt, 'child', 'parent');
+  const sameTimeSuccessor = mergedPullRequest(82, 'b'.repeat(40), mergedAt, 'parent', 'main');
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate, sameTimeSuccessor], new Set(['main']), 'main'),
+    { checked: false, parent: null });
+});
+
+test('同時刻の同名headがあり後刻の到達経路も見つかる場合は未確認にする', () => {
+  const mergedAt = '2026-10-04T11:00:00.000Z';
+  const candidate = mergedPullRequest(81, 'a'.repeat(40), mergedAt, 'child', 'parent');
+  const sameTimeSuccessor = mergedPullRequest(82, 'b'.repeat(40), mergedAt, 'parent', 'outside');
+  const laterSuccessor = mergedPullRequest(83, 'c'.repeat(40), '2026-10-04T11:01:00.000Z', 'parent', 'main');
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate, sameTimeSuccessor, laterSuccessor],
+    new Set(['main']), 'main'), { checked: false, parent: null });
 });
 
 test('base が空の候補は比較の鎖に関係なく親にできる', () => {
   const candidate = mergedPullRequest(81, 'a'.repeat(40));
-  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(), false), { checked: true, parent: candidate });
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(), 'main', false), { checked: true, parent: candidate });
 });
 
 for (const complete of [true, false]) {
   test(`親が見つからずマージ済み一覧の完全性が ${complete} なら checked は ${complete} になる`, () => {
-    assert.deepEqual(restackResult(new Set(), [], new Set(['main']), complete), { checked: complete, parent: null });
+    assert.deepEqual(restackResult(new Set(), [], new Set(['main']), 'main', complete), { checked: complete, parent: null });
   });
 }
 
 test('差分のコミット一覧が null なら積み直し状態を未確認にする', () => {
-  assert.deepEqual(restackResult(null, [], new Set(['main']), true), { checked: false, parent: null });
+  assert.deepEqual(restackResult(null, [], new Set(['main']), 'main', true), { checked: false, parent: null });
 });
 
 test('compare のコミット一覧が ahead_by より短ければ null にする', () => {

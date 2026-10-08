@@ -190,13 +190,87 @@ function parseCompareResult(stdout) {
   return new Set(value.commits.map((commit) => commit.sha.toLowerCase()));
 }
 
-// 親が見つからなくても、マージ済みの一覧が上限で切れていれば見逃しを否定できないので確かめられない扱いにする。
-function restackResult(commits, mergedPullRequests, comparisonBranches, mergedListComplete = true) {
+function mergedBaseReachesComparison(
+  branch,
+  mergedAt,
+  mergedPullRequests,
+  comparisonBranches,
+  defaultBranch,
+  visitedPrs = new Set(),
+  memo = new Map(),
+) {
+  if (comparisonBranches.has(branch)) return 'matched';
+  if (branch === defaultBranch) return 'none';
+  const key = `${branch}\0${Date.parse(mergedAt)}`;
+  if (memo.has(key)) return memo.get(key);
+  const mergeTime = Date.parse(mergedAt);
+  const sameTimeHead = mergedPullRequests.some((candidate) => (
+    candidate.headRefName === branch && Date.parse(candidate.mergedAt) === mergeTime
+  ));
+  if (sameTimeHead) {
+    memo.set(key, 'unknown');
+    return 'unknown';
+  }
+
+  const successors = mergedPullRequests.filter((candidate) => (
+    candidate.headRefName === branch && Date.parse(candidate.mergedAt) > mergeTime
+  ));
+  if (!successors.length) return 'none';
+
+  const outcomes = [];
+  for (const successor of successors) {
+    if (visitedPrs.has(successor.number) || !successor.baseRefName) {
+      outcomes.push('unknown');
+      continue;
+    }
+    const nextVisited = new Set(visitedPrs).add(successor.number);
+    outcomes.push(mergedBaseReachesComparison(
+      successor.baseRefName,
+      successor.mergedAt,
+      mergedPullRequests,
+      comparisonBranches,
+      defaultBranch,
+      nextVisited,
+      memo,
+    ));
+  }
+
+  const matchedCount = outcomes.filter((outcome) => outcome === 'matched').length;
+  const result = matchedCount > 1 || outcomes.includes('unknown')
+    ? 'unknown'
+    : matchedCount === 1 ? 'matched' : 'none';
+  memo.set(key, result);
+  return result;
+}
+
+function restackResult(commits, mergedPullRequests, comparisonBranches, defaultBranch, mergedListComplete = true) {
   if (!commits) return { checked: false, parent: null };
-  const parent = mergedPullRequests.find((candidate) => (
-    (!candidate.baseRefName || comparisonBranches.has(candidate.baseRefName)) && commits.has(candidate.headRefOid)
-  )) || null;
-  return { checked: Boolean(parent) || mergedListComplete, parent };
+  const candidates = mergedPullRequests.filter((candidate) => commits.has(candidate.headRefOid));
+  const directParents = candidates.filter((candidate) => (
+    !candidate.baseRefName || comparisonBranches.has(candidate.baseRefName)
+  ));
+  if (!mergedListComplete) {
+    return directParents.length ? { checked: true, parent: directParents[0] } : { checked: false, parent: null };
+  }
+
+  const parentCandidates = [...directParents];
+  const lineageMemo = new Map();
+  for (const candidate of candidates) {
+    if (directParents.includes(candidate) || !candidate.baseRefName) continue;
+    const lineage = mergedBaseReachesComparison(
+      candidate.baseRefName,
+      candidate.mergedAt,
+      mergedPullRequests,
+      comparisonBranches,
+      defaultBranch,
+      new Set([candidate.number]),
+      lineageMemo,
+    );
+    if (lineage === 'unknown') return { checked: false, parent: null };
+    if (lineage === 'matched') parentCandidates.push(candidate);
+  }
+  parentCandidates.sort((left, right) => Date.parse(left.mergedAt) - Date.parse(right.mergedAt) || left.number - right.number);
+  return { checked: true, parent: parentCandidates[0] || null };
 }
 
 function historicalMergedPullRequests(registrations, relatedPullRequests, openPullRequests) {
@@ -274,7 +348,7 @@ async function evaluateRestack({ openPullRequests, mergedCandidates, mergedListC
         pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
       );
       const commits = await compare(compareBase, pr.headRefOid);
-      const result = restackResult(commits, mergedCandidates, comparisonBranches, mergedListComplete);
+      const result = restackResult(commits, mergedCandidates, comparisonBranches, defaultBranch, mergedListComplete);
       if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
       return [pr.number, result];
     } catch (error) {
