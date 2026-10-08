@@ -11,6 +11,7 @@ const { createInstructionDeliveryJournal } = require('./instruction-delivery-jou
 const { createInstructionDeliveryService } = require('./instruction-delivery-service');
 const { createProviderInstructionAdapter } = require('./provider-instruction-adapter');
 const { createNativeLaunchComposition } = require('./native-launch-composition');
+const { createCommonQuestionService } = require('./common-question-service');
 
 const PROVIDERS = new Set(['claude', 'codex']);
 const ROUTER_METHODS = [
@@ -30,6 +31,7 @@ const PROFILE_FIELDS_WITH_RUNNER = [...PROFILE_FIELDS, 'runnerProfile'];
 const FACTORY_FIELDS = [
   'profiles', 'dataDirectory', 'hostId', 'runnerFactory', 'getAuthentication',
   'onAuthenticationRequired', 'now', 'checkpointAtomicWrite', 'journalAtomicWrite', 'storeLimits',
+  'commonQuestions',
 ];
 const START_FIELDS = ['launchId', 'runId', 'attemptId', 'profileId', 'origin', 'purpose', 'inputText'];
 const OWNED_STOP_FIELDS = ['launchRef', 'executionId', 'sessionId', 'expectedContextId',
@@ -197,7 +199,22 @@ function captureFactoryOptions(value) {
     profiles,
     dataDirectory: path.resolve(dataDirectory),
     storeLimits: captureStoreLimits(options.storeLimits),
+    commonQuestions: captureCommonQuestions(options.commonQuestions),
   };
+}
+
+function captureCommonQuestions(value) {
+  if (value === undefined) return null;
+  let fields;
+  try { fields = Reflect.ownKeys(value); } catch { throw integrationError('invalid_common_question_options'); }
+  if (!isRecord(value) || fields.some((field) => !['away', 'settings'].includes(field))) {
+    throw integrationError('invalid_common_question_options');
+  }
+  const config = exactData(value, fields, 'invalid_common_question_options');
+  const getAutoApplySettings = dataMethod(config.settings, 'getAutoApplySettings');
+  const subscribe = dataMethod(config.settings, 'subscribe');
+  if (!dataMethod(config.away, 'snapshot') || !getAutoApplySettings || !subscribe) return null;
+  return Object.freeze({ ...config, getAutoApplySettings, subscribe, getSettingsStatus: dataMethod(config.settings, 'getStatus') });
 }
 
 function captureAdmissionInput(value) {
@@ -247,6 +264,8 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   const profileProviders = new Map(Object.entries(profiles).map(([profileId, profile]) => [profileId, profile.provider]));
   const checkpointPath = path.join(dataDirectory, 'delivery-checkpoint.json');
   const journalPath = path.join(dataDirectory, 'instruction-journal.json');
+  const commonQuestionJournalPath = options.commonQuestions
+    ? path.join(dataDirectory, 'common-question-journal.json') : null;
   let composition;
   let routers = {};
   let store;
@@ -254,8 +273,51 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   let providerDeliveryAdapters;
   let providerInstructionAdapters;
   let service;
+  let questionService = null;
+  let unsubscribeSettings = null;
+  let acceptingSettings = true;
+
+  function getSettingsStatus() {
+    const unavailable = Object.freeze({ status: 'unavailable', revision: null, reason: 'settings_status_unavailable' });
+    if (!options.commonQuestions?.getSettingsStatus) return unavailable;
+    try {
+      const value = options.commonQuestions.getSettingsStatus.call(options.commonQuestions.settings);
+      if (utilTypes.isPromise(value)) swallowRejectedPromise(value);
+      if (hasThenMember(value) || !isRecord(value)) return unavailable;
+      const status = ownDataValue(value, 'status');
+      const revision = ownDataValue(value, 'revision');
+      const reason = ownDataValue(value, 'reason');
+      if (!['ready', 'missing', 'invalid', 'unavailable', 'changed'].includes(status) ||
+          !isIdentifier(revision) ||
+          !(reason === null || typeof reason === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(reason))) return unavailable;
+      return Object.freeze({ status, revision, reason });
+    } catch { return unavailable; }
+  }
+
+  function getAutoApplySettings() {
+    if (getSettingsStatus().status !== 'ready') return null;
+    try {
+      const value = options.commonQuestions.getAutoApplySettings.call(options.commonQuestions.settings);
+      if (utilTypes.isPromise(value)) swallowRejectedPromise(value);
+      return hasThenMember(value) ? null : value;
+    } catch { return null; }
+  }
+
+  function notifySettingsChanged() {
+    if (!acceptingSettings) return;
+    try { Promise.resolve(questionService.tick()).catch(() => {}); } catch {}
+  }
+
+  function stopSettingsNotifications() {
+    acceptingSettings = false;
+    const unsubscribe = unsubscribeSettings;
+    unsubscribeSettings = null;
+    unsubscribe?.();
+  }
 
   async function cleanupPartial() {
+    try { stopSettingsNotifications(); } catch {}
+    try { await questionService?.close?.(); } catch {}
     try { await service?.close?.(); } catch {}
     if (!service) {
       for (const adapter of Object.values(providerInstructionAdapters || {})) {
@@ -322,6 +384,26 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       ...(options.now ? { now: options.now } : {}),
     });
     await service.ready();
+    if (options.commonQuestions) {
+      questionService = createCommonQuestionService({
+        journalPath: commonQuestionJournalPath,
+        registrationRegistry: registrationKernel.registry,
+        launchRegistry: launchKernel.registry,
+        runtimeRegistry: runtimeKernel.registry,
+        deliveryStore: store,
+        away: options.commonQuestions.away,
+        getAutoApplySettings,
+        ...(options.now ? { now: options.now } : {}),
+      });
+      const questionReady = await questionService.ready();
+      if (ownDataValue(questionReady, 'ready') !== true) throw integrationError('common_question_service_unavailable');
+      const unsubscribe = options.commonQuestions.subscribe.call(options.commonQuestions.settings, notifySettingsChanged);
+      if (utilTypes.isPromise(unsubscribe)) swallowRejectedPromise(unsubscribe);
+      if (typeof unsubscribe !== 'function' || hasThenMember(unsubscribe)) {
+        throw integrationError('invalid_common_question_subscription');
+      }
+      unsubscribeSettings = unsubscribe;
+    }
   } catch (error) {
     await cleanupPartial();
     throw error;
@@ -619,6 +701,8 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       const attempt = async (operation) => {
         try { await operation(); } catch (error) { failure ||= error; }
       };
+      try { stopSettingsNotifications(); } catch (error) { failure ||= error; }
+      await attempt(() => questionService?.close());
       await attempt(() => service.close());
       for (const entry of [...admissions].reverse()) await attempt(() => stop(entry.receipt));
       for (const router of Object.values(routers)) {
@@ -633,13 +717,22 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   const native = Object.freeze({ admitLaunch, createOwnedCollector, startLaunch, stop, getLaunchState,
     ownedExecutionSnapshot, getOwnedStopState, stopOwnedExecution });
+  function getStatus() {
+    return Object.freeze({ commonQuestions: Object.freeze({
+      status: closing ? 'closed' : questionService ? 'ready' : 'unconfigured',
+      settings: options.commonQuestions ? getSettingsStatus() : null,
+    }) });
+  }
   return Object.freeze({
     native,
     service,
+    questionService,
     registrationRegistry: registrationKernel.registry,
     launchRegistry: launchKernel.registry,
     checkpointPath,
     journalPath,
+    commonQuestionJournalPath,
+    getStatus,
     instructionTargetState,
     close,
   });
@@ -663,6 +756,11 @@ async function startNativeInstructionServer(inputOptions) {
   if (previousShutdown !== undefined && typeof previousShutdown !== 'function') {
     throw integrationError('invalid_native_server_options');
   }
+  const commonQuestions = captureCommonQuestions(ownDataValue(options.integrationOptions, 'commonQuestions'));
+  const serverAway = ownDataValue(serverOptions, 'away');
+  if (commonQuestions && serverAway !== undefined && serverAway !== commonQuestions.away) {
+    throw integrationError('common_question_away_mismatch');
+  }
   const integration = await createNativeInstructionServiceIntegration(options.integrationOptions);
   let runtime;
   let closePromise = null;
@@ -670,6 +768,10 @@ async function startNativeInstructionServer(inputOptions) {
     const { startServer } = require('./server');
     runtime = await startServer({
       ...serverOptions,
+      ...(integration.questionService ? {
+        away: commonQuestions.away,
+        questionService: integration.questionService,
+      } : {}),
       registrationRegistry: integration.registrationRegistry,
       launchRegistry: integration.launchRegistry,
       instructionService: integration.service,

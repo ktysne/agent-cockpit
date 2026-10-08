@@ -58,6 +58,34 @@ adapterの準備前にはverifierがfalseを返す。
 HTTP requestにはnative profile allowlist、receipt、writer capabilityによる認可を追加しない。
 起動は明示opt-inであり、既定daemonや恒久HOMEへprofileを追加しない。
 
+## 共通質問の明示構成
+
+`commonQuestions: { away, settings }`をfactoryへ渡すと、共通質問サービスを同じnative構成へ接続する。
+`away`はHTTPサーバーと同じinstanceを使い、`settings`は同期の`getAutoApplySettings()`、`getStatus()`と変更通知の`subscribe(listener)`を持つ。
+away、設定getter、購読口のいずれかが不足する場合は非構成とし、通常指示だけの起動を維持する。
+`startNativeInstructionServer`に別のaway instanceを明示した要求は拒否する。
+標準起動、legacyフック、既存の離席設定には接続を追加しない。
+
+共通質問には同じregistration、launch、runtime registryと単一の配送storeを渡す。
+質問は`common-question-journal.json`、通常指示は`instruction-journal.json`に契約どおり保存し、配送checkpointは`delivery-checkpoint.json`を共有する。
+回答は検証済みwriterの`answerPoll`から`store.sendStart`の同期sinkへ渡し、通常指示adapterでnative入力へ変換しない。
+専用provider adapterと追加storeは作らない。
+
+`getStatus().commonQuestions.status`は`unconfigured`、`ready`、`closed`を区別する。
+サービスのready応答が成功を示した場合だけreadyとし、初期化失敗は構成成功を返さずcleanup後に拒否する。
+設定の診断は`status`、文字列revision、reasonだけを取り出す。
+設定がmissing、invalid、unavailable、changedの場合や、同期getterが例外またはPromiseを返した場合は自動適用をOFFにし、手動質問を受けられる状態と区別する。
+
+設定の保存または安全状態の変更通知で質問のtickを再評価する。
+listenerの同期例外と非同期拒否は観測し、通知元へ例外を戻さない。
+終了時は購読を解除し、共通質問の受付とtimerを停止してから通常指示と所有実行を閉じ、最後に共有storeをflushして閉じる。
+
+freshなmemory registryに保存済み質問のbindingがない場合は、現在の質問reconcileが初期化を拒否する。
+この拒否で質問journal、指示journal、checkpointを削除したり、保存済み回答を再送したりしない。
+保存済みbindingの信頼できる復元は未接続であり、fresh registryからの質問再開が成功したとは扱わない。
+既存kernelを保ったまま永続storeだけを開き直すfixtureとは異なり、段階2のcold再起動条件は未達である。
+この制約を解消するまでIssue #216を閉じない。
+
 ## HTTPのtarget projection
 
 `/api/state`の`instructionTargets`は、native integrationがlaunchRefごとに返す安全な状態だけを表示する。
