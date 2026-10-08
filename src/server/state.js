@@ -2358,7 +2358,9 @@ class DashboardState {
     }
     else this.sessions.delete(event.session_id);
     // 推定はターンが不明な間の補助なので、状態が確定したら消す。不明のままのイベントでは残す。
-    const hadEstimate = nextSessions[0]?.status !== '不明' && this.estimates.delete(event.session_id);
+    // 許可待ちはターンの確定を待たずに優先して出るので、許可待ちでも残す。
+    const derivedStatus = nextSessions[0]?.status;
+    const hadEstimate = derivedStatus !== '不明' && derivedStatus !== '許可待ち' && this.estimates.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd') {
       this.endSession(event.session_id, event.hookAt);

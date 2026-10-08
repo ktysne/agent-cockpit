@@ -430,11 +430,12 @@ test('状態の推定結果はイベント到着後に消える', async (t) => {
 
 test('推定は不明のままのイベントでは残し、ターンが確定した Stop で消す', async (t) => {
   await temporaryHome(t);
-  for (const [event, kept] of [
+  for (const [event, kept, status = kept ? '不明' : '待機中'] of [
     [{ hook_event_name: 'Notification' }, true],
     [{ hook_event_name: 'SubagentStart', agent_id: 'sub' }, true],
     [{ hook_event_name: 'PreToolUse', agent_id: 'sub', tool_name: 'Read', tool_use_id: 'sub-tool' }, true],
     [{ hook_event_name: 'PostToolBatch' }, true],
+    [{ hook_event_name: 'Notification', notification_type: 'permission_prompt', agent_id: 'sub' }, true, '許可待ち'],
     [{ hook_event_name: 'Stop' }, false],
   ]) {
     const state = new DashboardState();
@@ -443,7 +444,9 @@ test('推定は不明のままのイベントでは残し、ターンが確定�
     state.saveEstimate('estimate-kept', { recordedAt: '2026-10-02T01:02:03.000Z', lastTool: 'Read', state: 'input' });
     state.addEvent({ session_id: 'estimate-kept', hookAt: 100, ...event });
     assert.equal(state.estimates.has('estimate-kept'), kept, JSON.stringify(event));
-    assert.equal(state.snapshot().sessions[0].estimate?.canEstimate, kept ? true : undefined, JSON.stringify(event));
+    const session = state.snapshot().sessions[0];
+    assert.equal(session.status, status, JSON.stringify(event));
+    assert.equal(session.estimate?.canEstimate, status === '不明' ? true : undefined, JSON.stringify(event));
   }
 });
 
