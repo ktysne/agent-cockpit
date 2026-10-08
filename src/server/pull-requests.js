@@ -203,9 +203,17 @@ function mergedBaseReachesComparison(
   if (branch === defaultBranch) return 'none';
   const key = `${branch}\0${Date.parse(mergedAt)}`;
   if (memo.has(key)) return memo.get(key);
+  const mergeTime = Date.parse(mergedAt);
+  const sameTimeHead = mergedPullRequests.some((candidate) => (
+    candidate.headRefName === branch && Date.parse(candidate.mergedAt) === mergeTime
+  ));
+  if (sameTimeHead) {
+    memo.set(key, 'unknown');
+    return 'unknown';
+  }
 
   const successors = mergedPullRequests.filter((candidate) => (
-    candidate.headRefName === branch && Date.parse(candidate.mergedAt) > Date.parse(mergedAt)
+    candidate.headRefName === branch && Date.parse(candidate.mergedAt) > mergeTime
   ));
   if (!successors.length) return 'none';
 
