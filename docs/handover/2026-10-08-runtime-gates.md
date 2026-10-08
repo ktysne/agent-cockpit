@@ -52,6 +52,8 @@ fixtureで検証した変更をfeatureへ集約し、実runtime確認をfeature�
 fresh registryで保存済み質問を読み込む再起動はbinding照合で拒否されるため、段階2の再起動条件は未達である。
 未選択と選択済みの反例で、両journalとshared checkpointのbyte列が保持されることを確認する。
 復旧は[#283](https://github.com/ktysne/agent-cockpit/issues/283)で追跡し、#216を閉じない。
+復旧方式の選択肢と推奨案は[保存済み共通質問の復旧計画](2026-10-08-common-question-recovery-plan.md)に記載する。
+この復旧計画は提案段階であり、方式の確認後に実装する。
 #283の復旧契約を設計・検証し、fresh registryの再起動条件を満たすまで、共通質問を標準起動や設定画面へ接続するPRに着手しない。
 設定画面と標準起動への組込み、厳密な横断二重登録防止、native権限の変更には別の設計判断を残す。
 
