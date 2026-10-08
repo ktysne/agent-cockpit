@@ -545,6 +545,31 @@ function agentModelFromDefinition(agentType, definition) {
   };
 }
 
+/** @typedef {{tool_use_id: string, tool_name: string, summary: string, description: string, agent_id: string|null, startedAt: string}} SessionTool */
+
+/** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string}} PermissionWait */
+
+/** @typedef {ReturnType<typeof agentModelFromDefinition> & {
+ * isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
+ * }} SessionAgent */
+
+/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, ended: boolean}} SessionIdentity */
+
+/** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
+
+/** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>}} SessionAgents */
+
+/** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
+
+/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>}} SessionDecisions */
+
+/** @typedef {{permissionWaits: PermissionWait[]}} SessionPermissions */
+
+/** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
+
+/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[]}} AskDecisionState */
+
+/** @returns {DerivedSession} */
 function newSession(event, askDecisionState = {}) {
   return {
     session_id: event.session_id,
@@ -667,6 +692,7 @@ function isFinishedAskDecision(decision) {
   return ['resolved', 'withdrawn'].includes(decision?.state);
 }
 
+/** @param {AskDecisionState} askDecisionState */
 function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   // 判断事項ごとに、メモリーにある終わりのイベントの最も新しい時刻。出し直した呼び出しの終わりも数える。
   // 開始がメモリーに無い呼び出しの終わりは、作り直しで再現できないので数えない。
@@ -701,6 +727,9 @@ function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   };
 }
 
+/**
+ * @param {DerivedSession} session
+ */
 function sessionSnapshot(session) {
   const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
   const agents = session.agents
@@ -751,6 +780,9 @@ function sessionSnapshot(session) {
   };
 }
 
+/** @param {Map<string, DerivedSession>} sessions
+ * @returns {DerivedSession}
+ */
 function sessionForEvent(sessions, event, initialAskDecisionState) {
   let session = sessions.get(event.session_id);
   if (event.hook_event_name === 'SessionStart') {
@@ -765,6 +797,9 @@ function sessionForEvent(sessions, event, initialAskDecisionState) {
   return session;
 }
 
+/**
+ * @param {SessionDecisions} session
+ */
 function applyAskQuestionStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
@@ -812,6 +847,9 @@ function applyAskQuestionStart(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionTools, 'agentToolBindings'> & Pick<SessionAgents, 'agents'>} session
+ */
 function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
@@ -826,6 +864,9 @@ function applyAgentToolCompletion(session, event) {
   }
 }
 
+/**
+ * @param {SessionCodex & Pick<SessionAgents, 'agents'>} session
+ */
 function applyCodexLaunchCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
@@ -857,6 +898,9 @@ function applyCodexLaunchCompletion(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionCodex, 'codexLaunchToolIds'> & Pick<SessionAgents, 'agents'>} session
+ */
 function applyCodexResult(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
@@ -882,6 +926,9 @@ function applyCodexResult(session, event) {
   }
 }
 
+/**
+ * @param {SessionDecisions} session
+ */
 function applyAskQuestionCompletion(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -903,6 +950,9 @@ function applyAskQuestionCompletion(session, event) {
   }
 }
 
+/**
+ * @param {SessionAgents & Pick<SessionIdentity, 'product'|'title'|'lastActivityAt'>} session
+ */
 function applyCommonEventStart(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -925,6 +975,9 @@ function applyCommonEventStart(session, event) {
   }
 }
 
+/**
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & Pick<SessionIdentity, 'stopped'>} session
+ */
 function applyToolStart(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -962,6 +1015,9 @@ function applyToolStart(session, event) {
   }
 }
 
+/**
+ * @param {SessionAgents & Pick<SessionTools, 'tools'|'agentToolBindings'>} session
+ */
 function applySubagentStart(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -991,6 +1047,9 @@ function applySubagentStart(session, event) {
   }
 }
 
+/**
+ * @param {SessionAgents & Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
 function applySubagentStop(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -1003,6 +1062,9 @@ function applySubagentStop(session, event) {
   }
 }
 
+/**
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'>} session
+ */
 function applyToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -1026,6 +1088,9 @@ function applyToolCompletion(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
 function applyToolBatch(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -1039,6 +1104,9 @@ function applyToolBatch(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
 function applyPermissionPrompt(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -1061,6 +1129,9 @@ function applyPermissionPrompt(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'ended'>} session
+ */
 function applySessionLifecycle(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
@@ -1083,6 +1154,9 @@ function applySessionLifecycle(session, event) {
   if (eventName === 'SessionEnd') session.ended = true;
 }
 
+/**
+ * @param {Pick<SessionAgents, 'stoppedAgentIds'> & Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
 function applyCommonEventEnd(session, event) {
   const agentId = event.agent_id || null;
   if (agentId && session.stoppedAgentIds.has(agentId)) {
@@ -1091,6 +1165,9 @@ function applyCommonEventEnd(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'>} session
+ */
 function applyCodexWaitStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
@@ -1131,6 +1208,9 @@ function applyCodexWaitStart(session, event) {
   }
 }
 
+/**
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'>} session
+ */
 function applyCodexLaunchStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
@@ -1152,6 +1232,9 @@ function applyCodexLaunchStart(session, event) {
   session.pendingCodex[toolUseId] = agentIdForCall;
 }
 
+/**
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'>} session
+ */
 function applyCodexStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
