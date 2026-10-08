@@ -2626,6 +2626,28 @@ class DashboardState {
     return seenAt;
   }
 
+  // 初回の表示で既存の変化を既読として扱うために、変化を集める前に呼ぶ。
+  refreshSeenTimes(products, visibleProductKeys, now) {
+    let seenChanged = false;
+    for (const key of this.seenAtByProduct.keys()) {
+      if (!products.has(key)) {
+        this.seenAtByProduct.delete(key);
+        seenChanged = true;
+      }
+    }
+    let initialized = false;
+    for (const product of products.values()) {
+      if (visibleProductKeys.has(product.key) && !this.seenAtByProduct.has(product.key)) {
+        this.seenAtByProduct.set(product.key, isoTime(now));
+        initialized = true;
+      }
+    }
+    if (initialized || seenChanged) {
+      this.touch();
+      this.requestStoreWrite();
+    }
+  }
+
   snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
     const products = new Map();
     const visibleProductKeys = new Set();
@@ -2688,24 +2710,7 @@ class DashboardState {
       for (const product of productsForMergedPullRequest(merged)) addProduct(product);
     }
 
-    let seenChanged = false;
-    for (const key of this.seenAtByProduct.keys()) {
-      if (!products.has(key)) {
-        this.seenAtByProduct.delete(key);
-        seenChanged = true;
-      }
-    }
-    let initialized = false;
-    for (const product of products.values()) {
-      if (visibleProductKeys.has(product.key) && !this.seenAtByProduct.has(product.key)) {
-        this.seenAtByProduct.set(product.key, isoTime(now));
-        initialized = true;
-      }
-    }
-    if (initialized || seenChanged) {
-      this.touch();
-      this.requestStoreWrite();
-    }
+    this.refreshSeenTimes(products, visibleProductKeys, now);
 
     const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
     const eventKeys = new Set();
