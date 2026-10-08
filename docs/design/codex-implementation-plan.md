@@ -16,6 +16,17 @@ Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照�
 この契約のモデルは参照用であり、実adapterやruntimeの適合を証明しない。
 過去のPoCは固定SHAの証拠として扱い、本製品に機能が実装済みとはみなさない。
 
+## 決定済みの判断
+
+| 日付 | 判断 | 理由と適用範囲 |
+|---|---|---|
+| 2026-10-08 | fixtureで契約を検証した変更は `codex/feature-codex-support` へ集約する。実runtime未確認はfeatureからmainへ採用する条件として残す。 | fixtureはコードと契約の回帰を確かめるが、製品compositionや実runtimeの挙動までは証明しないため。#175、#211、#216、#217は、この集約だけでは閉じない。fixtureの成功を実runtimeの成功へ読み替えない。 |
+
+この判断はG2の実接続条件を緩和しない。
+再接続時の接続世代更新と旧currentProofの失効は、対象runtimeで別途確かめる。
+G4では質問応答と通常指示のtransportを分け、質問の宛先、owner保留、late answer、受付と適用の区別を維持する。
+fixtureでこれらの境界を検証しても、実runtimeの適合を確認したことにはならない。
+
 ## 実装の進め方
 
 Issueを新たに分割せず、各Issue内にA/B/Cのマイルストーンを置く。
