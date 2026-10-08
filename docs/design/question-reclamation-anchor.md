@@ -137,6 +137,12 @@ IDの最大長はUTF-16 code unitsであり、JSON escapeによるbyte増加を�
 移行時だけ `N + H` を許し、質問本文は7日を待ってから圧縮する。
 初回移行の `startedAt` は各記録の `quarantinedAt` に一度だけ保存し、manifestの完了後も保持起算点として残す。
 新形式の記録から保持中の追加枠の使用量を算出し、`migration` の有無で使用可否を決めない。
+通常上限を超えるslotには、各schemaの `migrationAllowance` をtarget byte列に保存する。
+grantはcoordinatorだけがsource fingerprintを照合して発行し、初回の対象ID集合を固定する。
+manifestを `null` にした後もgrantを残し、対象IDの追記、差替え、再利用、複数grantの積み上げを拒否する。
+保存された `maxExtraBytes` を固定 `H_i` より大きい値へ読み替えず、grant外の新規記録には追加枠を適用しない。
+対象slotのgrantが共に存在する間は同じ移行操作IDを要求するが、追加枠が不要なslotまたは収束後にgrantを消したslotは `null` を許す。
+全記録の将来予約が通常枠に収まり、以後も通常枠で既存操作を完結できるときだけ、そのslotのgrant全体をatomicに `null` にできる。
 移行中の専用枠を診断に出し、7日経過前に満杯なら新規受付停止を維持する。
 容量を空けるために保持期間を短縮しない。
 新形式が通常枠に収束した後は、追加移行枠を通常受付へ転用しない。

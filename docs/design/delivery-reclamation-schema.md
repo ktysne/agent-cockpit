@@ -36,8 +36,8 @@ revisionと時刻は安全な整数で、最大値は16桁である。
 
 | 保存先 | 新version | 新しい必須識別子 |
 |---|---:|---|
-| 配信checkpoint | 外側3、内包ledger 2 | anchorと同じ`storeId` |
-| 通常指示journal | 2 | anchorと同じ`storeId` |
+| 配信checkpoint | 外側3、内包ledger 2 | anchorと同じ`storeId`、必須`migrationAllowance`（null可） |
+| 通常指示journal | 2 | anchorと同じ`storeId`、必須`migrationAllowance`（null可） |
 | 配信ledger内のrecord | 2 | 各recordの`recordType` |
 
 `storeId`と回収`operationId`は小文字UUIDv4に固定する。
@@ -52,6 +52,34 @@ instructions slotはversion 1から2へ移す。
 sourceとtargetのbyte sizeとSHA-256は保存した実byte列で検査し、JSONを再直列化した値で代用しない。
 質問以外の配信対応はanchorの`targets`へ追加せず、3つのsource/target fingerprintとcross-store相関検査で確定する。
 
+## 移行後の追加枠grant
+
+checkpoint v3のouter objectとinstruction journal v2のtop-level objectは、必須field `migrationAllowance` を持つ。
+値は `null` または次のexact-key objectとし、field欠落、未知field、重複ID、不正値を拒否する。
+この節の通常枠 `B_i` は保存先の設定済みbyte上限であり、ピーク式の旧ファイル実byte `N_i` と区別する。
+
+| field | 値と検査 |
+|---|---|
+| `operationId` | anchor migrationと同じoperationの小文字UUIDv4 |
+| `sourceSchemaVersion` | checkpointでは2、instruction journalでは1 |
+| `sourceSizeBytes` | 対応する旧source slotの固定実byte size。安全な整数で`N_checkpoint`または`N_instructions`以下 |
+| `sourceSha256` | 対応するanchor source fingerprintと同じ、旧source実byteの小文字SHA-256 hex 64文字 |
+| `maxExtraBytes` | 安全な整数で`0..H_checkpoint`または`0..H_instructions`。発行後不変 |
+| `eligibleAttemptIds` | dense array。重複のない最大20,000件のidentifierで、各512 UTF-16 code unit以下 |
+
+移行coordinatorだけが、旧sourceのschema、size、SHA-256がanchorの固定fingerprintと一致した後にgrantを発行する。
+checkpoint grantのrosterは旧checkpoint v2 ledgerに存在したdelivery attempt ID、instruction grantのrosterは旧journal v1に存在したinstruction attempt IDから固定する。
+grantのoperation ID、source fingerprint、rosterを後から追記・差替え・再利用せず、同じsourceへのpartial grant積上げやgrantの重ね掛けを拒否する。
+`maxExtraBytes`がslot固有の固定`H_i`を超えるobjectも拒否する。
+
+`eligibleAttemptIds`は移行時点の上限対象を固定するrosterであり、移行後のrecordsと件数が完全一致する必要はない。
+保持期限などで旧recordが削除されてもrosterを縮めず、追加枠を使えるのはroster内IDに対応する現存recordだけとする。
+新しいattempt、registration、notification aliasなどは追加枠の対象外とし、既存全記録の将来予約を含む候補全体が通常`B_i`内の場合だけ受け付ける。
+`migrationAllowance` object、roster、schema wrapperの必須追加byteは対応する`H_i`の計算に含める。
+
+anchor migrationが`null`になってもfile内の`migrationAllowance`を維持する。
+各現存recordとその未完了state transitionと相関予約が通常`B_i`内で完結でき、file全体も通常byte budgetに収まるときだけ、grantの削除と通常budget検査を同じatomic file saveで行う。
+移行manifestの完了だけではgrantを消さず、grantを部分更新または後続migrationで積み増してHを再拡張しない。
 ## ledger v2のrecord variant
 
 ledger外側は`schemaVersion`、`revision`、`deliveries`、`notificationTargets`、`logicalTombstones`を保つ。
@@ -230,10 +258,11 @@ sourceとmigrationの拒否情報を保持し、manifestを完了扱いまたは
 | 最大reserved state | 現行state enum中の最長値 | `superseded_before_send`、22文字 |
 
 `H_checkpoint`はcheckpointの有効な最大source snapshotをv3へ投影したときの最大追加byteである。
-実recordに保存する`terminalAt`、variant、grave metadata、revision増分、最大相関2組と、移行中の旧詳細との一時重複を含める。
+実recordに保存する`terminalAt`、variant、grave metadata、revision増分、合法な後着遷移で増え得る相関、最大20,000件のeligible attempt ID roster、`migrationAllowance` objectと、移行中の旧詳細との一時重複を含める。
+退役済みquestionのavailableとunknownは凍結しているため、後着相関の増分を予約しない。
 `H_instructions`はinstruction journalの有効な最大source snapshotをv2へ投影した最大追加byteである。
-store ID、delivery creation state、revision増分、最大envelopeと移行中の一時重複を含める。
-`H_questions`は質問schemaの正本に従い、anchorの`T_migration`へ二重計上しない。
+store ID、delivery creation state、revision増分、最大envelope、最大20,000件のeligible instruction ID roster、`migrationAllowance` objectと移行中の一時重複を含める。
+`H_questions`は[質問journalの移行追加枠](common-question-reclamation-schema.md#質問journalの移行追加枠)の正本に従い、anchorの`T_migration`へ二重計上しない。
 各`H_i`は旧byte上限、件数、全recordの相関条件を同時に満たすsnapshotの実serializer差分から求める。
 `serializedTargetMax_i`も同じ有効snapshot制約で測り、全件へ独立最大長recordを配置する非実現構造を使わない。
 通常kindのunknownはdetailのまま保持し、後着相関も受け付けるため、通常checkpoint容量を引き続き消費する。
@@ -246,7 +275,7 @@ atomic置換中は既存anchor `A`と一時anchor `M`、各旧data file `N_i`と
 旧source `A`と`N_i`は既存fileが占有する通常容量に含め、追加予約へ二重計上しない。
 追加予約は`M + Σ(N_i + H_i)`で、一時targetの全byteを保持できる枠を別に確保する。
 `H_used_i`は現行recordsをdetail/grave variantへ投影した実serializer byteから算出し、manifestの有無に依存させない。
-`migration: null`後も`H_used_i`が残る間は通常上限に`H_i`を加えたload/writeを許し、圧縮で通常budget内へ収束するまで既存recordを保持・更新できるようにする。
+`migration: null`後も`H_used_i`が残る間は通常`B_i`に`H_i`を加えたload/writeを許し、圧縮で通常budget内へ収束するまでgrant対象の既存recordを保持、更新できるようにする。
 `H_i`を新規受付の予約や通常容量として使わず、次の移行でHを再帰的に加算しない。
 この枠を許さなければ、通常上限いっぱいの旧形式へ必須fieldを足せない。
 容量不足時は旧sourceと拒否情報を保持し、migrationと受付を再開しない。
