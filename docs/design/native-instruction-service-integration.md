@@ -80,12 +80,12 @@ away、設定getter、購読口のいずれかが不足する場合は非構成�
 listenerの同期例外と非同期拒否は観測し、通知元へ例外を戻さない。
 終了時は購読を解除し、共通質問の受付とtimerを停止してから通常指示と所有実行を閉じ、最後に共有storeをflushして閉じる。
 
-freshなmemory registryに保存済み質問のbindingがない場合は、現在の質問reconcileが初期化を拒否する。
-この拒否で質問journal、指示journal、checkpointを削除したり、保存済み回答を再送したりしない。
-保存済みbindingの信頼できる復元は未接続であり、fresh registryからの質問再開が成功したとは扱わない。
-既存kernelを保ったまま永続storeだけを開き直すfixtureとは異なり、段階2のcold再起動条件は未達である。
-この制約を解消するまでIssue #216を閉じない。
-[#283](https://github.com/ktysne/agent-cockpit/issues/283)を解消するまで、標準起動と設定画面への接続を進めない。
+service初期化時に読み込んだ全質問を隔離し、fresh registryへ保存済みbindingを登録せずに保存整合性を検査する。
+正当な保存記録がある起動は許すが、旧質問への回答と再送は許さない。
+孤立配送と記録間の矛盾では起動を拒否し、intentだけが残る質問の配送は再生成しない。
+通常指示の既存の復旧遷移を維持し、質問の隔離だけでは記録も容量予約も回収しない。
+これは旧質問の再開能力を示さず、両providerの実runtimeの復旧確認は別に残す。
+[#209](https://github.com/ktysne/agent-cockpit/issues/209)の隔離記録の回収条件を満たすまで標準起動と設定画面への接続を進めず、Issue #216を閉じない。
 
 ## HTTPのtarget projection
 

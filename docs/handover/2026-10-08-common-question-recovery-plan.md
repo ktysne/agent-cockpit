@@ -7,8 +7,8 @@
 #286のfixtureで未選択と選択済みの両方を再現し、拒否時に質問journal、指示journal、checkpointのbyte列が保持されることを確認した。
 実Claude/Codex runtimeの結果ではない。
 
-この資料は復旧方式の提案であり、開発者の確認後に実装する。
-現在の起動拒否は、この計画の作成だけでは変更しない。
+開発者は[A案を明示承認](https://github.com/ktysne/agent-cockpit/pull/290#issuecomment-6059866678)した。
+この資料は実装と検証の契約を定め、計画の承認だけで復旧成功とは扱わない。
 #216の標準起動と設定画面への接続は、復旧実装と関連検証の完了後に別途判断する。
 
 ## 開発者に判断してもらうこと
@@ -78,12 +78,16 @@ selectionとintentの有無は既存schemaで一致を要求しており、選�
 ## 通常指示とshared checkpoint
 
 共通質問の隔離処理は、通常指示の復旧仕様を変更しない。
-既存の通常指示serviceは、復旧時に`sending`と`accepted`を`unknown`へ保存する。
+既存の共有checkpointの復旧は全kindに適用され、`claimed`を`available`へ、`sending`と`accepted`を`unknown`へ戻す。
+変更があればledger revisionを進め、保存されたexecution、launchとactorを`unknown`へ、connectionを`inactive`へ戻す。
+load自体は復旧したメモリーsnapshotを返し、直ちに保存せず、後続の正規保存でcheckpointへ反映される場合がある。
 そのため、混在checkpointのbyte列が起動前後で常に同じになることは完了条件にしない。
 
 質問の隔離による新規配送とpayload復元は0回に保つ。
-通常指示の既存の復旧遷移は許容し、独立した期待値として内容の差を照合する。
-質問記録だけを持つfixtureでは質問journalのbyte列保持を確認し、通常指示が混在するfixtureでは既存の安全な遷移以外の変更がないことを確認する。
+共有checkpointの既存の復旧遷移は質問にも許容し、独立した期待値として内容の差を照合する。
+availableへの復旧は配送認可を与えず、隔離された質問の回答poll、payload復元、sendStartと配送再生成は引き続き拒否する。
+質問journalのbyte列保持と、checkpointの起動直後のsnapshot、保存byteおよび後続の正規保存後の差を分けて確認する。
+記録ID、digest、相関証拠、墓標と容量が失われないことも検証する。
 
 ## 実装するファイルと検証
 
@@ -97,7 +101,7 @@ selectionとintentの有無は既存schemaで一致を要求しており、選�
 2. 旧keyの再登録、手動回答、tick、answer-poll、各変更操作とlate answer読出しを試し、記録変更と配送0回を確認する。
 3. 同じbindingの再出現とservice再生成でも隔離が解除されないことを確認する。
 4. 保存記録の対応表の全行、digest不一致、重複、不正schemaと容量予約違反を検証し、不正な構造では起動拒否を維持する。
-5. 通常指示のavailable、sending、accepted、unknownが混在する実ファイルで、既存の復旧遷移、質問記録保持と自動再送0回を照合する。
+5. 質問のavailable、claimed、sending、accepted、unknownと通常指示が混在する実ファイルで、共有checkpointの既存の復旧遷移、質問記録保持と自動再送0回を照合する。起動時と後続の正規保存後の差を分けて確認する。
 6. 保存失敗、上限到達、隔離件数と予約量の診断、初期化失敗と終了時cleanupを確認する。
 
 関連fixture後に統合全体テストを一度実行し、既定の別ベンダークロスレビューで収束させる。
@@ -107,8 +111,8 @@ selectionとintentの有無は既存schemaで一致を要求しており、選�
 
 ## 次の作業
 
-この計画をfeature向けPRとしてレビューし、AまたはBの判断を開発者に求める。
-Aの承認後は最新featureから復旧実装PRを作り、保存記録と認可の境界を検証する。
+計画PR #290はレビューが収束し、A案の承認を確認した。
+最新featureを取り込んだ同期PRの上に復旧実装PRを積み、保存記録と認可の境界を検証する。
 その後に#209で隔離記録の回収を設計し、容量枯渇を解消する。
-Bの承認後は旧要求の未解決証拠を取得する能力調査へ進む。
+Bへ変更する場合は、旧要求の未解決証拠を取得する能力調査と設計判断を別に行う。
 どちらも、#216の設定画面と標準起動への接続を同時に承認したとは扱わない。

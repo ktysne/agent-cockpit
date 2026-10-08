@@ -717,10 +717,36 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   const native = Object.freeze({ admitLaunch, createOwnedCollector, startLaunch, stop, getLaunchState,
     ownedExecutionSnapshot, getOwnedStopState, stopOwnedExecution });
+  function getQuestionQuarantineStatus() {
+    if (!questionService) return null;
+    const unavailable = Object.freeze({ status: 'unavailable', reason: 'question_quarantine_status_unavailable',
+      quarantinedCount: 0, reservedBytes: null, remainingBytes: null, remainingCount: null });
+    try {
+      const method = questionService.getQuarantineDiagnostics;
+      if (typeof method !== 'function') return unavailable;
+      const value = method.call(questionService);
+      if (utilTypes.isPromise(value)) { swallowRejectedPromise(value); return unavailable; }
+      if (hasThenMember(value) || !isRecord(value)) return unavailable;
+      const status = ownDataValue(value, 'status');
+      const reason = ownDataValue(value, 'reason');
+      const quarantinedCount = ownDataValue(value, 'quarantinedCount');
+      const reservedBytes = ownDataValue(value, 'reservedBytes');
+      const remainingBytes = ownDataValue(value, 'remainingBytes');
+      const remainingCount = ownDataValue(value, 'remainingCount');
+      const validCount = (count) => Number.isSafeInteger(count) && count >= 0;
+      const validSize = (size) => size === null || validCount(size);
+      if (!['ready', 'blocked', 'unavailable'].includes(status) ||
+          !(reason === null || typeof reason === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(reason)) ||
+          !validCount(quarantinedCount) || !validSize(reservedBytes) ||
+          !validSize(remainingBytes) || !validSize(remainingCount)) return unavailable;
+      return Object.freeze({ status, reason, quarantinedCount, reservedBytes, remainingBytes, remainingCount });
+    } catch { return unavailable; }
+  }
   function getStatus() {
     return Object.freeze({ commonQuestions: Object.freeze({
       status: closing ? 'closed' : questionService ? 'ready' : 'unconfigured',
       settings: options.commonQuestions ? getSettingsStatus() : null,
+      quarantine: getQuestionQuarantineStatus(),
     }) });
   }
   return Object.freeze({

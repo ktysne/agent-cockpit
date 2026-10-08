@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const kernel = require('../src/server/common-question-kernel');
+const { assertCapacityReserved } = require('../src/server/common-question-journal');
 const { createCommonQuestionService } = require('../src/server/common-question-service');
 const { createCommonQuestionProductHarness } = require('./support/common-question-product-harness');
 const { atomicWriteJson } = require('../src/server/json-storage');
@@ -103,7 +104,8 @@ async function createFixture(t, overrides = {}) {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const identity = { provider: 'claude', nativeIdKind: 'session', hostId: 'host',
     homeScopeId: 'home', nativeId: 'native-session' };
-  const binding = { periodId: 'period-1', actor: { kind: 'agent', id: 'agent-1' } };
+  let currentPeriodId = 'period-1';
+  const binding = { periodId: currentPeriodId, actor: { kind: 'agent', id: 'agent-1' } };
   const claims = {
     launchId: 'launch-id', runId: 'run-id', attemptId: 'attempt-id',
     provider: identity.provider, nativeIdKind: identity.nativeIdKind,
@@ -115,21 +117,21 @@ async function createFixture(t, overrides = {}) {
     conversationId: 'conversation-1', sessionId: 'session-1', state: 'bound',
     currentOwner: clone(binding), ownerGeneration: 0 };
   let writerValid = true;
-  const writer = { token: 'a'.repeat(43), identity: clone(identity), contextId: 'context-1', executionId: 'period-1' };
+  const writer = { token: 'a'.repeat(43), identity: clone(identity), contextId: 'context-1', executionId: currentPeriodId };
   let executionState = 'active';
   const registrationRegistry = {
     authorizeWriter(value) {
       return writerValid && value.token === writer.token && value.contextId === writer.contextId &&
         value.executionId === writer.executionId
-        ? { ok: true, status: 'accepted', executionId: 'period-1', conversationId: 'conversation-1' }
+        ? { ok: true, status: 'accepted', executionId: currentPeriodId, conversationId: 'conversation-1' }
         : { ok: false, status: 'unverified' };
     },
     snapshot() {
       return { conversations: [{ conversationId: 'conversation-1', identity: clone(identity) }],
-        executions: [{ conversationId: 'conversation-1', executionId: 'period-1', sessionId: 'session-1', state: executionState }] };
+        executions: [{ conversationId: 'conversation-1', executionId: currentPeriodId, sessionId: 'session-1', state: executionState }] };
     },
   };
-  const actor = { identity: clone(identity), periodId: 'period-1', actor: clone(binding.actor),
+  const actor = { identity: clone(identity), periodId: currentPeriodId, actor: clone(binding.actor),
     contextId: 'context-1', launchRef, connectionId: 'connection-1', connectionGeneration: 1, state: 'active' };
   const connection = { connectionId: 'connection-1', generation: 1, state: 'active',
     scope: { provider: identity.provider, nativeIdKind: identity.nativeIdKind, hostId: identity.hostId,
@@ -163,6 +165,8 @@ async function createFixture(t, overrides = {}) {
     away: { snapshot: () => ({ enabled: awayEnabled, since: awaySince }) },
     now: () => now,
     ...(overrides.questionServiceOptions || {}),
+    ...(overrides.maxBytes !== undefined ? { maxBytes: overrides.maxBytes } : {}),
+    ...(overrides.maxRecords !== undefined ? { maxRecords: overrides.maxRecords } : {}),
     setTimeoutImpl: timeout,
     clearTimeoutImpl: clearTimeout,
     ...(overrides.atomicWrite ? { atomicWrite: overrides.atomicWrite } : {}),
@@ -177,6 +181,14 @@ async function createFixture(t, overrides = {}) {
     setNow(value) { now = value; },
     setAway(value, since = now) { awayEnabled = value; awaySince = value ? since : null; },
     setExecutionState(value) { executionState = value; },
+    setPeriod(value) {
+      currentPeriodId = value;
+      binding.periodId = value;
+      writer.executionId = value;
+      launch.executionBinding = clone(binding);
+      launch.currentOwner = clone(binding);
+      actor.periodId = value;
+    },
     invalidateWriter() { writerValid = false; },
   };
 }
@@ -628,7 +640,7 @@ test('a trusted external resolution suppresses a sink while send-start is paused
   assert.equal(resolved.question.deliveryState, 'unknown');
 });
 
-test('unanswered external-resolution replies deduplicate when the first result is unused and after service restart', async (t) => {
+test('unanswered external-resolution replies are quarantined after service restart', async (t) => {
   const fixture = await createFixture(t, { verifyNativeQuestion: () => true });
   const created = await register(fixture);
   await fixture.service.resolveExternal(created.question.internalQuestionId, { source: 'trusted' });
@@ -653,25 +665,36 @@ test('unanswered external-resolution replies deduplicate when the first result i
   t.after(() => reopened.close());
   fixture.service = reopened;
   await reopened.ready();
-  const afterRestart = await reopened.submitAnswer(created.question.internalQuestionId, answers('continue'));
-  assert.equal(afterRestart.outcome, 'duplicate');
-  const afterRestartJournal = await readJournal();
-  assert.equal(afterRestartJournal.revision, committedRevision);
-  assert.equal(afterRestartJournal.questions[0].lateAnswers.length, 1);
-
-  const different = await reopened.submitAnswer(created.question.internalQuestionId, answers('stop'));
-  assert.equal(different.outcome, 'late');
-  const finalJournal = await readJournal();
-  assert.equal(finalJournal.questions[0].lateAnswers.length, 2);
-  assert.equal(finalJournal.questions[0].selection, null);
-  assert.equal(finalJournal.questions[0].deliveryIntent, null);
+  const beforeQuarantinedOperations = await readJournal();
+  await assert.rejects(reopened.submitAnswer(created.question.internalQuestionId, answers('continue')),
+    errorCode('question_quarantined'));
+  await assert.rejects(reopened.submitAnswer(created.question.internalQuestionId, answers('stop')),
+    errorCode('question_quarantined'));
+  await assert.rejects(reopened.hold(created.question.internalQuestionId, true), errorCode('question_quarantined'));
+  await assert.rejects(reopened.cancel(created.question.internalQuestionId), errorCode('question_quarantined'));
+  await assert.rejects(reopened.reportResponseLost(created.question.internalQuestionId), errorCode('question_quarantined'));
+  await assert.rejects(reopened.resolveExternal(created.question.internalQuestionId, { source: 'trusted' }),
+    errorCode('question_quarantined'));
+  assert.deepEqual(await reopened.tick(), []);
+  await reopened.notifyAwayChanged();
+  const dashboard = await reopened.dashboardSnapshot();
+  const quarantined = dashboard.questions.find((item) => item.internalQuestionId === created.question.internalQuestionId);
+  assert.equal(quarantined.quarantined, true);
+  await assert.rejects(reopened.readLateAnswerDraft(created.question.internalQuestionId, 0,
+    quarantined.lateAnswerRefs[0].digest), errorCode('question_quarantined'));
+  assert.deepEqual(await readJournal(), beforeQuarantinedOperations);
+  assert.equal(beforeQuarantinedOperations.revision, committedRevision);
+  assert.equal(beforeQuarantinedOperations.questions[0].lateAnswers.length, 1);
   assert.equal(fixture.delivery.deliveries.size, 0);
   assert.equal(fixture.delivery.payloads.size, 0);
-  let sinkCalls = 0;
-  const poll = await reopened.answerPoll(fixture.writer, 'question-1', () => { sinkCalls += 1; });
-  assert.equal(poll.outcome, 'unavailable');
-  assert.equal(Object.hasOwn(poll, 'answers'), false);
-  assert.equal(sinkCalls, 0);
+  await assert.rejects(reopened.answerPoll(fixture.writer, 'question-1', () => {}), errorCode('question_quarantined'));
+
+  await assert.rejects(register(fixture), errorCode('question_quarantined'));
+  fixture.setPeriod('period-2');
+  const newPeriod = await register(fixture);
+  assert.equal(newPeriod.outcome, 'created');
+  assert.notEqual(newPeriod.question.internalQuestionId, created.question.internalQuestionId);
+  assert.equal((await reopened.status(fixture.writer, 'question-1')).quarantined, undefined);
 });
 
 test('external resolution preserves a late answer without marking the question manually cancelled', async (t) => {
@@ -726,21 +749,21 @@ test('manual cancellation after external resolution persists without retrying th
   assert.equal(cancelled.question.cancelHistoryMissing, false);
   await harness.reopen();
 
-  const status = await harness.questionService.status(harness.writer, 'question-external-cancel');
-  assert.equal(status.externalResolution, true);
-  assert.equal(status.cancelled, true);
-  assert.equal(status.deliveryState, 'cancelled_before_send');
-  assert.equal(status.cancelHistoryMissing, false);
+  const dashboard = await harness.questionService.dashboardSnapshot();
+  const quarantined = dashboard.questions[0];
+  assert.equal(quarantined.quarantined, true);
+  assert.equal(quarantined.externalResolution, true);
+  assert.equal(quarantined.cancelled, true);
+  assert.equal(quarantined.deliveryState, 'cancelled_before_send');
+  assert.equal(quarantined.cancelHistoryMissing, false);
   await assert.rejects(harness.questionService.submitAnswer(created.question.internalQuestionId, answers('stop')),
-    errorCode('question_cancelled'));
-  let sinkCalls = 0;
-  const poll = await harness.questionService.answerPoll(harness.writer, 'question-external-cancel', () => { sinkCalls += 1; });
-  assert.equal(poll.outcome, 'unavailable');
-  assert.equal(sinkCalls, 0);
-  const repeated = await harness.questionService.cancel(created.question.internalQuestionId);
-  assert.equal(repeated.outcome, 'cancelled');
-  assert.equal(repeated.question.externalResolution, true);
-  assert.equal(repeated.question.cancelled, true);
+    errorCode('question_quarantined'));
+  await assert.rejects(harness.questionService.status(harness.writer, 'question-external-cancel'),
+    errorCode('question_quarantined'));
+  await assert.rejects(harness.questionService.answerPoll(harness.writer, 'question-external-cancel', () => {}),
+    errorCode('question_quarantined'));
+  await assert.rejects(harness.questionService.cancel(created.question.internalQuestionId),
+    errorCode('question_quarantined'));
 });
 
 test('cancelling unknown persists a request in the file-backed delivery store without retrying', async (t) => {
@@ -767,16 +790,17 @@ test('cancelling unknown persists a request in the file-backed delivery store wi
   assert.equal(cancelled.question.cancelRequested, true);
   await harness.reopen();
 
-  const status = await harness.questionService.status(harness.writer, 'question-unknown-cancel');
-  assert.equal(status.deliveryState, 'unknown');
-  assert.equal(status.cancelRequested, true);
+  const dashboard = await harness.questionService.dashboardSnapshot();
+  assert.equal(dashboard.questions[0].quarantined, true);
+  assert.equal(dashboard.questions[0].deliveryState, 'unknown');
+  assert.equal(dashboard.questions[0].cancelRequested, true);
   const persistedDelivery = await harness.deliveryStore.get(deliveryId);
   assert.equal(persistedDelivery.state, 'unknown');
   assert.equal(persistedDelivery.cancelRequested, true);
-  let retryCalls = 0;
-  const retry = await harness.questionService.answerPoll(harness.writer, 'question-unknown-cancel', () => { retryCalls += 1; });
-  assert.equal(retry.outcome, 'already_started');
-  assert.equal(retryCalls, 0);
+  await assert.rejects(harness.questionService.status(harness.writer, 'question-unknown-cancel'),
+    errorCode('question_quarantined'));
+  await assert.rejects(harness.questionService.answerPoll(harness.writer, 'question-unknown-cancel', () => {}),
+    errorCode('question_quarantined'));
 });
 
 test('journal write failure after durable cancellation is diagnosed without claiming history saved', async (t) => {
@@ -799,13 +823,54 @@ test('a CQ-owned delivery without a readable matching journal blocks writes but 
   const fixture = await createFixture(t);
   const orphanId = 'orphan-delivery';
   fixture.delivery.deliveries.set(orphanId, {
-    deliveryAttemptId: orphanId, logicalMessageId: 'common-question-cq-12345678-1234-1234-1234-123456789abc',
+    kind: 'question', deliveryAttemptId: orphanId,
+    logicalMessageId: 'common-question-cq-12345678-1234-1234-1234-123456789abc',
   });
   await assert.rejects(fixture.service.ready(), errorCode('question_journal_missing_for_delivery'));
   await assert.rejects(register(fixture), errorCode('question_journal_missing_for_delivery'));
   const dashboard = await fixture.service.dashboardSnapshot();
   assert.deepEqual(dashboard.questions, []);
   assert.equal(dashboard.recovery.code, 'question_journal_missing_for_delivery');
+});
+
+for (const mismatch of ['source session', 'delivery kind']) {
+  test(`a persisted question intent with a mismatched ${mismatch} blocks restart`, async (t) => {
+    const fixture = await createFixture(t);
+    const created = await register(fixture);
+    const chosen = await select(fixture, created);
+    await fixture.service.close();
+    const delivery = fixture.delivery.deliveries.get(chosen.question.deliveryAttemptId);
+    if (mismatch === 'source session') delivery.source.sessionId = 'other-session';
+    else delivery.kind = 'instruction';
+    const journalBytes = await fs.readFile(fixture.journalPath, 'utf8');
+    const reopened = fixture.createService();
+    t.after(() => reopened.close());
+    await assert.rejects(reopened.ready(), errorCode('question_delivery_mismatch'));
+    assert.equal(await fs.readFile(fixture.journalPath, 'utf8'), journalBytes);
+    const dashboard = await reopened.dashboardSnapshot();
+    assert.equal(dashboard.recovery.code, 'question_delivery_mismatch');
+    assert.equal(dashboard.questions.length, 1);
+  });
+}
+
+test('duplicate persisted delivery attempt IDs block restart even when both deliveries are absent', async (t) => {
+  const fixture = await createFixture(t);
+  const first = await register(fixture, question('duplicate-attempt-first'));
+  const second = await register(fixture, question('duplicate-attempt-second'));
+  await select(fixture, first);
+  await select(fixture, second);
+  await fixture.service.close();
+  const journal = JSON.parse(await fs.readFile(fixture.journalPath, 'utf8'));
+  journal.questions[1].deliveryIntent.deliveryAttemptId = journal.questions[0].deliveryIntent.deliveryAttemptId;
+  await fs.writeFile(fixture.journalPath, JSON.stringify(journal, null, 2) + '\n');
+  fixture.delivery.deliveries.clear();
+  fixture.delivery.payloads.clear();
+  const journalBytes = await fs.readFile(fixture.journalPath, 'utf8');
+  const reopened = fixture.createService();
+  t.after(() => reopened.close());
+  await assert.rejects(reopened.ready(), errorCode('question_delivery_mismatch'));
+  assert.equal(await fs.readFile(fixture.journalPath, 'utf8'), journalBytes);
+  assert.equal((await reopened.dashboardSnapshot()).recovery.code, 'question_delivery_mismatch');
 });
 
 test('a corrupt journal yields payload-free recovery metadata instead of a dashboard read failure', async (t) => {
@@ -820,7 +885,7 @@ test('a corrupt journal yields payload-free recovery metadata instead of a dashb
   });
   void fixture;
 });
-test('selection journal intent is rehydrated with the same delivery ID after restart', async (t) => {
+test('selection intent survives restart without recreating a quarantined delivery', async (t) => {
   let failCreate = true;
   const fixture = await createFixture(t, { delivery: { beforeCreate: async () => {
     if (failCreate) { failCreate = false; throw new Error('delivery store unavailable'); }
@@ -837,13 +902,57 @@ test('selection journal intent is rehydrated with the same delivery ID after res
   const restored = fixture.createService(restoredStore.store);
   t.after(() => restored.close());
   await restored.ready();
-  assert.deepEqual(restoredStore.rehydratedIds, [fixedId]);
-  const afterRestore = await restored.status(fixture.writer, 'question-1');
-  assert.equal(afterRestore.deliveryAttemptId, fixedId);
-  assert.equal(afterRestore.deliveryState, 'available');
-  const sent = await restored.answerPoll(fixture.writer, 'question-1', () => {});
-  assert.equal(sent.deliveryAttemptId, fixedId);
-  assert.equal(sent.outcome, 'sent');
+  assert.deepEqual(restoredStore.rehydratedIds, []);
+  assert.equal(restored.getQuarantineDiagnostics().quarantinedCount, 1);
+  assert.equal(restored.getQuarantineDiagnostics().reservedBytes > 0, true);
+  assert.equal(restored.getQuarantineDiagnostics().remainingBytes > 0, true);
+  await assert.rejects(restored.status(fixture.writer, 'question-1'), errorCode('question_quarantined'));
+  await assert.rejects(restored.answerPoll(fixture.writer, 'question-1', () => {}), errorCode('question_quarantined'));
+  await assert.rejects(restored.submitAnswer(created.question.internalQuestionId, answers('stop')),
+    errorCode('question_quarantined'));
+  await assert.rejects(restored.cancel(created.question.internalQuestionId), errorCode('question_quarantined'));
+  assert.equal(restoredStore.deliveries.size, 0);
+  const dashboard = await restored.dashboardSnapshot();
+  assert.equal(dashboard.questions[0].deliveryAttemptId, fixedId);
+  assert.equal(dashboard.questions[0].quarantined, true);
+  assert.equal(dashboard.questions[0].deliveryState, null);
+});
+
+test('capacity diagnostics report actual journal reservation and reject intake at the configured record limit', async (t) => {
+  const fixture = await createFixture(t, { maxBytes: 16_384, maxRecords: 1 });
+  const created = await register(fixture, question('capacity-one'));
+  const before = await fs.readFile(fixture.journalPath, 'utf8');
+  const saved = JSON.parse(before);
+  const reservedBytes = assertCapacityReserved(saved, 16_384, 1);
+  const diagnostics = fixture.service.getQuarantineDiagnostics();
+  assert.deepEqual(diagnostics, { status: 'ready', reason: 'question_quarantine_capacity', quarantinedCount: 0,
+    reservedBytes, remainingBytes: 16_384 - reservedBytes, remainingCount: 0 });
+  await assert.rejects(register(fixture, question('capacity-two')), errorCode('question_quarantine_capacity'));
+  assert.equal(await fs.readFile(fixture.journalPath, 'utf8'), before);
+  assert.equal(fixture.service.getQuarantineDiagnostics().reason, 'question_quarantine_capacity');
+  assert.equal(fixture.service.getQuarantineDiagnostics().quarantinedCount, 0);
+
+  await fixture.service.close();
+  const reopened = fixture.createService();
+  fixture.service = reopened;
+  t.after(() => reopened.close());
+  await reopened.ready();
+  const afterRestart = reopened.getQuarantineDiagnostics();
+  assert.deepEqual(afterRestart, { status: 'ready', reason: 'question_quarantine_capacity', quarantinedCount: 1,
+    reservedBytes, remainingBytes: 16_384 - reservedBytes, remainingCount: 0 });
+  await assert.rejects(reopened.submitAnswer(created.question.internalQuestionId, answers('stop')),
+    errorCode('question_quarantined'));
+  await assert.rejects(register(fixture, question('capacity-two')), errorCode('question_quarantine_capacity'));
+  assert.equal(await fs.readFile(fixture.journalPath, 'utf8'), before);
+
+  await reopened.close();
+  const regenerated = fixture.createService();
+  fixture.service = regenerated;
+  t.after(() => regenerated.close());
+  await regenerated.ready();
+  assert.equal(regenerated.getQuarantineDiagnostics().quarantinedCount, 1);
+  await assert.rejects(regenerated.status(fixture.writer, 'capacity-one'), errorCode('question_quarantined'));
+  assert.equal(await fs.readFile(fixture.journalPath, 'utf8'), before);
 });
 
 test('external evidence is rejected when its encoded JSON exceeds the input limit', async (t) => {

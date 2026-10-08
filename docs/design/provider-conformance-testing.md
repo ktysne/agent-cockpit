@@ -110,9 +110,30 @@ Claude legacy経路と共通質問経路には共有native source keyも排他�
 質問サービスと指示サービスが同じregistryとcheckpoint storeを使い、質問の回答を通常指示adapterへ書き込まないことを期待値とする。
 設定のunsafe状態、Promise、例外では自動適用をOFFにし、終了時には設定通知を解除してから質問と指示のserviceを閉じる。
 これは注入用factoryのfixtureであり、標準起動の接続、MCP producerの実動作、実runtimeの成功を示さない。
-fresh registryで保存済み質問を読み込む再起動は、未選択・選択済みの両方でbinding照合に失敗する。
-この反例では起動拒否と両journal・checkpointのbyte列保持を確認し、再起動成功には数えない。
-復旧の契約は[#283](https://github.com/ktysne/agent-cockpit/issues/283)で追跡し、#216の再起動条件を未達として残す。
+#286の隔離復旧採用前のfixtureでは、fresh registryで未選択と選択済みの保存質問を読み込むとbinding照合に失敗した。
+その反例で起動拒否と両journalおよびcheckpointのbyte列保持を確認した。
+現在の隔離復旧の契約と期待値は次の節に定め、旧質問の再開能力と実runtime確認は別に残す。
+
+## 保存済み共通質問の隔離復旧
+
+期待値は[承認した復旧計画](../handover/2026-10-08-common-question-recovery-plan.md)から定める。
+次のscenarioはClaudeとCodexの製品adapter、共通質問serviceと実ファイルstoreを組み合わせるfixtureで検証し、実runtimeの結果は別に記録する。
+fresh registryでのnative factory再生成と共有資源のcleanupは、注入用factoryのcomposition試験で別に確認する。
+
+| ID | 入力と操作 | 独立した期待値と禁止副作用 |
+|---|---|---|
+| ID-F08-QR01 | 未選択と選択済みの質問を保存してfresh registryで初期化する | 保存構造が正当なら起動し、保存済み全質問を隔離する。authority復元、旧質問の自動適用と配送は0回。 |
+| ID-F08-QR02 | 隔離した質問へ回答、tick、answer-poll、保留変更、取消、外部解決、応答喪失とlate answerの読出しを試す | 旧記録の変更、新規intent、配送再生成、payload復元とtrustedSink呼出しは0回。安全な診断で操作不可を示す。 |
+| ID-F08-QR03 | 同じkeyを再登録し、同じsessionとpublic questionIdを新しい検証済みperiodIdで登録する | 旧keyを解除しない。新periodの別keyだけ受付する。同じbindingが後から現れても旧質問は隔離のまま。 |
+| ID-F08-QR04 | 保存記録の対応表の全行、不正schema、digest不一致と重複を初期化する | intentあり配送なしは保持して再生成しない。孤立配送、記録間の矛盾と不正構造は起動拒否。 |
+| ID-F08-QR05 | 質問のavailable、claimed、sending、accepted、unknownと通常指示を同じcheckpointへ保存して初期化する | 共有checkpointの既存claimedからavailable、sending/acceptedからunknownへの復旧、revision増加と生存状態の安全な復元を許容する。起動snapshotと保存byte、後続保存後の差を分け、質問の新規配送と自動再送を0回にする。 |
+| ID-F08-QR06 | 隔離記録を保持して上限まで新規受付し、保存失敗とservice再生成を試す | 記録と予約を保持し、上限は安全な理由、件数、予約量と残容量で診断する。再生成で隔離を解除しない。初期化失敗と終了時は共有資源を解放する。 |
+
+容量回収は#209の別条件であり、隔離だけで連続運転を保証したとは扱わない。
+隔離復旧を含むservice試験は41件、composition試験は20件、両providerの製品適合試験は32件が成功した。
+compositionではClaudeとCodexの未選択・選択済み質問をfresh registryで読み直し、隔離と共有資源の解放を確認した。
+QR03〜QR06のprovider別検証は製品adapter、serviceと実ファイルstoreの経路であり、native factoryの実runtimeを起動した結果ではない。
+実Claude/Codex runtimeの隔離復旧は未実施である。
 
 ## Codex native pendingの表示
 
