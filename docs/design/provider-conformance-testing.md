@@ -135,7 +135,7 @@ Claude legacy経路と共通質問経路には共有native source keyも排他�
 
 ## 保存済み共通質問の隔離復旧
 
-期待値は[承認した復旧計画](../handover/2026-10-08-common-question-recovery-plan.md)から定める。
+期待値は[承認した復旧計画](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md)から定める。
 次のscenarioはClaudeとCodexの製品adapter、共通質問serviceと実ファイルstoreを組み合わせるfixtureで検証し、実runtimeの結果は別に記録する。
 fresh registryでのnative factory再生成と共有資源のcleanupは、注入用factoryのcomposition試験で別に確認する。
 
@@ -188,7 +188,7 @@ stdioを強制的に閉じてcloseを作っても子孫processの終了証明に
 表示件数は要求IDの保持量と区別し、複数の所有実行を別の対象として確認する。
 停止確認後も旧実行の送信を再開せず、停止状態をカードと追加指示欄で一致させる。
 停止確認画面は製品HTMLを表示するfixtureで確認する。画像`.cross-review/211/product-stop-confirm.jpg`はGit管理外のローカルの一時記録であり、別のcloneでは参照できない。
-継続して参照する確認結果は[実runtimeの引き継ぎ資料](../handover/2026-10-08-runtime-gates.md)に文章で残す。
+継続して参照する確認結果は[Codex対応の引き継ぎ資料](../handover/codex-support.md)の「実 runtime 確認の計画」に文章で残す。
 このfixtureは停止APIの応答を模擬するため、実runtimeのowned child停止や物理停止の確認とは区別する。
 
 ## 実行と結果の記録

@@ -21,9 +21,9 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 - Codexの本実装と、それに関連するPoCや修正作業は、最新の codex/feature-codex-support から codex/ で始まる作業ブランチを作成する。
 - 作業PRのbaseは codex/feature-codex-support とし、レビュー済みの変更を集約先へ取り込む。
 - PRの作成前とレビュー時に、gitとghで実際のhead、base、headの起点を確認する。通常作業のPRがmainを向く場合や、headとbaseが逆の場合は、レビューや取り込みの前に修正する。
-- 既存PoCの #165、#169、#172、#173、#176、#178、#181、#182 は、各PRのheadを保ち、baseだけを codex/feature-codex-support に変更する。先行PRが未取り込みの間は、baseとの差分に先行変更が含まれることを記録する。
-- この既存PoCの積み上げPRは、元のheadを祖先として残す通常のmerge commitで取り込む。squash mergeとrebase mergeは使わず、取り込み後に後続PRの差分を再確認する。
-- 関連修正の #183 と #185 も codex/feature-codex-support をbaseにする。
+- mainの変更は同期PRで集約先へ随時取り込む。取り込みは元のheadを祖先として残す通常のmerge commitで行い、squash mergeとrebase mergeは使わない。
+- Codex対応の全体の流れ、現在地、次の作業、判断待ちは docs/handover/codex-support.md が正本である。PRのマージ、Issueのクローズ、開発者の決定のたびに、その資料をその場で更新する。
+- PoCと用済みの引き継ぎ資料は作業ツリーに置かず、固定したコミットの参照だけを同資料の「資料の一覧」に残す。
 - 全作業、統合検証、レビューが完了した後に限り、codex/feature-codex-support から main への最終PRを作成する。mainへ直接pushせず、開発者が確認して承認する前に取り込まない。
 - 現在のダッシュボードはbaseが既定ブランチのPRだけをマージ対象にする。この制限を迂回せず、モデル判断でfeature向けPRをマージしない。
 

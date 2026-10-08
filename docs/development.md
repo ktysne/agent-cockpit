@@ -9,6 +9,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 開発で守ること。Claude Code向けとCodex向けの規約は独立して管理する |
 | [mock/index.html](../mock/index.html) | 開発者と合意した最終形の見た目と機能の正本。実装はモックにそろえる |
 | [docs/handover/2026-10-02.md](handover/2026-10-02.md) | 実装の計画書。決定済みの判断、対応順序、判断待ち、落とし穴 |
+| [docs/handover/codex-support.md](handover/codex-support.md) | Codex対応の全体の流れ、現在地、次の作業、判断待ち、資料の一覧。Codex対応の作業はここから始める |
 | [Codex本実装計画](design/codex-implementation-plan.md) | Claude/Codex共通機能の段階実装、依存関係、統合ゲート |
 | [正規会話の登録核](design/codex-registration-core.md) | #166-Aの信頼境界、実行期間、後続interfaceと適合シナリオ |
 | [共通質問の設計](design/common-questions.md) | 質問と回答のschema、永続保存、MCPと画面、復旧と実native接続の採用条件 |
@@ -19,9 +20,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [docs/design/codex-shared-contract.md](design/codex-shared-contract.md) | Codex連携の会話識別、所有者引継ぎ、入力配信の共有契約 |
 | [docs/design/manual.md](design/manual.md) | 利用者向けマニュアルの構成、デモ状態、画面の撮影、配信、検査の設計 |
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
-| [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は `poc/` にある |
-| [適合試験の設計](design/provider-conformance-testing.md) | Claude/Codex共通機能の適合シナリオ、検証層、結果の扱い |
-| [共有契約](design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapterの適合証明ではない |
+| [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は固定したコミットの `poc/` を参照する |
 | [docs/cross-review.md](cross-review.md) / [.cross-review.md](../.cross-review.md) | AI クロスレビューの手順と、このリポジトリのレビュー観点 |
 | [docs/japanese-guard.md](japanese-guard.md) | 開発者に見える文を日本語に保つフック(クラウドセッション向け) |
 

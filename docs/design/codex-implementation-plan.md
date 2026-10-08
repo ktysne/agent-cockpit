@@ -20,9 +20,12 @@ Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照�
 
 | 日付 | 判断 | 理由と適用範囲 |
 |---|---|---|
+| 2026-10-09 | PoC の一式(`poc/` 全体、`docs/poc-codex-157.md`〜`164.md`、`tools/probes/common-question-runtime.js` とそのテスト)を feature から削除し、コミット 8c701b1 の固定参照だけを残す。`npm test` の対象は `test/**/*.test.js` に明示する。 | 開発者の決定。約 3.5 万行の PoC が差分に残ると、feature から main への最終差分の確認とレビューの負担になるため。固定参照は証拠として使い、製品実装済みの根拠にしない。 |
+| 2026-10-09 | 通常指示の本文が Codex 側の SQLite に残ることは許容する。隔離 HOME での実行と終了後の cleanup(#215)は維持する。 | 開発者の決定。Codex の仕様上避けられないと説明を受けたため。#218 の「設計で決める点」のうち、この項目は決着とする。 |
+| 2026-10-09 | Codex 対応の全体の流れ、現在地、次の作業、判断待ちは [docs/handover/codex-support.md](../handover/codex-support.md) に集約し、その場で更新する。GitHub ではマイルストーン「Codex対応」で Issue を分類する。 | 開発者の決定。計画と引き継ぎが複数の資料と Issue に散り、1 か所から辿れなかったため。 |
 | 2026-10-09 | #209は、完全identityとperiod IDで特定した旧期間の共通質問全体を永久失効させ、通常指示には広げない。隔離した非終端の本文も、永続化した隔離時刻から既定7日で圧縮する。隔離時刻のない旧記録は移行時刻を起算点として一度だけ保存する。 | 開発者がチャットで2点の推奨案を明示承認し、[Issueへ承認内容を転記](https://github.com/ktysne/agent-cockpit/issues/209#issuecomment-6062916698)した。拒否情報は保持し、unknownは結果不明のまま再送と後着更新を拒否する。[容量回収計画](codex-capacity-reclamation.md)の判断を確定したものであり、回収実装や実runtimeの成功を意味しない。 |
-| 2026-10-08 | #283はA案として、service初期化時に読み込んだ旧質問を解除不能の隔離対象にし、新しい検証済み実行期間の質問だけ受け付ける。回収は#209で別途対応する。 | 保存ファイルから実行権限を復元せずに起動不能を解消するため。旧質問への回答と再送は提供しない。[開発者の明示承認](https://github.com/ktysne/agent-cockpit/pull/290#issuecomment-6059866678)と[復旧計画](../handover/2026-10-08-common-question-recovery-plan.md)が根拠であり、実runtime確認と製品への接続を同時に承認したものではない。 |
-| 2026-10-08 | 案Aとしてfixtureで契約を検証した変更をfeatureへ集約し、実runtime未確認はfeatureからmainへの採用条件として残す。 | レビュー済みコードの確認起点をそろえるため。fixtureは製品compositionやruntimeの挙動を証明しないので、#175、#211、#216、#217をこの集約だけで閉じない。確認手順は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。 |
+| 2026-10-08 | #283はA案として、service初期化時に読み込んだ旧質問を解除不能の隔離対象にし、新しい検証済み実行期間の質問だけ受け付ける。回収は#209で別途対応する。 | 保存ファイルから実行権限を復元せずに起動不能を解消するため。旧質問への回答と再送は提供しない。[開発者の明示承認](https://github.com/ktysne/agent-cockpit/pull/290#issuecomment-6059866678)と[復旧計画](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md)が根拠であり、実runtime確認と製品への接続を同時に承認したものではない。 |
+| 2026-10-08 | 案Aとしてfixtureで契約を検証した変更をfeatureへ集約し、実runtime未確認はfeatureからmainへの採用条件として残す。 | レビュー済みコードの確認起点をそろえるため。fixtureは製品compositionやruntimeの挙動を証明しないので、#175、#211、#216、#217をこの集約だけで閉じない。確認手順は[Codex対応の引き継ぎ資料](../handover/codex-support.md)の「実 runtime 確認の計画」に定める。 |
 | 2026-10-08 | #211は容量超過時に保留を維持し、明示停止を確認した新世代だけで受付を再開する。実runtime確認計画の順序と合格基準を採用する。 | resolvedでturnを識別できない間はID集合を回収すると遅い通知を区別できないため、turnごとの回収による連続運転は対象外とする。[開発者の明示承認](https://github.com/ktysne/agent-cockpit/pull/263#issuecomment-6054884939)が根拠であり、実装やruntimeの成功を意味しない。 |
 | 2026-10-08 | #211の停止表示は、既存の判断カードとボタンを踏襲したモック案を採用する。停止対象を同じカード内で確認し、停止未確認中は送信を許さず、下書きを保持する。 | 開発者がチャットで表示確認後に「この形を採用する」と明示した。製品画面はこの形に揃え、実runtimeの停止確認は別に行う。 |
 
@@ -37,7 +40,7 @@ native待ちは、CodexまたはClaude本体が本人の質問回答や許可を
 authority失効だけでは物理停止を証明しないため、対象processのexitとclose、非稼働、対象contextとの一致を確認できない間は送信と再送を許さない。
 保留だけを外して同じ実行への送信を再開する操作は設けない。
 
-採用前に残る確認の順序、操作、観測点と合格条件は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。
+採用前に残る確認の順序、操作、観測点と合格条件は[Codex対応の引き継ぎ資料](../handover/codex-support.md)の「実 runtime 確認の計画」に定める。
 不足機能の実装と実runtime試験は、この計画を開発者が確認してから着手する。
 
 ## 実装の進め方
@@ -284,10 +287,9 @@ trusted設定の供給元と製品導線は未実装で、現状はservice注入
 モデルはfeature PRをmergeしない。
 
 #218の文書条件と#219のtargeted CLAUDE更新は、製品実装やruntime証拠の完了を意味しない。
-最終main PRでは`poc/`全体と`tools/probes/common-question-runtime.js`、`test/common-question-runtime-probe.test.js`を除く。
-`npm test`と`npm run test:inprocess`の対象を`test/**/*.test.js`に明示し、PoCの固定SHA参照を文書に残す。
-この削除は最終main PRの準備段階に限り、現feature branchではPoCを保持する。
-sanitize済みsummaryおよびmanifestの追跡整備も後続条件として残す。
+`poc/`全体と`tools/probes/common-question-runtime.js`、`test/common-question-runtime-probe.test.js`はfeatureから削除済みで、`npm test`と`npm run test:inprocess`の対象は`test/**/*.test.js`に明示している。
+PoCの固定SHA参照は[Codex対応の引き継ぎ資料](../handover/codex-support.md)の「資料の一覧」に置く。
+sanitize済みsummaryおよびmanifestの追跡整備は後続条件として残す。
 
 ### 監査Issueと対応段階
 

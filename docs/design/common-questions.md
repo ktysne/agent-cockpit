@@ -50,7 +50,7 @@ sending、accepted、unknownを復元しても自動再送しない。
 現在のwriter認可が成立する新しい実行期間の質問は、別keyとして受け付ける。
 保存記録の整合性と現在の実行権限は別々に検査し、保存ファイルからauthorityを復元しない。
 不正な構造、孤立配送と記録間の矛盾では起動拒否を維持する。
-隔離記録の容量回収は#209で扱い、容量と実runtimeの採用条件は[復旧計画](../handover/2026-10-08-common-question-recovery-plan.md)に従う。
+隔離記録の容量回収は#209で扱い、容量と実runtimeの採用条件は[復旧計画](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md)に従う。
 回収 schema と移行の具体案および未決の判断は[容量回収計画](codex-capacity-reclamation.md)を参照する。
 
 ## pollと競合
@@ -210,7 +210,8 @@ native組立で配信storeへ渡すruntimeRegistryは、現在ownerの連鎖を�
 
 ## 隔離runtimeの初期化確認
 
-`tools/probes/common-question-runtime.js`は新しい`poc/out`配下に専用HOMEを作り、製品MCPとCodex app-serverを独立した子プロセスで初期化する。
+初期化確認の probe は作業ツリーから削除済みで、コミット 8c701b1 時点の [`tools/probes/common-question-runtime.js`](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/tools/probes/common-question-runtime.js) を参照する。
+この probe は新しい`poc/out`配下に専用HOMEを作り、製品MCPとCodex app-serverを独立した子プロセスで初期化する。
 通常HOMEの認証ファイルを複製せず、ログイン、thread開始、turn開始、認証済みtool呼出しを行わない。
 結果の安全な観測値だけを`readiness.json`へ保存し、終了後に専用HOMEを削除する。
 既存の出力directoryを上書きしないため、再実行時は新しい出力先を指定する。

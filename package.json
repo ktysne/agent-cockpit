@@ -5,8 +5,8 @@
   "description": "Claude Code デスクトップアプリのセッション状態(タスク、完了条件、作業中の内容、サブエージェント、判断待ち)を内部ブラウザに表示するローカルのダッシュボード。",
   "scripts": {
     "start": "node src/server/server.js",
-    "test": "node --test",
-    "test:inprocess": "node --test --test-isolation=none",
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:inprocess": "node --test --test-isolation=none \"test/**/*.test.js\"",
     "manual:build": "node tools/manual/build.js",
     "manual:capture": "node tools/manual/capture.js",
     "manual:demo": "node tools/manual/demo-server.js",
