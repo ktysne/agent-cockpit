@@ -550,7 +550,7 @@ function agentModelFromDefinition(agentType, definition) {
 /** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string}} PermissionWait */
 
 /** @typedef {ReturnType<typeof agentModelFromDefinition> & {
- * isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
+ * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
 /** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, ended: boolean}} SessionIdentity */
