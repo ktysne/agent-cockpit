@@ -7,6 +7,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 const { AwayState } = require('../src/server/state');
 const { createOwnedNativeRunner } = require('../src/server/owned-native-runner');
+const { createCommonQuestionSettings } = require('../src/server/common-question-settings');
 const { createFakeNativeProcess, defaultProfiles } = require('./support/native-instruction-integration-harness');
 const { jsonBody, request, uiHeaders, hookHeaders } = require('./support/server');
 
@@ -287,6 +288,50 @@ test('successful settings notifications reevaluate registered questions and unsu
   assert.equal(f.captured.ticks, ticks);
   assert.deepEqual(f.captured.closeOrder, ['question', 'instruction']);
   assert.equal(integration.getStatus().commonQuestions.status, 'closed');
+});
+
+test('persisted settings start disabled, notify the factory after saving, and remain writable without its subscriber after close', async (t) => {
+  const f = await fixture(t);
+  const settings = await createCommonQuestionSettings({ dataDirectory: f.integrationOptions.dataDirectory });
+  const integration = await f.createNativeInstructionServiceIntegration({ ...f.integrationOptions,
+    commonQuestions: { away: f.away, settings } });
+  const initialStatus = settings.getStatus();
+  assert.equal(initialStatus.status, 'missing');
+  assert.equal(settings.getAutoApplySettings().enabled, false);
+  assert.equal(f.captured.questionOptions.getAutoApplySettings(), null);
+  assert.deepEqual(integration.getStatus().commonQuestions.settings, initialStatus);
+  const { writer } = await startNative(f, integration);
+  const { writer: ignoredWriter, ...input } = registration(writer);
+  await integration.questionService.register(writer, { ...input, category: 'ordinary' });
+  const initialJournal = JSON.parse(await fs.readFile(integration.commonQuestionJournalPath, 'utf8'));
+  assert.equal(initialJournal.questions[0].autoApplyEnabledAtRegistration, false);
+
+  const saved = await settings.updateSettings({ expectedRevision: initialStatus.revision,
+    enabled: true, minimumWaitMs: 600_000 });
+  await integration.questionService.flush();
+  assert.equal(f.captured.ticks, 1);
+  assert.equal(saved.status.status, 'ready');
+  assert.notEqual(saved.status.revision, initialStatus.revision);
+  assert.deepEqual(settings.getStatus(), saved.status);
+  assert.deepEqual(integration.getStatus().commonQuestions.settings, saved.status);
+  assert.deepEqual(settings.getAutoApplySettings(), { enabled: true, minimumWaitMs: 600_000 });
+  assert.deepEqual(f.captured.questionOptions.getAutoApplySettings(), saved.autoApply);
+  await integration.questionService.register(writer, { ...input, questionId: 'enabled-question', category: 'ordinary' });
+  const enabledJournal = JSON.parse(await fs.readFile(integration.commonQuestionJournalPath, 'utf8'));
+  assert.equal(enabledJournal.questions.find((question) => question.questionId === 'enabled-question').autoApplyEnabledAtRegistration, true);
+
+  const settingsPath = path.join(f.integrationOptions.dataDirectory, 'common-question-settings.json');
+  const savedBytes = await fs.readFile(settingsPath);
+  await integration.close();
+  assert.deepEqual(await fs.readFile(settingsPath), savedBytes);
+  const afterClose = await settings.updateSettings({ expectedRevision: saved.status.revision,
+    enabled: false, minimumWaitMs: 600_000 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.captured.ticks, 1);
+  assert.equal(afterClose.autoApply.enabled, false);
+  assert.notEqual(afterClose.status.revision, saved.status.revision);
+  assert.deepEqual(JSON.parse(await fs.readFile(settingsPath, 'utf8')),
+    { schemaVersion: 1, autoApply: { enabled: false, minimumWaitMs: 600_000 } });
 });
 
 for (const tickFailure of ['tickThrows', 'tickRejects']) {
