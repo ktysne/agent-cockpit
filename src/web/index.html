@@ -2923,7 +2923,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   panel.append(effects);
 
   const row = element('div', 'row');
-  const go =element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : 'マージを実行');
+  const go = element('button', `merge-go ${conditionPending ? 'outline' : ''}`.trim(), merging ? '処理中…' : 'マージを実行');
   go.type = 'button';
   go.dataset.mergeGo = key;
   go.dataset.mergeKey = key;
