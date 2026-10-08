@@ -43,6 +43,7 @@ bindingが後から現れた場合も、隔離対象を操作可能へ戻さな�
 隔離対象にintentがあるのに配送記録がない場合は、intentを保持し、配送を再生成しない。
 質問に対応する共通質問配送の扱いを次の表で固定する。
 通常指示の配送はこの表の対象外である。
+selectionとintentの有無は既存schemaで一致を要求しており、選択済みでintentがない記録は不正構造として起動拒否する。
 
 | 質問journal側の記録 | intent | 対応する配送記録 | 起動時の扱い |
 |---|---|---|---|
@@ -63,7 +64,7 @@ bindingが後から現れた場合も、隔離対象を操作可能へ戻さな�
 | 保留と解除、取消、外部解決、応答喪失の通知 | 旧記録を変更する操作は拒否する。隔離だけを外す操作は作らない。 |
 | 遅い回答の保存と下書き読出し | 新たな記録の追加と、旧回答を追加指示へ変換する読出しを拒否する。 |
 | 同じcommon keyの再登録 | 隔離を解除せず、旧IDを新しいIDへ置き換えない。common keyはidentityのprovider、nativeIdKind、hostId、homeScopeId、nativeId、periodId、public questionIdから決まる。同じsessionとpublic questionIdでも、新しい検証済みperiodIdなら別keyとして受付可能。launchRefだけの変更では別keyと扱わない。 |
-| 診断とprojection | 隔離件数、安全な理由コードと操作不可を返す。既存の認可された表示範囲を広げず、native ID、tokenや本文を診断へ追加しない。 |
+| 診断とprojection | 隔離件数、安全な理由コードと操作不可を返し、上限時は予約量と残容量を添える。既存の認可された表示範囲を広げず、native ID、tokenや本文を診断へ追加しない。 |
 | 容量と再送防止 | 質問記録、予約量、配送記録と墓標を保持する。隔離しただけでは回収しない。上限時は新規受付を抑止する。 |
 
 隔離対象に対する新規のintent、selection、late answerと配送記録の変更は0回にする。
