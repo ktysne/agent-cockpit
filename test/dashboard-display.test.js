@@ -189,6 +189,8 @@ test('経路設定は上部バーにあり、サブエージェントの三択�
       return { ok: true, json: async () => ({ agents: 'codex', review: 'claude' }) };
     },
     renderRouting: (...args) => renders.push(args),
+    routingInFlight: new Set(),
+    routing: { agents: 'default', review: 'default' },
     codexAgentAvailable: true,
     crossReviewAvailable: true,
     lastState: null,
@@ -199,6 +201,69 @@ test('経路設定は上部バーにあり、サブエージェントの三択�
   await context.updateRouting({ dataset: { route: 'review', v: 'claude' } });
   assert.deepEqual(JSON.parse(JSON.stringify(posts)), [['/api/routing', { key: 'review', value: 'claude' }]]);
   assert.deepEqual(JSON.parse(JSON.stringify(renders[0][1])), { codexAgent: true, crossReview: true });
+});
+
+test('経路の保存中は同じ組の全ボタンを無効にし、他の組の変更を受け付ける', async () => {
+  const renderSource = functionSource(web, 'renderRouting');
+  const updateSource = functionSource(web, 'updateRouting');
+  assert.ok(renderSource && updateSource);
+
+  const buttons = ['agents', 'agents', 'agents', 'review', 'review', 'review'].map((route, index) => ({
+    dataset: { route, v: ['default', 'codex', 'claude'][index % 3] },
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  }));
+  const root = {
+    hidden: false,
+    dataset: { routes: 'agents,review' },
+    querySelectorAll: () => buttons,
+  };
+  const routingInFlight = new Set(['agents']);
+  const context = pageContext(web, {
+    ROUTE_VALUES: new Set(['default', 'codex', 'claude']),
+    ROUTE: {
+      agents: { label: 'サブエージェント', opts: [] },
+      review: { label: 'クロスレビュー', opts: [] },
+    },
+    routing: { agents: 'default', review: 'default' },
+    routingInFlight,
+    codexAgentAvailable: true,
+    crossReviewAvailable: true,
+    document: { getElementById: () => root },
+    layoutRouting() {},
+  });
+  vm.runInContext(renderSource, context);
+  context.renderRouting(context.routing, { codexAgent: true, crossReview: true });
+  assert.deepEqual(buttons.map((button) => button.disabled), [true, true, true, false, false, false]);
+
+  const requests = new Map();
+  const posts = [];
+  const updateContext = pageContext(web, {
+    routingInFlight: new Set(),
+    routing: { agents: 'default', review: 'default' },
+    renderRouting() {},
+    postUiAction: (url, body) => {
+      posts.push([url, body]);
+      return new Promise((resolve) => requests.set(body.key, resolve));
+    },
+    codexAgentAvailable: true,
+    crossReviewAvailable: true,
+    lastState: null,
+    liveStatus: { textContent: '' },
+    showWriteError() {},
+  });
+  vm.runInContext(`${updateSource}\nthis.updateRouting = updateRouting;`, updateContext);
+  const agentsRequest = updateContext.updateRouting({ dataset: { route: 'agents', v: 'codex' } });
+  await updateContext.updateRouting({ dataset: { route: 'agents', v: 'claude' } });
+  const reviewRequest = updateContext.updateRouting({ dataset: { route: 'review', v: 'claude' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(posts)), [
+    ['/api/routing', { key: 'agents', value: 'codex' }],
+    ['/api/routing', { key: 'review', value: 'claude' }],
+  ]);
+  requests.get('agents')({ ok: true, json: async () => ({ agents: 'codex', review: 'default' }) });
+  requests.get('review')({ ok: true, json: async () => ({ agents: 'default', review: 'claude' }) });
+  await Promise.all([agentsRequest, reviewRequest]);
+  assert.deepEqual([...updateContext.routingInFlight], []);
 });
 
 test('経路の二段は実際の幅が収まる場合だけ横に並べる', () => {

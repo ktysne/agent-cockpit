@@ -572,6 +572,31 @@ function agentModelFromDefinition(agentType, definition) {
   };
 }
 
+/** @typedef {{tool_use_id: string, tool_name: string, summary: string, description: string, agent_id: string|null, startedAt: string}} SessionTool */
+
+/** @typedef {{agent_id: string|null, target_tool_use_id: string|null, tool_name: string, summary: string, notification_type: string, message: string, startedAt: string}} PermissionWait */
+
+/** @typedef {ReturnType<typeof agentModelFromDefinition> & {
+ * agent_id: string, startedAt: string|null, turnState?: string, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
+ * }} SessionAgent */
+
+/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, ended: boolean}} SessionIdentity */
+
+/** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
+
+/** @typedef {{agents: SessionAgent[], stoppedAgentIds: Set<string>}} SessionAgents */
+
+/** @typedef {{pendingCodex: Object<string, string>, pendingCodexWait: Object<string, boolean>, codexLaunchToolIds: Set<string>}} SessionCodex */
+
+/** @typedef {{decisions: Array<ReturnType<typeof cloneDecision>>, decisionBindings: Object<string, string>}} SessionDecisions */
+
+/** @typedef {{permissionWaits: PermissionWait[]}} SessionPermissions */
+
+/** @typedef {SessionIdentity & SessionTools & SessionAgents & SessionCodex & SessionDecisions & SessionPermissions} DerivedSession */
+
+/** @typedef {{decisions?: Array<ReturnType<typeof cloneDecision>>, bindings?: Object<string, string>, finishedOutsideEventsIds?: string[]}} AskDecisionState */
+
+/** @returns {DerivedSession} */
 function newSession(event, askDecisionState = {}) {
   return {
     session_id: event.session_id,
@@ -580,6 +605,7 @@ function newSession(event, askDecisionState = {}) {
     status: '作業中',
     tools: [],
     completedToolIds: new Set(),
+    stoppedAgentIds: new Set(),
     codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
@@ -694,9 +720,8 @@ function isFinishedAskDecision(decision) {
   return ['resolved', 'withdrawn'].includes(decision?.state);
 }
 
-function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
-  const sessions = new Map();
-  const stoppedAgentIdsBySession = new Map();
+/** @param {AskDecisionState} askDecisionState */
+function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   // 判断事項ごとに、メモリーにある終わりのイベントの最も新しい時刻。出し直した呼び出しの終わりも数える。
   // 開始がメモリーに無い呼び出しの終わりは、作り直しで再現できないので数えない。
   const startedAskToolUseIds = new Set(entries.flatMap(({ event }) => (
@@ -724,10 +749,580 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt));
     return keepStored ? [] : [decisionId];
   }));
-  const initialAskDecisionState = {
+  return {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
   };
+}
+
+/**
+ * @param {DerivedSession} session
+ */
+function sessionSnapshot(session) {
+  const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
+  const agents = session.agents
+    .filter((agent) => !(
+      agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
+    ))
+    .map((agent) => {
+      const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
+      const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
+        child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
+      ));
+      return {
+        ...agent,
+        ...(childUnconfirmed ? { unconfirmed: true } : {}),
+        modelName: agent.isCodex ? '' : claudeModelName(agent.model),
+        ...(gptAgent ? {
+          gpt: {
+            model: gptAgent.model,
+            effort: gptAgent.effort,
+            codex_home: gptAgent.codex_home,
+            unavailable: gptAgent.unavailable,
+            active: gptAgent.active,
+            unconfirmed: gptAgent.unconfirmed === true,
+          },
+        } : {}),
+      };
+    });
+  const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+  const status = permissionWaits.length
+    ? '許可待ち'
+    : session.interrupted
+      ? '中断'
+      : session.stopped && session.agents.some((agent) => agent.active)
+      ? '待機中(サブエージェント稼働中)'
+      : session.stopped
+        ? '待機中'
+        : '作業中';
+
+  return {
+    session_id: session.session_id,
+    product: session.product,
+    title: session.title,
+    lastActivityAt: session.lastActivityAt,
+    status,
+    turnState: session.interrupted ? 'interrupted' : session.stopped ? 'waiting' : 'working',
+    tools,
+    agents,
+    permissionWaits,
+    decisions: session.decisions.map(cloneDecision),
+    decisionBindings: { ...session.decisionBindings },
+  };
+}
+
+/** @param {Map<string, DerivedSession>} sessions
+ * @returns {DerivedSession}
+ */
+function sessionForEvent(sessions, event, initialAskDecisionState) {
+  let session = sessions.get(event.session_id);
+  if (event.hook_event_name === 'SessionStart') {
+    if (!session || session.ended) {
+      session = newSession(event, initialAskDecisionState);
+      sessions.set(event.session_id, session);
+    }
+  } else if (!session) {
+    session = newSession(event, initialAskDecisionState);
+    sessions.set(event.session_id, session);
+  }
+  return session;
+}
+
+/**
+ * @param {SessionDecisions} session
+ */
+function applyAskQuestionStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
+    // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
+    const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
+    const existing = boundDecision || session.decisions.find((decision) => (
+      ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
+    ));
+    // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
+    // 遅れて届いたか重複なので、状態と解決の内容を変えない。
+    const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
+      existing.id === toolUseId || existing.finishedByToolUseId === toolUseId ||
+      event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
+    );
+    if (staleStart) {
+      session.decisionBindings[toolUseId] = existing.id;
+    } else if (existing) {
+      existing.state = 'waiting';
+      existing.updatedAt = isoTime(event.hookAt);
+      existing.resolvedAt = null;
+      existing.resolution = null;
+      existing.title = event.questions[0].question.slice(0, 200);
+      existing.questions = event.questions;
+      session.decisionBindings[toolUseId] = existing.id;
+    } else {
+      const createdAt = isoTime(event.hookAt);
+      const decision = {
+        id: toolUseId,
+        session_id: event.session_id,
+        source: 'ask',
+        state: 'waiting',
+        title: event.questions[0].question.slice(0, 200),
+        context: '',
+        questions: event.questions,
+        createdAt,
+        updatedAt: createdAt,
+        resolvedAt: null,
+        answer: null,
+        resolution: null,
+      };
+      session.decisions.push(decision);
+      session.decisionBindings[toolUseId] = decision.id;
+    }
+  }
+}
+
+/**
+ * @param {Pick<SessionTools, 'agentToolBindings'> & Pick<SessionAgents, 'agents'>} session
+ */
+function applyAgentToolCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
+    const boundAgentId = session.agentToolBindings[toolUseId];
+    const targetAgent = agentFor(session, boundAgentId);
+    if (targetAgent?.active) targetAgent.backgrounded = true;
+    if (targetAgent && event.resolvedModel) {
+      targetAgent.model = event.resolvedModel;
+      targetAgent.source = 'Agent tool response';
+    }
+  }
+}
+
+/**
+ * @param {SessionCodex & Pick<SessionAgents, 'agents'>} session
+ */
+function applyCodexLaunchCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const toolUseId = event.tool_use_id || null;
+  if (event.tool_name === 'Bash' && toolUseId) {
+    const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
+    if (placeholder) session.codexLaunchToolIds.add(toolUseId);
+    if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
+    if (placeholder && event.codexResult) {
+      completeCodexAgent(placeholder, event);
+    } else if (placeholder && session.pendingCodexWait[toolUseId]) {
+      // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
+      applyCodexAudit(placeholder, event);
+      if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
+      if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
+        placeholder.active = false;
+        placeholder.unconfirmed = true;
+        placeholder.waitEnded = true;
+      }
+    } else if (placeholder && eventName === 'PostToolUseFailure') {
+      applyCodexAudit(placeholder, event);
+      placeholder.active = false;
+    } else if (placeholder) {
+      applyCodexAudit(placeholder, event);
+      placeholder.backgrounded = true;
+      if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
+    }
+    delete session.pendingCodex[toolUseId];
+    delete session.pendingCodexWait[toolUseId];
+  }
+}
+
+/**
+ * @param {Pick<SessionCodex, 'codexLaunchToolIds'> & Pick<SessionAgents, 'agents'>} session
+ */
+function applyCodexResult(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  // Codex を起動した呼び出しの出力はその起動のものなので、別の行へ結び付けない。
+  // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
+  const isCodexLaunch = session.codexLaunchToolIds.has(toolUseId);
+
+  // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
+  const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !isCodexLaunch
+    ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
+    : null;
+  if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
+
+  // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
+  if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
+    const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
+    const matched = codexForRun || outputCodex;
+    const targetAgent = matched
+      ? (matched.resultReceived ? null : matched)
+      : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
+    if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
+    if (targetAgent) completeCodexAgent(targetAgent, event);
+  }
+}
+
+/**
+ * @param {SessionDecisions} session
+ */
+function applyAskQuestionCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
+    const decisionId = session.decisionBindings[toolUseId];
+    const decision = session.decisions.find((item) => item.id === decisionId);
+    if (decision && ['waiting', 'provisional'].includes(decision.state)) {
+      decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
+      decision.updatedAt = isoTime(event.hookAt);
+      decision.resolvedAt = decision.updatedAt;
+      decision.resolution = eventName === 'PostToolUse'
+        ? event.decisionResolution || { chosen: [], note: '' }
+        : null;
+      // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
+      // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
+      decision.finishedByToolUseId = toolUseId;
+    }
+  }
+}
+
+/**
+ * @param {SessionAgents & Pick<SessionIdentity, 'product'|'title'|'lastActivityAt'>} session
+ */
+function applyCommonEventStart(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const isCodexAgentId = agentId?.startsWith('codex:') === true;
+  if (event.product) session.product = event.product;
+  if (event.sessionName) session.title = event.sessionName;
+  const previousActivityAt = Date.parse(session.lastActivityAt);
+  session.lastActivityAt = isoTime(Number.isFinite(previousActivityAt)
+    ? Math.max(previousActivityAt, event.hookAt)
+    : event.hookAt);
+
+  if (eventName === 'SubagentStop' && agentId) {
+    session.stoppedAgentIds.add(agentId);
+  } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
+    session.stoppedAgentIds.delete(agentId);
+  } else if (
+    agentId && !isCodexAgentId && !session.stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
+  ) {
+    const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
+    agent.agent_id = agentId;
+    agent.startedAt = isoTime(event.hookAt);
+    session.agents.push(agent);
+  }
+}
+
+/**
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & Pick<SessionIdentity, 'stopped'|'interrupted'>} session
+ */
+function applyToolStart(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PreToolUse') {
+    if (toolUseId && !session.completedToolIds.has(toolUseId)) {
+      session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
+      session.tools.push({
+        tool_use_id: toolUseId,
+        tool_name: event.tool_name,
+        summary: event.summary,
+        description: event.description || '',
+        agent_id: agentId,
+        startedAt: isoTime(event.hookAt),
+      });
+      if (event.tool_name === 'Agent' && !agentId) {
+        // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
+        const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
+        for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
+        session.agentToolBindings[toolUseId] = overlapping.length ? AMBIGUOUS_AGENT_CALL : null;
+      }
+    }
+
+    if (agentId) {
+      const agent = agentFor(session, agentId);
+      if (agent) {
+        agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
+      }
+    }
+
+    applyCodexStart(session, event);
+    applyAskQuestionStart(session, event);
+
+    if (!agentId) {
+      session.stopped = false;
+      session.interrupted = false;
+    }
+  }
+}
+
+/**
+ * @param {SessionAgents & Pick<SessionTools, 'tools'|'agentToolBindings'>} session
+ */
+function applySubagentStart(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const isCodexAgentId = agentId?.startsWith('codex:') === true;
+  if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
+    let agent = agentFor(session, agentId);
+    const definition = event.agentDefinition || {};
+    if (agent) {
+      agent.active = true;
+      agent.turnState = 'working';
+      agent.unconfirmed = false;
+      agent.startedAt = isoTime(event.hookAt);
+      agent.agent_type = event.agent_type || agent.agent_type;
+      if (event.route) agent.route = event.route;
+    } else {
+      agent = agentModelFromDefinition(event.agent_type, definition);
+      agent.turnState = 'working';
+      agent.agent_id = agentId;
+      agent.startedAt = isoTime(event.hookAt);
+      if (event.route) agent.route = event.route;
+      session.agents.push(agent);
+    }
+    const unboundAgentCalls = unboundAgentCallsOf(session);
+    if (unboundAgentCalls.length === 1) {
+      const tool = unboundAgentCalls[0];
+      session.agentToolBindings[tool.tool_use_id] = agentId;
+      agent.description = tool.description || agent.description;
+    }
+  }
+}
+
+/**
+ * @param {SessionAgents & Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
+function applySubagentStop(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  if (eventName === 'SubagentStop' && agentId) {
+    const agent = agentFor(session, agentId);
+    stopAgent(session, agentId, session.stoppedAgentIds);
+    if (agent) agent.turnState = 'stopped';
+  }
+  if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
+    const agent = agentFor(session, event.stoppedTaskId);
+    if (agent && !agent.isCodex) {
+      stopAgent(session, agent.agent_id, session.stoppedAgentIds);
+      agent.turnState = 'stopped';
+    }
+  }
+}
+
+/**
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'|'interrupted'>} session
+ */
+function applyToolCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    if (toolUseId) {
+      session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
+      session.completedToolIds.add(toolUseId);
+    }
+
+    applyAgentToolCompletion(session, event);
+    applyCodexLaunchCompletion(session, event);
+    applyCodexResult(session, event);
+
+    session.permissionWaits = session.permissionWaits.filter((wait) => !(
+      sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
+    ));
+    applyAskQuestionCompletion(session, event);
+
+    if (!agentId) {
+      session.stopped = false;
+      session.interrupted = false;
+    }
+  }
+}
+
+/**
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
+function applyToolBatch(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  // 区切りが終わった時点で、同じエージェントの先に始まったツールは終わったか拒否されている。
+  // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
+  if (eventName === 'PostToolBatch') {
+    const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
+    session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
+    // メインの許可待ちは Stop と UserPromptSubmit で消す。並行する背景のサブエージェントの許可待ちを巻き込まないため。
+    if (agentId) session.permissionWaits = session.permissionWaits.filter((wait) => !startedBeforeBatch(wait));
+  }
+}
+
+/**
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
+function applyPermissionPrompt(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
+    // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
+    const oldestTool = session.tools
+      .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
+      .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
+    const wait = {
+      agent_id: agentId,
+      target_tool_use_id: oldestTool?.tool_use_id || null,
+      tool_name: oldestTool?.tool_name || '',
+      summary: oldestTool?.summary || '',
+      notification_type: event.notification_type,
+      message: event.message,
+      startedAt: isoTime(event.hookAt),
+    };
+    session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
+    session.permissionWaits.push(wait);
+  }
+}
+
+/**
+ * @param {Pick<SessionTools, 'tools'> & Pick<SessionAgents, 'agents'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'interrupted'|'ended'>} session
+ */
+function applySessionLifecycle(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
+    session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
+    if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
+  }
+
+  // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
+  const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source) && !agentId;
+  if (startsIdle) {
+    session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
+    session.tools = session.tools.filter((tool) => tool.agent_id);
+    session.stopped = true;
+  }
+  if (eventName === 'UserPromptSubmit' && !agentId) {
+    session.stopped = false;
+    session.interrupted = false;
+  }
+  if (
+    agentId && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit'].includes(eventName)
+  ) {
+    const agent = agentFor(session, agentId);
+    if (agent && agent.active !== false) agent.turnState = 'working';
+  }
+  if (eventName === 'Stop' && agentId) {
+    const agent = agentFor(session, agentId);
+    if (agent) agent.turnState = 'waiting';
+  } else if (eventName === 'Stop') {
+    session.stopped = true;
+    session.interrupted = false;
+  }
+  if (eventName === 'Interrupt' && agentId) {
+    const agent = agentFor(session, agentId);
+    if (agent) agent.turnState = 'interrupted';
+  } else if (eventName === 'Interrupt') {
+    session.stopped = false;
+    session.interrupted = true;
+  }
+  if (eventName === 'SessionEnd' && agentId) {
+    const agent = agentFor(session, agentId);
+    if (agent) {
+      agent.active = false;
+      agent.turnState = 'session_ended';
+    }
+  }
+  if (eventName === 'SessionEnd' && !agentId) session.ended = true;
+}
+
+/**
+ * @param {Pick<SessionAgents, 'stoppedAgentIds'> & Pick<SessionTools, 'tools'> & SessionPermissions} session
+ */
+function applyCommonEventEnd(session, event) {
+  const agentId = event.agent_id || null;
+  if (agentId && session.stoppedAgentIds.has(agentId)) {
+    session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
+    session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
+  }
+}
+
+/**
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'>} session
+ */
+function applyCodexWaitStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  // 実行 ID は一意なので親を問わずに探し、待ちを引き継いだ親の下へ付け替える。
+  const codexForRun = session.agents.find((candidate) => candidate.isCodex && candidate.runId === event.codexWaitRunId);
+  if (codexForRun?.resultReceived) {
+    // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
+    session.pendingCodex[toolUseId] = codexForRun.agent_id;
+  } else {
+    const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
+    if (agent) {
+      agent.parent_agent_id = agentId;
+      agent.active = true;
+      agent.unconfirmed = false;
+      agent.runId = event.codexWaitRunId;
+      delete agent.waitEnded;
+      agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+      session.pendingCodex[toolUseId] = agent.agent_id;
+    } else {
+      const agentIdForCall = `codex:${toolUseId}`;
+      const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
+      Object.assign(waitAgent, {
+        agent_id: agentIdForCall,
+        agent_type: event.codexWaitDefinition,
+        isCodex: true,
+        parent_agent_id: agentId,
+        codex_home: '',
+        unavailable: '',
+        backgrounded: true,
+        runId: event.codexWaitRunId,
+        startedAt: isoTime(event.hookAt),
+        lastTool: { tool_name: 'Bash', summary: event.summary },
+      });
+      session.agents.push(waitAgent);
+      session.pendingCodex[toolUseId] = agentIdForCall;
+    }
+    session.pendingCodexWait[toolUseId] = true;
+  }
+}
+
+/**
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'>} session
+ */
+function applyCodexLaunchStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  const agentIdForCall = `codex:${toolUseId}`;
+  const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
+  Object.assign(agent, {
+    agent_id: agentIdForCall,
+    agent_type: event.codexDefinition,
+    isCodex: true,
+    parent_agent_id: agentId,
+    codex_home: '',
+    unavailable: '',
+    startedAt: isoTime(event.hookAt),
+    lastTool: { tool_name: 'Bash', summary: event.summary },
+  });
+  const existingIndex = session.agents.findIndex((item) => item.agent_id === agentIdForCall);
+  if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
+  else session.agents.push(agent);
+  session.pendingCodex[toolUseId] = agentIdForCall;
+}
+
+/**
+ * @param {Pick<SessionAgents, 'agents'> & Pick<SessionCodex, 'pendingCodex'|'pendingCodexWait'>} session
+ */
+function applyCodexStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  const isCodexAgentId = agentId?.startsWith('codex:') === true;
+  if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
+    applyCodexWaitStart(session, event);
+  } else if (event.codexDefinition && toolUseId) {
+    applyCodexLaunchStart(session, event);
+  }
+}
+
+function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
+  const sessions = new Map();
+  const initialAskDecisionState = initialAskDecisionsFor(entries, askDecisionState, beforeSequence);
   const preserveProjectionOrder = entries.some((entry) => entry.preserveProjectionOrder === true);
   const ordered = [...entries].sort((left, right) => {
     if (preserveProjectionOrder) return left.sequence - right.sequence;
@@ -736,434 +1331,25 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
   });
 
   for (const { event } of ordered) {
-    let session = sessions.get(event.session_id);
-    if (event.hook_event_name === 'SessionStart') {
-      if (!session || session.ended) {
-        session = newSession(event, initialAskDecisionState);
-        sessions.set(event.session_id, session);
-      }
-    } else if (!session) {
-      session = newSession(event, initialAskDecisionState);
-      sessions.set(event.session_id, session);
-    }
+    const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
-    if (event.product) session.product = event.product;
-    if (event.sessionName) session.title = event.sessionName;
-    const previousActivityAt = Date.parse(session.lastActivityAt);
-    session.lastActivityAt = isoTime(Number.isFinite(previousActivityAt)
-      ? Math.max(previousActivityAt, event.hookAt)
-      : event.hookAt);
+    applyCommonEventStart(session, event);
 
-    const eventName = event.hook_event_name;
-    const agentId = event.agent_id || null;
-    const toolUseId = event.tool_use_id || null;
-    const isCodexAgentId = agentId?.startsWith('codex:') === true;
-    let stoppedAgentIds = stoppedAgentIdsBySession.get(session);
-    if (!stoppedAgentIds) {
-      stoppedAgentIds = new Set();
-      stoppedAgentIdsBySession.set(session, stoppedAgentIds);
-    }
+    applyToolStart(session, event);
+    applySubagentStart(session, event);
+    applySubagentStop(session, event);
+    applyToolCompletion(session, event);
+    applyToolBatch(session, event);
+    applyPermissionPrompt(session, event);
+    applySessionLifecycle(session, event);
 
-    if (eventName === 'SubagentStop' && agentId) {
-      stoppedAgentIds.add(agentId);
-    } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
-      stoppedAgentIds.delete(agentId);
-    } else if (
-      agentId && !isCodexAgentId && !stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
-    ) {
-      const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
-      agent.agent_id = agentId;
-      agent.startedAt = isoTime(event.hookAt);
-      session.agents.push(agent);
-    }
-
-    if (eventName === 'PreToolUse') {
-      if (toolUseId && !session.completedToolIds.has(toolUseId)) {
-        session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
-        session.tools.push({
-          tool_use_id: toolUseId,
-          tool_name: event.tool_name,
-          summary: event.summary,
-          description: event.description || '',
-          agent_id: agentId,
-          startedAt: isoTime(event.hookAt),
-        });
-        if (event.tool_name === 'Agent' && !agentId) {
-          // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
-          const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
-          for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
-          session.agentToolBindings[toolUseId] = overlapping.length ? AMBIGUOUS_AGENT_CALL : null;
-        }
-      }
-
-      if (agentId) {
-        const agent = agentFor(session, agentId);
-        if (agent) {
-          agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
-        }
-      }
-
-      if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
-        // 実行 ID は一意なので親を問わずに探し、待ちを引き継いだ親の下へ付け替える。
-        const codexForRun = session.agents.find((candidate) => candidate.isCodex && candidate.runId === event.codexWaitRunId);
-        if (codexForRun?.resultReceived) {
-          // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
-          session.pendingCodex[toolUseId] = codexForRun.agent_id;
-        } else {
-          const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
-          if (agent) {
-            agent.parent_agent_id = agentId;
-            agent.active = true;
-            agent.unconfirmed = false;
-            agent.runId = event.codexWaitRunId;
-            delete agent.waitEnded;
-            agent.lastTool = { tool_name: 'Bash', summary: event.summary };
-            session.pendingCodex[toolUseId] = agent.agent_id;
-          } else {
-            const agentIdForCall = `codex:${toolUseId}`;
-            const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
-            Object.assign(waitAgent, {
-              agent_id: agentIdForCall,
-              agent_type: event.codexWaitDefinition,
-              isCodex: true,
-              parent_agent_id: agentId,
-              codex_home: '',
-              unavailable: '',
-              backgrounded: true,
-              runId: event.codexWaitRunId,
-              startedAt: isoTime(event.hookAt),
-              lastTool: { tool_name: 'Bash', summary: event.summary },
-            });
-            session.agents.push(waitAgent);
-            session.pendingCodex[toolUseId] = agentIdForCall;
-          }
-          session.pendingCodexWait[toolUseId] = true;
-        }
-      } else if (event.codexDefinition && toolUseId) {
-        const agentIdForCall = `codex:${toolUseId}`;
-        const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
-        Object.assign(agent, {
-          agent_id: agentIdForCall,
-          agent_type: event.codexDefinition,
-          isCodex: true,
-          parent_agent_id: agentId,
-          codex_home: '',
-          unavailable: '',
-          startedAt: isoTime(event.hookAt),
-          lastTool: { tool_name: 'Bash', summary: event.summary },
-        });
-        const existingIndex = session.agents.findIndex((item) => item.agent_id === agentIdForCall);
-        if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
-        else session.agents.push(agent);
-        session.pendingCodex[toolUseId] = agentIdForCall;
-      }
-      if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
-        // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
-        const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
-        const existing = boundDecision || session.decisions.find((decision) => (
-          ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
-        ));
-        // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
-        // 遅れて届いたか重複なので、状態と解決の内容を変えない。
-        const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
-          existing.id === toolUseId || existing.finishedByToolUseId === toolUseId ||
-          event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
-        );
-        if (staleStart) {
-          session.decisionBindings[toolUseId] = existing.id;
-        } else if (existing) {
-          existing.state = 'waiting';
-          existing.updatedAt = isoTime(event.hookAt);
-          existing.resolvedAt = null;
-          existing.resolution = null;
-          existing.title = event.questions[0].question.slice(0, 200);
-          existing.questions = event.questions;
-          session.decisionBindings[toolUseId] = existing.id;
-        } else {
-          const createdAt = isoTime(event.hookAt);
-          const decision = {
-            id: toolUseId,
-            session_id: event.session_id,
-            source: 'ask',
-            state: 'waiting',
-            title: event.questions[0].question.slice(0, 200),
-            context: '',
-            questions: event.questions,
-            createdAt,
-            updatedAt: createdAt,
-            resolvedAt: null,
-            answer: null,
-            resolution: null,
-          };
-          session.decisions.push(decision);
-          session.decisionBindings[toolUseId] = decision.id;
-        }
-      }
-      if (!agentId) {
-        session.stopped = false;
-        session.interrupted = false;
-      }
-    }
-
-    if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
-      let agent = agentFor(session, agentId);
-      const definition = event.agentDefinition || {};
-      if (agent) {
-        agent.active = true;
-        agent.turnState = 'working';
-        agent.unconfirmed = false;
-        agent.startedAt = isoTime(event.hookAt);
-        agent.agent_type = event.agent_type || agent.agent_type;
-        if (event.route) agent.route = event.route;
-      } else {
-        agent = agentModelFromDefinition(event.agent_type, definition);
-        agent.turnState = 'working';
-        agent.agent_id = agentId;
-        agent.startedAt = isoTime(event.hookAt);
-        if (event.route) agent.route = event.route;
-        session.agents.push(agent);
-      }
-      const unboundAgentCalls = unboundAgentCallsOf(session);
-      if (unboundAgentCalls.length === 1) {
-        const tool = unboundAgentCalls[0];
-        session.agentToolBindings[tool.tool_use_id] = agentId;
-        agent.description = tool.description || agent.description;
-      }
-    }
-
-    if (eventName === 'SubagentStop' && agentId) {
-      const agent = agentFor(session, agentId);
-      stopAgent(session, agentId, stoppedAgentIds);
-      if (agent) agent.turnState = 'stopped';
-    }
-    if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
-      const agent = agentFor(session, event.stoppedTaskId);
-      if (agent && !agent.isCodex) {
-        stopAgent(session, agent.agent_id, stoppedAgentIds);
-        agent.turnState = 'stopped';
-      }
-    }
-
-    if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
-      if (toolUseId) {
-        session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
-        session.completedToolIds.add(toolUseId);
-      }
-
-      if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
-        const boundAgentId = session.agentToolBindings[toolUseId];
-        const targetAgent = agentFor(session, boundAgentId);
-        if (targetAgent?.active) targetAgent.backgrounded = true;
-        if (targetAgent && event.resolvedModel) {
-          targetAgent.model = event.resolvedModel;
-          targetAgent.source = 'Agent tool response';
-        }
-      }
-
-      if (event.tool_name === 'Bash' && toolUseId) {
-        const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-        if (placeholder) session.codexLaunchToolIds.add(toolUseId);
-        if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
-        if (placeholder && event.codexResult) {
-          completeCodexAgent(placeholder, event);
-        } else if (placeholder && session.pendingCodexWait[toolUseId]) {
-          // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
-          applyCodexAudit(placeholder, event);
-          if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
-          if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
-            placeholder.active = false;
-            placeholder.unconfirmed = true;
-            placeholder.waitEnded = true;
-          }
-        } else if (placeholder && eventName === 'PostToolUseFailure') {
-          applyCodexAudit(placeholder, event);
-          placeholder.active = false;
-        } else if (placeholder) {
-          applyCodexAudit(placeholder, event);
-          placeholder.backgrounded = true;
-          if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
-        }
-        delete session.pendingCodex[toolUseId];
-        delete session.pendingCodexWait[toolUseId];
-      }
-
-      // Codex を起動した呼び出しの出力はその起動のものなので、別の行へ結び付けない。
-      // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
-      const isCodexLaunch = session.codexLaunchToolIds.has(toolUseId);
-
-      // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
-      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !isCodexLaunch
-        ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
-        : null;
-      if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
-
-      // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
-      if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
-        const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
-        const matched = codexForRun || outputCodex;
-        const targetAgent = matched
-          ? (matched.resultReceived ? null : matched)
-          : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
-        if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
-        if (targetAgent) completeCodexAgent(targetAgent, event);
-      }
-
-      session.permissionWaits = session.permissionWaits.filter((wait) => !(
-        sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
-      ));
-      if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
-        const decisionId = session.decisionBindings[toolUseId];
-        const decision = session.decisions.find((item) => item.id === decisionId);
-        if (decision && ['waiting', 'provisional'].includes(decision.state)) {
-          decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
-          decision.updatedAt = isoTime(event.hookAt);
-          decision.resolvedAt = decision.updatedAt;
-          decision.resolution = eventName === 'PostToolUse'
-            ? event.decisionResolution || { chosen: [], note: '' }
-            : null;
-          // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
-          // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
-          decision.finishedByToolUseId = toolUseId;
-        }
-      }
-      if (!agentId) {
-        session.stopped = false;
-        session.interrupted = false;
-      }
-    }
-
-    // 区切りが終わった時点で、同じエージェントの先に始まったツールは終わったか拒否されている。
-    // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
-    if (eventName === 'PostToolBatch') {
-      const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
-      session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
-      // メインの許可待ちは Stop と UserPromptSubmit で消す。並行する背景のサブエージェントの許可待ちを巻き込まないため。
-      if (agentId) session.permissionWaits = session.permissionWaits.filter((wait) => !startedBeforeBatch(wait));
-    }
-
-    if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
-      // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
-      const oldestTool = session.tools
-        .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
-        .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
-      const wait = {
-        agent_id: agentId,
-        target_tool_use_id: oldestTool?.tool_use_id || null,
-        tool_name: oldestTool?.tool_name || '',
-        summary: oldestTool?.summary || '',
-        notification_type: event.notification_type,
-        message: event.message,
-        startedAt: isoTime(event.hookAt),
-      };
-      session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
-      session.permissionWaits.push(wait);
-    }
-
-    if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
-      session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
-      if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
-    }
-
-    // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
-    const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source) && !agentId;
-    if (startsIdle) {
-      session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
-      session.tools = session.tools.filter((tool) => tool.agent_id);
-      session.stopped = true;
-    }
-    if (eventName === 'UserPromptSubmit' && !agentId) {
-      session.stopped = false;
-      session.interrupted = false;
-    }
-    if (
-      agentId && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit'].includes(eventName)
-    ) {
-      const agent = agentFor(session, agentId);
-      if (agent && agent.active !== false) agent.turnState = 'working';
-    }
-    if (eventName === 'Stop' && agentId) {
-      const agent = agentFor(session, agentId);
-      if (agent) agent.turnState = 'waiting';
-    } else if (eventName === 'Stop') {
-      session.stopped = true;
-      session.interrupted = false;
-    }
-    if (eventName === 'Interrupt' && agentId) {
-      const agent = agentFor(session, agentId);
-      if (agent) agent.turnState = 'interrupted';
-    } else if (eventName === 'Interrupt') {
-      session.stopped = false;
-      session.interrupted = true;
-    }
-    if (eventName === 'SessionEnd' && agentId) {
-      const agent = agentFor(session, agentId);
-      if (agent) {
-        agent.active = false;
-        agent.turnState = 'session_ended';
-      }
-    }
-    if (eventName === 'SessionEnd' && !agentId) session.ended = true;
-    if (agentId && stoppedAgentIds.has(agentId)) {
-      session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
-      session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
-    }
+    applyCommonEventEnd(session, event);
   }
 
   return [...sessions.values()]
     .filter((session) => !session.ended)
-    .map((session) => {
-      const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
-      const agents = session.agents
-        .filter((agent) => !(
-          agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
-        ))
-        .map((agent) => {
-          const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
-          const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
-            child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
-          ));
-          return {
-            ...agent,
-            ...(childUnconfirmed ? { unconfirmed: true } : {}),
-            modelName: agent.isCodex ? '' : claudeModelName(agent.model),
-            ...(gptAgent ? {
-              gpt: {
-                model: gptAgent.model,
-                effort: gptAgent.effort,
-                codex_home: gptAgent.codex_home,
-                unavailable: gptAgent.unavailable,
-                active: gptAgent.active,
-                unconfirmed: gptAgent.unconfirmed === true,
-              },
-            } : {}),
-          };
-        });
-      const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
-      const status = permissionWaits.length
-        ? '許可待ち'
-        : session.interrupted
-          ? '中断'
-          : session.stopped && session.agents.some((agent) => agent.active)
-          ? '待機中(サブエージェント稼働中)'
-          : session.stopped
-            ? '待機中'
-            : '作業中';
-
-      return {
-        session_id: session.session_id,
-        product: session.product,
-        title: session.title,
-        lastActivityAt: session.lastActivityAt,
-        status,
-        turnState: session.interrupted ? 'interrupted' : session.stopped ? 'waiting' : 'working',
-        tools,
-        agents,
-        permissionWaits,
-        decisions: session.decisions.map(cloneDecision),
-        decisionBindings: { ...session.decisionBindings },
-      };
-    });
+    .map(sessionSnapshot);
 }
 
 class DashboardState {
@@ -2804,68 +2990,110 @@ class DashboardState {
     return seenAt;
   }
 
-  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
-    const products = new Map();
-    const visibleProductKeys = new Set();
-    const registrations = this.pullRequestRegistrations();
-    const relatedRegistrations = this.relatedPullRequestRegistrations();
-    const mergedPullRequests = new Map();
-    const pullRequestTitles = new Map();
-    const rememberPullRequestTitle = (owner, repo, number, title) => {
-      if (typeof title !== 'string' || !title) return;
-      pullRequestTitles.set(relatedPullRequestRecordKey(owner, repo, number), title);
-    };
-    for (const record of [...registrations, ...relatedRegistrations]) {
-      rememberPullRequestTitle(record.owner, record.repo, record.number, record.lastOpen?.title);
+  taskCompletionCandidates() {
+    const candidates = [];
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const task of plan.tasks) {
+        const closed = this.closedTasks.get(sessionId)?.get(task.title);
+        const closedByUser = closed?.stateAtClose === task.state;
+        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
+        if (!at) continue;
+        candidates.push({
+          product, type: 'task', identity: `${sessionId}\0${task.title}`, at,
+          text: `タスク「${task.title}」が完了した`, pullRequest: null,
+        });
+      }
     }
-    const addProduct = (value) => {
-      const product = cloneProduct(value);
-      if (product && !products.has(product.key)) products.set(product.key, product);
-      return product;
-    };
-    for (const merged of this.mergedPullRequests.values()) {
-      mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
-      if (merged.title !== `#${merged.number}`) rememberPullRequestTitle(merged.owner, merged.repo, merged.number, merged.title);
-    }
-    for (const record of [...registrations, ...relatedRegistrations]) {
-      if (record.state !== 'merged' || !record.mergedAt) continue;
-      const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
-      if (mergedPullRequests.has(key)) continue;
-      mergedPullRequests.set(key, {
-        owner: record.owner,
-        repo: record.repo,
-        number: record.number,
-        title: record.lastOpen?.title,
-        mergedAt: record.mergedAt,
-      });
-    }
-    // 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
-    const productsForMergedPullRequest = (merged) => {
-      const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
-      const found = [
-        ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
-          .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
-        ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
-          .map((group) => cloneProduct(group.product)).filter(Boolean),
-      ];
-      if (!found.length) return [repoProduct(merged.owner, merged.repo)];
-      return [...new Map(found.map((product) => [product.key, product])).values()];
-    };
-    for (const session of sessions) {
-      const product = addProduct(session.product);
-      if (product) visibleProductKeys.add(product.key);
-    }
-    for (const group of pullRequestGroups) {
-      const product = addProduct(group.product || (group.owner && group.repo ? repoProduct(group.owner, group.repo) : null));
-      if (product) visibleProductKeys.add(product.key);
-    }
-    for (const plan of this.plans.values()) addProduct(plan.product);
-    for (const record of registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
-    for (const record of this.ciFailures) addProduct(record.product);
-    for (const merged of mergedPullRequests.values()) {
-      for (const product of productsForMergedPullRequest(merged)) addProduct(product);
-    }
+    return candidates;
+  }
 
+  pullRequestCreatedCandidates({ registrations, pullRequestTitles }) {
+    return registrations.map((record) => {
+      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+      const title = pullRequestTitles.get(identity);
+      return {
+        product: cloneProduct(record.product) || repoProduct(record.owner, record.repo),
+        type: 'pull-request',
+        identity: `${record.owner}/${record.repo}#${record.number}`,
+        at: record.addedAt,
+        text: `${pullRequestLabel(record.number, title)}を作成した`,
+        pullRequest: { identity, number: record.number, action: 'created', title },
+      };
+    });
+  }
+
+  // セッションの判断を先に取り、セッションに載っていない判断だけを計画から補う。
+  provisionalDecisionCandidates(sessions) {
+    const candidates = [];
+    const sessionDecisionIds = new Set();
+    for (const session of sessions) {
+      for (const decision of session.decisions) {
+        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
+        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
+        candidates.push({
+          product: cloneProduct(session.product || this.plans.get(session.session_id)?.product),
+          type: 'provisional',
+          identity: `${session.session_id}\0${decision.id}`,
+          at: decision.provisionalAt || decision.updatedAt,
+          text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          pullRequest: null,
+        });
+      }
+    }
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const decision of plan.decisions) {
+        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
+        candidates.push({
+          product,
+          type: 'provisional',
+          identity: `${sessionId}\0${decision.id}`,
+          at: decision.provisionalAt || decision.updatedAt,
+          text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          pullRequest: null,
+        });
+      }
+    }
+    return candidates;
+  }
+
+  // 記録のプロダクトをそのまま使う(cloneProduct を通さない)。
+  ciFailureCandidates({ pullRequestTitles }) {
+    return this.ciFailures.map((failure) => {
+      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
+      return {
+        product: failure.product,
+        type: 'ci-failure',
+        identity: `${failure.owner}/${failure.repo}#${failure.number}`,
+        at: failure.at,
+        text: `PR #${failure.number} の CI が失敗した`,
+        pullRequest: { identity, number: failure.number, action: 'ci-failure', title: pullRequestTitles.get(identity) },
+      };
+    });
+  }
+
+  mergedPullRequestCandidates(sources) {
+    const candidates = [];
+    for (const merged of sources.mergedPullRequests.values()) {
+      const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
+      const title = sources.pullRequestTitles.get(identity);
+      for (const product of mergedPullRequestProducts(merged, sources)) {
+        candidates.push({
+          product,
+          type: 'merged-pull-request',
+          identity: `${merged.owner}/${merged.repo}#${merged.number}`,
+          at: merged.mergedAt,
+          text: `${pullRequestLabel(merged.number, title)}をマージした`,
+          pullRequest: { identity, number: merged.number, action: 'merged', title },
+        });
+      }
+    }
+    return candidates;
+  }
+
+  // 初回の表示で既存の変化を既読として扱うために、変化を集める前に呼ぶ。
+  refreshSeenTimes(products, visibleProductKeys, now) {
     let seenChanged = false;
     for (const key of this.seenAtByProduct.keys()) {
       if (!products.has(key)) {
@@ -2884,127 +3112,69 @@ class DashboardState {
       this.touch();
       this.requestStoreWrite();
     }
+  }
 
-    const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
-    const eventKeys = new Set();
-    const happenedWhileAway = (timestamp) => awayPeriods.some((period) => {
-      if (!Number.isFinite(period.start)) return false;
-      const end = period.end === null ? now : period.end;
-      return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
-    });
-    const addEvent = (product, type, identity, at, text, pullRequest = null) => {
-      const timestamp = Date.parse(at || '');
-      if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
-      const key = `${product.key}\0${type}\0${identity}\0${at}`;
-      if (eventKeys.has(key)) return;
-      eventKeys.add(key);
-      eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+  // 変化の元になる記録。種類ごとの取り出しと対象のプロダクトの絞り込みが、同じ記録を見る。
+  sinceSeenSources(pullRequestGroups) {
+    const registrations = this.pullRequestRegistrations();
+    const records = [...registrations, ...this.relatedPullRequestRegistrations()];
+    const storedMerged = [...this.mergedPullRequests.values()];
+    return {
+      registrations,
+      pullRequestGroups,
+      pullRequestTitles: collectPullRequestTitles(records, storedMerged),
+      mergedPullRequests: collectMergedPullRequests(records, storedMerged),
     };
+  }
 
-    for (const [sessionId, plan] of this.plans) {
-      const product = cloneProduct(plan.product || this.productForSession(sessionId));
-      if (!product) continue;
-      for (const task of plan.tasks) {
-        const closed = this.closedTasks.get(sessionId)?.get(task.title);
-        const closedByUser = closed?.stateAtClose === task.state;
-        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
-        if (at) addEvent(product, 'task', `${sessionId}\0${task.title}`, at, `タスク「${task.title}」が完了した`);
-      }
-    }
-
-    for (const record of registrations) {
-      const product = cloneProduct(record.product) || repoProduct(record.owner, record.repo);
-      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
-      const title = pullRequestTitles.get(identity);
-      addEvent(product, 'pull-request', `${record.owner}/${record.repo}#${record.number}`, record.addedAt,
-        `PR #${record.number}${title ? `(${title})` : ''}を作成した`, { identity, number: record.number, action: 'created', title });
-    }
-
-    const sessionDecisionIds = new Set();
+  // 変化の元になる記録のどれかに載るプロダクトを集める。取り出しの関数が見る記録は、ここでも対象に加える。
+  // 加え忘れると、その種類の変化は重複の除去で捨てられる。
+  sinceSeenProducts(sessions, sources) {
+    const products = new Map();
+    const visibleProductKeys = new Set();
+    const addProduct = (value) => {
+      const product = cloneProduct(value);
+      if (product && !products.has(product.key)) products.set(product.key, product);
+      return product;
+    };
     for (const session of sessions) {
-      for (const decision of session.decisions) {
-        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
-        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
-        const product = cloneProduct(session.product || this.plans.get(session.session_id)?.product);
-        const at = decision.provisionalAt || decision.updatedAt;
-        addEvent(product, 'provisional', `${session.session_id}\0${decision.id}`, at,
-          `判断「${decision.title}」を推奨案で仮に進めた`);
-      }
+      const product = addProduct(session.product);
+      if (product) visibleProductKeys.add(product.key);
     }
-    for (const [sessionId, plan] of this.plans) {
-      const product = cloneProduct(plan.product || this.productForSession(sessionId));
-      for (const decision of plan.decisions) {
-        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
-        addEvent(product, 'provisional', `${sessionId}\0${decision.id}`, decision.provisionalAt || decision.updatedAt,
-          `判断「${decision.title}」を推奨案で仮に進めた`);
-      }
+    for (const group of sources.pullRequestGroups) {
+      const product = addProduct(group.product || (group.owner && group.repo ? repoProduct(group.owner, group.repo) : null));
+      if (product) visibleProductKeys.add(product.key);
     }
+    for (const plan of this.plans.values()) addProduct(plan.product);
+    for (const record of sources.registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
+    for (const record of this.ciFailures) addProduct(record.product);
+    for (const merged of sources.mergedPullRequests.values()) {
+      for (const product of mergedPullRequestProducts(merged, sources)) addProduct(product);
+    }
+    return { products, visibleProductKeys };
+  }
 
-    for (const failure of this.ciFailures) {
-      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
-      const title = pullRequestTitles.get(identity);
-      addEvent(failure.product, 'ci-failure', `${failure.owner}/${failure.repo}#${failure.number}`, failure.at,
-        `PR #${failure.number} の CI が失敗した`, { identity, number: failure.number, action: 'ci-failure', title });
-    }
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
+    const sources = this.sinceSeenSources(pullRequestGroups);
+    const { products, visibleProductKeys } = this.sinceSeenProducts(sessions, sources);
 
-    for (const merged of mergedPullRequests.values()) {
-      for (const product of productsForMergedPullRequest(merged)) {
-        const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
-        const title = pullRequestTitles.get(identity);
-        addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
-          `PR #${merged.number}${title ? `(${title})` : ''}をマージした`, { identity, number: merged.number, action: 'merged', title });
-      }
-    }
+    this.refreshSeenTimes(products, visibleProductKeys, now);
+
+    const candidates = [
+      ...this.taskCompletionCandidates(),
+      ...this.pullRequestCreatedCandidates(sources),
+      ...this.provisionalDecisionCandidates(sessions),
+      ...this.ciFailureCandidates(sources),
+      ...this.mergedPullRequestCandidates(sources),
+    ];
+    const eventsByProduct = groupSinceSeenEvents(candidates, products);
 
     const sinceSeen = [];
     for (const product of products.values()) {
       const seenAt = this.seenAtByProduct.get(product.key);
       if (!seenAt) continue;
-      const seenMilliseconds = Date.parse(seenAt || '');
-      const events = (eventsByProduct.get(product.key) || [])
-        .filter((event) => {
-          const timestamp = Date.parse(event.at);
-          return timestamp > seenMilliseconds && happenedWhileAway(timestamp);
-        });
-      const pullRequestSummaries = new Map();
-      const items = [];
-      for (const event of events) {
-        if (!event.pullRequest) {
-          items.push(event);
-          continue;
-        }
-        const { identity, number, action, title } = event.pullRequest;
-        let summary = pullRequestSummaries.get(identity);
-        if (!summary) {
-          summary = { at: event.at, number, title, actions: new Set() };
-          pullRequestSummaries.set(identity, summary);
-        }
-        if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
-        if (!summary.title && title) summary.title = title;
-        summary.actions.add(action);
-      }
-      for (const summary of pullRequestSummaries.values()) {
-        const { number, title, actions } = summary;
-        const prefix = `PR #${number}${title ? `(${title})` : ''}`;
-        const hasCreated = actions.has('created');
-        const hasMerged = actions.has('merged');
-        const hasCiFailure = actions.has('ci-failure');
-        let text;
-        if (hasCiFailure) {
-          const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
-          const outcome = hasCreated && hasMerged
-            ? '作成し、マージした'
-            : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
-          text = `${failure}${outcome ? `。${outcome}` : ''}`;
-        } else if (hasCreated && hasMerged) {
-          text = `${prefix}を作成し、マージした`;
-        } else if (hasCreated) {
-          text = `${prefix}を作成した`;
-        } else {
-          text = `${prefix}をマージした`;
-        }
-        items.push({ at: summary.at, type: 'pull-request-summary', text });
-      }
+      const events = eventsSinceSeenWhileAway(eventsByProduct.get(product.key) || [], Date.parse(seenAt), awayPeriods, now);
+      const items = foldPullRequestEvents(events);
       items.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       if (items.length) sinceSeen.push({ product, seenAt, items });
     }
@@ -3022,6 +3192,129 @@ class DashboardState {
       notificationTypes: [...this.notificationTypes].sort(),
     };
   }
+}
+
+function collectPullRequestTitles(records, storedMerged) {
+  const titles = new Map();
+  const remember = (owner, repo, number, title) => {
+    if (typeof title !== 'string' || !title) return;
+    titles.set(relatedPullRequestRecordKey(owner, repo, number), title);
+  };
+  for (const record of records) remember(record.owner, record.repo, record.number, record.lastOpen?.title);
+  for (const merged of storedMerged) {
+    if (merged.title !== `#${merged.number}`) remember(merged.owner, merged.repo, merged.number, merged.title);
+  }
+  return titles;
+}
+
+function collectMergedPullRequests(records, storedMerged) {
+  const mergedPullRequests = new Map();
+  for (const merged of storedMerged) {
+    mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
+  }
+  for (const record of records) {
+    if (record.state !== 'merged' || !record.mergedAt) continue;
+    const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+    if (mergedPullRequests.has(key)) continue;
+    mergedPullRequests.set(key, {
+      owner: record.owner,
+      repo: record.repo,
+      number: record.number,
+      title: record.lastOpen?.title,
+      mergedAt: record.mergedAt,
+    });
+  }
+  return mergedPullRequests;
+}
+
+// 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
+function mergedPullRequestProducts(merged, { registrations, pullRequestGroups }) {
+  const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
+  const found = [
+    ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
+      .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
+    ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
+      .map((group) => cloneProduct(group.product)).filter(Boolean),
+  ];
+  if (!found.length) return [repoProduct(merged.owner, merged.repo)];
+  return [...new Map(found.map((product) => [product.key, product])).values()];
+}
+
+function pullRequestLabel(number, title) {
+  return `PR #${number}${title ? `(${title})` : ''}`;
+}
+
+// 対象のプロダクトに無い候補、時刻を読めない候補、同じ内容の重複は捨てる。
+function groupSinceSeenEvents(candidates, products) {
+  const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
+  const eventKeys = new Set();
+  for (const { product, type, identity, at, text, pullRequest } of candidates) {
+    const timestamp = Date.parse(at || '');
+    if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) continue;
+    const key = `${product.key}\0${type}\0${identity}\0${at}`;
+    if (eventKeys.has(key)) continue;
+    eventKeys.add(key);
+    eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+  }
+  return eventsByProduct;
+}
+
+function isAwayAt(timestamp, awayPeriods, now) {
+  return awayPeriods.some((period) => {
+    if (!Number.isFinite(period.start)) return false;
+    const end = period.end === null ? now : period.end;
+    return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
+  });
+}
+
+// 絞り込みの後でまとめる。先にまとめると、範囲外の変化がまとめた行の時刻と文に混ざる。
+function eventsSinceSeenWhileAway(events, seenMilliseconds, awayPeriods, now) {
+  return events.filter((event) => {
+    const timestamp = Date.parse(event.at);
+    return timestamp > seenMilliseconds && isAwayAt(timestamp, awayPeriods, now);
+  });
+}
+
+// 同じ PR の作成、CI の失敗、マージを 1 行にまとめ、PR に紐づかない変化はそのまま返す。
+function foldPullRequestEvents(events) {
+  const pullRequestSummaries = new Map();
+  const items = [];
+  for (const event of events) {
+    if (!event.pullRequest) {
+      items.push(event);
+      continue;
+    }
+    const { identity, number, action, title } = event.pullRequest;
+    let summary = pullRequestSummaries.get(identity);
+    if (!summary) {
+      summary = { at: event.at, number, title, actions: new Set() };
+      pullRequestSummaries.set(identity, summary);
+    }
+    if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
+    if (!summary.title && title) summary.title = title;
+    summary.actions.add(action);
+  }
+  for (const summary of pullRequestSummaries.values()) {
+    items.push({ at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary) });
+  }
+  return items;
+}
+
+// 題が無いときは「の CI」の前に空白を置く。全角括弧の書式をテストが完全一致で確かめる。
+function pullRequestSummaryText({ number, title, actions }) {
+  const prefix = pullRequestLabel(number, title);
+  const hasCreated = actions.has('created');
+  const hasMerged = actions.has('merged');
+  if (actions.has('ci-failure')) {
+    const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
+    const outcome = hasCreated && hasMerged
+      ? '作成し、マージした'
+      : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
+    return `${failure}${outcome ? `。${outcome}` : ''}`;
+  }
+  if (hasCreated && hasMerged) return `${prefix}を作成し、マージした`;
+  if (hasCreated) return `${prefix}を作成した`;
+  return `${prefix}をマージした`;
 }
 
 function cloneResolution(resolution) {
@@ -3047,4 +3340,4 @@ function cloneDecision(decision) {
   };
 }
 
-module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName };
+module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName, isAwayAt, pullRequestSummaryText };

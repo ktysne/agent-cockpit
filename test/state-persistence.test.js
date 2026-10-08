@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { AwayState, DashboardState } = require('../src/server/state');
+const { AwayState, DashboardState, isAwayAt, pullRequestSummaryText } = require('../src/server/state');
 const { AtomicJsonWriter } = require('../src/server/json-storage');
 const { temporaryDirectory } = require('./support/temp');
 
@@ -1360,4 +1360,27 @@ test('離席期間の記録が食い違っていても、離席中かどうか�
 
   await fs.writeFile(filePath, JSON.stringify({ enabled: false, since: null, periods: 'broken' }));
   assert.deepEqual((await AwayState.load(homeDir)).snapshot(), { enabled: false, since: null, periods: [] });
+});
+
+test('離席中かどうかは期間の両端を含み、終了していない期間は現在時刻までとして扱う', () => {
+  const periods = [{ start: 10, end: 20 }, { start: 100, end: null }];
+  assert.equal(isAwayAt(10, periods, 150), true);
+  assert.equal(isAwayAt(20, periods, 150), true);
+  assert.equal(isAwayAt(21, periods, 150), false);
+  assert.equal(isAwayAt(150, periods, 150), true);
+  assert.equal(isAwayAt(151, periods, 150), false);
+  assert.equal(isAwayAt(5, [{ start: Number.NaN, end: 20 }], 150), false);
+  assert.equal(isAwayAt(5, [], 150), false);
+});
+
+test('PR の要約の文は題の有無と行動の組み合わせで決まる', () => {
+  const text = (title, ...actions) => pullRequestSummaryText({ number: 7, title, actions: new Set(actions) });
+  assert.equal(text('題', 'created'), 'PR #7(題)を作成した');
+  assert.equal(text('題', 'merged'), 'PR #7(題)をマージした');
+  assert.equal(text('題', 'created', 'merged'), 'PR #7(題)を作成し、マージした');
+  assert.equal(text('題', 'ci-failure'), 'PR #7(題)の CI が失敗した');
+  assert.equal(text(undefined, 'ci-failure'), 'PR #7 の CI が失敗した');
+  assert.equal(text(undefined, 'ci-failure', 'created'), 'PR #7 の CI が失敗した。作成した');
+  assert.equal(text('題', 'ci-failure', 'merged'), 'PR #7(題)の CI が失敗した。マージした');
+  assert.equal(text('題', 'ci-failure', 'created', 'merged'), 'PR #7(題)の CI が失敗した。作成し、マージした');
 });
