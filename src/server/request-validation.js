@@ -1,6 +1,8 @@
 const { isRequestSessionId } = require('./session-ids');
 const { OWNED_PROCESS_STATES, MAX_EXTERNAL_URL_LENGTH, MAX_NATIVE_PENDING_REQUESTS } = require('./server-constants');
 
+// 起動するプログラムには検査した値そのものを渡すため、正規化した href を返す。
+// rundll32 は引数を ShellExecute へそのまま渡すので、空白や引用符が残る値は受けない。
 function normalizeExternalUrl(value, port) {
   if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return null;
   try {

@@ -191,8 +191,6 @@ function validRequiredUiOrigin(request, port) {
     (fetchSite === undefined || fetchSite === 'same-origin');
 }
 
-// 起動するプログラムには検査した値そのものを渡すため、正規化した href を返す。
-// rundll32 は引数を ShellExecute へそのまま渡すので、空白や引用符が残る値は受けない。
 // xdg-open のようにすぐ終わらない起動もあるので、終了は待たずに起動できたかだけを見る。
 function defaultOpenExternalUrl(url) {
   const [command, args] = process.platform === 'win32'
