@@ -1,7 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PassThrough, Writable } = require('node:stream');
-const { startMcpServer, UNREACHABLE_MESSAGE, WRITER_REQUIRED_MESSAGE } = require('../src/mcp/server');
+const {
+  startMcpServer,
+  MCP_GITHUB_TIMEOUT_MS,
+  TIMEOUT_MESSAGE,
+  UNREACHABLE_MESSAGE,
+  WRITER_REQUIRED_MESSAGE,
+} = require('../src/mcp/server');
 
 function makeWriter(provider = 'claude', nativeId = 'mcp-session') {
   return {
@@ -259,6 +265,48 @@ test('MCP tools/call は呼出し元の宛先claimをHTTP送信前に拒否す�
   assert.equal(fetchCount, 0);
 });
 
+test('cockpit_skip_review は GitHub 同期の 60 秒期限内に応答した要求を記録する', async () => {
+  let observedDeadline;
+  let requestCount = 0;
+  let requestWasAborted = false;
+  const nowValue = 100000;
+  const headRefOid = 'a'.repeat(40);
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_skip_review', arguments: {
+      owner: 'example', repo: 'project', number: 45, headRefOid, reason: '変更が説明文だけのため',
+    } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer: makeWriter(),
+    now: () => nowValue,
+    ensureServerRunning: async ({ deadline }) => {
+      observedDeadline = deadline;
+      return { port: 49124, secret: 'test-secret' };
+    },
+    fetchImpl: async (_url, init) => {
+      requestCount += 1;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, 2100);
+        init.signal.addEventListener('abort', () => {
+          requestWasAborted = true;
+          clearTimeout(timer);
+          reject(new Error('aborted'));
+        }, { once: true });
+      });
+      return new Response(JSON.stringify({ number: 45, owner: 'example', repo: 'project', headRefOid }), { status: 200 });
+    },
+  });
+
+  assert.equal(MCP_GITHUB_TIMEOUT_MS, 60000);
+  assert.equal(observedDeadline, nowValue + MCP_GITHUB_TIMEOUT_MS);
+  assert.equal(requestWasAborted, false);
+  assert.equal(requestCount, 1);
+  assert.equal(responses[0].result.isError, undefined);
+  assert.match(responses[0].result.content[0].text, /クロスレビュー不要として記録しました/);
+});
+
 test('400 と 404 は理由を示す固定文を isError で返す', async () => {
   for (const [status, message] of [
     [400, '入力が正しくないか、上限を超えています'],
@@ -388,6 +436,60 @@ test('共通質問のMCP登録と状態pollは回答値を返さずwriterを固�
   assert.equal(responses[1].result.isError, undefined);
   assert.ok(!JSON.stringify(responses).includes('どの案を選びますか？'));
   assert.ok(!JSON.stringify(responses).includes('案 A'));
+});
+
+test('共通質問の送信後タイムアウトは結果不明、未送信は到達不能として案内する', async () => {
+  const calls = [
+    ['cockpit_register_question', commonQuestionInput(), '/api/sessions/pending/questions/register'],
+    ['cockpit_question_status', { questionId: 'question-fixture' }, '/api/sessions/pending/questions/status'],
+    ['cockpit_answer_poll', { questionId: 'question-fixture' }, '/api/sessions/pending/questions/answer-poll'],
+  ];
+
+  for (const [index, [name, argumentsValue, route]] of calls.entries()) {
+    const requests = [];
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: index + 1, method: 'tools/call',
+      params: { name, arguments: argumentsValue },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer: makeWriter(),
+      deadline: Date.now() + 3000,
+      ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+      fetchImpl: async (url, init) => {
+        const pathname = new URL(url).pathname;
+        requests.push(pathname);
+        if (pathname.endsWith('/response-lost')) return new Response('{}', { status: 200 });
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    });
+
+    assert.equal(responses[0].result.isError, true, name);
+    assert.equal(responses[0].result.content[0].text, TIMEOUT_MESSAGE, name);
+    assert.deepEqual(requests, name === 'cockpit_answer_poll'
+      ? [route, '/api/sessions/pending/questions/response-lost']
+      : [route], name);
+  }
+
+  for (const [index, [name, argumentsValue]] of calls.entries()) {
+    let fetchCount = 0;
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: index + 4, method: 'tools/call',
+      params: { name, arguments: argumentsValue },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer: makeWriter(),
+      ensureServerRunning: async () => null,
+      fetchImpl: async () => { fetchCount += 1; return new Response('{}', { status: 200 }); },
+    });
+
+    assert.equal(responses[0].result.isError, true, name);
+    assert.equal(responses[0].result.content[0].text, UNREACHABLE_MESSAGE, name);
+    assert.equal(fetchCount, 0, name);
+  }
 });
 
 test('共通質問answer-pollはsink結果だけを出力し、stdio書込み失敗を同じ質問IDで通知する', async () => {
@@ -596,4 +698,76 @@ test('同じbindingの並行answer-pollはそれぞれ一度のgetter結果だ�
   assert.equal(responses.length, 2);
   assert.equal(getterCalls, 2);
   assert.deepEqual(sent, [writer, writer]);
+});
+
+test('時間切れの add_pr、skip_review、plan は結果未確認の文を isError で返す', async () => {
+  const calls = [
+    ['cockpit_set_tasks', { tasks: [] }],
+    ['cockpit_add_pr', { url: 'https://github.com/example/project/pull/45' }],
+    ['cockpit_skip_review', {
+      owner: 'example', repo: 'project', number: 45, headRefOid: 'a'.repeat(40), reason: '記録する理由',
+    }],
+  ];
+
+  for (const [index, [name, argumentsValue]] of calls.entries()) {
+    let ensureCalls = 0;
+    let fetchCount = 0;
+    let refreshCalls = 0;
+    const responses = await exchange([{
+      jsonrpc: '2.0', id: index + 1, method: 'tools/call',
+      params: { name, arguments: argumentsValue },
+    }], {
+      homeDir: 'C:\\temporary-cockpit',
+      environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+      writer: makeWriter(),
+      refreshWriter: async () => { refreshCalls += 1; },
+      deadline: Date.now() + 100,
+      ensureServerRunning: async () => {
+        ensureCalls += 1;
+        return { port: 49124, secret: 'test-secret' };
+      },
+      fetchImpl: async (_url, init) => {
+        fetchCount += 1;
+        return new Promise((_, reject) => {
+          init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    });
+
+    assert.equal(responses[0].result.isError, true, name);
+    assert.equal(responses[0].result.content[0].text, TIMEOUT_MESSAGE, name);
+    assert.equal(fetchCount, 1, name);
+    assert.equal(ensureCalls, 1, name);
+    assert.equal(refreshCalls, 0, name);
+  }
+});
+
+test('writerの明示的な403だけは一度更新してMCP書き込みを再送する', async () => {
+  let writer = makeWriter();
+  writer.contextId = 'context-old';
+  const refreshedWriter = { ...writer, contextId: 'context-new', executionId: 'execution-new' };
+  const requests = [];
+  let refreshCalls = 0;
+  const responses = await exchange([{
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'cockpit_set_tasks', arguments: { tasks: [] } },
+  }], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    getWriter: () => writer,
+    refreshWriter: async (_deadline, { discard }) => {
+      assert.equal(discard, true);
+      refreshCalls += 1;
+      writer = refreshedWriter;
+    },
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body).writer);
+      return new Response(JSON.stringify({ tasks: [] }), { status: requests.length === 1 ? 403 : 200 });
+    },
+  });
+
+  assert.equal(responses[0].result.isError, undefined);
+  assert.equal(refreshCalls, 1);
+  assert.deepEqual(requests.map((request) => request.contextId), ['context-old', 'context-new']);
 });

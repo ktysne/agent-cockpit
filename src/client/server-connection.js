@@ -93,7 +93,12 @@ async function releaseStartLock(homeDir, token, fileSystem = fsp) {
 
 async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeoutMs, now = Date.now, readResponse) {
   const remaining = deadline - now();
-  if (remaining <= 0) throw new Error('server request deadline elapsed');
+  if (remaining <= 0) {
+    const error = new Error('server request deadline elapsed');
+    error.code = 'DEADLINE_TIMEOUT';
+    error.requestStarted = false;
+    throw error;
+  }
   const controller = new AbortController();
   let timeout;
   try {
@@ -104,8 +109,14 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
       })(),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
+          const deadlineReached = remaining <= attemptTimeoutMs;
+          const error = new Error(deadlineReached
+            ? 'server request deadline elapsed'
+            : 'server request attempt timed out');
+          error.code = deadlineReached ? 'DEADLINE_TIMEOUT' : 'ATTEMPT_TIMEOUT';
+          error.requestStarted = true;
+          reject(error);
           controller.abort();
-          reject(new Error('server request attempt timed out'));
         }, Math.min(attemptTimeoutMs, remaining));
       }),
     ]);
@@ -209,6 +220,7 @@ async function postToServer(requestPath, body, options = {}) {
   const fileSystem = options.fileSystem || fsp;
   const readInfo = options.readServerInfo || readServerInfo;
   const ensureSetting = Object.hasOwn(options, 'ensure') ? options.ensure : true;
+  const retryAfterTimeout = options.retryAfterTimeout ?? true;
   const ensureServer = ensureSetting === false
     ? null
     : typeof ensureSetting === 'function'
@@ -265,7 +277,14 @@ async function postToServer(requestPath, body, options = {}) {
       }
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
-    } catch {
+    } catch (error) {
+      if (error?.requestStarted === false && error.code === 'DEADLINE_TIMEOUT') {
+        return { ok: false, status: null, json: null };
+      }
+      if (retryAfterTimeout === false && error?.requestStarted === true &&
+          (error.code === 'ATTEMPT_TIMEOUT' || error.code === 'DEADLINE_TIMEOUT')) {
+        return { ok: false, status: null, json: null, timedOut: true };
+      }
       if (attempt + 1 >= maxAttempts) return { ok: false, status: null, json: null };
       try {
         if (ensureServer) info = await ensureServer(ensureOptions);

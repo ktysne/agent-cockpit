@@ -18,7 +18,7 @@
       "key": "conflict.effects",
       "bounds": {
         "x": 52,
-        "y": 1172,
+        "y": 1173,
         "width": 1472,
         "height": 119
       },
@@ -28,7 +28,7 @@
       "key": "conflict.go",
       "bounds": {
         "x": 52,
-        "y": 1307,
+        "y": 1308,
         "width": 197,
         "height": 80
       },
@@ -38,7 +38,7 @@
       "key": "conflict.cancel",
       "bounds": {
         "x": 265,
-        "y": 1307,
+        "y": 1308,
         "width": 140,
         "height": 80
       },

@@ -8,6 +8,7 @@ const SERVER_NAME = 'agent-cockpit';
 const SERVER_VERSION = '0.0.0';
 const PROTOCOL_VERSION = '2025-06-18';
 const MCP_TIMEOUT_MS = 5000;
+const MCP_GITHUB_TIMEOUT_MS = 60000;
 const UNREACHABLE_MESSAGE = 'ダッシュボードに書けなかった。作業は続けてよい';
 const WRITER_REQUIRED_MESSAGE = 'このセッションの認証済み登録情報を確認できませんでした。';
 const CLAUDE_REASON_MESSAGES = new Map([
@@ -16,6 +17,7 @@ const CLAUDE_REASON_MESSAGES = new Map([
   ['claude_sessions_unreadable', 'Claude のセッションファイルを読めないため、このセッションを確認できませんでした。'],
   ['claude_registration_failed', 'このセッションを登録核へ登録できませんでした。'],
 ]);
+const TIMEOUT_MESSAGE = '常駐サーバーの応答が時間内に返らず、記録できたかを確かめられなかった。処理が続いている可能性があるため、ダッシュボードで確かめてほしい';
 const MAX_RESULT_ITEMS = 10;
 const PLAN_ERROR_MESSAGES = new Map([
   [400, '入力が正しくないか、上限を超えています'],
@@ -330,7 +332,7 @@ function writerError(options) {
   return { errorMessage: writerErrorMessage(options) };
 }
 
-function postMcpRequest(requestPath, body, options, deadline, maxAttempts = 2) {
+function postMcpRequest(requestPath, body, options, deadline, { maxAttempts = 2, attemptTimeoutMs = 2000 } = {}) {
   return postToServer(requestPath, body, {
     homeDir: options.homeDir || cockpitHomeFromOptions(options),
     environment: options.environment || process.env,
@@ -339,39 +341,49 @@ function postMcpRequest(requestPath, body, options, deadline, maxAttempts = 2) {
     ensureServerRunning: options.ensureServerRunning,
     readServerInfo: options.readServerInfo,
     deadline,
-    attemptTimeoutMs: 2000,
+    now: options.now || Date.now,
+    attemptTimeoutMs,
     maxAttempts,
+    // タイムアウト後も常駐サーバーで処理が続くため、同じ書き込みを再送しない。
+    retryAfterTimeout: false,
     ensure: true,
   });
 }
 
 // writer が無いとき、または 403 で拒否されたときに限り、refreshWriter で照合し直して 1 回だけ送り直す。
-async function postWithWriter(requestPath, buildBody, options, deadline, maxAttempts, firstWriter) {
+async function postWithWriter(requestPath, buildBody, options, deadline, firstWriter, requestOptions = {}) {
   let writer = firstWriter;
   if (!writer && options.refreshWriter) {
     await options.refreshWriter(deadline, { discard: false });
     writer = resolveMcpWriter(options);
   }
   if (!writer) return { writer: null, result: null, writerRejected: true };
-  let result = await postMcpRequest(requestPath, buildBody(writer), options, deadline, maxAttempts);
+  let result = await postMcpRequest(requestPath, buildBody(writer), options, deadline, requestOptions);
   if (!result.ok && result.status === 403 && options.refreshWriter) {
     await options.refreshWriter(deadline, { discard: true });
     writer = resolveMcpWriter(options);
     if (!writer) return { writer: null, result, writerRejected: true };
-    result = await postMcpRequest(requestPath, buildBody(writer), options, deadline, maxAttempts);
+    result = await postMcpRequest(requestPath, buildBody(writer), options, deadline, requestOptions);
     return { writer, result, writerRejected: !result.ok && result.status === 403 };
   }
   return { writer, result, writerRejected: false };
 }
 
+function requestDeadline(options, timeoutMs) {
+  const now = options.now || Date.now;
+  return options.deadline ?? now() + timeoutMs;
+}
+
 async function postPlan(toolName, args, options = {}) {
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const plan = planArguments(toolName, args);
   const { result, writerRejected } = await postWithWriter(
-    '/api/sessions/pending/plan', (writer) => ({ ...plan, writer }), options, deadline, 2, resolveMcpWriter(options),
+    '/api/sessions/pending/plan', (writer) => ({ ...plan, writer }), options, deadline, resolveMcpWriter(options),
+    { maxAttempts: 2 },
   );
   if (writerRejected) return writerError(options);
   if (result.ok) return result.json;
+  if (result.timedOut) return { timedOut: true };
   const errorMessage = PLAN_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -381,15 +393,16 @@ async function postPullRequest(args, options = {}) {
   if (!firstWriter && !options.refreshWriter) return writerError(options);
   const pullRequest = parsePullRequestUrl(args.url);
   if (!pullRequest) return { errorMessage: PR_ERROR_MESSAGES.get(400) };
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   const cwd = options.cwd === undefined ? process.cwd() : options.cwd;
   const { result, writerRejected } = await postWithWriter(
     '/api/sessions/pending/prs',
     (writer) => ({ kind: 'add_pr', url: pullRequest.url, cwd, writer }),
-    options, deadline, 2, firstWriter,
+    options, deadline, firstWriter, { maxAttempts: 2 },
   );
   if (writerRejected) return writerError(options);
   if (result.ok) return result.json;
+  if (result.timedOut) return { timedOut: true };
   const errorMessage = PR_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -401,7 +414,7 @@ async function postCrossReviewSkip(args, options = {}) {
     !isCompleteCommitSha(args.headRefOid) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 2000) {
     return { errorMessage: REVIEW_SKIP_ERROR_MESSAGES.get(400) };
   }
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_GITHUB_TIMEOUT_MS);
   const { result, writerRejected } = await postWithWriter(
     '/api/sessions/pending/prs',
     (writer) => ({
@@ -413,10 +426,11 @@ async function postCrossReviewSkip(args, options = {}) {
       reason: args.reason,
       writer,
     }),
-    options, deadline, 2, firstWriter,
+    options, deadline, firstWriter, { maxAttempts: 2, attemptTimeoutMs: MCP_GITHUB_TIMEOUT_MS },
   );
   if (writerRejected) return writerError(options);
   if (result.ok) return result.json;
+  if (result.timedOut) return { timedOut: true };
   const errorMessage = REVIEW_SKIP_ERROR_MESSAGES.get(result.status);
   return errorMessage ? { errorMessage } : null;
 }
@@ -453,7 +467,7 @@ async function notifyQuestionResponseLost(questionId, writer, options) {
   try {
     await postMcpRequest('/api/sessions/pending/questions/response-lost', {
       writer, questionId,
-    }, options, Date.now() + MCP_TIMEOUT_MS, 1);
+    }, options, requestDeadline(options, MCP_TIMEOUT_MS), { maxAttempts: 1 });
   } catch {}
 }
 
@@ -471,11 +485,11 @@ async function postCommonQuestion(name, args, options = {}) {
   const buildBody = (writer) => (name === 'cockpit_register_question'
     ? { writer, questionId: args.questionId, questions: args.questions, timeoutMinutes: args.timeoutMinutes }
     : { writer, questionId: args.questionId });
-  const deadline = options.deadline || Date.now() + MCP_TIMEOUT_MS;
+  const deadline = requestDeadline(options, MCP_TIMEOUT_MS);
   let response;
   let writer = null;
   try {
-    const outcome = await postWithWriter(routes[name], buildBody, options, deadline, maxAttempts, firstWriter);
+    const outcome = await postWithWriter(routes[name], buildBody, options, deadline, firstWriter, { maxAttempts });
     if (outcome.writerRejected) return toolResult(writerErrorMessage(options), true);
     response = outcome.result;
     writer = outcome.writer;
@@ -485,12 +499,13 @@ async function postCommonQuestion(name, args, options = {}) {
     if (name === 'cockpit_answer_poll' && (!response || response.status === null || response.status >= 500)) {
       if (writer) await notifyQuestionResponseLost(args.questionId, writer, options);
     }
-    const message = response?.status === 400 ? '質問の入力を確認してください。'
-      : response?.status === 403 ? WRITER_REQUIRED_MESSAGE
-        : response?.status === 404 ? 'この実行期間の質問が見つかりません。'
-          : response?.status === 409 ? '質問の内容が変わったため登録できません。'
-            : response?.status === 503 ? '質問サービスを利用できません。'
-              : UNREACHABLE_MESSAGE;
+    const message = response?.timedOut ? TIMEOUT_MESSAGE
+      : response?.status === 400 ? '質問の入力を確認してください。'
+        : response?.status === 403 ? WRITER_REQUIRED_MESSAGE
+          : response?.status === 404 ? 'この実行期間の質問が見つかりません。'
+            : response?.status === 409 ? '質問の内容が変わったため登録できません。'
+              : response?.status === 503 ? '質問サービスを利用できません。'
+                : UNREACHABLE_MESSAGE;
     return toolResult(message, true);
   }
 
@@ -535,17 +550,20 @@ async function callTool(name, args, options = {}) {
   }
   if (name === 'cockpit_add_pr') {
     const saved = await postPullRequest(args, options);
+    if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) を登録しました。`);
   }
   if (name === 'cockpit_skip_review') {
     const saved = await postCrossReviewSkip(args, options);
+    if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
     if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
     if (saved.errorMessage) return toolResult(saved.errorMessage, true);
     return toolResult(`PR #${saved.number} (${saved.owner}/${saved.repo}) の head ${saved.headRefOid.slice(0, 7)} をクロスレビュー不要として記録しました。`);
   }
   const saved = await postPlan(name, args, options);
+  if (saved?.timedOut) return toolResult(TIMEOUT_MESSAGE, true);
   if (!saved) return toolResult(UNREACHABLE_MESSAGE, true);
   if (saved.errorMessage) return toolResult(saved.errorMessage, true);
   return toolResult(shortSavedList(name, saved));
@@ -701,8 +719,10 @@ module.exports = {
   SERVER_VERSION,
   PROTOCOL_VERSION,
   MCP_TIMEOUT_MS,
+  MCP_GITHUB_TIMEOUT_MS,
   UNREACHABLE_MESSAGE,
   WRITER_REQUIRED_MESSAGE,
+  TIMEOUT_MESSAGE,
   TOOL_DEFINITIONS,
   PR_ERROR_MESSAGES,
   REVIEW_SKIP_ERROR_MESSAGES,

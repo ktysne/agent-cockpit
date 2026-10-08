@@ -23,7 +23,7 @@ managed runtimeの読取専用collectorは、trusted compositionが`startServer(
 | `away.json` | `{enabled, since, periods}` |
 | `server.log` | 起動、停止、エラー。起動ごとに切り詰める。ツールの入力の要約は書かない |
 | `start.lock` | 再起動の排他。10 秒で失効する |
-| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、PR の記録 |
+| `store.json` | 画面表示設定、タスク、判断事項と回答の記録、完了タスク、外したセッション、削除済みセッションの時刻、PR の記録 |
 | `routing.json` | 経路の設定 |
 | `route-agents/*.json` | サブエージェント開始時の経路記録。24 時間使われていない記録は次の開始時に削除する |
 
@@ -56,6 +56,7 @@ managed collectorはserverの通常起動では作成・接続しない。注入
 - 開発用の口は `/api/dev/` の下に置き、`--dev` で起動したときだけ有効にする。
 - 書き込みの本文は 64KB を上限とし、超えたら拒否する。
 - フックと MCP サーバーからの書き込みは、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。秘密値は常駐サーバーの起動ごとに変わるためである。
+- MCP の全書き込み（共通質問を含む）は、送信開始後の応答待ちがタイムアウトした場合に再送せず、処理結果不明として返す。`cockpit_skip_review` の全体期限は 60 秒で、送信開始前に期限を使い切った場合は未到達として返す。
 - 画面は `uiSecret` を配信時に HTML の meta 属性から受け取る。`401` を受けたら常駐サーバーが再起動して秘密値が変わったとみなし、`GET /` を取り直して新しい値で 1 回だけ送り直す。
 
 ## 状態不明のセッション
@@ -67,7 +68,56 @@ managed collectorはserverの通常起動では作成・接続しない。注入
 - assistant の最後の行が `end_turn` で終わる場合、または `tool_use` を含まず stop reason も `tool_use` でない場合は `input` とする。user の行が最後なら `model`、それ以外の assistant の行なら `tool` とする。最後のツール名は末尾の読取範囲内で最後に現れる `tool_use` から求める。
 - 推定結果はセッションごとにメモリーへ持ち、そのセッションのイベントで消す。読み取り中にイベントが届いて状態が分かったときは保存せず `409` を返す。結果を保存した後は `version` を進め、推定結果を応答と `GET /api/state` に含める。
 - `POST /api/hidden-sessions` は `{action: "hide", session_id}` または `{action: "hide", session_ids}` で、一覧にあるセッションを状態にかかわらず外す。`session_ids` は ID を 1〜50 件含み、各 ID は `[A-Za-z0-9_-]` の 1〜100 文字に限る。知らない ID は無視し、1 件も一覧に無ければ `404` を返す。本文が仕様に合わない場合は `400` を返す。状態不明カードの「一覧から外す」とプロダクト見出しの「×」は同じ操作を使う。
-- `{action: "clear"}` はすべて表示する。外した ID はメモリーに持ち、セッションのイベントが届いたとき、またはセッションが終了扱いになったときに集合から削除する。`GET /api/state` では外したセッションにだけ `hidden: true` を付ける。
+- `{action: "clear"}` はすべて表示する。外した ID と時刻は `store.json` に保存し、セッションのイベントが届いたとき、またはセッションが終了扱いになったときに集合から削除する。`GET /api/state` では外したセッションに `hidden: true` と `hiddenAt` を付ける。
+  `hiddenAt` は保存済みの `hiddenSessionUpdatedAt` である。
+  時間経過による移動は画面の分類だけで行い、サーバーは外した集合から戻さない。
+
+## 記録の削除
+
+`POST /api/record-deletions` は画面が帯に数えた ID を受け取り、分類を再計算せずに削除する。
+`x-cockpit-secret` が `uiSecret` と異なれば `401`、Origin が無いか自分の origin と異なれば `403` を返す。
+本文は次の 3 キーだけを許し、各キーは省略できる。
+
+```json
+{
+  "session_ids": ["session-id"],
+  "merge_history": [{"owner": "example", "repo": "project", "number": 1}],
+  "closed_pull_requests": [{"owner": "example", "repo": "project", "number": 2}]
+}
+```
+
+各配列は 0〜50 件で、合計 1 件以上を必要とする。
+セッション ID は `[A-Za-z0-9_-]` の 1〜100 文字、PR は有効な owner、repo と正の整数の number を持つ。
+PR のオブジェクトも上記の 3 キーだけを許す。
+形が違う本文は `400`、正常時は `{deleted: {sessions, pullRequests}}` を返す。
+未知の ID と重複は件数に含めない。
+帯に 50 件を超える対象がある場合、画面は分割して送る。
+
+セッションの削除では、イベント、状態、終了時刻、不在終了、判断の上書き、推定、非表示、閉じたサブエージェント、ファイル最終確認時刻を消す。
+保存済みの計画、質問との結び付き、イベント外で終えた質問の印、回答ライフサイクル、閉じたタスクも消す。
+セッション別の PR 登録、マージ予約、マージ意図は残す。
+PR 登録はグループの起点と、マージ後の base 付け替えと restack の追跡に使うためである。
+削除でも不在終了と同じ通知を送り、離席中の質問を待つフックを解放する。
+
+`deletedSessions` はセッション ID から削除時刻の ISO 文字列への対応として `store.json` に保存する。
+項目の無い旧形式は空として読む。
+ファイルの更新時刻が削除時刻以前、または更新時刻が無い場合、ファイルだけからセッションを再表示しない。
+削除時刻以前の `hookAt` を持つイベントは捨てる。
+新しいイベント、新しいファイル更新、MCP の書き込みでは削除印を解除して復活させる。
+削除印は保存期限の 14 日を超えたときに掃除する。
+同期時の一覧に ID が無い状態は、ファイルの読み取り失敗でも起きるため掃除に使わない。
+
+マージ履歴の削除はレコードを残し、`historyDismissedAt` を付けて通常の履歴から除く。
+保存と復元でもこの時刻を保ち、merged 登録からの履歴再生成で戻らないようにする。
+同じ `mergedAt` の再記録では非表示時刻を引き継ぎ、新しい `mergedAt` では引き継がない。
+`headMismatch === true` の警告履歴は対象にしない。
+クローズ済み PR は、セッション別と関連 PR のうち state が `closed` の登録だけを削除してグループを再計算する。
+state が `merged` の登録は残す。
+
+3 つの帯の右端にゴミ箱を置く。
+押すと同じ帯に件数、元に戻せない旨、「削除する」「やめる」を出す。
+確認対象と確認状態は定期描画をまたいで保ち、フォーカスも同じ操作へ戻す。
+「やめる」は要求を送らず、削除後は対象 ID を「元に戻す」の記録から除く。
 
 ## フック
 
@@ -100,10 +150,10 @@ PostToolUse の出力全文は送らない。
 ## 状態
 
 - タスク催促の記録はセッションごとにメモリーだけに持ち、`SessionEnd` で消す。
-- イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて既定の種類順で補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeResultHideMinutes` は警告のないマージ結果の行を隠すまでの時間で、既定は 5 分、範囲は 1〜60 分の整数とする。旧形式または範囲外の保存値は 5 分として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマはブラウザーごとの `localStorage` に残す。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
+- イベントとイベントから組み立てるセッション状態はメモリーだけに持つ。MCP のタスクと判断事項、離席中の `AskUserQuestion` から作る判断事項、それらへの回答記録、完了タスク、外したセッション、削除時刻の `deletedSessions`、表示設定、クロスレビュー不要記録は `store.json` に保存する。判断事項の質問、状態、作成・更新・解決時刻、解決内容は `plans.decisions` に、回答と配信時刻は `decisionLifecycles` に置く。離席中の質問の `tool_use_id` と判断事項 ID の対応は `askDecisionBindings` に置く。この項目が無い旧形式の `store.json` は、結び付きが無いものとして読み込む。`crossReviewSkips` が無い旧形式は空として読み込む。表示設定は `GET /api/state` の `display` で配り、初回だけ画面が旧 `localStorage` の値をサーバーへ移す。`display.sectionOrder` は 5 種類のセクションを表示する順で、未知の値や重複を除いて既定の種類順で補う。`display.hideFinished` は完了済みの情報を隠す設定で、既定は `true` で、古い保存ファイルでも `true` として補う。`display.mergeResultHideMinutes` は警告のないマージ結果の行を隠すまでの時間で、既定は 5 分、範囲は 1〜60 分の整数とする。旧形式または範囲外の保存値は 5 分として補う。`display.mergeableCondition` は `operation`、`ci`、`cross-review` のいずれかで、旧形式では既定の `cross-review` として補う。テーマはブラウザーごとの `localStorage` に残す。離席状態と期間は `{enabled, since, periods}` として `away.json` に保存し、起動時に読む。期間は `{start, end}` の数値ミリ秒で、離席中の期間の `end` は `null` にする。旧形式の `{enabled, since}` は、離席中なら `since` から現在まで、離席中でなければ期間なしとして読む。既読済みの期間、14 日の保持期限を過ぎた期間、50 件を超える古い期間を整理する。期間の記録だけが壊れているか食い違うときは、旧形式と同じく `enabled` と `since` から期間を作り直す。`enabled` と `since` が壊れているときは離席中ではない状態として扱う。
 - 旧 `store.json` に残る `display.mergeAfterReviewDefault` は読み込み時に無視する。`mergeReservations` は登録セッション、リポジトリ、PR、方式、ブランチ削除の有無、予約時刻を `store.json` に保存する。旧 GitHub 自動マージ形式は予約として復元せず、そのまま捨てる。
 - 表示設定 `display.idleHideMinutes` は更新の無いセッションを隠すまでの時間で、既定は 30 分、範囲は 5〜1440 分の整数とする。保存値が範囲外または整数でなければ読み込み時に 30 分へ戻し、書き込み時は拒む。
-- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, routing, integrations, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
+- `GET /api/state` は `{version, generatedAt, display, sessions, pullRequests, sinceSeen, away, routing, integrations, uiVersion}` を返す。`uiVersion` は `src/web/index.html` の内容の SHA-256 先頭 16 桁で、ファイルの更新時刻か大きさが変わったときに再計算する。`GET /` の HTML にも同じ版を埋め込み、画面は版の違いを検出して読み込み直す。状態不明のセッションには、推定済みなら `estimate`、一覧から外したなら `hidden: true` と `hiddenAt` を含める。`GET /api/away` は離席中だけを返す。`version` は画面に出す状態が変わるたびに 1 増える。画面は 2 秒ごとに状態を取得する。
 - 識別子は `session_id`、`agent_id`、`tool_use_id` をそのまま使う。
 
 ## 保存
@@ -135,9 +185,14 @@ base と head の対応から関連するオープン PR を積み上げる。�
 MCP ツールは `POST /api/sessions/:session/prs`、カードの設定と取り消しは `POST /api/pull-requests/review-skip` を使う。画面からの要求は `uiSecret` と `validRequiredUiOrigin` を通し、登録キーと表示中の head SHA が最新状態と一致することを確かめる。
 各プロダクトの PR 群には、リポジトリ全体の失敗をまとめた `error` とは別に、そのプロダクトのオープンの PR を数えきれていないことを示す `openStateUnknown` を付ける。PR の一覧を取得できなかったときと、そのプロダクトが登録した PR の状態を確かめられなかったときに真にする。
 登録が保持期限などで消えたプロダクトの PR 群は、次の取り直しで配らなくなる。登録と関連 PR が 1 件も無くなったリポジトリは、取得した状態ごと捨てる。
-積み直し待ちは、GitHub のマージ済み PR の head SHA が各オープン PR の既定ブランチとの compare に残っているかで判定し、compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
+積み直し待ちは、各オープン PR の base から同じブランチ名を head に持つオープン PR、次にマージ済み PR をたどって compare の base を決め、マージ済み PR の head SHA がその差分に残っているかで判定する。
+マージ済み PR と同じ名前のブランチが残り、現在の head がマージ時の head SHA と異なる場合、または `mergedHead.branchKept: true` で残す選択が記録されている場合は、その生きているブランチを compare の base にして追跡を止める。
+既定ブランチに行き着かない場合は、行き着いたブランチとの差分を使う。
+compare の失敗や 250 件超で全件を確認できない場合はマージ不可とする。
 判定の詳細は[計画書の「積み直し待ちの判定」](../handover/2026-10-02.md#積み直し待ちの判定)を正本とする。
 ダッシュボードから即時マージする口は、秘密値と必須 Origin を照合し、登録済みスタックの一番下と現在の head をサーバーで確かめる。`gh pr merge` には画面で確認した `--match-head-commit` を渡す。PR 行の予約チェックからは画面で見た head、方式、ブランチ削除の有無を予約口に送り、条件がそろっていればクロスレビューの最後の `converged` 記録の SHA を `--match-head-commit` に渡してその場でマージする。確認欄は予約状態にかかわらず即時マージ専用とする。
+子 PR の base は head ブランチを削除する場合(自動削除を含む)だけ付け替え、残す場合と fork では付け替えない。
+`mergedHead` のない旧マージ済み記録は refresh ごとに最大 5 件を `gh pr view` で補完し、通知を再発火させず、失敗を画面へ出さずに同じプロセス内で 1 回まで再試行する。
 取得と判定の詳細は [計画書のマージ手順](../handover/2026-10-02.md#マージの手順常駐サーバー)に記す。
 
 ## 前回見てから
@@ -314,8 +369,11 @@ MCPは`pending`宛てに認証済みwriterを渡し、常駐サーバーがproje
 - 設定画面の下端のボタン列には、利用者向けマニュアルへのリンクを置く。
 - 2 秒ごとに `GET /api/state` を読む。
 - セッションの `lastUpdatedAt` は、フックイベントの `lastActivityAt`、計画の `tasksUpdatedAt`、判断事項の `updatedAt` のうち最も新しい時刻とする。候補が無い場合は `lastActivityAt` を使う。
-- `lastUpdatedAt` から `display.idleHideMinutes` を過ぎたセッションは、プロダクト別と種類別の一覧から隠す。許可待ち、`waiting` または `provisional` の判断事項、稼働中のサブエージェント、状態が「作業中」のいずれかがあれば表示する。
-- 更新の無いセッションを隠した件数は一覧の後に示す。「表示する」は設定や外したセッションの記録を変えず、開いているページの間だけ表示を切り替える。終わったものを隠す設定で除かれるセッションは更新の無い件数に含めない。
+- 更新時刻(`lastUpdatedAt`、無ければ `sessionFileUpdatedAt`)から `display.idleHideMinutes` を過ぎたセッションは、プロダクト別と種類別の一覧から隠す。許可待ち、`waiting` または `provisional` の判断事項、稼働中のサブエージェント、状態が「作業中」のいずれかがあれば表示する。
+- 更新の無いセッションを隠した件数は一覧の後に示す。「表示する」は設定や外したセッションの記録を変えず、開いているページの間だけ表示を切り替える。終わったものを隠す設定で除かれる通常のセッションは更新の無い件数に含めない。
+- 外したセッションでは更新時刻と `hiddenAt` の遅い方を起点にする。
+  条件を満たしたら「外したセッション」の件数と内訳から除き、「更新の無いセッション」に数える。
+  「表示する」で一覧に戻せる。
 - 更新の無いセッションだけが残るプロダクトは、プルリクエストか「前回見てから」の項目がある場合に表示する。
 - プロダクト別では `product.key` ごとにまとめ、プロダクト名、取得できたブランチ名、0 件を除く許可待ちと判断待ちの件数を見出しに出す。1 プロダクトに複数セッションがあるときだけ、各まとまりにセッション名と状態を出す。
 - セッション内は許可待ちと判断事項、タスクと完了条件、メインの作業行、サブエージェントの順に表示する。メイン行は状態、doing タスク、実行中ツール、最終イベントからの経過を示し、作業中の点は `prefers-reduced-motion` のとき点滅を止める。
