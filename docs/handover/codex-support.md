@@ -44,7 +44,7 @@ main にはその後 PR #305(別のリポジトリで作った PR の登録)が�
 
 ## Issue の対応表
 
-Codex 対応の Issue はマイルストーン「Codex対応」で分類する。
+Codex 対応の Issue はマイルストーン「Codex対応」で分類し、GitHub 側の入口は追跡 Issue [#310](https://github.com/ktysne/agent-cockpit/issues/310) に置く。
 main 側の不具合(#292、#308 など)にはマイルストーンを付けない。
 「主な PR」はコードの在りかを探す入口で、状態の正本は GitHub である。
 
@@ -72,6 +72,13 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
+| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | | 2026-10-09 起票。結果不明の書き込みを再送しない |
+| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | | 2026-10-09 起票。計測してから回収条件と索引を決める |
+| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | | 2026-10-09 起票。#210 の fsync とは別 |
+| #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
+| #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
+
+main 側の不具合として #316(idle で補った後の古い推定の再表示)と #317(マニュアルの回答画像が等倍)も 2026-10-09 に起票した。マイルストーンは付けていない。
 
 ## 決定済みの判断
 
@@ -93,7 +100,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 
 | 順 | 対象 | 作業 | PR と base | 状態(2026-10-09 確認) |
 |---:|---|---|---|---|
-| 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | この資料を含む PR、base: feature | 作成中 |
+| 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | [#309](https://github.com/ktysne/agent-cockpit/pull/309)、base: feature | レビュー待ち |
 | 2 | main 同期 | PR #305 を feature へ取り込む | 未作成 | 未着手 |
 | 3 | #209 段階 2 の 1b | 質問 codec | 未作成、1a(#307)の上 | 未着手。完了条件は [容量回収計画](../design/codex-capacity-reclamation.md) |
 | 4 | #209 段階 2 の 1c | 配信 codec | 未作成、1b の上 | 未着手 |
@@ -252,6 +259,8 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 停止済みの実行のカードの数え方 | 判断待ちの件数に停止済みのカードを含めるか。推奨は含めない(操作できないものを件数に出さない) | PR #274 の[コメント](https://github.com/ktysne/agent-cockpit/pull/274#issuecomment-6056718578) |
 | non-blocking の native 質問の待ち中の追加指示 | 送信を止めたままにするか、送ってよいか。推奨は実測するまで止めたままにする | PR #204 の本文 |
 | 電源断の保証 | 拒否情報の flush と保存順序の保証を電源断にも広げるか。推奨は広げない(現状はプロセスのクラッシュ後に限る) | [容量回収計画](../design/codex-capacity-reclamation.md)「容量予約と診断」 |
+| 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
+| 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
 
 ## 落とし穴
@@ -286,6 +295,12 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | Claude の wait の継続で文字列形式の tool_result を受け付けない(未観測) | [owned-native-claude-wait](../design/owned-native-claude-wait.md)「Context の継続」 |
 | PR 通知の alias を削除するときの alias 墓標(#209 の範囲) | [配信記録の回収 schema](../design/delivery-reclamation-schema.md)「PR通知のaliasと履歴」 |
 | Claude の local issuer をより強い証拠方式へ差し替える前提条件 | [claude-local-issuer](../design/claude-local-issuer.md)「採らなかった方式」 |
+| owned runner が 128 件の上限に達するたびに明示停止が要る。turn 単位の回収で連続運転するには、resolved で turn を識別できる方式の確認が先(2026-10-08 の決定で #211 の対象外) | 計画書「決定済みの判断」の #211 の行 |
+| 実 Codex の NS12 試験が unknown で終わった原因(run2 の observer digest mismatch、run3 と run4 の `scenario_gate_not_met`)の切り分け。harness は PoC と一緒に削除したので、再試験のときに #218 の採用ゲートの記録として扱う | [Native writer と通常指示サービスの接続](../design/native-instruction-service-integration.md)「NS12 Codex runtime観測」 |
+| PR #252 のレビューで「後続で追跡」とされた、保存済み子 PR の合算と fork の branchKept の差(main 側)。症状の記録が残っておらず、再現できたときに起票する。手がかりは `src/server/pull-request-merge.js` の `branchKept` | PR #252 の[コメント](https://github.com/ktysne/agent-cockpit/pull/252#issuecomment-6045000236) |
+
+Claude の local issuer の未確認(Claude CLI、`/clear`、他 OS、session file の読取の遅延)は、#207 の[コメント](https://github.com/ktysne/agent-cockpit/issues/207#issuecomment-6066708704)に確認項目として置いた。
+Claude の owned wait の共通質問サービスへの接続は #174 の[コメント](https://github.com/ktysne/agent-cockpit/issues/174#issuecomment-6066707834)、native owner の next-user-input は #175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6066708249)に残条件として置いた。
 
 ## 資料の一覧
 
