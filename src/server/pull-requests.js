@@ -1052,6 +1052,23 @@ class PullRequestTracker {
     }
   }
 
+  async fetchMergedPullRequests(repository, openPullRequests) {
+    if (!openPullRequests.length) {
+      return { mergedPullRequests: [], mergedListComplete: true, error: null };
+    }
+    const since = mergedSearchSince(openPullRequests);
+    try {
+      const mergedPullRequests = parseMergedPullRequestList(await this.execute([
+        'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
+        ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt',
+      ]));
+      return { mergedPullRequests, mergedListComplete: mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT, error: null };
+    } catch (error) {
+      return { mergedPullRequests: null, mergedListComplete: false,
+        error: `マージ済み PR の一覧を取得できません。${ghErrorMessage(error)}` };
+    }
+  }
+
   async fetchRepository(owner, repo, repository) {
     const key = repoKey(owner, repo);
     const checkedAt = new Date(this.now()).toISOString();
@@ -1078,20 +1095,10 @@ class PullRequestTracker {
     }
 
     // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
-    if (listAvailable && !openPullRequests.length) {
-      mergedPullRequests = [];
-      mergedListComplete = true;
-    } else if (listAvailable) {
-      const since = mergedSearchSince(openPullRequests);
-      try {
-        mergedPullRequests = parseMergedPullRequestList(await this.execute([
-          'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
-          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt',
-        ]));
-        mergedListComplete = mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT;
-      } catch (error) {
-        errors.push(`マージ済み PR の一覧を取得できません。${ghErrorMessage(error)}`);
-      }
+    if (listAvailable) {
+      const mergedResult = await this.fetchMergedPullRequests(repository, openPullRequests);
+      ({ mergedPullRequests, mergedListComplete } = mergedResult);
+      if (mergedResult.error) errors.push(mergedResult.error);
     }
 
     const historicalPullRequests = historicalMergedPullRequests(

@@ -2227,3 +2227,19 @@ test('予約とマージ意図と親が無ければ子のスタックは空に�
   assert.deepEqual(stackedPullRequestsForMerge({ reservation: null, mergeIntent: null,
     pullRequest: null, openPullRequests: [pullRequest(32, 'child', 'main')] }), []);
 });
+
+test('オープン PR が無いときはマージ済み一覧を取得せず完全な空一覧を返す', async () => {
+  const tracker = new PullRequestTracker({ state: new DashboardState() });
+  tracker.execute = async () => { assert.fail('gh を呼ばない'); };
+  assert.deepEqual(await tracker.fetchMergedPullRequests('example/project', []),
+    { mergedPullRequests: [], mergedListComplete: true, error: null });
+});
+
+test('マージ済み一覧の取得失敗は一覧を null にして既存のエラー文を返す', async () => {
+  const tracker = new PullRequestTracker({ state: new DashboardState() });
+  tracker.execute = async () => { throw new Error('failed'); };
+  const result = await tracker.fetchMergedPullRequests('example/project', [pullRequest(31, 'feat', 'main')]);
+  assert.equal(result.mergedPullRequests, null);
+  assert.equal(result.mergedListComplete, false);
+  assert.match(result.error, /^マージ済み PR の一覧を取得できません。/);
+});
