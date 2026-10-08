@@ -10,6 +10,9 @@ node_modules/
 *.log
 *.tmp
 
+# PoC の実行結果。PoC 自体は削除済みだが、既存の作業ツリーに成果物が残っていることがあり、セッションのトークンやパスを含むため共有しない
+poc/out/
+
 # ai-cross-review のローカル状態と生成物 (往復回数、レビュー出力、PR コメント本文)
 .cross-review-state.json
 .cross-review/
