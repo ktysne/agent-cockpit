@@ -42,6 +42,18 @@ fixtureで検証した変更をfeatureへ集約し、実runtime確認をfeature�
 | 4 | `codex/native-owned-stop-api-211-20261008` / #273 | `codex/native-capacity-stop-211-20261008` | 六項目の停止対象照合、旧配送の分離、後継開始の確認を製品HTTPへ接続。Claudeレビュー2往復で収束しReady。実runtimeは未確認。 |
 | 5 | `codex/native-stop-mock-211-20261008` / #274 | `codex/native-owned-stop-api-211-20261008` | 採用済みモックと製品画面を同じ判断カード・ボタンへ整合。画面関連fixture216/216成功。製品HTMLの表示、停止確認、送信抑止、下書き保持をfixtureで確認。Claudeレビュー2往復で収束しReady。 |
 | 6 | `codex/sync-main-272-20261008` / #276 | `codex/native-stop-mock-211-20261008` | main b62ba98を通常mergeし、HTTP route factoryへCodex対応を適合。先行UI/APIとの全体fixture2184/2184成功。設計・差分監査で必須修正なし。レビューの最新結果と収束headはGitHubのコメントを正本とする。 |
+| 7 | `codex/plan-common-question-composition-216-20261008` / #279 | `codex/sync-main-272-20261008` | 設定と注入用factoryの計画。Claudeレビュー2往復で収束。開発者が段階1・2を承認。 |
+| 8 | `codex/sync-main-278-20261008` / #282 | `codex/plan-common-question-composition-216-20261008` | main 85403b2のPR集計分割を取り込み、多段スタックの安全条件を保持。関連fixture203/203成功。 |
+| 9 | `codex/common-question-settings-216-20261008` / #284 | `codex/sync-main-278-20261008` | 既定OFFの専用設定、revision照合、保存後の通知を実装。標準起動と画面への接続は対象外。 |
+| 10 | `codex/common-question-composition-216-20261008` / #286 | `codex/common-question-settings-216-20261008` | 共通質問を同じregistry/storeへ明示注入。専用fixture18/18と既存関連31/31成功。fresh registryの再起動条件は#283で未達として追跡。 |
+
+#216の段階1・2は[開発者の承認記録](https://github.com/ktysne/agent-cockpit/pull/279#issuecomment-6057424235)に従う。
+注入用factoryのfixtureでは両providerの登録・回答・一度だけの配送を確認するが、実runtimeは未実施である。
+fresh registryで保存済み質問を読み込む再起動はbinding照合で拒否されるため、段階2の再起動条件は未達である。
+未選択と選択済みの反例で、両journalとshared checkpointのbyte列が保持されることを確認する。
+復旧は[#283](https://github.com/ktysne/agent-cockpit/issues/283)で追跡し、#216を閉じない。
+#283の復旧契約を設計・検証し、fresh registryの再起動条件を満たすまで、共通質問を標準起動や設定画面へ接続するPRに着手しない。
+設定画面と標準起動への組込み、厳密な横断二重登録防止、native権限の変更には別の設計判断を残す。
 
 開発者は下から通常mergeで取り込み、次段のbaseがfeatureへ付け替わったことを確認してから進める。
 以後の実装PRは、計画確認後に最新featureまたは開発者指定の直前PRを起点にする。

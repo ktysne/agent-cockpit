@@ -100,9 +100,19 @@ HTTP適合fixtureは[test/server-projection-display.test.js](../../test/server-p
 許可や承認の要求、nativeの待機には共通質問MCPを使用しない。
 Claudeのnative `AskUserQuestion`も既存hook経路で扱い、共通MCPへ再登録しない。
 MCPモデル引数にopt-in設定を持たせない。
-trusted設定の供給元と製品導線は未実装で、現状はservice注入だけであり、製品既定はoffである。
+trusted設定の供給元は[専用設定モジュール](common-question-settings-module.md)で定義し、[native integrationの注入用factory](native-instruction-service-integration.md)から明示的に渡せる。
+製品の標準起動と設定画面への接続は未実装で、製品既定はoffである。
 共通service fixtureでの合格は製品MCP compositionや実runtimeでの接続証拠ではない。
 Claude legacy経路と共通質問経路には共有native source keyも排他的producer選択もないため、厳密な横断重複防止は未達として追跡する。
+
+設定モジュールの保存、revision、不正状態の試験はproviderに依存しないunit fixtureであり、Claude/Codexの実runtime適合結果には数えない。
+`test/common-question-composition.test.js`では両providerのfake owned processと製品HTTPを通し、検証済みwriterの登録、手動回答、一度だけのanswer-poll配送を確認する。
+質問サービスと指示サービスが同じregistryとcheckpoint storeを使い、質問の回答を通常指示adapterへ書き込まないことを期待値とする。
+設定のunsafe状態、Promise、例外では自動適用をOFFにし、終了時には設定通知を解除してから質問と指示のserviceを閉じる。
+これは注入用factoryのfixtureであり、標準起動の接続、MCP producerの実動作、実runtimeの成功を示さない。
+fresh registryで保存済み質問を読み込む再起動は、未選択・選択済みの両方でbinding照合に失敗する。
+この反例では起動拒否と両journal・checkpointのbyte列保持を確認し、再起動成功には数えない。
+復旧の契約は[#283](https://github.com/ktysne/agent-cockpit/issues/283)で追跡し、#216の再起動条件を未達として残す。
 
 ## Codex native pendingの表示
 
