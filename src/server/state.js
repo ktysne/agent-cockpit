@@ -848,16 +848,23 @@ function applyAskQuestionStart(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'agentToolBindings'> & Pick<SessionAgents, 'agents'>} session
+ * @param {Pick<SessionTools, 'agentToolBindings'|'tools'> & Pick<SessionAgents, 'agents'>} session
  */
 function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
-    const boundAgentId = session.agentToolBindings[toolUseId];
-    const targetAgent = agentFor(session, boundAgentId);
+    const boundAgent = agentFor(session, session.agentToolBindings[toolUseId]);
+    const responseAgent = agentFor(session, event.agentId);
+    const targetAgent = responseAgent && !responseAgent.isCodex
+      ? responseAgent
+      : boundAgent && !boundAgent.isCodex ? boundAgent : null;
+    if (!targetAgent) return;
+    if (toolUseId) session.agentToolBindings[toolUseId] = targetAgent.agent_id;
+    const agentTool = toolUseId && session.tools.find((tool) => tool.tool_use_id === toolUseId && tool.tool_name === 'Agent');
+    if (!targetAgent.description && agentTool?.description) targetAgent.description = agentTool.description;
     if (targetAgent?.active) targetAgent.backgrounded = true;
-    if (targetAgent && event.resolvedModel) {
+    if (event.resolvedModel) {
       targetAgent.model = event.resolvedModel;
       targetAgent.source = 'Agent tool response';
     }
@@ -1070,12 +1077,12 @@ function applyToolCompletion(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    applyAgentToolCompletion(session, event);
     if (toolUseId) {
       session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
       session.completedToolIds.add(toolUseId);
     }
 
-    applyAgentToolCompletion(session, event);
     applyCodexLaunchCompletion(session, event);
     applyCodexResult(session, event);
 

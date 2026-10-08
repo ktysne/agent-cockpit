@@ -137,7 +137,7 @@ state が `merged` の登録は残す。
 |---|---|
 | 共通 | `session_id`、`hook_event_name`、`cwd`、`agent_id`、`agent_type`、`hookAt` |
 | PreToolUse | `tool_name`、`tool_use_id`、入力の要約(80 文字まで。切り詰めた場合は末尾に「…」を付ける)。Agent ツールでは `tool_input.description`(200 文字まで)。メインセッションの `AskUserQuestion` では質問、見出し、選択肢の label と description、`multiSelect` も上限付きで送る |
-| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールでは `tool_response.resolvedModel`。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex を終了と判定するのは結果行を受けたときだけで、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
+| PostToolUse、PostToolUseFailure | `tool_name`、`tool_use_id`。Agent ツールの PostToolUse では `tool_response.agentId`(256 文字まで)と `tool_response.resolvedModel`(160 文字まで)を送る。出力(PostToolUseFailure では `error` の文字列も)に含まれる Codex の監査行と結果行だけを送る。背景へ移った Bash の `tool_response.backgroundTaskId` と、背景タスクの出力ファイル(`<ID>.output`)を読んだ Read、`cat` などの Bash、`TaskOutput` の背景タスク ID も、決まった形(英数字、`_`、`-` の 64 文字まで)のときだけ送る。Codex を終了と判定するのは結果行を受けたときだけで、監査行だけなら背景で動いているものとして扱う。メインセッションの `AskUserQuestion` の PostToolUse では、認識できた回答だけを送る |
 | Notification | 通知の種類、メッセージ(200 文字まで) |
 | SubagentStart、SubagentStop | 共通の項目だけ |
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
@@ -245,7 +245,9 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 
 - Agent ツールの PreToolUse で受けた説明は、`tool_use_id` と `agent_id` の結び付けから対象のサブエージェントへ持たせる。
 - `SubagentStart`、または `SubagentStop` 以外で `agent_id` と `agent_type` を含むイベントでは、`~/.claude/agents/<agent_type>.md` の frontmatter の `model` と `effort` を仮の値として出す。
-- Agent ツールの PostToolUse の `resolvedModel` が来たら、モデルを置き換える。
+- Agent ツールの PostToolUse の `agentId` が既存の結び付けと異なるか、結び付けが曖昧なら、その ID からサブエージェント行を引き直して結び付けを更新する。
+- PostToolUse の `resolvedModel` は、その行のモデルに反映する。
+- Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、説明が空の行へ引き継ぐ。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
 - Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
 - Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。

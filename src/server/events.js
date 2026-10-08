@@ -162,6 +162,7 @@ function sanitizeEvent(input, metadata = {}) {
       event.decisionResolution = sanitizeDecisionResolution(input.decisionResolution) || { chosen: [], note: '' };
     }
     if (event.tool_name === 'Agent') {
+      event.agentId = shortString(input.agentId, 256) || '';
       event.resolvedModel = shortString(input.resolvedModel, 160) || '';
     }
   }
