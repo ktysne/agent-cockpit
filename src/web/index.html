@@ -4032,7 +4032,9 @@ function instructionComposer(session, state) {
         const rebind = element('button', 'secondary', '現在の実行状態で下書きを続ける');
         rebind.type = 'button';
         rebind.dataset.instructionRebind = session.session_id;
-        form.append(rebind);
+        const rebindActions = element('div', 'answer-foot');
+        rebindActions.append(rebind);
+        form.append(rebindActions);
       }
     }
     const textareaLabel = element('label', '', '指示の内容');
