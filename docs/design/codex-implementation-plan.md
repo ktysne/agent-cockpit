@@ -22,6 +22,17 @@ Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照�
 |---|---|---|
 | 2026-10-08 | 案Aとしてfixtureで契約を検証した変更をfeatureへ集約し、実runtime未確認はfeatureからmainへの採用条件として残す。 | レビュー済みコードの確認起点をそろえるため。fixtureは製品compositionやruntimeの挙動を証明しないので、#175、#211、#216、#217をこの集約だけで閉じない。確認手順は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。 |
 
+この判断はG2の実接続条件を緩和しない。
+再接続時の接続世代更新と旧currentProofの失効は、対象runtimeで別途確かめる。
+G4では質問応答と通常指示のtransportを分け、質問の宛先、owner保留、late answer、受付と適用の区別を維持する。
+fixtureでこれらの境界を検証しても、実runtimeの適合を確認したことにはならない。
+
+native待ちは、CodexまたはClaude本体が本人の質問回答や許可を待つ状態を指す。
+許可は元のUIで扱い、Cockpitは許可を出す口を持たない。
+#211の停止確認では、旧authorityの失効と物理停止を別に確認する。
+authority失効だけでは物理停止を証明しないため、対象processのexitとclose、非稼働、対象contextとの一致を確認できない間は送信と再送を許さない。
+保留だけを外して同じ実行への送信を再開する操作は設けない。
+
 採用前に残る確認の順序、操作、観測点と合格条件は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。
 不足機能の実装と実runtime試験は、この計画を開発者が確認してから着手する。
 
