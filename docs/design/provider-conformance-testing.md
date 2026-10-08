@@ -28,6 +28,18 @@ Claude側とCodex側で適用する共通シナリオには共有IDを付け、�
 | ID-F12-D01 | provider別の共通質問・指示projection表示 (#247) | Cockpitの共通結果 | Claude/Codexのregistrationと一致する質問・指示snapshot fixture | 合成行を非表示・復元・削除し、削除後にsnapshotが消えるケースと新しい検証済みstate writeを確認する | HTTP応答、GET `/api/state`、保存済み表示記録、実session状態と終了callback | 操作対象のprovider表示だけを変える。削除tombstoneは後から消えたprojectionで解除せず、削除より新しい検証済みstate writeだけで解除する。対象取得に失敗した変更操作は503で状態を変えず、GETは利用可能な実rowを返す | native ID、session ID、時刻はprovider fixtureごとに異なる。実runtime適合は別途確認 | projection操作から実session削除、終了callback、他providerへの変更、authorityまたはdeliveryの変更を起こさない |
 | 実装前に機能ごとに定義 | 対象機能と関連Issue | 共通結果、仕様差、未確認 | 実行条件 | 入力と操作 | 状態・宛先・期限 | 仕様に基づいて実装から独立に定める | 意味を変えない差だけ記載 | 起きてはならない副作用 |
 
+### 中断の表示 (#221)
+
+`ID-F12-I01` は、合意済みモックの「中断」を製品画面で確認するシナリオである。
+Claude/Codex の投影が `status: '中断'` または `turnState: 'interrupted'` を返すことを能力条件とする。
+親の中断と子だけの中断を分けて与え、通常表示と「終了を隠す」が有効な表示を確認する。
+次の描画で対象の行が「中断」と表示され、待機中や終了した行に分類されず、終了した記録の削除対象にも入らないことを期待する。
+子だけが中断した場合は、親の状態を変えない。
+provider の識別子や時刻の差は許容するが、表示の操作から実行の停止や再開を送ることは許容しない。
+
+投影 fixture とブラウザでの表示確認は、実 runtime から中断を検出できることの証明には含めない。
+実 Claude/Codex のイベントを通す確認は、main 合流前の runtime 適合試験に残す。
+
 ClaudeとCodexの両方が対象機能を実装するまでは、未実装側を未確認とする。
 未確認を成功や同等と扱わない。
 段階的な開発はできるが、共通結果を期待する対象機能は両adapterがシナリオに合格した時点で同等対応完了とする。

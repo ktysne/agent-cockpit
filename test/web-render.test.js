@@ -2336,6 +2336,95 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   ]);
 });
 
+test('中断したセッションとサブエージェントは終了を隠しても中断表示のまま残る', () => {
+  const names = [
+    'element', 'badge', 'activityStatus', 'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction',
+    'isFinishedSession', 'mainRow', 'appendAgents', 'productGroups', 'orderedProducts', 'finishedDeletionTargets',
+  ];
+  const functions = names.map((name) => functionSource(pageHtml, name));
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName, className = '', textContent = '') {
+      this.tagName = tagName; this.className = className; this.textContent = textContent; this.children = []; this.dataset = {};
+    }
+    get childNodes() { return this.children; }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+  class FakeText { constructor(text) { this.textContent = text; } }
+  const context = pageContext(pageHtml, {
+    displayPreferences: { hideFinished: true, idleHideMinutes: 30, order: [], pinned: [], collapsed: [] },
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => new FakeText(text),
+    },
+    saveDisplayPreferences: (patch) => Object.assign(context.displayPreferences, patch),
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    hasProductContent: (product) => product.sessions.length > 0,
+    visiblePullRequestGroups: (groups) => groups,
+    sessionActivityTime: (session) => Date.parse(session.lastActivityAt),
+    appendContextTags() {},
+    appendUnknownSessionControls() {},
+    appendModelLine() {},
+    relativeTimeElement: (_at, className, text) => new FakeElement('time', className, text),
+    durationAgoLabel: () => '3 分前',
+    newestFirst: (items) => [...items],
+    isFilterShown: () => true,
+    expandedEndedSessions: new Set(),
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  const base = {
+    product: { key: 'interrupted-project', name: 'Project' },
+    title: '中断した実行',
+    lastActivityAt: '2026-10-08T12:00:00.000Z',
+    tools: [], tasks: [], decisions: [], permissionWaits: [], agents: [],
+  };
+  const interruptedSessions = [
+    { ...base, provider: 'claude', session_id: 'claude-interrupted', status: '中断' },
+    { ...base, provider: 'codex', session_id: 'codex-interrupted', turnState: 'interrupted' },
+  ];
+  const unknown = { ...base, session_id: 'unknown', status: '不明', turnState: 'unknown', estimate: { canEstimate: true } };
+  const parent = {
+    ...base, session_id: 'parent', status: '作業中', turnState: 'working',
+    agents: [{ agent_id: 'child', agent_type: '実装担当', active: false, unconfirmed: false, turnState: 'interrupted' }],
+  };
+  const finished = {
+    ...base, session_id: 'finished', status: '待機中', turnState: 'waiting', tasks: [{ title: '完了', state: 'done' }],
+  };
+
+  for (const interrupted of interruptedSessions) {
+    assert.deepEqual(JSON.parse(JSON.stringify(context.activityStatus(interrupted))), { label: '中断', tone: 'interrupted' });
+    assert.equal(context.isFinishedSession(interrupted), false);
+  }
+  assert.deepEqual(JSON.parse(JSON.stringify(context.activityStatus({ ...unknown, turnState: 'unknown' }))), { label: '状態不明', tone: 'unknown' });
+  assert.equal(context.activityStatus(parent).label, '作業中');
+  assert.equal(context.isEndedAgent(parent.agents[0]), false);
+  const sessions = [finished, ...interruptedSessions];
+  const visibleProducts = context.orderedProducts(sessions);
+  assert.deepEqual(JSON.parse(JSON.stringify(visibleProducts.map((product) => product.key))), ['interrupted-project']);
+  assert.deepEqual(JSON.parse(JSON.stringify(visibleProducts.flatMap((product) => product.sessions.map((session) => session.session_id)).sort())), [
+    'claude-interrupted', 'codex-interrupted',
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.finishedDeletionTargets(sessions, []).session_ids)), ['finished']);
+
+  const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
+  for (const interrupted of interruptedSessions) {
+    const rowNodes = descendants(context.mainRow(interrupted, { key: 'interrupted-project', name: 'Project' }));
+    assert.ok(rowNodes.some((node) => node.className === 'dot interrupted'));
+    const status = rowNodes.find((node) => node.tagName === 'strong' && node.textContent === '中断');
+    assert.equal(status?.title, '利用者が中断した。セッションは生きていて、次の入力を待っている');
+  }
+  const parentRowNodes = descendants(context.mainRow(parent, { key: 'interrupted-project', name: 'Project' }));
+  assert.ok(parentRowNodes.some((node) => node.tagName === 'strong' && node.textContent === '作業中'));
+
+  const agentBody = new FakeElement('div');
+  context.appendAgents(agentBody, parent, { key: 'interrupted-project', name: 'Project' });
+  const agentNodes = descendants(agentBody);
+  assert.ok(agentNodes.some((node) => node.className === 'dot interrupted'));
+  assert.ok(agentNodes.some((node) => node.className === 'badge' && node.textContent === '中断'));
+});
+
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {
   const names = [
     'isEndedAgent', 'isEndedDecision', 'isActiveDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction', 'activityStatus', 'isFinishedSession', 'pullRequestGroupHasVisibleContent', 'visiblePullRequestGroups', 'pullRequestOpenCount', 'productGroups',
