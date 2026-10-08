@@ -851,16 +851,32 @@ function applyAskQuestionStart(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'agentToolBindings'> & Pick<SessionAgents, 'agents'>} session
+ * @param {Pick<SessionTools, 'agentToolBindings'|'tools'> & Pick<SessionAgents, 'agents'>} session
  */
 function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
-    const boundAgentId = session.agentToolBindings[toolUseId];
-    const targetAgent = agentFor(session, boundAgentId);
-    if (targetAgent?.active) targetAgent.backgrounded = true;
-    if (targetAgent && event.resolvedModel) {
+    const boundAgent = agentFor(session, session.agentToolBindings[toolUseId]);
+    const responseAgent = agentFor(session, event.agentId);
+    const targetAgent = responseAgent && !responseAgent.isCodex
+      ? responseAgent
+      : boundAgent && !boundAgent.isCodex ? boundAgent : null;
+    if (!targetAgent) return;
+    if (targetAgent === responseAgent) {
+      // 同じ行を指す別の呼び出しの結び付けは到着順の誤りなので、agentId の無い応答で使わせない。
+      for (const [otherToolUseId, boundAgentId] of Object.entries(session.agentToolBindings)) {
+        if (otherToolUseId !== toolUseId && boundAgentId === targetAgent.agent_id) {
+          session.agentToolBindings[otherToolUseId] = AMBIGUOUS_AGENT_CALL;
+        }
+      }
+    }
+    if (toolUseId) session.agentToolBindings[toolUseId] = targetAgent.agent_id;
+    const agentTool = toolUseId && session.tools.find((tool) => tool.tool_use_id === toolUseId && tool.tool_name === 'Agent');
+    // SubagentStart の時点の結び付けは到着順で誤ることがあるので、呼び出し自身の説明で上書きする。
+    if (agentTool?.description) targetAgent.description = agentTool.description;
+    if (targetAgent.active) targetAgent.backgrounded = true;
+    if (event.resolvedModel) {
       targetAgent.model = event.resolvedModel;
       targetAgent.source = 'Agent tool response';
     }
@@ -1076,12 +1092,12 @@ function applyToolCompletion(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    applyAgentToolCompletion(session, event);
     if (toolUseId) {
       session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
       session.completedToolIds.add(toolUseId);
     }
 
-    applyAgentToolCompletion(session, event);
     applyCodexLaunchCompletion(session, event);
     applyCodexResult(session, event);
 

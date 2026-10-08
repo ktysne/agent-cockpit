@@ -812,7 +812,10 @@ test('Stop 時にサブエージェントが稼働中なら待機中として区
 test('Agent ツールの resolvedModel でサブエージェントの仮モデルを置き換える', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
-  state.addEvent({ session_id: 'model-update', hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Agent', tool_use_id: 'agent-tool', summary: 'Agent' });
+  state.addEvent({
+    session_id: 'model-update', hook_event_name: 'PreToolUse', hookAt: 100,
+    tool_name: 'Agent', tool_use_id: 'agent-tool', summary: 'Agent', description: '探索対象を調べる',
+  });
   state.addEvent({ session_id: 'model-update', hook_event_name: 'SubagentStart', hookAt: 200, agent_id: 'agent-1', agent_type: 'Explore' }, {
     agentDefinition: { model: 'claude-default', effort: 'high', source: 'claude-agent-definition' },
   });
@@ -822,6 +825,108 @@ test('Agent ツールの resolvedModel でサブエージェントの仮モデ�
   assert.equal(agent.model, 'claude-resolved');
   assert.equal(agent.effort, 'high');
   assert.equal(agent.source, 'Agent tool response');
+  assert.equal(agent.description, '探索対象を調べる');
+  assert.equal(agent.backgrounded, true);
+});
+
+test('SubagentStart が Agent の PreToolUse より先でも応答の agentId から行を引き直す', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'agent-id-rebind', hook_event_name: 'SubagentStart', hookAt: 100, agent_id: 'agent-1', agent_type: 'Explore' }, {
+    agentDefinition: { model: 'claude-default', effort: 'high' },
+  });
+  state.addEvent({
+    session_id: 'agent-id-rebind', hook_event_name: 'PreToolUse', hookAt: 200,
+    tool_name: 'Agent', tool_use_id: 'agent-call', description: '探索対象を調べる',
+  });
+  state.addEvent({
+    session_id: 'agent-id-rebind', hook_event_name: 'PostToolUse', hookAt: 300,
+    tool_name: 'Agent', tool_use_id: 'agent-call', agentId: 'agent-1', resolvedModel: 'claude-resolved',
+  });
+
+  const agent = state.snapshot().sessions[0].agents[0];
+  assert.equal(agent.model, 'claude-resolved');
+  assert.equal(agent.effort, 'high');
+  assert.equal(agent.source, 'Agent tool response');
+  assert.equal(agent.description, '探索対象を調べる');
+  assert.equal(agent.backgrounded, true);
+});
+
+test('Agent の PostToolUse の agentId は既存の別行への結び付けより優先する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({
+    session_id: 'agent-id-conflict', hook_event_name: 'PreToolUse', hookAt: 100,
+    tool_name: 'Agent', tool_use_id: 'agent-call', description: '正しい呼び出しの説明',
+  });
+  state.addEvent({ session_id: 'agent-id-conflict', hook_event_name: 'SubagentStart', hookAt: 200, agent_id: 'wrong-agent', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'agent-id-conflict', hook_event_name: 'SubagentStart', hookAt: 250, agent_id: 'agent-1', agent_type: 'Explore' });
+  state.addEvent({
+    session_id: 'agent-id-conflict', hook_event_name: 'PostToolUse', hookAt: 300,
+    tool_name: 'Agent', tool_use_id: 'agent-call', agentId: 'agent-1', resolvedModel: 'claude-resolved',
+  });
+
+  const agents = state.snapshot().sessions[0].agents;
+  const correct = agents.find((agent) => agent.agent_id === 'agent-1');
+  const wrong = agents.find((agent) => agent.agent_id === 'wrong-agent');
+  assert.equal(correct.model, 'claude-resolved');
+  assert.equal(correct.description, '正しい呼び出しの説明');
+  assert.equal(correct.backgrounded, true);
+  assert.equal(wrong.model, '');
+  assert.equal(wrong.backgrounded, undefined);
+});
+
+test('並行した Agent 呼び出しで SubagentStart が入れ替わっても各行に自分の呼び出しの説明が入る', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'agent-swap', ...event });
+  add({ hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Agent', tool_use_id: 'call-1', description: '一つ目の説明' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 200, agent_id: 'agent-2', agent_type: 'Explore' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 300, tool_name: 'Agent', tool_use_id: 'call-2', description: '二つ目の説明' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 400, agent_id: 'agent-1', agent_type: 'Explore' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 500, tool_name: 'Agent', tool_use_id: 'call-1', agentId: 'agent-1', resolvedModel: 'claude-one' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 600, tool_name: 'Agent', tool_use_id: 'call-2', agentId: 'agent-2', resolvedModel: 'claude-two' });
+
+  const agents = state.snapshot().sessions[0].agents;
+  const first = agents.find((agent) => agent.agent_id === 'agent-1');
+  const second = agents.find((agent) => agent.agent_id === 'agent-2');
+  assert.equal(first.description, '一つ目の説明');
+  assert.equal(first.model, 'claude-one');
+  assert.equal(second.description, '二つ目の説明');
+  assert.equal(second.model, 'claude-two');
+});
+
+test('agentId で引き直した行は、同じ行を指していた別の呼び出しの agentId の無い応答で書き換えない', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  const add = (event) => state.addEvent({ session_id: 'agent-stale', ...event });
+  add({ hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Agent', tool_use_id: 'call-1', description: '一つ目の説明' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 200, agent_id: 'agent-2', agent_type: 'Explore' });
+  add({ hook_event_name: 'PreToolUse', hookAt: 300, tool_name: 'Agent', tool_use_id: 'call-2', description: '二つ目の説明' });
+  add({ hook_event_name: 'SubagentStart', hookAt: 400, agent_id: 'agent-1', agent_type: 'Explore' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 500, tool_name: 'Agent', tool_use_id: 'call-1', agentId: 'agent-1', resolvedModel: 'claude-one' });
+  add({ hook_event_name: 'PostToolUse', hookAt: 600, tool_name: 'Agent', tool_use_id: 'call-2', resolvedModel: 'claude-two' });
+
+  const first = state.snapshot().sessions[0].agents.find((agent) => agent.agent_id === 'agent-1');
+  assert.equal(first.description, '一つ目の説明');
+  assert.equal(first.model, 'claude-one');
+});
+
+test('Agent の PostToolUse の agentId は曖昧な結び付けを解決する', async (t) => {
+  await temporaryHome(t);
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'agent-id-ambiguous', hook_event_name: 'PreToolUse', hookAt: 100, tool_name: 'Agent', tool_use_id: 'call-a' });
+  state.addEvent({ session_id: 'agent-id-ambiguous', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Agent', tool_use_id: 'call-b' });
+  state.addEvent({ session_id: 'agent-id-ambiguous', hook_event_name: 'SubagentStart', hookAt: 300, agent_id: 'agent-a', agent_type: 'Explore' });
+  state.addEvent({ session_id: 'agent-id-ambiguous', hook_event_name: 'SubagentStart', hookAt: 400, agent_id: 'agent-b', agent_type: 'Explore' });
+  state.addEvent({
+    session_id: 'agent-id-ambiguous', hook_event_name: 'PostToolUse', hookAt: 500,
+    tool_name: 'Agent', tool_use_id: 'call-a', agentId: 'agent-a', resolvedModel: 'claude-resolved',
+  });
+
+  const agents = state.snapshot().sessions[0].agents;
+  assert.equal(agents.find((agent) => agent.agent_id === 'agent-a').model, 'claude-resolved');
+  assert.equal(agents.find((agent) => agent.agent_id === 'agent-b').model, '');
 });
 
 test('外したセッションが一覧不在で終了したら外した集合からも除く', async (t) => {
