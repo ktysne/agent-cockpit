@@ -548,7 +548,56 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
   assert.match(mock, /\.answer-foot \{[^}]*padding: 8px 10px/);
 });
 
-test('マージキュー中の PR は未マージ札だけで状態を示す', async () => {
+test('回答の送信中は選択肢、指示、送信ボタンを無効にし、再描画後も保つ', () => {
+  const componentSources = ['answerDraftKey', 'appendDecisionCard', 'appendDecisionAnswer']
+    .map((name) => functionSource(web, name));
+  assert.ok(componentSources.every(Boolean));
+  const key = 'session-answer\0decision-answer';
+  const decision = {
+    id: 'decision-answer', state: 'provisional', title: '形式を決める', questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: { choice: 'pick', picks: [['JSON']], note: '送信する指示' },
+  };
+  const context = pageContext(web, {
+    answerErrors: new Map(),
+    answerDrafts: new Map(),
+    decisionAnswerInFlight: new Set([key]),
+    element: fakeElement,
+    document: {
+      createElement: (tagName) => fakeElement(tagName),
+      createTextNode: (text) => fakeElement('#text', '', text),
+    },
+    decisionElapsedLabel: () => null,
+    decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
+    answerDraftFor: () => ({ choice: 'pick', picks: [['JSON']], note: '送信する指示' }),
+    answerDraftChanged: () => true,
+    answerMetaText: () => '送る答え: JSON',
+    canSendDecisionAnswer: () => true,
+    answerStatusText: () => '未送信',
+    displayRecommendedLabel: (label) => label,
+    appendContextTags() {},
+    badge: (_label, tone = '') => fakeElement('span', tone),
+    decisionStateLabel: () => '仮に推奨案で進行中',
+    sessionDisplayName: () => 'session-answer',
+    relativeTimeElement: () => fakeElement('time'),
+  });
+  vm.runInContext(`${componentSources.join('\n')}\nthis.renderDecision = appendDecisionCard;`, context);
+  const render = () => {
+    const target = fakeElement('div');
+    context.renderDecision(target, decision, { name: 'agent-cockpit' }, { session_id: 'session-answer' });
+    return descendants(target);
+  };
+  for (const nodes of [render(), render()]) {
+    assert.equal(nodes.filter((node) => node.dataset.answerPick === 'true').length, 2);
+    assert.ok(nodes.filter((node) => node.dataset.answerPick === 'true').every((node) => node.disabled));
+    assert.equal(nodes.find((node) => node.dataset.answerNote === 'true').disabled, true);
+    assert.equal(nodes.find((node) => node.dataset.sendAnswer === 'decision-answer').disabled, true);
+  }
+});
+
+test('キュー中と処理中の PR を札で分け、画面から実行中のマージは確認欄の処理中で示す', async () => {
   const webTree = functionSource(web, 'appendPullRequestTree');
   const webQueued = functionSource(web, 'queuedPullRequestMerge');
   assert.ok(webTree && webQueued);
@@ -563,6 +612,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     pullRequestMergeConditionWaits: (pullRequest) => pullRequest.ci === 'pending' ? ['CI 実行中'] : [],
     badge: (label, tone = '') => fakeElement('span', tone, label),
     appendPullRequestBadges() {},
+    appendPullRequestMergeConfirmation(target) { target.append(fakeElement('div', 'merge-confirm', '処理中…')); },
   });
   vm.runInContext(`${webQueued}\n${webTree}\nthis.renderPullRequest = appendPullRequestTree;`, webContext);
   const webTarget = fakeElement('div');
@@ -571,8 +621,9 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: { at: '12:00' }, blocker: 'CI 実行中', ci: 'pending', children: [],
   });
   const webText = webTarget.textContent;
-  assert.equal((webText.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
-  assert.doesNotMatch(webText, /GitHub のマージキューに追加済みです/);
+  assert.equal((webText.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
+  assert.doesNotMatch(webText, /マージキューに追加済み/);
+  assert.doesNotMatch(webText, /マージする|キューから外れた/);
   assert.match(webText, /待ち: CI 実行中/);
 
   webContext.queuedPullRequestMerges.set('repo#1', { headRefOid: 'abc' });
@@ -582,6 +633,7 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     mergeSessionId: 'session-1', canMerge: true, mergeIntent: null, headRefOid: 'abc', children: [],
   });
   assert.equal((queuedTarget.textContent.match(/マージキューに追加済み \(未マージ\)/g) || []).length, 1);
+  assert.doesNotMatch(queuedTarget.textContent, /マージ処理中/);
   assert.doesNotMatch(queuedTarget.textContent, /マージする|マージできます/);
   assert.match(queuedTarget.textContent, /キューから外れた/);
 
@@ -593,6 +645,25 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.doesNotMatch(pushedTarget.textContent, /マージキューに追加済み/);
   assert.match(pushedTarget.textContent, /マージする/);
   assert.equal(webContext.queuedPullRequestMerges.has('repo#1'), false);
+
+  webContext.pullRequestMergeInFlight.add('repo#1');
+  webContext.pullRequestMergeConfirmations.set('repo#1', { method: 'merge' });
+  const inFlightTarget = fakeElement('div');
+  webContext.renderPullRequest(inFlightTarget, {}, {
+    number: 1, title: '処理中', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: false, mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
+  });
+  assert.match(inFlightTarget.textContent, /処理中…/);
+  assert.doesNotMatch(inFlightTarget.textContent, /マージ処理中|マージキューに追加済み/);
+
+  webContext.pullRequestMergeConfirmations.delete('repo#1');
+  const reservingTarget = fakeElement('div');
+  webContext.renderPullRequest(reservingTarget, {}, {
+    number: 1, title: '予約から即時マージ', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: false, mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
+  });
+  assert.equal((reservingTarget.textContent.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
+  webContext.pullRequestMergeInFlight.delete('repo#1');
 
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);
@@ -612,6 +683,8 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
     crossReviewWaitReason: () => null,
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
+    pullRequestMergeInFlight: new Set(),
+    mergeConfirm: () => '<div class="merge-confirm">処理中…</div>',
   });
   vm.runInContext(`${mockItem}\nthis.renderPullRequest = prItem;`, mockContext);
   const mockText = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
@@ -621,6 +694,27 @@ test('マージキュー中の PR は未マージ札だけで状態を示す', a
   assert.match(mockText, /data-queue-left="repo#1"[^>]*>キューから外れた</);
   assert.doesNotMatch(mockText, /GitHub のマージキューに追加済みです/);
   assert.doesNotMatch(mockText, /マージできない理由/);
+  assert.doesNotMatch(mockText, /マージ処理中/);
+
+  const mockInProgress = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
+    number: 1, title: '処理中', mergeInProgress: true, head: 'feature', sha: 'abc', conflict: false,
+  });
+  assert.equal((mockInProgress.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
+  assert.doesNotMatch(mockInProgress, /マージキューに追加済み|キューから外れた|data-merge="/);
+
+  mockContext.pullRequestMergeInFlight.add('repo#1');
+  const mockReserving = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
+    number: 1, title: '予約から即時マージ', mergeInProgress: true, head: 'feature', sha: 'abc', conflict: false,
+  });
+  assert.equal((mockReserving.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
+  mockContext.ui.confirm = { key: 'repo#1', action: 'manual' };
+  const mockInFlight = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
+    number: 1, title: '処理中', mergeInProgress: true, head: 'feature', sha: 'abc', conflict: false,
+  });
+  assert.match(mockInFlight, /処理中…/);
+  assert.doesNotMatch(mockInFlight, /マージ処理中|マージキューに追加済み/);
+  mockContext.ui.confirm = null;
+  mockContext.pullRequestMergeInFlight.delete('repo#1');
 
   const action = web.match(/async function runPullRequestMergeAction\([^]*?\n\}/)?.[0];
   const actionHelper = functionSource(web, 'runPullRequestAction');
@@ -1068,6 +1162,7 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
   const errors = new Map();
   const context = pageContext(web, {
     answerErrors: errors,
+    decisionAnswerInFlight: new Set(),
     decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
     answerDraftFor: () => ({ choice: 'pick', picks: [[]], note: '新しい指示' }),
     element: fakeElement,
@@ -1116,6 +1211,8 @@ test('回答の編集時に送信済み回答の状態表示も更新する', ()
     },
   };
   const context = pageContext(web, {
+    decisionAnswerInFlight: new Set(),
+    answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
     findDecision: () => decision,
     answerDraftFor: () => draft,
     sameAnswerPicks: (left, right) => JSON.stringify(left) === JSON.stringify(right),
@@ -1290,7 +1387,23 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
   const button = descendants(target).find((node) => node.dataset.mergeGo === 'merge-key');
   assert.equal(button.textContent, '処理中…');
   assert.equal(button.disabled, true);
+  const cancel = descendants(target).find((node) => node.dataset.mergeCancel === 'merge-key');
+  assert.equal(cancel.disabled, true);
+  const method = descendants(target).find((node) => node.dataset.mergeMethod === 'merge');
+  assert.equal(method.disabled, true);
+  const deleteBranch = descendants(target).find((node) => node.dataset.mergeDelete === 'true');
+  assert.equal(deleteBranch.disabled, true);
   assert.match(mock, /merging \? '処理中…'/);
+  assert.match(mock, /data-merge-cancel \$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-method="\$\{m\}" [^>]*\$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-del [^>]*\$\{merging \? 'disabled' : ''\}/);
+});
+
+test('マージの実行中は方式とブランチ削除の変更を受け付けない', () => {
+  const handler = web.match(/const method = event\.target\.closest\('\[data-merge-method\]'\);[^]*?\n\}\);/)?.[0];
+  assert.ok(handler);
+  assert.match(handler, /if \(pullRequestMergeInFlight\.has\(control\.dataset\.mergeKey\)\) \{[^}]*return;/);
+  assert.match(mock, /if \(pullRequestMergeInFlight\.has\(k\)\) \{ render\(\); return; \}/);
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {
