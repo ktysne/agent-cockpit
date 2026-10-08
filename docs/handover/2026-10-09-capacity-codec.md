@@ -23,7 +23,7 @@
 | 順 | 対象 | ブランチ | PRとbase | 状態 |
 |---|---|---|---|---|
 | 0 | main #303/#304の同期 | codex/sync-main-304-20261009 | [#306](https://github.com/ktysne/agent-cockpit/pull/306)、base: codex/feature-codex-support | 競合解消済み、レビュー指摘対応中 |
-| 1a | codec共通基盤 | codex/reclamation-codec-primitives-209-20261009 | 未作成、base: 同期ブランチ | 実装と関連17件・全体2,343件の検証済み |
+| 1a | codec共通基盤 | codex/reclamation-codec-primitives-209-20261009 | [#307](https://github.com/ktysne/agent-cockpit/pull/307)、base: #306のブランチ | 実装と関連17件・全体2,343件の検証済み、クロスレビュー前 |
 | 1b | 質問codec | 作成前 | 1aの上へ積む | 未実装 |
 | 1c | 配信codec | 作成前 | 1bの上へ積む | 未実装 |
 | 1d | cross-store照合と互換投影 | 作成前 | 1cの上へ積む | 未実装 |
