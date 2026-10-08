@@ -19,47 +19,74 @@ function createHookRoutes(ctx) {
     return { sessionId: validSessionId(sessionId) ? sessionId : null, routeMismatch };
   }
 
-  async function handleHookAnswers({ response, body }) {
-    if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
-      jsonResponse(response, 400, { error: 'Invalid request' });
-      return;
-    }
-    try {
-      let result;
-      if (body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions)) {
-        result = answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id });
-      } else if (body.action === 'ask-poll' && body.event_name === 'PreToolUse') {
-        result = await answerDelivery.waitForAsk({ sessionId: body.session_id, toolUseId: body.id });
-      } else if (body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(body.outcome)) {
-        result = answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome });
-      } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch' && body.agent_id !== undefined) {
-        if (!validText(body.agent_id, 256)) {
-          jsonResponse(response, 400, { error: 'Invalid request' });
-          return;
-        }
+  const INVALID_ANSWER_REQUEST = Symbol('invalid answer request');
+
+  // 上から順に評価し、最初に一致した行を使う。post-tool-batch はサブエージェント用の行を先に置く。
+  // 一致しない要求と、行の中で不正と分かった要求は 400 にする。
+  const hookAnswerActions = [
+    {
+      matches: (body) => body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions),
+      run: (body) => answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id }),
+    },
+    {
+      matches: (body) => body.action === 'ask-poll' && body.event_name === 'PreToolUse',
+      run: (body) => answerDelivery.waitForAsk({ sessionId: body.session_id, toolUseId: body.id }),
+    },
+    {
+      matches: (body) => body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(body.outcome),
+      run: (body) => answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome }),
+    },
+    {
+      matches: (body) => body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch' && body.agent_id !== undefined,
+      run: (body) => {
+        if (!validText(body.agent_id, 256)) return INVALID_ANSWER_REQUEST;
         state.addEvent({
           session_id: body.session_id,
           hook_event_name: 'PostToolBatch',
           agent_id: body.agent_id,
           hookAt: Date.now(),
         });
-        result = { hookOutput: null };
-      } else if (body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch') {
+        return { hookOutput: null };
+      },
+    },
+    {
+      matches: (body) => body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch',
+      run: (body) => {
         state.addEvent({
           session_id: body.session_id,
           hook_event_name: 'PostToolBatch',
           hookAt: Date.now(),
         });
         const additionalContext = answerDelivery.deliverPostToolBatch(body.session_id);
-        result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
-      } else if (body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit') {
+        return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
+      },
+    },
+    {
+      matches: (body) => body.action === 'user-prompt-submit' && body.event_name === 'UserPromptSubmit',
+      run: (body) => {
         const additionalContext = answerDelivery.deliverPrompt(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined);
-        result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
-      } else if (body.action === 'stop-start' && body.event_name === 'Stop') {
-        result = { generation: answerDelivery.startStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined) };
-      } else if (body.action === 'stop-poll' && body.event_name === 'Stop' && Number.isInteger(body.generation) && typeof body.parent_alive === 'boolean') {
-        result = await answerDelivery.waitForStopAnswer(body.session_id, body.generation, body.parent_alive);
-      } else {
+        return { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
+      },
+    },
+    {
+      matches: (body) => body.action === 'stop-start' && body.event_name === 'Stop',
+      run: (body) => ({ generation: answerDelivery.startStop(body.session_id, body.id, Number.isFinite(body.hook_at) ? body.hook_at : undefined) }),
+    },
+    {
+      matches: (body) => body.action === 'stop-poll' && body.event_name === 'Stop' && Number.isInteger(body.generation) && typeof body.parent_alive === 'boolean',
+      run: (body) => answerDelivery.waitForStopAnswer(body.session_id, body.generation, body.parent_alive),
+    },
+  ];
+
+  async function handleHookAnswers({ response, body }) {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
+      jsonResponse(response, 400, { error: 'Invalid request' });
+      return;
+    }
+    try {
+      const action = hookAnswerActions.find((candidate) => candidate.matches(body));
+      const result = action ? await action.run(body) : INVALID_ANSWER_REQUEST;
+      if (result === INVALID_ANSWER_REQUEST) {
         jsonResponse(response, 400, { error: 'Invalid request' });
         return;
       }
