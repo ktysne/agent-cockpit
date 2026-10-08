@@ -1087,10 +1087,6 @@ class PullRequestTracker {
   updateProductMembership(owner, repo, {
     registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
   }) {
-    const trackedPullRequests = [...registrations, ...relatedPullRequests].map((record) => (
-      record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record)
-    )).filter(Boolean);
-
     if (listAvailable) {
       const registeredNumbers = new Set(registrations.map((record) => record.number));
       const productGroups = productGroupsFor(owner, repo, registrations);
