@@ -2243,3 +2243,28 @@ test('マージ済み一覧の取得失敗は一覧を null にして既存の�
   assert.equal(result.mergedListComplete, false);
   assert.match(result.error, /^マージ済み PR の一覧を取得できません。/);
 });
+
+const { productGroupsFor } = require('../src/server/pull-requests');
+
+test('プロダクトが無い登録はリポジトリ名を既定の所属にする', () => {
+  const registration = { number: 31 };
+  assert.deepEqual([...productGroupsFor('Example', 'Project', [registration])],
+    [['repo:example/project', { product: { key: 'repo:example/project', name: 'Example/Project' },
+      registrations: [registration] }]]);
+});
+
+test('所属は登録順で作り、同じキーの登録を最初のプロダクトに束ねる', () => {
+  const first = { number: 31, product: { key: 'b', name: 'first' } };
+  const second = { number: 32, product: { key: 'a', name: 'second' } };
+  const third = { number: 33, product: { key: 'b', name: 'third' } };
+  const registrations = [first, second, third];
+  const groups = productGroupsFor('example', 'project', registrations);
+  assert.deepEqual([...groups.keys()], ['b', 'a']);
+  assert.equal(groups.get('b').product, first.product);
+  assert.deepEqual(groups.get('b').registrations, [first, third]);
+  assert.deepEqual(registrations, [first, second, third]);
+});
+
+test('登録が無ければ所属は空にする', () => {
+  assert.deepEqual([...productGroupsFor('example', 'project', [])], []);
+});
