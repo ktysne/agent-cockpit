@@ -12,6 +12,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [Codex本実装計画](design/codex-implementation-plan.md) | Claude/Codex共通機能の段階実装、依存関係、統合ゲート |
 | [正規会話の登録核](design/codex-registration-core.md) | #166-Aの信頼境界、実行期間、後続interfaceと適合シナリオ |
 | [共通質問の設計](design/common-questions.md) | 質問と回答のschema、永続保存、MCPと画面、復旧と実native接続の採用条件 |
+| [質問と配信記録の容量回収計画](design/codex-capacity-reclamation.md) | 拒否情報の保持、満杯からの移行、途中からの復旧、未決の判断 |
 | [Claude/Codex適合試験方針](design/provider-conformance-testing.md) | 共通適合試験のscenario定義、検証層、結果の扱い |
 | [Codex共有契約](design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapter適合の証明ではない |
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |
