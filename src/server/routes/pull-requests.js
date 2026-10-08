@@ -1,5 +1,6 @@
 const { jsonResponse } = require('../http-helpers');
 const { isCompleteCommitSha, isSha256Digest, validRepositoryPart } = require('../pull-request-utils');
+const { applyReviewSkip, pullRequestStateUnavailable } = require('./review-skip');
 
 function createPullRequestRoutes(ctx) {
   const { state, pullRequestTracker, pullRequestMergeManager } = ctx;
@@ -17,25 +18,23 @@ function createPullRequestRoutes(ctx) {
       jsonResponse(response, 404, { error: 'Registered pull request not found' });
       return;
     }
-    if (!pullRequestTracker?.refreshRepoFresh || !pullRequestTracker.mergeCandidate) {
-      jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-      return;
-    }
     if (body.action === 'set') {
-      if (!pullRequestMergeManager?.setReviewSkip) {
-        jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-        return;
-      }
-      const result = await pullRequestMergeManager.setReviewSkip(
+      const result = await applyReviewSkip({
+        pullRequestTracker,
+        pullRequestMergeManager,
         registration,
-        body.headRefOid,
-        '開発者がダッシュボードでこの head のレビューを不要と判断した',
-      );
+        headRefOid: body.headRefOid,
+        reason: '開発者がダッシュボードでこの head のレビューを不要と判断した',
+      });
       if (!result.ok) {
         jsonResponse(response, result.status, { error: result.error });
         return;
       }
       jsonResponse(response, 200, { action: body.action, number: registration.number });
+      return;
+    }
+    if (pullRequestStateUnavailable(pullRequestTracker)) {
+      jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
       return;
     }
     try {

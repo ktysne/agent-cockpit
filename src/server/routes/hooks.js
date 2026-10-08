@@ -4,6 +4,7 @@ const { sanitizeEvent } = require('../events');
 const { productFromCwd } = require('../identity');
 const { claudeAgentDefinition, codexAgentDefinition } = require('../session-files');
 const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('../pull-request-utils');
+const { applyReviewSkip } = require('./review-skip');
 
 function createHookRoutes(ctx) {
   const { state, answerDelivery, claudeHome, pullRequestTracker, pullRequestMergeManager, findSessionIdByPid, scheduleTaskNotifications } = ctx;
@@ -198,16 +199,14 @@ function createHookRoutes(ctx) {
         jsonResponse(response, 404, { error: 'PR is not registered by this session' });
         return;
       }
-      if (!pullRequestTracker?.refreshRepoFresh || !pullRequestTracker.mergeCandidate) {
-        jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-        return;
-      }
       try {
-        if (!pullRequestMergeManager?.setReviewSkip) {
-          jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-          return;
-        }
-        const result = await pullRequestMergeManager.setReviewSkip(registration, body.headRefOid, body.reason);
+        const result = await applyReviewSkip({
+          pullRequestTracker,
+          pullRequestMergeManager,
+          registration,
+          headRefOid: body.headRefOid,
+          reason: body.reason,
+        });
         if (!result.ok) {
           jsonResponse(response, result.status, { error: result.error });
           return;
