@@ -134,7 +134,11 @@ function createHookRoutes(ctx) {
       (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
       isGithubCreatePullRequestTool(event.tool_name)
     )) {
-      const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: body.cwd, product }, event.hookAt);
+      const registrationCwd = event.commandCwd || body.cwd;
+      const registrationProduct = event.commandCwd ? productFromCwd(event.commandCwd) : product;
+      const registered = state.registerPullRequest(event.session_id, event.pullRequest, {
+        cwd: registrationCwd, product: registrationProduct,
+      }, event.hookAt);
       if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
     }
     if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (

@@ -3,7 +3,14 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { isCompleteCommitSha, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const {
+  isCompleteCommitSha,
+  parseGitHubRepositoryRemote,
+  parsePullRequestUrl,
+  repositoryKey,
+  validBranchName,
+  validRepositoryPart,
+} = require('./pull-request-utils');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
 
@@ -618,7 +625,29 @@ async function detectCrossReviewTool(cwd, fileSystem = fs) {
   }
 }
 
-async function readCrossReviewState(registration, pullRequest, fileSystem = fs) {
+function crossReviewReadOptions(options) {
+  const isFileSystem = options && typeof options.stat === 'function' && typeof options.readFile === 'function';
+  return {
+    fileSystem: isFileSystem ? options : options?.fileSystem || fs,
+    execFileImpl: options?.execFileImpl || execFile,
+    originCache: options?.originCache,
+  };
+}
+
+function readGitOrigin(root, execFileImpl) {
+  return new Promise((resolve) => {
+    try {
+      execFileImpl('git', ['-C', root, 'remote', 'get-url', 'origin'], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+      }, (error, stdout) => resolve(error || typeof stdout !== 'string' ? null : stdout.trim() || null));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function readCrossReviewState(registration, pullRequest, options = {}) {
+  const { fileSystem, execFileImpl, originCache } = crossReviewReadOptions(options);
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
@@ -626,6 +655,19 @@ async function readCrossReviewState(registration, pullRequest, fileSystem = fs) 
   if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
   if (tool.status !== 'present') return { unavailable: true };
   const { root } = tool;
+  const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
+  if (pullRequestRepository) {
+    const originCacheKey = process.platform === 'win32' ? root.toLowerCase() : root;
+    let origin = originCache?.get(originCacheKey);
+    if (!originCache?.has(originCacheKey)) {
+      origin = parseGitHubRepositoryRemote(await readGitOrigin(root, execFileImpl));
+      originCache?.set(originCacheKey, origin);
+    }
+    if (origin && (origin.owner.toLowerCase() !== pullRequestRepository.owner.toLowerCase() ||
+      origin.repo.toLowerCase() !== pullRequestRepository.repo.toLowerCase())) {
+      return { unavailable: true, reason: 'repository-mismatch' };
+    }
+  }
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
@@ -694,7 +736,7 @@ function listWorktrees(root, execFileImpl = execFile) {
 // チェックアウトしていない worktree は、そのブランチの記録を持つときだけ候補にする。読めない worktree で記録なしの表示を上書きしないため。
 async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
   const fileSystem = options.fileSystem || fs;
-  let selected = await readCrossReviewState(registration, pullRequest, fileSystem);
+  let selected = await readCrossReviewState(registration, pullRequest, options);
   const branch = pullRequest?.headRefName;
   if (selected === undefined || !branch) return selected;
   const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
@@ -702,7 +744,8 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   for (const worktree of await listWorktrees(root, options.execFileImpl)) {
     if (sameRoot(worktree.path, root)) continue;
-    const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, fileSystem);
+    const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, options);
+    if (candidate?.reason === 'repository-mismatch') continue;
     const hasRecord = Number.isSafeInteger(candidate?.round);
     if (worktree.branch !== branch && !hasRecord) continue;
     if (shouldReplaceCrossReview(selected, candidate, pullRequest.headRefOid)) selected = candidate;
@@ -1303,6 +1346,7 @@ class PullRequestTracker {
     const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
     const productGroups = productGroupsFor(owner, repo, registrations);
     const createdIdentities = new Set();
+    const originCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
@@ -1315,7 +1359,7 @@ class PullRequestTracker {
         continue;
       }
       const review = await this.readCrossReviewState(registration, pullRequest, {
-        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl,
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, originCache,
       });
       const current = crossReviewByNumber.get(registration.number);
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;
