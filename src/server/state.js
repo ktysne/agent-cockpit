@@ -666,9 +666,7 @@ function isFinishedAskDecision(decision) {
   return ['resolved', 'withdrawn'].includes(decision?.state);
 }
 
-function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
-  const sessions = new Map();
-  const stoppedAgentIdsBySession = new Map();
+function initialAskDecisionsFor(entries, askDecisionState, beforeSequence) {
   // 判断事項ごとに、メモリーにある終わりのイベントの最も新しい時刻。出し直した呼び出しの終わりも数える。
   // 開始がメモリーに無い呼び出しの終わりは、作り直しで再現できないので数えない。
   const startedAskToolUseIds = new Set(entries.flatMap(({ event }) => (
@@ -696,26 +694,87 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
       !(latestAskFinishAt.get(decisionId) >= Date.parse(stored.resolvedAt || stored.updatedAt));
     return keepStored ? [] : [decisionId];
   }));
-  const initialAskDecisionState = {
+  return {
     decisions: (askDecisionState.decisions || []).filter((decision) => !directlyRecreatedAskDecisionIds.has(decision.id)),
     bindings: askDecisionState.bindings || {},
   };
+}
+
+function sessionSnapshot(session) {
+  const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
+  const agents = session.agents
+    .filter((agent) => !(
+      agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
+    ))
+    .map((agent) => {
+      const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
+      const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
+        child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
+      ));
+      return {
+        ...agent,
+        ...(childUnconfirmed ? { unconfirmed: true } : {}),
+        modelName: agent.isCodex ? '' : claudeModelName(agent.model),
+        ...(gptAgent ? {
+          gpt: {
+            model: gptAgent.model,
+            effort: gptAgent.effort,
+            codex_home: gptAgent.codex_home,
+            unavailable: gptAgent.unavailable,
+            active: gptAgent.active,
+            unconfirmed: gptAgent.unconfirmed === true,
+          },
+        } : {}),
+      };
+    });
+  const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+  const status = permissionWaits.length
+    ? '許可待ち'
+    : session.stopped && session.agents.some((agent) => agent.active)
+      ? '待機中(サブエージェント稼働中)'
+      : session.stopped
+        ? '待機中'
+        : '作業中';
+
+  return {
+    session_id: session.session_id,
+    product: session.product,
+    title: session.title,
+    lastActivityAt: session.lastActivityAt,
+    status,
+    tools,
+    agents,
+    permissionWaits,
+    decisions: session.decisions.map(cloneDecision),
+    decisionBindings: { ...session.decisionBindings },
+  };
+}
+
+function sessionForEvent(sessions, event, initialAskDecisionState) {
+  let session = sessions.get(event.session_id);
+  if (event.hook_event_name === 'SessionStart') {
+    if (!session || session.ended) {
+      session = newSession(event, initialAskDecisionState);
+      sessions.set(event.session_id, session);
+    }
+  } else if (!session) {
+    session = newSession(event, initialAskDecisionState);
+    sessions.set(event.session_id, session);
+  }
+  return session;
+}
+
+function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
+  const sessions = new Map();
+  const stoppedAgentIdsBySession = new Map();
+  const initialAskDecisionState = initialAskDecisionsFor(entries, askDecisionState, beforeSequence);
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
     return difference || left.sequence - right.sequence;
   });
 
   for (const { event } of ordered) {
-    let session = sessions.get(event.session_id);
-    if (event.hook_event_name === 'SessionStart') {
-      if (!session || session.ended) {
-        session = newSession(event, initialAskDecisionState);
-        sessions.set(event.session_id, session);
-      }
-    } else if (!session) {
-      session = newSession(event, initialAskDecisionState);
-      sessions.set(event.session_id, session);
-    }
+    const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
     if (event.product) session.product = event.product;
@@ -1039,55 +1098,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
 
   return [...sessions.values()]
     .filter((session) => !session.ended)
-    .map((session) => {
-      const permissionWaits = session.permissionWaits.map(({ agent_id, ...wait }) => ({ agent_id, ...wait }));
-      const agents = session.agents
-        .filter((agent) => !(
-          agent.isCodex && agent.parent_agent_id && session.agents.some((parent) => parent.agent_id === agent.parent_agent_id)
-        ))
-        .map((agent) => {
-          const gptAgent = agent.isCodex ? null : latestCodexForParent(session.agents, agent.agent_id);
-          const childUnconfirmed = !agent.isCodex && !agent.active && session.agents.some((child) => (
-            child.isCodex && child.unconfirmed && child.parent_agent_id === agent.agent_id
-          ));
-          return {
-            ...agent,
-            ...(childUnconfirmed ? { unconfirmed: true } : {}),
-            modelName: agent.isCodex ? '' : claudeModelName(agent.model),
-            ...(gptAgent ? {
-              gpt: {
-                model: gptAgent.model,
-                effort: gptAgent.effort,
-                codex_home: gptAgent.codex_home,
-                unavailable: gptAgent.unavailable,
-                active: gptAgent.active,
-                unconfirmed: gptAgent.unconfirmed === true,
-              },
-            } : {}),
-          };
-        });
-      const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
-      const status = permissionWaits.length
-        ? '許可待ち'
-        : session.stopped && session.agents.some((agent) => agent.active)
-          ? '待機中(サブエージェント稼働中)'
-          : session.stopped
-            ? '待機中'
-            : '作業中';
-
-      return {
-        session_id: session.session_id,
-        product: session.product,
-        title: session.title,
-        lastActivityAt: session.lastActivityAt,
-        status,
-        tools,
-        agents,
-        permissionWaits,
-        decisions: session.decisions.map(cloneDecision),
-        decisionBindings: { ...session.decisionBindings },
-      };
-    });
+    .map(sessionSnapshot);
 }
 
 class DashboardState {
