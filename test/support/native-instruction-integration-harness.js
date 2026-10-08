@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createNativeInstructionServiceIntegration } = require('../../src/server/native-instruction-service-integration');
+const { startServer } = require('../../src/server/server');
 const { createOwnedNativeRunner } = require('../../src/server/owned-native-runner');
 const { atomicWriteJson } = require('../../src/server/json-storage');
 
@@ -42,13 +43,16 @@ class FakeInput extends EventEmitter {
 }
 
 class FakeNativeChild extends EventEmitter {
-  constructor(onWrite) {
+  constructor(onWrite, killEvents = 'both') {
     super();
     this.stdout = new EventEmitter();
     this.stderr = new EventEmitter();
     this.stdin = new FakeInput(onWrite);
     this.exited = false;
     this.killSignals = [];
+    this.killEvents = killEvents;
+    this.exitEmitted = false;
+    this.closeEmitted = false;
   }
 
   send(...messages) {
@@ -62,10 +66,24 @@ class FakeNativeChild extends EventEmitter {
     this.exited = true;
     this.stdin.destroyed = true;
     setImmediate(() => {
-      this.emit('exit', 0, signal || null);
-      this.emit('close', 0, signal || null);
-      this.stdout.emit('end');
+      if (this.killEvents === 'both' || this.killEvents === 'exit') this.reportExit(signal);
+      if (this.killEvents === 'both' || this.killEvents === 'close') this.reportClose(signal);
     });
+    return true;
+  }
+
+  reportExit(signal = null) {
+    if (this.exitEmitted) return false;
+    this.exitEmitted = true;
+    this.emit('exit', 0, signal);
+    return true;
+  }
+
+  reportClose(signal = null) {
+    if (this.closeEmitted) return false;
+    this.closeEmitted = true;
+    this.emit('close', 0, signal);
+    this.stdout.emit('end');
     return true;
   }
 }
@@ -193,7 +211,7 @@ function createFakeNativeProcess(provider, homePath, options = {}) {
       let request;
       try { request = JSON.parse(line); } catch { return; }
       return respond(request);
-    });
+    }, options.killEvents || 'both');
     state.environment = {
       home: spawnOptions.env.HOME,
       codexHome: spawnOptions.env.CODEX_HOME || null,
@@ -366,6 +384,18 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     return integration.service;
   }
 
+  async function startDashboard(serverOptions = {}) {
+    return startServer({
+      homeDir: path.join(directory, 'dashboard'),
+      claudeHome: path.join(directory, 'dashboard-claude-home'),
+      userHome: path.join(directory, 'dashboard-user-home'),
+      port: 0,
+      ...serverOptions,
+      ownedExecutionSnapshot: () => integration.native.ownedExecutionSnapshot(),
+      stopOwnedExecution: (claims) => integration.native.stopOwnedExecution(claims),
+    });
+  }
+
   async function close() {
     try { await integration.close(); } catch {}
   }
@@ -379,6 +409,7 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     start,
     admit,
     restartService,
+    startDashboard,
     close,
     get native() { return integration.native; },
     get service() { return integration.service; },
@@ -404,6 +435,7 @@ async function createTemporaryNativeInstructionHarness(options = {}) {
     start: harness.start,
     admit: harness.admit,
     restartService: harness.restartService,
+    startDashboard: harness.startDashboard,
     get service() { return harness.service; },
     get instructionTargetState() { return harness.instructionTargetState; },
     get providerAdapters() { return harness.providerAdapters; },

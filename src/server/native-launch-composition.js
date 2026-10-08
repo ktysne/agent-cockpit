@@ -511,6 +511,25 @@ function createNativeLaunchComposition(options = {}) {
     record.reason = reason;
   }
 
+  function updateStopRevision(record) {
+    if (record.stopRevisionUnavailable) return false;
+    const contextId = record.currentContextId || null;
+    const ownerGeneration = record.ownerGeneration;
+    if (!Number.isSafeInteger(ownerGeneration) || ownerGeneration < 0) {
+      record.stopRevisionUnavailable = true;
+      return false;
+    }
+    if (record.stopRevisionContextId === contextId && record.stopRevisionOwnerGeneration === ownerGeneration) return true;
+    if (!Number.isSafeInteger(record.stopRevision) || record.stopRevision >= Number.MAX_SAFE_INTEGER) {
+      record.stopRevisionUnavailable = true;
+      return false;
+    }
+    record.stopRevision += 1;
+    record.stopRevisionContextId = contextId;
+    record.stopRevisionOwnerGeneration = ownerGeneration;
+    return true;
+  }
+
   function invalidateOwnedProofs(source) {
     for (const record of launchRecords.values()) {
       const visited = new Set();
@@ -783,6 +802,7 @@ function createNativeLaunchComposition(options = {}) {
     }
     record.currentContextKind = context.kind;
     record.currentContextId = context.nativeContextId;
+    updateStopRevision(record);
     record.executionActorHandle = executionActor.actorHandle;
     record.actorLifeHandle = executionActor.actorHandle;
     record.actorLifeContextId = record.currentContextId;
@@ -816,6 +836,7 @@ function createNativeLaunchComposition(options = {}) {
     record.actorLifeContextId = record.currentContextId;
     record.proofHandle = reconciled.proofHandle;
     record.ownerGeneration = reconciled.currentProof.ownerGeneration;
+    updateStopRevision(record);
     record.writerEnvelope = null;
     record.status = 'observed';
     record.reason = null;
@@ -871,6 +892,7 @@ function createNativeLaunchComposition(options = {}) {
     invalidateOwnedProofs(record);
     record.currentContextId = null;
     record.currentContextKind = null;
+    updateStopRevision(record);
     record.writerContextId = null;
     setUnknown(record, 'native_context_ended');
     return true;
@@ -891,6 +913,7 @@ function createNativeLaunchComposition(options = {}) {
     invalidateOwnedProofs(record);
     record.currentContextId = null;
     record.currentContextKind = null;
+    updateStopRevision(record);
     record.executionActorHandle = null;
     record.actorLifeHandle = null;
     record.pendingContexts = [];
@@ -985,6 +1008,44 @@ function createNativeLaunchComposition(options = {}) {
       contextKind: record.currentContextKind || null,
       ownerGeneration: launch?.ownerGeneration ?? null,
       processState: record.processState,
+    });
+  }
+
+  function ownedStopState(admissionReceipt) {
+    const record = admissionRecords.get(admissionReceipt);
+    if (!record) throw compositionError('admission_receipt_unavailable');
+    if (!updateStopRevision(record)) throw compositionError('owned_stop_state_unavailable');
+    const contextId = record.currentContextId || null;
+    const ownerGeneration = record.ownerGeneration;
+    const visible = snapshotRecord(record);
+    let runnerSnapshot = null;
+    try { runnerSnapshot = record.runner?.snapshot?.() || null; } catch {}
+    if (record.runner && (!isRecord(runnerSnapshot) ||
+        !Number.isSafeInteger(runnerSnapshot.nativeRequestIdCount) ||
+        !Number.isSafeInteger(runnerSnapshot.nativeRequestIdRemaining) ||
+        runnerSnapshot.nativeRequestIdCount < 0 || runnerSnapshot.nativeRequestIdCount > 128 ||
+        runnerSnapshot.nativeRequestIdRemaining < 0 || runnerSnapshot.nativeRequestIdRemaining > 128 ||
+        runnerSnapshot.nativeRequestIdCount + runnerSnapshot.nativeRequestIdRemaining !== 128)) {
+      throw compositionError('owned_stop_diagnostics_unavailable');
+    }
+    return deepFreeze({
+      launchRef: record.launchRef,
+      executionId: visible.executionId,
+      sessionId: visible.sessionId,
+      expectedContextId: contextId,
+      expectedOwnerGeneration: ownerGeneration,
+      stopRevision: record.stopRevision,
+      processState: record.processState,
+      explicitStop: record.explicitStop,
+      childExited: runnerSnapshot?.childExited === true,
+      childClosed: runnerSnapshot?.childClosed === true,
+      ownedChildActive: runnerSnapshot?.ownedChildActive === true,
+      nativeRequestIdCount: Number.isSafeInteger(runnerSnapshot?.nativeRequestIdCount)
+        ? runnerSnapshot.nativeRequestIdCount : 0,
+      nativeRequestIdRemaining: Number.isSafeInteger(runnerSnapshot?.nativeRequestIdRemaining)
+        ? runnerSnapshot.nativeRequestIdRemaining : 128,
+      nativeRequestOverflow: runnerSnapshot?.nativeRequestOverflow === true,
+      unknownServerRequestHeld: runnerSnapshot?.unknownServerRequestHeld === true,
     });
   }
 
@@ -1097,6 +1158,10 @@ function createNativeLaunchComposition(options = {}) {
       startPromise: null,
       stopPromise: null,
       explicitStop: false,
+      stopRevision: 0,
+      stopRevisionContextId: null,
+      stopRevisionOwnerGeneration: 0,
+      stopRevisionUnavailable: false,
       identity: null,
       registration: null,
       executionBinding: null,
@@ -1295,6 +1360,7 @@ function createNativeLaunchComposition(options = {}) {
     if (record.epoch !== epoch || !periodMatches(record) || !guardContext(record, context)) return null;
     record.proofHandle = reconciled.proofHandle;
     record.ownerGeneration = reconciled.currentProof.ownerGeneration;
+    updateStopRevision(record);
     record.status = 'observed';
     record.reason = null;
     createRunReceipt(record);
@@ -1380,6 +1446,7 @@ function createNativeLaunchComposition(options = {}) {
     handoffResults.set(resultKey, { fingerprint, receipt });
     execution.currentOwnerRecord = targetOwner;
     execution.ownerGeneration = result.ownerGeneration;
+    updateStopRevision(execution);
     execution.proofHandle = null;
     execution.writerEnvelope = null;
     execution.status = 'unknown';
@@ -1533,6 +1600,7 @@ function createNativeLaunchComposition(options = {}) {
       if (loan.needsFreshContext) {
         record.currentContextId = null;
         record.currentContextKind = null;
+        updateStopRevision(record);
         record.executionActorHandle = null;
         record.proofHandle = null;
         record.writerEnvelope = null;
@@ -1884,6 +1952,7 @@ function createNativeLaunchComposition(options = {}) {
     writerFor,
     authorizeWriter,
     snapshot,
+    ownedStopState,
   });
 }
 

@@ -476,7 +476,7 @@ test('CW09 spawn failure closes the dedicated endpoint before explicit compositi
   const f = await fixture(t, { spawnFailure: true });
   const deadline = Date.now() + 1000;
   while (f.runner.snapshot().waitEndpointActive) { assert.ok(Date.now() < deadline); await new Promise(resolve => setImmediate(resolve)); }
-  assert.equal(f.runner.snapshot().state, 'failed');
+  assert.equal(f.runner.snapshot().state, 'stop_unconfirmed');
 });
 
 test('CW09 natural child exit closes the dedicated endpoint before explicit composition stop', async t => {

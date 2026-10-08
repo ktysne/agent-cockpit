@@ -160,4 +160,28 @@ child exitとclose、runner inactive、integration close、隔離HOME/cwd/store�
 harness scriptには固定BOOT/START/STEER試験文面が含まれる。sanitized summaryには実測native入力全文、raw frame、tokenを保存せず、試験文面のhashと相関結果を保存する。この保全範囲の記録は、runRoot外を含む端末全体の不在確認ではない。
 run3 script SHA-256は`55159428905C999DF2F3D17591DFB40C04D098D14091DA6A1D47FC9F2677B444`、sanitized summary SHA-256は`8A2469AC4360661538ECA9A336D5D0F03C568FBC0B6411DAA9EA0622BFDB586A`で、root-side manifestに固定している。
 
-NS09のquestion/permission pending保留は未対応のままで、Claudeのapplied判定も未確認である。PR #202はDraftを維持する。
+NS09の実runtimeでのquestion/permission待ちとClaudeのapplied判定は未確認である。
+fixtureで検証したPR #202はfeatureへ集約済みであり、実runtimeの確認はmain採用条件として残る。
+
+## 製品からの所有実行の停止
+
+`GET /api/state`の`ownedExecutions`は、compositionが保持するadmission receiptとrunnerから作る。
+公開IDや現在の送信proofだけからプロセス所有権を推定しない。
+`ownedExecutionDiagnostics.status`は`ready`、`unavailable`、`unconfigured`を区別し、取得不能な停止状態で送信を再開しない。
+
+`POST /api/executions/stop`は、画面の秘密値と同一Originを必須とする。
+本文は`launchRef`、`executionId`、`sessionId`、`expectedContextId`、`expectedOwnerGeneration`、`stopRevision`の六項目だけを受ける。
+画面で確認した対象と現在の所有実行が一致しない要求は409で拒否し、古い要求を別の対象へ読み替えない。
+contextの開始・終了と所有世代の変更でrevisionを単調に進め、取得間に状態が元へ戻った場合も古い確認を失効させる。
+送信proofが失効した後も、同じreceiptで所有が確認できるプロセスは停止できる。
+
+停止の開始時に送信権限を失効させ、旧routerとcollectorを分離する。
+`stopConfirmed`は、同一childのexitとclose、およびinactiveに加え、旧配送経路の分離をすべて確認した場合だけtrueにする。
+物理停止か分離のどちらかを確認できない間は、新世代の開始も保留する。
+内部の`predecessorReceipt`で紐づく新しい実行は、明示停止と停止確認を照合してから開始する。
+無関係な独立実行をこの保留に巻き込まない。
+
+要求IDの保持件数、残枠、上限128を停止状態に併記する。
+128件を保持しただけでは容量超過と推定せず、runnerのstickyな容量保留を投影する。
+`failed`は起動失敗の正当な状態として表示し、停止できる所有実行を一覧から除かない。
+これらの境界はfake childと製品HTTP経路のfixtureで確認し、実Codex・Claudeの停止結果とは区別する。
