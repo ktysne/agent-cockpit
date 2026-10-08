@@ -496,7 +496,7 @@ test('種類別の今やっていることは行が無いとき本文を出さ�
 
 function reloadHarness(initialUiVersion, drafts = []) {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
-  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks']
+  const functions = ['renderReloadNote', 'hasUnsentAnswerDraft', 'answerDraftChanged', 'answerValueFor', 'checkUiVersion', 'reloadNow', 'decisionAnswerAvailability', 'copyAnswerPicks', 'sameAnswerPicks', 'recommendedOptionsForQuestions']
     .map((name) => functionSource(html, name));
   assert.ok(functions.every(Boolean));
 
@@ -2293,7 +2293,7 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
 test('選択肢を押すと送る答えが表示され、回答を送るが有効になる', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functionNames = [
-    'answerDraftKey', 'answerDraftFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
+    'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
     'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
     'answerMetaText', 'canSendDecisionAnswer', 'updateAnswerSubmit',
@@ -2316,10 +2316,8 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   // 単一選択で選び直したときに、前の選択が残らないことも確かめるため、推奨を選んだ状態から始める。
   const answerDrafts = new Map([[key, { choice: 'pick', picks: [['JSON (推奨)']], note: '' }]]);
   const button = { disabled: true };
-  // 推奨の無い質問を未選択で描くと、送る答えの欄は空で隠れている。
   const meta = { textContent: '', hidden: true };
   const error = { textContent: '' };
-  const answerChoices = [{ checked: true }, { checked: true }];
   const card = {
     dataset: { sessionId: 'session-ui', decisionId: 'decision-ui' },
     querySelector(selector) {
@@ -2328,9 +2326,6 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
       if (selector === '.answer-error') return error;
       return null;
     },
-    querySelectorAll(selector) {
-      return selector === '[data-answer-choice]' ? answerChoices : [];
-    },
   };
   const pick = {
     type: 'radio', checked: true,
@@ -2338,7 +2333,6 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
       sessionId: 'session-ui', decisionId: 'decision-ui', answerQuestion: '0', answerOption: '1',
     },
     closest(selector) {
-      if (selector === '[data-answer-choice]') return null;
       if (selector === '[data-answer-pick]') return this;
       if (selector === '.decision-card') return { querySelector: (inner) => (inner === '.decision-answer' ? card : null) };
       return null;
@@ -2359,8 +2353,261 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   assert.equal(meta.textContent, '送る答え: CSV');
   assert.equal(meta.hidden, false);
   assert.equal(button.disabled, false);
-  assert.deepEqual(answerChoices.map((choice) => choice.checked), [false, false]);
   assert.equal(error.textContent, '');
+});
+
+function decisionAnswerPickHarness(decision) {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const functionNames = [
+    'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
+    'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
+    'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
+    'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText', 'updateAnswerSubmit', 'clearSelectedAnswerPick',
+  ];
+  const functions = functionNames.map((name) => functionSource(html, name));
+  const clickHandler = html.match(/document\.addEventListener\('click', \(event\) => \{\n  const pick = event\.target\.closest\('\[data-answer-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
+  const keydownHandler = html.match(/document\.addEventListener\('keydown', \(event\) => \{\n  if \(event\.key !== ' ' && event\.code !== 'Space'\) return;[\s\S]*?\n\}\);/)?.[0];
+  const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{\n  const pick = event\.target\.closest\('\[data-answer-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
+  const inputHandler = html.match(/document\.addEventListener\('input', \(event\) => \{\n  const note = event\.target\.closest\('\[data-answer-note\]'\);[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(functions.every(Boolean));
+  assert.ok(clickHandler && keydownHandler && changeHandler && inputHandler);
+
+  const answerDrafts = new Map();
+  const answerErrors = new Map();
+  const button = { disabled: true };
+  const meta = { textContent: '', hidden: true };
+  const status = { textContent: '' };
+  const error = { textContent: '' };
+  const card = {
+    dataset: { sessionId: 'session-pick', decisionId: decision.id },
+    querySelector(selector) {
+      if (selector === '[data-send-answer]') return button;
+      if (selector === '[data-answer-meta]') return meta;
+      if (selector === '.answer-foot .answer-status') return status;
+      if (selector === '.answer-error') return error;
+      return null;
+    },
+  };
+  const decisionCard = { querySelector: (selector) => (selector === '.decision-answer' ? card : null) };
+  const listeners = new Map();
+  const context = pageContext(html, {
+    answerDrafts,
+    answerErrors,
+    findDecision: (sessionId, decisionId) => (sessionId === 'session-pick' && decisionId === decision.id ? decision : null),
+    absoluteTimeLabel: () => '保存済みの時刻',
+    document: { addEventListener: (name, handler) => listeners.set(name, handler) },
+  });
+  vm.runInContext(`${functions.join('\n')}\n${clickHandler}\n${keydownHandler}\n${changeHandler}\n${inputHandler}`, context);
+
+  const makePick = (optionIndex, checked = true) => ({
+    type: 'radio', checked,
+    dataset: { sessionId: 'session-pick', decisionId: decision.id, answerQuestion: '0', answerOption: String(optionIndex) },
+    closest(selector) {
+      if (selector === '[data-answer-pick]') return this;
+      if (selector === '.decision-card') return decisionCard;
+      return null;
+    },
+  });
+  const note = {
+    value: '',
+    dataset: { sessionId: 'session-pick', decisionId: decision.id },
+    closest(selector) {
+      if (selector === '[data-answer-note]') return this;
+      if (selector === '.decision-answer') return card;
+      return null;
+    },
+  };
+  return { context, listeners, answerDrafts, button, meta, status, card, makePick, note };
+}
+
+test('選択済みの単一選択をもう一度押すと外れ、指示だけで送れる', () => {
+  const decision = {
+    id: 'decision-deselect',
+    questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: null,
+  };
+  const harness = decisionAnswerPickHarness(decision);
+  const pick = harness.makePick(1);
+  harness.listeners.get('change')({ target: pick });
+
+  assert.equal(harness.answerDrafts.get('session-pick\0decision-deselect').choice, 'pick');
+  assert.equal(harness.meta.textContent, '送る答え: CSV');
+  assert.equal(harness.button.disabled, false);
+
+  harness.listeners.get('click')({ target: pick });
+  assert.equal(pick.checked, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.answerDrafts.get('session-pick\0decision-deselect').picks)), [[]]);
+  assert.equal(harness.answerDrafts.get('session-pick\0decision-deselect').choice, null);
+  assert.equal(harness.meta.textContent, '');
+  assert.equal(harness.meta.hidden, true);
+  assert.equal(harness.button.disabled, true);
+
+  harness.note.value = '選択肢は決めず、対応方針だけ確認してください';
+  harness.listeners.get('input')({ target: harness.note });
+  const draft = harness.answerDrafts.get('session-pick\0decision-deselect');
+  assert.equal(draft.choice, null);
+  assert.equal(draft.note, harness.note.value);
+  assert.equal(harness.button.disabled, false);
+});
+
+test('保存済みの choice ok の推奨選択肢は押すと外れ、変更状態に更新される', () => {
+  const decision = {
+    id: 'decision-saved-ok',
+    questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: { choice: 'ok', picks: [], note: '', sentAt: '2026-10-08T00:00:00.000Z' },
+  };
+  const harness = decisionAnswerPickHarness(decision);
+  const pick = harness.makePick(0);
+  harness.listeners.get('click')({ target: pick });
+
+  const draft = harness.answerDrafts.get('session-pick\0decision-saved-ok');
+  assert.equal(pick.checked, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(draft.picks)), [[]]);
+  assert.equal(draft.choice, null);
+  assert.equal(harness.meta.textContent, '');
+  assert.equal(harness.meta.hidden, true);
+  assert.equal(harness.status.textContent, '変更は未送信');
+  assert.equal(harness.button.disabled, true);
+});
+
+test('選択済みラジオ上の Space は選択を外し、矢印キーは解除処理に入らない', () => {
+  const decision = {
+    id: 'decision-space',
+    questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: null,
+  };
+  const harness = decisionAnswerPickHarness(decision);
+  harness.answerDrafts.set('session-pick\0decision-space', { choice: 'pick', picks: [['CSV']], note: '' });
+  const pick = harness.makePick(1);
+  let prevented = false;
+  harness.listeners.get('keydown')({ target: pick, key: ' ', code: 'Space', preventDefault: () => { prevented = true; } });
+
+  assert.equal(prevented, true);
+  assert.equal(pick.checked, false);
+  assert.equal(harness.answerDrafts.get('session-pick\0decision-space').choice, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.answerDrafts.get('session-pick\0decision-space').picks)), [[]]);
+
+  prevented = false;
+  harness.listeners.get('keydown')({ target: pick, key: 'ArrowDown', code: 'ArrowDown', preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, false);
+});
+
+test('モックでも保存済みの choice ok は推奨選択肢を押すと外れ、指示のみで送れる', () => {
+  const html = mockHtml.replace(/\r\n/g, '\n');
+  const helpers = sourceBetween(html, 'function answerOf(id)', '\n\nconst allSessions');
+  const clearPick = functionSource(html, 'clearSelectedMockPick');
+  const clickHandler = html.match(/document\.addEventListener\('click', e => \{\n  const pick = e\.target\.closest\('input\[data-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
+  const keydownHandler = html.match(/document\.addEventListener\('keydown', e => \{\n  if \(e\.key !== ' ' && e\.code !== 'Space'\) return;[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(helpers);
+  assert.ok(clearPick && clickHandler && keydownHandler);
+
+  const decision = {
+    id: 'decision-mock',
+    options: [{ t: 'JSON', rec: true }, { t: 'CSV', rec: false }],
+  };
+  const ui = { answers: { 'decision-mock': {
+    choice: 'ok', picks: [], note: '',
+    sent: { choice: 'ok', picks: [], note: '', at: '2026-10-08 09:00' },
+  } } };
+  const card = {
+    dataset: { id: decision.id, sessionId: 'session-mock' },
+    querySelector: () => null,
+  };
+  const pick = {
+    type: 'radio', checked: true, dataset: { pick: '0' },
+    closest(selector) {
+      if (selector === 'input[data-pick]') return this;
+      if (selector === '.decision') return card;
+      return null;
+    },
+  };
+  const listeners = new Map();
+  let saveCount = 0;
+  let renderCount = 0;
+  const context = pageContext(html, {
+    ui,
+    answerErrors: new Map(),
+    allSessions: () => [{ decisions: [decision] }],
+    save: () => { saveCount += 1; },
+    render: () => { renderCount += 1; },
+    document: { addEventListener: (name, handler) => listeners.set(name, handler) },
+  });
+  vm.runInContext(`${helpers}\n${clearPick}\n${clickHandler}\n${keydownHandler}\nthis.canSendAnswerDraft = canSend; this.answerDraftIsDirty = answerDirty;`, context);
+  listeners.get('click')({ target: pick });
+
+  let answer = ui.answers[decision.id];
+  assert.equal(answer.choice, null);
+  assert.deepEqual([...answer.picks], []);
+  assert.equal(pick.checked, false);
+  assert.equal(context.canSendAnswerDraft(answer), false);
+  assert.equal(context.answerDraftIsDirty(answer, decision), true);
+
+  ui.answers[decision.id] = {
+    choice: 'ok', picks: [], note: '',
+    sent: { choice: 'ok', picks: [], note: '', at: '2026-10-08 09:00' },
+  };
+  pick.checked = true;
+  let prevented = false;
+  listeners.get('keydown')({
+    target: pick, key: ' ', code: 'Space', preventDefault: () => { prevented = true; },
+  });
+  answer = ui.answers[decision.id];
+  assert.equal(prevented, true);
+  assert.equal(answer.choice, null);
+  assert.deepEqual([...answer.picks], []);
+  assert.equal(pick.checked, false);
+
+  answer.note = '選択肢は決めず、対応方針だけ確認してください';
+  assert.equal(context.canSendAnswerDraft(answer), true);
+  assert.equal(saveCount, 2);
+  assert.equal(renderCount, 2);
+});
+
+test('送信済みの推奨案で OK は推奨選択肢を選んだ下書きとして表示する', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
+  const names = [
+    'answerDraftFor', 'answerValueFor', 'copyAnswerPicks', 'recommendedOptionsForQuestions',
+    'answerDraftChanged', 'sameAnswerPicks', 'displayRecommendedLabel', 'selectedAnswerLabels', 'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText',
+  ];
+  const functions = names.map((name) => functionSource(html, name));
+  assert.ok(functions.every(Boolean));
+
+  const decision = {
+    id: 'decision-legacy',
+    questions: [
+      {
+        question: '形式を決める', multiSelect: false,
+        options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+      },
+      {
+        question: '排他制御の方式を決める', multiSelect: false,
+        options: [{ label: '行ロック', recommended: true }, { label: '楽観ロック', recommended: false }],
+      },
+    ],
+    answer: { choice: 'ok', picks: [], note: '保存済みの指示', sentAt: '2026-10-03T00:00:00.000Z' },
+  };
+  const context = pageContext(html, {
+    answerDrafts: new Map(),
+    absoluteTimeLabel: () => '保存済みの時刻',
+  });
+  vm.runInContext(`${functions.join('\n')}\nthis.makeDraft = answerDraftFor; this.changed = answerDraftChanged; this.meta = answerMetaText; this.canSend = canSendDecisionAnswer; this.status = answerStatusText;`, context);
+  const draft = context.makeDraft(decision, { session_id: 'session-legacy' });
+
+  assert.equal(draft.choice, 'pick');
+  assert.deepEqual(JSON.parse(JSON.stringify(draft.picks)), [['JSON (推奨)'], ['行ロック']]);
+  assert.equal(context.changed(decision, draft), false);
+  assert.equal(context.meta(decision, draft), '送る答え: JSON、行ロック');
+  assert.equal(context.canSend(decision, draft), true);
+  assert.equal(context.status(decision.answer, decision), '保存済みの時刻 に送信済み: 推奨案で OK (指示あり)');
 });
 
 test('指示欄の変換中は描き直しを保留し、変換終了後に反映する', () => {

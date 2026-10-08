@@ -180,13 +180,8 @@ h3.sub { font-size: 13px; color: var(--text-2); margin: 14px 0 6px; }
 .answer-pick-body { min-width: 0; }
 .decision-option-description { display: block; color: var(--text-2); font-size: 12px; }
 .decision-answer { display: grid; gap: 8px; margin-top: 10px; }
-.answer-choices { display: flex; gap: 8px; flex-wrap: wrap; }
-.answer-choice { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; user-select: none; }
-.answer-choice input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
-.answer-choice.ok:has(input:checked) { background: var(--ok-soft); border-color: var(--ok); color: var(--ok-text); }
-.answer-choice.ok input { accent-color: var(--ok); }
 .decision-answer textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text); font: inherit; }
-.decision-answer textarea:focus-visible, .answer-choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.decision-answer textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .answer-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .decision-summary { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); }
 .answer-foot .primary { min-height: 40px; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; }
@@ -2631,9 +2626,22 @@ function answerDraftFor(decision, session) {
   const key = `${session.session_id}\0${decision.id}`;
   const saved = answerDrafts.get(key);
   const answer = saved || decision.answer || {};
+  return answerValueFor(decision, answer);
+}
+
+function answerValueFor(decision, answer) {
+  const questions = decision.questions || [];
+  const picks = copyAnswerPicks(answer.picks, questions.length);
+  const choice = answer.choice === 'ok' ? 'pick' : answer.choice === 'pick' ? 'pick' : null;
+  if (answer.choice === 'ok') {
+    const recommendations = recommendedOptionsForQuestions(questions);
+    recommendations.forEach((option, index) => {
+      if (option) picks[index] = [option.label];
+    });
+  }
   return {
-    choice: ['ok', 'pick'].includes(answer.choice) ? answer.choice : null,
-    picks: copyAnswerPicks(answer.picks, (decision.questions || []).length),
+    choice,
+    picks,
     note: answer.note || '',
   };
 }
@@ -2659,12 +2667,12 @@ function sameAnswerDraft(left, right) {
 }
 
 function answerDraftChanged(decision, draft, ignoreEmptyUnsent = false) {
-  const answer = decision.answer?.sentAt ? decision.answer : {};
-  if (ignoreEmptyUnsent && (draft.choice ?? null) === null && (draft.note || '') === (answer.note || '')) return false;
   const questionCount = (decision.questions || []).length;
-  return !decision.answer?.sentAt || (draft.choice ?? null) !== (answer.choice ?? null) ||
-    (draft.note || '') !== (answer.note || '') ||
-    !sameAnswerPicks(copyAnswerPicks(draft.picks, questionCount), copyAnswerPicks(answer.picks, questionCount));
+  const current = answerValueFor(decision, draft);
+  const sent = decision.answer?.sentAt ? answerValueFor(decision, decision.answer) : answerValueFor(decision, {});
+  if (ignoreEmptyUnsent && current.choice === null && current.note === sent.note) return false;
+  return !decision.answer?.sentAt || current.choice !== sent.choice || current.note !== sent.note ||
+    !sameAnswerPicks(copyAnswerPicks(current.picks, questionCount), copyAnswerPicks(sent.picks, questionCount));
 }
 
 function clearAnswerErrorWhenDraftChanges(key, previous, next, card) {
@@ -2709,10 +2717,6 @@ function selectedAnswerLabels(decision, picks) {
 function answerMetaText(decision, draft) {
   const picked = selectedAnswerLabels(decision, draft.picks);
   if (picked.length) return `送る答え: ${picked.join('、')}`;
-  const recommendations = recommendedOptionsForQuestions(decision.questions || []);
-  if (recommendations.length && recommendations.every(Boolean)) {
-    return `OK で送る答え: ${recommendations.map((option) => displayRecommendedLabel(option.label)).join('、')}`;
-  }
   return '';
 }
 
@@ -2723,7 +2727,6 @@ function canSendDecisionAnswer(decision, draft) {
     const recommendations = recommendedOptionsForQuestions(decision.questions || []);
     return draft.picks.every((labels, index) => labels.length > 0 || recommendations[index] || draft.note.trim());
   }
-  if (draft.choice === 'ok') return recommendedOptionsForQuestions(decision.questions || []).every(Boolean);
   return Boolean(draft.note.trim());
 }
 
@@ -2765,24 +2768,9 @@ function appendDecisionAnswer(card, decision, product, session, summary) {
   const draft = answerDraftFor(decision, session);
   const answer = decision.answer;
   const dirty = answerDraftChanged(decision, draft);
-  const recommendations = recommendedOptionsForQuestions(questions);
-  const canUseRecommendation = recommendations.length > 0 && recommendations.every(Boolean);
   const answerBox = element('div', 'decision-answer');
   answerBox.dataset.decisionId = decision.id;
   answerBox.dataset.sessionId = session.session_id;
-  const choices = element('div', 'answer-choices');
-  const control = document.createElement('label');
-  control.className = 'answer-choice ok';
-  const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox';
-  checkbox.dataset.answerChoice = 'ok';
-  checkbox.dataset.sessionId = session.session_id;
-  checkbox.dataset.decisionId = decision.id;
-  checkbox.checked = draft.choice === 'ok';
-  checkbox.disabled = !canUseRecommendation;
-  control.append(checkbox, document.createTextNode('推奨案で OK'));
-  choices.append(control);
-  answerBox.append(choices);
   const answerMeta = element('div', 'meta', answerMetaText(decision, draft));
   answerMeta.dataset.answerMeta = 'true';
   answerMeta.hidden = !answerMeta.textContent;
@@ -3411,7 +3399,6 @@ function render(state) {
         : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
-          : active?.dataset?.answerChoice ? { kind: 'answer-choice', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, choice: active.dataset.answerChoice }
          : active?.dataset?.showFinished ? { kind: 'show-finished' }
          : active?.dataset?.showIdle ? { kind: 'show-idle' }
            : active?.dataset?.closeMergeResult ? { kind: 'merge-result-close', id: active.dataset.closeMergeResult }
@@ -3487,12 +3474,11 @@ function render(state) {
   }
 
   if (focusData) {
-    if (['answer-pick', 'answer-choice', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
-      const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-choice], [data-answer-note], [data-send-answer]')].find((item) => (
+    if (['answer-pick', 'answer-note', 'answer-submit'].includes(focusData.kind)) {
+      const control = [...root.querySelectorAll('[data-answer-pick], [data-answer-note], [data-send-answer]')].find((item) => (
         item.dataset.sessionId === focusData.sessionId &&
         (item.dataset.decisionId || item.dataset.sendAnswer) === focusData.decisionId &&
         (focusData.kind !== 'answer-pick' || (item.dataset.answerQuestion === focusData.questionIndex && item.dataset.answerOption === focusData.optionIndex)) &&
-        (focusData.kind !== 'answer-choice' || item.dataset.answerChoice === focusData.choice) &&
         (focusData.kind !== 'answer-note' || item.hasAttribute('data-answer-note')) &&
         (focusData.kind !== 'answer-submit' || item.hasAttribute('data-send-answer'))
       ));
@@ -3581,6 +3567,32 @@ function updateAnswerSubmit(card) {
   button.disabled = !canSendDecisionAnswer(decision, draft) || !changed;
 }
 
+function clearSelectedAnswerPick(pick) {
+  const sessionId = pick.dataset.sessionId;
+  const decisionId = pick.dataset.decisionId;
+  const decision = findDecision(sessionId, decisionId);
+  if (!decision) return false;
+  const questionIndex = Number(pick.dataset.answerQuestion);
+  const optionIndex = Number(pick.dataset.answerOption);
+  const question = decision.questions?.[questionIndex];
+  const option = question?.options?.[optionIndex];
+  if (!option) return false;
+  const current = answerDraftFor(decision, { session_id: sessionId });
+  if (!current.picks[questionIndex]?.includes(option.label)) return false;
+  const picks = copyAnswerPicks(current.picks, (decision.questions || []).length);
+  picks[questionIndex] = [];
+  const next = { ...current, choice: picks.some((labels) => labels.length) ? 'pick' : null, picks };
+  const key = answerDraftKey(sessionId, decisionId);
+  answerDrafts.set(key, next);
+  pick.checked = false;
+  const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
+  if (card) {
+    clearAnswerErrorWhenDraftChanges(key, current, next, card);
+    updateAnswerSubmit(card);
+  }
+  return true;
+}
+
 function showAnswerError(sessionId, decisionId, message) {
   answerErrors.set(answerDraftKey(sessionId, decisionId), message);
   const card = [...root.querySelectorAll('.decision-answer')].find((item) => (
@@ -3627,25 +3639,6 @@ async function sendDecisionAnswer(button) {
 }
 
 document.addEventListener('change', (event) => {
-  const choice = event.target.closest('[data-answer-choice]');
-  if (choice) {
-    if (choice.disabled) return;
-    const key = answerDraftKey(choice.dataset.sessionId, choice.dataset.decisionId);
-    const card = choice.closest('.decision-answer');
-    const decision = findDecision(choice.dataset.sessionId, choice.dataset.decisionId);
-    if (!decision) return;
-    const current = answerDraftFor(decision, { session_id: choice.dataset.sessionId });
-    const next = { ...current, choice: choice.checked ? choice.dataset.answerChoice : null, picks: emptyAnswerPicks(decision) };
-    clearAnswerErrorWhenDraftChanges(key, current, next, card);
-    answerDrafts.set(key, next);
-    for (const input of card.querySelectorAll('[data-answer-choice]')) {
-      input.checked = next.choice === input.dataset.answerChoice;
-    }
-    for (const input of choice.closest('.decision-card')?.querySelectorAll('[data-answer-pick]') || []) input.checked = false;
-    updateAnswerSubmit(card);
-    return;
-  }
-
   const pick = event.target.closest('[data-answer-pick]');
   if (!pick) return;
   const sessionId = pick.dataset.sessionId;
@@ -3670,7 +3663,6 @@ document.addEventListener('change', (event) => {
   // 選択肢は回答欄の外(質問の区画)にあるので、判断事項のカードから回答欄を引く。
   const card = pick.closest('.decision-card')?.querySelector('.decision-answer');
   if (!card) return;
-  for (const input of card.querySelectorAll('[data-answer-choice]')) input.checked = false;
   clearAnswerErrorWhenDraftChanges(key, current, next, card);
   updateAnswerSubmit(card);
 });
@@ -4255,6 +4247,17 @@ document.addEventListener('click', (event) => {
     saveDisplayPreferences({ [changedKey]: changedValue });
     if (lastState) render(lastState);
   }
+});
+
+document.addEventListener('click', (event) => {
+  const pick = event.target.closest('[data-answer-pick]');
+  if (pick?.type === 'radio') clearSelectedAnswerPick(pick);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== ' ' && event.code !== 'Space') return;
+  const pick = event.target.closest('[data-answer-pick]');
+  if (pick?.type === 'radio' && clearSelectedAnswerPick(pick)) event.preventDefault();
 });
 
 document.addEventListener('auxclick', (event) => {
