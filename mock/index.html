@@ -1756,7 +1756,7 @@ function mergeConfirm(p, pr) {
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
-      <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
+      <button type="button" class="ghost" data-merge-cancel ${merging ? 'disabled' : ''}>やめる</button></div>
   </div>`;
 }
 
@@ -1807,12 +1807,15 @@ function prItem(p, pr) {
   const conditionMet = !operationBlocker && waiting.length === 0;
   // クロスレビューの行が黄の札で同じ待ちを示すときは、待ちの行から外して二重に出さない。
   const shownWaits = crossReviewState(pr).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
-  const mergeIntent = Boolean(pr.mergeIntent);
+  const queued = Boolean(pr.mergeIntent);
+  // 常駐サーバーが gh でマージしている間の印。確認欄から実行中の操作は確認欄の「処理中…」で示す。
+  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !(confirmManual && pullRequestMergeInFlight.has(k));
+  const mergeIntent = queued || mergeInProgress;
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
   const actions = [
-    mergeIntent ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
+    queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
     !mergeIntent && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
       <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
     conflictButton(p, pr),
@@ -1824,7 +1827,7 @@ function prItem(p, pr) {
       <span class="num">#${pr.number}</span><span class="ptitle">${esc(pr.title)}</span>
     </div>
     <div class="branch"><code>${esc(pr.head)}</code> → <code>${esc(e.base)}</code></div>
-    <div class="badges">${mergeIntent ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
+    <div class="badges">${queued ? '<span class="badge accent">マージキューに追加済み (未マージ)</span>' : mergeInProgress ? '<span class="badge accent">マージ処理中 (未マージ)</span>' : ''}${prBadges(p, pr)}</div>
     ${crossReviewLine(p, pr)}
     ${rsv ? `<div class="badges"><span class="badge accent long">レビュー収束後にマージ予約中 (${METHOD_LABEL[rsv.method]}、予約時 ${esc(absoluteTimeLabel(rsv.at, Date.now(), rsv.at))}、${esc(reservationWait(p, pr, rsv.method).join('、'))})</span>
       <button type="button" class="link-btn" data-ready-merge="${k}">モック: 待機条件を満たす</button></div>` : ''}
@@ -2366,6 +2369,7 @@ document.addEventListener('click', e => {
     delete ui.mergeErrors[t.dataset.conflictGo];
     ui.confirm = null;
   } else if (t.hasAttribute('data-merge-cancel')) {
+    if (ui.confirm?.key && pullRequestMergeInFlight.has(ui.confirm.key)) return;
     if (ui.confirm?.key) delete ui.mergeErrors[ui.confirm.key];
     else if (typeof ui.confirm === 'string' && ui.confirm.startsWith('conflict:')) delete ui.mergeErrors[ui.confirm.slice('conflict:'.length)];
     ui.confirm = null;
