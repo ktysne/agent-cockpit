@@ -143,6 +143,17 @@ test('kind が interactive 以外のセッションファイルは非対話と�
   assert.equal(Object.hasOwn(sessions['no-kind'], 'nonInteractive'), false);
 });
 
+test('kind が空文字列や空白だけのセッションファイルは非対話として付けない', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([
+    { session_id: 'empty', kind: '' },
+    { session_id: 'blank', kind: '   ' },
+  ]);
+  const sessions = Object.fromEntries(state.snapshot().sessions.map((session) => [session.session_id, session]));
+  assert.equal(Object.hasOwn(sessions.empty, 'nonInteractive'), false);
+  assert.equal(Object.hasOwn(sessions.blank, 'nonInteractive'), false);
+});
+
 function backgroundClaudeState(sessionId = 'task-stop') {
   const state = new DashboardState();
   state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'launch', hookAt: 100 });

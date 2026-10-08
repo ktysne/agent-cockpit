@@ -516,9 +516,9 @@ function agentFor(session, agentId) {
   return session.agents.find((agent) => agent.agent_id === agentId) || null;
 }
 
-// 非対話の claude -p は kind が interactive 以外になる。kind が無いか文字列でないファイルは対話として扱う。
+// 非対話の claude -p は kind が interactive 以外になる。kind が無い、空、または文字列でないファイルは対話として扱う。
 function isNonInteractiveSessionFile(file) {
-  return typeof file?.kind === 'string' && file.kind !== 'interactive';
+  return typeof file?.kind === 'string' && file.kind.trim() !== '' && file.kind !== 'interactive';
 }
 
 function claudeModelName(modelId) {

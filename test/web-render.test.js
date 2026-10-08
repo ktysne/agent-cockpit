@@ -4346,3 +4346,35 @@ test('非対話で状態が不明の行は更新時刻が古くても更新の�
   assert.equal(mockContext.isIdleHiddenSession(mockNonInteractive, now), false);
   assert.equal(mockContext.isIdleHiddenSession({ ...mockNonInteractive, nonInteractive: false }, now), true);
 });
+
+test('非対話の行は作業中と待機中を対話と同じ文言と色にし、状態不明の時だけ非対話の実行中にする', () => {
+  const implContext = pageContext(pageHtml, {});
+  vm.runInContext(functionSource(pageHtml, 'activityStatus'), implContext);
+
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const mockContext = pageContext(mock, {
+    ui: { estimatedSessions: [] },
+    taskState: (session, task) => task.state,
+    esc: (value) => String(value),
+    sessionTag: () => '',
+    renderToolLine: () => '<div class="tool-line"></div>',
+    absoluteTimeLabel: () => '',
+    ESTIMATE_WAITING: {},
+  });
+  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
+
+  const cases = [
+    { implSession: { status: '作業中', nonInteractive: true }, mockSession: { status: 'busy', nonInteractive: true }, label: '作業中', tone: 'busy' },
+    { implSession: { status: '待機中', nonInteractive: true }, mockSession: { status: 'wait', nonInteractive: true }, label: '待機中', tone: 'wait' },
+    { implSession: { status: '不明', nonInteractive: true }, mockSession: { status: 'unknown', nonInteractive: true }, label: '非対話の実行中', tone: 'busy' },
+  ];
+  for (const { implSession, mockSession, label, tone } of cases) {
+    const implStatus = implContext.activityStatus(implSession);
+    assert.equal(implStatus.label, label, `実装の文言: ${JSON.stringify(implSession)}`);
+    assert.equal(implStatus.tone, tone, `実装の色: ${JSON.stringify(implSession)}`);
+
+    const row = mockContext.mainRow({}, { id: 'batch', tasks: [], main: { tool: '', since: '3 分前' }, ...mockSession }, false);
+    assert.equal(row.match(/<strong>([^<]*)<\/strong>/)[1], label, `モックの文言: ${JSON.stringify(mockSession)}`);
+    assert.equal(row.match(/<span class="dot ([^"]+)"><\/span>/)[1], tone, `モックの色: ${JSON.stringify(mockSession)}`);
+  }
+});

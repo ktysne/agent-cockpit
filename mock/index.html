@@ -1266,14 +1266,15 @@ function sessionTag(p, session, withTag, includeSession = false) {
 }
 
 function mainRow(p, session, withTag) {
-  // 非対話の実行は状態不明のデータで持つが、行は稼働中として出す。
+  // 非対話の実行は、状態不明のときだけ稼働中として出す。作業中と待機中は対話と同じ文言と色にする。
   const nonInteractive = session.nonInteractive === true;
-  const unknown = session.status === 'unknown' && !nonInteractive;
+  const nonInteractiveUnknown = session.status === 'unknown' && nonInteractive;
+  const unknown = session.status === 'unknown' && !nonInteractiveUnknown;
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = nonInteractive ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
-  const stateClass = nonInteractive ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
+  const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
+  const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
   const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>' : '';
   const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
