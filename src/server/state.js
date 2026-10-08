@@ -750,6 +750,20 @@ function sessionSnapshot(session) {
   };
 }
 
+function sessionForEvent(sessions, event, initialAskDecisionState) {
+  let session = sessions.get(event.session_id);
+  if (event.hook_event_name === 'SessionStart') {
+    if (!session || session.ended) {
+      session = newSession(event, initialAskDecisionState);
+      sessions.set(event.session_id, session);
+    }
+  } else if (!session) {
+    session = newSession(event, initialAskDecisionState);
+    sessions.set(event.session_id, session);
+  }
+  return session;
+}
+
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
@@ -760,16 +774,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
   });
 
   for (const { event } of ordered) {
-    let session = sessions.get(event.session_id);
-    if (event.hook_event_name === 'SessionStart') {
-      if (!session || session.ended) {
-        session = newSession(event, initialAskDecisionState);
-        sessions.set(event.session_id, session);
-      }
-    } else if (!session) {
-      session = newSession(event, initialAskDecisionState);
-      sessions.set(event.session_id, session);
-    }
+    const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
     if (event.product) session.product = event.product;
