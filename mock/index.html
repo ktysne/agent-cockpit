@@ -611,6 +611,11 @@ const DATA = {
           main: { tool: '', since: '5 分前' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 5,
         },
+        {
+          id: 'agent-cockpit-noninteractive', title: '非対話の claude -p (クロスレビュー)', status: 'unknown', nonInteractive: true, branch: 'plan/pr-stack-view',
+          main: { tool: '', since: '3 分前' },
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 3,
+        },
       ],
     },
   ],
@@ -945,7 +950,8 @@ const answerDirty = (answer, decision) => {
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions).filter(s => !ui.deletedSessionIds.includes(s.id));
 function isIdleHiddenSession(session, now = Date.now()) {
-  if (session.status === 'busy' || session.perms.length > 0) return false;
+  // 非対話の実行中は作業中として見せるので、更新時刻が古くても隠さない。
+  if (session.status === 'busy' || (session.status === 'unknown' && session.nonInteractive) || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
   if (session.subagents.some(agent => isBusyAgent(session, agent))) return false;
   const lastUpdatedAt = Date.parse(session.lastUpdatedAt || session.sessionFileUpdatedAt || '');
@@ -1261,14 +1267,18 @@ function sessionTag(p, session, withTag, includeSession = false) {
 }
 
 function mainRow(p, session, withTag) {
-  const unknown = session.status === 'unknown';
+  // 非対話の実行は、状態不明のときだけ稼働中として出す。作業中と待機中は対話と同じ文言と色にする。
+  const nonInteractive = session.nonInteractive === true;
+  const nonInteractiveUnknown = session.status === 'unknown' && nonInteractive;
+  const unknown = session.status === 'unknown' && !nonInteractiveUnknown;
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
-  const stateClass = session.status === 'unknown' ? 'unknown' : session.status;
+  const status = nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)';
+  const stateClass = nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
-  const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}`;
+  const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>' : '';
+  const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
   return `<div class="now-row main-row">
       <div class="who"><span class="dot ${stateClass}"></span>メイン${sessionTag(p, session, withTag)}<strong>${status}</strong></div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
@@ -1999,7 +2009,7 @@ function kindTodoTaskCount(sessions) {
 const ESTIMATE_WAITING = { input: 'はい', tool: 'いいえ (許可待ちかツールの実行中)', model: 'いいえ (応答の生成中)' };
 
 function unknownSessionControls(session) {
-  if (session.status !== 'unknown') return '';
+  if (session.status !== 'unknown' || session.nonInteractive) return '';
   const estimate = ui.estimatedSessions.includes(session.id)
     ? session.estimate?.canEstimate
       ? `<div class="estimate"><p>最後の記録: ${esc(absoluteTimeLabel(session.estimate.recordedAt))}、最後のツール: ${esc(session.estimate.lastTool ?? session.estimate.tool ?? 'なし')}</p><p>入力待ちらしい: ${ESTIMATE_WAITING[session.estimate.state]}</p></div>`

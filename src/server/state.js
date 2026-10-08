@@ -516,6 +516,11 @@ function agentFor(session, agentId) {
   return session.agents.find((agent) => agent.agent_id === agentId) || null;
 }
 
+// 非対話の claude -p は kind が interactive 以外になる。kind が無い、空、または文字列でないファイルは対話として扱う。
+function isNonInteractiveSessionFile(file) {
+  return typeof file?.kind === 'string' && file.kind.trim() !== '' && file.kind !== 'interactive';
+}
+
 function claudeModelName(modelId) {
   if (typeof modelId !== 'string' || !modelId) return '';
   const id = modelId.replace(/\[[^\]]*\]$/, '');
@@ -2811,6 +2816,7 @@ class DashboardState {
           };
         }),
         tasksUpdatedAt: plan?.tasksUpdatedAt || null,
+        ...(isNonInteractiveSessionFile(file) ? { nonInteractive: true } : {}),
       };
       if (current.status === '不明' && file?.status === 'idle') {
         current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))

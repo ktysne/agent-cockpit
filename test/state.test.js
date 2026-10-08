@@ -112,6 +112,48 @@ test('セッションファイルの status は文字列だけを先頭 50 文�
   assert.deepEqual(files.map((file) => file.status), ['idle', 'busy', 'x'.repeat(50), '', undefined, undefined, undefined, undefined, undefined]);
 });
 
+test('セッションファイルの kind は文字列だけを先頭 50 文字まで読む', async () => {
+  const values = ['sdk-cli', 'x'.repeat(60), '', undefined, null, 1, {}];
+  const fileSystem = {
+    readdir: async () => values.map((_, index) => ({ name: `${index}.json`, isFile: () => true })),
+    readFile: async (file) => {
+      const index = Number(path.basename(file, '.json'));
+      return JSON.stringify({ session_id: String(index), pid: 1, kind: values[index] });
+    },
+  };
+  const files = await listLiveSessionFiles('unused', { fileSystem, isAlive: () => true });
+  assert.deepEqual(files.map((file) => file.kind), ['sdk-cli', 'x'.repeat(50), '', undefined, undefined, undefined, undefined]);
+});
+
+test('kind が interactive 以外のセッションファイルは非対話として付け、対話と kind の無い行は付けない', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'hooked', hook_event_name: 'Notification', hookAt: 100 });
+  state.syncSessionFiles([
+    { session_id: 'file-only', kind: 'sdk-cli' },
+    { session_id: 'hooked', kind: 'sdk-cli' },
+    { session_id: 'interactive', kind: 'interactive' },
+    { session_id: 'no-kind' },
+  ]);
+  const sessions = Object.fromEntries(state.snapshot().sessions.map((session) => [session.session_id, session]));
+  assert.equal(sessions['file-only'].nonInteractive, true);
+  assert.equal(sessions['file-only'].status, '不明');
+  assert.equal(sessions.hooked.nonInteractive, true);
+  assert.equal(sessions.hooked.status, '不明');
+  assert.equal(Object.hasOwn(sessions.interactive, 'nonInteractive'), false);
+  assert.equal(Object.hasOwn(sessions['no-kind'], 'nonInteractive'), false);
+});
+
+test('kind が空文字列や空白だけのセッションファイルは非対話として付けない', () => {
+  const state = new DashboardState();
+  state.syncSessionFiles([
+    { session_id: 'empty', kind: '' },
+    { session_id: 'blank', kind: '   ' },
+  ]);
+  const sessions = Object.fromEntries(state.snapshot().sessions.map((session) => [session.session_id, session]));
+  assert.equal(Object.hasOwn(sessions.empty, 'nonInteractive'), false);
+  assert.equal(Object.hasOwn(sessions.blank, 'nonInteractive'), false);
+});
+
 function backgroundClaudeState(sessionId = 'task-stop') {
   const state = new DashboardState();
   state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'launch', hookAt: 100 });

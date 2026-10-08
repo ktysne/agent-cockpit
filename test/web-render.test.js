@@ -4223,3 +4223,158 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
   assert.match(mock, /class="badge accent long">base を/);
   assert.match(mock, /class="badge long \$\{pr\.headMismatch/);
 });
+
+test('非対話の実行中の行は状態名と時刻と API の札を出し、状態推定と一覧からの除外を出さない', () => {
+  const functions = ['element', 'activityStatus', 'unknownSessionControls', 'appendUnknownSessionControls', 'appendToolLine',
+    'sessionDisplayName', 'appendContextTags', 'appendSessionModelLine', 'mainRow']
+    .map((name) => functionSource(pageHtml, name));
+  assert.ok(functions.every(Boolean));
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.childNodes = this.children;
+      this.className = '';
+      this.dataset = {};
+    }
+    append(...nodes) { this.children.push(...nodes); }
+  }
+
+  const context = pageContext(pageHtml, {
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => ({ nodeType: 'text', textContent: text }),
+    },
+    durationAgoLabel: (value) => (value ? '3 分前' : '時刻不明'),
+    relativeTimeElement: (value, className, label) => {
+      const time = new FakeElement('time');
+      time.className = className;
+      time.textContent = label;
+      time.value = value;
+      return time;
+    },
+    badge: (text, className) => {
+      const tag = new FakeElement('span');
+      tag.className = `badge ${className}`;
+      tag.textContent = text;
+      return tag;
+    },
+    expandedEndedSessions: new Set(),
+    displayPreferences: { hideFinished: true },
+    isFilterShown: () => true,
+    isEndedAgent: (agent) => !agent.active && !agent.unconfirmed,
+    newestFirst: (items) => items,
+  });
+  vm.runInContext(functions.join('\n'), context);
+
+  assert.deepEqual({ ...context.activityStatus({ status: '不明', nonInteractive: true }) }, { label: '非対話の実行中', tone: 'busy' });
+  assert.deepEqual({ ...context.activityStatus({ status: '不明' }) }, { label: '状態不明', tone: 'unknown' });
+
+  const product = { name: 'agent-cockpit' };
+  const session = {
+    session_id: 'batch-session', title: 'クロスレビュー', status: '不明', nonInteractive: true,
+    sessionFileUpdatedAt: '2026-10-05T00:00:00.000Z', lastActivityAt: null, lastUpdatedAt: null,
+    tasks: [], tools: [], permissionWaits: [], decisions: [], agents: [],
+  };
+  const main = context.mainRow(session, product);
+  assert.deepEqual(main.children.map((child) => child.className), ['who', 'since', 'detail']);
+  assert.equal(main.children[0].children[0].className, 'dot busy');
+  assert.equal(main.children[0].children.at(-1).textContent, '非対話の実行中');
+  assert.equal(main.children[1].textContent, '3 分前');
+  assert.equal(main.children[1].value, '2026-10-05T00:00:00.000Z');
+  assert.deepEqual(main.children[2].children.map((child) => child.className), ['models']);
+  const [claude] = main.children[2].children[0].children;
+  assert.equal(claude.className, 'model claude');
+  assert.equal(claude.textContent, 'Claude (API)');
+  assert.ok(!main.children.some((child) => child.className === 'session-extra'));
+
+  const named = context.mainRow({ ...session, modelName: 'Sonnet 5.5' }, product);
+  assert.equal(named.children[2].children[0].children[0].textContent, 'Claude Sonnet 5.5');
+
+  const interactive = context.mainRow({ ...session, nonInteractive: undefined, sessionFileUpdatedAt: null }, product);
+  assert.deepEqual(interactive.children.map((child) => child.className), ['who', 'session-extra']);
+  assert.equal(interactive.children[0].children.at(-1).textContent, '状態不明 (時刻不明)');
+});
+
+test('モックの非対話の行は稼働中の札で出し、状態推定と一覧からの除外を出さない', () => {
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const context = pageContext(mock, {
+    ui: { estimatedSessions: [] },
+    taskState: (session, task) => task.state,
+    esc: (value) => String(value),
+    sessionTag: () => '',
+    renderToolLine: () => '<div class="tool-line"></div>',
+    absoluteTimeLabel: () => '',
+    ESTIMATE_WAITING: {},
+  });
+  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), context);
+
+  const nonInteractive = context.mainRow({}, {
+    id: 'batch', status: 'unknown', nonInteractive: true, tasks: [], main: { tool: '', since: '3 分前' },
+  }, false);
+  assert.match(nonInteractive, /class="dot busy"/);
+  assert.match(nonInteractive, /<strong>非対話の実行中<\/strong>/);
+  assert.match(nonInteractive, /class="since">3 分前<\/div>/);
+  assert.match(nonInteractive, /<span class="model claude">Claude \(API\)<\/span>/);
+  assert.doesNotMatch(nonInteractive, /状態を推定|session-extra/);
+
+  const unknown = context.mainRow({}, { id: 'unknown', status: 'unknown', tasks: [], main: {} }, false);
+  assert.match(unknown, /<strong>状態不明 \(時刻不明\)<\/strong>/);
+  assert.match(unknown, /状態を推定/);
+});
+
+test('非対話で状態が不明の行は更新時刻が古くても更新の無い帯へ隠さず、対話の不明な行は従来どおり隠す', () => {
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const old = new Date(now - 31 * 60_000).toISOString();
+  const context = pageContext(pageHtml, {
+    displayPreferences: { idleHideMinutes: 30 }, isActiveDecision: () => false,
+  });
+  vm.runInContext(['isEndedAgent', 'isIdleHiddenSession'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const nonInteractive = { status: '不明', nonInteractive: true, sessionFileUpdatedAt: old, agents: [], decisions: [], permissionWaits: [] };
+  assert.equal(context.isIdleHiddenSession(nonInteractive, now), false);
+  assert.equal(context.isIdleHiddenSession({ ...nonInteractive, nonInteractive: undefined }, now), true);
+
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const mockContext = pageContext(mock, {
+    ui: { idleHideMinutes: 30, hiddenSessions: [], hiddenSessionUpdatedAt: {} },
+    isActiveDecision: () => false,
+    isBusyAgent: () => false,
+  });
+  vm.runInContext(functionSource(mock, 'isIdleHiddenSession'), mockContext);
+  const mockNonInteractive = { id: 'batch', status: 'unknown', nonInteractive: true, perms: [], decisions: [], subagents: [], lastUpdatedAt: old };
+  assert.equal(mockContext.isIdleHiddenSession(mockNonInteractive, now), false);
+  assert.equal(mockContext.isIdleHiddenSession({ ...mockNonInteractive, nonInteractive: false }, now), true);
+});
+
+test('非対話の行は作業中と待機中を対話と同じ文言と色にし、状態不明の時だけ非対話の実行中にする', () => {
+  const implContext = pageContext(pageHtml, {});
+  vm.runInContext(functionSource(pageHtml, 'activityStatus'), implContext);
+
+  const mock = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
+  const mockContext = pageContext(mock, {
+    ui: { estimatedSessions: [] },
+    taskState: (session, task) => task.state,
+    esc: (value) => String(value),
+    sessionTag: () => '',
+    renderToolLine: () => '<div class="tool-line"></div>',
+    absoluteTimeLabel: () => '',
+    ESTIMATE_WAITING: {},
+  });
+  vm.runInContext(['mainRow', 'unknownSessionControls'].map((name) => functionSource(mock, name)).join('\n'), mockContext);
+
+  const cases = [
+    { implSession: { status: '作業中', nonInteractive: true }, mockSession: { status: 'busy', nonInteractive: true }, label: '作業中', tone: 'busy' },
+    { implSession: { status: '待機中', nonInteractive: true }, mockSession: { status: 'wait', nonInteractive: true }, label: '待機中', tone: 'wait' },
+    { implSession: { status: '不明', nonInteractive: true }, mockSession: { status: 'unknown', nonInteractive: true }, label: '非対話の実行中', tone: 'busy' },
+  ];
+  for (const { implSession, mockSession, label, tone } of cases) {
+    const implStatus = implContext.activityStatus(implSession);
+    assert.equal(implStatus.label, label, `実装の文言: ${JSON.stringify(implSession)}`);
+    assert.equal(implStatus.tone, tone, `実装の色: ${JSON.stringify(implSession)}`);
+
+    const row = mockContext.mainRow({}, { id: 'batch', tasks: [], main: { tool: '', since: '3 分前' }, ...mockSession }, false);
+    assert.equal(row.match(/<strong>([^<]*)<\/strong>/)[1], label, `モックの文言: ${JSON.stringify(mockSession)}`);
+    assert.equal(row.match(/<span class="dot ([^"]+)"><\/span>/)[1], tone, `モックの色: ${JSON.stringify(mockSession)}`);
+  }
+});
