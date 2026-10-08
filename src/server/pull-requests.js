@@ -755,6 +755,70 @@ function interpretFetchResults({ listResult, configResult, current, checkedAt })
     fetchedAt, listAvailable, errors, uninspectedNumbers };
 }
 
+function selectPullRequestsToInspect({ registrationsBeforeInspection, relatedBeforeInspection, openNumbers, retried }) {
+  const trackedByNumber = new Map();
+  for (const record of [...registrationsBeforeInspection, ...relatedBeforeInspection]) {
+    let tracked = trackedByNumber.get(record.number);
+    if (!tracked) {
+      tracked = { registrations: [], related: null, record: null };
+      trackedByNumber.set(record.number, tracked);
+    }
+    if (record.session_id) tracked.registrations.push(record);
+    else tracked.related = record;
+    tracked.record ||= record;
+  }
+  const backfill = [...trackedByNumber.entries()]
+    .filter(([number, tracked]) => !openNumbers.has(number) && tracked.record.state === 'merged'
+      && !confirmedMergedHead(tracked.record.mergedHead)
+      && !retried.has(number))
+    .slice(0, 5);
+  const backfillNumbers = new Set(backfill.map(([number]) => number));
+  const toInspect = [...trackedByNumber.entries()]
+    .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state))
+    .concat(backfill);
+  return { trackedByNumber, toInspect, backfillNumbers };
+}
+
+function classifyInspectedPullRequest(result, backfillNumbers) {
+  if (backfillNumbers.has(result.number) && (result.error || result.value?.state !== 'MERGED'
+    || !confirmedMergedHead(result.value))) return { kind: 'skip' };
+  if (result.error) return { kind: 'error', error: `#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}` };
+  const value = result.value;
+  const state = String(value.state || '').toUpperCase();
+  if (!['OPEN', 'CLOSED', 'MERGED'].includes(state)) {
+    return { kind: 'unreadable', error: `#${result.number} の状態を読み取れませんでした` };
+  }
+  const closedState = state === 'MERGED' || (state === 'CLOSED' && value.mergedAt) ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
+  if (closedState === 'open') {
+    const pullRequest = normalizeOpenPullRequest(value);
+    return pullRequest ? { kind: 'open', pullRequest }
+      : { kind: 'unreadable', error: `#${result.number} の状態を読み取れませんでした` };
+  }
+  const stateChanges = {
+    state: closedState,
+    mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
+  };
+  if (closedState === 'merged') stateChanges.mergedHead = confirmedMergedHead(value);
+  return { kind: closedState, stateChanges };
+}
+
+function stackedPullRequestsForMerge({ reservation, mergeIntent, pullRequest, openPullRequests }) {
+  const openByNumber = new Map(openPullRequests.map((item) => [item.number, item]));
+  const stackedPullRequests = new Map();
+  for (const item of [...(reservation?.stackedPullRequests || []), ...(mergeIntent?.stackedPullRequests || [])]) {
+    const child = openByNumber.get(item.number);
+    if (child) stackedPullRequests.set(item.number, { ...item, headRefName: child.headRefName });
+  }
+  if (pullRequest) {
+    for (const child of openPullRequests
+      .filter((candidate) => candidate.baseRefName === pullRequest.headRefName)
+      .map((candidate) => ({ number: candidate.number, baseRefName: pullRequest.headRefName }))) {
+      stackedPullRequests.set(child.number, child);
+    }
+  }
+  return [...stackedPullRequests.values()];
+}
+
 class PullRequestTracker {
   constructor(options = {}) {
     this.state = options.state;
@@ -919,14 +983,83 @@ class PullRequestTracker {
     }
   }
 
+  async inspectDisappearedPullRequests(owner, repo, repository, {
+    registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers,
+  }) {
+    const { toInspect, backfillNumbers } = selectPullRequestsToInspect({
+      registrationsBeforeInspection, relatedBeforeInspection, openNumbers,
+      retried: new Set([...registrationsBeforeInspection, ...relatedBeforeInspection]
+        .filter((record) => this.mergedHeadBackfillRetries.has(`${repository}#${record.number}`))
+        .map((record) => record.number)),
+    });
+    for (const number of backfillNumbers) {
+      const key = `${repository}#${number}`;
+      if (this.mergedHeadBackfillAttempts.has(key)) this.mergedHeadBackfillRetries.add(key);
+      this.mergedHeadBackfillAttempts.add(key);
+    }
+    const viewFields = `${PULL_REQUEST_FIELDS},state,mergedAt`;
+    const inspected = await Promise.all(toInspect.map(async ([number, tracked]) => {
+      try {
+        const output = await this.execute(['pr', 'view', String(number), '-R', repository, '--json', viewFields]);
+        return { number, tracked, value: JSON.parse(output) };
+      } catch (error) {
+        return { number, tracked, error };
+      }
+    }));
+    for (const result of inspected) {
+      const classified = classifyInspectedPullRequest(result, backfillNumbers);
+      if (classified.kind === 'skip') continue;
+      if (classified.kind === 'error' || classified.kind === 'unreadable') {
+        errors.push(classified.error);
+        uninspectedNumbers.add(result.number);
+        continue;
+      }
+      if (classified.kind === 'open') {
+        openPullRequests.push(classified.pullRequest);
+        openNumbers.add(classified.pullRequest.number);
+        continue;
+      }
+      const value = result.value;
+      const closedState = classified.kind;
+      const stateChanges = classified.stateChanges;
+      for (const record of result.tracked.registrations) {
+        this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
+      }
+      if (result.tracked.related) {
+        this.state.updateRelatedPullRequest(owner, repo, result.number, stateChanges);
+      }
+      if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
+        const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+        const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
+        const pullRequest = normalizeOpenPullRequest(value);
+        const stackedPullRequests = stackedPullRequestsForMerge({
+          reservation, mergeIntent, pullRequest, openPullRequests,
+        });
+        await this.onMerged?.({
+          owner,
+          repo,
+          pullRequest,
+          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : new Date(this.now()).toISOString(),
+          reservation,
+          registrations: result.tracked.registrations,
+          stackedPullRequests,
+        });
+      } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
+        const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+        const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
+        if (reservation || mergeIntent) await this.onClosed?.({ owner, repo, number: result.number, reservation, mergeIntent, registrations: result.tracked.registrations });
+      }
+    }
+  }
+
   async fetchRepository(owner, repo, repository) {
     const key = repoKey(owner, repo);
     const checkedAt = new Date(this.now()).toISOString();
     const current = this.repositories.get(key) || {
       owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
     };
-    const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
-    const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const registrationsBeforeInspection = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const relatedBeforeInspection = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
     const [listResult, configResult] = await Promise.allSettled([
       this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--limit', '500', '--json', PULL_REQUEST_FIELDS]),
       this.execute(['api', `repos/${repository}`]),
@@ -939,110 +1072,9 @@ class PullRequestTracker {
     let mergedListComplete = false;
 
     if (listAvailable) {
-      const trackedByNumber = new Map();
-      for (const record of [...previousRegistrations, ...previousRelated]) {
-        let tracked = trackedByNumber.get(record.number);
-        if (!tracked) {
-          tracked = { registrations: [], related: null, record: null };
-          trackedByNumber.set(record.number, tracked);
-        }
-        if (record.session_id) tracked.registrations.push(record);
-        else tracked.related = record;
-        tracked.record ||= record;
-      }
-      const backfill = [...trackedByNumber.entries()]
-        .filter(([number, tracked]) => !openNumbers.has(number) && tracked.record.state === 'merged'
-          && !confirmedMergedHead(tracked.record.mergedHead)
-          && !this.mergedHeadBackfillRetries.has(`${repository}#${number}`))
-        .slice(0, 5);
-      const backfillNumbers = new Set(backfill.map(([number]) => number));
-      for (const [number] of backfill) {
-        const key = `${repository}#${number}`;
-        if (this.mergedHeadBackfillAttempts.has(key)) this.mergedHeadBackfillRetries.add(key);
-        this.mergedHeadBackfillAttempts.add(key);
-      }
-      const toInspect = [...trackedByNumber.entries()]
-        .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state))
-        .concat(backfill);
-      const viewFields = `${PULL_REQUEST_FIELDS},state,mergedAt`;
-      const inspected = await Promise.all(toInspect.map(async ([number, tracked]) => {
-        try {
-          const output = await this.execute(['pr', 'view', String(number), '-R', repository, '--json', viewFields]);
-          return { number, tracked, value: JSON.parse(output) };
-        } catch (error) {
-          return { number, tracked, error };
-        }
-      }));
-      for (const result of inspected) {
-        if (backfillNumbers.has(result.number) && (result.error || result.value?.state !== 'MERGED'
-          || !confirmedMergedHead(result.value))) continue;
-        if (result.error) {
-          errors.push(`#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}`);
-          uninspectedNumbers.add(result.number);
-          continue;
-        }
-        const value = result.value;
-        const state = String(value.state || '').toUpperCase();
-        if (!['OPEN', 'CLOSED', 'MERGED'].includes(state)) {
-          errors.push(`#${result.number} の状態を読み取れませんでした`);
-          uninspectedNumbers.add(result.number);
-          continue;
-        }
-        const closedState = state === 'MERGED' || (state === 'CLOSED' && value.mergedAt) ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
-        if (closedState === 'open') {
-          const normalized = normalizeOpenPullRequest(value);
-          if (!normalized) {
-            errors.push(`#${result.number} の状態を読み取れませんでした`);
-            uninspectedNumbers.add(result.number);
-            continue;
-          }
-          openPullRequests.push(normalized);
-          openNumbers.add(normalized.number);
-          continue;
-        }
-        const stateChanges = {
-          state: closedState,
-          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-        };
-        if (closedState === 'merged') stateChanges.mergedHead = confirmedMergedHead(value);
-        for (const record of result.tracked.registrations) {
-          this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
-        }
-        if (result.tracked.related) {
-          this.state.updateRelatedPullRequest(owner, repo, result.number, stateChanges);
-        }
-        if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
-          const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
-          const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
-          const pullRequest = normalizeOpenPullRequest(value);
-          const openByNumber = new Map(openPullRequests.map((item) => [item.number, item]));
-          const stackedPullRequests = new Map();
-          for (const item of [...(reservation?.stackedPullRequests || []), ...(mergeIntent?.stackedPullRequests || [])]) {
-            const child = openByNumber.get(item.number);
-            if (child) stackedPullRequests.set(item.number, { ...item, headRefName: child.headRefName });
-          }
-          if (pullRequest) {
-            for (const child of openPullRequests
-              .filter((candidate) => candidate.baseRefName === pullRequest.headRefName)
-              .map((candidate) => ({ number: candidate.number, baseRefName: pullRequest.headRefName }))) {
-              stackedPullRequests.set(child.number, child);
-            }
-          }
-          await this.onMerged?.({
-            owner,
-            repo,
-            pullRequest,
-            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : new Date(this.now()).toISOString(),
-            reservation,
-            registrations: result.tracked.registrations,
-            stackedPullRequests: [...stackedPullRequests.values()],
-          });
-        } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
-          const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
-          const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
-          if (reservation || mergeIntent) await this.onClosed?.({ owner, repo, number: result.number, reservation, mergeIntent, registrations: result.tracked.registrations });
-        }
-      }
+      await this.inspectDisappearedPullRequests(owner, repo, repository, {
+        registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers,
+      });
     }
 
     // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
@@ -1348,6 +1380,9 @@ function attachCrossReviewState(pullRequest, crossReviewByNumber) {
 }
 
 module.exports = {
+  selectPullRequestsToInspect,
+  classifyInspectedPullRequest,
+  stackedPullRequestsForMerge,
   interpretFetchResults,
   parseCompareResult,
   restackResult,
