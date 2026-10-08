@@ -37,7 +37,7 @@ bindingが後から現れた場合も、隔離対象を操作可能へ戻さな�
 起動時にはschema、厳密なfieldと型、質問keyの重複、回答digest、配送intent、容量予約を検査する。
 質問journalとcheckpointにある配送記録の関連は、保存されたidentity、period、actor、launchRef、配送ID、revisionとdigestを使う独立した整合性検査へ分離する。
 この検査は現在のregistryの登録を必要とせず、保存された情報を現在のauthorityへ登録しない。
-関連の欠損、改ざん、重複または不正な構造は、引き続き起動拒否とする。
+質問journal側の対応記録を欠く孤立配送、存在する記録同士の矛盾、重複または不正な構造は、引き続き起動拒否とする。
 
 隔離対象にintentがあるのに配送記録がない場合は、intentを保持し、配送を再生成しない。
 intentのない配送記録、または存在する記録同士の矛盾は、単純に読み飛ばさない。
