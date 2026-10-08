@@ -77,6 +77,7 @@ async function listLiveSessionFiles(claudeHome, { fileSystem = fs, isAlive = pro
       pid: value.pid,
       cwd: typeof value.cwd === 'string' ? value.cwd : '',
       name: typeof value.name === 'string' ? value.name.slice(0, 200) : null,
+      ...(typeof value.status === 'string' ? { status: value.status.slice(0, 50) } : {}),
       updatedAt: sessionFileUpdatedAt(value.updatedAt),
       procStart: sessionFileProcStart(value.procStart),
     });

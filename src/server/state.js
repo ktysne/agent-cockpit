@@ -580,7 +580,7 @@ function agentModelFromDefinition(agentType, definition) {
  * agent_id: string, startedAt: string|null, turnState?: string, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
-/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, ended: boolean}} SessionIdentity */
+/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, interrupted: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
@@ -602,7 +602,7 @@ function newSession(event, askDecisionState = {}) {
     session_id: event.session_id,
     product: event.product,
     title: event.sessionName,
-    status: '作業中',
+    status: '不明',
     tools: [],
     completedToolIds: new Set(),
     stoppedAgentIds: new Set(),
@@ -613,6 +613,7 @@ function newSession(event, askDecisionState = {}) {
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     stopped: false,
     interrupted: false,
+    turnKnown: false,
     ended: false,
     pendingCodex: Object.create(null),
     pendingCodexWait: Object.create(null),
@@ -790,11 +791,13 @@ function sessionSnapshot(session) {
     ? '許可待ち'
     : session.interrupted
       ? '中断'
-      : session.stopped && session.agents.some((agent) => agent.active)
-      ? '待機中(サブエージェント稼働中)'
-      : session.stopped
-        ? '待機中'
-        : '作業中';
+      : !session.turnKnown
+        ? '不明'
+        : session.stopped && session.agents.some((agent) => agent.active)
+          ? '待機中(サブエージェント稼働中)'
+          : session.stopped
+            ? '待機中'
+            : '作業中';
 
   return {
     session_id: session.session_id,
@@ -802,7 +805,7 @@ function sessionSnapshot(session) {
     title: session.title,
     lastActivityAt: session.lastActivityAt,
     status,
-    turnState: session.interrupted ? 'interrupted' : session.stopped ? 'waiting' : 'working',
+    turnState: session.interrupted ? 'interrupted' : !session.turnKnown ? 'unknown' : session.stopped ? 'waiting' : 'working',
     tools,
     agents,
     permissionWaits,
@@ -879,16 +882,32 @@ function applyAskQuestionStart(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'agentToolBindings'> & Pick<SessionAgents, 'agents'>} session
+ * @param {Pick<SessionTools, 'agentToolBindings'|'tools'> & Pick<SessionAgents, 'agents'>} session
  */
 function applyAgentToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
-    const boundAgentId = session.agentToolBindings[toolUseId];
-    const targetAgent = agentFor(session, boundAgentId);
-    if (targetAgent?.active) targetAgent.backgrounded = true;
-    if (targetAgent && event.resolvedModel) {
+    const boundAgent = agentFor(session, session.agentToolBindings[toolUseId]);
+    const responseAgent = agentFor(session, event.agentId);
+    const targetAgent = responseAgent && !responseAgent.isCodex
+      ? responseAgent
+      : boundAgent && !boundAgent.isCodex ? boundAgent : null;
+    if (!targetAgent) return;
+    if (targetAgent === responseAgent) {
+      // 同じ行を指す別の呼び出しの結び付けは到着順の誤りなので、agentId の無い応答で使わせない。
+      for (const [otherToolUseId, boundAgentId] of Object.entries(session.agentToolBindings)) {
+        if (otherToolUseId !== toolUseId && boundAgentId === targetAgent.agent_id) {
+          session.agentToolBindings[otherToolUseId] = AMBIGUOUS_AGENT_CALL;
+        }
+      }
+    }
+    if (toolUseId) session.agentToolBindings[toolUseId] = targetAgent.agent_id;
+    const agentTool = toolUseId && session.tools.find((tool) => tool.tool_use_id === toolUseId && tool.tool_name === 'Agent');
+    // SubagentStart の時点の結び付けは到着順で誤ることがあるので、呼び出し自身の説明で上書きする。
+    if (agentTool?.description) targetAgent.description = agentTool.description;
+    if (targetAgent.active) targetAgent.backgrounded = true;
+    if (event.resolvedModel) {
       targetAgent.model = event.resolvedModel;
       targetAgent.source = 'Agent tool response';
     }
@@ -1010,7 +1029,7 @@ function applyCommonEventStart(session, event) {
 }
 
 /**
- * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & Pick<SessionIdentity, 'stopped'|'interrupted'>} session
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & Pick<SessionIdentity, 'stopped'|'interrupted'|'turnKnown'>} session
  */
 function applyToolStart(session, event) {
   const eventName = event.hook_event_name;
@@ -1048,6 +1067,7 @@ function applyToolStart(session, event) {
     if (!agentId) {
       session.stopped = false;
       session.interrupted = false;
+      session.turnKnown = true;
     }
   }
 }
@@ -1107,19 +1127,19 @@ function applySubagentStop(session, event) {
 }
 
 /**
- * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'|'interrupted'>} session
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'|'interrupted'|'turnKnown'>} session
  */
 function applyToolCompletion(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
   if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    applyAgentToolCompletion(session, event);
     if (toolUseId) {
       session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
       session.completedToolIds.add(toolUseId);
     }
 
-    applyAgentToolCompletion(session, event);
     applyCodexLaunchCompletion(session, event);
     applyCodexResult(session, event);
 
@@ -1131,6 +1151,7 @@ function applyToolCompletion(session, event) {
     if (!agentId) {
       session.stopped = false;
       session.interrupted = false;
+      session.turnKnown = true;
     }
   }
 }
@@ -1177,7 +1198,7 @@ function applyPermissionPrompt(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & Pick<SessionAgents, 'agents'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'interrupted'|'ended'>} session
+ * @param {Pick<SessionTools, 'tools'> & Pick<SessionAgents, 'agents'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'interrupted'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
   const eventName = event.hook_event_name;
@@ -1189,6 +1210,7 @@ function applySessionLifecycle(session, event) {
 
   // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source) && !agentId;
+  if (!agentId && (startsIdle || ['UserPromptSubmit', 'Stop', 'Interrupt'].includes(eventName))) session.turnKnown = true;
   if (startsIdle) {
     session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
     session.tools = session.tools.filter((tool) => tool.agent_id);
@@ -2413,7 +2435,6 @@ class DashboardState {
     if (endedByAbsenceAt !== undefined && event.hookAt <= endedByAbsenceAt) return true;
 
     const before = JSON.stringify([...this.sessions.values()]);
-    const hadEstimate = this.estimates.delete(event.session_id);
     const wasHidden = this.hiddenSessions.delete(event.session_id);
     if (wasHidden) this.hiddenSessionUpdatedAt.delete(event.session_id);
     if (endedAt !== undefined) {
@@ -2443,6 +2464,10 @@ class DashboardState {
       askDecisionStateChanged = this.persistAskDecisionState(event.session_id, nextSessions[0]);
     }
     else this.sessions.delete(event.session_id);
+    // 推定はターンが不明な間の補助なので、状態が確定したら消す。不明のままのイベントでは残す。
+    // 許可待ちはターンの確定を待たずに優先して出るので、許可待ちでも残す。
+    const derivedStatus = nextSessions[0]?.status;
+    const hadEstimate = derivedStatus !== '不明' && derivedStatus !== '許可待ち' && this.estimates.delete(event.session_id);
 
     if (event.hook_event_name === 'SessionEnd' && !event.agent_id) {
       this.endSession(event.session_id, event.hookAt);
@@ -2481,7 +2506,7 @@ class DashboardState {
     }
   }
 
-  // 推定の読み取り中にイベントが届いたセッションは状態が分かったので、古い推定を残さない。
+  // 読み取り中に状態が分かったセッションには推定を保存しない。
   saveEstimate(sessionId, estimate) {
     const current = this.snapshot().sessions.find((item) => item.session_id === sessionId);
     if (current?.status !== '不明') return null;
@@ -2961,8 +2986,13 @@ class DashboardState {
         }),
         tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       };
+      if (current.status === '不明' && file?.status === 'idle') {
+        current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))
+          ? '待機中(サブエージェント稼働中)'
+          : '待機中';
+      }
       const estimate = this.estimates.get(sessionId);
-      if (estimate) current.estimate = { ...estimate };
+      if (estimate && current.status === '不明') current.estimate = { ...estimate };
       if (this.hiddenSessions.has(sessionId)) {
         current.hidden = true;
         current.hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
