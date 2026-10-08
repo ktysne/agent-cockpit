@@ -1500,6 +1500,25 @@ test('どの GitHub の remote とも PR のリポジトリが一致しないと
   assert.deepEqual(review, { unavailable: true, reason: 'repository-mismatch' });
 });
 
+test('クロスレビューの道具が無い worktree でも、remote が PR のリポジトリと食い違えばレビュー不要にせず確認不能にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  const remotes = (_file, _args, _options, callback) => callback(null, 'remote.origin.url https://github.com/other/tool-less.git\n');
+  const mismatched = await readCrossReviewState(
+    { number: 55, cwd: root },
+    { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr' },
+    { execFileImpl: remotes },
+  );
+  assert.deepEqual(mismatched, { unavailable: true, reason: 'repository-mismatch' });
+
+  const matched = await readCrossReviewState(
+    { number: 55, cwd: root },
+    { url: 'https://github.com/other/tool-less/pull/55', headRefName: 'feat/pr' },
+    { execFileImpl: remotes },
+  );
+  assert.deepEqual(matched, { notRequired: true, source: 'tool-absent' });
+});
+
 test('fork の origin ではなく upstream が PR のリポジトリと一致すればクロスレビュー状態を読む', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));

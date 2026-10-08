@@ -675,17 +675,18 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
   const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
-  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
-  if (tool.status !== 'present') return { unavailable: true };
+  if (tool.status !== 'present' && tool.status !== 'absent') return { unavailable: true };
   const { root } = tool;
   const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
   if (pullRequestRepository) {
     // フォークから upstream に作った PR は origin と食い違うため、どの GitHub の remote とも一致すれば続ける。
+    // 道具の有無は別のリポジトリの判定にならないので、レビュー不要と判定する前に照合する。
     const remotes = await gitHubRemoteRepositoriesOf(root, execFileImpl, remoteRepositoryCache);
     if (remotes.length && !remotes.some((remote) => sameGitHubRepository(remote, pullRequestRepository))) {
       return { unavailable: true, reason: 'repository-mismatch' };
     }
   }
+  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
