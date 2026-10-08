@@ -764,6 +764,404 @@ function sessionForEvent(sessions, event, initialAskDecisionState) {
   return session;
 }
 
+function applyAskQuestionStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
+    // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
+    const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
+    const existing = boundDecision || session.decisions.find((decision) => (
+      ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
+    ));
+    // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
+    // 遅れて届いたか重複なので、状態と解決の内容を変えない。
+    const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
+      existing.id === toolUseId || existing.finishedByToolUseId === toolUseId ||
+      event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
+    );
+    if (staleStart) {
+      session.decisionBindings[toolUseId] = existing.id;
+    } else if (existing) {
+      existing.state = 'waiting';
+      existing.updatedAt = isoTime(event.hookAt);
+      existing.resolvedAt = null;
+      existing.resolution = null;
+      existing.title = event.questions[0].question.slice(0, 200);
+      existing.questions = event.questions;
+      session.decisionBindings[toolUseId] = existing.id;
+    } else {
+      const createdAt = isoTime(event.hookAt);
+      const decision = {
+        id: toolUseId,
+        session_id: event.session_id,
+        source: 'ask',
+        state: 'waiting',
+        title: event.questions[0].question.slice(0, 200),
+        context: '',
+        questions: event.questions,
+        createdAt,
+        updatedAt: createdAt,
+        resolvedAt: null,
+        answer: null,
+        resolution: null,
+      };
+      session.decisions.push(decision);
+      session.decisionBindings[toolUseId] = decision.id;
+    }
+  }
+}
+
+function applyAgentToolCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
+    const boundAgentId = session.agentToolBindings[toolUseId];
+    const targetAgent = agentFor(session, boundAgentId);
+    if (targetAgent?.active) targetAgent.backgrounded = true;
+    if (targetAgent && event.resolvedModel) {
+      targetAgent.model = event.resolvedModel;
+      targetAgent.source = 'Agent tool response';
+    }
+  }
+}
+
+function applyCodexLaunchCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const toolUseId = event.tool_use_id || null;
+  if (event.tool_name === 'Bash' && toolUseId) {
+    const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
+    if (placeholder) session.codexLaunchToolIds.add(toolUseId);
+    if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
+    if (placeholder && event.codexResult) {
+      completeCodexAgent(placeholder, event);
+    } else if (placeholder && session.pendingCodexWait[toolUseId]) {
+      // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
+      applyCodexAudit(placeholder, event);
+      if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
+      if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
+        placeholder.active = false;
+        placeholder.unconfirmed = true;
+        placeholder.waitEnded = true;
+      }
+    } else if (placeholder && eventName === 'PostToolUseFailure') {
+      applyCodexAudit(placeholder, event);
+      placeholder.active = false;
+    } else if (placeholder) {
+      applyCodexAudit(placeholder, event);
+      placeholder.backgrounded = true;
+      if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
+    }
+    delete session.pendingCodex[toolUseId];
+    delete session.pendingCodexWait[toolUseId];
+  }
+}
+
+function applyCodexResult(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  // Codex を起動した呼び出しの出力はその起動のものなので、別の行へ結び付けない。
+  // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
+  const isCodexLaunch = session.codexLaunchToolIds.has(toolUseId);
+
+  // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
+  const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !isCodexLaunch
+    ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
+    : null;
+  if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
+
+  // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
+  if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
+    const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
+    const matched = codexForRun || outputCodex;
+    const targetAgent = matched
+      ? (matched.resultReceived ? null : matched)
+      : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
+    if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
+    if (targetAgent) completeCodexAgent(targetAgent, event);
+  }
+}
+
+function applyAskQuestionCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
+    const decisionId = session.decisionBindings[toolUseId];
+    const decision = session.decisions.find((item) => item.id === decisionId);
+    if (decision && ['waiting', 'provisional'].includes(decision.state)) {
+      decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
+      decision.updatedAt = isoTime(event.hookAt);
+      decision.resolvedAt = decision.updatedAt;
+      decision.resolution = eventName === 'PostToolUse'
+        ? event.decisionResolution || { chosen: [], note: '' }
+        : null;
+      // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
+      // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
+      decision.finishedByToolUseId = toolUseId;
+    }
+  }
+}
+
+function applyCommonEventStart(session, event, stoppedAgentIds) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const isCodexAgentId = agentId?.startsWith('codex:') === true;
+  if (event.product) session.product = event.product;
+  if (event.sessionName) session.title = event.sessionName;
+  session.lastActivityAt = isoTime(event.hookAt);
+
+  if (eventName === 'SubagentStop' && agentId) {
+    stoppedAgentIds.add(agentId);
+  } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
+    stoppedAgentIds.delete(agentId);
+  } else if (
+    agentId && !isCodexAgentId && !stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
+  ) {
+    const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
+    agent.agent_id = agentId;
+    agent.startedAt = isoTime(event.hookAt);
+    session.agents.push(agent);
+  }
+}
+
+function applyToolStart(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PreToolUse') {
+    if (toolUseId && !session.completedToolIds.has(toolUseId)) {
+      session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
+      session.tools.push({
+        tool_use_id: toolUseId,
+        tool_name: event.tool_name,
+        summary: event.summary,
+        description: event.description || '',
+        agent_id: agentId,
+        startedAt: isoTime(event.hookAt),
+      });
+      if (event.tool_name === 'Agent' && !agentId) {
+        // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
+        const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
+        for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
+        session.agentToolBindings[toolUseId] = overlapping.length ? AMBIGUOUS_AGENT_CALL : null;
+      }
+    }
+
+    if (agentId) {
+      const agent = agentFor(session, agentId);
+      if (agent) {
+        agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
+      }
+    }
+
+    applyCodexStart(session, event);
+    applyAskQuestionStart(session, event);
+
+    if (!agentId) session.stopped = false;
+  }
+}
+
+function applySubagentStart(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const isCodexAgentId = agentId?.startsWith('codex:') === true;
+  if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
+    let agent = agentFor(session, agentId);
+    const definition = event.agentDefinition || {};
+    if (agent) {
+      agent.active = true;
+      agent.unconfirmed = false;
+      agent.startedAt = isoTime(event.hookAt);
+      agent.agent_type = event.agent_type || agent.agent_type;
+      if (event.route) agent.route = event.route;
+    } else {
+      agent = agentModelFromDefinition(event.agent_type, definition);
+      agent.agent_id = agentId;
+      agent.startedAt = isoTime(event.hookAt);
+      if (event.route) agent.route = event.route;
+      session.agents.push(agent);
+    }
+    const unboundAgentCalls = unboundAgentCallsOf(session);
+    if (unboundAgentCalls.length === 1) {
+      const tool = unboundAgentCalls[0];
+      session.agentToolBindings[tool.tool_use_id] = agentId;
+      agent.description = tool.description || agent.description;
+    }
+  }
+}
+
+function applySubagentStop(session, event, stoppedAgentIds) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  if (eventName === 'SubagentStop' && agentId) {
+    stopAgent(session, agentId, stoppedAgentIds);
+  }
+  if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
+    const agent = agentFor(session, event.stoppedTaskId);
+    if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, stoppedAgentIds);
+  }
+}
+
+function applyToolCompletion(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
+    if (toolUseId) {
+      session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
+      session.completedToolIds.add(toolUseId);
+    }
+
+    applyAgentToolCompletion(session, event);
+    applyCodexLaunchCompletion(session, event);
+    applyCodexResult(session, event);
+
+    session.permissionWaits = session.permissionWaits.filter((wait) => !(
+      sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
+    ));
+    applyAskQuestionCompletion(session, event);
+
+    if (!agentId) session.stopped = false;
+  }
+}
+
+function applyToolBatch(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  // 区切りが終わった時点で、同じエージェントの先に始まったツールは終わったか拒否されている。
+  // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
+  if (eventName === 'PostToolBatch') {
+    const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
+    session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
+    // メインの許可待ちは Stop と UserPromptSubmit で消す。並行する背景のサブエージェントの許可待ちを巻き込まないため。
+    if (agentId) session.permissionWaits = session.permissionWaits.filter((wait) => !startedBeforeBatch(wait));
+  }
+}
+
+function applyPermissionPrompt(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
+    // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
+    const oldestTool = session.tools
+      .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
+      .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
+    const wait = {
+      agent_id: agentId,
+      target_tool_use_id: oldestTool?.tool_use_id || null,
+      tool_name: oldestTool?.tool_name || '',
+      summary: oldestTool?.summary || '',
+      notification_type: event.notification_type,
+      message: event.message,
+      startedAt: isoTime(event.hookAt),
+    };
+    session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
+    session.permissionWaits.push(wait);
+  }
+}
+
+function applySessionLifecycle(session, event) {
+  const eventName = event.hook_event_name;
+  const agentId = event.agent_id || null;
+  if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
+    session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
+    if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
+  }
+
+  // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
+  const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
+  if (startsIdle) {
+    session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
+    session.tools = session.tools.filter((tool) => tool.agent_id);
+    session.stopped = true;
+  }
+  if (eventName === 'UserPromptSubmit') session.stopped = false;
+  if (eventName === 'Stop') {
+    session.stopped = true;
+  }
+  if (eventName === 'SessionEnd') session.ended = true;
+}
+
+function applyCommonEventEnd(session, event, stoppedAgentIds) {
+  const agentId = event.agent_id || null;
+  if (agentId && stoppedAgentIds.has(agentId)) {
+    session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
+    session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
+  }
+}
+
+function applyCodexWaitStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  // 実行 ID は一意なので親を問わずに探し、待ちを引き継いだ親の下へ付け替える。
+  const codexForRun = session.agents.find((candidate) => candidate.isCodex && candidate.runId === event.codexWaitRunId);
+  if (codexForRun?.resultReceived) {
+    // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
+    session.pendingCodex[toolUseId] = codexForRun.agent_id;
+  } else {
+    const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
+    if (agent) {
+      agent.parent_agent_id = agentId;
+      agent.active = true;
+      agent.unconfirmed = false;
+      agent.runId = event.codexWaitRunId;
+      delete agent.waitEnded;
+      agent.lastTool = { tool_name: 'Bash', summary: event.summary };
+      session.pendingCodex[toolUseId] = agent.agent_id;
+    } else {
+      const agentIdForCall = `codex:${toolUseId}`;
+      const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
+      Object.assign(waitAgent, {
+        agent_id: agentIdForCall,
+        agent_type: event.codexWaitDefinition,
+        isCodex: true,
+        parent_agent_id: agentId,
+        codex_home: '',
+        unavailable: '',
+        backgrounded: true,
+        runId: event.codexWaitRunId,
+        startedAt: isoTime(event.hookAt),
+        lastTool: { tool_name: 'Bash', summary: event.summary },
+      });
+      session.agents.push(waitAgent);
+      session.pendingCodex[toolUseId] = agentIdForCall;
+    }
+    session.pendingCodexWait[toolUseId] = true;
+  }
+}
+
+function applyCodexLaunchStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  const agentIdForCall = `codex:${toolUseId}`;
+  const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
+  Object.assign(agent, {
+    agent_id: agentIdForCall,
+    agent_type: event.codexDefinition,
+    isCodex: true,
+    parent_agent_id: agentId,
+    codex_home: '',
+    unavailable: '',
+    startedAt: isoTime(event.hookAt),
+    lastTool: { tool_name: 'Bash', summary: event.summary },
+  });
+  const existingIndex = session.agents.findIndex((item) => item.agent_id === agentIdForCall);
+  if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
+  else session.agents.push(agent);
+  session.pendingCodex[toolUseId] = agentIdForCall;
+}
+
+function applyCodexStart(session, event) {
+  const agentId = event.agent_id || null;
+  const toolUseId = event.tool_use_id || null;
+  const isCodexAgentId = agentId?.startsWith('codex:') === true;
+  if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
+    applyCodexWaitStart(session, event);
+  } else if (event.codexDefinition && toolUseId) {
+    applyCodexLaunchStart(session, event);
+  }
+}
+
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
   const stoppedAgentIdsBySession = new Map();
@@ -777,323 +1175,23 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
-    if (event.product) session.product = event.product;
-    if (event.sessionName) session.title = event.sessionName;
-    session.lastActivityAt = isoTime(event.hookAt);
-
-    const eventName = event.hook_event_name;
-    const agentId = event.agent_id || null;
-    const toolUseId = event.tool_use_id || null;
-    const isCodexAgentId = agentId?.startsWith('codex:') === true;
     let stoppedAgentIds = stoppedAgentIdsBySession.get(session);
     if (!stoppedAgentIds) {
       stoppedAgentIds = new Set();
       stoppedAgentIdsBySession.set(session, stoppedAgentIds);
     }
 
-    if (eventName === 'SubagentStop' && agentId) {
-      stoppedAgentIds.add(agentId);
-    } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
-      stoppedAgentIds.delete(agentId);
-    } else if (
-      agentId && !isCodexAgentId && !stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
-    ) {
-      const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
-      agent.agent_id = agentId;
-      agent.startedAt = isoTime(event.hookAt);
-      session.agents.push(agent);
-    }
+    applyCommonEventStart(session, event, stoppedAgentIds);
 
-    if (eventName === 'PreToolUse') {
-      if (toolUseId && !session.completedToolIds.has(toolUseId)) {
-        session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
-        session.tools.push({
-          tool_use_id: toolUseId,
-          tool_name: event.tool_name,
-          summary: event.summary,
-          description: event.description || '',
-          agent_id: agentId,
-          startedAt: isoTime(event.hookAt),
-        });
-        if (event.tool_name === 'Agent' && !agentId) {
-          // 未対応の呼び出しが重なった時点で、どの SubagentStart がどれに当たるかは決まらない。
-          const overlapping = unboundAgentCallsOf(session).filter((tool) => tool.tool_use_id !== toolUseId);
-          for (const tool of overlapping) session.agentToolBindings[tool.tool_use_id] = AMBIGUOUS_AGENT_CALL;
-          session.agentToolBindings[toolUseId] = overlapping.length ? AMBIGUOUS_AGENT_CALL : null;
-        }
-      }
+    applyToolStart(session, event);
+    applySubagentStart(session, event);
+    applySubagentStop(session, event, stoppedAgentIds);
+    applyToolCompletion(session, event);
+    applyToolBatch(session, event);
+    applyPermissionPrompt(session, event);
+    applySessionLifecycle(session, event);
 
-      if (agentId) {
-        const agent = agentFor(session, agentId);
-        if (agent) {
-          agent.lastTool = { tool_name: event.tool_name, summary: event.summary };
-        }
-      }
-
-      if (event.codexWaitDefinition && agentId && !isCodexAgentId && toolUseId) {
-        // 実行 ID は一意なので親を問わずに探し、待ちを引き継いだ親の下へ付け替える。
-        const codexForRun = session.agents.find((candidate) => candidate.isCodex && candidate.runId === event.codexWaitRunId);
-        if (codexForRun?.resultReceived) {
-          // 取り出し直しの出力の結果行を、背景で動いている別の行へ流さないため、終わった行に結び付けておく。
-          session.pendingCodex[toolUseId] = codexForRun.agent_id;
-        } else {
-          const agent = codexForRun || latestWaitableCodex(session, agentId, event.codexWaitDefinition, event.codexWaitRunId);
-          if (agent) {
-            agent.parent_agent_id = agentId;
-            agent.active = true;
-            agent.unconfirmed = false;
-            agent.runId = event.codexWaitRunId;
-            delete agent.waitEnded;
-            agent.lastTool = { tool_name: 'Bash', summary: event.summary };
-            session.pendingCodex[toolUseId] = agent.agent_id;
-          } else {
-            const agentIdForCall = `codex:${toolUseId}`;
-            const waitAgent = agentModelFromDefinition(event.codexWaitDefinition, event.codexAgentDefinition);
-            Object.assign(waitAgent, {
-              agent_id: agentIdForCall,
-              agent_type: event.codexWaitDefinition,
-              isCodex: true,
-              parent_agent_id: agentId,
-              codex_home: '',
-              unavailable: '',
-              backgrounded: true,
-              runId: event.codexWaitRunId,
-              startedAt: isoTime(event.hookAt),
-              lastTool: { tool_name: 'Bash', summary: event.summary },
-            });
-            session.agents.push(waitAgent);
-            session.pendingCodex[toolUseId] = agentIdForCall;
-          }
-          session.pendingCodexWait[toolUseId] = true;
-        }
-      } else if (event.codexDefinition && toolUseId) {
-        const agentIdForCall = `codex:${toolUseId}`;
-        const agent = agentModelFromDefinition(event.codexDefinition, event.codexAgentDefinition);
-        Object.assign(agent, {
-          agent_id: agentIdForCall,
-          agent_type: event.codexDefinition,
-          isCodex: true,
-          parent_agent_id: agentId,
-          codex_home: '',
-          unavailable: '',
-          startedAt: isoTime(event.hookAt),
-          lastTool: { tool_name: 'Bash', summary: event.summary },
-        });
-        const existingIndex = session.agents.findIndex((item) => item.agent_id === agentIdForCall);
-        if (existingIndex >= 0) session.agents.splice(existingIndex, 1, agent);
-        else session.agents.push(agent);
-        session.pendingCodex[toolUseId] = agentIdForCall;
-      }
-      if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId && event.questions?.length) {
-        // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
-        const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
-        const existing = boundDecision || session.decisions.find((decision) => (
-          ['waiting', 'provisional'].includes(decision.state) && sameQuestionSet(decision.questions, event.questions)
-        ));
-        // 最初の呼び出しか判断事項を終えた呼び出しの開始と、終わった時点より古い開始の知らせは、
-        // 遅れて届いたか重複なので、状態と解決の内容を変えない。
-        const staleStart = existing === boundDecision && isFinishedAskDecision(existing) && (
-          existing.id === toolUseId || existing.finishedByToolUseId === toolUseId ||
-          event.hookAt <= Date.parse(existing.resolvedAt || existing.updatedAt)
-        );
-        if (staleStart) {
-          session.decisionBindings[toolUseId] = existing.id;
-        } else if (existing) {
-          existing.state = 'waiting';
-          existing.updatedAt = isoTime(event.hookAt);
-          existing.resolvedAt = null;
-          existing.resolution = null;
-          existing.title = event.questions[0].question.slice(0, 200);
-          existing.questions = event.questions;
-          session.decisionBindings[toolUseId] = existing.id;
-        } else {
-          const createdAt = isoTime(event.hookAt);
-          const decision = {
-            id: toolUseId,
-            session_id: event.session_id,
-            source: 'ask',
-            state: 'waiting',
-            title: event.questions[0].question.slice(0, 200),
-            context: '',
-            questions: event.questions,
-            createdAt,
-            updatedAt: createdAt,
-            resolvedAt: null,
-            answer: null,
-            resolution: null,
-          };
-          session.decisions.push(decision);
-          session.decisionBindings[toolUseId] = decision.id;
-        }
-      }
-      if (!agentId) session.stopped = false;
-    }
-
-    if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
-      let agent = agentFor(session, agentId);
-      const definition = event.agentDefinition || {};
-      if (agent) {
-        agent.active = true;
-        agent.unconfirmed = false;
-        agent.startedAt = isoTime(event.hookAt);
-        agent.agent_type = event.agent_type || agent.agent_type;
-        if (event.route) agent.route = event.route;
-      } else {
-        agent = agentModelFromDefinition(event.agent_type, definition);
-        agent.agent_id = agentId;
-        agent.startedAt = isoTime(event.hookAt);
-        if (event.route) agent.route = event.route;
-        session.agents.push(agent);
-      }
-      const unboundAgentCalls = unboundAgentCallsOf(session);
-      if (unboundAgentCalls.length === 1) {
-        const tool = unboundAgentCalls[0];
-        session.agentToolBindings[tool.tool_use_id] = agentId;
-        agent.description = tool.description || agent.description;
-      }
-    }
-
-    if (eventName === 'SubagentStop' && agentId) {
-      stopAgent(session, agentId, stoppedAgentIds);
-    }
-    if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
-      const agent = agentFor(session, event.stoppedTaskId);
-      if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, stoppedAgentIds);
-    }
-
-    if (eventName === 'PostToolUse' || eventName === 'PostToolUseFailure') {
-      if (toolUseId) {
-        session.tools = session.tools.filter((tool) => tool.tool_use_id !== toolUseId);
-        session.completedToolIds.add(toolUseId);
-      }
-
-      if (eventName === 'PostToolUse' && event.tool_name === 'Agent') {
-        const boundAgentId = session.agentToolBindings[toolUseId];
-        const targetAgent = agentFor(session, boundAgentId);
-        if (targetAgent?.active) targetAgent.backgrounded = true;
-        if (targetAgent && event.resolvedModel) {
-          targetAgent.model = event.resolvedModel;
-          targetAgent.source = 'Agent tool response';
-        }
-      }
-
-      if (event.tool_name === 'Bash' && toolUseId) {
-        const placeholder = agentFor(session, session.pendingCodex[toolUseId]);
-        if (placeholder) session.codexLaunchToolIds.add(toolUseId);
-        if (placeholder && event.codexRunId) placeholder.runId = event.codexRunId;
-        if (placeholder && event.codexResult) {
-          completeCodexAgent(placeholder, event);
-        } else if (placeholder && session.pendingCodexWait[toolUseId]) {
-          // waiting や状態が読めないときは Codex が背景で動き続けている見込みなので、稼働中に残す。
-          applyCodexAudit(placeholder, event);
-          if (['vanished', 'not-found'].includes(event.codexWaitStatus)) placeholder.active = false;
-          if (['orphaned', 'unverified'].includes(event.codexWaitStatus)) {
-            placeholder.active = false;
-            placeholder.unconfirmed = true;
-            placeholder.waitEnded = true;
-          }
-        } else if (placeholder && eventName === 'PostToolUseFailure') {
-          applyCodexAudit(placeholder, event);
-          placeholder.active = false;
-        } else if (placeholder) {
-          applyCodexAudit(placeholder, event);
-          placeholder.backgrounded = true;
-          if (event.backgroundTaskId) placeholder.backgroundTaskId = event.backgroundTaskId;
-        }
-        delete session.pendingCodex[toolUseId];
-        delete session.pendingCodexWait[toolUseId];
-      }
-
-      // Codex を起動した呼び出しの出力はその起動のものなので、別の行へ結び付けない。
-      // 同じ PostToolUse が重複して届くと pendingCodex は消えているので、起動の記録で判定する。
-      const isCodexLaunch = session.codexLaunchToolIds.has(toolUseId);
-
-      // 背景タスクの出力を読んだ呼び出しは、背景タスク ID で起動した行と結び付ける。実行 ID が無い複数の背景 Codex を区別できる。
-      const outputCodex = event.backgroundOutputTaskId && event.tool_name !== 'Agent' && !isCodexLaunch
-        ? session.agents.find((agent) => agent.isCodex && agent.backgroundTaskId === event.backgroundOutputTaskId)
-        : null;
-      if (outputCodex && !outputCodex.runId && event.codexRunId) outputCodex.runId = event.codexRunId;
-
-      // Agent の結果は担当の最終報告で、背景の Codex の結果行を写していることがあるので使わない。
-      if (event.codexResult && !isCodexLaunch && event.tool_name !== 'Agent') {
-        const codexForRun = event.codexRunId ? session.agents.find((agent) => agent.isCodex && agent.runId === event.codexRunId) : null;
-        const matched = codexForRun || outputCodex;
-        const targetAgent = matched
-          ? (matched.resultReceived ? null : matched)
-          : uniqueBackgroundedCodex(session, agentId, event.codexRunId);
-        if (targetAgent && !targetAgent.runId && event.codexRunId) targetAgent.runId = event.codexRunId;
-        if (targetAgent) completeCodexAgent(targetAgent, event);
-      }
-
-      session.permissionWaits = session.permissionWaits.filter((wait) => !(
-        sameAgent(wait.agent_id, agentId) && wait.target_tool_use_id === toolUseId && toolUseId
-      ));
-      if (event.tool_name === 'AskUserQuestion' && !agentId && toolUseId) {
-        const decisionId = session.decisionBindings[toolUseId];
-        const decision = session.decisions.find((item) => item.id === decisionId);
-        if (decision && ['waiting', 'provisional'].includes(decision.state)) {
-          decision.state = eventName === 'PostToolUse' ? 'resolved' : 'withdrawn';
-          decision.updatedAt = isoTime(event.hookAt);
-          decision.resolvedAt = decision.updatedAt;
-          decision.resolution = eventName === 'PostToolUse'
-            ? event.decisionResolution || { chosen: [], note: '' }
-            : null;
-          // 最後に判断事項を終えた呼び出し。再起動の後に同じ呼び出しの開始が新しい時刻で届いても重複と分かるよう、
-          // waiting に戻っても消さずに残す(開始から終わりまで進んだ呼び出しの開始が、正当に新しく届くことは無い)。
-          decision.finishedByToolUseId = toolUseId;
-        }
-      }
-      if (!agentId) session.stopped = false;
-    }
-
-    // 区切りが終わった時点で、同じエージェントの先に始まったツールは終わったか拒否されている。
-    // 拒否されたツールには PostToolUse も PostToolUseFailure も届かない。
-    if (eventName === 'PostToolBatch') {
-      const startedBeforeBatch = (item) => sameAgent(item.agent_id, agentId) && Date.parse(item.startedAt) < event.hookAt;
-      session.tools = session.tools.filter((tool) => !startedBeforeBatch(tool));
-      // メインの許可待ちは Stop と UserPromptSubmit で消す。並行する背景のサブエージェントの許可待ちを巻き込まないため。
-      if (agentId) session.permissionWaits = session.permissionWaits.filter((wait) => !startedBeforeBatch(wait));
-    }
-
-    if (eventName === 'Notification' && event.notification_type === 'permission_prompt') {
-      // Agent の呼び出しはサブエージェントの終わりまで続くので、許可を待つツールの候補にしない。
-      const oldestTool = session.tools
-        .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
-        .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
-      const wait = {
-        agent_id: agentId,
-        target_tool_use_id: oldestTool?.tool_use_id || null,
-        tool_name: oldestTool?.tool_name || '',
-        summary: oldestTool?.summary || '',
-        notification_type: event.notification_type,
-        message: event.message,
-        startedAt: isoTime(event.hookAt),
-      };
-      session.permissionWaits = session.permissionWaits.filter((item) => !sameAgent(item.agent_id, agentId));
-      session.permissionWaits.push(wait);
-    }
-
-    if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
-      session.permissionWaits = session.permissionWaits.filter((wait) => !sameAgent(wait.agent_id, agentId));
-      if (!agentId) session.tools = session.tools.filter((tool) => tool.agent_id);
-    }
-
-    // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
-    const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
-    if (startsIdle) {
-      session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
-      session.tools = session.tools.filter((tool) => tool.agent_id);
-      session.stopped = true;
-    }
-    if (eventName === 'UserPromptSubmit') session.stopped = false;
-    if (eventName === 'Stop') {
-      session.stopped = true;
-    }
-    if (eventName === 'SessionEnd') session.ended = true;
-    if (agentId && stoppedAgentIds.has(agentId)) {
-      session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
-      session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
-    }
+    applyCommonEventEnd(session, event, stoppedAgentIds);
   }
 
   return [...sessions.values()]
