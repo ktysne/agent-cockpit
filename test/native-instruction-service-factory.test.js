@@ -193,6 +193,55 @@ test('owned execution stop requires the dashboard secret and same-origin request
   assert.ok(started.process.child.killSignals.length > 0);
 });
 
+test('dashboard projects exact native hold capacity from the owned Codex runner', async (t) => {
+  const harness = await createTemporaryNativeInstructionHarness();
+  const runtime = await harness.startDashboard();
+  t.after(async () => { await runtime.close(); await harness.removeDirectory(); });
+
+  const normal = await harness.start('codex', { launchSuffix: 'hold-capacity-normal' });
+  const overflow = await harness.start('codex', { launchSuffix: 'hold-capacity-overflow' });
+  const unknown = await harness.start('codex', { launchSuffix: 'hold-capacity-unknown' });
+  const recordApprovalRequests = (started, count, prefix) => {
+    for (let index = 0; index < count; index += 1) {
+      started.process.child.send({
+        jsonrpc: '2.0',
+        id: `${prefix}-${index}`,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          threadId: started.process.threadId,
+          turnId: started.process.turnId,
+          itemId: `${prefix}-item-${index}`,
+          startedAtMs: index,
+        },
+      });
+    }
+  };
+  recordApprovalRequests(normal, 128, 'normal-approval');
+  recordApprovalRequests(overflow, 129, 'overflow-approval');
+  unknown.process.child.send({
+    jsonrpc: '2.0',
+    id: 'unknown-server-request',
+    method: 'item/unknown/request',
+    params: {},
+  });
+
+  const response = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
+  assert.equal(response.ownedExecutionDiagnostics.status, 'ready');
+  const byLaunchRef = new Map(response.ownedExecutions.map((execution) => [execution.launchRef, execution]));
+  const normalHold = byLaunchRef.get(normal.result.launchRef).hold;
+  assert.deepEqual(normalHold, {
+    reason: null, retainedRequestCount: 128, remainingRequestCount: 0, limit: 128,
+  });
+  const overflowHold = byLaunchRef.get(overflow.result.launchRef).hold;
+  assert.deepEqual(overflowHold, {
+    reason: 'capacity', retainedRequestCount: 128, remainingRequestCount: 0, limit: 128,
+  });
+  const unknownHold = byLaunchRef.get(unknown.result.launchRef).hold;
+  assert.deepEqual(unknownHold, {
+    reason: 'unknown', retainedRequestCount: 0, remainingRequestCount: 128, limit: 128,
+  });
+});
+
 test('owned execution stop rejects stale, foreign, and unknown displayed identities but works after current proof expires', async (t) => {
   const harness = await createTemporaryNativeInstructionHarness();
   const runtime = await harness.startDashboard();
@@ -389,6 +438,7 @@ test('target projection becomes unverified as integration cleanup begins', async
   assert.deepEqual(integration.instructionTargetState('unknown-launch'), {
     status: 'unverified', nativeTurnId: null, reason: 'native_instruction_integration_closed',
   });
+  assert.throws(() => integration.native.ownedExecutionSnapshot(), { code: 'owned_stop_state_unavailable' });
   await closing;
 });
 
