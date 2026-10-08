@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { createOwnedNativeRunner, getOwnedSource } = require('../src/server/owned-native-runner');
+const { getOwnedInstructionWriter } = require('../src/server/owned-native-instruction-writer');
+const { sha256 } = require('../src/server/owned-native-instruction-dispatch');
 
 const LOGIN_ID = 'login_test_1';
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=test';
@@ -33,13 +35,17 @@ class FakePipe extends EventEmitter {
 }
 
 class FakeChild extends EventEmitter {
-  constructor(onWrite) {
+  constructor(onWrite, options = {}) {
     super();
     this.stdout = new EventEmitter();
     this.stderr = new EventEmitter();
     this.killCalls = [];
     this.exited = false;
     this.stdin = new FakePipe(onWrite ? (text) => onWrite(text, this) : null);
+    this.killEvents = options.killEvents || ['exit', 'close'];
+    this.killResult = options.killResult ?? true;
+    this.killError = options.killError || null;
+    this.autoKillEvents = options.autoKillEvents !== false;
   }
 
   send(...messages) {
@@ -53,14 +59,16 @@ class FakeChild extends EventEmitter {
 
   kill(signal) {
     this.killCalls.push(signal || null);
-    if (!this.exited) {
-      this.exited = true;
+    if (this.killError) throw this.killError;
+    if (this.killResult === false) return false;
+    if (!this.exited && this.autoKillEvents) {
+      this.exited = this.killEvents.includes('exit');
       setImmediate(() => {
-        this.emit('exit', 0, signal || null);
+        for (const event of this.killEvents) this.emit(event, 0, signal || null);
         this.stdout.emit('end');
       });
     }
-    return true;
+    return this.killResult;
   }
 }
 
@@ -501,7 +509,7 @@ test('Codex accepts native responses without jsonrpc and rejects a conflicting p
   await runner.stop();
 });
 
-test('stop reports an owned child that did not emit exit or close before the kill timeout', async (t) => {
+test('stop remains unconfirmed after exit until close confirms the owned child is inactive', async (t) => {
   const workspace = createWorkspace(t);
   let child;
   const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
@@ -537,9 +545,195 @@ test('stop reports an owned child that did not emit exit or close before the kil
   assert.deepEqual(child.killCalls, [null, 'SIGKILL']);
   child.emit('exit', 137, 'SIGKILL');
   const afterExit = runner.snapshot();
-  assert.equal(afterExit.state, 'stopped');
+  assert.equal(afterExit.state, 'stop_unconfirmed');
   assert.equal(afterExit.childExited, true);
-  assert.equal(afterExit.ownedChildActive, false);
+  assert.equal(afterExit.childClosed, false);
+  assert.equal(afterExit.ownedChildActive, true);
+  child.emit('close', 137, 'SIGKILL');
+  const afterClose = runner.snapshot();
+  assert.equal(afterClose.state, 'stopped');
+  assert.equal(afterClose.childClosed, true);
+  assert.equal(afterClose.ownedChildActive, false);
+});
+
+test('close without exit does not confirm stop, while a later exit completes the evidence', async (t) => {
+  const workspace = createWorkspace(t);
+  let child;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    getAuthentication: () => ({ oauthToken: 'oauth-secret' }),
+    spawnImpl: (executable, args, spawnOptions) => {
+      child = new FakeChild((line, ownedChild) => {
+        if (JSON.parse(line).type !== 'user') return;
+        ownedChild.send(
+          { type: 'system', subtype: 'init', session_id: 'session_native_1' },
+          { type: 'stream_event', session_id: 'session_native_1', parent_tool_use_id: null,
+            event: { type: 'message_start', message: { id: 'message_native_1', role: 'assistant' } } },
+        );
+      });
+      child.kill = () => true;
+      setImmediate(() => child.emit('spawn'));
+      return child;
+    },
+    onNative() {},
+    timeouts: { stopMs: 50 },
+  }));
+  await runner.start({ inputText: 'fixed task' });
+  assert.equal((await runner.stop()).state, 'stop_unconfirmed');
+  child.emit('close', 0, 'SIGKILL');
+  assert.deepEqual(
+    { state: runner.snapshot().state, childExited: runner.snapshot().childExited,
+      childClosed: runner.snapshot().childClosed, ownedChildActive: runner.snapshot().ownedChildActive },
+    { state: 'stop_unconfirmed', childExited: false, childClosed: true, ownedChildActive: true },
+  );
+  child.emit('exit', 0, 'SIGKILL');
+  assert.equal(runner.snapshot().state, 'stopped');
+  assert.equal(runner.snapshot().ownedChildActive, false);
+});
+
+test('exit before the stop timeout avoids a redundant kill while close is pending', async (t) => {
+  const workspace = createWorkspace(t);
+  let child;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    getAuthentication: () => ({ oauthToken: 'oauth-secret' }),
+    spawnImpl: (executable, args, spawnOptions) => {
+      child = new FakeChild((line, ownedChild) => {
+        if (JSON.parse(line).type !== 'user') return;
+        ownedChild.send(
+          { type: 'system', subtype: 'init', session_id: 'session_native_1' },
+          { type: 'stream_event', session_id: 'session_native_1', parent_tool_use_id: null,
+            event: { type: 'message_start', message: { id: 'message_native_1', role: 'assistant' } } },
+        );
+      });
+      child.kill = (signal) => {
+        child.killCalls.push(signal || null);
+        setTimeout(() => child.emit('exit', 0, signal || null), 5);
+        return true;
+      };
+      setImmediate(() => child.emit('spawn'));
+      return child;
+    },
+    onNative() {},
+    timeouts: { stopMs: 50 },
+  }));
+  await runner.start({ inputText: 'fixed task' });
+
+  const stopped = await runner.stop();
+  assert.equal(stopped.state, 'stop_unconfirmed');
+  assert.equal(stopped.childExited, true);
+  assert.equal(stopped.childClosed, false);
+  assert.equal(stopped.ownedChildActive, true);
+  assert.deepEqual(child.killCalls, [null]);
+  child.emit('close', 0, 'SIGTERM');
+  assert.equal(runner.snapshot().state, 'stopped');
+});
+
+test('false or throwing kill results do not count as physical termination', async (t) => {
+  for (const behavior of ['false', 'throw']) {
+    const workspace = createWorkspace(t);
+    const harness = createSpawnHarness(workspace);
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
+      spawnImpl: (executable, args, spawnOptions) => {
+        const child = new FakeChild();
+        child.kill = (signal) => {
+          child.killCalls.push(signal || null);
+          if (behavior === 'throw') throw new Error('fixture kill failure');
+          return false;
+        };
+        harness.child = child;
+        setImmediate(() => child.emit('spawn'));
+        child.stdin.onWrite = (line) => {
+          const request = JSON.parse(line);
+          if (request.method === 'initialize') child.send(codexResponse(request.id, {}));
+          else if (request.method === 'account/login/start') child.send(codexResponse(request.id, {
+            type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+          }));
+          else if (request.method === 'thread/start') child.send(codexResponse(request.id, { thread: { id: 'thread_native_1' } }));
+          else if (request.method === 'turn/start') child.send(codexResponse(request.id, { turn: { id: 'turn_native_1' } }));
+        };
+        return child;
+      },
+      onNative() {},
+      timeouts: { stopMs: 50 },
+    }));
+    await runner.start({ inputText: 'fixed task' });
+    const stopped = await runner.stop();
+    assert.equal(stopped.state, 'stop_unconfirmed', behavior);
+    assert.equal(stopped.childExited, false, behavior);
+    assert.equal(stopped.childClosed, false, behavior);
+    assert.equal(stopped.ownedChildActive, true, behavior);
+  }
+});
+
+test('spawn error followed by close without exit remains unconfirmed', async (t) => {
+  const workspace = createWorkspace(t);
+  let child;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    getAuthentication: () => ({ oauthToken: 'oauth-secret' }),
+    spawnImpl: (executable, args, spawnOptions) => {
+      child = new FakeChild((line, ownedChild) => {
+        if (JSON.parse(line).type !== 'user') return;
+        ownedChild.send(
+          { type: 'system', subtype: 'init', session_id: 'session_native_1' },
+          { type: 'stream_event', session_id: 'session_native_1', parent_tool_use_id: null,
+            event: { type: 'message_start', message: { id: 'message_native_1', role: 'assistant' } } },
+        );
+      }, { autoKillEvents: false });
+      setImmediate(() => child.emit('spawn'));
+      return child;
+    },
+    onNative() {},
+    timeouts: { stopMs: 50 },
+  }));
+  await runner.start({ inputText: 'fixed task' });
+  child.emit('error', new Error('fixture spawn failure'));
+  child.emit('close', -1, null);
+  const stopped = await runner.stop();
+  assert.equal(stopped.state, 'stop_unconfirmed');
+  assert.equal(stopped.childExited, false);
+  assert.equal(stopped.childClosed, true);
+  assert.equal(stopped.ownedChildActive, true);
+});
+
+test('a spawn attempt without a child handle is not treated as confirmed stop', async (t) => {
+  const workspace = createWorkspace(t);
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    getAuthentication: () => ({ oauthToken: 'oauth-secret' }),
+    spawnImpl: () => { throw new Error('spawn adapter failed'); },
+    onNative() {},
+  }));
+
+  await assert.rejects(runner.start({ inputText: 'fixed task' }), (error) => error.code === 'spawn_failed');
+  const stopped = await runner.stop();
+  assert.equal(stopped.state, 'stop_unconfirmed');
+  assert.equal(stopped.childExited, false);
+  assert.equal(stopped.childClosed, false);
+  assert.equal(stopped.ownedChildActive, false);
+});
+
+test('owner expiry immediately after spawn still stops the returned child', async (t) => {
+  const workspace = createWorkspace(t);
+  let ownerCurrent = true;
+  let child;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'claude', {
+    isCurrent: () => ownerCurrent,
+    getAuthentication: () => ({ oauthToken: 'oauth-secret' }),
+    spawnImpl: () => {
+      ownerCurrent = false;
+      child = new FakeChild(() => {});
+      setImmediate(() => child.emit('spawn'));
+      return child;
+    },
+    onNative() {},
+  }));
+
+  await assert.rejects(runner.start({ inputText: 'fixed task' }), (error) => error.code === 'authority_expired');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(child.killCalls, [null]);
+  const stopped = await runner.stop();
+  assert.equal(stopped.state, 'stopped');
+  assert.equal(stopped.childExited, true);
+  assert.equal(stopped.childClosed, true);
 });
 
 test('a mismatched login completion fails closed without starting a thread or exposing login data', async (t) => {
@@ -629,21 +823,25 @@ test('the authentication prompt promise does not substitute for the native login
   await runner.stop();
 });
 
-test('a native permission request before a verified thread turn fails without replying', async (t) => {
+test('a native permission request before thread and turn scope is known enters a safe hold', async (t) => {
   const workspace = createWorkspace(t);
   const harness = codexResponder({ workspace, serverRequest: true });
   let disconnect = null;
   const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
-    onAuthenticationRequired() {},
+    onAuthenticationRequired: ({ loginId }) => harness.child.send(codexLoginCompleted(loginId)),
     spawnImpl: harness.spawnImpl,
     onNative() {},
     onDisconnect: (event) => { disconnect = event; },
   }));
-  await assert.rejects(runner.start({ inputText: 'task' }));
-  assert.equal(runner.snapshot().failureCode, 'native_server_request_scope_unavailable');
-  assert.equal(disconnect.reason, 'native_server_request_scope_unavailable');
-  assert.deepEqual(harness.methods, ['initialize']);
+  const snapshot = await runner.start({ inputText: 'task' });
+  assert.equal(snapshot.state, 'running');
+  assert.equal(snapshot.failureCode, null);
+  assert.equal(snapshot.unknownServerRequestHeld, true);
+  assert.equal(snapshot.nativeRequestIdCount, 1);
+  assert.equal(disconnect, null);
+  assert.deepEqual(harness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
   assert.equal(harness.child.stdin.writes.some((line) => line.includes('server-request')), false);
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
   await runner.stop();
 });
 
@@ -830,6 +1028,7 @@ function createWaitProfileHarness(workspace, options = {}) {
     } else if (request.method === 'turn/start') {
       const before = options.waitCallsBeforeTurnResponse || [];
       for (const call of before) child.send(call);
+      for (const nativeRequest of options.nativeRequestsBeforeTurnResponse || []) child.send(nativeRequest);
       if (options.terminalBeforeTurnResponse) child.send(codexTurnCompleted());
       child.send(codexResponse(request.id, { turn: { id: 'turn_native_1' } }));
       const after = options.waitCallsAfterTurnResponse || [];
@@ -1026,7 +1225,7 @@ test('native request violations fail closed while unmatched resolutions are coun
           requestId: 'wrong-turn-resolution', threadId: 'thread_native_1', turnId: 'turn_other',
         } });
       },
-      failureCode: 'native_server_resolution_invalid',
+      unmatchedResolutionCount: 1,
     },
     {
       run(harness) { harness.child.send(makeNativeHoldRequest('malformed', 'item/fileChange/requestApproval', { startedAtMs: undefined })); },
@@ -1052,17 +1251,75 @@ test('native request violations fail closed while unmatched resolutions are coun
   }
 });
 
-test('native request ID retention is bounded and overflow fails closed', async (t) => {
+test('known native requests and resolutions accept extension fields while retaining required scope checks', async (t) => {
   const workspace = createWorkspace(t);
   const harness = createWaitProfileHarness(workspace);
   const runner = createWaitRunner(workspace, harness);
   await runner.start({ inputText: 'fixed task' });
-  harness.child.send(...Array.from({ length: 129 }, (_, index) => makeNativeHoldRequest(index + 1)));
-  assert.equal(runner.snapshot().failureCode, 'native_server_request_limit');
+
+  const request = makeNativeHoldRequest('extension-fields', 'item/tool/requestUserInput', {
+    futureContext: { revision: 2 },
+    questions: [{ header: 'Choice', id: 'choice', question: 'Select an option', futureQuestionField: true }],
+  });
+  request.futureRequestField = 'ignored';
+  harness.child.send(request);
+  const resolved = nativeHoldResolved('extension-fields');
+  resolved.params.turnId = 'turn_native_1';
+  resolved.params.futureResolutionField = 'ignored';
+  resolved.futureNotificationField = true;
+  harness.child.send(resolved);
+
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().failureCode, null);
+  assert.deepEqual(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1').pending, []);
+  await runner.stop();
+});
+
+test('native request ID retention is bounded and overflow holds without clearing IDs', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace);
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+  const requests = Array.from({ length: 128 }, (_, index) => makeNativeHoldRequest(index + 1));
+  harness.child.send(...requests);
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().nativeRequestIdCount, 128);
+  assert.equal(runner.snapshot().nativeRequestIdRemaining, 0);
+  assert.equal(runner.snapshot().nativeRequestOverflow, false);
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1').pending[0].count, 128);
+  harness.child.send(makeNativeHoldRequest(129));
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().failureCode, null);
+  assert.equal(runner.snapshot().nativeRequestIdCount, 128);
+  assert.equal(runner.snapshot().nativeRequestIdRemaining, 0);
+  assert.equal(runner.snapshot().nativeRequestOverflow, true);
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
+  for (const request of requests) harness.child.send(nativeHoldResolved(request.id));
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().nativeRequestIdCount, 128);
+  assert.equal(runner.snapshot().nativeRequestOverflow, true);
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
   const replies = harness.child.stdin.writes.filter((line) => line.endsWith('\n'))
     .map((line) => JSON.parse(line))
     .filter((message) => !Object.hasOwn(message, 'method') && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error')));
   assert.equal(replies.length, 0);
+  await runner.stop();
+});
+
+test('a native hold request during turn start enters a persistent hold until explicit stop', async (t) => {
+  const workspace = createWorkspace(t);
+  const harness = createWaitProfileHarness(workspace, {
+    nativeRequestsBeforeTurnResponse: [makeNativeHoldRequest('early-native-request')],
+  });
+  const runner = createWaitRunner(workspace, harness);
+  await runner.start({ inputText: 'fixed task' });
+
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().failureCode, null);
+  assert.equal(runner.snapshot().unknownServerRequestHeld, true);
+  assert.equal(runner.snapshot().nativeRequestIdCount, 1);
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
+  assert.equal(harness.child.stdin.writes.some((line) => line.includes('early-native-request')), false);
   await runner.stop();
 });
 
@@ -1500,18 +1757,34 @@ test('native request IDs cannot collide with an owned wait in either arrival ord
   }
 });
 
-test('owned wait request IDs share the bounded runner lifetime limit', async (t) => {
+test('owned wait IDs share the request limit and overflow prevents wait delivery', async (t) => {
   const workspace = createWorkspace(t);
+  let receipt = null;
   const harness = createWaitProfileHarness(workspace, {
     waitCallsAfterTurnResponse: [makeWaitRequest()],
   });
-  const runner = createWaitRunner(workspace, harness);
+  const runner = createWaitRunner(workspace, harness, { onWaitRequired: (value) => { receipt = value; } });
   await runner.start({ inputText: 'fixed task' });
   await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
   harness.child.send(...Array.from({ length: 127 }, (_, index) => makeNativeHoldRequest(`request-${index}`)));
   assert.equal(runner.snapshot().state, 'running');
   harness.child.send(makeNativeHoldRequest('request-overflow'));
-  assert.equal(runner.snapshot().failureCode, 'native_server_request_limit');
+  assert.equal(runner.snapshot().failureCode, null);
+  assert.equal(runner.snapshot().nativeRequestIdCount, 128);
+  assert.equal(runner.snapshot().nativeRequestIdRemaining, 0);
+  assert.equal(runner.snapshot().nativeRequestOverflow, true);
+  assert.equal(runner.snapshot().retiredOwnedWaitRequestCount, 1);
+  assert.equal(runner.releaseWait(receipt), false);
+  assert.equal(runner.cancelWait(receipt), false);
+  assert.equal(waitReplies(harness).length, 0);
+  for (let index = 0; index < 127; index += 1) harness.child.send(nativeHoldResolved(`request-${index}`));
+  harness.child.send(nativeHoldResolved('wait_request_1'));
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().nativeRequestOverflow, true);
+  assert.equal(runner.snapshot().nativeRequestIdCount, 128);
+  assert.equal(runner.snapshot().retiredOwnedWaitRequestCount, 0);
+  assert.equal(runner.captureNativePendingSummary('thread_native_1', 'turn_native_1'), null);
   await runner.stop();
 });
 
@@ -1635,7 +1908,7 @@ test('a reentrant owner change during source validation prevents the final wait 
   await runner.stop();
 });
 
-test('a wait receipt cannot release a different runner and unknown approval requests get no response', async (t) => {
+test('unknown server requests hold an active wait without failing or sending a response', async (t) => {
   const firstWorkspace = createWorkspace(t);
   const secondWorkspace = createWorkspace(t);
   let firstReceipt = null;
@@ -1664,17 +1937,102 @@ test('a wait receipt cannot release a different runner and unknown approval requ
   await Promise.all([first.stop(), second.stop()]);
 
   const unknownWorkspace = createWorkspace(t);
-  const unknownHarness = createWaitProfileHarness(unknownWorkspace);
-  const unknownRunner = createWaitRunner(unknownWorkspace, unknownHarness);
+  let receipt = null;
+  const unknownHarness = createWaitProfileHarness(unknownWorkspace, {
+    waitCallsAfterTurnResponse: [makeWaitRequest()],
+  });
+  const unknownRunner = createWaitRunner(unknownWorkspace, unknownHarness, {
+    onWaitRequired: (value) => { receipt = value; },
+  });
   await unknownRunner.start({ inputText: 'fixed task' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(receipt);
   unknownHarness.child.send({
     id: 'permission_request_1',
     method: 'mcpServer/elicitation/request',
     params: { command: 'private' },
   });
   assert.equal(unknownHarness.child.stdin.writes.some((line) => line.includes('permission_request_1')), false);
-  assert.equal(unknownRunner.snapshot().failureCode, 'unknown_server_request');
+  assert.equal(unknownRunner.snapshot().state, 'running');
+  assert.equal(unknownRunner.snapshot().failureCode, null);
+  assert.equal(unknownRunner.snapshot().unknownServerRequestHeld, true);
+  assert.equal(unknownRunner.releaseWait(receipt), false);
+  assert.equal(waitReplies(unknownHarness).length, 0);
   await unknownRunner.stop();
+});
+
+test('native request overflow invalidates prepared instruction checks', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace);
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+  });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  assert.equal(source.bindOwner(claim), true);
+  source.acquireReadLease(Object.freeze({}));
+
+  const metadata = ownedCodexInstructionMetadata();
+  const writer = getOwnedInstructionWriter(capability);
+  const token = writer.prepare(metadata);
+  assert.ok(token);
+  assert.equal(writer.check(token), true);
+
+  const requests = Array.from({ length: 128 }, (_, index) => makeNativeHoldRequest(index + 1));
+  harness.child.send(...requests);
+  for (const request of requests) harness.child.send(nativeHoldResolved(request.id));
+  assert.equal(runner.canPrepareInstruction(metadata), true);
+  harness.child.send(makeNativeHoldRequest(129));
+
+  assert.equal(runner.snapshot().nativeRequestOverflow, true);
+  assert.equal(runner.canPrepareInstruction(metadata), false);
+  assert.equal(writer.check(token), false);
+  await runner.stop();
+});
+
+test('native holds during a follow-up turn start do not compare against the ended context', async (t) => {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace);
+  let capability = null;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+  });
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  assert.equal(source.bindOwner(claim), true);
+  source.acquireReadLease(Object.freeze({}));
+  harness.child.send(codexTurnCompleted());
+
+  const metadata = ownedCodexInstructionMetadata({
+    deliveryAttemptId: 'delivery_followup_start', mode: 'start', expectedTurnId: null, inputText: 'follow up',
+  });
+  const writer = getOwnedInstructionWriter(capability);
+  const token = writer.prepare(metadata);
+  assert.ok(token);
+  const previousWrite = harness.child.stdin.onWrite;
+  let pendingStartId = null;
+  harness.child.stdin.onWrite = (line) => {
+    const request = JSON.parse(line);
+    if (request.method === 'turn/start' && request.params.clientUserMessageId === metadata.deliveryAttemptId) {
+      pendingStartId = request.id;
+      return;
+    }
+    previousWrite(line);
+  };
+  const input = [{ type: 'text', text: 'follow up', text_elements: [] }];
+  const pendingAck = writer.dispatchNow(token, { ...metadata, input }, () => true);
+  pendingAck.catch(() => {});
+  assert.ok(pendingStartId);
+
+  harness.child.send(makeNativeHoldRequest('followup-hold', 'item/tool/requestUserInput', { turnId: 'turn_native_2' }));
+  assert.equal(runner.snapshot().state, 'running');
+  assert.equal(runner.snapshot().failureCode, null);
+  assert.equal(runner.snapshot().unknownServerRequestHeld, true);
+  assert.equal(runner.snapshot().contextState, 'ended');
+  await runner.stop();
 });
 
 test('the wait profile requires a trusted context-current callback', (t) => {
@@ -1849,6 +2207,38 @@ function createOwnedCodexRunner(workspace, harness, claim, callbacks = {}) {
     timeouts: callbacks.timeouts || { startupMs: 1000, rpcMs: 1000, loginMs: 1000, stopMs: 100 },
     onNative: callbacks.onNative || (() => {}),
   }));
+}
+
+function ownedCodexInstructionMetadata({ mode = 'steer', expectedTurnId = 'turn_native_1',
+  deliveryAttemptId = 'delivery_native_1', inputText = 'instruction input' } = {}) {
+  const claims = {
+    launchId: 'launch_native_1', runId: 'run_native_1', attemptId: 'attempt_native_1',
+    provider: 'codex', nativeIdKind: 'thread', hostId: 'host_native_1', homeScopeId: 'scope_native_1',
+    origin: 'standalone', purpose: 'agent', originBinding: null,
+  };
+  const identity = {
+    provider: 'codex', nativeIdKind: 'thread', hostId: 'host_native_1',
+    homeScopeId: 'scope_native_1', nativeId: 'thread_native_1',
+  };
+  const actor = { kind: 'main', id: 'actor_native_1' };
+  const executionBinding = { periodId: 'period_native_1', actor };
+  const source = {
+    launchRef: 'launch_ref_native_1', claims, identity, executionBinding,
+    conversationId: 'conversation_native_1', sessionId: 'session_native_1',
+  };
+  const input = [{ type: 'text', text: inputText, text_elements: [] }];
+  return {
+    deliveryAttemptId, revision: 1,
+    payloadDigest: sha256(JSON.stringify({ schemaVersion: 1, mode, expectedTurnId, input })),
+    nativeContentDigest: sha256(JSON.stringify(input)),
+    source,
+    target: {
+      kind: 'execution', launchRef: source.launchRef, claims, identity,
+      periodId: executionBinding.periodId, actor,
+      conversationId: source.conversationId, sessionId: source.sessionId,
+    },
+    mode, expectedTurnId,
+  };
 }
 
 test('owned Codex source reads only its current loaded turn over the existing pipe', async (t) => {

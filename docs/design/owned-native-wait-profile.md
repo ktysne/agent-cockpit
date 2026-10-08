@@ -25,9 +25,12 @@ runner自身はbrowserを起動せず、認証challengeや認証情報をsnapsho
 fixtureでは受信messageの jsonrpc を省略でき、指定される場合は "2.0" だけを受理する。
 このfixture結果はinstalled app-serverでの実接続確認を意味しない。
 
-wait requestは現在のnative thread、active turn、固定tool名、null namespace、空arguments、RPC request IDを完全一致で照合する。
+wait requestは現在のnative thread、active turn、固定tool名、null namespace、空arguments、RPC request IDを照合する。
 turn/start応答より早いrequestは一件だけ一時保持し、返されたturn IDとの一致を確認してからcontext登録とwait callbackを行う。
-thread/turnの欠落または不一致、重複call、未知のserver requestでは応答しない。
+thread/turnの欠落または既知のscopeとの不一致、重複callは引き続き拒否する。
+既知requestの追加fieldは無視し、必須fieldと既知method固有のschemaは検証する。
+未知のserver requestは定数サイズの保留へ移し、runnerを異常終了させず、回答や再開を許さない。
+turn/start応答前などscopeをまだ照合できない既知の保留要求も、IDと確認可能なscopeを検証した後に同じ保留へ移す。
 permission requestやほかのserver requestへ自動回答しない。
 
 ## fresh contextとwait応答
@@ -46,7 +49,10 @@ receiptは一回だけ使え、別runnerや別contextへ移せない。
 releaseWait() のtrueはlatchがterminal操作を受け付けたことを示し、native pipeへのresponse成功は保証しない。
 release、cancel、deadlineの応答にはrunnerが固定したstatusとsuccessだけを含める。
 native request IDは文字列と整数を区別し、runner寿命中の一意ID集合で再利用を拒否する。
-native hold requestとowned wait requestは同じrunner寿命中128件の上限を使い、上限到達時はrunnerをfail closedにする。この上限は長い実行に対する可用性上の制約となる。
+native hold requestとowned wait requestは同じrunner寿命中128件の上限を使う。
+129件目以降はIDや本文を追加記録せず、件数、残枠、overflow状態だけをsnapshotへ示す固定保留へ移す。
+overflowと未知requestの保留はresolved通知やturn終了で解除せず、native pendingの投影、wait応答、指示の作成・確認・送信を止める。
+retired wait記録も同じ上限内に保ち、診断には記録件数だけを含める。
 wait responseのwrite直前に既存のwait gateを再確認し、型付きrequest ID、child、generation、thread、元turnだけを非公開のresponse記録へ保存する。
 `serverRequest/resolved`は型付きrequest ID、child、generation、threadが一致するowned wait responseを確認し、pending hold requestの既存照合条件は別に維持する。
 応答前のactive waitに一致する通知はapp-serverによる取り消しとして消費し、latchを失効させてwaitを破棄する。
@@ -70,7 +76,9 @@ wait latchはmonotonic clockによる固定5分deadlineを持ち、release、can
 context terminal、runner stop、failureはlatchを無応答で失効させる。
 deadline時点でowner、source、contextのどれかがfreshでなければ、deadline応答を送らずreceiptを再利用できなくする。
 deadlineはnative subprocessを停止しないため、呼び出し側がstopを明示する必要がある。
-stop後にchildのexitまたはcloseを確認できなければsnapshotは stop_unconfirmed を示す。
+stop後はchildのexitとcloseの両方を確認し、childがinactiveになった場合だけsnapshotをstoppedにする。
+片方のeventだけ、killのfalse返却、kill例外、またはspawn error後にexitなしでcloseだけが届いた状態はstop_unconfirmedを保つ。
+authority失効は物理停止の確認を代替せず、停止未確認中の再送や同一runnerの再起動を許さない。
 
 Codexのnative thread responseだけがnative identityを確定し、matching turn/start responseだけがnative contextを確定する。
 matching terminalはcontextを終了するが、actorまたはcanonical periodの終了を意味しない。

@@ -38,7 +38,7 @@ function fixture(t, provider, options = {}) {
   child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
   child.killCalls = 0;
   child.send = (...messages) => child.stdout.emit('data', Buffer.from(messages.map(JSON.stringify).join('\n') + '\n'));
-  child.kill = () => { child.killCalls += 1; setImmediate(() => child.emit('exit', 0)); return true; };
+  child.kill = () => { child.killCalls += 1; setImmediate(() => { child.emit('exit', 0); child.emit('close', 0); }); return true; };
   child.stdin = Object.assign(new EventEmitter(), {
     write(line, callback) {
       const request = JSON.parse(line);
