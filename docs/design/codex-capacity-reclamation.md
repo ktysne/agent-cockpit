@@ -141,6 +141,26 @@ fixture の合格を実 runtime の適合確認と区別する。
 | 3 | 質問gate、serviceとdelivery storeの新形式対応 | アンカー対応compositionで旧periodの拒否、新periodの受付、全送信入口のguardを両providerのfixtureで確認 |
 | 4 | 明示的なnative factoryへの移行と稼働の統合 | 満杯の旧形式でも拒否情報を失わず移行し、件数枠が満杯なら新規受付停止を維持する。余裕のある旧形式では再起動後の新質問受付を確認。標準起動と設定画面には接続しない |
 
+### 新schema入口の内部分割
+
+段階2のPR1は、共通基盤を先に固定してから次の順で積む。
+各codecは他codecを直接importせず、上位の照合層で組み合わせる。
+
+| 順序 | 範囲 | 完了条件 |
+|---|---|---|
+| 1a | strict helper、UTF-8 byteと指紋、容量算術 | getter、未知field、疎配列、不正UTF-8、escape、整数overflowを確認。既存readerとwriterへ接続しない |
+| 1b | 質問journal v2とreservationのcodec | detail、墓標、準備の正確なfield集合と局所不変条件を確認 |
+| 1c | ledger v2、checkpoint v3、instruction journal v2のcodec | variant、終端時刻、指示準備、本文なし形式を確認 |
+| 1d | アンカーcodec、store間照合、旧形式の投影、grantと固定H/T | 保存境界、不正相関、最大容量のpure fixtureと解析的上界を確認 |
+
+1aは元byteの指紋と正規化後のbyteの指紋を別に返し、schema固有のdigestの代わりにしない。
+正規化serializerはrootの深さを0とし、objectのfieldとarrayの要素へ降りるたびに1増やす。
+深さ64を超える入力は不正形式として拒否し、後続codecの最大合法shapeがこの範囲内に収まることをfixtureで確認する。
+元byteの解析は既存readerと同じJSON.parseを使い、重複keyは後に書かれた値を採用する。
+保存先へ書く前の最終容量検査と移行coordinatorはPR2で実装する。
+固定H/Tの数値は新shapeとserializerが揃う1dで確定し、最大fixtureだけを任意入力の容量証明として扱わない。
+1aだけで新schema対応や段階2を完了扱いにしない。
+
 本文回収の実行は段階3以降に残す。
 段階2と3では個別墓標が件数枠を消費し続けるため、満杯からの移行成功は新規受付の再開を保証しない。
 件数枠の回収と継続受付は段階4で確認し、#209を先行部分だけで完了扱いにしない。
