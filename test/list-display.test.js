@@ -590,8 +590,15 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   });
   assert.match(inFlightTarget.textContent, /処理中…/);
   assert.doesNotMatch(inFlightTarget.textContent, /マージ処理中|マージキューに追加済み/);
-  webContext.pullRequestMergeInFlight.delete('repo#1');
+
   webContext.pullRequestMergeConfirmations.delete('repo#1');
+  const reservingTarget = fakeElement('div');
+  webContext.renderPullRequest(reservingTarget, {}, {
+    number: 1, title: '予約から即時マージ', url: 'https://example.test/pr/1', headRefName: 'feature', effectiveBase: 'main',
+    mergeSessionId: 'session-1', canMerge: false, mergeIntent: { at: '12:00' }, headRefOid: 'abc', children: [],
+  });
+  assert.equal((reservingTarget.textContent.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
+  webContext.pullRequestMergeInFlight.delete('repo#1');
 
   const mockItem = functionSource(mock, 'prItem');
   assert.ok(mockItem);
@@ -612,6 +619,7 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
     conflictStatus: () => '',
     esc: (value) => String(value ?? ''),
     pullRequestMergeInFlight: new Set(),
+    mergeConfirm: () => '<div class="merge-confirm">処理中…</div>',
   });
   vm.runInContext(`${mockItem}\nthis.renderPullRequest = prItem;`, mockContext);
   const mockText = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
@@ -630,10 +638,17 @@ test('キュー中と処理中の PR を札で分け、画面から実行中の�
   assert.doesNotMatch(mockInProgress, /マージキューに追加済み|キューから外れた|data-merge="/);
 
   mockContext.pullRequestMergeInFlight.add('repo#1');
+  const mockReserving = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
+    number: 1, title: '予約から即時マージ', mergeInProgress: true, head: 'feature', sha: 'abc', conflict: false,
+  });
+  assert.equal((mockReserving.match(/マージ処理中 \(未マージ\)/g) || []).length, 1);
+  mockContext.ui.confirm = { key: 'repo#1', action: 'manual' };
   const mockInFlight = mockContext.renderPullRequest({ name: 'agent-cockpit' }, {
     number: 1, title: '処理中', mergeInProgress: true, head: 'feature', sha: 'abc', conflict: false,
   });
+  assert.match(mockInFlight, /処理中…/);
   assert.doesNotMatch(mockInFlight, /マージ処理中|マージキューに追加済み/);
+  mockContext.ui.confirm = null;
   mockContext.pullRequestMergeInFlight.delete('repo#1');
 
   const action = web.match(/async function runPullRequestMergeAction\([^]*?\n\}/)?.[0];
@@ -1299,7 +1314,10 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
   const button = descendants(target).find((node) => node.dataset.mergeGo === 'merge-key');
   assert.equal(button.textContent, '処理中…');
   assert.equal(button.disabled, true);
+  const cancel = descendants(target).find((node) => node.dataset.mergeCancel === 'merge-key');
+  assert.equal(cancel.disabled, true);
   assert.match(mock, /merging \? '処理中…'/);
+  assert.match(mock, /data-merge-cancel \$\{merging \? 'disabled' : ''\}/);
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {

@@ -2050,6 +2050,7 @@ function appendPullRequestMergeConfirmation(target, group, pullRequest) {
   go.disabled = pullRequestMergeInFlight.has(key) || !(group.mergeMethods || []).length;
   const cancel = element('button', 'ghost', 'やめる');
   cancel.type = 'button';
+  cancel.disabled = merging;
   cancel.dataset.mergeCancel = key;
   cancel.dataset.mergeKey = key;
   row.append(go, cancel);
@@ -2152,9 +2153,11 @@ function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
   const queued = queuedPullRequestMerge(pullRequest);
   const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
+  const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
   // 常駐サーバーは gh でマージしている間だけ一覧に mergeIntent を付ける。
-  // 画面から実行中の操作は応答で結果が分かるので、それまでは確認欄の「処理中…」を出し続ける。
-  const mergeInProgress = Boolean(pullRequest.mergeIntent) && !queued && !pullRequestMergeInFlight.has(mergeKey);
+  // 確認欄から実行中の操作は応答で結果が分かるので、それまでは確認欄の「処理中…」を出し続ける。
+  const shownInConfirmation = Boolean(confirmation) && pullRequestMergeInFlight.has(mergeKey);
+  const mergeInProgress = Boolean(pullRequest.mergeIntent) && !queued && !shownInConfirmation;
   const mergeIntent = queued || mergeInProgress;
   const waiting = pullRequest.canMerge ? pullRequestMergeConditionWaits(pullRequest) : [];
   const conditionMet = pullRequest.canMerge === true && waiting.length === 0;
@@ -2174,7 +2177,6 @@ function appendPullRequestTree(target, group, pullRequest) {
   const body = element('div', 'pr-body');
   const text = element('div', 'pr-text');
   const actions = element('div', 'pr-actions');
-  const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
   if (mergeKey && mergeIntent) {
     if (queued && !pullRequest.mergeIntent) {
       const left = element('button', 'link-btn', 'キューから外れた');
@@ -4112,6 +4114,8 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (button.dataset.mergeCancel) {
+    // 実行中に確認欄を閉じると、マージが続いているのに処理中の表示が消える。
+    if (pullRequestMergeInFlight.has(button.dataset.mergeCancel)) return;
     pullRequestMergeConfirmations.delete(button.dataset.mergeCancel);
     pullRequestMergeMessages.delete(button.dataset.mergeCancel);
     if (lastState) render(lastState);

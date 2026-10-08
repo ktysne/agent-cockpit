@@ -1756,7 +1756,7 @@ function mergeConfirm(p, pr) {
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
-      <button type="button" class="ghost" data-merge-cancel>やめる</button></div>
+      <button type="button" class="ghost" data-merge-cancel ${merging ? 'disabled' : ''}>やめる</button></div>
   </div>`;
 }
 
@@ -1808,8 +1808,8 @@ function prItem(p, pr) {
   // クロスレビューの行が黄の札で同じ待ちを示すときは、待ちの行から外して二重に出さない。
   const shownWaits = crossReviewState(pr).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
   const queued = Boolean(pr.mergeIntent);
-  // 常駐サーバーが gh でマージしている間の印。画面から実行中の操作は確認欄の「処理中…」で示す。
-  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !pullRequestMergeInFlight.has(k);
+  // 常駐サーバーが gh でマージしている間の印。確認欄から実行中の操作は確認欄の「処理中…」で示す。
+  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !(confirmManual && pullRequestMergeInFlight.has(k));
   const mergeIntent = queued || mergeInProgress;
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
@@ -2369,6 +2369,7 @@ document.addEventListener('click', e => {
     delete ui.mergeErrors[t.dataset.conflictGo];
     ui.confirm = null;
   } else if (t.hasAttribute('data-merge-cancel')) {
+    if (ui.confirm?.key && pullRequestMergeInFlight.has(ui.confirm.key)) return;
     if (ui.confirm?.key) delete ui.mergeErrors[ui.confirm.key];
     else if (typeof ui.confirm === 'string' && ui.confirm.startsWith('conflict:')) delete ui.mergeErrors[ui.confirm.slice('conflict:'.length)];
     ui.confirm = null;
