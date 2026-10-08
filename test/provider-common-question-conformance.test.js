@@ -8,6 +8,8 @@ const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
 const { startMcpServer } = require('../src/mcp/server');
 const { startServer } = require('../src/server/server');
+const { DEFAULT_MAX_CHECKPOINT_BYTES } = require('../src/server/durable-checkpoint');
+const { readNativeRecoverySnapshot } = require('../src/server/durable-delivery-store');
 const { atomicWriteJson } = require('../src/server/json-storage');
 const { createCommonQuestionProductHarness, PROVIDERS } = require('./support/common-question-product-harness');
 const { jsonBody, request } = require('./support/server');
@@ -340,7 +342,7 @@ for (const provider of PROVIDERS) {
     assert.equal(JSON.stringify(selectedState).includes('private-choice-value'), false);
   });
 
-  test(`ID-F07-A03/A04/A05: ${provider} は送信開始を一度だけ行い再open後も同じdeliveryを使う`, { timeout: 5000 }, async (t) => {
+  test(`ID-F07-A03/A04/A05: ${provider} は再open後に保存済み質問を隔離し送信しない`, { timeout: 5000 }, async (t) => {
     const context = await createProductContext(t, provider);
     const questionId = 'send-once-' + provider;
     const textSecret = 'private-answer-' + provider;
@@ -417,31 +419,36 @@ for (const provider of PROVIDERS) {
     const availableAttempt = beforeSendQuestion.deliveryAttemptId;
     assert.ok(availableAttempt);
     assert.equal((await context.harness.deliveryStore.get(availableAttempt)).state, 'available');
+    const journalBeforeRestart = await fs.readFile(context.harness.journalPath, 'utf8');
+    const checkpointBeforeRestart = await fs.readFile(context.harness.checkpointPath, 'utf8');
 
     await stopProductServer(context);
     await context.harness.reopen();
     await startProductServer(context);
     const reopenedReady = await context.harness.questionService.ready().then(() => 'ready', (error) => error.code || error.message);
     assert.equal(reopenedReady, 'ready');
-    const replay = await answerOverMcp(context, beforeSendId);
-    assert.equal(replay[0].result.isError, undefined, JSON.stringify({ replay, calls: context.calls }));
-    const replayResult = JSON.parse(replay[0].result.content[0].text);
-    assert.equal(replayResult.deliveryAttemptId, availableAttempt);
-    assert.ok(Array.isArray(replayResult.answers));
-    assert.equal(context.calls.sinks, 1);
+    const afterRestart = await context.harness.questionService.dashboardSnapshot();
+    const reopenedQuestion = afterRestart.questions.find((item) => item.questionId === beforeSendId);
+    assert.equal(reopenedQuestion.quarantined, true);
+    assert.equal(reopenedQuestion.deliveryAttemptId, availableAttempt);
+    assert.equal(reopenedQuestion.deliveryState, 'available');
+    const sentQuestion = afterRestart.questions.find((item) => item.questionId === questionId);
+    assert.equal(sentQuestion.quarantined, true);
+    assert.equal(sentQuestion.deliveryState, 'unknown');
+    assert.equal(context.harness.questionService.getQuarantineDiagnostics().quarantinedCount, 4);
 
-    await stopProductServer(context);
-    await context.harness.reopen();
-    await startProductServer(context);
-    const afterUnknown = await context.harness.questionService.dashboardSnapshot();
-    assert.equal(afterUnknown.questions.find((item) => item.questionId === beforeSendId).deliveryState, 'unknown');
-    const retry = await answerOverMcp(context, beforeSendId);
-    assert.equal(JSON.stringify(retry).includes('restart-private-' + provider), false);
+    const replay = await answerOverMcp(context, beforeSendId);
+    assert.equal(replay[0].result.isError, true);
+    assert.equal(JSON.stringify(replay).includes('restart-private-' + provider), false);
+    assert.equal(JSON.stringify(afterRestart).includes('restart-private-' + provider), false);
     assert.equal(context.calls.sinks, 0);
-    assert.equal((await context.harness.deliveryStore.get(availableAttempt)).state, 'unknown');
+    assert.equal((await context.harness.deliveryStore.get(availableAttempt)).state, 'available');
+    assert.equal((await context.harness.deliveryStore.get(deliveryAttemptId)).state, 'unknown');
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBeforeRestart);
+    assert.equal(await fs.readFile(context.harness.checkpointPath, 'utf8'), checkpointBeforeRestart);
   });
 
-  test('ID-F07-A04: ' + provider + ' はsend-start保存失敗時に本文を渡さず、同じIDを再open後に使う', { timeout: 5000 }, async (t) => {
+  test('ID-F07-A04: ' + provider + ' はsend-start保存失敗後の再openでも回答本文を渡さない', { timeout: 5000 }, async (t) => {
     let failedSendingCheckpoint = false;
     let sendingWriteAttempts = 0;
     const atomicWrite = async (filePath, checkpoint) => {
@@ -486,15 +493,17 @@ for (const provider of PROVIDERS) {
     await context.harness.reopen();
     await startProductServer(context);
     const recovered = await answerOverMcp(context, questionId);
-    assert.equal(recovered[0].result.isError, undefined, JSON.stringify(recovered));
-    const delivery = JSON.parse(recovered[0].result.content[0].text);
-    assert.equal(delivery.deliveryAttemptId, deliveryId);
-    assert.equal(delivery.answers[0].freeText, answerText);
-    assert.equal(context.calls.sinks, 1);
-    assert.equal((await context.harness.deliveryStore.get(deliveryId)).state, 'sending');
+    assert.equal(recovered[0].result.isError, true);
+    assert.equal(JSON.stringify(recovered).includes(answerText), false);
+    const quarantined = await getDashboardQuestion(context, questionId);
+    assert.equal(quarantined.quarantined, true);
+    assert.equal(quarantined.deliveryAttemptId, deliveryId);
+    assert.equal(quarantined.deliveryState, 'available');
+    assert.equal(context.calls.sinks, 0);
+    assert.equal((await context.harness.deliveryStore.get(deliveryId)).state, 'available');
   });
 
-  test('ID-F07-A05: ' + provider + ' は選択済みintentを保ち、available保存失敗後も同じIDで一度だけ配送する', { timeout: 5000 }, async (t) => {
+  test('ID-F07-A05: ' + provider + ' はdelivery保存失敗後もintentを隔離し配送を再生成しない', { timeout: 5000 }, async (t) => {
     let failedAvailableCheckpoint = false;
     let availableWriteAttempts = 0;
     const atomicWrite = async (filePath, checkpoint) => {
@@ -542,23 +551,278 @@ for (const provider of PROVIDERS) {
     const recoveredQuestion = recoveredJournal.questions.find((item) => item.internalQuestionId === save.dashboardQuestion.internalQuestionId);
     assert.deepEqual(recoveredQuestion.deliveryIntent, fixedIntent);
     const recoveredDeliveries = (await context.harness.deliveryStore.snapshot()).deliveries;
-    assert.equal(recoveredDeliveries.length, 1);
-    assert.equal(recoveredDeliveries[0].deliveryAttemptId, fixedIntent.deliveryAttemptId);
-    assert.equal(recoveredDeliveries[0].logicalMessageId, fixedIntent.logicalMessageId);
-    assert.equal(recoveredDeliveries[0].revision, fixedIntent.revision);
-    assert.equal(recoveredDeliveries[0].payloadDigest, fixedIntent.payloadDigest);
-    assert.equal(recoveredDeliveries[0].state, 'available');
+    assert.deepEqual(recoveredDeliveries, []);
+    const quarantined = await getDashboardQuestion(context, questionId);
+    assert.equal(quarantined.quarantined, true);
+    assert.equal(quarantined.deliveryAttemptId, fixedIntent.deliveryAttemptId);
+    assert.equal(quarantined.deliveryState, null);
+    assert.equal(context.harness.questionService.getQuarantineDiagnostics().quarantinedCount, 1);
 
     const delivered = await answerOverMcp(context, questionId);
-    assert.equal(delivered[0].result.isError, undefined, JSON.stringify(delivered));
-    const response = JSON.parse(delivered[0].result.content[0].text);
-    assert.equal(response.deliveryAttemptId, fixedIntent.deliveryAttemptId);
-    assert.deepEqual(response.answers, [questionAnswer('choice', ['a'], answerText)]);
-    assert.equal(context.calls.sinks, 1);
+    assert.equal(delivered[0].result.isError, true);
+    assert.equal(JSON.stringify(delivered).includes(answerText), false);
+    assert.equal(context.calls.sinks, 0);
     const afterSend = (await context.harness.deliveryStore.snapshot()).deliveries;
-    assert.equal(afterSend.length, 1);
-    assert.equal(afterSend[0].deliveryAttemptId, fixedIntent.deliveryAttemptId);
-    assert.equal(afterSend[0].state, 'sending');
+    assert.deepEqual(afterSend, []);
+    assert.deepEqual(JSON.parse(await fs.readFile(context.harness.journalPath, 'utf8')), recoveredJournal);
+  });
+
+  test(`ID-F08-QR01/QR03: ${provider} は同じsessionの保存質問を隔離し、新periodだけ受け付ける`, { timeout: 5000 }, async (t) => {
+    const context = await createProductContext(t, provider);
+    const questionId = 'same-session-question-' + provider;
+    const form = [question('choice')];
+    await registerOverMcp(context, questionId, form);
+    const original = await getDashboardQuestion(context, questionId);
+    const save = await answerOverUi(context, questionId, [questionAnswer('choice')]);
+    assert.equal(save.response.status, 200, save.response.body);
+    const journalBeforeRestart = await fs.readFile(context.harness.journalPath, 'utf8');
+
+    await stopProductServer(context);
+    await context.harness.reopen();
+    await startProductServer(context);
+    const afterReconnect = await getDashboardQuestion(context, questionId);
+    assert.equal(afterReconnect.quarantined, true);
+    await assert.rejects(context.harness.questionService.register(context.harness.writer,
+      { questionId, questions: form, timeoutMinutes: 1, category: 'ordinary' }),
+    (error) => error.code === 'question_quarantined');
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBeforeRestart);
+
+    const identity = context.harness.primary.child.identity;
+    assert.equal(context.harness.registrationKernel.authority.end(original.periodId), true);
+    const resumed = context.harness.createExecution('new-period-' + provider, {
+      provider: identity.provider,
+      nativeIdKind: identity.nativeIdKind,
+      hostId: identity.hostId,
+      homeScopeId: identity.homeScopeId,
+      nativeId: identity.nativeId,
+    }, { resume: true });
+    assert.deepEqual(resumed.child.identity, identity);
+    assert.notEqual(resumed.child.registration.executionId, original.periodId);
+    const nextPeriod = await context.harness.questionService.register(resumed.child.writer,
+      { questionId, questions: form, timeoutMinutes: 1, category: 'ordinary' });
+    assert.equal(nextPeriod.outcome, 'created');
+    assert.equal(nextPeriod.question.periodId, resumed.child.registration.executionId);
+    assert.notEqual(nextPeriod.question.internalQuestionId, original.internalQuestionId);
+    const afterNewPeriod = await context.harness.questionService.dashboardSnapshot();
+    assert.equal(afterNewPeriod.questions.find((item) => item.internalQuestionId === original.internalQuestionId).quarantined, true);
+    assert.equal(afterNewPeriod.questions.find((item) => item.internalQuestionId === nextPeriod.question.internalQuestionId).quarantined, false);
+    assert.equal(afterNewPeriod.questions.length, 2);
+  });
+
+  for (const corruption of ['digest', 'orphan delivery', 'duplicate attempt']) {
+    test(`ID-F08-QR04: ${provider} は${corruption}を拒否し、修復後に再openできる`, { timeout: 5000 }, async (t) => {
+      const context = await createProductContext(t, provider);
+      const primaryId = 'qr04-primary-' + provider;
+      const ids = corruption === 'duplicate attempt'
+        ? [primaryId, 'qr04-secondary-' + provider]
+        : [primaryId];
+      for (const questionId of ids) {
+        await registerOverMcp(context, questionId);
+        const saved = await answerOverUi(context, questionId, [questionAnswer('choice')]);
+        assert.equal(saved.response.status, 200, saved.response.body);
+      }
+
+      const journalBefore = await fs.readFile(context.harness.journalPath, 'utf8');
+      const checkpointBefore = await fs.readFile(context.harness.checkpointPath, 'utf8');
+      const malformed = JSON.parse(journalBefore);
+      if (corruption === 'digest') malformed.questions[0].deliveryIntent.payloadDigest = '0'.repeat(64);
+      if (corruption === 'orphan delivery') malformed.questions = [];
+      if (corruption === 'duplicate attempt') {
+        malformed.questions[1].deliveryIntent.deliveryAttemptId = malformed.questions[0].deliveryIntent.deliveryAttemptId;
+      }
+      const malformedBytes = JSON.stringify(malformed, null, 2) + '\n';
+      const expectedCode = corruption === 'orphan delivery'
+        ? 'question_journal_missing_for_delivery'
+        : corruption === 'digest' ? 'invalid_journal' : 'question_delivery_mismatch';
+
+      await stopProductServer(context);
+      await fs.writeFile(context.harness.journalPath, malformedBytes);
+      await assert.rejects(context.harness.reopen(), (error) => error.code === expectedCode);
+      assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), malformedBytes);
+      assert.equal(await fs.readFile(context.harness.checkpointPath, 'utf8'), checkpointBefore);
+
+      await fs.writeFile(context.harness.journalPath, journalBefore);
+      await context.harness.reopen();
+      await startProductServer(context);
+      assert.equal(context.harness.questionService.getQuarantineDiagnostics().quarantinedCount, ids.length);
+      assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBefore);
+      assert.equal(await fs.readFile(context.harness.checkpointPath, 'utf8'), checkpointBefore);
+      const original = await getDashboardQuestion(context, primaryId);
+      await assert.rejects(context.harness.questionService.submitAnswer(original.internalQuestionId,
+        { answers: [questionAnswer('choice')] }), (error) => error.code === 'question_quarantined');
+      const fresh = await registerOverMcp(context, 'qr04-fresh-' + provider);
+      assert.equal(fresh.result.isError, undefined);
+    });
+  }
+
+  test(`ID-F08-QR05: ${provider} は混在checkpointの既存復旧だけを適用し質問を再送しない`, { timeout: 5000 }, async (t) => {
+    const context = await createProductContext(t, provider);
+    const store = context.harness.deliveryStore;
+    const stateByQuestion = new Map();
+    const sinkCalls = { beforeRestart: 0, afterRestart: 0 };
+    for (const state of ['available', 'claimed', 'sending', 'accepted', 'unknown']) {
+      const questionId = 'qr05-' + state + '-' + provider;
+      await registerOverMcp(context, questionId, [question('choice', { allowFreeText: true })]);
+      const saved = await answerOverUi(context, questionId, [questionAnswer('choice', ['a'], 'private-' + state)]);
+      assert.equal(saved.response.status, 200, saved.response.body);
+      const selected = await getDashboardQuestion(context, questionId);
+      const deliveryId = selected.deliveryAttemptId;
+      stateByQuestion.set(questionId, { internalQuestionId: selected.internalQuestionId, deliveryId, state });
+      if (state === 'claimed') await store.claim(deliveryId);
+      if (['sending', 'accepted', 'unknown'].includes(state)) {
+        await store.sendStart(deliveryId, () => { sinkCalls.beforeRestart += 1; });
+      }
+      if (state === 'accepted') {
+        const delivery = await store.get(deliveryId);
+        await store.recordAccepted(deliveryId, {
+          deliveryAttemptId: deliveryId, revision: delivery.revision, payloadDigest: delivery.payloadDigest,
+          targetPeriodId: delivery.target.periodId, nativeTurnId: 'accepted-turn-' + provider,
+          nativeItemId: null, clientRequestId: deliveryId,
+        });
+      }
+      if (state === 'unknown') await store.markUnknown(deliveryId);
+    }
+    const instructionId = 'qr05-instruction-' + provider;
+    const instruction = await store.createInstructionDelivery({ launchRef: context.harness.primary.launchRef,
+      deliveryAttemptId: instructionId, logicalMessageId: 'qr05-instruction-message-' + provider,
+      revision: 0, payload: 'opaque instruction payload' });
+    assert.equal(instruction.kind, 'instruction');
+    assert.equal(instruction.state, 'available');
+
+    const journalBeforeRestart = await fs.readFile(context.harness.journalPath, 'utf8');
+    const checkpointBeforeRestartBytes = await fs.readFile(context.harness.checkpointPath, 'utf8');
+    const checkpointBeforeRestart = JSON.parse(checkpointBeforeRestartBytes);
+    const beforeDeliveries = new Map(checkpointBeforeRestart.ledger.deliveries.map((item) => [item.deliveryAttemptId, item]));
+    const originalTombstones = structuredClone(checkpointBeforeRestart.ledger.logicalTombstones);
+    const expectedStates = { available: 'available', claimed: 'claimed', sending: 'sending',
+      accepted: 'accepted', unknown: 'unknown' };
+    for (const { deliveryId, state } of stateByQuestion.values()) {
+      assert.equal(beforeDeliveries.get(deliveryId).state, expectedStates[state]);
+    }
+    assert.equal(Buffer.byteLength(checkpointBeforeRestartBytes, 'utf8') <= DEFAULT_MAX_CHECKPOINT_BYTES, true);
+
+    await stopProductServer(context);
+    await context.harness.reopen();
+    await startProductServer(context);
+    assert.equal(await fs.readFile(context.harness.checkpointPath, 'utf8'), checkpointBeforeRestartBytes);
+    const recoveredCheckpoint = await readNativeRecoverySnapshot(context.harness.deliveryStore);
+    assert.equal(recoveredCheckpoint.revision, checkpointBeforeRestart.revision);
+    assert.equal(recoveredCheckpoint.ledger.revision, checkpointBeforeRestart.ledger.revision + 1);
+    assert.ok(recoveredCheckpoint.registrations.executions.every((item) => item.state === 'unknown'));
+    assert.ok(recoveredCheckpoint.registrations.launches.every((item) => item.state === 'unknown'));
+    assert.ok(recoveredCheckpoint.registrations.runtimeLaunches.every((item) => item.state === 'unknown'));
+    assert.ok(recoveredCheckpoint.registrations.connections.every((item) => item.state === 'inactive'));
+    assert.ok(recoveredCheckpoint.registrations.actors.every((item) => item.state === 'unknown'));
+    assert.deepEqual(recoveredCheckpoint.ledger.logicalTombstones, originalTombstones);
+
+    const restoredStates = { available: 'available', claimed: 'available', sending: 'unknown',
+      accepted: 'unknown', unknown: 'unknown' };
+    const recoveredDeliveries = new Map(recoveredCheckpoint.ledger.deliveries.map((item) => [item.deliveryAttemptId, item]));
+    for (const [questionId, { internalQuestionId, deliveryId, state }] of stateByQuestion) {
+      const before = beforeDeliveries.get(deliveryId);
+      const after = recoveredDeliveries.get(deliveryId);
+      assert.equal(after.state, restoredStates[state]);
+      assert.equal(after.payloadDigest, before.payloadDigest);
+      assert.equal(after.logicalMessageId, before.logicalMessageId);
+      assert.deepEqual(after.source, before.source);
+      assert.deepEqual(after.target, before.target);
+      assert.deepEqual(after.acceptedCorrelation, before.acceptedCorrelation);
+      assert.deepEqual(after.appliedCorrelation, before.appliedCorrelation);
+      const row = (await getDashboardQuestion(context, questionId));
+      assert.equal(row.internalQuestionId, internalQuestionId);
+      assert.equal(row.quarantined, true);
+      assert.equal(row.deliveryState, restoredStates[state]);
+      await assert.rejects(context.harness.questionService.answerPoll(context.harness.writer, questionId, () => {
+        sinkCalls.afterRestart += 1;
+      }), (error) => error.code === 'question_quarantined');
+    }
+    assert.equal(recoveredDeliveries.get(instructionId).kind, 'instruction');
+    assert.equal(recoveredDeliveries.get(instructionId).state, 'available');
+    assert.equal(sinkCalls.afterRestart, 0);
+    assert.equal(sinkCalls.beforeRestart, 3);
+    assert.equal(await fs.readFile(context.harness.checkpointPath, 'utf8'), checkpointBeforeRestartBytes);
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBeforeRestart);
+
+    const nextInstructionId = 'qr05-post-reopen-instruction-' + provider;
+    await context.harness.deliveryStore.createInstructionDelivery({ launchRef: context.harness.primary.launchRef,
+      deliveryAttemptId: nextInstructionId, logicalMessageId: 'qr05-post-reopen-message-' + provider,
+      revision: 0, payload: 'another opaque instruction payload' });
+    const checkpointAfterSaveBytes = await fs.readFile(context.harness.checkpointPath, 'utf8');
+    const checkpointAfterSave = JSON.parse(checkpointAfterSaveBytes);
+    const savedDeliveries = new Map(checkpointAfterSave.ledger.deliveries.map((item) => [item.deliveryAttemptId, item]));
+    assert.notEqual(checkpointAfterSaveBytes, checkpointBeforeRestartBytes);
+    assert.equal(checkpointAfterSave.revision, checkpointBeforeRestart.revision + 1);
+    assert.equal(checkpointAfterSave.ledger.revision, checkpointBeforeRestart.ledger.revision + 2);
+    assert.equal(checkpointAfterSave.ledger.logicalTombstones.length, originalTombstones.length + 1);
+    for (const tombstone of originalTombstones) assert.ok(checkpointAfterSave.ledger.logicalTombstones.some((item) =>
+      JSON.stringify(item) === JSON.stringify(tombstone)));
+    for (const { deliveryId, state } of stateByQuestion.values()) {
+      const before = beforeDeliveries.get(deliveryId);
+      const after = savedDeliveries.get(deliveryId);
+      assert.equal(after.state, restoredStates[state]);
+      assert.equal(after.payloadDigest, before.payloadDigest);
+      assert.equal(after.logicalMessageId, before.logicalMessageId);
+      assert.deepEqual(after.source, before.source);
+      assert.deepEqual(after.target, before.target);
+      assert.deepEqual(after.acceptedCorrelation, before.acceptedCorrelation);
+      assert.deepEqual(after.appliedCorrelation, before.appliedCorrelation);
+    }
+    assert.equal(savedDeliveries.get(instructionId).state, 'available');
+    assert.equal(savedDeliveries.get(nextInstructionId).kind, 'instruction');
+    assert.equal(savedDeliveries.get(nextInstructionId).state, 'available');
+    assert.equal(checkpointAfterSave.ledger.deliveries.filter((item) => item.kind === 'question').length, 5);
+    assert.equal(Buffer.byteLength(checkpointAfterSaveBytes, 'utf8') <= DEFAULT_MAX_CHECKPOINT_BYTES, true);
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBeforeRestart);
+    assert.equal(sinkCalls.afterRestart, 0);
+  });
+
+  test(`ID-F08-QR06: ${provider} は隔離対象で容量上限を維持し、再起動後も新規受付を拒否する`, { timeout: 5000 }, async (t) => {
+    const context = await createProductContext(t, provider, {
+      harnessOptions: { questionServiceOptions: { maxBytes: 16_384, maxRecords: 1 } },
+    });
+    const questionId = 'qr06-full-' + provider;
+    const registrationInput = { questionId, questions: [question('choice')], timeoutMinutes: 1, category: 'ordinary' };
+    await context.harness.questionService.register(context.harness.writer, registrationInput);
+    const diagnostics = context.harness.questionService.getQuarantineDiagnostics();
+    assert.equal(diagnostics.status, 'ready');
+    assert.equal(diagnostics.reason, 'question_quarantine_capacity');
+    assert.equal(diagnostics.quarantinedCount, 0);
+    assert.equal(diagnostics.remainingCount, 0);
+    assert.ok(diagnostics.reservedBytes > 0);
+    assert.ok(diagnostics.remainingBytes > 0);
+
+    const instructionId = 'qr06-instruction-' + provider;
+    await context.harness.deliveryStore.createInstructionDelivery({ launchRef: context.harness.primary.launchRef,
+      deliveryAttemptId: instructionId, logicalMessageId: 'qr06-instruction-message-' + provider,
+      revision: 0, payload: 'opaque instruction payload' });
+
+    const journalBeforeRestart = await fs.readFile(context.harness.journalPath, 'utf8');
+    const checkpointBeforeRestart = await fs.readFile(context.harness.checkpointPath, 'utf8');
+    await assert.rejects(context.harness.questionService.register(context.harness.writer,
+      { ...registrationInput, questionId: 'qr06-rejected-' + provider }),
+    (error) => error.code === 'question_quarantine_capacity');
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBeforeRestart);
+
+    await stopProductServer(context);
+    await context.harness.reopen();
+    await startProductServer(context);
+    const restored = context.harness.questionService.getQuarantineDiagnostics();
+    assert.equal(restored.status, 'ready');
+    assert.equal(restored.reason, 'question_quarantine_capacity');
+    assert.equal(restored.quarantinedCount, 1);
+    assert.equal(restored.remainingCount, 0);
+    assert.ok(restored.reservedBytes > 0);
+    assert.ok(restored.remainingBytes > 0);
+    assert.equal((await context.harness.deliveryStore.get(instructionId)).state, 'available');
+    const row = await getDashboardQuestion(context, questionId);
+    assert.equal(row.quarantined, true);
+    await assert.rejects(context.harness.questionService.submitAnswer(row.internalQuestionId,
+      { answers: [questionAnswer('choice')] }), (error) => error.code === 'question_quarantined');
+    await assert.rejects(context.harness.questionService.register(context.harness.writer,
+      { ...registrationInput, questionId: 'qr06-rejected-after-restart-' + provider }),
+    (error) => error.code === 'question_quarantine_capacity');
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBeforeRestart);
+    assert.equal(await fs.readFile(context.harness.checkpointPath, 'utf8'), checkpointBeforeRestart);
   });
 
 
@@ -665,7 +929,7 @@ for (const provider of PROVIDERS) {
     assert.equal((await context.harness.deliveryStore.get(selected.deliveryAttemptId)).state, 'available');
   });
 
-  test('ID-F08-A06: ' + provider + ' は初回HTTP応答の結果を使わず再試行し、late 回答を永続履歴で重複排除する', { timeout: 5000 }, async (t) => {
+  test('ID-F08-A06: ' + provider + ' は同一起動内のlate回答を重複排除し再open後は保存済み質問を隔離する', { timeout: 5000 }, async (t) => {
     const context = await createProductContext(t, provider, {
       harnessOptions: { questionServiceOptions: {
         verifyNativeQuestion: (evidence) => evidence?.source === 'trusted-original-ui-fixture',
@@ -706,15 +970,6 @@ for (const provider of PROVIDERS) {
     assert.equal(retry.response.body.includes(privateAnswer), false);
     assert.equal((await readJournal()).revision, firstJournalRevision);
 
-    await stopProductServer(context);
-    await context.harness.reopen();
-    await startProductServer(context);
-    const recoveredRetry = await answerOverUi(context, questionId, [questionAnswer('choice', ['b'], privateAnswer)]);
-    assert.equal(recoveredRetry.response.status, 200, recoveredRetry.response.body);
-    assert.equal(jsonBody(recoveredRetry.response).outcome, 'duplicate');
-    assert.equal(recoveredRetry.response.body.includes(privateAnswer), false);
-    assert.equal((await readJournal()).revision, firstJournalRevision);
-
     const different = await answerOverUi(context, questionId, [questionAnswer('choice', ['a'], 'late-distinct-' + provider)]);
     assert.equal(different.response.status, 200, different.response.body);
     assert.equal(jsonBody(different.response).outcome, 'late');
@@ -732,16 +987,31 @@ for (const provider of PROVIDERS) {
     const independent = await answerOverUi(context, otherQuestionId, [questionAnswer('choice', ['b'], privateAnswer)]);
     assert.equal(independent.response.status, 200, independent.response.body);
     assert.equal(jsonBody(independent.response).outcome, 'late');
-    const finalJournal = await readJournal();
-    assert.equal(findRecord(finalJournal, questionId).revision, 0);
-    assert.equal(findRecord(finalJournal, otherQuestionId).revision, 0);
-    assert.equal(findRecord(finalJournal, otherQuestionId).lateAnswers.length, 1);
+    const beforeRestart = await readJournal();
+    assert.equal(findRecord(beforeRestart, otherQuestionId).lateAnswers.length, 1);
     assert.equal((await context.harness.deliveryStore.snapshot()).deliveries.length, 0);
-    let sinkCalls = 0;
-    const poll = await context.harness.questionService.answerPoll(context.harness.writer, questionId, () => { sinkCalls += 1; });
-    assert.equal(poll.outcome, 'unavailable');
-    assert.equal(Object.hasOwn(poll, 'answers'), false);
-    assert.equal(sinkCalls, 0);
+    const journalBytesBeforeRestart = await fs.readFile(context.harness.journalPath, 'utf8');
+
+    await stopProductServer(context);
+    await context.harness.reopen();
+    await startProductServer(context);
+    const recoveredRetry = await answerOverUi(context, questionId, [questionAnswer('choice', ['b'], privateAnswer)]);
+    assert.equal(recoveredRetry.response.status, 503, recoveredRetry.response.body);
+    assert.equal(recoveredRetry.response.body.includes(privateAnswer), false);
+    const differentAfterRestart = await answerOverUi(context, questionId,
+      [questionAnswer('choice', ['a'], 'late-after-restart-' + provider)]);
+    assert.equal(differentAfterRestart.response.status, 503, differentAfterRestart.response.body);
+    assert.equal(differentAfterRestart.response.body.includes('late-after-restart-' + provider), false);
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBytesBeforeRestart);
+    assert.equal(context.harness.questionService.getQuarantineDiagnostics().quarantinedCount, 2);
+
+    await assert.rejects(context.harness.questionService.submitAnswer(original.internalQuestionId,
+      { answers: [questionAnswer('choice', ['a'], 'direct-after-restart-' + provider)] }),
+    (error) => error.code === 'question_quarantined');
+    await assert.rejects(context.harness.questionService.answerPoll(context.harness.writer, questionId, () => {}),
+      (error) => error.code === 'question_quarantined');
+    assert.equal(await fs.readFile(context.harness.journalPath, 'utf8'), journalBytesBeforeRestart);
+    assert.equal((await context.harness.deliveryStore.snapshot()).deliveries.length, 0);
   });
 
   test('ID-F08-A03: ' + provider + ' はowner終了後のfresh handoff proofで同じ子宛deliveryを再開する', { timeout: 5000 }, async (t) => {

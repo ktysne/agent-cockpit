@@ -180,7 +180,9 @@ function createCommonQuestionService(options = {}) {
   let initPromise = null;
   let timer = null;
   let closePromise = null;
+  let capacityRejected = false;
   const suppressed = new Set();
+  const quarantinedQuestionIds = new Set();
 
   function nowValue() {
     let value;
@@ -208,6 +210,35 @@ function createCommonQuestionService(options = {}) {
 
   function currentQuestion(id) {
     return journalState?.questions.find((record) => record.internalQuestionId === id) || null;
+  }
+
+  function isQuarantined(record) {
+    return Boolean(record && quarantinedQuestionIds.has(record.internalQuestionId));
+  }
+
+  function assertNotQuarantined(record) {
+    if (isQuarantined(record)) throw serviceError('question_quarantined');
+  }
+
+  function getQuarantineDiagnostics() {
+    const startupReason = startupError?.code;
+    const safeStartupReason = typeof startupReason === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(startupReason)
+      ? startupReason : 'question_quarantine_status_unavailable';
+    const unavailable = Object.freeze({ status: blocked ? 'blocked' : 'unavailable',
+      reason: safeStartupReason, quarantinedCount: quarantinedQuestionIds.size, reservedBytes: null,
+      remainingBytes: null, remainingCount: null });
+    if (!journalState) return unavailable;
+    try {
+      const reservedBytes = journal.assertCapacityReserved(journalState);
+      const remainingBytes = Math.max(0, journal.maxBytes - reservedBytes);
+      const remainingCount = Math.max(0, journal.maxRecords - journalState.questions.length);
+      const capacityReached = capacityRejected || remainingBytes === 0 || remainingCount === 0;
+      return Object.freeze({ status: blocked ? 'blocked' : 'ready',
+        reason: capacityReached ? 'question_quarantine_capacity' : blocked ? safeStartupReason : null,
+        quarantinedCount: quarantinedQuestionIds.size, reservedBytes, remainingBytes, remainingCount });
+    } catch {
+      return unavailable;
+    }
   }
 
   function findLiveWriter(input) {
@@ -332,7 +363,30 @@ function createCommonQuestionService(options = {}) {
       delivery.target?.sessionId === source.sessionId;
   }
 
+  function persistedDeliveryMatchesRecord(delivery, record) {
+    if (!delivery || !record.deliveryIntent || delivery.kind !== 'question' ||
+        delivery.deliveryAttemptId !== record.deliveryIntent.deliveryAttemptId ||
+        delivery.logicalMessageId !== record.deliveryIntent.logicalMessageId ||
+        delivery.revision !== record.deliveryIntent.revision ||
+        delivery.payloadDigest !== record.deliveryIntent.payloadDigest ||
+        delivery.sourceExecutionId !== record.executionBinding.periodId) return false;
+    const source = delivery.source;
+    const target = delivery.target;
+    const claims = source?.claims;
+    return source?.launchRef === record.launchRef &&
+      claims?.provider === record.identity.provider && claims?.nativeIdKind === record.identity.nativeIdKind &&
+      claims?.hostId === record.identity.hostId && claims?.homeScopeId === record.identity.homeScopeId &&
+      sameClaims(claims, target?.claims) && sameIdentity(source?.identity, record.identity) &&
+      sameBinding(source?.executionBinding, record.executionBinding) &&
+      source?.conversationId === record.conversationId &&
+      target?.kind === 'execution' && target?.launchRef === record.launchRef &&
+      target?.periodId === record.periodId && sameActor(target?.actor, record.executionBinding.actor) &&
+      sameIdentity(target?.identity, record.identity) && target?.conversationId === record.conversationId &&
+      target?.sessionId === source.sessionId;
+  }
+
   async function createDeliveryFromIntent(record) {
+    assertNotQuarantined(record);
     const payload = deliveryPayload(record);
     if (kernel.sha256Json(JSON.parse(payload)) !== record.deliveryIntent.payloadDigest) {
       throw serviceError('question_delivery_digest_mismatch');
@@ -367,6 +421,7 @@ function createCommonQuestionService(options = {}) {
         conversationId: record.conversationId, launchRef: record.launchRef, questions: structuredClone(record.questions),
         selectedOptionIds: record.selection ? record.selection.answers.map(({ questionId, optionIds }) =>
           ({ questionId, optionIds: [...optionIds] })) : [],
+        quarantined: isQuarantined(record),
       } : { periodId: record.periodId, executionId: record.executionId }),
       revision: record.revision,
       createdAt: record.createdAt,
@@ -389,6 +444,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   async function projectRecord(record, dashboard = false) {
+    assertNotQuarantined(record);
     const delivery = record.deliveryIntent ? await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId) : null;
     if (delivery && !deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
     return projection(record, delivery, dashboard);
@@ -418,42 +474,29 @@ function createCommonQuestionService(options = {}) {
 
   async function reconcile() {
     journalState = kernel.normalizeJournal(await journal.load(), journal.maxRecords);
+    for (const record of journalState.questions) quarantinedQuestionIds.add(record.internalQuestionId);
     await options.deliveryStore.ready;
     journal.assertCapacityReserved(journalState);
     const snapshot = await options.deliveryStore.snapshot();
     const deliveries = deliveryMap(snapshot);
-    const byAttempt = new Map(journalState.questions.filter((record) => record.deliveryIntent)
-      .map((record) => [record.deliveryIntent.deliveryAttemptId, record]));
-    for (const delivery of snapshot.deliveries) {
-      if (/^common-question-cq-[a-f0-9-]{36}$/.test(delivery.logicalMessageId || '')) {
-        const record = byAttempt.get(delivery.deliveryAttemptId);
-        if (!record || record.deliveryIntent.logicalMessageId !== delivery.logicalMessageId ||
-            !deliveryMatchesRecord(delivery, record)) throw serviceError('question_journal_missing_for_delivery');
-      }
-    }
-    for (const record of journalState.questions) validatePersistedBinding(record);
+    const byAttempt = new Map();
     for (const record of journalState.questions) {
       if (!record.deliveryIntent) continue;
-      let delivery = deliveries.get(record.deliveryIntent.deliveryAttemptId) ||
-        await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
-      if (!delivery && record.cancelledAt === null && record.externalResolution === null) {
-        const runtime = syncCall(options.runtimeRegistry, 'snapshot', [], 'question_binding_unavailable');
-        const candidates = runtime.actors.filter((actor) => actor.state === 'active' &&
-          actor.launchRef === record.launchRef && actor.periodId === record.periodId &&
-          sameIdentity(actor.identity, record.identity) &&
-          sameBinding({ periodId: actor.periodId, actor: actor.actor }, record.executionBinding) &&
-          connectionIsCurrent(actor, runtime));
-        if (candidates.length === 1) delivery = await createDeliveryFromIntent(record);
-      }
-      if (!delivery) continue;
-      if (!deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
-      if (['available', 'claimed'].includes(delivery.state) && record.cancelledAt === null &&
-          record.externalResolution === null) {
-        try {
-          await options.deliveryStore.rehydratePayload(record.deliveryIntent.deliveryAttemptId, deliveryPayload(record));
-        } catch (error) {
-          if (!['delivery_target_unavailable', 'payload_rehydrate_forbidden'].includes(error.code)) throw error;
-        }
+      const id = record.deliveryIntent.deliveryAttemptId;
+      if (byAttempt.has(id)) throw serviceError('question_delivery_mismatch');
+      byAttempt.set(id, record);
+    }
+    for (const delivery of deliveries.values()) {
+      if (delivery.kind !== 'question') continue;
+      const record = byAttempt.get(delivery.deliveryAttemptId);
+      if (!record) throw serviceError('question_journal_missing_for_delivery');
+      if (!persistedDeliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
+    }
+    for (const record of journalState.questions) {
+      if (!record.deliveryIntent) continue;
+      const delivery = deliveries.get(record.deliveryIntent.deliveryAttemptId);
+      if (delivery && (delivery.kind !== 'question' || !persistedDeliveryMatchesRecord(delivery, record))) {
+        throw serviceError('question_delivery_mismatch');
       }
     }
     rescheduleTimer();
@@ -484,6 +527,7 @@ function createCommonQuestionService(options = {}) {
     const awayState = currentAwayState();
     const delays = [];
     for (const record of journalState.questions) {
+      if (isQuarantined(record)) continue;
       const deadline = autoApplyPolicyDeadline(record, awayState, settings, at);
       if (deadline === null) continue;
       if (deadline > at) {
@@ -532,6 +576,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   async function maybeTimeout(record, at) {
+    if (isQuarantined(record)) return record;
     const deadline = autoApplyPolicyDeadline(record, currentAwayState(), getAutoApplySettings(), at);
     if (deadline === null || deadline > at || !hasCurrentExecutionBinding(record)) return record;
     const selected = kernel.selectionFor(record, kernel.awayDefaultAnswers(record), 'away-default', at,
@@ -546,6 +591,7 @@ function createCommonQuestionService(options = {}) {
     try {
       const at = nowValue();
       for (const record of [...journalState.questions]) {
+        if (isQuarantined(record)) continue;
         if (record.deadlineAt > at || !kernel.canApplyAwayDefault(record)) continue;
         const saved = await maybeTimeout(record, at);
         if (saved !== record) changed.push(await projectRecord(saved));
@@ -577,6 +623,7 @@ function createCommonQuestionService(options = {}) {
       const existing = findQuestion(live.identity, live.periodId, registration.questionId);
       const digest = kernel.sha256Json({ category: 'ordinary', questions });
       if (existing) {
+        assertNotQuarantined(existing);
         if (existing.contentDigest !== digest) throw serviceError('question_conflict');
         return { outcome: 'existing', question: await projectRecord(existing) };
       }
@@ -595,7 +642,16 @@ function createCommonQuestionService(options = {}) {
         createdAt: nowValue(),
         autoApplyEnabledAtRegistration: getAutoApplySettings().enabled,
       });
-      const saved = await addRecord(record);
+      let saved;
+      try { saved = await addRecord(record); }
+      catch (error) {
+        if (['question_capacity', 'journal_capacity_reserved', 'journal_too_large'].includes(error.code)) {
+          capacityRejected = true;
+          throw serviceError('question_quarantine_capacity');
+        }
+        throw error;
+      }
+      capacityRejected = false;
       rescheduleTimer();
       const confirmed = findLiveWriter(writer);
       if (confirmed.launchRef !== live.launchRef || !sameBinding(confirmed.executionBinding, live.executionBinding)) {
@@ -611,6 +667,7 @@ function createCommonQuestionService(options = {}) {
     return enqueue(async () => {
       const live = findLiveWriter(writer);
       const record = findQuestion(live.identity, live.periodId, publicQuestionId);
+      assertNotQuarantined(record);
       return record ? projectRecord(record) : null;
     });
   }
@@ -623,6 +680,7 @@ function createCommonQuestionService(options = {}) {
       const record = findQuestion(live.identity, live.periodId, publicQuestionId);
       if (!record) return { outcome: 'not_found', questionId: publicQuestionId,
         deliveryAttemptId: null, state: null };
+      assertNotQuarantined(record);
       if (!record.deliveryIntent || record.cancelledAt !== null || record.externalResolution !== null ||
           suppressed.has(record.internalQuestionId)) {
         return { outcome: 'unavailable', ...await projectRecord(record) };
@@ -681,6 +739,7 @@ function createCommonQuestionService(options = {}) {
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
       if (!record) throw serviceError('question_not_found');
+      assertNotQuarantined(record);
       if (record.cancelledAt !== null) throw serviceError('question_cancelled');
       const result = await applyAnswers(record, answers, 'manual', nowValue());
       rescheduleTimer();
@@ -693,6 +752,7 @@ function createCommonQuestionService(options = {}) {
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
       if (!record) throw serviceError('question_not_found');
+      assertNotQuarantined(record);
       if (record.held === held) return { outcome: held ? 'held' : 'released', question: await projectRecord(record) };
       const saved = await commitRecord({ ...record, held });
       rescheduleTimer();
@@ -705,6 +765,7 @@ function createCommonQuestionService(options = {}) {
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
       if (!record) throw serviceError('question_not_found');
+      assertNotQuarantined(record);
       if (record.cancelledAt !== null) return { outcome: 'cancelled', question: await projectRecord(record) };
       if (record.deliveryIntent) {
         const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
@@ -745,6 +806,8 @@ function createCommonQuestionService(options = {}) {
     if (!journalState) return Promise.reject(serviceError('question_service_not_ready'));
     const record = currentQuestion(internalQuestionId);
     if (!record) return Promise.reject(serviceError('question_not_found'));
+    try { assertNotQuarantined(record); }
+    catch (error) { return Promise.reject(error); }
     if (typeof options.verifyNativeQuestion !== 'function') return Promise.reject(serviceError('native_verifier_unavailable'));
     const evidence = captureJson(trustedEvidence);
     let verified;
@@ -763,6 +826,7 @@ function createCommonQuestionService(options = {}) {
     return enqueue(async () => {
       const current = currentQuestion(internalQuestionId);
       if (!current) throw serviceError('question_not_found');
+      assertNotQuarantined(current);
       if (current.externalResolution) return { outcome: 'existing', question: await projectRecord(current) };
       if (current.deliveryIntent) {
         let delivery = await options.deliveryStore.get(current.deliveryIntent.deliveryAttemptId);
@@ -785,6 +849,7 @@ function createCommonQuestionService(options = {}) {
     if (!kernel.isIdentifier(internalQuestionId)) throw serviceError('invalid_internal_question_id');
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
+      assertNotQuarantined(record);
       if (!record?.deliveryIntent) throw serviceError('question_not_found');
       const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
       if (!current || !deliveryMatchesRecord(current, record)) throw serviceError('question_delivery_mismatch');
@@ -810,7 +875,10 @@ function createCommonQuestionService(options = {}) {
       const questions = journalState.questions.map((record) => {
         const delivery = record.deliveryIntent ? deliveries.get(record.deliveryIntent.deliveryAttemptId) : null;
         try {
-          if (delivery && !deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
+          const matches = isQuarantined(record)
+            ? persistedDeliveryMatchesRecord(delivery, record)
+            : deliveryMatchesRecord(delivery, record);
+          if (delivery && !matches) throw serviceError('question_delivery_mismatch');
           return projection(record, delivery, true);
         } catch (error) {
           recovery ||= { state: 'blocked', code: error?.code || 'question_delivery_mismatch' };
@@ -829,6 +897,7 @@ function createCommonQuestionService(options = {}) {
     return enqueue(() => {
       const record = currentQuestion(internalQuestionId);
       const late = record?.lateAnswers[index];
+      assertNotQuarantined(record);
       if (!record || late?.digest !== digest) return null;
       const answers = new Map(late.answers.map((answer) => [answer.questionId, answer]));
       const text = record.questions.map((question) => {
@@ -880,7 +949,8 @@ function createCommonQuestionService(options = {}) {
   }
 
   return Object.freeze({ ready, register, status, answerPoll, submitAnswer, hold, cancel, tick, notifyAwayChanged,
-    resolveExternal, reportResponseLost, dashboardSnapshot, readLateAnswerDraft, flush, close });
+    resolveExternal, reportResponseLost, dashboardSnapshot, readLateAnswerDraft,
+    getQuarantineDiagnostics, flush, close });
 }
 
 module.exports = { DEFAULT_AUTO_APPLY_MINIMUM_WAIT_MS, createCommonQuestionService };

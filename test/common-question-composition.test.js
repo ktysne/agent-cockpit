@@ -222,12 +222,12 @@ for (const provider of ['claude', 'codex']) {
   });
 }
 
-for (const selected of [false, true]) {
-  test(`fresh native registries reject ${selected ? 'selected' : 'unselected'} saved questions while retaining both journals and the shared checkpoint`, async (t) => {
+for (const provider of ['claude', 'codex']) for (const selected of [false, true]) {
+  test(`${provider} fresh native registries quarantine ${selected ? 'selected' : 'unselected'} saved questions while retaining both journals and the shared checkpoint`, async (t) => {
     const f = await fixture(t);
     const integration = await f.createNativeInstructionServiceIntegration(f.integrationOptions);
     t.after(async () => { try { await integration.close(); } catch {} });
-    const { started, writer } = await startNative(f, integration);
+    const { started, writer } = await startNative(f, integration, provider);
     const { writer: ignoredWriter, ...input } = registration(writer);
     const registered = await integration.questionService.register(writer, { ...input, category: 'ordinary' });
     if (selected) {
@@ -235,15 +235,30 @@ for (const selected of [false, true]) {
         { answers: [{ questionId: 'choice', optionIds: ['a'], freeText: null }] });
     }
     await integration.service.create({ deliveryAttemptId: 'instruction-delivery', launchRef: started.result.launchRef,
-      logicalMessageId: 'instruction-message', revision: 0, text: 'Saved instruction', mode: 'steer', expectedTurnId: 'codex-native-turn-1' });
+      logicalMessageId: 'instruction-message', revision: 0, text: 'Saved instruction', mode: 'steer',
+      expectedTurnId: `${provider}-native-turn-1` });
     await integration.close();
     const paths = [integration.commonQuestionJournalPath, integration.journalPath, integration.checkpointPath];
     const before = await Promise.all(paths.map((filePath) => fs.readFile(filePath, 'utf8')));
-    await assert.rejects(f.createNativeInstructionServiceIntegration(f.integrationOptions), { code: 'question_binding_mismatch' });
+    const reopened = await f.createNativeInstructionServiceIntegration(f.integrationOptions);
+    t.after(async () => { try { await reopened.close(); } catch {} });
+    await reopened.questionService.ready();
     const after = await Promise.all(paths.map((filePath) => fs.readFile(filePath, 'utf8')));
     assert.deepEqual(after, before);
     assert.equal(JSON.parse(after[0]).questions.length, 1);
     assert.equal(JSON.parse(after[1]).instructions.length, 1);
+    assert.equal(reopened.questionService.getQuarantineDiagnostics().quarantinedCount, 1);
+    const dashboard = await reopened.questionService.dashboardSnapshot();
+    assert.equal(dashboard.questions[0].quarantined, true);
+    assert.equal(dashboard.questions[0].deliveryState, selected ? 'available' : null);
+    assert.equal(reopened.getStatus().commonQuestions.quarantine.quarantinedCount, 1);
+    await assert.rejects(reopened.questionService.submitAnswer(registered.question.internalQuestionId,
+      { answers: [{ questionId: 'choice', optionIds: ['a'], freeText: null }] }), { code: 'question_quarantined' });
+    await assert.rejects(reopened.questionService.hold(registered.question.internalQuestionId, true),
+      { code: 'question_quarantined' });
+    await assert.rejects(reopened.questionService.cancel(registered.question.internalQuestionId),
+      { code: 'question_quarantined' });
+    assert.deepEqual(await Promise.all(paths.map((filePath) => fs.readFile(filePath, 'utf8'))), before);
     assert.deepEqual(f.processes.at(-1).state.instructionWrites, []);
   });
 }
@@ -386,8 +401,18 @@ test('integration settings diagnostics expose only status revision and reason', 
   const f = await fixture(t, { settings });
   const integration = await f.createNativeInstructionServiceIntegration(f.integrationOptions);
   t.after(() => integration.close());
-  assert.deepEqual(integration.getStatus().commonQuestions, { status: 'ready',
-    settings: { status: 'invalid', revision: 'fixture-1', reason: 'invalid_settings_json' } });
+  const status = integration.getStatus().commonQuestions;
+  assert.equal(status.status, 'ready');
+  assert.deepEqual(status.settings, { status: 'invalid', revision: 'fixture-1', reason: 'invalid_settings_json' });
+  assert.deepEqual(Object.keys(status.quarantine).sort(), ['quarantinedCount', 'reason', 'remainingBytes',
+    'remainingCount', 'reservedBytes', 'status']);
+  assert.equal(status.quarantine.status, 'ready');
+  assert.equal(status.quarantine.reason, null);
+  assert.equal(status.quarantine.quarantinedCount, 0);
+  assert.equal(Number.isSafeInteger(status.quarantine.reservedBytes), true);
+  assert.equal(Number.isSafeInteger(status.quarantine.remainingBytes), true);
+  assert.equal(Number.isSafeInteger(status.quarantine.remainingCount), true);
+  assert.equal(JSON.stringify(status).includes(f.integrationOptions.dataDirectory), false);
   assert.equal(f.captured.questionOptions.getAutoApplySettings(), null);
 });
 
