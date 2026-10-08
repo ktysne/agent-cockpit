@@ -249,7 +249,7 @@ function createHookRoutes(ctx) {
       return;
     }
     const product = productFromCwd(body.cwd);
-    const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product });
+    const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product, preserveLocation: true });
     if (!registered) {
       jsonResponse(response, 400, { error: 'Invalid request' });
       return;

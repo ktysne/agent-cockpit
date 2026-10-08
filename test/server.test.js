@@ -1369,6 +1369,32 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   });
   assert.ok(!runtime.state.pullRequestRegistrations().some((record) => record.number === 48));
 
+  // フックが cd 先から決めた cwd と製品は、同じ PR を /prs で登録し直しても変えない。
+  const reregistered = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', headers,
+    body: JSON.stringify({
+      kind: 'add_pr', url: 'https://github.com/example/project/pull/47',
+      ppid: 123, claudeCodeSessionId: 'pr-session', cwd: hookCwd,
+    }),
+  });
+  assert.equal(reregistered.status, 200);
+  const keptPr = runtime.state.pullRequestRegistrations().find((record) => record.number === 47);
+  assert.equal(keptPr.cwd, path.resolve(commandCwd));
+  assert.equal(keptPr.product.key, productFromCwd(commandCwd).key);
+
+  // 未登録の PR は、/prs の cwd で登録される。
+  const addedWithoutHook = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', headers,
+    body: JSON.stringify({
+      kind: 'add_pr', url: 'https://github.com/example/project/pull/49',
+      ppid: 123, claudeCodeSessionId: 'pr-session', cwd: hookCwd,
+    }),
+  });
+  assert.equal(addedWithoutHook.status, 200);
+  const registeredByPrs = runtime.state.pullRequestRegistrations().find((record) => record.number === 49);
+  assert.equal(registeredByPrs.cwd, hookCwd);
+  assert.equal(registeredByPrs.product.key, productFromCwd(hookCwd).key);
+
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
     body: JSON.stringify({

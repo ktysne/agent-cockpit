@@ -104,6 +104,8 @@ function pullRequestCommandCwd(command, cwd) {
   const quotedPath = match[1] ?? match[2];
   const commandPath = quotedPath ?? match[3];
   if (!commandPath || commandPath.startsWith('-') || /[$`\r\n]/.test(commandPath)) return null;
+  // 二重引用符の中の \ は、エスケープか Windows の区切りかを決められないため、パスを推測しない。
+  if (match[1]?.includes('\\')) return null;
   if (quotedPath === undefined && (commandPath.startsWith('~') || /[\\<>*?\[\]{}]/.test(commandPath))) return null;
 
   let resolvedPath = commandPath;

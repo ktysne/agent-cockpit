@@ -630,24 +630,47 @@ function crossReviewReadOptions(options) {
   return {
     fileSystem: isFileSystem ? options : options?.fileSystem || fs,
     execFileImpl: options?.execFileImpl || execFile,
-    originCache: options?.originCache,
+    remoteRepositoryCache: options?.remoteRepositoryCache,
   };
 }
 
-function readGitOrigin(root, execFileImpl) {
+function readGitRemoteUrls(root, execFileImpl) {
   return new Promise((resolve) => {
     try {
-      execFileImpl('git', ['-C', root, 'remote', 'get-url', 'origin'], {
+      execFileImpl('git', ['-C', root, 'config', '--get-regexp', '^remote\\..*\\.url$'], {
         encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
-      }, (error, stdout) => resolve(error || typeof stdout !== 'string' ? null : stdout.trim() || null));
+      }, (error, stdout) => resolve(error || typeof stdout !== 'string' ? '' : stdout));
     } catch {
-      resolve(null);
+      resolve('');
     }
   });
 }
 
+// 各行は「remote.<名前>.url <URL>」の形。GitHub のリポジトリと判定できた remote だけを返す。
+function gitHubRemoteRepositories(stdout) {
+  const repositories = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const separator = line.indexOf(' ');
+    const repository = separator < 0 ? null : parseGitHubRepositoryRemote(line.slice(separator + 1));
+    if (repository) repositories.push(repository);
+  }
+  return repositories;
+}
+
+async function gitHubRemoteRepositoriesOf(root, execFileImpl, cache) {
+  const cacheKey = process.platform === 'win32' ? root.toLowerCase() : root;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+  const repositories = gitHubRemoteRepositories(await readGitRemoteUrls(root, execFileImpl));
+  cache?.set(cacheKey, repositories);
+  return repositories;
+}
+
+function sameGitHubRepository(left, right) {
+  return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
+}
+
 async function readCrossReviewState(registration, pullRequest, options = {}) {
-  const { fileSystem, execFileImpl, originCache } = crossReviewReadOptions(options);
+  const { fileSystem, execFileImpl, remoteRepositoryCache } = crossReviewReadOptions(options);
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
@@ -657,14 +680,9 @@ async function readCrossReviewState(registration, pullRequest, options = {}) {
   const { root } = tool;
   const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
   if (pullRequestRepository) {
-    const originCacheKey = process.platform === 'win32' ? root.toLowerCase() : root;
-    let origin = originCache?.get(originCacheKey);
-    if (!originCache?.has(originCacheKey)) {
-      origin = parseGitHubRepositoryRemote(await readGitOrigin(root, execFileImpl));
-      originCache?.set(originCacheKey, origin);
-    }
-    if (origin && (origin.owner.toLowerCase() !== pullRequestRepository.owner.toLowerCase() ||
-      origin.repo.toLowerCase() !== pullRequestRepository.repo.toLowerCase())) {
+    // フォークから upstream に作った PR は origin と食い違うため、どの GitHub の remote とも一致すれば続ける。
+    const remotes = await gitHubRemoteRepositoriesOf(root, execFileImpl, remoteRepositoryCache);
+    if (remotes.length && !remotes.some((remote) => sameGitHubRepository(remote, pullRequestRepository))) {
       return { unavailable: true, reason: 'repository-mismatch' };
     }
   }
@@ -1346,7 +1364,7 @@ class PullRequestTracker {
     const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
     const productGroups = productGroupsFor(owner, repo, registrations);
     const createdIdentities = new Set();
-    const originCache = new Map();
+    const remoteRepositoryCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
@@ -1359,7 +1377,7 @@ class PullRequestTracker {
         continue;
       }
       const review = await this.readCrossReviewState(registration, pullRequest, {
-        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, originCache,
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache,
       });
       const current = crossReviewByNumber.get(registration.number);
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;

@@ -2048,14 +2048,16 @@ class DashboardState {
     const previous = records.get(key);
     const relatedKey = relatedPullRequestRecordKey(parsedUrl.owner, parsedUrl.repo, parsedUrl.number);
     const related = this.relatedPullRequests.get(relatedKey);
-    const product = context.product && typeof context.product.key === 'string' && typeof context.product.name === 'string'
-      ? { key: context.product.key.slice(0, 500), name: context.product.name.slice(0, 200) }
+    // preserveLocation は、登録済みの cwd と製品を残す。コマンドの cd から決めた場所を、後の /prs の登録で上書きしないため。
+    const location = context.preserveLocation === true && previous?.cwd ? previous : context;
+    const product = location.product && typeof location.product.key === 'string' && typeof location.product.name === 'string'
+      ? { key: location.product.key.slice(0, 500), name: location.product.name.slice(0, 200) }
       : previous?.product || null;
     const next = {
       session_id: sessionId,
       ...parsedUrl,
       addedAt: previous?.addedAt || isoTime(now),
-      cwd: typeof context.cwd === 'string' && context.cwd.length <= 4096 ? context.cwd : previous?.cwd || null,
+      cwd: typeof location.cwd === 'string' && location.cwd.length <= 4096 ? location.cwd : previous?.cwd || null,
       product,
       state: previous?.state || related?.state || 'unknown',
       mergedAt: previous?.mergedAt || related?.mergedAt || null,
