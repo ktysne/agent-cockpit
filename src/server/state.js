@@ -862,8 +862,9 @@ function applyAgentToolCompletion(session, event) {
     if (!targetAgent) return;
     if (toolUseId) session.agentToolBindings[toolUseId] = targetAgent.agent_id;
     const agentTool = toolUseId && session.tools.find((tool) => tool.tool_use_id === toolUseId && tool.tool_name === 'Agent');
-    if (!targetAgent.description && agentTool?.description) targetAgent.description = agentTool.description;
-    if (targetAgent?.active) targetAgent.backgrounded = true;
+    // SubagentStart の時点の結び付けは到着順で誤ることがあるので、呼び出し自身の説明で上書きする。
+    if (agentTool?.description) targetAgent.description = agentTool.description;
+    if (targetAgent.active) targetAgent.backgrounded = true;
     if (event.resolvedModel) {
       targetAgent.model = event.resolvedModel;
       targetAgent.source = 'Agent tool response';

@@ -247,7 +247,7 @@ gh の順序、失敗時の扱い、積み直し通知は[計画書のマージ�
 - `SubagentStart`、または `SubagentStop` 以外で `agent_id` と `agent_type` を含むイベントでは、`~/.claude/agents/<agent_type>.md` の frontmatter の `model` と `effort` を仮の値として出す。
 - Agent ツールの PostToolUse の `agentId` が既存の結び付けと異なるか、結び付けが曖昧なら、その ID からサブエージェント行を引き直して結び付けを更新する。
 - PostToolUse の `resolvedModel` は、その行のモデルに反映する。
-- Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、説明が空の行へ引き継ぐ。
+- Agent 呼び出しの説明は、PostToolUse で Agent の実行中ツールを消す前に、対象の行へ書く。SubagentStart の時点の結び付けは到着順で誤ることがあるので、既に説明があっても呼び出し自身の説明で上書きする。
 - Claude のモデル名は、画面では `claude-sonnet-5-5` を `Sonnet 5.5` のように読みやすく表示する。
 - Bash の PreToolUse で `codex-agent.sh <定義名>` を見つけたら、`~/.claude/gpt-agents/<定義名>.md` の frontmatter の `codex_model` と `codex_reasoning_effort` を仮の値として持つ。
 - Bash の PreToolUse では、要約の切り詰め前にコマンド位置にあるクロスレビュー起動も Codex 呼び出しとして扱う。
