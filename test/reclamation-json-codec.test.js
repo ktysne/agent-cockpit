@@ -71,6 +71,52 @@ test('encode は plain JSON data を pretty JSON と LF で UTF-8 化する', ()
   assert.equal(encoded.sha256, digest(encoded.bytes));
 });
 
+test('encode は単独 surrogate を JSON escape にして decode と往復する', () => {
+  const value = { id: '\ud800' };
+  const encoded = encodeNormalized(value);
+  assert.equal(encoded.bytes.toString('utf8'), '{\n  "id": "\\ud800"\n}\n');
+
+  const decoded = decodeSourceBytes(encoded.bytes, encoded.sizeBytes);
+  assert.equal(decoded.value.id, value.id);
+  assert.equal(decoded.sizeBytes, encoded.sizeBytes);
+  assert.equal(decoded.sha256, encoded.sha256);
+});
+
+test('encode は root 0 の深さ64を受け入れ、65を固定形式で拒否する', () => {
+  const nestedArray = (depth) => {
+    let value = 0;
+    for (let index = 0; index < depth; index += 1) value = [value];
+    return value;
+  };
+  const nestedObject = (depth) => {
+    let value = 0;
+    for (let index = 0; index < depth; index += 1) value = { child: value };
+    return value;
+  };
+
+  assert.doesNotThrow(() => encodeNormalized(nestedArray(64)));
+  assert.doesNotThrow(() => encodeNormalized(nestedObject(64)));
+  assert.throws(() => encodeNormalized(nestedArray(65)), {
+    name: 'TypeError',
+    message: 'invalid_normalized_json',
+  });
+  assert.throws(() => encodeNormalized(nestedObject(65)), {
+    name: 'TypeError',
+    message: 'invalid_normalized_json',
+  });
+});
+
+test('decode した数千段の JSON は encodeNormalized でスタックを使い切らず拒否する', () => {
+  const depth = 5000;
+  const source = Buffer.from('['.repeat(depth) + '0' + ']'.repeat(depth), 'utf8');
+  const decoded = decodeSourceBytes(source, source.length);
+
+  assert.throws(() => encodeNormalized(decoded.value), {
+    name: 'TypeError',
+    message: 'invalid_normalized_json',
+  });
+});
+
 test('encode は getter、toJSON function、custom prototype を実行せず拒否する', () => {
   let getterCalled = false;
   let toJsonCalled = false;

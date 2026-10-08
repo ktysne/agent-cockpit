@@ -154,6 +154,9 @@ fixture の合格を実 runtime の適合確認と区別する。
 | 1d | アンカーcodec、store間照合、旧形式の投影、grantと固定H/T | 保存境界、不正相関、最大容量のpure fixtureと解析的上界を確認 |
 
 1aは元byteの指紋と正規化後のbyteの指紋を別に返し、schema固有のdigestの代わりにしない。
+正規化serializerはrootの深さを0とし、objectのfieldとarrayの要素へ降りるたびに1増やす。
+深さ64を超える入力は不正形式として拒否し、後続codecの最大合法shapeがこの範囲内に収まることをfixtureで確認する。
+元byteの解析は既存readerと同じJSON.parseを使い、重複keyは後に書かれた値を採用する。
 保存先へ書く前の最終容量検査と移行coordinatorはPR2で実装する。
 固定H/Tの数値は新shapeとserializerが揃う1dで確定し、最大fixtureだけを任意入力の容量証明として扱わない。
 1aだけで新schema対応や段階2を完了扱いにしない。

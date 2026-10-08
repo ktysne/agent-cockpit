@@ -10,6 +10,7 @@ const {
 } = require('./reclamation-codec-primitives');
 
 const MAX_ARRAY_LENGTH = 0xffff_ffff;
+const MAX_NORMALIZED_JSON_DEPTH = 64;
 const INVALID_SOURCE_BYTES = 'invalid_source_bytes';
 const INVALID_NORMALIZED_JSON = 'invalid_normalized_json';
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
@@ -46,6 +47,7 @@ function decodeSourceBytes(bytes, fixedMaxBytes) {
   if (byteLength > fixedMaxBytes) throw new RangeError('source_too_large');
 
   const sourceBytes = copyUint8Array(bytes);
+  if (sourceBytes.length > fixedMaxBytes) throw new RangeError('source_too_large');
   let sourceText;
   try {
     sourceText = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(sourceBytes);
@@ -66,7 +68,8 @@ function decodeSourceBytes(bytes, fixedMaxBytes) {
   };
 }
 
-function normalizeJsonValue(value, ancestors) {
+function normalizeJsonValue(value, ancestors, depth) {
+  if (depth > MAX_NORMALIZED_JSON_DEPTH) throw new TypeError(INVALID_NORMALIZED_JSON);
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new TypeError(INVALID_NORMALIZED_JSON);
@@ -95,7 +98,7 @@ function normalizeJsonValue(value, ancestors) {
       });
       for (let index = 0; index < items.length; index += 1) {
         Object.defineProperty(result, String(index), {
-          value: normalizeJsonValue(items[index], ancestors),
+          value: normalizeJsonValue(items[index], ancestors, depth + 1),
           enumerable: true,
           writable: true,
           configurable: true,
@@ -114,7 +117,7 @@ function normalizeJsonValue(value, ancestors) {
     const result = Object.create(null);
     for (const key of Object.keys(captured)) {
       Object.defineProperty(result, key, {
-        value: normalizeJsonValue(captured[key], ancestors),
+        value: normalizeJsonValue(captured[key], ancestors, depth + 1),
         enumerable: true,
         writable: true,
         configurable: true,
@@ -127,7 +130,7 @@ function normalizeJsonValue(value, ancestors) {
 }
 
 function encodeNormalized(value) {
-  const normalized = normalizeJsonValue(value, new WeakSet());
+  const normalized = normalizeJsonValue(value, new WeakSet(), 0);
   const serialized = JSON.stringify(normalized, null, 2);
   const body = Buffer.from(serialized, 'utf8');
   const sizeBytes = checkedAddBytes(body.length, 1);
