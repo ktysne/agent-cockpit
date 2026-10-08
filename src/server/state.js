@@ -2626,6 +2626,108 @@ class DashboardState {
     return seenAt;
   }
 
+  taskCompletionCandidates() {
+    const candidates = [];
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const task of plan.tasks) {
+        const closed = this.closedTasks.get(sessionId)?.get(task.title);
+        const closedByUser = closed?.stateAtClose === task.state;
+        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
+        if (!at) continue;
+        candidates.push({
+          product, type: 'task', identity: `${sessionId}\0${task.title}`, at,
+          text: `タスク「${task.title}」が完了した`, pullRequest: null,
+        });
+      }
+    }
+    return candidates;
+  }
+
+  pullRequestCreatedCandidates({ registrations, pullRequestTitles }) {
+    return registrations.map((record) => {
+      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+      const title = pullRequestTitles.get(identity);
+      return {
+        product: cloneProduct(record.product) || repoProduct(record.owner, record.repo),
+        type: 'pull-request',
+        identity: `${record.owner}/${record.repo}#${record.number}`,
+        at: record.addedAt,
+        text: `${pullRequestLabel(record.number, title)}を作成した`,
+        pullRequest: { identity, number: record.number, action: 'created', title },
+      };
+    });
+  }
+
+  // セッションの判断を先に取り、セッションに載っていない判断だけを計画から補う。
+  provisionalDecisionCandidates(sessions) {
+    const candidates = [];
+    const sessionDecisionIds = new Set();
+    for (const session of sessions) {
+      for (const decision of session.decisions) {
+        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
+        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
+        candidates.push({
+          product: cloneProduct(session.product || this.plans.get(session.session_id)?.product),
+          type: 'provisional',
+          identity: `${session.session_id}\0${decision.id}`,
+          at: decision.provisionalAt || decision.updatedAt,
+          text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          pullRequest: null,
+        });
+      }
+    }
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const decision of plan.decisions) {
+        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
+        candidates.push({
+          product,
+          type: 'provisional',
+          identity: `${sessionId}\0${decision.id}`,
+          at: decision.provisionalAt || decision.updatedAt,
+          text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          pullRequest: null,
+        });
+      }
+    }
+    return candidates;
+  }
+
+  // 記録のプロダクトをそのまま使う(cloneProduct を通さない)。
+  ciFailureCandidates({ pullRequestTitles }) {
+    return this.ciFailures.map((failure) => {
+      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
+      return {
+        product: failure.product,
+        type: 'ci-failure',
+        identity: `${failure.owner}/${failure.repo}#${failure.number}`,
+        at: failure.at,
+        text: `PR #${failure.number} の CI が失敗した`,
+        pullRequest: { identity, number: failure.number, action: 'ci-failure', title: pullRequestTitles.get(identity) },
+      };
+    });
+  }
+
+  mergedPullRequestCandidates(sources) {
+    const candidates = [];
+    for (const merged of sources.mergedPullRequests.values()) {
+      const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
+      const title = sources.pullRequestTitles.get(identity);
+      for (const product of mergedPullRequestProducts(merged, sources)) {
+        candidates.push({
+          product,
+          type: 'merged-pull-request',
+          identity: `${merged.owner}/${merged.repo}#${merged.number}`,
+          at: merged.mergedAt,
+          text: `${pullRequestLabel(merged.number, title)}をマージした`,
+          pullRequest: { identity, number: merged.number, action: 'merged', title },
+        });
+      }
+    }
+    return candidates;
+  }
+
   // 初回の表示で既存の変化を既読として扱うために、変化を集める前に呼ぶ。
   refreshSeenTimes(products, visibleProductKeys, now) {
     let seenChanged = false;
@@ -2690,81 +2792,23 @@ class DashboardState {
 
   snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
     const sources = this.sinceSeenSources(pullRequestGroups);
-    const { registrations, pullRequestTitles, mergedPullRequests } = sources;
     const { products, visibleProductKeys } = this.sinceSeenProducts(sessions, sources);
 
     this.refreshSeenTimes(products, visibleProductKeys, now);
 
-    const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
-    const eventKeys = new Set();
+    const candidates = [
+      ...this.taskCompletionCandidates(),
+      ...this.pullRequestCreatedCandidates(sources),
+      ...this.provisionalDecisionCandidates(sessions),
+      ...this.ciFailureCandidates(sources),
+      ...this.mergedPullRequestCandidates(sources),
+    ];
+    const eventsByProduct = groupSinceSeenEvents(candidates, products);
     const happenedWhileAway = (timestamp) => awayPeriods.some((period) => {
       if (!Number.isFinite(period.start)) return false;
       const end = period.end === null ? now : period.end;
       return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
     });
-    const addEvent = (product, type, identity, at, text, pullRequest = null) => {
-      const timestamp = Date.parse(at || '');
-      if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
-      const key = `${product.key}\0${type}\0${identity}\0${at}`;
-      if (eventKeys.has(key)) return;
-      eventKeys.add(key);
-      eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
-    };
-
-    for (const [sessionId, plan] of this.plans) {
-      const product = cloneProduct(plan.product || this.productForSession(sessionId));
-      if (!product) continue;
-      for (const task of plan.tasks) {
-        const closed = this.closedTasks.get(sessionId)?.get(task.title);
-        const closedByUser = closed?.stateAtClose === task.state;
-        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
-        if (at) addEvent(product, 'task', `${sessionId}\0${task.title}`, at, `タスク「${task.title}」が完了した`);
-      }
-    }
-
-    for (const record of registrations) {
-      const product = cloneProduct(record.product) || repoProduct(record.owner, record.repo);
-      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
-      const title = pullRequestTitles.get(identity);
-      addEvent(product, 'pull-request', `${record.owner}/${record.repo}#${record.number}`, record.addedAt,
-        `PR #${record.number}${title ? `(${title})` : ''}を作成した`, { identity, number: record.number, action: 'created', title });
-    }
-
-    const sessionDecisionIds = new Set();
-    for (const session of sessions) {
-      for (const decision of session.decisions) {
-        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
-        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
-        const product = cloneProduct(session.product || this.plans.get(session.session_id)?.product);
-        const at = decision.provisionalAt || decision.updatedAt;
-        addEvent(product, 'provisional', `${session.session_id}\0${decision.id}`, at,
-          `判断「${decision.title}」を推奨案で仮に進めた`);
-      }
-    }
-    for (const [sessionId, plan] of this.plans) {
-      const product = cloneProduct(plan.product || this.productForSession(sessionId));
-      for (const decision of plan.decisions) {
-        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
-        addEvent(product, 'provisional', `${sessionId}\0${decision.id}`, decision.provisionalAt || decision.updatedAt,
-          `判断「${decision.title}」を推奨案で仮に進めた`);
-      }
-    }
-
-    for (const failure of this.ciFailures) {
-      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
-      const title = pullRequestTitles.get(identity);
-      addEvent(failure.product, 'ci-failure', `${failure.owner}/${failure.repo}#${failure.number}`, failure.at,
-        `PR #${failure.number} の CI が失敗した`, { identity, number: failure.number, action: 'ci-failure', title });
-    }
-
-    for (const merged of mergedPullRequests.values()) {
-      for (const product of mergedPullRequestProducts(merged, sources)) {
-        const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
-        const title = pullRequestTitles.get(identity);
-        addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
-          `PR #${merged.number}${title ? `(${title})` : ''}をマージした`, { identity, number: merged.number, action: 'merged', title });
-      }
-    }
 
     const sinceSeen = [];
     for (const product of products.values()) {
@@ -2878,6 +2922,25 @@ function mergedPullRequestProducts(merged, { registrations, pullRequestGroups })
   ];
   if (!found.length) return [repoProduct(merged.owner, merged.repo)];
   return [...new Map(found.map((product) => [product.key, product])).values()];
+}
+
+function pullRequestLabel(number, title) {
+  return `PR #${number}${title ? `(${title})` : ''}`;
+}
+
+// 対象のプロダクトに無い候補、時刻を読めない候補、同じ内容の重複は捨てる。
+function groupSinceSeenEvents(candidates, products) {
+  const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
+  const eventKeys = new Set();
+  for (const { product, type, identity, at, text, pullRequest } of candidates) {
+    const timestamp = Date.parse(at || '');
+    if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) continue;
+    const key = `${product.key}\0${type}\0${identity}\0${at}`;
+    if (eventKeys.has(key)) continue;
+    eventKeys.add(key);
+    eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+  }
+  return eventsByProduct;
 }
 
 function cloneResolution(resolution) {
