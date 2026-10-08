@@ -276,7 +276,8 @@ test('native waiting target explains the hold accessibly while preserving the in
     element,
   });
   const sources = ['instructionComposer', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
-    'sameInstructionBinding', 'instructionTargetsForSession', 'instructionTargetName', 'instructionTargetWaitingSummary',
+    'sameInstructionBinding', 'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget',
+    'instructionDraftFor', 'instructionTargetsForSession', 'instructionTargetName', 'instructionTargetWaitingSummary',
     'instructionTargetStatusText', 'instructionTargetWaitingNotice', 'instructionModeLabel']
     .map(name => functionSource(product, name));
   assert.ok(sources.every(Boolean));
@@ -317,7 +318,7 @@ test('native waiting target explains the hold accessibly while preserving the in
   assert.equal(unverifiedTextarea.disabled, false);
 });
 
-test('product instruction draft never binds to the first of multiple current targets', () => {
+test('multiple instruction targets stay unselected until the developer explicitly chooses one', () => {
   const nodes = [];
   const element = (tagName, className = '', text = '') => {
     const children = [];
@@ -342,7 +343,8 @@ test('product instruction draft never binds to the first of multiple current tar
     instructionErrors: new Map(), instructionNotices: new Map(), instructionInFlight: new Set(), element,
   });
   const sources = ['instructionComposer', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
-    'sameInstructionBinding', 'instructionTargetName', 'instructionTargetStatusText', 'instructionModeLabel', 'instructionTargetWaitingNotice']
+    'sameInstructionBinding', 'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget',
+    'instructionDraftFor', 'instructionTargetName', 'instructionTargetStatusText', 'instructionModeLabel', 'instructionTargetWaitingNotice']
     .map(name => functionSource(product, name));
   assert.ok(sources.every(Boolean));
   vm.runInContext(sources.join('\n'), context);
@@ -353,8 +355,261 @@ test('product instruction draft never binds to the first of multiple current tar
   assert.equal(draft.targetLaunchRef, '');
   assert.equal(draft.binding, undefined);
   assert.match(nodes.map(node => node.textContent).join(' '), /候補 2 件/);
+  const targetOptions = nodes.filter(node => node.dataset.instructionTargetSelect === 'session-a');
+  assert.equal(targetOptions.length, 2);
+  assert.equal(targetOptions.filter(node => node.checked).length, 0);
+  assert.equal(targetOptions.some(node => node.value === 'launch-a'), true);
+  assert.equal(targetOptions.some(node => node.value === 'launch-b'), true);
   assert.equal(nodes.some(node => node.dataset.instructionRebind), false);
   assert.equal(nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する')?.disabled, true);
+});
+
+test('an explicit multi-target choice binds and saves only the selected launch', async () => {
+  const storage = instructionStorage();
+  const targets = [
+    { launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a' },
+    { launchRef: 'launch-b', sessionId: 'session-a', executionId: 'exec-b', origin: 'standalone', status: 'working', nativeTurnId: 'turn-b' },
+  ];
+  const state = { instructionTargets: targets, instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false } };
+  const draft = { targetLaunchRef: '', mode: '', text: '' };
+  const instructionDrafts = new Map([['session-a', draft]]);
+  const instructionPreviewSavePending = new Map();
+  const instructionPreviews = new Map();
+  const nodes = [];
+  const element = (tagName, className = '', text = '') => {
+    const children = [];
+    const node = {
+      tagName, className, textContent: String(text ?? ''), children, childNodes: children, dataset: {}, attributes: {},
+      append(...items) { children.push(...items); },
+      setAttribute(name, value) { this.attributes[name] = String(value); },
+      addEventListener() {},
+    };
+    nodes.push(node);
+    return node;
+  };
+  const posts = [];
+  let changeHandler;
+  let rerenders = 0;
+  const context = pageContext(product, {
+    INSTRUCTION_PREVIEW_STORAGE_KEY: 'instruction-preview',
+    INSTRUCTION_MODES: new Set(['steer', 'start', 'next-user-input']),
+    MAX_PENDING_INSTRUCTION_PREVIEWS: 64,
+    instructionDrafts,
+    instructionInFlight: new Set(),
+    instructionErrors: new Map(),
+    instructionNotices: new Map(),
+    instructionPreviewSavePending,
+    instructionPreviews,
+    lastState: state,
+    liveStatus: { textContent: '' },
+    element,
+    document: { addEventListener: (name, handler) => { if (name === 'change') changeHandler = handler; } },
+    render: () => { rerenders += 1; },
+    postUiAction: async (url, body) => {
+      posts.push({ url, body: JSON.parse(JSON.stringify(body)) });
+      return { ok: true, json: async () => ({ outcome: 'created', instruction: {
+        deliveryAttemptId: body.delivery_attempt_id, launchRef: body.launch_ref, mode: body.mode,
+        revision: body.revision, sessionId: body.session_id, createdAt: 10,
+      } }) };
+    },
+    refresh: async () => {}, showWriteError() {},
+  });
+  const names = [
+    'instructionIds', 'validScopedInstructionId', 'instructionDraftFor', 'instructionComposer', 'instructionTargetsForSession',
+    'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget', 'sameInstructionBinding',
+    'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget', 'selectInstructionDraftTarget',
+    'instructionTargetName', 'instructionTargetStatusText', 'instructionTargetWaitingSummary', 'instructionTargetWaitingNotice',
+    'instructionModeLabel', 'instructionResponse', 'instructionErrorText', 'persistInstructionPreviews', 'rememberInstructionPreview',
+    'reserveInstructionPreviewSave', 'completeInstructionPreviewSave', 'releaseInstructionPreviewSave',
+    'retryInstructionPreviewSave', 'runInstructionPreviewSaveRetry', 'runInstructionCreate',
+  ];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  const changeSource = product.match(/document\.addEventListener\('change', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
+  assert.ok(changeSource);
+  context.sessionStorage = storage;
+  vm.runInContext(`${sources.join('\n')}\n${changeSource}`, context);
+
+  context.instructionComposer({ session_id: 'session-a', instructions: [] }, state);
+  const targetRadio = nodes.find(node => node.dataset.instructionTargetSelect === 'session-a' && node.value === 'launch-b');
+  assert.ok(targetRadio);
+  const targetEvent = { closest: selector => selector === '[data-instruction-target-select]' ? targetRadio : null };
+  changeHandler({ target: targetEvent });
+  assert.equal(rerenders, 1);
+  assert.equal(draft.targetLaunchRef, 'launch-b');
+  assert.equal(draft.binding.executionId, 'exec-b');
+  draft.text = '選んだ実行だけに保存する';
+  const session = { session_id: 'session-a', instructions: [] };
+  nodes.length = 0;
+  context.instructionComposer(session, state);
+  const checked = nodes.filter(node => node.dataset.instructionTargetSelect === 'session-a' && node.checked);
+  assert.equal(checked.length, 1);
+  assert.equal(checked[0].value, 'launch-b');
+  const save = nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する');
+  assert.equal(save.disabled, false);
+
+  await context.runInstructionCreate({ dataset: { instructionSession: 'session-a' }, elements: [] });
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].url, '/api/instructions/create');
+  assert.equal(posts[0].body.launch_ref, 'launch-b');
+  assert.equal(posts[0].body.execution_id, 'exec-b');
+});
+
+test('changing a populated multi-target draft requires confirmation and candidate additions keep its selection', () => {
+  const targets = [
+    { launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a' },
+    { launchRef: 'launch-b', sessionId: 'session-a', executionId: 'exec-b', origin: 'standalone', status: 'working', nativeTurnId: 'turn-b' },
+  ];
+  const state = { instructionTargets: targets, instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false } };
+  const draft = {
+    targetLaunchRef: 'launch-a', mode: 'steer', text: '宛先を変えても本文を保つ',
+    binding: { launchRef: 'launch-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a', mode: 'steer' },
+  };
+  const context = pageContext(product, {
+    instructionDraftFor: () => draft,
+    instructionDrafts: new Map([['session-a', draft]]),
+    instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(),
+  });
+  const names = ['instructionDraftFor', 'instructionTargetsForSession', 'instructionModeForTarget', 'instructionTargetMode',
+    'instructionBindingForTarget', 'sameInstructionBinding', 'instructionDraftTargetFor', 'instructionDraftMatchesTarget',
+    'instructionDraftRebindTarget', 'selectInstructionDraftTarget', 'rebindInstructionDraft'];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  assert.equal(context.selectInstructionDraftTarget('session-a', 'launch-b', state), true);
+  assert.equal(draft.targetLaunchRef, 'launch-b');
+  assert.equal(draft.needsRebind, true);
+  assert.equal(draft.text, '宛先を変えても本文を保つ');
+  assert.equal(draft.binding.launchRef, 'launch-a');
+  assert.equal(context.rebindInstructionDraft('session-a', state), true);
+  assert.equal(draft.binding.launchRef, 'launch-b');
+  assert.equal(draft.needsRebind, false);
+
+  targets.push({ launchRef: 'launch-c', sessionId: 'session-a', executionId: 'exec-c', origin: 'standalone', status: 'working', nativeTurnId: 'turn-c' });
+  assert.equal(context.instructionDraftTargetFor(state, 'session-a', draft).launchRef, 'launch-b');
+  assert.equal(draft.targetLaunchRef, 'launch-b');
+});
+
+test('a selected native-waiting target remains visible but cannot be saved', async () => {
+  const waiting = { launchRef: 'launch-wait', sessionId: 'session-a', executionId: 'exec-wait', origin: 'standalone', status: 'waiting', nativeWaiting: [{ kind: 'question', count: 1 }] };
+  const ready = { launchRef: 'launch-ready', sessionId: 'session-a', executionId: 'exec-ready', origin: 'standalone', status: 'working', nativeTurnId: 'turn-ready' };
+  const state = { instructionTargets: [waiting, ready], instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false } };
+  const draft = { targetLaunchRef: '', mode: '', text: '' };
+  const nodes = [];
+  const element = (tagName, className = '', text = '') => {
+    const children = [];
+    const node = {
+      tagName, className, textContent: String(text ?? ''), children, childNodes: children, dataset: {}, attributes: {},
+      append(...items) { children.push(...items); }, setAttribute(name, value) { this.attributes[name] = String(value); }, addEventListener() {},
+    };
+    nodes.push(node);
+    return node;
+  };
+  const posts = [];
+  const context = pageContext(product, {
+    MAX_NATIVE_PENDING_REQUESTS: Number(product.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
+    instructionDraftFor: () => draft, instructionDrafts: new Map([['session-a', draft]]),
+    instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(), element,
+    lastState: state,
+    instructionTargetWaitingSummary: () => '質問 1 件',
+    postUiAction: async (...args) => posts.push(args),
+  });
+  const names = ['instructionComposer', 'instructionDraftFor', 'instructionTargetsForSession', 'instructionTargetMode',
+    'instructionModeForTarget', 'instructionBindingForTarget', 'sameInstructionBinding', 'instructionDraftTargetFor',
+    'instructionDraftMatchesTarget', 'instructionDraftRebindTarget', 'instructionTargetName', 'instructionTargetStatusText',
+    'instructionTargetWaitingSummary', 'instructionTargetWaitingNotice', 'instructionModeLabel', 'selectInstructionDraftTarget',
+    'updateInstructionSave', 'runInstructionCreate'];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+  assert.equal(context.selectInstructionDraftTarget('session-a', 'launch-wait', state), true);
+  draft.text = '待機中は送らない';
+  context.instructionComposer({ session_id: 'session-a', instructions: [] }, state);
+  assert.equal(nodes.some(node => node.checked && node.value === 'launch-wait'), true);
+  const save = nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する');
+  assert.equal(save.disabled, true);
+  await context.runInstructionCreate({ dataset: { instructionSession: 'session-a' }, elements: [] });
+  assert.equal(posts.length, 0);
+});
+
+test('normal snapshots make a hidden instruction draft sticky through A to B to A', () => {
+  const target = { launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a' };
+  const state = { instructionTargets: [target], instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false } };
+  const draft = {
+    targetLaunchRef: 'launch-a', mode: 'steer', text: '折り畳み中も保持する',
+    binding: { launchRef: 'launch-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a', mode: 'steer' },
+  };
+  const context = pageContext(product, { instructionDrafts: new Map([['session-a', draft]]) });
+  const names = ['instructionTargetsForSession', 'instructionModeForTarget', 'instructionBindingForTarget', 'sameInstructionBinding',
+    'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'observeInstructionDraftBindings'];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  context.observeInstructionDraftBindings(state);
+  assert.equal(draft.needsRebind, undefined);
+  target.status = 'waiting';
+  context.observeInstructionDraftBindings(state);
+  assert.equal(draft.needsRebind, true);
+  target.status = 'working';
+  target.nativeTurnId = 'turn-a';
+  context.observeInstructionDraftBindings(state);
+  assert.equal(draft.needsRebind, true);
+});
+
+test('a disappeared multi-target selection is not replaced when the old launch returns', () => {
+  const targets = [
+    { launchRef: 'launch-a', sessionId: 'session-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a' },
+    { launchRef: 'launch-b', sessionId: 'session-a', executionId: 'exec-b', origin: 'standalone', status: 'working', nativeTurnId: 'turn-b' },
+    { launchRef: 'launch-c', sessionId: 'session-a', executionId: 'exec-c', origin: 'standalone', status: 'working', nativeTurnId: 'turn-c' },
+  ];
+  const state = { instructionTargets: targets, instructionDiagnostics: { service: 'ready', targets: 'available', blocked: false } };
+  const draft = {
+    targetLaunchRef: 'launch-a', mode: 'steer', text: '対象が消えても保持する',
+    binding: { launchRef: 'launch-a', executionId: 'exec-a', origin: 'standalone', status: 'working', nativeTurnId: 'turn-a', mode: 'steer' },
+  };
+  const nodes = [];
+  const element = (tagName, className = '', text = '') => {
+    const children = [];
+    const node = {
+      tagName, className, textContent: String(text ?? ''), children, childNodes: children, dataset: {}, attributes: {},
+      append(...items) { children.push(...items); }, setAttribute(name, value) { this.attributes[name] = String(value); }, addEventListener() {},
+    };
+    nodes.push(node);
+    return node;
+  };
+  const context = pageContext(product, {
+    instructionDraftFor: () => draft, instructionDrafts: new Map([['session-a', draft]]),
+    instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(), element,
+    MAX_NATIVE_PENDING_REQUESTS: Number(product.match(/const MAX_NATIVE_PENDING_REQUESTS = (\d+);/)?.[1]),
+  });
+  const names = ['instructionComposer', 'instructionDraftFor', 'instructionTargetsForSession', 'instructionTargetMode',
+    'instructionModeForTarget', 'instructionBindingForTarget', 'sameInstructionBinding', 'instructionDraftTargetFor',
+    'instructionDraftMatchesTarget', 'instructionDraftRebindTarget', 'observeInstructionDraftBindings',
+    'instructionTargetName', 'instructionTargetStatusText', 'instructionTargetWaitingSummary', 'instructionTargetWaitingNotice',
+    'instructionModeLabel'];
+  const sources = names.map(name => functionSource(product, name));
+  assert.ok(sources.every(Boolean));
+  vm.runInContext(sources.join('\n'), context);
+
+  context.observeInstructionDraftBindings(state);
+  state.instructionTargets = [targets[1], targets[2]];
+  context.observeInstructionDraftBindings(state);
+  assert.equal(draft.needsRebind, true);
+  nodes.length = 0;
+  context.instructionComposer({ session_id: 'session-a', instructions: [] }, state);
+  assert.equal(draft.targetLaunchRef, 'launch-a');
+  assert.equal(nodes.filter(node => node.dataset.instructionTargetSelect && node.checked).length, 0);
+  assert.equal(nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する').disabled, true);
+
+  state.instructionTargets = [targets[0], targets[1], targets[2]];
+  context.observeInstructionDraftBindings(state);
+  nodes.length = 0;
+  context.instructionComposer({ session_id: 'session-a', instructions: [] }, state);
+  assert.equal(draft.needsRebind, true);
+  assert.equal(nodes.filter(node => node.dataset.instructionTargetSelect && node.checked).length, 1);
+  assert.equal(nodes.find(node => node.tagName === 'button' && node.textContent === '指示を保存する').disabled, true);
 });
 
 test('product draft rebind requires one safe current target and preserves its text', () => {
@@ -370,7 +625,7 @@ test('product draft rebind requires one safe current target and preserves its te
     instructionInFlight: new Set(), instructionErrors: new Map(), instructionNotices: new Map(),
   });
   const names = ['instructionTargetsForSession', 'instructionModeForTarget', 'instructionTargetMode',
-    'instructionBindingForTarget', 'rebindInstructionDraft'];
+    'instructionBindingForTarget', 'instructionDraftFor', 'instructionDraftTargetFor', 'instructionDraftRebindTarget', 'rebindInstructionDraft'];
   const sources = names.map(name => functionSource(product, name));
   assert.ok(sources.every(Boolean));
   vm.runInContext(sources.join('\n'), context);
@@ -429,8 +684,10 @@ test('product draft observed through waiting, unverified, and multiple targets s
     element,
   });
   const names = [
-    'instructionTargetsForSession', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
-    'sameInstructionBinding', 'instructionTargetName', 'instructionTargetStatusText', 'instructionTargetWaitingSummary',
+    'instructionDraftFor', 'instructionTargetsForSession', 'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget',
+    'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget',
+    'sameInstructionBinding', 'instructionDraftTargetFor', 'instructionDraftMatchesTarget', 'instructionDraftRebindTarget',
+    'instructionTargetName', 'instructionTargetStatusText', 'instructionTargetWaitingSummary',
     'instructionTargetWaitingNotice', 'instructionModeLabel', 'instructionComposer', 'rebindInstructionDraft', 'runInstructionCreate',
   ];
   const sources = names.map(name => functionSource(product, name));
@@ -878,7 +1135,7 @@ test('通常指示の成功後は本文だけをローカル復旧し、新し�
     showWriteError() {},
   });
   const names = [
-    'validScopedInstructionId', 'instructionDraftFor', 'instructionTargetFor', 'instructionTargetsForSession',
+    'validScopedInstructionId', 'instructionDraftFor', 'instructionTargetFor', 'instructionTargetsForSession', 'instructionDraftTargetFor',
     'instructionTargetMode', 'instructionModeForTarget', 'instructionBindingForTarget', 'sameInstructionBinding',
     'instructionResponse', 'instructionErrorText', 'persistInstructionPreviews', 'rememberInstructionPreview',
     'reserveInstructionPreviewSave', 'completeInstructionPreviewSave', 'releaseInstructionPreviewSave',

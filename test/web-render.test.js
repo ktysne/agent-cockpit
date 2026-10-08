@@ -2504,6 +2504,50 @@ test('選択肢にフォーカスがある描き直しでは同じ input に戻�
   assert.equal(activeElement, replacementPick);
 });
 
+test('複数の実行先ラジオにフォーカスがある描き直しでは同じ対象へ戻す', () => {
+  const render = functionSource(pageHtml, 'render');
+  assert.ok(render);
+  let activeElement;
+  const targetData = { instructionTargetSelect: 'session-ui', instructionTargetLaunchRef: 'launch-b' };
+  const activeTarget = { dataset: targetData, hasAttribute: () => false };
+  const replacementTarget = { dataset: { ...targetData }, focused: false, focus() { this.focused = true; activeElement = this; } };
+  activeElement = activeTarget;
+  const context = pageContext(pageHtml, {
+    answerNoteComposing: false,
+    commonQuestionComposing: false,
+    HTMLElement: class FakeHTMLElement {},
+    commonQuestionDiagnosticsNotice: () => null,
+    lastState: { sessions: [{ session_id: 'session-ui' }] },
+    HTMLTextAreaElement: class FakeTextArea {},
+    document: {
+      get activeElement() { return activeElement; },
+      querySelectorAll: () => [],
+    },
+    root: {
+      replaceChildren: () => { activeElement = null; },
+      querySelectorAll: () => [replacementTarget],
+    },
+    displayPreferences: { mode: 'product', pinned: [], idleHideMinutes: 30 },
+    visibleSinceSeen: (state) => Array.isArray(state?.sinceSeen) ? state.sinceSeen : [],
+    idleHiddenSessions: () => [],
+    isIdleHiddenSession: () => false,
+    sessionsAfterIdleFilter: (sessions) => sessions,
+    renderIdleNote() {},
+    finishedHiddenCounts: () => ({ sessions: 0, pullRequests: 0 }),
+    finishedDeletionTargets: () => ({ session_ids: [], merge_history: [], closed_pull_requests: [] }),
+    renderFinishedNote() {},
+    renderRouting() {},
+    renderSummary() {}, renderExcludedNote() {}, updateTitle() {},
+    orderedProducts: () => [{ key: 'product-ui' }],
+    productSection: () => ({}),
+  });
+  vm.runInContext(render, context);
+  context.render(context.lastState);
+
+  assert.equal(replacementTarget.focused, true);
+  assert.equal(activeElement, replacementTarget);
+});
+
 test('選択肢を押すと送る答えが表示され、回答を送るが有効になる', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8');
   const functionNames = [
@@ -2581,7 +2625,7 @@ function decisionAnswerPickHarness(decision) {
   const functions = functionNames.map((name) => functionSource(html, name));
   const clickHandler = html.match(/document\.addEventListener\('click', \(event\) => \{\n  const pick = event\.target\.closest\('\[data-answer-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
   const keydownHandler = html.match(/document\.addEventListener\('keydown', \(event\) => \{\n  if \(event\.key !== ' ' && event\.code !== 'Space'\) return;[\s\S]*?\n\}\);/)?.[0];
-  const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{\n  const instructionField = event\.target\.closest\('\[data-instruction-field\]'\);[\s\S]*?\n\}\);/)?.[0];
+  const changeHandler = html.match(/document\.addEventListener\('change', \(event\) => \{[\s\S]*?\n\}\);/)?.[0];
   const inputHandler = html.match(/document\.addEventListener\('input', \(event\) => \{\n  const instructionField = event\.target\.closest\('\[data-instruction-field\]'\);[\s\S]*?\n\}\);/)?.[0];
   assert.ok(functions.every(Boolean));
   assert.ok(clickHandler && keydownHandler && changeHandler && inputHandler);
@@ -3564,6 +3608,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
   const refresh = pageHtml.match(/async function refresh\(\) \{[\s\S]*?\n\}/)?.[0];
   const applyAwayState = functionSource(pageHtml, 'applyAwayState');
   assert.ok(refresh && applyAwayState);
+  assert.match(refresh, /lastState = state;\s*observeInstructionDraftBindings\(state\);/);
   let renders = 0;
   let signature = 'reservation:visible';
   const context = pageContext(pageHtml, {
@@ -3572,6 +3617,7 @@ test('通知が状態版の変化なしに期限切れになっても、次の�
     syncDisplayPreferences: async () => {},
     pullRequestExpirySignature: () => signature,
     observeInstructionStates: () => null,
+    observeInstructionDraftBindings() {},
     instructionProjectionSignature: () => '',
     renderedInstructionSignature: '',
     deferredRenderPending: false,
@@ -4334,6 +4380,7 @@ test('「離席中のみ」では、版が同じでも離席の切り替えを�
       syncDisplayPreferences: async () => {},
       pullRequestExpirySignature: () => '',
       observeInstructionStates: () => null,
+      observeInstructionDraftBindings() {},
       instructionProjectionSignature: () => '',
       renderedInstructionSignature: '',
       deferredRenderPending: false,
@@ -4383,4 +4430,15 @@ test('文や名前を差し込むバッジは折り返し、枠の外へはみ�
   assert.match(mock, /class="badge accent long">\$\{esc\(absoluteTimeLabel\(at/);
   assert.match(mock, /class="badge accent long">base を/);
   assert.match(mock, /class="badge long \$\{pr\.headMismatch/);
+});
+
+test('共通質問と指示カードは中立の左枠を使い既存判断事項の赤い枠を保つ', () => {
+  const neutral = Object.fromEntries(cssDeclarations(pageHtml, '.decision-card.neutral'));
+  const decision = Object.fromEntries(cssDeclarations(pageHtml, '.decision-card'));
+  assert.equal(neutral['border-left-width'], '1px');
+  assert.equal(neutral['border-left-color'], 'var(--border)');
+  assert.equal(decision['border-left'], '4px solid var(--danger)');
+  assert.match(pageHtml, /element\('article', 'decision-card neutral common-question'\)/);
+  assert.match(pageHtml, /element\('article', 'decision-card neutral'\);\s*const target = instructionTargetFor/);
+  assert.match(pageHtml, /element\('article', 'decision-card neutral'\);\s*const draft = instructionDraftFor/);
 });

@@ -338,6 +338,7 @@ h3.sub .count { font-weight: normal; }
 .decision-card.resolved { border-left-color: var(--ok); }
 .decision-card.withdrawn { border-left-color: var(--border); }
 .decision-card.long-wait, .permission.long-wait { background: var(--danger-soft); }
+.decision-card.neutral { border-left-width: 1px; border-left-color: var(--border); }
 .decision-head { display: flex; align-items: baseline; gap: 6px 8px; flex-wrap: wrap; }
 .decision-title { font-weight: 600; }
 .decision-context { margin: 4px 0 8px; color: var(--text-2); }
@@ -1563,6 +1564,57 @@ function instructionBindingForTarget(target, mode) {
 function sameInstructionBinding(left, right) {
   return Boolean(left && right && left.launchRef === right.launchRef && left.executionId === right.executionId &&
     left.origin === right.origin && left.status === right.status && left.nativeTurnId === right.nativeTurnId && left.mode === right.mode);
+}
+
+function instructionDraftTargetFor(state, sessionId, draft, allowSingleFallback = false) {
+  const targets = instructionTargetsForSession(state, sessionId);
+  const matches = targets.filter((target) => target.launchRef === draft?.targetLaunchRef);
+  if (matches.length === 1) return matches[0];
+  return allowSingleFallback && targets.length === 1 && matches.length === 0 ? targets[0] : null;
+}
+
+function instructionDraftMatchesTarget(draft, target) {
+  const mode = instructionModeForTarget(target);
+  return Boolean(target && draft?.targetLaunchRef === target.launchRef && draft.mode === mode &&
+    sameInstructionBinding(draft.binding, instructionBindingForTarget(target, mode)));
+}
+
+function instructionDraftRebindTarget(sessionId, state = lastState) {
+  const draft = instructionDraftFor(sessionId);
+  if (instructionInFlight.has(sessionId) || draft.deliveryAttemptId || draft.logicalMessageId ||
+      state?.instructionDiagnostics?.service !== 'ready' || state?.instructionDiagnostics?.blocked === true ||
+      state?.instructionDiagnostics?.targets !== 'available') return null;
+  const target = instructionDraftTargetFor(state, sessionId, draft, true);
+  const mode = instructionModeForTarget(target);
+  return mode && instructionTargetMode(target, mode) ? { target, mode } : null;
+}
+
+function selectInstructionDraftTarget(sessionId, launchRef, state = lastState) {
+  const draft = instructionDraftFor(sessionId);
+  if (instructionInFlight.has(sessionId) || draft.deliveryAttemptId || draft.logicalMessageId) return false;
+  const matches = instructionTargetsForSession(state, sessionId).filter((target) => target.launchRef === launchRef);
+  if (matches.length !== 1) return false;
+  const target = matches[0];
+  const mode = instructionModeForTarget(target);
+  draft.targetLaunchRef = launchRef;
+  if (draft.text.trim()) {
+    if (!instructionDraftMatchesTarget(draft, target)) draft.needsRebind = true;
+  } else {
+    draft.mode = mode;
+    draft.binding = instructionBindingForTarget(target, mode);
+    draft.needsRebind = false;
+  }
+  instructionErrors.delete(sessionId);
+  instructionNotices.delete(sessionId);
+  return true;
+}
+
+function observeInstructionDraftBindings(state) {
+  for (const [sessionId, draft] of instructionDrafts) {
+    if (!draft?.text?.trim()) continue;
+    const target = instructionDraftTargetFor(state, sessionId, draft);
+    if (!instructionDraftMatchesTarget(draft, target)) draft.needsRebind = true;
+  }
 }
 
 function instructionTargetWaitingSummary(target) {
@@ -3406,7 +3458,7 @@ function appendCommonQuestions(body, session, product, withTags = false, multipl
   const list = element('div', 'decision-list common-question-list');
   for (const question of questions) {
     const key = commonQuestionKey(question);
-    const card = element('article', 'decision-card common-question');
+    const card = element('article', 'decision-card neutral common-question');
     card.dataset.sessionId = session.session_id;
     card.dataset.internalQuestionId = question.internalQuestionId;
     const head = element('div', 'decision-head');
@@ -3661,7 +3713,7 @@ function instructionPreviewRecoveryPanel(state) {
     const target = instructionTargetFor(state, instruction.launchRef);
     const targetName = target ? instructionTargetName(target) : '実行先を確認できません';
     const createdAt = Number.isSafeInteger(instruction.createdAt) ? absoluteTimeLabel(instruction.createdAt) : '作成時刻不明';
-    const item = element('article', 'decision-card instruction-recovery-card');
+    const item = element('article', 'decision-card neutral instruction-recovery-card');
     const itemHeading = element('span', 'decision-title', instructionModeLabel(instruction.mode) + ' · ' + targetName + ' · ' + createdAt);
     itemHeading.setAttribute('role', 'heading');
     itemHeading.setAttribute('aria-level', '3');
@@ -3715,7 +3767,7 @@ function instructionAlternativeRecoveryPanel(state) {
   for (const [oldId, draft] of pending) {
     const request = draft.pendingRequest;
     const retry = instructionAlternativeRetryState(state, request);
-    const item = element('article', 'decision-card instruction-recovery-card');
+    const item = element('article', 'decision-card neutral instruction-recovery-card');
     const targetName = retry.target ? instructionTargetName(retry.target) : '実行先を確認できません';
     const heading = element('span', 'decision-title', `${targetName} · 次の入力へ差し替え`);
     heading.setAttribute('role', 'heading');
@@ -3771,7 +3823,7 @@ function instructionAlternativeRecoveryPanel(state) {
 }
 
 function instructionCard(session, state, instruction) {
-  const card = element('article', 'decision-card');
+  const card = element('article', 'decision-card neutral');
   const target = instructionTargetFor(state, instruction.launchRef);
   const serviceReady = state?.instructionDiagnostics?.service === 'ready' && state?.instructionDiagnostics?.blocked !== true;
   const targetReady = target && target.sessionId === session.session_id && target.executionId === instruction.registrationExecutionId &&
@@ -3796,7 +3848,7 @@ function instructionCard(session, state, instruction) {
   }
   if (instruction.heldReason) card.append(element('p', 'instruction-reason', instructionReasonLabel(instruction.heldReason)));
   else if (!targetReady && ['available', 'claimed'].includes(instruction.state)) {
-    card.append(element('p', 'instruction-reason', '実行先の状態を確認できないため、送信を保留しています。'));
+    card.append(element('p', 'instruction-reason', '現在の状態では送信できません。送信を保留しています。'));
   }
   const actionError = instructionErrors.get(`action:${instruction.deliveryAttemptId}`);
   if (actionError) card.append(element('p', 'instruction-reason', actionError));
@@ -3889,8 +3941,9 @@ function instructionComposer(session, state) {
   if (!targets.length && !instructions.length && !existingDraft?.text) return null;
   const panel = element('section');
   panel.setAttribute('aria-label', '指示の保存と送信');
-  const composer = element('article', 'decision-card');
-  const currentTarget = targets.length === 1 ? targets[0] : null;
+  const composer = element('article', 'decision-card neutral');
+  const draft = instructionDraftFor(session.session_id);
+  const currentTarget = targets.length === 1 ? targets[0] : instructionDraftTargetFor(state, session.session_id, draft);
   const currentMode = instructionModeForTarget(currentTarget);
   const heading = element('div', 'decision-head');
   heading.append(element('span', 'decision-title', '追加指示'));
@@ -3898,7 +3951,8 @@ function instructionComposer(session, state) {
   composer.append(heading);
   const destination = currentTarget
     ? `${instructionTargetName(currentTarget)} · ${instructionTargetStatusText(currentTarget)}`
-    : targets.length ? `実行先を一意に確認できません（候補 ${targets.length} 件）` : '実行先を確認できません';
+    : targets.length > 1 ? `実行先を選択してください（候補 ${targets.length} 件）`
+      : targets.length ? `実行先を一意に確認できません（候補 ${targets.length} 件）` : '実行先を確認できません';
   composer.append(element('p', 'decision-context instruction-target', `現在の宛先: ${destination} · 送信方法: ${currentMode ? instructionModeLabel(currentMode) : '確認できません'}`));
   if (!serviceReady) {
     const reason = state?.instructionDiagnostics?.errorCode || state?.instructionDiagnostics?.service || 'instruction_dispatch_unavailable';
@@ -3907,29 +3961,59 @@ function instructionComposer(session, state) {
     composer.append(element('p', 'decision-context instruction-reason', '実行先を確認できないため、指示を保存できません。'));
   }
   {
-    const draft = instructionDraftFor(session.session_id);
     const emptyDraft = !draft.text && !draft.deliveryAttemptId && !draft.logicalMessageId;
     if (emptyDraft) {
       draft.needsRebind = false;
-      if (targets.length === 1 && state?.instructionDiagnostics?.targets === 'available' && serviceReady) {
-        const target = targets[0];
+      const selectedTarget = targets.length === 1 ? targets[0] : instructionDraftTargetFor(state, session.session_id, draft);
+      if (selectedTarget && state?.instructionDiagnostics?.targets === 'available' && serviceReady) {
+        const target = selectedTarget;
         const mode = instructionModeForTarget(target);
         draft.targetLaunchRef = target.launchRef;
         draft.mode = mode;
         draft.binding = instructionBindingForTarget(target, mode);
       }
     }
-    const currentBinding = instructionBindingForTarget(currentTarget, currentMode);
-    const currentBindingMatches = sameInstructionBinding(draft.binding, currentBinding) && draft.targetLaunchRef === currentTarget?.launchRef && draft.mode === currentMode;
+    const currentBindingMatches = instructionDraftMatchesTarget(draft, currentTarget);
     if (draft.text && !currentBindingMatches) draft.needsRebind = true;
     const bindingMatches = currentBindingMatches && draft.needsRebind !== true;
     const form = element('form', 'decision-answer instruction-create-form');
     form.dataset.instructionCreateForm = 'true';
     form.dataset.instructionSession = session.session_id;
-    const modeText = currentMode ? instructionModeLabel(currentMode) : '送信方法を確認できません';
-    if (targets.length !== 1) {
-      form.append(element('p', 'decision-context instruction-reason', targets.length
-        ? '実行先が複数あるため、指示の保存を保留しています。下書きは保持されます。'
+    if (targets.length > 1) {
+      const selection = element('section', 'decision-question instruction-target-choices');
+      selection.setAttribute('role', 'group');
+      selection.setAttribute('aria-label', '対象の実行');
+      selection.append(element('p', 'decision-question-title', '対象の実行'));
+      const options = element('ul', 'decision-options');
+      const selectedCounts = new Map();
+      for (const target of targets) selectedCounts.set(target.launchRef, (selectedCounts.get(target.launchRef) || 0) + 1);
+      for (const target of targets) {
+        const item = element('li', 'decision-option');
+        const label = element('label', 'answer-pick');
+        const input = element('input');
+        input.type = 'radio';
+        input.name = `instruction-target-${session.session_id}`;
+        input.value = target.launchRef;
+        input.checked = selectedCounts.get(target.launchRef) === 1 && draft.targetLaunchRef === target.launchRef;
+        input.disabled = instructionInFlight.has(session.session_id) || Boolean(draft.deliveryAttemptId || draft.logicalMessageId);
+        input.dataset.instructionTargetSelect = session.session_id;
+        input.dataset.instructionTargetLaunchRef = target.launchRef;
+        const targetMode = instructionModeForTarget(target);
+        const targetSummary = `${instructionTargetName(target)} · ${instructionTargetStatusText(target)} · ${targetMode ? instructionModeLabel(targetMode) : '現在は送信できません'}`;
+        label.append(input, element('span', 'answer-pick-body', targetSummary));
+        item.append(label);
+        if (target.status === 'waiting') item.append(element('span', 'decision-option-description', instructionTargetWaitingNotice(target)));
+        else if (target.status === 'unverified') item.append(element('span', 'decision-option-description', '実行状態を確認できません。'));
+        options.append(item);
+      }
+      selection.append(options);
+      form.append(selection);
+    }
+    if (targets.length !== 1 && !currentTarget) {
+      form.append(element('p', 'decision-context instruction-reason', targets.length > 1
+        ? '対象の実行を選ぶまで、指示の保存を保留しています。下書きは保持されます。'
+        : targets.length
+          ? '選択した実行先を一意に確認できないため、指示の保存を保留しています。下書きは保持されます。'
         : '実行先を確認できないため、指示の保存を保留しています。下書きは保持されます。'));
     } else if (currentTarget.status === 'waiting') {
       form.append(element('p', 'decision-context instruction-reason', instructionTargetWaitingNotice(currentTarget)));
@@ -3939,8 +4023,7 @@ function instructionComposer(session, state) {
       form.append(element('p', 'decision-context instruction-reason', '現在の実行状態では指示を保存できません。入力内容は保持されます。'));
     }
     if (draft.text && !bindingMatches) {
-      const canRebind = currentTarget && currentMode && instructionTargetMode(currentTarget, currentMode) &&
-        !instructionInFlight.has(session.session_id);
+      const canRebind = instructionDraftRebindTarget(session.session_id, state);
       const bindingNotice = element('p', 'decision-context instruction-reason', canRebind
         ? `この下書きは実行状態の変化を確認しました。現在の宛先は ${destination}、送信方法は ${instructionModeLabel(currentMode)} です。`
         : 'この下書きの宛先または実行状態が変わりました。下書きは保持し、対象を確認できるまで保存を保留しています。');
@@ -4001,11 +4084,8 @@ function setInstructionDraftField(sessionId, field, value) {
 function updateInstructionSave(form) {
   const sessionId = form.dataset.instructionSession;
   const draft = instructionDraftFor(sessionId);
-  const targets = instructionTargetsForSession(lastState, sessionId);
-  const target = targets.length === 1 ? targets[0] : null;
-  const currentMode = instructionModeForTarget(target);
-  const currentBinding = instructionBindingForTarget(target, currentMode);
-  const bindingMatches = sameInstructionBinding(draft.binding, currentBinding) && draft.targetLaunchRef === target?.launchRef && draft.mode === currentMode;
+  const target = instructionDraftTargetFor(lastState, sessionId, draft);
+  const bindingMatches = instructionDraftMatchesTarget(draft, target);
   const submit = form.querySelector('[type="submit"]');
   if (submit) submit.disabled = draft.needsRebind === true || instructionInFlight.has(sessionId) || lastState?.instructionDiagnostics?.service !== 'ready' ||
     lastState?.instructionDiagnostics?.blocked === true || lastState?.instructionDiagnostics?.targets !== 'available' || !target || !bindingMatches ||
@@ -4016,13 +4096,9 @@ function updateInstructionSave(form) {
 
 function rebindInstructionDraft(sessionId, state = lastState) {
   const draft = instructionDraftFor(sessionId);
-  const targets = instructionTargetsForSession(state, sessionId);
-  if (targets.length !== 1 || instructionInFlight.has(sessionId) || draft.deliveryAttemptId || draft.logicalMessageId ||
-      state?.instructionDiagnostics?.service !== 'ready' || state?.instructionDiagnostics?.blocked === true ||
-      state?.instructionDiagnostics?.targets !== 'available') return false;
-  const target = targets[0];
-  const mode = instructionModeForTarget(target);
-  if (!mode || !instructionTargetMode(target, mode)) return false;
+  const binding = instructionDraftRebindTarget(sessionId, state);
+  if (!binding) return false;
+  const { target, mode } = binding;
   draft.targetLaunchRef = target.launchRef;
   draft.mode = mode;
   draft.binding = instructionBindingForTarget(target, mode);
@@ -4654,6 +4730,7 @@ function render(state) {
         : active?.dataset?.mergeGo ? { kind: 'merge-go', key: active.dataset.mergeGo }
       : active?.dataset?.productAction ? { kind: 'product', action: active.dataset.productAction, key: active.dataset.productKey, direction: active.dataset.direction || '' }
         : active?.dataset?.answerPick ? { kind: 'answer-pick', sessionId: active.dataset.sessionId, decisionId: active.dataset.decisionId, questionIndex: active.dataset.answerQuestion, optionIndex: active.dataset.answerOption }
+        : active?.dataset?.instructionTargetSelect ? { kind: 'instruction-target', sessionId: active.dataset.instructionTargetSelect, launchRef: active.dataset.instructionTargetLaunchRef }
         : activeInstructionField ? { kind: 'instruction-input', sessionId: activeInstructionField.dataset.instructionSession,
            field: activeInstructionField.dataset.instructionField, id: activeInstructionField.dataset.instructionId || '',
            start: activeInstructionField instanceof HTMLTextAreaElement ? activeInstructionField.selectionStart : 0,
@@ -4768,6 +4845,12 @@ function render(state) {
   }
 
   if (focusData) {
+    if (focusData.kind === 'instruction-target') {
+      const control = [...root.querySelectorAll('[data-instruction-target-select]')].find((item) =>
+        item.dataset.instructionTargetSelect === focusData.sessionId && item.dataset.instructionTargetLaunchRef === focusData.launchRef);
+      control?.focus({ preventScroll: true });
+      return;
+    }
     if (focusData.kind === 'instruction-alt-preview') {
       const control = root.querySelector(`[data-instruction-recovery-text="${CSS.escape(focusData.id)}"]`);
       if (activeInstructionRecoveryText && control) {
@@ -4979,6 +5062,13 @@ async function sendDecisionAnswer(button) {
 }
 
 document.addEventListener('change', (event) => {
+  const instructionTargetSelect = event.target.closest('[data-instruction-target-select]');
+  if (instructionTargetSelect) {
+    selectInstructionDraftTarget(instructionTargetSelect.dataset.instructionTargetSelect,
+      instructionTargetSelect.dataset.instructionTargetLaunchRef, lastState);
+    if (lastState) render(lastState);
+    return;
+  }
   const instructionField = event.target.closest('[data-instruction-field]');
   if (instructionField && ['target', 'mode'].includes(instructionField.dataset.instructionField)) {
     const fieldName = instructionField.dataset.instructionField === 'target' ? 'targetLaunchRef' : 'mode';
@@ -5199,8 +5289,7 @@ async function runInstructionCreate(form) {
     return;
   }
   if (existingPreview?.phase === 'requesting') return;
-  const targets = instructionTargetsForSession(lastState, sessionId);
-  const target = targets.length === 1 ? targets[0] : null;
+  const target = instructionDraftTargetFor(lastState, sessionId, draft);
   const mode = instructionModeForTarget(target);
   const binding = instructionBindingForTarget(target, mode);
   if (lastState?.instructionDiagnostics?.service !== 'ready' || lastState?.instructionDiagnostics?.blocked === true ||
@@ -6254,6 +6343,7 @@ async function refresh() {
     connectionLost = false;
     updateConnectionNote();
     lastState = state;
+    observeInstructionDraftBindings(state);
     const awayBefore = header.dataset.away;
     applyAwayState(state.away);
     // 離席の切り替えでは version が進まないので、「離席中のみ」の表示はここで描き直す。
