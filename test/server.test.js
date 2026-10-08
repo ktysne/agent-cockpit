@@ -860,6 +860,7 @@ test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合す�
     { path: '/api/pull-requests/cancel-reservation', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/conflict-request', secret: 'ui', originRequired: true },
     { path: '/api/sessions/session-a/estimate', secret: 'ui', originRequired: true },
+    { path: '/api/record-deletions', secret: 'ui', originRequired: true },
     { path: '/api/hidden-sessions', secret: 'ui', originRequired: true },
     { path: '/api/display', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/merge-result/close', secret: 'ui', originRequired: true },
