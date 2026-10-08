@@ -296,6 +296,7 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
 .pr.merge-pending { background: var(--surface-2); border: 1px solid var(--border); margin: 4px -6px; padding: 8px 6px 6px; border-radius: 8px; }
 .merge-btn { background: var(--ok); color: var(--on-ok); border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; min-height: 32px; margin-left: auto; }
 .merge-btn.outline { border: 1px solid var(--border); background: transparent; color: var(--text); }
+.merge-btn:disabled { cursor: default; opacity: .55; }
 .reservation-toggle { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; }
 .reservation-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
 .reservation-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -655,6 +656,11 @@ const DATA = {
           id: 'agent-cockpit-notify', title: 'Notification だけ届いたセッション', status: 'unknown', branch: 'feature/notification-only',
           main: { tool: '', since: '5 分前' },
           perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 5,
+        },
+        {
+          id: 'agent-cockpit-noninteractive', title: '非対話の claude -p (クロスレビュー)', status: 'unknown', nonInteractive: true, branch: 'plan/pr-stack-view',
+          main: { tool: '', since: '3 分前' },
+          perms: [], subagents: [], tasks: [], tasksUpdatedMin: 0, decisions: [], lastUpdatedMin: 3,
         },
       ],
     },
@@ -1089,7 +1095,8 @@ const answerDirty = (answer, decision) => {
 
 const allSessions = () => DATA.products.flatMap(p => p.sessions).filter(s => !ui.deletedSessionIds.includes(s.id));
 function isIdleHiddenSession(session, now = Date.now()) {
-  if (session.status === 'busy' || session.perms.length > 0) return false;
+  // 非対話の実行中は作業中として見せるので、更新時刻が古くても隠さない。
+  if (session.status === 'busy' || (session.status === 'unknown' && session.nonInteractive) || session.perms.length > 0) return false;
   if (session.decisions.some(isActiveDecision)) return false;
   if (commonQuestionsOf(session).some(question => !isFinishedCommonQuestion(question))) return false;
   if (instructionRecordsForSession(session).some(record => !isFinishedInstructionRecord(record))) return false;
@@ -2088,7 +2095,9 @@ function renderLineageDiagnostics() {
 }
 
 function mainRow(p, session, withTag) {
-  const unknown = session.status === 'unknown';
+  const nonInteractive = session.nonInteractive === true;
+  const nonInteractiveUnknown = session.status === 'unknown' && nonInteractive;
+  const unknown = session.status === 'unknown' && !nonInteractiveUnknown;
   const nativeState = nativeStopState(session);
   const nativeStatus = {
     'native-wait': '質問・許可待ち',
@@ -2100,14 +2109,15 @@ function mainRow(p, session, withTag) {
   const estimate = unknown && ui.estimatedSessions.includes(session.id) && session.estimate?.canEstimate ? session.estimate : null;
   const taskTitle = session.tasks.find(task => taskState(session, task) === 'doing')?.title || '';
   // 状態不明の行の main.since は、ターンを確定しないイベントが最後に届いた時刻。無いときは時刻不明にする。
-  const status = nativeStatus || (session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)');
+  const status = nativeStatus || (nonInteractiveUnknown ? '非対話の実行中' : session.status === 'busy' ? '作業中' : session.status === 'wait' ? '待機中' : session.status === 'interrupted' ? '中断' : estimate ? '状態不明' : session.main.since ? `状態不明 (${session.main.since})` : '状態不明 (時刻不明)');
   const statusTitle = session.status === 'interrupted' ? ' title="利用者が中断した。セッションは生きていて、次の入力を待っている"' : '';
   const conversation = session.codex?.resumes ? `<span class="route-tag" title="同じ会話を再開しても 1 行にまとめて表示する">再開 ${session.codex.resumes} 回</span>` : '';
   const stateClass = nativeState === 'native-stop-unconfirmed' ? 'unknown'
     : ['native-wait', 'native-capacity', 'native-stopped'].includes(nativeState) ? 'wait'
-      : session.status === 'unknown' ? 'unknown' : session.status;
+      : nonInteractiveUnknown ? 'busy' : session.status === 'unknown' ? 'unknown' : session.status;
   const tool = estimate || !session.main.tool || session.main.tool === '—' ? '' : session.main.tool;
-  const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}`;
+  const model = nonInteractive ? '<div class="models"><span class="model claude">Claude (API)</span></div>' : '';
+  const detail = `${taskTitle ? `<div class="activity-title">${esc(taskTitle)}</div>` : ''}${tool ? renderToolLine(tool) : ''}${model}`;
   return `<div class="now-row main-row">
       <div class="who"><span class="dot ${stateClass}"></span>${session.codex ? 'Codex' : 'メイン'}${sessionTag(p, session, withTag)}<strong${statusTitle}>${status}</strong>${conversation}${lineageNotice(session)}</div>
       ${unknown ? '' : `<div class="since">${esc(session.main.since || '')}</div>`}
@@ -2722,14 +2732,15 @@ function prItem(p, pr) {
   const shownWaits = crossReviewState(pr).cls === 'warn' ? waiting.filter((reason) => reason !== crossReviewWaitReason(p, pr)) : waiting;
   const queued = Boolean(pr.mergeIntent);
   // 常駐サーバーが gh でマージしている間の印。確認欄から実行中の操作は確認欄の「処理中…」で示す。
-  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !(confirmManual && pullRequestMergeInFlight.has(k));
+  const shownInConfirmation = confirmManual && pullRequestMergeInFlight.has(k);
+  const mergeInProgress = Boolean(pr.mergeInProgress) && !queued && !shownInConfirmation;
   const mergeIntent = queued || mergeInProgress;
   const pos = stackPos(p, pr);
   const e = effective(p, pr);
   const rsv = ui.reserved[k];
   const actions = [
     queued ? `<button type="button" class="link-btn" data-queue-left="${k}" title="GitHub でキューから外れたときに押すと、マージの操作に戻る">キューから外れた</button>` : '',
-    !mergeIntent && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
+    !mergeIntent && !shownInConfirmation && (!operationBlocker || rsv) ? `${conditionMet ? '<span class="merge-state ok">マージできます</span>' : !operationBlocker ? '<span class="merge-state">マージ操作は可能</span>' : ''}<button type="button" class="merge-btn ${conditionMet ? '' : 'outline'}" data-merge="${k}" data-merge-action="manual" ${confirmManual || pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>マージする</button>
       <label class="reservation-toggle"><input type="checkbox" data-reservation-toggle="${k}" ${rsv ? 'checked' : ''} ${pullRequestMergeInFlight.has(k) ? 'disabled' : ''}>収束後マージ</label>` : '',
     conflictButton(p, pr),
   ].join('').trim();
@@ -2907,7 +2918,7 @@ function kindTodoTaskCount(sessions) {
 const ESTIMATE_WAITING = { input: 'はい', tool: 'いいえ (許可待ちかツールの実行中)', model: 'いいえ (応答の生成中)' };
 
 function unknownSessionControls(session) {
-  if (session.status !== 'unknown') return '';
+  if (session.status !== 'unknown' || session.nonInteractive) return '';
   const estimate = ui.estimatedSessions.includes(session.id)
     ? session.estimate?.canEstimate
       ? `<div class="estimate"><p>最後の記録: ${esc(absoluteTimeLabel(session.estimate.recordedAt))}、最後のツール: ${esc(session.estimate.lastTool ?? session.estimate.tool ?? 'なし')}</p><p>入力待ちらしい: ${ESTIMATE_WAITING[session.estimate.state]}</p></div>`
