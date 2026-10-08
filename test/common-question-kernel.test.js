@@ -33,6 +33,15 @@ function withExternalResolution(questionRecord) {
   });
 }
 
+test('legacy journal records without registration-time opt-in normalize to disabled', () => {
+  const current = record();
+  const legacy = { ...current };
+  delete legacy.autoApplyEnabledAtRegistration;
+  assert.deepEqual(kernel.normalizeQuestionRecord(legacy), current);
+  assert.throws(() => kernel.normalizeQuestionRecord({ ...current, autoApplyEnabledAtRegistration: 1 }),
+    { code: 'invalid_journal' });
+});
+
 test('question normalization rejects unknown fields, accessors, and sparse arrays', () => {
   assert.throws(() => kernel.normalizeQuestions([{ ...questions()[0], extra: true }]), { code: 'invalid_question' });
   const accessor = questions()[0];

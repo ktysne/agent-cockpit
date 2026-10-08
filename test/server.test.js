@@ -264,6 +264,22 @@ test('離席中の切り替えは秘密値と Origin を照合し、状態を軽
   assert.equal(away.headers['access-control-allow-origin'], undefined);
 });
 
+test('離席状態の変更は共通質問serviceへ任意で通知する', async (t) => {
+  const notifications = [];
+  const questionService = {
+    async ready() {},
+    notifyAwayChanged() { notifications.push('away-changed'); },
+    async close() {},
+  };
+  const runtime = await runningServer(t, { questionService });
+  const response = await request(runtime.info.port, {
+    method: 'POST', path: '/api/away', headers: uiHeaders(runtime.info),
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(notifications, ['away-changed']);
+});
+
 test('PR マージ口は画面秘密値と Origin 必須照合を行い、owner/repo を要求本文から拒む', async (t) => {
   const runtime = await runningServer(t);
   const path = '/api/pull-requests/merge';

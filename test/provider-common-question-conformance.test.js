@@ -564,9 +564,11 @@ for (const provider of PROVIDERS) {
 
   test('ID-F08-A01: ' + provider + ' は保留と全問適格条件を離席期限で確認する', { timeout: 5000 }, async (t) => {
     let clock = 1_000;
-    const away = { enabled: true, snapshot() { return { enabled: this.enabled }; } };
+    const away = { enabled: true, since: 1_000, snapshot() { return { enabled: this.enabled, since: this.since }; } };
     const context = await createProductContext(t, provider, {
-      harnessOptions: { now: () => clock, away },
+      harnessOptions: { now: () => clock, away, questionServiceOptions: {
+        getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+      } },
     });
     const allRecommendedId = 'held-recommended-' + provider;
     await registerOverMcp(context, allRecommendedId, [
@@ -596,6 +598,7 @@ for (const provider of PROVIDERS) {
       held: false,
     }, uiHeaders(context.runtime));
     assert.equal(release.status, 200, release.body);
+    clock = heldQuestion.createdAt + 300_000;
     await context.harness.questionService.tick();
     const defaulted = await getDashboardQuestion(context, allRecommendedId);
     assert.equal(defaulted.selectionSource, 'away-default');
@@ -611,7 +614,7 @@ for (const provider of PROVIDERS) {
       question('multi', { mode: 'multi', recommendedOptionId: 'a' }),
     ]);
     const mixed = await getDashboardQuestion(context, mixedId);
-    clock = mixed.deadlineAt;
+    clock = mixed.createdAt + 300_000;
     await context.harness.questionService.tick();
     const unchanged = await getDashboardQuestion(context, mixedId);
     assert.equal(unchanged.selectionSource, null);
@@ -621,9 +624,11 @@ for (const provider of PROVIDERS) {
 
   test('ID-F08-A02: ' + provider + ' は手動回答と期限回答の先着を保持し遅い回答を再適用しない', { timeout: 5000 }, async (t) => {
     let clock = 2_000;
-    const away = { snapshot: () => ({ enabled: true }) };
+    const away = { snapshot: () => ({ enabled: true, since: 2_000 }) };
     const context = await createProductContext(t, provider, {
-      harnessOptions: { now: () => clock, away },
+      harnessOptions: { now: () => clock, away, questionServiceOptions: {
+        getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+      } },
     });
     const manualId = 'manual-before-deadline-' + provider;
     await registerOverMcp(context, manualId, [question('choice', { options: [
@@ -634,7 +639,7 @@ for (const provider of PROVIDERS) {
     const manual = await answerOverUi(context, manualId, [questionAnswer('choice', ['b'])]);
     assert.equal(manual.response.status, 200, manual.response.body);
     assert.equal(jsonBody(manual.response).outcome, 'selected');
-    clock = manualQuestion.deadlineAt;
+    clock = manualQuestion.createdAt + 300_000;
     await context.harness.questionService.tick();
     const preservedManual = await getDashboardQuestion(context, manualId);
     assert.equal(preservedManual.selectionSource, 'manual');
@@ -646,7 +651,7 @@ for (const provider of PROVIDERS) {
       { id: 'b', label: 'Option B', description: '' },
     ], recommendedOptionId: 'a' })]);
     const pending = await getDashboardQuestion(context, defaultId);
-    clock = pending.deadlineAt;
+    clock = pending.createdAt + 300_000;
     await context.harness.questionService.tick();
     const selected = await getDashboardQuestion(context, defaultId);
     assert.equal(selected.selectionSource, 'away-default');

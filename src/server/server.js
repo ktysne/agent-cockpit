@@ -2105,6 +2105,9 @@ function createRequestHandler(options) {
       try {
         const snapshot = await away.setEnabled(body.enabled);
         if (!snapshot.enabled) answerDelivery.signalAll();
+        if (typeof questionService?.notifyAwayChanged === 'function') {
+          try { void Promise.resolve(questionService.notifyAwayChanged()).catch(() => {}); } catch {}
+        }
         jsonResponse(response, 200, snapshot);
       } catch {
         jsonResponse(response, 500, { error: 'Internal Server Error' });

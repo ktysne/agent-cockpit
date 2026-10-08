@@ -65,6 +65,11 @@ test('MCP stdio は initialize、tools/list、tools/call に応答する', async
   assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
     'cockpit_set_tasks', 'cockpit_add_decision', 'cockpit_update_decision', 'cockpit_register_question', 'cockpit_question_status', 'cockpit_answer_poll', 'cockpit_add_pr', 'cockpit_skip_review',
   ]);
+  const questionTool = responses[1].result.tools.find((tool) => tool.name === 'cockpit_register_question');
+  assert.match(questionTool.description, /通常判断の質問/);
+  assert.match(questionTool.description, /回答pollで一度だけ取得/);
+  assert.match(questionTool.description, /許可や承認の要求、nativeの待機には使用しません/);
+  assert.match(questionTool.description, /Claudeのnative AskUserQuestionも共通質問へ再登録しません/);
   assert.equal(responses[2].id, 3);
   assert.match(responses[2].result.content[0].text, /テストを書く \(doing\)/);
   assert.equal(sent.url, 'http://127.0.0.1:49124/api/sessions/pending/plan');
@@ -388,6 +393,22 @@ function commonQuestionInput() {
     timeoutMinutes: 5,
   };
 }
+
+test('共通質問MCPの引数から信頼済み自動適用設定を指定できない', async () => {
+  let requests = 0;
+  const response = await exchange([
+    { jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'cockpit_register_question', arguments: { ...commonQuestionInput(), autoApplyEnabled: true } } },
+  ], {
+    homeDir: 'C:\\temporary-cockpit',
+    environment: { CLAUDE_CODE_SESSION_ID: 'mcp-session' },
+    writer: makeWriter(),
+    ensureServerRunning: async () => ({ port: 49124, secret: 'test-secret' }),
+    fetchImpl: async () => { requests += 1; throw new Error('invalid MCP arguments reached HTTP'); },
+  });
+  assert.equal(response[0].result.isError, true);
+  assert.equal(requests, 0);
+});
 
 test('共通質問のMCP登録と状態pollは回答値を返さずwriterを固定経路へ送る', async () => {
   const writer = makeWriter();
