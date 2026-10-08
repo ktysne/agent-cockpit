@@ -334,6 +334,7 @@ function createOwnedNativeRunner(options) {
   let childExited = false;
   let childClosed = false;
   let childSpawned = false;
+  let childSpawnAttempted = false;
   let childTerminationResolve = null;
   let childTerminationPromise = null;
   let childStopPromise = null;
@@ -343,6 +344,8 @@ function createOwnedNativeRunner(options) {
   let lineCount = 0;
   let ignoredMessageCount = 0;
   let unmatchedResolutionCount = 0;
+  let nativeRequestOverflow = false;
+  let unknownServerRequestHeld = false;
   let pendingRpc = null;
   const pendingReadRpcs = new Map();
   const MAX_PENDING_READ_RPCS = 1;
@@ -417,10 +420,15 @@ function createOwnedNativeRunner(options) {
       childExited,
       childClosed,
       waitEndpointActive: claudeMcpWait?.controller.isListening() === true,
-      ownedChildActive: Boolean(child && !childExited && !childClosed),
+      ownedChildActive: Boolean(child && !(childExited && childClosed)),
       lineCount,
       ignoredMessageCount,
       unmatchedResolutionCount,
+      nativeRequestIdCount: usedNativeRequestIds.size,
+      nativeRequestIdRemaining: Math.max(0, MAX_NATIVE_SERVER_REQUESTS - usedNativeRequestIds.size),
+      nativeRequestOverflow,
+      unknownServerRequestHeld,
+      retiredOwnedWaitRequestCount: retiredOwnedWaitRequests.size,
       pendingRpcCount: (pendingRpc ? 1 : 0) + pendingReadRpcs.size,
       contextState: terminalContextId ? 'ended' : nativeContext ? 'active' : 'none',
       terminalContextCount,
@@ -517,10 +525,22 @@ function createOwnedNativeRunner(options) {
   }
 
   function stopChild(childToStop) {
-    if (!childToStop || childExited || childClosed) return Promise.resolve(true);
+    if (!childToStop) {
+      if (!childSpawnAttempted) return Promise.resolve(true);
+      if (state === 'stopping' || state === 'failed') {
+        stateBeforeStopUnconfirmed = state;
+        failureBeforeStopUnconfirmed = failureCode;
+        state = 'stop_unconfirmed';
+        failureCode = 'stop_unconfirmed';
+      }
+      return Promise.resolve(false);
+    }
+    if (childExited && childClosed) return Promise.resolve(true);
     if (childStopPromise) return childStopPromise;
     try { childToStop.stdin.end(); } catch {}
-    try { childToStop.kill(); } catch {}
+    if (!childExited && !childClosed) {
+      try { childToStop.kill(); } catch {}
+    }
     const operation = new Promise((resolve) => {
       let settled = false;
       let timer;
@@ -534,7 +554,7 @@ function createOwnedNativeRunner(options) {
         if (!childExited && !childClosed) {
           try { childToStop.kill('SIGKILL'); } catch {}
         }
-        const confirmed = childExited || childClosed;
+        const confirmed = childExited && childClosed;
         if (!confirmed && (state === 'stopping' || state === 'failed')) {
           stateBeforeStopUnconfirmed = state;
           failureBeforeStopUnconfirmed = failureCode;
@@ -554,7 +574,7 @@ function createOwnedNativeRunner(options) {
   }
 
   function restoreStateAfterLateTermination() {
-    if (state !== 'stop_unconfirmed') return;
+    if (state !== 'stop_unconfirmed' || !childExited || !childClosed) return;
     state = stateBeforeStopUnconfirmed === 'stopping' ? 'stopped' : stateBeforeStopUnconfirmed || 'failed';
     failureCode = failureBeforeStopUnconfirmed;
     stateBeforeStopUnconfirmed = null;
@@ -766,6 +786,10 @@ function createOwnedNativeRunner(options) {
       expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
   }
 
+  function hasRequiredKeys(value, requiredKeys) {
+    return isRecord(value) && requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+  }
+
   function isJsonRpcRequestId(value) {
     return (typeof value === 'string' && isIdentifier(value)) ||
       (Number.isSafeInteger(value) && value >= 0);
@@ -779,10 +803,32 @@ function createOwnedNativeRunner(options) {
     return typeof id === 'string' ? `string:${id}` : `integer:${id}`;
   }
 
+  function holdNativeRequests(reason) {
+    const wasHeld = nativeRequestOverflow || unknownServerRequestHeld;
+    if (reason === 'overflow') nativeRequestOverflow = true;
+    else unknownServerRequestHeld = true;
+    if (wasHeld) return;
+
+    pendingNativeRequestRevision += 1n;
+    const wait = activeWait;
+    const earlyWait = earlyWaitCall;
+    activeWait = null;
+    earlyWaitCall = null;
+    if (wait) {
+      retainRetiredWaitRequest(wait);
+      wait.latch.invalidate();
+    }
+    if (earlyWait) retainRetiredWaitRequest(earlyWait);
+  }
+
   function reserveNativeRequestId(idKey) {
     if (usedNativeRequestIds.has(idKey)) throw runnerError('native_server_request_id_reused');
-    if (usedNativeRequestIds.size >= MAX_NATIVE_SERVER_REQUESTS) throw runnerError('native_server_request_limit');
+    if (usedNativeRequestIds.size >= MAX_NATIVE_SERVER_REQUESTS) {
+      holdNativeRequests('overflow');
+      return false;
+    }
     usedNativeRequestIds.add(idKey);
+    return true;
   }
 
   function retainRetiredWaitRequest(request) {
@@ -792,7 +838,11 @@ function createOwnedNativeRunner(options) {
         pendingOwnedWaitResponses.has(request.requestIdKey)) return;
     if (retiredOwnedWaitRequests.has(request.requestIdKey)) return;
     if (retiredOwnedWaitRequests.size >= MAX_NATIVE_SERVER_REQUESTS) {
-      throw runnerError('native_server_request_limit');
+      if (!nativeRequestOverflow) {
+        nativeRequestOverflow = true;
+        pendingNativeRequestRevision += 1n;
+      }
+      return;
     }
     retiredOwnedWaitRequests.set(request.requestIdKey, Object.freeze({
       requestId: request.requestId,
@@ -805,16 +855,14 @@ function createOwnedNativeRunner(options) {
   }
 
   function parseNativeHoldRequest(message) {
-    const requestKeys = Object.prototype.hasOwnProperty.call(message, 'jsonrpc')
-      ? ['jsonrpc', 'id', 'method', 'params']
-      : ['id', 'method', 'params'];
-    if (!hasExactKeys(message, requestKeys) ||
+    if (!hasRequiredKeys(message, ['id', 'method', 'params']) ||
         (Object.prototype.hasOwnProperty.call(message, 'jsonrpc') && message.jsonrpc !== '2.0') ||
         !isNativeServerRequestId(message.id) || typeof message.method !== 'string' || !isRecord(message.params)) {
       throw runnerError('native_server_request_invalid');
     }
     const params = message.params;
-    if (!isIdentifier(params.threadId) || !isIdentifier(params.turnId) || !isIdentifier(params.itemId)) {
+    if (!hasRequiredKeys(params, ['threadId', 'turnId', 'itemId']) ||
+        !isIdentifier(params.threadId) || !isIdentifier(params.turnId) || !isIdentifier(params.itemId)) {
       throw runnerError('native_server_request_invalid');
     }
 
@@ -862,13 +910,18 @@ function createOwnedNativeRunner(options) {
 
   function recordNativeHoldRequest(message) {
     const request = parseNativeHoldRequest(message);
-    reserveNativeRequestId(request.idKey);
-    if (!childSpawned || !child || !['starting', 'running'].includes(state) || turnStartPending ||
-        !nativeIdentity || !nativeContext || terminalContextId) {
+    if (!childSpawned || !child || !['starting', 'running'].includes(state)) {
       throw runnerError('native_server_request_scope_unavailable');
     }
-    if (nativeIdentity.nativeId !== request.threadId || nativeContext.nativeContextId !== request.turnId) {
+    if ((nativeIdentity && nativeIdentity.nativeId !== request.threadId) ||
+        (!turnStartPending && !instructionStart && nativeContext &&
+          nativeContext.nativeContextId !== request.turnId)) {
       throw runnerError('native_server_request_scope_mismatch');
+    }
+    if (!reserveNativeRequestId(request.idKey)) return;
+    if (turnStartPending || !nativeIdentity || !nativeContext || terminalContextId) {
+      holdNativeRequests('unknown_server_request');
+      return;
     }
     pendingNativeRequests.set(request.idKey, Object.freeze({
       generation,
@@ -881,15 +934,15 @@ function createOwnedNativeRunner(options) {
   }
 
   function resolveNativeHoldRequest(message) {
-    const notificationKeys = Object.prototype.hasOwnProperty.call(message, 'jsonrpc')
-      ? ['jsonrpc', 'method', 'params']
-      : ['method', 'params'];
-    if (!hasExactKeys(message, notificationKeys) ||
+    if (!hasRequiredKeys(message, ['method', 'params']) ||
         (Object.prototype.hasOwnProperty.call(message, 'jsonrpc') && message.jsonrpc !== '2.0') ||
-        !isRecord(message.params) || !hasExactKeys(message.params, ['requestId', 'threadId']) ||
-        !isNativeServerRequestId(message.params.requestId) || !isIdentifier(message.params.threadId)) {
+        !hasRequiredKeys(message.params, ['requestId', 'threadId']) ||
+        !isNativeServerRequestId(message.params.requestId) || !isIdentifier(message.params.threadId) ||
+        (Object.hasOwn(message.params, 'turnId') && !isIdentifier(message.params.turnId))) {
       throw runnerError('native_server_resolution_invalid');
     }
+    const resolutionMatchesTurn = (turnId) =>
+      !Object.hasOwn(message.params, 'turnId') || message.params.turnId === turnId;
     const idKey = nativeRequestIdKey(message.params.requestId);
     if (earlyResolvedWaitRequest && earlyResolvedWaitRequest.requestIdKey === idKey) {
       unmatchedResolutionCount += 1;
@@ -899,7 +952,7 @@ function createOwnedNativeRunner(options) {
     if (ownedWaitResponse) {
       if (ownedWaitResponse.resolved || ownedWaitResponse.generation !== generation || ownedWaitResponse.child !== child ||
           !childSpawned || !['starting', 'running'].includes(state) ||
-          message.params.threadId !== ownedWaitResponse.threadId) {
+          message.params.threadId !== ownedWaitResponse.threadId || !resolutionMatchesTurn(ownedWaitResponse.turnId)) {
         unmatchedResolutionCount += 1;
         return;
       }
@@ -914,6 +967,7 @@ function createOwnedNativeRunner(options) {
           retiredWaitRequest.generation !== generation || retiredWaitRequest.child !== child ||
           !childSpawned || !['starting', 'running'].includes(state) ||
           message.params.threadId !== retiredWaitRequest.threadId ||
+          !resolutionMatchesTurn(retiredWaitRequest.turnId) ||
           pendingNativeRequests.has(idKey) || pendingOwnedWaitResponses.has(idKey)) {
         unmatchedResolutionCount += 1;
         return;
@@ -925,6 +979,7 @@ function createOwnedNativeRunner(options) {
     if (!pending) {
       const wait = activeWait;
       if (wait && wait.requestIdKey === idKey && wait.threadId === message.params.threadId &&
+          resolutionMatchesTurn(wait.turnId) &&
           wait.child === child && wait.generation === generation && childSpawned &&
           ['starting', 'running'].includes(state)) {
         // 取り消された要求へ応答すると指示が失われるため、無応答でreceiptを失効させる。
@@ -937,6 +992,7 @@ function createOwnedNativeRunner(options) {
     }
     if (pending.generation !== generation || pending.child !== child || !childSpawned ||
         !['starting', 'running'].includes(state) || message.params.threadId !== pending.threadId ||
+        !resolutionMatchesTurn(pending.turnId) ||
         !nativeIdentity || nativeIdentity.nativeId !== pending.threadId || !nativeContext ||
         nativeContext.nativeContextId !== pending.turnId ||
         (terminalContextId !== null && terminalContextId !== pending.turnId)) {
@@ -952,6 +1008,10 @@ function createOwnedNativeRunner(options) {
     const completed = earlyTurnCompletion;
     if (earlyResolvedWaitRequest || !turnStartPending || !wait ||
         wait.requestIdKey !== idKey || wait.requestId !== message.params.requestId) {
+      unmatchedResolutionCount += 1;
+      return;
+    }
+    if (Object.hasOwn(message.params, 'turnId') && message.params.turnId !== wait.turnId) {
       unmatchedResolutionCount += 1;
       return;
     }
@@ -1000,7 +1060,7 @@ function createOwnedNativeRunner(options) {
     if (!isIdentifier(threadId) || !isIdentifier(turnId) || state !== 'running' || !childSpawned || !child ||
         !nativeIdentity || nativeIdentity.nativeId !== threadId || !nativeContext ||
         nativeContext.nativeContextId !== turnId || terminalContextId || turnStartPending || activeWait ||
-        instructionStart || instructionUncertain) return null;
+        instructionStart || instructionUncertain || nativeRequestOverflow || unknownServerRequestHeld) return null;
     const capturedGeneration = generation;
     const capturedChild = child;
     const capturedRevision = pendingNativeRequestRevision;
@@ -1020,7 +1080,7 @@ function createOwnedNativeRunner(options) {
       if (pendingNativeRequestRevision !== capturedRevision || generation !== capturedGeneration || child !== capturedChild ||
           state !== 'running' || !childSpawned || !nativeIdentity || nativeIdentity.nativeId !== threadId || !nativeContext ||
           nativeContext.nativeContextId !== turnId || terminalContextId || turnStartPending || activeWait ||
-          instructionStart || instructionUncertain) return false;
+          instructionStart || instructionUncertain || nativeRequestOverflow || unknownServerRequestHeld) return false;
       for (const request of pendingNativeRequests.values()) {
         if (request.generation !== capturedGeneration || request.child !== capturedChild ||
             request.threadId !== threadId || request.turnId !== turnId) return false;
@@ -1058,6 +1118,7 @@ function createOwnedNativeRunner(options) {
   function waitScopeCurrent(wait) {
     const matches = () => wait && activeWait === wait && isCurrent(wait.generation) &&
       child === wait.child && childSpawned &&
+      !nativeRequestOverflow && !unknownServerRequestHeld &&
       nativeIdentity && nativeIdentity.nativeId === wait.threadId &&
       nativeContext && nativeContext.nativeContextId === wait.turnId && !terminalContextId;
     if (!matches() || !wait.callbackComplete) return false;
@@ -1125,6 +1186,10 @@ function createOwnedNativeRunner(options) {
   }
 
   function activateWaitCall(call) {
+    if (nativeRequestOverflow || unknownServerRequestHeld) {
+      retainRetiredWaitRequest(call);
+      return;
+    }
     if (!waitProfile || call.child !== child || call.generation !== generation || !childSpawned ||
         !nativeIdentity || !nativeContext || terminalContextId ||
         call.threadId !== nativeIdentity.nativeId || call.turnId !== nativeContext.nativeContextId) {
@@ -1166,6 +1231,7 @@ function createOwnedNativeRunner(options) {
   function waitScopeCurrentBeforeCallback(wait) {
     const matches = () => wait && activeWait === wait && isCurrent(wait.generation) &&
       child === wait.child && childSpawned &&
+      !nativeRequestOverflow && !unknownServerRequestHeld &&
       nativeIdentity && nativeIdentity.nativeId === wait.threadId &&
       nativeContext && nativeContext.nativeContextId === wait.turnId && !terminalContextId;
     if (!matches()) return false;
@@ -1180,9 +1246,12 @@ function createOwnedNativeRunner(options) {
     if (!waitProfile || !nativeIdentity || call.threadId !== nativeIdentity.nativeId) {
       throw runnerError('wait_request_context_mismatch');
     }
+    if (!turnStartPending && nativeContext && call.turnId !== nativeContext.nativeContextId) {
+      throw runnerError('wait_request_context_mismatch');
+    }
     if (waitCallSeen) throw runnerError('wait_request_duplicate');
     const requestIdKey = nativeRequestIdKey(call.requestId);
-    reserveNativeRequestId(requestIdKey);
+    if (!reserveNativeRequestId(requestIdKey)) return;
     const ownedCall = Object.freeze({ ...call, requestIdKey, child, generation });
     waitCallSeen = true;
     if (turnStartPending) {
@@ -1195,12 +1264,12 @@ function createOwnedNativeRunner(options) {
 
   function releaseWait(receipt) {
     const wait = activeWait;
-    return Boolean(wait && wait.callbackComplete && wait.latch.release(receipt));
+    return Boolean(!nativeRequestOverflow && !unknownServerRequestHeld && wait && wait.callbackComplete && wait.latch.release(receipt));
   }
 
   function cancelWait(receipt) {
     const wait = activeWait;
-    return Boolean(wait && wait.callbackComplete && wait.latch.cancel(receipt));
+    return Boolean(!nativeRequestOverflow && !unknownServerRequestHeld && wait && wait.callbackComplete && wait.latch.cancel(receipt));
   }
 
   function writeLine(line, expectedGeneration) {
@@ -1419,13 +1488,15 @@ function createOwnedNativeRunner(options) {
 
 
   function captureInstruction(metadata) {
-    if (state !== 'running' || !ownedSource || !nativeIdentity || !nativeContext || activeWait || pendingNativeRequests.size > 0 || instructionStart || instructionUncertain ||
+    if (state !== 'running' || !ownedSource || !nativeIdentity || !nativeContext || activeWait || pendingNativeRequests.size > 0 ||
+        nativeRequestOverflow || unknownServerRequestHeld || instructionStart || instructionUncertain ||
         provider === 'codex' && !initializeHomeConfirmed || provider !== 'codex' && metadata.mode === 'steer') return null;
     const capture = { generation, identity: nativeIdentity, contextId: nativeContext.nativeContextId, terminal: terminalContextId, child, lease: sourceController.captureInstructionLease() };
     return checkInstruction(capture, metadata) ? capture : null;
   }
   function checkInstructionPhysical(capture) {
     return capture && isCurrent(capture.generation) && state === 'running' && child === capture.child &&
+      !nativeRequestOverflow && !unknownServerRequestHeld &&
       nativeIdentity === capture.identity && ownedSource.facade.checkSource() === true &&
       sourceController.isLeaseTokenCurrent(capture.lease) === true;
   }
@@ -1521,7 +1592,9 @@ function createOwnedNativeRunner(options) {
           recordNativeHoldRequest(message);
           return;
         }
-        throw runnerError('unknown_server_request');
+        if (!isNativeServerRequestId(message.id)) throw runnerError('native_server_request_invalid');
+        holdNativeRequests('unknown_server_request');
+        return;
       }
       if (message.method === 'serverRequest/resolved') {
         resolveNativeHoldRequest(message);
@@ -1702,16 +1775,22 @@ function createOwnedNativeRunner(options) {
     child.once('exit', () => {
       childExited = true;
       if (sourceController) sourceController.invalidate();
-    if (instructionController) instructionController.invalidate();
-      if (childTerminationResolve) childTerminationResolve();
+      if (instructionController) instructionController.invalidate();
+      if (childExited && childClosed && childTerminationResolve) {
+        childTerminationResolve();
+        childTerminationResolve = null;
+      }
       restoreStateAfterLateTermination();
       if (isCurrent(expectedGeneration)) fail('process_exited');
     });
     child.once('close', () => {
       childClosed = true;
       if (sourceController) sourceController.invalidate();
-    if (instructionController) instructionController.invalidate();
-      if (childTerminationResolve) childTerminationResolve();
+      if (instructionController) instructionController.invalidate();
+      if (childExited && childClosed && childTerminationResolve) {
+        childTerminationResolve();
+        childTerminationResolve = null;
+      }
       restoreStateAfterLateTermination();
       if (isCurrent(expectedGeneration)) fail('process_exited');
     });
@@ -1794,6 +1873,7 @@ function createOwnedNativeRunner(options) {
     }
     let childProcess;
     try {
+      childSpawnAttempted = true;
       childProcess = spawnImpl(executablePath, argumentsList, {
         cwd,
         env: environment,
@@ -1807,8 +1887,8 @@ function createOwnedNativeRunner(options) {
       throw runnerError('spawn_failed');
     }
     for (const key of Object.keys(environment)) delete environment[key];
-    requireCurrent(expectedGeneration);
     attachChild(childProcess, expectedGeneration);
+    requireCurrent(expectedGeneration);
     await waitForSpawn(expectedGeneration);
     requireOwnerCurrent(expectedGeneration);
     notifySourceReady(expectedGeneration);
@@ -1928,7 +2008,8 @@ function createOwnedNativeRunner(options) {
     if (startPromise || state !== 'idle') return Promise.reject(runnerError('already_started'));
     startPromise = startOnce(request).catch((error) => {
       const code = error instanceof OwnedNativeRunnerError ? error.code : 'startup_failed';
-      if (state !== 'failed' && state !== 'stopped' && state !== 'stopping' && state !== 'unsupported') fail(code);
+      if (state !== 'failed' && state !== 'stopped' && state !== 'stopping' && state !== 'stop_unconfirmed' &&
+          state !== 'unsupported') fail(code);
       throw runnerError(code);
     });
     startPromise.catch(() => {});

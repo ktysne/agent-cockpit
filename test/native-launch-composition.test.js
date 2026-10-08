@@ -261,6 +261,9 @@ class FakeChild extends EventEmitter {
     this.stdin = new FakePipe((line) => onWrite(line, this));
     this.exited = false;
     this.suppressKillClose = options.suppressKillClose === true;
+    this.killEvents = options.killEvents || ['exit', 'close'];
+    this.killResult = options.killResult ?? true;
+    this.killError = options.killError || null;
   }
 
   send(...messages) {
@@ -269,14 +272,16 @@ class FakeChild extends EventEmitter {
   }
 
   kill(signal) {
+    if (this.killError) throw this.killError;
+    if (this.killResult === false) return false;
     if (!this.exited && !this.suppressKillClose) {
-      this.exited = true;
+      this.exited = this.killEvents.includes('exit');
       setImmediate(() => {
-        this.emit('exit', 0, signal || null);
+        for (const event of this.killEvents) this.emit(event, 0, signal || null);
         this.stdout.emit('end');
       });
     }
-    return true;
+    return this.killResult;
   }
 }
 
@@ -952,7 +957,7 @@ test('a terminal context received before its context event prevents later proof 
   assert.equal(fixture.registrationKernel.registry.snapshot().executions[0].state, 'active');
 });
 
-test('stop keeps proof revoked and reports an unconfirmed child until close is observed', async (t) => {
+test('stop keeps proof revoked and reports an unconfirmed child until exit and close are observed', async (t) => {
   const fixture = createOwnedCompositionFixture(t, 'codex', {
     suppressKillClose: true,
     stopMs: 50,
@@ -974,11 +979,24 @@ test('stop keeps proof revoked and reports an unconfirmed child until close is o
   assert.equal(fixture.nativeHarness.child.exited, false);
   assert.equal(fixture.runtimeKernel.registry.checkCurrentProof(result.launchRef, proof).ok, false);
   assert.equal(fixture.registrationKernel.registry.snapshot().executions[0].state, 'active');
+  fixture.nativeHarness.child.exited = true;
+  fixture.nativeHarness.child.emit('exit', 137, 'SIGKILL');
+  assert.equal(fixture.composition.snapshot().launches[0].processState, 'stop_unconfirmed');
+  assert.equal(fixture.nativeHarness.runnerOptions.isCurrent(), false);
   fixture.nativeHarness.child.emit('close');
-  assert.equal(fixture.nativeHarness.child.exited, false);
+  assert.equal(fixture.nativeHarness.child.exited, true);
   assert.equal(fixture.nativeHarness.runnerOptions.isCurrent(), false);
   assert.equal(fixture.composition.snapshot().launches[0].processState, 'stopped');
   assert.equal(fixture.composition.resolveProof(result.launchRef), null);
+});
+
+test('composition does not infer stop success from a runner snapshot without both termination flags', async () => {
+  const fixture = createFixture();
+  const { receipt } = await fixture.startStandalone('codex', 'missing-termination-evidence');
+  const stopped = await fixture.composition.stop(receipt);
+  assert.equal(stopped.processState, 'stop_unconfirmed');
+  assert.equal(stopped.reason, 'owned_process_stop_unconfirmed');
+  assert.equal(fixture.composition.snapshot().launches[0].processState, 'stop_unconfirmed');
 });
 
 test('a native source identity conflict quarantines the connection and expires its proof', async () => {

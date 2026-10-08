@@ -963,8 +963,8 @@ function createNativeLaunchComposition(options = {}) {
     if (record.runner && ['stopping', 'stop_unconfirmed'].includes(record.processState)) {
       let runnerSnapshot;
       try { runnerSnapshot = record.runner.snapshot(); } catch { runnerSnapshot = null; }
-      if (isRecord(runnerSnapshot) &&
-          (runnerSnapshot.childExited === true || runnerSnapshot.childClosed === true)) {
+      if (isRecord(runnerSnapshot) && runnerSnapshot.childExited === true &&
+          runnerSnapshot.childClosed === true && runnerSnapshot.ownedChildActive === false) {
         record.processState = 'stopped';
         if (record.reason === 'owned_process_stop_unconfirmed') record.reason = 'owned_process_stopped';
       }
@@ -1261,10 +1261,10 @@ function createNativeLaunchComposition(options = {}) {
       if (!isRecord(runnerSnapshot)) {
         try { runnerSnapshot = record.runner.snapshot(); } catch { runnerSnapshot = null; }
       }
-      const childStillActive = runnerSnapshot?.ownedChildActive === true ||
-        runnerSnapshot?.state === 'stop_unconfirmed';
-      record.processState = childStillActive ? 'stop_unconfirmed' : 'stopped';
-      if (childStillActive) record.reason = 'owned_process_stop_unconfirmed';
+      const childStopped = isRecord(runnerSnapshot) && runnerSnapshot.childExited === true &&
+        runnerSnapshot.childClosed === true && runnerSnapshot.ownedChildActive === false;
+      record.processState = childStopped ? 'stopped' : 'stop_unconfirmed';
+      if (!childStopped) record.reason = 'owned_process_stop_unconfirmed';
       return snapshotRecord(record);
     }, () => {
       record.processState = 'stop_unconfirmed';
