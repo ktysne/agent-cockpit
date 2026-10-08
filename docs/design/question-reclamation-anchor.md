@@ -100,9 +100,11 @@ gateは対象の完全identityとperiod IDごとに `active`、`retiring`、`ret
 
 1. 同期で `retiring` にし、新しい登録、回答、poll、timer、late answer、配送作成、復元、sendStartを遮断する。
 2. 受付済みqueue待機操作も含む対象操作を、完了または副作用なしの拒否までdrainし、質問と関連配信のsnapshotを固定する。
-3. 失効記録と移行intentをアンカーに保存し、保存成功を確認する。
-4. `retired` にし、移行または回収を続ける。保存失敗や結果不明でもgateを開け直さない。
+3. 失効記録をアンカーに保存し、保存成功を確認する。初回schema移行を伴う場合だけ固定source/targetのmigrationも同じ更新に保存し、通常period退役ではmigration:nullを維持する。
+4. 通常period退役では、対象質問のcheckpoint状態を正規化して保存し、質問journalへquarantinedAtと隔離snapshotを保存してから`retired`にする。形式移行は固定manifestの手順を使う。保存失敗や結果不明でもgateを開け直さない。
 
+通常退役の正規化と途中復旧は[質問schema](common-question-reclamation-schema.md)に従い、claimedをavailable、sending/acceptedをunknownへ変更する。
+対象質問のattempt、digest、相関、cancel要求を保持し、他kindの状態を変更しない。
 gateの世代を捕捉済みの操作は再取得せず、最終sinkの世代検査を守って完了させる。再取得が必要な操作は副作用なしで即時拒否し、queue待機中に無条件で実行しない。
 送信操作はgateの世代番号を捕捉し、最終sinkを呼ぶ直前にも同期で再検査する。
 再検査からsinkの呼び出しまで `await` を挟まない。
@@ -117,31 +119,44 @@ gateの世代を捕捉済みの操作は再取得せず、最終sinkの世代検
 
 ## 満杯からの移行とbyte上限
 
-通常受付の上限 `N` と別に、アンカー用の移行枠 `M` と各データファイルの追加移行枠 `H` を設ける。
+容量の記号は次のように区別する。
+
+| 記号 | 意味 |
+|---|---|
+| `B_i` | 各slotの現在設定の通常byte上限。質問schemaの`N`は`B_questions`の別名 |
+| `C_i` | 旧schemaの固定byte最大値。保存grantのsource size検査と固定Hの定義域に使用 |
+| `S_i` | 初回移行で固定した旧fileの実byte。現在設定内のsourceだけ移行を開始 |
+| `H_i` | 旧schemaの有効入力全体から証明する、sourceとの差分の固定保守上界 |
+| `G_i` | 保存grantのmaxExtraBytes。grantなしなら0 |
+| `M` | 移行中のアンカー1fileの最大byte。`B_anchor + T_migration` |
+
+アンカー用の移行枠`M`とデータslotの追加枠を通常受付とは別に確保する。
 移行枠は通常受付に使えない。
 移行専用の追加枠 `T_migration` は、受理可能な旧slotのbyte上限、件数上限、field制約を同時に満たす入力に対する固定上界とする。
-必要追加量の上界を `Σ(c_s × N_s) + Qmax × Kq + Pmax × Kp + Kmanifest` で証明し、その右辺を固定枠 `T_migration` とする。
-`N_s` は旧slotの許容byte上限、`c_s` は旧文字列の最大複製回数、`Qmax` と `Pmax` は各20,000件の質問と世代の上限である。
+必要追加量の上界を `Σ(c_s × C_s) + Qmax × Kq + Pmax × Kp + Kmanifest` で証明し、その右辺を固定枠 `T_migration` とする。
+`C_s` は旧slotの許容byte上限、`c_s` は旧文字列の最大複製回数、`Qmax` と `Pmax` は各20,000件の質問と世代の上限である。
 `Kq` と `Kp` は追加キー、digest、時刻、区切り、indentの最大byte数、`Kmanifest` は最大3slotの記述子とenvelopeの最大byte数である。
-旧文字列をJSON文字列として二重escapeせず、旧文字列の合計byteが `N_s` 以下である制約を使う。
+旧文字列をJSON文字列として二重escapeせず、旧文字列の合計byteが `C_s` 以下である制約を使う。
 各記述子の独立した最大長を20,000倍した値だけを移行枠の根拠にしない。
 係数、固定fieldのbyte数、最終の固定定数は段階2で実serializerに基づいて証明し、最大escapeのfixtureで確認する。
 `T_migration` を利用者の自由な設定値にはしない。
 移行中のアンカー1ファイルの上限 `M` は `B_anchor + T_migration` とする。
 `M` はアンカー1ファイルの上界であり、atomic置換時の既存アンカー `A` と一時ファイル `M` の同時保持は別に計上する。
-初回形式移行の各旧データファイルの実byteを `N_i`、固定の追加枠を `H_i` とすると、保守的なピーク総量は `A + M + Σ(2N_i + H_i)`、`A ≤ M` なので上界は `2M + Σ(2N_i + H_i)` となる。
-初回移行の追加予約上界は `M + Σ(N_i + H_i)` とする。
+初回形式移行の全phaseの保守的ピーク上界は`2M + Σ(2S_i + H_i)`とする。
+アンカーの現在実byteはphase更新で増えるため、初回の`A`を全phaseの既存file量として固定しない。
+初回移行の追加予約上界は `M + Σ(S_i + H_i)` とする。
 manifestをnullにした後は、通常設定上限 `B_i` と保存済みgrant `G_i=maxExtraBytes`（nullなら0）を使い、各slotの旧fileと一時fileの上界を `2 × (B_i + G_i)` とする。
 アンカーを含む全fileの同時保持について、移行後の保守的ピーク上界は `2B_anchor + Σ(2 × (B_i + G_i))`、追加予約上界は `B_anchor + Σ(B_i + G_i)` とする。
 これらは初回移行の式を置き換えるphase別上界であり、初回の予約へ加算しない。
-移行後の予約へ切り替える前に必要な容量を確保し、確保できなければ旧sourceと拒否情報を保持してwriterを停止する。
+移行後の予約へ切り替える前に必要な容量を確保し、確保できなければ各slotで現在保存済みのsourceまたはtargetと拒否情報を保持してwriterを停止する。
 実際の直列atomic置換では、他の保存済みfileの実byteと置換対象の現file実byteに、今回の一時fileのbyte上界を加えた量を各phaseで検査し、その最大値だけを確保する。
 既存fileの占有量を追加予約へ二重計上せず、同時に一時fileを保持するphaseを除いてphase別予約を合計しない。
 `H` は各ファイルの新schemaへの差分と、保持する旧詳細と拒否情報の重複分の最大byte数とする。
 IDの最大長はUTF-16 code unitsであり、JSON escapeによるbyte増加を含める。
 512 code unitsの文字列を512 bytesとは数えない。
 
-移行時だけ `N + H` を許し、質問本文は7日を待ってから圧縮する。
+load/writeの上限は`B_i + G_i`とし、固定`H_i`をそのまま許容量にしない。
+grantは移行完了後も保持と回収の既存操作に残し、質問本文は7日を待ってから圧縮する。
 初回移行の `startedAt` は各記録の `quarantinedAt` に一度だけ保存し、manifestの完了後も保持起算点として残す。
 新形式の記録から保持中の追加枠の使用量を算出し、`migration` の有無で使用可否を決めない。
 通常上限を超えるslotには、各schemaの `migrationAllowance` をtarget byte列に保存する。

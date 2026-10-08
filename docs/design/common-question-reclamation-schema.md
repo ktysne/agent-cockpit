@@ -10,7 +10,7 @@
 |---|---|
 | journal | schemaVersion 1、正確な外形は schemaVersion、revision、questions |
 | 件数 | 最大20,000 record。journal作成時のmaxRecordsは1から20,000 |
-| byte | 既定と設定可能な最大は16,777,216 byte |
+| byte | 通常上限`B_questions`（`N = B_questions`）の既定値と設定可能な最大は16,777,216 byte。旧v1 schemaの固定上限`C_questions`も16,777,216 byte |
 | serialize | JSON.stringify(value, null, 2)にLFを1つ追加し、UTF-8 byte数で検査 |
 | revision、時刻 | 0以上の安全な整数 |
 | identifier | trim済み、制御文字なし、最大512 JavaScript UTF-16 code unit |
@@ -45,13 +45,14 @@ v2の外形はschemaVersion、storeId、revision、questions、reservations、mi
 schemaVersionは2、storeIdはアンカーと同じ小文字UUIDv4、revisionは0以上の安全な整数とする。
 通常はmigrationAllowance=nullとし、初回v1 sourceの追加容量を保持する場合だけ厳密なgrant objectを保存する。
 grant objectはoperationId、sourceSchemaVersion、sourceSizeBytes、sourceSha256、maxExtraBytes、eligibleQuestionIdsを持つ。
-operationIdはanchor migrationと同じoperationの小文字UUIDv4、sourceSchemaVersionは1、sourceSizeBytesは旧v1の固定最大値16,777,216以下の安全な非負整数、sourceSha256は旧fileの実byteに対するlowercase SHA-256 hex 64文字とする。
+operationIdはanchor migrationと同じoperationの小文字UUIDv4、sourceSchemaVersionは1、sourceSizeBytesは旧v1 schemaの固定上限`C_questions`以下の安全な非負整数、sourceSha256は旧fileの実byteに対するlowercase SHA-256 hex 64文字とする。
+旧sourceは`sourceSizeBytes`が`C_questions`以下で、旧schema、fingerprint、相関の検査を通る必要がある。移行開始にはさらに実source byte `S`が現在設定`B_questions`以下であることを求める。`S`が`B_questions`を超える場合はsourceを保持して容量診断を出し、破損扱いにしない。設定を戻した後にsource検査と将来projectionを再実行する。
 maxExtraBytesはsource検査時に一度計算して固定する安全な整数で、1からH_questions以下とし、grant無しの最大projectionが通常上限N以内ならgrantをnullにする。
 eligibleQuestionIdsはsource v1のinternalQuestionIdを全て一度だけ並べたdense arrayで、各値は既存identifier規則に従い、最大20,000件とする。
 未知field、重複ID、不正UUID、source version/size/digestの不一致を拒否する。
 形式migration coordinatorだけが、アンカーのquestion source fingerprintと完全一致したv1 snapshotからgrantを発行できる。
 grantのsource情報、maxExtraBytes、eligibleQuestionIdsは発行後不変で、部分発行、差替え、IDの追加・再利用、複数grantの積上げを認めない。
-段階4の集約でeligibleQuestionIdsの一部に対応するreservationが無くなってもgrantを不正とはしないが、現在Hを使うdetail/reservationは必ずgrant内のIDでなければならない。
+段階4の集約でeligibleQuestionIdsの一部に対応するreservationが無くなってもgrantを不正とはしないが、現在grantの追加枠`G`を使うdetail/reservationは必ずgrant内のIDでなければならない。
 質問journalとcheckpointは同じstoreIdを持つ。
 アンカーの欠落・破損・storeId不一致では質問serviceと全質問gateを停止する。
 checkpoint自身のstoreId不一致では共有checkpoint writer全体を停止する。
@@ -150,10 +151,13 @@ questionがactiveでanchorにperiod失効が無い間は、復旧時に静的相
 差がある場合はledgerの現在recordと完全相関を照合し、既存の合法なstate transitionまたは再起動時のclaimedからavailable、sending/acceptedからunknownへの復旧変換だけを認める。
 unknownからaccepted/appliedへの遷移は完全一致する後着correlationがある場合に限り、periodをretiringにする前だけ認める。
 applied、cancelled_before_send、superseded_before_sendから別stateへの後退は拒否する。
-通常のperiod retirementでは対象question操作をdrainし、checkpoint snapshotをメモリー上で固定してから、quarantinedAtとsnapshotを反映した質問journal bytesを作る。
-この場合はanchorへperiod失効を先に保存し、次に質問journalを保存する。
-retired anchorとdetail retainedの組は、この順序の中断として受け付け、checkpointとの静的相関を検査した後に同じsnapshotをjournalへ冪等に反映する。
-この中断復旧では状態cacheの初期差だけを起動拒否の理由にせず、correlation不一致や不可能なstate後退は拒否する。
+通常period退役は[アンカーの失効とwriterの直列化](question-reclamation-anchor.md#失効とwriterの直列化)に従い、対象操作をdrainしてcheckpoint snapshotを固定した後、失効記録をanchorへ保存し、対象checkpointを正規化して保存してから、`quarantinedAt`とsnapshotを反映した質問journalを保存する。
+退役時は対象question deliveryの`claimed`を`available`へ、`sending`と`accepted`を`unknown`へ正規化する。attempt、digest、相関、cancel要求は保持し、終端stateと他kindのrecordは変更しない。
+checkpointの保存結果が不明なら、共有checkpointの全kind writerを停止する。
+失効済みanchorと未更新journalの組は、通常退役、`reclamation=null`、`bodyState=retained`の中断に限り、gateを閉じたまま再開する。既存checkpointの完全相関とreservation cacheからの合法なstate到達経路を検査し、複数の合法遷移を経たcheckpointも退役時snapshotとしてjournalへ保存できる。
+この復旧では保存済みcheckpointだけを採用し、anchor失効後に届いた新しいaccepted/applied evidenceは受け付けない。checkpointとcacheの相関不一致、終端stateの後退、`not_created`と同intentのattemptの併存は拒否する。
+`reclamation`が設定済み、`bodyState=reclaimed`、または形式migrationの固定targetではcheckpointとcacheを完全一致させ、cache差を修復しない。
+全対象journalのsnapshot保存が成功するまでgateを閉じたままにする。checkpointまたはjournalの保存結果が不明なら対象writerを停止し、本文を保持して再送しない。
 schema migrationでは全writerを停止したsource snapshotからtarget bytesとfingerprintを先に作り、anchor保存後にcheckpoint、instructions、questionsの順で置換する。
 anchor migration targetのcheckpointStateとreclaimed bodyのcheckpointStateは固定snapshotであり、保存済みstateとcorrelationが完全一致しなければならない。
 bodyState=reclaimed後は配信stateの進行を許さず、ledgerとreservationのsnapshot不一致は復旧を拒否する。
@@ -192,7 +196,7 @@ checkpointはattemptの存在と全相関が一致する場合だけ使う。
 
 旧質問journal v1は、anchor migrationが固定したsource fingerprintに一致する場合だけ移行入力として読む。
 sourcePresent=falseはファイル全体が無いことを示すだけで、個別質問の配信未作成を証明しない。
-質問slotがsourcePresent=falseならmigrationAllowance=nullとし、旧source由来のH grantを発行しない。
+質問slotがsourcePresent=falseならmigrationAllowance=nullとし、旧source由来のgrantを発行しない。
 checkpoint slotが無い、または質問attemptが無い場合の選択intentはindeterminateへ移す。
 
 | v1の質問 | v2への移行 |
@@ -251,7 +255,8 @@ terminalAtがないterminal checkpointは本文回収を拒否する。
 時計の大幅な進みで実時間の7日未満にdeadlineへ達する事象は保証対象外とする。
 
 期限前は質問文、選択肢、answers、lateAnswers.answersを保持する。
-隔離済み質問は期限後に限って本文を圧縮でき、圧縮は形式移行manifestとは別operationとする。
+未失効periodの終端question deliveryは汎用ledger回収の対象外とする。
+質問本文の回収はperiod失効後に限り、anchorの退役時刻を`quarantinedAt`へ保存し、質問専用の3境界でsnapshotを保持する。圧縮は形式移行manifestとは別operationとする。
 回収準備、配信grave化、質問detail削除は下記の3保存境界に従う。
 未選択またはnot_createdなら配信を作らず質問だけを圧縮する。
 indeterminateまたはcheckpointedかつunknown/availableの配信は観測済みstateを凍結し、terminalResultKind=null、再作成・再送・後着更新禁止を墓標へ残して本文を圧縮できる。
@@ -309,20 +314,24 @@ record revisionの後退、source fileの予期しない欠落、checkpointed at
 | 隔離中または圧縮済みquestionへの回答、poll、cancel、late answer、resolution | question_quarantinedを返し、保存と配送を行わない |
 | checkpointedの欠落、mismatch、孤立question delivery | question_delivery_mismatchまたはquestion_journal_missing_for_deliveryで起動を拒否 |
 | 回収境界のoperationId、snapshot、存在証拠の不一致 | invalid_journalまたはquestion_delivery_mismatchで起動を拒否し、attemptを作成・修復しない |
-| 新規登録candidate全体がmaxRecordsまたは通常byte上限Nを超過 | question_quarantine_capacityを返し、新規recordを作らない。H grantは適用しない |
-| 既存migration/retention loadまたは次writeがN + maxExtraBytesを超過 | journal_too_largeで対象writerを停止し、質問detailと拒否snapshotを保持する |
-| 既存journalの予約byteがNを超えるがN + maxExtraBytes以内 | それだけでは圧縮を拒否せず、grant対象の既存操作と回収境界を続ける |
+| 新規登録candidate全体がmaxRecordsまたは通常byte上限Nを超過 | question_quarantine_capacityを返し、新規recordを作らない。固定上界`H_questions`とgrant枠`G`を適用しない |
+| 既存migration/retention loadまたは次writeがN + Gを超過 | journal_too_largeで対象writerを停止し、質問detailと拒否snapshotを保持する |
+| 既存journalの予約byteがNを超えるがN + G以内 | grant対象の既存操作である場合に限り、圧縮と回収境界を続ける |
 
 本文回収後も予約を使ってquestion_quarantinedを返すため、圧縮をquestion_not_foundや再登録可能状態に見せない。
 起動を拒否したときはdashboardのrecovery blocked状態にし、空journalへ初期化して通常受付を続けない。
+設定変更で保存済みjournalの実byteまたは予約byteが現在の`N + G`を超えた場合は、schema適合済みのrecordを破損扱いにせず保持し、容量診断を出して受付と対象writeを停止する。設定復元後にschema、digest、checkpoint相関、将来予約を再検査してから再開する。
 通常指示とPR通知のaccepted/applied遅延受け入れ規則はこの質問専用墓標で変更しない。
 
 ## byte予約と完了条件
 
 実使用byteはv2 journal全体を現行serializerと同じindent、LF、UTF-8で直列化したbyte数とする。
-通常上限を`N = 16,777,216` byteとし、通常受付の候補journal全体の予約byteが`N`を超える登録を拒否する。
-既存sourceの移行と保持・回収は、grantが有効な間に限り`N + H_questions`までの既存journal load/writeを許す。
-Hを使う移行・回収の拒否snapshotと各保存境界は、上限内で保存できる場合に維持する。
+`B_questions`は現在設定の通常byte上限で、既定値と設定可能な最大値は16,777,216 byteである。`N = B_questions`とし、`N`を旧schema固定上限の別名には使わない。
+`C_questions = 16,777,216` byteは旧v1 schemaの固定byte上限であり、旧sourceの妥当性検査に使う。
+`Q`は移行対象の旧snapshot、`S(Q)`はその旧fileの実byte、`H_questions`は旧schemaで有効な全sourceから求める固定保守上界、`G`は保存grantの`maxExtraBytes`である。grantがnullなら`G=0`とする。
+通常受付の候補journal全体の予約byteが`N`を超える登録を拒否する。
+移行と保持・回収の既存journal load/writeは、grantがある場合に限り`N + G`まで許す。
+grant内の追加枠で行う移行・回収の拒否snapshotと各保存境界は、`N + G`以内で保存できる場合に維持する。
 
     reserveBytes = serializedJournalBytes
                  + revisionGrowthBytes
@@ -338,38 +347,35 @@ maxReservationBytesは状態別に合法な将来projectionを同じserializer�
 通常登録とv1移行の両方で、detail/reservation作成時から将来reclamationを最大値で予約する。
 配信checkpointのaccepted/applied correlationと最大payload byteは配信schemaの予約式で数え、質問journal式へ重複計上しない。
 質問journal側の最大回答、遅延回答、intent、予約projectionは平均値で割り引かない。
-`maxRecords`と16MiBは別上限であり、両方を満たす容量保証と誤認しない。
+`maxRecords`、現在設定上限`B_questions`、旧schema上限`C_questions`は別条件として検査する。
 
 ## 質問journalの移行追加枠
 
-`H_questions`は、source byteが`N`以下で、v1 journalの件数、全field validator、質問とdeliveryの相関検査を同時に通る各snapshot `S`から必要になる最大追加予約byteの固定上界である。
-各`S`をv2へ移し、全質問detailと同数のreservation、`quarantinedAt=migration.startedAt`、全reservationの最大reclamation予約、`migrationAllowance`、revision増分を含むtarget projectionを実serializerで測る。
+`H_questions`は、旧schemaで有効なsnapshot `Q`の実source byte `S(Q)`が`C_questions`以下で、件数、全field validator、質問とdeliveryの相関検査を通る全sourceから求める、sourceとの差分の最大追加予約byteの固定保守上界である。現在設定`B_questions`による移行可否とは独立し、runtime load/write枠としては使わない。
+各有効な旧source snapshot `Q`をv2へ移し、全質問detailと同数のreservation、`quarantinedAt=migration.startedAt`、全reservationの最大reclamation予約、`migrationAllowance`、revision増分を含むtarget projectionを実serializerで測る。
 計算ではsourceの全detailを保持し、`reserveBytes`の状態別detail/reservation projectionを適用する。
 同じ計測を回収の3境界それぞれの完全なquestion-journal projectionでも行い、境界間の最大値だけを使う。境界2はcheckpointだけを保存するためquestion journal byteは境界1と同じである。
-`H_questions = max(0, max_{S,b}(projectedReserveBytes(S,b) - sourceSizeBytes(S)))`とし、`b`は移行targetと回収境界1、2、3を表す。
+`P_questions(Q,b)`を、source snapshot `Q`から作る将来予約込みjournal projectionを境界`b`でserializerにより測ったbyte数とする。`H_questions = max(0, max_{Q,b}(P_questions(Q,b) - S(Q)))`とし、`Q`は旧schemaで有効な全source、`b`は移行targetと回収境界1、2、3を表す。
 最大reclamation objectと将来増分は`reserveBytes`内で一度だけ計上し、最大shape展開のbyteへ重ねて加えない。
 grant本体と最大`eligibleQuestionIds`配列もprojectionに含める。固定値の数値は段階2でserializer fixtureにより決める。
 循環参照を避けるため、`H_questions`の計算中はgrant内の`maxExtraBytes`を最大の16桁safe integerとしてprojectionする。
 
-まずgrantをnullとした有効な旧source `S`のprojectionを、移行target、保持、回収の全境界と将来予約について測る。
-その最大値が通常上限`N`以内ならgrantをnullとし、追加枠を発行しない。
-通常上限を超える場合だけgrant込みで再測定し、受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
+現在設定`B_questions`内の有効なsource snapshot `Q`について、まずgrantをnullとした移行target、保持、回収の全境界と将来予約の最大projectionを測る。
+その最大値が`B_questions`以内ならgrantをnullとし、追加枠を発行しない。
+`B_questions`を超える場合だけgrant込みで再測定し、受け取った有効な旧source `Q`について、`G = maxExtraBytes = max(0, max_b(P_questions(Q,b) - S(Q)))`を一度計算して固定する。
 `b`と将来予約の計上方法は上の固定上界と同じとし、grant内の数値は16桁の最大幅でprojectionして自己参照を避ける。
-このsource基準は通常上限を基準にした最小追加量より保守的な移行増加枠であり、固定`H_questions`も同じ基準の上界として維持する。
-通常上限と旧sourceの差に由来する余裕は、合法な既存遷移だけに限定し、物理ピークも保存されたmaxExtraBytesを含めて確保する。
+このsource基準の`G`は通常上限`B_questions`を基準にした最小追加量より大きくなり得る。その余裕は当該sourceの既存移行、保持、回収に限って使い、固定`H_questions`も同じsource基準の上界として維持する。
 未使用分を新規受付へ転用しない。算出値が`H_questions`を超えれば移行を拒否する。
-grantがある間、移行・保持中の既存journal load/writeと回収3境界に`N + maxExtraBytes`を適用する。
-journalの現在・次snapshotが`N`を超えても`N + maxExtraBytes`以内なら、既存の拒否snapshotを維持し、回収境界1を含む既存操作を続けられる。
+grantがある間、移行・保持中の既存journal load/writeと回収3境界に`N + G`を適用する。
+journalの現在・次snapshotが`N`を超えても`N + G`以内なら、既存の拒否snapshotを維持し、回収境界1を含む既存操作を続けられる。
 grantを越える場合はquestion writerと対象gateを停止し、source/detailと拒否情報を削らず保持する。
 新規question候補はgrant対象recordを除外せず、既存全detail/reservationの全将来予約を含む候補journal全体が通常上限`N`以内の場合だけ受け付ける。
-新規受付に`H_questions`を使用せず、既存H対象のIDは`eligibleQuestionIds`に含まれるsource IDに限定する。
+新規受付に固定上界`H_questions`もgrant枠`G`も使用せず、既存grant対象のIDは`eligibleQuestionIds`に含まれるsource IDに限定する。
 
-旧v1 sourceと一時targetの物理同時保持はlogicalな`H_questions`とは別に計上する。
-移行sourceは`N`以下、targetは`N + H_questions`以下なので、質問fileのsource+temp上界は`2N + H_questions`である。
-回収時のatomic replaceも実source byteと実temp target byteの和で別途peak計上し、この物理量を`H_questions`へ足さない。
-anchorの移行枠Mと他slot H、global peakの扱いは[anchor](question-reclamation-anchor.md)に従う。
+質問journalの物理peakは論理上界`H_questions`と保存grant`G`へ含めない。
+旧sourceと一時targetの同時保持、atomic置換を含む物理peakは[アンカーの満杯からの移行とbyte上限](question-reclamation-anchor.md#満杯からの移行とbyte上限)に従う。
 
-anchor migrationが`null`になっても`migrationAllowance`を保持し、`H_questions_used`はgrantがある場合に各起動と変更前のrecordから`max(0, reserveBytes - N)`として再計算する。grantがnullならH_questions_used=0として全load/writeをN内に制限する。
+anchor migrationが`null`になっても`migrationAllowance`を保持し、`G_questions_used`はgrantがある場合に各起動と変更前のrecordから`max(0, reserveBytes - N)`として再計算する。grantがnullなら`G_questions_used=0`として全load/writeを`N`以内に制限する。
 使用量は`maxExtraBytes`以下でなければならず、migration phaseの有無や記録済みカウンターで代用しない。
 grant内のsource fingerprint、ID集合、上限は不変とし、追加grantやHの再帰積上げをしない。
 対応する形式移行が完了してanchorの`migration === null`となり、`migrationAllowance=null`にした後の全体将来予約が通常上限`N`以内で、進行中の回収をgrant無しで完結できる場合だけ、journal更新一回でgrant全体をnullにする。
@@ -379,7 +385,7 @@ manifestがprepared、guarded、installing、またはcompletedのままなら�
 旧questions.lengthがmaxRecordsと等しい場合も移行枠で全detailと同数のreservationを安全に保存し、移行を完了できる。
 その後もreservations.length=maxRecordsの間は新質問登録を停止し、本文圧縮で件数枠を空けない。
 count上限に余裕がある旧journalだけ、manifestを完了してmigration=nullを保存した後、既存全recordの将来予約と新候補1件を合わせたjournal全体が通常上限`N`以内なら登録を再開する。
-移行と保持のM/Hを新規受付へ流用しない。
+アンカーの移行枠`M`とslot別保持上界`H_i`を新規受付へ流用しない。
 形式移行が完了したこと自体を受付再開の証拠にせず、個別reservationの件数枠回収は段階4の世代集約まで行わない。
 
 段階1の完了条件は、v1/v2の正確なfield集合とdigest、creation stateとcheckpoint stateの組、全相関、anchor presence、移行拒否条件、7日保持起算、墓標保持、byte予約、応答codeが実装前に固定されていることである。
