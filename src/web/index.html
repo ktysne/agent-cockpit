@@ -2151,7 +2151,11 @@ function appendPullRequestConflictControls(actions, text, details, group, pullRe
 function appendPullRequestTree(target, group, pullRequest) {
   const reservation = pullRequest.reservation || null;
   const queued = queuedPullRequestMerge(pullRequest);
-  const mergeIntent = pullRequest.mergeIntent || queued || null;
+  const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
+  // 常駐サーバーは gh でマージしている間だけ一覧に mergeIntent を付ける。
+  // 画面から実行中の操作は応答で結果が分かるので、それまでは確認欄の「処理中…」を出し続ける。
+  const mergeInProgress = Boolean(pullRequest.mergeIntent) && !queued && !pullRequestMergeInFlight.has(mergeKey);
+  const mergeIntent = queued || mergeInProgress;
   const waiting = pullRequest.canMerge ? pullRequestMergeConditionWaits(pullRequest) : [];
   const conditionMet = pullRequest.canMerge === true && waiting.length === 0;
   const item = element('div', `pr ${reservation ? 'reserved' : conditionMet ? 'can-merge' : pullRequest.canMerge ? 'merge-pending' : ''}`.trim());
@@ -2170,7 +2174,6 @@ function appendPullRequestTree(target, group, pullRequest) {
   const body = element('div', 'pr-body');
   const text = element('div', 'pr-text');
   const actions = element('div', 'pr-actions');
-  const mergeKey = pullRequest.mergeSessionId ? pullRequestMergeKey(pullRequest) : '';
   const confirmation = mergeKey ? pullRequestMergeConfirmations.get(mergeKey) : null;
   if (mergeKey && mergeIntent) {
     if (queued && !pullRequest.mergeIntent) {
@@ -2208,7 +2211,8 @@ function appendPullRequestTree(target, group, pullRequest) {
   branch.append(element('code', '', pullRequest.headRefName), document.createTextNode(' → '), element('code', '', pullRequest.effectiveBase));
   text.append(branch);
   const badges = element('div', 'badges');
-  if (mergeKey && mergeIntent) badges.append(badge('マージキューに追加済み (未マージ)', 'accent'));
+  if (mergeKey && queued) badges.append(badge('マージキューに追加済み (未マージ)', 'accent'));
+  else if (mergeKey && mergeInProgress) badges.append(badge('マージ処理中 (未マージ)', 'accent'));
   appendPullRequestBadges(badges, pullRequest);
   if (reservation) {
     const reservedText = `レビュー収束後にマージ予約中 (${MERGE_METHOD_LABELS[reservation.method] || reservation.method}、予約時 ${reservation.createdAt ? absoluteTimeLabel(reservation.createdAt) : '時刻不明'}、${pullRequestReservationWaits(pullRequest, group, reservation.method).join('、')})`;
