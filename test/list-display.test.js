@@ -532,6 +532,55 @@ test('判断事項の解決内容と回答状態は余白のある一行にま�
   assert.match(mock, /\.answer-foot \{[^}]*padding: 8px 10px/);
 });
 
+test('回答の送信中は選択肢、指示、送信ボタンを無効にし、再描画後も保つ', () => {
+  const componentSources = ['answerDraftKey', 'appendDecisionCard', 'appendDecisionAnswer']
+    .map((name) => functionSource(web, name));
+  assert.ok(componentSources.every(Boolean));
+  const key = 'session-answer\0decision-answer';
+  const decision = {
+    id: 'decision-answer', state: 'provisional', title: '形式を決める', questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: { choice: 'pick', picks: [['JSON']], note: '送信する指示' },
+  };
+  const context = pageContext(web, {
+    answerErrors: new Map(),
+    answerDrafts: new Map(),
+    decisionAnswerInFlight: new Set([key]),
+    element: fakeElement,
+    document: {
+      createElement: (tagName) => fakeElement(tagName),
+      createTextNode: (text) => fakeElement('#text', '', text),
+    },
+    decisionElapsedLabel: () => null,
+    decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
+    answerDraftFor: () => ({ choice: 'pick', picks: [['JSON']], note: '送信する指示' }),
+    answerDraftChanged: () => true,
+    answerMetaText: () => '送る答え: JSON',
+    canSendDecisionAnswer: () => true,
+    answerStatusText: () => '未送信',
+    displayRecommendedLabel: (label) => label,
+    appendContextTags() {},
+    badge: (_label, tone = '') => fakeElement('span', tone),
+    decisionStateLabel: () => '仮に推奨案で進行中',
+    sessionDisplayName: () => 'session-answer',
+    relativeTimeElement: () => fakeElement('time'),
+  });
+  vm.runInContext(`${componentSources.join('\n')}\nthis.renderDecision = appendDecisionCard;`, context);
+  const render = () => {
+    const target = fakeElement('div');
+    context.renderDecision(target, decision, { name: 'agent-cockpit' }, { session_id: 'session-answer' });
+    return descendants(target);
+  };
+  for (const nodes of [render(), render()]) {
+    assert.equal(nodes.filter((node) => node.dataset.answerPick === 'true').length, 2);
+    assert.ok(nodes.filter((node) => node.dataset.answerPick === 'true').every((node) => node.disabled));
+    assert.equal(nodes.find((node) => node.dataset.answerNote === 'true').disabled, true);
+    assert.equal(nodes.find((node) => node.dataset.sendAnswer === 'decision-answer').disabled, true);
+  }
+});
+
 test('キュー中と処理中の PR を札で分け、画面から実行中のマージは確認欄の処理中で示す', async () => {
   const webTree = functionSource(web, 'appendPullRequestTree');
   const webQueued = functionSource(web, 'queuedPullRequestMerge');
@@ -1092,6 +1141,7 @@ test('回答の送信失敗は再描画後も残り、下書き変更後に送�
   const errors = new Map();
   const context = pageContext(web, {
     answerErrors: errors,
+    decisionAnswerInFlight: new Set(),
     decisionAnswerAvailability: () => ({ active: true, viaDialog: false }),
     answerDraftFor: () => ({ choice: 'pick', picks: [[]], note: '新しい指示' }),
     element: fakeElement,
@@ -1140,6 +1190,8 @@ test('回答の編集時に送信済み回答の状態表示も更新する', ()
     },
   };
   const context = pageContext(web, {
+    decisionAnswerInFlight: new Set(),
+    answerDraftKey: (sessionId, decisionId) => `${sessionId}\0${decisionId}`,
     findDecision: () => decision,
     answerDraftFor: () => draft,
     sameAnswerPicks: (left, right) => JSON.stringify(left) === JSON.stringify(right),
@@ -1316,8 +1368,21 @@ test('マージの確認欄は実行中のボタンをマージ中に変える',
   assert.equal(button.disabled, true);
   const cancel = descendants(target).find((node) => node.dataset.mergeCancel === 'merge-key');
   assert.equal(cancel.disabled, true);
+  const method = descendants(target).find((node) => node.dataset.mergeMethod === 'merge');
+  assert.equal(method.disabled, true);
+  const deleteBranch = descendants(target).find((node) => node.dataset.mergeDelete === 'true');
+  assert.equal(deleteBranch.disabled, true);
   assert.match(mock, /merging \? '処理中…'/);
   assert.match(mock, /data-merge-cancel \$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-method="\$\{m\}" [^>]*\$\{merging \? 'disabled' : ''\}/);
+  assert.match(mock, /data-del [^>]*\$\{merging \? 'disabled' : ''\}/);
+});
+
+test('マージの実行中は方式とブランチ削除の変更を受け付けない', () => {
+  const handler = web.match(/const method = event\.target\.closest\('\[data-merge-method\]'\);[^]*?\n\}\);/)?.[0];
+  assert.ok(handler);
+  assert.match(handler, /if \(pullRequestMergeInFlight\.has\(control\.dataset\.mergeKey\)\) \{[^}]*return;/);
+  assert.match(mock, /if \(pullRequestMergeInFlight\.has\(k\)\) \{ render\(\); return; \}/);
 });
 
 test('PR の初回取得中は空一覧の代わりに取得中の案内を出す', () => {

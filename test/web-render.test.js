@@ -2354,6 +2354,7 @@ test('選択肢を押すと送る答えが表示され、回答を送るが有�
   const context = pageContext(pageHtml, {
     answerDrafts,
     answerErrors: new Map(),
+    decisionAnswerInFlight: new Set(),
     findDecision: () => decision,
     document: { addEventListener: (name, handler) => { if (name === 'change') handleChange = handler; } },
   });
@@ -2374,7 +2375,7 @@ function decisionAnswerPickHarness(decision) {
     'answerDraftKey', 'answerDraftFor', 'answerValueFor', 'emptyAnswerPicks', 'copyAnswerPicks', 'sameAnswerPicks',
     'sameAnswerDraft', 'answerDraftChanged', 'clearAnswerErrorWhenDraftChanges',
     'displayRecommendedLabel', 'recommendedOptionsForQuestions', 'selectedAnswerLabels',
-    'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText', 'updateAnswerSubmit', 'clearSelectedAnswerPick',
+    'answerMetaText', 'canSendDecisionAnswer', 'answerStatusText', 'updateAnswerSubmit', 'clearSelectedAnswerPick', 'sendDecisionAnswer',
   ];
   const functions = functionNames.map((name) => functionSource(html, name));
   const clickHandler = html.match(/document\.addEventListener\('click', \(event\) => \{\n  const pick = event\.target\.closest\('\[data-answer-pick\]'\);[\s\S]*?\n\}\);/)?.[0];
@@ -2386,7 +2387,8 @@ function decisionAnswerPickHarness(decision) {
 
   const answerDrafts = new Map();
   const answerErrors = new Map();
-  const button = { disabled: true };
+  const decisionAnswerInFlight = new Set();
+  const button = { disabled: true, dataset: { sessionId: 'session-pick', sendAnswer: decision.id } };
   const meta = { textContent: '', hidden: true };
   const status = { textContent: '' };
   const error = { textContent: '' };
@@ -2402,11 +2404,18 @@ function decisionAnswerPickHarness(decision) {
   };
   const decisionCard = { querySelector: (selector) => (selector === '.decision-answer' ? card : null) };
   const listeners = new Map();
+  let renderCount = 0;
+  let postCount = 0;
   const context = pageContext(html, {
     answerDrafts,
     answerErrors,
+    decisionAnswerInFlight,
     findDecision: (sessionId, decisionId) => (sessionId === 'session-pick' && decisionId === decision.id ? decision : null),
     absoluteTimeLabel: () => '保存済みの時刻',
+    lastState: { sessions: [] },
+    render: () => { renderCount += 1; },
+    root: { querySelectorAll: () => [] },
+    postUiAction: async () => { postCount += 1; return { ok: true }; },
     document: { addEventListener: (name, handler) => listeners.set(name, handler) },
   });
   vm.runInContext(`${functions.join('\n')}\n${clickHandler}\n${keydownHandler}\n${changeHandler}\n${inputHandler}`, context);
@@ -2429,7 +2438,11 @@ function decisionAnswerPickHarness(decision) {
       return null;
     },
   };
-  return { context, listeners, answerDrafts, button, meta, status, card, makePick, note };
+  return {
+    context, listeners, answerDrafts, answerErrors, decisionAnswerInFlight, button, meta, status, card, makePick, note,
+    get renderCount() { return renderCount; },
+    get postCount() { return postCount; },
+  };
 }
 
 test('選択済みの単一選択をもう一度押すと外れ、指示だけで送れる', () => {
@@ -2463,6 +2476,33 @@ test('選択済みの単一選択をもう一度押すと外れ、指示だけ�
   assert.equal(draft.choice, null);
   assert.equal(draft.note, harness.note.value);
   assert.equal(harness.button.disabled, false);
+});
+
+test('回答の送信中は選択肢、指示、再送信の変更を捨てる', async () => {
+  const decision = {
+    id: 'decision-in-flight',
+    questions: [{
+      question: '形式を決める', multiSelect: false,
+      options: [{ label: 'JSON (推奨)', recommended: true }, { label: 'CSV', recommended: false }],
+    }],
+    answer: null,
+  };
+  const harness = decisionAnswerPickHarness(decision);
+  const key = 'session-pick\0decision-in-flight';
+  const submittedDraft = { choice: 'pick', picks: [['JSON (推奨)']], note: '送信した指示' };
+  harness.answerDrafts.set(key, submittedDraft);
+  harness.decisionAnswerInFlight.add(key);
+
+  const pick = harness.makePick(1);
+  harness.listeners.get('change')({ target: pick });
+  harness.listeners.get('click')({ target: pick });
+  harness.note.value = '送信中に変えた指示';
+  harness.listeners.get('input')({ target: harness.note });
+  await harness.context.sendDecisionAnswer(harness.button);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(harness.answerDrafts.get(key))), submittedDraft);
+  assert.equal(harness.postCount, 0);
+  assert.equal(harness.renderCount, 3);
 });
 
 test('保存済みの choice ok の推奨選択肢は押すと外れ、変更状態に更新される', () => {
@@ -2765,7 +2805,8 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   const helpers = sourceBetween(html, 'function element(tag, className, text)', 'function durationLabel');
   const component = sourceBetween(html, 'const MERGE_METHOD_LABELS', 'function appendPullRequestBlock');
   const action = sourceBetween(html, 'function findPullRequestMergeTarget', 'async function runSessionAction');
-  assert.ok(helpers && component && action);
+  const clickHandler = html.match(/document\.addEventListener\('click', \(event\) => \{\r?\n  if \(event\.button === 0 && handleExternalLink\(event\)\) return;[\s\S]*?\r?\n\}\);/)?.[0];
+  assert.ok(helpers && component && action && clickHandler);
   assert.ok(absoluteTimeSource);
 
   class FakeElement {
@@ -2792,22 +2833,29 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   };
   const group = { owner: 'example', repo: 'project', defaultBranch: 'main', mergeMethods: [], trees: [pullRequest] };
   const sent = [];
+  const conflictConfirmations = new Set();
+  const conflictMessages = new Map();
+  const conflictInFlight = new Set();
+  let documentClickHandler;
+  let renderCount = 0;
   const context = pageContext(pageHtml, {
     document: {
       createElement: (tagName) => new FakeElement(tagName),
       createTextNode: (text) => new FakeText(text),
+      addEventListener: (name, handler) => { if (name === 'click') documentClickHandler = handler; },
     },
     pullRequestMergeConfirmations: new Map(), pullRequestMergeOptions: new Map(), pullRequestMergeMessages: new Map(), queuedPullRequestMerges: new Map(), queuedPullRequestMerge: () => null, pullRequestMergeInFlight: new Set(), pullRequestReservationPending: new Map(),
-    pullRequestConflictConfirmations: new Set(), pullRequestConflictMessages: new Map(), pullRequestConflictInFlight: new Set(),
+    pullRequestConflictConfirmations: conflictConfirmations, pullRequestConflictMessages: conflictMessages, pullRequestConflictInFlight: conflictInFlight,
     lastState: { sessions: [{ session_id: 'session-pr', title: 'Feature session' }], pullRequests: [group] },
     appendPullRequestBadges() {},
     crossReviewState: () => ({}),
+    pullRequestTransientNoticeExpired: () => false,
     postUiAction: async (url, body) => { sent.push({ url, body }); return { ok: true, json: async () => ({ requestedAt: '2026-10-03T03:04:00.000Z' }) }; },
-    refresh: async () => {}, render() {}, liveStatus: { textContent: '' },
+    refresh: async () => {}, render() { renderCount += 1; }, liveStatus: { textContent: '' },
   });
   vm.runInContext([
     absoluteTimeSource,
-    helpers, component, action,
+    helpers, component, action, clickHandler,
   ].join('\n'), context);
   vm.runInContext("Date.now = () => new Date(2026, 9, 5).getTime()", context);
   const flatten = (node) => [node, ...(node.children || []).flatMap(flatten)];
@@ -2822,6 +2870,22 @@ test('衝突した PR にだけ依頼ボタンを出し、終了扱いの依頼�
   const requestButton = nodes.find((node) => node.dataset?.conflictOpen === uiKey);
   assert.ok(requestButton);
   assert.equal(requestButton.textContent, 'コンフリクト解決');
+
+  conflictConfirmations.add(uiKey);
+  conflictMessages.set(uiKey, { message: '依頼のエラー', shownAt: Date.now() });
+  conflictInFlight.add(uiKey);
+  nodes = renderPullRequest(pullRequest);
+  const cancelWhileSending = nodes.find((node) => node.dataset?.conflictCancel === uiKey);
+  assert.ok(cancelWhileSending);
+  assert.equal(cancelWhileSending.disabled, true);
+  const cancelButton = { dataset: { conflictCancel: uiKey } };
+  documentClickHandler({ button: 1, target: { closest: (selector) => selector === 'button' ? cancelButton : null } });
+  assert.equal(conflictConfirmations.has(uiKey), true);
+  assert.equal(conflictMessages.get(uiKey).message, '依頼のエラー');
+  assert.equal(renderCount, 0);
+  conflictInFlight.delete(uiKey);
+  conflictConfirmations.delete(uiKey);
+  conflictMessages.delete(uiKey);
 
   const nonConflict = renderPullRequest({ ...pullRequest, conflict: false });
   assert.equal(nonConflict.some((node) => node.dataset?.conflictOpen), false);

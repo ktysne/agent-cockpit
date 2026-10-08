@@ -1750,9 +1750,9 @@ function mergeConfirm(p, pr) {
     <div><strong>#${pr.number}</strong> を <code>${esc(p.repo.defaultBranch)}</code> へマージする</div>
     ${waiting.length ? `<p class="merge-condition-warning" role="status">選択した条件の未達: ${waiting.map(esc).join('、')}</p>` : ''}
     <div class="methods" role="radiogroup" aria-label="マージの方式">${p.repo.methods.map(m =>
-      `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
+      `<label><input type="radio" name="m-${prKey(p, pr.number)}" data-method="${m}" ${o.method === m ? 'checked' : ''} ${merging ? 'disabled' : ''}>${METHOD_LABEL[m]}</label>`).join('')}
     ${p.repo.methods.length === 1 ? '<span class="meta">リポジトリで許可されている方式です</span>' : ''}</div>
-    ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''}>マージ後にリモートブランチを削除する</label>`}
+    ${p.repo.autoDeleteBranch ? '' : `<label class="opt"><input type="checkbox" data-del ${o.del ? 'checked' : ''} ${merging ? 'disabled' : ''}>マージ後にリモートブランチを削除する</label>`}
     <ul class="effects">${effects.map(x => `<li class="${x.startsWith('<span>') ? 'warn' : ''}">${x}</li>`).join('')}</ul>
     <div class="row"><button type="button" class="merge-go ${conditionPending ? 'outline' : ''}" data-merge-go="${prKey(p, pr.number)}" ${merging ? 'disabled' : ''}>${merging ? '処理中…' : 'マージを実行'}</button>
       <button type="button" class="link-btn" data-mock-merge-failure="${prKey(p, pr.number)}">モック: 失敗の知らせを表示</button>
@@ -2484,6 +2484,7 @@ document.addEventListener('change', e => {
   const mc = e.target.closest('.merge-confirm');
   if (mc) {
     const k = mc.dataset.pr;
+    if (pullRequestMergeInFlight.has(k)) { render(); return; }
     const [pid, n] = k.split('#');
     const p = byId(pid), pr = p.prs.find(x => String(x.number) === n);
     const o = mergeOpts(p, pr);
