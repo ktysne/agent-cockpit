@@ -765,6 +765,55 @@ test('SubagentStop 後の遅延イベントではサブエージェントを復�
   }
 });
 
+test('停止後の Notification と PostToolBatch と完了イベントはツールと許可待ちを残さない', () => {
+  for (const event of [
+    { hook_event_name: 'Notification', notification_type: 'permission_prompt' },
+    { hook_event_name: 'PostToolBatch' },
+    { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'late' },
+    { hook_event_name: 'PostToolUseFailure', tool_name: 'Read', tool_use_id: 'late' },
+  ]) {
+    const state = backgroundClaudeState('late-cleanup');
+    const add = (input) => state.addEvent({ session_id: 'late-cleanup', agent_id: 'task-1', ...input });
+    add({ hook_event_name: 'SubagentStop', hookAt: 400 });
+    add({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'late', hookAt: 500 });
+    add({ ...event, hookAt: 510 });
+    const session = state.snapshot().sessions[0];
+    assert.equal(session.agents[0].active, false);
+    assert.deepEqual(session.tools, []);
+    assert.deepEqual(session.permissionWaits, []);
+  }
+});
+
+test('再起動後の完了と通知と区切りイベントもサブエージェントの行を復元する', () => {
+  for (const event of [
+    { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'read' },
+    { hook_event_name: 'PostToolUseFailure', tool_name: 'Read', tool_use_id: 'read' },
+    { hook_event_name: 'Notification', notification_type: 'permission_prompt' },
+    { hook_event_name: 'PostToolBatch' },
+  ]) {
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'restored-row', agent_id: 'agent-1', agent_type: 'Explore', hookAt: 200, ...event }, {
+      agentDefinition: { model: 'claude-sonnet-5-5', effort: 'high', source: 'claude-agent-definition' },
+    });
+    const [agent] = state.snapshot().sessions[0].agents;
+    assert.equal(agent.agent_id, 'agent-1');
+    assert.equal(agent.agent_type, 'Explore');
+    assert.equal(agent.active, true);
+    assert.equal(agent.startedAt, new Date(200).toISOString());
+    assert.equal(agent.model, 'claude-sonnet-5-5');
+    assert.equal(agent.effort, 'high');
+  }
+});
+
+test('復元したサブエージェントに最初の PreToolUse の lastTool を記録する', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'restored-tool', hook_event_name: 'PreToolUse', agent_id: 'agent-1',
+    agent_type: 'Explore', tool_name: 'Read', tool_use_id: 'read', summary: '対象を読む', hookAt: 200 });
+  const session = state.snapshot().sessions[0];
+  assert.deepEqual(session.agents[0].lastTool, { tool_name: 'Read', summary: '対象を読む' });
+  assert.equal(session.tools[0].agent_id, 'agent-1');
+});
+
 test('Codex の擬似 agent_id はサブエージェント行の復元対象にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
