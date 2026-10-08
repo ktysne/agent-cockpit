@@ -81,19 +81,33 @@ reservationsは本文回収後も残す質問墓標の配列で、1質問につ�
 | terminalResultKind | applied、cancelled_before_send、superseded_before_send、nullのいずれか。reservationに保存したcheckpointStateから導く |
 | quarantinedAt | detailと一致。nullまたは隔離時刻で、隔離後は不変 |
 | bodyState、reclaimedAt | retained/nullまたはreclaimed/時刻の組。detail配列との一対一対応を示す |
+| reclamation | nullまたは厳密な回収準備 object。必須fieldはoperationId、preparedAt、deliveryPresence、checkpointState |
 
 予約は回答、質問文、選択肢、自由記述、遅延回答を保持しない。
 bodyStateがretainedなら同じinternalQuestionIdのdetailが1件あり、全共通fieldとdigestが一致する。
 bodyStateがreclaimedならdetailがなく、reclaimedAtが安全な整数である。
+reclamationはexact-key objectで、operationIdは小文字UUIDv4の36 ASCII文字、preparedAtは0以上の安全なUnix時刻ミリ秒とする。
+deliveryPresenceはnone、checkpoint、indeterminate、checkpointStateはnullまたは配信ledgerの8 state enumに限る。
+noneは未選択またはv2 not_createdとcheckpoint不在を同一snapshotで確認した記録だけに使い、checkpointState=nullとする。
+checkpointは完全相関したcheckpoint attemptが存在する記録だけに使い、checkpointStateはその復旧後snapshotの8 stateのいずれかとする。
+indeterminateは旧intentまたはcreatingの作成有無を確定できない記録に使い、checkpointState=unknownとする。
+retainedかつreclamation=nullは未準備、retainedかつnonnullは同operationの回収準備済み、reclaimedではnonnullを必須とする。
+回収準備後のcheckpointStateは固定snapshotであり、後着通知などによる進行を認めない。
+同じreservationのdeliveryIntentが持つattempt ID、revision、payloadDigestと全実行相関を固定し、準備後の差替えを拒否する。
+reclaimed後もreclamation.operationId、preparedAt、deliveryPresence、checkpointStateを変更しない。
+reclaimedAtはpreparedAt以上の安全な整数であり、detail削除と同じquestion journal更新で保存する。
 selectionSourceとselectedAt、externalResolution、cancelledAtは本文を消した後も監査・状態照合に必要な最小情報として残す。
 terminalResultKindはcheckpointStateがappliedならapplied、cancelled_before_sendなら同値、superseded_before_sendなら同値、それ以外はnullとする。
-unknown、available、claimed、sending、accepted、not_created、indeterminateはnullである。
+checkpointStateがunknown、available、claimed、sending、accepted、nullの場合、terminalResultKindはnullである。
+terminalResultKindはterminal outcomeの分類であり、deliveryCreationStateのnot_created、creating、checkpointed、indeterminateとは別field・別状態軸である。
 
 reservationsの共通keyは完全identity、periodId、questionIdであり、SHA-256 digestだけを一意性検査に使わない。
 同じcommon keyまたはinternalQuestionIdの予約重複、detailとの不一致、未知field、未知enum、疎配列を拒否する。
 retained reservation一件に対するdetailは1件、reclaimed reservationに対するdetailは0件である。
 questionsにある全detailは同一internalQuestionIdのretained reservationと一対一に対応する。
-maxRecordsはreservationsの永続件数上限にも適用するため、本文圧縮で件数枠を空けない。
+questions.lengthはreservations.length以下、reservations.lengthはmaxRecords以下とする。
+同じmaxRecords上限をdetail数と永久reservation数へ適用し、本文圧縮では件数枠を空けない。
+通常登録時は新しいdetailとreservationだけでなく、reservation.reclamationの最大objectを含む将来のbyteも予約する。
 
 ## 配信作成とcheckpointの相関
 
@@ -109,9 +123,13 @@ deliveryCreationStateは質問intentとcheckpoint recordの保存境界、checkp
 | v1 intentあり、checkpointにattemptがない | 4 field | indeterminate | unknown | indeterminate |
 | v2 creatingの再起動後にattemptがない | 4 field | indeterminate | unknown | indeterminate |
 
+v2のnot_createdと同intentのcheckpoint attemptが同時に存在する組は保存順序上不可能であり、起動時と回収時の両方で拒否する。
+not_createdをcheckpointedへ読み替えず、creatingの再起動時だけ完全一致attemptを根拠にcheckpointedへ復元する。
+
 checkpointStateの許容enumはavailable、claimed、sending、accepted、applied、unknown、cancelled_before_send、superseded_before_sendである。
 not_createdはintentがnullまたは選択済みintentだけを持ち、checkpointStateはnullとする。
 creatingは選択済みintentを必須とし、同じ稼働操作が配信作成を継続している間だけ使う。
+回収準備のsnapshotにはcreatingを残さない。gateで同稼働操作をdrainし、完全一致attemptがあればcheckpointed、無ければindeterminateへ確定する。
 indeterminateは選択済みintentとcheckpointState unknownを必須とし、作成・送信・再送を永久に禁止する。
 checkpointedはintent、checkpointState、sourceClaimsDigest、sessionIdを必須とする。
 
@@ -127,6 +145,7 @@ retired anchorとdetail retainedの組は、この順序の中断として受け
 schema migrationでは全writerを停止したsource snapshotからtarget bytesとfingerprintを先に作り、anchor保存後にcheckpoint、instructions、questionsの順で置換する。
 anchor migration targetのcheckpointStateとreclaimed bodyのcheckpointStateは固定snapshotであり、保存済みstateとcorrelationが完全一致しなければならない。
 bodyState=reclaimed後は配信stateの進行を許さず、ledgerとreservationのsnapshot不一致は復旧を拒否する。
+回収準備時はreservation.checkpointStateとreclamation.checkpointStateを同じ固定snapshotへ更新し、以後両値を一致させて保持する。
 
 質問periodをretiringにした後のclaim、sendStart、payload再取得、accepted/applied、late answerは、ledger状態を見る前に質問墓標で拒否する。
 通常復旧後に残る隔離非終端stateはavailableまたはunknownに限り、7日後に同じstateのまま墓標化できる。
@@ -171,6 +190,13 @@ checkpoint slotが無い、または質問attemptが無い場合の選択intent�
 | checkpointにattemptがあるが全相関一致しない | migration拒否。serviceを起動しない |
 | selectionとintentの片側だけがnull | v1自身のschema違反として拒否 |
 
+v1 record一件ごとにv2 detail一件とreservation一件を作る。
+anchorのretiredQuestionPeriodsは完全identityとperiodIdの一意な組ごとに一件だけ作り、複数questionが同periodに属するときは共有する。
+各migration targetのperiodIndexはその完全一致entryを指し、対象配列を移行中に並べ替えない。
+旧recordに隔離時刻が無い場合はmigration.startedAtをquarantinedAtへ一度だけ保存する。
+v1 intentとcheckpointが完全一致していてもsendingまたはacceptedなら既存recoveryを先に適用し、checkpointState=unknownとして固定する。
+v2 not_createdと同intentのattemptが見つかった場合は移行を拒否し、checkpointedへ補正しない。
+
 checkpoint recoveryによりsendingまたはacceptedが見つかった場合は、既存delivery契約どおりunknownへ戻す。
 claimedはavailableへ戻し、他の既存stateはledgerのvalidatorとrecovery規則に従う。
 質問が隔離された後はunknownを成功へ変更せず、後着accepted/applied、late answer、pollからの再配送を拒否する。
@@ -212,13 +238,37 @@ terminalAtがないterminal checkpointは本文回収を拒否する。
 
 期限前は質問文、選択肢、answers、lateAnswers.answersを保持する。
 隔離済み質問は期限後に限って本文を圧縮でき、圧縮は形式移行manifestとは別operationとする。
-配信checkpointのreclaimed variantと全相関を先に保存し、次に同じ質問journal revisionでdetailを削除しbodyState=reclaimedとreclaimedAtを保存する。
+回収準備、配信grave化、質問detail削除は下記の3保存境界に従う。
 未選択またはnot_createdなら配信を作らず質問だけを圧縮する。
 indeterminateまたはcheckpointedかつunknown/availableの配信は観測済みstateを凍結し、terminalResultKind=null、再作成・再送・後着更新禁止を墓標へ残して本文を圧縮できる。
 terminal stateの配信はcheckpoint.terminalAtとquarantinedAtの双方の7日条件を満たすまでdetailを保持し、期限後もterminalResultKindを元stateに一致させる。
 圧縮で配送をcancel、success、未送信へ遷移させない。
 checkpointedが指すattemptの欠落、相関違い、checkpoint保存結果不明ではdetailを削除しない。
 本文圧縮の保存失敗または結果不明時は質問writerと対象gateを閉じ、既存本文を削除済みと推測しない。
+
+回収は同じoperationIdで次の3境界を順に保存する。
+
+1. 質問journalにreservation.reclamationを設定し、detailをretainedのまま残す。operationIdとpreparedAtをここで一度だけ発行し、deliveryPresenceとcheckpointStateを固定する。
+2. deliveryPresence=checkpointなら対応deliveryを同operationIdのreclaimed variantとしてcheckpointへ保存する。deliveryPresence=noneまたはindeterminateではattemptを作成せずcheckpointを変更しない。
+3. 質問journalからdetailを削除し、bodyState=reclaimed、reclaimedAt、同じreclamationを一度に保存する。
+
+各保存の結果が不明なら関係writerを止め、再起動後に保存済みoperationIdと厳密な相関で境界を判定する。
+新しいoperationIdを発行して再開せず、保存境界間のoperationId違い、snapshot state違い、相関違いを拒否する。
+checkpointedを示す質問と配信detail/graveの欠落は不整合であり、新規attemptを作って補わない。
+noneまたはindeterminateの対象attemptが途中で現れた場合も矛盾として拒否し、graveを新規作成しない。
+
+| 質問journal | checkpoint | 復旧動作 |
+|---|---|---|
+| retained、reclamation=null | 厳密なdetail、またはnone/indeterminateの証明と一致 | deadline、gate、snapshotを再検査して境界1を開始 |
+| retained、準備済み | 元detailがsnapshot/correlationと一致しgraveなし | 同じoperationIdで境界2を続ける。checkpointState不一致は拒否 |
+| retained、準備済み | 同じoperationIdのgraveが全相関/state一致 | 境界3で質問detailを削除 |
+| reclaimed、準備済み、deliveryPresence=checkpoint | 同じoperationIdのgraveが全相関/state一致 | 完了済みとして拒否情報を維持 |
+| reclaimed、準備済み、deliveryPresence=none/indeterminate | 対応attemptなし | 完了済みとして拒否情報を維持 |
+| reclaimed、準備済み、deliveryPresence=checkpoint | attemptまたはgrave欠落、別operationId、相関/state不一致 | question_delivery_mismatchで起動拒否 |
+| any | not_createdだが同intentのattemptあり、none/indeterminateなのにattemptあり、または孤立grave | invalid_journalまたはquestion_delivery_mismatchで起動拒否 |
+
+graveのreclamation.operationIdは質問reservationの同fieldと一致する。
+reclaimedAtは質問側と配信側のそれぞれの保存時刻であり、両者の時刻一致は要求しないが、各値はpreparedAt以上の安全な整数である。
 
 bodyState=reclaimedのreservationは永久に残す。
 予約の共通key、internalQuestionId、contentDigest、intent、execution projection、配信stateは同じ内容の再登録・同attempt再利用・遅延通知を拒否するため保持する。
@@ -242,6 +292,7 @@ record revisionの後退、source fileの予期しない欠落、checkpointed at
 | 永続reservationと同じcommon keyの登録 | 内容digest一致でもquestion_conflictを返し、既存結果を返さない |
 | 隔離中または圧縮済みquestionへの回答、poll、cancel、late answer、resolution | question_quarantinedを返し、保存と配送を行わない |
 | checkpointedの欠落、mismatch、孤立question delivery | question_delivery_mismatchまたはquestion_journal_missing_for_deliveryで起動を拒否 |
+| 回収境界のoperationId、snapshot、存在証拠の不一致 | invalid_journalまたはquestion_delivery_mismatchで起動を拒否し、attemptを作成・修復しない |
 | capacity/byte reservation超過 | question_quarantine_capacityまたはjournal_too_largeで新規受付と圧縮を拒否 |
 
 本文回収後も予約を使ってquestion_quarantinedを返すため、圧縮をquestion_not_foundや再登録可能状態に見せない。
@@ -262,10 +313,20 @@ revisionGrowthBytesはrevisionをNumber.MAX_SAFE_INTEGERの16桁へ拡張したs
 worstFutureDetailBytesは現行assertCapacityReservedと同じ最大回答、lateAnswers 10件、取消、externalResolution、revision増加を反映したrecordをjournal内と同じindentで測る。
 maxReservationBytesはnullable fieldを最大合法値へ投影したreservationを同じserializerで測る。
 最大値には512 UTF-16 code unitのidentifierを含むJSON escape、64 lowercase hex digest、安全な整数、最長enum、UUIDv4を含める。
+maxReservationBytesにはreclamation=nullではなく最大合法objectを含める。
+このobjectは36 ASCII文字のoperationId、16桁までのpreparedAt、最長deliveryPresence、最長ledger state、field名、引用符、comma、JSON indentを含め、実serializerで測る。
+reclamation=nullから最大objectへ増えるbyteは、各reservationを作る時点で将来回収用に予約する。
 配信checkpointのaccepted/applied correlationと最大payload byteは配信schemaの予約式で数え、質問journal式へ重複計上しない。
 質問journal側の最大回答、遅延回答、intent、予約projectionは平均値で割り引かない。
 `maxRecords`と16MiBは別上限であり、両方を満たす容量保証と誤認しない。
 移行専用枠M、各source/targetの追加保持H、実byte fingerprintの扱いは[anchor](question-reclamation-anchor.md)に従う。
+
+旧journalの形式移行は、通常の質問受付可否と分けて完了判定する。
+旧questions.lengthがmaxRecordsと等しい場合も移行枠で全detailと同数のreservationを安全に保存し、移行を完了できる。
+その後もreservations.length=maxRecordsの間は新質問登録を停止し、本文圧縮で件数枠を空けない。
+count上限に余裕がある旧journalだけ、manifestを完了してmigration=nullを保存した後、1件分のdetail・reservation・将来byteを通常上限内に予約できる場合に登録を再開する。
+移行専用M/Hを通常受付へ流用しない。
+形式移行が完了したこと自体を受付再開の証拠にせず、個別reservationの件数枠回収は段階4の世代集約まで行わない。
 
 段階1の完了条件は、v1/v2の正確なfield集合とdigest、creation stateとcheckpoint stateの組、全相関、anchor presence、移行拒否条件、7日保持起算、墓標保持、byte予約、応答codeが実装前に固定されていることである。
 段階2では自動圧縮を有効にせず、v1の全移行ケース、満杯journal、最大escape、保存境界のクラッシュ、同内容再登録、ID再利用、indeterminateの再送抑止をfixtureで検証する。

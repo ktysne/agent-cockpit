@@ -173,9 +173,52 @@ instruction journal v1からv2への変換では、journal revisionの増加分�
 ## 移行専用枠のbyte計算
 
 現行checkpoint serializerは`JSON.stringify(value, null, 2) + "\n"`である。
-既定上限は1,048,576 byteで、設定可能な最大は16,777,216 byteである。
-指示journalの既定と最大は16,777,216 byteであり、質問journalも既定と設定可能な最大が16,777,216 byteである。
-source slotの実byte sizeはanchorに固定されるが、起動時の固定枠は最大有効sourceについて別に確保する。
+新schemaのbyte数は、同じpretty serializerと改行を含む実保存byteから測る。
+旧形式の移行入力には、保存先ごとの既存byte上限、件数上限、構造検査を同時に適用する。
+
+| 枠またはsource slot | 固定上限 | 根拠 |
+|---|---:|---|
+| 通常アンカー`B_anchor` | 16,777,216 bytes、失効period 20,000件 | [質問回収アンカー](question-reclamation-anchor.md) |
+| questionsの旧source `N_questions` | 16,777,216 bytes | 質問journalの最大byte上限 |
+| checkpointの旧source `N_checkpoint` | 16,777,216 bytes | 既定1,048,576 bytes、設定上限16,777,216 bytes |
+| instructionsの旧source `N_instructions` | 16,777,216 bytes | instruction journalの最大byte上限 |
+| 質問記述子`Qmax` | 20,000件 | アンカーの移行target上限 |
+| 失効period記録`Pmax` | 20,000件 | 通常アンカーの失効period上限 |
+
+登録時には完全identityとperiod IDごとに、そのperiodを失効させる将来の記録1件分の件数とserialized byteを予約する。
+同じkeyの予約は重複計上せず、anchorにはpending reservation fieldを追加しない。
+予約はquestion journalのreservationsにある非退役の完全identityとperiod IDの集合から導き、再起動時と登録・失効操作前に再計算する。
+共通coordinatorで対象periodの操作を直列化し、anchorの実byteと未消費予約の件数・byteを合わせて上限検査する。
+anchorに失効記録を保存したperiodは未消費集合から除き、そのrecordの実byteで将来予約を満たしたものとする。
+現在のアンカー実byteと全未消費予約を合わせて`B_anchor`または20,000件を超える新しいperiodは受け付けない。
+予約分を含めて上限を検査するため、質問受付後に失効記録を追加できなくなる状態を作らない。
+
+移行anchorの追加枠は次式の右辺を段階2で証明して固定する。
+
+`RHS = Σ_s(c_s × N_s) + Qmax × Kq + Pmax × Kp + Kmanifest`
+
+`c_s`は旧source slotごとの旧文字列の最大複製回数で、無次元の整数とする。
+`N_s`は上表の旧source slotごとの許容serialized byte上限である。
+`Kq`は質問記述子1件、`Kp`は失効period記録1件の固定構造byte上界である。
+`Kmanifest`はmigration wrapperと最大3 slotのsource/target fingerprint descriptorのbyte上界である。
+`Kq`と`Kp`にはschema field、固定enum、digest、時刻、delimiter、pretty indentを含める。
+sourceから複製する可変文字列は`c_s × N_s`で数え、`Kq`と`Kp`へ重ねて数えない。
+旧sourceのJSON escapeは`N_s`に含め、escapeを二重計上しない。
+`c_s`と各`K`の値は任意設定にせず、採用schemaの実serializerから段階2で決める。
+
+段階2では、各旧slotのbyte、件数、field、相関の制約を同時に満たす最大fixtureをserializerで検査し、任意の受理可能sourceに対する必要追加byte `need` が`RHS`以下であることを証明する。
+その右辺を固定`T_migration`とし、`T_migration = RHS`とする。
+全recordに512文字IDを同時に複製したり、実現できない独立最大構造を重ねたりして上限を水増ししない。
+`Qmax × Kq`と`Pmax × Kp`は固定構造の予約であり、最大長の旧文字列を各recordへ追加複製する前提を含まない。
+
+移行中のanchor 1 fileの上限は`M = B_anchor + T_migration`とする。
+`M`は通常の失効集合と一時的なmigration情報を含むanchorのserialized byte上限であり、独立最大長recordを20,000倍した値だけから算出しない。
+移行完了時には失効集合が20,000件かつ`B_anchor`以内に収まることを必須とする。
+初回の旧question sourceから作る失効集合も`B_anchor`に収まることを段階2で証明する。
+通常受付の予約があるため、定義どおりの登録から失効への投影でbyte上限を超えないこともfixtureで確認する。
+既存anchorが満杯で追加の失効集合が`B_anchor`に収まらない場合、追加枠を恒久容量へ転用しない。
+sourceとmigrationの拒否情報を保持し、manifestを完了扱いまたはnullにせず、migrationと新規受付を停止したままにする。
+固定枠を黙って拡張しない。
 
 | 要素 | 最大長の根拠 | byte計算 |
 |---|---|---:|
@@ -186,29 +229,25 @@ source slotの実byte sizeはanchorに固定されるが、起動時の固定枠
 | 最大相関object | 現行7 field、最大5 ID、revision 16桁、digest64桁 | compact 15,572 byte、単独pretty 15,601 byte |
 | 最大reserved state | 現行state enum中の最長値 | `superseded_before_send`、22文字 |
 
-`M`は最大20,000件ずつの失効世代と質問記述子、最大3件ずつのsource/target fingerprintを持つanchorの最大serialized byte数とする。
-`M`にはstore ID、operation ID、anchor revision、開始時刻、各fingerprintの固定slot、`sourcePresent`、source/target version、revision、size、digest、失効記録のidentityとperiod、targetの`internalQuestionId`、`commonKeyDigest`、`periodIndex`、`recordDigest`、`deliveryPresence`、`checkpointState`を含め、実serializerで算出する。
-質問記述子内のdelivery intentは4 field全てを最大値にし、配列要素をdigestへ短縮しない。
-`H_checkpoint`はv2 checkpointからv3への最大schema差分、各detail/graveの`terminalAt`、variantとgrave metadata、revision予約、最大相関2組、保持する旧詳細との一時重複を含むbyte差分である。
-`H_instructions`はv1からv2への最大schema差分、store ID、delivery creation state、revision予約、保持中の最大envelopeと一時重複を含むbyte差分である。
-question journalの`H_questions`は質問schemaの正本で定義し、こちらのcheckpoint式へ二重計上しない。
-512個のID、最大revisionと時刻、最大state、両相関のnative IDを上式に入れ、値の平均や本文の想定値で割り引かない。
-`serializedTargetMax`は現行上限値を上限構造と誤認せず、各保存先の最大件数に最大長recordを配置して実serializerで測る。
-各IDは512 code unit、digestは64 lowercase hex、UUIDは36 ASCII文字、時刻とrevisionは安全な整数上限を使う。
-最大相関は相関内5 ID、最大revision、64桁digestの全値を埋め、pretty serializer内のindent増分も全checkpointへ反映する。
-source/target projectionを墓標と重ねて二重保持する設計を避け、移行中だけのdetailと墓標の同時保持量は別途加算する。
-実使用中の墓標用Hは、現行recordsをdetail/grave variantに投影した実serializer byteから算出し、migration manifestの有無に依存させない。
+`H_checkpoint`はcheckpointの有効な最大source snapshotをv3へ投影したときの最大追加byteである。
+実recordに保存する`terminalAt`、variant、grave metadata、revision増分、最大相関2組と、移行中の旧詳細との一時重複を含める。
+`H_instructions`はinstruction journalの有効な最大source snapshotをv2へ投影した最大追加byteである。
+store ID、delivery creation state、revision増分、最大envelopeと移行中の一時重複を含める。
+`H_questions`は質問schemaの正本に従い、anchorの`T_migration`へ二重計上しない。
+各`H_i`は旧byte上限、件数、全recordの相関条件を同時に満たすsnapshotの実serializer差分から求める。
+`serializedTargetMax_i`も同じ有効snapshot制約で測り、全件へ独立最大長recordを配置する非実現構造を使わない。
+通常kindのunknownはdetailのまま保持し、後着相関も受け付けるため、通常checkpoint容量を引き続き消費する。
+このunknown detailはquestion用の圧縮`H`へ含めず、回収量として見積もらない。
+#206のmemory ledgerとclaimの回収、および非question unknownの長期占有は段階4の未完了範囲である。
 
-`M`はanchorのtarget最大byte、`A`は既存anchorの実byte（初回作成時は0）であり、`A`は`M`以下とする。
-data fileごとの`N_i`は旧sourceの実byte、`H_i`は`max(0, serializedTargetMax_i - N_i)`とする。
-atomic置換中はanchorの`A`とtarget `M`、各data fileの`N_i`とtarget temporary `N_i + H_i`が同時に存在し得る。
+`A`は既存anchorの実byte（初回作成時は0）、`N_i`は各旧data fileの実byte、`H_i = max(0, serializedTargetMax_i - N_i)`とする。
+atomic置換中は既存anchor `A`と一時anchor `M`、各旧data file `N_i`と一時target `N_i + H_i`が同時に存在し得る。
 総ピーク上界は`A + M + Σ(2N_i + H_i)`である。
-旧source `A`と`N_i`は既存fileが占有する通常容量に含め、追加の移行予約へ二重計上しない。
-専用の追加予約は`M + Σ(N_i + H_i)`とし、満杯のsourceを残したままtargetを置換する空間を確保する。
-移行専用load/write上限は各fileの通常load上限に`H_i`を加えた値とし、targetを読み書きできる間だけ適用する。
-その例外が無ければ、通常上限ぎりぎりのlegacy fileへ必須fieldを追加できず、満杯旧形式からの脱出は保証できない。
-ディスク不足時はsourceを残し、移行と通常受付を再開しない。
-
-現行定数から相関とfield追加分は計算できるが、`H_checkpoint`と`M`の数値は新しいquestion descriptor、target serializer、実際の最大record variantを合わせて算出する。
-最大有効source件数と各recordの最大構造byteを全source fileへ適用した結果を実装計画の容量試験値にする。
-7日経過前に通常上限を超える場合は受付を止め、保持期限を短縮しない。
+旧source `A`と`N_i`は既存fileが占有する通常容量に含め、追加予約へ二重計上しない。
+追加予約は`M + Σ(N_i + H_i)`で、一時targetの全byteを保持できる枠を別に確保する。
+`H_used_i`は現行recordsをdetail/grave variantへ投影した実serializer byteから算出し、manifestの有無に依存させない。
+`migration: null`後も`H_used_i`が残る間は通常上限に`H_i`を加えたload/writeを許し、圧縮で通常budget内へ収束するまで既存recordを保持・更新できるようにする。
+`H_i`を新規受付の予約や通常容量として使わず、次の移行でHを再帰的に加算しない。
+この枠を許さなければ、通常上限いっぱいの旧形式へ必須fieldを足せない。
+容量不足時は旧sourceと拒否情報を保持し、migrationと受付を再開しない。
+7日経過前に通常上限を超える場合も新規受付を止め、本文保持期限を短縮しない。

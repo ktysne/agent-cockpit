@@ -35,6 +35,11 @@ identity と period ID の検査と正規化には registry と同じ規則を�
 加えて `retiredAt` に0以上の安全な整数のUnix時刻（ミリ秒）、`reason` に `startup-quarantine` または `confirmed-retirement` を持つ。
 未知のフィールド、enum、重複した失効keyを拒否する。
 初期の失効世代上限は質問の最大件数と同じ20,000件とし、満杯では新規の失効操作と新規質問の受付を止める。
+通常のアンカーbyte上限 `B_anchor` は16,777,216 bytesとし、件数とbyteの両方を検査する。
+質問の通常登録時から、その期間の失効記録を追加する将来の件数とbyteを予約する。
+未消費の予約は質問journalの非退役period集合から導出し、復旧時も同じ完全keyで再計算する。
+共有coordinatorで登録と失効を直列化し、アンカー実使用量と導出予約を合わせて通常上限を検査する。
+同じ完全identityとperiod IDの予約は重複計上せず、上限を超える新期間の受付を拒否する。
 既存の失効記録を消して枠を空けない。
 
 同じ period で actor、connection generation、launch reference だけが変わっても失効は解除しない。
@@ -113,7 +118,15 @@ gateは対象の完全identityとperiod IDごとに `active`、`retiring`、`ret
 
 通常受付の上限 `N` と別に、アンカー用の移行枠 `M` と各データファイルの追加移行枠 `H` を設ける。
 移行枠は通常受付に使えない。
-`M` は、最大20,000の失効記録と質問記述子、最大3のファイル記述子、envelope、最大revision桁数、隔離時刻の保存を、実serializerで最大長にしたbyte数の上界とする。
+移行専用の追加枠 `T_migration` は、受理可能な旧slotのbyte上限、件数上限、field制約を同時に満たす入力に対する固定上界とする。
+必要追加量の上界を `Σ(c_s × N_s) + Qmax × Kq + Pmax × Kp + Kmanifest` で証明し、その右辺を固定枠 `T_migration` とする。
+`N_s` は旧slotの許容byte上限、`c_s` は旧文字列の最大複製回数、`Qmax` と `Pmax` は各20,000件の質問と世代の上限である。
+`Kq` と `Kp` は追加キー、digest、時刻、区切り、indentの最大byte数、`Kmanifest` は最大3slotの記述子とenvelopeの最大byte数である。
+旧文字列をJSON文字列として二重escapeせず、旧文字列の合計byteが `N_s` 以下である制約を使う。
+各記述子の独立した最大長を20,000倍した値だけを移行枠の根拠にしない。
+係数、固定fieldのbyte数、最終の固定定数は段階2で実serializerに基づいて証明し、最大escapeのfixtureで確認する。
+`T_migration` を利用者の自由な設定値にはしない。
+移行中のアンカー1ファイルの上限 `M` は `B_anchor + T_migration` とする。
 `M` はアンカー1ファイルの上界であり、atomic置換時の既存アンカー `A` と一時ファイル `M` の同時保持は別に計上する。
 各データファイルの通常上限を `N_i`、追加枠を `H_i` とすると、保守的なピーク総量は `A + M + Σ(2N_i + H_i)`、`A ≤ M` なので上界は `2M + Σ(2N_i + H_i)` となる。
 既存ファイルの占有量と専用追加予約を区別し、同じ既存byteを両方へ重複計上しない。
@@ -138,12 +151,18 @@ IDの最大長はUTF-16 code unitsであり、JSON escapeによるbyte増加を�
 以後は旧manifestのbyte指紋を適用せず、新schemaの構造と相関で復旧を検査する。
 7日後の本文回収は各schemaの回収操作で管理し、形式移行のmanifestを残したまま通常writerを再開しない。
 失効配列とstore IDは残す。
+初回の旧質問から作る失効集合が `B_anchor` に収まることを、旧入力の上限と投影の容量式で段階2に証明する。
+通常上限が満杯の既存アンカーへの追加移行は別の条件であり、永続失効集合が `B_anchor` に収まらない場合は拒否情報を保持して移行を保留する。
+追加枠を永久失効集合の通常上限の拡張に使わず、新規受付とwriterの停止を維持する。
 ENOSPCでは旧詳細を保持して停止し、先に本文を削除しない。
 
 ## 実装前の検証条件
 
 段階2では自動回収を接続せず、拒否情報と移行のfixtureを確認する。
 満杯の旧形式、Unicodeの最大escape、revision上限、保存境界のクラッシュ、新旧ファイルの混在、アンカーの欠落と取り違えを試験する。
+件数満杯の移行成功と新規受付再開を分け、墓標で件数枠が満杯なら受付停止を維持する。
+稼働を続ける同一native thread/sessionでも再登録が旧periodを維持する場合は拒否し、trusted registrationが新periodを発行した場合だけ受付できることを確認する。
+再起動しただけで新periodが得られるとは仮定しない。
 同periodのactorやgeneration変更、新trusted period、旧ID再利用、質問と通常指示が同じcheckpointを使う場合の停止範囲も確認する。
 7日保持中の容量不足と、初回移行時刻の再起動後の不変を確認する。
 これらのfixtureを実runtimeの成功として扱わない。
