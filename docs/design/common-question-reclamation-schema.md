@@ -45,8 +45,8 @@ v2の外形はschemaVersion、storeId、revision、questions、reservations、mi
 schemaVersionは2、storeIdはアンカーと同じ小文字UUIDv4、revisionは0以上の安全な整数とする。
 通常はmigrationAllowance=nullとし、初回v1 sourceの追加容量を保持する場合だけ厳密なgrant objectを保存する。
 grant objectはoperationId、sourceSchemaVersion、sourceSizeBytes、sourceSha256、maxExtraBytes、eligibleQuestionIdsを持つ。
-operationIdはanchor migrationと同じoperationの小文字UUIDv4、sourceSchemaVersionは1、sourceSizeBytesは0から通常上限Nまでの安全な整数、sourceSha256は旧fileの実byteに対するlowercase SHA-256 hex 64文字とする。
-maxExtraBytesはsource検査時に一度計算して固定する安全な整数で、1からH_questions以下とし、算出値が0ならgrantをnullにする。
+operationIdはanchor migrationと同じoperationの小文字UUIDv4、sourceSchemaVersionは1、sourceSizeBytesは旧v1の固定最大値16,777,216以下の安全な非負整数、sourceSha256は旧fileの実byteに対するlowercase SHA-256 hex 64文字とする。
+maxExtraBytesはsource検査時に一度計算して固定する安全な整数で、1からH_questions以下とし、grant無しの最大projectionが通常上限N以内ならgrantをnullにする。
 eligibleQuestionIdsはsource v1のinternalQuestionIdを全て一度だけ並べたdense arrayで、各値は既存identifier規則に従い、最大20,000件とする。
 未知field、重複ID、不正UUID、source version/size/digestの不一致を拒否する。
 形式migration coordinatorだけが、アンカーのquestion source fingerprintと完全一致したv1 snapshotからgrantを発行できる。
@@ -356,6 +356,7 @@ grant本体と最大`eligibleQuestionIds`配列もprojectionに含める。固�
 通常上限を超える場合だけgrant込みで再測定し、受け取った有効な旧source `S`について、`maxExtraBytes = max(0, max_b(projectedReserveBytes(S,b) - sourceSizeBytes(S)))`を一度計算して固定する。
 `b`と将来予約の計上方法は上の固定上界と同じとし、grant内の数値は16桁の最大幅でprojectionして自己参照を避ける。
 このsource基準は通常上限を基準にした最小追加量より保守的な移行増加枠であり、固定`H_questions`も同じ基準の上界として維持する。
+通常上限と旧sourceの差に由来する余裕は、合法な既存遷移だけに限定し、物理ピークも保存されたmaxExtraBytesを含めて確保する。
 未使用分を新規受付へ転用しない。算出値が`H_questions`を超えれば移行を拒否する。
 grantがある間、移行・保持中の既存journal load/writeと回収3境界に`N + maxExtraBytes`を適用する。
 journalの現在・次snapshotが`N`を超えても`N + maxExtraBytes`以内なら、既存の拒否snapshotを維持し、回収境界1を含む既存操作を続けられる。

@@ -62,9 +62,9 @@ checkpoint v3のouter objectとinstruction journal v2のtop-level objectは、�
 |---|---|
 | `operationId` | anchor migrationと同じoperationの小文字UUIDv4 |
 | `sourceSchemaVersion` | checkpointでは2、instruction journalでは1 |
-| `sourceSizeBytes` | 対応する旧source slotの固定実byte size。安全な整数で`0..B_i`。旧source schemaの制約も満たす |
+| `sourceSizeBytes` | 対応する旧source slotの固定実byte size。安全な整数で`0..16,777,216`。sourceSchemaVersionに対応する旧形式の固定最大値と制約を満たす。現在の設定B_iでは検証しない |
 | `sourceSha256` | 対応するanchor source fingerprintと同じ、旧source実byteの小文字SHA-256 hex 64文字 |
-| `maxExtraBytes` | 正の安全な整数でslot固有の`H_i`以下。算出値0ならgrantはnull。発行後不変 |
+| `maxExtraBytes` | 正の安全な整数でslot固有の`H_i`以下。grant無しの最大projectionが通常枠内ならnull。発行後不変 |
 | `eligibleAttemptIds` | dense array。重複のない最大20,000件のidentifierで、各512 UTF-16 code unit以下 |
 
 移行coordinatorだけが、旧sourceのschema、size、SHA-256がanchorの固定fingerprintと一致した後にgrantを発行する。
@@ -79,7 +79,9 @@ grantのoperation ID、source fingerprint、rosterを後から追記・差替え
 sourcePresent=falseならgrantをnullにする。
 source基準は通常上限を基準にした最小追加量より保守的な移行増加枠であり、固定`H_i`も同じ基準の上界として維持する。未使用分を新規受付へ転用しない。
 算出値が固定`H_i`を超えれば移行を拒否する。
-旧sourceの実byteが現在の`B_i`を超える場合も移行を拒否し、sourceを保持して診断に上限超過の理由を出す。
+旧sourceの実byteが現在の`B_i`を超える場合も移行を拒否し、sourceを保持して診断に上限超過の理由を出す。設定を必要な容量へ戻した後、schema、相関、将来予約を再検査すれば再開できる。
+設定縮小だけで保存済みgrantをschema破損と扱わず、grantは不変に保つ。
+現在の容量検査に通らなければ書込みを始めず、writer停止、保存データ保持、容量不足診断とし、設定復元後の再検査で再開する。
 非null grantの`maxExtraBytes`が0または固定`H_i`を超えるobjectも拒否する。
 
 `eligibleAttemptIds`は移行時点の上限対象を固定するrosterであり、移行後のrecordsと件数が完全一致する必要はない。
@@ -294,5 +296,4 @@ grantがnullなら全load/writeを通常`B_i`内に制限する。固定`H_i`は
 容量不足時は旧sourceと拒否情報を保持し、migrationと受付を再開しない。
 7日経過前に通常上限を超える場合も新規受付を止め、本文保持期限を短縮しない。
 
-この旧source実byteを使う物理ピーク式は初回形式移行の置換に限る。
-移行後の再書込みでは旧fileも増大するため、各slotの旧fileと一時fileの合計は保守的に`2 × (B_i + maxExtraBytes)`を確保し、アンカーと他slotの保持分を別に加える。
+初回移行と移行後再書込みの物理ピーク、追加予約の切替えは[アンカーの容量式](question-reclamation-anchor.md#満杯からの移行とbyte上限)に従う。
