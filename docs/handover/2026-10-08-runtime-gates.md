@@ -40,7 +40,7 @@ fixtureで検証した変更をfeatureへ集約し、実runtime確認をfeature�
 | 順 | ブランチとPR | base | 状態（2026-10-08確認） |
 |---:|---|---|---|
 | 1 | `codex/sync-main-259-20261008` / #261 | `codex/feature-codex-support` | head `f7d4a51`、レビュー2往復で要修正なし。#259の同期とレビューで見つかった #262 の修正。未マージ。 |
-| 2 | `codex/plan-a-runtime-gates-20261008` / 作成予定 | `codex/sync-main-259-20261008` | 案Aと本計画。レビュー前、未マージ。 |
+| 2 | `codex/plan-a-runtime-gates-20261008` / #263 | `codex/sync-main-259-20261008` | 案Aと本計画。レビュー対象、未マージ。 |
 
 開発者は下から通常mergeで取り込み、次段のbaseがfeatureへ付け替わったことを確認してから進める。
 以後の実装PRは、計画確認後に最新featureまたは開発者指定の直前PRを起点にする。
