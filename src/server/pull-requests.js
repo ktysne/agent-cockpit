@@ -713,6 +713,48 @@ function removeStaleProductViews(productViews, repositoryKey, currentIdentities)
   }
 }
 
+// 後段で push するのは listAvailable が真のときだけで、その場合は新しい配列を返す。
+function interpretFetchResults({ listResult, configResult, current, checkedAt }) {
+  const errors = [];
+  const uninspectedNumbers = new Set();
+  let openPullRequests = current.openPullRequests;
+  let defaultBranch = current.defaultBranch;
+  let mergeMethods = current.mergeMethods;
+  let autoDeleteBranch = current.autoDeleteBranch;
+  let configAvailable = false;
+  let fetchedAt = current.fetchedAt;
+  let listAvailable = false;
+
+  if (listResult.status === 'fulfilled') {
+    try {
+      openPullRequests = parsePullRequestList(listResult.value);
+      fetchedAt = checkedAt;
+      listAvailable = true;
+    } catch {
+      errors.push('PR の一覧を読み取れませんでした');
+    }
+  } else {
+    errors.push(`PR の一覧を取得できません。${ghErrorMessage(listResult.reason)}`);
+  }
+
+  if (configResult.status === 'fulfilled') {
+    try {
+      const config = parseRepositoryConfig(configResult.value);
+      defaultBranch = config.defaultBranch;
+      mergeMethods = config.mergeMethods;
+      autoDeleteBranch = config.autoDeleteBranch;
+      configAvailable = true;
+    } catch {
+      errors.push('リポジトリ設定を読み取れませんでした');
+    }
+  } else {
+    errors.push(`リポジトリ設定を取得できません。${ghErrorMessage(configResult.reason)}`);
+  }
+  const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
+  return { openPullRequests, openNumbers, defaultBranch, mergeMethods, autoDeleteBranch, configAvailable,
+    fetchedAt, listAvailable, errors, uninspectedNumbers };
+}
+
 class PullRequestTracker {
   constructor(options = {}) {
     this.state = options.state;
@@ -889,44 +931,12 @@ class PullRequestTracker {
       this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--limit', '500', '--json', PULL_REQUEST_FIELDS]),
       this.execute(['api', `repos/${repository}`]),
     ]);
-    const errors = [];
-    const uninspectedNumbers = new Set();
-    let openPullRequests = current.openPullRequests;
-    let defaultBranch = current.defaultBranch;
-    let mergeMethods = current.mergeMethods;
-    let autoDeleteBranch = current.autoDeleteBranch;
-    let configAvailable = false;
-    let fetchedAt = current.fetchedAt;
-    let listAvailable = false;
+    const { openPullRequests, openNumbers, defaultBranch, mergeMethods, autoDeleteBranch, configAvailable,
+      fetchedAt, listAvailable, errors, uninspectedNumbers } = interpretFetchResults({
+      listResult, configResult, current, checkedAt,
+    });
     let mergedPullRequests = null;
     let mergedListComplete = false;
-
-    if (listResult.status === 'fulfilled') {
-      try {
-        openPullRequests = parsePullRequestList(listResult.value);
-        fetchedAt = checkedAt;
-        listAvailable = true;
-      } catch {
-        errors.push('PR の一覧を読み取れませんでした');
-      }
-    } else {
-      errors.push(`PR の一覧を取得できません。${ghErrorMessage(listResult.reason)}`);
-    }
-
-    if (configResult.status === 'fulfilled') {
-      try {
-        const config = parseRepositoryConfig(configResult.value);
-        defaultBranch = config.defaultBranch;
-        mergeMethods = config.mergeMethods;
-        autoDeleteBranch = config.autoDeleteBranch;
-        configAvailable = true;
-      } catch {
-        errors.push('リポジトリ設定を読み取れませんでした');
-      }
-    } else {
-      errors.push(`リポジトリ設定を取得できません。${ghErrorMessage(configResult.reason)}`);
-    }
-
 
     if (listAvailable) {
       const trackedByNumber = new Map();
@@ -940,7 +950,6 @@ class PullRequestTracker {
         else tracked.related = record;
         tracked.record ||= record;
       }
-      const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
       const backfill = [...trackedByNumber.entries()]
         .filter(([number, tracked]) => !openNumbers.has(number) && tracked.record.state === 'merged'
           && !confirmedMergedHead(tracked.record.mergedHead)
@@ -1339,6 +1348,7 @@ function attachCrossReviewState(pullRequest, crossReviewByNumber) {
 }
 
 module.exports = {
+  interpretFetchResults,
   parseCompareResult,
   restackResult,
   historicalMergedPullRequests,

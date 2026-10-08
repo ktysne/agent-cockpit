@@ -2086,3 +2086,46 @@ test('比較はすべての PR で始めてから結果を待ち、失敗した 
     [91, { checked: false, parent: null }],
   ]));
 });
+const { interpretFetchResults } = require('../src/server/pull-requests');
+
+test('取得に失敗した一覧と設定は前回の値を残し、取得時刻を更新しない', () => {
+  const current = { openPullRequests: [pullRequest(31, 'feat', 'main')], defaultBranch: 'main',
+    mergeMethods: ['merge'], autoDeleteBranch: true, fetchedAt: 'previous' };
+  const result = interpretFetchResults({ current, checkedAt: 'now',
+    listResult: { status: 'rejected', reason: new Error('list') },
+    configResult: { status: 'rejected', reason: new Error('config') } });
+  assert.equal(result.openPullRequests, current.openPullRequests);
+  assert.equal(result.mergeMethods, current.mergeMethods);
+  assert.equal(result.defaultBranch, 'main');
+  assert.equal(result.autoDeleteBranch, true);
+  assert.equal(result.fetchedAt, 'previous');
+  assert.equal(result.listAvailable, false);
+  assert.equal(result.configAvailable, false);
+  assert.deepEqual([...result.openNumbers], [31]);
+  assert.match(result.errors[0], /^PR の一覧を取得できません。/);
+  assert.match(result.errors[1], /^リポジトリ設定を取得できません。/);
+});
+
+test('読み取れない一覧と設定は一覧、設定の順でエラーにする', () => {
+  const result = interpretFetchResults({ current: { openPullRequests: [], fetchedAt: 'previous' }, checkedAt: 'now',
+    listResult: { status: 'fulfilled', value: 'invalid' },
+    configResult: { status: 'fulfilled', value: 'invalid' } });
+  assert.deepEqual(result.errors, ['PR の一覧を読み取れませんでした', 'リポジトリ設定を読み取れませんでした']);
+  assert.equal(result.fetchedAt, 'previous');
+});
+
+test('取得できた一覧は新しい配列にして設定と取得時刻を更新する', () => {
+  const current = { openPullRequests: [] };
+  const result = interpretFetchResults({ current, checkedAt: 'now',
+    listResult: { status: 'fulfilled', value: JSON.stringify([ghPullRequest(31, 'feat', 'main')]) },
+    configResult: { status: 'fulfilled', value: JSON.stringify({ default_branch: 'main',
+      allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: true, delete_branch_on_merge: true }) } });
+  assert.notEqual(result.openPullRequests, current.openPullRequests);
+  assert.deepEqual([...result.openNumbers], [31]);
+  assert.equal(result.fetchedAt, 'now');
+  assert.equal(result.listAvailable, true);
+  assert.equal(result.configAvailable, true);
+  assert.deepEqual(result.mergeMethods, ['merge', 'rebase']);
+  assert.equal(result.autoDeleteBranch, true);
+  assert.deepEqual(result.errors, []);
+});
