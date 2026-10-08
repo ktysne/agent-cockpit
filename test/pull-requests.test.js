@@ -5,7 +5,12 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   PullRequestTracker,
+  classifyInspectedPullRequest,
   evaluateRestack,
+  interpretFetchResults,
+  productGroupsFor,
+  selectPullRequestsToInspect,
+  stackedPullRequestsForMerge,
   historicalMergedPullRequests,
   mergedPullRequestCandidates,
   parseCompareResult,
@@ -2086,7 +2091,6 @@ test('比較はすべての PR で始めてから結果を待ち、失敗した 
     [91, { checked: false, parent: null }],
   ]));
 });
-const { interpretFetchResults } = require('../src/server/pull-requests');
 
 test('取得に失敗した一覧と設定は前回の値を残し、取得時刻を更新しない', () => {
   const current = { openPullRequests: [pullRequest(31, 'feat', 'main')], defaultBranch: 'main',
@@ -2130,7 +2134,6 @@ test('取得できた一覧は新しい配列にして設定と取得時刻を�
   assert.deepEqual(result.errors, []);
 });
 
-const { selectPullRequestsToInspect, classifyInspectedPullRequest, stackedPullRequestsForMerge } = require('../src/server/pull-requests');
 
 test('確認対象は登録、関連の挿入順で束ね、同じ番号の登録をまとめる', () => {
   const first = pullRequestRegistration(32);
@@ -2244,7 +2247,6 @@ test('マージ済み一覧の取得失敗は一覧を null にして既存の�
   assert.match(result.error, /^マージ済み PR の一覧を取得できません。/);
 });
 
-const { productGroupsFor } = require('../src/server/pull-requests');
 
 test('プロダクトが無い登録はリポジトリ名を既定の所属にする', () => {
   const registration = { number: 31 };
