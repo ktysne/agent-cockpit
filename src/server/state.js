@@ -553,6 +553,7 @@ function newSession(event, askDecisionState = {}) {
     status: '作業中',
     tools: [],
     completedToolIds: new Set(),
+    stoppedAgentIds: new Set(),
     codexLaunchToolIds: new Set(),
     agents: [],
     permissionWaits: [],
@@ -902,7 +903,7 @@ function applyAskQuestionCompletion(session, event) {
   }
 }
 
-function applyCommonEventStart(session, event, stoppedAgentIds) {
+function applyCommonEventStart(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   const isCodexAgentId = agentId?.startsWith('codex:') === true;
@@ -911,11 +912,11 @@ function applyCommonEventStart(session, event, stoppedAgentIds) {
   session.lastActivityAt = isoTime(event.hookAt);
 
   if (eventName === 'SubagentStop' && agentId) {
-    stoppedAgentIds.add(agentId);
+    session.stoppedAgentIds.add(agentId);
   } else if (eventName === 'SubagentStart' && agentId && !isCodexAgentId) {
-    stoppedAgentIds.delete(agentId);
+    session.stoppedAgentIds.delete(agentId);
   } else if (
-    agentId && !isCodexAgentId && !stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
+    agentId && !isCodexAgentId && !session.stoppedAgentIds.has(agentId) && !agentFor(session, agentId)
   ) {
     const agent = agentModelFromDefinition(event.agent_type, event.agentDefinition || {});
     agent.agent_id = agentId;
@@ -990,15 +991,15 @@ function applySubagentStart(session, event) {
   }
 }
 
-function applySubagentStop(session, event, stoppedAgentIds) {
+function applySubagentStop(session, event) {
   const eventName = event.hook_event_name;
   const agentId = event.agent_id || null;
   if (eventName === 'SubagentStop' && agentId) {
-    stopAgent(session, agentId, stoppedAgentIds);
+    stopAgent(session, agentId, session.stoppedAgentIds);
   }
   if (eventName === 'PostToolUse' && event.tool_name === 'TaskStop' && event.stoppedTaskId) {
     const agent = agentFor(session, event.stoppedTaskId);
-    if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, stoppedAgentIds);
+    if (agent && !agent.isCodex) stopAgent(session, agent.agent_id, session.stoppedAgentIds);
   }
 }
 
@@ -1082,9 +1083,9 @@ function applySessionLifecycle(session, event) {
   if (eventName === 'SessionEnd') session.ended = true;
 }
 
-function applyCommonEventEnd(session, event, stoppedAgentIds) {
+function applyCommonEventEnd(session, event) {
   const agentId = event.agent_id || null;
-  if (agentId && stoppedAgentIds.has(agentId)) {
+  if (agentId && session.stoppedAgentIds.has(agentId)) {
     session.tools = session.tools.filter((tool) => tool.agent_id !== agentId);
     session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id !== agentId);
   }
@@ -1164,7 +1165,6 @@ function applyCodexStart(session, event) {
 
 function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinity) {
   const sessions = new Map();
-  const stoppedAgentIdsBySession = new Map();
   const initialAskDecisionState = initialAskDecisionsFor(entries, askDecisionState, beforeSequence);
   const ordered = [...entries].sort((left, right) => {
     const difference = left.event.hookAt - right.event.hookAt;
@@ -1175,23 +1175,17 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
     const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
-    let stoppedAgentIds = stoppedAgentIdsBySession.get(session);
-    if (!stoppedAgentIds) {
-      stoppedAgentIds = new Set();
-      stoppedAgentIdsBySession.set(session, stoppedAgentIds);
-    }
-
-    applyCommonEventStart(session, event, stoppedAgentIds);
+    applyCommonEventStart(session, event);
 
     applyToolStart(session, event);
     applySubagentStart(session, event);
-    applySubagentStop(session, event, stoppedAgentIds);
+    applySubagentStop(session, event);
     applyToolCompletion(session, event);
     applyToolBatch(session, event);
     applyPermissionPrompt(session, event);
     applySessionLifecycle(session, event);
 
-    applyCommonEventEnd(session, event, stoppedAgentIds);
+    applyCommonEventEnd(session, event);
   }
 
   return [...sessions.values()]

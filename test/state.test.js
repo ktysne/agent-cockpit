@@ -814,6 +814,14 @@ test('復元したサブエージェントに最初の PreToolUse の lastTool �
   assert.equal(session.tools[0].agent_id, 'agent-1');
 });
 
+test('停止したエージェントの内部集合は snapshot に含めない', () => {
+  const state = backgroundClaudeState();
+  state.addEvent({ session_id: 'task-stop', hook_event_name: 'SubagentStop', agent_id: 'task-1', hookAt: 400 });
+  const session = state.snapshot().sessions[0];
+  assert.equal(Object.hasOwn(session, 'stoppedAgentIds'), false);
+  assert.equal(Object.hasOwn(state.sessions.get('task-stop'), 'stoppedAgentIds'), false);
+});
+
 test('Codex の擬似 agent_id はサブエージェント行の復元対象にしない', async (t) => {
   await temporaryHome(t);
   const state = new DashboardState();
