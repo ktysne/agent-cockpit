@@ -85,6 +85,7 @@ freshなmemory registryに保存済み質問のbindingがない場合は、現�
 保存済みbindingの信頼できる復元は未接続であり、fresh registryからの質問再開が成功したとは扱わない。
 既存kernelを保ったまま永続storeだけを開き直すfixtureとは異なり、段階2のcold再起動条件は未達である。
 この制約を解消するまでIssue #216を閉じない。
+[#283](https://github.com/ktysne/agent-cockpit/issues/283)を解消するまで、標準起動と設定画面への接続を進めない。
 
 ## HTTPのtarget projection
 

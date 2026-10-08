@@ -401,7 +401,7 @@ test('question readiness diagnostics reject initialization and release both jour
   await integration.close();
 });
 
-test('a failed question close still closes instructions and the shared store once', async (t) => {
+test('a failed question close still closes instructions once and removes the settings subscriber', async (t) => {
   const f = await fixture(t, { observe: { closeRejects: true } });
   const integration = await f.createNativeInstructionServiceIntegration(f.integrationOptions);
   await assert.rejects(integration.close(), /fixture question close failure/);
