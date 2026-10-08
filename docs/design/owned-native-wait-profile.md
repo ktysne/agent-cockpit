@@ -45,7 +45,24 @@ wait profileだけが releaseWait(receipt) と cancelWait(receipt) を返す。
 receiptは一回だけ使え、別runnerや別contextへ移せない。
 releaseWait() のtrueはlatchがterminal操作を受け付けたことを示し、native pipeへのresponse成功は保証しない。
 release、cancel、deadlineの応答にはrunnerが固定したstatusとsuccessだけを含める。
-request IDはmatching requestへ応答する間だけメモリーに保持し、snapshotやlogには含めない。
+native request IDは文字列と整数を区別し、runner寿命中の一意ID集合で再利用を拒否する。
+native hold requestとowned wait requestは同じrunner寿命中128件の上限を使い、上限到達時はrunnerをfail closedにする。この上限は長い実行に対する可用性上の制約となる。
+wait responseのwrite直前に既存のwait gateを再確認し、型付きrequest ID、child、generation、thread、元turnだけを非公開のresponse記録へ保存する。
+`serverRequest/resolved`は型付きrequest ID、child、generation、threadが一致するowned wait responseを確認し、pending hold requestの既存照合条件は別に維持する。
+応答前のactive waitに一致する通知はapp-serverによる取り消しとして消費し、latchを失効させてwaitを破棄する。
+取り消された要求には応答せず、response記録やretired記録も作らないため、同じreceiptによるreleaseWaitはfalseを返す。
+turn/start応答前のearly waitも、早期turn完了が無ければ一致する通知で破棄し、応答後に活性化しない。
+waitCallSeenは維持し、同じturnの重複callを拒否する。
+早期turn完了がある場合は解決通知を遅延し、turn/start応答後に元のscopeを照合して再生する。
+解決通知を消費せずに無応答で無効化または破棄した既知のactive/early waitは、元の型付きrequest ID、child、generation、thread、turnを同じ128件上限内で保持する。
+対応する遅延`serverRequest/resolved`は一度だけ消費し、pending holdとrevisionを変えない。
+未知または二重の通知と、ID型、thread、child、generationのいずれかが一致しない通知はrunnerを止めず、unmatchedResolutionCountに数える。
+照合できない通知ではどの保留も解除せず、pending hold、revision、各記録を変えない。
+遅延した解決通知の再生時に照合できない場合は、その遅延通知だけを捨てて1件数える。
+snapshotにはこの件数だけを数値で含め、request IDや本文は含めない。
+resolution通知がwrite callbackより先に届いた場合は両方の到着まで記録を保持し、write errorはresponse失敗としてrunnerを停止する。
+resolution時に現在turnとの一致は求めないため、wait response後にturnが進んでも元のscopeで確認できる。
+response記録はwrite成功と対応通知の両方を確認した後、またはrunnerの失敗・停止時に破棄し、request IDやresponse本文はsnapshotやlogへ含めない。
 
 ## deadlineとprocess寿命
 
