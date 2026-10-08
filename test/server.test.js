@@ -1968,7 +1968,7 @@ test('離席状態の切り替えを続けて呼ぶと、呼んだ順に保存�
 });
 
 test('/api/state は版と時刻を、離席期間の整理を待つ前に中身と同じ時点で確定する', async () => {
-  const source = (await fs.readFile(path.join(__dirname, '../src/server/server.js'), 'utf8')).replace(/\r\n/g, '\n');
+  const source = (await fs.readFile(path.join(__dirname, '../src/server/routes/read.js'), 'utf8')).replace(/\r\n/g, '\n');
   const start = source.indexOf('async function handleState(');
   const handler = source.slice(start, source.indexOf('jsonResponse(response, 200', start));
   const versionAt = handler.indexOf('snapshot.version = state.version;');
