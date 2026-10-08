@@ -119,6 +119,7 @@ function createInstructionHarness(options = {}) {
   });
   const writes = [];
   const evidenceListeners = new Set();
+  const closedListeners = new Set();
   const capabilities = new WeakSet();
   const capabilitiesByAttempt = new Map();
   const ackWaiters = new Map();
@@ -127,6 +128,14 @@ function createInstructionHarness(options = {}) {
 
   let closed = false;
   const nativeOwner = ownerEnabled ? Object.freeze({
+    ...(options.lateObservation ? {
+      subscribeInstructionClosed(listener) { closedListeners.add(listener); return () => closedListeners.delete(listener); },
+      closeInstructionObservation(capability, metadata) {
+        if (capabilitiesByAttempt.get(metadata.deliveryAttemptId) !== capability) return false;
+        capabilitiesByAttempt.delete(metadata.deliveryAttemptId);
+        return true;
+      },
+    } : {}),
     prepareInstructionDispatch(metadata) {
       if (closed || metadata.source.launchRef !== launch.launchRef) return null;
       const capability = Object.freeze({});
@@ -181,6 +190,7 @@ function createInstructionHarness(options = {}) {
     createProviderInstructionAdapter(name, {
       deliveryAdapter: providerAdapters[name],
       nativeOwner: name === provider ? nativeOwner : null,
+      ...(options.setTimeoutImpl ? { setTimeoutImpl: options.setTimeoutImpl, clearTimeoutImpl: options.clearTimeoutImpl } : {}),
     }),
   ]));
   const journal = createInstructionDeliveryJournal({ filePath: journalPath });
@@ -189,6 +199,7 @@ function createInstructionHarness(options = {}) {
     deliveryStore: store,
     providerInstructionAdapters: instructionAdapters,
     launchRegistry,
+    ...(options.now ? { now: options.now } : {}),
   });
   function emitEvidence(capability, value) {
     let accepted = false;

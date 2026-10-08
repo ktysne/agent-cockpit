@@ -661,6 +661,7 @@ function createOwnedNativeRunner(options) {
     invalidateWait();
     if (claudeWait && !claudeWait.controller.transitioning()) claudeWait.controller.endInput();
     terminalContextId = nativeContextId;
+    instructionController?.endContext(nativeContextId);
     terminalContextCount = Math.min(Number.MAX_SAFE_INTEGER, terminalContextCount + 1);
     if (instructionController) {
       if (knownInstructionTerminals.size >= MAX_NATIVE_TERMINALS) throw runnerError('native_context_end_limit');

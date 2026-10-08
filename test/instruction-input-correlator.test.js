@@ -139,7 +139,7 @@ test('an expired accepted attempt is closed even when its timer callback has not
   correlator.close();
 });
 
-test('the commit guard rejects evidence after TTL even while an apply callback is waiting', async () => {
+test('expiry cannot interrupt evidence that is already applying', async () => {
   const value = fixture();
   let currentTime = 5;
   let timerCallback;
@@ -173,9 +173,9 @@ test('the commit guard rejects evidence after TTL even while an apply callback i
   applyGate.resolve();
   await waitFor(() => correlator.pendingCount === 0);
 
-  assert.equal(guardResult, false);
-  assert.equal(appliedSaves, 0);
-  assert.deepEqual(unknown, [{ id: value.deliveryAttemptId, reason: 'instruction_evidence_expired' }]);
+  assert.equal(guardResult, true);
+  assert.equal(appliedSaves, 1);
+  assert.deepEqual(unknown, []);
   correlator.close();
 });
 
@@ -204,6 +204,60 @@ test('evidence arriving after TTL cannot revive an attempt when its timer callba
   }), false);
   assert.equal(correlator.pendingCount, 0);
   assert.deepEqual(unknown, [{ id: value.deliveryAttemptId, reason: 'instruction_evidence_expired' }]);
+  correlator.close();
+});
+
+test('acknowledged observation expiry retains bounded correlation and applies matching late evidence once', async () => {
+  const value = fixture(); let currentTime = 0; const unknown = []; let applied = 0; let finished = 0;
+  const token = Symbol('source'); let correlator;
+  correlator = createInstructionInputCorrelator({ now: () => currentTime,
+    onUnknown: (id, reason) => unknown.push(reason),
+    onFinished: (id, state, reason, sourceToken) => { assert.equal(sourceToken, token); finished += 1; },
+    onApplied: (id, evidence, sourceToken) => {
+      applied += 1; assert.equal(correlator.beginApplyCommit(id, sourceToken, evidence), true);
+      return Promise.resolve(true);
+    },
+  });
+  correlator.register(value.registration); correlator.attachSourceToken(value.deliveryAttemptId, token, true);
+  correlator.markDispatching(value.deliveryAttemptId, token);
+  correlator.accepted(value.deliveryAttemptId, token, { clientRequestId: value.deliveryAttemptId, nativeTurnId: 'turn-one', nativeItemId: null });
+  currentTime = DEFAULT_TTL_MS + 1; correlator.expire(); correlator.expire();
+  correlator.unknown(value.deliveryAttemptId, 'instruction_evidence_expired');
+  assert.equal(correlator.pendingCount, 1); assert.deepEqual(unknown, ['instruction_evidence_expired']);
+  assert.equal(correlator.observe({ deliveryAttemptId: value.deliveryAttemptId, sourceToken: token, evidence: value.evidence }), true);
+  await waitFor(() => correlator.pendingCount === 0);
+  assert.equal(applied, 1); assert.equal(finished, 1);
+  assert.equal(correlator.observe({ deliveryAttemptId: value.deliveryAttemptId, sourceToken: token, evidence: value.evidence }), false);
+  correlator.close();
+});
+
+test('expired observation closes on mismatch or source termination and never recovers an unacknowledged attempt', () => {
+  for (const reason of ['instruction_source_invalid', 'instruction_context_ended', 'mismatch', 'no-ack']) {
+    const value = fixture(); let currentTime = 0; const unknown = []; const token = Symbol('source');
+    const correlator = createInstructionInputCorrelator({ now: () => currentTime, onApplied: () => assert.fail('closed evidence must not apply'), onUnknown: (id, reason) => unknown.push(reason) });
+    correlator.register(value.registration); correlator.attachSourceToken(value.deliveryAttemptId, token, true); correlator.markDispatching(value.deliveryAttemptId, token);
+    if (reason !== 'no-ack') correlator.accepted(value.deliveryAttemptId, token, { clientRequestId: value.deliveryAttemptId, nativeTurnId: 'turn-one', nativeItemId: null });
+    currentTime = DEFAULT_TTL_MS + 1; correlator.expire();
+    if (reason === 'mismatch') correlator.observe({ deliveryAttemptId: value.deliveryAttemptId, sourceToken: token, evidence: { ...value.evidence, nativeTurnId: 'other-turn' } });
+    else if (reason !== 'no-ack') correlator.unknown(value.deliveryAttemptId, reason);
+    assert.equal(correlator.pendingCount, 0); assert.equal(unknown.length, 1);
+    assert.equal(correlator.observe({ deliveryAttemptId: value.deliveryAttemptId, sourceToken: token, evidence: value.evidence }), false);
+    correlator.close();
+  }
+});
+
+test('observation unknown entries continue to consume the pending capacity', () => {
+  const value = fixture(); let currentTime = 0;
+  const correlator = createInstructionInputCorrelator({ now: () => currentTime, onApplied: () => Promise.resolve(false), onUnknown() {} });
+  for (let index = 0; index < MAX_PENDING; index += 1) {
+    const id = 'late-' + index; const token = Symbol('source');
+    correlator.register({ ...value.registration, deliveryAttemptId: id }); correlator.attachSourceToken(id, token, true); correlator.markDispatching(id, token);
+    correlator.accepted(id, token, { clientRequestId: id, nativeTurnId: 'turn-one', nativeItemId: null });
+  }
+  currentTime = DEFAULT_TTL_MS; correlator.expire();
+  assert.equal(correlator.pendingCount, MAX_PENDING);
+  assert.throws(() => correlator.register(value.registration), { code: 'instruction_correlation_capacity' });
+  correlator.unknown('late-0', 'instruction_context_ended'); assert.equal(correlator.register(value.registration), true);
   correlator.close();
 });
 

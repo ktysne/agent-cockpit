@@ -121,6 +121,17 @@ featureをmainへ提出する前に、採用対象の共通機能について両
 採用対象に残す機能の未確認項目は解消する。
 未確認項目を残す場合は、開発者が承認した対象範囲の縮小または代替仕様によって採用対象から外し、理由、担当Issue、確認条件を記録する。
 
+## ACK確定後の入力証拠の適合
+
+`ID-F08-NI14`はACK確定後に観測期限を超えて届く入力証拠を扱う。
+ClaudeとCodexのadapter fixtureで、期限後のunknownから完全一致の証拠を保存してappliedへ進め、native writeが1回のままであることを確かめる。
+未使用capabilityは60秒で失効し、ACK未確定の5秒タイムアウトは回復対象にしない。
+終端、source失効、不一致で受付を閉じ、未知のcapabilityや古いsource tokenの閉鎖操作を拒否する。
+保持中のunknownも件数と入力予約の上限を消費し、終端で予約を回収する。
+閉鎖通知のない既存ownerは従来の60秒回収を維持する。
+この結果はfixtureでの適合確認であり、両providerの実runtimeで60秒超の入力通知を観測した証拠にはしない。
+実runtimeの確認は横断統合試験に残す。
+
 ## actor生存とcontext認可の適合
 
 #171-Bと#180-Aでは、main actor、canonical period、owned processの生存とcontext認可を別々に観測する。

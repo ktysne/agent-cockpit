@@ -105,10 +105,11 @@ function createOwnedInstructionDispatch(bindingOwner) {
   const nativeCapabilities = new WeakMap();
   const entries = new Map();
   const listeners = new Set();
+  const closedListeners = new Set();
   let bytes = 0;
   function expire() {
     const now = clock();
-    for (const entry of entries.values()) if (entry.expiresAt <= now) entry.retired = true;
+    for (const entry of entries.values()) if (!entry.used && entry.expiresAt <= now) entry.retired = true;
   }
   function current(entry, metadata) {
     return entry && !entry.used && !entry.retired && entry.expiresAt > clock() &&
@@ -116,7 +117,7 @@ function createOwnedInstructionDispatch(bindingOwner) {
   }
   bindingOwner.subscribeNative((token, receipt) => {
     const entry = nativeCapabilities.get(token);
-    if (!entry || !entry.used || entry.retired || entry.expiresAt <= clock()) return;
+    if (!entry || !entry.used || entry.retired) return;
     if (entry.authorization.checkEvidenceScope() !== true) return;
     const observation = bindingOwner.consumeEvidence(token, receipt);
     if (!observation || entry.authorization.checkEvidenceScope() !== true) return;
@@ -127,6 +128,12 @@ function createOwnedInstructionDispatch(bindingOwner) {
       if (entry.authorization.checkEvidenceScope() !== true) return;
       try { listener(entry.capability, evidence); } catch {}
     }
+  });
+  bindingOwner.subscribeNativeClosed?.((token, reason) => {
+    const entry = nativeCapabilities.get(token);
+    if (!entry || entry.retired) return;
+    entry.retired = true;
+    for (const listener of [...closedListeners]) { try { listener(entry.capability, reason); } catch {} }
   });
   return Object.freeze({
     prepareInstructionDispatch(value) {
@@ -171,6 +178,17 @@ function createOwnedInstructionDispatch(bindingOwner) {
     subscribeInstructionEvidence(listener) {
       if (typeof listener !== 'function') throw dispatchError();
       listeners.add(listener); return () => listeners.delete(listener);
+    },
+    subscribeInstructionClosed(listener) {
+      if (typeof listener !== 'function') throw dispatchError();
+      closedListeners.add(listener); return () => closedListeners.delete(listener);
+    },
+    closeInstructionObservation(capability, value) {
+      const entry = capabilities.get(capability);
+      const metadata = normalizeMetadata(value);
+      if (!entry || entry.retired || entry.fingerprint !== JSON.stringify(metadata)) return false;
+      entry.retired = true;
+      return bindingOwner.closeNative?.(entry.nativeToken) === true;
     },
   });
 }

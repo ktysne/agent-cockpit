@@ -565,15 +565,105 @@ function isolatedWriterHarness() {
   function newWriter(options = {}) {
     const sourceCap = Object.freeze({}); let currentToken;
     const controller = isolated.exports.createOwnedInstructionWriter(sourceCap, {
-      capture: () => ({}), check: () => true, checkEvidence: () => true,
+      capture: () => ({}), check: () => true, checkEvidence: options.checkEvidence || (() => true),
       prepareWrite: () => ({ write() {}, line: '{}\n' }), register(token) { currentToken = token; if (options.registerThrows) throw new Error('fixture register failure'); }, unregister() {}, complete() {},
     });
     return { writer: isolated.exports.getOwnedInstructionWriter(sourceCap), controller, token: () => currentToken };
   }
   return { ...newWriter(), newWriter,
-    advance(milliseconds) { now += milliseconds; for (const job of [...jobs]) if (job.dueAt <= now) { jobs.delete(job); job.callback(); } },
+    advance(milliseconds, runTimers = true) { now += milliseconds; if (runTimers) for (const job of [...jobs]) if (job.dueAt <= now) { jobs.delete(job); job.callback(); } },
   };
 }
+
+test('ID-F08-NI14 duplicate 90KB started and completed items reserve once before and after acknowledgment', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  const pair = withText(commandFor(f, started.launchRef, 'steer', 'duplicate-large'), 'x'.repeat(90000));
+  const token = h.writer.prepare(pair.metadata); const receipts = []; h.writer.subscribeEvidence((cap, receipt) => receipts.push(receipt));
+  const ack = h.writer.dispatchNow(token, pair.command, () => true);
+  const item = { type: 'userMessage', id: 'large-started-completed', clientId: pair.metadata.deliveryAttemptId, content: pair.command.input };
+  for (let index = 0; index < 150; index += 1) assert.equal(h.controller.observeItem('native-id', 'native-context', item), true);
+  h.controller.acknowledge(token, 'native-context'); await ack;
+  for (let index = 0; index < 150; index += 1) assert.equal(h.controller.observeItem('native-id', 'native-context', item), true);
+  assert.equal(receipts.length, 1); assert.ok(h.writer.consumeEvidence(token, receipts[0]));
+  assert.equal(h.writer.consumeEvidence(token, receipts[0]), null);
+  const other = h.newWriter(); const extra = withText(commandFor(f, started.launchRef, 'steer', 'other-item'), 'y'.repeat(30000));
+  const extraToken = other.writer.prepare(extra.metadata); const extraAck = other.writer.dispatchNow(extraToken, extra.command, () => true);
+  assert.equal(other.controller.observeItem('native-id', 'native-context', { ...item, id: 'other-item', clientId: extra.metadata.deliveryAttemptId, content: extra.command.input }), true);
+  other.controller.acknowledge(extraToken, 'native-context'); await extraAck;
+  h.controller.invalidate(); other.controller.invalidate();
+});
+
+test('ID-F08-NI14 unacknowledged capability expiry retains the ack timeout reason when timer callbacks are delayed', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  const pair = commandFor(f, started.launchRef, 'steer', 'delayed-ack-timer'); const token = h.writer.prepare(pair.metadata);
+  const ack = h.writer.dispatchNow(token, pair.command, () => true);
+  h.advance(60000, false); assert.equal(h.writer.check(token), false);
+  await assert.rejects(ack, { code: 'instruction_ack_timeout' }); h.controller.invalidate();
+});
+
+test('ID-F08-NI14 duplicate pending start item validates its turn and payload before deduplication', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  for (const mismatch of ['turn', 'payload']) {
+    const pair = commandFor(f, started.launchRef, 'start', 'duplicate-start-' + mismatch); const token = h.writer.prepare(pair.metadata);
+    const ack = h.writer.dispatchNow(token, pair.command, () => true);
+    const item = { type: 'userMessage', id: 'pending-start', clientId: pair.metadata.deliveryAttemptId, content: pair.command.input };
+    assert.equal(h.controller.observeItem('native-id', 'pending-new-turn', item), true);
+    const changed = mismatch === 'payload' ? { ...item, content: [{ type: 'text', text: 'different', text_elements: [] }] } : item;
+    assert.equal(h.controller.observeItem('native-id', mismatch === 'turn' ? 'other-turn' : 'pending-new-turn', changed), false);
+    await assert.rejects(ack, { code: 'instruction_evidence_conflict' });
+    assert.equal(h.controller.observeItem('native-id', 'pending-new-turn', item), false);
+  }
+  h.controller.invalidate();
+});
+
+test('ID-F08-NI14 delivered duplicate cannot bypass an invalidated source or mismatched payload', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  for (const mismatch of ['source', 'payload']) {
+    let sourceCurrent = true; const driver = h.newWriter({ checkEvidence: () => sourceCurrent });
+    const pair = commandFor(f, started.launchRef, 'steer', 'delivered-' + mismatch); const token = driver.writer.prepare(pair.metadata);
+    const ack = driver.writer.dispatchNow(token, pair.command, () => true); driver.controller.acknowledge(token, 'native-context'); await ack;
+    const item = { type: 'userMessage', id: 'delivered', clientId: pair.metadata.deliveryAttemptId, content: pair.command.input };
+    assert.equal(driver.controller.observeItem('native-id', 'native-context', item), true);
+    if (mismatch === 'source') sourceCurrent = false;
+    const changed = mismatch === 'payload' ? { ...item, content: [{ type: 'text', text: 'different', text_elements: [] }] } : item;
+    assert.equal(driver.controller.observeItem('native-id', 'native-context', changed), false);
+    assert.equal(driver.controller.observeItem('native-id', 'native-context', item), false); driver.controller.invalidate();
+  }
+  h.controller.invalidate();
+});
+
+test('ID-F08-NI14 acknowledged exact input remains observable after TTL until terminal and never permits a second send', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
+  const pair = commandFor(f, started.launchRef, 'steer', 'late-exact'); const token = h.writer.prepare(pair.metadata);
+  const receipts = []; const closed = []; h.writer.subscribeEvidence((cap, receipt) => receipts.push(receipt));
+  h.writer.subscribeClosed((cap, reason) => closed.push(reason));
+  const ack = h.writer.dispatchNow(token, pair.command, () => true); h.controller.acknowledge(token, 'native-context'); await ack;
+  h.advance(60001);
+  const item = { type: 'userMessage', id: 'late-input', clientId: pair.metadata.deliveryAttemptId, content: pair.command.input };
+  assert.equal(h.controller.observeItem('native-id', 'native-context', item), true);
+  assert.equal(receipts.length, 1); assert.ok(h.writer.consumeEvidence(token, receipts[0]));
+  assert.equal(h.writer.consumeEvidence(token, receipts[0]), null);
+  assert.equal(h.controller.observeItem('native-id', 'native-context', item), true); assert.equal(receipts.length, 1);
+  assert.throws(() => h.writer.dispatchNow(token, pair.command, () => true));
+  h.controller.endContext('native-context'); h.controller.endContext('native-context');
+  assert.deepEqual(closed, ['instruction_context_ended']);
+  assert.equal(h.controller.observeItem('native-id', 'native-context', { ...item, id: 'after-terminal' }), false);
+  h.controller.invalidate();
+});
+
+test('ID-F08-NI14 unacknowledged timeout and mismatched late turn close the native observation permanently', async t => {
+  const f = fixture(t, 'codex'); const started = await f.start();
+  for (const mode of ['timeout', 'mismatch']) {
+    const h = isolatedWriterHarness(); const pair = commandFor(f, started.launchRef, 'steer', mode); const token = h.writer.prepare(pair.metadata);
+    const ack = h.writer.dispatchNow(token, pair.command, () => true);
+    if (mode === 'timeout') { h.advance(5000); await assert.rejects(ack, { code: 'instruction_ack_timeout' }); }
+    else { h.controller.acknowledge(token, 'native-context'); await ack; h.advance(60001); }
+    const item = { type: 'userMessage', id: 'late-input', clientId: pair.metadata.deliveryAttemptId, content: pair.command.input };
+    assert.equal(h.controller.observeItem('native-id', mode === 'mismatch' ? 'other-turn' : 'native-context', item), false);
+    assert.equal(h.controller.observeItem('native-id', 'native-context', item), false);
+    assert.equal(h.writer.prepare(pair.metadata), null); h.controller.invalidate();
+  }
+});
 
 test('ID-F08-NI09 private API bounds candidates globally across requests before ack', async t => {
   const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
@@ -586,7 +676,8 @@ test('ID-F08-NI09 private API bounds candidates globally across requests before 
       type: 'userMessage', id: pair.metadata.deliveryAttemptId + index, clientId: pair.metadata.deliveryAttemptId, content: pair.command.input }), true);
   }
   assert.equal(h.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'overflow', clientId: 'two', content: pairs[1].command.input }), false);
-  h.controller.acknowledge(tokens[0], 'native-context'); h.controller.acknowledge(tokens[1], 'native-context'); await Promise.all(promises);
+  h.controller.acknowledge(tokens[0], 'native-context'); h.controller.acknowledge(tokens[1], 'native-context');
+  await promises[0]; await assert.rejects(promises[1], { code: 'instruction_evidence_capacity' });
   assert.equal(emitted.length, 64);
   h.controller.invalidate();
 });
@@ -606,7 +697,7 @@ test('ID-F08-NI09 serialized bytes and sixty-second TTL remove payload while ret
   const pending = h.writer.dispatchNow(token, first.command, () => true);
   assert.equal(h.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'retained-item', clientId: 'first', content: first.command.input }), true);
   assert.equal(h.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'over-byte-bound', clientId: 'first', content: first.command.input }), false);
-  h.controller.acknowledge(token, 'native-context'); await pending;
+  h.controller.acknowledge(token, 'native-context'); await assert.rejects(pending, { code: 'instruction_evidence_capacity' });
   const unused = commandFor(f, started.launchRef, 'steer', 'unused'); const unusedToken = h.writer.prepare(unused.metadata);
   h.advance(60000);
   assert.equal(h.writer.check(unusedToken), false); assert.equal(h.writer.prepare(unused.metadata), null);
@@ -630,7 +721,7 @@ test('ID-F08-NI06 installed native text default omits only empty text_elements a
   assert.equal(evidence.length, 1); assert.deepEqual(evidence[0].input, [{ type: 'text', text: 'instruction input', text_elements: [] }]);
 });
 
-test('ID-F08-NI09 TTL preserves item ownership while removing native receipts and payload', async t => {
+test('ID-F08-NI09 acknowledged receipts survive TTL and close reclaims payload while preserving item ownership', async t => {
   const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness();
   const receipts = []; h.writer.subscribeEvidence((token, receipt) => receipts.push({ token, receipt }));
   const first = commandFor(f, started.launchRef, 'steer', 'first-owner');
@@ -639,6 +730,8 @@ test('ID-F08-NI09 TTL preserves item ownership while removing native receipts an
   h.controller.observeItem('native-id', 'native-context', item); h.controller.acknowledge(token, 'native-context'); await pending;
   assert.equal(receipts.length, 1); assert.ok(h.writer.inspectEvidence(token, receipts[0].receipt));
   h.advance(60000);
+  assert.ok(h.writer.inspectEvidence(token, receipts[0].receipt));
+  assert.equal(h.writer.closeObservation(token), true);
   assert.equal(h.writer.inspectEvidence(token, receipts[0].receipt), null); assert.equal(h.writer.prepare(first.metadata), null);
   const second = commandFor(f, started.launchRef, 'steer', 'second-owner');
   const secondToken = h.writer.prepare(second.metadata); const secondPending = h.writer.dispatchNow(secondToken, second.command, () => true);
@@ -777,7 +870,7 @@ test('ID-F08-NI12 separate source writers share candidate count and free reserva
   const extra = commandFor(f, started.launchRef, 'steer', 'extra'); const token = second.writer.prepare(extra.metadata);
   const dispatch = second.writer.dispatchNow(token, extra.command, () => true);
   assert.equal(second.controller.observeItem('native-id', 'native-context', { type: 'userMessage', id: 'extra', clientId: 'extra', content: extra.command.input }), false);
-  second.controller.acknowledge(token, 'native-context'); await dispatch;
+  second.controller.acknowledge(token, 'native-context'); await assert.rejects(dispatch, { code: 'instruction_evidence_capacity' });
   h.controller.invalidate();
   const restored = commandFor(f, started.launchRef, 'steer', 'restored'); const restoredToken = second.writer.prepare(restored.metadata);
   const restoredPending = second.writer.dispatchNow(restoredToken, restored.command, () => true);
@@ -785,7 +878,7 @@ test('ID-F08-NI12 separate source writers share candidate count and free reserva
   second.controller.acknowledge(restoredToken, 'native-context'); await restoredPending; second.controller.invalidate();
 });
 
-test('ID-F08-NI13 prepare at zero then dispatch at fifty releases payload at sixty without source access', async t => {
+test('ID-F08-NI13 acknowledged payload remains charged after sixty seconds until its turn ends', async t => {
   const f = fixture(t, 'codex'); const started = await f.start(); const h = isolatedWriterHarness(); const second = h.newWriter();
   const pair = withText(commandFor(f, started.launchRef, 'steer', 'delayed'), 'a'.repeat(90000));
   const token = h.writer.prepare(pair.metadata); let receipt;
@@ -798,6 +891,9 @@ test('ID-F08-NI13 prepare at zero then dispatch at fifty releases payload at six
   const nextToken = second.writer.prepare(next.metadata);
   assert.throws(() => second.writer.dispatchNow(nextToken, next.command, () => true));
   h.advance(10000);
+  assert.throws(() => second.writer.dispatchNow(nextToken, next.command, () => true));
+  assert.ok(h.writer.inspectEvidence(token, receipt));
+  h.controller.endContext('native-context');
   const resumed = second.writer.dispatchNow(nextToken, next.command, () => true);
   second.controller.acknowledge(nextToken, 'native-context'); await resumed;
   assert.equal(h.writer.inspectEvidence(token, receipt), null);
