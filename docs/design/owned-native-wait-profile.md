@@ -3,8 +3,9 @@
 ## 対象と制約
 
 cockpit-native-v1 は一回のturnを実行する既存profileとして維持する。
-cockpit-native-wait-v1 はCodex専用のtrusted profileであり、任意のCLI引数、任意のtool、任意のMCP設定を受け取らない。
-wait profileは experimentalApi=true と固定の cockpit_wait dynamic tool一つだけを追加する。
+cockpit-native-wait-v1 は固定のtrusted wait profileであり、任意のCLI引数、任意のtool、任意のMCP設定を受け取らない。
+以下のexperimentalApiとdynamic toolの条件はCodexのwait経路に適用する。
+Codex wait profileは experimentalApi=true と固定の cockpit_wait dynamic tool一つだけを追加する。
 cockpit_wait の引数schemaは空objectに限定し、callerやmodelが渡す内容を証拠として使わない。
 features.shell_tool、features.unified_exec、features.multi_agent、features.apps、features.hooks、features.skill_mcp_dependency_install、features.daemon_auto_start、features.browser_use、features.browser_use_external、features.browser_use_full_cdp_access、features.computer_use、features.image_generation、features.plugins、features.remote_plugin、features.workspace_dependenciesを個別にfalseへ固定し、web_searchをdisabledにする。
 thread/startとturn/startにはread-only sandboxを指定し、turn/startではnetwork accessを無効にし、approvalをneverに固定する。
@@ -64,8 +65,9 @@ terminal後もprocessが生きていることからactor operational proofや新
 Claude Code 2.1.291のCLI helpはstream-jsonの入出力、partial message、MCP関連option、tool filterを示す。
 [Claude Code SDKのstreaming資料](https://code.claude.com/docs/en/agent-sdk/streaming-output)は複数入力を扱うlong-lived sessionとassistant message IDを説明する。
 [tool-use資料](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)はtool_use IDと対応するtool result IDを定義する。
-installed CLIのschema/helpではMCP call IDとassistant contextのcorrelationを確認できていない。
-そのためClaudeのwait profileはunsupportedとしてspawn前に拒否し、v1のClaude one-message bindingをwait能力へ拡張しない。
+installed CLIのschema/helpだけではMCP call IDとassistant contextのcorrelationを確認できない。
+Claude waitは、明示された`claudeWaitProfile`と`ownedSourceClaim`を持つ専用経路に限り、[Claude owned native wait契約](owned-native-claude-wait.md)の相関、freshness、response条件に従う。
+owned sourceと必須callbackがないClaude wait profileはunsupportedとしてspawn前に拒否し、generic profileや既存のone-message bindingへwait能力を与えない。
 
 ## 検証境界
 

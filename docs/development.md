@@ -12,15 +12,15 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [Codex本実装計画](design/codex-implementation-plan.md) | Claude/Codex共通機能の段階実装、依存関係、統合ゲート |
 | [正規会話の登録核](design/codex-registration-core.md) | #166-Aの信頼境界、実行期間、後続interfaceと適合シナリオ |
 | [共通質問の設計](design/common-questions.md) | 質問と回答のschema、永続保存、MCPと画面、復旧と実native接続の採用条件 |
-| [Claude/Codex適合試験方針](https://github.com/ktysne/agent-cockpit/blob/f4460762641d9eef6c0eb0c2c9c55df4f625532e/docs/design/provider-conformance-testing.md) | 共通適合試験のscenario定義、検証層、結果の扱い |
-| [Codex共有契約](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapter適合の証明ではない |
+| [Claude/Codex適合試験方針](design/provider-conformance-testing.md) | 共通適合試験のscenario定義、検証層、結果の扱い |
+| [Codex共有契約](design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapter適合の証明ではない |
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |
 | [docs/design/codex-shared-contract.md](design/codex-shared-contract.md) | Codex連携の会話識別、所有者引継ぎ、入力配信の共有契約 |
 | [docs/design/manual.md](design/manual.md) | 利用者向けマニュアルの構成、デモ状態、画面の撮影、配信、検査の設計 |
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
 | [docs/poc-results.md](poc-results.md) | PoC で確かめたことと、分かった制約。再現の一式は `poc/` にある |
 | [適合試験の設計](design/provider-conformance-testing.md) | Claude/Codex共通機能の適合シナリオ、検証層、結果の扱い |
-| [共有契約](https://github.com/ktysne/agent-cockpit/blob/a2da27f1f51e932a0184cea72da38fc89b1c5c5f/docs/design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapterの適合証明ではない |
+| [共有契約](design/codex-shared-contract.md) | Codex連携の共有契約。参照モデルは実adapterの適合証明ではない |
 | [docs/cross-review.md](cross-review.md) / [.cross-review.md](../.cross-review.md) | AI クロスレビューの手順と、このリポジトリのレビュー観点 |
 | [docs/japanese-guard.md](japanese-guard.md) | 開発者に見える文を日本語に保つフック(クラウドセッション向け) |
 

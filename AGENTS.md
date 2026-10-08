@@ -42,7 +42,7 @@ ClaudeとCodexで同じ結果を期待するCockpit機能は、本実装に合�
 ## AIクロスレビュー
 
 手順は [docs/cross-review.md](docs/cross-review.md) と cross-review スキルに従う。観点は [.cross-review.md](.cross-review.md)。
-通常のCodexレビューは既定のGPT-6.1 Sol、effort mediumを使う。Astraは、AGENTS.mdで相談が必要とされる困難な設計判断などに限って使う。
+通常のCodexレビューは `codex-review`モデル定義を使う。`.claude/gpt-agents/codex-review.md` があればそれを優先し、無ければ `~/.claude/gpt-agents/codex-review.md` を参照する。Astraは、AGENTS.mdで相談が必要とされる困難な設計判断などに限って使う。
 
 ## テスト
 
