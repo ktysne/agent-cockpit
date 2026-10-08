@@ -4,7 +4,8 @@ const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { runHook } = require('../src/hooks/event');
+const { makeHookEvent, runHook } = require('../src/hooks/event');
+const { productFromCwd } = require('../src/server/identity');
 const { DashboardState } = require('../src/server/state');
 const {
   startServer,
@@ -1332,22 +1333,31 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
   assert.equal(runtime.state.pullRequestRegistrations()[0].number, 46);
 
   const headers = { 'content-type': 'application/json', 'x-cockpit-secret': runtime.info.secret };
+  const hookCwd = path.join(runtime.homeDir, 'session-project', '.claude', 'worktrees', 'session');
+  const commandCwd = path.join(runtime.homeDir, 'pull-request-project', '.claude', 'worktrees', 'feature');
+  const createCommand = `cd "${commandCwd.replaceAll('\\', '/')}" && gh pr create --fill`;
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
     body: JSON.stringify({
       session_id: 'pr-session', hook_event_name: 'PreToolUse', hookAt: Date.now(),
-      tool_name: 'Bash', tool_use_id: 'create-47', ghPrCreateCommand: true,
+      cwd: hookCwd, tool_name: 'Bash', tool_use_id: 'create-47', ghPrCreateCommand: true,
     }),
+  });
+  const postCreateEvent = makeHookEvent({
+    session_id: 'pr-session', hook_event_name: 'PostToolUse', cwd: hookCwd,
+    tool_name: 'Bash', tool_use_id: 'create-47', tool_input: { command: createCommand },
+    tool_response: { stdout: 'https://github.com/example/project/pull/47' },
   });
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
-    body: JSON.stringify({
-      session_id: 'pr-session', hook_event_name: 'PostToolUse', hookAt: Date.now(),
-      tool_name: 'Bash', tool_use_id: 'create-47',
-      pullRequest: { owner: 'example', repo: 'project', number: 47, url: 'https://github.com/example/project/pull/47' },
-    }),
+    body: JSON.stringify(postCreateEvent),
   });
-  assert.ok(runtime.state.pullRequestRegistrations().some((record) => record.number === 47));
+  const registeredPr = runtime.state.pullRequestRegistrations().find((record) => record.number === 47);
+  assert.ok(registeredPr);
+  assert.equal(registeredPr.cwd, path.resolve(commandCwd));
+  assert.equal(registeredPr.product.key, productFromCwd(commandCwd).key);
+  assert.equal(registeredPr.product.name, productFromCwd(commandCwd).name);
+  assert.notEqual(registeredPr.product.key, productFromCwd(hookCwd).key);
 
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
@@ -1358,6 +1368,32 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
     }),
   });
   assert.ok(!runtime.state.pullRequestRegistrations().some((record) => record.number === 48));
+
+  // フックが cd 先から決めた cwd と製品は、同じ PR を /prs で登録し直しても変えない。
+  const reregistered = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', headers,
+    body: JSON.stringify({
+      kind: 'add_pr', url: 'https://github.com/example/project/pull/47',
+      ppid: 123, claudeCodeSessionId: 'pr-session', cwd: hookCwd,
+    }),
+  });
+  assert.equal(reregistered.status, 200);
+  const keptPr = runtime.state.pullRequestRegistrations().find((record) => record.number === 47);
+  assert.equal(keptPr.cwd, path.resolve(commandCwd));
+  assert.equal(keptPr.product.key, productFromCwd(commandCwd).key);
+
+  // 未登録の PR は、/prs の cwd で登録される。
+  const addedWithoutHook = await request(runtime.info.port, {
+    method: 'POST', path: '/api/sessions/pr-session/prs', headers,
+    body: JSON.stringify({
+      kind: 'add_pr', url: 'https://github.com/example/project/pull/49',
+      ppid: 123, claudeCodeSessionId: 'pr-session', cwd: hookCwd,
+    }),
+  });
+  assert.equal(addedWithoutHook.status, 200);
+  const registeredByPrs = runtime.state.pullRequestRegistrations().find((record) => record.number === 49);
+  assert.equal(registeredByPrs.cwd, hookCwd);
+  assert.equal(registeredByPrs.product.key, productFromCwd(hookCwd).key);
 
   await request(runtime.info.port, {
     method: 'POST', path: '/api/events', headers,
@@ -1373,7 +1409,7 @@ test('/prs は秘密値と Origin を照合し、MCP とフックから PR を�
       tool_name: 'Bash', tool_use_id: 'push-1',
     }),
   });
-  assert.equal(calls.all, 1);
+  assert.equal(calls.all, 2);
   assert.ok(calls.repos.includes('example/project'));
   const snapshot = jsonBody(await request(runtime.info.port, { path: '/api/state' }));
   assert.deepEqual(snapshot.pullRequests, []);

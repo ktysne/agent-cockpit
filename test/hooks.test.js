@@ -211,14 +211,18 @@ test('launchServer は秘密値を除いた環境で子プロセスを起動す�
 });
 
 test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', async () => {
+  const commandCwd = path.join(os.tmpdir(), 'pull-request-repo', 'worktree');
+  const command = `cd "${commandCwd.replaceAll('\\', '/')}" && gh pr create --fill`;
   const bash = makeHookEvent({
     session_id: 'pr-hook', hook_event_name: 'PostToolUse', cwd: 'D:\\repo',
-    tool_name: 'Bash', tool_use_id: 'bash-pr', tool_input: { command: 'gh pr create --fill' },
+    tool_name: 'Bash', tool_use_id: 'bash-pr', tool_input: { command },
     tool_response: { stdout: 'private output\nhttps://github.com/example/project/pull/42\nmore private output' },
   });
   assert.deepEqual(bash.pullRequest, {
     owner: 'example', repo: 'project', number: 42, url: 'https://github.com/example/project/pull/42',
   });
+  assert.equal(bash.commandCwd, path.resolve(commandCwd));
+  assert.equal(sanitizeEvent(bash).commandCwd, path.resolve(commandCwd));
   assert.equal(bash.ghPrCreateCommand, true);
   assert.ok(!JSON.stringify(bash).includes('private output'));
 
@@ -237,6 +241,20 @@ test('gh pr create と GitHub MCP の応答から PR の URL だけを送る', a
     tool_input: { command: 'gh pr create' }, tool_response: 'Pull request created successfully',
   });
   assert.equal(Object.hasOwn(noUrl, 'pullRequest'), false);
+  assert.equal(Object.hasOwn(noUrl, 'commandCwd'), false);
+});
+
+test('PostToolUse は絶対 commandCwd を 4096 文字まで受け付ける', () => {
+  const base = { session_id: 'command-cwd', hook_event_name: 'PostToolUse', tool_name: 'Bash' };
+  const cwd = path.resolve(os.tmpdir(), 'command-repo');
+  const pathRoot = path.parse(cwd).root;
+  const atLimit = `${pathRoot}${'a'.repeat(4096 - pathRoot.length)}`;
+  const overLimit = `${pathRoot}${'a'.repeat(4097 - pathRoot.length)}`;
+  assert.equal(sanitizeEvent({ ...base, commandCwd: cwd }).commandCwd, cwd);
+  assert.equal(sanitizeEvent({ ...base, commandCwd: atLimit }).commandCwd, atLimit);
+  assert.equal(sanitizeEvent({ ...base, commandCwd: 'relative/path' }).commandCwd, undefined);
+  assert.equal(sanitizeEvent({ ...base, commandCwd: 42 }).commandCwd, undefined);
+  assert.equal(sanitizeEvent({ ...base, commandCwd: overLimit }).commandCwd, undefined);
 });
 
 test('Bash の要約が切れても全文から Codex の --wait 実行 ID を送る', () => {
