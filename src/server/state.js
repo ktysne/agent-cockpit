@@ -2626,68 +2626,110 @@ class DashboardState {
     return seenAt;
   }
 
-  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
-    const products = new Map();
-    const visibleProductKeys = new Set();
-    const registrations = this.pullRequestRegistrations();
-    const relatedRegistrations = this.relatedPullRequestRegistrations();
-    const mergedPullRequests = new Map();
-    const pullRequestTitles = new Map();
-    const rememberPullRequestTitle = (owner, repo, number, title) => {
-      if (typeof title !== 'string' || !title) return;
-      pullRequestTitles.set(relatedPullRequestRecordKey(owner, repo, number), title);
-    };
-    for (const record of [...registrations, ...relatedRegistrations]) {
-      rememberPullRequestTitle(record.owner, record.repo, record.number, record.lastOpen?.title);
+  taskCompletionCandidates() {
+    const candidates = [];
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const task of plan.tasks) {
+        const closed = this.closedTasks.get(sessionId)?.get(task.title);
+        const closedByUser = closed?.stateAtClose === task.state;
+        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
+        if (!at) continue;
+        candidates.push({
+          product, type: 'task', identity: `${sessionId}\0${task.title}`, at,
+          text: `タスク「${task.title}」が完了した`, pullRequest: null,
+        });
+      }
     }
-    const addProduct = (value) => {
-      const product = cloneProduct(value);
-      if (product && !products.has(product.key)) products.set(product.key, product);
-      return product;
-    };
-    for (const merged of this.mergedPullRequests.values()) {
-      mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
-      if (merged.title !== `#${merged.number}`) rememberPullRequestTitle(merged.owner, merged.repo, merged.number, merged.title);
-    }
-    for (const record of [...registrations, ...relatedRegistrations]) {
-      if (record.state !== 'merged' || !record.mergedAt) continue;
-      const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
-      if (mergedPullRequests.has(key)) continue;
-      mergedPullRequests.set(key, {
-        owner: record.owner,
-        repo: record.repo,
-        number: record.number,
-        title: record.lastOpen?.title,
-        mergedAt: record.mergedAt,
-      });
-    }
-    // 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
-    const productsForMergedPullRequest = (merged) => {
-      const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
-      const found = [
-        ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
-          .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
-        ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
-          .map((group) => cloneProduct(group.product)).filter(Boolean),
-      ];
-      if (!found.length) return [repoProduct(merged.owner, merged.repo)];
-      return [...new Map(found.map((product) => [product.key, product])).values()];
-    };
-    for (const session of sessions) {
-      const product = addProduct(session.product);
-      if (product) visibleProductKeys.add(product.key);
-    }
-    for (const group of pullRequestGroups) {
-      const product = addProduct(group.product || (group.owner && group.repo ? repoProduct(group.owner, group.repo) : null));
-      if (product) visibleProductKeys.add(product.key);
-    }
-    for (const plan of this.plans.values()) addProduct(plan.product);
-    for (const record of registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
-    for (const record of this.ciFailures) addProduct(record.product);
-    for (const merged of mergedPullRequests.values()) {
-      for (const product of productsForMergedPullRequest(merged)) addProduct(product);
-    }
+    return candidates;
+  }
 
+  pullRequestCreatedCandidates({ registrations, pullRequestTitles }) {
+    return registrations.map((record) => {
+      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+      const title = pullRequestTitles.get(identity);
+      return {
+        product: cloneProduct(record.product) || repoProduct(record.owner, record.repo),
+        type: 'pull-request',
+        identity: `${record.owner}/${record.repo}#${record.number}`,
+        at: record.addedAt,
+        text: `${pullRequestLabel(record.number, title)}を作成した`,
+        pullRequest: { identity, number: record.number, action: 'created', title },
+      };
+    });
+  }
+
+  // セッションの判断を先に取り、セッションに載っていない判断だけを計画から補う。
+  provisionalDecisionCandidates(sessions) {
+    const candidates = [];
+    const sessionDecisionIds = new Set();
+    for (const session of sessions) {
+      for (const decision of session.decisions) {
+        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
+        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
+        candidates.push({
+          product: cloneProduct(session.product || this.plans.get(session.session_id)?.product),
+          type: 'provisional',
+          identity: `${session.session_id}\0${decision.id}`,
+          at: decision.provisionalAt || decision.updatedAt,
+          text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          pullRequest: null,
+        });
+      }
+    }
+    for (const [sessionId, plan] of this.plans) {
+      const product = cloneProduct(plan.product || this.productForSession(sessionId));
+      for (const decision of plan.decisions) {
+        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
+        candidates.push({
+          product,
+          type: 'provisional',
+          identity: `${sessionId}\0${decision.id}`,
+          at: decision.provisionalAt || decision.updatedAt,
+          text: `判断「${decision.title}」を推奨案で仮に進めた`,
+          pullRequest: null,
+        });
+      }
+    }
+    return candidates;
+  }
+
+  // 記録のプロダクトをそのまま使う(cloneProduct を通さない)。
+  ciFailureCandidates({ pullRequestTitles }) {
+    return this.ciFailures.map((failure) => {
+      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
+      return {
+        product: failure.product,
+        type: 'ci-failure',
+        identity: `${failure.owner}/${failure.repo}#${failure.number}`,
+        at: failure.at,
+        text: `PR #${failure.number} の CI が失敗した`,
+        pullRequest: { identity, number: failure.number, action: 'ci-failure', title: pullRequestTitles.get(identity) },
+      };
+    });
+  }
+
+  mergedPullRequestCandidates(sources) {
+    const candidates = [];
+    for (const merged of sources.mergedPullRequests.values()) {
+      const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
+      const title = sources.pullRequestTitles.get(identity);
+      for (const product of mergedPullRequestProducts(merged, sources)) {
+        candidates.push({
+          product,
+          type: 'merged-pull-request',
+          identity: `${merged.owner}/${merged.repo}#${merged.number}`,
+          at: merged.mergedAt,
+          text: `${pullRequestLabel(merged.number, title)}をマージした`,
+          pullRequest: { identity, number: merged.number, action: 'merged', title },
+        });
+      }
+    }
+    return candidates;
+  }
+
+  // 初回の表示で既存の変化を既読として扱うために、変化を集める前に呼ぶ。
+  refreshSeenTimes(products, visibleProductKeys, now) {
     let seenChanged = false;
     for (const key of this.seenAtByProduct.keys()) {
       if (!products.has(key)) {
@@ -2706,127 +2748,69 @@ class DashboardState {
       this.touch();
       this.requestStoreWrite();
     }
+  }
 
-    const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
-    const eventKeys = new Set();
-    const happenedWhileAway = (timestamp) => awayPeriods.some((period) => {
-      if (!Number.isFinite(period.start)) return false;
-      const end = period.end === null ? now : period.end;
-      return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
-    });
-    const addEvent = (product, type, identity, at, text, pullRequest = null) => {
-      const timestamp = Date.parse(at || '');
-      if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) return;
-      const key = `${product.key}\0${type}\0${identity}\0${at}`;
-      if (eventKeys.has(key)) return;
-      eventKeys.add(key);
-      eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+  // 変化の元になる記録。種類ごとの取り出しと対象のプロダクトの絞り込みが、同じ記録を見る。
+  sinceSeenSources(pullRequestGroups) {
+    const registrations = this.pullRequestRegistrations();
+    const records = [...registrations, ...this.relatedPullRequestRegistrations()];
+    const storedMerged = [...this.mergedPullRequests.values()];
+    return {
+      registrations,
+      pullRequestGroups,
+      pullRequestTitles: collectPullRequestTitles(records, storedMerged),
+      mergedPullRequests: collectMergedPullRequests(records, storedMerged),
     };
+  }
 
-    for (const [sessionId, plan] of this.plans) {
-      const product = cloneProduct(plan.product || this.productForSession(sessionId));
-      if (!product) continue;
-      for (const task of plan.tasks) {
-        const closed = this.closedTasks.get(sessionId)?.get(task.title);
-        const closedByUser = closed?.stateAtClose === task.state;
-        const at = closedByUser ? closed.closedAt || plan.tasksUpdatedAt : task.state === 'done' ? task.completedAt || plan.tasksUpdatedAt : null;
-        if (at) addEvent(product, 'task', `${sessionId}\0${task.title}`, at, `タスク「${task.title}」が完了した`);
-      }
-    }
-
-    for (const record of registrations) {
-      const product = cloneProduct(record.product) || repoProduct(record.owner, record.repo);
-      const identity = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
-      const title = pullRequestTitles.get(identity);
-      addEvent(product, 'pull-request', `${record.owner}/${record.repo}#${record.number}`, record.addedAt,
-        `PR #${record.number}${title ? `(${title})` : ''}を作成した`, { identity, number: record.number, action: 'created', title });
-    }
-
-    const sessionDecisionIds = new Set();
+  // 変化の元になる記録のどれかに載るプロダクトを集める。取り出しの関数が見る記録は、ここでも対象に加える。
+  // 加え忘れると、その種類の変化は重複の除去で捨てられる。
+  sinceSeenProducts(sessions, sources) {
+    const products = new Map();
+    const visibleProductKeys = new Set();
+    const addProduct = (value) => {
+      const product = cloneProduct(value);
+      if (product && !products.has(product.key)) products.set(product.key, product);
+      return product;
+    };
     for (const session of sessions) {
-      for (const decision of session.decisions) {
-        sessionDecisionIds.add(`${session.session_id}\0${decision.id}`);
-        if (!decision.provisionalAt && decision.state !== 'provisional') continue;
-        const product = cloneProduct(session.product || this.plans.get(session.session_id)?.product);
-        const at = decision.provisionalAt || decision.updatedAt;
-        addEvent(product, 'provisional', `${session.session_id}\0${decision.id}`, at,
-          `判断「${decision.title}」を推奨案で仮に進めた`);
-      }
+      const product = addProduct(session.product);
+      if (product) visibleProductKeys.add(product.key);
     }
-    for (const [sessionId, plan] of this.plans) {
-      const product = cloneProduct(plan.product || this.productForSession(sessionId));
-      for (const decision of plan.decisions) {
-        if (sessionDecisionIds.has(`${sessionId}\0${decision.id}`) || (!decision.provisionalAt && decision.state !== 'provisional')) continue;
-        addEvent(product, 'provisional', `${sessionId}\0${decision.id}`, decision.provisionalAt || decision.updatedAt,
-          `判断「${decision.title}」を推奨案で仮に進めた`);
-      }
+    for (const group of sources.pullRequestGroups) {
+      const product = addProduct(group.product || (group.owner && group.repo ? repoProduct(group.owner, group.repo) : null));
+      if (product) visibleProductKeys.add(product.key);
     }
+    for (const plan of this.plans.values()) addProduct(plan.product);
+    for (const record of sources.registrations) addProduct(record.product || repoProduct(record.owner, record.repo));
+    for (const record of this.ciFailures) addProduct(record.product);
+    for (const merged of sources.mergedPullRequests.values()) {
+      for (const product of mergedPullRequestProducts(merged, sources)) addProduct(product);
+    }
+    return { products, visibleProductKeys };
+  }
 
-    for (const failure of this.ciFailures) {
-      const identity = relatedPullRequestRecordKey(failure.owner, failure.repo, failure.number);
-      const title = pullRequestTitles.get(identity);
-      addEvent(failure.product, 'ci-failure', `${failure.owner}/${failure.repo}#${failure.number}`, failure.at,
-        `PR #${failure.number} の CI が失敗した`, { identity, number: failure.number, action: 'ci-failure', title });
-    }
+  snapshotSinceSeen(sessions, pullRequestGroups = [], now = Date.now(), awayPeriods = []) {
+    const sources = this.sinceSeenSources(pullRequestGroups);
+    const { products, visibleProductKeys } = this.sinceSeenProducts(sessions, sources);
 
-    for (const merged of mergedPullRequests.values()) {
-      for (const product of productsForMergedPullRequest(merged)) {
-        const identity = relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number);
-        const title = pullRequestTitles.get(identity);
-        addEvent(product, 'merged-pull-request', `${merged.owner}/${merged.repo}#${merged.number}`, merged.mergedAt,
-          `PR #${merged.number}${title ? `(${title})` : ''}をマージした`, { identity, number: merged.number, action: 'merged', title });
-      }
-    }
+    this.refreshSeenTimes(products, visibleProductKeys, now);
+
+    const candidates = [
+      ...this.taskCompletionCandidates(),
+      ...this.pullRequestCreatedCandidates(sources),
+      ...this.provisionalDecisionCandidates(sessions),
+      ...this.ciFailureCandidates(sources),
+      ...this.mergedPullRequestCandidates(sources),
+    ];
+    const eventsByProduct = groupSinceSeenEvents(candidates, products);
 
     const sinceSeen = [];
     for (const product of products.values()) {
       const seenAt = this.seenAtByProduct.get(product.key);
       if (!seenAt) continue;
-      const seenMilliseconds = Date.parse(seenAt || '');
-      const events = (eventsByProduct.get(product.key) || [])
-        .filter((event) => {
-          const timestamp = Date.parse(event.at);
-          return timestamp > seenMilliseconds && happenedWhileAway(timestamp);
-        });
-      const pullRequestSummaries = new Map();
-      const items = [];
-      for (const event of events) {
-        if (!event.pullRequest) {
-          items.push(event);
-          continue;
-        }
-        const { identity, number, action, title } = event.pullRequest;
-        let summary = pullRequestSummaries.get(identity);
-        if (!summary) {
-          summary = { at: event.at, number, title, actions: new Set() };
-          pullRequestSummaries.set(identity, summary);
-        }
-        if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
-        if (!summary.title && title) summary.title = title;
-        summary.actions.add(action);
-      }
-      for (const summary of pullRequestSummaries.values()) {
-        const { number, title, actions } = summary;
-        const prefix = `PR #${number}${title ? `(${title})` : ''}`;
-        const hasCreated = actions.has('created');
-        const hasMerged = actions.has('merged');
-        const hasCiFailure = actions.has('ci-failure');
-        let text;
-        if (hasCiFailure) {
-          const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
-          const outcome = hasCreated && hasMerged
-            ? '作成し、マージした'
-            : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
-          text = `${failure}${outcome ? `。${outcome}` : ''}`;
-        } else if (hasCreated && hasMerged) {
-          text = `${prefix}を作成し、マージした`;
-        } else if (hasCreated) {
-          text = `${prefix}を作成した`;
-        } else {
-          text = `${prefix}をマージした`;
-        }
-        items.push({ at: summary.at, type: 'pull-request-summary', text });
-      }
+      const events = eventsSinceSeenWhileAway(eventsByProduct.get(product.key) || [], Date.parse(seenAt), awayPeriods, now);
+      const items = foldPullRequestEvents(events);
       items.sort((left, right) => Date.parse(right.at) - Date.parse(left.at));
       if (items.length) sinceSeen.push({ product, seenAt, items });
     }
@@ -2844,6 +2828,129 @@ class DashboardState {
       notificationTypes: [...this.notificationTypes].sort(),
     };
   }
+}
+
+function collectPullRequestTitles(records, storedMerged) {
+  const titles = new Map();
+  const remember = (owner, repo, number, title) => {
+    if (typeof title !== 'string' || !title) return;
+    titles.set(relatedPullRequestRecordKey(owner, repo, number), title);
+  };
+  for (const record of records) remember(record.owner, record.repo, record.number, record.lastOpen?.title);
+  for (const merged of storedMerged) {
+    if (merged.title !== `#${merged.number}`) remember(merged.owner, merged.repo, merged.number, merged.title);
+  }
+  return titles;
+}
+
+function collectMergedPullRequests(records, storedMerged) {
+  const mergedPullRequests = new Map();
+  for (const merged of storedMerged) {
+    mergedPullRequests.set(relatedPullRequestRecordKey(merged.owner, merged.repo, merged.number), merged);
+  }
+  for (const record of records) {
+    if (record.state !== 'merged' || !record.mergedAt) continue;
+    const key = relatedPullRequestRecordKey(record.owner, record.repo, record.number);
+    if (mergedPullRequests.has(key)) continue;
+    mergedPullRequests.set(key, {
+      owner: record.owner,
+      repo: record.repo,
+      number: record.number,
+      title: record.lastOpen?.title,
+      mergedAt: record.mergedAt,
+    });
+  }
+  return mergedPullRequests;
+}
+
+// 関連 PR は登録にプロダクトを持たないので、その PR をマージ済みとして載せている PR 群のプロダクトに出す。
+function mergedPullRequestProducts(merged, { registrations, pullRequestGroups }) {
+  const sameRepo = (owner, repo) => owner?.toLowerCase() === merged.owner.toLowerCase() && repo?.toLowerCase() === merged.repo.toLowerCase();
+  const found = [
+    ...registrations.filter((record) => sameRepo(record.owner, record.repo) && record.number === merged.number)
+      .map((record) => cloneProduct(record.product) || repoProduct(merged.owner, merged.repo)),
+    ...pullRequestGroups.filter((group) => sameRepo(group.owner, group.repo) && group.merged?.some((item) => item.number === merged.number))
+      .map((group) => cloneProduct(group.product)).filter(Boolean),
+  ];
+  if (!found.length) return [repoProduct(merged.owner, merged.repo)];
+  return [...new Map(found.map((product) => [product.key, product])).values()];
+}
+
+function pullRequestLabel(number, title) {
+  return `PR #${number}${title ? `(${title})` : ''}`;
+}
+
+// 対象のプロダクトに無い候補、時刻を読めない候補、同じ内容の重複は捨てる。
+function groupSinceSeenEvents(candidates, products) {
+  const eventsByProduct = new Map([...products.keys()].map((key) => [key, []]));
+  const eventKeys = new Set();
+  for (const { product, type, identity, at, text, pullRequest } of candidates) {
+    const timestamp = Date.parse(at || '');
+    if (!product || !eventsByProduct.has(product.key) || !Number.isFinite(timestamp)) continue;
+    const key = `${product.key}\0${type}\0${identity}\0${at}`;
+    if (eventKeys.has(key)) continue;
+    eventKeys.add(key);
+    eventsByProduct.get(product.key).push({ at, type, text, ...(pullRequest ? { pullRequest } : {}) });
+  }
+  return eventsByProduct;
+}
+
+function isAwayAt(timestamp, awayPeriods, now) {
+  return awayPeriods.some((period) => {
+    if (!Number.isFinite(period.start)) return false;
+    const end = period.end === null ? now : period.end;
+    return Number.isFinite(end) && timestamp >= period.start && timestamp <= end;
+  });
+}
+
+// 絞り込みの後でまとめる。先にまとめると、範囲外の変化がまとめた行の時刻と文に混ざる。
+function eventsSinceSeenWhileAway(events, seenMilliseconds, awayPeriods, now) {
+  return events.filter((event) => {
+    const timestamp = Date.parse(event.at);
+    return timestamp > seenMilliseconds && isAwayAt(timestamp, awayPeriods, now);
+  });
+}
+
+// 同じ PR の作成、CI の失敗、マージを 1 行にまとめ、PR に紐づかない変化はそのまま返す。
+function foldPullRequestEvents(events) {
+  const pullRequestSummaries = new Map();
+  const items = [];
+  for (const event of events) {
+    if (!event.pullRequest) {
+      items.push(event);
+      continue;
+    }
+    const { identity, number, action, title } = event.pullRequest;
+    let summary = pullRequestSummaries.get(identity);
+    if (!summary) {
+      summary = { at: event.at, number, title, actions: new Set() };
+      pullRequestSummaries.set(identity, summary);
+    }
+    if (Date.parse(event.at) > Date.parse(summary.at)) summary.at = event.at;
+    if (!summary.title && title) summary.title = title;
+    summary.actions.add(action);
+  }
+  for (const summary of pullRequestSummaries.values()) {
+    items.push({ at: summary.at, type: 'pull-request-summary', text: pullRequestSummaryText(summary) });
+  }
+  return items;
+}
+
+// 題が無いときは「の CI」の前に空白を置く。全角括弧の書式をテストが完全一致で確かめる。
+function pullRequestSummaryText({ number, title, actions }) {
+  const prefix = pullRequestLabel(number, title);
+  const hasCreated = actions.has('created');
+  const hasMerged = actions.has('merged');
+  if (actions.has('ci-failure')) {
+    const failure = `${prefix}${title ? '' : ' '}の CI が失敗した`;
+    const outcome = hasCreated && hasMerged
+      ? '作成し、マージした'
+      : hasCreated ? '作成した' : hasMerged ? 'マージした' : '';
+    return `${failure}${outcome ? `。${outcome}` : ''}`;
+  }
+  if (hasCreated && hasMerged) return `${prefix}を作成し、マージした`;
+  if (hasCreated) return `${prefix}を作成した`;
+  return `${prefix}をマージした`;
 }
 
 function cloneResolution(resolution) {
@@ -2869,4 +2976,4 @@ function cloneDecision(decision) {
   };
 }
 
-module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName };
+module.exports = { AwayState, atomicWriteAwayState, DashboardState, deriveSessions, claudeModelName, isAwayAt, pullRequestSummaryText };
