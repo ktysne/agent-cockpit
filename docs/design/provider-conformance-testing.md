@@ -46,6 +46,14 @@ ClaudeとCodexの両方が対象機能を実装するまでは、未実装側を
 fixtureを使った試験と実runtime試験の結果を分けて記録する。
 機能の実装中は対象に関わる層を追加し、全体完成後に横断runtime統合試験を行う。
 
+## TaskStopと終了通知
+
+TaskStopの成功イベントは、stoppedTaskIdが一致するClaudeサブエージェントだけを終了扱いにする。
+transcriptはnative session IDで読み、合成した終了イベントは表示用session IDへ適用する。
+窓口配下のbackground Codexがactive=false, unconfirmed=trueになった状態は、実プロセス停止や結果受信の確認を意味しない。
+fixtureではflatとnested native eventの成功IDが同じsanitize結果になり、失敗、他tool、不正ID、直接Codex行が状態を変えないことを確認する。
+実runtimeは未確認であり、適合試験の成功に含めない。
+
 ## 観測する不変条件
 
 各シナリオは、入力だけでなく処理中と処理後の観測点を定義する。

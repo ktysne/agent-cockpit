@@ -156,6 +156,9 @@ function sanitizeEvent(input, metadata = {}) {
   }
 
   if (eventName === 'PostToolUse') {
+    if (event.tool_name === 'TaskStop' && typeof input.stoppedTaskId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(input.stoppedTaskId)) {
+      event.stoppedTaskId = input.stoppedTaskId;
+    }
     if (event.tool_name === 'AskUserQuestion' && !agentId) {
       event.decisionResolution = sanitizeDecisionResolution(input.decisionResolution) || { chosen: [], note: '' };
     }

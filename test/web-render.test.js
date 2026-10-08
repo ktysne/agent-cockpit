@@ -10,6 +10,18 @@ const { cssDeclarations, functionSource, pageContext: createPageContext, sourceB
 const pageHtml = fs.readFileSync(path.join(__dirname, '../src/web/index.html'), 'utf8').replace(/\r\n/g, '\n');
 const mockHtml = fs.readFileSync(path.join(__dirname, '../mock/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
+test('終了した行だけを持つ待機中セッションは更新の無い設定で隠れる', () => {
+  const context = pageContext(pageHtml, {
+    displayPreferences: { idleHideMinutes: 30 }, isActiveDecision: () => false,
+  });
+  vm.runInContext(['isEndedAgent', 'isIdleHiddenSession'].map(name => functionSource(pageHtml, name)).join('\n'), context);
+  const now = Date.parse('2026-10-08T12:00:00.000Z');
+  const session = { status: '待機中', lastUpdatedAt: new Date(now - 31 * 60_000).toISOString(),
+    agents: [{ active: false, unconfirmed: false }] };
+  assert.equal(context.isIdleHiddenSession(session, now), true);
+  assert.equal(context.isIdleHiddenSession({ ...session, agents: [{ active: true }] }, now), false);
+});
+
 test('外したセッションは hiddenAt と更新時刻の遅い方から待ち、更新の無い帯へ移る', () => {
   const context = pageContext(pageHtml, {
     displayPreferences: { idleHideMinutes: 30, hideFinished: true },
@@ -1127,7 +1139,7 @@ test('終了ボタンは状態と名前を含む flex 行の右端に置く', ()
   for (const selector of ['.now-row', '.agent-row']) {
     assert.equal(Object.fromEntries(cssDeclarations(mobileHtml, selector))['grid-template-columns'], undefined);
   }
-  assert.match(mock, /const isClosable = \(session, agent\) => \(!!agent\.unconfirmed \|\| isMainBackgroundCodex\(agent\)\)/);
+  assert.match(mock, /const isClosable = \(session, agent\) => \(\(!isBusyAgent\(session, agent\) && !!agent\.unconfirmed\)\s*\|\|\s*\(!agent\.isCodex && agent\.backgrounded && isBusyAgent\(session, agent\)\)\s*\|\|\s*isMainBackgroundCodex\(agent\)\) && !isClosedByUser\(session, agent\);/);
   assert.match(mock, /<span class="agent-name"><span class="badge \$\{state\[1\]\}">[\s\S]*?\$\{close\}<\/span>/);
   assert.equal(Object.fromEntries(cssDeclarations(mock, '.agent-name'))['flex-wrap'], 'wrap');
   assert.equal(Object.fromEntries(cssDeclarations(mock, '.close-agent'))['margin-left'], 'auto');

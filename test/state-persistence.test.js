@@ -9,6 +9,30 @@ const { temporaryDirectory } = require('./support/temp');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+test('合成 SubagentStop と TaskStop による終了はイベントから再構成しても終了のまま', () => {
+  const now = Date.now();
+  const state = new DashboardState();
+  for (const session_id of ['notification-stop', 'tool-stop']) {
+    state.addEvent({ session_id, hook_event_name: 'SubagentStart', agent_id: 'task-1', hookAt: now - 100 });
+    if (session_id === 'notification-stop') {
+      state.applyTaskNotifications(session_id, new Map([['task-1', { status: 'killed', recordedAt: null }]]), now);
+    } else {
+      state.addEvent({ session_id, hook_event_name: 'PostToolUse', tool_name: 'TaskStop', stoppedTaskId: 'task-1', hookAt: now });
+    }
+    state.addEvent({ session_id, hook_event_name: 'Stop', hookAt: now + 1 });
+  }
+  const restored = new DashboardState();
+  const events = JSON.parse(JSON.stringify([...state.entries.values()].flat().map(entry => entry.event)));
+  for (const event of events) restored.addEvent(event);
+  assert.equal(restored.snapshot().sessions.length, 2);
+  for (const session of restored.snapshot().sessions) {
+    assert.equal(session.agents[0].active, false);
+    assert.equal(session.status, '待機中');
+    restored.addEvent({ session_id: session.session_id, hook_event_name: 'PreToolUse', agent_id: 'task-1', tool_name: 'Read', tool_use_id: 'late', hookAt: now + 3 });
+    assert.equal(restored.snapshot().sessions.find(item => item.session_id === session.session_id).agents[0].active, false);
+  }
+});
+
 test('削除印を保存して復元し、旧形式は空として読む', async (t) => {
   const homeDir = await temporaryHome(t);
   const now = Date.parse('2026-10-08T00:00:00.000Z');

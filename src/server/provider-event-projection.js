@@ -32,7 +32,7 @@ const NATIVE_COMMON_FIELDS = Object.freeze([
   'decision_resolution', 'ghPrCreateCommand', 'refreshPullRequestsCommand',
   'refreshPullRequests', 'pullRequest', 'backgroundTaskId', 'backgroundOutputTaskId',
   'resolvedModel', 'codexOutput', 'codexReviewDefinition', 'codexWaitRunId',
-  'cwd', 'notification_type', 'message',
+  'cwd', 'notification_type', 'message', 'stoppedTaskId',
 ]);
 const COMMON_EVENT_FIELDS = new Set(NATIVE_COMMON_FIELDS.filter((name) => name !== 'hook_at' && name !== 'decision_resolution'));
 
