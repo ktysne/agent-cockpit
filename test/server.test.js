@@ -900,6 +900,7 @@ test('すべての POST 口で秘密値、Origin、Sec-Fetch-Site を照合す�
     { path: '/api/pull-requests/cancel-reservation', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/conflict-request', secret: 'ui', originRequired: true },
     { path: '/api/sessions/session-a/estimate', secret: 'ui', originRequired: true },
+    { path: '/api/record-deletions', secret: 'ui', originRequired: true },
     { path: '/api/hidden-sessions', secret: 'ui', originRequired: true },
     { path: '/api/display', secret: 'ui', originRequired: true },
     { path: '/api/pull-requests/merge-result/close', secret: 'ui', originRequired: true },
@@ -2386,11 +2387,29 @@ test('離席状態の切り替えを続けて呼ぶと、呼んだ順に保存�
 });
 
 test('/api/state は版と時刻を、離席期間の整理を待つ前に中身と同じ時点で確定する', async () => {
-  const source = (await fs.readFile(path.join(__dirname, '../src/server/server.js'), 'utf8')).replace(/\r\n/g, '\n');
-  const start = source.indexOf("requestUrl.pathname === '/api/state'");
+  const source = (await fs.readFile(path.join(__dirname, '../src/server/routes/read.js'), 'utf8')).replace(/\r\n/g, '\n');
+  const start = source.indexOf('async function handleState(');
   const handler = source.slice(start, source.indexOf('jsonResponse(response, 200', start));
   const versionAt = handler.indexOf('snapshot.version = state.version;');
   const pruneAt = handler.indexOf('away.prune?.(');
   assert.ok(versionAt > 0 && pruneAt > versionAt);
   assert.doesNotMatch(handler, /await away\.prune/);
+});
+
+test('/api/state は質問サービスを待つ間の更新を本文と版の両方に反映する', async (t) => {
+  const state = new DashboardState();
+  const { info } = await startTestServer(t, {
+    state,
+    questionService: {
+      async dashboardSnapshot() {
+        await Promise.resolve();
+        state.syncSessionFiles([{ session_id: 'snapshot-after-wait' }]);
+        return { questions: [] };
+      },
+    },
+  });
+  const snapshot = jsonBody(await request(info.port, { path: '/api/state' }));
+  assert.ok(snapshot.sessions.some((session) => session.session_id === 'snapshot-after-wait'));
+  assert.equal(snapshot.version, state.version);
+  assert.equal(snapshot.generatedAt, state.generatedAt);
 });

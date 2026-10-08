@@ -4,53 +4,29 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
 const { AwayState, DashboardState } = require('./state');
-const { RoutingState, isValidRouteUpdate } = require('./routing');
+const { RoutingState } = require('./routing');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
-const { validDisplayPatch } = require('./display-preferences');
-const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
-const { sanitizeEvent } = require('./events');
-const { estimateTranscript, readTaskNotifications } = require('./transcript');
-const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
-const { listLiveSessionFiles, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
+
+const { ANSWER_WAIT_MS, DecisionAnswerDelivery } = require('./decision-answers');
+
+const { readTaskNotifications } = require('./transcript');
+const { productFromCwd, claudeHomeFromOptions, cockpitHomeFromOptions } = require('./identity');
+const { listLiveSessionFiles } = require('./session-files');
 const { createRegistrationKernel } = require('./conversation-registry');
 const { createClaudeLocalIssuer } = require('./claude-local-issuer');
 const { createProviderEventProjection, createProviderEventAdapter } = require('./provider-event-projection');
-const { sanitizeManagedCollectorSnapshot } = require('./managed-collector');
+
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
 const { PullRequestMergeManager } = require('./pull-request-merge');
-const { isCompleteCommitSha, isSha256Digest, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('./pull-request-utils');
-const { isRequestSessionId, isShortSessionId } = require('./session-ids');
-const { DEFAULT_PORT } = require('./server-constants');
 
-const APP_NAME = 'agent-cockpit';
+const { isShortSessionId } = require('./session-ids');
+const {
+  DEFAULT_PORT, APP_NAME, MAX_BODY_BYTES, MAX_NATIVE_PENDING_REQUESTS,
+  IDLE_TIMEOUT_MS, SESSION_SCAN_INTERVAL_MS, MANUAL_CONTENT_TYPES,
+} = require('./server-constants');
+
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
-const MAX_BODY_BYTES = 64 * 1024;
-const MAX_EXTERNAL_URL_LENGTH = 2048;
-const MAX_NATIVE_PENDING_REQUESTS = 128;
-const OWNED_STOP_FIELDS = Object.freeze(['launchRef', 'executionId', 'sessionId', 'expectedContextId',
-  'expectedOwnerGeneration', 'stopRevision']);
-const OWNED_PROCESS_STATES = new Set([
-  'not_started', 'starting', 'running', 'stopping', 'stopped', 'stop_unconfirmed', 'disconnected', 'quarantined', 'failed',
-]);
-const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
-const SESSION_SCAN_INTERVAL_MS = 10_000;
-const WRITER_CLAIM_FIELDS = Object.freeze([
-  'provider', 'nativeIdKind', 'native_id_kind', 'hostId', 'host_id',
-  'homeScopeId', 'home_scope_id', 'nativeId', 'native_id', 'identity',
-  'sessionId', 'conversationId', 'conversation_id', 'executionId', 'execution_id',
-  'periodId', 'period_id', 'contextId', 'context_id', 'evidence', 'evidenceId',
-  'evidence_id', 'evidenceMetadata', 'evidence_metadata', 'observationId',
-  'observation_id', 'registration', 'registrationId', 'registration_id',
-  'verified', 'verification', 'writerToken', 'writer_token', 'claudeCodeSessionId',
-  'claude_code_session_id', 'originBinding', 'executionBinding', 'actorId', 'launchId', 'runId',
-]);
-const MANUAL_CONTENT_TYPES = Object.freeze({
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.png': 'image/png',
-});
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -61,31 +37,7 @@ async function defaultCodexAgentScriptExists(scriptPath) {
   }
 }
 
-// 画面を別のページの iframe に埋めて操作させる経路と、別のオリジンからの読み取りを塞ぐ。
-const SECURITY_HEADERS = Object.freeze({
-  'cache-control': 'no-store',
-  'x-content-type-options': 'nosniff',
-  'x-frame-options': 'DENY',
-  'content-security-policy': "frame-ancestors 'none'",
-  'cross-origin-resource-policy': 'same-origin',
-  'cross-origin-opener-policy': 'same-origin',
-});
-
-function jsonResponse(response, status, value) {
-  response.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    ...SECURITY_HEADERS,
-  });
-  response.end(JSON.stringify(value));
-}
-
-function textResponse(response, status, value, contentType = 'text/plain; charset=utf-8') {
-  response.writeHead(status, {
-    'content-type': contentType,
-    ...SECURITY_HEADERS,
-  });
-  response.end(value);
-}
+const { SECURITY_HEADERS, jsonResponse, textResponse, escapeHtmlAttribute, logLine } = require('./http-helpers');
 
 function requestHostIsLocal(request, port) {
   const host = request.headers.host;
@@ -241,26 +193,6 @@ function validRequiredUiOrigin(request, port) {
 
 // 起動するプログラムには検査した値そのものを渡すため、正規化した href を返す。
 // rundll32 は引数を ShellExecute へそのまま渡すので、空白や引用符が残る値は受けない。
-function normalizeExternalUrl(value, port) {
-  if (typeof value !== 'string' || value.length > MAX_EXTERNAL_URL_LENGTH || /[\u0000-\u001f\u007f]/.test(value)) return null;
-  try {
-    const url = new URL(value);
-    if (url.href.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(url.href)) return null;
-    if (url.protocol === 'https:') return url.href;
-
-    const urlPort = Number(url.port || 80);
-    const matchesLocalhost = url.hostname === '127.0.0.1' || url.hostname === 'localhost';
-    const isManualPath = url.pathname.startsWith('/manual/');
-    if (url.protocol !== 'http:' || !matchesLocalhost || urlPort !== port || !isManualPath || url.username || url.password) return null;
-
-    const normalizedUrl = `http://127.0.0.1:${port}${url.pathname}${url.search}${url.hash}`;
-    if (normalizedUrl.length > MAX_EXTERNAL_URL_LENGTH || /[\s"]/.test(normalizedUrl)) return null;
-    return normalizedUrl;
-  } catch {
-    return null;
-  }
-}
-
 // xdg-open のようにすぐ終わらない起動もあるので、終了は待たずに起動できたかだけを見る。
 function defaultOpenExternalUrl(url) {
   const [command, args] = process.platform === 'win32'
@@ -276,204 +208,54 @@ function defaultOpenExternalUrl(url) {
   });
 }
 
-function escapeHtmlAttribute(value) {
-  return String(value).replace(/[&"'<>]/g, (character) => ({
-    '&': '&amp;',
-    '"': '&quot;',
-    "'": '&#39;',
-    '<': '&lt;',
-    '>': '&gt;',
-  })[character]);
-}
-
-function validSessionId(value) {
-  return isRequestSessionId(value);
-}
-
-function validText(value, maxLength, allowEmpty = false) {
-  return typeof value === 'string' && value.length <= maxLength && (allowEmpty || value.trim().length > 0);
-}
-
-function validTasks(value) {
-  if (!Array.isArray(value) || value.length > 50) return false;
-  const titles = new Set();
-  for (const task of value) {
-    if (
-      !task || typeof task !== 'object' || Array.isArray(task) ||
-      !validText(task.title, 200) || titles.has(task.title) || !['todo', 'doing', 'done'].includes(task.state) ||
-      !Array.isArray(task.criteria) || task.criteria.length > 20 || !task.criteria.every((criterion) => (
-        criterion && typeof criterion === 'object' && !Array.isArray(criterion) &&
-        validText(criterion.text, 2000) && typeof criterion.met === 'boolean'
-      ))
-    ) return false;
-    titles.add(task.title);
-  }
-  return true;
-}
-
-function validSeenRequest(value) {
-  const generatedAt = Date.parse(value?.generatedAt || '');
-  return value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).length === 2 && Object.hasOwn(value, 'productKey') && Object.hasOwn(value, 'generatedAt') &&
-    typeof value.productKey === 'string' && value.productKey.trim().length > 0 && value.productKey.length <= 500 &&
-    typeof value.generatedAt === 'string' && Number.isFinite(generatedAt) && generatedAt <= Date.now();
-}
-
-function validDecisionOptions(value) {
-  if (!Array.isArray(value) || value.length > 6) return false;
-  let recommendedCount = 0;
-  for (const option of value) {
-    if (
-      !option || typeof option !== 'object' || Array.isArray(option) ||
-      !validText(option.label, 200) || !validText(option.description, 2000, true) ||
-      (option.recommended !== undefined && typeof option.recommended !== 'boolean')
-    ) return false;
-    if (option.recommended) recommendedCount += 1;
-  }
-  return recommendedCount <= 1;
-}
-
-function validChosen(value) {
-  if (typeof value === 'string') return value.length <= 2000;
-  return Array.isArray(value) && value.length <= 6 && value.every((item) => validText(item, 2000, true));
-}
-
-function validPlanInput(body) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  if (body.kind === 'tasks') return validTasks(body.tasks);
-  if (body.kind === 'add_decision') {
-    return validText(body.title, 200) && validText(body.context, 2000, true) &&
-      ['waiting', 'provisional'].includes(body.state) && validDecisionOptions(body.options);
-  }
-  if (body.kind === 'update_decision') {
-    return validText(body.id, 256) && ['provisional', 'resolved'].includes(body.state) &&
-      validChosen(body.chosen) && validText(body.note, 2000, true);
-  }
-  return false;
-}
-
-function hasOnlyKeys(value, fields) {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value)) &&
-    Object.keys(value).every((field) => fields.includes(field));
-}
-
-function hasExactKeys(value, fields) {
-  return hasOnlyKeys(value, fields) && Object.keys(value).length === fields.length;
-}
-
-function sameQuestionIdentity(left, right) {
-  const fields = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
-  return hasExactKeys(left, fields) && hasExactKeys(right, fields) &&
-    fields.every((field) => left[field] === right[field]);
-}
-
-function questionErrorStatus(error) {
-  const code = typeof error?.code === 'string' ? error.code : '';
-  if (code.startsWith('invalid_') || code === 'question_category_forbidden') return 400;
-  if (['question_writer_unverified', 'question_writer_binding_mismatch'].includes(code)) return 403;
-  if (code === 'question_not_found') return 404;
-  if (['question_conflict', 'question_cancelled', 'question_delivery_mismatch', 'question_delivery_digest_mismatch'].includes(code)) return 409;
-  return 503;
-}
-
-const INSTRUCTION_MODES = new Set(['steer', 'start', 'next-user-input']);
-const INSTRUCTION_STATES = new Set(['available', 'claimed', 'sending', 'accepted', 'applied', 'unknown', 'unavailable', 'cancelled_before_send', 'superseded_before_send']);
-
-function validScopedIdentifier(value, maxLength = 512) {
-  return typeof value === 'string' && value.length > 0 && value.length <= maxLength &&
-    value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
-}
-
-function validInstructionIdentity(value) {
-  const fields = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
-  return hasExactKeys(value, fields) && ['claude', 'codex'].includes(value.provider) &&
-    fields.slice(1).every((field) => validScopedIdentifier(value[field]));
-}
-
-function instructionProjection(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      !validScopedIdentifier(value.deliveryAttemptId) || !validScopedIdentifier(value.logicalMessageId) ||
-      !validScopedIdentifier(value.launchRef) || !validSessionId(value.sessionId) ||
-      !validScopedIdentifier(value.executionId) || !validInstructionIdentity(value.identity) ||
-      !['standalone', 'delegated', 'review'].includes(value.origin) || !INSTRUCTION_STATES.has(value.state) ||
-      !INSTRUCTION_MODES.has(value.mode) || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
-      (value.nativeTurnId !== null && !validScopedIdentifier(value.nativeTurnId)) ||
-      (value.heldReason !== null && value.heldReason !== undefined && !validText(value.heldReason, 512, true)) ||
-      !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) return null;
-  return {
-    deliveryAttemptId: value.deliveryAttemptId,
-    logicalMessageId: value.logicalMessageId,
-    revision: value.revision,
-    launchRef: value.launchRef,
-    sessionId: value.sessionId,
-    executionId: value.executionId,
-    identity: { ...value.identity },
-    origin: value.origin,
-    state: value.state,
-    mode: value.mode,
-    nativeTurnId: value.nativeTurnId,
-    heldReason: value.heldReason ?? null,
-    createdAt: value.createdAt ?? null,
-  };
-}
-
-function ownedExecutionProjection(value) {
-  const fields = ['launchRef', 'executionId', 'sessionId', 'expectedContextId', 'expectedOwnerGeneration',
-    'stopRevision', 'processState', 'canStop', 'stopConfirmed', 'hold'];
-  if (!hasExactKeys(value, fields) || !validScopedIdentifier(value.launchRef) ||
-      !validScopedIdentifier(value.executionId) || !validSessionId(value.sessionId) ||
-      (value.expectedContextId !== null && !validScopedIdentifier(value.expectedContextId)) ||
-      !Number.isSafeInteger(value.expectedOwnerGeneration) || value.expectedOwnerGeneration < 0 ||
-      !Number.isSafeInteger(value.stopRevision) || value.stopRevision < 0 ||
-      !OWNED_PROCESS_STATES.has(value.processState) || typeof value.canStop !== 'boolean' ||
-      typeof value.stopConfirmed !== 'boolean' || value.stopConfirmed && value.processState !== 'stopped' ||
-      value.stopConfirmed && value.canStop) return null;
-  const hold = value.hold;
-  if (!hasExactKeys(hold, ['reason', 'retainedRequestCount', 'remainingRequestCount', 'limit']) ||
-      ![null, 'capacity', 'unknown'].includes(hold.reason) || hold.limit !== MAX_NATIVE_PENDING_REQUESTS ||
-      !Number.isSafeInteger(hold.retainedRequestCount) || hold.retainedRequestCount < 0 ||
-      hold.retainedRequestCount > hold.limit || !Number.isSafeInteger(hold.remainingRequestCount) ||
-      hold.remainingRequestCount < 0 || hold.remainingRequestCount > hold.limit ||
-      hold.retainedRequestCount + hold.remainingRequestCount !== hold.limit ||
-      hold.reason === 'capacity' && (hold.retainedRequestCount !== hold.limit || hold.remainingRequestCount !== 0)) return null;
-  return {
-    launchRef: value.launchRef,
-    executionId: value.executionId,
-    sessionId: value.sessionId,
-    expectedContextId: value.expectedContextId,
-    expectedOwnerGeneration: value.expectedOwnerGeneration,
-    stopRevision: value.stopRevision,
-    processState: value.processState,
-    canStop: value.canStop,
-    stopConfirmed: value.stopConfirmed,
-    hold: { ...hold },
-  };
-}
-
-function instructionErrorStatus(error) {
-  const code = typeof error?.code === 'string' ? error.code : '';
-  if (code === 'instruction_not_found' || code === 'delivery_not_found') return 404;
-  if (['instruction_scope_mismatch', 'instruction_launch_unavailable'].includes(code)) return 403;
-  if (code.startsWith('invalid_') || code.startsWith('expected_turn_') ||
-      code.startsWith('instruction_invalid_') || code.startsWith('instruction_expected_turn_') ||
-      code === 'unexpected_turn' || code === 'instruction_envelope_too_large') return 400;
-  if (['instruction_not_sendable', 'instruction_not_supersedable', 'instruction_mode_requires_supersede'].includes(code) ||
-      code.includes('conflict') || code.includes('mismatch') || code.includes('unavailable') ||
-      code.includes('unverified') || code.includes('forbidden') || code.includes('unsupported') ||
-      code.includes('timeout') || code.includes('requires_supersede')) return 409;
-  return 503;
-}
+const {
+  validSessionId, validText, validTasks, validDecisionOptions,
+  validPlanInput, hasExactKeys, sameQuestionIdentity, questionErrorStatus,
+  validScopedIdentifier, instructionProjection, instructionErrorStatus,
+} = require('./request-validation');
 
 function lateInstructionIds(internalQuestionId, index, digest) {
   const key = crypto.createHash("sha256").update(JSON.stringify([internalQuestionId, index, digest])).digest("hex");
   return { deliveryAttemptId: 'late-delivery-' + key, logicalMessageId: 'late-message-' + key, revision: 0 };
 }
 
-function decisionSummaries(state, sessionId) {
-  return state.decisionsFor(sessionId)
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-    .map(({ id, title, state: decisionState }) => ({ id, title, state: decisionState }));
+// 書き込み口の照合を 1 か所にまとめる。hook はフックと MCP 用の secret、ui と ui-optional-origin は画面用の uiSecret を求める。
+// ui-optional-origin は Origin が無くても通す(トレイが呼ぶ /api/away だけ)。none は照合しない。
+const WRITE_AUTH = Object.freeze({
+  hook: { secret: (info) => info.secret, origin: (request) => validOriginForWrite(request) },
+  ui: { secret: (info) => info.uiSecret, origin: validRequiredUiOrigin },
+  'ui-optional-origin': { secret: (info) => info.uiSecret, origin: validUiOrigin },
+});
+
+function authFailure(auth, request, info) {
+  if (auth === 'none') return null;
+  const check = WRITE_AUTH[auth];
+  if (!check) throw new Error(`unknown auth kind: ${auth}`);
+  if (request.headers['x-cockpit-secret'] !== check.secret(info)) return { status: 401, error: 'Unauthorized' };
+  return check.origin(request, info.port) ? null : { status: 403, error: 'Forbidden' };
 }
+
+function findRoute(routes, method, pathname) {
+  for (const route of routes) {
+    if (route.method !== method) continue;
+    if (typeof route.path === 'string') {
+      if (route.path === pathname) return { route, params: [] };
+      continue;
+    }
+    const params = pathname.match(route.path);
+    if (params) return { route, params };
+  }
+  return null;
+}
+
+const { createReadRoutes } = require('./routes/read');
+const { createOwnedExecutionsRoutes } = require('./routes/owned-executions');
+const { createQuestionsRoutes } = require('./routes/questions');
+const { createSettingsRoutes } = require('./routes/settings');
+const { createHookRoutes } = require('./routes/hooks');
+const { createUiSessionRoutes } = require('./routes/ui-sessions');
+const { createPullRequestRoutes } = require('./routes/pull-requests');
+const { createInstructionsRoutes } = require('./routes/instructions');
 
 function createRequestHandler(options) {
   const {
@@ -515,22 +297,6 @@ function createRequestHandler(options) {
   const providerEventAdapters = new Map(['claude', 'codex'].map((provider) => [
     provider, createProviderEventAdapter(provider, providerEventProjection),
   ]));
-  let cachedUiFileStamp = null;
-  let uiVersion = null;
-
-  async function currentUiVersion() {
-    try {
-      const stat = await fs.stat(webPath);
-      const stamp = `${stat.mtimeMs}:${stat.size}`;
-      if (stamp !== cachedUiFileStamp) {
-        const content = await fs.readFile(webPath);
-        uiVersion = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
-        cachedUiFileStamp = stamp;
-      }
-    } catch {}
-    return uiVersion;
-  }
-
   function resolveWriterSessionId(routeId, body) {
     const authorization = registrationRegistry.authorizeWriter(body.writer);
     if (!authorization.ok || !validSessionId(authorization.sessionId)) return null;
@@ -803,18 +569,6 @@ function createRequestHandler(options) {
     await Promise.allSettled([...pendingInstructionLosses]);
   }
 
-  async function readInstructionBody(request, response) {
-    try {
-      const body = JSON.parse(await readJsonBody(request));
-      if (body && typeof body === 'object' && !Array.isArray(body)) return body;
-    } catch (error) {
-      jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-      return null;
-    }
-    jsonResponse(response, 400, { error: 'Invalid request' });
-    return null;
-  }
-
   function instructionScopeMatches(body, link) {
     return Boolean(link && body.session_id === link.execution.sessionId &&
       body.execution_id === link.execution.executionId);
@@ -843,204 +597,6 @@ function createRequestHandler(options) {
     if (!instruction || !link || !instructionMatchesLaunch(instruction, link)) return { forbidden: true };
     if (!instructionScopeMatches(body, link)) return { forbidden: true };
     return { instruction, link };
-  }
-
-  async function handleInstructionRequest(request, response, requestUrl, info) {
-    const createPath = request.method === 'POST' && requestUrl.pathname === '/api/instructions/create';
-    const actionPath = request.method === 'POST' && requestUrl.pathname.match(/^\/api\/instructions\/([^/]+)\/(send|cancel|alternative)$/);
-    const latePath = request.method === 'POST' && requestUrl.pathname.match(/^\/api\/decisions\/([^/]+)\/late-instruction$/);
-    if (!createPath && !actionPath && !latePath) return false;
-    if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-      jsonResponse(response, 401, { error: 'Unauthorized' });
-      return true;
-    }
-    if (!validRequiredUiOrigin(request, info.port)) {
-      jsonResponse(response, 403, { error: 'Forbidden' });
-      return true;
-    }
-    if (!instructionService || !instructionServiceReady) {
-      jsonResponse(response, 503, { error: 'Instruction service is unavailable' });
-      return true;
-    }
-    const body = await readInstructionBody(request, response);
-    if (!body) return true;
-
-    try {
-      if (createPath) {
-        const fields = ['session_id', 'execution_id', 'launch_ref', 'delivery_attempt_id',
-          'logical_message_id', 'revision', 'text', 'mode', 'expected_turn_id'];
-        if (!hasExactKeys(body, fields) || !validSessionId(body.session_id) ||
-            !validScopedIdentifier(body.execution_id) || !validScopedIdentifier(body.launch_ref) ||
-            !validScopedIdentifier(body.delivery_attempt_id) || !validScopedIdentifier(body.logical_message_id) ||
-            !Number.isSafeInteger(body.revision) || body.revision < 0 ||
-            typeof body.text !== 'string' || !body.text.trim() || Buffer.byteLength(body.text, 'utf8') > 64 * 1024 ||
-            !INSTRUCTION_MODES.has(body.mode) ||
-            (body.expected_turn_id !== null && !validScopedIdentifier(body.expected_turn_id))) {
-          jsonResponse(response, 400, { error: 'instruction_invalid_request' });
-          return true;
-        }
-        const snapshot = registrationSnapshotForInstructions();
-        const link = snapshot ? linkInstructionLaunch(body.launch_ref, snapshot, true) : null;
-        if (!link || link.launch.state !== 'bound' || !instructionScopeMatches(body, link)) {
-          jsonResponse(response, 403, { error: 'instruction_scope_mismatch' });
-          return true;
-        }
-        const target = instructionTargetProjection(body.launch_ref);
-        if (!instructionModeAllowed(link.launch, target, body.mode, body.expected_turn_id)) {
-          jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
-          return true;
-        }
-        const result = await instructionService.create({
-          deliveryAttemptId: body.delivery_attempt_id,
-          launchRef: body.launch_ref,
-          logicalMessageId: body.logical_message_id,
-          revision: body.revision,
-          text: body.text,
-          mode: body.mode,
-          expectedTurnId: body.expected_turn_id,
-        });
-        const safe = instructionServiceResult(result);
-        if (!safe) {
-          jsonResponse(response, 503, { error: 'instruction_projection_unavailable' });
-          return true;
-        }
-        jsonResponse(response, 200, safe);
-        return true;
-      }
-
-      if (actionPath) {
-        let deliveryAttemptId;
-        try { deliveryAttemptId = decodeURIComponent(actionPath[1]); }
-        catch { jsonResponse(response, 400, { error: 'instruction_invalid_request' }); return true; }
-        if (!validScopedIdentifier(deliveryAttemptId) || !hasExactKeys(body,
-          actionPath[2] === 'alternative'
-            ? ['session_id', 'execution_id', 'new_delivery_attempt_id', 'logical_message_id', 'revision', 'text', 'mode', 'expected_turn_id']
-            : ['session_id', 'execution_id']) ||
-            !validSessionId(body.session_id) || !validScopedIdentifier(body.execution_id)) {
-          jsonResponse(response, 400, { error: 'instruction_invalid_request' });
-          return true;
-        }
-        const scoped = await loadScopedInstruction(deliveryAttemptId, body);
-        if (scoped.missing) { jsonResponse(response, 404, { error: 'instruction_not_found' }); return true; }
-        if (scoped.forbidden) { jsonResponse(response, 403, { error: 'instruction_scope_mismatch' }); return true; }
-        if (actionPath[2] === 'send') {
-          const { launch } = scoped.link;
-          const target = instructionTargetProjection(launch.launchRef);
-          const expectedTurnId = scoped.instruction.mode === 'steer' ? scoped.instruction.nativeTurnId : null;
-          const allowNext = scoped.instruction.mode === 'next-user-input';
-          if (launch.state !== 'bound' || scoped.link.execution.state !== 'active' ||
-              !instructionModeAllowed(launch, target, scoped.instruction.mode, expectedTurnId, allowNext)) {
-            jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
-            return true;
-          }
-          response.once('close', () => {
-            if (!response.writableFinished) queueInstructionResponseLost(deliveryAttemptId);
-          });
-          const result = await instructionService.send(deliveryAttemptId);
-          if (response.destroyed) return true;
-          const safe = instructionServiceResult(result);
-          if (!safe) {
-            queueInstructionResponseLost(deliveryAttemptId);
-            jsonResponse(response, 503, { error: 'instruction_projection_unavailable' });
-            return true;
-          }
-          jsonResponse(response, 200, safe);
-          return true;
-        }
-        if (actionPath[2] === 'cancel') {
-          const result = await instructionService.cancel(deliveryAttemptId);
-          const safe = instructionServiceResult(result);
-          if (!safe) { jsonResponse(response, 503, { error: 'instruction_projection_unavailable' }); return true; }
-          jsonResponse(response, 200, safe);
-          return true;
-        }
-        if (!validScopedIdentifier(body.new_delivery_attempt_id) || !validScopedIdentifier(body.logical_message_id) ||
-            !Number.isSafeInteger(body.revision) || body.revision < 0 || typeof body.text !== 'string' ||
-            !body.text.trim() || Buffer.byteLength(body.text, 'utf8') > 64 * 1024 ||
-            !INSTRUCTION_MODES.has(body.mode) ||
-            (body.expected_turn_id !== null && !validScopedIdentifier(body.expected_turn_id))) {
-          jsonResponse(response, 400, { error: 'instruction_invalid_request' });
-          return true;
-        }
-        const { launch, execution } = scoped.link;
-        const target = instructionTargetProjection(launch.launchRef);
-        if (launch.state !== 'bound' || execution.state !== 'active' ||
-            !instructionModeAllowed(launch, target, body.mode, body.expected_turn_id, true)) {
-          jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
-          return true;
-        }
-        const result = await instructionService.supersedeUnsent(deliveryAttemptId, {
-          newDeliveryAttemptId: body.new_delivery_attempt_id,
-          logicalMessageId: body.logical_message_id,
-          revision: body.revision,
-          text: body.text,
-          mode: body.mode,
-          expectedTurnId: body.expected_turn_id,
-        });
-        const safe = instructionServiceResult(result);
-        if (!safe) { jsonResponse(response, 503, { error: 'instruction_projection_unavailable' }); return true; }
-        jsonResponse(response, 200, safe);
-        return true;
-      }
-
-      let internalQuestionId;
-      try { internalQuestionId = decodeURIComponent(latePath[1]); }
-      catch { jsonResponse(response, 400, { error: 'instruction_invalid_request' }); return true; }
-      const lateFields = ['session_id', 'execution_id', 'index', 'digest', 'mode', 'expected_turn_id'];
-      if (!hasExactKeys(body, lateFields) || !validSessionId(body.session_id) ||
-          !validScopedIdentifier(body.execution_id) || !Number.isSafeInteger(body.index) || body.index < 0 ||
-          typeof body.digest !== 'string' || !/^[a-f0-9]{64}$/.test(body.digest) ||
-          !INSTRUCTION_MODES.has(body.mode) ||
-          (body.expected_turn_id !== null && !validScopedIdentifier(body.expected_turn_id))) {
-        jsonResponse(response, 400, { error: 'instruction_invalid_request' });
-        return true;
-      }
-      if (!questionService || !questionServiceReady || typeof questionService.readLateAnswerDraft !== 'function') {
-        jsonResponse(response, 503, { error: 'Late answer conversion is unavailable' });
-        return true;
-      }
-      const questionSnapshot = await questionService.dashboardSnapshot();
-      const question = questionSnapshot?.questions?.find((item) => item.internalQuestionId === internalQuestionId);
-      const questionLink = question && questionRegistrationLink(question);
-      if (!question || !questionLink || questionLink.sessionId !== body.session_id ||
-          questionLink.execution.executionId !== body.execution_id ||
-          !question.lateAnswerRefs?.some((ref) => ref.index === body.index && ref.digest === body.digest)) {
-        jsonResponse(response, 404, { error: 'late_answer_not_found' });
-        return true;
-      }
-      const launchSnapshot = registrationSnapshotForInstructions();
-      const launchLink = launchSnapshot ? linkInstructionLaunch(question.launchRef, launchSnapshot, true) : null;
-      if (!launchLink || launchLink.launch.state !== 'bound' || launchLink.execution.sessionId !== body.session_id ||
-          launchLink.execution.executionId !== body.execution_id) {
-        jsonResponse(response, 403, { error: 'instruction_scope_mismatch' });
-        return true;
-      }
-      const target = instructionTargetProjection(question.launchRef);
-      if (!instructionModeAllowed(launchLink.launch, target, body.mode, body.expected_turn_id)) {
-        jsonResponse(response, 409, { error: target.reason || 'instruction_target_unverified' });
-        return true;
-      }
-      const draft = await questionService.readLateAnswerDraft(internalQuestionId, body.index, body.digest);
-      if (!draft || draft.launchRef !== question.launchRef || typeof draft.text !== 'string') {
-        jsonResponse(response, 404, { error: 'late_answer_not_found' });
-        return true;
-      }
-      const ids = lateInstructionIds(internalQuestionId, body.index, body.digest);
-      const result = await instructionService.create({
-        ...ids,
-        launchRef: draft.launchRef,
-        text: draft.text,
-        mode: body.mode,
-        expectedTurnId: body.expected_turn_id,
-      });
-      const safe = instructionServiceResult(result);
-      if (!safe) { jsonResponse(response, 503, { error: 'instruction_projection_unavailable' }); return true; }
-      jsonResponse(response, 200, safe);
-      return true;
-    } catch (error) {
-      sendInstructionError(response, error);
-      return true;
-    }
   }
 
   async function dashboardQuestion(internalQuestionId) {
@@ -1089,6 +645,105 @@ function createRequestHandler(options) {
     }
   }
 
+  const ctx = {
+    answerDelivery,
+    applyClaudeLineage,
+    away,
+    claudeHome,
+    claudeIssuer,
+    codexAgentScriptExists,
+    crossReviewToolExists,
+    currentValidatedSessionProjectionRecords,
+    dev,
+    homeDir,
+    instructionModeAllowed,
+    instructionScopeMatches,
+    instructionService,
+    instructionServiceReady,
+    instructionServiceResult,
+    instructionTargetList,
+    instructionTargetProjection,
+    instructionTargetState,
+    lateInstructionIds,
+    launchRegistry,
+    linkInstructionLaunch,
+    loadScopedInstruction,
+    managedCollectors,
+    mutateCommonQuestion,
+    openExternalUrl,
+    ownedExecutionSnapshot,
+    providerEventAdapters,
+    providerEventProjection,
+    pullRequestMergeManager,
+    pullRequestTracker,
+    questionRegistrationLink,
+    questionService,
+    questionServiceReady,
+    queueInstructionResponseLost,
+    queueQuestionResponseLost,
+    registrationRegistry,
+    registrationSnapshotForInstructions,
+    resolveFreshWriterSessionId,
+    resolveProjectionProvidersForSession,
+    resolveWriterSessionId,
+    routing,
+    safeInstructionRecovery,
+    sendInstructionError,
+    state,
+    stopOwnedExecution,
+    userHome,
+    validatedSessionProjectionRecords,
+    webPath,
+    scheduleTaskNotifications: (sessionId) => options.scheduleTaskNotifications?.(sessionId),
+  };
+  const { handleHealth, handleState, handleContext, handleDevFields, handleIndex } = createReadRoutes(ctx);
+  const { handleOwnedExecutionStop } = createOwnedExecutionsRoutes(ctx);
+  const { handleQuestionRequest, handleQuestionMutation } = createQuestionsRoutes(ctx);
+  const { handleAwayState, handleAway, handleRouting, handleOpenUrl } = createSettingsRoutes(ctx);
+  const { handleHookAnswers, handleClaudeWriter, handleEvents, handlePlan, handleSessionPullRequests } = createHookRoutes(ctx);
+  const { handleDecisionAnswer, handleEstimate, handleRecordDeletions, handleHiddenSessions, handleDisplay, handleSeen, handleClosedTasks, handleClosedAgents } = createUiSessionRoutes(ctx);
+  const { handleReviewSkip, handlePullRequestAction, handleMergeResultClose } = createPullRequestRoutes(ctx);
+  const { handleInstructionRequest } = createInstructionsRoutes(ctx);
+
+  const invalidSessionId = { valid: (params) => validSessionId(params[1]), status: 400, error: 'Invalid session id' };
+  const unknownSessionId = { valid: (params) => isShortSessionId(params[1]), status: 404, error: 'Session not found' };
+
+  const routes = [
+    { method: 'GET', path: '/health', auth: 'none', body: 'none', handler: handleHealth },
+    { method: 'GET', path: '/api/state', auth: 'none', body: 'none', handler: handleState },
+    { method: 'POST', path: '/api/executions/stop', auth: 'ui', body: 'json', preBody: () => stopOwnedExecution ? null : { status: 503, error: 'owned_execution_stop_unavailable' }, handler: handleOwnedExecutionStop },
+    { method: 'POST', path: /^\/api\/decisions\/([^/]+)\/late-instruction$/, auth: 'ui', body: 'json', preBody: () => instructionService && instructionServiceReady ? null : { status: 503, error: 'Instruction service is unavailable' }, handler: handleInstructionRequest },
+    { method: 'POST', path: /^\/api\/instructions\/([^/]+)\/(send|cancel|alternative)$/, auth: 'ui', body: 'json', preBody: () => instructionService && instructionServiceReady ? null : { status: 503, error: 'Instruction service is unavailable' }, handler: handleInstructionRequest },
+    { method: 'POST', path: '/api/instructions/create', auth: 'ui', body: 'json', preBody: () => instructionService && instructionServiceReady ? null : { status: 503, error: 'Instruction service is unavailable' }, handler: handleInstructionRequest },
+    { method: 'POST', path: /^\/api\/sessions\/pending\/questions\/(register|status|answer-poll|response-lost)$/, auth: 'hook', body: 'json', preBody: () => questionService && questionServiceReady ? null : { status: 503, error: 'Question service is unavailable' }, handler: handleQuestionRequest },
+    { method: 'GET', path: '/api/away', auth: 'none', body: 'none', handler: handleAwayState },
+    { method: 'GET', path: /^\/api\/sessions\/([^/]+)\/context$/, auth: 'none', body: 'none', idCheck: invalidSessionId, handler: handleContext },
+    { method: 'GET', path: '/api/dev/fields', auth: 'none', body: 'none', handler: handleDevFields },
+    { method: 'POST', path: '/api/hooks/answers', auth: 'hook', body: 'json', handler: handleHookAnswers },
+    { method: 'POST', path: /^\/api\/decisions\/([^/]+)\/answer$/, auth: 'ui', body: 'json', handler: handleDecisionAnswer },
+    { method: 'POST', path: /^\/api\/decisions\/([^/]+)\/(hold|cancel)$/, auth: 'ui', body: 'json', handler: handleQuestionMutation },
+    { method: 'POST', path: '/api/pull-requests/review-skip', auth: 'ui', body: 'json', handler: handleReviewSkip },
+    { method: 'POST', path: /^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/, auth: 'ui', body: 'json', handler: handlePullRequestAction },
+    { method: 'GET', path: '/', auth: 'none', body: 'none', handler: handleIndex },
+    { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/estimate$/, auth: 'ui', body: 'none', idCheck: unknownSessionId, handler: handleEstimate },
+    { method: 'POST', path: '/api/record-deletions', auth: 'ui', body: 'json', handler: handleRecordDeletions },
+    { method: 'POST', path: '/api/hidden-sessions', auth: 'ui', body: 'json', handler: handleHiddenSessions },
+    { method: 'POST', path: '/api/display', auth: 'ui', body: 'json', handler: handleDisplay },
+    { method: 'POST', path: '/api/pull-requests/merge-result/close', auth: 'ui', body: 'json', handler: handleMergeResultClose },
+    { method: 'POST', path: '/api/seen', auth: 'ui', body: 'json', handler: handleSeen },
+    { method: 'POST', path: '/api/closed-tasks', auth: 'ui', body: 'json', handler: handleClosedTasks },
+    { method: 'POST', path: '/api/closed-agents', auth: 'ui', body: 'json', handler: handleClosedAgents },
+    { method: 'POST', path: '/api/away', auth: 'ui-optional-origin', body: 'json', handler: handleAway },
+    { method: 'POST', path: '/api/routing', auth: 'ui', body: 'json', handler: handleRouting },
+    { method: 'POST', path: '/api/open-url', auth: 'ui', body: 'json', handler: handleOpenUrl },
+    { method: 'POST', path: '/api/claude/writer', auth: 'hook', body: 'json', handler: handleClaudeWriter },
+    { method: 'POST', path: '/api/events', auth: 'hook', body: 'json', handler: handleEvents },
+    { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/plan$/, auth: 'hook', body: 'json', idCheck: invalidSessionId, handler: handlePlan },
+    { method: 'POST', path: /^\/api\/sessions\/([^/]+)\/prs$/, auth: 'hook', body: 'json', idCheck: invalidSessionId, handler: handleSessionPullRequests },
+  ];
+
+  // 順序は Host、markRequest、/manual、ルートの決定、秘密値(401)、Origin(403)、ID、サービスの利用可否、本文で固定する。
+  // 外部の Host の要求でアイドル終了を延ばさず、照合の前に ID や本文の妥当性を応答して漏らさないため。
   const handler = async (request, response) => {
     const info = getServerInfo();
     if (!info || !requestHostIsLocal(request, info.port)) {
@@ -1099,1576 +754,34 @@ function createRequestHandler(options) {
 
     const requestUrl = new URL(request.url, `http://127.0.0.1:${info.port}`);
     if (await serveManualRequest(request, response, manualDir)) return;
-    if (request.method === 'GET' && requestUrl.pathname === '/health') {
-      jsonResponse(response, 200, { app: APP_NAME, pid: info.pid, startedAt: info.startedAt });
-      return;
-    }
-    if (request.method === 'GET' && requestUrl.pathname === '/api/state') {
-      const snapshot = state.snapshot();
-      let commonQuestionSnapshot = null;
-      let questionRegistrationSnapshot = null;
-      let commonQuestionSnapshotUnavailable = false;
-      if (questionService) {
-        try {
-          const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-          commonQuestionSnapshot = await questionService.dashboardSnapshot();
-          if (!isRecord(commonQuestionSnapshot) || !Array.isArray(commonQuestionSnapshot.questions) ||
-              commonQuestionSnapshot.questions.some((question) => !isRecord(question))) throw new Error();
-          questionRegistrationSnapshot = registrationSnapshotForInstructions();
-          if (!questionRegistrationSnapshot ||
-              questionRegistrationSnapshot.conversations.some((conversation) => !isRecord(conversation)) ||
-              questionRegistrationSnapshot.executions.some((execution) => !isRecord(execution))) throw new Error();
-        } catch {
-          commonQuestionSnapshot = null;
-          questionRegistrationSnapshot = null;
-          commonQuestionSnapshotUnavailable = true;
-        }
-      }
-      let instructionDashboard = null;
-      let instructionRegistrationSnapshot = null;
-      let instructionTargets = [];
-      let instructionDashboardUnavailable = !instructionService || !instructionServiceReady;
-      let instructionTargetsUnavailable = !launchRegistry;
-      if (launchRegistry) {
-        try {
-          instructionRegistrationSnapshot = registrationSnapshotForInstructions();
-          if (!instructionRegistrationSnapshot) throw new Error();
-          instructionTargets = instructionTargetList(instructionRegistrationSnapshot);
-          instructionTargetsUnavailable = false;
-        } catch {
-          instructionRegistrationSnapshot = null;
-          instructionTargets = [];
-          instructionTargetsUnavailable = true;
-        }
-      }
-      if (instructionService && instructionServiceReady) {
-        try {
-          instructionDashboard = await instructionService.dashboardSnapshot();
-          if (!instructionDashboard || typeof instructionDashboard !== "object" ||
-              !Array.isArray(instructionDashboard.instructions)) throw new Error();
-          instructionDashboardUnavailable = false;
-        } catch { instructionDashboardUnavailable = true; }
-      }
-      if (launchRegistry && instructionService && instructionServiceReady &&
-          (!instructionDashboard || !instructionRegistrationSnapshot)) {
-        instructionDashboard = null;
-        instructionRegistrationSnapshot = null;
-      }
-      const pullRequests = pullRequestTracker?.snapshot() || [];
-      const now = Date.now();
-      const awayState = away.snapshot();
-      const sinceSeen = state.snapshotSinceSeen(snapshot.sessions, pullRequests, now, awayState.periods);
-      // 版と時刻は中身と同じ同期処理の中で確定する。後で待つと、待つ間の更新の版が古い中身に付く。
-      snapshot.version = state.version;
-      snapshot.generatedAt = state.generatedAt;
-      void away.prune?.([...state.seenAtByProduct.values()], now);
-      const stateSessionIds = new Set(snapshot.sessions.map((session) => session.session_id));
-      const sessions = snapshot.sessions.filter((session) => {
-        const rowProviders = state.sessionProviderSourcesFor?.(session.session_id) || [];
-        return !(rowProviders.length === 1 && state.projectionDisplayRecordsForSession(session.session_id)
-          .some((record) => record.provider === rowProviders[0] && record.deletedAt !== undefined));
-      }).map((session) => {
-        const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
-        const seenMilliseconds = Date.parse(seenAt || '');
-        return {
-          ...session,
-          decisions: session.decisions.map((decision) => ({
-            ...decision,
-            isNew: Number.isFinite(seenMilliseconds) && Date.parse(decision.createdAt) > seenMilliseconds,
-          })),
-        };
-      });
-      const sessionsById = new Map(sessions.map((session) => [session.session_id, session]));
-      const projectionRecords = validatedSessionProjectionRecords(
-        commonQuestionSnapshot, questionRegistrationSnapshot, instructionDashboard, instructionRegistrationSnapshot);
-      const projectionProvidersBySession = new Map();
-      for (const projection of [...projectionRecords.questions, ...projectionRecords.instructions]) {
-        const providers = projectionProvidersBySession.get(projection.sessionId) || new Set();
-        providers.add(projection.provider);
-        projectionProvidersBySession.set(projection.sessionId, providers);
-      }
-      function projectionCanMerge(sessionId, provider) {
-        const providers = new Set([
-          ...(projectionProvidersBySession.get(sessionId) || []),
-          ...state.projectionDisplayRecordsForSession(sessionId).map((record) => record.provider),
-        ]);
-        if (providers.size !== 1 || !providers.has(provider)) return false;
-        const rowProviders = state.sessionProviderSourcesFor?.(sessionId) || [];
-        if (stateSessionIds.has(sessionId)) return rowProviders.length === 1 && rowProviders[0] === provider;
-        return rowProviders.length === 0 || (rowProviders.length === 1 && rowProviders[0] === provider);
-      }
-      const orphanedCommonQuestions = projectionRecords.orphanedCommonQuestions;
-      for (const { question, link, provider, sessionId } of projectionRecords.questions) {
-        if (!projectionCanMerge(sessionId, provider)) continue;
-        const display = state.projectionDisplayFor(provider, sessionId);
-        if (display?.deletedAt) continue;
-        let session = sessionsById.get(sessionId);
-        if (!session) {
-          session = {
-            session_id: sessionId,
-            provider,
-            title: question.identity.nativeId,
-            product: null,
-            status: '待機中',
-            tools: [],
-            agents: [],
-            permissionWaits: [],
-            decisions: [],
-            tasks: [],
-            tasksUpdatedAt: null,
-          };
-          sessionsById.set(sessionId, session);
-          sessions.push(session);
-        }
-        if (display?.hiddenAt) {
-          session.hidden = true;
-          if (!session.hiddenAt || Date.parse(display.hiddenAt) > Date.parse(session.hiddenAt)) session.hiddenAt = display.hiddenAt;
-        }
-        if (!Array.isArray(session.commonQuestions)) session.commonQuestions = [];
-        const seenAt = session.product && sinceSeen.seenAtByProduct[session.product.key];
-        const seenMilliseconds = Date.parse(seenAt || '');
-        session.commonQuestions.push({
-          ...question,
-          sessionId,
-          executionState: link.execution.state,
-          isNew: Number.isFinite(seenMilliseconds) && question.createdAt > seenMilliseconds,
-        });
-      }
-      const unmatchedInstructions = projectionRecords.unmatchedInstructions;
-      for (const { instruction, link, provider, sessionId } of projectionRecords.instructions) {
-        if (!projectionCanMerge(sessionId, provider)) continue;
-        const display = state.projectionDisplayFor(provider, sessionId);
-        if (display?.deletedAt) continue;
-        let session = sessionsById.get(sessionId);
-        if (!session) {
-          session = { session_id: sessionId, provider, title: instruction.identity.nativeId, product: null,
-            status: "待機中", tools: [], agents: [], permissionWaits: [], decisions: [], tasks: [], tasksUpdatedAt: null };
-          sessionsById.set(sessionId, session);
-          sessions.push(session);
-        }
-        if (display?.hiddenAt) {
-          session.hidden = true;
-          if (!session.hiddenAt || Date.parse(display.hiddenAt) > Date.parse(session.hiddenAt)) session.hiddenAt = display.hiddenAt;
-        }
-        if (!Array.isArray(session.instructions)) session.instructions = [];
-        session.instructions.push({ ...instruction, registrationExecutionId: link.execution.executionId,
-          executionState: link.execution.state });
-      }
-      const instructionRecovery = safeInstructionRecovery(instructionDashboard?.recovery);
-      const instructionConfigured = Boolean(instructionService || launchRegistry || instructionTargetState);
-      const instructionDiagnostics = {
-        configuration: instructionConfigured ? "configured" : "unconfigured",
-        service: instructionDashboardUnavailable ? "unavailable" : instructionRecovery?.status || "ready",
-        targets: instructionTargetsUnavailable ? "unavailable" : "available",
-        ...(instructionRecovery?.blocked === true ? { blocked: true } : {}),
-        ...(instructionRecovery?.errorCode ? { errorCode: instructionRecovery.errorCode } : {}),
-        ...(unmatchedInstructions ? { unmatchedCount: unmatchedInstructions } : {}),
-      };
-      const uiVersion = await currentUiVersion();
-      let codexAgent = false;
-      for (const scriptPath of codexAgentScriptPaths(claudeHome, userHome)) {
-        if (await codexAgentScriptExists(scriptPath) === true) {
-          codexAgent = true;
-          break;
-        }
-      }
-      let crossReview = false;
-      for (const cwd of state.knownCwds()) {
-        if (await crossReviewToolExists(cwd) === true) {
-          crossReview = true;
-          break;
-        }
-      }
-      const managedCollectorSnapshots = Array.isArray(managedCollectors)
-        ? managedCollectors.map((collector) => {
-          try {
-            return typeof collector?.snapshot === 'function'
-              ? sanitizeManagedCollectorSnapshot(collector.snapshot())
-              : null;
-          } catch { return null; }
-        }).filter(Boolean)
-        : [];
-      const commonQuestionDiagnostics = commonQuestionSnapshotUnavailable
-        ? { recovery: { status: 'unavailable', errorCode: 'common_question_state_unavailable' } }
-        : commonQuestionSnapshot?.recovery || orphanedCommonQuestions.length
-        ? { ...(commonQuestionSnapshot?.recovery ? { recovery: commonQuestionSnapshot.recovery } : {}),
-          ...(orphanedCommonQuestions.length ? { orphanedQuestions: orphanedCommonQuestions } : {}) }
-        : undefined;
-      let ownedExecutions = [];
-      let ownedExecutionDiagnostics = { status: ownedExecutionSnapshot ? 'unavailable' : 'unconfigured' };
-      if (ownedExecutionSnapshot) {
-        try {
-          const rawOwnedExecutions = await ownedExecutionSnapshot();
-          if (!Array.isArray(rawOwnedExecutions) || rawOwnedExecutions.length > 4096) throw new Error();
-          const seenLaunchRefs = new Set();
-          ownedExecutions = rawOwnedExecutions.map((value) => {
-            const projected = ownedExecutionProjection(value);
-            if (!projected || seenLaunchRefs.has(projected.launchRef)) throw new Error();
-            seenLaunchRefs.add(projected.launchRef);
-            return projected;
-          });
-          ownedExecutionDiagnostics = { status: 'ready' };
-        } catch {
-          ownedExecutions = [];
-        }
-      }
-      jsonResponse(response, 200, { ...snapshot, sessions, pullRequests, sinceSeen: sinceSeen.sinceSeen, away: away.snapshot(), routing: routing.snapshot(), integrations: { codexAgent, crossReview }, providerEvents: providerEventProjection.snapshot(), managedCollectors: managedCollectorSnapshots, uiVersion, instructionTargets, instructionDiagnostics, ownedExecutions, ownedExecutionDiagnostics, ...(commonQuestionDiagnostics ? { commonQuestionDiagnostics } : {}) });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/executions/stop') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
+
+    const matched = findRoute(routes, request.method, requestUrl.pathname);
+    if (matched) {
+      const { route, params } = matched;
+      const failure = authFailure(route.auth, request, info);
+      if (failure) {
+        jsonResponse(response, failure.status, { error: failure.error });
         return;
       }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
+      if (route.idCheck && !route.idCheck.valid(params)) {
+        jsonResponse(response, route.idCheck.status, { error: route.idCheck.error });
         return;
       }
-      if (!stopOwnedExecution) {
-        jsonResponse(response, 503, { error: 'owned_execution_stop_unavailable' });
+      const unavailable = route.preBody?.();
+      if (unavailable) {
+        jsonResponse(response, unavailable.status, { error: unavailable.error });
         return;
       }
       let body;
-      try { body = JSON.parse(await readJsonBody(request)); }
-      catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!hasExactKeys(body, OWNED_STOP_FIELDS) || !validScopedIdentifier(body.launchRef) ||
-          !validScopedIdentifier(body.executionId) || !validSessionId(body.sessionId) ||
-          (body.expectedContextId !== null && !validScopedIdentifier(body.expectedContextId)) ||
-          !Number.isSafeInteger(body.expectedOwnerGeneration) || body.expectedOwnerGeneration < 0 ||
-          !Number.isSafeInteger(body.stopRevision) || body.stopRevision < 0) {
-        jsonResponse(response, 400, { error: 'invalid_owned_stop_request' });
-        return;
-      }
-      try {
-        const result = await stopOwnedExecution(body);
-        const ownedExecution = result?.ownedExecution === null ? null : ownedExecutionProjection(result?.ownedExecution);
-        if (result?.status === 'stale') {
-          jsonResponse(response, 409, { error: 'stale_owned_execution', ownedExecution });
-          return;
-        }
-        if (!ownedExecution || !['stop_confirmed', 'stop_unconfirmed'].includes(result?.status) ||
-            (result.status === 'stop_confirmed') !== ownedExecution.stopConfirmed) {
-          jsonResponse(response, 503, { error: 'owned_execution_stop_unavailable' });
-          return;
-        }
-        jsonResponse(response, 200, { status: result.status, ownedExecution });
-      } catch (error) {
-        jsonResponse(response, error?.code === 'invalid_owned_stop_request' ? 400 : 503,
-          { error: error?.code === 'invalid_owned_stop_request' ? 'invalid_owned_stop_request' : 'owned_execution_stop_unavailable' });
-      }
-      return;
-    }
-    if (await handleInstructionRequest(request, response, requestUrl, info)) return;
-    const commonQuestionRoute = requestUrl.pathname.match(/^\/api\/sessions\/pending\/questions\/(register|status|answer-poll|response-lost)$/);
-    if (request.method === 'POST' && commonQuestionRoute) {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validOriginForWrite(request)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      if (!questionService || !questionServiceReady) {
-        jsonResponse(response, 503, { error: 'Question service is unavailable' });
-        return;
-      }
-      let body;
-      try { body = JSON.parse(await readJsonBody(request)); }
-      catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      const operation = commonQuestionRoute[1];
-      const expectedFields = operation === 'register'
-        ? ['writer', 'questionId', 'questions', 'timeoutMinutes']
-        : ['writer', 'questionId'];
-      if (!hasExactKeys(body, expectedFields)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      let writerSessionId = null;
-      try { writerSessionId = await resolveFreshWriterSessionId('pending', body); } catch {}
-      if (!writerSessionId) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      }
-      try {
-        if (operation === 'register') {
-          const result = await questionService.register(body.writer, {
-            questionId: body.questionId, questions: body.questions,
-            timeoutMinutes: body.timeoutMinutes, category: 'ordinary',
-          });
-          jsonResponse(response, 200, result);
-          return;
-        }
-        if (operation === 'status') {
-          const result = await questionService.status(body.writer, body.questionId);
-          jsonResponse(response, 200, result);
-          return;
-        }
-        const registeredQuestion = await questionService.status(body.writer, body.questionId);
-        if (!registeredQuestion) {
-          if (operation === 'response-lost') {
-            jsonResponse(response, 404, { error: 'Question not found' });
-          } else {
-            jsonResponse(response, 200, {
-              status: { outcome: 'not_found', questionId: body.questionId, deliveryAttemptId: null, state: null },
-              delivery: null,
-            });
-          }
-          return;
-        }
-        if (operation === 'response-lost') {
-          const result = await questionService.reportResponseLost(registeredQuestion.internalQuestionId);
-          jsonResponse(response, 200, result);
-          return;
-        }
-        let responseClosed = false;
-        let responseLostQueued = false;
-        let sinkResponded = false;
-        const reportLost = () => {
-          if (!sinkResponded || !responseClosed || responseLostQueued) return;
-          responseLostQueued = true;
-          queueQuestionResponseLost(registeredQuestion.internalQuestionId);
-        };
-        response.once('close', () => {
-          if (!response.writableFinished) {
-            responseClosed = true;
-            reportLost();
-          }
-        });
+      if (route.body === 'json') {
         try {
-          const result = await questionService.answerPoll(body.writer, body.questionId, (answers, metadata) => {
-            if (sinkResponded || responseClosed || response.destroyed || response.writableEnded ||
-                !metadata || !Array.isArray(answers)) throw new Error();
-            sinkResponded = true;
-            jsonResponse(response, 200, {
-              status: { outcome: 'sent', questionId: metadata.questionId,
-                deliveryAttemptId: metadata.deliveryAttemptId, state: 'sending' },
-              delivery: {
-                questionId: metadata.questionId,
-                revision: metadata.revision,
-                deliveryAttemptId: metadata.deliveryAttemptId,
-                answers: structuredClone(answers),
-              },
-            });
-          });
-          if (!sinkResponded && !response.destroyed && !response.writableEnded) {
-            jsonResponse(response, 200, { status: result, delivery: null });
-          }
+          body = JSON.parse(await readJsonBody(request));
         } catch (error) {
-          if (sinkResponded) {
-            if (responseClosed || response.destroyed || !response.writableFinished) {
-              responseClosed = true;
-              reportLost();
-            }
-            return;
-          }
-          throw error;
-        }
-      } catch (error) {
-        jsonResponse(response, questionErrorStatus(error), { error: 'Question request is unavailable' });
-      }
-      return;
-    }
-    if (request.method === 'GET' && requestUrl.pathname === '/api/away') {
-      jsonResponse(response, 200, away.snapshot());
-      return;
-    }
-    const contextPath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/context$/);
-    if (request.method === 'GET' && contextPath) {
-      const sessionId = contextPath[1];
-      if (!validSessionId(sessionId)) {
-        jsonResponse(response, 400, { error: 'Invalid session id' });
-        return;
-      }
-      const displayId = claudeIssuer?.activeProjectionFor({ sessionId }) || sessionId;
-      jsonResponse(response, 200, { ...away.snapshot(), ...state.planSummary(displayId) });
-      return;
-    }
-    if (request.method === 'GET' && requestUrl.pathname === '/api/dev/fields') {
-      if (!dev) {
-        textResponse(response, 404, 'Not Found');
-        return;
-      }
-      jsonResponse(response, 200, state.devFields());
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/hooks/answers') {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validOriginForWrite(request)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body) || !validSessionId(body.session_id) || !validText(body.id, 256)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (Object.hasOwn(body, 'claudeLineage')) {
-        const attached = await applyClaudeLineage(body);
-        if (!attached.ok) {
-          jsonResponse(response, 403, { error: 'Writer unavailable', reason: attached.reason });
-          return;
-        }
-        body = attached.body;
-      }
-      const answerRequest = { ...body };
-      let authorizationDenied = false;
-      let authorizeAnswer;
-      if (Object.hasOwn(body, 'writer')) {
-        const authorization = registrationRegistry.authorizeEvent(body.writer);
-        if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
-            !authorization.ok || body.session_id !== authorization.sessionId) {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
-          return;
-        }
-        answerRequest.session_id = authorization.sessionId;
-        delete answerRequest.writer;
-        authorizeAnswer = () => {
-          const current = registrationRegistry.authorizeEvent(body.writer);
-          const authorized = current.ok && current.sessionId === body.session_id;
-          if (!authorized) authorizationDenied = true;
-          return authorized;
-        };
-      } else if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
-          registrationRegistry.isRegisteredSessionId(body.session_id)) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      } else {
-        authorizeAnswer = () => {
-          const authorized = !registrationRegistry.isRegisteredSessionId(body.session_id);
-          if (!authorized) authorizationDenied = true;
-          return authorized;
-        };
-      }
-      try {
-        let result;
-        if (answerRequest.action === 'ask-register' && answerRequest.event_name === 'PreToolUse' && Array.isArray(answerRequest.questions)) {
-          result = answerDelivery.registerAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, questions: answerRequest.questions, agentId: answerRequest.agent_id });
-        } else if (answerRequest.action === 'ask-poll' && answerRequest.event_name === 'PreToolUse') {
-          result = await answerDelivery.waitForAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, authorize: authorizeAnswer });
-        } else if (answerRequest.action === 'ask-finish' && answerRequest.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(answerRequest.outcome)) {
-          result = answerDelivery.finishAsk({ sessionId: answerRequest.session_id, toolUseId: answerRequest.id, decisionId: answerRequest.decision_id, outcome: answerRequest.outcome });
-        } else if (answerRequest.action === 'post-tool-batch' && answerRequest.event_name === 'PostToolBatch' && answerRequest.agent_id !== undefined) {
-          if (!validText(answerRequest.agent_id, 256)) {
-            jsonResponse(response, 400, { error: 'Invalid request' });
-            return;
-          }
-          state.addEvent({
-            session_id: answerRequest.session_id,
-            hook_event_name: 'PostToolBatch',
-            agent_id: answerRequest.agent_id,
-            hookAt: Date.now(),
-          });
-          result = { hookOutput: null };
-        } else if (answerRequest.action === 'post-tool-batch' && answerRequest.event_name === 'PostToolBatch') {
-          state.addEvent({
-            session_id: answerRequest.session_id,
-            hook_event_name: 'PostToolBatch',
-            hookAt: Date.now(),
-          });
-          const additionalContext = answerDelivery.deliverPostToolBatch(answerRequest.session_id);
-          result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'PostToolBatch', additionalContext } } : null };
-        } else if (answerRequest.action === 'user-prompt-submit' && answerRequest.event_name === 'UserPromptSubmit') {
-          const additionalContext = answerDelivery.deliverPrompt(answerRequest.session_id, answerRequest.id, Number.isFinite(answerRequest.hook_at) ? answerRequest.hook_at : undefined);
-          result = { hookOutput: additionalContext ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } } : null };
-        } else if (answerRequest.action === 'stop-start' && answerRequest.event_name === 'Stop') {
-          result = { generation: answerDelivery.startStop(answerRequest.session_id, answerRequest.id, Number.isFinite(answerRequest.hook_at) ? answerRequest.hook_at : undefined) };
-        } else if (answerRequest.action === 'stop-poll' && answerRequest.event_name === 'Stop' && Number.isInteger(answerRequest.generation) && typeof answerRequest.parent_alive === 'boolean') {
-          result = await answerDelivery.waitForStopAnswer(answerRequest.session_id, answerRequest.generation, answerRequest.parent_alive, authorizeAnswer);
-        } else {
-          jsonResponse(response, 400, { error: 'Invalid request' });
-          return;
-        }
-        if (authorizationDenied) {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
-          return;
-        }
-        await state.waitForPersistence();
-        jsonResponse(response, 200, result);
-      } catch {
-        jsonResponse(response, 500, { error: 'Internal Server Error' });
-      }
-      return;
-    }
-    const answerPath = requestUrl.pathname.match(/^\/api\/decisions\/([^/]+)\/answer$/);
-    if (request.method === 'POST' && answerPath) {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      let decisionId;
-      try {
-        decisionId = decodeURIComponent(answerPath[1]);
-      } catch {
-        jsonResponse(response, 400, { error: 'Invalid decision id' });
-        return;
-      }
-      if (decisionId.startsWith('cq-')) {
-        await mutateCommonQuestion(response, decisionId, body, 'answer');
-        return;
-      }
-      if (
-        !body || typeof body !== 'object' || Array.isArray(body) ||
-        !validSessionId(body.session_id) || body.choice !== null && !['ok', 'pick'].includes(body.choice) ||
-        (body.choice === 'pick' ? !Array.isArray(body.picks) : Object.hasOwn(body, 'picks')) ||
-        !validText(body.note, 2000, true)
-      ) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (body.choice === null && !body.note.trim()) {
-        jsonResponse(response, 400, { error: 'An answer is required' });
-        return;
-      }
-      const decision = state.decisionFor(body.session_id, decisionId);
-      if (!decision || decision.session_id !== body.session_id) {
-        jsonResponse(response, 404, { error: 'Decision not found' });
-        return;
-      }
-      if (body.choice === 'pick' && !validPicks(decision, body.picks, body.note)) {
-        jsonResponse(response, 400, { error: 'Invalid picks' });
-        return;
-      }
-      const answer = answerDelivery.submitAnswer(body.session_id, decisionId, body.choice, body.note, body.picks);
-      if (answer === false) {
-        jsonResponse(response, 400, { error: 'A recommended option is required for this choice' });
-        return;
-      }
-      if (!answer) {
-        jsonResponse(response, 409, { error: 'Decision cannot be answered now' });
-        return;
-      }
-      await state.waitForPersistence();
-      jsonResponse(response, 200, { decision: { id: answer.id, state: answer.state, answer: answer.answer } });
-      return;
-    }
-    const commonQuestionMutationPath = requestUrl.pathname.match(/^\/api\/decisions\/([^/]+)\/(hold|cancel)$/);
-    if (request.method === 'POST' && commonQuestionMutationPath) {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try { body = JSON.parse(await readJsonBody(request)); }
-      catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      let internalQuestionId;
-      try { internalQuestionId = decodeURIComponent(commonQuestionMutationPath[1]); }
-      catch {
-        jsonResponse(response, 400, { error: 'Invalid question id' });
-        return;
-      }
-      if (!internalQuestionId.startsWith('cq-')) {
-        jsonResponse(response, 404, { error: 'Question not found' });
-        return;
-      }
-      await mutateCommonQuestion(response, internalQuestionId, body, commonQuestionMutationPath[2]);
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/pull-requests/review-skip') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body) ||
-        Object.keys(body).sort().join(',') !== 'action,headRefOid,registration_key' ||
-        !['set', 'clear'].includes(body.action) || !isSha256Digest(body.registration_key) ||
-        !isCompleteCommitSha(body.headRefOid)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const registration = state.pullRequestRegistrationByKey(body.registration_key);
-      if (!registration) {
-        jsonResponse(response, 404, { error: 'Registered pull request not found' });
-        return;
-      }
-      if (!pullRequestTracker?.refreshRepoFresh || !pullRequestTracker.mergeCandidate) {
-        jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-        return;
-      }
-      if (body.action === 'set') {
-        if (!pullRequestMergeManager?.setReviewSkip) {
-          jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-          return;
-        }
-        const result = await pullRequestMergeManager.setReviewSkip(
-          registration,
-          body.headRefOid,
-          '開発者がダッシュボードでこの head のレビューを不要と判断した',
-        );
-        if (!result.ok) {
-          jsonResponse(response, result.status, { error: result.error });
-          return;
-        }
-        jsonResponse(response, 200, { action: body.action, number: registration.number });
-        return;
-      }
-      try {
-        const refreshed = await pullRequestTracker.refreshRepoFresh(registration.owner, registration.repo);
-        const candidate = refreshed?.error ? null : pullRequestTracker.mergeCandidate(registration);
-        if (!candidate?.pullRequest) {
-          jsonResponse(response, 409, { error: 'Pull request is no longer open' });
-          return;
-        }
-        if (candidate.pullRequest.headRefOid.toLowerCase() !== body.headRefOid.toLowerCase()) {
-          jsonResponse(response, 409, { error: 'Pull request head has changed' });
-          return;
-        }
-        if (!state.clearCrossReviewSkip(registration.owner, registration.repo, registration.number, candidate.pullRequest.headRefOid)) {
-          jsonResponse(response, 409, { error: 'Review skip is no longer active' });
-          return;
-        }
-        await state.waitForPersistence();
-        await pullRequestTracker.refreshReviewGroups(registration.owner, registration.repo);
-        jsonResponse(response, 200, { action: body.action, number: registration.number });
-      } catch {
-        jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
-      }
-      return;
-    }
-
-    const pullRequestMergePath = requestUrl.pathname.match(/^\/api\/pull-requests\/(merge|reserve|cancel-reservation|conflict-request)$/);
-    if (request.method === 'POST' && pullRequestMergePath) {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      const action = pullRequestMergePath[1];
-      const isConflictRequest = action === 'conflict-request';
-      const expectedFields = isConflictRequest ? ['headRefOid', 'key'] : action === 'cancel-reservation'
-        ? ['number', 'registration_key']
-        : ['deleteBranch', 'headRefOid', 'method', 'number', 'registration_key'];
-      if (!body || typeof body !== 'object' || Array.isArray(body) ||
-        Object.keys(body).sort().join(',') !== expectedFields.join(',') ||
-        (isConflictRequest
-          ? (!isSha256Digest(body.key) || typeof body.headRefOid !== 'string' || body.headRefOid.length > 64)
-          : (!Number.isSafeInteger(body.number) || body.number < 1 || !isSha256Digest(body.registration_key) ||
-            (action !== 'cancel-reservation' && (typeof body.headRefOid !== 'string' || body.headRefOid.length > 64 ||
-              typeof body.method !== 'string' || typeof body.deleteBranch !== 'boolean'))))) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const result = isConflictRequest
-        ? await pullRequestMergeManager.requestConflictResolution(body)
-        : action === 'merge'
-          ? await pullRequestMergeManager.merge(body)
-          : action === 'reserve'
-            ? await pullRequestMergeManager.reserve(body)
-            : await pullRequestMergeManager.cancelReservation(body);
-      await state.waitForPersistence();
-      jsonResponse(response, result.ok ? 200 : result.status, result.ok ? result : { error: result.error });
-      return;
-    }
-    if (request.method === 'GET' && requestUrl.pathname === '/') {
-      try {
-        let beforeStat = null;
-        try {
-          beforeStat = await fs.stat(webPath);
-        } catch {}
-        const content = await fs.readFile(webPath);
-        let afterStat = null;
-        try {
-          afterStat = await fs.stat(webPath);
-        } catch {}
-        uiVersion = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
-        const sameFile = beforeStat && afterStat && beforeStat.mtimeMs === afterStat.mtimeMs && beforeStat.size === afterStat.size && content.length === afterStat.size;
-        cachedUiFileStamp = sameFile ? `${afterStat.mtimeMs}:${afterStat.size}` : null;
-        const template = content.toString('utf8');
-        const html = template.replace(
-          '<meta name="cockpit-secret" content="">',
-          `<meta name="cockpit-secret" content="${escapeHtmlAttribute(info.uiSecret)}">`,
-        ).replace(
-          '<meta name="cockpit-ui-version" content="">',
-          `<meta name="cockpit-ui-version" content="${uiVersion}">`,
-        );
-        textResponse(response, 200, html, 'text/html; charset=utf-8');
-      } catch {
-        textResponse(response, 500, 'Dashboard unavailable');
-      }
-      return;
-    }
-    const estimatePath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/estimate$/);
-    if (request.method === 'POST' && estimatePath) {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      const sessionId = estimatePath[1];
-      if (!isShortSessionId(sessionId)) {
-        jsonResponse(response, 404, { error: 'Session not found' });
-        return;
-      }
-      const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
-      if (!session) {
-        jsonResponse(response, 404, { error: 'Session not found' });
-        return;
-      }
-      if (session.status !== '不明') {
-        jsonResponse(response, 409, { error: 'Session state is known' });
-        return;
-      }
-      const file = state.sessionFileFor(sessionId);
-      const estimate = await estimateTranscript(claudeHome, file?.cwd, file?.native_session_id || sessionId);
-      const saved = state.saveEstimate(sessionId, estimate);
-      if (!saved) {
-        jsonResponse(response, 409, { error: 'Session state is known' });
-        return;
-      }
-      jsonResponse(response, 200, saved);
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/record-deletions') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      const keys = ['session_ids', 'merge_history', 'closed_pull_requests'];
-      const validPullRequest = (record) => record && typeof record === 'object' && !Array.isArray(record)
-        && Object.keys(record).length === 3 && Object.keys(record).every((key) => ['owner', 'repo', 'number'].includes(key))
-        && validRepositoryPart(record.owner) && validRepositoryPart(record.repo)
-        && Number.isSafeInteger(record.number) && record.number > 0;
-      if (!body || typeof body !== 'object' || Array.isArray(body)
-        || Object.keys(body).some((key) => !keys.includes(key))
-        || keys.some((key) => Object.hasOwn(body, key) && (!Array.isArray(body[key]) || body[key].length > 50
-          || !body[key].every(key === 'session_ids' ? isShortSessionId : validPullRequest)))
-        || !keys.some((key) => body[key]?.length > 0)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const sessionIds = [...new Set(body.session_ids || [])];
-      const projections = sessionIds.length ? await currentValidatedSessionProjectionRecords() : null;
-      if (projections?.configuredSourceUnavailable) {
-        jsonResponse(response, 503, { error: 'Session target is unavailable' });
-        return;
-      }
-      const projectionProviders = new Map(sessionIds.map((sessionId) => [
-        sessionId, projections ? resolveProjectionProvidersForSession(projections, sessionId) : [],
-      ]));
-      if ([...projectionProviders.values()].some((providers) => providers.length > 1)) {
-        jsonResponse(response, 409, { error: 'Session target is ambiguous' });
-        return;
-      }
-      const now = Date.now();
-      let sessions = 0;
-      for (const sessionId of sessionIds) {
-        const provider = projectionProviders.get(sessionId)?.[0];
-        if (provider) {
-          if (state.deleteProjectionDisplay(provider, sessionId, now)) sessions += 1;
-        } else if (state.deleteSession(sessionId, now)) sessions += 1;
-      }
-      const deletedPullRequests = new Set();
-      const changedRepositories = new Map();
-      for (const record of body.merge_history || []) {
-        if (state.dismissMergedPullRequestHistory(record.owner, record.repo, record.number, now)) {
-          deletedPullRequests.add(`${record.owner.toLowerCase()}/${record.repo.toLowerCase()}#${record.number}`);
-        }
-      }
-      for (const record of body.closed_pull_requests || []) {
-        if (!state.deleteClosedPullRequest(record.owner, record.repo, record.number)) continue;
-        const repository = `${record.owner.toLowerCase()}/${record.repo.toLowerCase()}`;
-        deletedPullRequests.add(`${repository}#${record.number}`);
-        changedRepositories.set(repository, record);
-      }
-      for (const { owner, repo } of changedRepositories.values()) {
-        try {
-          await pullRequestTracker?.refreshReviewGroups?.(owner, repo);
-        } catch {
-          logLine(homeDir, `pull request group refresh failed for ${owner}/${repo}`);
-        }
-      }
-      jsonResponse(response, 200, { deleted: { sessions, pullRequests: deletedPullRequests.size } });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/hidden-sessions') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const keys = Object.keys(body).sort();
-      if (body.action === 'clear' && keys.length === 1 && keys[0] === 'action') {
-        jsonResponse(response, 200, { cleared: state.clearHiddenSessions() });
-        return;
-      }
-      const validHiddenSessionId = isShortSessionId;
-      const isBatchUnhide = body.action === 'unhide' && keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
-        Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
-        body.session_ids.every(validHiddenSessionId);
-      if (body.action === 'unhide') {
-        if (!isBatchUnhide) {
-          jsonResponse(response, 400, { error: 'Invalid request' });
-          return;
-        }
-        const sessionIds = [...new Set(body.session_ids)];
-        const projections = await currentValidatedSessionProjectionRecords();
-        if (projections.configuredSourceUnavailable) {
-          jsonResponse(response, 503, { error: 'Session target is unavailable' });
-          return;
-        }
-        const projectionProviders = new Map();
-        for (const sessionId of sessionIds) {
-          const currentProviders = resolveProjectionProvidersForSession(projections, sessionId);
-          const hiddenProviders = state.projectionDisplayRecordsForSession(sessionId)
-            .filter((record) => record.hiddenAt !== undefined).map((record) => record.provider);
-          const providers = currentProviders.length ? currentProviders : [...new Set(hiddenProviders)];
-          if (providers.length > 1) {
-            jsonResponse(response, 409, { error: 'Session target is ambiguous' });
-            return;
-          }
-          projectionProviders.set(sessionId, providers[0] || null);
-        }
-        const unhiddenIds = new Set();
-        const stateHiddenIds = new Set(sessionIds.filter((sessionId) => state.hiddenSessions.has(sessionId)));
-        state.unhideSessions(sessionIds);
-        for (const sessionId of sessionIds) {
-          const provider = projectionProviders.get(sessionId);
-          const projectionUnhidden = provider && state.setProjectionHidden(provider, sessionId, false);
-          if (projectionUnhidden || stateHiddenIds.has(sessionId)) unhiddenIds.add(sessionId);
-        }
-        jsonResponse(response, 200, { unhidden: unhiddenIds.size });
-        return;
-      }
-      const isSingleHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_id' && validHiddenSessionId(body.session_id);
-      const isBatchHide = keys.length === 2 && keys[0] === 'action' && keys[1] === 'session_ids' &&
-        Array.isArray(body.session_ids) && body.session_ids.length >= 1 && body.session_ids.length <= 50 &&
-        body.session_ids.every(validHiddenSessionId);
-      if (body.action !== 'hide' || (!isSingleHide && !isBatchHide)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const sessionIds = [...new Set(isSingleHide ? [body.session_id] : body.session_ids)];
-      const projections = await currentValidatedSessionProjectionRecords();
-      if (projections.configuredSourceUnavailable) {
-        jsonResponse(response, 503, { error: 'Session target is unavailable' });
-        return;
-      }
-      const projectionProviders = new Map(sessionIds.map((sessionId) => [
-        sessionId, resolveProjectionProvidersForSession(projections, sessionId),
-      ]));
-      if ([...projectionProviders.values()].some((providers) => providers.length > 1)) {
-        jsonResponse(response, 409, { error: 'Session target is ambiguous' });
-        return;
-      }
-      let hiddenCount = 0;
-      for (const sessionId of sessionIds) {
-        const provider = projectionProviders.get(sessionId)?.[0];
-        const projectionHidden = provider ? state.setProjectionHidden(provider, sessionId, true) : false;
-        const stateHidden = state.hideSession(sessionId) !== null;
-        if (projectionHidden || stateHidden) hiddenCount += 1;
-      }
-      if (hiddenCount === 0) {
-        jsonResponse(response, 404, { error: 'Session not found' });
-        return;
-      }
-      jsonResponse(response, 200, { hidden: isSingleHide ? true : hiddenCount });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/display') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!validDisplayPatch(body)) {
-        jsonResponse(response, 400, { error: 'Invalid display preferences' });
-        return;
-      }
-      jsonResponse(response, 200, { display: state.patchDisplayPreferences(body) });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/pull-requests/merge-result/close') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body) ||
-        Object.keys(body).sort().join(',') !== 'number,owner,repo' ||
-        !validRepositoryPart(body.owner) || !validRepositoryPart(body.repo) ||
-        !Number.isSafeInteger(body.number) || body.number < 1) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const closed = state.closeAutomaticPullRequestMergeResult(body.owner, body.repo, body.number);
-      if (closed === null) {
-        jsonResponse(response, 404, { error: 'Automatic pull request merge result not found' });
-        return;
-      }
-      await state.waitForPersistence?.();
-      jsonResponse(response, 200, { closed: true });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/seen') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!validSeenRequest(body)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const seenAt = state.setProductSeen(body.productKey, body.generatedAt);
-      await away.prune?.([...state.seenAtByProduct.values()]);
-      jsonResponse(response, 200, { productKey: body.productKey, seenAt });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/closed-tasks') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body) ||
-        Object.keys(body).sort().join(',') !== 'session_id,title' || !validSessionId(body.session_id) || !validText(body.title, 200)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (!state.snapshot().sessions.some((session) => session.session_id === body.session_id)) {
-        jsonResponse(response, 404, { error: 'Session not found' });
-        return;
-      }
-      const closed = state.closeTask(body.session_id, body.title);
-      if (closed === null) {
-        jsonResponse(response, 404, { error: 'Task not found' });
-        return;
-      }
-      if (!closed) {
-        jsonResponse(response, 409, { error: 'Task is already complete' });
-        return;
-      }
-      jsonResponse(response, 200, { closed: true });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/closed-agents') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body) ||
-        Object.keys(body).sort().join(',') !== 'agent_id,session_id' || !validSessionId(body.session_id) || !validText(body.agent_id, 256)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const closed = state.closeAgent(body.session_id, body.agent_id);
-      if (closed === null) {
-        jsonResponse(response, 404, { error: 'Unconfirmed agent not found' });
-        return;
-      }
-      if (!closed) {
-        jsonResponse(response, 409, { error: 'Agent state changed' });
-        return;
-      }
-      jsonResponse(response, 200, { closed: true });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/away') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean') {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      try {
-        const snapshot = await away.setEnabled(body.enabled);
-        if (!snapshot.enabled) answerDelivery.signalAll();
-        if (typeof questionService?.notifyAwayChanged === 'function') {
-          try { void Promise.resolve(questionService.notifyAwayChanged()).catch(() => {}); } catch {}
-        }
-        jsonResponse(response, 200, snapshot);
-      } catch {
-        jsonResponse(response, 500, { error: 'Internal Server Error' });
-      }
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/routing') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!isValidRouteUpdate(body)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      try {
-        const snapshot = await routing.set(body.key, body.value);
-        state.touch?.();
-        jsonResponse(response, 200, snapshot);
-      } catch {
-        jsonResponse(response, 500, { error: 'Internal Server Error' });
-      }
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/open-url') {
-      if (request.headers['x-cockpit-secret'] !== info.uiSecret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validRequiredUiOrigin(request, info.port)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      const externalUrl = body && typeof body === 'object' && !Array.isArray(body)
-        ? normalizeExternalUrl(body.url, info.port)
-        : null;
-      if (!externalUrl) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      try {
-        await openExternalUrl(externalUrl);
-        response.writeHead(204, SECURITY_HEADERS);
-        response.end();
-      } catch {
-        jsonResponse(response, 500, { error: 'Internal Server Error' });
-      }
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/claude/writer') {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validOriginForWrite(request)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!hasExactKeys(body, ['ppid', 'contextPid']) || !Number.isSafeInteger(body.ppid) || body.ppid < 1 ||
-          !Number.isSafeInteger(body.contextPid) || body.contextPid < 1) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (!claudeIssuer) {
-        jsonResponse(response, 503, { error: 'Claude writer issuer unavailable' });
-        return;
-      }
-      const attested = await claudeIssuer.attestMcp({ ppid: body.ppid, contextPid: body.contextPid });
-      if (!attested.ok) {
-        jsonResponse(response, 403, { error: 'Writer unavailable', reason: attested.reason });
-        return;
-      }
-      jsonResponse(response, 200, { writer: attested.writer });
-      return;
-    }
-    if (request.method === 'POST' && requestUrl.pathname === '/api/events') {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validOriginForWrite(request)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-
-      if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (Object.hasOwn(body, 'claudeLineage')) {
-        const attached = await applyClaudeLineage(body);
-        if (!attached.ok) {
-          jsonResponse(response, 403, { error: 'Writer unavailable', reason: attached.reason });
-          return;
-        }
-        body = attached.body;
-      }
-      const eventBody = { ...body };
-      const writerEnvelope = Object.hasOwn(body, 'writer') ? body.writer : null;
-      if (Object.hasOwn(body, 'writer')) {
-        const authorization = registrationRegistry.authorizeEvent(writerEnvelope);
-        if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
-            !authorization.ok || body.session_id !== authorization.sessionId) {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
-          return;
-        }
-        eventBody.session_id = authorization.sessionId;
-        delete eventBody.writer;
-      } else {
-        if (WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field)) ||
-            registrationRegistry.isRegisteredSessionId(body.session_id)) {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
+          jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
           return;
         }
       }
-
-      let eventAdapter = null;
-      let registration = null;
-      if (writerEnvelope) {
-        const checked = providerEventProjection.inspect(writerEnvelope, eventBody.session_id);
-        if (!checked.ok) {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
-          return;
-        }
-        registration = checked.registration;
-        eventAdapter = providerEventAdapters.get(registration.provider);
-        const normalized = eventAdapter.normalize(eventBody);
-        if (!normalized.ok) {
-          const result = eventAdapter.project({ writer: writerEnvelope, sessionId: eventBody.session_id, event: eventBody });
-          if (result.action === 'reject') {
-            jsonResponse(response, 403, { error: 'Writer unavailable' });
-          } else {
-            jsonResponse(response, 202, { accepted: false, status: 'unknown', reason: result.reason });
-          }
-          return;
-        }
-        Object.assign(eventBody, normalized.event);
-      }
-      const product = productFromCwd(eventBody.cwd || eventBody.nativeEvent?.cwd);
-      const sessionId = typeof eventBody.session_id === 'string' ? eventBody.session_id : '';
-      const eventName = eventBody.hook_event_name;
-      const agentId = eventBody.agent_id || eventBody.nativeEvent?.agent_id;
-      const agentType = eventBody.agent_type || eventBody.nativeEvent?.agent_type;
-      const sessionName = sessionId ? state.sessionNameFor(sessionId) : null;
-      const incomingEvent = sanitizeEvent(eventBody, { product, sessionName });
-      const deletedAt = incomingEvent && state.deletedSessions.get(incomingEvent.session_id);
-      if (deletedAt && incomingEvent.hookAt <= Date.parse(deletedAt)) {
-        jsonResponse(response, 202, { accepted: true });
-        return;
-      }
-      let agentDefinition = null;
-      let codexDefinitionMetadata = null;
-
-      if (
-        (registration?.provider === 'claude' || !registration) && agentId && agentType && eventName !== 'SubagentStop' &&
-        (eventName === 'SubagentStart' || !state.hasAgentRow(sessionId, agentId))
-      ) {
-        agentDefinition = await claudeAgentDefinition(agentType, claudeHome);
-      }
-      if (eventName === 'PreToolUse') {
-        const preliminary = sanitizeEvent(eventBody, { product });
-        const codexAgentName = preliminary?.codexDefinition || preliminary?.codexWaitDefinition;
-        if (codexAgentName) {
-          codexDefinitionMetadata = await codexAgentDefinition(codexAgentName, claudeHome);
-        }
-      }
-
-      let stateEventBody = eventBody;
-      let preserveProjectionOrder = false;
-      if (writerEnvelope) {
-        const authorization = registrationRegistry.authorizeEvent(writerEnvelope);
-        const checked = providerEventProjection.inspect(writerEnvelope, eventBody.session_id, registration.provider);
-        if (!authorization.ok || eventBody.session_id !== authorization.sessionId || !checked.ok) {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
-          return;
-        }
-        const result = eventAdapter.project({ writer: writerEnvelope, sessionId: eventBody.session_id, event: eventBody });
-        if (result.action === 'reject') {
-          jsonResponse(response, 403, { error: 'Writer unavailable' });
-          return;
-        }
-        if (result.action === 'duplicate') {
-          jsonResponse(response, 202, { accepted: true, duplicate: true });
-          return;
-        }
-        if (result.action === 'unknown') {
-          jsonResponse(response, 202, { accepted: false, status: 'unknown', reason: result.reason });
-          return;
-        }
-        preserveProjectionOrder = true;
-        stateEventBody = { ...result.event };
-        delete stateEventBody.nativeEvent;
-        delete stateEventBody.nativeEventId;
-      } else if (registrationRegistry.isRegisteredSessionId(eventBody.session_id)) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      }
-      state.captureFieldNames(stateEventBody);
-      const eventMetadata = {
-        product,
-        ...(registration ? { provider: registration.provider } : {}),
-        sessionName,
-        agentDefinition,
-        codexAgentDefinition: codexDefinitionMetadata,
-        ...(preserveProjectionOrder ? { preserveProjectionOrder: true } : {}),
-        ...(registration ? { onVerifiedStateWrite: (event) => event.hook_event_name !== 'SessionEnd' &&
-          state.clearProjectionDeletionAfterVerifiedWrite(registration.provider, event.session_id, event.hookAt) } : {}),
-      };
-      state.addEvent(stateEventBody, eventMetadata);
-      const event = sanitizeEvent(stateEventBody, eventMetadata);
-      if (event && !event.agent_id) options.scheduleTaskNotifications?.(event.session_id);
-      if (event && state.deletedSessions.has(event.session_id)
-        && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
-        jsonResponse(response, 202, { accepted: true });
-        return;
-      }
-      if (event?.hook_event_name === 'PostToolUse' && event.pullRequest && (
-        (event.tool_name === 'Bash' && (event.ghPrCreateCommand || state.wasPullRequestCreate(event.session_id, event.tool_use_id))) ||
-        isGithubCreatePullRequestTool(event.tool_name)
-      )) {
-        const registered = state.registerPullRequest(event.session_id, event.pullRequest, { cwd: stateEventBody.cwd, product }, event.hookAt);
-        if (registered) void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
-      }
-      if ((event?.hook_event_name === 'PostToolUse' || event?.hook_event_name === 'PostToolUseFailure') && (
-        event.refreshPullRequests || state.wasPullRequestRefreshCommand(event.session_id, event.tool_use_id)
-      )) void pullRequestTracker?.refreshAll().catch(() => {});
-      if (event) answerDelivery.afterEvent(event);
-      await state.waitForPersistence();
-      jsonResponse(response, 202, { accepted: true });
-      return;
-    }
-
-    const planPath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/plan$/);
-    if (request.method === 'POST' && planPath) {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validOriginForWrite(request)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      const routeSessionId = planPath[1];
-      if (!validSessionId(routeSessionId)) {
-        jsonResponse(response, 400, { error: 'Invalid session id' });
-        return;
-      }
-
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      if (!validPlanInput(body) || (body.ppid !== undefined && (!Number.isInteger(body.ppid) || body.ppid < 1))) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (Object.hasOwn(body, 'claudeCodeSessionId') && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string') {
-        jsonResponse(response, 400, { error: 'Invalid session id' });
-        return;
-      }
-
-      if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'writer')) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      }
-      if (Object.hasOwn(body, 'session_id') || WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field))) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const sessionId = await resolveFreshWriterSessionId(routeSessionId, body);
-      if (!sessionId) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      }
-      const planFields = {
-        tasks: ['kind', 'tasks', 'writer', 'ppid'],
-        add_decision: ['kind', 'title', 'context', 'state', 'options', 'writer', 'ppid'],
-        update_decision: ['kind', 'id', 'state', 'chosen', 'note', 'writer', 'ppid'],
-      }[body.kind];
-      if (!hasOnlyKeys(body, planFields)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-
-      if (body.kind === 'tasks') {
-        const saved = state.setTasks(sessionId, body.tasks);
-        answerDelivery.afterTasksWrite(sessionId, Date.parse(saved.updatedAt));
-        jsonResponse(response, 200, { tasks: saved.tasks.map(({ title, state: taskState }) => ({ title, state: taskState })), updatedAt: saved.updatedAt });
-        return;
-      }
-      if (body.kind === 'add_decision') {
-        const decision = state.addDecision(sessionId, {
-          title: body.title,
-          context: body.context,
-          state: body.state,
-          options: body.options.map((option) => ({
-            label: option.label,
-            description: option.description,
-            recommended: option.recommended === true,
-          })),
-        });
-        const decisions = decisionSummaries(state, sessionId);
-        jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
-        return;
-      }
-      const decision = state.updateDecision(sessionId, body.id, body.state, body.chosen, body.note);
-      if (!decision) {
-        jsonResponse(response, 404, { error: 'Decision not found or already resolved' });
-        return;
-      }
-      answerDelivery.afterDecisionUpdate(sessionId, decision.id);
-      await state.waitForPersistence();
-      const decisions = decisionSummaries(state, sessionId);
-      jsonResponse(response, 200, { decision: { id: decision.id, title: decision.title, state: decision.state }, decisions });
-      return;
-    }
-
-    const prsPath = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/prs$/);
-    if (request.method === 'POST' && prsPath) {
-      if (request.headers['x-cockpit-secret'] !== info.secret) {
-        jsonResponse(response, 401, { error: 'Unauthorized' });
-        return;
-      }
-      if (!validOriginForWrite(request)) {
-        jsonResponse(response, 403, { error: 'Forbidden' });
-        return;
-      }
-      const routeSessionId = prsPath[1];
-      if (!validSessionId(routeSessionId)) {
-        jsonResponse(response, 400, { error: 'Invalid session id' });
-        return;
-      }
-      let body;
-      try {
-        body = JSON.parse(await readJsonBody(request));
-      } catch (error) {
-        jsonResponse(response, error.statusCode || 400, { error: error.statusCode === 413 ? 'Payload too large' : 'Invalid JSON' });
-        return;
-      }
-      const isAddPullRequest = body?.kind === 'add_pr';
-      const isSkipReview = body?.kind === 'skip_review';
-      const pullRequest = isAddPullRequest ? parsePullRequestUrl(body.url) : null;
-      const skipReviewKeys = ['headRefOid', 'kind', 'number', 'owner', 'reason', 'repo', 'writer'];
-      const validSkipReview = isSkipReview && Object.keys(body).sort().join(',') === skipReviewKeys.join(',') &&
-        validRepositoryPart(body.owner) && validRepositoryPart(body.repo) && Number.isSafeInteger(body.number) && body.number > 0 &&
-        isCompleteCommitSha(body.headRefOid) && validText(body.reason, 2000);
-      if ((!pullRequest && !validSkipReview) ||
-        (body.ppid !== undefined && (!Number.isInteger(body.ppid) || body.ppid < 1)) ||
-        (body.cwd !== undefined && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) ||
-        (body.claudeCodeSessionId !== undefined && body.claudeCodeSessionId !== null && typeof body.claudeCodeSessionId !== 'string')) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      if (!Object.hasOwn(body, 'writer')) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      }
-      if (Object.hasOwn(body, 'session_id') || WRITER_CLAIM_FIELDS.some((field) => Object.hasOwn(body, field))) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const addPullRequestFields = ['kind', 'url', 'writer', 'cwd', 'ppid'];
-      if (!isSkipReview && !hasOnlyKeys(body, addPullRequestFields)) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      const sessionId = await resolveFreshWriterSessionId(routeSessionId, body);
-      if (!sessionId) {
-        jsonResponse(response, 403, { error: 'Writer unavailable' });
-        return;
-      }
-      if (isSkipReview) {
-        const registration = state.pullRequestRegistrationForSession(sessionId, body.owner, body.repo, body.number);
-        if (!registration) {
-          jsonResponse(response, 404, { error: 'PR is not registered by this session' });
-          return;
-        }
-        if (!pullRequestTracker?.refreshRepoFresh || !pullRequestTracker.mergeCandidate) {
-          jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-          return;
-        }
-        try {
-          if (!pullRequestMergeManager?.setReviewSkip) {
-            jsonResponse(response, 503, { error: 'Pull request state is unavailable' });
-            return;
-          }
-          const result = await pullRequestMergeManager.setReviewSkip(registration, body.headRefOid, body.reason, {
-            authorize: () => resolveWriterSessionId(routeSessionId, body) === sessionId,
-          });
-          if (!result.ok) {
-            jsonResponse(response, result.status, { error: result.error });
-            return;
-          }
-          jsonResponse(response, 200, { ...result.saved });
-        } catch {
-          jsonResponse(response, 502, { error: 'Pull request state could not be refreshed' });
-        }
-        return;
-      }
-      const product = productFromCwd(body.cwd);
-      const registered = state.registerPullRequest(sessionId, pullRequest, { cwd: body.cwd, product });
-      if (!registered) {
-        jsonResponse(response, 400, { error: 'Invalid request' });
-        return;
-      }
-      void pullRequestTracker?.refreshRepo(registered.owner, registered.repo).catch(() => {});
-      jsonResponse(response, 200, { owner: registered.owner, repo: registered.repo, number: registered.number, url: registered.url });
+      await route.handler({ request, response, requestUrl, info, params, body });
       return;
     }
 
@@ -2681,11 +794,6 @@ function createRequestHandler(options) {
   handler.flushQuestionLosses = async () => { await Promise.all([...pendingQuestionLosses]); };
   handler.flushInstructionLosses = flushInstructionLosses;
   return handler;
-}
-
-function logLine(homeDir, message) {
-  const line = `${new Date().toISOString()} ${message}\n`;
-  fs.appendFile(path.join(homeDir, 'server.log'), line).catch(() => {});
 }
 
 async function listen(server, port) {

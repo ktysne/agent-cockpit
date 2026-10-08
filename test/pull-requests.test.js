@@ -1745,6 +1745,54 @@ test('登録の cwd とは別の worktree が PR のブランチをチェック�
   });
 });
 
+test('PR のブランチをどの worktree もチェックアウトしていなくても、そのブランチの記録を持つ worktree のクロスレビュー状態を読む', async (t) => {
+  const base = await temporaryDirectory(t);
+  const sessionRoot = path.join(base, 'session');
+  const reviewRoot = path.join(base, 'review');
+  for (const root of [sessionRoot, reviewRoot]) {
+    await fs.mkdir(path.join(root, '.git'), { recursive: true });
+    await installCrossReview(root);
+  }
+  const headSha = 'a'.repeat(40);
+  await fs.writeFile(path.join(reviewRoot, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/open': { round: 2, dismissed: [], lastReviewedSha: headSha, lastTriage: { round: 2, sha: headSha, outcome: 'converged' } } },
+  }));
+  await fs.writeFile(path.join(sessionRoot, '.cross-review-state.json'), JSON.stringify({ branches: {} }));
+  const review = await readCrossReviewStateAcrossWorktrees(
+    { number: 31, cwd: sessionRoot },
+    { headRefName: 'feat/open', headRefOid: headSha },
+    {
+      execFileImpl: (_file, _args, _options, callback) => callback(null, [
+        `worktree ${sessionRoot.replaceAll('\\', '/')}`, `HEAD ${'c'.repeat(40)}`, 'branch refs/heads/main', '',
+        `worktree ${reviewRoot.replaceAll('\\', '/')}`, `HEAD ${'d'.repeat(40)}`, 'branch refs/heads/feat/stacked-child', '',
+      ].join('\n')),
+    },
+  );
+  assert.deepEqual(review, {
+    number: 31, branch: 'feat/open', round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' },
+  });
+});
+
+test('PR のブランチをチェックアウトしていない worktree が読めなくても、記録なしの状態を確認不能に変えない', async (t) => {
+  const base = await temporaryDirectory(t);
+  const sessionRoot = path.join(base, 'session');
+  const missingRoot = path.join(base, 'removed');
+  await fs.mkdir(path.join(sessionRoot, '.git'), { recursive: true });
+  await installCrossReview(sessionRoot);
+  await fs.writeFile(path.join(sessionRoot, '.cross-review-state.json'), JSON.stringify({ branches: {} }));
+  const review = await readCrossReviewStateAcrossWorktrees(
+    { number: 31, cwd: sessionRoot },
+    { headRefName: 'feat/open', headRefOid: 'a'.repeat(40) },
+    {
+      execFileImpl: (_file, _args, _options, callback) => callback(null, [
+        `worktree ${sessionRoot.replaceAll('\\', '/')}`, `HEAD ${'c'.repeat(40)}`, 'branch refs/heads/main', '',
+        `worktree ${missingRoot.replaceAll('\\', '/')}`, `HEAD ${'d'.repeat(40)}`, 'branch refs/heads/feat/other', '',
+      ].join('\n')),
+    },
+  );
+  assert.equal(review, null);
+});
+
 test('worktree の一覧を取れないときは、登録の cwd の状態ファイルだけを読む', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
