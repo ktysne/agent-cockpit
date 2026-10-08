@@ -377,7 +377,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   }
 
   function ownedExecutionSnapshot() {
-    if (closing) return Object.freeze([]);
+    if (closing) throw integrationError('owned_stop_state_unavailable');
     const result = [];
     for (const entry of admissions) {
       const state = ownedExecutionFor(entry);
@@ -488,6 +488,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     let compositionStop;
     try { compositionStop = composition.stop(receipt); }
     catch (error) { compositionStop = Promise.reject(error); }
+    compositionStop.catch(() => {});
     let routerDetached = false;
     try {
       routerDetached = (entry.detach ? entry.detach() : entry.router.detachAdmission(receipt)) === true;
