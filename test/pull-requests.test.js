@@ -5,6 +5,12 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   PullRequestTracker,
+  evaluateRestack,
+  historicalMergedPullRequests,
+  mergedPullRequestCandidates,
+  parseCompareResult,
+  restackCompareBase,
+  restackResult,
   assemblePullRequestStacks,
   crossReviewToolExists,
   parsePullRequestList,
@@ -1801,4 +1807,282 @@ test('親だけを登録したスタックで、親のマージ後に base を�
   await tracker.refreshRepo('example', 'project');
 
   assert.deepEqual(state.ciFailures.filter((failure) => failure.number === 31).map((failure) => failure.product.key), [productA.key]);
+});
+
+function restackMapReader(values, calls = []) {
+  return async (...args) => {
+    calls.push(args);
+    assert.ok(values.has(args[0]), `スタブに ${args[0]} が必要です`);
+    const value = values.get(args[0]);
+    if (value instanceof Error) throw value;
+    return value;
+  };
+}
+
+async function compareBaseFixture({ base = 'main', open = [], merged = [], heads = new Map() } = {}) {
+  const pr = pullRequest(90, 'child', base);
+  const headCalls = [];
+  const liveMergedBranches = new Set();
+  const result = await restackCompareBase(pr, [pr, ...open], merged, 'main', restackMapReader(heads, headCalls), liveMergedBranches);
+  return { ...result, headCalls, liveMergedBranches };
+}
+
+test('base が既定ブランチならそのブランチだけを比較し head を取得しない', async () => {
+  assert.deepEqual(await compareBaseFixture(), {
+    compareBase: 'main', comparisonBranches: new Set(['main']), headCalls: [], liveMergedBranches: new Set(),
+  });
+});
+
+test('オープンの親 PR の base をたどるとき head を取得しない', async () => {
+  const result = await compareBaseFixture({ base: 'parent', open: [pullRequest(89, 'parent', 'main')] });
+  assert.equal(result.compareBase, 'main');
+  assert.deepEqual(result.comparisonBranches, new Set(['parent', 'main']));
+  assert.deepEqual(result.headCalls, []);
+});
+
+for (const [name, head] of [['マージ時と同じ', 'a'.repeat(40)], ['存在しない', null]]) {
+  test(`マージ済みの親ブランチが${name}なら親の base をたどる`, async () => {
+    const result = await compareBaseFixture({ base: 'parent',
+      merged: [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')], heads: new Map([['parent', head]]) });
+    assert.equal(result.compareBase, 'main');
+    assert.deepEqual(result.comparisonBranches, new Set(['parent', 'main']));
+    assert.deepEqual(result.headCalls, [['parent']]);
+    assert.deepEqual(result.liveMergedBranches, new Set());
+  });
+}
+
+test('同じ head 名のマージ済み PR は最も新しいマージの base をたどる', async () => {
+  const result = await compareBaseFixture({ base: 'parent', merged: [
+    mergedPullRequest(87, 'a'.repeat(40), '2026-10-01T00:00:00Z', 'parent', 'old-base'),
+    mergedPullRequest(89, 'b'.repeat(40), '2026-10-02T00:00:00Z', 'parent', 'main'),
+  ], heads: new Map([['parent', 'b'.repeat(40)]]) });
+  assert.equal(result.compareBase, 'main');
+  assert.deepEqual(result.comparisonBranches, new Set(['parent', 'main']));
+});
+
+test('マージ時から head が進んだ親ブランチで止まり生きているブランチに含める', async () => {
+  const result = await compareBaseFixture({ base: 'parent',
+    merged: [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')], heads: new Map([['parent', 'b'.repeat(40)]]) });
+  assert.equal(result.compareBase, 'parent');
+  assert.deepEqual(result.comparisonBranches, new Set(['parent']));
+  assert.deepEqual(result.liveMergedBranches, new Set(['parent']));
+});
+
+for (const [name, head, expectedBase] of [['実在する', 'a'.repeat(40), 'parent'], ['存在しない', null, 'main']]) {
+  test(`残す選択をした親ブランチが${name}場合は ${expectedBase} を比較する`, async () => {
+    const result = await compareBaseFixture({ base: 'parent',
+      merged: [{ ...mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main'), branchKept: true }],
+      heads: new Map([['parent', head]]) });
+    assert.equal(result.compareBase, expectedBase);
+    assert.deepEqual(result.comparisonBranches, new Set(head ? ['parent'] : ['parent', 'main']));
+    assert.deepEqual(result.liveMergedBranches, new Set(head ? ['parent'] : []));
+  });
+}
+
+test('既定ブランチに届かない鎖は行き着いたブランチを比較する', async () => {
+  const result = await compareBaseFixture({ base: 'parent', open: [pullRequest(89, 'parent', 'aggregate')] });
+  assert.equal(result.compareBase, 'aggregate');
+  assert.deepEqual(result.comparisonBranches, new Set(['parent', 'aggregate']));
+});
+
+test('base と同じ head が自分自身だけならマージ済みの同名ブランチへはたどらない', async () => {
+  const pr = pullRequest(90, 'parent', 'parent');
+  const result = await restackCompareBase(pr, [pr],
+    [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')], 'main', restackMapReader(new Map()), new Set());
+  assert.deepEqual(result, { compareBase: 'parent', comparisonBranches: new Set(['parent']) });
+});
+
+test('別 PR の head だけが base と一致し親の base が空なら既定ブランチへ戻る', async () => {
+  const result = await compareBaseFixture({ base: 'parent', open: [pullRequest(89, 'parent', '')],
+    merged: [mergedPullRequest(88, 'a'.repeat(40), undefined, 'parent', 'aggregate')] });
+  assert.equal(result.compareBase, 'main');
+  assert.deepEqual(result.comparisonBranches, new Set(['parent', 'main']));
+  assert.deepEqual(result.headCalls, []);
+});
+
+test('base の鎖が循環したら再訪したブランチで止まる', async () => {
+  const result = await compareBaseFixture({ base: 'parent',
+    open: [pullRequest(89, 'parent', 'other'), pullRequest(88, 'other', 'parent')] });
+  assert.equal(result.compareBase, 'parent');
+  assert.deepEqual(result.comparisonBranches, new Set(['parent', 'other']));
+});
+
+test('base が空なら既定ブランチを比較する', async () => {
+  const result = await compareBaseFixture({ base: '' });
+  assert.equal(result.compareBase, 'main');
+  assert.deepEqual(result.comparisonBranches, new Set(['main']));
+});
+
+test('ブランチ head の取得失敗は比較 base の判定からそのまま伝播する', async () => {
+  const error = new Error('head failure');
+  await assert.rejects(compareBaseFixture({ base: 'parent',
+    merged: [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')], heads: new Map([['parent', error]]) }),
+  (actual) => actual === error);
+});
+
+test('差分に head があり base が鎖に含まれる候補のうち最も古いマージを親にする', () => {
+  const oldest = mergedPullRequest(81, 'a'.repeat(40), '2026-10-01T00:00:00Z', 'old', 'parent');
+  const newest = mergedPullRequest(82, 'b'.repeat(40), '2026-10-02T00:00:00Z', 'new', 'main');
+  const candidates = mergedPullRequestCandidates([newest, oldest], []);
+  assert.deepEqual(restackResult(new Set([oldest.headRefOid, newest.headRefOid]), candidates, new Set(['parent', 'main']), false),
+    { checked: true, parent: oldest });
+});
+
+test('差分に head があっても base が比較の鎖にない候補は親にしない', () => {
+  const candidate = mergedPullRequest(81, 'a'.repeat(40), undefined, 'parent', 'outside');
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(['main']), true), { checked: true, parent: null });
+});
+
+test('base が空の候補は比較の鎖に関係なく親にできる', () => {
+  const candidate = mergedPullRequest(81, 'a'.repeat(40));
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(), false), { checked: true, parent: candidate });
+});
+
+for (const complete of [true, false]) {
+  test(`親が見つからずマージ済み一覧の完全性が ${complete} なら checked は ${complete} になる`, () => {
+    assert.deepEqual(restackResult(new Set(), [], new Set(['main']), complete), { checked: complete, parent: null });
+  });
+}
+
+test('差分のコミット一覧が null なら積み直し状態を未確認にする', () => {
+  assert.deepEqual(restackResult(null, [], new Set(['main']), true), { checked: false, parent: null });
+});
+
+test('compare のコミット一覧が ahead_by より短ければ null にする', () => {
+  assert.equal(parseCompareResult(JSON.stringify(compareResult(['a'.repeat(40)], 2))), null);
+});
+
+test('compare の ahead_by や SHA が不正なら例外にする', () => {
+  for (const aheadBy of [-1, 0.5, '1', null]) {
+    assert.throws(() => parseCompareResult(JSON.stringify(compareResult([], aheadBy))), /invalid compare result/);
+  }
+  for (const sha of ['abc', 'g'.repeat(40), null]) {
+    assert.throws(() => parseCompareResult(JSON.stringify(compareResult([sha]))), /invalid compare result/);
+  }
+});
+
+test('compare の SHA を小文字にして重複をまとめる', () => {
+  assert.deepEqual(parseCompareResult(JSON.stringify(compareResult(['A'.repeat(40), 'a'.repeat(40), 'B'.repeat(64)]))),
+    new Set(['a'.repeat(40), 'b'.repeat(64)]));
+});
+
+test('履歴の候補には確定した mergedHead が必要でオープンの番号を除き同じ番号の新しいマージを採る', () => {
+  const head = { headRefOid: 'a'.repeat(40), headRefName: 'parent', baseRefName: 'main' };
+  const old = { number: 81, session_id: 'session', state: 'merged', mergedAt: '2026-10-01T00:00:00Z', mergedHead: head };
+  const latest = { ...old, mergedAt: '2026-10-02T00:00:00Z', mergedHead: { ...head, headRefOid: 'b'.repeat(40) } };
+  assert.deepEqual(historicalMergedPullRequests([
+    old, { ...old, number: 82, mergedHead: undefined, lastOpen: head },
+    { ...old, number: 83 }, { ...old, number: 84, state: 'closed' },
+  ], [{ ...latest, session_id: undefined }], [pullRequest(83, 'open', 'main')]),
+  [{ number: 81, ...latest.mergedHead, mergedAt: latest.mergedAt }]);
+});
+
+test('一覧と履歴の番号が同じなら一覧の値を使い履歴の branchKept true だけを引き継ぐ', () => {
+  const listed = mergedPullRequest(81, 'a'.repeat(40), '2026-10-02T00:00:00Z', 'listed', 'main');
+  const historical = { ...mergedPullRequest(81, 'b'.repeat(40), '2026-10-01T00:00:00Z', 'historical', 'old'), branchKept: true };
+  assert.deepEqual(mergedPullRequestCandidates([listed], [historical]), [{ ...listed, branchKept: true }]);
+  assert.deepEqual(mergedPullRequestCandidates([listed], [{ ...historical, branchKept: false }]), [listed]);
+});
+
+test('マージ済み一覧が null でも履歴だけから時刻順の候補を作る', () => {
+  const old = mergedPullRequest(81, 'a'.repeat(40), '2026-10-01T00:00:00Z');
+  const latest = mergedPullRequest(82, 'b'.repeat(40), '2026-10-02T00:00:00Z');
+  assert.deepEqual(mergedPullRequestCandidates(null, [latest, old]), [old, latest]);
+});
+
+function evaluateRestackFixture(openPullRequests, { heads = new Map(), commits = new Map(), ...changes } = {}) {
+  const headCalls = [];
+  const compareCalls = [];
+  const errors = [];
+  const result = evaluateRestack({ openPullRequests, mergedCandidates: [], mergedListComplete: true,
+    defaultBranch: 'main', listAvailable: true, readBranchHead: restackMapReader(heads, headCalls),
+    compare: restackMapReader(commits, compareCalls), onError: (message) => errors.push(message), ...changes });
+  return { result, headCalls, compareCalls, errors };
+}
+
+test('完全な SHA を持たない PR は compare を呼ばず未確認にする', async () => {
+  const fixture = evaluateRestackFixture([pullRequest(90, 'child', 'main', { headRefOid: 'abc' })]);
+  assert.deepEqual(await fixture.result, { restackResults: new Map([[90, { checked: false, parent: null }]]), liveMergedBranches: new Set() });
+  assert.deepEqual(fixture.headCalls, []);
+  assert.deepEqual(fixture.compareCalls, []);
+});
+
+for (const [name, changes] of [['既定ブランチが null', { defaultBranch: null }], ['一覧が取得できない', { listAvailable: false }]]) {
+  test(`${name}ならすべての PR を未確認にし I/O を行わない`, async () => {
+    const fixture = evaluateRestackFixture([pullRequest(90, 'child', 'parent'), pullRequest(91, 'other', 'main')], {
+      ...changes, mergedCandidates: [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')],
+    });
+    assert.deepEqual(await fixture.result, { restackResults: new Map([
+      [90, { checked: false, parent: null }], [91, { checked: false, parent: null }],
+    ]), liveMergedBranches: new Set() });
+    assert.deepEqual(fixture.headCalls, []);
+    assert.deepEqual(fixture.compareCalls, []);
+  });
+}
+
+test('compare が失敗した PR だけ未確認にして従来の文言でエラーを通知する', async () => {
+  const prs = Object.freeze([Object.freeze(pullRequest(90, 'child', 'main')), Object.freeze(pullRequest(91, 'other', 'aggregate'))]);
+  const fixture = evaluateRestackFixture(prs, { commits: new Map([['main', new Error('compare failure')], ['aggregate', new Set()]]) });
+  const result = await fixture.result;
+  assert.deepEqual(result.restackResults, new Map([[90, { checked: false, parent: null }], [91, { checked: true, parent: null }]]));
+  assert.deepEqual(fixture.errors, ['#90 の積み直し状態を確認できません。gh の認証、通信、または取得結果を確認してください']);
+  assert.deepEqual(fixture.compareCalls, [['main', prs[0].headRefOid], ['aggregate', prs[1].headRefOid]]);
+});
+
+test('head が進んだ親ブランチは compare に失敗しても生きているブランチに残る', async () => {
+  const fixture = evaluateRestackFixture([pullRequest(90, 'child', 'parent')], {
+    mergedCandidates: [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')],
+    heads: new Map([['parent', 'b'.repeat(40)]]), commits: new Map([['parent', new Error('compare failure')]]),
+  });
+  assert.deepEqual(await fixture.result, { restackResults: new Map([[90, { checked: false, parent: null }]]), liveMergedBranches: new Set(['parent']) });
+  assert.deepEqual(fixture.headCalls, [['parent']]);
+  assert.deepEqual(fixture.errors, ['#90 の積み直し状態を確認できません。gh の認証、通信、または取得結果を確認してください']);
+});
+
+test('一覧が不完全で親が見つからない PR は差分を取得できても未確認にする', async () => {
+  const fixture = evaluateRestackFixture([pullRequest(90, 'child', 'main')], {
+    mergedListComplete: false, commits: new Map([['main', new Set()]]),
+  });
+  assert.deepEqual((await fixture.result).restackResults, new Map([[90, { checked: false, parent: null }]]));
+  assert.deepEqual(fixture.errors, []);
+});
+
+test('ブランチ head の取得が失敗した PR は compare を呼ばず未確認にする', async () => {
+  const fixture = evaluateRestackFixture([pullRequest(90, 'child', 'parent')], {
+    mergedCandidates: [mergedPullRequest(89, 'a'.repeat(40), undefined, 'parent', 'main')],
+    heads: new Map([['parent', Object.assign(new Error('head failure'), { code: 'ETIMEDOUT' })]]),
+  });
+  assert.deepEqual((await fixture.result).restackResults, new Map([[90, { checked: false, parent: null }]]));
+  assert.deepEqual(fixture.compareCalls, []);
+  assert.deepEqual(fixture.errors, ['#90 の積み直し状態を確認できません。gh の取得がタイムアウトしました']);
+});
+
+test('比較はすべての PR で始めてから結果を待ち、失敗した PR ごとにエラーを 1 件通知する', { timeout: 5000 }, async () => {
+  const failures = new Map();
+  const errors = [];
+  let bothStarted;
+  const started = new Promise((resolve) => { bothStarted = resolve; });
+  const pending = evaluateRestack({
+    openPullRequests: [pullRequest(90, 'first', 'main'), pullRequest(91, 'second', 'aggregate')],
+    mergedCandidates: [], mergedListComplete: true, defaultBranch: 'main', listAvailable: true,
+    readBranchHead: restackMapReader(new Map()),
+    compare: (base) => new Promise((resolve, reject) => {
+      failures.set(base, reject);
+      if (failures.size === 2) bothStarted();
+    }),
+    onError: (message) => errors.push(message),
+  });
+  // どちらの比較も失敗させる前に 2 つとも始まっていれば、PR ごとに逐次ではなく並列に比べている。
+  await started;
+  failures.get('aggregate')(Object.assign(new Error('second'), { code: 'ENOENT' }));
+  failures.get('main')(Object.assign(new Error('first'), { code: 'EPERM' }));
+  const result = await pending;
+  assert.deepEqual([...errors].sort(), [
+    '#90 の積み直し状態を確認できません。gh を実行できません',
+    '#91 の積み直し状態を確認できません。gh コマンドが見つかりません',
+  ]);
+  assert.deepEqual(result.restackResults, new Map([
+    [90, { checked: false, parent: null }],
+    [91, { checked: false, parent: null }],
+  ]));
 });

@@ -260,6 +260,32 @@ async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defa
   return { compareBase, comparisonBranches };
 }
 
+async function evaluateRestack({ openPullRequests, mergedCandidates, mergedListComplete, defaultBranch, listAvailable, readBranchHead, compare, onError }) {
+  const restackResults = new Map();
+  const liveMergedBranches = new Set();
+  if (!(listAvailable && defaultBranch)) {
+    for (const pr of openPullRequests) restackResults.set(pr.number, { checked: false, parent: null });
+    return { restackResults, liveMergedBranches };
+  }
+  const comparisons = await Promise.all(openPullRequests.map(async (pr) => {
+    if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
+    try {
+      const { compareBase, comparisonBranches } = await restackCompareBase(
+        pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
+      );
+      const commits = await compare(compareBase, pr.headRefOid);
+      const result = restackResult(commits, mergedCandidates, comparisonBranches, mergedListComplete);
+      if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
+      return [pr.number, result];
+    } catch (error) {
+      onError(`#${pr.number} の積み直し状態を確認できません。${ghErrorMessage(error)}`);
+      return [pr.number, { checked: false, parent: null }];
+    }
+  }));
+  for (const [number, result] of comparisons) restackResults.set(number, result);
+  return { restackResults, liveMergedBranches };
+}
+
 // 積まれた子の親は子が作られた後にマージされるので、オープンの PR の最も古い作成日より後のマージだけを取る。
 // gh の検索は日付の単位なので、1 日前から取る。
 function mergedSearchSince(openPullRequests) {
@@ -1033,7 +1059,6 @@ class PullRequestTracker {
       openPullRequests,
     );
     const mergedCandidates = mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests);
-    const liveMergedBranches = new Set();
     const branchHeadRequests = new Map();
     const readBranchHead = (branch) => {
       if (!branchHeadRequests.has(branch)) {
@@ -1041,29 +1066,13 @@ class PullRequestTracker {
       }
       return branchHeadRequests.get(branch);
     };
-    const restackResults = new Map();
-    const comparisons = listAvailable && defaultBranch
-      ? await Promise.all(openPullRequests.map(async (pr) => {
-        if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
-        try {
-          const { compareBase, comparisonBranches } = await restackCompareBase(
-            pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
-          );
-          const output = await this.execute([
-            'api',
-            `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${pr.headRefOid}`,
-          ]);
-          const commits = parseCompareResult(output);
-          const result = restackResult(commits, mergedCandidates, comparisonBranches, mergedListComplete);
-          if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
-          return [pr.number, result];
-        } catch (error) {
-          errors.push(`#${pr.number} の積み直し状態を確認できません。${ghErrorMessage(error)}`);
-          return [pr.number, { checked: false, parent: null }];
-        }
-      }))
-      : openPullRequests.map((pr) => [pr.number, { checked: false, parent: null }]);
-    for (const [number, result] of comparisons) restackResults.set(number, result);
+    const { restackResults, liveMergedBranches } = await evaluateRestack({
+      openPullRequests, mergedCandidates, mergedListComplete, defaultBranch, listAvailable, readBranchHead,
+      compare: async (compareBase, headRefOid) => parseCompareResult(await this.execute([
+        'api', `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${headRefOid}`,
+      ])),
+      onError: (message) => errors.push(message),
+    });
 
     // base を付け替えた子も親のプロダクトに数えるため、所属は積み直しの判定の後に、画面と同じ結果で集める。
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
@@ -1330,6 +1339,12 @@ function attachCrossReviewState(pullRequest, crossReviewByNumber) {
 }
 
 module.exports = {
+  parseCompareResult,
+  restackResult,
+  historicalMergedPullRequests,
+  mergedPullRequestCandidates,
+  restackCompareBase,
+  evaluateRestack,
   PullRequestTracker,
   assemblePullRequestStacks,
   ghEnvironment,
