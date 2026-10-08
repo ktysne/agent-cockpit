@@ -140,6 +140,7 @@ state が `merged` の登録は残す。
 | Stop、SessionEnd、UserPromptSubmit | 共通の項目だけ。プロンプトの本文は送らない |
 
 `answer.js` から届く `PostToolBatch` は、常駐サーバーの受信時刻を使う状態イベントとして記録する。
+サブエージェントの `PostToolBatch` は `agent_id` 付きで送り、状態イベントとしてだけ記録する。回答、知らせ、催促はメインにだけ渡すので、この要求には何も返さない。
 入力の要約は、Bash なら改行と続く空白を空白一つに置き換えたコマンド、Read、Edit、Write ならファイルのパス、それ以外はツール名だけにする。
 要約が80文字を超える場合だけ先頭79文字に「…」を付ける。画面幅による省略は CSS の `text-overflow: ellipsis` で行う。
 
@@ -166,7 +167,7 @@ PostToolUse の出力全文は送らない。
 - 最終イベント時刻: `lastActivityAt` にセッションの最新フック時刻を ISO 形式で持ち、メイン行の経過表示に使う。
 - セッションファイル: `~/.claude/sessions/*.json` の `name` を題名に使い、有限の数値 `updatedAt` は ISO 形式にして `sessionFileUpdatedAt` に載せる。状態不明のセッションを隠す判定に使う。
 - 状態: 作業中、待機中、待機中(サブエージェント稼働中)、許可待ち。Stop を受けたときに稼働中のサブエージェントがあれば「待機中(サブエージェント稼働中)」にする。SessionStart の source が startup、resume、clear のときは、入力を待つ状態で始まるので待機中にし、メインの実行中のツールと許可待ちを外す。compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。SessionEnd を受けたら一覧から外す。一度生きている一覧に載ったセッションファイルが 60 秒以上一覧から消えた場合も、不在による終了として一覧から外す。不在による終了は、セッションファイルが再び一覧に載ったときに解除する。SessionStart と、それ以外のイベントは、hookAt が終了判定時刻より後なら終了扱いを解除して受け付ける。SessionEnd による終了は解除しない。
-- 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。メインの Stop と UserPromptSubmit ではメインのツールを消し、PostToolBatch ではその時刻より前に始まったメインのツールを消す。いずれもサブエージェントのツールは残す。
+- 実行中のツール: PostToolUse が来ていない `tool_use_id` ごとの、ツール名と要約と開始時刻。メインの Stop と UserPromptSubmit ではメインのツールを消し、PostToolBatch ではその時刻より前に始まった、同じエージェント(メインかサブエージェント)のツールを消す。拒否されたツールには PostToolUse も PostToolUseFailure も届かないためである。サブエージェントの PostToolBatch では、そのサブエージェントの、その時刻より前に始まった許可待ちも消す。メインの許可待ちは PostToolBatch では消さず、Stop と UserPromptSubmit で消す。
 - サブエージェント: `agent_id` ごとに、`agent_type`、作業の説明、開始時刻、最後のツール、モデル、effort。
 - `SubagentStart` が記録されていなくても、`SubagentStop` 以外のイベントで初めて届いた `agent_id` から行を作る。
   開始時刻はそのイベントの時刻とし、稼働中として扱う。
