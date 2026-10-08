@@ -2336,7 +2336,7 @@ test('終わったセッションはタスクの有無にかかわらず両方�
   ]);
 });
 
-test('中断したセッションとサブエージェントは終了を隠しても中断表示のまま残る', () => {
+test('中断セッションは終了と混同せず、UI終了済みの子は終了扱いにする', () => {
   const names = [
     'element', 'badge', 'activityStatus', 'isEndedAgent', 'isEndedDecision', 'isFinishedCommonQuestion', 'isFinishedInstruction',
     'isFinishedSession', 'mainRow', 'appendAgents', 'productGroups', 'orderedProducts', 'finishedDeletionTargets',
@@ -2387,7 +2387,7 @@ test('中断したセッションとサブエージェントは終了を隠し�
   const unknown = { ...base, session_id: 'unknown', status: '不明', turnState: 'unknown', estimate: { canEstimate: true } };
   const parent = {
     ...base, session_id: 'parent', status: '作業中', turnState: 'working',
-    agents: [{ agent_id: 'child', agent_type: '実装担当', active: false, unconfirmed: false, turnState: 'interrupted' }],
+    agents: [{ agent_id: 'child', agent_type: '実装担当', active: true, unconfirmed: false, turnState: 'interrupted' }],
   };
   const finished = {
     ...base, session_id: 'finished', status: '待機中', turnState: 'waiting', tasks: [{ title: '完了', state: 'done' }],
@@ -2407,6 +2407,12 @@ test('中断したセッションとサブエージェントは終了を隠し�
     'claude-interrupted', 'codex-interrupted',
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(context.finishedDeletionTargets(sessions, []).session_ids)), ['finished']);
+  context.displayPreferences.hideFinished = false;
+  const visibleWhenFinishedShown = context.orderedProducts(sessions);
+  assert.deepEqual(JSON.parse(JSON.stringify(visibleWhenFinishedShown.flatMap((product) => product.sessions.map((session) => session.session_id)).sort())), [
+    'claude-interrupted', 'codex-interrupted', 'finished',
+  ]);
+  context.displayPreferences.hideFinished = true;
 
   const descendants = (node) => [node, ...(node.children || []).flatMap(descendants)];
   for (const interrupted of interruptedSessions) {
@@ -2421,8 +2427,14 @@ test('中断したセッションとサブエージェントは終了を隠し�
   const agentBody = new FakeElement('div');
   context.appendAgents(agentBody, parent, { key: 'interrupted-project', name: 'Project' });
   const agentNodes = descendants(agentBody);
-  assert.ok(agentNodes.some((node) => node.className === 'dot interrupted'));
-  assert.ok(agentNodes.some((node) => node.className === 'badge' && node.textContent === '中断'));
+  assert.ok(agentNodes.some((node) => node.className === 'dot busy'));
+  assert.ok(agentNodes.some((node) => node.className.startsWith('badge ') && node.textContent === '稼働中'));
+
+  const closedAfterUiAction = { agent_id: 'child', agent_type: '実装担当', active: false, unconfirmed: false, turnState: 'interrupted' };
+  assert.equal(context.isEndedAgent(closedAfterUiAction), true);
+  const closedAgentBody = new FakeElement('div');
+  context.appendAgents(closedAgentBody, { ...parent, agents: [closedAfterUiAction] }, { key: 'interrupted-project', name: 'Project' });
+  assert.equal(descendants(closedAgentBody).some((node) => node.className === 'agent-row'), false);
 });
 
 test('タスクの有無にかかわらず終わったセッションと履歴だけの PR は両方の表示から除く', () => {

@@ -3422,9 +3422,8 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
     const row = element('div', 'agent-row');
     row.dataset.startedAt = agent.startedAt || '';
     const who = element('div', 'who');
-    const agentInterrupted = agent.turnState === 'interrupted';
-    const agentState = agentInterrupted ? ['中断', ''] : agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
-    who.append(element('span', `dot ${agentInterrupted ? 'interrupted' : agent.unconfirmed ? 'wait' : agentState[1]}`));
+    const agentState = agent.active ? ['稼働中', 'busy'] : agent.unconfirmed ? ['終了未確認', 'wait'] : ['終了', 'done'];
+    who.append(element('span', `dot ${agent.unconfirmed ? 'wait' : agentState[1]}`));
     appendContextTags(who, product, session, withTags, multipleSessions);
     const name = element('span', 'agent-name');
     name.append(badge(agentState[0], agentState[1]), element('strong', '', agent.agent_type || agent.agent_id));
@@ -3451,9 +3450,9 @@ function appendAgents(body, session, product, withTags = false, multipleSessions
   }
 }
 
-// 「終了未確認」と「中断」は、終了済みと判断できる状態ではない。
+// 「終了未確認」はまだ動いている可能性があるので、終了済みに含めない。
 function isEndedAgent(agent) {
-  return !agent.active && !agent.unconfirmed && agent.turnState !== 'interrupted';
+  return !agent.active && !agent.unconfirmed;
 }
 
 function itemTimestamp(item) {
