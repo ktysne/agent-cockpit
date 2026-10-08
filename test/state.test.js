@@ -8,6 +8,110 @@ const { productFromCwd } = require('../src/server/identity');
 const { readSessionName, listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('../src/server/session-files');
 const { temporaryHome: createTemporaryHome } = require('./support/temp');
 
+test('Notification だけの行は不明になり Stop またはメインのツールで状態が確定する', () => {
+  for (const [hook_event_name, status] of [
+    ['Stop', '待機中'], ['PreToolUse', '作業中'], ['PostToolUse', '作業中'],
+    ['PostToolUseFailure', '作業中'], ['UserPromptSubmit', '作業中'],
+  ]) {
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'unknown', hook_event_name: 'Notification', hookAt: 100 });
+    assert.equal(state.snapshot().sessions[0].status, '不明');
+    assert.equal(Object.hasOwn(state.snapshot().sessions[0], 'turnKnown'), false);
+    state.addEvent({ session_id: 'unknown', hook_event_name, tool_name: 'Read', tool_use_id: 'tool', hookAt: 200 });
+    assert.equal(state.snapshot().sessions[0].status, status);
+  }
+});
+
+test('サブエージェントのイベントと compact と PostToolBatch はターンの状態を確定しない', () => {
+  for (const event of [
+    { hook_event_name: 'SubagentStart', agent_id: 'sub' },
+    { hook_event_name: 'SubagentStop', agent_id: 'sub' },
+    ...['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].map((hook_event_name) => ({
+      hook_event_name, agent_id: 'sub', tool_name: 'Read', tool_use_id: 'tool',
+    })),
+    { hook_event_name: 'SessionStart', source: 'compact' },
+    { hook_event_name: 'SessionStart' },
+    { hook_event_name: 'PostToolBatch' },
+  ]) {
+    const state = new DashboardState();
+    state.addEvent({ session_id: 'unknown', hookAt: 100, ...event });
+    assert.equal(state.snapshot().sessions[0].status, '不明', JSON.stringify(event));
+  }
+});
+
+test('未確定の行でも許可待ちは idle の補完より優先する', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'permission', hook_event_name: 'Notification', notification_type: 'permission_prompt', hookAt: 100 });
+  state.syncSessionFiles([{ session_id: 'permission', status: 'idle' }]);
+  assert.equal(state.snapshot().sessions[0].status, '許可待ち');
+});
+
+test('イベント由来とファイルだけの不明な行は idle のときだけ待機中で補う', () => {
+  for (const withEvent of [false, true]) {
+    const state = new DashboardState();
+    if (withEvent) state.addEvent({ session_id: 'unknown', hook_event_name: 'Notification', hookAt: 100 });
+    for (const status of [undefined, 'busy', 'unknown', 'IDLE', 'idle']) {
+      state.syncSessionFiles([{ session_id: 'unknown', ...(status ? { status } : {}) }]);
+      assert.equal(state.snapshot().sessions[0].status, status === 'idle' ? '待機中' : '不明');
+    }
+  }
+});
+
+test('idle の補完は稼働中のサブエージェントを含み画面で終了にしたものを除く', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'unknown', hook_event_name: 'SubagentStart', agent_id: 'sub', hookAt: 100 });
+  state.syncSessionFiles([{ session_id: 'unknown', status: 'idle' }]);
+  assert.equal(state.snapshot().sessions[0].status, '待機中(サブエージェント稼働中)');
+  state.addEvent({ session_id: 'unknown', hook_event_name: 'SubagentStop', agent_id: 'sub', hookAt: 200 });
+  assert.equal(state.snapshot().sessions[0].status, '待機中');
+
+  const background = new DashboardState();
+  background.addEvent({ session_id: 'closed', hook_event_name: 'SubagentStart', agent_id: 'task-1', hookAt: 100 });
+  background.sessions.get('closed').agents[0].backgrounded = true;
+  background.syncSessionFiles([{ session_id: 'closed', status: 'idle' }]);
+  assert.equal(background.snapshot().sessions[0].status, '待機中(サブエージェント稼働中)');
+  assert.equal(background.closeAgent('closed', 'task-1'), true);
+  assert.equal(background.snapshot().sessions[0].status, '待機中');
+});
+
+test('ファイルの status だけの変更で版が進み補完した行には推定を付けず保存も拒否する', () => {
+  for (const withEvent of [false, true]) {
+    const state = new DashboardState();
+    if (withEvent) state.addEvent({ session_id: 'unknown', hook_event_name: 'Notification', hookAt: 100 });
+    const file = { session_id: 'unknown', status: 'busy' };
+    state.syncSessionFiles([file]);
+    assert.ok(state.saveEstimate('unknown', null));
+    const version = state.version;
+    state.syncSessionFiles([{ ...file, status: 'idle' }]);
+    assert.equal(state.version, version + 1);
+    assert.equal(state.snapshot().sessions[0].estimate, undefined);
+    assert.equal(state.saveEstimate('unknown', null), null);
+    const unchangedVersion = state.version;
+    state.syncSessionFiles([{ ...file, status: 'idle' }]);
+    assert.equal(state.version, unchangedVersion);
+  }
+});
+
+test('確定したターンの状態はセッションファイルの idle で上書きしない', () => {
+  const state = new DashboardState();
+  state.addEvent({ session_id: 'working', hook_event_name: 'UserPromptSubmit', hookAt: 100 });
+  state.syncSessionFiles([{ session_id: 'working', status: 'idle' }]);
+  assert.equal(state.snapshot().sessions[0].status, '作業中');
+});
+
+test('セッションファイルの status は文字列だけを先頭 50 文字まで読む', async () => {
+  const values = ['idle', 'busy', 'x'.repeat(60), '', undefined, null, 1, {}, []];
+  const fileSystem = {
+    readdir: async () => values.map((_, index) => ({ name: `${index}.json`, isFile: () => true })),
+    readFile: async (file) => {
+      const index = Number(path.basename(file, '.json'));
+      return JSON.stringify({ session_id: String(index), pid: 1, status: values[index] });
+    },
+  };
+  const files = await listLiveSessionFiles('unused', { fileSystem, isAlive: () => true });
+  assert.deepEqual(files.map((file) => file.status), ['idle', 'busy', 'x'.repeat(50), '', undefined, undefined, undefined, undefined, undefined]);
+});
+
 function backgroundClaudeState(sessionId = 'task-stop') {
   const state = new DashboardState();
   state.addEvent({ session_id: sessionId, hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'launch', hookAt: 100 });
@@ -306,7 +410,7 @@ test('外したセッションはイベント到着後に一覧へ戻る', async
   state.syncSessionFiles([{ session_id: 'hidden-event', cwd: 'C:\\project', name: '作業中' }]);
   state.hideSession('hidden-event');
 
-  state.addEvent({ session_id: 'hidden-event', hook_event_name: 'SessionStart', hookAt: 100 });
+  state.addEvent({ session_id: 'hidden-event', hook_event_name: 'SessionStart', source: 'startup', hookAt: 100 });
   assert.equal(state.snapshot().sessions[0].hidden, undefined);
   assert.notEqual(state.snapshot().sessions[0].status, '不明');
 });
@@ -428,7 +532,7 @@ test('推定の読み取り中に状態が分かったセッションには推�
   await temporaryHome(t);
   const state = new DashboardState();
   state.syncSessionFiles([{ session_id: 'estimated-race', cwd: 'C:\\project', name: '作業中' }]);
-  state.addEvent({ session_id: 'estimated-race', hook_event_name: 'SessionStart', hookAt: 100 });
+  state.addEvent({ session_id: 'estimated-race', hook_event_name: 'SessionStart', source: 'startup', hookAt: 100 });
   assert.equal(state.saveEstimate('estimated-race', { recordedAt: '2026-10-02T01:02:03.000Z', lastTool: 'Read', state: 'input' }), null);
   assert.equal(state.snapshot().sessions[0].estimate, undefined);
 });
@@ -1785,6 +1889,8 @@ for (const source of ['startup', 'resume', 'clear']) {
   test(`SessionStart の ${source} を受けたセッションは待機中になり、メインの実行中のツールを外す`, async (t) => {
     await temporaryHome(t);
     const state = new DashboardState();
+    state.addEvent({ session_id: 'idle-start', hook_event_name: 'SessionStart', source, hookAt: 50 });
+    assert.equal(state.snapshot().sessions[0].status, '待機中');
     state.addEvent({ session_id: 'idle-start', hook_event_name: 'UserPromptSubmit', hookAt: 100 });
     state.addEvent({ session_id: 'idle-start', hook_event_name: 'PreToolUse', hookAt: 200, tool_name: 'Bash', tool_use_id: 'stale', summary: 'npm test' });
     state.addEvent({ session_id: 'idle-start', hook_event_name: 'SessionStart', source, hookAt: 300 });

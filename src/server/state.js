@@ -553,7 +553,7 @@ function agentModelFromDefinition(agentType, definition) {
  * agent_id: string, startedAt: string|null, isCodex?: boolean, parent_agent_id?: string|null, runId?: string, backgroundTaskId?: string, backgrounded?: boolean, unconfirmed?: boolean, resultReceived?: boolean, waitEnded?: boolean, route?: string, codex_home?: string, unavailable?: string
  * }} SessionAgent */
 
-/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, ended: boolean}} SessionIdentity */
+/** @typedef {{session_id: string, product: string, title: string, status: string, lastActivityAt?: string, stopped: boolean, turnKnown: boolean, ended: boolean}} SessionIdentity */
 
 /** @typedef {{tools: SessionTool[], completedToolIds: Set<string>, agentToolBindings: Object<string, string|symbol|null>}} SessionTools */
 
@@ -575,7 +575,7 @@ function newSession(event, askDecisionState = {}) {
     session_id: event.session_id,
     product: event.product,
     title: event.sessionName,
-    status: '作業中',
+    status: '不明',
     tools: [],
     completedToolIds: new Set(),
     stoppedAgentIds: new Set(),
@@ -585,6 +585,7 @@ function newSession(event, askDecisionState = {}) {
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     stopped: false,
+    turnKnown: false,
     ended: false,
     pendingCodex: Object.create(null),
     pendingCodexWait: Object.create(null),
@@ -760,11 +761,13 @@ function sessionSnapshot(session) {
   const tools = [...session.tools].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
   const status = permissionWaits.length
     ? '許可待ち'
-    : session.stopped && session.agents.some((agent) => agent.active)
-      ? '待機中(サブエージェント稼働中)'
-      : session.stopped
-        ? '待機中'
-        : '作業中';
+    : !session.turnKnown
+      ? '不明'
+      : session.stopped && session.agents.some((agent) => agent.active)
+        ? '待機中(サブエージェント稼働中)'
+        : session.stopped
+          ? '待機中'
+          : '作業中';
 
   return {
     session_id: session.session_id,
@@ -976,7 +979,7 @@ function applyCommonEventStart(session, event) {
 }
 
 /**
- * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & Pick<SessionIdentity, 'stopped'>} session
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & Pick<SessionIdentity, 'stopped'|'turnKnown'>} session
  */
 function applyToolStart(session, event) {
   const eventName = event.hook_event_name;
@@ -1011,7 +1014,10 @@ function applyToolStart(session, event) {
     applyCodexStart(session, event);
     applyAskQuestionStart(session, event);
 
-    if (!agentId) session.stopped = false;
+    if (!agentId) {
+      session.stopped = false;
+      session.turnKnown = true;
+    }
   }
 }
 
@@ -1063,7 +1069,7 @@ function applySubagentStop(session, event) {
 }
 
 /**
- * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'>} session
+ * @param {SessionTools & Pick<SessionAgents, 'agents'> & SessionCodex & SessionDecisions & SessionPermissions & Pick<SessionIdentity, 'stopped'|'turnKnown'>} session
  */
 function applyToolCompletion(session, event) {
   const eventName = event.hook_event_name;
@@ -1084,7 +1090,10 @@ function applyToolCompletion(session, event) {
     ));
     applyAskQuestionCompletion(session, event);
 
-    if (!agentId) session.stopped = false;
+    if (!agentId) {
+      session.stopped = false;
+      session.turnKnown = true;
+    }
   }
 }
 
@@ -1130,7 +1139,7 @@ function applyPermissionPrompt(session, event) {
 }
 
 /**
- * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'ended'>} session
+ * @param {Pick<SessionTools, 'tools'> & SessionPermissions & Pick<SessionIdentity, 'stopped'|'turnKnown'|'ended'>} session
  */
 function applySessionLifecycle(session, event) {
   const eventName = event.hook_event_name;
@@ -1142,6 +1151,7 @@ function applySessionLifecycle(session, event) {
 
   // compact は自動の圧縮でターンの途中にも起きるので、直前の状態を保つ。
   const startsIdle = eventName === 'SessionStart' && IDLE_START_SOURCES.has(event.source);
+  if (startsIdle || eventName === 'UserPromptSubmit' || eventName === 'Stop') session.turnKnown = true;
   if (startsIdle) {
     session.permissionWaits = session.permissionWaits.filter((wait) => wait.agent_id);
     session.tools = session.tools.filter((tool) => tool.agent_id);
@@ -2376,7 +2386,7 @@ class DashboardState {
     }
   }
 
-  // 推定の読み取り中にイベントが届いたセッションは状態が分かったので、古い推定を残さない。
+  // 読み取り中に状態が分かったセッションには推定を保存しない。
   saveEstimate(sessionId, estimate) {
     const current = this.snapshot().sessions.find((item) => item.session_id === sessionId);
     if (current?.status !== '不明') return null;
@@ -2783,8 +2793,13 @@ class DashboardState {
         }),
         tasksUpdatedAt: plan?.tasksUpdatedAt || null,
       };
+      if (current.status === '不明' && file?.status === 'idle') {
+        current.status = base.agents.some((agent) => agent.active && !isClosedByUser(agent))
+          ? '待機中(サブエージェント稼働中)'
+          : '待機中';
+      }
       const estimate = this.estimates.get(sessionId);
-      if (estimate) current.estimate = { ...estimate };
+      if (estimate && current.status === '不明') current.estimate = { ...estimate };
       if (this.hiddenSessions.has(sessionId)) {
         current.hidden = true;
         current.hiddenAt = this.hiddenSessionUpdatedAt.get(sessionId);
