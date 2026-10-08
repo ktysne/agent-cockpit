@@ -2057,30 +2057,32 @@ test('ブランチ head の取得が失敗した PR は compare を呼ばず未�
   assert.deepEqual(fixture.errors, ['#90 の積み直し状態を確認できません。gh の取得がタイムアウトしました']);
 });
 
-test('比較は並列に開始しエラーは PR 順ではなく失敗した順に通知する', async () => {
+test('比較はすべての PR で始めてから結果を待ち、失敗した PR ごとにエラーを 1 件通知する', { timeout: 5000 }, async () => {
   const failures = new Map();
-  const started = [];
   const errors = [];
+  let bothStarted;
+  const started = new Promise((resolve) => { bothStarted = resolve; });
   const pending = evaluateRestack({
     openPullRequests: [pullRequest(90, 'first', 'main'), pullRequest(91, 'second', 'aggregate')],
     mergedCandidates: [], mergedListComplete: true, defaultBranch: 'main', listAvailable: true,
     readBranchHead: restackMapReader(new Map()),
-    compare: (base) => {
-      started.push(base);
-      return new Promise((resolve, reject) => failures.set(base, reject));
-    },
+    compare: (base) => new Promise((resolve, reject) => {
+      failures.set(base, reject);
+      if (failures.size === 2) bothStarted();
+    }),
     onError: (message) => errors.push(message),
   });
-  await Promise.resolve();
-  assert.deepEqual(started, ['main', 'aggregate']);
+  // どちらの比較も失敗させる前に 2 つとも始まっていれば、PR ごとに逐次ではなく並列に比べている。
+  await started;
   failures.get('aggregate')(Object.assign(new Error('second'), { code: 'ENOENT' }));
-  await Promise.resolve();
-  assert.deepEqual(errors, ['#91 の積み直し状態を確認できません。gh コマンドが見つかりません']);
   failures.get('main')(Object.assign(new Error('first'), { code: 'EPERM' }));
   const result = await pending;
-  assert.deepEqual(errors, [
-    '#91 の積み直し状態を確認できません。gh コマンドが見つかりません',
+  assert.deepEqual([...errors].sort(), [
     '#90 の積み直し状態を確認できません。gh を実行できません',
+    '#91 の積み直し状態を確認できません。gh コマンドが見つかりません',
   ]);
-  assert.deepEqual([...result.restackResults.keys()], [90, 91]);
+  assert.deepEqual(result.restackResults, new Map([
+    [90, { checked: false, parent: null }],
+    [91, { checked: false, parent: null }],
+  ]));
 });
