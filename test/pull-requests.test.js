@@ -2055,6 +2055,23 @@ test('差分に head があっても base が比較の鎖にない候補は親�
   assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(['main']), 'main', true), { checked: true, parent: null });
 });
 
+test('同時刻に同名headがマージされていればbaseの到達先を未確認にする', () => {
+  const mergedAt = '2026-10-04T11:00:00.000Z';
+  const candidate = mergedPullRequest(81, 'a'.repeat(40), mergedAt, 'child', 'parent');
+  const sameTimeSuccessor = mergedPullRequest(82, 'b'.repeat(40), mergedAt, 'parent', 'main');
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate, sameTimeSuccessor], new Set(['main']), 'main'),
+    { checked: false, parent: null });
+});
+
+test('同時刻の同名headがあり後刻の到達経路も見つかる場合は未確認にする', () => {
+  const mergedAt = '2026-10-04T11:00:00.000Z';
+  const candidate = mergedPullRequest(81, 'a'.repeat(40), mergedAt, 'child', 'parent');
+  const sameTimeSuccessor = mergedPullRequest(82, 'b'.repeat(40), mergedAt, 'parent', 'outside');
+  const laterSuccessor = mergedPullRequest(83, 'c'.repeat(40), '2026-10-04T11:01:00.000Z', 'parent', 'main');
+  assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate, sameTimeSuccessor, laterSuccessor],
+    new Set(['main']), 'main'), { checked: false, parent: null });
+});
+
 test('base が空の候補は比較の鎖に関係なく親にできる', () => {
   const candidate = mergedPullRequest(81, 'a'.repeat(40));
   assert.deepEqual(restackResult(new Set([candidate.headRefOid]), [candidate], new Set(), 'main', false), { checked: true, parent: candidate });
