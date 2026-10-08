@@ -713,6 +713,127 @@ function removeStaleProductViews(productViews, repositoryKey, currentIdentities)
   }
 }
 
+// 後段で push するのは listAvailable が真のときだけで、その場合は新しい配列を返す。
+function interpretFetchResults({ listResult, configResult, current, checkedAt }) {
+  const errors = [];
+  const uninspectedNumbers = new Set();
+  let openPullRequests = current.openPullRequests;
+  let defaultBranch = current.defaultBranch;
+  let mergeMethods = current.mergeMethods;
+  let autoDeleteBranch = current.autoDeleteBranch;
+  let configAvailable = false;
+  let fetchedAt = current.fetchedAt;
+  let listAvailable = false;
+
+  if (listResult.status === 'fulfilled') {
+    try {
+      openPullRequests = parsePullRequestList(listResult.value);
+      fetchedAt = checkedAt;
+      listAvailable = true;
+    } catch {
+      errors.push('PR の一覧を読み取れませんでした');
+    }
+  } else {
+    errors.push(`PR の一覧を取得できません。${ghErrorMessage(listResult.reason)}`);
+  }
+
+  if (configResult.status === 'fulfilled') {
+    try {
+      const config = parseRepositoryConfig(configResult.value);
+      defaultBranch = config.defaultBranch;
+      mergeMethods = config.mergeMethods;
+      autoDeleteBranch = config.autoDeleteBranch;
+      configAvailable = true;
+    } catch {
+      errors.push('リポジトリ設定を読み取れませんでした');
+    }
+  } else {
+    errors.push(`リポジトリ設定を取得できません。${ghErrorMessage(configResult.reason)}`);
+  }
+  const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
+  return { openPullRequests, openNumbers, defaultBranch, mergeMethods, autoDeleteBranch, configAvailable,
+    fetchedAt, listAvailable, errors, uninspectedNumbers };
+}
+
+function selectPullRequestsToInspect({ registrationsBeforeInspection, relatedBeforeInspection, openNumbers, retried }) {
+  const trackedByNumber = new Map();
+  for (const record of [...registrationsBeforeInspection, ...relatedBeforeInspection]) {
+    let tracked = trackedByNumber.get(record.number);
+    if (!tracked) {
+      tracked = { registrations: [], related: null, record: null };
+      trackedByNumber.set(record.number, tracked);
+    }
+    if (record.session_id) tracked.registrations.push(record);
+    else tracked.related = record;
+    tracked.record ||= record;
+  }
+  const backfill = [...trackedByNumber.entries()]
+    .filter(([number, tracked]) => !openNumbers.has(number) && tracked.record.state === 'merged'
+      && !confirmedMergedHead(tracked.record.mergedHead)
+      && !retried.has(number))
+    .slice(0, 5);
+  const backfillNumbers = new Set(backfill.map(([number]) => number));
+  const toInspect = [...trackedByNumber.entries()]
+    .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state))
+    .concat(backfill);
+  return { trackedByNumber, toInspect, backfillNumbers };
+}
+
+function classifyInspectedPullRequest(result, backfillNumbers) {
+  if (backfillNumbers.has(result.number) && (result.error || result.value?.state !== 'MERGED'
+    || !confirmedMergedHead(result.value))) return { kind: 'skip' };
+  if (result.error) return { kind: 'error', error: `#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}` };
+  const value = result.value;
+  const state = String(value.state || '').toUpperCase();
+  if (!['OPEN', 'CLOSED', 'MERGED'].includes(state)) {
+    return { kind: 'unreadable', error: `#${result.number} の状態を読み取れませんでした` };
+  }
+  const closedState = state === 'MERGED' || (state === 'CLOSED' && value.mergedAt) ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
+  if (closedState === 'open') {
+    const pullRequest = normalizeOpenPullRequest(value);
+    return pullRequest ? { kind: 'open', pullRequest }
+      : { kind: 'unreadable', error: `#${result.number} の状態を読み取れませんでした` };
+  }
+  const stateChanges = {
+    state: closedState,
+    mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
+  };
+  if (closedState === 'merged') stateChanges.mergedHead = confirmedMergedHead(value);
+  return { kind: closedState, stateChanges };
+}
+
+function stackedPullRequestsForMerge({ reservation, mergeIntent, pullRequest, openPullRequests }) {
+  const openByNumber = new Map(openPullRequests.map((item) => [item.number, item]));
+  const stackedPullRequests = new Map();
+  for (const item of [...(reservation?.stackedPullRequests || []), ...(mergeIntent?.stackedPullRequests || [])]) {
+    const child = openByNumber.get(item.number);
+    if (child) stackedPullRequests.set(item.number, { ...item, headRefName: child.headRefName });
+  }
+  if (pullRequest) {
+    for (const child of openPullRequests
+      .filter((candidate) => candidate.baseRefName === pullRequest.headRefName)
+      .map((candidate) => ({ number: candidate.number, baseRefName: pullRequest.headRefName }))) {
+      stackedPullRequests.set(child.number, child);
+    }
+  }
+  return [...stackedPullRequests.values()];
+}
+
+function productGroupsFor(owner, repo, registrations) {
+  const key = repoKey(owner, repo);
+  const productGroups = new Map();
+  for (const registration of registrations) {
+    const productKey = registration.product?.key || `repo:${key}`;
+    let group = productGroups.get(productKey);
+    if (!group) {
+      group = { product: registration.product || { key: productKey, name: `${owner}/${repo}` }, registrations: [] };
+      productGroups.set(productKey, group);
+    }
+    group.registrations.push(registration);
+  }
+  return productGroups;
+}
+
 class PullRequestTracker {
   constructor(options = {}) {
     this.state = options.state;
@@ -877,222 +998,102 @@ class PullRequestTracker {
     }
   }
 
-  async fetchRepository(owner, repo, repository) {
-    const key = repoKey(owner, repo);
-    const checkedAt = new Date(this.now()).toISOString();
-    const current = this.repositories.get(key) || {
-      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
-    };
-    const previousRegistrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
-    const previousRelated = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
-    const [listResult, configResult] = await Promise.allSettled([
-      this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--limit', '500', '--json', PULL_REQUEST_FIELDS]),
-      this.execute(['api', `repos/${repository}`]),
-    ]);
-    const errors = [];
-    const uninspectedNumbers = new Set();
-    let openPullRequests = current.openPullRequests;
-    let defaultBranch = current.defaultBranch;
-    let mergeMethods = current.mergeMethods;
-    let autoDeleteBranch = current.autoDeleteBranch;
-    let configAvailable = false;
-    let fetchedAt = current.fetchedAt;
-    let listAvailable = false;
-    let mergedPullRequests = null;
-    let mergedListComplete = false;
-
-    if (listResult.status === 'fulfilled') {
-      try {
-        openPullRequests = parsePullRequestList(listResult.value);
-        fetchedAt = checkedAt;
-        listAvailable = true;
-      } catch {
-        errors.push('PR の一覧を読み取れませんでした');
-      }
-    } else {
-      errors.push(`PR の一覧を取得できません。${ghErrorMessage(listResult.reason)}`);
-    }
-
-    if (configResult.status === 'fulfilled') {
-      try {
-        const config = parseRepositoryConfig(configResult.value);
-        defaultBranch = config.defaultBranch;
-        mergeMethods = config.mergeMethods;
-        autoDeleteBranch = config.autoDeleteBranch;
-        configAvailable = true;
-      } catch {
-        errors.push('リポジトリ設定を読み取れませんでした');
-      }
-    } else {
-      errors.push(`リポジトリ設定を取得できません。${ghErrorMessage(configResult.reason)}`);
-    }
-
-
-    if (listAvailable) {
-      const trackedByNumber = new Map();
-      for (const record of [...previousRegistrations, ...previousRelated]) {
-        let tracked = trackedByNumber.get(record.number);
-        if (!tracked) {
-          tracked = { registrations: [], related: null, record: null };
-          trackedByNumber.set(record.number, tracked);
-        }
-        if (record.session_id) tracked.registrations.push(record);
-        else tracked.related = record;
-        tracked.record ||= record;
-      }
-      const openNumbers = new Set(openPullRequests.map((pr) => pr.number));
-      const backfill = [...trackedByNumber.entries()]
-        .filter(([number, tracked]) => !openNumbers.has(number) && tracked.record.state === 'merged'
-          && !confirmedMergedHead(tracked.record.mergedHead)
-          && !this.mergedHeadBackfillRetries.has(`${repository}#${number}`))
-        .slice(0, 5);
-      const backfillNumbers = new Set(backfill.map(([number]) => number));
-      for (const [number] of backfill) {
-        const key = `${repository}#${number}`;
-        if (this.mergedHeadBackfillAttempts.has(key)) this.mergedHeadBackfillRetries.add(key);
-        this.mergedHeadBackfillAttempts.add(key);
-      }
-      const toInspect = [...trackedByNumber.entries()]
-        .filter(([number, tracked]) => !openNumbers.has(number) && !['merged', 'closed'].includes(tracked.record.state))
-        .concat(backfill);
-      const viewFields = `${PULL_REQUEST_FIELDS},state,mergedAt`;
-      const inspected = await Promise.all(toInspect.map(async ([number, tracked]) => {
-        try {
-          const output = await this.execute(['pr', 'view', String(number), '-R', repository, '--json', viewFields]);
-          return { number, tracked, value: JSON.parse(output) };
-        } catch (error) {
-          return { number, tracked, error };
-        }
-      }));
-      for (const result of inspected) {
-        if (backfillNumbers.has(result.number) && (result.error || result.value?.state !== 'MERGED'
-          || !confirmedMergedHead(result.value))) continue;
-        if (result.error) {
-          errors.push(`#${result.number} の状態を確認できません。${ghErrorMessage(result.error)}`);
-          uninspectedNumbers.add(result.number);
-          continue;
-        }
-        const value = result.value;
-        const state = String(value.state || '').toUpperCase();
-        if (!['OPEN', 'CLOSED', 'MERGED'].includes(state)) {
-          errors.push(`#${result.number} の状態を読み取れませんでした`);
-          uninspectedNumbers.add(result.number);
-          continue;
-        }
-        const closedState = state === 'MERGED' || (state === 'CLOSED' && value.mergedAt) ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
-        if (closedState === 'open') {
-          const normalized = normalizeOpenPullRequest(value);
-          if (!normalized) {
-            errors.push(`#${result.number} の状態を読み取れませんでした`);
-            uninspectedNumbers.add(result.number);
-            continue;
-          }
-          openPullRequests.push(normalized);
-          openNumbers.add(normalized.number);
-          continue;
-        }
-        const stateChanges = {
-          state: closedState,
-          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : null,
-        };
-        if (closedState === 'merged') stateChanges.mergedHead = confirmedMergedHead(value);
-        for (const record of result.tracked.registrations) {
-          this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
-        }
-        if (result.tracked.related) {
-          this.state.updateRelatedPullRequest(owner, repo, result.number, stateChanges);
-        }
-        if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
-          const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
-          const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
-          const pullRequest = normalizeOpenPullRequest(value);
-          const openByNumber = new Map(openPullRequests.map((item) => [item.number, item]));
-          const stackedPullRequests = new Map();
-          for (const item of [...(reservation?.stackedPullRequests || []), ...(mergeIntent?.stackedPullRequests || [])]) {
-            const child = openByNumber.get(item.number);
-            if (child) stackedPullRequests.set(item.number, { ...item, headRefName: child.headRefName });
-          }
-          if (pullRequest) {
-            for (const child of openPullRequests
-              .filter((candidate) => candidate.baseRefName === pullRequest.headRefName)
-              .map((candidate) => ({ number: candidate.number, baseRefName: pullRequest.headRefName }))) {
-              stackedPullRequests.set(child.number, child);
-            }
-          }
-          await this.onMerged?.({
-            owner,
-            repo,
-            pullRequest,
-            mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : new Date(this.now()).toISOString(),
-            reservation,
-            registrations: result.tracked.registrations,
-            stackedPullRequests: [...stackedPullRequests.values()],
-          });
-        } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
-          const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
-          const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
-          if (reservation || mergeIntent) await this.onClosed?.({ owner, repo, number: result.number, reservation, mergeIntent, registrations: result.tracked.registrations });
-        }
-      }
-    }
-
-    // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
-    if (listAvailable && !openPullRequests.length) {
-      mergedPullRequests = [];
-      mergedListComplete = true;
-    } else if (listAvailable) {
-      const since = mergedSearchSince(openPullRequests);
-      try {
-        mergedPullRequests = parseMergedPullRequestList(await this.execute([
-          'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
-          ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt',
-        ]));
-        mergedListComplete = mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT;
-      } catch (error) {
-        errors.push(`マージ済み PR の一覧を取得できません。${ghErrorMessage(error)}`);
-      }
-    }
-
-    const historicalPullRequests = historicalMergedPullRequests(
-      this.state.pullRequestRegistrationsForRepo(owner, repo),
-      this.state.relatedPullRequestRegistrationsForRepo(owner, repo),
-      openPullRequests,
-    );
-    const mergedCandidates = mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests);
-    const branchHeadRequests = new Map();
-    const readBranchHead = (branch) => {
-      if (!branchHeadRequests.has(branch)) {
-        branchHeadRequests.set(branch, this.readRemoteBranchHead(repository, branch));
-      }
-      return branchHeadRequests.get(branch);
-    };
-    const { restackResults, liveMergedBranches } = await evaluateRestack({
-      openPullRequests, mergedCandidates, mergedListComplete, defaultBranch, listAvailable, readBranchHead,
-      compare: async (compareBase, headRefOid) => parseCompareResult(await this.execute([
-        'api', `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${headRefOid}`,
-      ])),
-      onError: (message) => errors.push(message),
+  async inspectDisappearedPullRequests(owner, repo, repository, {
+    registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers,
+  }) {
+    const { toInspect, backfillNumbers } = selectPullRequestsToInspect({
+      registrationsBeforeInspection, relatedBeforeInspection, openNumbers,
+      retried: new Set([...registrationsBeforeInspection, ...relatedBeforeInspection]
+        .filter((record) => this.mergedHeadBackfillRetries.has(`${repository}#${record.number}`))
+        .map((record) => record.number)),
     });
+    for (const number of backfillNumbers) {
+      const key = `${repository}#${number}`;
+      if (this.mergedHeadBackfillAttempts.has(key)) this.mergedHeadBackfillRetries.add(key);
+      this.mergedHeadBackfillAttempts.add(key);
+    }
+    const viewFields = `${PULL_REQUEST_FIELDS},state,mergedAt`;
+    const inspected = await Promise.all(toInspect.map(async ([number, tracked]) => {
+      try {
+        const output = await this.execute(['pr', 'view', String(number), '-R', repository, '--json', viewFields]);
+        return { number, tracked, value: JSON.parse(output) };
+      } catch (error) {
+        return { number, tracked, error };
+      }
+    }));
+    for (const result of inspected) {
+      const classified = classifyInspectedPullRequest(result, backfillNumbers);
+      if (classified.kind === 'skip') continue;
+      if (classified.kind === 'error' || classified.kind === 'unreadable') {
+        errors.push(classified.error);
+        uninspectedNumbers.add(result.number);
+        continue;
+      }
+      if (classified.kind === 'open') {
+        openPullRequests.push(classified.pullRequest);
+        openNumbers.add(classified.pullRequest.number);
+        continue;
+      }
+      const value = result.value;
+      const closedState = classified.kind;
+      const stateChanges = classified.stateChanges;
+      for (const record of result.tracked.registrations) {
+        this.state.updatePullRequest(record.session_id, owner, repo, result.number, stateChanges);
+      }
+      if (result.tracked.related) {
+        this.state.updateRelatedPullRequest(owner, repo, result.number, stateChanges);
+      }
+      if (closedState === 'merged' && result.tracked.record.state !== 'merged') {
+        const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+        const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
+        const pullRequest = normalizeOpenPullRequest(value);
+        const stackedPullRequests = stackedPullRequestsForMerge({
+          reservation, mergeIntent, pullRequest, openPullRequests,
+        });
+        await this.onMerged?.({
+          owner,
+          repo,
+          pullRequest,
+          mergedAt: typeof value.mergedAt === 'string' ? value.mergedAt : new Date(this.now()).toISOString(),
+          reservation,
+          registrations: result.tracked.registrations,
+          stackedPullRequests,
+        });
+      } else if (closedState === 'closed' && result.tracked.record.state !== 'closed') {
+        const reservation = this.state.pullRequestMergeReservation(owner, repo, result.number);
+        const mergeIntent = this.state.pullRequestMergeIntent(owner, repo, result.number);
+        if (reservation || mergeIntent) await this.onClosed?.({ owner, repo, number: result.number, reservation, mergeIntent, registrations: result.tracked.registrations });
+      }
+    }
+  }
 
-    // base を付け替えた子も親のプロダクトに数えるため、所属は積み直しの判定の後に、画面と同じ結果で集める。
-    const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
-    const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+  async fetchMergedPullRequests(repository, openPullRequests) {
+    if (!openPullRequests.length) {
+      return { mergedPullRequests: [], mergedListComplete: true, error: null };
+    }
+    const since = mergedSearchSince(openPullRequests);
+    try {
+      const mergedPullRequests = parseMergedPullRequestList(await this.execute([
+        'pr', 'list', '-R', repository, '--state', 'merged', '--limit', String(MERGED_PULL_REQUEST_LIMIT),
+        ...(since ? ['--search', `merged:>=${since}`] : []), '--json', 'number,headRefOid,headRefName,baseRefName,mergedAt',
+      ]));
+      return { mergedPullRequests, mergedListComplete: mergedPullRequests.length < MERGED_PULL_REQUEST_LIMIT, error: null };
+    } catch (error) {
+      return { mergedPullRequests: null, mergedListComplete: false,
+        error: `マージ済み PR の一覧を取得できません。${ghErrorMessage(error)}` };
+    }
+  }
+
+  updateProductMembership(owner, repo, {
+    registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
+  }) {
     const trackedPullRequests = [...registrations, ...relatedPullRequests].map((record) => (
       record.session_id ? storedPullRequest(record) : storedRelatedPullRequest(record)
     )).filter(Boolean);
 
     if (listAvailable) {
       const registeredNumbers = new Set(registrations.map((record) => record.number));
-      const productGroups = new Map();
-      for (const registration of registrations) {
-        const productKey = registration.product?.key || `repo:${key}`;
-        let group = productGroups.get(productKey);
-        if (!group) {
-          group = { product: registration.product || { key: productKey, name: `${owner}/${repo}` }, registrations: [] };
-          productGroups.set(productKey, group);
-        }
-        group.registrations.push(registration);
-      }
+      const productGroups = productGroupsFor(owner, repo, registrations);
       const groupAssemblies = [];
       const displayProductsByNumber = new Map();
       for (const group of productGroups.values()) {
@@ -1141,6 +1142,67 @@ class PullRequestTracker {
         }
       }
     }
+  }
+
+  async fetchRepository(owner, repo, repository) {
+    const key = repoKey(owner, repo);
+    const checkedAt = new Date(this.now()).toISOString();
+    const current = this.repositories.get(key) || {
+      owner, repo, openPullRequests: [], defaultBranch: null, mergeMethods: [], autoDeleteBranch: false, configAvailable: false, fetchedAt: null, checkedAt: null,
+    };
+    const registrationsBeforeInspection = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const relatedBeforeInspection = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    const [listResult, configResult] = await Promise.allSettled([
+      this.execute(['pr', 'list', '-R', repository, '--state', 'open', '--limit', '500', '--json', PULL_REQUEST_FIELDS]),
+      this.execute(['api', `repos/${repository}`]),
+    ]);
+    const { openPullRequests, openNumbers, defaultBranch, mergeMethods, autoDeleteBranch, configAvailable,
+      fetchedAt, listAvailable, errors, uninspectedNumbers } = interpretFetchResults({
+      listResult, configResult, current, checkedAt,
+    });
+    let mergedPullRequests = null;
+    let mergedListComplete = false;
+
+    if (listAvailable) {
+      await this.inspectDisappearedPullRequests(owner, repo, repository, {
+        registrationsBeforeInspection, relatedBeforeInspection, openPullRequests, openNumbers, errors, uninspectedNumbers,
+      });
+    }
+
+    // gh pr view で補ったオープンの PR も含めるため、マージ済みの一覧は補った後に取る。
+    if (listAvailable) {
+      const mergedResult = await this.fetchMergedPullRequests(repository, openPullRequests);
+      ({ mergedPullRequests, mergedListComplete } = mergedResult);
+      if (mergedResult.error) errors.push(mergedResult.error);
+    }
+
+    const historicalPullRequests = historicalMergedPullRequests(
+      this.state.pullRequestRegistrationsForRepo(owner, repo),
+      this.state.relatedPullRequestRegistrationsForRepo(owner, repo),
+      openPullRequests,
+    );
+    const mergedCandidates = mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests);
+    const branchHeadRequests = new Map();
+    const readBranchHead = (branch) => {
+      if (!branchHeadRequests.has(branch)) {
+        branchHeadRequests.set(branch, this.readRemoteBranchHead(repository, branch));
+      }
+      return branchHeadRequests.get(branch);
+    };
+    const { restackResults, liveMergedBranches } = await evaluateRestack({
+      openPullRequests, mergedCandidates, mergedListComplete, defaultBranch, listAvailable, readBranchHead,
+      compare: async (compareBase, headRefOid) => parseCompareResult(await this.execute([
+        'api', `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${headRefOid}`,
+      ])),
+      onError: (message) => errors.push(message),
+    });
+
+    // base を付け替えた子も親のプロダクトに数えるため、所属は積み直しの判定の後に、画面と同じ結果で集める。
+    const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
+    const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
+    this.updateProductMembership(owner, repo, {
+      registrations, relatedPullRequests, openPullRequests, defaultBranch, listAvailable, restackResults, liveMergedBranches,
+    });
 
     this.repositories.set(key, {
       owner,
@@ -1169,16 +1231,7 @@ class PullRequestTracker {
     if (!repositoryState) return;
     const registrations = this.state.pullRequestRegistrationsForRepo(owner, repo);
     const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
-    const productGroups = new Map();
-    for (const registration of registrations) {
-      const productKey = registration.product?.key || `repo:${key}`;
-      let group = productGroups.get(productKey);
-      if (!group) {
-        group = { product: registration.product || { key: productKey, name: `${owner}/${repo}` }, registrations: [] };
-        productGroups.set(productKey, group);
-      }
-      group.registrations.push(registration);
-    }
+    const productGroups = productGroupsFor(owner, repo, registrations);
     const createdIdentities = new Set();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
@@ -1339,6 +1392,11 @@ function attachCrossReviewState(pullRequest, crossReviewByNumber) {
 }
 
 module.exports = {
+  productGroupsFor,
+  selectPullRequestsToInspect,
+  classifyInspectedPullRequest,
+  stackedPullRequestsForMerge,
+  interpretFetchResults,
   parseCompareResult,
   restackResult,
   historicalMergedPullRequests,

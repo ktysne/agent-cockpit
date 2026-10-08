@@ -5,7 +5,12 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   PullRequestTracker,
+  classifyInspectedPullRequest,
   evaluateRestack,
+  interpretFetchResults,
+  productGroupsFor,
+  selectPullRequestsToInspect,
+  stackedPullRequestsForMerge,
   historicalMergedPullRequests,
   mergedPullRequestCandidates,
   parseCompareResult,
@@ -2085,4 +2090,183 @@ test('比較はすべての PR で始めてから結果を待ち、失敗した 
     [90, { checked: false, parent: null }],
     [91, { checked: false, parent: null }],
   ]));
+});
+
+test('取得に失敗した一覧と設定は前回の値を残し、取得時刻を更新しない', () => {
+  const current = { openPullRequests: [pullRequest(31, 'feat', 'main')], defaultBranch: 'main',
+    mergeMethods: ['merge'], autoDeleteBranch: true, fetchedAt: 'previous' };
+  const result = interpretFetchResults({ current, checkedAt: 'now',
+    listResult: { status: 'rejected', reason: new Error('list') },
+    configResult: { status: 'rejected', reason: new Error('config') } });
+  assert.equal(result.openPullRequests, current.openPullRequests);
+  assert.equal(result.mergeMethods, current.mergeMethods);
+  assert.equal(result.defaultBranch, 'main');
+  assert.equal(result.autoDeleteBranch, true);
+  assert.equal(result.fetchedAt, 'previous');
+  assert.equal(result.listAvailable, false);
+  assert.equal(result.configAvailable, false);
+  assert.deepEqual([...result.openNumbers], [31]);
+  assert.match(result.errors[0], /^PR の一覧を取得できません。/);
+  assert.match(result.errors[1], /^リポジトリ設定を取得できません。/);
+});
+
+test('読み取れない一覧と設定は一覧、設定の順でエラーにする', () => {
+  const result = interpretFetchResults({ current: { openPullRequests: [], fetchedAt: 'previous' }, checkedAt: 'now',
+    listResult: { status: 'fulfilled', value: 'invalid' },
+    configResult: { status: 'fulfilled', value: 'invalid' } });
+  assert.deepEqual(result.errors, ['PR の一覧を読み取れませんでした', 'リポジトリ設定を読み取れませんでした']);
+  assert.equal(result.fetchedAt, 'previous');
+});
+
+test('取得できた一覧は新しい配列にして設定と取得時刻を更新する', () => {
+  const current = { openPullRequests: [] };
+  const result = interpretFetchResults({ current, checkedAt: 'now',
+    listResult: { status: 'fulfilled', value: JSON.stringify([ghPullRequest(31, 'feat', 'main')]) },
+    configResult: { status: 'fulfilled', value: JSON.stringify({ default_branch: 'main',
+      allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: true, delete_branch_on_merge: true }) } });
+  assert.notEqual(result.openPullRequests, current.openPullRequests);
+  assert.deepEqual([...result.openNumbers], [31]);
+  assert.equal(result.fetchedAt, 'now');
+  assert.equal(result.listAvailable, true);
+  assert.equal(result.configAvailable, true);
+  assert.deepEqual(result.mergeMethods, ['merge', 'rebase']);
+  assert.equal(result.autoDeleteBranch, true);
+  assert.deepEqual(result.errors, []);
+});
+
+
+test('確認対象は登録、関連の挿入順で束ね、同じ番号の登録をまとめる', () => {
+  const first = pullRequestRegistration(32);
+  const duplicate = { ...first, session_id: 'another' };
+  const related = { number: 31, state: 'open' };
+  const result = selectPullRequestsToInspect({ registrationsBeforeInspection: [first, pullRequestRegistration(30), duplicate],
+    relatedBeforeInspection: [related, { number: 32, state: 'closed' }], openNumbers: new Set(), retried: new Set() });
+  assert.deepEqual([...result.trackedByNumber.keys()], [32, 30, 31]);
+  assert.deepEqual(result.toInspect.map(([number]) => number), [32, 30, 31]);
+  assert.deepEqual(result.trackedByNumber.get(32).registrations, [first, duplicate]);
+  assert.equal(result.trackedByNumber.get(32).record, first);
+  assert.equal(result.trackedByNumber.get(31).related, related);
+});
+
+test('補完対象は最大５件を通常の確認対象の末尾に登録順で足す', () => {
+  const records = [1, 2, 3, 4, 5, 6, 7].map(number => pullRequestRegistration(number, { state: 'merged' }));
+  records.push(pullRequestRegistration(20));
+  const retried = new Set([2]);
+  const result = selectPullRequestsToInspect({ registrationsBeforeInspection: records,
+    relatedBeforeInspection: [], openNumbers: new Set(), retried });
+  assert.deepEqual([...result.backfillNumbers], [1, 3, 4, 5, 6]);
+  assert.deepEqual(result.toInspect.map(([number]) => number), [20, 1, 3, 4, 5, 6]);
+  assert.deepEqual([...retried], [2]);
+});
+
+test('一覧にある PR と閉じた PR と確定 head のあるマージ済み PR は確認しない', () => {
+  const records = [pullRequestRegistration(1), pullRequestRegistration(2, { state: 'closed' }),
+    { ...pullRequestRegistration(3, { state: 'merged' }),
+      mergedHead: { headRefName: 'feat', baseRefName: 'main', headRefOid: 'a'.repeat(40) } }];
+  const result = selectPullRequestsToInspect({ registrationsBeforeInspection: records,
+    relatedBeforeInspection: [], openNumbers: new Set([1]), retried: new Set() });
+  assert.deepEqual(result.toInspect, []);
+});
+
+test('補完は MERGED かつ確定 head のときだけ適用し、ほかの結果を無視する', () => {
+  const backfill = new Set([31]);
+  const value = { ...ghPullRequest(31, 'feat', 'main', { sha: 'a'.repeat(40) }), state: 'MERGED', mergedAt: 'now' };
+  for (const result of [{ number: 31, error: new Error('failed') },
+    { number: 31, value: { ...value, state: 'merged' } },
+    { number: 31, value: { ...value, headRefOid: '' } },
+    { number: 31, value: { ...value, state: 'CLOSED' } }]) {
+    assert.deepEqual(classifyInspectedPullRequest(result, backfill), { kind: 'skip' });
+  }
+  const result = classifyInspectedPullRequest({ number: 31, value }, backfill);
+  assert.equal(result.kind, 'merged');
+  assert.equal(result.stateChanges.mergedHead.headRefOid, value.headRefOid);
+});
+
+test('確認失敗と読み取れない状態は番号付きのエラーに分類する', () => {
+  assert.match(classifyInspectedPullRequest({ number: 31, error: new Error('failed') }, new Set()).error,
+    /^#31 の状態を確認できません。/);
+  for (const value of [{ state: 'UNKNOWN' }, { state: 'OPEN', number: 31 }]) {
+    assert.deepEqual(classifyInspectedPullRequest({ number: 31, value }, new Set()),
+      { kind: 'unreadable', error: '#31 の状態を読み取れませんでした' });
+  }
+});
+
+test('確認で見つかった OPEN は正規化した PR を返す', () => {
+  const result = classifyInspectedPullRequest({ number: 31,
+    value: { ...ghPullRequest(31, 'feat', 'main'), state: 'open' } }, new Set());
+  assert.equal(result.kind, 'open');
+  assert.equal(result.pullRequest.number, 31);
+  assert.equal(result.pullRequest.headRefName, 'feat');
+});
+
+test('CLOSED に mergedAt があれば merged にし、無ければ closed にする', () => {
+  const closed = classifyInspectedPullRequest({ number: 31, value: { state: 'CLOSED' } }, new Set());
+  assert.deepEqual(closed, { kind: 'closed', stateChanges: { state: 'closed', mergedAt: null } });
+  const merged = classifyInspectedPullRequest({ number: 31,
+    value: { ...ghPullRequest(31, 'feat', 'main'), state: 'CLOSED', mergedAt: 'now' } }, new Set());
+  assert.equal(merged.kind, 'merged');
+  assert.equal(merged.stateChanges.mergedAt, 'now');
+});
+
+test('子のスタックは予約、マージ意図の順で集め、閉じた子を除外する', () => {
+  const result = stackedPullRequestsForMerge({
+    reservation: { stackedPullRequests: [{ number: 32, baseRefName: 'old' }, { number: 99 }] },
+    mergeIntent: { stackedPullRequests: [{ number: 33 }, { number: 32, baseRefName: 'updated' }] },
+    pullRequest: null, openPullRequests: [pullRequest(32, 'child32', 'main'), pullRequest(33, 'child33', 'main')] });
+  assert.deepEqual(result, [{ number: 32, baseRefName: 'updated', headRefName: 'child32' },
+    { number: 33, headRefName: 'child33' }]);
+});
+
+test('親の head を base に持つ子は予約の値を置き換え、後から補った子も含める', () => {
+  const openPullRequests = [pullRequest(32, 'child32', 'parent')];
+  openPullRequests.push(pullRequest(33, 'child33', 'parent'));
+  assert.deepEqual(stackedPullRequestsForMerge({
+    reservation: { stackedPullRequests: [{ number: 32, baseRefName: 'old', headRefName: 'old' }] },
+    mergeIntent: null, pullRequest: pullRequest(31, 'parent', 'main'), openPullRequests }),
+  [{ number: 32, baseRefName: 'parent' }, { number: 33, baseRefName: 'parent' }]);
+});
+
+test('予約とマージ意図と親が無ければ子のスタックは空にする', () => {
+  assert.deepEqual(stackedPullRequestsForMerge({ reservation: null, mergeIntent: null,
+    pullRequest: null, openPullRequests: [pullRequest(32, 'child', 'main')] }), []);
+});
+
+test('オープン PR が無いときはマージ済み一覧を取得せず完全な空一覧を返す', async () => {
+  const tracker = new PullRequestTracker({ state: new DashboardState() });
+  tracker.execute = async () => { assert.fail('gh を呼ばない'); };
+  assert.deepEqual(await tracker.fetchMergedPullRequests('example/project', []),
+    { mergedPullRequests: [], mergedListComplete: true, error: null });
+});
+
+test('マージ済み一覧の取得失敗は一覧を null にして既存のエラー文を返す', async () => {
+  const tracker = new PullRequestTracker({ state: new DashboardState() });
+  tracker.execute = async () => { throw new Error('failed'); };
+  const result = await tracker.fetchMergedPullRequests('example/project', [pullRequest(31, 'feat', 'main')]);
+  assert.equal(result.mergedPullRequests, null);
+  assert.equal(result.mergedListComplete, false);
+  assert.match(result.error, /^マージ済み PR の一覧を取得できません。/);
+});
+
+
+test('プロダクトが無い登録はリポジトリ名を既定の所属にする', () => {
+  const registration = { number: 31 };
+  assert.deepEqual([...productGroupsFor('Example', 'Project', [registration])],
+    [['repo:example/project', { product: { key: 'repo:example/project', name: 'Example/Project' },
+      registrations: [registration] }]]);
+});
+
+test('所属は登録順で作り、同じキーの登録を最初のプロダクトに束ねる', () => {
+  const first = { number: 31, product: { key: 'b', name: 'first' } };
+  const second = { number: 32, product: { key: 'a', name: 'second' } };
+  const third = { number: 33, product: { key: 'b', name: 'third' } };
+  const registrations = [first, second, third];
+  const groups = productGroupsFor('example', 'project', registrations);
+  assert.deepEqual([...groups.keys()], ['b', 'a']);
+  assert.equal(groups.get('b').product, first.product);
+  assert.deepEqual(groups.get('b').registrations, [first, third]);
+  assert.deepEqual(registrations, [first, second, third]);
+});
+
+test('登録が無ければ所属は空にする', () => {
+  assert.deepEqual([...productGroupsFor('example', 'project', [])], []);
 });
