@@ -137,7 +137,8 @@ stdioを強制的に閉じてcloseを作っても子孫processの終了証明に
 `test/owned-execution-stop-web.test.js`で、診断欠落、古い確認の409、停止後に遅れて届く旧snapshot、停止未確認、下書き保持を検証する。
 表示件数は要求IDの保持量と区別し、複数の所有実行を別の対象として確認する。
 停止確認後も旧実行の送信を再開せず、停止状態をカードと追加指示欄で一致させる。
-製品HTMLを表示用fixtureで開いたブラウザ確認は、実runtimeの物理停止とは区別して記録する。
+停止確認画面は製品HTMLを表示するfixtureで確認し、画面記録をリポジトリルートの`.cross-review/211/product-stop-confirm.jpg`に保存する。
+このfixtureは停止APIの応答を模擬するため、実runtimeのowned child停止や物理停止の確認とは区別する。
 
 ## 実行と結果の記録
 

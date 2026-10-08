@@ -4941,7 +4941,7 @@ function renderKindSections(products, state = typeof lastState === 'undefined' ?
   const endedAgentCount = kindEndedAgentCount(references);
   for (const { product, session, multipleSessions } of references) {
     activityItems.push({ age: sessionActivityTime(session), row: mainRow(session, product, true, multipleSessions) });
-  const instructions = instructionComposer(session, state);
+    const instructions = instructionComposer(session, state);
     if (instructions) {
       const createdAt = Math.max(...(session.instructions || []).map((item) => item.createdAt).filter(Number.isFinite), 0);
       activityItems.push({ age: createdAt, row: instructions });
