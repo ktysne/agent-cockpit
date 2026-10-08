@@ -191,9 +191,11 @@ function parseCompareResult(stdout) {
 }
 
 // 親が見つからなくても、マージ済みの一覧が上限で切れていれば見逃しを否定できないので確かめられない扱いにする。
-function restackResult(commits, mergedPullRequests, mergedListComplete = true) {
+function restackResult(commits, mergedPullRequests, comparisonBranches, mergedListComplete = true) {
   if (!commits) return { checked: false, parent: null };
-  const parent = mergedPullRequests.find((candidate) => commits.has(candidate.headRefOid)) || null;
+  const parent = mergedPullRequests.find((candidate) => (
+    (!candidate.baseRefName || comparisonBranches.has(candidate.baseRefName)) && commits.has(candidate.headRefOid)
+  )) || null;
   return { checked: Boolean(parent) || mergedListComplete, parent };
 }
 
@@ -228,6 +230,7 @@ function mergedPullRequestCandidates(mergedPullRequests, historicalPullRequests)
 
 async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defaultBranch, readBranchHead, liveMergedBranches) {
   let compareBase = asText(pr.baseRefName);
+  const comparisonBranches = new Set(compareBase ? [compareBase] : []);
   const visitedBranches = new Set();
   while (compareBase && compareBase !== defaultBranch && !visitedBranches.has(compareBase)) {
     visitedBranches.add(compareBase);
@@ -236,6 +239,7 @@ async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defa
     ));
     if (openParent) {
       compareBase = asText(openParent.baseRefName);
+      if (compareBase) comparisonBranches.add(compareBase);
       continue;
     }
     if (openPullRequests.some((candidate) => candidate.headRefName === compareBase)) break;
@@ -249,8 +253,11 @@ async function restackCompareBase(pr, openPullRequests, mergedPullRequests, defa
       break;
     }
     compareBase = asText(mergedParent.baseRefName);
+    if (compareBase) comparisonBranches.add(compareBase);
   }
-  return compareBase || defaultBranch;
+  compareBase = compareBase || defaultBranch;
+  if (compareBase) comparisonBranches.add(compareBase);
+  return { compareBase, comparisonBranches };
 }
 
 // 積まれた子の親は子が作られた後にマージされるので、オープンの PR の最も古い作成日より後のマージだけを取る。
@@ -1032,7 +1039,7 @@ class PullRequestTracker {
       ? await Promise.all(openPullRequests.map(async (pr) => {
         if (!isCompleteCommitSha(pr.headRefOid)) return [pr.number, { checked: false, parent: null }];
         try {
-          const compareBase = await restackCompareBase(
+          const { compareBase, comparisonBranches } = await restackCompareBase(
             pr, openPullRequests, mergedCandidates, defaultBranch, readBranchHead, liveMergedBranches,
           );
           const output = await this.execute([
@@ -1040,7 +1047,7 @@ class PullRequestTracker {
             `repos/${repository}/compare/${encodeURIComponent(compareBase)}...${pr.headRefOid}`,
           ]);
           const commits = parseCompareResult(output);
-          const result = restackResult(commits, mergedCandidates, mergedListComplete);
+          const result = restackResult(commits, mergedCandidates, comparisonBranches, mergedListComplete);
           if (!result.checked && commits) return [pr.number, { checked: false, parent: null }];
           return [pr.number, result];
         } catch (error) {
