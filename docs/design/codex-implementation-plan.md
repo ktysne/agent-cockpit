@@ -26,6 +26,8 @@ Codexの共有契約は[共有契約文書](codex-shared-contract.md)を参照�
 再接続時の接続世代更新と旧currentProofの失効は、対象runtimeで別途確かめる。
 G4では質問応答と通常指示のtransportを分け、質問の宛先、owner保留、late answer、受付と適用の区別を維持する。
 fixtureでこれらの境界を検証しても、実runtimeの適合を確認したことにはならない。
+採用前に残る確認の順序、操作、観測点と合格条件は[実runtime確認計画](../handover/2026-10-08-runtime-gates.md)に定める。
+不足機能の実装と実runtime試験は、この計画を開発者が確認してから着手する。
 
 ## 実装の進め方
 

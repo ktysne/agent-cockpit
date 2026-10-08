@@ -2,7 +2,8 @@
 
 この計画は、fixtureで検証したCodex対応をfeatureへ集約した後、mainへ採用する前に残る実runtime確認を進めるための資料である。
 起点は、main同期PR `codex/sync-main-259-20261008` の上に作成する計画PR `codex/plan-a-runtime-gates-20261008` である。
-PR番号、起点SHA、実runtimeの版とhostは、実際の作業と証拠を確認して追記する。
+起点はfeature `6b071e1` とmain `3a7f007` の通常mergeである。
+実runtimeの版とhostは、試験時に確認して追記する。
 この計画の作成だけでは製品実装、runtime試験、Issue完了を意味しない。
 
 ## 現在地と次にやること
@@ -15,11 +16,11 @@ fixtureで検証した変更をfeatureへ集約し、実runtime確認をfeature�
 
 ## 決定済みの判断
 
-| 日付 | 決定 | 適用 |
+| 日付 | 決定 | 理由と適用 |
 |---|---|---|
-| 2026-10-08 | fixtureで契約を検証した変更はfeatureへ集約し、実runtime未確認はfeatureからmainへ採用する条件として残す。 | #175、#211、#216、#217は、この集約だけでは閉じない。fixtureの合格を実runtimeの成功に読み替えない。 |
+| 2026-10-08 | fixtureで契約を検証した変更はfeatureへ集約し、実runtime未確認はfeatureからmainへ採用する条件として残す。 | レビュー済みコードを集約して確認の起点をそろえるため。#175、#211、#216、#217は、この集約だけでは閉じない。fixtureの合格を実runtimeの成功に読み替えない。 |
 | 2026-10-08 | native待ちは、CodexまたはClaude本体が本人の質問回答や許可を待っている状態を指す。 | 許可の操作はCockpitでは行わず、元のCodexまたはClaudeの画面で行う。Cockpitは観測した状態を表示し、許可を推測しない。 |
-| 2026-10-08 | #211の停止確認は、保留状態を消したことではなく、対象実行の停止を確認したこととする。 | 対象processの終了またはcloseと、対象contextとの一致を証拠で確かめる。停止を確認できない場合は再送を許さず、unknownを解除するだけの操作を設けない。 |
+| 既決 | #211の停止確認は対象実行の停止を確認したこととする。 | authorityの失効だけでは物理停止を証明できないため。対象processのexitとclose、非稼働、対象contextとの一致を証拠で確かめる。停止を確認できない場合は再送を許さず、保留だけを解除する操作を設けない。 |
 | 既決 | G2は実接続、再接続時の接続世代更新、旧currentProof失効をruntimeで確認する。 | fixtureまたはNS12の部分観測をG2通過の証拠にしない。 |
 | 既決 | G4は質問応答と通常指示のtransport、宛先、owner保留を分ける。 | owner不在だけで質問を解決せず、late answerの宛先と受付・適用を別々に確かめる。 |
 
@@ -34,7 +35,14 @@ fixtureで検証した変更をfeatureへ集約し、実runtime確認をfeature�
 | 5 | #217 | 実Codexで60秒を超える処理中に通常指示を送り、入力通知、ACK、遅れて届く適用証拠を確認する。 | feature向けの別PR。Issueは閉じない。 | 同一turnの完全一致する証拠だけがunknownからappliedへ進み、unknownやACK未確定の要求は再送されない。 |
 | 6 | #209、#210、#212、#218 / G2・G4 | 容量予約と回収、再照合後のcheckpoint処理、collector復帰証拠と指示projection、currentProofと再接続、質問応答と通常指示の横断適合、PoCの最終除去条件を照合する。 | main向け最終PRの準備段階。削除・package/test対象変更は承認済み条件の範囲で行う。 | 永続化と復旧の安全条件、G2/G4、対象runtimeの条件がそろい、未確認事項が採用範囲から残っていない。 |
 
-PRのスタックは `codex/sync-main-259-20261008` をfeature向けmain同期PR #261（head `9d5b3fe`、2026-10-08時点でレビュー中）とし、その上へ `codex/plan-a-runtime-gates-20261008` を積む。
+現在のスタックは次の表に記録する。
+
+| 順 | ブランチとPR | base | 状態（2026-10-08確認） |
+|---:|---|---|---|
+| 1 | `codex/sync-main-259-20261008` / #261 | `codex/feature-codex-support` | head `f7d4a51`、レビュー2往復で要修正なし。#259の同期とレビューで見つかった #262 の修正。未マージ。 |
+| 2 | `codex/plan-a-runtime-gates-20261008` / 作成予定 | `codex/sync-main-259-20261008` | 案Aと本計画。レビュー前、未マージ。 |
+
+開発者は下から通常mergeで取り込み、次段のbaseがfeatureへ付け替わったことを確認してから進める。
 以後の実装PRは、計画確認後に最新featureまたは開発者指定の直前PRを起点にする。
 実際のPR番号、head、base、SHAはGitHubとGitで確認した値だけを記録する。
 PRのマージは開発者が行う。
@@ -46,9 +54,11 @@ PRのマージは開発者が行う。
 対象ソースのSHA、製品の起動入口、設定値の由来、既存テストの初期化、実runtimeへ届く観測点を先に特定する。
 fixtureが内部関数を直接呼ぶ場合は、製品compositionを通る検証とは分けて記録する。
 
-各試験記録に、provider、runtime名と版、OS、hostの識別子、Cockpit source SHA、fixtureまたは実runtimeの区分、手順、観測結果、合否を残す。
+各試験記録に、シナリオID、provider、runtime名と版、OS、hostの識別子、Cockpit source SHA、scriptと結果のhash、fixtureまたは実runtimeの区分、手順、観測結果、合否を残す。
 host名などの個人情報は共有用記録で伏せ、認証情報、質問本文、ローカルの秘密パスを保存しない。
 未確認や観測不能は `unknown` として記録し、失敗や成功へ読み替えない。
+sanitizeしたsummaryとmanifestは `docs/evidence/` の追跡対象かIssue添付へ残し、レビューで再照合できるようにする。
+raw frame、token、実際の質問や入力本文は共有用証拠に含めない。
 
 ### #211の上限、停止、resolved
 
@@ -57,7 +67,7 @@ host名などの個人情報は共有用記録で伏せ、認証情報、質問�
 実runtimeでは通常発生する少数のnative待ちだけを扱い、境界件数の証拠とは分ける。
 
 **明示停止**は、CodexまたはClaude本体がnative要求を待っている代表実行から行う。
-Cockpitの既存デザインに沿う停止操作が対象実行を指すことを確認し、停止後にprocessの終了またはcloseを観測する。
+Cockpitの既存デザインに沿う停止操作が対象実行を指すことを確認し、停止後にprocessのexitとclose、および非稼働を観測する。
 終了証拠は対象contextと照合し、同名または後続実行の終了を取り違えない。
 statusや保留レコードの削除だけでは物理停止の証拠にしない。
 停止に失敗した場合、または対象との一致を確認できない場合は、送信と再送を保留する。
@@ -77,29 +87,37 @@ statusや保留レコードの削除だけでは物理停止の証拠にしな�
 ### #175の実Codex質問・許可とClaude native検出
 
 **Codexの質問待ち**は、実Codexで判断を必要とする質問を出し、本体が回答待ちになる操作で再現する。
-Cockpitに同一実行の質問待ちが表示され、回答の受付と本体への適用が別々に観測されることを確認する。
+自然文で質問を出すだけではnative要求の証拠にならないため、実際のserver requestを観測できる能力と操作を先に確認する。
+同一実行の待ちの種類と件数、下書き保持、追加指示の保存と送信の拒否を製品HTTPと画面で確認する。
+繰り返しGETで要求を消費しないこと、元のUIでの解決後も現在bindingを再検証できない間はunverifiedを保つことを確認する。
 質問本文や回答機能がnative待ちの種別と件数から推定されていないことも確かめる。
 
 **Codexの許可待ち**は、本体が許可を求める操作で再現する。
+現行owned runnerのnever/read-only固定では許可待ちの再現能力を証明できない。
+対応版がサポートする質問と許可要求を受けられる専用の試験profileを計画確認後に用意し、通常の製品設定と認証を変更せず、無害な固定操作で再現する。
+要求のschemaと能力が確認できなければ、未確認としてゲートを残し、Cockpit独自の `cockpit_wait` を成功の代わりに数えない。
 Cockpitが通常指示を保留し、許可操作が元のCodex画面に残ることを確認する。
 Cockpitから許可を出せる経路や、許可待ちを質問応答で解除する経路があれば不合格とする。
 
 **Claudeのnative検出**は、実Claudeで権限または質問を必要とする操作を行い、対象セッションのnative待ちと正規bindingがCockpitに現れるかを確認する。
+Claude担当の #207 の製品経路と観測能力を照合してから行い、writerの実装を重複させない。
 以前のClaude記録は起動順修正前の結果であるため、修正後のruntime版とsource SHAを記録して再実施する。
 検出できない場合は、未検出の観測点と原因候補を記録し、既存の実行を消したり新たな許可を代行したりしない。
 
 ### #217の60秒超過、ACK、遅延適用
 
-実Codexで、ツール実行が60秒を超える作業中に対象turnへ通常指示を送る。
+実Codexで、無害な固定の長時間処理を同じturnで継続し、その間に通常指示を一度送る。
 Cockpitの入力通知とACKを記録し、同一turn、同一要求、同一本文に対応するnative入力証拠が後から届いた時刻を確認する。
 
 完全一致する遅延証拠だけがunknownからappliedへ進むことを確かめる。
 別turn、別source、本文不一致、ACK未確定の証拠では状態を進めず、再送回数が0であることを台帳とruntime入力で照合する。
-60秒以内に証拠が届いた場合は、遅延証拠の確認になっていないため再試験する。
+ACK確定から入力適用証拠の到着まで実時間で60秒を超えたことを記録する。
+処理全体が60秒を超えても、証拠が60秒以内に届いた場合は遅延証拠を未確認とする。
+再試験はそのdeliveryを再送せず、別の明示した試験実行で行う。
 
 ## #218で維持する最終準備条件
 
-承認済みの旧PoC 8ファイルを含むPoC全体除去、関連するprobeとtestの2ファイル除去、`npm test` と `npm run test:inprocess` の明示的な対象指定、本文SQLiteの隔離HOMEとcleanupを最終main PRの準備条件として維持する。
+承認済みの旧PoC 8ファイルを含む `poc/` 全体除去、`tools/probes/common-question-runtime.js` と `test/common-question-runtime-probe.test.js` の除去、`npm test` と `npm run test:inprocess` の `test/**/*.test.js` への対象指定、本文SQLiteの隔離HOMEとcleanupを最終main PRの準備条件として維持する。
 これらは今回の計画PRでは削除または変更しない。
 PoCの固定SHA参照は証拠として残し、製品実装済みの根拠にしない。
 
@@ -114,6 +132,8 @@ G4は質問の固定宛先、owner保留、late answer、通常指示とのtrans
 
 別repositoryや通常HOMEへの変更は、対象、導入手順、cleanupを明記し開発者が確認した後に行う。
 bridge側の正本、契約、試験が必要な変更はCockpit側だけで完了としない。
+#207のClaudeだけの標準起動と書き込みを回帰確認し、未構成のCodex機能が既存利用の画面と挙動を変えないことを確認する。
+必要なbridge側の変更はrepositoryとIssueを明示し、外部repositoryの変更が未確認の間は関連ゲートを完了にしない。
 
 ## 判断待ち
 
@@ -134,5 +154,5 @@ runtimeの版、host、利用可能な機能、認証状態は、確認時点で
 ## 次のセッションの開始用プロンプト
 
 ```text
-docs/handover/2026-10-08-runtime-gates.md と docs/design/codex-implementation-plan.md を読み、まず最新のfeature/main、#218、#175、#211、#216、#217の状態をGitHubとGitで照合してください。計画の確認後、製品compositionと既存テストが実際に通る経路、設定のtrusted source、runtimeで観測できる証拠を特定してください。fixture、product composition、実runtimeの結果を分け、実施していない項目を成功と扱わないでください。#211の128件境界はfixtureと製品境界で確かめ、実モデルに129件を要求しないでください。native待ちの許可は元のCodexまたはClaude画面で行い、停止確認はprocess終了またはcloseと対象contextの一致で確かめてください。計画確認前に不足機能を実装せず、PRをマージしないでください。
+docs/handover/2026-10-08-runtime-gates.md と docs/design/codex-implementation-plan.md を読み、まず最新のfeature/main、#218、#175、#211、#216、#217の状態をGitHubとGitで照合してください。計画の開発者確認が記録されているか確認し、未確認なら実装とruntime試験へ進まないでください。確認後、製品compositionと既存テストが実際に通る経路、設定のtrusted source、runtimeで観測できる証拠を特定してください。fixture、product composition、実runtimeの結果を分け、実施していない項目を成功と扱わないでください。#211の128件境界はfixtureと製品境界で確かめ、実モデルに129件を要求しないでください。native待ちの許可は元のCodexまたはClaude画面で行い、停止確認はprocessのexitとclose、非稼働と対象contextの一致で確かめてください。PRをマージしないでください。
 ```
