@@ -10,7 +10,7 @@ const { isGithubCredentialEnvironmentVariable } = require('./credential-environm
 const { validDisplayPatch } = require('./display-preferences');
 const { ANSWER_WAIT_MS, DecisionAnswerDelivery, validPicks } = require('./decision-answers');
 const { sanitizeEvent } = require('./events');
-const { estimateTranscript } = require('./transcript');
+const { estimateTranscript, readTaskNotifications } = require('./transcript');
 const { productFromCwd, claudeHomeFromOptions, codexAgentScriptPaths, cockpitHomeFromOptions } = require('./identity');
 const { listLiveSessionFiles, findLiveSessionIdByPid, claudeAgentDefinition, codexAgentDefinition } = require('./session-files');
 const { crossReviewToolExists: defaultCrossReviewToolExists, PullRequestTracker } = require('./pull-requests');
@@ -1152,6 +1152,8 @@ function createRequestHandler(options) {
       const eventMetadata = { product, sessionName, agentDefinition, codexAgentDefinition: codexDefinitionMetadata };
       state.addEvent(body, eventMetadata);
       const event = sanitizeEvent(body, eventMetadata);
+      // 終了通知はメインの記録に書かれるので、サブエージェントのイベントのたびには読まない。
+      if (event && !event.agent_id) options.scheduleTaskNotifications?.(event.session_id);
       if (event && state.deletedSessions.has(event.session_id)
         && event.hookAt <= Date.parse(state.deletedSessions.get(event.session_id))) {
         jsonResponse(response, 202, { accepted: true });
@@ -1409,6 +1411,36 @@ async function startServer(options = {}) {
   let info = null;
   let closing = null;
   let lastRequestAt = Date.now();
+  const notificationTimers = new Map();
+  const notificationReads = new Map();
+  const notificationReader = options.readTaskNotifications || readTaskNotifications;
+  function needsTaskNotifications(sessionId) {
+    const session = state.snapshot().sessions.find((item) => item.session_id === sessionId);
+    return session?.status === '待機中(サブエージェント稼働中)'
+      && session.agents.some((agent) => !agent.isCodex && agent.active);
+  }
+  function reconcileTaskNotifications(sessionId) {
+    if (closing || !needsTaskNotifications(sessionId)) return Promise.resolve();
+    if (notificationReads.has(sessionId)) return notificationReads.get(sessionId);
+    const reading = (async () => {
+      try {
+        const file = state.sessionFileFor(sessionId);
+        const notifications = await notificationReader(claudeHome, file?.cwd, sessionId);
+        if (!closing && needsTaskNotifications(sessionId)) state.applyTaskNotifications(sessionId, notifications);
+      } catch {}
+    })().finally(() => notificationReads.delete(sessionId));
+    notificationReads.set(sessionId, reading);
+    return reading;
+  }
+  function scheduleTaskNotifications(sessionId) {
+    if (closing || notificationTimers.has(sessionId) || !needsTaskNotifications(sessionId)) return;
+    const timer = setTimeout(() => {
+      notificationTimers.delete(sessionId);
+      void reconcileTaskNotifications(sessionId);
+    }, options.taskNotificationDelayMs ?? 500);
+    timer.unref();
+    notificationTimers.set(sessionId, timer);
+  }
   const server = options.server || http.createServer((request, response) => {
     Promise.resolve(handler(request, response)).catch((error) => {
       logLine(homeDir, 'request failed');
@@ -1432,6 +1464,7 @@ async function startServer(options = {}) {
     webPath: options.webPath,
     manualDir: options.manualDir,
     dev,
+    scheduleTaskNotifications,
     getServerInfo: () => info,
     markRequest: () => { lastRequestAt = Date.now(); },
   });
@@ -1464,6 +1497,11 @@ async function startServer(options = {}) {
     else state.pruneExpiredStoreRecords(Date.now());
   }
   await refreshSessionFiles().catch(() => {});
+  for (const session of state.snapshot().sessions) scheduleTaskNotifications(session.session_id);
+  const notificationTimer = setInterval(() => {
+    for (const session of state.snapshot().sessions) void reconcileTaskNotifications(session.session_id);
+  }, 60_000);
+  notificationTimer.unref();
   const sessionScanTimer = setInterval(() => { refreshSessionFiles().catch(() => {}); }, SESSION_SCAN_INTERVAL_MS);
   sessionScanTimer.unref();
 
@@ -1481,6 +1519,10 @@ async function startServer(options = {}) {
     closing = (async () => {
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
+      clearInterval(notificationTimer);
+      for (const timer of notificationTimers.values()) clearTimeout(timer);
+      notificationTimers.clear();
+      await Promise.all(notificationReads.values());
       answerDelivery.close();
       pullRequestMergeManager.close?.();
       pullRequestTracker.close();
