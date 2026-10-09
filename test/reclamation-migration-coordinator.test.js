@@ -627,7 +627,7 @@ test('an undersized capacity budget blocks migration before any source is replac
   await coordinator.close();
 });
 
-test('null-anchor readback failure retains the bridge lease until a later verified clear', async () => {
+test('null-anchor readback failure retains the bridge lease and keeps the gate closed', async () => {
   const configuredSlots = ['questions'];
   const sourceBytes = Buffer.from(JSON.stringify({
     schemaVersion: 1,
