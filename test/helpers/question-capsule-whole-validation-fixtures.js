@@ -39,8 +39,8 @@ function transformStrings(value, replacements) {
   return value;
 }
 
-function periodSources(provider, suffix) {
-  const sources = threeSlotLegacySources(provider);
+function periodSources(provider, suffix, sourceProvider = provider) {
+  const sources = threeSlotLegacySources(sourceProvider);
   const replacements = new Map([
     ['period-1', `period-${suffix}`],
     ['internal-1', `internal-${suffix}`],
@@ -52,8 +52,8 @@ function periodSources(provider, suffix) {
     ['attempt-id', `attempt-id-${suffix}`],
     ['session-1', `session-${suffix}`],
     ['actor-1', `actor-${suffix}`],
-    [`host-${provider}`, `host-${provider}-${suffix}`],
-    [`home-${provider}`, `home-${provider}-${suffix}`],
+    [`host-${sourceProvider}`, `host-${sourceProvider}-${suffix}`],
+    [`home-${sourceProvider}`, `home-${sourceProvider}-${suffix}`],
     ['native-1', `native-${suffix}`],
     ['source-context', `source-context-${suffix}`],
     ['common-question-selection-1', `common-question-selection-${suffix}`],
@@ -134,14 +134,6 @@ function mergePeriodRegistrations(target, source) {
   for (const field of fields) target.registrations[field].push(...clone(source.registrations[field]));
 }
 
-function selectCapsuleContext(snapshot, delivery) {
-  if (delivery === null) return [];
-  return snapshot.stores.checkpoint.ledger.logicalTombstones.filter((item) =>
-    item.kind === delivery.kind && item.sourceExecutionId === delivery.sourceExecutionId &&
-    item.logicalMessageId === delivery.logicalMessageId && item.revision === delivery.revision &&
-    item.targetLaunchKey === null).map(clone);
-}
-
 function makeRepresentation(snapshot, normalByteLimitsBySlot) {
   const reservationsById = new Map(snapshot.stores.questions.reservations.map((row) =>
     [row.internalQuestionId, row]));
@@ -185,13 +177,21 @@ function makeRepresentation(snapshot, normalByteLimitsBySlot) {
   };
 }
 
-function createQuestionCapsuleWholeValidationFixture({ provider = 'claude', ordinaryQuestionSelected = false } = {}) {
-  if (!['claude', 'codex'].includes(provider)) throw new TypeError('invalid_whole_capsule_fixture');
+function createQuestionCapsuleWholeValidationFixture({
+  provider = 'claude',
+  ordinaryQuestionSelected = false,
+  secondaryProvider = null,
+} = {}) {
+  if (!['claude', 'codex'].includes(provider) ||
+      (secondaryProvider !== null && (!['claude', 'codex'].includes(secondaryProvider) ||
+        secondaryProvider === provider))) {
+    throw new TypeError('invalid_whole_capsule_fixture');
+  }
   const sources = threeSlotLegacySources(provider);
   const baseQuestion = clone(sources.question);
   const questionSource = JSON.parse(sources.questions.toString('utf8'));
   const firstCheckpoint = JSON.parse(sources.checkpoint.toString('utf8'));
-  const nextPeriod = periodSources(provider, '2');
+  const nextPeriod = periodSources(provider, '2', secondaryProvider ?? provider);
   const secondCheckpoint = nextPeriod.checkpoint;
   const secondPeriodQuestion = addQuestion(nextPeriod.question, 2, true);
   nextPeriod.questions.questions = [secondPeriodQuestion];
@@ -294,6 +294,10 @@ function createQuestionCapsuleWholeValidationFixture({ provider = 'claude', ordi
   }
 
   let releasedSnapshot = { anchor, stores };
+  const sourceGrants = {
+    questions: clone(releasedSnapshot.stores.questions.migrationAllowance),
+    checkpoint: clone(releasedSnapshot.stores.checkpoint.migrationAllowance),
+  };
   for (const slot of ['questions', 'checkpoint']) {
     const release = planMigrationAllowanceRelease({
       anchor: releasedSnapshot.anchor,
@@ -335,6 +339,7 @@ function createQuestionCapsuleWholeValidationFixture({ provider = 'claude', ordi
     },
     capsuleQuestionIds: [...CAPSULED_QUESTION_IDS],
     normalByteLimitsBySlot,
+    sourceGrants,
   };
 }
 

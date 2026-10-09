@@ -9,6 +9,7 @@ const {
   NORMAL_ANCHOR_MAX_BYTES,
   measureCheckpointReservation,
   measureInstructionReservation,
+  measurePendingQuestionPeriodCapacity,
   measureQuestionJournalReservationBytes,
 } = require('../src/server/reclamation-capacity-bounds');
 const { encodeQuestionReclamationAnchorV1Local } = require('../src/server/question-reclamation-anchor-codec');
@@ -110,6 +111,19 @@ test('whole validation reconstructs mixed multi-period chunks and preserves decl
     assert.equal(Object.hasOwn(result, 'canResume'), false);
     assert.equal(Object.hasOwn(result, 'isPersisted'), false);
   }
+});
+
+test('whole validation accepts capsule pairs from different providers in one snapshot', () => {
+  const generated = createQuestionCapsuleWholeValidationFixture({
+    provider: 'claude',
+    secondaryProvider: 'codex',
+  });
+  const providers = new Set(generated.input.capsulePairs.map((pair) =>
+    pair.questionCapsule.identity.provider));
+
+  assert.deepEqual(providers, new Set(['claude', 'codex']));
+  assertCapsulePairsPassLocally(generated.input);
+  assert.deepEqual(validateQuestionCapsuleWholeRepresentation(generated.input).snapshot, generated.snapshot);
 });
 
 test('whole validation accepts reordered object keys while preserving array order', () => {
@@ -228,6 +242,124 @@ test('whole validation rejects an oversized but locally valid retired anchor acc
     questionReservationOrder: [],
     normalByteLimitsBySlot: { questions: null, checkpoint: null, instructions: null },
   });
+});
+
+test('whole validation rejects future anchor growth when the current anchor still fits', () => {
+  const generated = createQuestionCapsuleWholeValidationFixture({ ordinaryQuestionSelected: true });
+  const anchor = structuredClone(generated.snapshot.anchor);
+  const originalRetiredCount = anchor.retiredQuestionPeriods.length;
+  const identityTemplate = {
+    ...anchor.retiredQuestionPeriods[0].identity,
+    hostId: 'h'.repeat(512),
+    homeScopeId: 'm'.repeat(512),
+    nativeId: 'n'.repeat(512),
+  };
+  const makePaddingPeriod = (index) => ({
+    identity: { ...identityTemplate },
+    periodId: `pad-${index.toString(36).padStart(8, '0')}-${'q'.repeat(499)}`,
+    retiredAt: 2_000_000,
+    reason: 'confirmed-retirement',
+  });
+  const currentBytesAtBase = encodeQuestionReclamationAnchorV1Local(anchor).sizeBytes;
+  const firstPeriodBytes = encodeQuestionReclamationAnchorV1Local({
+    ...anchor,
+    retiredQuestionPeriods: [...anchor.retiredQuestionPeriods, makePaddingPeriod(0)],
+  }).sizeBytes;
+  const secondPeriodBytes = encodeQuestionReclamationAnchorV1Local({
+    ...anchor,
+    retiredQuestionPeriods: [
+      ...anchor.retiredQuestionPeriods,
+      makePaddingPeriod(0),
+      makePaddingPeriod(1),
+    ],
+  }).sizeBytes;
+  const firstPeriodGrowth = firstPeriodBytes - currentBytesAtBase;
+  const additionalPeriodGrowth = secondPeriodBytes - firstPeriodBytes;
+  const targetCurrentBytes = NORMAL_ANCHOR_MAX_BYTES - 100;
+  const paddingCount = Math.floor((targetCurrentBytes - currentBytesAtBase - firstPeriodGrowth) /
+    additionalPeriodGrowth) + 2;
+  assert.ok(firstPeriodGrowth > 0 && additionalPeriodGrowth > 0);
+  assert.ok(paddingCount > 2 && paddingCount + originalRetiredCount <= 20_000);
+  anchor.retiredQuestionPeriods.push(...Array.from({ length: paddingCount }, (_, index) =>
+    makePaddingPeriod(index)));
+
+  const minLengthByField = { hostId: 1, homeScopeId: 1, nativeId: 1, periodId: 13 };
+  const trimPaddingBytes = (targetAnchor, bytesToTrim) => {
+    for (let periodIndex = targetAnchor.retiredQuestionPeriods.length - 1;
+      periodIndex >= originalRetiredCount && bytesToTrim > 0; periodIndex -= 1) {
+      const retiredPeriod = targetAnchor.retiredQuestionPeriods[periodIndex];
+      for (const [record, field] of [
+        [retiredPeriod.identity, 'hostId'],
+        [retiredPeriod.identity, 'homeScopeId'],
+        [retiredPeriod.identity, 'nativeId'],
+        [retiredPeriod, 'periodId'],
+      ]) {
+        const value = record[field];
+        const removableBytes = value.length - minLengthByField[field];
+        const trimBytes = Math.min(bytesToTrim, removableBytes);
+        record[field] = value.slice(0, value.length - trimBytes);
+        bytesToTrim -= trimBytes;
+      }
+    }
+    return bytesToTrim;
+  };
+  const initialPaddingBytes = encodeQuestionReclamationAnchorV1Local(anchor).sizeBytes;
+  const bytesToTrim = initialPaddingBytes - targetCurrentBytes;
+  assert.equal(trimPaddingBytes(anchor, bytesToTrim), 0);
+  let currentBytes = encodeQuestionReclamationAnchorV1Local(anchor).sizeBytes;
+  assert.equal(currentBytes, targetCurrentBytes);
+  assert.ok(encodeQuestionReclamationAnchorV1Local({
+    ...anchor,
+    retiredQuestionPeriods: anchor.retiredQuestionPeriods.slice(0, originalRetiredCount),
+  }).bytes.equals(encodeQuestionReclamationAnchorV1Local(generated.snapshot.anchor).bytes));
+
+  const activePeriods = generated.snapshot.stores.questions.reservations.map(({ identity, periodId }) => ({
+    identity,
+    periodId,
+  }));
+  const emptyActiveScopeCapacity = measurePendingQuestionPeriodCapacity(anchor, []);
+  assert.equal(emptyActiveScopeCapacity.currentBytes, currentBytes);
+  assert.equal(emptyActiveScopeCapacity.fits, true);
+  assert.ok(emptyActiveScopeCapacity.projectedBytes <= NORMAL_ANCHOR_MAX_BYTES);
+  const fullQuestionScopeCapacity = measurePendingQuestionPeriodCapacity(anchor, activePeriods);
+  assert.equal(fullQuestionScopeCapacity.currentBytes, currentBytes);
+  assert.equal(fullQuestionScopeCapacity.pendingCount, 1);
+  assert.ok(currentBytes <= NORMAL_ANCHOR_MAX_BYTES);
+  assert.ok(fullQuestionScopeCapacity.projectedBytes > NORMAL_ANCHOR_MAX_BYTES);
+  assert.equal(fullQuestionScopeCapacity.fits, false);
+  assert.equal(fullQuestionScopeCapacity.reason, 'byte_limit');
+
+  const oneFewerAnchor = structuredClone(anchor);
+  oneFewerAnchor.retiredQuestionPeriods.pop();
+  let oneFewerCapacity = measurePendingQuestionPeriodCapacity(oneFewerAnchor, activePeriods);
+  if (!oneFewerCapacity.fits) {
+    assert.ok(oneFewerCapacity.projectedBytes > NORMAL_ANCHOR_MAX_BYTES);
+    assert.equal(trimPaddingBytes(oneFewerAnchor,
+      oneFewerCapacity.projectedBytes - (NORMAL_ANCHOR_MAX_BYTES - 100)), 0);
+    oneFewerCapacity = measurePendingQuestionPeriodCapacity(oneFewerAnchor, activePeriods);
+  }
+  assert.equal(oneFewerCapacity.fits, true);
+  assert.ok(oneFewerCapacity.currentBytes <= NORMAL_ANCHOR_MAX_BYTES);
+  assert.ok(oneFewerCapacity.projectedBytes <= NORMAL_ANCHOR_MAX_BYTES);
+  assert.equal(oneFewerAnchor.retiredQuestionPeriods.length, anchor.retiredQuestionPeriods.length - 1);
+  const oneFewerInput = structuredClone(generated.input);
+  oneFewerInput.anchor = oneFewerAnchor;
+  assertCapsulePairsPassLocally(oneFewerInput);
+  assert.deepEqual(validateQuestionCapsuleWholeRepresentation(oneFewerInput).snapshot.stores,
+    generated.snapshot.stores);
+
+  const snapshotWithPadding = {
+    anchor,
+    stores: generated.snapshot.stores,
+  };
+  const legacyOracle = validateReclamationSnapshot(snapshotWithPadding);
+  assert.equal(legacyOracle.status, 'ready');
+  assert.deepEqual(legacyOracle.reasons, []);
+  assertCapsulePairsPassLocally(generated.input);
+
+  const oversizedProjection = structuredClone(generated.input);
+  oversizedProjection.anchor = anchor;
+  assertInvalid(oversizedProjection);
 });
 
 test('empty capsule representation accepts a legacy anchor with every store slot absent', () => {
@@ -470,6 +602,33 @@ test('whole validation rejects migration in progress and a remaining question mi
     eligibleQuestionIds: [],
   };
   assertInvalid(grant);
+});
+
+test('whole validation rejects a valid migration grant on each capsule target store', () => {
+  for (const slot of ['questions', 'checkpoint']) {
+    const generated = fixture();
+    const grant = generated.sourceGrants[slot];
+    assert.ok(grant);
+
+    const snapshot = structuredClone(generated.snapshot);
+    snapshot.stores[slot].migrationAllowance = structuredClone(grant);
+    const legacyOracle = validateReclamationSnapshot(snapshot);
+    assert.equal(legacyOracle.status, 'ready');
+    assert.deepEqual(legacyOracle.reasons, []);
+    const storeWriteOracle = validateReclamationStoreWrite({
+      anchor: snapshot.anchor,
+      previousStores: snapshot.stores,
+      nextStores: snapshot.stores,
+      normalByteLimitsBySlot: generated.normalByteLimitsBySlot,
+    });
+    assert.equal(storeWriteOracle.status, 'checked');
+    assert.deepEqual(storeWriteOracle.reasons, []);
+
+    const input = structuredClone(generated.input);
+    input.ordinaryStores[slot].migrationAllowance = structuredClone(grant);
+    assertCapsulePairsPassLocally(input);
+    assertInvalid(input);
+  }
 });
 
 test('whole input rejects unknown fields, getters, and proxies without running traps', () => {
