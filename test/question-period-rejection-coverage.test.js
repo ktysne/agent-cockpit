@@ -276,7 +276,7 @@ function withQuestionCheckpointCacheState(snapshot, staleState) {
 
 function withInstructionCreationState(snapshot) {
   const journal = structuredClone(snapshot.stores.instructions);
-  journal.revision = Math.max(0, journal.revision - 1);
+  journal.revision += 1;
   for (const instruction of journal.instructions) {
     if (instruction.recordType === 'detail') instruction.deliveryCreationState = 'creating';
   }
@@ -504,11 +504,15 @@ test('QRC05: real PR and result deliveries remain outside question-period covera
   checkpoint = { ...checkpoint, ledger: result.ledger };
   const augmented = {
     ...fixture.retired,
-    stores: { ...fixture.retired.stores, checkpoint },
+    stores: {
+      ...fixture.retired.stores,
+      checkpoint: { ...checkpoint, revision: initialCheckpoint.revision + 1 },
+    },
   };
   const baselineCoverage = analyze(fixture.retired, fixture.selected.identity, fixture.selected.periodId);
   const augmentedCoverage = analyze(augmented, fixture.selected.identity, fixture.selected.periodId);
 
+  assert.equal(validateTransition(fixture.retired, augmented).status, 'checked');
   assert.equal(registration.created, true);
   assert.equal(prNotification.created, true);
   assert.equal(prNotification.delivery.kind, 'pr-notification');
@@ -516,7 +520,7 @@ test('QRC05: real PR and result deliveries remain outside question-period covera
   assert.equal(result.delivery.kind, 'result');
   assert.equal(getReclamationDelivery(checkpoint, 'qrc05-pr-attempt').kind, 'pr-notification');
   assert.equal(getReclamationDelivery(checkpoint, 'qrc05-result-attempt').kind, 'result');
-  assert.deepEqual(augmentedCoverage.questionRows, baselineCoverage.questionRows);
+  assert.deepEqual(augmentedCoverage, baselineCoverage);
   assert.ok(augmentedCoverage.scopeLimitations.includes(
     'nonquestion_checkpoint_and_instruction_obligations_not_covered'));
 });
