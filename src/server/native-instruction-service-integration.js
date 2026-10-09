@@ -38,6 +38,7 @@ const MAX_OBSERVATION_CAPABILITIES = 128;
 const PROFILE_FIELDS = ['provider', 'executablePath', 'homePath', 'homeScopeId', 'cwd'];
 const PROFILE_FIELDS_WITH_RUNNER = [...PROFILE_FIELDS, 'runnerProfile'];
 const RECLAMATION_SLOTS = ['checkpoint', 'instructions', 'questions'];
+const QUESTION_RECLAMATION_IDENTITY_FIELDS = ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'];
 const RECLAMATION_MAX_RECORDS_BY_SLOT = Object.freeze({
   checkpoint: DEFAULT_CHECKPOINT_MAX_RECORDS,
   instructions: DEFAULT_INSTRUCTION_MAX_RECORDS,
@@ -914,9 +915,25 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       'invalid_question_period_retirement');
     return reclamationContext.retireQuestionPeriod({ ...request, questionService, deliveryStore: store });
   }
+  function reclaimQuestionBodies(value) {
+    if (reclamationContext === null) throw integrationError('reclamation_unavailable');
+    if (closing) throw integrationError('native_instruction_integration_closed');
+    const captured = exactData(value, ['identity', 'periodId'], 'invalid_question_body_reclamation');
+    const request = Object.freeze({
+      identity: Object.freeze(exactData(captured.identity, QUESTION_RECLAMATION_IDENTITY_FIELDS,
+        'invalid_question_body_reclamation')),
+      periodId: captured.periodId,
+    });
+    return reclamationContext.reclaimQuestionBodies({
+      ...request,
+      questionService,
+      deliveryStore: store,
+    });
+  }
   const reclamation = reclamationContext === null ? null : Object.freeze({
     status: () => reclamationContext.status(),
     retireQuestionPeriod,
+    reclaimQuestionBodies,
   });
   return Object.freeze({
     native,

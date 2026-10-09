@@ -1,5 +1,6 @@
 'use strict';
 
+const { randomUUID } = require('node:crypto');
 const { types: utilTypes } = require('node:util');
 const {
   assertSafeUnsignedInteger,
@@ -41,6 +42,7 @@ const {
   validateReclamationTransition,
 } = require('./reclamation-store-consistency');
 const { planQuestionPeriodRetirement } = require('./question-period-retirement');
+const { planQuestionBodyReclamation } = require('./question-body-reclamation');
 const { createQuestionPeriodGate } = require('./question-period-gate');
 
 const SLOT_ORDER = Object.freeze(['checkpoint', 'instructions', 'questions']);
@@ -199,6 +201,11 @@ function identityPeriodKey(identity, periodId) {
   return values.map((value) => `${value.length}:${value}`).join('');
 }
 
+function sameIdentity(left, right) {
+  return ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId']
+    .every((field) => left[field] === right[field]);
+}
+
 function deliveryCapacity(slot, snapshot, normalByteLimit) {
   if (slot === 'questions') {
     return measureQuestionJournalReservationBytes({ snapshot, currentByteLimit: normalByteLimit }).reservedBytes;
@@ -283,6 +290,7 @@ function createReclamationServiceContext(value) {
   let closing = false;
   let closed = false;
   let failureCode = null;
+  let lastObservedNow = null;
   let readyResolve;
   let readyReject;
   let readyPending = true;
@@ -294,6 +302,19 @@ function createReclamationServiceContext(value) {
 
   function contextCanWrite() {
     return opened && !blocked && !closing && !closed && coordinator?.canWrite() === true;
+  }
+
+  function observeClock() {
+    let now;
+    try { now = input.now(); } catch { return { now: null, synchronized: false }; }
+    if (!Number.isSafeInteger(now) || now < 0) return { now: null, synchronized: false };
+    if (lastObservedNow === null) {
+      lastObservedNow = now;
+      return { now, synchronized: false };
+    }
+    const synchronized = now >= lastObservedNow;
+    if (synchronized) lastObservedNow = now;
+    return { now, synchronized };
   }
 
   const periodGate = createQuestionPeriodGate({
@@ -656,9 +677,78 @@ function createReclamationServiceContext(value) {
     }
   }
 
+  function fullSnapshotForRepair(repair) {
+    return makeRecord([
+      ['anchor', repair.anchor],
+      ['stores', fullStores(configuredSlots, repair.stores)],
+    ]);
+  }
+
+  async function savePreparedBodyBoundary(repair, step) {
+    const slot = step.slot;
+    if (!['questions', 'checkpoint'].includes(slot) ||
+        (step.boundary === 'checkpoint-grave') !== (slot === 'checkpoint')) {
+      throw contextError('invalid_question_body_reclamation_plan');
+    }
+    const currentStores = repair.stores;
+    const nextStores = cloneSnapshot(currentStores);
+    nextStores[slot] = normalizeStore(slot, step.snapshot.stores[slot]);
+    const transition = validateReclamationStoreWrite({
+      anchor: repair.anchor,
+      previousStores: currentStores,
+      nextStores,
+      normalByteLimitsBySlot: limitsForTransitions,
+    });
+    requireValue(sameStore(slot, transition.snapshot.stores[slot], nextStores[slot]),
+      'invalid_question_body_reclamation_plan');
+    const validation = validateReclamationSnapshot({
+      anchor: repair.anchor,
+      stores: transition.snapshot.stores,
+    });
+    requireValue(validation.status === 'ready', 'reclamation_snapshot_requires_reconciliation');
+    const candidate = validation.snapshot.stores[slot];
+    const encoded = encodeStore(slot, candidate);
+    const limit = checkedAddBytes(normalByteLimitsBySlot[slot], candidate.migrationAllowance?.maxExtraBytes ?? 0);
+    requireValue(limit <= slotMaximum(slot) && encoded.sizeBytes <= limit, 'reclamation_capacity_exceeded');
+    measurementLimit(slot, candidate, normalByteLimitsBySlot[slot], false, repair.anchor);
+    requireValue(!closing && !closed && !blocked, 'reclamation_service_context_closed');
+    try {
+      await persistence.writeSlotBytes(slot, encoded.bytes, limit);
+      const readback = await persistence.readSlotBytes(slot, limit);
+      requireValue(readback !== null && sameBytes(readback, encoded.bytes),
+        'reclamation_persistence_readback_mismatch');
+      repair.stores[slot] = candidate;
+      repair.rawBytes[slot] = readback;
+    } catch (error) {
+      block(error);
+      throw error;
+    }
+  }
+
+  async function continuePreparedBodyReclamations(repair) {
+    if (repair === null || repair.stores.questions === null) return;
+    const prepared = repair.stores.questions.reservations.filter((reservation) =>
+      reservation.reclamation !== null && reservation.bodyState === 'retained');
+    if (prepared.length === 0) return;
+    acquireOrResize(coldRepairReservation(repair));
+    for (const reservation of prepared) {
+      const clock = observeClock();
+      if (clock.now === null || !clock.synchronized) continue;
+      const planned = planQuestionBodyReclamation({
+        ...fullSnapshotForRepair(repair),
+        normalByteLimitsBySlot: limitsForTransitions,
+        internalQuestionId: reservation.internalQuestionId,
+        now: clock.now,
+      });
+      if (planned.status === 'deferred') continue;
+      requireValue(planned.status === 'planned', 'invalid_question_body_reclamation_plan');
+      for (const step of planned.steps) await savePreparedBodyBoundary(repair, step);
+    }
+  }
+
   async function repairColdStartup() {
     const repair = await readNormalSnapshotForRepair();
-    if (repair === null) return;
+    if (repair === null) return null;
     if (!sameAnchor(repair.originalAnchor, repair.anchor) || repair.reasons.length > 0) {
       acquireOrResize(coldRepairReservation(repair));
       await saveRepairAnchor(repair);
@@ -668,6 +758,7 @@ function createReclamationServiceContext(value) {
     }
     const validation = validateReclamationSnapshot({ anchor: repair.anchor, stores: repair.stores });
     requireValue(validation.status === 'ready', 'reclamation_snapshot_requires_reconciliation');
+    return repair;
   }
 
   function start(writersValue) {
@@ -686,8 +777,10 @@ function createReclamationServiceContext(value) {
     });
     startPromise = (async () => {
       try {
+        observeClock();
         await stopAndDrainWriters();
-        await repairColdStartup();
+        const repair = await repairColdStartup();
+        await continuePreparedBodyReclamations(repair);
         const result = await coordinator.start();
         requireValue(result.status === 'ready' && contextCanWrite(), 'reclamation_service_start_failed');
         readyPending = false;
@@ -783,6 +876,155 @@ function createReclamationServiceContext(value) {
     }
   }
 
+  function captureRetiredPeriodRequest(value) {
+    const captured = captureExactRecord(value, ['identity', 'periodId'],
+      'invalid_question_body_reclamation');
+    const request = Object.freeze(makeRecord([
+      ['identity', Object.freeze(captureExactRecord(captured.identity,
+        ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'],
+        'invalid_question_body_reclamation'))],
+      ['periodId', captured.periodId],
+    ]));
+    if (!periodGate.isRetired(request.identity, request.periodId) || anchor === null ||
+        !anchor.retiredQuestionPeriods.some((period) => period.periodId === request.periodId &&
+          sameIdentity(period.identity, request.identity))) {
+      throw contextError('question_period_not_retired');
+    }
+    return request;
+  }
+
+  function assertRetiredBodyOperation(request) {
+    if (!contextCanWrite() || anchor === null || anchor.migration !== null ||
+        !periodGate.isRetired(request.identity, request.periodId) ||
+        !anchor.retiredQuestionPeriods.some((period) => period.periodId === request.periodId &&
+          sameIdentity(period.identity, request.identity))) {
+      throw contextError('question_period_not_retired');
+    }
+  }
+
+  function liveBodySnapshot(questionAccess, checkpointAccess) {
+    const snapshot = currentSnapshot();
+    requireValue(snapshot !== null, 'reclamation_writer_cold');
+    snapshot.stores.questions = questionAccess.snapshot();
+    snapshot.stores.checkpoint = checkpointAccess.snapshot();
+    return snapshot;
+  }
+
+  async function persistLiveBodyBoundary(step, internalQuestionId, deliveryAttemptId,
+    questionAccess, checkpointAccess, request) {
+    assertRetiredBodyOperation(request);
+    const current = liveBodySnapshot(questionAccess, checkpointAccess);
+    requireValue(sameAnchor(current.anchor, step.snapshot.anchor), 'invalid_question_body_reclamation_plan');
+    const slot = step.slot;
+    const candidate = normalizeStore(slot, step.snapshot.stores[slot]);
+    const nextStores = cloneSnapshot(current.stores);
+    nextStores[slot] = candidate;
+    const transition = validateReclamationStoreWrite({
+      anchor: current.anchor,
+      previousStores: current.stores,
+      nextStores,
+      normalByteLimitsBySlot: limitsForTransitions,
+    });
+    requireValue(sameStore(slot, transition.snapshot.stores[slot], candidate),
+      'invalid_question_body_reclamation_plan');
+    for (const otherSlot of STORE_ORDER) {
+      if (otherSlot !== slot && current.stores[otherSlot] !== null) {
+        requireValue(sameStore(otherSlot, transition.snapshot.stores[otherSlot], current.stores[otherSlot]),
+          'invalid_question_body_reclamation_plan');
+      }
+    }
+    requireValue(transition.reasons.every((reason) =>
+      ['instruction_creation_state', 'question_creation_state', 'question_checkpoint_cache'].includes(reason)),
+    'invalid_question_body_reclamation_plan');
+    let saved;
+    if (slot === 'questions') {
+      saved = await questionAccess.persist(internalQuestionId, candidate);
+    } else if (slot === 'checkpoint' && deliveryAttemptId !== null) {
+      saved = await checkpointAccess.persist(candidate, deliveryAttemptId);
+    } else {
+      throw contextError('invalid_question_body_reclamation_plan');
+    }
+    requireValue(sameStore(slot, candidate, saved), 'reclamation_persistence_readback_mismatch');
+  }
+
+  async function reclaimQuestionBodies(value) {
+    const inputValue = captureExactRecord(value,
+      ['identity', 'periodId', 'questionService', 'deliveryStore'], 'invalid_question_body_reclamation');
+    const request = captureRetiredPeriodRequest(makeRecord([
+      ['identity', inputValue.identity], ['periodId', inputValue.periodId],
+    ]));
+    if (!contextCanWrite()) throw contextError('reclamation_service_blocked');
+    const questionService = inputValue.questionService;
+    const deliveryStore = inputValue.deliveryStore;
+    if (!questionService || typeof questionService.withRetiredQuestionBodies !== 'function' ||
+        !deliveryStore || typeof deliveryStore.withRetiredQuestionCheckpoint !== 'function') {
+      throw contextError('invalid_question_body_reclamation');
+    }
+    const reclaimedQuestionIds = [];
+    const deferredQuestionIds = [];
+    try {
+      await questionService.withRetiredQuestionBodies(request, async (questionAccess) =>
+        deliveryStore.withRetiredQuestionCheckpoint(request, async (checkpointAccess) => {
+          assertRetiredBodyOperation(request);
+          const initial = liveBodySnapshot(questionAccess, checkpointAccess);
+          const internalQuestionIds = initial.stores.questions.reservations
+            .filter((reservation) => reservation.periodId === request.periodId &&
+              sameIdentity(reservation.identity, request.identity))
+            .map((reservation) => reservation.internalQuestionId);
+          for (const internalQuestionId of internalQuestionIds) {
+            assertRetiredBodyOperation(request);
+            const base = liveBodySnapshot(questionAccess, checkpointAccess);
+            const reservation = base.stores.questions.reservations.find((item) =>
+              item.internalQuestionId === internalQuestionId);
+            if (!reservation || reservation.bodyState === 'reclaimed') {
+              if (reservation?.bodyState === 'reclaimed') reclaimedQuestionIds.push(internalQuestionId);
+              continue;
+            }
+            const clock = observeClock();
+            if (clock.now === null || !clock.synchronized) {
+              deferredQuestionIds.push(internalQuestionId);
+              continue;
+            }
+            const planInput = {
+              ...base,
+              normalByteLimitsBySlot: limitsForTransitions,
+              internalQuestionId,
+              now: clock.now,
+              ...(reservation.reclamation === null ? {} : { operationId: reservation.reclamation.operationId }),
+            };
+            let planned = planQuestionBodyReclamation(planInput);
+            if (planned.status === 'eligible') {
+              const operationId = input.createOperationId ? input.createOperationId() : randomUUID();
+              planned = planQuestionBodyReclamation({ ...planInput, operationId });
+            }
+            if (planned.status === 'deferred') {
+              deferredQuestionIds.push(internalQuestionId);
+              continue;
+            }
+            if (planned.status === 'complete') {
+              reclaimedQuestionIds.push(internalQuestionId);
+              continue;
+            }
+            requireValue(planned.status === 'planned', 'invalid_question_body_reclamation_plan');
+            for (const step of planned.steps) {
+              await persistLiveBodyBoundary(step, internalQuestionId,
+                reservation.deliveryIntent?.deliveryAttemptId ?? null,
+                questionAccess, checkpointAccess, request);
+            }
+            reclaimedQuestionIds.push(internalQuestionId);
+          }
+        }));
+      return Object.freeze({
+        status: deferredQuestionIds.length === 0 ? 'complete' : 'deferred',
+        reclaimedQuestionIds: Object.freeze(reclaimedQuestionIds),
+        deferredQuestionIds: Object.freeze(deferredQuestionIds),
+      });
+    } catch (error) {
+      block(error);
+      throw error;
+    }
+  }
+
   function close() {
     if (closePromise !== null) return closePromise;
     closing = true;
@@ -839,6 +1081,7 @@ function createReclamationServiceContext(value) {
     canWrite: contextCanWrite,
     snapshot: currentSnapshot,
     retireQuestionPeriod,
+    reclaimQuestionBodies,
     close,
     status,
   });

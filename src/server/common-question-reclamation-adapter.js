@@ -12,6 +12,7 @@ const {
   normalizeQuestionDetailV2,
   normalizeQuestionReservation,
 } = require('./common-question-reclamation-codec');
+const { encodeNormalized } = require('./reclamation-json-codec');
 
 const V1_RECORD_FIELDS = [
   'internalQuestionId', 'questionId', 'identity', 'periodId', 'executionId', 'conversationId',
@@ -53,6 +54,10 @@ function sameGrant(left, right) {
   return GRANT_FIELDS.every((field) => field === 'eligibleQuestionIds'
     ? left[field].length === right[field].length && left[field].every((item, index) => item === right[field][index])
     : left[field] === right[field]);
+}
+
+function sameRecord(left, right) {
+  return encodeNormalized(left).bytes.equals(encodeNormalized(right).bytes);
 }
 
 function safeRecord(entries) {
@@ -158,6 +163,7 @@ function createCommonQuestionReclamationJournal(value) {
       typeof backend.canWrite !== 'function' ||
       !periodGate || typeof periodGate.assertCurrent !== 'function' ||
       typeof periodGate.assertRetirement !== 'function' ||
+      typeof periodGate.isRetired !== 'function' ||
       !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > kernel.MAX_JOURNAL_RECORDS) {
     throw adapterError('invalid_question_reclamation_journal');
   }
@@ -416,6 +422,77 @@ function createCommonQuestionReclamationJournal(value) {
     return structuredClone(snapshot);
   }
 
+  async function persistBodyReclamation(candidateValue, identity, periodId, internalQuestionId, assertAccess) {
+    if (closed) throw adapterError('question_service_closed');
+    if (typeof internalQuestionId !== 'string' || internalQuestionId.length === 0 ||
+        typeof assertAccess !== 'function' ||
+        !periodGate.isRetired(identity, periodId)) {
+      throw adapterError('question_period_not_retired');
+    }
+    const current = requireInstalled();
+    const candidate = normalizeQuestionJournalV2Local(candidateValue, maxRecords);
+    const previousReservation = current.reservations.find((item) => item.internalQuestionId === internalQuestionId);
+    const nextReservation = candidate.reservations.find((item) => item.internalQuestionId === internalQuestionId);
+    const previousDetail = current.questions.find((item) => item.internalQuestionId === internalQuestionId);
+    const nextDetail = candidate.questions.find((item) => item.internalQuestionId === internalQuestionId);
+    const preparing = previousReservation?.reclamation === null;
+    const reservationFieldsMatch = previousReservation && nextReservation &&
+      Object.keys(previousReservation).every((field) =>
+        ['bodyState', 'reclaimedAt', 'reclamation'].includes(field) ||
+        sameRecord(previousReservation[field], nextReservation[field]));
+    const detailMatches = previousDetail && (nextReservation?.bodyState === 'reclaimed'
+      ? nextDetail === undefined
+      : nextDetail !== undefined && sameRecord(previousDetail, nextDetail));
+    if (!previousReservation || !nextReservation || !previousDetail || !detailMatches || !reservationFieldsMatch ||
+        !sameIdentity(previousReservation.identity, identity) || previousReservation.periodId !== periodId ||
+        candidate.storeId !== current.storeId || current.revision >= Number.MAX_SAFE_INTEGER ||
+        candidate.revision !== current.revision + 1 || !sameGrant(candidate.migrationAllowance, current.migrationAllowance) ||
+        candidate.reservations.length !== current.reservations.length ||
+        !sameIdentity(nextReservation.identity, identity) || nextReservation.periodId !== periodId ||
+        nextReservation.questionId !== previousReservation.questionId ||
+        nextReservation.contentDigest !== previousReservation.contentDigest ||
+        nextReservation.reclamation === null ||
+        (preparing
+          ? nextReservation.bodyState !== 'retained' || nextReservation.reclaimedAt !== null
+          : previousReservation.bodyState !== 'retained' || nextReservation.bodyState !== 'reclaimed' ||
+            nextReservation.reclaimedAt < nextReservation.reclamation.preparedAt ||
+            !sameRecord(nextReservation.reclamation, previousReservation.reclamation))) {
+      throw adapterError('invalid_question_body_reclamation_candidate');
+    }
+    const sameRowsExceptTarget = (previousRows, nextRows, field) => {
+      if (field === 'questions' && nextReservation.bodyState === 'reclaimed') {
+        if (nextRows.length !== previousRows.length - 1 || nextDetail !== undefined) return false;
+      } else if (nextRows.length !== previousRows.length) return false;
+      const nextById = new Map(nextRows.map((item) => [item.internalQuestionId, item]));
+      return previousRows.every((row) => {
+        if (row.internalQuestionId !== internalQuestionId) {
+          const next = nextById.get(row.internalQuestionId);
+          return next !== undefined && sameRecord(row, next);
+        }
+        return true;
+      }) && (field !== 'questions' || nextReservation.bodyState === 'reclaimed' || nextDetail !== undefined);
+    };
+    if (!sameRowsExceptTarget(current.reservations, candidate.reservations, 'reservations') ||
+        !sameRowsExceptTarget(current.questions, candidate.questions, 'questions')) {
+      throw adapterError('invalid_question_body_reclamation_candidate');
+    }
+    assertSnapshotCapacity(candidate);
+    const assertRetired = () => {
+      assertAccess();
+      if (closed || !periodGate.isRetired(identity, periodId)) throw adapterError('question_period_not_retired');
+    };
+    assertRetired();
+    const saved = await backend.save(candidate, assertRetired);
+    const normalized = normalizeQuestionJournalV2Local(saved, maxRecords);
+    if (!encodeQuestionJournalV2Local(normalized, maxRecords).bytes.equals(
+      encodeQuestionJournalV2Local(candidate, maxRecords).bytes)) {
+      throw adapterError('question_journal_save_mismatch');
+    }
+    snapshot = normalized;
+    legacy = projectLegacyJournal(snapshot, maxRecords);
+    return structuredClone(snapshot);
+  }
+
   function load() {
     return Promise.resolve(structuredClone(projectLegacyJournal(requireInstalled(), maxRecords)));
   }
@@ -451,6 +528,7 @@ function createCommonQuestionReclamationJournal(value) {
     getSnapshot,
     getLegacySnapshot,
     persistRetirement,
+    persistBodyReclamation,
     assertCapacityReserved,
     flush,
     close,

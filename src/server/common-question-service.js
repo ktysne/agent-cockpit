@@ -1351,6 +1351,61 @@ function createCommonQuestionService(options = {}) {
     return result;
   }
 
+  async function withRetiredQuestionBodies(value, callback) {
+    if (!reclamationMode || typeof callback !== 'function') {
+      throw serviceError('question_reclamation_unavailable');
+    }
+    const captured = kernel.exactObject(value, ['identity', 'periodId'], 'invalid_question_body_reclamation');
+    const request = Object.freeze({
+      identity: Object.freeze(kernel.exactObject(captured.identity, IDENTITY_FIELDS,
+        'invalid_question_body_reclamation')),
+      periodId: captured.periodId,
+    });
+    if (retirementStorage.getStore() === retirementScope) {
+      throw serviceError('question_retirement_queue_reentry');
+    }
+    const assertRetired = () => {
+      if (!accepting || writerStopped || !journalState || !sharedWriterCanWrite() ||
+          !reclamationOptions.periodGate.isRetired(request.identity, request.periodId)) {
+        throw serviceError('question_period_not_retired');
+      }
+    };
+    assertRetired();
+    pendingOperations += 1;
+    const queued = tail.then(async () => {
+      assertRetired();
+      let accessOpen = true;
+      const assertAccess = () => {
+        if (!accessOpen || retirementStorage.getStore() !== retirementScope) {
+          throw serviceError('question_retirement_access_expired');
+        }
+        assertRetired();
+      };
+      const access = Object.freeze({
+        snapshot() {
+          assertAccess();
+          return journal.getSnapshot();
+        },
+        async persist(internalQuestionId, candidate) {
+          assertAccess();
+          const saved = await journal.persistBodyReclamation(candidate, request.identity, request.periodId,
+            internalQuestionId, assertAccess);
+          journalState = journal.getLegacySnapshot();
+          refreshQuarantinedQuestionIds();
+          return saved;
+        },
+      });
+      try {
+        return await retirementStorage.run(retirementScope, () => callback(access));
+      } finally {
+        accessOpen = false;
+      }
+    });
+    const result = queued.finally(() => { pendingOperations -= 1; });
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   function close() {
     if (closePromise) return closePromise;
     accepting = false;
@@ -1378,6 +1433,7 @@ function createCommonQuestionService(options = {}) {
       prepareResume: prepareReclamationWriter,
     });
     api.withRetirementSnapshot = withRetirementSnapshot;
+    api.withRetiredQuestionBodies = withRetiredQuestionBodies;
   }
   return Object.freeze(api);
 }
