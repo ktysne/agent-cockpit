@@ -512,7 +512,9 @@ test('QRC05: real PR and result deliveries remain outside question-period covera
   const baselineCoverage = analyze(fixture.retired, fixture.selected.identity, fixture.selected.periodId);
   const augmentedCoverage = analyze(augmented, fixture.selected.identity, fixture.selected.periodId);
 
-  assert.equal(validateTransition(fixture.retired, augmented).status, 'checked');
+  const transition = validateTransition(fixture.retired, augmented);
+  assert.equal(transition.status, 'checked');
+  assert.deepEqual(transition.reasons, []);
   assert.equal(registration.created, true);
   assert.equal(prNotification.created, true);
   assert.equal(prNotification.delivery.kind, 'pr-notification');
