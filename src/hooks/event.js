@@ -16,6 +16,7 @@ const {
   firstPullRequestUrl,
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
+  pullRequestCommandCwd,
   shouldRefreshPullRequests,
 } = require('../server/pull-request-utils');
 
@@ -288,7 +289,11 @@ function makeHookEvent(input, now = Date.now()) {
       if (isGhPrCreateCommand(command)) event.ghPrCreateCommand = true;
       if (shouldRefreshPullRequests(command)) event.refreshPullRequests = true;
       const pullRequest = eventName === 'PostToolUse' ? firstPullRequestUrl(input.tool_response) : null;
-      if (pullRequest) event.pullRequest = pullRequest;
+      if (pullRequest) {
+        event.pullRequest = pullRequest;
+        const commandCwd = pullRequestCommandCwd(command, input.cwd);
+        if (commandCwd) event.commandCwd = commandCwd;
+      }
     } else if (eventName === 'PostToolUse' && isGithubCreatePullRequestTool(event.tool_name)) {
       const pullRequest = firstPullRequestUrl(input.tool_response);
       if (pullRequest) event.pullRequest = pullRequest;

@@ -27,11 +27,52 @@ const {
   firstPullRequestUrl,
   isGhPrCreateCommand,
   parsePullRequestUrl,
+  pullRequestCommandCwd,
   shouldRefreshPullRequests,
 } = require('../src/server/pull-request-utils');
 const { DashboardState } = require('../src/server/state');
 const { temporaryDirectory: createTemporaryDirectory } = require('./support/temp');
 const { ghPullRequest, pullRequest, pullRequestRegistration } = require('./support/github');
+
+test('PR 作成コマンドの先頭 cd から作業ディレクトリを解決する', () => {
+  const hookCwd = path.resolve(os.tmpdir(), 'session-repo', 'worktree');
+  const targetCwd = path.resolve(os.tmpdir(), 'pull-request-repo', 'worktree');
+  const commandPath = targetCwd.replaceAll('\\', '/');
+
+  for (const command of [
+    `cd "${commandPath}" && gh pr create`,
+    `cd '${commandPath}' && gh pr create`,
+    `cd ${commandPath} && gh pr create`,
+  ]) {
+    assert.equal(pullRequestCommandCwd(command, hookCwd), targetCwd);
+  }
+  assert.equal(pullRequestCommandCwd('cd ../pull-request-repo && gh pr create', hookCwd),
+    path.resolve(hookCwd, '../pull-request-repo'));
+
+  const gitBashCwd = pullRequestCommandCwd('cd /d/Desktop/Develop/project && gh pr create', hookCwd);
+  assert.equal(gitBashCwd, process.platform === 'win32'
+    ? path.resolve('D:/Desktop/Develop/project')
+    : '/d/Desktop/Develop/project');
+});
+
+test('PR 作成コマンドの cd を確定できない形式では cwd を推測しない', () => {
+  const hookCwd = path.resolve(os.tmpdir(), 'session-repo');
+  const targetCwd = path.resolve(os.tmpdir(), 'pull-request-repo').replaceAll('\\', '/');
+  for (const command of [
+    `echo start && cd ${targetCwd} && gh pr create`,
+    `cd ${targetCwd}; gh pr create`,
+    `cd ${targetCwd} & gh pr create`,
+    'cd "$PROJECT_ROOT" && gh pr create',
+    'cd `pwd` && gh pr create',
+    'cd ~/project && gh pr create',
+    'cd D:\\Desktop\\project && gh pr create',
+    'cd "a\\"b" && gh pr create',
+    'cd "D:\\Desktop\\project" && gh pr create',
+  ]) {
+    assert.equal(pullRequestCommandCwd(command, hookCwd), null, command);
+  }
+  assert.equal(pullRequestCommandCwd('gh pr create', hookCwd), null);
+});
 
 async function temporaryDirectory(testContext) {
   return createTemporaryDirectory(testContext, 'agent-cockpit-pr-test-').directory;
@@ -1435,6 +1476,97 @@ async function installCrossReview(root) {
   await fs.writeFile(path.join(root, 'tools', 'cross-review.js'), '');
 }
 
+test('どの GitHub の remote とも PR のリポジトリが一致しないとクロスレビュー状態を確認不能にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
+  }));
+  const calls = [];
+  const review = await readCrossReviewState(
+    { number: 55, cwd: root },
+    { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr' },
+    { execFileImpl: (file, args, _options, callback) => {
+      calls.push([file, ...args]);
+      callback(null, [
+        'remote.origin.url git@github.com:other/project.git',
+        'remote.upstream.url https://github.com/another/project.git',
+      ].join('\n') + '\n');
+    } },
+  );
+
+  assert.deepEqual(calls, [['git', '-C', root, 'config', '--get-regexp', '^remote\\..*\\.url$']]);
+  assert.deepEqual(review, { unavailable: true, reason: 'repository-mismatch' });
+});
+
+test('クロスレビューの道具が無い worktree でも、remote が PR のリポジトリと食い違えばレビュー不要にせず確認不能にする', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  const remotes = (_file, _args, _options, callback) => callback(null, 'remote.origin.url https://github.com/other/tool-less.git\n');
+  const mismatched = await readCrossReviewState(
+    { number: 55, cwd: root },
+    { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr' },
+    { execFileImpl: remotes },
+  );
+  assert.deepEqual(mismatched, { unavailable: true, reason: 'repository-mismatch' });
+
+  const matched = await readCrossReviewState(
+    { number: 55, cwd: root },
+    { url: 'https://github.com/other/tool-less/pull/55', headRefName: 'feat/pr' },
+    { execFileImpl: remotes },
+  );
+  assert.deepEqual(matched, { notRequired: true, source: 'tool-absent' });
+});
+
+test('fork の origin ではなく upstream が PR のリポジトリと一致すればクロスレビュー状態を読む', async (t) => {
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(root, '.git'));
+  await installCrossReview(root);
+  await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
+  }));
+  const review = await readCrossReviewState(
+    { number: 55, cwd: root },
+    { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr' },
+    { execFileImpl: (_file, _args, _options, callback) => callback(null, [
+      'remote.origin.url https://github.com/me/project.git',
+      'remote.upstream.url git@github.com:Example/Project.git',
+    ].join('\n') + '\n') },
+  );
+
+  assert.deepEqual(review, {
+    number: 55, branch: 'feat/pr', round: 1, max: 3, dismissed: 0,
+    reviewedSha: 'a'.repeat(40), triage: null,
+  });
+});
+
+test('GitHub の remote の一致と判定できない remote はクロスレビュー状態の読み取りを続ける', async (t) => {
+  const expected = {
+    number: 55, branch: 'feat/pr', round: 1, max: 3, dismissed: 0,
+    reviewedSha: 'a'.repeat(40), triage: null,
+  };
+  const remotes = [
+    (callback) => callback(null, 'remote.origin.url HTTPS://GITHUB.COM/Example/Project.git\n'),
+    (callback) => callback(null, 'remote.origin.url https://gitlab.com/example/project.git\n'),
+    (callback) => callback(new Error('remotes are unavailable')),
+  ];
+  for (const provideRemotes of remotes) {
+    const root = await temporaryDirectory(t);
+    await fs.mkdir(path.join(root, '.git'));
+    await installCrossReview(root);
+    await fs.writeFile(path.join(root, '.cross-review-state.json'), JSON.stringify({
+      branches: { 'feat/pr': { round: 1, dismissed: [], lastReviewedSha: 'a'.repeat(40) } },
+    }));
+    const review = await readCrossReviewState(
+      { number: 55, cwd: root },
+      { url: 'https://github.com/example/project/pull/55', headRefName: 'feat/pr' },
+      { execFileImpl: (_file, _args, _options, callback) => provideRemotes(callback) },
+    );
+    assert.deepEqual(review, expected);
+  }
+});
+
 test('クロスレビューの道具は cwd から見つかる worktree のものだけを検出する', async (t) => {
   const root = await temporaryDirectory(t);
   await fs.mkdir(path.join(root, '.git'));
@@ -1739,6 +1871,10 @@ test('登録の cwd とは別の worktree が PR のブランチをチェック�
   const gitCalls = [];
   tracker.gitExecFileImpl = (file, args, _options, callback) => {
     gitCalls.push([file, ...args]);
+    if (args.includes('config')) {
+      callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+      return;
+    }
     callback(null, [
       `worktree ${sessionRoot.replaceAll('\\', '/')}`, `HEAD ${'c'.repeat(40)}`, 'branch refs/heads/main', '',
       `worktree ${reviewRoot.replaceAll('\\', '/')}`, `HEAD ${headSha}`, 'branch refs/heads/feat/open', '',
@@ -1750,7 +1886,11 @@ test('登録の cwd とは別の worktree が PR のブランチをチェック�
   await tracker.refreshRepo('example', 'project');
 
   const [group] = tracker.snapshot();
-  assert.deepEqual(gitCalls, [['git', '-C', sessionRoot, 'worktree', 'list', '--porcelain']]);
+  assert.deepEqual(gitCalls, [
+    ['git', '-C', sessionRoot, 'config', '--get-regexp', '^remote\\..*\\.url$'],
+    ['git', '-C', sessionRoot, 'worktree', 'list', '--porcelain'],
+    ['git', '-C', reviewRoot, 'config', '--get-regexp', '^remote\\..*\\.url$'],
+  ]);
   assert.deepEqual(group.trees[0].crossReview, {
     round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' },
   });
@@ -1781,6 +1921,44 @@ test('PR のブランチをどの worktree もチェックアウトしていな�
   );
   assert.deepEqual(review, {
     number: 31, branch: 'feat/open', round: 2, max: 3, dismissed: 0, reviewedSha: headSha, triage: { round: 2, sha: headSha, outcome: 'converged' },
+  });
+});
+
+test('別 worktree の origin が別リポジトリなら、その状態で登録 cwd の結果を上書きしない', async (t) => {
+  const base = await temporaryDirectory(t);
+  const sessionRoot = path.join(base, 'session');
+  const reviewRoot = path.join(base, 'review');
+  for (const root of [sessionRoot, reviewRoot]) {
+    await fs.mkdir(path.join(root, '.git'), { recursive: true });
+    await installCrossReview(root);
+  }
+  const headSha = 'a'.repeat(40);
+  await fs.writeFile(path.join(sessionRoot, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/open': { round: 1, dismissed: [], lastReviewedSha: headSha } },
+  }));
+  await fs.writeFile(path.join(reviewRoot, '.cross-review-state.json'), JSON.stringify({
+    branches: { 'feat/open': {
+      round: 2, dismissed: [], lastReviewedSha: headSha,
+      lastTriage: { round: 2, sha: headSha, outcome: 'converged' },
+    } },
+  }));
+  const worktrees = [
+    `worktree ${sessionRoot.replaceAll('\\', '/')}`, `HEAD ${'c'.repeat(40)}`, 'branch refs/heads/main', '',
+    `worktree ${reviewRoot.replaceAll('\\', '/')}`, `HEAD ${'d'.repeat(40)}`, 'branch refs/heads/feat/open', '',
+  ].join('\n');
+  const review = await readCrossReviewStateAcrossWorktrees(
+    { number: 31, cwd: sessionRoot },
+    { url: 'https://github.com/example/project/pull/31', headRefName: 'feat/open', headRefOid: headSha },
+    { execFileImpl: (_file, args, _options, callback) => {
+      if (args[2] === 'worktree') callback(null, worktrees);
+      else if (args[1] === reviewRoot) callback(null, 'remote.origin.url https://github.com/other/project.git\n');
+      else callback(null, 'remote.origin.url https://github.com/example/project.git\n');
+    } },
+  );
+
+  assert.deepEqual(review, {
+    number: 31, branch: 'feat/open', round: 1, max: 3, dismissed: 0,
+    reviewedSha: headSha, triage: null,
   });
 });
 

@@ -1,5 +1,7 @@
 'use strict';
 
+const path = require('node:path');
+
 const COMPLETE_COMMIT_SHA_PATTERN = /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/;
 const SHA256_DIGEST_PATTERN = /^[a-fA-F0-9]{64}$/;
 
@@ -95,6 +97,46 @@ function isGithubCreatePullRequestTool(toolName) {
   return normalized === 'create_pull_request' || /(?:^|__)github__create_pull_request$/.test(normalized);
 }
 
+function pullRequestCommandCwd(command, cwd) {
+  if (typeof command !== 'string' || typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  const match = command.match(/^\s*cd[\t ]+(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([^\s;&|()<>]+))[\t ]*&&(?!&)/);
+  if (!match) return null;
+  const quotedPath = match[1] ?? match[2];
+  const commandPath = quotedPath ?? match[3];
+  if (!commandPath || commandPath.startsWith('-') || /[$`\r\n]/.test(commandPath)) return null;
+  // 二重引用符の中の \ は、エスケープか Windows の区切りかを決められないため、パスを推測しない。
+  if (match[1]?.includes('\\')) return null;
+  if (quotedPath === undefined && (commandPath.startsWith('~') || /[\\<>*?\[\]{}]/.test(commandPath))) return null;
+
+  let resolvedPath = commandPath;
+  if (process.platform === 'win32') {
+    const gitBashDrivePath = resolvedPath.match(/^\/([a-z])\//i);
+    if (gitBashDrivePath) resolvedPath = `${gitBashDrivePath[1].toUpperCase()}:${resolvedPath.slice(2)}`;
+    else if (resolvedPath.startsWith('/') && !resolvedPath.startsWith('//')) return null;
+  }
+  return path.resolve(cwd, resolvedPath);
+}
+
+function parseGitHubRepositoryRemote(remoteUrl) {
+  if (typeof remoteUrl !== 'string' || remoteUrl.length > 2000) return null;
+  let owner;
+  let repo;
+  try {
+    const parsed = new URL(remoteUrl.trim());
+    if (!['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol) ||
+      parsed.hostname.toLowerCase() !== 'github.com' || parsed.search || parsed.hash) return null;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.length !== 2) return null;
+    [owner, repo] = parts;
+  } catch {
+    const match = remoteUrl.trim().match(/^(?:[^@/:]+@)?github\.com:([^/]+)\/([^/]+?)\/?$/i);
+    if (!match) return null;
+    [, owner, repo] = match;
+  }
+  repo = repo.replace(/\.git$/i, '');
+  return validRepositoryPart(owner) && validRepositoryPart(repo) ? { owner, repo } : null;
+}
+
 function shellTokens(segment) {
   return (segment.match(/"(?:[^"\\]|\\.)*"|'[^']*'|\\.|[^\s]+/g) || [])
     .map((token) => token.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_match, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
@@ -182,6 +224,8 @@ module.exports = {
   isGhPrCreateCommand,
   isGithubCreatePullRequestTool,
   parsePullRequestUrl,
+  parseGitHubRepositoryRemote,
+  pullRequestCommandCwd,
   pullRequestKey,
   repositoryKey,
   shouldRefreshPullRequests,

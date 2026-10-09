@@ -3,7 +3,14 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { isCompleteCommitSha, repositoryKey, validBranchName, validRepositoryPart } = require('./pull-request-utils');
+const {
+  isCompleteCommitSha,
+  parseGitHubRepositoryRemote,
+  parsePullRequestUrl,
+  repositoryKey,
+  validBranchName,
+  validRepositoryPart,
+} = require('./pull-request-utils');
 const { isGithubCredentialEnvironmentVariable } = require('./credential-environment');
 const { findWorktreeRoot } = require('./git-worktree');
 
@@ -618,14 +625,68 @@ async function detectCrossReviewTool(cwd, fileSystem = fs) {
   }
 }
 
-async function readCrossReviewState(registration, pullRequest, fileSystem = fs) {
+function crossReviewReadOptions(options) {
+  const isFileSystem = options && typeof options.stat === 'function' && typeof options.readFile === 'function';
+  return {
+    fileSystem: isFileSystem ? options : options?.fileSystem || fs,
+    execFileImpl: options?.execFileImpl || execFile,
+    remoteRepositoryCache: options?.remoteRepositoryCache,
+  };
+}
+
+function readGitRemoteUrls(root, execFileImpl) {
+  return new Promise((resolve) => {
+    try {
+      execFileImpl('git', ['-C', root, 'config', '--get-regexp', '^remote\\..*\\.url$'], {
+        encoding: 'utf8', timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true, shell: false,
+      }, (error, stdout) => resolve(error || typeof stdout !== 'string' ? '' : stdout));
+    } catch {
+      resolve('');
+    }
+  });
+}
+
+// 各行は「remote.<名前>.url <URL>」の形。GitHub のリポジトリと判定できた remote だけを返す。
+function gitHubRemoteRepositories(stdout) {
+  const repositories = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const separator = line.indexOf(' ');
+    const repository = separator < 0 ? null : parseGitHubRepositoryRemote(line.slice(separator + 1));
+    if (repository) repositories.push(repository);
+  }
+  return repositories;
+}
+
+async function gitHubRemoteRepositoriesOf(root, execFileImpl, cache) {
+  const cacheKey = process.platform === 'win32' ? root.toLowerCase() : root;
+  if (cache?.has(cacheKey)) return cache.get(cacheKey);
+  const repositories = gitHubRemoteRepositories(await readGitRemoteUrls(root, execFileImpl));
+  cache?.set(cacheKey, repositories);
+  return repositories;
+}
+
+function sameGitHubRepository(left, right) {
+  return left.owner.toLowerCase() === right.owner.toLowerCase() && left.repo.toLowerCase() === right.repo.toLowerCase();
+}
+
+async function readCrossReviewState(registration, pullRequest, options = {}) {
+  const { fileSystem, execFileImpl, remoteRepositoryCache } = crossReviewReadOptions(options);
   const branch = pullRequest?.headRefName;
   if (!registration.cwd) return undefined;
   // 状態ファイルは初回レビューまで作られないため、ツール本体の有無で連携を判定する。
   const tool = await detectCrossReviewTool(registration.cwd, fileSystem);
-  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
-  if (tool.status !== 'present') return { unavailable: true };
+  if (tool.status !== 'present' && tool.status !== 'absent') return { unavailable: true };
   const { root } = tool;
+  const pullRequestRepository = parsePullRequestUrl(pullRequest?.url);
+  if (pullRequestRepository) {
+    // フォークから upstream に作った PR は origin と食い違うため、どの GitHub の remote とも一致すれば続ける。
+    // 道具の有無は別のリポジトリの判定にならないので、レビュー不要と判定する前に照合する。
+    const remotes = await gitHubRemoteRepositoriesOf(root, execFileImpl, remoteRepositoryCache);
+    if (remotes.length && !remotes.some((remote) => sameGitHubRepository(remote, pullRequestRepository))) {
+      return { unavailable: true, reason: 'repository-mismatch' };
+    }
+  }
+  if (tool.status === 'absent') return { notRequired: true, source: 'tool-absent' };
   let contents;
   try {
     contents = await fileSystem.readFile(path.join(root, '.cross-review-state.json'), 'utf8');
@@ -694,7 +755,7 @@ function listWorktrees(root, execFileImpl = execFile) {
 // チェックアウトしていない worktree は、そのブランチの記録を持つときだけ候補にする。読めない worktree で記録なしの表示を上書きしないため。
 async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, options = {}) {
   const fileSystem = options.fileSystem || fs;
-  let selected = await readCrossReviewState(registration, pullRequest, fileSystem);
+  let selected = await readCrossReviewState(registration, pullRequest, options);
   const branch = pullRequest?.headRefName;
   if (selected === undefined || !branch) return selected;
   const { root } = await findWorktreeRoot(registration.cwd, fileSystem);
@@ -702,7 +763,8 @@ async function readCrossReviewStateAcrossWorktrees(registration, pullRequest, op
   const sameRoot = (left, right) => process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
   for (const worktree of await listWorktrees(root, options.execFileImpl)) {
     if (sameRoot(worktree.path, root)) continue;
-    const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, fileSystem);
+    const candidate = await readCrossReviewState({ ...registration, cwd: worktree.path }, pullRequest, options);
+    if (candidate?.reason === 'repository-mismatch') continue;
     const hasRecord = Number.isSafeInteger(candidate?.round);
     if (worktree.branch !== branch && !hasRecord) continue;
     if (shouldReplaceCrossReview(selected, candidate, pullRequest.headRefOid)) selected = candidate;
@@ -1303,6 +1365,7 @@ class PullRequestTracker {
     const relatedPullRequests = this.state.relatedPullRequestRegistrationsForRepo(owner, repo);
     const productGroups = productGroupsFor(owner, repo, registrations);
     const createdIdentities = new Set();
+    const remoteRepositoryCache = new Map();
     // worktree が分かるのは登録したセッションだけなので、登録の無い関連 PR には crossReview を付けない。
     const crossReviewByNumber = new Map();
     this.state.invalidateCrossReviewSkips?.(owner, repo, repositoryState.openPullRequests);
@@ -1315,7 +1378,7 @@ class PullRequestTracker {
         continue;
       }
       const review = await this.readCrossReviewState(registration, pullRequest, {
-        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl,
+        fileSystem: this.fileSystem, execFileImpl: this.gitExecFileImpl, remoteRepositoryCache,
       });
       const current = crossReviewByNumber.get(registration.number);
       if (crossReviewByNumber.has(registration.number) && !shouldReplaceCrossReview(current, review, pullRequest.headRefOid)) continue;

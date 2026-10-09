@@ -1,3 +1,4 @@
+const path = require('node:path');
 const { parsePullRequestUrl } = require('./pull-request-utils');
 
 const EVENT_NAMES = new Set([
@@ -156,6 +157,9 @@ function sanitizeEvent(input, metadata = {}) {
   }
 
   if (eventName === 'PostToolUse') {
+    if (event.tool_name === 'Bash' && typeof input.commandCwd === 'string' && input.commandCwd.length <= 4096 && path.isAbsolute(input.commandCwd)) {
+      event.commandCwd = input.commandCwd;
+    }
     if (event.tool_name === 'TaskStop' && typeof input.stoppedTaskId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(input.stoppedTaskId)) {
       event.stoppedTaskId = input.stoppedTaskId;
     }
