@@ -31,7 +31,8 @@ main の PR #305（別のリポジトリで作った PR の登録）は、作業
 関連テスト39件と全体テスト1,997件は成功した。[PR #319](https://github.com/ktysne/agent-cockpit/pull/319) は Claude のクロスレビューで blocker・要修正がなく、1往復で収束した。
 [PR #319](https://github.com/ktysne/agent-cockpit/pull/319) も feature へマージ済みで、merge SHA は `f9e45c6` である。
 この head を起点に `codex/delivery-reclamation-codec-209-20261009` で #209 段階2の1c（配信 codec）を実装した。
-独立 codec と fixture、関連45件・既存関連59件・全体2,022件の検証は成功した。[PR #320](https://github.com/ktysne/agent-cockpit/pull/320) はクロスレビュー前である。
+独立 codec と fixture、関連50件・既存関連59件・修正後の全体2,027件の検証は成功した。[PR #320](https://github.com/ktysne/agent-cockpit/pull/320) は Claude のクロスレビューが2往復で収束し、開発者のマージを待つ。
+次は #209 段階2の1d（アンカーcodec、store間照合、旧形式の投影、grantと固定H/T）を #320 の head に積んで着手できる。
 
 ## 全体の流れ
 
@@ -64,7 +65,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c) | 1c のレビューとマージ、1d store 間照合、段階 3 の自動回収の接続 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c) | 1c のマージ、1d store 間照合、段階 3 の自動回収の接続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -106,7 +107,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | [#309](https://github.com/ktysne/agent-cockpit/pull/309)、base: feature | マージ済み（2026-10-09、merge SHA `3c4fee8`） |
 | 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | マージ済み（2026-10-09、merge SHA `394daa9`）。関連347件・監査後107件成功、Claude レビュー1往復で収束 |
 | 3 | #209 段階 2 の 1b | 質問 codec | [#319](https://github.com/ktysne/agent-cockpit/pull/319)、マージ時base: feature | マージ済み（2026-10-09、merge SHA `f9e45c6`）。関連39件・全体1,997件成功、Claude レビュー1往復で収束。外部 store 照合と容量条件は1dへ残す |
-| 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | `codex/delivery-reclamation-codec-209-20261009` で独立 codec と fixture を実装済み。関連45件・既存関連59件・全体2,022件成功。クロスレビュー前（2026-10-09） |
+| 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | `codex/delivery-reclamation-codec-209-20261009` で独立 codec と fixture を実装済み。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束し、開発者のマージ待ち（2026-10-09） |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | 未作成、1c の上 | 未着手 |
 | 6 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |
 | 7 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 6 の回収条件を満たした後 |
