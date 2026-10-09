@@ -499,7 +499,12 @@ R2の任意提案を`f2b84fb`で適用し、保持期限の成功側対照、両
 Claude R3もblockerと要修正0件だった。
 任意提案のCP capsuleとpairでの早期grave拒否assertを同じ箇所へ追加し、関連15件の成功を確認した。文書の時制も修正した。
 製品コードは全体検証した`060f516`から変わっていない。
-後続は、通常recordと複数capsuleを宣言された順序で復元し、全体ID、logical集合、履歴とnative相関の再利用、アンカー退役を検査する独立入口である。
+後続の独立入口は、`codex/question-capsule-whole-validation-209-20261010`で実装中である。
+通常recordと複数capsuleを宣言された順序で復元し、全体ID、logical集合、履歴とnative相関の再利用、アンカー退役を検査する。
+通常CPの全論理墓標から選択contextを導き、復元raw snapshotのreadyと同じrawストアの自己遷移checkedを、どちらも理由0件で要求する。
+実保存byteと将来予約量は各slotのencoderとmeasurerで別途検査し、アンカーの退役予約も通常上限へ照合する。
+既存件数と将来予約を含む通常容量の上限を維持し、同じ操作IDを共有する複数chunkもrecordの全体一意性で検査する。
+契約は[容量回収計画](../design/codex-capacity-reclamation.md#通常recordと複数capsuleの全体検査)に置く。
 保存接続、cold復旧、件数枠の解放と実runtime確認は未実施である。
 
 ## 起票していない候補
