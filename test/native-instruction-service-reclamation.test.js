@@ -442,6 +442,69 @@ for (const provider of PROVIDERS) {
     assert.equal(closingReclamation.status().capacity.activeLeaseCount, 0);
   });
 
+  test(`${provider} cold restart quarantines a checkpointed new-format question without resending`, async (t) => {
+    const { harness } = await createHarness(t, provider, {
+      questionMaxRecords: 2,
+      bytePadding: 1024 * 1024,
+    });
+    await harness.restartService();
+    const { started, writer } = await currentWriter(harness, provider, 'checkpointed-question-cold-restart');
+    const questionId = `checkpointed-new-${provider}`;
+    const registered = await harness.questionService.register(writer, registration(questionId));
+    assert.equal(registered.outcome, 'created');
+    const registeredJournal = await readJson(harness.commonQuestionJournalPath);
+    const registeredQuestion = registeredJournal.questions.find((question) => question.questionId === questionId);
+    assert.ok(registeredQuestion);
+
+    const submitted = await harness.questionService.submitAnswer(registeredQuestion.internalQuestionId, {
+      answers: [{ questionId: `choice-${questionId}`, optionIds: ['option-a'], freeText: null }],
+    });
+    assert.equal(submitted.outcome, 'selected');
+    const selectedJournal = await readJson(harness.commonQuestionJournalPath);
+    const selectedQuestion = selectedJournal.questions.find((question) => question.internalQuestionId ===
+      registeredQuestion.internalQuestionId);
+    assert.equal(selectedQuestion.deliveryCreationState, 'checkpointed');
+    const selectedCheckpoint = await readJson(harness.checkpointPath);
+    const selectedDelivery = selectedCheckpoint.ledger.deliveries.find((delivery) =>
+      delivery.kind === 'question' &&
+      delivery.deliveryAttemptId === selectedQuestion.deliveryIntent.deliveryAttemptId);
+    assert.ok(selectedDelivery);
+    const selectedDeliveryState = selectedDelivery.state;
+    const selectedDeliveryCount = selectedCheckpoint.ledger.deliveries.length;
+    assert.equal(started.process.instructionWrites.length, 0);
+
+    await harness.restartService();
+    assert.equal(harness.reclamation.status().canWrite, true);
+    const anchor = await readJson(path.join(harness.directory, ANCHOR_FILE));
+    const retiredPeriod = anchor.retiredQuestionPeriods.find((period) =>
+      period.periodId === selectedQuestion.periodId &&
+      period.identity.provider === provider &&
+      period.identity.nativeId === selectedQuestion.identity.nativeId);
+    assert.ok(retiredPeriod);
+    assert.equal(retiredPeriod.reason, 'startup-quarantine');
+    const quarantinedJournal = await readJson(harness.commonQuestionJournalPath);
+    const quarantinedQuestion = quarantinedJournal.questions.find((question) =>
+      question.internalQuestionId === selectedQuestion.internalQuestionId);
+    assert.equal(quarantinedQuestion.quarantinedAt, retiredPeriod.retiredAt);
+    assert.equal(quarantinedQuestion.deliveryCreationState, 'checkpointed');
+    const restartedCheckpoint = await readJson(harness.checkpointPath);
+    const restartedDelivery = restartedCheckpoint.ledger.deliveries.find((delivery) =>
+      delivery.deliveryAttemptId === selectedQuestion.deliveryIntent.deliveryAttemptId);
+    assert.equal(restartedCheckpoint.ledger.deliveries.length, selectedDeliveryCount);
+    assert.equal(restartedDelivery.state, selectedDeliveryState);
+    assert.equal(started.process.instructionWrites.length, 0);
+
+    await assert.rejects(harness.questionService.submitAnswer('internal-1', selectedAnswer()),
+      { code: 'question_quarantined' });
+    await assert.rejects(harness.questionService.submitAnswer(selectedQuestion.internalQuestionId, {
+      answers: [{ questionId: `choice-${questionId}`, optionIds: ['option-a'], freeText: null }],
+    }), { code: 'question_quarantined' });
+
+    const closingReclamation = harness.reclamation;
+    await harness.close();
+    assert.equal(closingReclamation.status().capacity.activeLeaseCount, 0);
+  });
+
   test(`${provider} a zero-byte migration budget failure releases storage for a same-path retry`, async (t) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-instruction-reclamation-budget-failure-'));
     t.after(() => fs.rm(directory, { recursive: true, force: true }));

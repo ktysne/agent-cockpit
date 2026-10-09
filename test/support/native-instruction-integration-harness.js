@@ -1,5 +1,6 @@
 'use strict';
 
+const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -383,9 +384,20 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
       createIntegrationFactory = require('../../src/server/native-instruction-service-integration')
         .createNativeInstructionServiceIntegration;
     }
-    const created = await createIntegrationFactory(integrationOptions);
-    composition = getComposition();
-    return created;
+    let created = null;
+    try {
+      created = await createIntegrationFactory(integrationOptions);
+      composition = getComposition();
+      if (options.reclamation !== undefined) {
+        assert.ok(composition, 'native launch composition is required for reclamation writer tests');
+      }
+      return created;
+    } catch (error) {
+      if (created !== null) {
+        try { await created.close(); } catch {}
+      }
+      throw error;
+    }
   }
 
   integration = await createIntegration();

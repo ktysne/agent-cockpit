@@ -45,7 +45,8 @@ Claudeクロスレビューは3往復で収束し、PR #323はfeatureへマー�
 作成中から未作成への巻き戻しは単調遷移契約により採用せず、保存済みの完全相関checkpointがある指示だけ作成済みへ回復する。
 PR4では、instruction journalのprepareResume待ち中にcloseが完了しても受付フラグを戻さず、閉鎖後の公開操作がbackendの保存やnative作成を呼ばないことを確認した。
 新しいfactoryでの起動時に隔離済みの質問を保存済み相関で照合し、古い実行を再認可しない。
-両providerのnative factory適合試験25件は成功し、全体試験は2,254件成功、1件skip、失敗0件である。
+両providerのnative factory適合試験は、Claudeの任意提案を反映した追加試験を含め27件成功した。
+実装完了時の全体試験は2,254件成功、1件skip、失敗0件であり、その後の変更は試験と引き継ぎ資料の補強だけである。
 featureへのマージは未実施であり、Claudeクロスレビューの記録はPRコメントで追跡する。
 skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
 
@@ -311,6 +312,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 結果不明のときの「状態確認」の案内が全操作で同じ 1 文 | PR #252 の[コメント](https://github.com/ktysne/agent-cockpit/pull/252#issuecomment-6045370091) |
 | main の全 worktree 探索のキャッシュ(計測後に判断) | PR #276 の[コメント](https://github.com/ktysne/agent-cockpit/pull/276#issuecomment-6056840655) |
 | 設定変更で service を作り直す入口を足すときは、保存済み質問が隔離される契約を見直す | PR #290 の[コメント](https://github.com/ktysne/agent-cockpit/pull/290#issuecomment-6059799864) |
+| native factoryの起動と後始末がともに失敗したときの上位error codeと表示。現在はAggregateErrorのcauseとerrorsで原因を保持する（標準起動の接続時に設計する） | PR #324のClaudeレビューの任意提案 |
 | deleteSession のたびの snapshot 再計算(計測後に判断) | PR #252 の[コメント](https://github.com/ktysne/agent-cockpit/pull/252#issuecomment-6045000236) |
 | 積み直し判定で間接候補の番号表示が正確でない | PR #261 の[コメント](https://github.com/ktysne/agent-cockpit/pull/261#issuecomment-6054038985) |
 | 失効世代を集約する永続的な単調世代(#209 段階 4 の範囲) | [容量回収計画](../design/codex-capacity-reclamation.md)「世代の集約」 |
