@@ -47,8 +47,19 @@ PR4では、instruction journalのprepareResume待ち中にcloseが完了して�
 新しいfactoryでの起動時に隔離済みの質問を保存済み相関で照合し、古い実行を再認可しない。
 両providerのnative factory適合試験は、Claudeの任意提案を反映した追加試験を含め27件成功した。
 レビューの任意提案を反映後の最終全体試験は2,256件成功、1件skip、失敗0件である。
-featureへのマージは未実施であり、Claudeクロスレビューの記録はPRコメントで追跡する。
+Claudeクロスレビューは3往復で収束し、PRはDraftを解除してマージ可能になった。
+後続開始時のGitHub照合ではPR #324はOPENであるため、レビュー済みhead `bfb8aa7`から段階3の質問本文回収を積む。
+マージが反映された時点でbaseとマージ状態を更新する。
 skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
+
+段階3は質問、通常指示、PR通知とresult、自動実行と停止範囲の分離の順に分割する。
+最初の質問回収は `codex/reclamation-body-coordinator-209-20261009` で、退役済み期間の明示回収と準備済み操作の起動時再開を実装した（[PR #325](https://github.com/ktysne/agent-cockpit/pull/325)）。
+関連保存遷移試験32件、両providerのnative factory試験44件、全体2,310件（head `39c9123`）が成功し、環境依存の1件はskip、失敗は0件である。
+その後の表示2項目の補強は、両providerの関連2件で確認した。
+Claudeのクロスレビューは3往復で収束し、PR #324をbaseにしたマージ可能なPRである。
+マージ順はPR #324、PR #325であり、後続は通常指示の確定終端回収をこのheadへ積む。
+現保存層の全writer停止を維持し、質問単独失敗時の停止範囲の分離は後続に残す。
+個別墓標の件数枠を空ける世代集約は段階4であり、本文回収だけで#209を完了扱いにしない。
 
 ## 全体の流れ
 
@@ -114,8 +125,11 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 
 ## 対応順序、ブランチ、PR
 
-作業 PR は最新の feature を起点に feature を base にする。
+独立した作業PRは最新のfeatureを起点にfeatureをbaseにする。
+未マージの変更に依存する後続はレビュー済みheadを起点にし、その親ブランチをbaseにする。
 連続する作業はスタック式に積み、開発者が下から通常 merge で取り込む。
+マージ可能になった時点で通知し、マージ待ちで止まらず後続を積む（2026-10-09の開発者指定）。
+親のマージ後に、親headがfeatureの祖先であることを確認してから後続PRのbaseをfeatureへ移す。
 マージは開発者が行い、PR 番号、head、base は GitHub で確かめた値だけを書く。
 
 | 順 | 対象 | 作業 | PR と base | 状態(2026-10-09 確認) |
@@ -128,7 +142,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324)、base: feature | 実装と検証を完了。featureへのマージ未実施。`codex/reclamation-native-factory-209-20261009`（起点 `977e4fe`）。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、base: PR #324 | 段階3の質問本文回収は検証とClaudeレビューを完了し、マージ可能。PR #324のhead `bfb8aa7`から `codex/reclamation-body-coordinator-209-20261009` へ積む。質問、通常指示、PR通知とresult、自動実行と停止範囲の分離、段階4の順に進める |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |

@@ -80,6 +80,11 @@ HTTP requestにはnative profile allowlist、receipt、writer capabilityによ�
 
 戻り値の`reclamation.status()`は共通gateと容量予約の診断を返す。
 `reclamation.retireQuestionPeriod({ identity, periodId, reason? })`は、そのfactoryが持つ質問サービスと配信storeで対象periodを永久失効させる。
+`reclamation.reclaimQuestionBodies({ identity, periodId })`は、退役済み期間の隔離質問を保存済み保持期限に従って本文回収する。
+指定はこの2項目だけを許し、未退役期間は保存を始めず拒否する。
+期限到達前は本文を保持し、結果の`reclaimedQuestionIds`と`deferredQuestionIds`で回収済みと延期した対象を区別する。
+準備済みの回収は保存済み操作IDで再開し、起動時にも全writerの再開前に未完了の準備を走査する。
+質問journalの準備、対応checkpointの墓標、質問詳細削除を順に保存し、配信の新規作成や再送を行わない。
 生のcontextやbackendは公開せず、nativeの停止時に自動で退役させる接続も加えない。
 
 移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。

@@ -250,6 +250,11 @@ function providerMatches(record, provider) {
     record.nativeIdKind === PROVIDER_NATIVE_ID_KINDS[provider]);
 }
 
+function sameNativeIdentity(left, right) {
+  return ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId']
+    .every((field) => left[field] === right[field]);
+}
+
 function reclamationTarget(record) {
   return record?.recordType === 'reclaimed' ? record.targetRef : record?.target;
 }
@@ -1068,6 +1073,102 @@ function createDurableDeliveryStore(options = {}) {
     });
   }
 
+  async function withRetiredQuestionCheckpoint(value, callback) {
+    if (!reclamation || typeof callback !== 'function') {
+      throw storeError('invalid_question_body_reclamation');
+    }
+    const captured = captureExactRecord(value, ['identity', 'periodId'], 'invalid_question_body_reclamation');
+    const request = Object.freeze({
+      identity: Object.freeze(captureExactRecord(captured.identity,
+        ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'], 'invalid_question_body_reclamation')),
+      periodId: captured.periodId,
+    });
+    const assertRetired = () => {
+      let canWrite = false;
+      try { canWrite = reclamation.backend.canWrite() === true; } catch {}
+      if (!accepting || closePromise || !reclamationPrepared || !canWrite ||
+          !reclamation.periodGate.isRetired(request.identity, request.periodId)) {
+        throw storeError('question_period_not_retired');
+      }
+    };
+    assertRetired();
+    return enqueue(async () => {
+      assertRetired();
+      let active = true;
+      const assertAccess = () => {
+        if (!active || QUESTION_RETIREMENT_SCOPE.getStore() !== retirementScopeToken) {
+          throw storeError('question_retirement_access_expired');
+        }
+        assertRetired();
+      };
+      const access = Object.freeze({
+        snapshot() {
+          assertAccess();
+          return structuredClone(currentCheckpoint);
+        },
+        async persist(candidateValue, deliveryAttemptId) {
+          assertAccess();
+          if (!isIdentifier(deliveryAttemptId)) throw storeError('invalid_question_body_reclamation');
+          const candidate = normalizeCheckpointV3Local(candidateValue, limits.maxRecords ?? DEFAULT_MAX_RECORDS);
+          const previous = currentCheckpoint;
+          if (previous.revision >= Number.MAX_SAFE_INTEGER || previous.ledger.revision >= Number.MAX_SAFE_INTEGER ||
+              candidate.storeId !== previous.storeId || candidate.revision !== previous.revision + 1 ||
+              candidate.ledger.revision !== previous.ledger.revision + 1 ||
+              !jsonEqual(candidate.registrations, previous.registrations) ||
+              !jsonEqual(candidate.migrationAllowance, previous.migrationAllowance) ||
+              !jsonEqual(candidate.ledger.notificationTargets, previous.ledger.notificationTargets) ||
+              !jsonEqual(candidate.ledger.logicalTombstones, previous.ledger.logicalTombstones) ||
+              candidate.ledger.deliveries.length !== previous.ledger.deliveries.length) {
+            throw storeError('invalid_question_body_reclamation_candidate');
+          }
+          const previousDelivery = previous.ledger.deliveries.find((item) =>
+            item.deliveryAttemptId === deliveryAttemptId);
+          const nextDeliveriesByAttempt = new Map(candidate.ledger.deliveries.map((item) =>
+            [item.deliveryAttemptId, item]));
+          const nextDelivery = nextDeliveriesByAttempt.get(deliveryAttemptId);
+          if (!previousDelivery || previousDelivery.recordType !== 'detail' || previousDelivery.kind !== 'question' ||
+              !nextDelivery || nextDelivery.recordType !== 'reclaimed' || nextDelivery.kind !== 'question' ||
+              previousDelivery.payloadDigest !== nextDelivery.payloadDigest ||
+              previousDelivery.state !== nextDelivery.state || previousDelivery.terminalAt !== nextDelivery.terminalAt ||
+              previousDelivery.cancelRequested !== nextDelivery.cancelRequested ||
+              !jsonEqual(previousDelivery.acceptedCorrelation, nextDelivery.acceptedCorrelation) ||
+              !jsonEqual(previousDelivery.appliedCorrelation, nextDelivery.appliedCorrelation) ||
+              nextDelivery.reclamation.reason !== 'retired_question_period' ||
+              !sameNativeIdentity(previousDelivery.source.identity, request.identity) ||
+              previousDelivery.source.executionBinding.periodId !== request.periodId ||
+              previousDelivery.target.kind !== 'execution' ||
+              !sameNativeIdentity(previousDelivery.target.identity, request.identity) ||
+              previousDelivery.target.periodId !== request.periodId ||
+              !sameNativeIdentity(nextDelivery.sourceRef.identity, request.identity) ||
+              nextDelivery.sourceRef.executionBinding.periodId !== request.periodId ||
+              !sameNativeIdentity(nextDelivery.targetRef.identity, request.identity) ||
+              nextDelivery.targetRef.periodId !== request.periodId ||
+              previous.ledger.deliveries.some((item) => item.deliveryAttemptId !== deliveryAttemptId &&
+                !jsonEqual(item, nextDeliveriesByAttempt.get(item.deliveryAttemptId)))) {
+            throw storeError('invalid_question_body_reclamation_candidate');
+          }
+          assertReclamationCheckpointCapacity(candidate, null, true);
+          assertAccess();
+          try {
+            const saved = await checkpointStore.save(candidate, assertAccess);
+            currentCheckpoint = saved;
+            return structuredClone(saved);
+          } catch (error) {
+            if (error.code === 'checkpoint_write_failed' || error.code === 'checkpoint_writer_blocked') {
+              writerBlocked = true;
+            }
+            throw error;
+          }
+        },
+      });
+      try {
+        return await QUESTION_RETIREMENT_SCOPE.run(retirementScopeToken, () => callback(access));
+      } finally {
+        active = false;
+      }
+    });
+  }
+
   function close() {
     if (closePromise) return closePromise;
     accepting = false;
@@ -1115,6 +1216,7 @@ function createDurableDeliveryStore(options = {}) {
   if (reclamation) {
     storeValue.reclamationWriter = reclamationWriter;
     storeValue.withQuestionRetirement = withQuestionRetirement;
+    storeValue.withRetiredQuestionCheckpoint = withRetiredQuestionCheckpoint;
   }
   const store = Object.freeze(storeValue);
   STORE_INTERNALS.set(store, {
