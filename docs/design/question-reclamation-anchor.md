@@ -4,7 +4,8 @@
 
 この文書は[容量回収計画](codex-capacity-reclamation.md)で定める保存契約である。
 局所codec、旧sourceの純粋な投影、store間照合と容量計算の入口を実装している。
-永続アンカーstore、移行coordinator、writerの停止と再開、通常起動への接続は未実装である。
+独立した保存層と移行coordinatorをテスト用compositionへ追加する。
+質問serviceと通常writerの新形式対応、native factoryと通常起動への接続は後続の範囲である。
 質問の永久失効を通常の journal と別の永続アンカーに保存する。
 アンカーは本文回収後も残し、質問に限った拒否の根拠とする。
 registry の execution を終了させず、通常指示の認可と runtime の稼働状態は変えない。
@@ -29,6 +30,43 @@ active manifestはcompletedでも`reconciliation-required`を返し、manifest�
 
 各入口は時刻、UUID、source bytes、通常byte上限を呼び出し元から受け取り、時計、乱数、ファイル保存、registry、runtimeを呼ばない。
 既存reader、writer、service、標準起動には接続していない。
+
+## 保存層と移行coordinator
+
+`src/server/reclamation-persistence.js` はcompositionが固定した保存先を所有し、上限付きの実byte読取とatomic置換を行う。
+アンカーのbasenameは `question-reclamation-anchor.json` に固定し、dataの保存先は構成したslotの固定mapから取得する。
+manifestから保存先を取得せず、重複保存先とsymlinkを拒否する。
+保存先のディレクトリはcompositionがあらかじめ作成する。
+同一プロセス内の保存先所有を検査するが、別プロセスをまたぐwriter排他は#313の範囲であり、排他起動を前提とする。
+保存対象は検査したbyte列の複製であり、保存時にJSONのキー順や改行を変えない。
+書込み失敗後は同じstoreからの再書込みを止め、一時ファイルの清掃で保存済みsourceやtargetを削除しない。
+
+`src/server/reclamation-capacity-reservation.js` は論理的な追加byte予算をleaseとして確保する。
+予約の拡張に失敗した場合は旧予約を保持し、移行前後の予約を別leaseで二重計上しない。
+各atomic置換の実fileと一時fileが同時に存在する量を計算し、その最大値から現在の実占有量を引いた追加量を予約する。
+slotのraw byte、正規化したbyte、全将来予約を通常上限と保存grantへ照合し、固定Hを許容量に使わない。
+この予算はOSの空き容量や保存成功の保証ではない。
+
+`src/server/reclamation-migration-coordinator.js` の `start` は共有gateを同期で閉じ、全構成writerへ同期stopを適用してからdrainを待つ。
+stopの一部が失敗しても残りのwriterを止める。
+アンカーを先に読み、drain後のsourceと固定manifestを照合する。
+途中移行は同じoperation ID、起算時刻、sourceとtargetの指紋、grantを使い、固定順のtarget prefixだけを復旧する。
+各保存後に再読取と指紋確認を行い、全targetを実ファイルから再検査してcompletedを保存する。
+manifestをnullにする前にも、アンカー全体の一致と全targetの指紋を再検査する。
+manifestのtarget sizeは読取り前に固定C+H上界を検査し、未検証のサイズを読取上限に使わない。
+completed後は旧phaseとpost上界をともに満たす予約を先に確保し、nullの保存成功と再読取を確認してからpost予約へ縮小する。
+各writerの再開準備には検証済みの全snapshotを個別に複製して渡し、全準備の成功後に共有gateを開く。
+このgateはwriter全体の停止状態を表し、件数枠と通常予約に基づく新規質問の受付許可は後続のguardで検査する。
+
+I/O、指紋、容量確保、停止、再開準備の失敗ではgateを閉じたままにする。
+rename後の例外と再読取の失敗は保存結果不明として扱い、同じinstanceのstartを再試行に使わない。
+明示的なcloseで未完了I/Oとdrainを待ち、保存先所有とleaseを解放してから、新instanceで固定保存状態を検査する。
+既存の通常アンカーで相関の再照合が必要な状態は、PR2では通常退役の修復処理を行わず、writerを止めて診断する。
+
+全slot未作成時の初期化は、dataを固定順に作成してから通常アンカーを最後に保存する。
+部分作成後に停止した新schemaとアンカー欠落の組は、初回作成と読み替えず自動復旧を拒否する。
+保存済みファイルを削除したり、必須slotへ空schemaを補って再開したりしない。
+この制限を含む保存境界のfixtureは[適合試験](provider-conformance-testing.md#旧保存形式の移行と容量予約)で定める。
 
 ## アンカーの形式
 

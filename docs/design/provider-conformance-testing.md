@@ -154,6 +154,31 @@ compositionではClaudeとCodexの未選択・選択済み質問をfresh registr
 QR03〜QR06のprovider別検証は製品adapter、serviceと実ファイルstoreの経路であり、native factoryの実runtimeを起動した結果ではない。
 実Claude/Codex runtimeの隔離復旧は未実施である。
 
+## 旧保存形式の移行と容量予約
+
+#209の段階2では、独立した移行coordinatorと実ファイル保存層を組み合わせる。
+期待値は[アンカー保存契約](question-reclamation-anchor.md)から定める。
+ClaudeとCodexの相関を持つ旧形式を同じ保存手順へ通し、provider固有adapterと実runtimeの適合とは区別する。
+通常のservice、native factory、製品起動へ接続する試験は後続の実装範囲である。
+
+| ID | 入力と操作 | 独立した期待値と禁止副作用 |
+|---|---|---|
+| ID-F08-RC01 | 満杯の旧形式を、質問と通常指示の相関を持つ3slotで移行する | 全writerの同期停止とdrain後にsourceを固定し、拒否情報、operation ID、起算時刻、grantを保持する。本文回収と新規配信は0回。 |
+| ID-F08-RC02 | 各anchor phase、各slotの置換前後、再読取、completedからnullの間で保存を失敗させ、新instanceで再開する | 保存済みsourceか固定targetを保持し、固定順のprefixだけを復旧する。同じoperation ID、時刻、指紋とgrantを使う。結果不明のinstanceからは再開しない。 |
+| ID-F08-RC03 | アンカー欠落、破損、store ID不一致、必須slot欠落、不可能prefixを与える | writerを停止し、空ファイルの補完、sourceの削除、自動再初期化と旧writerへのfallbackを行わない。 |
+| ID-F08-RC04 | stop、drain、再開準備を失敗させ、並行startとcloseを行う | 全writerへstopを適用し、共通gateは全再開準備の成功後にだけ開く。失敗したinstanceのstartを再試行に使わない。 |
+| ID-F08-RC05 | raw byteと将来予約がB+Gを超える設定、移行前後の予約不足を与える | Hを許容量へ流用せず停止する。予約resize失敗時は旧予約を保持し、null保存の確認後にだけpost予約へ縮小する。 |
+| ID-F08-RC06 | 全slot未作成から初期化し、部分作成後に停止する | 完全初期化ではdataを先に、anchorを最後に保存する。部分new schemaと欠落anchorを再初期化せず、保存済みファイルを保持して停止する。 |
+| ID-F08-RC07 | manifestをnullにして再起動し、既存grantと満杯の件数を検査する | grantを自動で消さず、通常枠への収束と新規受付を移行成功だけで許可しない。時刻、操作IDと失効期間を再発行しない。 |
+
+容量budgetはcompositionが供給する論理予約であり、OSの空き容量や保存成功を保証しない。
+移行coordinatorの17試験では両providerの3slot移行、24の保存故障境界、再起動と停止条件を確認した。
+保存層と容量予約の試験は19件成功・1件skipであり、skipは実symlinkの作成権限が無いためである。
+symlink拒否は注入fixtureでも検証している。
+ENOSPCとrename後の例外でも保存済みファイルを保持して停止することを試験する。
+同一保存先の排他起動は前提であり、プロセス間writer排他は#313の別範囲である。
+これらのfixtureの成功を、実Claude/Codex runtimeの成功には数えない。
+
 ## Codex native pendingの表示
 
 `ID-F08-NS09`はCodex nativeの質問要求と許可要求をCockpitで表示するシナリオである。
