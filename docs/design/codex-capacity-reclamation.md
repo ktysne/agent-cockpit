@@ -253,6 +253,8 @@ JSONの重複keyは既存parserに従って最後の値を採用し、解析結�
 呼出し元は、選択したgraveに必要な論理墓標だけを最大256 groupで渡す。
 groupは既存のlogical tuple（kind、sourceExecutionId、logicalMessageId、revision、targetLaunchKey）で識別し、sourceLaunchKeyとpayload digestを値として照合する。
 同じgroup、sourceLaunchKeyとdigestのgraveは一つの墓標を共有し、欠落、余剰、重複、値の矛盾を拒否する。
+同groupでsuperseded_before_send以外のgraveは最大1件とする。
+選択墓標は保存されないcontextの集合なので、入力の並び順を要求しない。
 この入力が実checkpoint全体の正しい部分集合であることは、後続の全体検査で確認する。
 返却の`scopeLimitations`は、アンカー退役、全体ID一意性、contextの正しい部分集合、全体logical集合、合計容量、永続化復旧、配信履歴とnative相関の再利用が未検証であることを固定の項目で示す。
 
@@ -267,8 +269,8 @@ nullableなscalarはnullでも他の値でも一訪問と数え、questionで非
 |---|---|
 | QCC01 | 両providerで元recordの全observableを展開後も保持し、元snapshotなしにdecodeする |
 | QCC02 | 配列順、entry識別子、参照辞書の初出順と一意性、不正索引を検査する |
-| QCC03 | wrapperと本文回収操作の相関、各保持期限、noneとindeterminateを検査する |
-| QCC04 | 必要な論理墓標groupの閉包を検査し、同groupの異なるdigestを拒否する |
+| QCC03 | wrapperと本文回収操作の相関、pairで各保持期限、noneとindeterminateを検査する |
+| QCC04 | 任意順の選択墓標に必要groupの閉包を要求し、同groupの異なる値と複数の非superseded記録を拒否する |
 | QCC05 | 実encoderのbyte境界と件数境界を独立に検査する |
 | QCC06 | getterとProxyを実行せず、共有参照の反復も訪問予算へ含める |
 | QCC07 | caller入力を変更または凍結せず、局所検査の成功から削除権限を発行しない |
@@ -277,6 +279,9 @@ nullableなscalarはnullでも他の値でも一訪問と数え、questionで非
 capsuleのattempt順は元ledgerの履歴順を表さないため、後続outer形式で元の順序を保存する方法を決め、superseded履歴の検査を行う。
 旧readerが新outer版を拒否する条件、保存途中の故障とcold復旧、アンカーの退役証拠、件数枠の解放も別のgateとして残す。
 単体codecと選択ペアの成功を、これらの全体条件の成立へ読み替えない。
+単体codecは局所schemaを検査し、隔離後と確定終端後の保持期限は選択ペアから既存のrecord相関検査へ委ねる。
+公開pair入口は不正入力を一つのTypeErrorへ統一し、意図したcapsule byte超過だけをRangeErrorで返す。
+いずれの例外messageも保存や回復の許可を表さない。
 
 ### 永続集約への条件
 

@@ -244,7 +244,7 @@ function normalizeCapsule(value, normalizeInternal, maxBytes, tooLargeCode, erro
     const normalized = normalizeInternal(value);
     return encodeCapsuleValue(normalized, maxBytes, tooLargeCode).value;
   } catch (error) {
-    if (error instanceof RangeError) throw error;
+    if (error instanceof RangeError && error.message === tooLargeCode) throw error;
     if (error instanceof TypeError && error.message === errorCode) throw error;
     fail(errorCode);
   }
@@ -255,7 +255,7 @@ function encodeCapsule(value, normalizeInternal, maxBytes, tooLargeCode, errorCo
     const normalized = normalizeInternal(value);
     return encodeCapsuleValue(normalized, maxBytes, tooLargeCode);
   } catch (error) {
-    if (error instanceof RangeError) throw error;
+    if (error instanceof RangeError && error.message === tooLargeCode) throw error;
     if (error instanceof TypeError && error.message === errorCode) throw error;
     fail(errorCode);
   }

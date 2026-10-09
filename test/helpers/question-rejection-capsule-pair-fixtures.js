@@ -1,7 +1,11 @@
 'use strict';
 
-const { encodeNormalized } = require('../../src/server/reclamation-json-codec');
 const { createReclaimedQuestionPairFixture } = require('./reclaimed-question-pair-fixtures');
+const { encodeNormalized } = require('../../src/server/reclamation-json-codec');
+const {
+  makeDeliveryCapsule,
+  makeQuestionCapsule,
+} = require('./question-rejection-capsule-fixtures');
 
 const COMPACTION_OPERATION_ID = '55555555-5555-4555-8555-555555555555';
 
@@ -18,61 +22,6 @@ function makeMetadata(reservation, snapshot) {
   };
 }
 
-function makeQuestionCapsule(reservations, metadata) {
-  return {
-    formatVersion: 1,
-    compactionOperationId: metadata.compactionOperationId,
-    storeId: metadata.storeId,
-    identity: clone(metadata.identity),
-    periodId: metadata.periodId,
-    reservations: reservations.map((reservation) => {
-      const entry = clone(reservation);
-      delete entry.identity;
-      delete entry.periodId;
-      return entry;
-    }),
-  };
-}
-
-function refKey(ref) {
-  return JSON.stringify(ref);
-}
-
-function makeDeliveryCapsule(deliveries, metadata) {
-  if (deliveries.length === 0) return null;
-  const sources = [];
-  const targets = [];
-  const sourceIndices = new Map();
-  const targetIndices = new Map();
-  const entries = deliveries.map((delivery) => {
-    const sourceKey = refKey(delivery.sourceRef);
-    const targetKey = refKey(delivery.targetRef);
-    if (!sourceIndices.has(sourceKey)) {
-      sourceIndices.set(sourceKey, sources.length);
-      sources.push(clone(delivery.sourceRef));
-    }
-    if (!targetIndices.has(targetKey)) {
-      targetIndices.set(targetKey, targets.length);
-      targets.push(clone(delivery.targetRef));
-    }
-    const entry = clone(delivery);
-    delete entry.sourceRef;
-    delete entry.targetRef;
-    entry.sourceRefIndex = sourceIndices.get(sourceKey);
-    entry.targetRefIndex = targetIndices.get(targetKey);
-    return entry;
-  });
-  return {
-    formatVersion: 1,
-    compactionOperationId: metadata.compactionOperationId,
-    storeId: metadata.storeId,
-    identity: clone(metadata.identity),
-    periodId: metadata.periodId,
-    references: { sources, targets },
-    deliveries: entries,
-  };
-}
-
 function tombstoneForDelivery(delivery) {
   return {
     kind: delivery.kind,
@@ -85,7 +34,7 @@ function tombstoneForDelivery(delivery) {
   };
 }
 
-function groupKey(tombstone) {
+function tombstoneKey(tombstone) {
   return encodeNormalized([
     tombstone.kind,
     tombstone.sourceExecutionId,
@@ -99,14 +48,14 @@ function makePairInput(questionReservations, checkpointDeliveries, metadata, sel
   const tombstones = selectedLogicalTombstones === undefined
     ? [...new Map(checkpointDeliveries.map((delivery) => {
       const tombstone = tombstoneForDelivery(delivery);
-      return [groupKey(tombstone), tombstone];
+      return [tombstoneKey(tombstone), tombstone];
     })).values()]
     : selectedLogicalTombstones.map(clone);
-  tombstones.sort((left, right) => groupKey(left) < groupKey(right) ? -1 :
-    groupKey(left) > groupKey(right) ? 1 : 0);
   return {
     questionCapsule: makeQuestionCapsule(questionReservations, metadata),
-    checkpointCapsule: makeDeliveryCapsule(checkpointDeliveries, metadata),
+    checkpointCapsule: checkpointDeliveries.length === 0
+      ? null
+      : makeDeliveryCapsule(checkpointDeliveries, metadata),
     selectedLogicalTombstones: tombstones,
   };
 }

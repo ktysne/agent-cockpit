@@ -53,10 +53,6 @@ function logicalGroupKey(tombstone) {
   ]);
 }
 
-function compareOrdinal(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function validateSelectedLogicalTombstones(input, deliveries) {
   const expectedByKey = new Map();
   for (const delivery of deliveries) {
@@ -77,21 +73,28 @@ function validateSelectedLogicalTombstones(input, deliveries) {
     if (prior === undefined) expectedByKey.set(key, {
       payloadDigest: tombstone.payloadDigest,
       sourceLaunchKey,
+      nonSupersededCount: delivery.state === 'superseded_before_send' ? 0 : 1,
     });
+    else if (delivery.state !== 'superseded_before_send') {
+      prior.nonSupersededCount += 1;
+      requirePair(prior.nonSupersededCount <= 1);
+    }
   }
 
   const selectedLogicalTombstones = captureDenseArray(input, MAX_PAIR_ARRAY_LENGTH, INVALID_PAIR)
     .map((item) => normalizeLogicalTombstoneV2Local(item));
-  const keys = selectedLogicalTombstones.map(logicalGroupKey);
-  for (let index = 1; index < keys.length; index += 1) {
-    requirePair(compareOrdinal(keys[index - 1], keys[index]) < 0);
+  const selectedByKey = new Map();
+  for (const tombstone of selectedLogicalTombstones) {
+    const key = logicalGroupKey(tombstone);
+    requirePair(!selectedByKey.has(key));
+    selectedByKey.set(key, tombstone);
   }
-  requirePair(keys.length === expectedByKey.size);
-  for (let index = 0; index < keys.length; index += 1) {
-    const expected = expectedByKey.get(keys[index]);
+  requirePair(selectedByKey.size === expectedByKey.size);
+  for (const [key, expected] of expectedByKey) {
+    const tombstone = selectedByKey.get(key);
     requirePair(expected !== undefined &&
-      expected.payloadDigest === selectedLogicalTombstones[index].payloadDigest &&
-      expected.sourceLaunchKey === canonicalJson(selectedLogicalTombstones[index].sourceLaunchKey));
+      tombstone !== undefined && expected.payloadDigest === tombstone.payloadDigest &&
+      expected.sourceLaunchKey === canonicalJson(tombstone.sourceLaunchKey));
   }
   return selectedLogicalTombstones;
 }
@@ -101,8 +104,7 @@ function normalizePairInput(value) {
   return captureExactRecord(value, PAIR_FIELDS, INVALID_PAIR);
 }
 
-/** standalone Q/CP capsuleと選択logical contextの局所整合を検査する。 */
-function validateQuestionRejectionCapsulePair(value) {
+function validateQuestionRejectionCapsulePairInternal(value) {
   const input = normalizePairInput(value);
   const questionCapsule = normalizeQuestionRejectionCapsule(input.questionCapsule);
   const checkpointCapsule = input.checkpointCapsule === null
@@ -169,6 +171,19 @@ function validateQuestionRejectionCapsulePair(value) {
     selectedLogicalTombstones,
     scopeLimitations: SCOPE_LIMITATIONS,
   };
+}
+
+/** standalone Q/CP capsuleと選択logical contextの局所整合を検査する。 */
+function validateQuestionRejectionCapsulePair(value) {
+  try {
+    return validateQuestionRejectionCapsulePairInternal(value);
+  } catch (error) {
+    if (error instanceof RangeError &&
+        ['question_capsule_too_large', 'question_delivery_capsule_too_large'].includes(error.message)) {
+      throw error;
+    }
+    throw new TypeError(INVALID_PAIR);
+  }
 }
 
 module.exports = { validateQuestionRejectionCapsulePair };

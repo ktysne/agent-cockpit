@@ -312,6 +312,22 @@ test('encoders and decoders return canonical capsule bytes without changing the 
   }
 });
 
+test('wrapper operation IDs are independent from each reclaimed record operation ID', () => {
+  const fixture = createQuestionRejectionCapsuleFixture({ provider: 'claude', presence: 'checkpoint' });
+  assert.notEqual(fixture.questionCapsule.compactionOperationId, fixture.reservation.reclamation.operationId);
+  assert.notEqual(fixture.checkpointCapsule.compactionOperationId, fixture.delivery.reclamation.operationId);
+  assert.doesNotThrow(() => normalizeQuestionRejectionCapsule(fixture.questionCapsule));
+  assert.doesNotThrow(() => normalizeQuestionDeliveryCapsule(fixture.checkpointCapsule));
+
+  const sameQuestionOperation = structuredClone(fixture.questionCapsule);
+  sameQuestionOperation.compactionOperationId = fixture.reservation.reclamation.operationId;
+  assert.doesNotThrow(() => normalizeQuestionRejectionCapsule(sameQuestionOperation));
+
+  const sameDeliveryOperation = structuredClone(fixture.checkpointCapsule);
+  sameDeliveryOperation.compactionOperationId = fixture.delivery.reclamation.operationId;
+  assert.doesNotThrow(() => normalizeQuestionDeliveryCapsule(sameDeliveryOperation));
+});
+
 test('normalization ignores object property insertion order but preserves array order', () => {
   const fixture = createQuestionRejectionCapsuleFixture({ provider: 'claude', presence: 'checkpoint' });
   assert.deepEqual(
@@ -560,8 +576,12 @@ test('question capsule pretty bytes accept immediately below and at the cap and 
     assert.equal(encoded.sizeBytes, targetSize);
   }
   const overLimit = createQuestionCapsuleAtSize(fixture, CAPSULE_LIMITS.maxQuestionBytes + 1);
-  assert.throws(() => normalizeQuestionRejectionCapsule(overLimit), RangeError);
-  assert.throws(() => encodeQuestionRejectionCapsule(overLimit), RangeError);
+  assert.throws(() => normalizeQuestionRejectionCapsule(overLimit), {
+    name: 'RangeError', message: 'question_capsule_too_large',
+  });
+  assert.throws(() => encodeQuestionRejectionCapsule(overLimit), {
+    name: 'RangeError', message: 'question_capsule_too_large',
+  });
 });
 
 test('checkpoint capsule pretty bytes accept immediately below and at the cap and reject one byte above', () => {
@@ -572,6 +592,10 @@ test('checkpoint capsule pretty bytes accept immediately below and at the cap an
     assert.equal(encoded.sizeBytes, targetSize);
   }
   const overLimit = createDeliveryCapsuleAtSize(fixture, CAPSULE_LIMITS.maxCheckpointBytes + 1);
-  assert.throws(() => normalizeQuestionDeliveryCapsule(overLimit), RangeError);
-  assert.throws(() => encodeQuestionDeliveryCapsule(overLimit), RangeError);
+  assert.throws(() => normalizeQuestionDeliveryCapsule(overLimit), {
+    name: 'RangeError', message: 'question_delivery_capsule_too_large',
+  });
+  assert.throws(() => encodeQuestionDeliveryCapsule(overLimit), {
+    name: 'RangeError', message: 'question_delivery_capsule_too_large',
+  });
 });
