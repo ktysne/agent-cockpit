@@ -357,6 +357,7 @@ for (const provider of PROVIDERS) {
       const writerClosePromise = writer.close();
       barrier.release();
       await assert.rejects(releasePromise, { code: closedErrorCode });
+      assert.equal(harness.reclamationContext.canWrite(), false);
       await Promise.all([blockingWrite, writerClosePromise]);
 
       assert.equal(harness.persistenceWriteCounts[slot], writesBefore[slot]);

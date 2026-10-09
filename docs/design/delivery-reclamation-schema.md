@@ -344,7 +344,8 @@ atomic保存とreadbackが一致するまで旧leaseを保持する。
 成功後は保存済み状態からanchorと未解放slotのgrantを含む予約を計算し、同じleaseを縮小して各writerとserviceのcacheを更新する。
 縮小が失敗しても旧予約の保持を確認できる場合は、grantを復活させず過大な予約を保持する。
 保存結果または必要予約の保持が不明な場合は全writerを停止し、fresh起動の完全照合を必要とする。
-保存開始前に全保存状態の照合やscope受付が拒否された場合は、解放を行わず、contextの書き込み可否を維持する。
+`access.persist`を呼ぶ前に全保存状態の照合やwriterのscope取得が拒否された場合は、解放を行わず、contextの書き込み可否を維持する。
+`access.persist`以降の拒否は保存開始後として扱い、全writerを停止する。
 
 | ID | 期待条件 |
 |---|---|
