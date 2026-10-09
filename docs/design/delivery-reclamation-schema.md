@@ -16,7 +16,7 @@ getter、toJSON、継承されたtoJSON、入力値の暗黙の文字列変換�
 既存reader、writer、service、標準起動からこの入口は呼ばない。
 
 Local入口の成功は、アンカーや質問journalとの照合、instruction journalとcheckpointの照合、grantの発行資格、固定H/Tや容量予約の検証を意味しない。
-これらと旧形式の投影は容量回収計画の1dへ残す。
+これらと旧形式の投影は上位の `reclamation-store-consistency.js`、`reclamation-migration-projection.js`、`reclamation-capacity-bounds.js` で扱う。
 配信detail/graveのclaimsまたはdigestとlaunch履歴の一致は、checkpoint内の一意なlaunch履歴との照合で保証する。ledger単体ではclaimsを保持するaliasとの照合と、各recordの局所整合を検査する。
 7日保持の局所時刻条件は検査するが、外部質問journalの隔離時刻による期限や、過去のsnapshotからの遷移不変性はこの入口だけでは判定しない。
 fixtureの成功は実runtime適合の証拠ではない。

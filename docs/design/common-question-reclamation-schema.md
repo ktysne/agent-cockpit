@@ -2,7 +2,7 @@
 
 この文書は[容量回収計画](codex-capacity-reclamation.md)の段階1における質問 journal の保存契約である。
 形式移行と世代失効の外側契約は[質問回収アンカー](question-reclamation-anchor.md)、配信 record の保存契約は[配信回収 schema](delivery-reclamation-schema.md)を正本とする。
-局所 schema の codec は実装済みである。保存処理への接続、形式移行、容量検査、runtime 適合は未確認である。
+局所 schema の codec は実装済みである。純粋な旧形式投影、store間照合、容量計算は独立した入口として実装している。保存処理への接続とruntime適合は未確認である。
 
 ## 質問 journal v2 の局所 codec
 
@@ -13,7 +13,7 @@
 入力の getter と toJSON、継承された toJSON、暗黙の文字列変換は実行しない。
 
 Local 入口の成功は、アンカー・checkpoint・旧 source との照合、追加枠の発行資格、固定 `H_questions`、予約 byte の検証を意味しない。
-これらの検証と旧形式の投影は 1d へ残す。
+これらの検証と旧形式の投影は上位の `reclamation-store-consistency.js`、`reclamation-migration-projection.js`、`reclamation-capacity-bounds.js` で扱う。
 回収準備の checkpointState はこの文書の構造契約である 8 state を受け付け、退役後に到達可能な状態は外部照合で制限する。
 過去の snapshot に対する操作 ID や相関の不変性、7 日保持の経過、回収可否もこの単体 codec では判定しない。
 既存 reader、writer、service、標準起動からこの入口は呼ばない。
@@ -234,7 +234,9 @@ claimedはavailableへ戻し、他の既存stateはledgerのvalidatorとrecovery
 質問が隔離された後はunknownを成功へ変更せず、後着accepted/applied、late answer、pollからの再配送を拒否する。
 externalResolutionは元の証拠digestとresolvedAtを維持し、terminalResultKindに変換しない。
 
-recordDigestはanchor migration targetのquestions recordをschemaごとのnormalizerで正規化し、UTF-8のJSON.stringify(normalizedRecord)をSHA-256 lowercase hexにする。
+anchor migration targetのrecordDigestは、投影後のv2 detailをnormalizerで正規化し、UTF-8のJSON.stringify(normalizedRecord)をSHA-256 lowercase hexにする。
+移行途中のv1 sourceは旧schemaの検証と実byte列のsource fingerprintで照合し、v2 targetのrecordDigestをv1 recordへ適用しない。
+v1 recordのdigestを計算する場合は、次のv1正規化規則を使う。
 v1のfield順はkernelの現行RECORD_FIELDSそのままを使い、v1で欠落可能なautoApplyEnabledAtRegistrationはfalseへ補完してdigest対象に含める。
 v2のfield順はv1 record順を維持し、deliveryCreationStateをdeliveryIntent直後、autoApplyEnabledAtRegistrationの後にquarantinedAtを置く。
 v2 digestにはdeliveryCreationState、quarantinedAt、補完後の全既存fieldを含める。

@@ -2,7 +2,9 @@
 
 ## 対象と保証範囲
 
-この文書は[容量回収計画](codex-capacity-reclamation.md)の段階1で定める保存契約であり、実装済みの形式ではない。
+この文書は[容量回収計画](codex-capacity-reclamation.md)で定める保存契約である。
+局所codec、旧sourceの純粋な投影、store間照合と容量計算の入口を実装している。
+永続アンカーstore、移行coordinator、writerの停止と再開、通常起動への接続は未実装である。
 質問の永久失効を通常の journal と別の永続アンカーに保存する。
 アンカーは本文回収後も残し、質問に限った拒否の根拠とする。
 registry の execution を終了させず、通常指示の認可と runtime の稼働状態は変えない。
@@ -11,6 +13,22 @@ registry の execution を終了させず、通常指示の認可と runtime の
 保証するのはプロセスクラッシュ後の復旧、後着通知、同じ識別子の再利用に対する拒否である。
 電源断時の flush 保証、全ファイルの過去への巻戻し、移行中の旧 binary への切替は対象外である。
 移行中は保存先ごとに排他起動し、アンカーを知らない旧 binary を起動しない。
+
+## 独立した検証入口
+
+`src/server/question-reclamation-anchor-codec.js` はアンカー単体の構造、固定slot、失効key、migration descriptorを検査する。
+`src/server/reclamation-migration-projection.js` は旧sourceのraw bytesを検査し、新schemaの局所targetと容量候補を返す。
+Local投影はgrantの発行資格やwriterの再開を判定しない。
+`src/server/reclamation-migration-plan.js` の `planInitialReclamationMigration` はraw sourceと通常上限から、検査済みsource由来のgrant、固定したtarget指紋、初回の移行計画を生成する。
+全slot未作成ではmanifestを持たない空schemaの初期化計画を返し、存在する旧sourceの移行ではprepared manifestを返す。
+`src/server/reclamation-store-consistency.js` はアンカーと新schemaのstoreを組み合わせ、相関と保存境界を検査する。
+`inspectReclamationMigrationSnapshot` は固定slot順のtarget prefixとsource suffixを照合し、sourceから未設置targetを再構成する。
+active manifestはcompletedでも`reconciliation-required`を返し、manifest削除前の稼働を許可しない。
+`validateReclamationTransition` は前後snapshotを比較し、準備記録、操作ID、退役質問の状態、grantの不変条件を検査する。
+ここでの`ready`はschemaと相関の整合を表し、保存済みであることやwriterを再開できることは表さない。
+
+各入口は時刻、UUID、source bytes、通常byte上限を呼び出し元から受け取り、時計、乱数、ファイル保存、registry、runtimeを呼ばない。
+既存reader、writer、service、標準起動には接続していない。
 
 ## アンカーの形式
 
@@ -58,6 +76,8 @@ identity と period ID の検査と正規化には registry と同じ規則を�
 | `targets` | 下記の質問記述子。最大20,000件。質問IDとcommon key digestの重複を拒否 |
 
 `migration` は旧形式から拒否情報を備えた新形式への置換だけを表し、7日保持の待機と本文回収を含めない。
+局所codecは `sources` の入力順を問わず、`checkpoint`、`instructions`、`questions` の固定順へ正規化する。
+途中状態の到達可能性もこの固定順で検査し、`targets` と失効配列の順序は `periodIndex` の参照を保つため維持する。
 `prepared` はアンカー保存済み、`guarded` は置換開始の永続化済み、`installing` はファイル置換中、`completed` は全target指紋確認済みを表す。
 置換順は `checkpoint`、`instructions`、`questions` とし、構成されていないslotは省略する。
 途中復旧はこの順に到達できるsourceとtargetの組合せだけを受け付ける。
@@ -70,11 +90,14 @@ slot は `questions`、`checkpoint`、`instructions` に限り、実際の保存
 移行後はファイルを削除する形式を許さず、各target fingerprintを事前に確定する。
 
 version、revision、sizeは安全な整数の範囲で検査し、digestは小文字のSHA-256 hex 64文字に限る。
+旧sourceが存在するslotの移行target revisionはsource revisionに1を加え、未作成slotは0から始める。
+checkpoint内のledger revisionも移行で1を加え、安全な整数で表せない場合はsourceを保持して移行を拒否する。
 `sources.sha256` と `targetSha256` は保存する実byte列のdigestである。
 質問記述子の `recordDigest` と `commonKeyDigest` は、各schemaで定義した正規化形式のdigestであり、実byte列のdigestと混同しない。
 JSONのキー順や改行を変えたファイルを、同じsource fingerprintと読み替えない。
 
 質問記述子は `internalQuestionId`、`commonKeyDigest`、`periodIndex`、`recordDigest`、`deliveryPresence`、`deliveryIntent`、`checkpointState` を持つ。
+`recordDigest` は投影後のv2 detailのdigestであり、旧sourceの検査には実byte列のsource fingerprintと旧schemaのvalidatorを使う。
 `periodIndex` は失効配列の有効なindexで、移行中は失効配列の追加、削除、並替え、置換を止める。
 通常の質問と配信の記録は配列indexを永続参照せず、完全identityとperiod IDを保持する。
 `deliveryIntent` は既存の4フィールドの相関または `null` とし、質問詳細との一致を検査する。
