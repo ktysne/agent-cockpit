@@ -165,13 +165,20 @@ function loadFactory(faults) {
       resolveCompletion = resolve;
       rejectCompletion = reject;
     });
+    completion.catch(() => {});
+    let completionSettled = false;
+    const settleCompletion = (settle, value) => {
+      if (completionSettled) return;
+      completionSettled = true;
+      settle(value);
+    };
     const hold = {
       deliveryAttemptId,
       received,
       resolveCaptured,
       completion,
-      resolveCompletion,
-      rejectCompletion,
+      resolveCompletion: (value) => settleCompletion(resolveCompletion, value),
+      rejectCompletion: (error) => settleCompletion(rejectCompletion, error),
       captured: null,
       released: false,
     };
@@ -187,14 +194,21 @@ function loadFactory(faults) {
         try {
           result = listener(hold.captured.deliveryAttemptId, hold.captured.sourceToken, hold.captured.accepted);
         } catch (error) {
-          rejectCompletion(error);
+          hold.rejectCompletion(error);
           throw error;
         }
         const observed = Promise.resolve(result);
-        observed.then(resolveCompletion, rejectCompletion);
+        observed.then(hold.resolveCompletion, hold.rejectCompletion);
         return observed;
       },
     });
+  }
+
+  function abandonAcceptedHolds() {
+    for (const hold of acceptedHolds.values()) {
+      if (!hold.released) hold.released = true;
+      hold.rejectCompletion(new Error('hold_abandoned'));
+    }
   }
 
   require.cache[compositionPath].exports = {
@@ -298,6 +312,7 @@ function loadFactory(faults) {
     serviceAcceptedListener: (provider) => serviceAcceptedListeners.get(provider) || null,
     instructionEvidence: (id) => evidenceByDelivery.get(id) || null,
     holdNextAccepted,
+    abandonAcceptedHolds,
     backendSaveCount: (slot) => backendSaveCounts[slot] || 0,
   });
 }
@@ -411,6 +426,7 @@ function createNativeInstructionBodyReclamationHarness(options) {
     ready,
     start,
     restart,
+    abandonAcceptedHolds() { currentFactory?.abandonAcceptedHolds(); },
     close,
     closeCurrent,
     faults,

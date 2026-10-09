@@ -35,6 +35,7 @@ async function createHarness(t, provider, options = {}) {
     ...(options.reclamation ? { reclamation: options.reclamation } : {}),
   });
   t.after(async () => {
+    harness.abandonAcceptedHolds();
     try { await harness.close(); } catch {}
     await fs.rm(directory, { recursive: true, force: true });
   });
@@ -294,11 +295,12 @@ for (const provider of PROVIDERS) {
         assert.equal(typeof listener, 'function');
         const beforeLateAcceptance = await readSlots(harness);
         const writesBeforeLateAcceptance = { ...harness.persistenceWriteCounts };
-        await assert.rejects(listener(input.deliveryAttemptId, null, {
+        const missingTokenResult = listener(input.deliveryAttemptId, null, {
           clientRequestId: grave.appliedCorrelation.clientRequestId,
           nativeTurnId: grave.appliedCorrelation.nativeTurnId,
           nativeItemId: null,
-        }), { code: 'instruction_acceptance_source_unavailable' });
+        });
+        await assert.rejects(missingTokenResult, { code: 'instruction_acceptance_source_unavailable' });
         assert.deepEqual(await readSlots(harness), beforeLateAcceptance);
         assert.deepEqual(harness.persistenceWriteCounts, writesBeforeLateAcceptance);
       }
@@ -470,8 +472,10 @@ test('Codex registered service accepted listener writes a late applied grave onl
   const graveBefore = checkpointBefore.ledger.deliveries.find((item) =>
     item.deliveryAttemptId === input.deliveryAttemptId);
   const writesBefore = { ...harness.persistenceWriteCounts };
-  const wrongTokenResult = listener(input.deliveryAttemptId, null, acceptedEvent.accepted);
-  await assert.rejects(wrongTokenResult, { code: 'instruction_acceptance_source_unavailable' });
+  const missingTokenResult = listener(input.deliveryAttemptId, null, acceptedEvent.accepted);
+  await assert.rejects(missingTokenResult, { code: 'instruction_acceptance_source_unavailable' });
+  const mismatchedTokenResult = listener(input.deliveryAttemptId, Object.freeze({}), acceptedEvent.accepted);
+  await assert.rejects(mismatchedTokenResult, { code: 'instruction_acceptance_source_unavailable' });
   assert.deepEqual(await readSlots(harness), before);
   assert.deepEqual(harness.persistenceWriteCounts, writesBefore);
 
