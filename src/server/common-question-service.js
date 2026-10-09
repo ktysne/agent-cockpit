@@ -1305,7 +1305,7 @@ function createCommonQuestionService(options = {}) {
                   reservations.get(record.internalQuestionId))) {
               throw serviceError('question_delivery_mismatch');
             }
-            return projection(record, null, true);
+            return projection(record, { state: delivery.state, cancelRequested: delivery.cancelRequested }, true);
           }
           const matches = isQuarantined(record)
             ? persistedDeliveryMatchesRecord(delivery, record)

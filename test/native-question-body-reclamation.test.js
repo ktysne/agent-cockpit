@@ -533,8 +533,11 @@ for (const provider of PROVIDERS) {
     assert.ok(prepared);
     assert.equal(interrupted.reservations[0].bodyState, 'retained');
     const checkpoint = await readJson(harness.checkpointPath);
-    assert.equal(checkpoint.ledger.deliveries.find((item) =>
-      item.deliveryAttemptId === sources.question.deliveryIntent.deliveryAttemptId).recordType, 'reclaimed');
+    const reclaimedDelivery = checkpoint.ledger.deliveries.find((item) =>
+      item.deliveryAttemptId === sources.question.deliveryIntent.deliveryAttemptId);
+    assert.equal(reclaimedDelivery.recordType, 'reclaimed');
+    const originalDelivery = JSON.parse(sources.checkpoint.toString('utf8')).ledger.deliveries.find((item) =>
+      item.deliveryAttemptId === sources.question.deliveryIntent.deliveryAttemptId);
 
     setNow(prepared.preparedAt - 1);
     const bytesBeforeRestart = await readSlotBytes(directory);
@@ -549,6 +552,8 @@ for (const provider of PROVIDERS) {
       item.internalQuestionId === sources.question.internalQuestionId);
     assert.ok(displayed);
     assert.equal(displayed.quarantined, true);
+    assert.equal(displayed.deliveryState, originalDelivery.state);
+    assert.equal(displayed.cancelRequested, originalDelivery.cancelRequested);
     assert.equal((await readJson(harness.questionJournalPath)).reservations[0].reclamation.operationId,
       prepared.operationId);
 

@@ -328,10 +328,11 @@ processとnative event transportはfixtureに置き換えるため、実runtime�
 | QR-B01 | 退役期間の未選択、配信未作成、不確定、available、unknown、確定終端 | 保持期限前は本文を残す。期限到達後に準備、対応配信の墓標、質問詳細削除を順に保存し、配信stateと結果種別を変えない |
 | QR-B02 | 3保存境界それぞれの書込み前と、保存後の返却失敗 | 再送を止める。保存済み準備があれば再起動後に同じ操作IDで再開し、準備前の失敗では本文を残す |
 | QR-B03 | 回収済み質問と配信detail、準備なし質問と配信墓標、相関不一致 | 起動と回収を拒否し、配信を新規作成して補わない |
-| QR-B04 | 回収後の同じ質問ID、共通key、attempt、後着通知 | 墓標から拒否し、全processの追加native writeを0回に保つ。墓標件数と移行grantを保持する |
+| QR-B04 | 回収後の同じ質問ID、共通key、attempt、後着通知 | 退役gateまたは墓標で再利用を拒否する。後着操作は退役gateが先にquestion_quarantinedで拒否し、全processの追加native writeを0回に保つ。墓標件数と移行grantを保持する |
 | QR-B05 | 保持期限のoverflow、時計逆行、closeとの競合 | 安全な期限を判定できなければ本文を保持する。close後の新しい保存を拒否する |
 
-QR-B04の後着通知は、providerで限定されたstoreのacceptedとapplied操作を直接呼び、配信墓標の拒否と保存不変を確認する。
+QR-B04の後着通知は、providerで限定されたstoreのacceptedとapplied操作を直接呼び、退役gateが墓標判定より先にquestion_quarantinedで拒否することと保存不変を確認する。
+墓標によるdelivery_reclaimedの拒否は、この経路では到達しない。
 実runtimeから古い通知が到着することは、この試験では確認しない。
 QR-B05は、質問準備と配信墓標を保存した後の時計逆行による延期も含み、質問欄が整合不良と表示されないことを確認する。
 

@@ -54,7 +54,7 @@ skipはWindowsで実symlinkを作成する権限が無い試験であり、注�
 
 段階3は質問、通常指示、PR通知とresult、自動実行と停止範囲の分離の順に分割する。
 最初の質問回収は `codex/reclamation-body-coordinator-209-20261009` で、退役済み期間の明示回収と準備済み操作の起動時再開を実装した（[PR #325](https://github.com/ktysne/agent-cockpit/pull/325)）。
-関連保存遷移試験32件、両providerのnative factory試験38件、全体2,304件が成功し、環境依存の1件はskip、失敗は0件である。
+関連保存遷移試験32件、両providerのnative factory試験44件、修正後の全体2,310件が成功し、環境依存の1件はskip、失敗は0件である。
 Claudeのクロスレビュー中で、PR #324をbaseにしたDraftとしている。
 現保存層の全writer停止を維持し、質問単独失敗時の停止範囲の分離は後続に残す。
 個別墓標の件数枠を空ける世代集約は段階4であり、本文回収だけで#209を完了扱いにしない。
