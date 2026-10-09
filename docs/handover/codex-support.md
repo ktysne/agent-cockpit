@@ -482,6 +482,16 @@ R1のtest helper補強と測定値assertは`9506be4`でbyte試験7件が成功�
 製品コードは全体検証した`b9b15fb`から変わっていない。
 後続は固定の件数とbyte上限を持つ単体Q/CP capsule codecとpair検査で、保存接続と件数枠解放はさらに別のgateとする。
 
+## 単体質問capsuleと選択ペア
+
+`codex/question-rejection-capsule-codec-209-20261010`は#333の収束head `1510a02`を起点とする。
+回収済みQ/CPの単体codecと、対象に必要な論理墓標だけを受け取るペア検査を実装する。
+各ファイル1 MiBと各capsule256件を独立した受理上限とし、最大長recordを256件収容する保証にはしない。
+getterとProxyを実行しない検査に訪問予算を加え、共有参照の各出現も数える。
+元snapshotとの比較だけで合否を決めず、保存byteからも独立に正規化する。
+契約と後続gateは[容量回収計画](../design/codex-capacity-reclamation.md#単体質問capsuleと選択ペアの検査)に置く。
+現在は実装中で、保存接続、cold復旧、件数枠の解放と実runtime確認は未実施である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

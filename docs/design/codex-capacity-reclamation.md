@@ -222,6 +222,62 @@ byteが先に上限へ達する場合も拒否し、件数上限までの任意�
 この上限は単体形式の資源政策であり、通常slotの予算やgrantを増やす許可にはならない。
 全capsuleと通常記録の合計、移行時の重複保持と保存用一時ファイルは、別の容量検査を必要とする。
 
+### 単体質問capsuleと選択ペアの検査
+
+質問capsuleは、回収済みreservationの完全identityとperiodをwrapperに移し、残るfieldを各entryに保持する独立形式である。
+配信capsuleは、回収済みquestion graveの完全なsourceとtarget参照をファイル内辞書へ移し、各entryから索引で参照する。
+展開結果は既存のreservationとgraveの形へ戻す。
+論理墓標は配信capsuleへ移さず、checkpoint全体の正本に残す。
+このcodecは元snapshotを入力にせず、capsule自身のfieldと展開した単体recordを検査する。
+
+両wrapperは形式版1、圧縮操作のUUID、store UUID、完全identityとperiodを持つ。
+圧縮操作はwrapperの対応を識別し、各recordに残る本文回収操作を置き換えない。
+質問entryはinternalQuestionId、配信entryはdeliveryAttemptIdのordinal昇順で一意に並べる。
+入力の配列を並べ替えて補修せず、objectのfield挿入順だけを正規化する。
+参照辞書はroleごとの初出順とし、同値参照の重複、未使用参照、不正索引を拒否する。
+
+形式の受理上限は、質問と配信それぞれ最大256件、各ファイルの2-space pretty JSONと末尾改行を合わせて1,048,576 byteである。
+配信capsuleがある場合は両形式とも1件以上とし、質問がすべてnoneまたはindeterminateなら配信capsuleをnullで渡す。
+件数とbyteは独立して検査するため、最大長recordを256件収容できるという保証にはしない。
+参照辞書は各roleとも配信entry数以下に制限する。
+bytes decoderはJSONの解析前にraw byte上限を照合し、正規化後にも同じ実encoderの出力上限を照合する。
+JSONの重複keyは既存parserに従って最後の値を採用し、解析結果をexact schemaで検査する。
+
+単一entryの保守上界は、単体recordの最大構造をcapsuleへ写像し、全wrapper、完全参照辞書、索引、追加indentと末尾改行を含めて計算する。
+可変文字列は512 UTF-16 code unitsのescape上界、数値は最大桁を使い、nullableな枝も構造へ含める。
+この構造解析による上界はQ 96,657 byte、CP 186,690 byteで、各1 MiB以内である。
+到達可能な最大値とは区別し、合法な最大長候補のencode成功と実byte境界を別の試験で確認する。
+
+選択ペアの検査は、両wrapperのstore、圧縮操作、identityとperiodを照合し、checkpoint presenceの質問と配信graveを一対一で対応させる。
+各組は単体recordの相関検査を使い、noneとindeterminateに配信を補わない。
+呼出し元は、選択したgraveに必要な論理墓標だけを最大256 groupで渡す。
+groupは既存のlogical tuple（kind、sourceExecutionId、logicalMessageId、revision、targetLaunchKey）で識別し、sourceLaunchKeyとpayload digestを値として照合する。
+同じgroup、sourceLaunchKeyとdigestのgraveは一つの墓標を共有し、欠落、余剰、重複、値の矛盾を拒否する。
+この入力が実checkpoint全体の正しい部分集合であることは、後続の全体検査で確認する。
+返却の`scopeLimitations`は、アンカー退役、全体ID一意性、contextの正しい部分集合、全体logical集合、合計容量、永続化復旧、配信履歴とnative相関の再利用が未検証であることを固定の項目で示す。
+
+plain-data検査はprimitiveと共有参照の各出現を含めて訪問数を数え、新入口では100,000回までに制限する。
+256件のQとCP、各role256固有参照、256論理group、非nullのaccepted/applied相関とexternalResolutionを含む最大ノード構造のpairは31,517訪問で収まる。
+nullableなscalarはnullでも他の値でも一訪問と数え、questionで非nullにできないfieldはnullのままとする。
+既存の三引数入口は既定1,000,000回とし、Proxyとgetterを実行せず、循環と過深入力を拒否する。
+この予算は再帰走査を制限するもので、巨大objectのown key列挙や、入力済み文字列の保持まで含むCPUとメモリーの上限ではない。
+選択論理墓標はファイルではないため、ファイル用1 MiB上限は適用せず、件数、各fieldの既存上限、訪問予算で検査する。
+
+| ID | 確かめる条件 |
+|---|---|
+| QCC01 | 両providerで元recordの全observableを展開後も保持し、元snapshotなしにdecodeする |
+| QCC02 | 配列順、entry識別子、参照辞書の初出順と一意性、不正索引を検査する |
+| QCC03 | wrapperと本文回収操作の相関、各保持期限、noneとindeterminateを検査する |
+| QCC04 | 必要な論理墓標groupの閉包を検査し、同groupの異なるdigestを拒否する |
+| QCC05 | 実encoderのbyte境界と件数境界を独立に検査する |
+| QCC06 | getterとProxyを実行せず、共有参照の反復も訪問予算へ含める |
+| QCC07 | caller入力を変更または凍結せず、局所検査の成功から削除権限を発行しない |
+
+保存接続では、通常recordと全capsule間の一意性、全履歴、native item相関の再利用拒否、対象外も含む論理墓標の整合、全容量と一時保存ピークを検査する。
+capsuleのattempt順は元ledgerの履歴順を表さないため、後続outer形式で元の順序を保存する方法を決め、superseded履歴の検査を行う。
+旧readerが新outer版を拒否する条件、保存途中の故障とcold復旧、アンカーの退役証拠、件数枠の解放も別のgateとして残す。
+単体codecと選択ペアの成功を、これらの全体条件の成立へ読み替えない。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
