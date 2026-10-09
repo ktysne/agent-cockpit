@@ -327,10 +327,27 @@ test('両providerとkindでcheckpoint write前・後・readback失敗をfresh起
   }
 });
 
-test('applied墓標は固定相関のaccepted補完と完全一致重複だけを保存し、再作成・再送・rehydrateを拒む', { timeout: 120000 }, async (t) => {
+test('applied墓標は固定相関補完だけを許し、終端墓標は再作成・再送・rehydrateを拒む', { timeout: 120000 }, async (t) => {
   for (const provider of PROVIDERS) {
     for (const kind of TERMINAL_DELIVERY_KINDS) {
       const harness = await makeHarness(t);
+      if (kind === 'result') {
+        const recreationScenario = await createTerminalDelivery(harness, provider, kind,
+          `recreate-${provider}-${kind}`);
+        await recreationScenario.adapter.cancel(recreationScenario.delivery.deliveryAttemptId);
+        const cancelled = await recreationScenario.adapter.get(recreationScenario.delivery.deliveryAttemptId);
+        harness.setNow(cancelled.terminalAt);
+        assert.equal((await harness.reclaim(recreationScenario.delivery.deliveryAttemptId)).status, 'deferred');
+        harness.setNow(cancelled.terminalAt + TERMINAL_RETENTION_MS);
+        assert.equal((await harness.reclaim(recreationScenario.delivery.deliveryAttemptId)).status, 'complete');
+        const bytesWithTombstone = await harness.checkpointBytes();
+        await assert.rejects(recreationScenario.adapter.createResultDelivery({
+          ...deliveryInput(recreationScenario.targetLaunch.launchRef, `duplicate-${provider}-${kind}`),
+          logicalMessageId: recreationScenario.delivery.logicalMessageId,
+          revision: recreationScenario.delivery.revision,
+        }), { code: 'logical_conflict' });
+        assert.deepEqual(await harness.checkpointBytes(), bytesWithTombstone);
+      }
       const scenario = await prepareAppliedScenario(harness, provider, kind, `late-${provider}-${kind}`);
       const nativeWritesBefore = new Map(PROVIDERS.map((item) => [item, countFakeNativeWrites(harness, item)]));
       const appliedCorrelation = correlationFor(scenario.detail, `fake-turn-${scenario.delivery.deliveryAttemptId}`,
@@ -362,20 +379,15 @@ test('applied墓標は固定相関のaccepted補完と完全一致重複だけ�
       await assert.rejects(adapter.recordAccepted(scenario.delivery.deliveryAttemptId, wrongCorrelation),
         (error) => ['correlation_mismatch', 'delivery_reclaimed'].includes(error.code));
       await assert.rejects(harness.deliveryAdapter(otherProvider(provider))
-        .recordAccepted(scenario.delivery.deliveryAttemptId, appliedCorrelation));
+        .recordAccepted(scenario.delivery.deliveryAttemptId, appliedCorrelation), { code: 'provider_mismatch' });
       assert.deepEqual(await harness.checkpointBytes(), stableBytes);
 
       let sinkCalls = 0;
-      await assert.rejects(adapter.sendStart(scenario.delivery.deliveryAttemptId, () => { sinkCalls += 1; }));
+      await assert.rejects(adapter.sendStart(scenario.delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
+        { code: 'delivery_reclaimed' });
       await assert.rejects(adapter.rehydratePayload(scenario.delivery.deliveryAttemptId,
-        `private-terminal-body-${provider}-${kind}`));
-      if (kind === 'result') {
-        await assert.rejects(adapter.createResultDelivery({
-          ...deliveryInput(scenario.targetLaunch.launchRef, `${provider}-${kind}-duplicate`),
-          logicalMessageId: scenario.delivery.logicalMessageId,
-          revision: scenario.delivery.revision,
-        }));
-      } else {
+        `private-terminal-body-${provider}-${kind}`), { code: 'delivery_reclaimed' });
+      if (kind === 'pr-notification') {
         await assert.rejects(adapter.createPrNotification({
           sourceLaunchRef: scenario.sourceLaunch.launchRef,
           targetId: scenario.targetId,
@@ -383,7 +395,7 @@ test('applied墓標は固定相関のaccepted補完と完全一致重複だけ�
           logicalMessageId: scenario.delivery.logicalMessageId,
           revision: scenario.delivery.revision,
           payload: 'must not be restored',
-        }));
+        }), { code: 'logical_conflict' });
       }
       assert.equal(sinkCalls, 0);
       assert.deepEqual(await harness.checkpointBytes(), stableBytes);

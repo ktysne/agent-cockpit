@@ -289,7 +289,7 @@ instruction journalの単独保存結果不明でも全writerを停止し、inst
 | IRB01 | 確定終端から7日未満、unknown、作成未完了は保存せず保留し、期限到達後に3保存で本文を回収する |
 | IRB02 | 各保存境界の失敗後は新instanceが同じ操作IDで再開し、未準備のeligible記録は自動回収しない |
 | IRB03 | 本文とcheckpointの静的相関が不一致なら、起動時に保存とnative送信を行わず拒否する |
-| IRB04 | 通常指示のapplied墓標への互換accepted追記と完全一致appliedは保存層で成立し、差替え、質問と取消済み墓標への追記は拒否する |
+| IRB04 | 通常指示のapplied墓標への互換accepted追記と完全一致appliedは保存層で成立し、差替え、質問、cancelled、supersededの墓標への追記は拒否する |
 | IRB05 | cleanup後のservice通知は保存されず、既存観測の照合でtoken不一致、close、待機中の失効を拒否する |
 | IRB06 | 時計逆行、期限の整数overflow、close、callback access失効時は次の保存を行わない |
 | IRB07 | 無関係な記録、alias、履歴、logical tombstone、件数枠、grantを保持し、後着相関の最大増分を予約する |
