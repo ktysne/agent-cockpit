@@ -46,7 +46,7 @@ Claudeクロスレビューは3往復で収束し、PR #323はfeatureへマー�
 PR4では、instruction journalのprepareResume待ち中にcloseが完了しても受付フラグを戻さず、閉鎖後の公開操作がbackendの保存やnative作成を呼ばないことを確認した。
 新しいfactoryでの起動時に隔離済みの質問を保存済み相関で照合し、古い実行を再認可しない。
 両providerのnative factory適合試験は、Claudeの任意提案を反映した追加試験を含め27件成功した。
-実装完了時の全体試験は2,254件成功、1件skip、失敗0件であり、その後の変更は試験と引き継ぎ資料の補強だけである。
+レビューの任意提案を反映後の最終全体試験は2,256件成功、1件skip、失敗0件である。
 featureへのマージは未実施であり、Claudeクロスレビューの記録はPRコメントで追跡する。
 skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
 
@@ -127,7 +127,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | マージ済み（2026-10-09、merge SHA `7427105`）。全体2,102件成功。Claudeレビュー3往復で収束 |
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
-| 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324)、base: feature | 実装と検証を完了。featureへのマージ未実施。`codex/reclamation-native-factory-209-20261009`（起点 `977e4fe`）。全体2,254件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面、実runtimeは未接続 |
+| 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324)、base: feature | 実装と検証を完了。featureへのマージ未実施。`codex/reclamation-native-factory-209-20261009`（起点 `977e4fe`）。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
 | 9 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
@@ -312,7 +312,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 結果不明のときの「状態確認」の案内が全操作で同じ 1 文 | PR #252 の[コメント](https://github.com/ktysne/agent-cockpit/pull/252#issuecomment-6045370091) |
 | main の全 worktree 探索のキャッシュ(計測後に判断) | PR #276 の[コメント](https://github.com/ktysne/agent-cockpit/pull/276#issuecomment-6056840655) |
 | 設定変更で service を作り直す入口を足すときは、保存済み質問が隔離される契約を見直す | PR #290 の[コメント](https://github.com/ktysne/agent-cockpit/pull/290#issuecomment-6059799864) |
-| native factoryの起動と後始末がともに失敗したときの上位error codeと表示。現在はAggregateErrorのcauseとerrorsで原因を保持する（標準起動の接続時に設計する） | PR #324のClaudeレビューの任意提案 |
+| native factoryの起動と後始末がともに失敗したときの上位error codeと表示。現在はAggregateErrorのcauseとerrorsで原因を保持する（標準起動の接続時に設計する） | PR #324の[Claudeレビューの任意提案](https://github.com/ktysne/agent-cockpit/pull/324#issuecomment-6081237323) |
 | deleteSession のたびの snapshot 再計算(計測後に判断) | PR #252 の[コメント](https://github.com/ktysne/agent-cockpit/pull/252#issuecomment-6045000236) |
 | 積み直し判定で間接候補の番号表示が正確でない | PR #261 の[コメント](https://github.com/ktysne/agent-cockpit/pull/261#issuecomment-6054038985) |
 | 失効世代を集約する永続的な単調世代(#209 段階 4 の範囲) | [容量回収計画](../design/codex-capacity-reclamation.md)「世代の集約」 |

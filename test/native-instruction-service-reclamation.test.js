@@ -321,6 +321,11 @@ async function currentWriter(harness, provider, suffix) {
   return { started, writer };
 }
 
+function totalNativeInstructionWrites(harness, provider) {
+  return harness.processesByProvider.get(provider).reduce((total, process) =>
+    total + process.state.instructionWrites.length, 0);
+}
+
 async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
@@ -448,7 +453,7 @@ for (const provider of PROVIDERS) {
       bytePadding: 1024 * 1024,
     });
     await harness.restartService();
-    const { started, writer } = await currentWriter(harness, provider, 'checkpointed-question-cold-restart');
+    const { writer } = await currentWriter(harness, provider, 'checkpointed-question-cold-restart');
     const questionId = `checkpointed-new-${provider}`;
     const registered = await harness.questionService.register(writer, registration(questionId));
     assert.equal(registered.outcome, 'created');
@@ -471,7 +476,7 @@ for (const provider of PROVIDERS) {
     assert.ok(selectedDelivery);
     const selectedDeliveryState = selectedDelivery.state;
     const selectedDeliveryCount = selectedCheckpoint.ledger.deliveries.length;
-    assert.equal(started.process.instructionWrites.length, 0);
+    assert.equal(totalNativeInstructionWrites(harness, provider), 0);
 
     await harness.restartService();
     assert.equal(harness.reclamation.status().canWrite, true);
@@ -492,13 +497,18 @@ for (const provider of PROVIDERS) {
       delivery.deliveryAttemptId === selectedQuestion.deliveryIntent.deliveryAttemptId);
     assert.equal(restartedCheckpoint.ledger.deliveries.length, selectedDeliveryCount);
     assert.equal(restartedDelivery.state, selectedDeliveryState);
-    assert.equal(started.process.instructionWrites.length, 0);
+    assert.equal(totalNativeInstructionWrites(harness, provider), 0);
+
+    const postQuarantine = await currentWriter(harness, provider, 'after-quarantine');
+    assert.equal(postQuarantine.started.process.instructionWrites.length, 0);
+    assert.equal(totalNativeInstructionWrites(harness, provider), 0);
 
     await assert.rejects(harness.questionService.submitAnswer('internal-1', selectedAnswer()),
       { code: 'question_quarantined' });
     await assert.rejects(harness.questionService.submitAnswer(selectedQuestion.internalQuestionId, {
       answers: [{ questionId: `choice-${questionId}`, optionIds: ['option-a'], freeText: null }],
     }), { code: 'question_quarantined' });
+    assert.equal(totalNativeInstructionWrites(harness, provider), 0);
 
     const closingReclamation = harness.reclamation;
     await harness.close();
