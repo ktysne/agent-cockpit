@@ -33,8 +33,12 @@ main の PR #305（別のリポジトリで作った PR の登録）は、作業
 この head を起点に `codex/delivery-reclamation-codec-209-20261009` で #209 段階2の1c（配信 codec）を実装した。
 独立 codec と fixture、関連50件・既存関連59件・修正後の全体2,027件の検証は成功した。[PR #320](https://github.com/ktysne/agent-cockpit/pull/320) は Claude のクロスレビューが2往復で収束し、featureへマージ済みである（merge SHA `66b3c6a`）。
 このheadを起点に `codex/reclamation-contract-209-20261009` で #209 段階2の1d（アンカーcodec、store間照合、旧形式の投影、grantと固定H/T）を実装した。
-Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功した。[PR #321](https://github.com/ktysne/agent-cockpit/pull/321) はClaudeのクロスレビューが3往復で収束し、featureへのマージ待ちである。
-1dのレビューとマージ後は、段階2のPR2としてアンカーstore、移行coordinator、専用枠へ進む。
+Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功した。[PR #321](https://github.com/ktysne/agent-cockpit/pull/321) はClaudeのクロスレビューが3往復で収束し、featureへマージ済みである（merge SHA `7427105`）。
+このheadを起点に `codex/reclamation-migration-store-209-20261009` で、段階2のPR2としてアンカーstore、移行coordinator、専用枠と保存境界検証を実装した。
+関連試験は42件成功・1件skip、修正後の全体試験は2,144件成功・1件skip・失敗0件である。
+[PR #322](https://github.com/ktysne/agent-cockpit/pull/322)のClaudeクロスレビューは2往復で収束し、featureへのマージ待ちである。
+マージ後は段階2のPR3として既存writerの新形式対応、受付guardとserviceの接続へ進む。
+skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
 
 ## 全体の流れ
 
@@ -67,7 +71,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d) | 1dのレビューとマージ、段階2の保存接続、段階3の自動回収の接続 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2) | PR2のマージ、段階2のguard・service・native factory接続、段階3の自動回収の接続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -110,8 +114,8 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | マージ済み（2026-10-09、merge SHA `394daa9`）。関連347件・監査後107件成功、Claude レビュー1往復で収束 |
 | 3 | #209 段階 2 の 1b | 質問 codec | [#319](https://github.com/ktysne/agent-cockpit/pull/319)、マージ時base: feature | マージ済み（2026-10-09、merge SHA `f9e45c6`）。関連39件・全体1,997件成功、Claude レビュー1往復で収束。外部 store 照合と容量条件は1dへ残す |
 | 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | マージ済み（2026-10-09、merge SHA `66b3c6a`）。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束 |
-| 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | `codex/reclamation-contract-209-20261009` で実装済み（起点 `66b3c6a`）。全体2,102件成功。Claudeレビュー3往復で収束。featureへのマージ待ち |
-| 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | 未作成 | 未着手。テスト用compositionで保存境界とwriter停止を検証し、製品起動へ接続しない |
+| 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | マージ済み（2026-10-09、merge SHA `7427105`）。全体2,102件成功。Claudeレビュー3往復で収束 |
+| 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ待ち。`codex/reclamation-migration-store-209-20261009`（起点 `7427105`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | 未作成 | 未着手。旧period拒否、新period受付、全送信入口のguardを両providerのfixtureで検証する |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | 未作成 | 未着手。満杯と余裕のある旧形式を検証し、標準起動と設定画面には接続しない |
 | 9 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |

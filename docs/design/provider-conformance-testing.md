@@ -154,6 +154,42 @@ compositionではClaudeとCodexの未選択・選択済み質問をfresh registr
 QR03〜QR06のprovider別検証は製品adapter、serviceと実ファイルstoreの経路であり、native factoryの実runtimeを起動した結果ではない。
 実Claude/Codex runtimeの隔離復旧は未実施である。
 
+## 旧保存形式の移行と容量予約
+
+#209の段階2では、独立した移行coordinatorと実ファイル保存層を組み合わせる。
+期待値は[アンカー保存契約](question-reclamation-anchor.md)から定める。
+以下は後続のサービス接続も含む期待値の定義であり、全項目をこの段階で確認済みとはしない。
+ClaudeとCodexの相関を持つ旧形式を同じ保存手順へ通し、provider固有adapterと実runtimeの適合とは区別する。
+通常のservice、native factory、製品起動へ接続する試験は後続の実装範囲である。
+
+| ID | 入力と操作 | 独立した期待値と禁止副作用 |
+|---|---|---|
+| ID-F08-RC01 | 満杯の旧形式を、質問と通常指示の相関を持つ3slotで移行する | 全writerの同期停止とdrain後にsourceを固定し、拒否情報、operation ID、起算時刻、grantを保持する。本文回収と新規配信は0回。 |
+| ID-F08-RC02 | 各anchor phase、各slotの置換前後、再読取、completedからnullの間で保存を失敗させ、新instanceで再開する | 保存済みsourceか固定targetを保持し、固定順のprefixだけを復旧する。同じoperation ID、時刻、指紋とgrantを使う。結果不明のinstanceからは再開しない。 |
+| ID-F08-RC03 | アンカー欠落、破損、store ID不一致、必須slot欠落、不可能prefixを与える | writerを停止し、空ファイルの補完、sourceの削除、自動再初期化と旧writerへのfallbackを行わない。 |
+| ID-F08-RC04 | stop、drain、再開準備を失敗させ、並行startとcloseを行う | 全writerへstopを適用し、共通gateは全再開準備の成功後にだけ開く。失敗したinstanceのstartを再試行に使わない。 |
+| ID-F08-RC05 | raw byteと将来予約がB+Gを超える設定、移行前後の予約不足を与える | Hを許容量へ流用せず停止する。予約resize失敗時は旧予約を保持し、null保存の確認後にだけpost予約へ縮小する。 |
+| ID-F08-RC06 | 全slot未作成から初期化し、部分作成後に停止する | 完全初期化ではdataを先に、anchorを最後に保存する。部分new schemaと欠落anchorを再初期化せず、保存済みファイルを保持して停止する。 |
+| ID-F08-RC07 | manifestをnullにして再起動し、既存grantと満杯の件数を検査する | grantを自動で消さず、通常枠への収束と新規受付を移行成功だけで許可しない。時刻、操作IDと失効期間を再発行しない。 |
+
+容量budgetはcompositionが供給する論理予約であり、OSの空き容量や保存成功を保証しない。
+ENOSPCとrename後の例外でも保存済みファイルを保持して停止することを試験する。
+同一保存先の排他起動は前提であり、プロセス間writer排他は#313の別範囲である。
+実装済みの試験は[移行coordinator試験](../../test/reclamation-migration-coordinator.test.js)、[容量予約試験](../../test/reclamation-capacity-reservation.test.js)、[保存層試験](../../test/reclamation-persistence.test.js)にある。
+
+| ID | この段階で確認する試験と範囲 | 後続で確認する項目 |
+|---|---|---|
+| RC01 | `both providers complete a linked three-slot migration with fixed grants at source-sized limits`。Bをsource実byteに設定し、両providerの相関、失効とgrantを確認 | サービスの本文回収と新規配信の呼出回数。現在はどちらにも接続していない |
+| RC02 | `every durable anchor and slot boundary fails closed and recovers only the persisted prefix`。5段階のanchorと3slotの各保存前・保存後・再読取、合計24故障境界を確認 | 実runtimeでの停止と復旧 |
+| RC03 | 必須slot欠落、store ID不一致、破損anchorと無効prefixを拒否する各試験 | 製品起動時の診断表示 |
+| RC04 | `a stop exception still stops and drains every writer without reading or writing storage`、drain失敗、再開準備失敗、close競合とsnapshot個別cloneの試験 | 製品writerへの停止範囲の接続 |
+| RC05 | B+Gを超えるraw／将来予約、開始予算不足、bridge resize失敗、null再読取失敗時のlease保持を確認する各試験 | 通常受付guardとの接続 |
+| RC06 | `empty first creation writes configured data slots before the anchor and opens the gate last`と部分初期化拒否の試験 | 部分初期化停止時の製品診断 |
+| RC07 | 保存故障境界試験のnull保存後の再起動でgrant、操作IDと起算時刻の保持を確認 | 満杯の件数と新規受付の判定はPR3のguardで検証 |
+
+symlink拒否は注入fixtureでも検証し、実symlinkを作成する権限が無い環境では実ファイル試験をskipする。
+ここに列挙した確認範囲だけをfixtureの成功とし、未接続の受付guardや実Claude/Codex runtimeの成功には数えない。
+
 ## Codex native pendingの表示
 
 `ID-F08-NS09`はCodex nativeの質問要求と許可要求をCockpitで表示するシナリオである。
