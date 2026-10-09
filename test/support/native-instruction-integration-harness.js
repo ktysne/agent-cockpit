@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { createNativeInstructionServiceIntegration } = require('../../src/server/native-instruction-service-integration');
 const { startServer } = require('../../src/server/server');
 const { createOwnedNativeRunner } = require('../../src/server/owned-native-runner');
 const { atomicWriteJson } = require('../../src/server/json-storage');
@@ -13,6 +12,37 @@ const { atomicWriteJson } = require('../../src/server/json-storage');
 const PROVIDERS = Object.freeze(['claude', 'codex']);
 const NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=fixture';
+
+function loadNativeIntegrationFactoryWithCompositionCapture() {
+  const compositionPath = require.resolve('../../src/server/native-launch-composition');
+  const integrationPath = require.resolve('../../src/server/native-instruction-service-integration');
+  require(compositionPath);
+  const compositionEntry = require.cache[compositionPath];
+  const previousIntegrationEntry = require.cache[integrationPath];
+  const originalExports = compositionEntry.exports;
+  const originalFactory = originalExports.createNativeLaunchComposition;
+  let composition = null;
+  compositionEntry.exports = {
+    ...originalExports,
+    createNativeLaunchComposition(options) {
+      composition = originalFactory(options);
+      return composition;
+    },
+  };
+  delete require.cache[integrationPath];
+  let integrationModule;
+  try {
+    integrationModule = require(integrationPath);
+  } finally {
+    compositionEntry.exports = originalExports;
+    if (previousIntegrationEntry) require.cache[integrationPath] = previousIntegrationEntry;
+    else delete require.cache[integrationPath];
+  }
+  return Object.freeze({
+    create: integrationModule.createNativeInstructionServiceIntegration,
+    getComposition: () => composition,
+  });
+}
 
 function rpcResponse(id, result) {
   return { jsonrpc: '2.0', id, result };
@@ -284,6 +314,7 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
   const processesByProvider = new Map(PROVIDERS.map((provider) => [provider, []]));
   let checkpointWriteCount = 0;
   let integration;
+  let composition = null;
 
   function runnerFactory(runnerOptions) {
     const observedRunnerOptions = typeof options.onNative === 'function'
@@ -323,21 +354,38 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
   });
 
   async function createIntegration() {
-    return createNativeInstructionServiceIntegration({
+    const integrationOptions = {
       profiles,
       dataDirectory: directory,
       hostId: options.hostId || 'native-instruction-integration-host',
       runnerFactory,
       getAuthentication: suppliedAuthentication,
       onAuthenticationRequired: authPresenter,
-      checkpointAtomicWrite: async (target, value) => {
+      ...(options.commonQuestions !== undefined ? { commonQuestions: options.commonQuestions } : {}),
+      ...(options.reclamation !== undefined ? { reclamation: options.reclamation } : {}),
+    };
+    if (options.reclamation === undefined) {
+      integrationOptions.checkpointAtomicWrite = async (target, value) => {
         checkpointWriteCount += 1;
         const write = { attempt: checkpointWriteCount, target, value };
         await options.atomicWriteHook?.(write);
         await atomicWriteJson(path.dirname(target), path.basename(target), value);
         await options.afterCheckpointWrite?.(write);
-      },
-    });
+      };
+    }
+    let createIntegrationFactory;
+    let getComposition = () => null;
+    if (options.reclamation !== undefined) {
+      const factory = loadNativeIntegrationFactoryWithCompositionCapture();
+      createIntegrationFactory = factory.create;
+      getComposition = factory.getComposition;
+    } else {
+      createIntegrationFactory = require('../../src/server/native-instruction-service-integration')
+        .createNativeInstructionServiceIntegration;
+    }
+    const created = await createIntegrationFactory(integrationOptions);
+    composition = getComposition();
+    return created;
   }
 
   integration = await createIntegration();
@@ -381,6 +429,7 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     await integration.close();
     integration = await createIntegration();
     await integration.service.ready();
+    await integration.questionService?.ready?.();
     return integration.service;
   }
 
@@ -404,6 +453,7 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     directory,
     get checkpointPath() { return integration.checkpointPath; },
     get journalPath() { return integration.journalPath; },
+    get commonQuestionJournalPath() { return integration.commonQuestionJournalPath; },
     processes,
     processesByProvider,
     start,
@@ -411,8 +461,11 @@ async function createNativeInstructionIntegrationHarness(options = {}) {
     restartService,
     startDashboard,
     close,
+    writerFor(launchRef) { return composition?.writerFor(launchRef) || null; },
     get native() { return integration.native; },
     get service() { return integration.service; },
+    get questionService() { return integration.questionService; },
+    get reclamation() { return integration.reclamation; },
     get instructionTargetState() { return integration.instructionTargetState; },
     get checkpointWriteCount() { return checkpointWriteCount; },
   });
@@ -430,13 +483,17 @@ async function createTemporaryNativeInstructionHarness(options = {}) {
     directory,
     checkpointPath: harness.checkpointPath,
     journalPath: harness.journalPath,
+    get commonQuestionJournalPath() { return harness.commonQuestionJournalPath; },
     processes: harness.processes,
     processesByProvider: harness.processesByProvider,
     start: harness.start,
     admit: harness.admit,
     restartService: harness.restartService,
     startDashboard: harness.startDashboard,
+    writerFor: harness.writerFor,
     get service() { return harness.service; },
+    get questionService() { return harness.questionService; },
+    get reclamation() { return harness.reclamation; },
     get instructionTargetState() { return harness.instructionTargetState; },
     get providerAdapters() { return harness.providerAdapters; },
     get providerInstructionAdapters() { return harness.providerInstructionAdapters; },

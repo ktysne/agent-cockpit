@@ -7,11 +7,20 @@ const { createRegistrationKernel } = require('./conversation-registry');
 const { createLaunchBindingKernel } = require('./launch-binding');
 const { createRuntimeBindingKernel } = require('./runtime-binding');
 const { createDurableDeliveryStore, createProviderDeliveryAdapter } = require('./durable-delivery-store');
-const { createInstructionDeliveryJournal } = require('./instruction-delivery-journal');
+const { DEFAULT_MAX_RECORDS: DEFAULT_CHECKPOINT_MAX_RECORDS } = require('./durable-checkpoint');
+const {
+  DEFAULT_MAX_RECORDS: DEFAULT_INSTRUCTION_MAX_RECORDS,
+  createInstructionDeliveryJournal,
+} = require('./instruction-delivery-journal');
 const { createInstructionDeliveryService } = require('./instruction-delivery-service');
 const { createProviderInstructionAdapter } = require('./provider-instruction-adapter');
 const { createNativeLaunchComposition } = require('./native-launch-composition');
 const { createCommonQuestionService } = require('./common-question-service');
+const { MAX_JOURNAL_RECORDS } = require('./common-question-kernel');
+const { createReclamationPersistence } = require('./reclamation-persistence');
+const { createReclamationCapacityBudget } = require('./reclamation-capacity-reservation');
+const { createReclamationServiceContext } = require('./reclamation-service-context');
+const { MAX_SOURCE_BYTES } = require('./reclamation-capacity-bounds');
 
 const PROVIDERS = new Set(['claude', 'codex']);
 const ROUTER_METHODS = [
@@ -28,10 +37,16 @@ const RETIRED_CAPABILITY = Symbol('retired native instruction capability');
 const MAX_OBSERVATION_CAPABILITIES = 128;
 const PROFILE_FIELDS = ['provider', 'executablePath', 'homePath', 'homeScopeId', 'cwd'];
 const PROFILE_FIELDS_WITH_RUNNER = [...PROFILE_FIELDS, 'runnerProfile'];
+const RECLAMATION_SLOTS = ['checkpoint', 'instructions', 'questions'];
+const RECLAMATION_MAX_RECORDS_BY_SLOT = Object.freeze({
+  checkpoint: DEFAULT_CHECKPOINT_MAX_RECORDS,
+  instructions: DEFAULT_INSTRUCTION_MAX_RECORDS,
+  questions: MAX_JOURNAL_RECORDS,
+});
 const FACTORY_FIELDS = [
   'profiles', 'dataDirectory', 'hostId', 'runnerFactory', 'getAuthentication',
   'onAuthenticationRequired', 'now', 'checkpointAtomicWrite', 'journalAtomicWrite', 'storeLimits',
-  'commonQuestions',
+  'commonQuestions', 'reclamation',
 ];
 const START_FIELDS = ['launchId', 'runId', 'attemptId', 'profileId', 'origin', 'purpose', 'inputText'];
 const OWNED_STOP_FIELDS = ['launchRef', 'executionId', 'sessionId', 'expectedContextId',
@@ -172,6 +187,36 @@ function captureStoreLimits(value) {
   return Object.freeze(exactData(value, fields, 'invalid_store_limits'));
 }
 
+function captureReclamationLimitMap(value, maximums) {
+  const limits = exactData(value, RECLAMATION_SLOTS, 'invalid_reclamation_options');
+  for (const slot of RECLAMATION_SLOTS) {
+    const maximum = maximums === null ? MAX_SOURCE_BYTES : maximums[slot];
+    if (!Number.isSafeInteger(limits[slot]) || limits[slot] < 1 || limits[slot] > maximum) {
+      throw integrationError('invalid_reclamation_options');
+    }
+  }
+  return Object.freeze(limits);
+}
+
+function captureReclamationOptions(value) {
+  let fields;
+  try { fields = Reflect.ownKeys(value); } catch { throw integrationError('invalid_reclamation_options'); }
+  if (!isRecord(value) || fields.some((field) => typeof field !== 'string' ||
+      !['maxAdditionalBytes', 'normalByteLimitsBySlot', 'maxRecordsBySlot'].includes(field)) ||
+      !fields.includes('maxAdditionalBytes') || !fields.includes('normalByteLimitsBySlot')) {
+    throw integrationError('invalid_reclamation_options');
+  }
+  const config = exactData(value, fields, 'invalid_reclamation_options');
+  if (!Number.isSafeInteger(config.maxAdditionalBytes) || config.maxAdditionalBytes < 0) {
+    throw integrationError('invalid_reclamation_options');
+  }
+  const normalByteLimitsBySlot = captureReclamationLimitMap(config.normalByteLimitsBySlot, null);
+  const maxRecordsBySlot = fields.includes('maxRecordsBySlot')
+    ? captureReclamationLimitMap(config.maxRecordsBySlot, RECLAMATION_MAX_RECORDS_BY_SLOT)
+    : Object.freeze({ ...RECLAMATION_MAX_RECORDS_BY_SLOT });
+  return Object.freeze({ maxAdditionalBytes: config.maxAdditionalBytes, normalByteLimitsBySlot, maxRecordsBySlot });
+}
+
 function captureFactoryOptions(value) {
   let fields;
   try { fields = Reflect.ownKeys(value); } catch { throw integrationError('invalid_native_integration_options'); }
@@ -180,11 +225,19 @@ function captureFactoryOptions(value) {
     throw integrationError('invalid_native_integration_options');
   }
   const options = exactData(value, fields, 'invalid_native_integration_options');
+  const reclamationEnabled = fields.includes('reclamation');
+  if (reclamationEnabled && fields.some((field) =>
+    ['checkpointAtomicWrite', 'journalAtomicWrite', 'storeLimits'].includes(field))) {
+    throw integrationError('reclamation_option_conflict');
+  }
   const profiles = captureProfiles(options.profiles);
   const dataDirectory = options.dataDirectory;
   if (typeof dataDirectory !== 'string' || !path.isAbsolute(dataDirectory) || !dataDirectory.trim()) {
     throw integrationError('invalid_native_integration_options');
   }
+  const commonQuestions = captureCommonQuestions(options.commonQuestions);
+  const reclamation = reclamationEnabled ? captureReclamationOptions(options.reclamation) : undefined;
+  if (reclamationEnabled && commonQuestions === null) throw integrationError('common_question_service_unavailable');
   if (!isIdentifier(options.hostId) ||
       (options.runnerFactory !== undefined && typeof options.runnerFactory !== 'function') ||
       (options.getAuthentication !== undefined && typeof options.getAuthentication !== 'function') ||
@@ -199,7 +252,8 @@ function captureFactoryOptions(value) {
     profiles,
     dataDirectory: path.resolve(dataDirectory),
     storeLimits: captureStoreLimits(options.storeLimits),
-    commonQuestions: captureCommonQuestions(options.commonQuestions),
+    commonQuestions,
+    ...(reclamationEnabled ? { reclamation } : {}),
   };
 }
 
@@ -254,6 +308,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   const options = captureFactoryOptions(inputOptions);
   const { profiles, dataDirectory, hostId } = options;
   await fs.mkdir(dataDirectory, { recursive: true });
+  const storageDirectory = options.reclamation ? await fs.realpath(dataDirectory) : dataDirectory;
 
   const registrationKernel = createRegistrationKernel();
   const launchKernel = createLaunchBindingKernel({ registrationRegistry: registrationKernel.registry });
@@ -262,20 +317,23 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     launchRegistry: launchKernel.registry,
   });
   const profileProviders = new Map(Object.entries(profiles).map(([profileId, profile]) => [profileId, profile.provider]));
-  const checkpointPath = path.join(dataDirectory, 'delivery-checkpoint.json');
-  const journalPath = path.join(dataDirectory, 'instruction-journal.json');
+  const checkpointPath = path.join(storageDirectory, 'delivery-checkpoint.json');
+  const journalPath = path.join(storageDirectory, 'instruction-journal.json');
   const commonQuestionJournalPath = options.commonQuestions
-    ? path.join(dataDirectory, 'common-question-journal.json') : null;
+    ? path.join(storageDirectory, 'common-question-journal.json') : null;
   let composition;
   let routers = {};
   let store;
   let journal;
+  let reclamationPersistence = null;
+  let reclamationContext = null;
   let providerDeliveryAdapters;
   let providerInstructionAdapters;
   let service;
   let questionService = null;
   let unsubscribeSettings = null;
   let acceptingSettings = true;
+  const reclamationNow = options.now || Date.now;
 
   function getSettingsStatus() {
     const unavailable = Object.freeze({ status: 'unavailable', revision: null, reason: 'settings_status_unavailable' });
@@ -316,26 +374,60 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   }
 
   async function cleanupPartial() {
-    try { stopSettingsNotifications(); } catch {}
-    try { await questionService?.close?.(); } catch {}
-    try { await service?.close?.(); } catch {}
+    let failure = null;
+    let contextClosePromise = null;
+    const attempt = async (operation) => {
+      try { await operation(); } catch (error) { failure ||= error; }
+    };
+    if (reclamationContext !== null) {
+      try {
+        contextClosePromise = reclamationContext.close();
+        contextClosePromise.catch(() => {});
+      } catch (error) { failure ||= error; }
+    }
+    await attempt(() => stopSettingsNotifications());
+    await attempt(() => questionService?.close?.());
+    await attempt(() => service?.close?.());
     if (!service) {
       for (const adapter of Object.values(providerInstructionAdapters || {})) {
-        try { adapter?.close?.(); } catch {}
+        try { adapter?.close?.(); } catch (error) { failure ||= error; }
       }
       for (const adapter of Object.values(providerDeliveryAdapters || {})) {
-        try { adapter?.close?.(); } catch {}
+        try { adapter?.close?.(); } catch (error) { failure ||= error; }
       }
-      try { await journal?.close?.(); } catch {}
+      await attempt(() => journal?.close?.());
     }
     for (const router of Object.values(routers)) {
-      try { router.close(); } catch {}
+      try { router.close(); } catch (error) { failure ||= error; }
     }
-    try { await store?.flush?.(); } catch {}
-    try { await store?.close?.(); } catch {}
+    if (reclamationContext === null) await attempt(() => store?.flush?.());
+    await attempt(() => store?.close?.());
+    if (contextClosePromise !== null) await attempt(() => contextClosePromise);
+    else if (reclamationContext === null) await attempt(() => reclamationPersistence?.close?.());
+    if (failure !== null && options.reclamation) throw failure;
   }
 
   try {
+    if (options.reclamation) {
+      const directory = storageDirectory;
+      reclamationPersistence = createReclamationPersistence({
+        anchorPath: path.join(directory, 'question-reclamation-anchor.json'),
+        slotPathsBySlot: {
+          checkpoint: checkpointPath,
+          instructions: journalPath,
+          questions: commonQuestionJournalPath,
+        },
+      });
+      const capacityBudget = createReclamationCapacityBudget({
+        maxAdditionalBytes: options.reclamation.maxAdditionalBytes,
+      });
+      reclamationContext = createReclamationServiceContext({
+        persistence: reclamationPersistence,
+        normalByteLimitsBySlot: options.reclamation.normalByteLimitsBySlot,
+        capacityBudget,
+        now: reclamationNow,
+      });
+    }
     composition = createNativeLaunchComposition({
       registrationKernel,
       launchKernel,
@@ -358,10 +450,30 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       resolveProof: (launchRef) => composition.resolveProof(launchRef),
       verifyInstructionTarget: (delivery) =>
         providerInstructionAdapters?.[delivery.source.claims.provider]?.verifyDeliveryTarget(delivery) === true,
-      ...(options.checkpointAtomicWrite ? { atomicWrite: options.checkpointAtomicWrite } : {}),
-      ...(options.storeLimits ? { limits: options.storeLimits } : {}),
+      ...(options.reclamation ? {
+        reclamation: {
+          backend: reclamationContext.backend('checkpoint'),
+          periodGate: reclamationContext.periodGate,
+        },
+        limits: {
+          maxBytes: options.reclamation.normalByteLimitsBySlot.checkpoint,
+          maxRecords: options.reclamation.maxRecordsBySlot.checkpoint,
+        },
+        now: reclamationNow,
+      } : {
+        ...(options.checkpointAtomicWrite ? { atomicWrite: options.checkpointAtomicWrite } : {}),
+        ...(options.storeLimits ? { limits: options.storeLimits } : {}),
+      }),
     });
-    journal = createInstructionDeliveryJournal({
+    if (options.reclamation) store.ready.catch(() => {});
+    journal = createInstructionDeliveryJournal(options.reclamation ? {
+      reclamation: {
+        backend: reclamationContext.backend('instructions'),
+        periodGate: reclamationContext.periodGate,
+      },
+      maxBytes: options.reclamation.normalByteLimitsBySlot.instructions,
+      maxRecords: options.reclamation.maxRecordsBySlot.instructions,
+    } : {
       filePath: journalPath,
       ...(options.journalAtomicWrite ? { atomicWrite: options.journalAtomicWrite } : {}),
     });
@@ -381,22 +493,49 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       deliveryStore: store,
       providerInstructionAdapters,
       launchRegistry: launchKernel.registry,
-      ...(options.now ? { now: options.now } : {}),
+      ...(options.reclamation ? { now: reclamationNow } : options.now ? { now: options.now } : {}),
     });
-    await service.ready();
-    if (options.commonQuestions) {
+    if (options.reclamation) {
       questionService = createCommonQuestionService({
-        journalPath: commonQuestionJournalPath,
+        reclamation: {
+          backend: reclamationContext.backend('questions'),
+          periodGate: reclamationContext.periodGate,
+        },
+        maxBytes: options.reclamation.normalByteLimitsBySlot.questions,
+        maxRecords: options.reclamation.maxRecordsBySlot.questions,
         registrationRegistry: registrationKernel.registry,
         launchRegistry: launchKernel.registry,
         runtimeRegistry: runtimeKernel.registry,
         deliveryStore: store,
         away: options.commonQuestions.away,
         getAutoApplySettings,
-        ...(options.now ? { now: options.now } : {}),
+        now: reclamationNow,
       });
-      const questionReady = await questionService.ready();
+      await reclamationContext.start({
+        checkpoint: store.reclamationWriter,
+        instructions: service.reclamationWriter,
+        questions: questionService.reclamationWriter,
+      });
+      const [, , questionReady] = await Promise.all([store.ready, service.ready(), questionService.ready()]);
       if (ownDataValue(questionReady, 'ready') !== true) throw integrationError('common_question_service_unavailable');
+    } else {
+      await service.ready();
+      if (options.commonQuestions) {
+        questionService = createCommonQuestionService({
+          journalPath: commonQuestionJournalPath,
+          registrationRegistry: registrationKernel.registry,
+          launchRegistry: launchKernel.registry,
+          runtimeRegistry: runtimeKernel.registry,
+          deliveryStore: store,
+          away: options.commonQuestions.away,
+          getAutoApplySettings,
+          ...(options.now ? { now: options.now } : {}),
+        });
+        const questionReady = await questionService.ready();
+        if (ownDataValue(questionReady, 'ready') !== true) throw integrationError('common_question_service_unavailable');
+      }
+    }
+    if (options.commonQuestions) {
       const unsubscribe = options.commonQuestions.subscribe.call(options.commonQuestions.settings, notifySettingsChanged);
       if (utilTypes.isPromise(unsubscribe)) swallowRejectedPromise(unsubscribe);
       if (typeof unsubscribe !== 'function' || hasThenMember(unsubscribe)) {
@@ -405,7 +544,10 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       unsubscribeSettings = unsubscribe;
     }
   } catch (error) {
-    await cleanupPartial();
+    try { await cleanupPartial(); }
+    catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'native instruction integration startup cleanup failed', { cause: error });
+    }
     throw error;
   }
 
@@ -696,8 +838,15 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   async function close() {
     if (closePromise) return closePromise;
     closing = true;
+    let failure = null;
+    let contextClosePromise = null;
+    if (reclamationContext !== null) {
+      try {
+        contextClosePromise = reclamationContext.close();
+        contextClosePromise.catch(() => {});
+      } catch (error) { failure = error; }
+    }
     closePromise = (async () => {
-      let failure = null;
       const attempt = async (operation) => {
         try { await operation(); } catch (error) { failure ||= error; }
       };
@@ -708,8 +857,9 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       for (const router of Object.values(routers)) {
         try { router.close(); } catch (error) { failure ||= error; }
       }
-      await attempt(() => store.flush());
+      if (reclamationContext === null) await attempt(() => store.flush());
       await attempt(() => store.close());
+      if (contextClosePromise !== null) await attempt(() => contextClosePromise);
       if (failure) throw failure;
     })();
     return closePromise;
@@ -749,10 +899,30 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       quarantine: getQuestionQuarantineStatus(),
     }) });
   }
+  function retireQuestionPeriod(value) {
+    if (reclamationContext === null) throw integrationError('reclamation_unavailable');
+    if (closing) throw integrationError('native_instruction_integration_closed');
+    let keys;
+    try {
+      if (!isRecord(value)) throw new TypeError();
+      keys = Reflect.ownKeys(value);
+    } catch {
+      throw integrationError('invalid_question_period_retirement');
+    }
+    const hasReason = keys.includes('reason');
+    const request = exactData(value, hasReason ? ['identity', 'periodId', 'reason'] : ['identity', 'periodId'],
+      'invalid_question_period_retirement');
+    return reclamationContext.retireQuestionPeriod({ ...request, questionService, deliveryStore: store });
+  }
+  const reclamation = reclamationContext === null ? null : Object.freeze({
+    status: () => reclamationContext.status(),
+    retireQuestionPeriod,
+  });
   return Object.freeze({
     native,
     service,
     questionService,
+    ...(reclamation ? { reclamation } : {}),
     registrationRegistry: registrationKernel.registry,
     launchRegistry: launchKernel.registry,
     checkpointPath,
@@ -829,7 +999,8 @@ async function startNativeInstructionServer(inputOptions) {
     })();
     return closePromise;
   }
-  return Object.freeze({ ...runtime, instructionService: integration.service, native: integration.native, close,
+  return Object.freeze({ ...runtime, instructionService: integration.service, native: integration.native,
+    ...(integration.reclamation ? { reclamation: integration.reclamation } : {}), close,
     get shutdownError() { return runtime.shutdownError; } });
 }
 

@@ -39,9 +39,14 @@ Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功�
 [PR #322](https://github.com/ktysne/agent-cockpit/pull/322)のClaudeクロスレビューは2往復で収束し、featureへマージ済みである（merge SHA `557e547`）。
 このheadを起点に `codex/reclamation-service-guards-209-20261009` で、段階2のPR3として既存writerの新形式対応、質問gate、受付guardとserviceの接続を実装した。
 両providerのservice適合試験14件、実サービス再起動を含む保存故障18ケースは成功した。[PR #323](https://github.com/ktysne/agent-cockpit/pull/323)のClaudeレビュー指摘を修正し、最終の全体試験は2,228件成功・1件skip・失敗0件である。
-再開とcloseの競合、初回の指示保存結果に関する任意提案も適用した。Claudeクロスレビューは3往復で収束し、blocker・要修正はなく、feature向けPRをマージできる状態である。
+再開とcloseの競合、初回の指示保存結果に関する任意提案も適用した。
+Claudeクロスレビューは3往復で収束し、PR #323はfeatureへマージ済みである（merge SHA `977e4fe`）。
+このheadを起点に `codex/reclamation-native-factory-209-20261009` で、段階2のPR4として明示的なnative factoryの移行と起動・停止の統合に着手した。
 作成中から未作成への巻き戻しは単調遷移契約により採用せず、保存済みの完全相関checkpointがある指示だけ作成済みへ回復する。
-PR4では、instruction journalのprepareResume待ち中にcloseが完了した場合の受付フラグと、閉鎖後公開操作のエラー契約を確認する。現状でも書込みはclosed検査で拒否し、serviceから閉鎖後のjournalを操作する経路はない。
+PR4では、instruction journalのprepareResume待ち中にcloseが完了しても受付フラグを戻さず、閉鎖後の公開操作がbackendの保存やnative作成を呼ばないことを確認した。
+新しいfactoryでの起動時に隔離済みの質問を保存済み相関で照合し、古い実行を再認可しない。
+両providerのnative factory適合試験25件は成功し、全体試験は2,254件成功、1件skip、失敗0件である。
+featureへのマージは未実施であり、Claudeクロスレビューの記録はPRコメントで追跡する。
 skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
 
 ## 全体の流れ
@@ -75,7 +80,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3) | PR3のマージ、段階2のnative factory接続、段階3の自動回収の接続 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3) | 段階2のnative factory接続、段階3の自動回収の接続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -120,8 +125,8 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | マージ済み（2026-10-09、merge SHA `66b3c6a`）。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束 |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | マージ済み（2026-10-09、merge SHA `7427105`）。全体2,102件成功。Claudeレビュー3往復で収束 |
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
-| 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ待ち。`codex/reclamation-service-guards-209-20261009`（起点 `557e547`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
-| 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | 未作成 | 未着手。満杯と余裕のある旧形式を検証し、標準起動と設定画面には接続しない |
+| 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
+| 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | 未作成 | 実装中。`codex/reclamation-native-factory-209-20261009`（起点 `977e4fe`）。満杯と余裕のある旧形式を検証し、標準起動と設定画面には接続しない |
 | 9 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |

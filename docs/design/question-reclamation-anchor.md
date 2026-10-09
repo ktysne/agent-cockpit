@@ -5,7 +5,7 @@
 この文書は[容量回収計画](codex-capacity-reclamation.md)で定める保存契約である。
 局所codec、旧sourceの純粋な投影、store間照合と容量計算の入口を実装している。
 独立した保存層と移行coordinatorをテスト用compositionへ追加し、明示的な依存注入で質問serviceと通常writerを新形式へ接続する。
-native factoryと通常起動への接続は後続の範囲である。
+native factoryは明示的なreclamation指定で接続し、通常起動への接続は後続の範囲である。
 質問の永久失効を通常の journal と別の永続アンカーに保存する。
 アンカーは本文回収後も残し、質問に限った拒否の根拠とする。
 registry の execution を終了させず、通常指示の認可と runtime の稼働状態は変えない。

@@ -718,7 +718,13 @@ function createCommonQuestionService(options = {}) {
       const reservation = byAttempt.get(delivery.deliveryAttemptId);
       if (!reservation) throw serviceError('question_journal_missing_for_delivery');
       const record = currentQuestion(reservation.internalQuestionId);
-      if (!record || !deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
+      if (!record) throw serviceError('question_delivery_mismatch');
+      const retired = isQuarantined(record) && reservation.quarantinedAt !== null &&
+        reclamationOptions.periodGate.isRetired(reservation.identity, reservation.periodId);
+      const matches = retired
+        ? persistedDeliveryMatchesRecord(delivery, record)
+        : deliveryMatchesRecord(delivery, record);
+      if (!matches) throw serviceError('question_delivery_mismatch');
       if (reservation.deliveryCreationState === 'not_created' ||
           reservation.deliveryCreationState === 'indeterminate') {
         throw serviceError('question_delivery_creation_state_mismatch');
