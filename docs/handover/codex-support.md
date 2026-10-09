@@ -25,7 +25,7 @@ PR #309 は 2026-10-09 に feature へマージ済みで、merge SHA は `3c4fee
 main の PR #305（別のリポジトリで作った PR の登録）は、作業ブランチ `codex/sync-main-305-20261009` で `origin/main` の `8a0314c` を通常 merge している。
 競合解消と関連テストは完了した。feature 本体への取り込みは [PR #318](https://github.com/ktysne/agent-cockpit/pull/318) のレビューと開発者のマージを待つ。
 
-GitHub の確認では、Codex 対応 Issue の状態は対応表と一致し、open PR は 0 件だった（2026-10-09）。
+作業開始時の GitHub 照合では、Codex 対応 Issue の状態は対応表と一致し、open PR は 0 件だった（2026-10-09）。現在の作業 PR は以下の対応順序表で追跡する。
 
 同期 PR のレビューと並行して、#209 段階 2 の 1b（質問 codec）の独立した検証モジュールを実装する。
 同期 PR のレビュー後は、その PR の head を起点に #209 段階 2 の 1b（質問 codec）を積める。
