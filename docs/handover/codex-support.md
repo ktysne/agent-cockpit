@@ -416,7 +416,7 @@ closeはtimer停止後、passの完了を待たずにcontextの書き込みを�
 
 scheduler単体17件と既存context/factory接続73件は成功した。
 両providerのfactory試験16件と既存の質問局所停止の回帰試験16件は成功した。
-確認済みcancelled resultの自動本文回収を含むが、PR通知の専用自動回収fixtureと実native送信は未確認である。
+CP確認済みcancelled resultとPR通知の自動本文回収を含むが、実native送信は未確認である。
 全体試験とClaudeレビューは実行中である。
 タイマーとprovider processのfixtureによる合格を、実runtimeの7日連続運転の成功と扱わない。
 後続は段階4の質問世代に対する拒否包含のpure検証で、墓標削除や既存のattempt拒否を弱める処理は先に接続しない。
