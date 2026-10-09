@@ -5,7 +5,7 @@
 この文書は[容量回収計画](codex-capacity-reclamation.md)で定める保存契約である。
 局所codec、旧sourceの純粋な投影、store間照合と容量計算の入口を実装している。
 独立した保存層と移行coordinatorをテスト用compositionへ追加し、明示的な依存注入で質問serviceと通常writerを新形式へ接続する。
-native factoryと通常起動への接続は後続の範囲である。
+native factoryは明示的なreclamation指定で接続し、通常起動への接続は後続の範囲である。
 質問の永久失効を通常の journal と別の永続アンカーに保存する。
 アンカーは本文回収後も残し、質問に限った拒否の根拠とする。
 registry の execution を終了させず、通常指示の認可と runtime の稼働状態は変えない。
@@ -123,6 +123,23 @@ contextが書込み可能でgetがnullという観測だけでは、注入adapte
 件数上限には本文のある記録と墓標をともに数える。
 terminalAtは初めて確定終端になるcheckpoint保存で固定し、後着通知や再起動で更新しない。
 この接続は自動回収、本文削除、grant削除を実行しない。
+
+### 隔離質問の本文回収
+
+明示factoryの回収入口は、完全identityとperiod IDで退役済み期間を指定する。
+期間の失効や保持期限を呼出し側の申告で変更せず、アンカーと保存済み時刻で判定する。
+質問serviceのqueue、共有checkpointのqueue、contextのI/O queueの順に操作を直列化し、保存直前にもgateと期間失効を検査する。
+回収用snapshot accessはcallbackが生存する間だけ有効とし、外部からのcandidate保存や同じqueueへの再入を拒否する。
+
+本文回収は[質問schemaの3保存境界](common-question-reclamation-schema.md#隔離保持本文回収)に従う。
+起動時は全writerを停止してdrainし、既存の照合を済ませた後、準備済みで詳細が残る回収操作を同じoperation IDで再開する。
+各境界で遷移、容量、保存byteの再読取を検査し、最終snapshotをwriterへ設置してから受付を再開する。
+準備のない期限到達記録は、明示回収または後続の自動実行が開始するまで保持する。
+
+本文回収後も墓標、アンカー、移行grantと対象ID集合を保持する。
+件数枠は解放せず、本文が縮んだことだけで満件の受付を再開しない。
+この中間接続では保存結果不明時の既存の全writer停止を維持し、質問単独の保存失敗で他kindを継続する停止範囲の分離は未達である。
+自動実行、grantの解放、通常指示とPR通知の回収、標準起動への接続は別の作業である。
 
 ## アンカーの形式
 

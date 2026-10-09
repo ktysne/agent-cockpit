@@ -568,7 +568,12 @@ function createInstructionDeliveryService(options = {}) {
   async function prepareResume(fullSnapshot) {
     if (!reclamationMode || closePromise) throw serviceError('instruction_service_closed');
     const normalized = normalizeInstructionJournalV2Local(fullSnapshot?.stores?.instructions);
-    await reclamationWriter.prepareResume(fullSnapshot);
+    try {
+      await reclamationWriter.prepareResume(fullSnapshot);
+    } catch (error) {
+      if (closePromise) throw serviceError('instruction_service_closed');
+      throw error;
+    }
     if (closePromise) throw serviceError('instruction_service_closed');
     journalState = normalized;
     initPromise = null;

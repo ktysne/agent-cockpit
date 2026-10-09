@@ -708,6 +708,7 @@ function createReclamationInstructionDeliveryJournal(options) {
     const grantBytes = raw?.migrationAllowance?.maxExtraBytes ?? 0;
     const normalized = measure(raw, checkedCapacityAdd(backend.normalByteLimit, grantBytes));
     await backend.prepareResume(fullSnapshot);
+    if (closed || closePromise) throw journalError('instruction_journal_closed');
     currentJournal = normalized;
     lastCommittedRevision = normalized.revision;
     hasLoaded = true;

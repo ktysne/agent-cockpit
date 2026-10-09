@@ -60,6 +60,42 @@ HTTP requestにはnative profile allowlist、receipt、writer capabilityによ�
 
 ## 共通質問の明示構成
 
+### 保存形式の移行を使う明示構成
+
+`reclamation: { maxAdditionalBytes, normalByteLimitsBySlot, maxRecordsBySlot? }`は、共通質問を含む3つの保存先を一体で移行する指定である。
+`normalByteLimitsBySlot`は`checkpoint`、`instructions`、`questions`の全キーを持ち、各値を1〜16 MiBの整数で指定する。
+`maxAdditionalBytes`は移行と拒否情報に予約できる追加byteの非負整数であり、OSの空き容量を保証する値ではない。
+`maxRecordsBySlot`も指定時は全キーを持つ。
+省略時の件数上限はcheckpointの登録履歴が50,000、instructionsとquestionsが20,000であり、checkpoint内の配信台帳は別途20,000件のschema上限に従う。
+
+この指定には、有効な`commonQuestions`が必要である。
+旧保存経路の`checkpointAtomicWrite`、`journalAtomicWrite`、`storeLimits`との併用は拒否する。
+不正な指定や新形式の保存失敗を旧保存経路へ切り替えない。
+指定を省略した構成には既存の保存経路を使う。
+
+保存ディレクトリの作成後に実pathを解決し、固定basenameのcheckpoint、指示journal、質問journalとアンカーを同じpersistenceへ渡す。
+全writerを構築した後、共通contextで受付停止、ローカルqueueのdrain、移行、保存結果の照合、全writerの再開を行う。
+各serviceの準備完了を待つのは、この移行の後である。
+終了時は共通gateを先に閉じ、serviceとnativeの停止を進めてから、persistenceと容量予約の解放を待つ。
+
+戻り値の`reclamation.status()`は共通gateと容量予約の診断を返す。
+`reclamation.retireQuestionPeriod({ identity, periodId, reason? })`は、そのfactoryが持つ質問サービスと配信storeで対象periodを永久失効させる。
+`reclamation.reclaimQuestionBodies({ identity, periodId })`は、退役済み期間の隔離質問を保存済み保持期限に従って本文回収する。
+指定はこの2項目だけを許し、未退役期間は保存を始めず拒否する。
+期限到達前は本文を保持し、結果の`reclaimedQuestionIds`と`deferredQuestionIds`で回収済みと延期した対象を区別する。
+準備済みの回収は保存済み操作IDで再開し、起動時にも全writerの再開前に未完了の準備を走査する。
+質問journalの準備、対応checkpointの墓標、質問詳細削除を順に保存し、配信の新規作成や再送を行わない。
+生のcontextやbackendは公開せず、nativeの停止時に自動で退役させる接続も加えない。
+
+移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。
+準備完了時の照合では、隔離済みでアンカーにも退役が記録された質問だけ、保存済みの完全相関を使う。
+現在の質問の認可は実行registryで照合し、古いlaunchやactorを復元して再認可しない。
+件数枠が満杯なら、移行が成功しても新規受付は再開しない。
+本文の自動回収、墓標の件数解放、標準起動と設定画面への接続は後続の範囲である。
+native processとprovider eventをfixtureで置換した試験は、実runtimeの成功証跡には数えない。
+
+### 質問サービスの依存
+
 `commonQuestions: { away, settings }`をfactoryへ渡すと、共通質問サービスを同じnative構成へ接続する。
 `away`はHTTPサーバーと同じinstanceを使い、`settings`は同期の`getAutoApplySettings()`、`getStatus()`と変更通知の`subscribe(listener)`を持つ。
 away、設定getter、購読口のいずれかが不足する場合は非構成とし、通常指示だけの起動を維持する。

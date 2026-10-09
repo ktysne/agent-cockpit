@@ -54,12 +54,17 @@ function createBackend(initial = emptyJournal()) {
   let value = structuredClone(initial);
   let writable = true;
   let nextResumeBarrier = null;
+  let saveCount = 0;
   return {
     slot: 'instructions', normalByteLimit: BYTE_LIMIT,
     canWrite() { return writable; },
     setWritable(next) { writable = next; },
     async load() { return structuredClone(value); },
-    async save(candidate) { value = structuredClone(candidate); return structuredClone(value); },
+    async save(candidate) {
+      saveCount += 1;
+      value = structuredClone(candidate);
+      return structuredClone(value);
+    },
     async prepareResume(fullSnapshot) {
       const barrier = nextResumeBarrier;
       nextResumeBarrier = null;
@@ -72,6 +77,7 @@ function createBackend(initial = emptyJournal()) {
     async flush() {},
     async close() {},
     get value() { return structuredClone(value); },
+    get saveCount() { return saveCount; },
     pauseNextResume() {
       let signalStarted;
       let release;
@@ -184,8 +190,14 @@ test('closing during instruction resume cannot reopen the service', async (t) =>
   barrier.release();
 
   await assert.rejects(pending, (error) => error.code === 'instruction_service_closed');
+  assert.equal(harness.backend.saveCount, 0);
+  assert.equal(harness.createCount, 0);
   await assert.rejects(harness.service.dashboardSnapshot(),
-    (error) => error.code === 'instruction_service_closed' || error.code === 'reclamation_writer_cold');
+    (error) => error.code === 'reclamation_writer_cold');
+  await assert.rejects(harness.service.create(input),
+    (error) => error.code === 'reclamation_writer_cold');
+  assert.equal(harness.backend.saveCount, 0);
+  assert.equal(harness.createCount, 0);
 });
 
 test('an unconfirmed reclamation create retains creating and rejects same-attempt retry', async (t) => {
