@@ -1128,6 +1128,11 @@ function createDurableDeliveryStore(options = {}) {
           const nextDelivery = nextDeliveriesByAttempt.get(deliveryAttemptId);
           if (!previousDelivery || previousDelivery.recordType !== 'detail' || previousDelivery.kind !== 'question' ||
               !nextDelivery || nextDelivery.recordType !== 'reclaimed' || nextDelivery.kind !== 'question' ||
+              previousDelivery.payloadDigest !== nextDelivery.payloadDigest ||
+              previousDelivery.state !== nextDelivery.state || previousDelivery.terminalAt !== nextDelivery.terminalAt ||
+              previousDelivery.cancelRequested !== nextDelivery.cancelRequested ||
+              !jsonEqual(previousDelivery.acceptedCorrelation, nextDelivery.acceptedCorrelation) ||
+              !jsonEqual(previousDelivery.appliedCorrelation, nextDelivery.appliedCorrelation) ||
               nextDelivery.reclamation.reason !== 'retired_question_period' ||
               !sameNativeIdentity(previousDelivery.source.identity, request.identity) ||
               previousDelivery.source.executionBinding.periodId !== request.periodId ||

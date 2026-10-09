@@ -232,7 +232,7 @@ function deliveryGraveFromDetail(delivery, operationId, reclaimedAt) {
   return normalizeDeliveryRecordV2Local(grave);
 }
 
-function questionPreparation(reservation, operationId, preparedAt, deliveryPresence, checkpointState) {
+function questionPreparation(operationId, preparedAt, deliveryPresence, checkpointState) {
   return makeRecord([
     ['operationId', operationId],
     ['preparedAt', preparedAt],
@@ -320,7 +320,7 @@ function prepareQuestionStep(snapshot, limits, row, operationId, preparedAt, del
   const reservations = row.journal.reservations.map((reservation) => reservation.internalQuestionId === row.reservation.internalQuestionId
     ? makeRecord(RESERVATION_FIELDS.map((field) => [field,
       field === 'reclamation'
-        ? questionPreparation(reservation, operationId, preparedAt, deliveryPresence, checkpointState)
+        ? questionPreparation(operationId, preparedAt, deliveryPresence, checkpointState)
         : reservation[field]]))
     : reservation);
   const questions = buildQuestionJournal(row.journal, reservations);
@@ -450,8 +450,6 @@ function planQuestionBodyReclamation(value) {
 
   const operationId = preparation === null ? input.operationId : preparation.operationId;
   if (operationId === null) return result('eligible', snapshot, deadlineAt, null);
-  if (preparation === null && input.now < deadlineAt) return defer(snapshot, deadlineAt, 'retention_not_elapsed');
-
   const steps = [];
   let current = snapshot;
   let currentRow = row;

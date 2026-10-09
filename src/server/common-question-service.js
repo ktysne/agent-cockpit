@@ -484,6 +484,69 @@ function createCommonQuestionService(options = {}) {
       target?.sessionId === source.sessionId;
   }
 
+  function sameQuestionDetailReservation(record, reservation) {
+    const intent = record.deliveryIntent;
+    const reservedIntent = reservation.deliveryIntent;
+    const external = record.externalResolution;
+    const reservedExternal = reservation.externalResolution;
+    return reservation.internalQuestionId === record.internalQuestionId &&
+      sameIdentity(reservation.identity, record.identity) && reservation.periodId === record.periodId &&
+      reservation.questionId === record.questionId && reservation.contentDigest === record.contentDigest &&
+      reservation.executionId === record.executionId && reservation.conversationId === record.conversationId &&
+      reservation.launchRef === record.launchRef && sameBinding(reservation.executionBinding, record.executionBinding) &&
+      reservation.createdAt === record.createdAt && reservation.revision === record.revision &&
+      reservation.selectionSource === (record.selection?.source ?? null) &&
+      reservation.selectedAt === (record.selection?.selectedAt ?? null) &&
+      (intent === null ? reservedIntent === null : reservedIntent !== null &&
+        intent.deliveryAttemptId === reservedIntent.deliveryAttemptId &&
+        intent.logicalMessageId === reservedIntent.logicalMessageId && intent.revision === reservedIntent.revision &&
+        intent.payloadDigest === reservedIntent.payloadDigest) &&
+      reservation.deliveryCreationState === record.deliveryCreationState &&
+      (external === null ? reservedExternal === null : reservedExternal !== null &&
+        external.resolvedAt === reservedExternal.resolvedAt && external.evidenceDigest === reservedExternal.evidenceDigest) &&
+      reservation.cancelledAt === record.cancelledAt && reservation.quarantinedAt === record.quarantinedAt;
+  }
+
+  function sameIdentifierTuple(left, right) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === 3 && right.length === 3 &&
+      left[0] === right[0] && left[1] === right[1] && left[2] === right[2];
+  }
+
+  function reclaimedDeliveryMatchesRecord(delivery, record, reservation) {
+    if (!delivery || delivery.recordType !== 'reclaimed' || delivery.kind !== 'question' ||
+        !reservation || !sameQuestionDetailReservation(record, reservation) ||
+        reservation.bodyState !== 'retained' || reservation.reclaimedAt !== null ||
+        reservation.deliveryCreationState !== 'checkpointed' || reservation.quarantinedAt === null ||
+        !sameIdentity(record.identity, reservation.identity) || record.quarantinedAt !== reservation.quarantinedAt ||
+        !record.deliveryIntent || reservation.reclamation === null ||
+        reservation.reclamation.deliveryPresence !== 'checkpoint') return false;
+    const source = delivery.sourceRef;
+    const target = delivery.targetRef;
+    const reclamation = delivery.reclamation;
+    const intent = record.deliveryIntent;
+    const preparation = reservation.reclamation;
+    const terminalResultKind = ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(delivery.state)
+      ? delivery.state : null;
+    return delivery.deliveryAttemptId === intent.deliveryAttemptId &&
+      delivery.logicalMessageId === intent.logicalMessageId && delivery.revision === intent.revision &&
+      delivery.payloadDigest === intent.payloadDigest && delivery.sourceExecutionId === reservation.periodId &&
+      source?.launchRef === reservation.launchRef && sameIdentity(source?.identity, reservation.identity) &&
+      sameBinding(source?.executionBinding, reservation.executionBinding) &&
+      source?.conversationId === reservation.conversationId && source?.sessionId === reservation.sessionId &&
+      source?.sourceClaimsDigest === reservation.sourceClaimsDigest && target?.kind === 'execution' &&
+      target?.launchRef === reservation.launchRef && sameIdentity(target?.identity, reservation.identity) &&
+      target?.periodId === reservation.periodId && sameActor(target?.actor, reservation.executionBinding.actor) &&
+      target?.conversationId === reservation.conversationId && target?.sessionId === reservation.sessionId &&
+      target?.targetClaimsDigest === reservation.sourceClaimsDigest &&
+      sameIdentifierTuple(source?.launchKey, target?.launchKey) &&
+      reservation.checkpointState === delivery.state && preparation.checkpointState === delivery.state &&
+      reservation.terminalResultKind === terminalResultKind &&
+      reclamation?.operationId === preparation.operationId &&
+      reclamation?.reason === 'retired_question_period' &&
+      reclamation.reclaimedAt >= preparation.preparedAt &&
+      reclamation.reclaimedAt >= reservation.quarantinedAt;
+  }
+
   async function createDeliveryFromIntent(record) {
     assertNotQuarantined(record);
     const payload = deliveryPayload(record);
@@ -1215,13 +1278,35 @@ function createCommonQuestionService(options = {}) {
       } };
       let recovery = blocked ? { state: 'blocked', code: startupError?.code || 'question_writer_blocked' } : null;
       let deliveries = new Map();
+      let reservations = new Map();
+      let questionDetails = new Map();
       try { deliveries = deliveryMap(await options.deliveryStore.snapshot()); }
       catch (error) {
         recovery ||= { state: 'blocked', code: error?.code || 'delivery_store_unavailable' };
       }
+      if (reclamationMode) {
+        try {
+          const snapshot = journal.getSnapshot();
+          reservations = new Map(snapshot.reservations.map((reservation) =>
+            [reservation.internalQuestionId, reservation]));
+          questionDetails = new Map(snapshot.questions.map((detail) =>
+            [detail.internalQuestionId, detail]));
+        } catch (error) {
+          recovery ||= { state: 'blocked', code: error?.code || 'question_reservation_unavailable' };
+        }
+      }
       const questions = journalState.questions.map((record) => {
         const delivery = record.deliveryIntent ? deliveries.get(record.deliveryIntent.deliveryAttemptId) : null;
         try {
+          if (delivery?.recordType === 'reclaimed') {
+            const detail = questionDetails.get(record.internalQuestionId);
+            if (!isQuarantined(record) || !reclamationOptions?.periodGate.isRetired(record.identity, record.periodId) ||
+                !detail || !reclaimedDeliveryMatchesRecord(delivery, detail,
+                  reservations.get(record.internalQuestionId))) {
+              throw serviceError('question_delivery_mismatch');
+            }
+            return projection(record, null, true);
+          }
           const matches = isQuarantined(record)
             ? persistedDeliveryMatchesRecord(delivery, record)
             : deliveryMatchesRecord(delivery, record);

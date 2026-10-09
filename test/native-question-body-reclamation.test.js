@@ -10,6 +10,7 @@ const { createQuestionRecord, selectionFor } = require('../src/server/common-que
 const { createDelivery, createEmptyLedger } = require('../src/server/delivery-ledger');
 const { makeEmptyCheckpoint } = require('../src/server/durable-checkpoint');
 const { planQuestionBodyReclamation } = require('../src/server/question-body-reclamation');
+const { encodeCheckpointV3Local } = require('../src/server/delivery-reclamation-codec');
 const { createNativeQuestionBodyReclamationHarness } = require('./support/native-question-body-reclamation-harness');
 
 const PROVIDERS = ['claude', 'codex'];
@@ -406,6 +407,50 @@ for (const provider of PROVIDERS) {
     assert.equal(totalInstructionWrites(harness, provider), 0);
   });
 
+  test(`${provider} rejects accepted and applied events for a reclaimed delivery without writes`, async (t) => {
+    const sources = threeSlotLegacySources(provider);
+    const { harness, setNow } = await createHarness(t, provider, { sources });
+    const deliveryAdapter = harness.deliveryAdapter(provider);
+    assert.ok(deliveryAdapter);
+    const attemptId = sources.question.deliveryIntent.deliveryAttemptId;
+    const checkpointBefore = await fs.readFile(harness.checkpointPath);
+    const checkpoint = JSON.parse(checkpointBefore.toString('utf8'));
+    const detail = checkpoint.ledger.deliveries.find((item) => item.deliveryAttemptId === attemptId);
+    assert.equal(detail.recordType, 'detail');
+    const anchor = await readJson(path.join(harness.directory, ANCHOR_FILE));
+    const retiredAt = anchor.retiredQuestionPeriods.find((item) => item.periodId === sources.question.periodId).retiredAt;
+    setNow(retiredAt + RETENTION_MS);
+
+    const result = await harness.reclamationService.reclaimQuestionBodies({
+      identity: sources.question.identity,
+      periodId: sources.question.periodId,
+    });
+    assert.equal(result.status, 'complete');
+    const checkpointAfterReclamation = await fs.readFile(harness.checkpointPath);
+    const reclaimed = JSON.parse(checkpointAfterReclamation.toString('utf8')).ledger.deliveries
+      .find((item) => item.deliveryAttemptId === attemptId);
+    assert.equal(reclaimed.recordType, 'reclaimed');
+    const correlation = {
+      deliveryAttemptId: reclaimed.deliveryAttemptId,
+      revision: reclaimed.revision,
+      payloadDigest: reclaimed.payloadDigest,
+      targetPeriodId: reclaimed.targetRef.periodId,
+      nativeTurnId: `late-turn-${provider}`,
+      nativeItemId: `late-item-${provider}`,
+      clientRequestId: reclaimed.deliveryAttemptId,
+    };
+    const checkpointWrites = harness.persistenceWriteCounts.checkpoint;
+    const nativeWrites = totalInstructionWrites(harness, provider);
+
+    await assert.rejects(async () => deliveryAdapter.recordAccepted(attemptId, correlation),
+      { code: 'question_quarantined' });
+    await assert.rejects(async () => deliveryAdapter.recordApplied(attemptId, correlation),
+      { code: 'question_quarantined' });
+    assert.deepEqual(await fs.readFile(harness.checkpointPath), checkpointAfterReclamation);
+    assert.equal(harness.persistenceWriteCounts.checkpoint, checkpointWrites);
+    assert.equal(totalInstructionWrites(harness, provider), nativeWrites);
+  });
+
   test(`${provider} resumes only the persisted operation across each save-boundary return failure`, async (t) => {
     const boundaries = [
       { name: 'question prepare', slot: 'questions', occurrence: 1 },
@@ -470,6 +515,54 @@ for (const provider of PROVIDERS) {
     }
   });
 
+  test(`${provider} keeps dashboard recovery clear while a prepared grave waits for its clock`, async (t) => {
+    const sources = threeSlotLegacySources(provider);
+    const { directory, harness, setNow } = await createHarness(t, provider, { sources });
+    const anchor = await readJson(path.join(directory, ANCHOR_FILE));
+    const retired = anchor.retiredQuestionPeriods.find((item) => item.periodId === sources.question.periodId);
+    setNow(retired.retiredAt + RETENTION_MS);
+    harness.faults.arm({ slot: 'questions', phase: 'before-write', occurrence: 2 });
+    await assert.rejects(harness.reclamationService.reclaimQuestionBodies({
+      identity: sources.question.identity,
+      periodId: sources.question.periodId,
+    }), /fixture/);
+
+    const interrupted = await readJson(harness.questionJournalPath);
+    const prepared = interrupted.reservations.find((item) => item.internalQuestionId === sources.question.internalQuestionId)
+      .reclamation;
+    assert.ok(prepared);
+    assert.equal(interrupted.reservations[0].bodyState, 'retained');
+    const checkpoint = await readJson(harness.checkpointPath);
+    assert.equal(checkpoint.ledger.deliveries.find((item) =>
+      item.deliveryAttemptId === sources.question.deliveryIntent.deliveryAttemptId).recordType, 'reclaimed');
+
+    setNow(prepared.preparedAt - 1);
+    const bytesBeforeRestart = await readSlotBytes(directory);
+    const writesBeforeRestart = { ...harness.persistenceWritesBySlot };
+    await harness.restart();
+    assert.deepEqual(await readSlotBytes(directory), bytesBeforeRestart);
+    assert.deepEqual(harness.persistenceWritesBySlot, writesBeforeRestart);
+
+    const dashboard = await harness.questionService.dashboardSnapshot();
+    assert.equal(dashboard.recovery, null);
+    const displayed = dashboard.questions.find((item) =>
+      item.internalQuestionId === sources.question.internalQuestionId);
+    assert.ok(displayed);
+    assert.equal(displayed.quarantined, true);
+    assert.equal((await readJson(harness.questionJournalPath)).reservations[0].reclamation.operationId,
+      prepared.operationId);
+
+    setNow(prepared.preparedAt);
+    const completed = await harness.reclamationService.reclaimQuestionBodies({
+      identity: sources.question.identity,
+      periodId: sources.question.periodId,
+    });
+    assert.equal(completed.status, 'complete');
+    const finalQuestionJournal = await readJson(harness.questionJournalPath);
+    assert.equal(finalQuestionJournal.questions.length, 0);
+    assert.equal(finalQuestionJournal.reservations[0].reclamation.operationId, prepared.operationId);
+  });
+
   test(`${provider} rejects both impossible question-detail and checkpoint-grave pairs without writes`, async (t) => {
     for (const mismatch of ['reclaimed-question-with-detail', 'retained-question-with-grave']) {
       await t.test(mismatch, async (subtest) => {
@@ -514,6 +607,60 @@ for (const provider of PROVIDERS) {
         await restarted.close();
       });
     }
+  });
+
+  test(`${provider} rejects a locally valid new-format checkpoint with mismatched question correlation before startup writes`, async (t) => {
+    const sources = threeSlotLegacySources(provider);
+    const { directory, harness } = await createHarness(t, provider, { sources });
+    const checkpoint = await readJson(harness.checkpointPath);
+    const attemptId = sources.question.deliveryIntent.deliveryAttemptId;
+    const questionDelivery = checkpoint.ledger.deliveries.find((item) => item.deliveryAttemptId === attemptId);
+    assert.equal(questionDelivery.kind, 'question');
+    assert.equal(questionDelivery.recordType, 'detail');
+    const originalDigest = questionDelivery.payloadDigest;
+    const mismatchedDigest = '0'.repeat(64) === originalDigest ? '1'.repeat(64) : '0'.repeat(64);
+    questionDelivery.payloadDigest = mismatchedDigest;
+    for (const correlationName of ['acceptedCorrelation', 'appliedCorrelation']) {
+      if (questionDelivery[correlationName] !== null) {
+        questionDelivery[correlationName].payloadDigest = mismatchedDigest;
+      }
+    }
+    const tombstone = checkpoint.ledger.logicalTombstones.find((item) =>
+      item.kind === questionDelivery.kind && item.sourceExecutionId === questionDelivery.sourceExecutionId &&
+      item.logicalMessageId === questionDelivery.logicalMessageId && item.revision === questionDelivery.revision);
+    assert.ok(tombstone);
+    tombstone.payloadDigest = mismatchedDigest;
+    const locallyEncoded = encodeCheckpointV3Local(checkpoint);
+    assert.equal(JSON.parse(locallyEncoded.bytes.toString('utf8')).ledger.deliveries
+      .find((item) => item.deliveryAttemptId === attemptId).payloadDigest, questionDelivery.payloadDigest);
+
+    await harness.close();
+    await fs.writeFile(path.join(directory, DATA_FILES.checkpoint), locallyEncoded.bytes);
+    const bytesBeforeStartup = {
+      ...await readSlotBytes(directory),
+      anchor: await fs.readFile(path.join(directory, ANCHOR_FILE)),
+    };
+    const restarted = createNativeQuestionBodyReclamationHarness({
+      directory,
+      now: () => 1_000_000,
+      reclamation: reclamationConfig({
+        normalByteLimitsBySlot: Object.fromEntries(Object.keys(DATA_FILES).map((slot) =>
+          [slot, sources[slot].length])),
+      }),
+    });
+    t.after(async () => { try { await restarted.close(); } catch {} });
+
+    await assert.rejects(restarted.ready, (error) => {
+      assert.equal(error.message, 'invalid_reclamation_snapshot');
+      return true;
+    });
+    assert.deepEqual({
+      ...await readSlotBytes(directory),
+      anchor: await fs.readFile(path.join(directory, ANCHOR_FILE)),
+    }, bytesBeforeStartup);
+    assert.deepEqual(restarted.persistenceWritesBySlot, { checkpoint: 0, instructions: 0, questions: 0 });
+    assert.deepEqual(restarted.persistenceWriteCounts, { anchor: 0, checkpoint: 0, instructions: 0, questions: 0 });
+    assert.equal(restarted.processesByProvider.get(provider).length, 0);
   });
 
   test(`${provider} rejects unknown question-body fields and captures identity before queued work`, async (t) => {

@@ -114,22 +114,29 @@ function loadFactory(faults) {
   const compositionPath = require.resolve('../../src/server/native-launch-composition');
   const persistencePath = require.resolve('../../src/server/reclamation-persistence');
   const contextPath = require.resolve('../../src/server/reclamation-service-context');
+  const deliveryStorePath = require.resolve('../../src/server/durable-delivery-store');
   const integrationPath = require.resolve('../../src/server/native-instruction-service-integration');
   require(compositionPath);
   require(persistencePath);
   require(contextPath);
+  require(deliveryStorePath);
   const compositionEntry = require.cache[compositionPath];
   const persistenceEntry = require.cache[persistencePath];
   const contextEntry = require.cache[contextPath];
+  const deliveryStoreEntry = require.cache[deliveryStorePath];
   const previousIntegrationEntry = require.cache[integrationPath];
   const originalCompositionExports = compositionEntry.exports;
   const originalPersistenceExports = persistenceEntry.exports;
   const originalContextExports = contextEntry.exports;
+  const originalDeliveryStoreExports = deliveryStoreEntry.exports;
   const createComposition = originalCompositionExports.createNativeLaunchComposition;
   const createPersistence = originalPersistenceExports.createReclamationPersistence;
   const createContext = originalContextExports.createReclamationServiceContext;
+  const createDurableDeliveryStore = originalDeliveryStoreExports.createDurableDeliveryStore;
+  const createProviderDeliveryAdapter = originalDeliveryStoreExports.createProviderDeliveryAdapter;
   let composition = null;
   let context = null;
+  const deliveryAdapters = new Map();
 
   compositionEntry.exports = {
     ...originalCompositionExports,
@@ -151,6 +158,17 @@ function loadFactory(faults) {
       return context;
     },
   };
+  deliveryStoreEntry.exports = {
+    ...originalDeliveryStoreExports,
+    createDurableDeliveryStore(options) {
+      return createDurableDeliveryStore(options);
+    },
+    createProviderDeliveryAdapter(provider, store) {
+      const adapter = createProviderDeliveryAdapter(provider, store);
+      deliveryAdapters.set(provider, adapter);
+      return adapter;
+    },
+  };
   delete require.cache[integrationPath];
   let integrationModule;
   try {
@@ -159,6 +177,7 @@ function loadFactory(faults) {
     compositionEntry.exports = originalCompositionExports;
     persistenceEntry.exports = originalPersistenceExports;
     contextEntry.exports = originalContextExports;
+    deliveryStoreEntry.exports = originalDeliveryStoreExports;
     if (previousIntegrationEntry) require.cache[integrationPath] = previousIntegrationEntry;
     else delete require.cache[integrationPath];
   }
@@ -167,6 +186,7 @@ function loadFactory(faults) {
     create: integrationModule.createNativeInstructionServiceIntegration,
     getComposition: () => composition,
     getContext: () => context,
+    getDeliveryAdapters: () => deliveryAdapters,
   });
 }
 
@@ -284,7 +304,6 @@ function createNativeQuestionBodyReclamationHarness(options) {
     await ready;
     if (closed) throw new Error('fixture_closed');
     await integration.close();
-    closed = false;
     integration = await createIntegration();
   }
 
@@ -309,6 +328,7 @@ function createNativeQuestionBodyReclamationHarness(options) {
     get instructionService() { return integration?.service || null; },
     get reclamationService() { return integration?.reclamation || null; },
     get reclamationContext() { return currentFactory?.getContext() || null; },
+    deliveryAdapter(provider) { return currentFactory?.getDeliveryAdapters().get(provider) || null; },
     get checkpointPath() { return path.join(directory, 'delivery-checkpoint.json'); },
     get questionJournalPath() { return path.join(directory, 'common-question-journal.json'); },
     processesByProvider,

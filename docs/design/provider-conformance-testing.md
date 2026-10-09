@@ -331,6 +331,10 @@ processとnative event transportはfixtureに置き換えるため、実runtime�
 | QR-B04 | 回収後の同じ質問ID、共通key、attempt、後着通知 | 墓標から拒否し、全processの追加native writeを0回に保つ。墓標件数と移行grantを保持する |
 | QR-B05 | 保持期限のoverflow、時計逆行、closeとの競合 | 安全な期限を判定できなければ本文を保持する。close後の新しい保存を拒否する |
 
+QR-B04の後着通知は、providerで限定されたstoreのacceptedとapplied操作を直接呼び、配信墓標の拒否と保存不変を確認する。
+実runtimeから古い通知が到着することは、この試験では確認しない。
+QR-B05は、質問準備と配信墓標を保存した後の時計逆行による延期も含み、質問欄が整合不良と表示されないことを確認する。
+
 この接続の書込み結果不明時は既存の全writer停止を維持する。
 質問writerだけを停止する分離、自動実行、通常指示とPR通知の回収は別の適合条件として残す。
 

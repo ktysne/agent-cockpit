@@ -425,8 +425,10 @@ function createCommonQuestionReclamationJournal(value) {
   async function persistBodyReclamation(candidateValue, identity, periodId, internalQuestionId, assertAccess) {
     if (closed) throw adapterError('question_service_closed');
     if (typeof internalQuestionId !== 'string' || internalQuestionId.length === 0 ||
-        typeof assertAccess !== 'function' ||
-        !periodGate.isRetired(identity, periodId)) {
+        typeof assertAccess !== 'function') {
+      throw adapterError('invalid_question_body_reclamation_candidate');
+    }
+    if (!periodGate.isRetired(identity, periodId)) {
       throw adapterError('question_period_not_retired');
     }
     const current = requireInstalled();
