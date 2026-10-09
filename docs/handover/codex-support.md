@@ -137,6 +137,9 @@ fixtureの予約状態不明を実OSの容量喪失や実runtimeの故障へ読�
 Claude R1はblockerと要修正0件で、任意提案に従い本文回収の最終質問rename故障を両providerで4件追加した。
 最終native fixtureは16件成功し、checkpoint墓標に対応するprepared質問をcold復旧で回収し、operation ID、anchorと全grant、2回目の起動後のbytes安定と追加送信なしを確認した。
 同instanceのstart拒否はPromiseで返す契約にそろえ、関連2件に成功した。
+修正head `b7c92f5`の全体`npm test`は2,485件成功、1件skip、失敗0件（全2,486件、exit0）だった。
+Claude R2もblockerと要修正0件で、故障fixtureと観測assertの任意提案を補強した。
+補強後のnative16件、persistence20件成功と同じsymlink権限の1件skipを確認した。productionは全体試験head `b7c92f5`と同一である。
 
 実装head `cf6e991`の全体`npm test`は2,481件成功、1件skip、失敗0件（全2,482件、exit0）だった。
 skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。

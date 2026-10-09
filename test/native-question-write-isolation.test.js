@@ -124,6 +124,10 @@ for (const provider of PROVIDERS) {
         assert.equal(failedQuestionJournal.questions.some((detail) =>
           detail.internalQuestionId === sources.question.internalQuestionId), false);
       }
+      const passedRenameEvents = harness.nativeFileSystem.events.filter((event) =>
+        event.operation === 'rename-passthrough' && event.targetPath === harness.pathFor('questions') &&
+        event.writeOccurrence === 1);
+      assert.equal(passedRenameEvents.length, 1);
       const failedRenameEvents = harness.nativeFileSystem.events.filter((event) =>
         event.operation === 'rename' && event.targetPath === harness.pathFor('questions') &&
         event.writeOccurrence === 2);

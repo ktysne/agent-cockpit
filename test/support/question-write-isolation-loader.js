@@ -37,10 +37,13 @@ function createNativeFileSystemFixture() {
       fault.writeOccurrences += 1;
       fault.calls = 0;
     }
+    if (fault.writeOccurrences < fault.occurrence) {
+      events.push({ operation: 'rename-passthrough', targetPath, writeOccurrence: fault.writeOccurrences, phase: fault.phase });
+      return native.rename(temporaryPath, targetPath);
+    }
     fault.calls += 1;
     events.push({ operation: 'rename', targetPath, call: fault.calls,
       writeOccurrence: fault.writeOccurrences, phase: fault.phase });
-    if (fault.writeOccurrences !== fault.occurrence) return native.rename(temporaryPath, targetPath);
     if (fault.hold && fault.calls === 1) {
       fault.entered.resolve();
       await fault.release.promise;
