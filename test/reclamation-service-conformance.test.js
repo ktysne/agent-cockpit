@@ -140,6 +140,12 @@ for (const provider of PROVIDERS) {
       item.internalQuestionId === selected.question.internalQuestionId);
     assert.equal(retiredReservation.quarantinedAt, 1_000_000);
     assert.equal(retiredReservation.bodyState, 'retained');
+    const dashboard = await harness.questionService.dashboardSnapshot();
+    assert.equal(dashboard.questions.find((item) => item.internalQuestionId === selected.question.internalQuestionId)
+      .quarantined, true);
+    assert.equal(dashboard.questions.find((item) => item.internalQuestionId === unrelated.question.internalQuestionId)
+      .quarantined, false);
+    assert.equal(harness.questionService.getQuarantineDiagnostics().quarantinedCount, 1);
     assert.equal((await harness.deliveryStore.snapshot()).deliveries.find((item) =>
       item.deliveryAttemptId === deliveryId).state, 'unknown');
     assert.deepEqual(questionSnapshot.questions.find((item) =>

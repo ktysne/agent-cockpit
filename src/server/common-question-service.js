@@ -296,6 +296,17 @@ function createCommonQuestionService(options = {}) {
     return Boolean(record && quarantinedQuestionIds.has(record.internalQuestionId));
   }
 
+  function refreshQuarantinedQuestionIds() {
+    const snapshot = journal.getSnapshot();
+    quarantinedQuestionIds.clear();
+    for (const detail of snapshot.questions) {
+      if (detail.quarantinedAt !== null) quarantinedQuestionIds.add(detail.internalQuestionId);
+    }
+    for (const reservation of snapshot.reservations) {
+      if (reservation.bodyState === 'reclaimed') quarantinedQuestionIds.add(reservation.internalQuestionId);
+    }
+  }
+
   function assertNotQuarantined(record) {
     if (isQuarantined(record)) throw serviceError('question_quarantined');
     if (reclamationMode && record) {
@@ -936,7 +947,8 @@ function createCommonQuestionService(options = {}) {
       let saved;
       try { saved = await addRecord(record); }
       catch (error) {
-        if (['question_capacity', 'journal_capacity_reserved', 'journal_too_large'].includes(error.code)) {
+        if (['question_capacity', 'journal_capacity_reserved', 'journal_too_large',
+          'reclamation_capacity_exceeded'].includes(error.code)) {
           capacityRejected = true;
           throw serviceError('question_quarantine_capacity');
         }
@@ -1286,13 +1298,7 @@ function createCommonQuestionService(options = {}) {
     }
     const prepared = journal.prepareResume(fullSnapshot);
     journalState = journal.getLegacySnapshot();
-    quarantinedQuestionIds.clear();
-    for (const detail of journal.getSnapshot().questions) {
-      if (detail.quarantinedAt !== null) quarantinedQuestionIds.add(detail.internalQuestionId);
-    }
-    for (const reservation of journal.getSnapshot().reservations) {
-      if (reservation.bodyState === 'reclaimed') quarantinedQuestionIds.add(reservation.internalQuestionId);
-    }
+    refreshQuarantinedQuestionIds();
     blocked = false;
     startupError = null;
     initPromise = null;
@@ -1324,6 +1330,7 @@ function createCommonQuestionService(options = {}) {
           assertAccess();
           const saved = await journal.persistRetirement(candidate, ticket);
           journalState = journal.getLegacySnapshot();
+          refreshQuarantinedQuestionIds();
           return saved;
         },
       });

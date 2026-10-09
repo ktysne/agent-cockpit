@@ -111,6 +111,10 @@ intentをnot_createdで保存し、creatingを保存してからcheckpointを作
 成功したcheckpointの完全相関を確認してcheckpointedとcacheを保存する。
 checkpointだけが先へ進んだ合法なcacheの遅れは許容し、serviceの観測時、冷起動または退役時に照合する。
 creatingで停止し、対応checkpointが無い場合はindeterminateとして新作成を拒否する。
+creatingを保存した後の認可・容量拒否も、未完了の作成が無いことを証明する契約が無ければ同じattemptを再作成しない。
+contextが書込み可能でgetがnullという観測だけでは、注入adapterの非同期作成が終了したことを証明できない。
+完全相関が一致する保存済みcheckpointを確認できる場合は、単調遷移でcheckpointedへ進める。
+副作用前の拒否と全creatorの完了を証明する再試行契約は、native factoryと復旧の統合で別途設計する。
 通常指示も自身のserviceが作成段階を保存し、checkpoint writerから別journalを書き換えない。
 
 新規ID、registration、aliasの受付は全candidateの将来予約が通常上限B以内であることを要求する。
@@ -219,6 +223,8 @@ gateは対象の完全identityとperiod IDごとに `active`、`retiring`、`ret
 通常退役の正規化と途中復旧は[質問schema](common-question-reclamation-schema.md)に従い、claimedをavailable、sending/acceptedをunknownへ変更する。
 対象質問のattempt、digest、相関、cancel要求を保持し、他kindの状態を変更しない。
 gateの世代を捕捉済みの操作は再取得せず、最終sinkの世代検査を守って完了させる。再取得が必要な操作は副作用なしで即時拒否し、queue待機中に無条件で実行しない。
+退役開始後の検証失敗も共有contextを停止し、通常指示とPR通知を含む全writerを再起動まで閉じる。
+保存前の失敗であっても、process内のretiring状態を解除して同じ期間を再開する経路は設けない。
 送信操作はgateの世代番号を捕捉し、最終sinkを呼ぶ直前にも同期で再検査する。
 再検査からsinkの呼び出しまで `await` を挟まない。
 既にsinkを呼んだ配信を取り消せた扱いにはせず、結果不明ならunknownのまま保持する。

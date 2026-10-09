@@ -996,6 +996,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   async function prepareResumeReclamation(fullSnapshot) {
+    if (closePromise) throw storeError('store_closed');
     if (!reclamation || !isRecord(fullSnapshot) || !isRecord(fullSnapshot.stores) ||
         !Object.hasOwn(fullSnapshot.stores, 'checkpoint')) {
       throw storeError('invalid_reclamation_checkpoint_resume');

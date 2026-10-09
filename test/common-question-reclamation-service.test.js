@@ -322,6 +322,29 @@ test('reclaimed reservations continue to consume the configured journal record l
   assert.equal(fixture.backendState.calls.save, 0);
 });
 
+test('anchor reclamation capacity rejection is reported as question quarantine capacity', async (t) => {
+  const fixture = makeFixture();
+  t.after(() => fixture.service.close());
+  await install(fixture);
+  const originalSave = fixture.backendState.backend.save;
+  let saveAttempts = 0;
+  fixture.backendState.backend.save = async () => {
+    saveAttempts += 1;
+    const error = new Error('reclamation_capacity_exceeded');
+    error.code = 'reclamation_capacity_exceeded';
+    throw error;
+  };
+
+  await assert.rejects(register(fixture), { code: 'question_quarantine_capacity' });
+  assert.equal(saveAttempts, 1);
+  const diagnostics = fixture.service.getQuarantineDiagnostics();
+  assert.equal(diagnostics.status, 'ready');
+  assert.equal(diagnostics.reason, 'question_quarantine_capacity');
+  assert.equal(diagnostics.quarantinedCount, 0);
+  assert.ok(diagnostics.remainingCount > 0);
+  fixture.backendState.backend.save = originalSave;
+});
+
 test('all ingress rejects retired reservation keys and ticks skip quarantined details', async (t) => {
   const graveDetail = createDetail({ internalQuestionId: 'cq-grave' });
   const grave = reservationFor(graveDetail, {

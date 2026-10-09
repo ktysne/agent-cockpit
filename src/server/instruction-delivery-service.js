@@ -386,14 +386,36 @@ function createInstructionDeliveryService(options = {}) {
     let createdNow = false;
     if (!delivery) {
       const create = adapter?.createInstructionDelivery || deliveryStore.createInstructionDelivery;
-      const created = await create.call(adapter || deliveryStore, {
-        launchRef: savedIntent.launchRef,
-        deliveryAttemptId: savedIntent.deliveryAttemptId,
-        logicalMessageId: savedIntent.logicalMessageId,
-        revision: savedIntent.revision,
-        payload: savedIntent.envelope,
-      });
-      delivery = created;
+      try {
+        delivery = await create.call(adapter || deliveryStore, {
+          launchRef: savedIntent.launchRef,
+          deliveryAttemptId: savedIntent.deliveryAttemptId,
+          logicalMessageId: savedIntent.logicalMessageId,
+          revision: savedIntent.revision,
+          payload: savedIntent.envelope,
+        });
+      } catch (error) {
+        if (!reclamationMode) throw error;
+        let recoveredDelivery;
+        try {
+          recoveredDelivery = await validateExistingDelivery(savedIntent, provider);
+        } catch {
+          throw error;
+        }
+        if (!recoveredDelivery) throw error;
+        if (deliveryMatchesRecord(recoveredDelivery, savedIntent)) {
+          const checkpointed = updateInstructionCreationStateV2(
+            journalState, savedIntent.deliveryAttemptId, 'checkpointed');
+          journalState = await journal.save(checkpointed.journal);
+          savedIntent = findIntent(savedIntent.deliveryAttemptId);
+          return {
+            outcome: 'existing',
+            delivery: recoveredDelivery,
+            instruction: projection(savedIntent, recoveredDelivery),
+          };
+        }
+        throw error;
+      }
       createdNow = true;
     }
     if (!deliveryMatchesRecord(delivery, savedIntent)) throw serviceError('instruction_delivery_mismatch');
@@ -850,9 +872,9 @@ function createInstructionDeliveryService(options = {}) {
     dashboardSnapshot,
     reportResponseLost,
     flush,
-      close,
-      ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter } : {}),
-    });
+    close,
+    ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter } : {}),
+  });
 }
 
 module.exports = { createInstructionDeliveryService };

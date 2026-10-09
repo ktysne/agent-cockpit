@@ -333,6 +333,23 @@ function createWriteBarrierBackend() {
   };
 }
 
+test('a closed reclamation delivery writer cannot resume from a snapshot', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend: persistence.backend, periodGate },
+  });
+  t.after(() => store.close());
+  await store.ready;
+  await store.close();
+
+  await assert.rejects(store.reclamationWriter.prepareResume({
+    anchor: {}, stores: { checkpoint: persistence.checkpoint },
+  }), errorCode('store_closed'));
+});
+
 test('a question token is rechecked by the backend immediately before a delayed checkpoint write', async (t) => {
   const fixture = createFixture();
   const persistence = createWriteBarrierBackend();
