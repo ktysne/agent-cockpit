@@ -2,7 +2,13 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { types: utilTypes } = require('node:util');
 const { atomicWriteJson } = require('./json-storage');
+const {
+  encodeCheckpointV3Local,
+  normalizeCheckpointV3Local,
+} = require('./delivery-reclamation-codec');
+const { checkedCapacityAdd, measureCheckpointReservation } = require('./reclamation-capacity-bounds');
 
 const CHECKPOINT_SCHEMA_VERSION = 2;
 const LEGACY_CHECKPOINT_SCHEMA_VERSION = 1;
@@ -948,6 +954,7 @@ function pathKey(filePath) {
 }
 
 function createDurableCheckpointStore(options = {}) {
+  if (options.reclamation !== undefined) return createReclamationCheckpointStore(options);
   const filePath = checkpointPath(options.filePath);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_CHECKPOINT_BYTES;
   const maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
@@ -1066,6 +1073,185 @@ function createDurableCheckpointStore(options = {}) {
   }
 
   return Object.freeze({ filePath, load, save, flush, close });
+}
+
+function createReclamationCheckpointStore(options) {
+  const optionKeys = Reflect.ownKeys(options);
+  if (optionKeys.some((key) => typeof key !== 'string' ||
+      !['reclamation', 'maxBytes', 'maxRecords'].includes(key))) {
+    throw checkpointError('invalid_checkpoint_options');
+  }
+  const reclamation = options.reclamation;
+  let reclamationKeys;
+  let backendDescriptor;
+  let periodGateDescriptor;
+  try {
+    if (!isRecord(reclamation)) throw new TypeError();
+    reclamationKeys = Reflect.ownKeys(reclamation);
+    backendDescriptor = Object.getOwnPropertyDescriptor(reclamation, 'backend');
+    periodGateDescriptor = Object.getOwnPropertyDescriptor(reclamation, 'periodGate');
+  } catch {
+    throw checkpointError('invalid_reclamation_checkpoint_backend');
+  }
+  if (reclamationKeys.length !== 2 || !Object.hasOwn(reclamation, 'backend') ||
+      !Object.hasOwn(reclamation, 'periodGate') || !Object.hasOwn(backendDescriptor || {}, 'value') ||
+      !Object.hasOwn(periodGateDescriptor || {}, 'value')) {
+    throw checkpointError('invalid_reclamation_checkpoint_backend');
+  }
+  const backend = backendDescriptor.value;
+  const periodGate = periodGateDescriptor.value;
+  if (!backend || backend.slot !== 'checkpoint' ||
+      typeof backend.canWrite !== 'function' ||
+      typeof backend.load !== 'function' || typeof backend.save !== 'function' ||
+      typeof backend.prepareResume !== 'function' || typeof backend.flush !== 'function' ||
+      typeof backend.close !== 'function' || !Number.isSafeInteger(backend.normalByteLimit) ||
+      backend.normalByteLimit < 1 || backend.normalByteLimit > 16 * 1024 * 1024 ||
+      !periodGate || typeof periodGate.capture !== 'function' ||
+      typeof periodGate.assertCurrent !== 'function' || typeof periodGate.assertRetirement !== 'function') {
+    throw checkpointError('invalid_reclamation_checkpoint_backend');
+  }
+  const maxBytes = options.maxBytes ?? backend.normalByteLimit;
+  const maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
+  if (maxBytes !== backend.normalByteLimit ||
+      !Number.isSafeInteger(maxRecords) || maxRecords < 1 || maxRecords > DEFAULT_MAX_RECORDS) {
+    throw checkpointError('invalid_checkpoint_limits');
+  }
+
+  let accepting = true;
+  let closed = false;
+  let hasLoaded = false;
+  let lastCommittedRevision = -1;
+  let currentCheckpoint = null;
+  let tail = Promise.resolve();
+  let closePromise = null;
+
+  function enqueue(operation) {
+    if (!accepting) return Promise.reject(checkpointError('checkpoint_store_closed'));
+    const result = tail.then(operation);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  function assertCapacity(checkpoint) {
+    const measurement = measureCheckpointReservation({
+      snapshot: checkpoint,
+      currentByteLimit: backend.normalByteLimit,
+    });
+    const extra = checkpoint.migrationAllowance?.maxExtraBytes ?? 0;
+    if (measurement.reservedBytes > checkedCapacityAdd(backend.normalByteLimit, extra)) {
+      throw checkpointError('checkpoint_capacity_reserved');
+    }
+  }
+
+  async function loadNow() {
+    if (closed) throw checkpointError('checkpoint_store_closed');
+    if (hasLoaded) return structuredClone(currentCheckpoint);
+    const loaded = normalizeCheckpointV3Local(await backend.load(), maxRecords);
+    assertCapacity(loaded);
+    currentCheckpoint = loaded;
+    lastCommittedRevision = loaded.revision;
+    hasLoaded = true;
+    return structuredClone(loaded);
+  }
+
+  function load() {
+    return enqueue(loadNow);
+  }
+
+  function captureBeforeWrite(value) {
+    if (value === undefined) return null;
+    if (typeof value !== 'function') throw checkpointError('invalid_checkpoint_write_guard');
+    return () => {
+      const result = value();
+      if (result !== undefined) {
+        if (utilTypes.isPromise(result)) Promise.prototype.catch.call(result, () => {});
+        throw checkpointError('invalid_checkpoint_write_guard');
+      }
+    };
+  }
+
+  function save(value, assertBeforeWrite = undefined) {
+    if (!accepting) return Promise.reject(checkpointError('checkpoint_store_closed'));
+    let assertWriteAllowed;
+    try {
+      assertWriteAllowed = captureBeforeWrite(assertBeforeWrite);
+      assertWriteAllowed?.();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    let canWrite = false;
+    try { canWrite = backend.canWrite() === true; } catch {}
+    if (!canWrite) return Promise.reject(checkpointError('reclamation_service_blocked'));
+    let normalized;
+    try {
+      normalized = normalizeCheckpointV3Local(value, maxRecords);
+      const encoded = encodeCheckpointV3Local(normalized, maxRecords);
+      if (encoded.sizeBytes > checkedCapacityAdd(
+        backend.normalByteLimit, normalized.migrationAllowance?.maxExtraBytes ?? 0)) {
+        throw checkpointError('checkpoint_too_large');
+      }
+      assertCapacity(normalized);
+      normalized = structuredClone(normalized);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return enqueue(async () => {
+      if (closed) throw checkpointError('checkpoint_store_closed');
+      assertWriteAllowed?.();
+      canWrite = false;
+      try { canWrite = backend.canWrite() === true; } catch {}
+      if (!canWrite) throw checkpointError('reclamation_service_blocked');
+      if (!hasLoaded) await loadNow();
+      assertWriteAllowed?.();
+      if (normalized.revision <= lastCommittedRevision) {
+        throw checkpointError('checkpoint_revision_not_advanced');
+      }
+      const backendSave = assertWriteAllowed === null
+        ? backend.save(normalized)
+        : backend.save(normalized, assertWriteAllowed);
+      const saved = normalizeCheckpointV3Local(await backendSave, maxRecords);
+      currentCheckpoint = saved;
+      lastCommittedRevision = saved.revision;
+      return structuredClone(saved);
+    });
+  }
+
+  async function prepareResume(fullSnapshot) {
+    if (closed) throw checkpointError('checkpoint_store_closed');
+    if (!isRecord(fullSnapshot) || !isRecord(fullSnapshot.stores) ||
+        !Object.hasOwn(fullSnapshot.stores, 'checkpoint')) {
+      throw checkpointError('invalid_reclamation_checkpoint_resume');
+    }
+    const normalized = normalizeCheckpointV3Local(fullSnapshot.stores.checkpoint, maxRecords);
+    assertCapacity(normalized);
+    await backend.prepareResume(fullSnapshot);
+    currentCheckpoint = normalized;
+    lastCommittedRevision = normalized.revision;
+    hasLoaded = true;
+  }
+
+  function flush() {
+    if (!accepting) return Promise.reject(checkpointError('checkpoint_store_closed'));
+    return tail.then(() => backend.flush());
+  }
+
+  function close() {
+    if (closePromise) return closePromise;
+    accepting = false;
+    closePromise = tail.then(() => { closed = true; });
+    return closePromise;
+  }
+
+  return Object.freeze({
+    filePath: null,
+    maxBytes,
+    maxRecords,
+    load,
+    save,
+    flush,
+    close,
+    prepareResume,
+  });
 }
 module.exports = {
   CHECKPOINT_SCHEMA_VERSION,

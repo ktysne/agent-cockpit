@@ -1,9 +1,11 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { types: utilTypes } = require('node:util');
 const kernel = require('./common-question-kernel');
 const { createCommonQuestionJournal } = require('./common-question-journal');
+const { createCommonQuestionReclamationJournal } = require('./common-question-reclamation-adapter');
 const nativePromiseThen = Promise.prototype.then;
 
 const WRITER_FIELDS = ['token', 'identity', 'contextId', 'executionId'];
@@ -130,7 +132,15 @@ function validateLaunchBinding(launchRegistry, runtimeRegistry, launchRef, ident
 }
 
 function createCommonQuestionService(options = {}) {
-  if (!options || typeof options !== 'object' || Array.isArray(options) || typeof options.journalPath !== 'string' ||
+  const reclamationOptions = options && typeof options === 'object' && !Array.isArray(options)
+    ? options.reclamation : undefined;
+  const reclamationMode = reclamationOptions !== undefined;
+  const reclamationValid = reclamationMode && reclamationOptions && typeof reclamationOptions === 'object' &&
+    !Array.isArray(reclamationOptions) && reclamationOptions.backend && reclamationOptions.periodGate;
+  if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      (!reclamationMode && typeof options.journalPath !== 'string') ||
+      (reclamationMode && (!reclamationValid ||
+        (options.maxBytes !== undefined && options.maxBytes !== reclamationOptions.backend.normalByteLimit))) ||
       !options.registrationRegistry || typeof options.registrationRegistry.authorizeWriter !== 'function' ||
       typeof options.registrationRegistry.snapshot !== 'function' || !options.launchRegistry ||
       typeof options.launchRegistry.get !== 'function' || typeof options.launchRegistry.snapshot !== 'function' ||
@@ -149,12 +159,18 @@ function createCommonQuestionService(options = {}) {
       (options.clearTimeoutImpl !== undefined && typeof options.clearTimeoutImpl !== 'function')) {
     throw serviceError('invalid_question_service_dependencies');
   }
-  const journal = createCommonQuestionJournal({ filePath: options.journalPath,
-    ...(options.atomicWrite ? { atomicWrite: options.atomicWrite } : {}),
-    ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-    ...(options.maxRecords !== undefined ? { maxRecords: options.maxRecords } : {}),
-    ...(options.fileSystem ? { fileSystem: options.fileSystem } : {}),
-  });
+  const journal = reclamationMode
+    ? createCommonQuestionReclamationJournal({
+      backend: reclamationOptions.backend,
+      periodGate: reclamationOptions.periodGate,
+      ...(options.maxRecords !== undefined ? { maxRecords: options.maxRecords } : {}),
+    })
+    : createCommonQuestionJournal({ filePath: options.journalPath,
+      ...(options.atomicWrite ? { atomicWrite: options.atomicWrite } : {}),
+      ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
+      ...(options.maxRecords !== undefined ? { maxRecords: options.maxRecords } : {}),
+      ...(options.fileSystem ? { fileSystem: options.fileSystem } : {}),
+    });
   const now = options.now || Date.now;
   const getAutoApplySettings = () => {
     if (typeof options.getAutoApplySettings !== 'function') {
@@ -181,6 +197,12 @@ function createCommonQuestionService(options = {}) {
   let timer = null;
   let closePromise = null;
   let capacityRejected = false;
+  let writerStopped = false;
+  let pendingOperations = 0;
+  let activePeriodToken = null;
+  const creatingDeliveryQuestionIds = new Set();
+  const retirementStorage = reclamationMode ? new AsyncLocalStorage() : null;
+  const retirementScope = Object.freeze({});
   const suppressed = new Set();
   const quarantinedQuestionIds = new Set();
 
@@ -191,13 +213,63 @@ function createCommonQuestionService(options = {}) {
     return value;
   }
 
-  function enqueue(operation, diagnostic = false) {
+  function assertCurrentPeriod() {
+    if (reclamationMode && activePeriodToken !== null) reclamationOptions.periodGate.assertCurrent(activePeriodToken);
+  }
+
+  function sharedWriterCanWrite() {
+    if (!reclamationMode) return true;
+    try { return reclamationOptions.backend.canWrite() === true; } catch { return false; }
+  }
+
+  function assertSharedWriterCanWrite() {
+    if (!sharedWriterCanWrite()) throw serviceError('question_gate_closed');
+  }
+
+  function captureWriterPeriodToken(writer) {
+    if (!reclamationMode) return { live: null, token: null };
+    const live = findLiveWriter(writer);
+    return { live, token: reclamationOptions.periodGate.capture(live.identity, live.periodId) };
+  }
+
+  function captureInternalPeriodToken(internalQuestionId) {
+    if (!reclamationMode) return null;
+    if (!journalState) throw serviceError('question_service_not_ready');
+    const reservation = journal.getReservation(internalQuestionId);
+    if (!reservation) return null;
+    if (reservation.bodyState === 'reclaimed' || reservation.quarantinedAt !== null) {
+      throw serviceError('question_quarantined');
+    }
+    return reclamationOptions.periodGate.capture(reservation.identity, reservation.periodId);
+  }
+
+  function enqueue(operation, diagnostic = false, periodToken = null) {
     if (!accepting) return Promise.reject(serviceError('question_service_closed'));
-    const result = tail.then(async () => {
+    if (reclamationMode && retirementStorage.getStore() === retirementScope) {
+      return Promise.reject(serviceError('question_retirement_queue_reentry'));
+    }
+    if (reclamationMode && !sharedWriterCanWrite()) {
+      return Promise.reject(serviceError('question_gate_closed'));
+    }
+    if (reclamationMode && (writerStopped || (!journalState && !diagnostic))) {
+      return Promise.reject(serviceError(writerStopped ? 'question_gate_closed' : 'question_service_not_ready'));
+    }
+    pendingOperations += 1;
+    const queued = tail.then(async () => {
+      if (reclamationMode) assertSharedWriterCanWrite();
       try { await ready(); } catch (error) { if (!diagnostic) throw error; }
       if (blocked && !diagnostic) throw serviceError('question_writer_blocked');
-      return operation();
+      if (reclamationMode) assertSharedWriterCanWrite();
+      const previousToken = activePeriodToken;
+      activePeriodToken = periodToken;
+      try {
+        if (periodToken !== null) reclamationOptions.periodGate.assertCurrent(periodToken);
+        return await operation();
+      } finally {
+        activePeriodToken = previousToken;
+      }
     });
+    const result = queued.finally(() => { pendingOperations -= 1; });
     tail = result.then(() => undefined, () => undefined);
     return result;
   }
@@ -206,6 +278,14 @@ function createCommonQuestionService(options = {}) {
     const key = kernel.questionKey(identity, periodId, id);
     return journalState.questions.find((record) =>
       kernel.questionKey(record.identity, record.periodId, record.questionId) === key) || null;
+  }
+
+  function assertPublicQuestionReservation(identity, periodId, questionId) {
+    if (!reclamationMode) return;
+    const reservation = journal.findReservation(identity, periodId, questionId);
+    if (reservation && (reservation.bodyState === 'reclaimed' || reservation.quarantinedAt !== null)) {
+      throw serviceError('question_quarantined');
+    }
   }
 
   function currentQuestion(id) {
@@ -218,6 +298,13 @@ function createCommonQuestionService(options = {}) {
 
   function assertNotQuarantined(record) {
     if (isQuarantined(record)) throw serviceError('question_quarantined');
+    if (reclamationMode && record) {
+      const reservation = journal.getReservation(record.internalQuestionId);
+      if (reservation && (reservation.bodyState === 'reclaimed' || reservation.quarantinedAt !== null)) {
+        throw serviceError('question_quarantined');
+      }
+      assertCurrentPeriod();
+    }
   }
 
   function getQuarantineDiagnostics() {
@@ -231,7 +318,8 @@ function createCommonQuestionService(options = {}) {
     try {
       const reservedBytes = journal.assertCapacityReserved(journalState);
       const remainingBytes = Math.max(0, journal.maxBytes - reservedBytes);
-      const remainingCount = Math.max(0, journal.maxRecords - journalState.questions.length);
+      const retainedCount = reclamationMode ? journal.getSnapshot().reservations.length : journalState.questions.length;
+      const remainingCount = Math.max(0, journal.maxRecords - retainedCount);
       const capacityReached = capacityRejected || remainingBytes === 0 || remainingCount === 0;
       return Object.freeze({ status: blocked ? 'blocked' : 'ready',
         reason: capacityReached ? 'question_quarantine_capacity' : blocked ? safeStartupReason : null,
@@ -391,11 +479,15 @@ function createCommonQuestionService(options = {}) {
     if (kernel.sha256Json(JSON.parse(payload)) !== record.deliveryIntent.payloadDigest) {
       throw serviceError('question_delivery_digest_mismatch');
     }
+    if (reclamationMode) return createReclamationDeliveryFromIntent(record, payload);
+    assertCurrentPeriod();
     const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
+    assertCurrentPeriod();
     if (current) {
       if (!deliveryMatchesRecord(current, record)) throw serviceError('question_delivery_mismatch');
       return current;
     }
+    assertCurrentPeriod();
     const delivery = await options.deliveryStore.createQuestionDelivery({
       launchRef: record.launchRef,
       deliveryAttemptId: record.deliveryIntent.deliveryAttemptId,
@@ -405,6 +497,91 @@ function createCommonQuestionService(options = {}) {
     });
     if (!deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
     return delivery;
+  }
+
+  async function createReclamationDeliveryFromIntent(record, payload) {
+    const id = record.deliveryIntent.deliveryAttemptId;
+    let reservation = journal.getReservation(record.internalQuestionId);
+    if (!reservation) throw serviceError('question_journal_missing_for_delivery');
+    if (reservation.deliveryCreationState === 'indeterminate') {
+      throw serviceError('question_delivery_indeterminate');
+    }
+    let ownCreation = false;
+    if (reservation.deliveryCreationState === 'not_created') {
+      assertCurrentPeriod();
+      creatingDeliveryQuestionIds.add(record.internalQuestionId);
+      ownCreation = true;
+      try {
+        record = await updateDeliveryCreationState(record, 'creating');
+        reservation = journal.getReservation(record.internalQuestionId);
+      } catch (error) {
+        creatingDeliveryQuestionIds.delete(record.internalQuestionId);
+        throw error;
+      }
+    } else if (reservation.deliveryCreationState === 'creating') {
+      if (!creatingDeliveryQuestionIds.has(record.internalQuestionId)) {
+        throw serviceError('question_delivery_indeterminate');
+      }
+      ownCreation = true;
+    }
+
+    try {
+      assertCurrentPeriod();
+      let current = await options.deliveryStore.get(id);
+      assertCurrentPeriod();
+      if (current && !deliveryMatchesRecord(current, record)) throw serviceError('question_delivery_mismatch');
+      if (reservation.deliveryCreationState === 'checkpointed') {
+        if (!current) throw serviceError('question_delivery_missing');
+        return current;
+      }
+      if (!current) {
+        assertCurrentPeriod();
+        await options.deliveryStore.createQuestionDelivery({
+          launchRef: record.launchRef,
+          deliveryAttemptId: id,
+          logicalMessageId: record.deliveryIntent.logicalMessageId,
+          revision: record.deliveryIntent.revision,
+          payload,
+        });
+        assertCurrentPeriod();
+        current = await options.deliveryStore.get(id);
+        assertCurrentPeriod();
+      }
+      if (!current || !deliveryMatchesRecord(current, record)) throw serviceError('question_delivery_mismatch');
+      try {
+        journalState = await journal.updateDeliveryState(record.internalQuestionId, 'checkpointed', current,
+          activePeriodToken);
+      } catch (error) {
+        blocked = true;
+        startupError = serviceError('question_delivery_creation_cache_failed');
+        throw error;
+      }
+      return current;
+    } catch (error) {
+      if (ownCreation) {
+        creatingDeliveryQuestionIds.delete(record.internalQuestionId);
+        try {
+          assertCurrentPeriod();
+          const observed = await options.deliveryStore.get(id);
+          assertCurrentPeriod();
+          if (observed) {
+            if (!deliveryMatchesRecord(observed, record)) throw serviceError('question_delivery_mismatch');
+            journalState = await journal.updateDeliveryState(record.internalQuestionId, 'checkpointed', observed,
+              activePeriodToken);
+            return observed;
+          }
+          journalState = await journal.updateDeliveryState(record.internalQuestionId, 'indeterminate', null,
+            activePeriodToken);
+        } catch (recoveryError) {
+          if (['question_quarantined', 'question_gate_closed'].includes(recoveryError?.code)) throw recoveryError;
+          blocked = true;
+          startupError = serviceError('question_delivery_creation_unknown');
+        }
+      }
+      throw error;
+    } finally {
+      if (ownCreation) creatingDeliveryQuestionIds.delete(record.internalQuestionId);
+    }
   }
 
   function deliveryMap(snapshot) {
@@ -446,13 +623,15 @@ function createCommonQuestionService(options = {}) {
   async function projectRecord(record, dashboard = false) {
     assertNotQuarantined(record);
     const delivery = record.deliveryIntent ? await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId) : null;
+    assertCurrentPeriod();
     if (delivery && !deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
     return projection(record, delivery, dashboard);
   }
 
   async function saveCandidate(candidate, internalQuestionId) {
     try {
-      const saved = await journal.save(candidate);
+      assertCurrentPeriod();
+      const saved = await journal.save(candidate, activePeriodToken);
       journalState = saved;
       return saved.questions.find((record) => record.internalQuestionId === internalQuestionId);
     } catch (error) {
@@ -470,6 +649,13 @@ function createCommonQuestionService(options = {}) {
 
   async function addRecord(record) {
     return saveCandidate(kernel.addQuestion(journalState, record, journal.maxRecords), record.internalQuestionId);
+  }
+
+  async function updateDeliveryCreationState(record, state, evidence = null) {
+    if (!reclamationMode) return record;
+    assertCurrentPeriod();
+    journalState = await journal.updateDeliveryState(record.internalQuestionId, state, evidence, activePeriodToken);
+    return currentQuestion(record.internalQuestionId);
   }
 
   async function reconcile() {
@@ -503,13 +689,60 @@ function createCommonQuestionService(options = {}) {
     return Object.freeze({ ready: true, revision: journalState.revision });
   }
 
+  async function reconcileReclamation() {
+    if (!journalState) throw serviceError('question_service_not_ready');
+    journalState = kernel.normalizeJournal(await journal.load(), journal.maxRecords);
+    await options.deliveryStore.ready;
+    const snapshot = journal.getSnapshot();
+    const byAttempt = new Map();
+    for (const reservation of snapshot.reservations) {
+      if (!reservation.deliveryIntent) continue;
+      const id = reservation.deliveryIntent.deliveryAttemptId;
+      if (byAttempt.has(id)) throw serviceError('question_delivery_mismatch');
+      byAttempt.set(id, reservation);
+    }
+    const deliveries = deliveryMap(await options.deliveryStore.snapshot());
+    for (const delivery of deliveries.values()) {
+      if (delivery.kind !== 'question' || delivery.recordType === 'reclaimed') continue;
+      const reservation = byAttempt.get(delivery.deliveryAttemptId);
+      if (!reservation) throw serviceError('question_journal_missing_for_delivery');
+      const record = currentQuestion(reservation.internalQuestionId);
+      if (!record || !deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
+      if (reservation.deliveryCreationState === 'not_created' ||
+          reservation.deliveryCreationState === 'indeterminate') {
+        throw serviceError('question_delivery_creation_state_mismatch');
+      }
+    }
+    for (const reservation of snapshot.reservations) {
+      if (!reservation.deliveryIntent) continue;
+      const delivery = deliveries.get(reservation.deliveryIntent.deliveryAttemptId);
+      if (reservation.bodyState === 'reclaimed') continue;
+      if (reservation.deliveryCreationState === 'creating') {
+        throw serviceError('question_delivery_creation_not_recovered');
+      }
+      if (reservation.deliveryCreationState === 'checkpointed' && !delivery) {
+        throw serviceError('question_delivery_missing');
+      }
+      if (reservation.deliveryCreationState === 'indeterminate' && delivery) {
+        throw serviceError('question_delivery_creation_state_mismatch');
+      }
+      if (reservation.deliveryCreationState === 'not_created' && delivery) {
+        throw serviceError('question_delivery_creation_state_mismatch');
+      }
+    }
+    journal.assertCapacityReserved();
+    rescheduleTimer();
+    return Object.freeze({ ready: true, revision: journalState.revision });
+  }
+
   function ready() {
     if (!initPromise) {
-      initPromise = reconcile().catch(async (error) => {
+      if (reclamationMode && !journalState) return Promise.reject(serviceError('question_service_not_ready'));
+      initPromise = (reclamationMode ? reconcileReclamation() : reconcile()).catch(async (error) => {
         blocked = true;
         startupError = error;
         rescheduleTimer();
-        await journal.close().catch(() => {});
+        if (!reclamationMode) await journal.close().catch(() => {});
         throw error;
       });
     }
@@ -542,7 +775,14 @@ function createCommonQuestionService(options = {}) {
     const delay = Math.min(2_147_483_647, Math.max(1_000, Math.min(...delays)));
     timer = setTimeoutImpl(() => {
       timer = null;
-      void enqueue(tickNow).catch(() => {});
+      let tokens;
+      try { tokens = captureQuestionTokens(); }
+      catch (error) {
+        blocked = true;
+        startupError = error;
+        return;
+      }
+      void enqueue(() => tickNow(tokens)).catch(() => {});
     }, delay);
     timer?.unref?.();
   }
@@ -586,15 +826,47 @@ function createCommonQuestionService(options = {}) {
     return saved;
   }
 
-  async function tickNow() {
+  function captureQuestionTokens() {
+    if (!reclamationMode) return null;
+    const tokens = new Map();
+    for (const record of journalState?.questions || []) {
+      try {
+        tokens.set(record.internalQuestionId,
+          reclamationOptions.periodGate.capture(record.identity, record.periodId));
+      } catch (error) {
+        if (!['question_quarantined', 'question_gate_closed'].includes(error?.code)) throw error;
+      }
+    }
+    return tokens;
+  }
+
+  async function tickNow(tokens = null) {
     const changed = [];
     try {
       const at = nowValue();
       for (const record of [...journalState.questions]) {
+        const previousToken = activePeriodToken;
+        if (reclamationMode) {
+          activePeriodToken = tokens?.get(record.internalQuestionId) || null;
+          if (activePeriodToken === null) {
+            activePeriodToken = previousToken;
+            continue;
+          }
+          try { reclamationOptions.periodGate.assertCurrent(activePeriodToken); }
+          catch (error) {
+            activePeriodToken = previousToken;
+            if (['question_quarantined', 'question_gate_closed'].includes(error?.code)) continue;
+            throw error;
+          }
+        }
+        try {
         if (isQuarantined(record)) continue;
         if (record.deadlineAt > at || !kernel.canApplyAwayDefault(record)) continue;
         const saved = await maybeTimeout(record, at);
         if (saved !== record) changed.push(await projectRecord(saved));
+        } finally {
+          activePeriodToken = previousToken;
+        }
       }
       return changed;
     } finally {
@@ -604,7 +876,9 @@ function createCommonQuestionService(options = {}) {
 
   function captureWriter(input) {
     const writer = kernel.exactObject(input, WRITER_FIELDS, 'question_writer_unverified');
-    return { ...writer, identity: kernel.normalizeIdentity(writer.identity) };
+    const identity = kernel.exactObject(writer.identity, IDENTITY_FIELDS, 'question_writer_unverified');
+    if (typeof identity.provider !== 'string') throw serviceError('question_writer_unverified');
+    return { ...writer, identity: kernel.normalizeIdentity(identity) };
   }
 
   function deliveryQuestionResult(record, delivery) {
@@ -613,6 +887,7 @@ function createCommonQuestionService(options = {}) {
 
   async function register(writerInput, input) {
     const writer = captureWriter(writerInput);
+    const { token } = captureWriterPeriodToken(writer);
     const registration = kernel.exactObject(input, REGISTER_FIELDS, 'invalid_question_registration');
     if (!kernel.isIdentifier(registration.questionId) || !Number.isSafeInteger(registration.timeoutMinutes) ||
         registration.timeoutMinutes < 1 || registration.timeoutMinutes > 30) throw serviceError('invalid_question_registration');
@@ -621,14 +896,30 @@ function createCommonQuestionService(options = {}) {
     return enqueue(async () => {
       const live = findLiveWriter(writer);
       const existing = findQuestion(live.identity, live.periodId, registration.questionId);
+      const reservation = reclamationMode
+        ? journal.findReservation(live.identity, live.periodId, registration.questionId)
+        : null;
+      if (reservation && (reservation.bodyState === 'reclaimed' || reservation.quarantinedAt !== null)) {
+        throw serviceError('question_quarantined');
+      }
+      if (reservation && !existing) throw serviceError('question_conflict');
       const digest = kernel.sha256Json({ category: 'ordinary', questions });
       if (existing) {
         assertNotQuarantined(existing);
         if (existing.contentDigest !== digest) throw serviceError('question_conflict');
         return { outcome: 'existing', question: await projectRecord(existing) };
       }
+      let internalQuestionId = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const candidateId = `cq-${crypto.randomUUID()}`;
+        if (!reclamationMode || !journal.getReservation(candidateId)) {
+          internalQuestionId = candidateId;
+          break;
+        }
+      }
+      if (internalQuestionId === null) throw serviceError('question_internal_id_unavailable');
       const record = kernel.createQuestionRecord({
-        internalQuestionId: `cq-${crypto.randomUUID()}`,
+        internalQuestionId,
         questionId: registration.questionId,
         identity: live.identity,
         periodId: live.periodId,
@@ -658,25 +949,29 @@ function createCommonQuestionService(options = {}) {
         throw serviceError('question_writer_unverified');
       }
       return { outcome: 'created', question: await projectRecord(saved) };
-    });
+    }, false, token);
   }
 
   async function status(writerInput, publicQuestionId) {
     const writer = captureWriter(writerInput);
+    const { token } = captureWriterPeriodToken(writer);
     if (!kernel.isIdentifier(publicQuestionId)) throw serviceError('invalid_question_id');
     return enqueue(async () => {
       const live = findLiveWriter(writer);
+      assertPublicQuestionReservation(live.identity, live.periodId, publicQuestionId);
       const record = findQuestion(live.identity, live.periodId, publicQuestionId);
       assertNotQuarantined(record);
       return record ? projectRecord(record) : null;
-    });
+    }, false, token);
   }
 
   async function answerPoll(writerInput, publicQuestionId, trustedSink) {
     const writer = captureWriter(writerInput);
+    const { token } = captureWriterPeriodToken(writer);
     if (!kernel.isIdentifier(publicQuestionId) || typeof trustedSink !== 'function') throw serviceError('invalid_answer_poll');
     return enqueue(async () => {
       const live = findLiveWriter(writer);
+      assertPublicQuestionReservation(live.identity, live.periodId, publicQuestionId);
       const record = findQuestion(live.identity, live.periodId, publicQuestionId);
       if (!record) return { outcome: 'not_found', questionId: publicQuestionId,
         deliveryAttemptId: null, state: null };
@@ -689,13 +984,17 @@ function createCommonQuestionService(options = {}) {
         throw serviceError('question_writer_binding_mismatch');
       }
       const id = record.deliveryIntent.deliveryAttemptId;
+      assertCurrentPeriod();
       let delivery = await options.deliveryStore.get(id);
+      assertCurrentPeriod();
       if (!delivery) delivery = await createDeliveryFromIntent(record);
       if (!deliveryMatchesRecord(delivery, record)) throw serviceError('question_delivery_mismatch');
       if (!['available', 'claimed'].includes(delivery.state)) {
         return { outcome: 'already_started', ...deliveryQuestionResult(record, delivery) };
       }
+      assertCurrentPeriod();
       await options.deliveryStore.rehydratePayload(id, deliveryPayload(record));
+      assertCurrentPeriod();
       let sinkSuppressed = false;
       delivery = await options.deliveryStore.sendStart(id, (payload, metadata) => {
         if (suppressed.has(record.internalQuestionId)) {
@@ -717,6 +1016,7 @@ function createCommonQuestionService(options = {}) {
           throw serviceError('question_delivery_digest_mismatch');
         }
         const answers = kernel.normalizeAnswers(envelope.answers, record.questions);
+        assertCurrentPeriod();
         const result = trustedSink(structuredClone(answers), Object.freeze({
           questionId: record.questionId,
           revision: record.deliveryIntent.revision,
@@ -724,14 +1024,20 @@ function createCommonQuestionService(options = {}) {
         }));
         if (isThenable(result)) throw serviceError('question_sink_must_be_synchronous');
       });
-      if (sinkSuppressed) delivery = await options.deliveryStore.markUnknown(id);
+      assertCurrentPeriod();
+      if (sinkSuppressed) {
+        assertCurrentPeriod();
+        delivery = await options.deliveryStore.markUnknown(id);
+        assertCurrentPeriod();
+      }
       return { outcome: sinkSuppressed ? 'suppressed' : delivery.state === 'unknown' ? 'unknown' : 'sent',
         ...deliveryQuestionResult(record, delivery) };
-    });
+    }, false, token);
   }
 
   async function submitAnswer(internalQuestionId, input) {
     if (!kernel.isIdentifier(internalQuestionId)) throw serviceError('invalid_internal_question_id');
+    const token = captureInternalPeriodToken(internalQuestionId);
     const submission = kernel.exactObject(input, ['answers'], 'invalid_answer');
     let answers;
     try { answers = captureJson(submission.answers); }
@@ -744,11 +1050,12 @@ function createCommonQuestionService(options = {}) {
       const result = await applyAnswers(record, answers, 'manual', nowValue());
       rescheduleTimer();
       return { outcome: result.outcome, question: await projectRecord(result.record) };
-    });
+    }, false, token);
   }
 
   async function hold(internalQuestionId, held) {
     if (!kernel.isIdentifier(internalQuestionId) || typeof held !== 'boolean') throw serviceError('invalid_question_hold');
+    const token = captureInternalPeriodToken(internalQuestionId);
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
       if (!record) throw serviceError('question_not_found');
@@ -757,18 +1064,21 @@ function createCommonQuestionService(options = {}) {
       const saved = await commitRecord({ ...record, held });
       rescheduleTimer();
       return { outcome: held ? 'held' : 'released', question: await projectRecord(saved) };
-    });
+    }, false, token);
   }
 
   async function cancel(internalQuestionId) {
     if (!kernel.isIdentifier(internalQuestionId)) throw serviceError('invalid_internal_question_id');
+    const token = captureInternalPeriodToken(internalQuestionId);
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
       if (!record) throw serviceError('question_not_found');
       assertNotQuarantined(record);
       if (record.cancelledAt !== null) return { outcome: 'cancelled', question: await projectRecord(record) };
       if (record.deliveryIntent) {
+        assertCurrentPeriod();
         const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
+        assertCurrentPeriod();
         const alreadyStoppedForExternalResolution = record.externalResolution !== null &&
           current?.state === 'cancelled_before_send';
         if (current && ['applied', 'cancelled_before_send', 'superseded_before_send'].includes(current.state) &&
@@ -777,7 +1087,9 @@ function createCommonQuestionService(options = {}) {
             question: projection(record, current) };
         }
         if (current && !alreadyStoppedForExternalResolution) {
+          assertCurrentPeriod();
           const updated = await options.deliveryStore.cancel(record.deliveryIntent.deliveryAttemptId);
+          assertCurrentPeriod();
           if (['sending', 'accepted', 'applied', 'unknown'].includes(updated.state)) {
             return { outcome: updated.state === 'cancelled_before_send' ? 'cancelled' : 'too_late',
               question: projection(record, updated) };
@@ -797,13 +1109,16 @@ function createCommonQuestionService(options = {}) {
       }
       rescheduleTimer();
       return { outcome: 'cancelled', question: await projectRecord(saved) };
-    });
+    }, false, token);
   }
 
   async function resolveExternal(internalQuestionId, trustedEvidence) {
     if (!accepting) return Promise.reject(serviceError('question_service_closed'));
     if (!kernel.isIdentifier(internalQuestionId)) throw serviceError('invalid_internal_question_id');
     if (!journalState) return Promise.reject(serviceError('question_service_not_ready'));
+    let token;
+    try { token = captureInternalPeriodToken(internalQuestionId); }
+    catch (error) { return Promise.reject(error); }
     const record = currentQuestion(internalQuestionId);
     if (!record) return Promise.reject(serviceError('question_not_found'));
     try { assertNotQuarantined(record); }
@@ -822,6 +1137,8 @@ function createCommonQuestionService(options = {}) {
       }));
     } catch { return Promise.reject(serviceError('native_question_unverified')); }
     if (isThenable(verified) || verified !== true) return Promise.reject(serviceError('native_question_unverified'));
+    try { if (token !== null) reclamationOptions.periodGate.assertCurrent(token); }
+    catch (error) { return Promise.reject(error); }
     suppressed.add(internalQuestionId);
     return enqueue(async () => {
       const current = currentQuestion(internalQuestionId);
@@ -829,11 +1146,17 @@ function createCommonQuestionService(options = {}) {
       assertNotQuarantined(current);
       if (current.externalResolution) return { outcome: 'existing', question: await projectRecord(current) };
       if (current.deliveryIntent) {
+        assertCurrentPeriod();
         let delivery = await options.deliveryStore.get(current.deliveryIntent.deliveryAttemptId);
+        assertCurrentPeriod();
         if (delivery && ['available', 'claimed', 'sending', 'accepted'].includes(delivery.state)) {
+          assertCurrentPeriod();
           delivery = await options.deliveryStore.cancel(current.deliveryIntent.deliveryAttemptId);
+          assertCurrentPeriod();
           if (['sending', 'accepted'].includes(delivery.state)) {
+            assertCurrentPeriod();
             delivery = await options.deliveryStore.markUnknown(current.deliveryIntent.deliveryAttemptId);
+            assertCurrentPeriod();
           }
         }
       }
@@ -842,23 +1165,29 @@ function createCommonQuestionService(options = {}) {
       } });
       rescheduleTimer();
       return { outcome: 'resolved', question: await projectRecord(saved) };
-    });
+    }, false, token);
   }
 
   async function reportResponseLost(internalQuestionId) {
     if (!kernel.isIdentifier(internalQuestionId)) throw serviceError('invalid_internal_question_id');
+    const token = captureInternalPeriodToken(internalQuestionId);
     return enqueue(async () => {
       const record = currentQuestion(internalQuestionId);
       assertNotQuarantined(record);
       if (!record?.deliveryIntent) throw serviceError('question_not_found');
+      assertCurrentPeriod();
       const current = await options.deliveryStore.get(record.deliveryIntent.deliveryAttemptId);
+      assertCurrentPeriod();
       if (!current || !deliveryMatchesRecord(current, record)) throw serviceError('question_delivery_mismatch');
-      const delivery = ['sending', 'accepted'].includes(current.state)
-        ? await options.deliveryStore.markUnknown(current.deliveryAttemptId)
-        : current;
+      let delivery = current;
+      if (['sending', 'accepted'].includes(current.state)) {
+        assertCurrentPeriod();
+        delivery = await options.deliveryStore.markUnknown(current.deliveryAttemptId);
+      }
+      assertCurrentPeriod();
       return { outcome: delivery.state === 'unknown' ? 'unknown' : 'unchanged',
         question: projection(record, delivery) };
-    });
+    }, false, token);
   }
 
   async function dashboardSnapshot() {
@@ -894,6 +1223,7 @@ function createCommonQuestionService(options = {}) {
         typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) {
       throw serviceError('invalid_late_answer_ref');
     }
+    const token = captureInternalPeriodToken(internalQuestionId);
     return enqueue(() => {
       const record = currentQuestion(internalQuestionId);
       const late = record?.lateAnswers[index];
@@ -913,28 +1243,105 @@ function createCommonQuestionService(options = {}) {
         revision: record.revision,
         text,
       };
-    }, true);
+    }, true, token);
   }
 
   function tick() {
-    return enqueue(tickNow);
+    const tokens = captureQuestionTokens();
+    return enqueue(() => tickNow(tokens), false);
   }
 
   function notifyAwayChanged() {
-    return enqueue(tickNow);
+    const tokens = captureQuestionTokens();
+    return enqueue(() => tickNow(tokens), false);
   }
 
   function flush() {
     if (!accepting) return Promise.reject(serviceError('question_service_closed'));
+    if (reclamationMode && writerStopped) return Promise.reject(serviceError('question_gate_closed'));
     return tail.then(() => ready()).then(() => Promise.all([
       journal.flush(),
       typeof options.deliveryStore.flush === 'function' ? options.deliveryStore.flush() : Promise.resolve(),
     ])).then(() => undefined);
   }
 
+  function stopReclamationWriter() {
+    if (!reclamationMode) return;
+    writerStopped = true;
+    journal.stop();
+    if (timer !== null) {
+      clearTimeoutImpl(timer);
+      timer = null;
+    }
+  }
+
+  function drainReclamationWriter() {
+    if (!reclamationMode) return Promise.reject(serviceError('question_reclamation_unavailable'));
+    return tail;
+  }
+
+  function prepareReclamationWriter(fullSnapshot) {
+    if (!reclamationMode || !accepting || !writerStopped || pendingOperations !== 0) {
+      throw serviceError('invalid_question_resume_state');
+    }
+    const prepared = journal.prepareResume(fullSnapshot);
+    journalState = journal.getLegacySnapshot();
+    quarantinedQuestionIds.clear();
+    for (const detail of journal.getSnapshot().questions) {
+      if (detail.quarantinedAt !== null) quarantinedQuestionIds.add(detail.internalQuestionId);
+    }
+    for (const reservation of journal.getSnapshot().reservations) {
+      if (reservation.bodyState === 'reclaimed') quarantinedQuestionIds.add(reservation.internalQuestionId);
+    }
+    blocked = false;
+    startupError = null;
+    initPromise = null;
+    writerStopped = false;
+    return prepared;
+  }
+
+  async function withRetirementSnapshot(ticket, callback) {
+    if (!reclamationMode || typeof callback !== 'function') throw serviceError('question_reclamation_unavailable');
+    if (retirementStorage.getStore() === retirementScope) throw serviceError('question_retirement_queue_reentry');
+    if (!accepting || writerStopped) throw serviceError('question_gate_closed');
+    pendingOperations += 1;
+    const queued = tail.then(async () => {
+      if (!journalState) throw serviceError('question_service_not_ready');
+      reclamationOptions.periodGate.assertRetirement(ticket);
+      let accessOpen = true;
+      const assertAccess = () => {
+        if (!accessOpen || retirementStorage.getStore() !== retirementScope) {
+          throw serviceError('question_retirement_access_expired');
+        }
+        reclamationOptions.periodGate.assertRetirement(ticket);
+      };
+      const access = Object.freeze({
+        snapshot() {
+          assertAccess();
+          return journal.getSnapshot();
+        },
+        async persist(candidate) {
+          assertAccess();
+          const saved = await journal.persistRetirement(candidate, ticket);
+          journalState = journal.getLegacySnapshot();
+          return saved;
+        },
+      });
+      try {
+        return await retirementStorage.run(retirementScope, () => callback(access));
+      } finally {
+        accessOpen = false;
+      }
+    });
+    const result = queued.finally(() => { pendingOperations -= 1; });
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
   function close() {
     if (closePromise) return closePromise;
     accepting = false;
+    if (reclamationMode) stopReclamationWriter();
     if (timer !== null) {
       clearTimeoutImpl(timer);
       timer = null;
@@ -948,9 +1355,18 @@ function createCommonQuestionService(options = {}) {
     return closePromise;
   }
 
-  return Object.freeze({ ready, register, status, answerPoll, submitAnswer, hold, cancel, tick, notifyAwayChanged,
+  const api = { ready, register, status, answerPoll, submitAnswer, hold, cancel, tick, notifyAwayChanged,
     resolveExternal, reportResponseLost, dashboardSnapshot, readLateAnswerDraft,
-    getQuarantineDiagnostics, flush, close });
+    getQuarantineDiagnostics, flush, close };
+  if (reclamationMode) {
+    api.reclamationWriter = Object.freeze({
+      stop: stopReclamationWriter,
+      drain: drainReclamationWriter,
+      prepareResume: prepareReclamationWriter,
+    });
+    api.withRetirementSnapshot = withRetirementSnapshot;
+  }
+  return Object.freeze(api);
 }
 
 module.exports = { DEFAULT_AUTO_APPLY_MINIMUM_WAIT_MS, createCommonQuestionService };

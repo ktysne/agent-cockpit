@@ -378,6 +378,92 @@ function validateQuestionDelivery(reservation, delivery, code) {
   return projection;
 }
 
+function validateQuestionPeriodRetirementInputs(value) {
+  const code = 'invalid_question_retirement_snapshot';
+  const input = captureRecord(value,
+    ['anchor', 'questionJournal', 'checkpoint', 'identity', 'periodId'], code);
+  const anchor = normalizeQuestionReclamationAnchorV1Local(input.anchor);
+  const questionJournal = normalizeQuestionJournalV2Local(input.questionJournal);
+  const checkpoint = normalizeCheckpointV3Local(input.checkpoint);
+  const identity = captureRecord(input.identity, IDENTITY_FIELDS, code);
+  const periodId = input.periodId;
+  questionCommonKeyDigest(identity, periodId, 'retirement-validation');
+  requireValue(anchor.migration === null && anchor.storeId === questionJournal.storeId &&
+    anchor.storeId === checkpoint.storeId, code);
+  const targetKey = identityPeriodKey(identity, periodId);
+  requireValue(!anchor.retiredQuestionPeriods.some((period) =>
+    identityPeriodKey(period.identity, period.periodId) === targetKey), code);
+
+  const detailById = new Map(questionJournal.questions.map((detail) => [detail.internalQuestionId, detail]));
+  const deliveryByAttempt = indexCheckpointDeliveries(checkpoint, code);
+  const targetRows = [];
+  const targetAttemptIds = new Set();
+  for (const reservation of questionJournal.reservations) {
+    if (identityPeriodKey(reservation.identity, reservation.periodId) !== targetKey) continue;
+    const detail = detailById.get(reservation.internalQuestionId);
+    requireValue(detail !== undefined && reservation.quarantinedAt === null && detail.quarantinedAt === null &&
+      reservation.bodyState === 'retained' && reservation.reclaimedAt === null && reservation.reclamation === null,
+    code);
+
+    const intent = reservation.deliveryIntent;
+    const delivery = intent === null ? null : deliveryByAttempt.get(intent.deliveryAttemptId) || null;
+    let normalizedReservation = reservation;
+    if (intent !== null) {
+      if (delivery === null) {
+        requireValue(reservation.deliveryCreationState !== 'checkpointed', code);
+        if (reservation.deliveryCreationState === 'creating') {
+          normalizedReservation = cloneRecordWith(reservation, QUESTION_RESERVATION_FIELDS, new Map([
+            ['deliveryCreationState', 'indeterminate'], ['checkpointState', 'unknown'],
+            ['sourceClaimsDigest', null], ['sessionId', null], ['terminalResultKind', null],
+          ]));
+        } else {
+          requireValue(reservation.deliveryCreationState === 'not_created' ||
+            reservation.deliveryCreationState === 'indeterminate', code);
+        }
+      } else {
+        requireValue(delivery.recordType === 'detail' && delivery.kind === 'question' &&
+          (reservation.deliveryCreationState === 'creating' || reservation.deliveryCreationState === 'checkpointed'),
+        code);
+        targetAttemptIds.add(intent.deliveryAttemptId);
+        if (reservation.deliveryCreationState === 'creating') {
+          const projection = questionDeliveryProjection(delivery);
+          normalizedReservation = cloneRecordWith(reservation, QUESTION_RESERVATION_FIELDS, new Map([
+            ['deliveryCreationState', 'checkpointed'], ['checkpointState', delivery.state],
+            ['sourceClaimsDigest', projection.sourceClaimsDigest], ['sessionId', projection.sourceSessionId],
+            ['terminalResultKind', correlationTerminalResult(delivery.state)],
+          ]));
+        } else {
+          requireValue(reservation.sourceClaimsDigest === questionDeliveryProjection(delivery).sourceClaimsDigest &&
+            reservation.sessionId === delivery.source.sessionId &&
+            (reservation.checkpointState === delivery.state ||
+              canReachDeliveryState(reservation.checkpointState, delivery.state)), code);
+        }
+        validateQuestionDelivery(normalizedReservation, delivery, code);
+      }
+    }
+    targetRows.push(makeRecord([
+      ['reservation', reservation], ['detail', detail], ['normalizedReservation', normalizedReservation],
+      ['delivery', delivery],
+    ]));
+  }
+
+  for (const delivery of checkpoint.ledger.deliveries) {
+    if (delivery.kind !== 'question') continue;
+    const source = delivery.recordType === 'detail' ? delivery.source : delivery.sourceRef;
+    const target = delivery.recordType === 'detail' ? delivery.target : delivery.targetRef;
+    const sourceMatches = identityPeriodKey(source.identity, source.executionBinding.periodId) === targetKey;
+    const targetMatches = target.kind === 'execution' &&
+      identityPeriodKey(target.identity, target.periodId) === targetKey;
+    if (!sourceMatches && !targetMatches) continue;
+    requireValue(sourceMatches && targetMatches && targetAttemptIds.has(delivery.deliveryAttemptId), code);
+  }
+
+  return makeRecord([
+    ['anchor', anchor], ['questionJournal', questionJournal], ['checkpoint', checkpoint],
+    ['identity', identity], ['periodId', periodId], ['targetRows', targetRows],
+  ]);
+}
+
 function validateQuestionGrave(reservation, delivery, code) {
   const preparation = reservation.reclamation;
   requireValue(preparation !== null && preparation.deliveryPresence === 'checkpoint' &&
@@ -905,6 +991,57 @@ function validateReclamationSnapshot(value) {
     ['status', reasons.length === 0 ? 'ready' : 'reconciliation-required'],
     ['snapshot', snapshot],
     ['reasons', reasons],
+  ]);
+}
+
+function validateQuestionPeriodRetirementAnchorTransition(value) {
+  const code = 'invalid_question_retirement_anchor_transition';
+  const input = captureRecord(value,
+    ['previous', 'next', 'identity', 'periodId', 'retiredAt', 'reason'], code);
+  const previous = normalizeQuestionReclamationAnchorV1Local(input.previous);
+  const next = normalizeQuestionReclamationAnchorV1Local(input.next);
+  const identity = captureRecord(input.identity, IDENTITY_FIELDS, code);
+  assertSafeUnsignedInteger(input.retiredAt, code);
+  requireValue(input.reason === 'confirmed-retirement' && previous.migration === null &&
+    next.migration === null && previous.storeId === next.storeId &&
+    previous.revision < MAX_SAFE_INTEGER && next.revision === previous.revision + 1 &&
+    next.retiredQuestionPeriods.length === previous.retiredQuestionPeriods.length + 1, code);
+  compareAnchorTransition(previous, next, code);
+  for (let index = 0; index < previous.retiredQuestionPeriods.length; index += 1) {
+    requireValue(sameCanonicalJson(previous.retiredQuestionPeriods[index],
+      next.retiredQuestionPeriods[index]), code);
+  }
+  const appended = next.retiredQuestionPeriods[next.retiredQuestionPeriods.length - 1];
+  requireValue(sameIdentity(appended.identity, identity) && appended.periodId === input.periodId &&
+    appended.retiredAt === input.retiredAt && appended.reason === input.reason, code);
+  return next;
+}
+
+function validateReclamationStoreWrite(value) {
+  const code = 'invalid_reclamation_store_write';
+  const input = captureRecord(value, [
+    'anchor', 'previousStores', 'nextStores', 'normalByteLimitsBySlot',
+  ], code);
+  const anchor = normalizeQuestionReclamationAnchorV1Local(input.anchor);
+  requireValue(anchor.migration === null, code);
+  const previousStores = normalizeStores(anchor, input.previousStores, code);
+  const nextStores = normalizeStores(anchor, input.nextStores, code);
+  const limits = captureRecord(input.normalByteLimitsBySlot, STORE_FIELDS, code);
+  validateNormalByteLimits(limits, previousStores, nextStores, code);
+  const previousChanges = normalizeQuestionAndInstructionCreations(anchor, previousStores, code);
+  const nextChanges = normalizeQuestionAndInstructionCreations(anchor, nextStores, code);
+  validateGrantBindings(anchor, previousStores, code);
+  validateGrantBindings(anchor, nextStores, code);
+  compareGrantTransition(previousStores, nextStores, anchor, anchor, limits, code);
+  validateStoreTransition(
+    makeRecord([['anchor', anchor], ['stores', previousStores]]),
+    makeRecord([['anchor', anchor], ['stores', nextStores]]),
+    code,
+  );
+  return makeRecord([
+    ['status', 'checked'],
+    ['snapshot', makeRecord([['anchor', anchor], ['stores', nextStores]])],
+    ['reasons', makeArray([...new Set([...previousChanges.reasons, ...nextChanges.reasons])])],
   ]);
 }
 
@@ -1604,6 +1741,9 @@ function validateStoreTransition(previous, next, code) {
 
 module.exports = {
   inspectReclamationMigrationSnapshot,
+  validateQuestionPeriodRetirementInputs,
+  validateQuestionPeriodRetirementAnchorTransition,
   validateReclamationSnapshot,
+  validateReclamationStoreWrite,
   validateReclamationTransition,
 };
