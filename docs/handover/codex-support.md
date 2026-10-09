@@ -91,10 +91,27 @@ Windowsの実symlink試験1件は作成権限によりskipで、注入fixtureに
 両providerの実factoryとファイル保存の関連5件は成功し、両kindの3確定終端、期限境界、非終端の延期、12保存故障境界とfresh起動、相関補完と再送拒否を確認した。
 PR通知のappliedはtrusted provider adapterの遷移で作り、resultのappliedと一部の非終端は正規の保存済みcheckpointをcold起動で読み込む。
 resultの実送信、異なるownerへのfactory返却、実runtimeの7日後通知の成功証跡には数えない。
-最終試験差分`ac1b2d4`と同じ試験内容でnative5件が成功した。製品コードは全体検証headから変わっていない。`ac1b2d4`からの最終更新はレビュー結果の文書記録だけである。`logical_conflict`の試験について、resultの再作成はliveの取消済み墓標で`logical_conflict`と保存なしを確認する。このcodeはlogical tombstoneの拒否と共通で、拒否した層は区別しない。cold appliedでは先行するprovider照合の拒否と保存なしを確認し、墓標による拒否へ読み替えない。
+最終試験差分`ac1b2d4`と同じ試験内容でnative5件が成功した。PR #327の製品コードは同PRの全体検証headから変わっていない。`ac1b2d4`から同PRの最終更新はレビュー結果の文書記録だけである。`logical_conflict`の試験について、resultの再作成はliveの取消済み墓標で`logical_conflict`と保存なしを確認する。このcodeはlogical tombstoneの拒否と共通で、拒否した層は区別しない。cold appliedでは先行するprovider照合の拒否と保存なしを確認し、墓標による拒否へ読み替えない。
 非公開callback accessの再入と寿命はstore単体の試験で確認し、factory facadeへ試験用の保存口を公開しない。
 別ownerと非null grantの保全は、純粋な回収計画・参照投影・容量予約の関連25件で確認した。追加のowner世代試験を含む回収計画5件も成功し、accepted handoffで現在ownerが世代6へ進んだ後も、保存済みresultのownerと世代5を保持する。
 store/runtime関連39件と最終追加store/context7件は成功した。head `f589250`の全体`npm test`は2,389件成功、1件skip、失敗0件である。skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。
+
+### migration grant解放の確認範囲
+
+期待条件は[配信回収schema](../design/delivery-reclamation-schema.md#migration-grantの明示解放)のGAR01〜GAR06に置く。
+PR #327の最終head `bacfa41`から`codex/reclamation-grant-release-209-20261010`をスタックし、featureへのmerge `ea908c2`を内容一致の確認後にfast-forwardで取り込んだ。
+pure plannerの関連6件で、実source由来の全3slotのgrant、現在byteが収まっていても将来予約が超える場合の保持、上限ちょうどでの解放、manifestと未設定slotの拒否を確認した。
+対象以外の合法なcreating状態はrawのまま保持し、正規化による修復を保存しない。
+
+中核の関連writer54件とcontext・service・conformance57件は成功した。
+leaseの3件で、保存後の縮小、旧予約を保持した縮小拒否、予約状態不明による全停止を確認した。
+最終guardと質問関連18件も成功し、callback寿命、再入と実I/O直前のservice guardを確認した。
+これらの件数は重複を含むため合算しない。
+Astraの読み取り監査では必須指摘がない。実factory/fileの関連31件も成功し、全3slot・両providerの18保存故障境界、close中のwrite drain、同じleaseのreadback後縮小と各writer scopeのwarm状態、保存なしのfresh起動を確認した。
+高levelの新規受付操作と実native送信は未確認で、実factoryの既存回収入口・scopeとfake process/fileの検証に限定する。全体検証とClaudeクロスレビューを採用前の条件として残す。
+
+この変更は件数枠の解放、自動実行、質問journalの局所停止、標準起動と設定画面への接続を含まない。
+fixtureの予約状態不明を実OSの容量喪失や実runtimeの故障へ読み替えない。
 
 ## 全体の流れ
 
@@ -177,7 +194,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)（base: feature） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327で実装し、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。続いて明示grant解放、質問journal局所停止、自動実行、段階4を進める |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)（base: feature） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。続いて明示grant解放、質問journal局所停止、自動実行、段階4を進める |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |

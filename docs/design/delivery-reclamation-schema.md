@@ -329,6 +329,31 @@ PR通知はtarget provider、resultはsource providerの照合を維持し、補
 
 provider別の実施状況と未確認事項は[全体計画](../handover/codex-support.md)で追跡し、fixtureを実runtimeの7日後通知の証跡へ読み替えない。
 
+## migration grantの明示解放
+
+`reclamation.releaseMigrationAllowance({ slot })`は、設定済みの`questions`、`checkpoint`、`instructions`のうち一つを指定する。
+対象writerのqueue内で最新の全保存状態を照合し、移行が完了している場合だけ解放を判定する。
+現在のfile byteではなく、固定相関の補完を含む全将来予約が通常上限`B`に収まることを条件にする。
+
+結果は`{ status, slot }`とし、解放成功を`released`、将来予約が収まらない場合を`retained`、既にgrantがない場合を`already_clear`とする。
+`already_clear`でも全保存状態を検査し、保存は行わない。
+解放時はgrant全体をnullにしてwrapper revisionだけを進め、checkpoint ledgerのrevisionと内容、全記録とそのID、拒否情報と件数枠を保持する。
+対象ID集合を縮めたgrantへの差し替え、部分更新、再発行は行わない。
+
+atomic保存とreadbackが一致するまで旧leaseを保持する。
+成功後は保存済み状態からanchorと未解放slotのgrantを含む予約を計算し、同じleaseを縮小して各writerとserviceのcacheを更新する。
+縮小が失敗しても旧予約の保持を確認できる場合は、grantを復活させず過大な予約を保持する。
+保存結果または必要予約の保持が不明な場合は全writerを停止し、fresh起動の完全照合を必要とする。
+
+| ID | 期待条件 |
+|---|---|
+| GAR01 | 全将来予約が通常上限以下の場合だけgrant全体を解放し、現在byteだけで許可しない |
+| GAR02 | 全3slotで対象grantとwrapper revision以外の保存内容と件数枠を保持する |
+| GAR03 | 保存とreadbackまで旧leaseを保持し、成功後だけ同じleaseを縮小する。他slotのgrantとanchorの予約を残す |
+| GAR04 | 各writerとserviceへ保存済み状態を反映し、後続保存でgrantを復活させない |
+| GAR05 | scope寿命、queue再入、closeと実I/O直前のguardを検査する |
+| GAR06 | 保存結果不明では旧予約を維持して停止し、fresh起動で照合する。縮小失敗は予約保持の確実性で区別する |
+
 ## PR通知のaliasと履歴
 
 現行PR通知の論理keyはkind、logical ID、revision、target launch tupleで決まり、source execution IDはkeyに入らない。

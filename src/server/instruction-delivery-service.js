@@ -206,6 +206,8 @@ function createInstructionDeliveryService(options = {}) {
   let initPromise = null;
   const bodyScope = new AsyncLocalStorage();
   const bodyScopeToken = {};
+  const grantScope = new AsyncLocalStorage();
+  const grantScopeToken = {};
   let tail = Promise.resolve();
   let closePromise = null;
   const adapterUnsubscribers = [];
@@ -618,6 +620,7 @@ function createInstructionDeliveryService(options = {}) {
   }) : null;
 
   function enqueue(operation, diagnostic = false) {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(serviceError('migration_allowance_access_reentry'));
     if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(serviceError(
       'instruction_body_access_reentry'));
     const canWrite = !reclamationMode || backendCanWrite();
@@ -642,6 +645,28 @@ function createInstructionDeliveryService(options = {}) {
     });
     tail = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  function withMigrationAllowance(callback) {
+    if (!reclamationMode || typeof callback !== 'function') throw serviceError('invalid_migration_allowance_release');
+    return enqueue(() => journal.withMigrationAllowance(async (journalAccess) => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || grantScope.getStore() !== grantScopeToken) throw serviceError('migration_allowance_access_expired');
+        if (!accepting || closePromise || !backendCanWrite()) throw serviceError('instruction_service_closed');
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return journalAccess.snapshot(); },
+        async persist(candidate) {
+          assertAccess();
+          const saved = await journalAccess.persist(candidate, assertAccess);
+          journalState = saved;
+          return structuredClone(saved);
+        },
+      });
+      try { return await grantScope.run(grantScopeToken, () => callback(access)); }
+      finally { active = false; }
+    }));
   }
 
   function withInstructionBody(value, callback) {
@@ -874,6 +899,7 @@ function createInstructionDeliveryService(options = {}) {
   }
 
   function flush() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(serviceError('migration_allowance_access_reentry'));
     if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(serviceError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(serviceError('instruction_service_closed'));
     if (reclamationMode && !reclamationPrepared) return Promise.reject(serviceError('reclamation_writer_cold'));
@@ -881,6 +907,7 @@ function createInstructionDeliveryService(options = {}) {
   }
 
   function close() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(serviceError('migration_allowance_access_reentry'));
     if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(serviceError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
@@ -930,7 +957,7 @@ function createInstructionDeliveryService(options = {}) {
     reportResponseLost,
     flush,
     close,
-    ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter, withInstructionBody } : {}),
+    ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter, withInstructionBody, withMigrationAllowance } : {}),
   });
 }
 

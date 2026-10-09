@@ -20,6 +20,24 @@ const OPERATION_ID = '33333333-3333-4333-8333-333333333333';
 const identity = Object.freeze({ provider: 'claude', nativeIdKind: 'session', hostId: 'host-1',
   homeScopeId: 'home-1', nativeId: 'native-1' });
 
+test('grant question scope rejects recursive service queues and expires after callback return', async (t) => {
+  const fixture = makeFixture();
+  t.after(() => fixture.service.close());
+  await install(fixture);
+  let retained;
+  await fixture.service.withMigrationAllowance(async (access) => {
+    retained = access;
+    assert.equal(access.snapshot().storeId, STORE_ID);
+    for (const operation of [() => fixture.service.tick(), () => fixture.service.flush(), () => fixture.service.close(),
+      () => fixture.service.withMigrationAllowance(() => {})]) {
+      await assert.rejects(operation(), (error) => error.code === 'migration_allowance_access_reentry');
+    }
+  });
+  assert.throws(() => retained.snapshot(), (error) => error.code === 'migration_allowance_access_expired');
+  await assert.rejects(retained.persist({}), (error) => error.code === 'migration_allowance_access_expired');
+  await fixture.service.flush();
+});
+
 function clone(value) {
   return structuredClone(value);
 }

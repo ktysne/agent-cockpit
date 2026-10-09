@@ -1,5 +1,7 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { types: utilTypes } = require('node:util');
 const { createHash } = require('node:crypto');
 const kernel = require('./common-question-kernel');
 const {
@@ -173,6 +175,9 @@ function createCommonQuestionReclamationJournal(value) {
   let legacy = null;
   let closed = false;
   let stopped = false;
+  let tail = Promise.resolve();
+  const grantScope = new AsyncLocalStorage();
+  const grantScopeToken = {};
 
   function install(value) {
     snapshot = normalizeQuestionJournalV2Local(value, maxRecords);
@@ -495,6 +500,62 @@ function createCommonQuestionReclamationJournal(value) {
     return structuredClone(snapshot);
   }
 
+  function enqueue(operation) {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(adapterError('migration_allowance_access_reentry'));
+    if (closed || stopped) return Promise.reject(adapterError('question_service_closed'));
+    const result = tail.then(() => {
+      if (closed || stopped || !backend.canWrite()) throw adapterError('question_gate_closed');
+      return operation();
+    });
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  function withMigrationAllowance(callback) {
+    if (typeof callback !== 'function') throw adapterError('invalid_migration_allowance_release');
+    return enqueue(async () => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || grantScope.getStore() !== grantScopeToken) throw adapterError('migration_allowance_access_expired');
+        if (closed || stopped || !backend.canWrite()) throw adapterError('question_gate_closed');
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return structuredClone(requireInstalled()); },
+        async persist(value, serviceGuard = undefined) {
+          assertAccess();
+          if (serviceGuard !== undefined && typeof serviceGuard !== 'function') throw adapterError('invalid_reclamation_write_guard');
+          const current = requireInstalled();
+          const candidate = normalizeQuestionJournalV2Local(value, maxRecords);
+          const fixed = structuredClone(candidate);
+          fixed.revision = current.revision;
+          fixed.migrationAllowance = current.migrationAllowance;
+          if (current.migrationAllowance === null || candidate.migrationAllowance !== null ||
+              candidate.revision !== current.revision + 1 || !sameRecord(fixed, current)) {
+            throw adapterError('invalid_migration_allowance_release_candidate');
+          }
+          assertSnapshotCapacity(candidate);
+          const assertWrite = () => {
+            assertAccess();
+            const result = serviceGuard?.();
+            if (result !== undefined) {
+              if (utilTypes.isPromise(result)) Promise.prototype.catch.call(result, () => {});
+              throw adapterError('invalid_reclamation_write_guard');
+            }
+          };
+          const saved = normalizeQuestionJournalV2Local(await backend.save(candidate, assertWrite), maxRecords);
+          if (!encodeQuestionJournalV2Local(saved, maxRecords).bytes.equals(encodeQuestionJournalV2Local(candidate, maxRecords).bytes)) {
+            throw adapterError('question_journal_save_mismatch');
+          }
+          snapshot = saved;
+          legacy = projectLegacyJournal(snapshot, maxRecords);
+          return structuredClone(saved);
+        },
+      });
+      try { return await grantScope.run(grantScopeToken, () => callback(access)); }
+      finally { active = false; }
+    });
+  }
+
   function load() {
     return Promise.resolve(structuredClone(projectLegacyJournal(requireInstalled(), maxRecords)));
   }
@@ -508,29 +569,32 @@ function createCommonQuestionReclamationJournal(value) {
   }
 
   function flush() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(adapterError('migration_allowance_access_reentry'));
     requireInstalled();
-    return backend.flush();
+    return tail.then(() => backend.flush());
   }
 
   function close() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(adapterError('migration_allowance_access_reentry'));
     closed = true;
     stopped = true;
-    return Promise.resolve();
+    return tail;
   }
 
   return Object.freeze({
     maxBytes,
     maxRecords,
     load,
-    save,
-    updateDeliveryState,
+    save: (candidateInput, periodToken) => enqueue(() => save(candidateInput, periodToken)),
+    updateDeliveryState: (internalQuestionId, state, detailEvidence, periodToken) => enqueue(() => updateDeliveryState(internalQuestionId, state, detailEvidence, periodToken)),
     prepareResume,
     findReservation,
     getReservation,
     getSnapshot,
     getLegacySnapshot,
-    persistRetirement,
-    persistBodyReclamation,
+    persistRetirement: (candidateValue, ticket) => enqueue(() => persistRetirement(candidateValue, ticket)),
+    withMigrationAllowance,
+    persistBodyReclamation: (candidateValue, identity, periodId, internalQuestionId, assertAccess) => enqueue(() => persistBodyReclamation(candidateValue, identity, periodId, internalQuestionId, assertAccess)),
     assertCapacityReserved,
     flush,
     close,

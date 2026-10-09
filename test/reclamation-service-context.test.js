@@ -310,6 +310,82 @@ function limits() {
   return { checkpoint: NORMAL_LIMIT, instructions: NORMAL_LIMIT, questions: NORMAL_LIMIT };
 }
 
+for (const resizeOutcome of ['success', 'retained', 'unknown']) {
+  test(`grant clear installs saved state before lease resize and handles ${resizeOutcome} reservation`, async (t) => {
+    const stores = emptyStores();
+    stores.checkpoint = checkpointWithRegisteredLaunch({ grant: true });
+    const budget = createReclamationCapacityBudget({ maxAdditionalBytes: 4_000_000_000 });
+    const observed = [];
+    let armed = false;
+    let leaseUnknown = false;
+    let sandbox;
+    const capacityBudget = {
+      status: () => budget.status(),
+      acquire(bytes) {
+        const held = budget.acquire(bytes);
+        return Object.freeze({
+          status() {
+            if (leaseUnknown) throw new Error('unknown lease');
+            return held.status();
+          },
+          release: () => held.release(),
+          resize(nextBytes) {
+            if (!armed) return held.resize(nextBytes);
+            observed.push({ phase: 'resize', bytes: held.status().bytes,
+              grant: sandbox.context.snapshot().stores.checkpoint.migrationAllowance });
+            if (resizeOutcome === 'retained') throw new Error('resize refused');
+            if (resizeOutcome === 'unknown') { leaseUnknown = true; throw new Error('lease state lost'); }
+            return held.resize(nextBytes);
+          },
+        });
+      },
+    };
+    const atomicWriteBytes = async (filePath, bytes) => {
+      if (armed) observed.push({ phase: 'write', bytes: budget.status().reservedBytes,
+        grant: sandbox.context.snapshot().stores.checkpoint.migrationAllowance });
+      await fs.writeFile(filePath, bytes);
+    };
+    sandbox = await makeSandbox(t, stores, emptyAnchor(), atomicWriteBytes, {}, limits(), capacityBudget);
+    await sandbox.context.start(sandbox.writersBySlot);
+    const oldBytes = budget.status().reservedBytes;
+    let cache = sandbox.context.backend('checkpoint').getSnapshot();
+    const writer = { async withMigrationAllowance(callback) {
+      return callback({ snapshot: () => structuredClone(cache), async persist(candidate) {
+        const saved = await sandbox.context.backend('checkpoint').save(candidate);
+        cache = saved;
+        return saved;
+      } });
+    } };
+    armed = true;
+    const release = sandbox.context.releaseMigrationAllowance({ slot: 'checkpoint', writer });
+    if (resizeOutcome === 'unknown') {
+      await assert.rejects(release, (error) => error.code === 'reclamation_capacity_reservation_unknown');
+      assert.equal(sandbox.context.status().state, 'blocked');
+      assert.throws(() => sandbox.context.backend('checkpoint').getSnapshot(),
+        (error) => error.code === 'reclamation_service_blocked');
+      assert.notEqual(cache.migrationAllowance, null);
+    } else {
+      assert.deepEqual(await release, { status: 'released', slot: 'checkpoint' });
+      assert.equal(cache.migrationAllowance, null);
+      assert.equal(sandbox.context.status().state, 'ready');
+      assert.equal(budget.status().reservedBytes, resizeOutcome === 'retained' ? oldBytes
+        : oldBytes - stores.checkpoint.migrationAllowance.maxExtraBytes);
+      assert.deepEqual(await sandbox.context.releaseMigrationAllowance({ slot: 'checkpoint', writer }),
+        { status: 'already_clear', slot: 'checkpoint' });
+    }
+    assert.equal(observed.length, 2);
+    assert.equal(observed[0].phase, 'write');
+    assert.equal(observed[0].bytes, oldBytes);
+    assert.notEqual(observed[0].grant, null);
+    assert.equal(observed[1].phase, 'resize');
+    assert.equal(observed[1].bytes, oldBytes);
+    assert.equal(observed[1].grant, null);
+    const persisted = JSON.parse(await fs.readFile(sandbox.slotPathsBySlot.checkpoint, 'utf8'));
+    assert.equal(persisted.migrationAllowance, null);
+    assert.equal(persisted.ledger.revision, stores.checkpoint.ledger.revision);
+  });
+}
+
 function encodeStores(stores) {
   return {
     checkpoint: encodeCheckpointV3Local(stores.checkpoint).bytes,

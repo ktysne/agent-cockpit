@@ -19,6 +19,29 @@ const { projectInstructionDeliveryReferences } = require('../src/server/instruct
 
 const INSTRUCTION_BODY_RETENTION_MS = 604_800_000;
 
+test('grant checkpoint scope rejects nested writer queues and expires after the callback', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const store = createDurableDeliveryStore({ ...fixture.dependencies,
+    reclamation: { backend: persistence.backend,
+      periodGate: { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} } } });
+  t.after(() => store.close());
+  await store.ready;
+  const adapter = createProviderDeliveryAdapter('claude', store);
+  let retained;
+  await store.withMigrationAllowance(async (access) => {
+    retained = access;
+    assert.ok(access.snapshot().ledger);
+    await assert.rejects(adapter.get('missing'), errorCode('migration_allowance_access_reentry'));
+    await assert.rejects(store.withMigrationAllowance(() => {}), errorCode('migration_allowance_access_reentry'));
+    await assert.rejects(store.flush(), errorCode('migration_allowance_access_reentry'));
+    await assert.rejects(store.close(), errorCode('migration_allowance_access_reentry'));
+  });
+  assert.throws(() => retained.snapshot(), errorCode('migration_allowance_access_expired'));
+  await assert.rejects(retained.persist({}), errorCode('migration_allowance_access_expired'));
+  await store.flush();
+});
+
 function identity(provider, tag) {
   return {
     provider,
