@@ -1174,9 +1174,16 @@ function createDurableDeliveryStore(options = {}) {
           }
           assertReclamationCheckpointCapacity(candidate, id, true);
           assertAccess();
-          const saved = await checkpointStore.save(candidate, assertAccess);
-          currentCheckpoint = saved;
-          return structuredClone(saved);
+          try {
+            const saved = await checkpointStore.save(candidate, assertAccess);
+            currentCheckpoint = saved;
+            return structuredClone(saved);
+          } catch (error) {
+            if (error.code === 'checkpoint_write_failed' || error.code === 'checkpoint_writer_blocked') {
+              writerBlocked = true;
+            }
+            throw error;
+          }
         },
       });
       try { return await INSTRUCTION_BODY_SCOPE.run(instructionBodyScopeToken, () => callback(access)); }

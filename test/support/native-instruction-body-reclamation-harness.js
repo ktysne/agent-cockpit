@@ -148,6 +148,54 @@ function loadFactory(faults) {
   const deliveryAdapters = new Map();
   const instructionAdapters = new Map();
   const sourceTokens = new Map();
+  const serviceAcceptedListeners = new Map();
+  const evidenceByDelivery = new Map();
+  const acceptedHolds = new Map();
+  const backendSaveCounts = { checkpoint: 0, instructions: 0, questions: 0 };
+
+  function holdNextAccepted(provider, deliveryAttemptId) {
+    if (!PROVIDERS.includes(provider) || typeof deliveryAttemptId !== 'string' || acceptedHolds.has(provider)) {
+      throw new TypeError('invalid accepted event hold');
+    }
+    let resolveCaptured;
+    let resolveCompletion;
+    let rejectCompletion;
+    const received = new Promise((resolve) => { resolveCaptured = resolve; });
+    const completion = new Promise((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    const hold = {
+      deliveryAttemptId,
+      received,
+      resolveCaptured,
+      completion,
+      resolveCompletion,
+      rejectCompletion,
+      captured: null,
+      released: false,
+    };
+    acceptedHolds.set(provider, hold);
+    return Object.freeze({
+      received,
+      release() {
+        if (!hold.captured || hold.released) throw new TypeError('accepted event is not releasable');
+        hold.released = true;
+        const listener = serviceAcceptedListeners.get(provider);
+        if (typeof listener !== 'function') throw new TypeError('service accepted listener unavailable');
+        let result;
+        try {
+          result = listener(hold.captured.deliveryAttemptId, hold.captured.sourceToken, hold.captured.accepted);
+        } catch (error) {
+          rejectCompletion(error);
+          throw error;
+        }
+        const observed = Promise.resolve(result);
+        observed.then(resolveCompletion, rejectCompletion);
+        return observed;
+      },
+    });
+  }
 
   require.cache[compositionPath].exports = {
     ...originals[compositionPath],
@@ -163,7 +211,24 @@ function loadFactory(faults) {
   require.cache[contextPath].exports = {
     ...originals[contextPath],
     createReclamationServiceContext(options) {
-      reclamationContext = context.create(options);
+      const created = context.create(options);
+      const wrappedBackends = new Map();
+      reclamationContext = Object.freeze({
+        ...created,
+        backend(slot) {
+          if (!wrappedBackends.has(slot)) {
+            const backend = created.backend(slot);
+            wrappedBackends.set(slot, Object.freeze({
+              ...backend,
+              save(...args) {
+                if (Object.hasOwn(backendSaveCounts, slot)) backendSaveCounts[slot] += 1;
+                return backend.save(...args);
+              },
+            }));
+          }
+          return wrappedBackends.get(slot);
+        },
+      });
       return reclamationContext;
     },
   };
@@ -181,6 +246,28 @@ function loadFactory(faults) {
       const adapter = adapters.create(provider, options);
       const wrapped = Object.freeze({
         ...adapter,
+        onAccepted(listener) {
+          serviceAcceptedListeners.set(provider, listener);
+          return adapter.onAccepted((deliveryAttemptId, sourceToken, accepted) => {
+            const captured = { deliveryAttemptId, sourceToken, accepted: structuredClone(accepted) };
+            const hold = acceptedHolds.get(provider);
+            if (hold && hold.deliveryAttemptId === deliveryAttemptId && hold.captured === null) {
+              hold.captured = captured;
+              hold.resolveCaptured(captured);
+              return hold.completion;
+            }
+            return listener(deliveryAttemptId, sourceToken, accepted);
+          });
+        },
+        onEvidence(listener) {
+          return adapter.onEvidence((deliveryAttemptId, sourceToken, evidence) => {
+            evidenceByDelivery.set(deliveryAttemptId, { sourceToken, evidence: structuredClone(evidence) });
+            return listener(deliveryAttemptId, sourceToken, evidence);
+          });
+        },
+        hasInstructionObservation(deliveryAttemptId, sourceToken) {
+          return adapter.hasInstructionObservation(deliveryAttemptId, sourceToken);
+        },
         async prepareInstructionDispatch(...args) {
           const prepared = await adapter.prepareInstructionDispatch(...args);
           if (prepared?.ok && prepared.sourceToken) sourceTokens.set(args[0]?.deliveryAttemptId, prepared.sourceToken);
@@ -208,6 +295,10 @@ function loadFactory(faults) {
     deliveryAdapter: (provider) => deliveryAdapters.get(provider) || null,
     instructionAdapter: (provider) => instructionAdapters.get(provider) || null,
     sourceToken: (id) => sourceTokens.get(id) || null,
+    serviceAcceptedListener: (provider) => serviceAcceptedListeners.get(provider) || null,
+    instructionEvidence: (id) => evidenceByDelivery.get(id) || null,
+    holdNextAccepted,
+    backendSaveCount: (slot) => backendSaveCounts[slot] || 0,
   });
 }
 
@@ -330,6 +421,13 @@ function createNativeInstructionBodyReclamationHarness(options) {
     deliveryAdapter(provider) { return currentFactory?.deliveryAdapter(provider) || null; },
     instructionAdapter(provider) { return currentFactory?.instructionAdapter(provider) || null; },
     sourceToken(id) { return currentFactory?.sourceToken(id) || null; },
+    serviceAcceptedListener(provider) { return currentFactory?.serviceAcceptedListener(provider) || null; },
+    instructionEvidence(id) { return currentFactory?.instructionEvidence(id) || null; },
+    holdNextAccepted(provider, id) {
+      if (!currentFactory) throw new Error('native_factory_unavailable');
+      return currentFactory.holdNextAccepted(provider, id);
+    },
+    backendSaveCount(slot) { return currentFactory?.backendSaveCount(slot) || 0; },
     writerFor(launchRef) { return currentFactory?.getComposition()?.writerFor(launchRef) || null; },
     pathFor(slot) {
       const names = { checkpoint: 'delivery-checkpoint.json', instructions: 'instruction-journal.json',

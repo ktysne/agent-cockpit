@@ -294,12 +294,8 @@ instruction journalの単独保存結果不明でも全writerを停止し、inst
 | IRB06 | 時計逆行、期限の整数overflow、close、callback access失効時は次の保存を行わない |
 | IRB07 | 無関係な記録、alias、履歴、logical tombstone、件数枠、grantを保持し、後着相関の最大増分を予約する |
 
-純粋な計画、静的照合、容量予約とstore照合の関連試験は47件、実factoryとファイル保存を通る試験は34件成功した。
-Claudeのapplied状態は完全相関する保存済みcheckpointのcold fixtureであり、Codexのapplied状態はfake native evidenceを通して作る。
-applied墓標への保存成功はtrusted provider adapter経路で確認し、serviceの通知権限を再発行する正例とは区別する。
-観測cleanup後の拒否と共有保存queue待機中のwitness失効は、Codexのguarded store入口で確認した。
-既存adapter観測のtoken照合と終了後失効は、両providerの単体試験で確認した。
-これらは実runtimeの7日後通知や、墓標からの観測再開の証跡には含めない。
+provider別の確認範囲と未確認事項は[全体計画](../handover/codex-support.md#通常指示の本文回収の確認範囲)で追跡する。
+観測を保持する合成fixtureの成功を、実runtimeの7日後通知や、墓標からの観測再開の証跡へ読み替えない。
 
 ## PR通知のaliasと履歴
 

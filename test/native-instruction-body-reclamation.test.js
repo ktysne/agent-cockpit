@@ -112,6 +112,57 @@ async function completeState(harness, provider, started, state, suffix) {
   throw new TypeError('unsupported instruction state');
 }
 
+async function prepareServiceAcceptedGrave(t, suffix) {
+  const { harness, setNow } = await createHarness(t, 'codex', { instructionEvidence: 'full' });
+  const { started } = await startWriter(harness, 'codex', suffix);
+  const input = await createInstruction(harness, 'codex', started, suffix);
+  const hold = harness.holdNextAccepted('codex', input.deliveryAttemptId);
+  const sent = await harness.instructionService.send(input.deliveryAttemptId);
+  assert.equal(sent.outcome, 'sending');
+
+  const acceptedEvent = await hold.received;
+  const sourceToken = harness.sourceToken(input.deliveryAttemptId);
+  assert.ok(sourceToken);
+  assert.strictEqual(acceptedEvent.sourceToken, sourceToken);
+  assert.equal(acceptedEvent.accepted.clientRequestId, input.deliveryAttemptId);
+  const observed = harness.instructionEvidence(input.deliveryAttemptId);
+  assert.ok(observed);
+  assert.strictEqual(observed.sourceToken, sourceToken);
+  assert.equal(observed.evidence.nativeTurnId, acceptedEvent.accepted.nativeTurnId);
+
+  const adapter = harness.deliveryAdapter('codex');
+  const sending = await adapter.get(input.deliveryAttemptId);
+  assert.equal(sending.state, 'sending');
+  assert.equal(sending.acceptedCorrelation, null);
+  const appliedCorrelation = {
+    deliveryAttemptId: sending.deliveryAttemptId,
+    revision: sending.revision,
+    payloadDigest: sending.payloadDigest,
+    targetPeriodId: sending.target.periodId,
+    nativeTurnId: observed.evidence.nativeTurnId,
+    nativeItemId: observed.evidence.nativeItemId,
+    clientRequestId: acceptedEvent.accepted.clientRequestId,
+  };
+  await adapter.recordApplied(input.deliveryAttemptId, appliedCorrelation);
+  const applied = await adapter.get(input.deliveryAttemptId);
+  assert.equal(applied.state, 'applied');
+  assert.equal(applied.acceptedCorrelation, null);
+  assert.deepEqual({ ...applied.appliedCorrelation }, appliedCorrelation);
+
+  setNow(applied.terminalAt + RETENTION_MS);
+  assert.deepEqual(await harness.reclamationService.reclaimInstructionBody({
+    deliveryAttemptId: input.deliveryAttemptId,
+  }), { status: 'complete', deliveryAttemptId: input.deliveryAttemptId });
+  const grave = await adapter.get(input.deliveryAttemptId);
+  assert.equal(grave.recordType, 'reclaimed');
+  assert.equal(grave.state, 'applied');
+  assert.equal(grave.acceptedCorrelation, null);
+  assert.deepEqual({ ...grave.appliedCorrelation }, appliedCorrelation);
+  assert.equal(harness.instructionAdapter('codex').hasInstructionObservation(
+    input.deliveryAttemptId, sourceToken), true);
+  return { harness, input, acceptedEvent, sourceToken, hold, appliedCorrelation };
+}
+
 async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
@@ -238,6 +289,19 @@ for (const provider of PROVIDERS) {
       assert.equal(totalInstructionWrites(harness, provider), nativeWritesBeforeReclaim);
       assert.equal(totalInstructionWrites(harness, provider) - nativeWritesBefore,
         provider === 'codex' && state === 'applied' ? 1 : 0);
+      if (provider === 'claude' && state === 'applied') {
+        const listener = harness.serviceAcceptedListener(provider);
+        assert.equal(typeof listener, 'function');
+        const beforeLateAcceptance = await readSlots(harness);
+        const writesBeforeLateAcceptance = { ...harness.persistenceWriteCounts };
+        await assert.rejects(listener(input.deliveryAttemptId, null, {
+          clientRequestId: grave.appliedCorrelation.clientRequestId,
+          nativeTurnId: grave.appliedCorrelation.nativeTurnId,
+          nativeItemId: null,
+        }), { code: 'instruction_acceptance_source_unavailable' });
+        assert.deepEqual(await readSlots(harness), beforeLateAcceptance);
+        assert.deepEqual(harness.persistenceWriteCounts, writesBeforeLateAcceptance);
+      }
       await assert.rejects(harness.instructionService.send(input.deliveryAttemptId));
       await assert.rejects(harness.instructionService.create(input));
       assert.equal(await harness.instructionService.get(input.deliveryAttemptId), null);
@@ -394,6 +458,107 @@ test('Codex rechecks an accepted witness after a shared persistence queue wait',
   assert.deepEqual(await fs.readFile(harness.pathFor('checkpoint')), checkpointBytesBefore);
   assert.equal(harness.persistenceWriteCounts.checkpoint, checkpointWritesBefore);
   assert.equal(harness.reclamationContext.canWrite(), true);
+});
+
+test('Codex registered service accepted listener writes a late applied grave only with its live observation', async (t) => {
+  const { harness, input, acceptedEvent, sourceToken, hold, appliedCorrelation } =
+    await prepareServiceAcceptedGrave(t, 'service-terminal-evidence');
+  const listener = harness.serviceAcceptedListener('codex');
+  assert.equal(typeof listener, 'function');
+  const before = await readSlots(harness);
+  const checkpointBefore = await readJson(harness.pathFor('checkpoint'));
+  const graveBefore = checkpointBefore.ledger.deliveries.find((item) =>
+    item.deliveryAttemptId === input.deliveryAttemptId);
+  const writesBefore = { ...harness.persistenceWriteCounts };
+  const wrongTokenResult = listener(input.deliveryAttemptId, null, acceptedEvent.accepted);
+  await assert.rejects(wrongTokenResult, { code: 'instruction_acceptance_source_unavailable' });
+  assert.deepEqual(await readSlots(harness), before);
+  assert.deepEqual(harness.persistenceWriteCounts, writesBefore);
+
+  assert.equal(await hold.release(), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  const checkpoint = await readJson(harness.pathFor('checkpoint'));
+  const grave = checkpoint.ledger.deliveries.find((item) => item.deliveryAttemptId === input.deliveryAttemptId);
+  assert.deepEqual(grave.acceptedCorrelation, {
+    deliveryAttemptId: appliedCorrelation.deliveryAttemptId,
+    revision: appliedCorrelation.revision,
+    payloadDigest: appliedCorrelation.payloadDigest,
+    targetPeriodId: appliedCorrelation.targetPeriodId,
+    nativeTurnId: acceptedEvent.accepted.nativeTurnId,
+    nativeItemId: null,
+    clientRequestId: acceptedEvent.accepted.clientRequestId,
+  });
+  assert.equal(grave.recordType, 'reclaimed');
+  assert.equal(grave.state, 'applied');
+  const withoutAcceptedCorrelation = (record) => {
+    const copy = structuredClone(record);
+    delete copy.acceptedCorrelation;
+    return copy;
+  };
+  assert.deepEqual(withoutAcceptedCorrelation(grave), withoutAcceptedCorrelation(graveBefore));
+  assert.deepEqual(checkpoint.registrations, checkpointBefore.registrations);
+  assert.deepEqual(checkpoint.ledger.logicalTombstones, checkpointBefore.ledger.logicalTombstones);
+  assert.deepEqual(checkpoint.migrationAllowance, checkpointBefore.migrationAllowance);
+  assert.deepEqual(checkpoint.ledger.deliveries.filter((item) =>
+    item.deliveryAttemptId !== input.deliveryAttemptId), checkpointBefore.ledger.deliveries.filter((item) =>
+    item.deliveryAttemptId !== input.deliveryAttemptId));
+  assert.equal(harness.persistenceWriteCounts.checkpoint, writesBefore.checkpoint + 1);
+  assert.deepEqual(harness.persistenceWriteCounts.instructions, writesBefore.instructions);
+  assert.deepEqual(harness.persistenceWriteCounts.questions, writesBefore.questions);
+  for (const slot of ['anchor', 'instructions', 'questions']) {
+    assert.deepEqual(await fs.readFile(harness.pathFor(slot)), before[slot]);
+  }
+  const afterAcceptedSlots = await readSlots(harness);
+  const afterAccepted = afterAcceptedSlots.checkpoint;
+  const writesAfterAccepted = { ...harness.persistenceWriteCounts };
+
+  assert.equal(await listener(input.deliveryAttemptId, sourceToken, acceptedEvent.accepted), true);
+  assert.deepEqual(await fs.readFile(harness.pathFor('checkpoint')), afterAccepted);
+  assert.deepEqual(harness.persistenceWriteCounts, writesAfterAccepted);
+
+  assert.equal(harness.instructionAdapter('codex').closeInstructionObservation(
+    input.deliveryAttemptId, sourceToken), true);
+  await assert.rejects(listener(input.deliveryAttemptId, sourceToken, acceptedEvent.accepted),
+    { code: 'instruction_acceptance_source_unavailable' });
+  assert.deepEqual(await fs.readFile(harness.pathFor('checkpoint')), afterAccepted);
+  assert.deepEqual(harness.persistenceWriteCounts, writesAfterAccepted);
+
+  await harness.instructionService.close();
+  assert.deepEqual(await readSlots(harness), afterAcceptedSlots);
+  await assert.rejects(listener(input.deliveryAttemptId, sourceToken, acceptedEvent.accepted),
+    { code: 'instruction_service_closed' });
+  assert.deepEqual(await fs.readFile(harness.pathFor('checkpoint')), afterAccepted);
+  assert.deepEqual(harness.persistenceWriteCounts, writesAfterAccepted);
+});
+
+test('Codex registered service accepted listener rechecks observation after a queued checkpoint save', async (t) => {
+  const { harness, input, acceptedEvent, sourceToken, hold } =
+    await prepareServiceAcceptedGrave(t, 'service-terminal-evidence-queue');
+  const instructionsBackend = harness.reclamationContext.backend('instructions');
+  const instructions = await instructionsBackend.load();
+  const blockerSnapshot = structuredClone(instructions);
+  blockerSnapshot.revision += 1;
+  const barrier = harness.faults.holdNextWrite('instructions');
+  const blocker = instructionsBackend.save(blockerSnapshot);
+  await barrier.entered;
+
+  const checkpointSaveCount = harness.backendSaveCount('checkpoint');
+  const checkpointBytesBefore = await fs.readFile(harness.pathFor('checkpoint'));
+  const checkpointWritesBefore = harness.persistenceWriteCounts.checkpoint;
+  const queuedAccepted = hold.release();
+  await waitUntil(() => harness.backendSaveCount('checkpoint') > checkpointSaveCount);
+  assert.equal(harness.instructionAdapter('codex').hasInstructionObservation(
+    input.deliveryAttemptId, sourceToken), true);
+  assert.equal(harness.instructionAdapter('codex').closeInstructionObservation(
+    input.deliveryAttemptId, sourceToken), true);
+  barrier.release();
+  await blocker;
+  await assert.rejects(queuedAccepted, { code: 'instruction_acceptance_source_unavailable' });
+  await harness.instructionService.flush();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(await fs.readFile(harness.pathFor('checkpoint')), checkpointBytesBefore);
+  assert.equal(harness.persistenceWriteCounts.checkpoint, checkpointWritesBefore);
+  assert.equal((await harness.deliveryAdapter('codex').get(input.deliveryAttemptId)).acceptedCorrelation, null);
 });
 
 for (const provider of PROVIDERS) {
