@@ -59,7 +59,7 @@ Claudeのクロスレビューは3往復で収束し、PR #325は親ブランチ
 通常指示の確定終端回収は `codex/instruction-body-reclamation-209-20261009` で、PR #325のレビュー済みheadを起点に着手し、マージ済みfeatureの`f64db23`へ同期した。
 3保存境界と準備済み操作の冷起動復旧、墓標への互換相関追記を実装し、既存の観測権限を復活させない条件を確認する。
 関連47件、両providerの実factoryとservice listenerの36件、全体2,366件（head `88ea774`）は成功し、環境依存の1件はskip、失敗0件である。
-[PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとするDraftで、ClaudeのR1で指摘されたservice listenerの試験不足を補った。追加後のfactory関連36件と全体検証は成功した。R2で指摘されたstore停止の直接検証と確認範囲の記載を補強している。
+[PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとし、Claudeのクロスレビューは3往復で収束した。head `e8d94f3`では、store停止の直接回帰試験を含む32件と、factory関連36件が成功した。製品コードは全体検証済みの`88ea774`から変わっていない。
 現保存層の全writer停止を維持し、質問単独失敗時の停止範囲の分離は後続に残す。
 個別墓標の件数枠を空ける世代集約は段階4であり、本文回収だけで#209を完了扱いにしない。
 
@@ -162,7 +162,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)（base: feature） | 質問本文回収はfeatureへ集約済み。通常指示は`f64db23`起点の`codex/instruction-body-reclamation-209-20261009`で実装し、全体2,366件成功、1件skip（head `88ea774`）。Claude R2の試験・記載指摘を修正中。続いてPR通知とresult、自動実行と停止範囲の分離、段階4を進める |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)（base: feature） | 質問本文回収はfeatureへ集約済み。通常指示は`f64db23`起点の`codex/instruction-body-reclamation-209-20261009`で実装し、全体2,366件成功、1件skip（head `88ea774`）。head `e8d94f3`のstore32件・factory36件成功、Claudeレビュー3往復で収束。続いてPR通知とresult、自動実行と停止範囲の分離、段階4を進める |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |
