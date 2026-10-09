@@ -230,6 +230,7 @@ test('degraded state skips question and grant candidates while continuing nonque
 });
 
 test('question uncertainty bounds candidate rechecks and still advances to nonquestion work', async () => {
+  const maxOperationsPerPass = 3;
   const questionCandidates = Array.from({ length: 20_000 }, (_, index) => ({
     kind: 'question-period',
     identity: IDENTITY,
@@ -239,7 +240,7 @@ test('question uncertainty bounds candidate rechecks and still advances to nonqu
   let listCalls = 0;
   const invoked = [];
   const { scheduler, timers } = createScheduler({
-    maxOperationsPerPass: 3,
+    maxOperationsPerPass,
     listCandidates: () => {
       listCalls += 1;
       if (listCalls <= 2) {
@@ -266,8 +267,7 @@ test('question uncertainty bounds candidate rechecks and still advances to nonqu
   scheduler.start();
   await timers.fire(timers.next());
 
-  assert.equal(listCalls, 4);
-  assert.ok(listCalls - 1 <= 3);
+  assert.equal(listCalls, 1 + maxOperationsPerPass);
   assert.deepEqual(invoked, ['retired-00000', 'instruction-1']);
   assert.equal(scheduler.status().lastPassOperationCount, 2);
   assert.equal(scheduler.status().failureCount, 0);
@@ -276,20 +276,23 @@ test('question uncertainty bounds candidate rechecks and still advances to nonqu
 });
 
 test('stale candidates are rechecked within budget and cursor reaches later work across passes', async () => {
-  const questionCandidates = Array.from({ length: 6 }, (_, index) => ({
+  const maxOperationsPerPass = 2;
+  const questionCandidates = Array.from({ length: 200 }, (_, index) => ({
     kind: 'question-period',
     identity: IDENTITY,
-    periodId: `retired-${String(index).padStart(2, '0')}`,
+    periodId: `retired-${String(index).padStart(3, '0')}`,
   }));
   const instruction = { kind: 'instruction', deliveryAttemptId: 'instruction-1' };
   const initial = candidates({ bodyCandidates: [...questionCandidates, instruction] });
+  const stalePassCount = Math.ceil(questionCandidates.length / 2);
+  const instructionCandidateReadCall = stalePassCount * 3 + 2;
   const invoked = [];
   let listCalls = 0;
   const { scheduler, timers } = createScheduler({
-    maxOperationsPerPass: 2,
+    maxOperationsPerPass,
     listCandidates: () => {
       listCalls += 1;
-      if (listCalls === 11) return candidates({ bodyCandidates: [instruction] });
+      if (listCalls === instructionCandidateReadCall) return candidates({ bodyCandidates: [instruction] });
       return (listCalls - 1) % 3 === 0 ? initial : candidates();
     },
     reclaimCandidate: async (candidate) => {
@@ -299,18 +302,16 @@ test('stale candidates are rechecked within budget and cursor reaches later work
   });
   scheduler.start();
 
-  for (let pass = 0; pass < 3; pass += 1) {
+  for (let pass = 0; pass < stalePassCount; pass += 1) {
     const readsBeforePass = listCalls;
     await timers.fire(timers.next());
-    assert.equal(listCalls - readsBeforePass, 3);
-    assert.ok(listCalls - readsBeforePass - 1 <= 2);
+    assert.equal(listCalls - readsBeforePass, 1 + maxOperationsPerPass);
     assert.equal(scheduler.status().lastPassOperationCount, 0);
   }
 
   const readsBeforeProgressPass = listCalls;
   await timers.fire(timers.next());
-  assert.equal(listCalls - readsBeforeProgressPass, 3);
-  assert.ok(listCalls - readsBeforeProgressPass - 1 <= 2);
+  assert.equal(listCalls - readsBeforeProgressPass, 1 + maxOperationsPerPass);
   assert.deepEqual(invoked, ['instruction-1']);
   assert.equal(scheduler.status().lastPassOperationCount, 1);
   scheduler.stop();
