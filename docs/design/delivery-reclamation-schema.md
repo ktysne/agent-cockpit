@@ -253,6 +253,54 @@ checkpoint保存結果が不明ならcheckpointを共有する全kindのwriter�
 question deliveryのgraveは[質問schema](common-question-reclamation-schema.md#隔離保持本文回収)の質問journal prepare objectと同じoperation IDを持ち、`reason: retired_question_period`で識別する。
 generic instruction-retention coordinatorはquestion専用graveを新規作成・更新せず、その回収を通常の終端期限表へ含めない。
 
+### 明示回収と後着相関の受付
+
+通常指示の明示回収はinstruction service、checkpoint、context I/Oのqueueを順に取得し、3保存境界が終わるまで保持する。
+各境界では最新snapshotへ対象slotだけを差し込み、無関係な作成途中の記録を冷起動の修復値へ置き換えない。
+callback accessはそのcallback内だけで使い、待機中の保存も実書込みの直前に寿命とcloseを照合する。
+準備済みの冷起動復旧は全writerの再開前に行い、保存結果不明後は同じinstanceで再開しない。
+
+静的な照合はjournalの完全sourceからcheckpointのsourceとcanonical target、および墓標のsourceRefとtargetRefを導く。
+claimsのdigestは正規化済みfieldの固定順で求め、元objectのfield順やtoJSONを根拠にしない。
+この照合は保存済み記録の整合検査であり、native通知や再送の権限を発行しない。
+
+通常指示のapplied墓標は、固定相関が一致するacceptedの互換追記と、完全一致するappliedの重複だけを受け付ける。
+既存の非nullのnative IDを差し替えず、終端状態と時刻、墓標の時刻、refs、digest、回収operationを変更しない。
+変更が無ければ保存とrevision更新を行わず、変更時は台帳全体を検査して相関の重複も拒否する。
+applied墓標の容量予約には、固定applied相関からacceptedへ補完できる最大増分を含める。
+保存済みgrantを増額せず、通常枠とgrantの合計に収まらなければ保存内容を保持して更新を拒否する。
+取り下げと送信前置換の墓標にはacceptedとappliedを追加せず、質問の退役墓標も更新しない。
+payloadの復元、claim、send、unknown化、取り下げは墓標から受け付けない。
+
+serviceが準備済み記録や墓標への通知を受ける場合は、既存adapterのcontextとsourceTokenが有効かを保存前と書込み直前に照合する。
+本文操作の適格性を広げず、墓標から新しいcapability、token、観測、timerを作らない。
+終了済み観測は拒否し、終了時のcleanupを画面表示の適格性に依存させない。
+7日後も任意のnative通知が届くことは保証せず、保存層の相関更新と、既存権限で到着したservice通知の確認を区別する。
+
+段階3の明示構成は既存保存層の全writer停止を維持する。
+instruction journalの単独保存結果不明でも全writerを停止し、instructionだけを止める契約の分離は後続で実装する。
+自動実行、grant解放、墓標件数枠の解放、標準起動への接続はこの明示回収に含めない。
+
+明示構成の適合試験は、実ファイル保存とfixtureのnative processを通して次の条件を確認する。
+実ClaudeとCodexの通知到着や7日後の観測寿命の確認とは区別する。
+
+| ID | 確認条件 |
+|---|---|
+| IRB01 | 確定終端から7日未満、unknown、作成未完了は保存せず保留し、期限到達後に3保存で本文を回収する |
+| IRB02 | 各保存境界の失敗後は新instanceが同じ操作IDで再開し、未準備のeligible記録は自動回収しない |
+| IRB03 | 本文とcheckpointの静的相関が不一致なら、起動時に保存とnative送信を行わず拒否する |
+| IRB04 | applied墓標への互換accepted追記と完全一致appliedは保存層で成立し、差替えと他の墓標への追記は拒否する |
+| IRB05 | cleanup後のservice通知は保存されず、既存観測の照合でtoken不一致、close、待機中の失効を拒否する |
+| IRB06 | 時計逆行、期限の整数overflow、close、callback access失効時は次の保存を行わない |
+| IRB07 | 無関係な記録、alias、履歴、logical tombstone、件数枠、grantを保持し、後着相関の最大増分を予約する |
+
+純粋な計画、静的照合、容量予約とstore照合の関連試験は47件、実factoryとファイル保存を通る試験は34件成功した。
+Claudeのapplied状態は完全相関する保存済みcheckpointのcold fixtureであり、Codexのapplied状態はfake native evidenceを通して作る。
+applied墓標への保存成功はtrusted provider adapter経路で確認し、serviceの通知権限を再発行する正例とは区別する。
+観測cleanup後の拒否と共有保存queue待機中のwitness失効は、Codexのguarded store入口で確認した。
+既存adapter観測のtoken照合と終了後失効は、両providerの単体試験で確認した。
+これらは実runtimeの7日後通知や、墓標からの観測再開の証跡には含めない。
+
 ## PR通知のaliasと履歴
 
 現行PR通知の論理keyはkind、logical ID、revision、target launch tupleで決まり、source execution IDはkeyに入らない。

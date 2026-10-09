@@ -506,6 +506,13 @@ function createProviderInstructionAdapter(provider, options = {}) {
     discardContext(context);
     return true;
   }
+  function hasInstructionObservation(id, sourceToken) {
+    const context = contexts.get(id);
+    return !closed && available && !!context && context.sourceToken === sourceToken &&
+      ['dispatching', 'accepting', 'accepted'].includes(context.phase) &&
+      (context.expiresAt > Date.now() || context.phase === 'accepted' && context.recoverAfterExpiry);
+  }
+
   function closeInstructionObservation(id, sourceToken) {
     const context = contexts.get(id);
     if (!context || context.sourceToken !== sourceToken) return false;
@@ -541,6 +548,7 @@ function createProviderInstructionAdapter(provider, options = {}) {
     onUnknown: (listener) => subscribe(unknownListeners, listener, 'instruction_dispatch_unavailable'),
     abandon,
     closeInstructionObservation,
+    hasInstructionObservation,
     createInstructionDelivery: deliveryAdapter.createInstructionDelivery,
     get: deliveryAdapter.get,
     cancel: deliveryAdapter.cancel,
@@ -548,6 +556,7 @@ function createProviderInstructionAdapter(provider, options = {}) {
     sendStart: deliveryAdapter.sendStart,
     rehydratePayload: deliveryAdapter.rehydratePayload,
     recordAccepted: deliveryAdapter.recordAccepted,
+    recordAcceptedInstructionGuarded: deliveryAdapter.recordAcceptedInstructionGuarded,
     recordApplied: deliveryAdapter.recordApplied,
     recordAppliedInstructionGuarded: deliveryAdapter.recordAppliedInstructionGuarded,
     markUnknown: deliveryAdapter.markUnknown,

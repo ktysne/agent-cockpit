@@ -152,11 +152,45 @@ function registerReclamationTarget(checkpoint, targetId, executionRecord) {
   return { ledger, target: ledger.notificationTargets.find((target) => target.targetId === targetId), created: true };
 }
 
+function transitionInstructionGrave(checkpoint, current, operation, correlation) {
+  if (current.kind !== 'instruction' || current.state !== 'applied' ||
+      !['accepted', 'applied'].includes(operation)) throw runtimeError('delivery_reclaimed');
+  const fields = ['deliveryAttemptId', 'revision', 'payloadDigest', 'targetPeriodId',
+    'nativeTurnId', 'nativeItemId', 'clientRequestId'];
+  if (!correlation || Reflect.ownKeys(correlation).length !== fields.length ||
+      fields.some((field) => !Object.getOwnPropertyDescriptor(correlation, field) ||
+        !Object.hasOwn(Object.getOwnPropertyDescriptor(correlation, field), 'value'))) {
+    throw runtimeError('correlation_mismatch');
+  }
+  if (correlation.nativeItemId !== null && correlation.nativeTurnId === null) {
+    throw runtimeError('correlation_mismatch');
+  }
+  const applied = current.appliedCorrelation;
+  for (const field of ['deliveryAttemptId', 'revision', 'payloadDigest', 'targetPeriodId', 'clientRequestId']) {
+    if (correlation[field] !== applied[field]) throw runtimeError('correlation_mismatch');
+  }
+  for (const field of ['nativeTurnId', 'nativeItemId']) {
+    if (operation === 'applied' ? correlation[field] !== applied[field]
+      : correlation[field] !== null && correlation[field] !== applied[field]) {
+      throw runtimeError('correlation_mismatch');
+    }
+  }
+  if (operation === 'applied') return { ledger: checkpoint.ledger, delivery: current, changed: false };
+  const previous = current.acceptedCorrelation;
+  const accepted = Object.fromEntries(fields.map((field) => [field,
+    ['nativeTurnId', 'nativeItemId'].includes(field) ? previous?.[field] ?? correlation[field] : correlation[field]]));
+  const delivery = normalizeDeliveryRecordV2Local({ ...current, acceptedCorrelation: accepted });
+  if (JSON.stringify(delivery) === JSON.stringify(current)) {
+    return { ledger: checkpoint.ledger, delivery: current, changed: false };
+  }
+  return { ledger: ledgerWithDelivery(checkpoint, delivery), delivery, changed: true };
+}
+
 function transitionReclamationDelivery(checkpoint, deliveryAttemptId, operation, correlation, now) {
   const current = checkpoint.ledger.deliveries.find((record) =>
     record.deliveryAttemptId === deliveryAttemptId);
   if (!current) throw runtimeError('delivery_not_found');
-  if (current.recordType === 'reclaimed') throw runtimeError('delivery_reclaimed');
+  if (current.recordType === 'reclaimed') return transitionInstructionGrave(checkpoint, current, operation, correlation);
   const result = transitionDelivery(legacyLedgerView(checkpoint), deliveryAttemptId, operation, correlation);
   if (!result.changed) return { ledger: checkpoint.ledger, delivery: current, changed: false };
   const terminalAt = current.terminalAt !== null ? current.terminalAt

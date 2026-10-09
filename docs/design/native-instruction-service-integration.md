@@ -85,6 +85,11 @@ HTTP requestにはnative profile allowlist、receipt、writer capabilityによ�
 期限到達前は本文を保持し、結果の`reclaimedQuestionIds`と`deferredQuestionIds`で回収済みと延期した対象を区別する。
 準備済みの回収は保存済み操作IDで再開し、起動時にも全writerの再開前に未完了の準備を走査する。
 質問journalの準備、対応checkpointの墓標、質問詳細削除を順に保存し、配信の新規作成や再送を行わない。
+`reclamation.reclaimInstructionBody({ deliveryAttemptId })`は、対応するcheckpointで確定した通常指示の終端時刻から7日経過後にenvelopeを回収する。
+指定はattemptの1項目だけを許し、結果は`status: complete | deferred`と`deliveryAttemptId`を返す。
+unknownと未確定状態は延期し、journalの準備、checkpointの墓標、journalの本文削除を同じ操作IDで進める。
+起動時は準備済み操作だけをwriter再開前に続け、未準備の候補を自動で回収しない。
+本文を回収しても件数枠と移行grant、再送拒否の記録は保持する。
 生のcontextやbackendは公開せず、nativeの停止時に自動で退役させる接続も加えない。
 
 移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。

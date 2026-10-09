@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { types: utilTypes } = require('node:util');
 const {
   assertSafeUnsignedInteger,
+  assertIdentifier,
   captureDenseArray,
   captureExactRecord,
   checkedAddBytes,
@@ -43,6 +44,7 @@ const {
 } = require('./reclamation-store-consistency');
 const { planQuestionPeriodRetirement } = require('./question-period-retirement');
 const { planQuestionBodyReclamation } = require('./question-body-reclamation');
+const { planInstructionBodyReclamation } = require('./instruction-body-reclamation');
 const { createQuestionPeriodGate } = require('./question-period-gate');
 
 const SLOT_ORDER = Object.freeze(['checkpoint', 'instructions', 'questions']);
@@ -684,11 +686,11 @@ function createReclamationServiceContext(value) {
     ]);
   }
 
-  async function savePreparedBodyBoundary(repair, step) {
+  async function savePreparedBodyBoundary(repair, step, errorCode = 'invalid_question_body_reclamation_plan') {
     const slot = step.slot;
-    if (!['questions', 'checkpoint'].includes(slot) ||
+    if (!['questions', 'instructions', 'checkpoint'].includes(slot) ||
         (step.boundary === 'checkpoint-grave') !== (slot === 'checkpoint')) {
-      throw contextError('invalid_question_body_reclamation_plan');
+      throw contextError(errorCode);
     }
     const currentStores = repair.stores;
     const nextStores = cloneSnapshot(currentStores);
@@ -700,7 +702,7 @@ function createReclamationServiceContext(value) {
       normalByteLimitsBySlot: limitsForTransitions,
     });
     requireValue(sameStore(slot, transition.snapshot.stores[slot], nextStores[slot]),
-      'invalid_question_body_reclamation_plan');
+      errorCode);
     const validation = validateReclamationSnapshot({
       anchor: repair.anchor,
       stores: transition.snapshot.stores,
@@ -746,6 +748,25 @@ function createReclamationServiceContext(value) {
     }
   }
 
+  async function continuePreparedInstructionBodies(repair) {
+    if (repair === null || repair.stores.instructions === null) return;
+    const prepared = repair.stores.instructions.instructions.filter((record) =>
+      record.recordType === 'detail' && record.reclamation !== null);
+    if (prepared.length === 0) return;
+    acquireOrResize(coldRepairReservation(repair));
+    for (const record of prepared) {
+      const clock = observeClock();
+      if (clock.now === null || !clock.synchronized) continue;
+      const planned = planInstructionBodyReclamation({
+        ...fullSnapshotForRepair(repair), normalByteLimitsBySlot: limitsForTransitions,
+        deliveryAttemptId: record.deliveryAttemptId, now: clock.now,
+      });
+      if (planned.status === 'deferred') continue;
+      requireValue(planned.status === 'planned', 'invalid_instruction_body_reclamation_plan');
+      for (const step of planned.steps) await savePreparedBodyBoundary(repair, step, 'invalid_instruction_body_reclamation_plan');
+    }
+  }
+
   async function repairColdStartup() {
     const repair = await readNormalSnapshotForRepair();
     if (repair === null) return null;
@@ -781,6 +802,7 @@ function createReclamationServiceContext(value) {
         await stopAndDrainWriters();
         const repair = await repairColdStartup();
         await continuePreparedBodyReclamations(repair);
+        await continuePreparedInstructionBodies(repair);
         const result = await coordinator.start();
         requireValue(result.status === 'ready' && contextCanWrite(), 'reclamation_service_start_failed');
         readyPending = false;
@@ -1025,6 +1047,86 @@ function createReclamationServiceContext(value) {
     }
   }
 
+  async function reclaimInstructionBody(value) {
+    const captured = captureExactRecord(value, ['deliveryAttemptId', 'instructionService', 'deliveryStore'],
+      'invalid_instruction_body_reclamation');
+    assertIdentifier(captured.deliveryAttemptId, 'invalid_instruction_body_reclamation');
+    const request = Object.freeze({ deliveryAttemptId: captured.deliveryAttemptId });
+    const service = captured.instructionService;
+    const store = captured.deliveryStore;
+    if (!service || typeof service.withInstructionBody !== 'function' ||
+        !store || typeof store.withInstructionBodyCheckpoint !== 'function') {
+      throw contextError('invalid_instruction_body_reclamation');
+    }
+    requireValue(contextCanWrite(), 'reclamation_service_blocked');
+    try {
+      return await service.withInstructionBody(request, (instructionAccess) =>
+        store.withInstructionBodyCheckpoint(request, async (checkpointAccess) => {
+          const snapshot = () => {
+            requireValue(contextCanWrite() && anchor !== null && anchor.migration === null,
+              'reclamation_service_blocked');
+            const current = currentSnapshot();
+            current.stores.instructions = instructionAccess.snapshot();
+            current.stores.checkpoint = checkpointAccess.snapshot();
+            return current;
+          };
+          const base = snapshot();
+          const record = base.stores.instructions.instructions.find((item) =>
+            item.deliveryAttemptId === request.deliveryAttemptId);
+          if (!record) throw contextError('instruction_not_found');
+          if (record.recordType === 'reclaimed') {
+            const completed = planInstructionBodyReclamation({ ...base,
+              normalByteLimitsBySlot: limitsForTransitions,
+              deliveryAttemptId: request.deliveryAttemptId, now: record.reclaimedAt });
+            requireValue(completed.status === 'complete', 'invalid_instruction_body_reclamation_plan');
+            return Object.freeze({ status: 'complete', deliveryAttemptId: request.deliveryAttemptId });
+          }
+          const clock = observeClock();
+          if (clock.now === null || !clock.synchronized) {
+            return Object.freeze({ status: 'deferred', deliveryAttemptId: request.deliveryAttemptId });
+          }
+          const planInput = { ...base, normalByteLimitsBySlot: limitsForTransitions,
+            deliveryAttemptId: request.deliveryAttemptId, now: clock.now };
+          let planned = planInstructionBodyReclamation(planInput);
+          if (planned.status === 'eligible') {
+            planned = planInstructionBodyReclamation({ ...planInput,
+              operationId: input.createOperationId ? input.createOperationId() : randomUUID() });
+          }
+          if (planned.status === 'deferred' || planned.status === 'complete') {
+            return Object.freeze({ status: planned.status, deliveryAttemptId: request.deliveryAttemptId });
+          }
+          requireValue(planned.status === 'planned', 'invalid_instruction_body_reclamation_plan');
+          for (const step of planned.steps) {
+            const current = snapshot();
+            requireValue(sameAnchor(current.anchor, step.snapshot.anchor), 'invalid_instruction_body_reclamation_plan');
+            const slot = step.slot;
+            requireValue(['instructions', 'checkpoint'].includes(slot), 'invalid_instruction_body_reclamation_plan');
+            const candidate = normalizeStore(slot, step.snapshot.stores[slot]);
+            const nextStores = cloneSnapshot(current.stores);
+            nextStores[slot] = candidate;
+            const transition = validateReclamationStoreWrite({ anchor: current.anchor,
+              previousStores: current.stores, nextStores, normalByteLimitsBySlot: limitsForTransitions });
+            for (const otherSlot of STORE_ORDER) {
+              requireValue(nextStores[otherSlot] === null
+                ? transition.snapshot.stores[otherSlot] === null
+                : sameStore(otherSlot, transition.snapshot.stores[otherSlot], nextStores[otherSlot]),
+              'invalid_instruction_body_reclamation_plan');
+            }
+            requireValue(transition.reasons.every((reason) =>
+              ['instruction_creation_state', 'question_creation_state', 'question_checkpoint_cache'].includes(reason)),
+            'invalid_instruction_body_reclamation_plan');
+            const saved = slot === 'instructions' ? await instructionAccess.persist(candidate)
+              : await checkpointAccess.persist(candidate);
+            requireValue(sameStore(slot, candidate, saved), 'reclamation_persistence_readback_mismatch');
+          }
+          return Object.freeze({ status: 'complete', deliveryAttemptId: request.deliveryAttemptId });
+        }));
+    } catch (error) {
+      if (error.code !== 'instruction_not_found') block(error);
+      throw error;
+    }
+  }
+
   function close() {
     if (closePromise !== null) return closePromise;
     closing = true;
@@ -1082,6 +1184,7 @@ function createReclamationServiceContext(value) {
     snapshot: currentSnapshot,
     retireQuestionPeriod,
     reclaimQuestionBodies,
+    reclaimInstructionBody,
     close,
     status,
   });

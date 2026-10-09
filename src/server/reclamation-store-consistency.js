@@ -35,6 +35,7 @@ const {
   projectLegacyInstructionJournalV1Local,
   projectLegacyQuestionJournalV1Local,
 } = require('./reclamation-migration-projection');
+const { assertInstructionDeliveryBinding } = require('./instruction-reclamation-correlation');
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SOURCE_BYTES = 16_777_216;
@@ -65,9 +66,6 @@ const QUESTION_RESERVATION_FIELDS = [
   'selectedAt', 'deliveryIntent', 'deliveryCreationState', 'checkpointState', 'sourceClaimsDigest',
   'sessionId', 'externalResolution', 'cancelledAt', 'terminalResultKind', 'quarantinedAt',
   'bodyState', 'reclaimedAt', 'reclamation',
-];
-const INSTRUCTION_SOURCE_FIELDS = [
-  'launchRef', 'claims', 'identity', 'executionBinding', 'conversationId', 'sessionId',
 ];
 const INSTRUCTION_PREPARATION_FIELDS = ['operationId', 'preparedAt', 'terminalState', 'terminalAt'];
 const DELIVERY_TERMINAL_STATES = new Set(['applied', 'cancelled_before_send', 'superseded_before_send']);
@@ -203,10 +201,6 @@ function claimsDigest(claims) {
 
 function launchKeyFromClaims(claims) {
   return makeArray([claims.launchId, claims.runId, claims.attemptId]);
-}
-
-function sourceProjectionFromInstructionSource(source) {
-  return makeRecord(INSTRUCTION_SOURCE_FIELDS.map((field) => [field, source[field]]));
 }
 
 function migrationSourceBySlot(migration) {
@@ -477,46 +471,8 @@ function validateQuestionGrave(reservation, delivery, code) {
   return normalized;
 }
 
-function expectedInstructionTarget(source) {
-  return makeRecord([
-    ['kind', 'execution'],
-    ['launchRef', source.launchRef],
-    ['claims', source.claims],
-    ['identity', source.identity],
-    ['periodId', source.executionBinding.periodId],
-    ['actor', source.executionBinding.actor],
-    ['conversationId', source.conversationId],
-    ['sessionId', source.sessionId],
-  ]);
-}
-
 function validateInstructionDelivery(instruction, delivery, code) {
-  requireValue(delivery.kind === 'instruction' && delivery.deliveryAttemptId === instruction.deliveryAttemptId &&
-    delivery.logicalMessageId === instruction.logicalMessageId && delivery.revision === instruction.revision &&
-    delivery.payloadDigest === instruction.envelopeDigest &&
-    delivery.sourceExecutionId === instruction.source.executionBinding.periodId, code);
-  if (delivery.recordType === 'detail') {
-    requireValue(sameCanonicalJson(delivery.source, sourceProjectionFromInstructionSource(instruction.source)) &&
-      sameCanonicalJson(delivery.target, expectedInstructionTarget(instruction.source)), code);
-  } else {
-    const sourceRef = delivery.sourceRef;
-    const targetRef = delivery.targetRef;
-    const sourceClaimsSha = claimsDigest(instruction.source.claims);
-    const sourceKey = launchKeyFromClaims(instruction.source.claims);
-    requireValue(sourceRef.launchRef === instruction.source.launchRef &&
-      sameCanonicalJson(sourceRef.launchKey, sourceKey) && sourceRef.sourceClaimsDigest === sourceClaimsSha &&
-      sameCanonicalJson(sourceRef.identity, instruction.source.identity) &&
-      sameBinding(sourceRef.executionBinding, instruction.source.executionBinding) &&
-      sourceRef.conversationId === instruction.source.conversationId &&
-      sourceRef.sessionId === instruction.source.sessionId &&
-      targetRef.kind === 'execution' && targetRef.launchRef === instruction.source.launchRef &&
-      sameCanonicalJson(targetRef.launchKey, sourceKey) && targetRef.targetClaimsDigest === sourceClaimsSha &&
-      sameCanonicalJson(targetRef.identity, instruction.source.identity) &&
-      targetRef.periodId === instruction.source.executionBinding.periodId &&
-      sameActor(targetRef.actor, instruction.source.executionBinding.actor) &&
-      targetRef.conversationId === instruction.source.conversationId &&
-      targetRef.sessionId === instruction.source.sessionId, code);
-  }
+  assertInstructionDeliveryBinding(instruction, delivery, code);
 
   const preparation = instruction.reclamation;
   if (instruction.recordType === 'reclaimed') {

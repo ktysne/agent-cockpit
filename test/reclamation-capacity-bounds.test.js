@@ -24,11 +24,13 @@ const {
 const {
   encodeCheckpointV3Local,
   encodeInstructionJournalV2Local,
+  normalizeCheckpointV3Local,
   normalizeDeliveryRecordV2Local,
   normalizeInstructionJournalV2Local,
   normalizeInstructionRecordV2Local,
 } = require('../src/server/delivery-reclamation-codec');
 const { encodeNormalized } = require('../src/server/reclamation-json-codec');
+const { projectInstructionDeliveryReferences } = require('../src/server/instruction-reclamation-correlation');
 const {
   FIXED_ANCHOR_MIGRATION_BOUNDS,
   FIXED_H_BOUNDS,
@@ -328,6 +330,32 @@ function questionGraveFromDetail(detail, operationId) {
       operationId,
       reclaimedAt: MAX_SAFE_INTEGER,
       reason: 'retired_question_period',
+    },
+  });
+}
+
+function instructionGraveFromDetail(detail) {
+  const refs = projectInstructionDeliveryReferences(detail.source);
+  return normalizeDeliveryRecordV2Local({
+    recordType: 'reclaimed',
+    deliveryAttemptId: detail.deliveryAttemptId,
+    kind: detail.kind,
+    logicalMessageId: detail.logicalMessageId,
+    revision: detail.revision,
+    sourceExecutionId: detail.sourceExecutionId,
+    payloadDigest: detail.payloadDigest,
+    state: detail.state,
+    terminalAt: detail.terminalAt,
+    cancelRequested: detail.cancelRequested,
+    ownerGeneration: detail.ownerGeneration,
+    acceptedCorrelation: detail.acceptedCorrelation,
+    appliedCorrelation: detail.appliedCorrelation,
+    sourceRef: refs.sourceRef,
+    targetRef: refs.targetRef,
+    reclamation: {
+      operationId: OPERATION_ID,
+      reclaimedAt: detail.terminalAt + TERMINAL_RETENTION_MS,
+      reason: 'terminal_retention',
     },
   });
 }
@@ -868,6 +896,7 @@ test('new question admission uses internally derived reservation rows when candi
 });
 
 test('checkpoint reserve deduplicates complete, nullable, and absent accepted correlations safely', () => {
+  const expectedGrantBytes = { complete: 3_555, partial: 6_624, none: 6_854 };
   for (const acceptedKind of ['complete', 'partial', 'none']) {
     const raw = legacyAppliedCheckpoint(acceptedKind);
     const projection = projectLegacyCheckpointV2Local({
@@ -939,6 +968,7 @@ test('checkpoint reserve deduplicates complete, nullable, and absent accepted co
     });
     assert.ok(grant !== null);
     assert.ok(grant.maxExtraBytes > 0 && grant.maxExtraBytes <= FIXED_H_BOUNDS.checkpoint);
+    assert.equal(grant.maxExtraBytes, expectedGrantBytes[acceptedKind]);
   }
 });
 
@@ -1076,6 +1106,133 @@ test('question checkpoint reserve includes max-correlation graves while preservi
     snapshot: overflowSnapshot,
     currentByteLimit: MAX_SOURCE_BYTES,
   }, OPERATION_ID).detailGrowthBytes, 0);
+});
+
+test('applied instruction graves reserve only fixed-ID accepted correlation completion', () => {
+  for (const acceptedKind of ['none', 'partial', 'complete']) {
+    const raw = legacyAppliedCheckpoint(acceptedKind);
+    const sourceBytesValue = sourceBytes(raw);
+    const projection = projectLegacyCheckpointV2Local({
+      sourceBytes: sourceBytesValue,
+      storeId: STORE_ID,
+      operationId: OPERATION_ID,
+      startedAt: STARTED_AT,
+      migrationAllowance: null,
+    });
+    const detail = projection.snapshot.ledger.deliveries[0];
+    const grave = instructionGraveFromDetail(detail);
+    const snapshot = structuredClone(projection.snapshot);
+    snapshot.revision += 1;
+    snapshot.ledger.revision += 1;
+    snapshot.ledger.deliveries[0] = grave;
+    const normalizedSnapshot = normalizeCheckpointV3Local(snapshot);
+    const originalBytes = encodeCheckpointV3Local(normalizedSnapshot).sizeBytes;
+
+    const measurement = measureCheckpointReservation({
+      snapshot: normalizedSnapshot,
+      currentByteLimit: MAX_SOURCE_BYTES,
+    }, OPERATION_ID);
+    const applied = grave.appliedCorrelation;
+    const expectedAccepted = grave.acceptedCorrelation === null
+      ? structuredClone(applied)
+      : {
+        ...grave.acceptedCorrelation,
+        nativeTurnId: grave.acceptedCorrelation.nativeTurnId ?? applied.nativeTurnId,
+        nativeItemId: grave.acceptedCorrelation.nativeItemId ?? applied.nativeItemId,
+      };
+    const expandedGrave = normalizeDeliveryRecordV2Local({
+      ...grave,
+      acceptedCorrelation: expectedAccepted,
+    });
+    const expectedGrowth = Math.max(0,
+      encodeNormalized({ ledger: { deliveries: [expandedGrave] } }).sizeBytes -
+      encodeNormalized({ ledger: { deliveries: [grave] } }).sizeBytes);
+    assert.equal(measurement.detailGrowthBytes, expectedGrowth, acceptedKind);
+    assert.equal(measurement.fits, true, acceptedKind);
+    if (acceptedKind !== 'complete') assert.ok(measurement.detailGrowthBytes > 0, acceptedKind);
+    const clearGrant = canClearMigrationAllowance({
+      slot: 'checkpoint',
+      snapshotWithoutGrant: normalizedSnapshot,
+      normalByteLimit: originalBytes,
+    });
+    assert.equal(clearGrant.canClear, false, acceptedKind);
+    assert.ok(clearGrant.reserveBytes > originalBytes, acceptedKind);
+    assert.equal(clearGrant.reserveBytes, measurement.reservedBytes, acceptedKind);
+
+    const currentOnly = measureCheckpointReservation({
+      snapshot: normalizedSnapshot,
+      deliveryCandidates: [{
+        deliveryAttemptId: grave.deliveryAttemptId,
+        candidates: [{ variant: 'current', record: grave }],
+      }],
+      currentByteLimit: MAX_SOURCE_BYTES,
+    }, OPERATION_ID);
+    assert.equal(currentOnly.detailGrowthBytes, measurement.detailGrowthBytes, acceptedKind);
+
+    const insufficient = measureCheckpointReservation({
+      snapshot: normalizedSnapshot,
+      currentByteLimit: measurement.reservedBytes - 1,
+    }, OPERATION_ID);
+    assert.equal(insufficient.fits, false, acceptedKind);
+    assert.equal(encodeCheckpointV3Local(normalizedSnapshot).sizeBytes, originalBytes, acceptedKind);
+  }
+
+  const source = sourceBytes(legacyAppliedCheckpoint('none'));
+  const noGrant = projectLegacyReclamationMigrationLocal({
+    configuredSlots: ['checkpoint'],
+    sourceBytesBySlot: { checkpoint: source },
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowanceBySlot: { checkpoint: null },
+  });
+  const direct = projectLegacyCheckpointV2Local({
+    sourceBytes: source,
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowance: null,
+  });
+  assert.deepEqual(
+    encodeCheckpointV3Local(noGrant.slots.checkpoint.target.snapshot).bytes,
+    direct.encoded.bytes,
+  );
+  const sourceDescriptor = noGrant.slots.checkpoint.source;
+  const maxGrantProjection = projectLegacyReclamationMigrationLocal({
+    configuredSlots: ['checkpoint'],
+    sourceBytesBySlot: { checkpoint: source },
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowanceBySlot: {
+      checkpoint: {
+        operationId: OPERATION_ID,
+        sourceSchemaVersion: sourceDescriptor.schemaVersion,
+        sourceSizeBytes: sourceDescriptor.sizeBytes,
+        sourceSha256: sourceDescriptor.sha256,
+        maxExtraBytes: MAX_SAFE_INTEGER,
+        eligibleAttemptIds: noGrant.slots.checkpoint.eligibleIds,
+      },
+    },
+  });
+  const grant = measureMigrationAllowance({
+    slot: 'checkpoint',
+    sourcePresent: true,
+    sourceSchemaVersion: sourceDescriptor.schemaVersion,
+    sourceRevision: sourceDescriptor.revision,
+    sourceSizeBytes: sourceDescriptor.sizeBytes,
+    sourceSha256: sourceDescriptor.sha256,
+    currentByteLimit: sourceDescriptor.sizeBytes,
+    anchor: noGrant.anchor,
+    eligibleIds: noGrant.slots.checkpoint.eligibleIds,
+    projections: {
+      withoutGrant: noGrant.slots.checkpoint.candidateSnapshotsByBoundary,
+      withMaximumGrant: maxGrantProjection.slots.checkpoint.candidateSnapshotsByBoundary,
+      deliveryCandidates: maxGrantProjection.slots.checkpoint.deliveryCandidates,
+    },
+  });
+  assert.ok(grant !== null);
+  assert.ok(grant.maxExtraBytes <= FIXED_H_BOUNDS.checkpoint);
 });
 
 test('checkpoint and instruction external candidate rows can increase but never reduce internal reserves', () => {
