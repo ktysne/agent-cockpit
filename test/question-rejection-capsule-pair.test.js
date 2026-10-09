@@ -8,7 +8,14 @@ const {
   normalizeQuestionDeliveryCapsule,
   normalizeQuestionRejectionCapsule,
 } = require('../src/server/question-rejection-capsule-codec');
-const { makeDeliveryCapsule } = require('./helpers/question-rejection-capsule-fixtures');
+const { normalizeQuestionReservation } = require('../src/server/common-question-reclamation-codec');
+const {
+  normalizeDeliveryRecordV2Local,
+  normalizeLogicalTombstoneV2Local,
+} = require('../src/server/delivery-reclamation-codec');
+const {
+  normalizeReclaimedQuestionPair,
+} = require('../src/server/reclamation-store-consistency');
 const { validateQuestionRejectionCapsulePair } = require('../src/server/question-rejection-capsule-pair');
 const {
   createMaximalQuestionRejectionCapsulePairFixture,
@@ -49,9 +56,9 @@ function longIdentifier(prefix, index) {
   return uniquePrefix + 'x'.repeat(512 - uniquePrefix.length);
 }
 
-function makeRepeatedGroupParts(states) {
+function makeRepeatedGroupParts(states, provider = 'claude') {
   const fixtures = states.map((state) => createQuestionRejectionCapsulePairFixture({
-    provider: 'claude',
+    provider,
     presence: 'checkpoint',
     state,
   }));
@@ -76,8 +83,8 @@ function makeRepeatedGroupParts(states) {
   return { reservations, deliveries, metadata: fixtures[0].metadata };
 }
 
-function makeRepeatedGroupInput(states) {
-  const { reservations, deliveries, metadata } = makeRepeatedGroupParts(states);
+function makeRepeatedGroupInput(states, provider) {
+  const { reservations, deliveries, metadata } = makeRepeatedGroupParts(states, provider);
   return makePairInput(reservations, deliveries, metadata);
 }
 
@@ -208,20 +215,29 @@ test('selected logical context is an exact unordered set of unique keys and matc
   assert.throws(() => validateQuestionRejectionCapsulePair(wrongSource));
 });
 
-test('one selected tombstone covers a superseded grave and one active grave in the same group', () => {
-  const input = makeRepeatedGroupInput(['superseded_before_send', 'available']);
-  const result = validateQuestionRejectionCapsulePair(input);
-  assert.equal(result.reservations.length, 2);
-  assert.equal(result.deliveries.length, 2);
-  assert.equal(result.selectedLogicalTombstones.length, 1);
-});
-
-test('a logical group cannot contain two graves that are not superseded before send', () => {
-  for (const states of [['available', 'available'], ['applied', 'applied']]) {
-    assert.throws(() => validateQuestionRejectionCapsulePair(makeRepeatedGroupInput(states)), {
-      name: 'TypeError',
-      message: INVALID_PAIR,
-    });
+test('logical group state combinations preserve the per-provider superseded constraint', () => {
+  const cases = [
+    { states: ['superseded_before_send', 'superseded_before_send'], accepted: true },
+    { states: ['superseded_before_send', 'available'], accepted: true },
+    { states: ['cancelled_before_send', 'available'], accepted: false },
+    { states: ['available', 'available'], accepted: false },
+    { states: ['applied', 'applied'], accepted: false },
+  ];
+  for (const provider of ['claude', 'codex']) {
+    for (const { states, accepted } of cases) {
+      const input = makeRepeatedGroupInput(states, provider);
+      if (accepted) {
+        const result = validateQuestionRejectionCapsulePair(input);
+        assert.equal(result.reservations.length, 2);
+        assert.equal(result.deliveries.length, 2);
+        assert.equal(result.selectedLogicalTombstones.length, 1);
+      } else {
+        assert.throws(() => validateQuestionRejectionCapsulePair(input), {
+          name: 'TypeError',
+          message: INVALID_PAIR,
+        });
+      }
+    }
   }
 });
 
@@ -304,8 +320,8 @@ test('pair boundary maps lower-level validation errors to its public error code'
 });
 
 test('pair boundary preserves only the two intentional capsule size errors', () => {
-  const fixture = createMaximalQuestionRejectionCapsulePairFixture();
-  const oversizedQuestion = clone(fixture.input);
+  const noCheckpoint = createQuestionRejectionCapsulePairFixture({ provider: 'claude', presence: 'none' });
+  const reservations = Array.from({ length: 256 }, (_, index) => clone(noCheckpoint.questionReservations[0]));
   const questionFields = [
     ['internalQuestionId', 'internal'],
     ['questionId', 'question'],
@@ -315,25 +331,39 @@ test('pair boundary preserves only the two intentional capsule size errors', () 
     ['executionBinding.actor.id', 'actor'],
     ['deliveryIntent.deliveryAttemptId', 'attempt'],
     ['deliveryIntent.logicalMessageId', 'logical'],
-    ['sessionId', 'session'],
   ];
-  oversizedQuestion.questionCapsule.reservations.forEach((reservation, index) => {
+  reservations.forEach((reservation, index) => {
     for (const [path, prefix] of questionFields) {
       setPath(reservation, path, longIdentifier(prefix, index));
     }
+  });
+  const oversizedQuestion = makePairInput(reservations, [], noCheckpoint.metadata, []);
+  assert.equal(oversizedQuestion.checkpointCapsule, null);
+  assert.equal(oversizedQuestion.selectedLogicalTombstones.length, 0);
+  for (const reservation of reservations) {
+    assert.doesNotThrow(() => normalizeQuestionReservation(reservation));
+    assert.doesNotThrow(() => normalizeReclaimedQuestionPair({ reservation, delivery: null }));
+  }
+  assert.throws(() => normalizeQuestionRejectionCapsule(oversizedQuestion.questionCapsule), {
+    name: 'RangeError',
+    message: 'question_capsule_too_large',
   });
   assert.throws(() => validateQuestionRejectionCapsulePair(oversizedQuestion), {
     name: 'RangeError',
     message: 'question_capsule_too_large',
   });
 
-  const oversizedDelivery = clone(fixture.input);
-  const deliveries = expandQuestionDeliveryCapsule(oversizedDelivery.checkpointCapsule);
+  const fixture = createMaximalQuestionRejectionCapsulePairFixture();
+  const linkedReservations = clone(fixture.questionReservations);
+  const deliveries = expandQuestionDeliveryCapsule(fixture.input.checkpointCapsule);
   deliveries.forEach((delivery, index) => {
     const launchKey = ['launch', 'run', 'attempt'].map((prefix) => longIdentifier(prefix, index));
     const launchRef = longIdentifier('launch-ref', index);
     delivery.deliveryAttemptId = longIdentifier('delivery-attempt', index);
     delivery.logicalMessageId = longIdentifier('logical-message', index);
+    linkedReservations[index].launchRef = launchRef;
+    linkedReservations[index].deliveryIntent.deliveryAttemptId = delivery.deliveryAttemptId;
+    linkedReservations[index].deliveryIntent.logicalMessageId = delivery.logicalMessageId;
     delivery.sourceRef.launchRef = launchRef;
     delivery.targetRef.launchRef = launchRef;
     delivery.sourceRef.launchKey = launchKey;
@@ -345,34 +375,64 @@ test('pair boundary preserves only the two intentional capsule size errors', () 
       }
     }
   });
-  oversizedDelivery.checkpointCapsule = makeDeliveryCapsule(deliveries, fixture.metadata);
+  const oversizedDelivery = makePairInput(linkedReservations, deliveries, fixture.metadata);
+  assert.doesNotThrow(() => normalizeQuestionRejectionCapsule(oversizedDelivery.questionCapsule));
+  for (let index = 0; index < deliveries.length; index += 1) {
+    assert.doesNotThrow(() => normalizeQuestionReservation(linkedReservations[index]));
+    assert.doesNotThrow(() => normalizeDeliveryRecordV2Local(deliveries[index]));
+    assert.doesNotThrow(() => normalizeReclaimedQuestionPair({
+      reservation: linkedReservations[index],
+      delivery: deliveries[index],
+    }));
+    assert.doesNotThrow(() => normalizeLogicalTombstoneV2Local(oversizedDelivery.selectedLogicalTombstones[index]));
+  }
+  assert.throws(() => normalizeQuestionDeliveryCapsule(oversizedDelivery.checkpointCapsule), {
+    name: 'RangeError',
+    message: 'question_delivery_capsule_too_large',
+  });
   assert.throws(() => validateQuestionRejectionCapsulePair(oversizedDelivery), {
     name: 'RangeError',
     message: 'question_delivery_capsule_too_large',
   });
 });
 
-test('pair retention rejects a terminal grave before seven days after its terminal time', () => {
-  const fixture = createQuestionRejectionCapsulePairFixture({
-    provider: 'claude',
-    presence: 'checkpoint',
-    state: 'applied',
-  });
-  const reservation = clone(fixture.questionReservations[0]);
-  const delivery = clone(fixture.checkpointDeliveries[0]);
-  reservation.quarantinedAt = 100;
-  reservation.reclamation.preparedAt = 100 + TERMINAL_RETENTION_MS;
-  reservation.reclaimedAt = reservation.reclamation.preparedAt;
-  delivery.terminalAt = 200;
-  delivery.reclamation.reclaimedAt = 200 + TERMINAL_RETENTION_MS;
-  const input = makePairInput([reservation], [delivery], fixture.metadata);
+test('terminal retention uses its exact boundary for both providers and every terminal state', () => {
+  for (const provider of ['claude', 'codex']) {
+    for (const state of TERMINAL_STATES) {
+      const fixture = createQuestionRejectionCapsulePairFixture({ provider, presence: 'checkpoint', state });
+      const reservation = clone(fixture.questionReservations[0]);
+      const delivery = clone(fixture.checkpointDeliveries[0]);
+      const quarantinedAt = reservation.quarantinedAt;
+      const terminalAt = quarantinedAt + 100;
+      const deadline = terminalAt + TERMINAL_RETENTION_MS;
+      assert.ok(quarantinedAt < terminalAt);
 
-  assert.doesNotThrow(() => normalizeQuestionRejectionCapsule(input.questionCapsule));
-  assert.doesNotThrow(() => normalizeQuestionDeliveryCapsule(input.checkpointCapsule));
-  assert.throws(() => validateQuestionRejectionCapsulePair(input), {
-    name: 'TypeError',
-    message: INVALID_PAIR,
-  });
+      reservation.reclamation.preparedAt = deadline;
+      reservation.reclaimedAt = deadline;
+      delivery.terminalAt = terminalAt;
+      delivery.reclamation.reclaimedAt = deadline;
+      const validInput = makePairInput([reservation], [delivery], fixture.metadata);
+      assert.equal(reservation.reclamation.preparedAt, deadline);
+      assert.equal(reservation.reclaimedAt, deadline);
+      assert.equal(delivery.reclamation.reclaimedAt, deadline);
+      assert.doesNotThrow(() => normalizeQuestionRejectionCapsule(validInput.questionCapsule));
+      assert.doesNotThrow(() => normalizeQuestionDeliveryCapsule(validInput.checkpointCapsule));
+      assert.doesNotThrow(() => validateQuestionRejectionCapsulePair(validInput));
+
+      const earlyPreparation = clone(validInput);
+      earlyPreparation.questionCapsule.reservations[0].reclamation.preparedAt = deadline - 1;
+      assert.doesNotThrow(() => normalizeQuestionRejectionCapsule(earlyPreparation.questionCapsule));
+      assert.doesNotThrow(() => normalizeQuestionDeliveryCapsule(earlyPreparation.checkpointCapsule));
+      assert.throws(() => validateQuestionRejectionCapsulePair(earlyPreparation), {
+        name: 'TypeError',
+        message: INVALID_PAIR,
+      });
+
+      const earlyGrave = clone(delivery);
+      earlyGrave.reclamation.reclaimedAt = deadline - 1;
+      assert.throws(() => normalizeDeliveryRecordV2Local(earlyGrave), TypeError);
+    }
+  }
 });
 
 test('null-checkpoint pairs require seven days after quarantine for none and indeterminate providers', () => {

@@ -492,8 +492,10 @@ getterとProxyを実行しない検査に訪問予算を加え、共有参照の
 契約と後続gateは[容量回収計画](../design/codex-capacity-reclamation.md#単体質問capsuleと選択ペアの検査)に置く。
 [#334](https://github.com/ktysne/agent-cockpit/pull/334)は#333をbaseとするDraft PRである。
 初回head `56d9d33`の全体試験は2,589件成功、1件skip、失敗0件だった。
-Claude R1はblocker 0件、要修正2件と任意提案4件で、同groupの非superseded件数と非保存contextの任意順受付を修正する。
-任意提案の例外統一、操作IDと保持期限の試験、fixture builderの共通化も適用する。
+Claude R1の要修正2件と任意提案4件を`060f516`で適用し、同groupの非superseded件数、非保存contextの任意順受付、例外の統一を修正した。
+操作IDと保持期限の試験、fixture builderの共通化も同headへ反映した。
+修正後の全体試験は2,596件成功、1件skip、失敗0件で、Claude R2はblockerと要修正0件だった。
+R2の任意提案に従い、保持期限の成功側対照、両providerの状態境界、容量超過入力の相関を試験で補強する。
 保存接続、cold復旧、件数枠の解放と実runtime確認は未実施である。
 
 ## 起票していない候補

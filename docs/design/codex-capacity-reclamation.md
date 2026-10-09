@@ -279,8 +279,10 @@ nullableなscalarはnullでも他の値でも一訪問と数え、questionで非
 capsuleのattempt順は元ledgerの履歴順を表さないため、後続outer形式で元の順序を保存する方法を決め、superseded履歴の検査を行う。
 旧readerが新outer版を拒否する条件、保存途中の故障とcold復旧、アンカーの退役証拠、件数枠の解放も別のgateとして残す。
 単体codecと選択ペアの成功を、これらの全体条件の成立へ読み替えない。
-単体codecは局所schemaを検査し、隔離後と確定終端後の保持期限は選択ペアから既存のrecord相関検査へ委ねる。
+CPの単体codecは確定終端から墓標作成までの7日保持を検査する。
+質問の回収準備が隔離後と確定終端後の7日を満たす条件は、選択ペアから既存のrecord相関検査へ委ねる。
 公開pair入口は不正入力を一つのTypeErrorへ統一し、意図したcapsule byte超過だけをRangeErrorで返す。
+容量超過は他の検査より先に検出される場合があるため、RangeErrorは容量以外の妥当性を保証しない。
 いずれの例外messageも保存や回復の許可を表さない。
 
 ### 永続集約への条件
