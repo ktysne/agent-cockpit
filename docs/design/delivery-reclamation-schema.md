@@ -3,6 +3,24 @@
 この文書は[容量回収計画](codex-capacity-reclamation.md)の段階1で定める配信側の保存契約である。
 実装時は[質問回収アンカー](question-reclamation-anchor.md)の`storeId`と移行fingerprintを共有する。
 
+## 局所 codec の入口と境界
+
+`src/server/delivery-reclamation-codec.js` は、新形式を保存処理へ接続せず検査する独立した入口である。
+`normalizeDeliveryRecordV2Local` と `normalizeDeliveryLedgerV2Local` は variant、終端時刻、相関、論理墓標、PR alias を検査する。
+`normalizeCheckpointV3Local` は外側3・内包ledger 2の構造と、同じcheckpoint内の登録履歴・配信参照を照合する。
+`normalizeInstructionRecordV2Local` と `normalizeInstructionJournalV2Local` は envelope、digest、回収準備、本文なし形式、重複を検査する。
+`encodeDeliveryLedgerV2Local`、`encodeCheckpointV3Local`、`encodeInstructionJournalV2Local` は、対応する検査後のpretty JSONに末尾LFを付けたUTF-8 bytes、byte数、SHA-256指紋を返す。
+
+getter、toJSON、継承されたtoJSON、入力値の暗黙の文字列変換は実行しない。
+復旧用state変換、旧versionの補完、保存、回収操作は行わない。
+既存reader、writer、service、標準起動からこの入口は呼ばない。
+
+Local入口の成功は、アンカーや質問journalとの照合、instruction journalとcheckpointの照合、grantの発行資格、固定H/Tや容量予約の検証を意味しない。
+これらと旧形式の投影は容量回収計画の1dへ残す。
+配信detail/graveのclaimsまたはdigestとlaunch履歴の一致は、checkpoint内の一意なlaunch履歴との照合で保証する。ledger単体ではclaimsを保持するaliasとの照合と、各recordの局所整合を検査する。
+7日保持の局所時刻条件は検査するが、外部質問journalの隔離時刻による期限や、過去のsnapshotからの遷移不変性はこの入口だけでは判定しない。
+fixtureの成功は実runtime適合の証拠ではない。
+
 ## 現行形式と容量上限
 
 | 保存先 | 現行形式 | 現行上限 |
