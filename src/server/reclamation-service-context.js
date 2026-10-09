@@ -35,6 +35,8 @@ const {
   normalizeQuestionReclamationAnchorV1Local,
 } = require('./question-reclamation-anchor-codec');
 const { decodeSourceBytes, encodeNormalized } = require('./reclamation-json-codec');
+const { consumeBoundedQuestionWriteFailure } = require('./reclamation-persistence');
+const { validateQuestionUncertainStoreWrite } = require('./question-uncertain-store-write');
 const { createReclamationMigrationCoordinator } = require('./reclamation-migration-coordinator');
 const {
   validateQuestionPeriodRetirementAnchorTransition,
@@ -295,6 +297,9 @@ function createReclamationServiceContext(value) {
   let closed = false;
   let failureCode = null;
   let lastObservedNow = null;
+  let uncertainQuestions = null;
+  let questionFailureCode = null;
+  const localQuestionErrors = new WeakSet();
   let readyResolve;
   let readyReject;
   let readyPending = true;
@@ -306,6 +311,59 @@ function createReclamationServiceContext(value) {
 
   function contextCanWrite() {
     return opened && !blocked && !closing && !closed && coordinator?.canWrite() === true;
+  }
+
+  function questionCanWrite() {
+    return contextCanWrite() && uncertainQuestions === null;
+  }
+
+  function questionUncertainError(code = 'question_journal_uncertain') {
+    const error = contextError(code);
+    localQuestionErrors.add(error);
+    return error;
+  }
+
+  function assertQuestionsKnown() {
+    if (uncertainQuestions !== null) throw questionUncertainError();
+  }
+
+  function blockUnlessLocalQuestionError(error) {
+    if (!localQuestionErrors.has(error)) block(error);
+  }
+
+  function freezeQuestionCandidate(value) {
+    for (const child of Object.values(value)) {
+      if (child !== null && typeof child === 'object') freezeQuestionCandidate(child);
+    }
+    return Object.freeze(value);
+  }
+
+  function qualifyQuestionWriteFailure(slot, error, previous, candidate, bytes) {
+    if (slot !== 'questions' || uncertainQuestions !== null || !contextCanWrite() ||
+        anchor === null || anchor.migration !== null ||
+        !consumeBoundedQuestionWriteFailure(persistence, error, bytes)) return false;
+    const questionCandidates = Object.freeze([
+      freezeQuestionCandidate(cloneSnapshot(previous)), freezeQuestionCandidate(cloneSnapshot(candidate)),
+    ]);
+    try {
+      validateQuestionUncertainStoreWrite({ anchor, previousStores: stores, nextStores: stores,
+        questionCandidates, normalByteLimitsBySlot: limitsForTransitions });
+    } catch { return false; }
+    uncertainQuestions = questionCandidates;
+    questionFailureCode = errorCodeFrom(error);
+    localQuestionErrors.add(error);
+    try {
+      Promise.resolve(writersBySlot.questions.stop()).catch((stopError) => { block(stopError); });
+    } catch (stopError) { block(stopError); }
+    return !blocked;
+  }
+
+  function validateUncertainNonQuestionWrite(nextStores) {
+    if (uncertainQuestions === null) return;
+    try {
+      validateQuestionUncertainStoreWrite({ anchor, previousStores: stores, nextStores,
+        questionCandidates: uncertainQuestions, normalByteLimitsBySlot: limitsForTransitions });
+    } catch { throw questionUncertainError('question_uncertain_transition_rejected'); }
   }
 
   function observeClock() {
@@ -326,10 +384,15 @@ function createReclamationServiceContext(value) {
       if (!anchor) throw contextError('question_gate_closed');
       return cloneSnapshot(anchor);
     },
-    canWrite: contextCanWrite,
+    canWrite: questionCanWrite,
   });
 
   function currentSnapshot() {
+    assertQuestionsKnown();
+    return rawSnapshot();
+  }
+
+  function rawSnapshot() {
     if (!anchor) return null;
     return makeRecord([['anchor', cloneSnapshot(anchor)], ['stores', cloneSnapshot(stores)]]);
   }
@@ -469,8 +532,11 @@ function createReclamationServiceContext(value) {
     return Object.freeze({
       slot,
       normalByteLimit: normalByteLimitsBySlot[slot],
+      assertQuestionReadable() {
+        if (slot === 'questions') assertQuestionsKnown();
+      },
       canWrite() {
-        return contextCanWrite();
+        return slot === 'questions' ? questionCanWrite() : contextCanWrite();
       },
       getStoreId() {
         if (!opened || anchor === null) throw contextError('reclamation_writer_cold');
@@ -478,6 +544,7 @@ function createReclamationServiceContext(value) {
       },
       async load() {
         await ready;
+        if (slot === 'questions') assertQuestionsKnown();
         if (!opened || blocked || closing || closed) throw contextError('reclamation_service_blocked');
         return cloneSnapshot(currentStore(slot));
       },
@@ -494,6 +561,7 @@ function createReclamationServiceContext(value) {
           return Promise.reject(error);
         }
         return enqueueIO(async () => {
+          if (slot === 'questions') assertQuestionsKnown();
           requireValue(contextCanWrite(), 'reclamation_service_blocked');
           requireValue(opened && anchor !== null && stores[slot] !== null, 'reclamation_writer_cold');
           const previous = stores[slot];
@@ -502,6 +570,7 @@ function createReclamationServiceContext(value) {
           'reclamation_store_transition_rejected');
           const nextStores = cloneSnapshot(stores);
           nextStores[slot] = candidate;
+          validateUncertainNonQuestionWrite(nextStores);
           const transition = validateReclamationStoreWrite({
             anchor,
             previousStores: stores,
@@ -528,7 +597,7 @@ function createReclamationServiceContext(value) {
             requireValue(readback !== null && sameBytes(readback, encoded.bytes),
               'reclamation_persistence_readback_mismatch');
           } catch (error) {
-            block(error);
+            if (!qualifyQuestionWriteFailure(slot, error, previous, candidate, encoded.bytes)) block(error);
             throw error;
           }
           stores[slot] = candidate;
@@ -568,16 +637,19 @@ function createReclamationServiceContext(value) {
         });
       },
       prepareResume(snapshot) {
+        assertQuestionsKnown();
         if (closing || closed || blocked) throw contextError('reclamation_service_blocked');
         installSnapshot(snapshot);
       },
       flush() {
         return ioTail.then(() => {
+          if (slot === 'questions') assertQuestionsKnown();
           if (blocked || closing || closed) throw contextError('reclamation_service_blocked');
         });
       },
       close,
       getSnapshot() {
+        if (slot === 'questions') assertQuestionsKnown();
         if (blocked || closing || closed) throw contextError('reclamation_service_blocked');
         return cloneSnapshot(currentStore(slot));
       },
@@ -818,6 +890,7 @@ function createReclamationServiceContext(value) {
   }
 
   function start(writersValue) {
+    assertQuestionsKnown();
     if (startPromise !== null) return startPromise;
     if (closing || closed) return Promise.reject(contextError('reclamation_service_context_closed'));
     if (blocked) return Promise.reject(contextError('reclamation_service_blocked'));
@@ -863,6 +936,7 @@ function createReclamationServiceContext(value) {
         retiredAt,
         reason,
       });
+      assertQuestionsKnown();
       try {
         await persistence.writeAnchorBytes(encodeQuestionReclamationAnchorV1Local(validated).bytes,
           NORMAL_ANCHOR_MAX_BYTES);
@@ -878,6 +952,7 @@ function createReclamationServiceContext(value) {
   }
 
   async function retireQuestionPeriod(value) {
+    assertQuestionsKnown();
     const fields = ['identity', 'periodId', 'questionService', 'deliveryStore'];
     let keys;
     try {
@@ -928,7 +1003,7 @@ function createReclamationServiceContext(value) {
         }));
       return result;
     } catch (error) {
-      block(error);
+      blockUnlessLocalQuestionError(error);
       throw error;
     }
   }
@@ -960,7 +1035,7 @@ function createReclamationServiceContext(value) {
   }
 
   function liveBodySnapshot(questionAccess, checkpointAccess) {
-    const snapshot = currentSnapshot();
+    const snapshot = rawSnapshot();
     requireValue(snapshot !== null, 'reclamation_writer_cold');
     snapshot.stores.questions = questionAccess.snapshot();
     snapshot.stores.checkpoint = checkpointAccess.snapshot();
@@ -1005,6 +1080,7 @@ function createReclamationServiceContext(value) {
   }
 
   async function reclaimQuestionBodies(value) {
+    assertQuestionsKnown();
     const inputValue = captureExactRecord(value,
       ['identity', 'periodId', 'questionService', 'deliveryStore'], 'invalid_question_body_reclamation');
     const request = captureRetiredPeriodRequest(makeRecord([
@@ -1077,7 +1153,7 @@ function createReclamationServiceContext(value) {
         deferredQuestionIds: Object.freeze(deferredQuestionIds),
       });
     } catch (error) {
-      block(error);
+      blockUnlessLocalQuestionError(error);
       throw error;
     }
   }
@@ -1100,7 +1176,7 @@ function createReclamationServiceContext(value) {
           const snapshot = () => {
             requireValue(contextCanWrite() && anchor !== null && anchor.migration === null,
               'reclamation_service_blocked');
-            const current = currentSnapshot();
+            const current = rawSnapshot();
             current.stores.instructions = instructionAccess.snapshot();
             current.stores.checkpoint = checkpointAccess.snapshot();
             return current;
@@ -1157,7 +1233,7 @@ function createReclamationServiceContext(value) {
           return Object.freeze({ status: 'complete', deliveryAttemptId: request.deliveryAttemptId });
         }));
     } catch (error) {
-      if (error.code !== 'instruction_not_found') block(error);
+      if (error.code !== 'instruction_not_found') blockUnlessLocalQuestionError(error);
       throw error;
     }
   }
@@ -1177,7 +1253,7 @@ function createReclamationServiceContext(value) {
         const snapshot = () => {
           requireValue(contextCanWrite() && anchor !== null && anchor.migration === null,
             'reclamation_service_blocked');
-          const current = currentSnapshot();
+          const current = rawSnapshot();
           current.stores.checkpoint = checkpointAccess.snapshot();
           return current;
         };
@@ -1239,12 +1315,13 @@ function createReclamationServiceContext(value) {
         return Object.freeze({ status: 'complete', deliveryAttemptId: request.deliveryAttemptId });
       });
     } catch (error) {
-      if (!['delivery_not_found', 'invalid_terminal_delivery_body_reclamation_kind'].includes(error.code)) block(error);
+      if (!['delivery_not_found', 'invalid_terminal_delivery_body_reclamation_kind'].includes(error.code)) blockUnlessLocalQuestionError(error);
       throw error;
     }
   }
 
   async function releaseMigrationAllowance(value) {
+    assertQuestionsKnown();
     const captured = captureExactRecord(value, ['slot', 'writer'], 'invalid_migration_allowance_release');
     const { slot, writer } = captured;
     requireValue(typeof slot === 'string' && configuredSlots.includes(slot) && writer &&
@@ -1253,8 +1330,9 @@ function createReclamationServiceContext(value) {
     let persistStarted = false;
     try {
       return await writer.withMigrationAllowance(async (access) => {
+        assertQuestionsKnown();
         requireValue(contextCanWrite(), 'reclamation_service_blocked');
-        const base = currentSnapshot();
+        const base = rawSnapshot();
         base.stores[slot] = access.snapshot();
         const planned = planMigrationAllowanceRelease({ ...base, normalByteLimitsBySlot: limitsForTransitions, slot });
         if (planned.status === 'released') {
@@ -1266,7 +1344,7 @@ function createReclamationServiceContext(value) {
         return Object.freeze({ status: planned.status, slot });
       });
     } catch (error) {
-      if (persistStarted) block(error);
+      if (persistStarted) blockUnlessLocalQuestionError(error);
       throw error;
     }
   }
@@ -1311,11 +1389,15 @@ function createReclamationServiceContext(value) {
     let coordinatorStatus = null;
     try { coordinatorStatus = coordinator?.status() ?? null; } catch (error) { if (!blocked) throw error; }
     return Object.freeze({
-      state: closed ? 'closed' : blocked ? 'blocked' : contextCanWrite() ? 'ready' : startPromise ? 'starting' : 'cold',
+      state: closed ? 'closed' : blocked ? 'blocked' : contextCanWrite() ? uncertainQuestions === null ? 'ready' : 'degraded' : startPromise ? 'starting' : 'cold',
       canWrite: contextCanWrite(),
       closing,
       closed,
       failureCode,
+      questionFailureCode,
+      slotHealth: Object.freeze(Object.fromEntries(configuredSlots.map((slot) => [slot,
+        closed ? 'closed' : blocked ? 'blocked' : slot === 'questions' && uncertainQuestions !== null
+          ? 'uncertain' : contextCanWrite() ? 'ready' : 'cold']))),
       gate: periodGate.snapshot(),
       coordinator: coordinatorStatus,
       capacity: capacityBudget.status(),

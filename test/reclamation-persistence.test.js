@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
+const { loadQuestionWriteIsolationModules } = require('./support/question-write-isolation-loader');
 
 const ANCHOR_NAME = 'question-reclamation-anchor.json';
 
@@ -494,4 +495,257 @@ test('an error reported after rename remains a failed and blocked write without 
   assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions), originalSource);
   assert.equal((await fsp.readdir(fixture.directory)).some((name) => name.endsWith('.tmp')), false);
   await persistence.close();
+});
+
+for (const phase of ['before', 'after']) {
+  test(`a default questions rename retry exhaustion in the ${phase} phase can be consumed once`, async (t) => {
+    const fixture = await createFixture(t);
+    const modules = loadQuestionWriteIsolationModules();
+    const original = Buffer.from('questions-before-write');
+    const replacement = Buffer.from('questions-after-write');
+    const checkpointPath = fixture.slotPathsBySlot.checkpoint;
+    await fsp.writeFile(fixture.slotPathsBySlot.questions, original);
+    const persistence = modules.persistence.createReclamationPersistence({
+      anchorPath: fixture.anchorPath,
+      slotPathsBySlot: {
+        questions: fixture.slotPathsBySlot.questions,
+        checkpoint: checkpointPath,
+      },
+    });
+    const error = Object.assign(new Error('rename stayed busy'), { code: 'EPERM' });
+    modules.nativeFileSystem.armRenameRetryExhaustion({
+      targetPath: fixture.slotPathsBySlot.questions,
+      phase,
+      error,
+    });
+
+    await assert.rejects(persistence.writeSlotBytes('questions', replacement, 100),
+      (caught) => caught === error);
+    assert.equal(modules.nativeFileSystem.renameCalls(fixture.slotPathsBySlot.questions), 4);
+    assert.equal(modules.nativeFileSystem.cleanupCalls(fixture.slotPathsBySlot.questions), 1);
+    assert.equal(modules.nativeFileSystem.events.some((event) =>
+      event.operation === (phase === 'before' ? 'unlink-removed' : 'unlink-missing')), true);
+    assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions),
+      phase === 'before' ? original : replacement);
+
+    await persistence.readSlotBytes('questions', 100);
+    await assert.rejects(persistence.writeSlotBytes('checkpoint', Buffer.from('blocked'), 100),
+      (caught) => caught.code === 'reclamation_persistence_question_failure_pending');
+    assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure({}, error, replacement), false);
+    assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(persistence, error,
+      Buffer.from('different bytes')), false);
+    assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(persistence, error, replacement), true);
+    assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(persistence, error, replacement), false);
+    await assert.rejects(persistence.writeSlotBytes('questions', Buffer.from('later'), 100),
+      (caught) => caught.code === 'reclamation_persistence_question_write_blocked');
+    await persistence.writeSlotBytes('checkpoint', Buffer.from('non-question write'), 100);
+    assert.deepEqual(persistence.status(), { closed: false, writeBlocked: false });
+    assert.equal((await fsp.readdir(fixture.directory)).some((name) => name.endsWith('.tmp')), false);
+    await persistence.close();
+  });
+}
+
+test('qualified question rename provenance is discarded on close and cannot be reused by another instance', async (t) => {
+  const firstFixture = await createFixture(t);
+  const secondFixture = await createFixture(t);
+  const modules = loadQuestionWriteIsolationModules();
+  const bytes = Buffer.from('same candidate');
+  const error = Object.assign(new Error('rename stayed busy'), { code: 'EBUSY' });
+  await fsp.writeFile(firstFixture.slotPathsBySlot.questions, Buffer.from('first source'));
+  await fsp.writeFile(secondFixture.slotPathsBySlot.questions, Buffer.from('second source'));
+  const first = modules.persistence.createReclamationPersistence({
+    anchorPath: firstFixture.anchorPath,
+    slotPathsBySlot: {
+      questions: firstFixture.slotPathsBySlot.questions,
+      checkpoint: firstFixture.slotPathsBySlot.checkpoint,
+    },
+  });
+  const second = modules.persistence.createReclamationPersistence({
+    anchorPath: secondFixture.anchorPath,
+    slotPathsBySlot: { questions: secondFixture.slotPathsBySlot.questions },
+  });
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: firstFixture.slotPathsBySlot.questions,
+    code: 'EBUSY',
+    error,
+  });
+  await assert.rejects(first.writeSlotBytes('questions', bytes, 100), (caught) => caught === error);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(second, error, bytes), false);
+  await first.close();
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(first, error, bytes), false);
+
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: secondFixture.slotPathsBySlot.questions,
+    code: 'EBUSY',
+    error,
+  });
+  await assert.rejects(second.writeSlotBytes('questions', bytes, 100), (caught) => caught === error);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(second, error, bytes), false);
+  assert.deepEqual(second.status(), { closed: false, writeBlocked: true });
+  assert.deepEqual(await fsp.readFile(secondFixture.slotPathsBySlot.questions), Buffer.from('second source'));
+  await second.close();
+});
+
+test('reusing a default rename error invalidates outstanding provenance across persistence instances', async (t) => {
+  const firstFixture = await createFixture(t);
+  const secondFixture = await createFixture(t);
+  const modules = loadQuestionWriteIsolationModules();
+  const bytes = Buffer.from('same candidate');
+  const error = Object.assign(new Error('rename stayed busy'), { code: 'EPERM' });
+  await fsp.writeFile(firstFixture.slotPathsBySlot.questions, Buffer.from('first source'));
+  await fsp.writeFile(secondFixture.slotPathsBySlot.questions, Buffer.from('second source'));
+  const first = modules.persistence.createReclamationPersistence({
+    anchorPath: firstFixture.anchorPath,
+    slotPathsBySlot: {
+      questions: firstFixture.slotPathsBySlot.questions,
+      checkpoint: firstFixture.slotPathsBySlot.checkpoint,
+    },
+  });
+  const second = modules.persistence.createReclamationPersistence({
+    anchorPath: secondFixture.anchorPath,
+    slotPathsBySlot: { questions: secondFixture.slotPathsBySlot.questions },
+  });
+
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: firstFixture.slotPathsBySlot.questions,
+    error,
+  });
+  await assert.rejects(first.writeSlotBytes('questions', bytes, 100), (caught) => caught === error);
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: secondFixture.slotPathsBySlot.questions,
+    error,
+  });
+  await assert.rejects(second.writeSlotBytes('questions', bytes, 100), (caught) => caught === error);
+
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(first, error, bytes), false);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(second, error, bytes), false);
+  await assert.rejects(first.writeSlotBytes('checkpoint', bytes, 100),
+    (caught) => caught.code === 'reclamation_persistence_question_failure_pending');
+  assert.deepEqual(second.status(), { closed: false, writeBlocked: true });
+  assert.deepEqual(await fsp.readFile(firstFixture.slotPathsBySlot.questions), Buffer.from('first source'));
+  assert.deepEqual(await fsp.readFile(secondFixture.slotPathsBySlot.questions), Buffer.from('second source'));
+  await Promise.all([first.close(), second.close()]);
+});
+
+test('custom persistence options and uncertain cleanup cannot create local question provenance', async (t) => {
+  const fixture = await createFixture(t);
+  const modules = loadQuestionWriteIsolationModules();
+  const bytes = Buffer.from('candidate');
+  const error = Object.assign(new Error('rename stayed busy'), { code: 'EPERM' });
+  await fsp.writeFile(fixture.slotPathsBySlot.questions, Buffer.from('source'));
+  const persistence = modules.persistence.createReclamationPersistence({
+    anchorPath: fixture.anchorPath,
+    slotPathsBySlot: { questions: fixture.slotPathsBySlot.questions },
+    atomicWriteBytes: undefined,
+  });
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: fixture.slotPathsBySlot.questions,
+    error,
+  });
+  await assert.rejects(persistence.writeSlotBytes('questions', bytes, 100), (caught) => caught === error);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(persistence, error, bytes), false);
+  assert.deepEqual(persistence.status(), { closed: false, writeBlocked: true });
+  await persistence.close();
+
+  const fileSystemFixture = await createFixture(t);
+  await fsp.writeFile(fileSystemFixture.slotPathsBySlot.questions, Buffer.from('source'));
+  const fileSystemError = Object.assign(new Error('rename stayed busy'), { code: 'EPERM' });
+  const fileSystemPersistence = modules.persistence.createReclamationPersistence({
+    anchorPath: fileSystemFixture.anchorPath,
+    slotPathsBySlot: { questions: fileSystemFixture.slotPathsBySlot.questions },
+    fileSystem: modules.nativeFileSystem.fileSystem,
+  });
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: fileSystemFixture.slotPathsBySlot.questions,
+    error: fileSystemError,
+  });
+  await assert.rejects(fileSystemPersistence.writeSlotBytes('questions', bytes, 100),
+    (caught) => caught === fileSystemError);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(
+    fileSystemPersistence, fileSystemError, bytes), false);
+  assert.deepEqual(fileSystemPersistence.status(), { closed: false, writeBlocked: true });
+  await fileSystemPersistence.close();
+
+  const checkpointFixture = await createFixture(t);
+  await fsp.writeFile(checkpointFixture.slotPathsBySlot.questions, Buffer.from('question source'));
+  const checkpointError = Object.assign(new Error('checkpoint rename stayed busy'), { code: 'EBUSY' });
+  const checkpointPersistence = modules.persistence.createReclamationPersistence({
+    anchorPath: checkpointFixture.anchorPath,
+    slotPathsBySlot: {
+      questions: checkpointFixture.slotPathsBySlot.questions,
+      checkpoint: checkpointFixture.slotPathsBySlot.checkpoint,
+    },
+  });
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: checkpointFixture.slotPathsBySlot.checkpoint,
+    code: 'EBUSY',
+    error: checkpointError,
+  });
+  await assert.rejects(checkpointPersistence.writeSlotBytes('checkpoint', bytes, 100),
+    (caught) => caught === checkpointError);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(
+    checkpointPersistence, checkpointError, bytes), false);
+  assert.deepEqual(checkpointPersistence.status(), { closed: false, writeBlocked: true });
+  assert.deepEqual(await fsp.readFile(checkpointFixture.slotPathsBySlot.questions), Buffer.from('question source'));
+  await checkpointPersistence.close();
+
+  const cleanupFixture = await createFixture(t);
+  await fsp.writeFile(cleanupFixture.slotPathsBySlot.questions, Buffer.from('source'));
+  const cleanupError = Object.assign(new Error('rename stayed busy'), { code: 'EPERM' });
+  const cleanupPersistence = modules.persistence.createReclamationPersistence({
+    anchorPath: cleanupFixture.anchorPath,
+    slotPathsBySlot: { questions: cleanupFixture.slotPathsBySlot.questions },
+  });
+  modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: cleanupFixture.slotPathsBySlot.questions,
+    error: cleanupError,
+    cleanupFailure: true,
+  });
+  await assert.rejects(cleanupPersistence.writeSlotBytes('questions', bytes, 100),
+    (caught) => caught === cleanupError);
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(cleanupPersistence, cleanupError, bytes), false);
+  assert.deepEqual(cleanupPersistence.status(), { closed: false, writeBlocked: true });
+  assert.equal((await fsp.readdir(cleanupFixture.directory)).some((name) => name.endsWith('.tmp')), true);
+  await modules.nativeFileSystem.removeTemporaryFiles(cleanupFixture.directory);
+  await cleanupPersistence.close();
+});
+
+test('a question failure arriving after close begins is globally blocked without provenance', async (t) => {
+  const fixture = await createFixture(t);
+  const modules = loadQuestionWriteIsolationModules();
+  const error = Object.assign(new Error('rename stayed busy'), { code: 'EPERM' });
+  const original = Buffer.from('before close');
+  await fsp.writeFile(fixture.slotPathsBySlot.questions, original);
+  const persistence = modules.persistence.createReclamationPersistence({
+    anchorPath: fixture.anchorPath,
+    slotPathsBySlot: { questions: fixture.slotPathsBySlot.questions },
+  });
+  const barrier = modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: fixture.slotPathsBySlot.questions,
+    error,
+    hold: true,
+  });
+  const write = persistence.writeSlotBytes('questions', Buffer.from('replacement'), 100);
+  await barrier.entered;
+  const closing = persistence.close();
+  barrier.release();
+  await assert.rejects(write, (caught) => caught === error);
+  await closing;
+
+  assert.equal(modules.persistence.consumeBoundedQuestionWriteFailure(
+    persistence, error, Buffer.from('replacement')), false);
+  assert.deepEqual(persistence.status(), { closed: true, writeBlocked: true });
+  assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions), original);
+  assert.equal((await fsp.readdir(fixture.directory)).some((name) => name.endsWith('.tmp')), false);
+});
+
+test('the isolated loader leaves global module cache and native filesystem references unchanged', () => {
+  const persistencePath = require.resolve('../src/server/reclamation-persistence');
+  const cachedPersistence = require.cache[persistencePath];
+  const nativeRename = fsp.rename;
+  const isolated = loadQuestionWriteIsolationModules();
+
+  assert.equal(typeof isolated.persistence.consumeBoundedQuestionWriteFailure, 'function');
+  assert.equal(require.cache[persistencePath], cachedPersistence);
+  assert.equal(fsp.rename, nativeRename);
 });

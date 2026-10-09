@@ -100,6 +100,12 @@ unknownと未確定状態は延期し、journalの準備、checkpointの墓標�
 保存とreadbackの後に同じleaseを縮小し、各writerとserviceのcacheへ反映する。
 条件と拒否・停止境界は[配信回収schema](delivery-reclamation-schema.md#migration-grantの明示解放)のGAR01〜GAR06に従う。
 
+質問journalの限定したrename失敗では、`reclamation.status()`を`degraded`とし、slotごとの健康状態を示す。
+質問の状態表示は利用不可にし、旧cacheを最新の質問として返さない。
+通常指示、PR通知とresultは、旧質問状態と候補状態の両方で保存の整合性を照合できる場合だけ継続する。
+局所停止中は全grantとleaseを保持し、期間退役とgrant解放を拒否する。
+認定条件と全停止との境界は[配信回収schema](delivery-reclamation-schema.md#質問journalの限定した保存結果不明)のQWI01〜QWI06に従う。
+
 移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。
 準備完了時の照合では、隔離済みでアンカーにも退役が記録された質問だけ、保存済みの完全相関を使う。
 現在の質問の認可は実行registryで照合し、古いlaunchやactorを復元して再認可しない。

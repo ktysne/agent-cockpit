@@ -197,6 +197,9 @@ grant解放は現在のfile byteだけで判定せず、固定相関の補完を
 明示入口と停止・保存の契約は[配信回収schema](delivery-reclamation-schema.md#migration-grantの明示解放)のGAR01〜GAR06に従う。
 質問journalの局所停止では、不確かなsnapshotを正常な保存状態として公開せず、そのslotのgrantと必要leaseを保持する。
 候補を限定できない破損、anchorまたは共有容量の障害まで、質問journalの停止分離へ一般化しない。
+最初の局所停止は標準atomic writerの限定したrename失敗に絞り、旧状態と候補状態の双方を照合する。
+清掃結果不明、readbackと任意writerの失敗は全停止を維持し、anchor、全grantとleaseを凍結する。
+詳細は[配信回収schema](delivery-reclamation-schema.md#質問journalの限定した保存結果不明)のQWI01〜QWI06に従う。
 自動実行は既存回収入口をqueue内で再判定して使い、unknownの終端化や質問期間の新規失効を行わない。
 
 ### 段階2の固定容量上界

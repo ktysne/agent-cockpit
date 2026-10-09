@@ -20,6 +20,40 @@ const OPERATION_ID = '33333333-3333-4333-8333-333333333333';
 const identity = Object.freeze({ provider: 'claude', nativeIdKind: 'session', hostId: 'host-1',
   homeScopeId: 'home-1', nativeId: 'native-1' });
 
+test('the bound uncertain read guard prevents dashboard fallback and cached adapter reads', async (t) => {
+  const fixture = makeFixture();
+  t.after(() => fixture.service.close());
+  await install(fixture);
+  await register(fixture, 'uncertain-guard-question');
+  const adapter = createCommonQuestionReclamationJournal({
+    backend: fixture.backendState.backend, periodGate: fixture.periodGate,
+  });
+  adapter.prepareResume(fixture.backendState.fullSnapshot);
+  const unavailable = Object.assign(new Error('question read uncertain'), { code: 'question_journal_uncertain' });
+  fixture.backendState.backend.assertQuestionReadable = () => { throw unavailable; };
+  await assert.rejects(fixture.service.dashboardSnapshot(), (error) => error === unavailable);
+  for (const read of [() => adapter.load(), () => adapter.getSnapshot(), () => adapter.getLegacySnapshot(),
+    () => adapter.getReservation('unknown'), () => adapter.findReservation(identity, 'period-1', 'unknown')]) {
+    assert.throws(read, (error) => error === unavailable);
+  }
+  assert.equal(fixture.service.getQuarantineDiagnostics().status, 'unavailable');
+});
+
+test('question read guards must be functions with synchronous void results', async (t) => {
+  const fixture = makeFixture();
+  t.after(() => fixture.service.close());
+  await install(fixture);
+  const adapter = createCommonQuestionReclamationJournal({
+    backend: fixture.backendState.backend, periodGate: fixture.periodGate,
+  });
+  adapter.prepareResume(fixture.backendState.fullSnapshot);
+  for (const guard of [false, () => true, () => Promise.reject(new Error('read guard rejected'))]) {
+    fixture.backendState.backend.assertQuestionReadable = guard;
+    assert.throws(() => adapter.getSnapshot(), { code: 'invalid_reclamation_read_guard' });
+    await assert.rejects(fixture.service.dashboardSnapshot(), { code: 'invalid_reclamation_read_guard' });
+  }
+});
+
 test('grant question scope rejects recursive service queues and expires after callback return', async (t) => {
   const fixture = makeFixture();
   t.after(() => fixture.service.close());

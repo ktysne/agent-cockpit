@@ -225,7 +225,21 @@ function createCommonQuestionService(options = {}) {
   }
 
   function assertSharedWriterCanWrite() {
-    if (!sharedWriterCanWrite()) throw serviceError('question_gate_closed');
+    if (!sharedWriterCanWrite()) {
+      assertQuestionReadKnown();
+      throw serviceError('question_gate_closed');
+    }
+  }
+
+  function assertQuestionReadKnown() {
+    const guard = reclamationOptions?.backend.assertQuestionReadable;
+    if (guard === undefined) return;
+    if (typeof guard !== 'function') throw serviceError('invalid_reclamation_read_guard');
+    const result = guard.call(reclamationOptions.backend);
+    if (result !== undefined) {
+      if (utilTypes.isPromise(result)) Promise.prototype.catch.call(result, () => {});
+      throw serviceError('invalid_reclamation_read_guard');
+    }
   }
 
   function captureWriterPeriodToken(writer) {
@@ -252,7 +266,8 @@ function createCommonQuestionService(options = {}) {
       return Promise.reject(serviceError('question_retirement_queue_reentry'));
     }
     if (reclamationMode && !sharedWriterCanWrite()) {
-      return Promise.reject(serviceError('question_gate_closed'));
+      try { assertSharedWriterCanWrite(); }
+      catch (error) { return Promise.reject(error); }
     }
     if (reclamationMode && (writerStopped || (!journalState && !diagnostic))) {
       return Promise.reject(serviceError(writerStopped ? 'question_gate_closed' : 'question_service_not_ready'));
@@ -1276,6 +1291,7 @@ function createCommonQuestionService(options = {}) {
 
   async function dashboardSnapshot() {
     return enqueue(async () => {
+      assertQuestionReadKnown();
       if (!journalState) return { version: 1, questions: [], recovery: {
         state: 'blocked', code: startupError?.code || 'question_journal_unavailable',
       } };
@@ -1298,6 +1314,7 @@ function createCommonQuestionService(options = {}) {
           recovery ||= { state: 'blocked', code: error?.code || 'question_reservation_unavailable' };
         }
       }
+      assertQuestionReadKnown();
       const questions = journalState.questions.map((record) => {
         const delivery = record.deliveryIntent ? deliveries.get(record.deliveryIntent.deliveryAttemptId) : null;
         try {
@@ -1405,9 +1422,11 @@ function createCommonQuestionService(options = {}) {
     if (grantScope.getStore() === grantScopeToken) throw serviceError('migration_allowance_access_reentry');
     if (!reclamationMode || typeof callback !== 'function') throw serviceError('question_reclamation_unavailable');
     if (retirementStorage.getStore() === retirementScope) throw serviceError('question_retirement_queue_reentry');
+    assertSharedWriterCanWrite();
     if (!accepting || writerStopped) throw serviceError('question_gate_closed');
     pendingOperations += 1;
     const queued = tail.then(async () => {
+      assertSharedWriterCanWrite();
       if (!journalState) throw serviceError('question_service_not_ready');
       reclamationOptions.periodGate.assertRetirement(ticket);
       let accessOpen = true;
@@ -1415,6 +1434,7 @@ function createCommonQuestionService(options = {}) {
         if (!accessOpen || retirementStorage.getStore() !== retirementScope) {
           throw serviceError('question_retirement_access_expired');
         }
+        assertSharedWriterCanWrite();
         reclamationOptions.periodGate.assertRetirement(ticket);
       };
       const access = Object.freeze({
@@ -1479,6 +1499,7 @@ function createCommonQuestionService(options = {}) {
       throw serviceError('question_retirement_queue_reentry');
     }
     const assertRetired = () => {
+      assertSharedWriterCanWrite();
       if (!accepting || writerStopped || !journalState || !sharedWriterCanWrite() ||
           !reclamationOptions.periodGate.isRetired(request.identity, request.periodId)) {
         throw serviceError('question_period_not_retired');

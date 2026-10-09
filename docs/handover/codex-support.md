@@ -116,6 +116,27 @@ Claude R1の保存前拒否と質問adapter停止を修正し、実退役処理�
 この変更は件数枠の解放、自動実行、質問journalの局所停止、標準起動と設定画面への接続を含まない。
 fixtureの予約状態不明を実OSの容量喪失や実runtimeの故障へ読み替えない。
 
+### 質問journalの限定した保存結果不明
+
+質問journalの局所停止は、標準atomic保存のrename再試行がEPERMまたはEBUSYで尽き、tempの後始末まで確認できた場合に限る。
+元のadapter、例外instance、保存候補bytesを内部で照合し、旧snapshotと候補snapshotの両方が有効で、grantとslot構成が同じ場合だけ質問を不明状態にする。
+質問の公開読取、dashboard、保存を拒否し、anchorと全slotのgrant解放を凍結する。
+非質問の保存は共通I/O queueで最新状態を取得し、両方の質問snapshotに対して同じ更新が有効か保存前に検査する。
+一般のreadback不明、custom保存経路、checkpoint保存故障、質問grant解放故障は全停止のままである。
+復帰にはfresh instanceでの完全なcold照合が必要で、同じinstanceの再開は許可しない。
+
+純粋validatorの13件、persistenceの20件成功と1件skip、contextの40件、質問serviceの16件、局所停止の関連5件は成功した。
+これらには重複があるため合算しない。
+実factoryと実サービスのnative fixtureは両providerの12件に成功し、rename前の旧bytesとrename後の候補bytesを検査した。
+局所停止後の公開instruction取消と7日後の本文回収、grantと容量leaseと質問checkpoint行の保持、低層のgrant消去拒否後の継続を確認した。
+全停止のcheckpoint故障と質問grant解放故障はfresh cold起動で保存実体を照合し、追加送信とファイル書換えなしに復帰した。
+質問のrename成立後の復帰では、既存のcold復旧契約に従って候補内の質問を隔離するため、必要なjournalとanchorの修復保存を行う。
+このcold復旧を含む最終12件も成功し、全grantの保持、追加native送信なし、診断読取後と2回目のfresh起動後のbytes安定を確認した。
+低層の不正candidate試験は、公開操作で片方のworldだけが不正になる再現例を示すものではない。
+
+注入したrename故障とfake native processの試験であり、実OS由来の故障や実vendor送信の証拠にはしない。
+自動回収、件数枠の解放、標準起動と設定画面への接続は後続である。
+
 ## 全体の流れ
 
 | 段階 | 内容 | 対象 | 状態(2026-10-09 確認) |
@@ -147,7 +168,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放) | grant解放のレビュー、段階3の停止範囲分離・自動実行、段階4の世代集約 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放) | grant解放はレビュー収束。段階3の限定した質問局所停止を検証中で、自動実行と段階4の世代集約が後続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
