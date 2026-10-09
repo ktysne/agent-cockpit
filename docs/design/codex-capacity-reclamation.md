@@ -114,7 +114,8 @@ intent の追加による保証は、プロセスクラッシュ後の整合性�
 自動回収と世代全体の拒否は、以下の段階的な実装と検証に従って導入する。
 
 段階1の具体形式は[質問schema](common-question-reclamation-schema.md)、[配信schema](delivery-reclamation-schema.md)、[永久失効と移行アンカー](question-reclamation-anchor.md)に定める。
-これらは実装前の保存契約であり、fixtureや実runtimeで検証済みの形式ではない。
+局所codec、純粋な旧形式投影、store間照合と容量計算を独立した入口として実装している。
+保存境界の故障注入と実runtimeの確認は後続で行う。
 
 ## 段階的な実装と完了条件
 
@@ -164,3 +165,59 @@ fixture の合格を実 runtime の適合確認と区別する。
 本文回収の実行は段階3以降に残す。
 段階2と3では個別墓標が件数枠を消費し続けるため、満杯からの移行成功は新規受付の再開を保証しない。
 件数枠の回収と継続受付は段階4で確認し、#209を先行部分だけで完了扱いにしない。
+
+### 段階2の固定容量上界
+
+固定上界は旧sourceの実byte列を対象とし、compact JSON、指数表記、重複keyを含めて検査する。
+重複keyはJSON.parseで採用された最後の値のtokenだけを容量証明へ割り当て、捨てられたtokenのbyteを無視する。
+正規化したJSON文字列の内容byteは、対応する元tokenの内容byte以下である。
+引用符、backslash、controlのescapeは同じ長さか短くなり、Unicode escapeはUTF-8 literalへ短縮する場合がある。
+単独surrogateは元JSONにもescapeが必要で、UTF-8として不正な元byteは入力検査で拒否する。
+
+移行アンカーへ複製する可変文字列は、質問の内部ID、intentのattemptとlogical ID、完全identityとperiod IDである。
+失効periodごとに代表質問を1件選べば、これらを旧questionsの異なるfield出現へ各1回以下で割り当てられる。
+したがって、アンカーの係数は `c_questions=1`、`c_checkpoint=c_instructions=0` とする。
+実serializerの構造費を次の値で抑え、`T_migration = 34,518,968`、`M = 51,296,184` bytesとする。
+
+| 構造費 | byte上界 |
+|---|---:|
+| 質問記述子 `Kq` | 608 |
+| 失効period記録 `Kp` | 279 |
+| 最大3slotを含むwrapper `Kmanifest` | 1,752 |
+
+`T_migration = 16,777,216 + 20,000 × 608 + 20,000 × 279 + 1,752` である。
+構造費の測定では可変identifierの内容を空にし、数値を16桁へ、enumを最長へ置く。
+この測定用skeletonは合法fixtureではなく、可変文字列以外のbyteを数える道具である。
+最大escapeの合法fixtureは別途検証する。
+
+初回の失効集合が通常アンカー枠へ収まることも、旧sourceの制約から求める。
+一意なperiod数を `n`、代表質問からコピーするidentityとperiodの文字列内容byte合計を `V` とすると、旧compact構造の下界は `S_questions ≥ 47 + 664n + V` である。
+通常アンカーは `A ≤ 163 + 279n + V` と抑えられるため、`n ≥ 1` なら `A ≤ S_questions ≤ B_anchor` となり、空集合なら `A ≤ 163` となる。
+下界の測定も、identifierの内容と数値を最小へ緩和した構造解析であり、実際に受理するfixtureとは区別する。
+
+各slotの固定 `H_i` は、`H_i = (a_i − 1)C_i + n_i F_i + W_i` の保守上界を採用する。
+`a_i` は旧sourceの構造、既存可変文字列のコピー、compactからprettyへの増加、指数表記から最大16桁への増加を覆う係数である。
+scalarの最大深さを `D_i` とすると、旧構造1byteあたりのpretty化を `2D_i + 2` で抑え、`a_i = max(16, 2D_i + 2)` とする。
+旧可変文字列の最大コピー数3はこの係数以下である。
+新fieldの構造費、別source由来の文字列、将来の相関は `F_i` で別に計上する。
+`W_i` はgrantを含むwrapperの構造費である。
+
+| slot | `D_i` | `a_i` | `n_i`上界 | `F_i` | `W_i` | 固定`H_i`（bytes） |
+|---|---:|---:|---:|---:|---:|---:|
+| questions | 8 | 18 | 20,000 | 4,997 | 461 | 385,153,133 |
+| checkpoint | 8 | 18 | `min(20,000, floor(C_checkpoint / 945)) = 17,753` | 32,161 | 600 | 856,167,505 |
+| instructions | 7 | 16 | `min(20,000, floor(C_instructions / 819)) = 20,000` | 365 | 441 | 258,958,681 |
+
+checkpointとinstructionの旧record構造の下界945と819を使い、件数とsource byteの制約を同時に適用する。
+questionsの `F_i` はcheckpoint由来のsession ID、checkpointの `F_i` は将来のacceptedとapplied correlationの識別子を含む。
+これらの新しいidentifierは最大512 UTF-16 code unitsのescape費を計上する。
+隔離した旧questionは本文を固定するため、回答とlateAnswersの将来成長を加えない。
+異なる合法境界の新規構造費を同時に加える場合は解析上界として扱い、その組を合法snapshotとは呼ばない。
+
+この `H_i` をそのままgrantやload/writeの許容量にはしない。
+grantは受理した旧sourceごとに合法な移行、保持、回収のprojectionを測り、既定のsource基準式で発行する。
+構造費と固定値は `src/server/reclamation-capacity-bounds.js` の測定と対応fixtureで再現する。
+
+予約量はrecordごとのvariant差分とroot・ledger revisionの最大桁増分を合算する保守的な上界であり、将来snapshot全体を複製しない。
+instruction journal単体の予約計算はcheckpointの現在stateを持たないため、終端と準備の構造を保守的に計上する。
+この予約量は厳密な到達可能最大値や回収許可を表さず、回収操作のstateと時刻はstore間照合で別に検査する。
