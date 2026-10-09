@@ -142,6 +142,7 @@ PR通知のtargetに対する論理keyの拒否も、sourceの質問periodへ置
 共有するのは質問のidentityとperiod、および完全に一致する配信墓標のsourceRefとtargetRefである。
 残る項目はすべて保持し、単なるdigestへ置き換えない。
 状態照会で返す墓標、internalQuestionIdとattempt IDの全体重複拒否、論理keyと相関の情報を復元の比較対象にする。
+internalQuestionIdの保持は元記録の完全一致とStoreWriteの一意性検査で間接的に確認し、同じIDの再登録をruntimeで直接試す検証とは区別する。
 CPが無いintentから配信墓標は生成せず、未選択とindeterminateの区別、lookupのnullを保持する。
 
 復元は元の整合済みsnapshotと候補を同時に受け取るpure実験に限定する。
@@ -163,13 +164,13 @@ byte比較は同じcompact JSONのUTF-8で測り、候補の辞書とwrapperも�
 | QGP02 | 元の合法記録をoracleにし、全観測項目をlosslessに往復する |
 | QGP03 | CPなしのlookup nullと未選択またはindeterminateの区別を保持する |
 | QGP04 | 既存runtimeとgateで重複拒否と新規IDまたは別periodの対照を確認する |
-| QGP05 | 候補の欠落、追加、重複、参照差替えと範囲外索引を拒否する |
+| QGP05 | 候補の欠落、未知field、重複、参照差替えと範囲外索引を、元snapshotから作り直した候補との完全一致検査で拒否する。単独decoderの索引検査の証拠にはしない |
 | QGP06 | 入力を変更または凍結せず、返却を深く凍結する |
 | QGP07 | serialized byte比較と実保存、件数枠、メモリーの削減を区別する |
 
 合法fixtureでは、対象質問5件、配信墓標3件、CPなしintent1件、未選択1件、論理墓標3件を使い、sourceとtargetの辞書は2項目になった。
 available、unknown、cancelled_before_sendの照会値を含めて往復を確認した。
-同じcompact JSONによるサイズは次のとおりである。
+commit `3937095` のfixtureを同じcompact JSONで測定したサイズは次のとおりである。
 
 | provider | 対象record (byte) | 候補 (byte) | 差 (byte) | 全snapshot (byte) |
 |---|---:|---:|---:|---:|

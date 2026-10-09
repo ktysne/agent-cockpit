@@ -336,6 +336,18 @@ for (const provider of ['claude', 'codex']) {
     assert.deepEqual(expanded.questionReservations, expected.reservations);
     assert.equal(stableJson(expanded.deliveryGraves), stableJson(expected.deliveryGraves));
     assert.equal(stableJson(expanded.logicalTombstones), stableJson(expected.logicalTombstones));
+    assert.equal(expanded.logicalTombstones.length, 3);
+    assert.equal(result.candidateMetrics.counts.logicalTombstones, 3);
+    assert.equal(result.candidateMetrics.counts.sharedReferences, 2);
+    for (const grave of expected.deliveryGraves) {
+      const sourceTombstones = originalInput.stores.checkpoint.ledger.logicalTombstones.filter((tombstone) =>
+        tombstone.logicalMessageId === grave.logicalMessageId && tombstone.revision === grave.revision);
+      const expandedTombstones = expanded.logicalTombstones.filter((tombstone) =>
+        tombstone.logicalMessageId === grave.logicalMessageId && tombstone.revision === grave.revision);
+      assert.equal(sourceTombstones.length, 1);
+      assert.equal(expandedTombstones.length, 1);
+      assert.deepEqual(expandedTombstones[0], sourceTombstones[0]);
+    }
     assert.deepEqual(serialize(originalInput), before);
     assert.equal(Object.isFrozen(originalInput), false);
 
@@ -425,6 +437,8 @@ for (const provider of ['claude', 'codex']) {
       (copy) => { copy.referenceTable.push({
         role: 'source', value: { ...copy.referenceTable[0].value, launchRef: 'unused-launch-reference' },
       }); },
+      (copy) => { copy.extra = 1; },
+      (copy) => { copy.reservations[0].extra = 1; },
     ];
     for (const mutate of mutations) {
       const tampered = structuredClone(candidate);
