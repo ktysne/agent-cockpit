@@ -231,7 +231,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature）、[#329](https://github.com/ktysne/agent-cockpit/pull/329)（base: #328）、[#330](https://github.com/ktysne/agent-cockpit/pull/330)（base: #329） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。既定offの自動実行は#330でレビュー収束。全体2,525件成功と1件skip（source `a787e89`）、最終補強の単体19件成功（`4f69c03`）。段階4の拒否包含分析は[#331](https://github.com/ktysne/agent-cockpit/pull/331)（base: #330）でレビュー収束。全体2,528件成功・1件skip（head `bab5d51`）。次は拒否索引候補から既存grave形へのpure projectionを検証する |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature）、[#329](https://github.com/ktysne/agent-cockpit/pull/329)（base: #328）、[#330](https://github.com/ktysne/agent-cockpit/pull/330)（base: #329） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。既定offの自動実行は#330でレビュー収束。全体2,525件成功と1件skip（source `a787e89`）、最終補強の単体19件成功（`4f69c03`）。段階4の拒否包含分析は[#331](https://github.com/ktysne/agent-cockpit/pull/331)（base: #330）でレビュー収束。全体2,528件成功・1件skip（head `bab5d51`）。拒否索引候補から既存grave形へのpure復元実験に着手中。永続化にはcodec、容量上界、保存とcold、件数枠の条件を別々に満たす |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |
@@ -448,6 +448,20 @@ Claude R2とR3でblockerと要修正0件に収束した。
 マージ順は#328、#329、#330、#331。各親をfeatureへ集約した後、子へ通常mergeで取り込み、baseをfeatureへ付け替えてからマージする。
 次は拒否索引候補から既存grave形へのpure projectionを検証する。
 墓標削除、件数枠解放、受付再開、保存schemaと標準起動の変更はまだ接続しない。
+
+## 質問墓標の復元実験
+
+`codex/question-grave-projection-experiment-209-20261010`は#331の収束head `4f06ee4`を起点とする。
+失効periodの回収済み質問を共有表現へ移し、元snapshotとの完全一致、状態照会と拒否動作をpure検証する。
+共通参照の辞書化以外の項目は落とさず、CPなしintentから配信を生成しない。
+元snapshotを必要とする往復実験であり、新しい永続codecやruntimeの拒否索引には接続しない。
+pure実装と両providerの関連12件が成功した。
+対象質問5件と配信墓標3件のfixtureでは、候補と対象recordの差はClaudeで2,170 byte、Codexで2,138 byteだった。
+元recordの状態照会、旧attemptとlogical keyの拒否、別periodの対照を既存runtimeとgateで確認した。
+入力候補を凍結しないように展開前に複製し、値の不変と全nested値の非freezeを確認した。
+非対象store IDの不一致と、補修が必要な状態を両APIが拒否することも確認した。
+全体検証とClaudeクロスレビューは未完了である。
+件数枠解放、実保存の縮小、移行容量とメモリー節約は未実施として扱う。
 
 ## 起票していない候補
 
