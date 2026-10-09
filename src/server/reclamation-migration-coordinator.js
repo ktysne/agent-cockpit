@@ -312,11 +312,12 @@ function createReclamationMigrationCoordinator(value) {
     for (const slot of configuredSlots) {
       try {
         const returned = writersBySlot[slot].stop();
-        if (returned instanceof Promise) stopPromises.push(returned);
+        stopPromises.push(Promise.resolve(returned));
       } catch (error) {
         stopErrors.push(error);
       }
     }
+    const stopResults = await Promise.allSettled(stopPromises);
     const drainPromises = [];
     for (const slot of configuredSlots) {
       try {
@@ -325,10 +326,7 @@ function createReclamationMigrationCoordinator(value) {
         drainPromises.push(Promise.reject(error));
       }
     }
-    const [stopResults, drainResults] = await Promise.all([
-      Promise.allSettled(stopPromises),
-      Promise.allSettled(drainPromises),
-    ]);
+    const drainResults = await Promise.allSettled(drainPromises);
     const failed = stopErrors.length > 0 || stopResults.some((item) => item.status === 'rejected') ||
       drainResults.some((item) => item.status === 'rejected');
     if (failed) throw new Error('reclamation_writer_stop_or_drain_failed');
@@ -706,6 +704,7 @@ function createReclamationMigrationCoordinator(value) {
       if (decodedAnchor !== null && decodedAnchor.migration !== null) {
         const descriptor = decodedAnchor.migration.sources.find((source) => source.slot === slot);
         requireValue(descriptor !== undefined && descriptor.targetSizeBytes <= slotMaximum(slot));
+        if (descriptor.sourcePresent) requireValue(descriptor.sizeBytes <= MAX_SOURCE_BYTES);
         maximumBytes = Math.max(descriptor.sourcePresent ? descriptor.sizeBytes : 0, descriptor.targetSizeBytes);
         requireValue(maximumBytes <= slotMaximum(slot));
       } else if (anchorBytes !== null) {
@@ -750,7 +749,10 @@ function createReclamationMigrationCoordinator(value) {
       startedAt,
     });
     ensureActive();
-    if (allAbsent) return initializeEmpty(plan, slotBytes);
+    if (allAbsent) {
+      requireValue(plan.outcome === 'initial-create');
+      return initializeEmpty(plan, slotBytes);
+    }
     requireValue(plan.outcome === 'migration-prepared');
     return beginLegacyMigration(plan, slotBytes);
   }

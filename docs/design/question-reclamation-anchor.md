@@ -37,9 +37,12 @@ active manifestはcompletedでも`reconciliation-required`を返し、manifest�
 アンカーのbasenameは `question-reclamation-anchor.json` に固定し、dataの保存先は構成したslotの固定mapから取得する。
 manifestから保存先を取得せず、重複保存先とsymlinkを拒否する。
 保存先のディレクトリはcompositionがあらかじめ作成する。
+祖先にsymlinkがある保存先は、compositionがディレクトリをrealpathで解決してから渡す。
 同一プロセス内の保存先所有を検査するが、別プロセスをまたぐwriter排他は#313の範囲であり、排他起動を前提とする。
 保存対象は検査したbyte列の複製であり、保存時にJSONのキー順や改行を変えない。
 書込み失敗後は同じstoreからの再書込みを止め、一時ファイルの清掃で保存済みsourceやtargetを削除しない。
+既定のatomic writerはrenameのEPERM／EBUSYだけを50、100、200msの間隔で再試行する。
+再試行を使い切った失敗、その他のI/O失敗、rename後の例外は停止対象とする。
 
 `src/server/reclamation-capacity-reservation.js` は論理的な追加byte予算をleaseとして確保する。
 予約の拡張に失敗した場合は旧予約を保持し、移行前後の予約を別leaseで二重計上しない。
@@ -49,6 +52,7 @@ slotのraw byte、正規化したbyte、全将来予約を通常上限と保存g
 
 `src/server/reclamation-migration-coordinator.js` の `start` は共有gateを同期で閉じ、全構成writerへ同期stopを適用してからdrainを待つ。
 stopの一部が失敗しても残りのwriterを止める。
+stopがPromiseを返す場合は全stopの完了を待ち、成功・失敗にかかわらず全writerをdrainする。
 アンカーを先に読み、drain後のsourceと固定manifestを照合する。
 途中移行は同じoperation ID、起算時刻、sourceとtargetの指紋、grantを使い、固定順のtarget prefixだけを復旧する。
 各保存後に再読取と指紋確認を行い、全targetを実ファイルから再検査してcompletedを保存する。

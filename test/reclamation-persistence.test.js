@@ -10,7 +10,8 @@ const { createReclamationPersistence } = require('../src/server/reclamation-pers
 const ANCHOR_NAME = 'question-reclamation-anchor.json';
 
 async function createFixture(t) {
-  const directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'reclamation-persistence-'));
+  const temporaryRoot = await fsp.realpath(os.tmpdir());
+  const directory = await fsp.mkdtemp(path.join(temporaryRoot, 'reclamation-persistence-'));
   t.after(() => fsp.rm(directory, { recursive: true, force: true }));
   const anchorPath = path.join(directory, ANCHOR_NAME);
   const slotPathsBySlot = {
@@ -382,14 +383,103 @@ test('ENOSPC while writing a temporary file cleans only the temporary file', asy
   await persistence.close();
 });
 
+test('a transient EPERM rename retries and leaves the writer usable', async (t) => {
+  const fixture = await createFixture(t);
+  const originalSource = Buffer.from('source-before-write');
+  const replacement = Buffer.from([0x00, 0xff, 0x7b]);
+  await fsp.writeFile(fixture.anchorPath, Buffer.from('anchor-before-write'));
+  await fsp.writeFile(fixture.slotPathsBySlot.questions, originalSource);
+  let renameCalls = 0;
+  const fileSystem = fileSystemWith({
+    rename: async (temporaryPath, targetPath) => {
+      renameCalls += 1;
+      if (renameCalls === 1) throw Object.assign(new Error('target is temporarily busy'), { code: 'EPERM' });
+      return fsp.rename(temporaryPath, targetPath);
+    },
+  });
+  const persistence = persistenceFor(fixture, { fileSystem });
+
+  await persistence.writeAnchorBytes(replacement, 100);
+  assert.equal(renameCalls, 2);
+  assert.deepEqual(persistence.status(), { closed: false, writeBlocked: false });
+  assert.deepEqual(await persistence.readAnchorBytes(100), replacement);
+  assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions), originalSource);
+  assert.equal((await fsp.readdir(fixture.directory)).some((name) => name.endsWith('.tmp')), false);
+  await persistence.close();
+});
+
+test('rename retry exhaustion keeps the old target and blocks later writes', async (t) => {
+  const fixture = await createFixture(t);
+  const originalAnchor = Buffer.from('anchor-before-write');
+  const originalSource = Buffer.from('source-before-write');
+  await fsp.writeFile(fixture.anchorPath, originalAnchor);
+  await fsp.writeFile(fixture.slotPathsBySlot.questions, originalSource);
+  let renameCalls = 0;
+  const fileSystem = fileSystemWith({
+    rename: async () => {
+      renameCalls += 1;
+      throw Object.assign(new Error('target remains busy'), { code: 'EPERM' });
+    },
+  });
+  const persistence = persistenceFor(fixture, { fileSystem });
+
+  await assert.rejects(persistence.writeAnchorBytes(Buffer.from('replacement'), 100),
+    (error) => error.code === 'EPERM');
+  assert.equal(renameCalls, 4);
+  assert.deepEqual(persistence.status(), { closed: false, writeBlocked: true });
+  await assert.rejects(persistence.writeAnchorBytes(Buffer.from('second'), 100),
+    (error) => coded(error, 'reclamation_persistence_write_blocked'));
+  assert.equal(renameCalls, 4);
+  assert.deepEqual(await fsp.readFile(fixture.anchorPath), originalAnchor);
+  assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions), originalSource);
+  assert.equal((await fsp.readdir(fixture.directory)).some((name) => name.endsWith('.tmp')), false);
+  await persistence.close();
+});
+
+test('a temporary-file close failure remains sticky and cleans only the temporary file', async (t) => {
+  const fixture = await createFixture(t);
+  const originalAnchor = Buffer.from('anchor-before-write');
+  const originalSource = Buffer.from('source-before-write');
+  await fsp.writeFile(fixture.anchorPath, originalAnchor);
+  await fsp.writeFile(fixture.slotPathsBySlot.questions, originalSource);
+  const fileSystem = fileSystemWith({
+    open: async (...args) => {
+      const handle = await fsp.open(...args);
+      if (args[1] !== 'wx') return handle;
+      let isClosed = false;
+      return {
+        writeFile: (bytes) => handle.writeFile(bytes),
+        close: async () => {
+          if (!isClosed) {
+            isClosed = true;
+            await handle.close();
+          }
+          throw Object.assign(new Error('close result is uncertain'), { code: 'EIO' });
+        },
+      };
+    },
+  });
+  const persistence = persistenceFor(fixture, { fileSystem });
+
+  await assert.rejects(persistence.writeAnchorBytes(Buffer.from('replacement'), 100),
+    (error) => error.code === 'EIO');
+  assert.deepEqual(persistence.status(), { closed: false, writeBlocked: true });
+  assert.deepEqual(await fsp.readFile(fixture.anchorPath), originalAnchor);
+  assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions), originalSource);
+  assert.equal((await fsp.readdir(fixture.directory)).some((name) => name.endsWith('.tmp')), false);
+  await persistence.close();
+});
+
 test('an error reported after rename remains a failed and blocked write without deleting source files', async (t) => {
   const fixture = await createFixture(t);
   const originalSource = Buffer.from('source-before-write');
   const replacement = Buffer.from([0x00, 0xff, 0x7b]);
   await fsp.writeFile(fixture.anchorPath, Buffer.from('anchor-before-write'));
   await fsp.writeFile(fixture.slotPathsBySlot.questions, originalSource);
+  let renameCalls = 0;
   const fileSystem = fileSystemWith({
     rename: async (temporaryPath, targetPath) => {
+      renameCalls += 1;
       await fsp.rename(temporaryPath, targetPath);
       throw Object.assign(new Error('rename result is uncertain'), { code: 'EIO' });
     },
@@ -398,6 +488,7 @@ test('an error reported after rename remains a failed and blocked write without 
 
   await assert.rejects(persistence.writeAnchorBytes(replacement, 100),
     (error) => error.code === 'EIO');
+  assert.equal(renameCalls, 1);
   assert.equal(persistence.status().writeBlocked, true);
   assert.deepEqual(await fsp.readFile(fixture.anchorPath), replacement);
   assert.deepEqual(await fsp.readFile(fixture.slotPathsBySlot.questions), originalSource);

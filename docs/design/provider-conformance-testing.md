@@ -158,6 +158,7 @@ QR03〜QR06のprovider別検証は製品adapter、serviceと実ファイルstore
 
 #209の段階2では、独立した移行coordinatorと実ファイル保存層を組み合わせる。
 期待値は[アンカー保存契約](question-reclamation-anchor.md)から定める。
+以下は後続のサービス接続も含む期待値の定義であり、全項目をこの段階で確認済みとはしない。
 ClaudeとCodexの相関を持つ旧形式を同じ保存手順へ通し、provider固有adapterと実runtimeの適合とは区別する。
 通常のservice、native factory、製品起動へ接続する試験は後続の実装範囲である。
 
@@ -172,12 +173,22 @@ ClaudeとCodexの相関を持つ旧形式を同じ保存手順へ通し、provid
 | ID-F08-RC07 | manifestをnullにして再起動し、既存grantと満杯の件数を検査する | grantを自動で消さず、通常枠への収束と新規受付を移行成功だけで許可しない。時刻、操作IDと失効期間を再発行しない。 |
 
 容量budgetはcompositionが供給する論理予約であり、OSの空き容量や保存成功を保証しない。
-移行coordinatorの17試験では両providerの3slot移行、24の保存故障境界、再起動と停止条件を確認した。
-保存層と容量予約の試験は19件成功・1件skipであり、skipは実symlinkの作成権限が無いためである。
-symlink拒否は注入fixtureでも検証している。
 ENOSPCとrename後の例外でも保存済みファイルを保持して停止することを試験する。
 同一保存先の排他起動は前提であり、プロセス間writer排他は#313の別範囲である。
-これらのfixtureの成功を、実Claude/Codex runtimeの成功には数えない。
+実装済みの試験は[移行coordinator試験](../../test/reclamation-migration-coordinator.test.js)、[容量予約試験](../../test/reclamation-capacity-reservation.test.js)、[保存層試験](../../test/reclamation-persistence.test.js)にある。
+
+| ID | この段階で確認する試験と範囲 | 後続で確認する項目 |
+|---|---|---|
+| RC01 | `both providers complete a linked three-slot migration with fixed grants at source-sized limits`。Bをsource実byteに設定し、両providerの相関、失効とgrantを確認 | サービスの本文回収と新規配信の呼出回数。現在はどちらにも接続していない |
+| RC02 | `every durable anchor and slot boundary fails closed and recovers only the persisted prefix`。5段階のanchorと3slotの各保存前・保存後・再読取、合計24故障境界を確認 | 実runtimeでの停止と復旧 |
+| RC03 | 必須slot欠落、store ID不一致、破損anchorと無効prefixを拒否する各試験 | 製品起動時の診断表示 |
+| RC04 | `a stop exception still stops and drains every writer without reading or writing storage`、drain失敗、再開準備失敗、close競合とsnapshot個別cloneの試験 | 製品writerへの停止範囲の接続 |
+| RC05 | B+Gを超えるraw／将来予約、開始予算不足、bridge resize失敗、null再読取失敗時のlease保持を確認する各試験 | 通常受付guardとの接続 |
+| RC06 | `empty first creation writes configured data slots before the anchor and opens the gate last`と部分初期化拒否の試験 | 部分初期化停止時の製品診断 |
+| RC07 | 保存故障境界試験のnull保存後の再起動でgrant、操作IDと起算時刻の保持を確認 | 満杯の件数と新規受付の判定はPR3のguardで検証 |
+
+symlink拒否は注入fixtureでも検証し、実symlinkを作成する権限が無い環境では実ファイル試験をskipする。
+ここに列挙した確認範囲だけをfixtureの成功とし、未接続の受付guardや実Claude/Codex runtimeの成功には数えない。
 
 ## Codex native pendingの表示
 

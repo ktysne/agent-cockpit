@@ -14,7 +14,6 @@ const {
 } = require('./delivery-reclamation-codec');
 const {
   encodeQuestionReclamationAnchorV1Local,
-  normalizeQuestionReclamationAnchorV1Local,
 } = require('./question-reclamation-anchor-codec');
 const {
   FIXED_ANCHOR_MIGRATION_BOUNDS,

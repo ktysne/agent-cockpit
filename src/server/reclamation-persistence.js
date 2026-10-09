@@ -12,6 +12,7 @@ const SLOT_ORDER = Object.freeze(['checkpoint', 'instructions', 'questions']);
 const SLOT_NAMES = new Set(SLOT_ORDER);
 const OPTION_NAMES = new Set(['anchorPath', 'slotPathsBySlot', 'fileSystem', 'atomicWriteBytes']);
 const READ_CHUNK_BYTES = 64 * 1024;
+const RENAME_RETRY_DELAYS_MS = Object.freeze([50, 100, 200]);
 const OWNED_PATHS = new Map();
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_BUFFER_BYTES = bufferConstants.MAX_LENGTH;
@@ -240,7 +241,18 @@ async function defaultAtomicWriteBytes(targetPath, bytes, fileSystem) {
     await handle.writeFile(bytes);
     await handle.close();
     handle = null;
-    await fileSystem.rename(temporaryPath, targetPath);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fileSystem.rename(temporaryPath, targetPath);
+        return;
+      } catch (error) {
+        if (!error || !['EPERM', 'EBUSY'].includes(error.code) ||
+            attempt >= RENAME_RETRY_DELAYS_MS.length) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAYS_MS[attempt]));
+      }
+    }
   } catch (error) {
     if (handle !== null) await handle.close().catch(() => {});
     await fileSystem.unlink(temporaryPath).catch(() => {});

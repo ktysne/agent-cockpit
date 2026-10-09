@@ -87,7 +87,7 @@ function createWriters(configuredSlots, events, hooks = {}) {
     writers[slot] = {
       stop() {
         events.push(['stop', slot]);
-        hooks.stop?.(slot);
+        return hooks.stop?.(slot);
       },
       drain() {
         events.push(['drain', slot]);
@@ -114,6 +114,34 @@ function coordinatorOptions({ persistence, writersBySlot, events, configuredSlot
     createOperationId: () => OPERATION_ID,
     now: () => 1234,
   };
+}
+
+function trackedCapacityBudget(maxAdditionalBytes = 1_000_000_000) {
+  const delegate = createReclamationCapacityBudget({ maxAdditionalBytes });
+  const history = { acquired: [], resized: [], released: 0 };
+  const capacityBudget = {
+    acquire(bytes) {
+      history.acquired.push(bytes);
+      const lease = delegate.acquire(bytes);
+      return {
+        resize(nextBytes) {
+          history.resized.push(nextBytes);
+          return lease.resize(nextBytes);
+        },
+        release() {
+          history.released += 1;
+          return lease.release();
+        },
+        status() {
+          return lease.status();
+        },
+      };
+    },
+    status() {
+      return delegate.status();
+    },
+  };
+  return { capacityBudget, history };
 }
 
 function emptyLegacyQuestionBytes() {
@@ -367,6 +395,45 @@ test('a stop exception still stops and drains every writer without reading or wr
   await assert.rejects(coordinator.close());
 });
 
+test('all asynchronous stops settle before draining, even when one stop rejects', async () => {
+  const configuredSlots = ['checkpoint', 'instructions', 'questions'];
+  const memory = memoryPersistence(configuredSlots);
+  const events = memory.events;
+  const stops = Object.fromEntries(configuredSlots.map((slot) => [slot, deferred()]));
+  const writers = createWriters(configuredSlots, events, {
+    stop(slot) {
+      return stops[slot].promise;
+    },
+  });
+  const coordinator = createReclamationMigrationCoordinator(coordinatorOptions({
+    persistence: memory.persistence,
+    writersBySlot: writers,
+    events,
+    configuredSlots,
+  }));
+
+  const started = coordinator.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events.filter((event) => event[0] === 'stop').map((event) => event[1]), configuredSlots);
+  assert.equal(events.some((event) => event[0] === 'drain'), false);
+  stops.checkpoint.resolve();
+  stops.instructions.reject(new Error('async stop failed'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(events.some((event) => event[0] === 'drain'), false);
+  stops.questions.resolve();
+
+  await assert.rejects(started);
+  assert.deepEqual(events.filter((event) => event[0] === 'drain').map((event) => event[1]).slice(0, configuredSlots.length),
+    configuredSlots);
+  const initialStopIndexes = events.flatMap((event, index) => event[0] === 'stop' ? [index] : [])
+    .slice(0, configuredSlots.length);
+  const firstDrainIndex = events.findIndex((event) => event[0] === 'drain');
+  assert.ok(initialStopIndexes.at(-1) < firstDrainIndex);
+  assert.equal(events.some((event) => event[0].startsWith('read-') || event[0].startsWith('write-')), false);
+  assert.equal(coordinator.canWrite(), false);
+  await assert.rejects(coordinator.close());
+});
+
 test('close during drain keeps the gate closed and prevents later reads or writer preparation', async () => {
   const configuredSlots = ['questions'];
   const memory = memoryPersistence(configuredSlots);
@@ -525,6 +592,98 @@ test('a bridge lease resize failure leaves the completed manifest and old lease 
   assert.equal(lease.status().released, true);
 });
 
+test('an undersized capacity budget blocks migration before any source is replaced', async () => {
+  const configuredSlots = ['questions'];
+  const sourceBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 1,
+    revision: 7,
+    questions: [legacyQuestion('claude')],
+  }), 'utf8');
+  const normalByteLimitsBySlot = { questions: sourceBytes.length };
+  const plan = planInitialReclamationMigration({
+    configuredSlots,
+    sourceBytesBySlot: { questions: sourceBytes },
+    normalByteLimitsBySlot,
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: 1234,
+  });
+  assert.ok(plan.slots.questions.grant.maxExtraBytes > 0);
+  const memory = memoryPersistence(configuredSlots, { slots: { questions: sourceBytes } });
+  const coordinator = createReclamationMigrationCoordinator(coordinatorOptions({
+    persistence: memory.persistence,
+    events: memory.events,
+    configuredSlots,
+    normalByteLimitsBySlot,
+    capacityBytes: 1,
+  }));
+
+  await assert.rejects(coordinator.start(), /reclamation_capacity_exceeded/);
+  assert.equal(coordinator.status().state, 'blocked');
+  assert.equal(coordinator.canWrite(), false);
+  assert.equal(memory.events.filter((event) => event[0] === 'write-anchor' || event[0] === 'write-slot').length, 0);
+  assert.deepEqual(memory.data.slots.questions, sourceBytes);
+  assert.equal(memory.data.anchor, null);
+  await coordinator.close();
+});
+
+test('null-anchor readback failure retains the bridge lease until a later verified clear', async () => {
+  const configuredSlots = ['questions'];
+  const sourceBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 1,
+    revision: 7,
+    questions: [legacyQuestion('codex')],
+  }), 'utf8');
+  const normalByteLimitsBySlot = { questions: sourceBytes.length };
+
+  async function migrate({ failNullReadback }) {
+    let corrupted = false;
+    const memory = memoryPersistence(configuredSlots, { slots: { questions: sourceBytes } }, {
+      readAnchor({ bytes }) {
+        if (!failNullReadback || corrupted || bytes === null) return undefined;
+        const parsed = JSON.parse(bytes.toString('utf8'));
+        if (parsed.migration !== null) return undefined;
+        corrupted = true;
+        return Buffer.from('invalid-null-anchor-readback');
+      },
+    });
+    const tracked = trackedCapacityBudget();
+    const coordinator = createReclamationMigrationCoordinator(coordinatorOptions({
+      persistence: memory.persistence,
+      events: memory.events,
+      configuredSlots,
+      normalByteLimitsBySlot,
+      capacityBudget: tracked.capacityBudget,
+    }));
+    if (failNullReadback) {
+      await assert.rejects(coordinator.start());
+      const stateAtFailure = coordinator.status();
+      await coordinator.close();
+      return { memory, history: tracked.history, stateAtFailure };
+    }
+    const ready = await coordinator.start();
+    const stateAtReady = coordinator.status();
+    await coordinator.close();
+    return { memory, history: tracked.history, stateAtReady, ready };
+  }
+
+  const completed = await migrate({ failNullReadback: false });
+  const postReservationBytes = completed.history.resized.at(-1);
+  const bridgeReservationBytes = completed.history.resized.at(-2);
+  assert.equal(completed.history.resized.length, 2);
+  assert.ok(bridgeReservationBytes >= postReservationBytes);
+  assert.equal(completed.stateAtReady.lease.bytes, postReservationBytes);
+  assert.equal(completed.ready.snapshot.anchor.migration, null);
+
+  const failedClear = await migrate({ failNullReadback: true });
+  assert.equal(failedClear.history.resized.length, 1);
+  assert.equal(failedClear.stateAtFailure.lease.bytes, failedClear.history.resized[0]);
+  assert.ok(failedClear.stateAtFailure.lease.bytes >= postReservationBytes);
+  assert.equal(failedClear.stateAtFailure.canWrite, false);
+  assert.equal(failedClear.memory.data.anchor &&
+    JSON.parse(failedClear.memory.data.anchor.toString('utf8')).migration, null);
+});
+
 test('a writer prepare failure stops all writers again and never opens the shared gate', async () => {
   const configuredSlots = ['checkpoint', 'questions'];
   const memory = memoryPersistence(configuredSlots);
@@ -551,7 +710,7 @@ test('a writer prepare failure stops all writers again and never opens the share
 });
 
 test('legacy source recovery preserves the fixed operation and timestamp through a prepared-prefix restart', async (t) => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'reclamation-coordinator-'));
+  const tempRoot = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'reclamation-coordinator-'));
   t.after(async () => fs.rm(tempRoot, { recursive: true, force: true }));
   const anchorPath = path.join(tempRoot, 'question-reclamation-anchor.json');
   const questionPath = path.join(tempRoot, 'questions.json');
@@ -630,7 +789,7 @@ test('both providers complete a linked three-slot migration with fixed grants at
 });
 
 test('an error after slot rename blocks this instance and the next instance resumes the exact prefix', async (t) => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'reclamation-prefix-restart-'));
+  const tempRoot = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'reclamation-prefix-restart-'));
   t.after(async () => fs.rm(tempRoot, { recursive: true, force: true }));
   const anchorPath = path.join(tempRoot, 'question-reclamation-anchor.json');
   const questionPath = path.join(tempRoot, 'questions.json');

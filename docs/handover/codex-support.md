@@ -35,7 +35,7 @@ main の PR #305（別のリポジトリで作った PR の登録）は、作業
 このheadを起点に `codex/reclamation-contract-209-20261009` で #209 段階2の1d（アンカーcodec、store間照合、旧形式の投影、grantと固定H/T）を実装した。
 Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功した。[PR #321](https://github.com/ktysne/agent-cockpit/pull/321) はClaudeのクロスレビューが3往復で収束し、featureへマージ済みである（merge SHA `7427105`）。
 このheadを起点に `codex/reclamation-migration-store-209-20261009` で、段階2のPR2としてアンカーstore、移行coordinator、専用枠と保存境界検証を実装した。
-関連試験は36件成功・1件skip、全体試験は2,138件成功・1件skip・失敗0件で、Claudeのクロスレビューへ進む。
+関連試験は42件成功・1件skip、修正後の全体試験は2,144件成功・1件skip・失敗0件で、[PR #322](https://github.com/ktysne/agent-cockpit/pull/322)のClaudeクロスレビューを進めている。
 skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
 
 ## 全体の流れ
@@ -113,7 +113,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 3 | #209 段階 2 の 1b | 質問 codec | [#319](https://github.com/ktysne/agent-cockpit/pull/319)、マージ時base: feature | マージ済み（2026-10-09、merge SHA `f9e45c6`）。関連39件・全体1,997件成功、Claude レビュー1往復で収束。外部 store 照合と容量条件は1dへ残す |
 | 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | マージ済み（2026-10-09、merge SHA `66b3c6a`）。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束 |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | マージ済み（2026-10-09、merge SHA `7427105`）。全体2,102件成功。Claudeレビュー3往復で収束 |
-| 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | 未作成、base: feature | `codex/reclamation-migration-store-209-20261009` で実装中（起点 `7427105`）。テスト用compositionで保存境界とwriter停止を検証し、製品起動へ接続しない |
+| 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | `codex/reclamation-migration-store-209-20261009`（起点 `7427105`）。指摘修正後の全体2,144件成功・1件skip。Claudeの妥当性確認へ進む。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | 未作成 | 未着手。旧period拒否、新period受付、全送信入口のguardを両providerのfixtureで検証する |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | 未作成 | 未着手。満杯と余裕のある旧形式を検証し、標準起動と設定画面には接続しない |
 | 9 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |
