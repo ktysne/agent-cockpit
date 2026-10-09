@@ -33,7 +33,7 @@ main の PR #305（別のリポジトリで作った PR の登録）は、作業
 この head を起点に `codex/delivery-reclamation-codec-209-20261009` で #209 段階2の1c（配信 codec）を実装した。
 独立 codec と fixture、関連50件・既存関連59件・修正後の全体2,027件の検証は成功した。[PR #320](https://github.com/ktysne/agent-cockpit/pull/320) は Claude のクロスレビューが2往復で収束し、featureへマージ済みである（merge SHA `66b3c6a`）。
 このheadを起点に `codex/reclamation-contract-209-20261009` で #209 段階2の1d（アンカーcodec、store間照合、旧形式の投影、grantと固定H/T）を実装した。
-Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功した。[PR #321](https://github.com/ktysne/agent-cockpit/pull/321) はDraftで、Claudeの2往復目では要修正がなく、追加提案3件を反映した最終確認を待っている。
+Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功した。[PR #321](https://github.com/ktysne/agent-cockpit/pull/321) はClaudeのクロスレビューが3往復で収束し、featureへのマージ待ちである。
 1dのレビューとマージ後は、段階2のPR2としてアンカーstore、移行coordinator、専用枠へ進む。
 
 ## 全体の流れ
@@ -110,7 +110,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | マージ済み（2026-10-09、merge SHA `394daa9`）。関連347件・監査後107件成功、Claude レビュー1往復で収束 |
 | 3 | #209 段階 2 の 1b | 質問 codec | [#319](https://github.com/ktysne/agent-cockpit/pull/319)、マージ時base: feature | マージ済み（2026-10-09、merge SHA `f9e45c6`）。関連39件・全体1,997件成功、Claude レビュー1往復で収束。外部 store 照合と容量条件は1dへ残す |
 | 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | マージ済み（2026-10-09、merge SHA `66b3c6a`）。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束 |
-| 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | `codex/reclamation-contract-209-20261009` で実装済み（起点 `66b3c6a`）。Claudeの2往復目では要修正なし。追加提案反映後、全体2,102件成功。最終確認待ち |
+| 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | `codex/reclamation-contract-209-20261009` で実装済み（起点 `66b3c6a`）。全体2,102件成功。Claudeレビュー3往復で収束。featureへのマージ待ち |
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | 未作成 | 未着手。テスト用compositionで保存境界とwriter停止を検証し、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | 未作成 | 未着手。旧period拒否、新period受付、全送信入口のguardを両providerのfixtureで検証する |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | 未作成 | 未着手。満杯と余裕のある旧形式を検証し、標準起動と設定画面には接続しない |

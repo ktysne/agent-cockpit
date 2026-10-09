@@ -991,7 +991,7 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
         (record.kind !== 'question' || earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS)) {
       candidates.push(reclaimedDeliveryCandidate(record,
         record.kind === 'question' ? currentCorrelations : correlations, operationId));
-      if (record.kind === 'question') {
+      if (record.kind === 'question' && !sameEmbeddedRecord(updated, record)) {
         candidates.push(reclaimedDeliveryCandidate(updated, correlations, operationId));
       }
     }
@@ -1012,7 +1012,7 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
       candidates.push(reclaimedDeliveryCandidate(record, currentCorrelations, operationId));
     }
     const reclaimableTerminalAt = MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS;
-    if (earliestTime <= reclaimableTerminalAt && retentionDeadlineFits(reclaimableTerminalAt)) {
+    if (earliestTime <= reclaimableTerminalAt) {
       const reclaimableApplied = normalizeDeliveryRecordV2Local({
         ...futureApplied,
         terminalAt: reclaimableTerminalAt,

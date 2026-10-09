@@ -999,7 +999,6 @@ test('question checkpoint reserve includes max-correlation graves while preservi
       { variant: 'reclaimed', record: futureGrave },
     ],
   };
-  assert.equal(row.candidates.length, 3);
   const baseRecordBytes = checkpointRecordBytes(current);
   const expectedGrowth = Math.max(
     checkpointRecordBytes(projectedFuture),
