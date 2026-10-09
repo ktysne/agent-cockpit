@@ -28,6 +28,7 @@ const {
   normalizeQuestionReclamationAnchorV1Local,
 } = require('./question-reclamation-anchor-codec');
 const { encodeNormalized } = require('./reclamation-json-codec');
+const { projectNormalizedDeliveryReferences } = require('./reclamation-delivery-references');
 const { MAX_FREE_TEXT, MAX_LATE_ANSWERS } = require('./common-question-kernel');
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
@@ -80,6 +81,7 @@ const DELIVERY_CANDIDATE_ROW_FIELDS = ['deliveryAttemptId', 'candidates'];
 const INSTRUCTION_CANDIDATE_ROW_FIELDS = ['deliveryAttemptId', 'candidates'];
 const RECORD_VARIANT_FIELDS = ['variant', 'record'];
 const MAX_DELIVERY_RECORDS = 20_000;
+const APPLIED_GRAVE_ACCEPTED_COMPLETION_KINDS = new Set(['instruction', 'pr-notification', 'result']);
 
 const INVALID_CAPACITY = 'invalid_reclamation_capacity';
 
@@ -865,7 +867,8 @@ function maxFutureCorrelation(record, nativeItemId) {
 }
 
 function futureCorrelationsForDelivery(record, nativeItemId) {
-  if ((record.recordType === 'reclaimed' && !(record.kind === 'instruction' && record.state === 'applied')) ||
+  if ((record.recordType === 'reclaimed' &&
+      !(APPLIED_GRAVE_ACCEPTED_COMPLETION_KINDS.has(record.kind) && record.state === 'applied')) ||
       ['cancelled_before_send', 'superseded_before_send'].includes(record.state)) {
     return {
       acceptedCorrelation: record.acceptedCorrelation,
@@ -888,45 +891,6 @@ function futureCorrelationsForDelivery(record, nativeItemId) {
   return { acceptedCorrelation: correlation, appliedCorrelation: correlation };
 }
 
-function sourceReferenceForDelivery(source) {
-  return {
-    launchRef: source.launchRef,
-    launchKey: [source.claims.launchId, source.claims.runId, source.claims.attemptId],
-    sourceClaimsDigest: compactDigest(source.claims),
-    identity: source.identity,
-    executionBinding: source.executionBinding,
-    conversationId: source.conversationId,
-    sessionId: source.sessionId,
-  };
-}
-
-function targetReferenceForDelivery(target) {
-  if (target.kind === 'owner') {
-    return {
-      kind: 'owner',
-      launchRef: null,
-      launchKey: null,
-      targetClaimsDigest: null,
-      identity: target.identity,
-      periodId: target.periodId,
-      actor: target.actor,
-      conversationId: target.conversationId,
-      sessionId: target.sessionId,
-    };
-  }
-  return {
-    kind: 'execution',
-    launchRef: target.launchRef,
-    launchKey: [target.claims.launchId, target.claims.runId, target.claims.attemptId],
-    targetClaimsDigest: compactDigest(target.claims),
-    identity: target.identity,
-    periodId: target.periodId,
-    actor: target.actor,
-    conversationId: target.conversationId,
-    sessionId: target.sessionId,
-  };
-}
-
 function reclaimedDeliveryCandidate(record, correlations, operationId) {
   if (record.recordType === 'reclaimed') {
     return normalizeDeliveryRecordV2Local({
@@ -936,6 +900,7 @@ function reclaimedDeliveryCandidate(record, correlations, operationId) {
     });
   }
   const reason = record.kind === 'question' ? 'retired_question_period' : 'terminal_retention';
+  const refs = projectNormalizedDeliveryReferences(record);
   return normalizeDeliveryRecordV2Local({
     recordType: 'reclaimed',
     deliveryAttemptId: record.deliveryAttemptId,
@@ -950,8 +915,8 @@ function reclaimedDeliveryCandidate(record, correlations, operationId) {
     ownerGeneration: record.ownerGeneration,
     acceptedCorrelation: correlations.acceptedCorrelation,
     appliedCorrelation: correlations.appliedCorrelation,
-    sourceRef: sourceReferenceForDelivery(record.source),
-    targetRef: targetReferenceForDelivery(record.target),
+    sourceRef: refs.sourceRef,
+    targetRef: refs.targetRef,
     reclamation: {
       operationId,
       reclaimedAt: MAX_SAFE_INTEGER,
@@ -963,7 +928,7 @@ function reclaimedDeliveryCandidate(record, correlations, operationId) {
 function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operationId, earliestTime = 0) {
   const candidates = [record];
   if (record.recordType === 'reclaimed') {
-    if (record.kind === 'instruction' && record.state === 'applied') {
+    if (APPLIED_GRAVE_ACCEPTED_COMPLETION_KINDS.has(record.kind) && record.state === 'applied') {
       const correlations = futureCorrelationsForDelivery(record, null);
       const expanded = reclaimedDeliveryCandidate(record, correlations, operationId);
       if (!sameEmbeddedRecord(expanded, record)) candidates.push(expanded);

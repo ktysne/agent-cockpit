@@ -289,13 +289,45 @@ instruction journalの単独保存結果不明でも全writerを停止し、inst
 | IRB01 | 確定終端から7日未満、unknown、作成未完了は保存せず保留し、期限到達後に3保存で本文を回収する |
 | IRB02 | 各保存境界の失敗後は新instanceが同じ操作IDで再開し、未準備のeligible記録は自動回収しない |
 | IRB03 | 本文とcheckpointの静的相関が不一致なら、起動時に保存とnative送信を行わず拒否する |
-| IRB04 | applied墓標への互換accepted追記と完全一致appliedは保存層で成立し、差替えと他の墓標への追記は拒否する |
+| IRB04 | 通常指示のapplied墓標への互換accepted追記と完全一致appliedは保存層で成立し、差替え、質問と取消済み墓標への追記は拒否する |
 | IRB05 | cleanup後のservice通知は保存されず、既存観測の照合でtoken不一致、close、待機中の失効を拒否する |
 | IRB06 | 時計逆行、期限の整数overflow、close、callback access失効時は次の保存を行わない |
 | IRB07 | 無関係な記録、alias、履歴、logical tombstone、件数枠、grantを保持し、後着相関の最大増分を予約する |
 
 provider別の確認範囲と未確認事項は[全体計画](../handover/codex-support.md#通常指示の本文回収の確認範囲)で追跡する。
 観測を保持する合成fixtureの成功を、実runtimeの7日後通知や、墓標からの観測再開の証跡へ読み替えない。
+
+## PR通知とresultの明示本文回収
+
+PR通知とresultの本文はcheckpoint内にあるため、確定終端から7日後にdetailを`terminal_retention`墓標へ1回のatomic保存で置き換える。
+回収操作IDと回収時刻はこの墓標へ保存し、別journalの準備記録やanchorの移行manifestを追加しない。
+保存前に失敗してdetailが残った場合は新しいinstanceで明示的に再試行し、保存済み墓標は同じ操作IDと回収時刻を保持した完了として扱う。
+起動時に未回収の候補を自動で回収しない。
+
+回収はcheckpoint writer queueの最新snapshotを使い、checkpointとledgerのrevisionを同じ保存で進める。
+対象以外の配信、registrations、notificationTargets、logical tombstone、件数枠、grantと対象ID集合を保持する。
+他slotの合法な途中状態を回収のために正規化して保存しない。
+時計逆行、期限の安全整数overflow、期限未到達、unknownを含む未確定状態では保存せず延期する。
+時計のhighwaterはcontext共通のinstance内検査であり、再起動を跨ぐ時計の単調性を保証するものではない。
+閉鎖、callback accessの失効、同じqueueへの再入を検査し、保存結果が不明なら全writerを停止する。
+
+PR通知のtargetRefは保存済みexecution target自身のlaunch tupleとclaims digestを保持する。
+resultのowner targetは保存済みidentity、period、actor、conversation、sessionとownerGenerationを保持し、launchRef、launchKey、targetClaimsDigestのnullをsourceや現在のownerで埋めない。
+applied墓標へのaccepted通知は保存済みappliedの固定native IDと一致するnull補完だけを許し、appliedの完全一致通知は保存なしで受け付ける。
+質問墓標とcancelled、superseded墓標への相関追記は拒否する。
+保存済み参照をnativeの通知権限に使わず、既存のcapability、観測寿命、cleanupを維持する。
+PR通知はtarget provider、resultはsource providerの照合を維持し、補完後の最大byte増分を将来予約に含める。
+
+| 条件 | 適合試験で確認すること |
+|---|---|
+| TDB01 | 両provider・両kindの3確定終端は7日前まで保持し、期限到達後に1回のcheckpoint保存で回収する |
+| TDB02 | 保存前、置換後、readback失敗後の新instanceは正規detailまたは墓標だけを受け付け、墓標の操作IDを再発行しない |
+| TDB03 | PRのaliasと履歴、resultの保存済みowner情報、他記録、logical tombstone、件数枠とgrantを保持する |
+| TDB04 | applied墓標の固定ID補完と重複通知だけを受け付け、差替え、再作成、再送、payload復元を拒否する |
+| TDB05 | close、時計逆行、期限overflow、callback寿命と再入を検査し、実保存直前のguardを省かない |
+| TDB06 | 相関補完の最大増分を予約し、固定H/Tと旧sourceへのgrantを増やさない |
+
+provider別の実施状況と未確認事項は[全体計画](../handover/codex-support.md)で追跡し、fixtureを実runtimeの7日後通知の証跡へ読み替えない。
 
 ## PR通知のaliasと履歴
 

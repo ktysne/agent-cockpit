@@ -90,6 +90,10 @@ HTTP requestにはnative profile allowlist、receipt、writer capabilityによ�
 unknownと未確定状態は延期し、journalの準備、checkpointの墓標、journalの本文削除を同じ操作IDで進める。
 起動時は準備済み操作だけをwriter再開前に続け、未準備の候補を自動で回収しない。
 本文を回収しても件数枠と移行grant、再送拒否の記録は保持する。
+`reclamation.reclaimTerminalDeliveryBody({ deliveryAttemptId })`は、PR通知とresultの確定終端から7日後にcheckpoint内の本文を回収する。
+指定と結果は通常指示の明示回収と同じ形とし、questionとinstructionはそれぞれ専用の回収入口を使う。
+本文と拒否情報を同じcheckpoint保存で置き換え、保存済みのtarget、aliasと履歴、logical tombstone、件数枠とgrantを保持する。
+回収済み墓標は保存なしで完了を返し、未回収候補を起動時に自動で回収しない。
 生のcontextやbackendは公開せず、nativeの停止時に自動で退役させる接続も加えない。
 
 移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。

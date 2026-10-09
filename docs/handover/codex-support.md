@@ -62,6 +62,10 @@ Claudeのクロスレビューは3往復で収束し、PR #325は親ブランチ
 [PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとし、Claudeのクロスレビューは3往復で収束した。head `e8d94f3`では、store停止の直接回帰試験を含む32件と、factory関連36件が成功した。製品コードは全体検証済みの`88ea774`から変わっていない。
 現保存層の全writer停止を維持し、質問単独失敗時の停止範囲の分離は後続に残す。
 個別墓標の件数枠を空ける世代集約は段階4であり、本文回収だけで#209を完了扱いにしない。
+PR通知とresultの確定終端回収は、PR #326のレビュー済みhead `3b93ee4`から`codex/terminal-delivery-body-reclamation-209-20261010`へスタックして着手した。
+checkpoint内の本文と拒否情報を1回の保存で墓標へ置き換え、aliasと履歴、保存済みowner、logical tombstone、件数枠とgrantを保持する。
+明示factoryにはresult送信前の`verifyResultOwner`が未接続のため、resultのapplied回収は正規の保存済みcheckpointを使うcold fixtureで検証する。
+送信前owner照合と実vendorへの結果返却は[#180-B](https://github.com/ktysne/agent-cockpit/issues/180)の未接続範囲であり、この回収fixtureを実result送信の成功に数えない。
 
 ### 通常指示の本文回収の確認範囲
 
@@ -80,6 +84,16 @@ Codexのservice合成試験は、native fixtureの実際のACKとitem evidence�
 
 既存adapter観測のtoken照合と終了後失効は、両providerの単体試験8件に含める。
 Windowsの実symlink試験1件は作成権限によりskipで、注入fixtureによる拒否は成功した。
+
+### PR通知とresultの本文回収の確認範囲
+
+期待条件は[配信回収schema](../design/delivery-reclamation-schema.md#pr通知とresultの明示本文回収)のTDB01〜TDB06に置く。
+両providerの実factoryとファイル保存の関連5件は成功し、両kindの3確定終端、期限境界、非終端の延期、12保存故障境界とfresh起動、相関補完と再送拒否を確認した。
+PR通知のappliedはtrusted provider adapterの遷移で作り、resultのappliedと一部の非終端は正規の保存済みcheckpointをcold起動で読み込む。
+resultの実送信、異なるownerへのfactory返却、実runtimeの7日後通知の成功証跡には数えない。
+非公開callback accessの再入と寿命はstore単体の試験で確認し、factory facadeへ試験用の保存口を公開しない。
+別ownerと非null grantの保全は、純粋な回収計画・参照投影・容量予約の関連25件で確認した。追加のowner世代試験を含む回収計画5件も成功し、accepted handoffで現在ownerが世代6へ進んだ後も、保存済みresultのownerと世代5を保持する。
+store/runtime関連39件と最終追加store/context7件は成功し、全体検証を実行している。
 
 ## 全体の流れ
 
