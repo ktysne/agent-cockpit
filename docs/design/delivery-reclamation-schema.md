@@ -385,6 +385,37 @@ anchor、全slotのmigration grantとleaseは固定し、期間退役とgrant解
 この契約は任意の保存結果不明を局所化するものではない。
 標準filesystemの実OS障害、実native送信と自動回収の確認は別に記録する。
 
+## 明示構成の自動回収
+
+`reclamation.autoReclaim`を省略するか`false`にすると、自動回収は無効になる。
+有効にする設定は`{ intervalMs, maxOperationsPerPass }`だけを持つdata-only objectとする。
+間隔は1以上2,147,483,647以下、処理量は1以上100以下のsafe integerで指定する。
+任意timer、clock、snapshot、安全判定callbackを公開設定で受け取らない。
+標準setupと設定画面への接続は別の採用条件である。
+
+cold照合と準備済み回収の復旧が完了してから最初のtimerを設定し、初回も指定間隔だけ待つ。
+passの完了後に次のone-shot timerを設定し、同じpassを並行実行しない。
+処理量は本文回収APIと各slotのgrant解放APIの呼出し数であり、記録数やI/O数の上限を意味しない。
+延期候補を同じpassで再試行せず、種別とIDのcursorを次passへ持ち越す。
+
+候補は検査済みの内部状態からIDだけを取得し、既存の明示回収APIで期限と状態をqueue内で再判定する。
+質問は退役証拠がある期間だけを対象にし、新たな期間失効やunknownの終端化を行わない。
+質問が不明な間は質問候補と全grant解放を省き、非質問だけを二通りのsnapshotで照合する。
+局所停止の例外は当該contextの内部登録を参照して区別し、例外codeや最新停止状態だけで安全な延期に変えない。
+未知例外ではtimerを止め、全停止後も失敗診断を保持する。
+
+closeでは新しいtickと次候補を同期的に止め、contextの保存guardを直ちに閉じてから実行中処理を待つ。
+起動途中の失敗でも同じ停止順序でtimerとwriterを片付ける。
+
+| ID | 期待条件 |
+|---|---|
+| ARS01 | 既定offと厳密な設定検査を維持し、公開timerや安全判定を受け取らない |
+| ARS02 | cold復旧後に遅延開始し、one-shotとsingle-flightで同時passを防ぐ |
+| ARS03 | API呼出し予算とcursorで処理を分け、延期候補の即時再試行と後続候補の飢餓を防ぐ |
+| ARS04 | 期限、時計逆行、overflowと手動競合を既存queueで再判定する |
+| ARS05 | 質問不明時に全grantを凍結し、未知失敗は停止と診断に残す |
+| ARS06 | close要求直後に保存guardを閉じ、次候補を始めず実行中処理をsettleする |
+
 ## PR通知のaliasと履歴
 
 現行PR通知の論理keyはkind、logical ID、revision、target launch tupleで決まり、source execution IDはkeyに入らない。

@@ -740,3 +740,52 @@ test('malformed explicit reclamation options reject without falling back to lega
   }
   assert.equal(getterCalls, 0);
 });
+
+test('auto reclaim options are strict data and disabled configurations preserve status shape', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-auto-reclaim-options-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const base = { profiles: defaultProfiles(directory), dataDirectory: directory,
+    hostId: 'native-reclamation-factory-host', commonQuestions: questionDependencies(),
+    reclamation: reclamationOptions() };
+  let getterCalls = 0;
+  const getterOption = { maxOperationsPerPass: 1 };
+  Object.defineProperty(getterOption, 'intervalMs', { enumerable: true,
+    get() { getterCalls += 1; return 100; } });
+  const invalid = [undefined, true, null, {}, { intervalMs: 100 },
+    { intervalMs: 100, maxOperationsPerPass: 1, extra: true },
+    { intervalMs: 0, maxOperationsPerPass: 1 }, { intervalMs: 2_147_483_648, maxOperationsPerPass: 1 },
+    { intervalMs: 100.5, maxOperationsPerPass: 1 }, { intervalMs: NaN, maxOperationsPerPass: 1 },
+    { intervalMs: 100, maxOperationsPerPass: 0 }, { intervalMs: 100, maxOperationsPerPass: 101 },
+    { intervalMs: 100, maxOperationsPerPass: 1.5 }, getterOption,
+    new Proxy({ intervalMs: 100, maxOperationsPerPass: 1 }, {})];
+  for (const autoReclaim of invalid) {
+    await assert.rejects(createNativeInstructionServiceIntegration({ ...base,
+      reclamation: { ...base.reclamation, autoReclaim } }), { code: 'invalid_reclamation_options' });
+    await assert.rejects(fs.access(path.join(directory, ANCHOR_FILE)), { code: 'ENOENT' });
+  }
+  assert.equal(getterCalls, 0);
+  for (const config of [base.reclamation, { ...base.reclamation, autoReclaim: false },
+    { ...base.reclamation, autoReclaim: { intervalMs: 2_147_483_647, maxOperationsPerPass: 100 } }]) {
+    const integration = await createNativeInstructionServiceIntegration({ ...base, reclamation: config });
+    try {
+      const status = integration.reclamation.status();
+      assert.equal(Object.hasOwn(status, 'scheduler'), typeof config.autoReclaim === 'object');
+      assert.equal(Object.hasOwn(integration.reclamation, 'listReclamationCandidates'), false);
+      assert.equal(Object.hasOwn(integration.reclamation, 'isQuestionUncertaintyError'), false);
+    } finally { await integration.close(); }
+  }
+});
+
+test('proxy reclamation configuration rejects before invoking its traps', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'native-reclamation-proxy-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let traps = 0;
+  const reclamation = new Proxy(reclamationOptions(), {
+    ownKeys() { traps += 1; throw new Error('unsafe options'); },
+    getOwnPropertyDescriptor() { traps += 1; throw new Error('unsafe options'); },
+  });
+  await assert.rejects(createNativeInstructionServiceIntegration({ profiles: defaultProfiles(directory),
+    dataDirectory: directory, hostId: 'native-reclamation-factory-host',
+    commonQuestions: questionDependencies(), reclamation }), { code: 'invalid_reclamation_options' });
+  assert.equal(traps, 0);
+});

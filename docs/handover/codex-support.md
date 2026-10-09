@@ -147,7 +147,8 @@ Claude R2もblockerと要修正0件で、故障fixtureと観測assertの任意�
 skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。
 
 注入したrename故障とfake native processの試験であり、実OS由来の故障や実vendor送信の証拠にはしない。
-自動回収、件数枠の解放、標準起動と設定画面への接続は後続である。
+明示構成の自動回収は、既定offのschedulerとして実装中である。
+件数枠の解放、標準起動と設定画面への接続は後続である。
 
 ## 全体の流れ
 
@@ -401,6 +402,24 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 - `npm test` は `test/**/*.test.js` だけを流す。`test/` の外にテストを置くと流れない。
 - 子プロセスを起動できない環境(Codex の Windows サンドボックス)では `npm run test:inprocess` を使う。`test/ensure-server.test.js` はそこでは失敗する。
 - #209 の codec 共通基盤(1a)は Node 標準機能だけを使い、時計、乱数、registry、ファイル保存を呼ばない。strict helper は own data property を検査し、getter や toJSON を実行しない。
+
+## 明示構成の自動回収scheduler
+
+`codex/reclamation-scheduler-209-20261010`は#329の収束head `3f6a3ca`を起点とする。
+`reclamation.autoReclaim`の省略とfalseはoffで、明示した`intervalMs`と`maxOperationsPerPass`だけで起動する。
+標準起動と設定画面へは接続しない。
+
+各passは退役した質問period、確認済み終端配信とgrantを候補にし、既存の直列化された明示回収APIで最新状態を再検査する。
+件数予算はAPI呼び出し回数であり、書き込み回数や処理時間の上限ではない。
+closeはtimer停止後、passの完了を待たずにcontextの書き込みを閉じる。
+質問の局所不確実性では質問と全grantを固定し、既知の不確実性以外の例外では自動回収を止める。
+
+scheduler単体17件と既存context/factory接続73件は成功した。
+両providerのfactory試験16件と既存の質問局所停止の回帰試験16件は成功した。
+確認済みcancelled resultの自動本文回収を含むが、PR通知の専用自動回収fixtureと実native送信は未確認である。
+全体試験とClaudeレビューは実行中である。
+タイマーとprovider processのfixtureによる合格を、実runtimeの7日連続運転の成功と扱わない。
+後続は段階4の質問世代に対する拒否包含のpure検証で、墓標削除や既存のattempt拒否を弱める処理は先に接続しない。
 
 ## 起票していない候補
 

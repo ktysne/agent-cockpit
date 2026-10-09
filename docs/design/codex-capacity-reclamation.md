@@ -179,10 +179,10 @@ fixture の合格を実 runtime の適合確認と区別する。
 | 3 | PR通知とresultの確定終端回収 | checkpoint内の本文と拒否情報を1回のatomic保存で墓標へ置き換え、alias、履歴、保存済みowner、logical tombstoneを保持し、再利用と再送を拒否する |
 | 4 | 自動実行、追加枠の解放、停止範囲の分離 | 時計逆行、close、各writerとの競合を確認し、通常枠で完結するgrantを解放する。質問単独の保存結果不明で他kindを継続できる境界を実装し、横断検証する |
 
-質問、通常指示、PR通知とresultの明示回収は既存保存層の停止範囲を維持する。
-各journalだけの書込みでも結果不明時は全writerを止め、再起動による照合まで本文削除や配信を続けない。
-質問writerだけを止めて通常指示とPR通知を継続する契約は、この中間実装では未達である。
-停止範囲を分離するには、保存先ごとの停止状態と、結果不明の質問snapshotに依存しない他kindの更新条件を先に検証する。
+保存結果不明時は原則として全writerを止め、再起動による照合まで本文削除や配信を続けない。
+例外は、下記の限定した標準質問rename故障を二通りのsnapshotへ絞れる場合である。
+質問の公開状態を不明とし、旧状態と候補状態の両方で有効な非質問の更新だけを継続する。
+共有checkpoint、anchor、清掃結果不明と一般のreadback故障は全停止を維持する。
 明示回収だけでは段階3を完了扱いにせず、標準起動と設定画面への接続、実runtime確認も別に残す。
 
 本文回収後の範囲は、次の順で分けて検証する。
@@ -201,6 +201,9 @@ grant解放は現在のfile byteだけで判定せず、固定相関の補完を
 清掃結果不明、readbackと任意writerの失敗は全停止を維持し、anchor、全grantとleaseを凍結する。
 詳細は[配信回収schema](delivery-reclamation-schema.md#質問journalの限定した保存結果不明)のQWI01〜QWI06に従う。
 自動実行は既存回収入口をqueue内で再判定して使い、unknownの終端化や質問期間の新規失効を行わない。
+明示factoryの`autoReclaim`は既定offとし、設定した間隔のone-shot timerで有限な数の回収APIを呼ぶ。
+局所停止時は質問と全grant解放を省き、closeでは保存guardを閉じてから実行中処理を待つ。
+設定、処理量と故障時の契約は[配信回収schema](delivery-reclamation-schema.md#明示構成の自動回収)のARS01〜ARS06に従う。
 
 ### 段階2の固定容量上界
 

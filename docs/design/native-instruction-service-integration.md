@@ -106,11 +106,21 @@ unknownと未確定状態は延期し、journalの準備、checkpointの墓標�
 局所停止中は全grantとleaseを保持し、期間退役とgrant解放を拒否する。
 認定条件と全停止との境界は[配信回収schema](delivery-reclamation-schema.md#質問journalの限定した保存結果不明)のQWI01〜QWI06に従う。
 
+`reclamation.autoReclaim`を省略するか`false`にすると、timerを作らず明示回収だけを使う。
+有効化には`{ intervalMs, maxOperationsPerPass }`を指定し、間隔は1以上2,147,483,647以下、API呼出し数は1以上100以下のsafe integerとする。
+cold復旧の完了後にtimerを開始し、初回も指定間隔を待つ。
+検査済みの候補IDから既存の明示回収を呼び、期限、時計逆行と手動操作との競合を保存queueで再判定する。
+質問が不明な間は質問候補と全grant解放を省き、非質問の更新だけを継続する。
+有効構成の`reclamation.status()`にはschedulerの診断を追加し、未知失敗と全停止の原因を保持する。
+closeは新しいtickと次候補を同期的に止め、contextの保存guardを閉じてから実行中passを待つ。
+詳細は[配信回収schema](delivery-reclamation-schema.md#明示構成の自動回収)のARS01〜ARS06に従う。
+
 移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。
 準備完了時の照合では、隔離済みでアンカーにも退役が記録された質問だけ、保存済みの完全相関を使う。
 現在の質問の認可は実行registryで照合し、古いlaunchやactorを復元して再認可しない。
 件数枠が満杯なら、移行が成功しても新規受付は再開しない。
-本文の自動回収、墓標の件数解放、標準起動と設定画面への接続は後続の範囲である。
+本文の自動回収は上記の明示的なopt-in構成だけを対象とする。
+墓標の件数解放、標準起動と設定画面への接続、実runtimeでの期限経過確認は別の採用条件である。
 native processとprovider eventをfixtureで置換した試験は、実runtimeの成功証跡には数えない。
 
 ### 質問サービスの依存
