@@ -39,7 +39,7 @@ function transformStrings(value, replacements) {
   return value;
 }
 
-function periodSources(provider, suffix, sourceProvider = provider) {
+function periodSources(sourceProvider, suffix) {
   const sources = threeSlotLegacySources(sourceProvider);
   const replacements = new Map([
     ['period-1', `period-${suffix}`],
@@ -191,7 +191,7 @@ function createQuestionCapsuleWholeValidationFixture({
   const baseQuestion = clone(sources.question);
   const questionSource = JSON.parse(sources.questions.toString('utf8'));
   const firstCheckpoint = JSON.parse(sources.checkpoint.toString('utf8'));
-  const nextPeriod = periodSources(provider, '2', secondaryProvider ?? provider);
+  const nextPeriod = periodSources(secondaryProvider ?? provider, '2');
   const secondCheckpoint = nextPeriod.checkpoint;
   const secondPeriodQuestion = addQuestion(nextPeriod.question, 2, true);
   nextPeriod.questions.questions = [secondPeriodQuestion];
