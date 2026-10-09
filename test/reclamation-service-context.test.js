@@ -505,7 +505,7 @@ for (const phase of ['before', 'after']) {
     for (const slot of SLOTS) {
       assert.throws(() => sandbox.context.backend(slot).prepareResume(initial), { code: 'question_journal_uncertain' });
     }
-    assert.throws(() => sandbox.context.start(sandbox.writersBySlot), { code: 'question_journal_uncertain' });
+    await assert.rejects(sandbox.context.start(sandbox.writersBySlot), { code: 'question_journal_uncertain' });
     await assert.rejects(sandbox.context.releaseMigrationAllowance({}), { code: 'question_journal_uncertain' });
     await assert.rejects(sandbox.context.retireQuestionPeriod({}), { code: 'question_journal_uncertain' });
     const afterFault = await fs.readFile(sandbox.slotPathsBySlot.questions);

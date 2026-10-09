@@ -890,7 +890,11 @@ function createReclamationServiceContext(value) {
   }
 
   function start(writersValue) {
-    assertQuestionsKnown();
+    try {
+      assertQuestionsKnown();
+    } catch (error) {
+      return Promise.reject(error);
+    }
     if (startPromise !== null) return startPromise;
     if (closing || closed) return Promise.reject(contextError('reclamation_service_context_closed'));
     if (blocked) return Promise.reject(contextError('reclamation_service_blocked'));

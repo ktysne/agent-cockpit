@@ -133,6 +133,10 @@ fixtureの予約状態不明を実OSの容量喪失や実runtimeの故障へ読�
 質問のrename成立後の復帰では、既存のcold復旧契約に従って候補内の質問を隔離するため、必要なjournalとanchorの修復保存を行う。
 このcold復旧を含む最終12件も成功し、全grantの保持、追加native送信なし、診断読取後と2回目のfresh起動後のbytes安定を確認した。
 低層の不正candidate試験は、公開操作で片方のworldだけが不正になる再現例を示すものではない。
+局所停止中のPR通知とresultの継続は、共通validatorと共有保存入口の読み取り監査で確認した設計条件であり、種別ごとの専用native fixtureでは未確認である。
+Claude R1はblockerと要修正0件で、任意提案に従い本文回収の最終質問rename故障を両providerで4件追加した。
+最終native fixtureは16件成功し、checkpoint墓標に対応するprepared質問をcold復旧で回収し、operation ID、anchorと全grant、2回目の起動後のbytes安定と追加送信なしを確認した。
+同instanceのstart拒否はPromiseで返す契約にそろえ、関連2件に成功した。
 
 実装head `cf6e991`の全体`npm test`は2,481件成功、1件skip、失敗0件（全2,482件、exit0）だった。
 skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。

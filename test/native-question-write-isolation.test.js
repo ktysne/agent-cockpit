@@ -12,6 +12,7 @@ const {
 const { PROVIDERS } = require('./support/native-instruction-integration-harness');
 
 const SLOT_NAMES = Object.freeze(['checkpoint', 'instructions', 'questions']);
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const QUESTION = (questionId) => ({
   questionId,
   timeoutMinutes: 1,
@@ -55,6 +56,112 @@ async function assertQuestionsUnavailable(harness, started) {
   await assert.rejects(harness.integration.questionService.status(started.writer, 'unreadable'), readFailure);
   await assert.rejects(harness.integration.questionService.register(started.writer,
     QUESTION(`blocked-${harness.provider}`)), readFailure);
+}
+
+for (const provider of PROVIDERS) {
+  for (const phase of ['before', 'after']) {
+    test(`${provider} resumes prepared question-body reclamation after the final questions rename fails ${phase}`, async (t) => {
+      const sources = threeSlotLegacySources(provider);
+      const harness = await createNativeQuestionWriteIsolationHarness(provider, {
+        sources,
+        normalByteLimitsBySlot: {
+          checkpoint: sources.checkpoint.length + 16 * 1024,
+          instructions: sources.instructions.length + 16 * 1024,
+          questions: 16 * 1024 * 1024,
+        },
+      });
+      t.after(() => harness.removeDirectory());
+
+      const before = await harness.readAllBytes();
+      const beforeGrants = grantsFrom(before);
+      const beforeQuestionJournal = JSON.parse(before.questions.toString('utf8'));
+      const beforeAnchor = JSON.parse(before.anchor.toString('utf8'));
+      const beforeCapacity = structuredClone(harness.context.status().capacity);
+      const retiredPeriod = beforeAnchor.retiredQuestionPeriods.find((period) =>
+        period.periodId === sources.question.periodId && period.identity.nativeId === sources.question.identity.nativeId);
+      assert.ok(retiredPeriod);
+      assert.ok(Object.values(beforeGrants).some((grant) => grant !== null));
+
+      harness.setNow(retiredPeriod.retiredAt + RETENTION_MS);
+      harness.nativeFileSystem.armRenameRetryExhaustion({
+        targetPath: harness.pathFor('questions'),
+        phase,
+        occurrence: 2,
+      });
+      await assert.rejects(harness.integration.reclamation.reclaimQuestionBodies({
+        identity: sources.question.identity,
+        periodId: sources.question.periodId,
+      }), { code: 'EPERM' });
+
+      const afterFailure = await harness.readAllBytes();
+      const failedQuestionJournal = JSON.parse(afterFailure.questions.toString('utf8'));
+      const failedReservation = failedQuestionJournal.reservations.find((reservation) =>
+        reservation.internalQuestionId === sources.question.internalQuestionId);
+      const operationId = failedReservation?.reclamation?.operationId;
+      assert.equal(typeof operationId, 'string');
+      assert.equal(failedReservation.reclamation.preparedAt, harness.now);
+      assert.equal(failedQuestionJournal.revision, beforeQuestionJournal.revision + (phase === 'before' ? 1 : 2));
+      assert.deepEqual(afterFailure.anchor, before.anchor);
+      assert.deepEqual(grantsFrom(afterFailure), beforeGrants);
+      assert.deepEqual(afterFailure.instructions, before.instructions);
+      assert.deepEqual(harness.context.status().capacity, beforeCapacity);
+      assert.equal(harness.context.status().state, 'degraded');
+      assert.equal(harness.context.status().canWrite, true);
+      assert.equal(harness.context.status().slotHealth.questions, 'uncertain');
+      assert.equal(harness.context.status().slotHealth.checkpoint, 'ready');
+      assert.equal(harness.context.status().slotHealth.instructions, 'ready');
+
+      const failedDelivery = JSON.parse(afterFailure.checkpoint.toString('utf8')).ledger.deliveries.find((delivery) =>
+        delivery.deliveryAttemptId === sources.question.deliveryIntent.deliveryAttemptId);
+      assert.equal(failedDelivery.recordType, 'reclaimed');
+      assert.equal(failedDelivery.reclamation.operationId, operationId);
+      if (phase === 'before') {
+        assert.equal(failedReservation.bodyState, 'retained');
+        assert.ok(failedQuestionJournal.questions.some((detail) =>
+          detail.internalQuestionId === sources.question.internalQuestionId));
+      } else {
+        assert.equal(failedReservation.bodyState, 'reclaimed');
+        assert.equal(failedQuestionJournal.questions.some((detail) =>
+          detail.internalQuestionId === sources.question.internalQuestionId), false);
+      }
+      const failedRenameEvents = harness.nativeFileSystem.events.filter((event) =>
+        event.operation === 'rename' && event.targetPath === harness.pathFor('questions') &&
+        event.writeOccurrence === 2);
+      assert.equal(failedRenameEvents.length, 4);
+      await assertNoTemporaryFiles(harness);
+
+      const nativeWritesBeforeRestart = totalNativeInstructionWrites(harness, provider);
+      await harness.restart();
+      const afterColdRecovery = await harness.readAllBytes();
+      const recoveredQuestionJournal = JSON.parse(afterColdRecovery.questions.toString('utf8'));
+      const recoveredReservation = recoveredQuestionJournal.reservations.find((reservation) =>
+        reservation.internalQuestionId === sources.question.internalQuestionId);
+      assert.equal(recoveredReservation.bodyState, 'reclaimed');
+      assert.equal(recoveredReservation.reclamation.operationId, operationId);
+      assert.equal(recoveredQuestionJournal.questions.some((detail) =>
+        detail.internalQuestionId === sources.question.internalQuestionId), false);
+      assert.equal(recoveredQuestionJournal.revision, failedQuestionJournal.revision + (phase === 'before' ? 1 : 0));
+      assert.deepEqual(afterColdRecovery.anchor, before.anchor);
+      assert.deepEqual(afterColdRecovery.checkpoint, afterFailure.checkpoint);
+      assert.deepEqual(afterColdRecovery.instructions, before.instructions);
+      assert.deepEqual(grantsFrom(afterColdRecovery), beforeGrants);
+      assert.equal(harness.context.status().state, 'ready');
+      assert.deepEqual(harness.context.status().slotHealth,
+        { checkpoint: 'ready', instructions: 'ready', questions: 'ready' });
+      assert.ok(harness.context.status().capacity.activeLeaseCount > 0);
+      assert.ok(harness.context.status().capacity.reservedBytes > 0);
+      assert.equal(harness.integration.getStatus().commonQuestions.status, 'ready');
+      assert.equal(harness.integration.questionService.getQuarantineDiagnostics().status, 'ready');
+      assert.equal((await harness.integration.questionService.dashboardSnapshot()).recovery, null);
+      assert.equal(totalNativeInstructionWrites(harness, provider), nativeWritesBeforeRestart);
+      await assertNoTemporaryFiles(harness);
+
+      await harness.restart();
+      assert.equal(harness.context.status().state, 'ready');
+      assert.deepEqual(await harness.readAllBytes(), afterColdRecovery);
+      assert.equal(totalNativeInstructionWrites(harness, provider), nativeWritesBeforeRestart);
+    });
+  }
 }
 
 for (const provider of PROVIDERS) {

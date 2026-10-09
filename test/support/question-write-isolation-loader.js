@@ -32,8 +32,15 @@ function createNativeFileSystemFixture() {
   async function rename(temporaryPath, targetPath) {
     const fault = armedRenameFailure;
     if (!fault || fault.targetPath !== targetPath) return native.rename(temporaryPath, targetPath);
+    if (fault.temporaryPath !== temporaryPath) {
+      fault.temporaryPath = temporaryPath;
+      fault.writeOccurrences += 1;
+      fault.calls = 0;
+    }
     fault.calls += 1;
-    events.push({ operation: 'rename', targetPath, call: fault.calls, phase: fault.phase });
+    events.push({ operation: 'rename', targetPath, call: fault.calls,
+      writeOccurrence: fault.writeOccurrences, phase: fault.phase });
+    if (fault.writeOccurrences !== fault.occurrence) return native.rename(temporaryPath, targetPath);
     if (fault.hold && fault.calls === 1) {
       fault.entered.resolve();
       await fault.release.promise;
@@ -84,6 +91,7 @@ function createNativeFileSystemFixture() {
     armRenameRetryExhaustion({
       targetPath,
       phase = 'before',
+      occurrence = 1,
       code = 'EPERM',
       cleanupFailure = false,
       error = null,
@@ -91,6 +99,7 @@ function createNativeFileSystemFixture() {
     }) {
       if (armedRenameFailure !== null || typeof targetPath !== 'string' ||
           !['before', 'after'].includes(phase) || !['EPERM', 'EBUSY'].includes(code) ||
+          !Number.isSafeInteger(occurrence) || occurrence < 1 ||
           typeof cleanupFailure !== 'boolean' || typeof hold !== 'boolean' ||
           (error !== null && (!error || typeof error !== 'object' || error.code !== code))) {
         throw new TypeError('invalid isolated rename fault');
@@ -100,6 +109,7 @@ function createNativeFileSystemFixture() {
       armedRenameFailure = {
         targetPath,
         phase,
+        occurrence,
         code,
         cleanupFailure,
         error,
@@ -107,6 +117,8 @@ function createNativeFileSystemFixture() {
         entered,
         release,
         calls: 0,
+        writeOccurrences: 0,
+        temporaryPath: null,
         cleanupCalls: 0,
       };
       return Object.freeze({ entered: entered.promise, release: release.resolve });
