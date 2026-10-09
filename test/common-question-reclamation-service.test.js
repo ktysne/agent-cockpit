@@ -327,6 +327,7 @@ test('anchor reclamation capacity rejection is reported as question quarantine c
   t.after(() => fixture.service.close());
   await install(fixture);
   const originalSave = fixture.backendState.backend.save;
+  t.after(() => { fixture.backendState.backend.save = originalSave; });
   let saveAttempts = 0;
   fixture.backendState.backend.save = async () => {
     saveAttempts += 1;
@@ -342,7 +343,6 @@ test('anchor reclamation capacity rejection is reported as question quarantine c
   assert.equal(diagnostics.reason, 'question_quarantine_capacity');
   assert.equal(diagnostics.quarantinedCount, 0);
   assert.ok(diagnostics.remainingCount > 0);
-  fixture.backendState.backend.save = originalSave;
 });
 
 test('all ingress rejects retired reservation keys and ticks skip quarantined details', async (t) => {

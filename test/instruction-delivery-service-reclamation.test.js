@@ -53,6 +53,7 @@ function creatingJournal() {
 function createBackend(initial = emptyJournal()) {
   let value = structuredClone(initial);
   let writable = true;
+  let nextResumeBarrier = null;
   return {
     slot: 'instructions', normalByteLimit: BYTE_LIMIT,
     canWrite() { return writable; },
@@ -60,11 +61,25 @@ function createBackend(initial = emptyJournal()) {
     async load() { return structuredClone(value); },
     async save(candidate) { value = structuredClone(candidate); return structuredClone(value); },
     async prepareResume(fullSnapshot) {
+      const barrier = nextResumeBarrier;
+      nextResumeBarrier = null;
+      if (barrier) {
+        barrier.started();
+        await barrier.wait;
+      }
       value = structuredClone(fullSnapshot.stores.instructions);
     },
     async flush() {},
     async close() {},
     get value() { return structuredClone(value); },
+    pauseNextResume() {
+      let signalStarted;
+      let release;
+      const started = new Promise((resolve) => { signalStarted = resolve; });
+      const wait = new Promise((resolve) => { release = resolve; });
+      nextResumeBarrier = { started: signalStarted, wait };
+      return { started, release };
+    },
   };
 }
 
@@ -149,7 +164,7 @@ test('a failed reclamation create recovers only a fully correlated checkpointed 
   await harness.service.ready();
 
   const recovered = await harness.service.create(input);
-  assert.equal(recovered.outcome, 'existing');
+  assert.equal(recovered.outcome, 'created');
   assert.equal(recovered.delivery.deliveryAttemptId, input.deliveryAttemptId);
   assert.equal(harness.backend.value.instructions[0].deliveryCreationState, 'checkpointed');
   assert.equal(harness.createCount, 1);
@@ -157,6 +172,20 @@ test('a failed reclamation create recovers only a fully correlated checkpointed 
   const replay = await harness.service.create(input);
   assert.equal(replay.outcome, 'existing');
   assert.equal(harness.createCount, 1);
+});
+
+test('closing during instruction resume cannot reopen the service', async (t) => {
+  const harness = createHarness();
+  t.after(() => harness.service.close());
+  const barrier = harness.backend.pauseNextResume();
+  const pending = harness.service.reclamationWriter.prepareResume(harness.fullSnapshot);
+  await barrier.started;
+  await harness.service.close();
+  barrier.release();
+
+  await assert.rejects(pending, (error) => error.code === 'instruction_service_closed');
+  await assert.rejects(harness.service.dashboardSnapshot(),
+    (error) => error.code === 'instruction_service_closed' || error.code === 'reclamation_writer_cold');
 });
 
 test('an unconfirmed reclamation create retains creating and rejects same-attempt retry', async (t) => {

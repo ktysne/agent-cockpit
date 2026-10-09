@@ -297,6 +297,7 @@ test('reclamation checkpoint write guards observe async rejection without callin
 function createWriteBarrierBackend() {
   const state = { checkpoint: emptyReclamationCheckpoint() };
   let nextBarrier = null;
+  let nextResumeBarrier = null;
   let lastWriteGuard;
   const backend = {
     slot: 'checkpoint', normalByteLimit: 1024 * 1024,
@@ -314,7 +315,15 @@ function createWriteBarrierBackend() {
       state.checkpoint = clone(candidate);
       return clone(state.checkpoint);
     },
-    async prepareResume(snapshot) { state.checkpoint = clone(snapshot.stores.checkpoint); },
+    async prepareResume(snapshot) {
+      const barrier = nextResumeBarrier;
+      nextResumeBarrier = null;
+      if (barrier) {
+        barrier.started();
+        await barrier.wait;
+      }
+      state.checkpoint = clone(snapshot.stores.checkpoint);
+    },
     async flush() {},
     async close() {},
   };
@@ -328,6 +337,14 @@ function createWriteBarrierBackend() {
       const started = new Promise((resolve) => { signalStarted = resolve; });
       const wait = new Promise((resolve) => { release = resolve; });
       nextBarrier = { started: signalStarted, wait };
+      return { started, release };
+    },
+    pauseNextResume() {
+      let signalStarted;
+      let release;
+      const started = new Promise((resolve) => { signalStarted = resolve; });
+      const wait = new Promise((resolve) => { release = resolve; });
+      nextResumeBarrier = { started: signalStarted, wait };
       return { started, release };
     },
   };
@@ -348,6 +365,30 @@ test('a closed reclamation delivery writer cannot resume from a snapshot', async
   await assert.rejects(store.reclamationWriter.prepareResume({
     anchor: {}, stores: { checkpoint: persistence.checkpoint },
   }), errorCode('store_closed'));
+});
+
+test('closing during reclamation resume cannot reopen the delivery writer', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend: persistence.backend, periodGate },
+  });
+  t.after(() => store.close());
+  await store.ready;
+  store.reclamationWriter.stop();
+
+  const barrier = persistence.pauseNextResume();
+  const pending = store.reclamationWriter.prepareResume({
+    anchor: {}, stores: { checkpoint: persistence.checkpoint },
+  });
+  await barrier.started;
+  await store.close();
+  barrier.release();
+
+  await assert.rejects(pending, errorCode('store_closed'));
+  await assert.rejects(store.snapshot(), errorCode('store_closed'));
 });
 
 test('a question token is rechecked by the backend immediately before a delayed checkpoint write', async (t) => {

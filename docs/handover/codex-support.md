@@ -39,7 +39,8 @@ Astra監査とClaudeの指摘を修正し、修正後の全体2,102件は成功�
 [PR #322](https://github.com/ktysne/agent-cockpit/pull/322)のClaudeクロスレビューは2往復で収束し、featureへマージ済みである（merge SHA `557e547`）。
 このheadを起点に `codex/reclamation-service-guards-209-20261009` で、段階2のPR3として既存writerの新形式対応、質問gate、受付guardとserviceの接続を実装した。
 両providerのservice適合試験14件、実サービス再起動を含む保存故障18ケースは成功した。[PR #323](https://github.com/ktysne/agent-cockpit/pull/323)のClaudeレビュー1往復目の指摘を修正し、修正後の全体試験は2,226件成功・1件skip・失敗0件である。
-2往復目はClaude CLIのOAuth期限切れで開始できず、再認証を待つDraftである。作成中から未作成への巻き戻しは単調遷移契約により採用せず、保存済みの完全相関checkpointがある指示だけ作成済みへ回復する。
+再認証後のClaudeレビュー2往復目はblocker・要修正なしだった。再開とcloseの競合、初回の指示保存結果に関する任意提案を適用し、最終妥当性を確認するDraftである。
+作成中から未作成への巻き戻しは単調遷移契約により採用せず、保存済みの完全相関checkpointがある指示だけ作成済みへ回復する。
 skipはWindowsで実symlinkを作成する権限が無い試験であり、注入fixtureによるsymlink拒否は成功した。
 
 ## 全体の流れ
@@ -118,7 +119,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | マージ済み（2026-10-09、merge SHA `66b3c6a`）。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束 |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | マージ済み（2026-10-09、merge SHA `7427105`）。全体2,102件成功。Claudeレビュー3往復で収束 |
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
-| 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | `codex/reclamation-service-guards-209-20261009` で実装済み（起点 `557e547`）。修正後全体2,226件成功・1件skip。Draft、Claudeレビュー1往復目の指摘対応済み、2往復目の再認証待ち。native factoryと実runtimeは未接続 |
+| 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | `codex/reclamation-service-guards-209-20261009` で実装済み（起点 `557e547`）。修正後全体2,226件成功・1件skip。Draft、Claudeレビュー2往復目はblocker・要修正なし。任意提案の適用後に最終妥当性を確認する。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | 未作成 | 未着手。満杯と余裕のある旧形式を検証し、標準起動と設定画面には接続しない |
 | 9 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |

@@ -1004,6 +1004,7 @@ function createDurableDeliveryStore(options = {}) {
     const resumed = assertReclamationCheckpointCapacity(fullSnapshot.stores.checkpoint, null, true);
     try {
       await checkpointStore.prepareResume(fullSnapshot);
+      if (closePromise) throw storeError('store_closed');
       currentCheckpoint = resumed;
       payloads.clear();
       writerBlocked = false;

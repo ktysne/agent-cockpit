@@ -409,7 +409,7 @@ function createInstructionDeliveryService(options = {}) {
           journalState = await journal.save(checkpointed.journal);
           savedIntent = findIntent(savedIntent.deliveryAttemptId);
           return {
-            outcome: 'existing',
+            outcome: attempted.created ? 'created' : 'existing',
             delivery: recoveredDelivery,
             instruction: projection(savedIntent, recoveredDelivery),
           };
@@ -569,6 +569,7 @@ function createInstructionDeliveryService(options = {}) {
     if (!reclamationMode || closePromise) throw serviceError('instruction_service_closed');
     const normalized = normalizeInstructionJournalV2Local(fullSnapshot?.stores?.instructions);
     await reclamationWriter.prepareResume(fullSnapshot);
+    if (closePromise) throw serviceError('instruction_service_closed');
     journalState = normalized;
     initPromise = null;
     startupError = null;
