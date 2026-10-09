@@ -264,6 +264,7 @@ function assertShapeFits(value, shape, path = []) {
     if (shape === null || NULLABLE_PATHS.has(keyPath)) return;
     throw new TypeError(`unexpected_null:${keyPath}`);
   }
+  if (shape === null) throw new TypeError(`unexpected_value:${keyPath}`);
   if (Array.isArray(shape)) {
     if (!Array.isArray(value) || value.length !== shape.length) throw new TypeError(`shape_mismatch:${keyPath}`);
     for (let index = 0; index < shape.length; index += 1) assertShapeFits(value[index], shape[index], [...path, String(index)]);

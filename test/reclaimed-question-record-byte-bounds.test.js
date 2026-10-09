@@ -42,8 +42,24 @@ test('最大構造shapeのQ reservationとCP graveは独立byte上界を満た�
     const grave = normalizeDeliveryRecordV2Local(createMaximumQuestionGrave({ provider }));
     assertShapeFits(question, QUESTION_RESERVATION_MAX_SHAPE);
     assertShapeFits(grave, QUESTION_GRAVE_MAX_SHAPE);
-    assertIndependentEncoding(question, questionBound);
-    assertIndependentEncoding(grave, graveBound);
+    const questionMeasurement = assertIndependentEncoding(question, questionBound);
+    const graveMeasurement = assertIndependentEncoding(grave, graveBound);
+    const expected = provider === 'claude'
+      ? { question: [44_566, 44_326], grave: [109_624, 109_134] }
+      : { question: [44_564, 44_324], grave: [109_620, 109_130] };
+    assert.deepEqual([questionMeasurement.prettyBytes, questionMeasurement.compactBytes], expected.question);
+    assert.deepEqual([graveMeasurement.prettyBytes, graveMeasurement.compactBytes], expected.grave);
+  }
+});
+
+test('null固定shapeのownerGenerationはnullを許し、それ以外を拒否する', () => {
+  const grave = normalizeDeliveryRecordV2Local(createMaximumQuestionGrave());
+  assert.equal(grave.ownerGeneration, null);
+  assert.doesNotThrow(() => assertShapeFits(grave, QUESTION_GRAVE_MAX_SHAPE));
+
+  for (const ownerGeneration of [0, '0', {}]) {
+    assert.throws(() => assertShapeFits({ ...grave, ownerGeneration }, QUESTION_GRAVE_MAX_SHAPE),
+      /unexpected_value:ownerGeneration/);
   }
 });
 

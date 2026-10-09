@@ -189,6 +189,8 @@ commit `3937095` のfixtureを同じcompact JSONで測定したサイズは次�
 返すのは正規化した記録だけで、anchorの永久失効、checkpoint全体からの不存在、全記録のID一意性や削除許可は認定しない。
 論理墓標の単体normalizerも公開し、既存ledger全体の件数枠を単体recordの合否へ流用しない。
 既存snapshotの検査分岐と受理上限は保つ。
+不正な入力はTypeErrorで拒否し、messageは既存record normalizerとsnapshot整合検査の分類を引き継ぐ。
+後続capsuleの入口ではこれらを一括して不正入力として扱い、局所例外のmessageから保存や復旧の許可を決めない。
 
 | ID | 期待条件 |
 |---|---|
