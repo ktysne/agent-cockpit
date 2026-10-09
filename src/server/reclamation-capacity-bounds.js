@@ -5,6 +5,7 @@ const {
   assertIdentifier,
   assertSha256,
   assertSafeUnsignedInteger,
+  assertUuidV4,
   captureDenseArray,
   captureExactRecord,
 } = require('./reclamation-codec-primitives');
@@ -400,7 +401,15 @@ function maxFutureQuestionDetail(currentValue) {
   const current = normalizeQuestionDetailV2(currentValue);
   const answers = worstQuestionAnswers(current.questions);
   const variants = [];
+  const addFutureMetadata = (record) => {
+    record.quarantinedAt = MAX_SAFE_INTEGER;
+    if (record.deliveryIntent !== null &&
+        ['not_created', 'creating'].includes(record.deliveryCreationState)) {
+      record.deliveryCreationState = 'indeterminate';
+    }
+  };
   const addLateAnswers = (record) => {
+    addFutureMetadata(record);
     record.cancelledAt ??= MAX_SAFE_INTEGER;
     record.externalResolution ??= {
       resolvedAt: MAX_SAFE_INTEGER,
@@ -856,7 +865,8 @@ function maxFutureCorrelation(record, nativeItemId) {
 }
 
 function futureCorrelationsForDelivery(record, nativeItemId) {
-  if (record.kind === 'question' || ['cancelled_before_send', 'superseded_before_send'].includes(record.state)) {
+  if (record.recordType === 'reclaimed' ||
+      ['cancelled_before_send', 'superseded_before_send'].includes(record.state)) {
     return {
       acceptedCorrelation: record.acceptedCorrelation,
       appliedCorrelation: record.appliedCorrelation,
@@ -961,21 +971,17 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
   if (record.recordType === 'reclaimed') return candidates;
   const nativeItemId = nativeItemIdForRecord(index, usedNativeItemIds);
   const correlations = futureCorrelationsForDelivery(record, nativeItemId);
+  const currentCorrelations = {
+    acceptedCorrelation: record.acceptedCorrelation,
+    appliedCorrelation: record.appliedCorrelation,
+  };
   const retentionDeadlineFits = (terminalAt) =>
     terminalAt <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS;
-  if (record.kind === 'question') {
-    if (earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS &&
-        ['available', 'unknown', 'applied', 'cancelled_before_send', 'superseded_before_send'].includes(record.state) &&
-        (!['applied', 'cancelled_before_send', 'superseded_before_send'].includes(record.state) ||
-          retentionDeadlineFits(record.terminalAt))) {
-      candidates.push(reclaimedDeliveryCandidate(record, correlations, operationId));
-    }
-    return candidates;
-  }
-
   if (['cancelled_before_send', 'superseded_before_send'].includes(record.state)) {
-    if (retentionDeadlineFits(record.terminalAt)) {
-      candidates.push(reclaimedDeliveryCandidate(record, correlations, operationId));
+    if (retentionDeadlineFits(record.terminalAt) &&
+        (record.kind !== 'question' || earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS)) {
+      candidates.push(reclaimedDeliveryCandidate(record,
+        record.kind === 'question' ? currentCorrelations : correlations, operationId));
     }
     return candidates;
   }
@@ -986,9 +992,11 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
       acceptedCorrelation: correlations.acceptedCorrelation,
       appliedCorrelation: correlations.appliedCorrelation,
     });
-    candidates.push(updated);
-    if (retentionDeadlineFits(record.terminalAt)) {
-      candidates.push(reclaimedDeliveryCandidate(updated, correlations, operationId));
+    if (!sameEmbeddedRecord(updated, record)) candidates.push(updated);
+    if (retentionDeadlineFits(record.terminalAt) &&
+        (record.kind !== 'question' || earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS)) {
+      candidates.push(reclaimedDeliveryCandidate(record,
+        record.kind === 'question' ? currentCorrelations : correlations, operationId));
     }
     return candidates;
   }
@@ -1001,6 +1009,13 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
     appliedCorrelation: correlations.appliedCorrelation,
   });
   candidates.push(futureApplied);
+  if (record.kind === 'question') {
+    if (['available', 'unknown'].includes(record.state) &&
+        earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS) {
+      candidates.push(reclaimedDeliveryCandidate(record, currentCorrelations, operationId));
+    }
+    return candidates;
+  }
   if (earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS) {
     const reclaimableApplied = normalizeDeliveryRecordV2Local({
       ...record,
@@ -1035,10 +1050,22 @@ function instructionFutureRecordCandidates(record, operationId, earliestTime = 0
     }));
     return candidates;
   }
-  if (record.deliveryCreationState !== 'checkpointed' ||
-      earliestTime > MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS) return candidates;
+  if (record.deliveryCreationState === 'indeterminate') return candidates;
+  let checkpointed = record;
+  if (record.deliveryCreationState === 'not_created' || record.deliveryCreationState === 'creating') {
+    candidates.push(normalizeInstructionRecordV2Local({
+      ...record,
+      deliveryCreationState: 'indeterminate',
+    }));
+    checkpointed = normalizeInstructionRecordV2Local({
+      ...record,
+      deliveryCreationState: 'checkpointed',
+    });
+    candidates.push(checkpointed);
+  }
+  if (earliestTime > MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS) return candidates;
   const prepared = normalizeInstructionRecordV2Local({
-    ...record,
+    ...checkpointed,
     reclamation: {
       operationId,
       preparedAt: MAX_SAFE_INTEGER,
@@ -1064,7 +1091,8 @@ function instructionFutureRecordCandidates(record, operationId, earliestTime = 0
   return candidates;
 }
 
-function checkpointFutureGrowthBytes(snapshot, operationId = FIXED_OPERATION_ID, earliestTime = 0) {
+function checkpointFutureGrowthBytes(snapshot, operationId = FIXED_OPERATION_ID, earliestTime = 0,
+    externalCandidates = null) {
   const normalized = normalizeCheckpointV3Local(snapshot);
   const usedNativeItemIds = new Set();
   for (const record of normalized.ledger.deliveries) {
@@ -1077,22 +1105,32 @@ function checkpointFutureGrowthBytes(snapshot, operationId = FIXED_OPERATION_ID,
   let growth = 0;
   normalized.ledger.deliveries.forEach((record, index) => {
     const currentBytes = checkpointRecordBytes(record);
-    const futureBytes = Math.max(...futureDeliveryRecordCandidates(record, index, usedNativeItemIds,
-      operationId, earliestTime)
-      .map((candidate) => checkpointRecordBytes(candidate)));
+    const internalBytes = futureDeliveryRecordCandidates(record, index, usedNativeItemIds,
+      operationId, earliestTime).map((candidate) => checkpointRecordBytes(candidate));
+    const external = externalCandidates?.get(record.deliveryAttemptId);
+    if (external !== undefined) {
+      for (const candidate of external.values()) internalBytes.push(checkpointRecordBytes(candidate));
+    }
+    const futureBytes = Math.max(currentBytes, ...internalBytes);
     const delta = Math.max(0, futureBytes - currentBytes);
     growth = checkedCapacityAdd(growth, delta);
   });
   return growth;
 }
 
-function instructionFutureGrowthBytes(snapshot, operationId = FIXED_OPERATION_ID, earliestTime = 0) {
+function instructionFutureGrowthBytes(snapshot, operationId = FIXED_OPERATION_ID, earliestTime = 0,
+    externalCandidates = null) {
   const normalized = normalizeInstructionJournalV2Local(snapshot);
   let growth = 0;
   for (const record of normalized.instructions) {
     const currentBytes = instructionRecordBytes(record);
-    const futureBytes = Math.max(...instructionFutureRecordCandidates(record, operationId, earliestTime)
-      .map((candidate) => instructionRecordBytes(candidate)));
+    const candidates = instructionFutureRecordCandidates(record, operationId, earliestTime)
+      .map((candidate) => instructionRecordBytes(candidate));
+    const external = externalCandidates?.get(record.deliveryAttemptId);
+    if (external !== undefined) {
+      for (const candidate of external.values()) candidates.push(instructionRecordBytes(candidate));
+    }
+    const futureBytes = Math.max(currentBytes, ...candidates);
     growth = checkedCapacityAdd(growth, Math.max(0, futureBytes - currentBytes));
   }
   return growth;
@@ -1145,6 +1183,8 @@ function normalizeFutureRecordRows(values, snapshot, slot) {
 }
 
 function measureCheckpointReservation(inputValue, operationId = FIXED_OPERATION_ID, earliestTime = 0) {
+  assertUuidV4(operationId, INVALID_CAPACITY);
+  assertSafeUnsignedInteger(earliestTime, INVALID_CAPACITY);
   const input = captureRecordWithOptional(inputValue,
     ['snapshot', 'currentByteLimit'], ['deliveryCandidates']);
   assertSafeUnsignedInteger(input.currentByteLimit, INVALID_CAPACITY);
@@ -1154,7 +1194,7 @@ function measureCheckpointReservation(inputValue, operationId = FIXED_OPERATION_
   const external = normalizeFutureRecordRows(rows, snapshot, 'checkpoint');
   const currentBytes = encodeCheckpointV3Local(snapshot).sizeBytes;
   const revisionGrowthBytes = revisionGrowthBytesForSnapshot(snapshot, 'checkpoint');
-  const detailGrowthBytes = checkpointFutureGrowthBytes(snapshot, operationId, earliestTime);
+  const detailGrowthBytes = checkpointFutureGrowthBytes(snapshot, operationId, earliestTime, external);
   requireValue(external.size === snapshot.ledger.deliveries.length);
   const reservedBytes = checkedCapacitySum([currentBytes, revisionGrowthBytes, detailGrowthBytes]);
   return Object.freeze({
@@ -1168,6 +1208,8 @@ function measureCheckpointReservation(inputValue, operationId = FIXED_OPERATION_
 }
 
 function measureInstructionReservation(inputValue, operationId = FIXED_OPERATION_ID, earliestTime = 0) {
+  assertUuidV4(operationId, INVALID_CAPACITY);
+  assertSafeUnsignedInteger(earliestTime, INVALID_CAPACITY);
   const input = captureRecordWithOptional(inputValue,
     ['snapshot', 'currentByteLimit'], ['instructionCandidates']);
   assertSafeUnsignedInteger(input.currentByteLimit, INVALID_CAPACITY);
@@ -1177,7 +1219,7 @@ function measureInstructionReservation(inputValue, operationId = FIXED_OPERATION
   const external = normalizeFutureRecordRows(rows, snapshot, 'instructions');
   const currentBytes = encodeInstructionJournalV2Local(snapshot).sizeBytes;
   const revisionGrowth = revisionGrowthBytesForSnapshot(snapshot, 'instructions');
-  const detailGrowthBytes = instructionFutureGrowthBytes(snapshot, operationId, earliestTime);
+  const detailGrowthBytes = instructionFutureGrowthBytes(snapshot, operationId, earliestTime, external);
   requireValue(external.size === snapshot.instructions.length);
   const reservedBytes = checkedCapacitySum([currentBytes, revisionGrowth, detailGrowthBytes]);
   return Object.freeze({
@@ -1284,12 +1326,20 @@ function defaultInstructionCandidateRows(snapshot, operationId = FIXED_OPERATION
   const normalized = normalizeInstructionJournalV2Local(snapshot);
   return normalized.instructions.map((record) => {
     const candidates = instructionFutureRecordCandidates(record, operationId, earliestTime);
-    const rows = [{ variant: 'current', record: candidates[0] }];
-    if (record.reclamation === null && candidates.length > 1) {
-      rows.push({ variant: 'prepared', record: candidates[1] });
-      if (candidates.length > 2) rows.push({ variant: 'reclaimed', record: candidates[2] });
-    } else if (record.reclamation !== null && candidates.length > 1) {
-      rows.push({ variant: 'reclaimed', record: candidates[1] });
+    const bestByVariant = new Map();
+    for (const candidate of candidates) {
+      if (sameEmbeddedRecord(candidate, record)) continue;
+      const variant = candidate.recordType === 'reclaimed' ? 'reclaimed'
+        : candidate.reclamation !== null ? 'prepared' : 'maxFutureDetail';
+      const previous = bestByVariant.get(variant);
+      if (previous === undefined || instructionRecordBytes(candidate) > instructionRecordBytes(previous)) {
+        bestByVariant.set(variant, candidate);
+      }
+    }
+    const rows = [{ variant: 'current', record }];
+    for (const variant of ['maxFutureDetail', 'prepared', 'reclaimed']) {
+      const candidate = bestByVariant.get(variant);
+      if (candidate !== undefined) rows.push({ variant, record: candidate });
     }
     return { deliveryAttemptId: record.deliveryAttemptId, candidates: rows };
   });
@@ -1425,6 +1475,8 @@ module.exports = {
   checkedCapacitySum,
   computePhysicalReclamationBounds,
   measureNewQuestionCandidateCapacity,
+  measureCheckpointReservation,
+  measureInstructionReservation,
   measureQuestionJournalReservationBytes,
   measureFixedAnchorMigrationBounds,
   measureMigrationAllowance,

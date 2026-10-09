@@ -482,6 +482,34 @@ test('prepared source projection reconstructs the bound non-null migration grant
   assert.equal(result.snapshot.stores.questions.migrationAllowance.maxExtraBytes, grant.maxExtraBytes);
 });
 
+test('installing source projection reconstructs a fixed grant without changing the manifest phase', () => {
+  const sourceBytes = Buffer.from(JSON.stringify({
+    schemaVersion: 1, revision: 7, questions: [legacyQuestion()],
+  }));
+  const withoutGrant = projectQuestion(sourceBytes);
+  const grant = questionGrantForProjection(withoutGrant, sourceBytes);
+  const withGrant = projectLegacyReclamationMigrationLocal({
+    configuredSlots: ['questions'],
+    sourceBytesBySlot: { questions: sourceBytes },
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowanceBySlot: { questions: grant },
+  });
+  const anchor = structuredClone(withGrant.anchor);
+  anchor.migration.phase = 'installing';
+  const result = inspectReclamationMigrationSnapshot({
+    anchor,
+    slotBytesBySlot: bytesBySlot({ questions: sourceBytes }),
+  });
+
+  assert.equal(result.phase, 'installing');
+  assert.equal(result.snapshot.anchor.migration.phase, 'installing');
+  assert.equal(anchor.migration.phase, 'installing');
+  assert.deepEqual(result.snapshot.stores.questions.migrationAllowance, grant);
+  assert.deepEqual(result.snapshot.stores.questions, withGrant.slots.questions.target.snapshot);
+});
+
 test('a completed migration manifest still requires reconciliation on current snapshots', () => {
   const projection = projectQuestion();
   const anchor = structuredClone(projection.anchor);

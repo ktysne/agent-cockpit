@@ -8,6 +8,7 @@ const { createDelivery, createEmptyLedger } = require('../src/server/delivery-le
 const { makeEmptyCheckpoint } = require('../src/server/durable-checkpoint');
 const {
   createEmptyQuestionJournalV2TargetLocal,
+  projectLegacyReclamationMigrationLocal,
 } = require('../src/server/reclamation-migration-projection');
 const {
   FIXED_ANCHOR_MIGRATION_BOUNDS,
@@ -15,6 +16,8 @@ const {
   MAX_SOURCE_BYTES,
   NORMAL_ANCHOR_MAX_BYTES,
 } = require('../src/server/reclamation-capacity-bounds');
+const { normalizeQuestionReclamationAnchorV1Local } = require('../src/server/question-reclamation-anchor-codec');
+const { inspectReclamationMigrationSnapshot } = require('../src/server/reclamation-store-consistency');
 const { planInitialReclamationMigration } = require('../src/server/reclamation-migration-plan');
 
 const STORE_ID = '11111111-1111-4111-8111-111111111111';
@@ -374,6 +377,55 @@ test('three legacy stores preserve question and instruction deliveries for both 
       assert.equal(withGrants.slots[slot].source.sizeBytes, sourceBytesBySlot[slot].length);
       assert.ok(withGrants.slots[slot].grant);
       assert.ok(withGrants.slots[slot].grant.maxExtraBytes > 0);
+    }
+
+    const fixedGrantReprojection = projectLegacyReclamationMigrationLocal({
+      configuredSlots,
+      sourceBytesBySlot,
+      storeId: STORE_ID,
+      operationId: OPERATION_ID,
+      startedAt: STARTED_AT,
+      migrationAllowanceBySlot: Object.fromEntries(configuredSlots.map((slot) => [
+        slot,
+        withGrants.slots[slot].grant,
+      ])),
+    });
+    assert.deepEqual(fixedGrantReprojection.anchor, withGrants.anchor);
+    for (const slot of configuredSlots) {
+      const projected = fixedGrantReprojection.slots[slot].target;
+      const target = withGrants.slots[slot].target;
+      const descriptor = withGrants.anchor.migration.sources.find((source) => source.slot === slot);
+      assert.equal(projected.sizeBytes, target.sizeBytes);
+      assert.equal(projected.sha256, target.sha256);
+      assert.equal(descriptor.targetSizeBytes, projected.sizeBytes);
+      assert.equal(descriptor.targetSha256, projected.sha256);
+      assert.deepEqual(projected.snapshot, target.snapshot);
+    }
+
+    const slotOrder = ['checkpoint', 'instructions', 'questions'];
+    for (const { phase, prefixLength } of [
+      { phase: 'prepared', prefixLength: 0 },
+      { phase: 'installing', prefixLength: 1 },
+      { phase: 'installing', prefixLength: 2 },
+      { phase: 'completed', prefixLength: 3 },
+    ]) {
+      const anchor = structuredClone(withGrants.anchor);
+      anchor.migration.phase = phase;
+      const slotBytesBySlot = Object.fromEntries(slotOrder.map((slot, index) => [
+        slot,
+        index < prefixLength
+          ? withGrants.slots[slot].target.encoded.bytes
+          : sourceBytesBySlot[slot],
+      ]));
+      const inspected = inspectReclamationMigrationSnapshot({ anchor, slotBytesBySlot });
+      assert.equal(inspected.status, 'reconciliation-required');
+      assert.equal(inspected.phase, phase);
+      assert.equal(inspected.prefixLength, prefixLength);
+      assert.deepEqual(inspected.sourceStates.map(({ slot, state }) => [slot, state]),
+        slotOrder.map((slot, index) => [slot, index < prefixLength ? 'target' : 'source']));
+      assert.deepEqual(inspected.snapshot.anchor,
+        normalizeQuestionReclamationAnchorV1Local(anchor));
+      assert.deepEqual(inspected.snapshot.stores, withGrants.stores);
     }
   }
 });

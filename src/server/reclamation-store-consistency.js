@@ -23,6 +23,7 @@ const {
 } = require('./delivery-reclamation-codec');
 const { decodeSourceBytes, encodeNormalized } = require('./reclamation-json-codec');
 const {
+  canClearMigrationAllowance,
   FIXED_H_BOUNDS,
   measureMigrationAllowance,
 } = require('./reclamation-capacity-bounds');
@@ -981,6 +982,16 @@ function targetDescriptorMatchesProjection(descriptor, projection, code) {
     projection.encoded.sha256 === descriptor.targetSha256, code);
 }
 
+function anchorForGrantMeasurement(anchor) {
+  const migration = cloneRecordWith(anchor.migration,
+    ['operationId', 'startedAt', 'phase', 'sources', 'targets'],
+    new Map([['phase', 'prepared']]));
+  const preparedAnchor = cloneRecordWith(anchor,
+    ['schemaVersion', 'revision', 'storeId', 'retiredQuestionPeriods', 'migration'],
+    new Map([['migration', migration]]));
+  return normalizeQuestionReclamationAnchorV1Local(preparedAnchor);
+}
+
 function reconstructTargetFromSource(slot, sourceBytes, anchor, descriptor, checkpointSnapshot, code) {
   if (!descriptor.sourcePresent) {
     const empty = emptyTargetForSlot(slot, anchor.storeId);
@@ -1004,7 +1015,7 @@ function reconstructTargetFromSource(slot, sourceBytes, anchor, descriptor, chec
     sourceSizeBytes: descriptor.sizeBytes,
     sourceSha256: descriptor.sha256,
     currentByteLimit: descriptor.sizeBytes,
-    anchor,
+    anchor: anchorForGrantMeasurement(anchor),
     eligibleIds: withoutGrant.eligibleIds,
     projections: makeRecord([
       ['withoutGrant', candidateProjectionRecord(slot, withoutGrant, descriptor,
@@ -1185,9 +1196,7 @@ function compareGrantTransition(previousStores, nextStores, previousAnchor, next
     requireValue(Number.isSafeInteger(normalByteLimit) && normalByteLimit > 0 &&
       normalByteLimit <= MAX_SOURCE_BYTES, code);
     const snapshotWithoutGrant = replaceStoreGrant(nextStore, null, slot, code);
-    const capacity = require('./reclamation-capacity-bounds');
-    requireValue(typeof capacity.canClearMigrationAllowance === 'function', code);
-    const result = capacity.canClearMigrationAllowance({
+    const result = canClearMigrationAllowance({
       slot,
       snapshotWithoutGrant,
       normalByteLimit,
@@ -1196,7 +1205,6 @@ function compareGrantTransition(previousStores, nextStores, previousAnchor, next
       Number.isSafeInteger(result.reserveBytes) && Number.isSafeInteger(result.limitBytes) &&
       result.reserveBytes <= result.limitBytes && result.limitBytes === normalByteLimit, code);
   }
-  return false;
 }
 
 function replaceStoreGrant(store, migrationAllowance, slot, code) {
@@ -1260,13 +1268,13 @@ function validateReclamationTransition(value) {
   const nextValidated = makeRecord([['anchor', nextAnchor], ['stores', nextResult.stores]]);
 
   if (previousAnchor !== null) compareAnchorTransition(previousAnchor, nextAnchor, INVALID_TRANSITION);
-  const grantReconciliation = previousAnchor === null ? false :
+  if (previousAnchor !== null) {
     compareGrantTransition(previousStores, nextResult.stores, previousAnchor, nextAnchor,
       limits, INVALID_TRANSITION);
+  }
   validateStoreTransition(previousValidated || transitionPrevious, nextValidated, INVALID_TRANSITION);
 
   const reasons = new Set(nextResult.reasons);
-  if (grantReconciliation) reasons.add('grant_clear_capacity_pending');
   if (nextAnchor.migration !== null) reasons.add('migration_in_progress');
   return makeRecord([
     ['status', reasons.size === 0 ? 'ready' : 'reconciliation-required'],

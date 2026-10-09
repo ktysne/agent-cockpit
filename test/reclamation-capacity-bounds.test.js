@@ -4,7 +4,11 @@ const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const test = require('node:test');
 const {
+  MAX_LATE_ANSWERS,
   createQuestionRecord,
+  normalizeQuestionRecord,
+  selectionFor,
+  sha256Json,
 } = require('../src/server/common-question-kernel');
 const {
   createDelivery,
@@ -14,10 +18,15 @@ const {
 const { makeEmptyCheckpoint } = require('../src/server/durable-checkpoint');
 const {
   encodeQuestionJournalV2Local,
+  normalizeQuestionDetailV2,
   normalizeQuestionJournalV2Local,
 } = require('../src/server/common-question-reclamation-codec');
 const {
   encodeCheckpointV3Local,
+  encodeInstructionJournalV2Local,
+  normalizeDeliveryRecordV2Local,
+  normalizeInstructionJournalV2Local,
+  normalizeInstructionRecordV2Local,
 } = require('../src/server/delivery-reclamation-codec');
 const {
   FIXED_ANCHOR_MIGRATION_BOUNDS,
@@ -28,6 +37,8 @@ const {
   canClearMigrationAllowance,
   checkedCapacityAdd,
   computePhysicalReclamationBounds,
+  measureCheckpointReservation,
+  measureInstructionReservation,
   measureMigrationAllowance,
   measureNewQuestionCandidateCapacity,
   measurePendingQuestionPeriodCapacity,
@@ -260,6 +271,149 @@ function legacyAppliedCheckpoint(acceptedKind) {
   }];
   checkpoint.registrations.incompleteConversationIds = [launch.conversationId];
   return checkpoint;
+}
+
+function availableQuestionCheckpoint() {
+  const checkpoint = structuredClone(legacyAppliedCheckpoint('none'));
+  const delivery = checkpoint.ledger.deliveries[0];
+  delivery.kind = 'question';
+  delivery.state = 'available';
+  delivery.cancelRequested = false;
+  delivery.acceptedCorrelation = null;
+  delivery.appliedCorrelation = null;
+  checkpoint.ledger.logicalTombstones[0].kind = 'question';
+  return checkpoint;
+}
+
+function instructionSource() {
+  const launch = instructionLaunch();
+  return {
+    launchRef: launch.launchRef,
+    claims: {
+      launchId: launch.launchId,
+      runId: launch.runId,
+      attemptId: launch.attemptId,
+      provider: launch.provider,
+      nativeIdKind: launch.nativeIdKind,
+      hostId: launch.hostId,
+      homeScopeId: launch.homeScopeId,
+      origin: launch.origin,
+      purpose: launch.purpose,
+      originBinding: launch.originBinding,
+    },
+    identity: launch.identity,
+    executionBinding: launch.executionBinding,
+    conversationId: launch.conversationId,
+    sessionId: launch.sessionId,
+  };
+}
+
+function instructionRecordWithState(deliveryCreationState) {
+  const input = [{ type: 'text', text: 'capacity instruction', text_elements: [] }];
+  const envelope = JSON.stringify({
+    schemaVersion: 1,
+    mode: 'start',
+    expectedTurnId: null,
+    input,
+  });
+  const digest = (value) => createHash('sha256').update(value, 'utf8').digest('hex');
+  return normalizeInstructionRecordV2Local({
+    recordType: 'detail',
+    deliveryAttemptId: 'capacity-instruction-attempt',
+    launchRef: instructionLaunch().launchRef,
+    logicalMessageId: 'capacity-instruction-logical',
+    revision: 1,
+    source: instructionSource(),
+    envelope,
+    envelopeDigest: digest(envelope),
+    nativeContentDigest: digest(JSON.stringify(input)),
+    createdAt: STARTED_AT,
+    deliveryCreationState,
+    reclamation: null,
+  });
+}
+
+function instructionJournalWith(record) {
+  return normalizeInstructionJournalV2Local({
+    schemaVersion: 2,
+    revision: 1,
+    storeId: STORE_ID,
+    migrationAllowance: null,
+    instructions: [record],
+  });
+}
+
+function checkpointRecordWithMaximumIdentity(record) {
+  const longId = MAX_ESCAPED_IDENTIFIER;
+  const source = {
+    ...record.source,
+    launchRef: longId,
+    claims: { ...record.source.claims, hostId: longId, homeScopeId: longId },
+    identity: {
+      ...record.source.identity,
+      hostId: longId,
+      homeScopeId: longId,
+      nativeId: longId,
+    },
+    executionBinding: {
+      periodId: longId,
+      actor: { ...record.source.executionBinding.actor, id: longId },
+    },
+    conversationId: longId,
+    sessionId: longId,
+  };
+  const target = {
+    ...record.target,
+    launchRef: longId,
+    claims: source.claims,
+    identity: source.identity,
+    periodId: longId,
+    actor: source.executionBinding.actor,
+    conversationId: longId,
+    sessionId: longId,
+  };
+  return normalizeDeliveryRecordV2Local({
+    ...record,
+    logicalMessageId: longId,
+    sourceExecutionId: longId,
+    source,
+    target,
+  });
+}
+
+function activeQuestionJournalWithCreatingIntent() {
+  const initial = makeQuestionRecord();
+  const answers = [{ questionId: 'question-1', optionIds: ['option-1'], freeText: null }];
+  const selected = selectionFor(initial, answers, 'manual', initial.createdAt + 1, 'capacity').record;
+  const digest = sha256Json(answers);
+  const source = normalizeQuestionRecord({
+    ...selected,
+    lateAnswers: Array.from({ length: MAX_LATE_ANSWERS }, () => ({
+      submittedAt: initial.createdAt + 2,
+      digest,
+      answers,
+    })),
+  });
+  const projected = projectLegacyQuestionJournalV1Local({
+    sourceBytes: sourceBytes({ schemaVersion: 1, revision: 7, questions: [source] }),
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    checkpointSnapshot: null,
+    migrationAllowance: null,
+  });
+  const snapshot = structuredClone(projected.snapshot);
+  const detail = snapshot.questions[0];
+  detail.quarantinedAt = null;
+  detail.deliveryCreationState = 'creating';
+  const reservation = snapshot.reservations[0];
+  reservation.quarantinedAt = null;
+  reservation.deliveryCreationState = 'creating';
+  reservation.checkpointState = null;
+  reservation.sourceClaimsDigest = null;
+  reservation.sessionId = null;
+  reservation.terminalResultKind = null;
+  return normalizeQuestionJournalV2Local(snapshot);
 }
 
 test('fixed migration and future-reservation bounds match the encoded skeletons and analytic constants', () => {
@@ -561,6 +715,68 @@ test('unselected question at MAX_SAFE revision still reserves late-answer growth
   assert.ok(clear.reserveBytes > clear.limitBytes);
 });
 
+test('future question detail quarantines legally and preserves the frozen intent state', () => {
+  const snapshot = activeQuestionJournalWithCreatingIntent();
+  const currentDetail = snapshot.questions[0];
+  const currentReservation = snapshot.reservations[0];
+  const underReservedDetail = normalizeQuestionDetailV2({
+    ...currentDetail,
+    cancelledAt: MAX_SAFE_INTEGER,
+    externalResolution: { resolvedAt: MAX_SAFE_INTEGER, evidenceDigest: 'f'.repeat(64) },
+  });
+  const row = {
+    internalQuestionId: currentDetail.internalQuestionId,
+    currentDetail,
+    maxFutureDetail: underReservedDetail,
+    retainedReservation: currentReservation,
+    preparedReservation: null,
+    reclaimedReservation: null,
+  };
+  assert.throws(() => measureQuestionJournalReservationBytes({
+    snapshot,
+    questionCandidates: [row],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }), TypeError);
+
+  const futureDetail = normalizeQuestionDetailV2({
+    ...underReservedDetail,
+    deliveryCreationState: 'indeterminate',
+    quarantinedAt: MAX_SAFE_INTEGER,
+  });
+  const measurement = measureQuestionJournalReservationBytes({
+    snapshot,
+    questionCandidates: [{ ...row, maxFutureDetail: futureDetail }],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  });
+  assert.ok(measurement.detailGrowthBytes > 0);
+
+  const unselected = projectLegacyQuestionJournalV1Local({
+    sourceBytes: sourceBytes({ schemaVersion: 1, revision: 0, questions: [makeQuestionRecord()] }),
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    checkpointSnapshot: null,
+    migrationAllowance: null,
+  }).snapshot.questions[0];
+  assert.equal(unselected.deliveryIntent, null);
+  assert.throws(() => normalizeQuestionDetailV2({
+    ...unselected,
+    deliveryCreationState: 'indeterminate',
+  }), TypeError);
+
+  const alreadyQuarantined = structuredClone(snapshot);
+  alreadyQuarantined.questions[0].quarantinedAt = STARTED_AT;
+  alreadyQuarantined.questions[0].deliveryCreationState = 'indeterminate';
+  alreadyQuarantined.reservations[0].quarantinedAt = STARTED_AT;
+  alreadyQuarantined.reservations[0].deliveryCreationState = 'indeterminate';
+  alreadyQuarantined.reservations[0].checkpointState = 'unknown';
+  const frozen = measureQuestionJournalReservationBytes({
+    snapshot: normalizeQuestionJournalV2Local(alreadyQuarantined),
+    currentByteLimit: MAX_SOURCE_BYTES,
+  });
+  assert.equal(frozen.detailGrowthBytes, 0);
+});
+
 test('new question admission uses internally derived reservation rows when candidates are omitted', () => {
   const current = createEmptyQuestionJournalV2TargetLocal({ storeId: STORE_ID });
   const projected = projectLegacyQuestionJournalV1Local({
@@ -654,6 +870,133 @@ test('checkpoint reserve deduplicates complete, nullable, and absent accepted co
     assert.ok(grant !== null);
     assert.ok(grant.maxExtraBytes > 0 && grant.maxExtraBytes <= FIXED_H_BOUNDS.checkpoint);
   }
+});
+
+test('active question checkpoint reserve covers future correlation and terminal growth at the current byte limit', () => {
+  const raw = availableQuestionCheckpoint();
+  const projection = projectLegacyCheckpointV2Local({
+    sourceBytes: sourceBytes(raw),
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowance: null,
+  });
+  const current = projection.snapshot.ledger.deliveries[0];
+  assert.equal(current.kind, 'question');
+  assert.equal(current.state, 'available');
+  const measurement = measureCheckpointReservation({
+    snapshot: projection.snapshot,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.ok(measurement.detailGrowthBytes > 3_000);
+  const currentBytes = encodeCheckpointV3Local(projection.snapshot).sizeBytes;
+  const clear = canClearMigrationAllowance({
+    slot: 'checkpoint',
+    snapshotWithoutGrant: projection.snapshot,
+    normalByteLimit: currentBytes,
+  });
+  assert.equal(clear.canClear, false);
+  assert.ok(clear.reserveBytes > currentBytes);
+});
+
+test('checkpoint and instruction external candidate rows can increase but never reduce internal reserves', () => {
+  const questionProjection = projectLegacyCheckpointV2Local({
+    sourceBytes: sourceBytes(availableQuestionCheckpoint()),
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowance: null,
+  });
+  const questionRecord = questionProjection.snapshot.ledger.deliveries[0];
+  const questionRow = {
+    deliveryAttemptId: questionRecord.deliveryAttemptId,
+    candidates: [{ variant: 'current', record: questionRecord }],
+  };
+  const internalCheckpoint = measureCheckpointReservation({
+    snapshot: questionProjection.snapshot,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  const smallerCheckpointRows = measureCheckpointReservation({
+    snapshot: questionProjection.snapshot,
+    deliveryCandidates: [questionRow],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.equal(smallerCheckpointRows.detailGrowthBytes, internalCheckpoint.detailGrowthBytes);
+  const largerQuestionRecord = checkpointRecordWithMaximumIdentity(questionRecord);
+  const largerCheckpointRows = measureCheckpointReservation({
+    snapshot: questionProjection.snapshot,
+    deliveryCandidates: [{
+      deliveryAttemptId: questionRecord.deliveryAttemptId,
+      candidates: [
+        { variant: 'current', record: questionRecord },
+        { variant: 'maxFutureDetail', record: largerQuestionRecord },
+      ],
+    }],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.ok(largerCheckpointRows.detailGrowthBytes > internalCheckpoint.detailGrowthBytes);
+
+  const instruction = instructionJournalWith(instructionRecordWithState('creating'));
+  const instructionRecord = instruction.instructions[0];
+  const instructionRow = {
+    deliveryAttemptId: instructionRecord.deliveryAttemptId,
+    candidates: [{ variant: 'current', record: instructionRecord }],
+  };
+  const internalInstruction = measureInstructionReservation({
+    snapshot: instruction,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  const smallerInstructionRows = measureInstructionReservation({
+    snapshot: instruction,
+    instructionCandidates: [instructionRow],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.equal(smallerInstructionRows.detailGrowthBytes, internalInstruction.detailGrowthBytes);
+  const largerInstructionRecord = normalizeInstructionRecordV2Local({
+    ...instructionRecord,
+    logicalMessageId: MAX_ESCAPED_IDENTIFIER,
+  });
+  const largerInstructionRows = measureInstructionReservation({
+    snapshot: instruction,
+    instructionCandidates: [{
+      deliveryAttemptId: instructionRecord.deliveryAttemptId,
+      candidates: [
+        { variant: 'current', record: instructionRecord },
+        { variant: 'maxFutureDetail', record: largerInstructionRecord },
+      ],
+    }],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.ok(largerInstructionRows.detailGrowthBytes > internalInstruction.detailGrowthBytes);
+});
+
+test('instruction creation states reserve checkpoint and terminal growth before the safe deadline cutoff', () => {
+  const measurements = new Map();
+  for (const state of ['not_created', 'creating', 'checkpointed', 'indeterminate']) {
+    const snapshot = instructionJournalWith(instructionRecordWithState(state));
+    measurements.set(state, measureInstructionReservation({
+      snapshot,
+      currentByteLimit: MAX_SOURCE_BYTES,
+    }, OPERATION_ID));
+  }
+  assert.ok(measurements.get('not_created').detailGrowthBytes > 0);
+  assert.ok(measurements.get('creating').detailGrowthBytes > 0);
+  assert.ok(measurements.get('checkpointed').detailGrowthBytes > 0);
+  assert.equal(measurements.get('indeterminate').detailGrowthBytes, 0);
+
+  const creating = instructionJournalWith(instructionRecordWithState('creating'));
+  const earliestTime = MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS + 1;
+  const bounded = measureInstructionReservation({
+    snapshot: creating,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID, earliestTime);
+  const baseBytes = encodeInstructionJournalV2Local(creating).sizeBytes;
+  const stateGrowthBytes = ['indeterminate', 'checkpointed'].map((state) => {
+    const projected = structuredClone(creating);
+    projected.instructions[0].deliveryCreationState = state;
+    return encodeInstructionJournalV2Local(normalizeInstructionJournalV2Local(projected)).sizeBytes - baseBytes;
+  });
+  assert.equal(bounded.detailGrowthBytes, Math.max(...stateGrowthBytes));
 });
 
 test('migration and physical capacity inputs reject coercible slot values without invoking them', () => {

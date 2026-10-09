@@ -219,5 +219,8 @@ grantは受理した旧sourceごとに合法な移行、保持、回収のprojec
 構造費と固定値は `src/server/reclamation-capacity-bounds.js` の測定と対応fixtureで再現する。
 
 予約量はrecordごとのvariant差分とroot・ledger revisionの最大桁増分を合算する保守的な上界であり、将来snapshot全体を複製しない。
+checkpoint単体では質問が退役periodに属するかを判定できないため、未終端の質問deliveryにもapplied相関と終端時刻の将来成長を予約する。
 instruction journal単体の予約計算はcheckpointの現在stateを持たないため、終端と準備の構造を保守的に計上する。
+instructionの作成前・作成中の状態文字列の成長は、準備期限をsafe integerで表せるかにかかわらず予約する。
+呼び出し側が渡す候補は内部候補との最大値に加え、候補の省略で予約量を減らさない。
 この予約量は厳密な到達可能最大値や回収許可を表さず、回収操作のstateと時刻はstore間照合で別に検査する。
