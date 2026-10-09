@@ -431,6 +431,12 @@ test('terminal retention uses its exact boundary for both providers and every te
       const earlyGrave = clone(delivery);
       earlyGrave.reclamation.reclaimedAt = deadline - 1;
       assert.throws(() => normalizeDeliveryRecordV2Local(earlyGrave), TypeError);
+      const earlyInput = makePairInput([reservation], [earlyGrave], fixture.metadata);
+      assert.throws(() => normalizeQuestionDeliveryCapsule(earlyInput.checkpointCapsule), TypeError);
+      assert.throws(() => validateQuestionRejectionCapsulePair(earlyInput), {
+        name: 'TypeError',
+        message: INVALID_PAIR,
+      });
     }
   }
 });
