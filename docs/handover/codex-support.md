@@ -23,7 +23,7 @@ Codex 対応は、調査(#156)、PoC(#157〜#164)、集約(PR #165〜#187)、本
 
 PR #309 は 2026-10-09 に feature へマージ済みで、merge SHA は `3c4fee8` である。
 main の PR #305（別のリポジトリで作った PR の登録）は、作業ブランチ `codex/sync-main-305-20261009` で `origin/main` の `8a0314c` を通常 merge している。
-競合解消と関連テストは完了した。feature 本体への取り込みは同期 PR のレビューと開発者のマージを待つ。
+競合解消と関連テストは完了した。feature 本体への取り込みは [PR #318](https://github.com/ktysne/agent-cockpit/pull/318) のレビューと開発者のマージを待つ。
 
 GitHub の確認では、Codex 対応 Issue の状態は対応表と一致し、open PR は 0 件だった（2026-10-09）。
 
@@ -101,7 +101,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 順 | 対象 | 作業 | PR と base | 状態(2026-10-09 確認) |
 |---:|---|---|---|---|
 | 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | [#309](https://github.com/ktysne/agent-cockpit/pull/309)、base: feature | マージ済み（2026-10-09、merge SHA `3c4fee8`） |
-| 2 | main 同期 | PR #305 を feature へ取り込む | 未作成、base: feature | `codex/sync-main-305-20261009` で `origin/main` (`8a0314c`) を通常 merge し、差分を反映。競合解消と関連テスト347件、監査修正後の107件は成功。feature 向け PR のレビュー前（2026-10-09） |
+| 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | `codex/sync-main-305-20261009` で `origin/main` (`8a0314c`) を通常 merge し、差分を反映。競合解消と関連テスト347件、監査修正後の107件は成功。feature 向け PR のレビュー前（2026-10-09） |
 | 3 | #209 段階 2 の 1b | 質問 codec | 未作成、1a(#307)の上 | 未着手。完了条件は [容量回収計画](../design/codex-capacity-reclamation.md) |
 | 4 | #209 段階 2 の 1c | 配信 codec | 未作成、1b の上 | 未着手 |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | 未作成、1c の上 | 未着手 |
