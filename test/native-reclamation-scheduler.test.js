@@ -4,7 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const { test } = require('node:test');
 const { createDelivery, registerPrTarget, transitionDelivery } = require('../src/server/delivery-ledger');
-const { createNativeReclamationSchedulerHarness } = require('./support/native-reclamation-scheduler-harness');
+const { createNativeQuestionWriteIsolationHarness } = require('./support/native-question-write-isolation-harness');
+const {
+  createFakeTimerQueue,
+  createNativeReclamationSchedulerHarness,
+} = require('./support/native-reclamation-scheduler-harness');
 const { threeSlotLegacySources } = require('./support/native-migration-allowance-release-harness');
 const { PROVIDERS } = require('./support/native-instruction-integration-harness');
 
@@ -149,6 +153,49 @@ for (const provider of PROVIDERS) {
     assert.equal(after.ledger.deliveries.length, initial.ledger.deliveries.length);
     assert.equal(nativeInstructionWrites(harness, provider), nativeWritesBefore);
     await assertNoTemporaryFiles(harness);
+  });
+
+  test(`${provider} closes the context and releases its lease when the first scheduler timer cannot be installed`, async (t) => {
+    const initial = await createHarness(provider);
+    t.after(() => initial.removeDirectory());
+    const before = await initial.harness.readAllBytes();
+    const migratedSources = Object.freeze({
+      ...initial.sources,
+      checkpoint: before.checkpoint,
+      instructions: before.instructions,
+      questions: before.questions,
+    });
+    await initial.harness.close();
+
+    const timerError = Object.assign(new Error('timer setup failed'), { code: 'fixture_timer_setup_failed' });
+    const timers = createFakeTimerQueue({ setTimeoutError: timerError });
+    let failedModules = null;
+    await assert.rejects(createNativeQuestionWriteIsolationHarness(provider, {
+      directory: initial.harness.directory,
+      sources: migratedSources,
+      normalByteLimitsBySlot: initial.harness.normalByteLimitsBySlot,
+      initialNow: initial.harness.now,
+      autoReclaim: { intervalMs: 40, maxOperationsPerPass: 100 },
+      schedulerTimers: timers.schedulerTimers,
+      onModules(modules) { failedModules = modules; },
+    }), (error) => error === timerError);
+
+    assert.ok(failedModules);
+    const failedContext = failedModules.observer.contexts().at(-1);
+    const failedScheduler = failedModules.observer.schedulers().at(-1);
+    assert.ok(failedContext);
+    assert.ok(failedScheduler);
+    assert.equal(failedContext.status().state, 'closed');
+    assert.equal(failedContext.status().capacity.activeLeaseCount, 0);
+    assert.equal(failedContext.canWrite(), false);
+    assert.equal(failedScheduler.status().state, 'stopped');
+    assert.equal(failedScheduler.status().timerPending, false);
+    assert.equal(timers.pendingCount(), 0);
+    const after = await initial.harness.readAllBytes();
+    for (const slot of ['anchor', 'checkpoint', 'instructions', 'questions']) {
+      assert.deepEqual(after[slot], before[slot]);
+    }
+    await assertNoTemporaryFiles(initial.harness);
   });
 
   test(`${provider} waits for the seven-day boundary and serializes a manual race with an automatic pass`, async (t) => {

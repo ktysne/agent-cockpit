@@ -51,6 +51,7 @@ async function createNativeQuestionWriteIsolationHarness(provider, options = {})
     options.paddingBytes ?? 16 * 1024);
   const modules = loadQuestionWriteIsolationModules(options.schedulerTimers === undefined
     ? {} : { schedulerTimers: options.schedulerTimers });
+  options.onModules?.(modules);
   const processesByProvider = new Map(PROVIDERS.map((value) => [value, []]));
   let now = options.initialNow ?? 1_000_000;
   let integration = null;

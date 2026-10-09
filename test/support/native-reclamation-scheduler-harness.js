@@ -2,11 +2,12 @@
 
 const { createNativeQuestionWriteIsolationHarness } = require('./native-question-write-isolation-harness');
 
-function createFakeTimerQueue() {
+function createFakeTimerQueue(options = {}) {
   const records = [];
   let nextId = 1;
 
   function setTimeoutImpl(callback, delayMs) {
+    if (options.setTimeoutError) throw options.setTimeoutError;
     if (typeof callback !== 'function' || !Number.isSafeInteger(delayMs) || delayMs < 0) {
       throw new TypeError('invalid fake timer');
     }

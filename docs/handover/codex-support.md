@@ -181,7 +181,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放) | grant解放はレビュー収束。段階3の限定した質問局所停止は#329でレビュー収束。自動実行と段階4の世代集約が後続 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放) | grant解放はレビュー収束。段階3の限定した質問局所停止は#329でレビュー収束。自動実行は#330でレビュー中。段階4の拒否包含分析と世代集約が後続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -231,7 +231,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。次は既定offの自動実行と段階4を進める |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。既定offの自動実行は#330でレビュー中。次は段階4の拒否包含分析を進める |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |
@@ -414,10 +414,15 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 closeはtimer停止後、passの完了を待たずにcontextの書き込みを閉じる。
 質問の局所不確実性では質問と全grantを固定し、既知の不確実性以外の例外では自動回収を止める。
 
-scheduler単体17件と既存context/factory接続73件は成功した。
-両providerのfactory試験16件と既存の質問局所停止の回帰試験16件は成功した。
+scheduler単体19件と既存context/factory接続73件は成功した。
+両providerのfactory試験18件と既存の質問局所停止の回帰試験16件は成功した。
 CP確認済みcancelled resultとPR通知の自動本文回収を含むが、実native送信は未確認である。
-全体試験とClaudeレビューは実行中である。
+初版の全体試験はhead `5a43bc1`で2,521件成功、1件skip、失敗0件だった。
+Claude R1の大量skip候補の検証回数を修正し、19件の単体試験で上限とcursorの継続を確認した。
+timer設定故障時のcold起動後始末も両providerで確認した。
+修正後の全体試験と妥当性確認は実行中である。
+skipは既存のファイルsymlink権限制約である。
+[#330](https://github.com/ktysne/agent-cockpit/pull/330)は#329をbaseにしたDraftで、Claudeレビュー中である。
 タイマーとprovider processのfixtureによる合格を、実runtimeの7日連続運転の成功と扱わない。
 後続は段階4の質問世代に対する拒否包含のpure検証で、墓標削除や既存のattempt拒否を弱める処理は先に接続しない。
 

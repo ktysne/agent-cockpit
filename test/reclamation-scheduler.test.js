@@ -229,6 +229,93 @@ test('degraded state skips question and grant candidates while continuing nonque
   scheduler.stop();
 });
 
+test('question uncertainty bounds candidate rechecks and still advances to nonquestion work', async () => {
+  const questionCandidates = Array.from({ length: 20_000 }, (_, index) => ({
+    kind: 'question-period',
+    identity: IDENTITY,
+    periodId: `retired-${String(index).padStart(5, '0')}`,
+  }));
+  const instruction = { kind: 'instruction', deliveryAttemptId: 'instruction-1' };
+  let listCalls = 0;
+  const invoked = [];
+  const { scheduler, timers } = createScheduler({
+    maxOperationsPerPass: 3,
+    listCandidates: () => {
+      listCalls += 1;
+      if (listCalls <= 2) {
+        return candidates({
+          bodyCandidates: [...questionCandidates, instruction],
+          grantSlots: ['checkpoint'],
+        });
+      }
+      return candidates({
+        state: 'degraded',
+        bodyCandidates: [instruction],
+      });
+    },
+    reclaimCandidate: async (candidate) => {
+      invoked.push(candidate.kind === 'question-period' ? candidate.periodId : candidate.deliveryAttemptId);
+      return { status: candidate.kind === 'question-period' ? 'skipped' : 'complete' };
+    },
+    releaseGrants: async () => {
+      invoked.push('grant');
+      return { status: 'released' };
+    },
+  });
+
+  scheduler.start();
+  await timers.fire(timers.next());
+
+  assert.equal(listCalls, 4);
+  assert.ok(listCalls - 1 <= 3);
+  assert.deepEqual(invoked, ['retired-00000', 'instruction-1']);
+  assert.equal(scheduler.status().lastPassOperationCount, 2);
+  assert.equal(scheduler.status().failureCount, 0);
+  assert.equal(timers.next().delay, 25);
+  scheduler.stop();
+});
+
+test('stale candidates are rechecked within budget and cursor reaches later work across passes', async () => {
+  const questionCandidates = Array.from({ length: 6 }, (_, index) => ({
+    kind: 'question-period',
+    identity: IDENTITY,
+    periodId: `retired-${String(index).padStart(2, '0')}`,
+  }));
+  const instruction = { kind: 'instruction', deliveryAttemptId: 'instruction-1' };
+  const initial = candidates({ bodyCandidates: [...questionCandidates, instruction] });
+  const invoked = [];
+  let listCalls = 0;
+  const { scheduler, timers } = createScheduler({
+    maxOperationsPerPass: 2,
+    listCandidates: () => {
+      listCalls += 1;
+      if (listCalls === 11) return candidates({ bodyCandidates: [instruction] });
+      return (listCalls - 1) % 3 === 0 ? initial : candidates();
+    },
+    reclaimCandidate: async (candidate) => {
+      invoked.push(candidate.deliveryAttemptId || candidate.periodId);
+      return { status: 'complete' };
+    },
+  });
+  scheduler.start();
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const readsBeforePass = listCalls;
+    await timers.fire(timers.next());
+    assert.equal(listCalls - readsBeforePass, 3);
+    assert.ok(listCalls - readsBeforePass - 1 <= 2);
+    assert.equal(scheduler.status().lastPassOperationCount, 0);
+  }
+
+  const readsBeforeProgressPass = listCalls;
+  await timers.fire(timers.next());
+  assert.equal(listCalls - readsBeforeProgressPass, 3);
+  assert.ok(listCalls - readsBeforeProgressPass - 1 <= 2);
+  assert.deepEqual(invoked, ['instruction-1']);
+  assert.equal(scheduler.status().lastPassOperationCount, 1);
+  scheduler.stop();
+});
+
 test('unavailable candidate state stops without starting a reclamation operation', async () => {
   let operations = 0;
   const { scheduler, timers } = createScheduler({

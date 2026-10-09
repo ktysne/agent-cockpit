@@ -348,6 +348,8 @@ function createReclamationScheduler(inputValue) {
     }
     const operations = initial.operations;
     if (operations.length === 0) return;
+    let latestCandidateCheckCount = 0;
+    let degradedSeen = initial.state === 'degraded';
     const startIndex = cursor === null
       ? 0
       : Math.max(0, operations.findIndex((operation) => compareOperationKeys(operation, cursor) > 0));
@@ -357,14 +359,21 @@ function createReclamationScheduler(inputValue) {
 
     for (const operation of ordered) {
       if (stopped || lastPassOperationCount >= maxOperationsPerPass) return;
+      const isQuestionOrGrant = operation.type === 'grant' || operation.category === 'question-period';
+      if (degradedSeen && isQuestionOrGrant) {
+        cursor = operation;
+        continue;
+      }
+      if (latestCandidateCheckCount >= maxOperationsPerPass) return;
+      latestCandidateCheckCount += 1;
       const current = readCandidates();
       if (stopped) return;
       if (current.state === 'unavailable') {
         stopUnavailable();
         return;
       }
-      if (current.state === 'degraded' &&
-          (operation.type === 'grant' || operation.category === 'question-period')) {
+      if (current.state === 'degraded') degradedSeen = true;
+      if (degradedSeen && isQuestionOrGrant) {
         cursor = operation;
         continue;
       }
