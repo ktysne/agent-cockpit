@@ -5,14 +5,17 @@ const test = require('node:test');
 const { serialize } = require('node:v8');
 const { createQuestionRecord } = require('../src/server/common-question-kernel');
 const { createQuestionPeriodGate } = require('../src/server/question-period-gate');
-const { createReclamationDelivery, getReclamationDelivery } =
+const { createReclamationDelivery, getReclamationDelivery, registerReclamationTarget } =
   require('../src/server/delivery-reclamation-runtime');
 const { questionCommonKeyDigest, normalizeQuestionJournalV2Local } =
   require('../src/server/common-question-reclamation-codec');
+const { normalizeInstructionJournalV2Local } = require('../src/server/delivery-reclamation-codec');
 const { MAX_SOURCE_BYTES } = require('../src/server/reclamation-capacity-bounds');
 const { planInitialReclamationMigration } = require('../src/server/reclamation-migration-plan');
 const { planQuestionBodyReclamation } = require('../src/server/question-body-reclamation');
 const { planQuestionPeriodRetirement } = require('../src/server/question-period-retirement');
+const { validateReclamationSnapshot, validateReclamationStoreWrite } =
+  require('../src/server/reclamation-store-consistency');
 const { threeSlotLegacySources } = require('./support/native-migration-allowance-release-harness');
 const { analyzeQuestionPeriodRejectionCoverage } =
   require('../src/server/question-period-rejection-coverage');
@@ -206,13 +209,78 @@ function createFixture(provider, { omitQuestionDelivery = false } = {}) {
 }
 
 function analyze(snapshot, identity, periodId) {
-  return analyzeQuestionPeriodRejectionCoverage({
+  return analyzeQuestionPeriodRejectionCoverage(analysisInput(snapshot, identity, periodId));
+}
+
+function analysisInput(snapshot, identity, periodId) {
+  return {
     anchor: snapshot.anchor,
     stores: snapshot.stores,
     normalByteLimitsBySlot: snapshot.normalByteLimitsBySlot,
     identity,
     periodId,
+  };
+}
+
+function validateTransition(previousSnapshot, nextSnapshot) {
+  return validateReclamationStoreWrite({
+    anchor: previousSnapshot.anchor,
+    previousStores: previousSnapshot.stores,
+    nextStores: nextSnapshot.stores,
+    normalByteLimitsBySlot: previousSnapshot.normalByteLimitsBySlot,
   });
+}
+
+function assertAllowedReasonUsesOriginalSnapshot(snapshot, identity, periodId, expectedReason) {
+  const input = analysisInput(snapshot, identity, periodId);
+  const inputBefore = serialize(input);
+  assert.equal(Object.isFrozen(input), false);
+  const repair = validateReclamationSnapshot({ anchor: snapshot.anchor, stores: snapshot.stores });
+  assert.equal(repair.status, 'reconciliation-required');
+  assert.deepEqual(repair.reasons, [expectedReason]);
+  const repairedSnapshot = { ...snapshot, stores: repair.snapshot.stores };
+  const transition = validateTransition(snapshot, repairedSnapshot);
+  assert.deepEqual(transition.reasons, [expectedReason]);
+  assert.deepEqual(serialize(transition.snapshot.stores), serialize(repair.snapshot.stores));
+  const coverage = analyzeQuestionPeriodRejectionCoverage(input);
+  assert.deepEqual(serialize(input), inputBefore);
+  assert.equal(Object.isFrozen(input), false);
+  return { coverage, transition };
+}
+
+function withQuestionCreationState(snapshot) {
+  const journal = structuredClone(snapshot.stores.questions);
+  journal.revision += 1;
+  for (const detail of journal.questions) {
+    if (detail.deliveryIntent !== null) detail.deliveryCreationState = 'creating';
+  }
+  for (const reservation of journal.reservations) {
+    if (reservation.deliveryIntent === null) continue;
+    reservation.deliveryCreationState = 'creating';
+    reservation.checkpointState = null;
+    reservation.sourceClaimsDigest = null;
+    reservation.sessionId = null;
+    reservation.terminalResultKind = null;
+  }
+  return { ...snapshot, stores: { ...snapshot.stores, questions: normalizeQuestionJournalV2Local(journal) } };
+}
+
+function withQuestionCheckpointCacheState(snapshot, staleState) {
+  const journal = structuredClone(snapshot.stores.questions);
+  journal.revision += 1;
+  for (const reservation of journal.reservations) {
+    if (reservation.deliveryIntent !== null) reservation.checkpointState = staleState;
+  }
+  return { ...snapshot, stores: { ...snapshot.stores, questions: normalizeQuestionJournalV2Local(journal) } };
+}
+
+function withInstructionCreationState(snapshot) {
+  const journal = structuredClone(snapshot.stores.instructions);
+  journal.revision = Math.max(0, journal.revision - 1);
+  for (const instruction of journal.instructions) {
+    if (instruction.recordType === 'detail') instruction.deliveryCreationState = 'creating';
+  }
+  return { ...snapshot, stores: { ...snapshot.stores, instructions: normalizeInstructionJournalV2Local(journal) } };
 }
 
 function sourceForLaunch(checkpoint, launchRef) {
@@ -238,7 +306,7 @@ function assertCode(callback, code) {
 }
 
 for (const provider of ['claude', 'codex']) {
-  test(`${provider} migration fixture scopes retired-period coverage and preserves other obligations`, () => {
+  test(`QRC02-QRC03-QRC04-QRC06-QRC07: ${provider} migration fixture scopes retired-period coverage and preserves other obligations`, () => {
     const fixture = createFixture(provider);
     const identity = fixture.selected.identity;
     const coverage = analyze(fixture.retired, identity, fixture.selected.periodId);
@@ -360,7 +428,100 @@ for (const provider of ['claude', 'codex']) {
   });
 }
 
-test('rejects unsafe input and snapshots that need retirement repair', () => {
+test('QRC01: question creation reconciliation is accepted without analyzing its repaired snapshot', () => {
+  const fixture = createFixture('codex');
+  const snapshot = withQuestionCreationState(fixture.active);
+  const { coverage, transition } = assertAllowedReasonUsesOriginalSnapshot(snapshot,
+    fixture.selected.identity, fixture.selected.periodId, 'question_creation_state');
+  const selectedRow = coverage.questionRows.find((row) =>
+    row.internalQuestionId === fixture.selected.internalQuestionId);
+  const repairedReservation = transition.snapshot.stores.questions.reservations.find((row) =>
+    row.internalQuestionId === fixture.selected.internalQuestionId);
+
+  assert.equal(selectedRow.deliveryCreationState, 'creating');
+  assert.equal(selectedRow.checkpointState, null);
+  assert.equal(repairedReservation.deliveryCreationState, 'checkpointed');
+});
+
+test('QRC01: checkpoint cache reconciliation is accepted while coverage reads the raw cache', () => {
+  const fixture = createFixture('codex');
+  const snapshot = withQuestionCheckpointCacheState(fixture.active, 'claimed');
+  const { coverage, transition } = assertAllowedReasonUsesOriginalSnapshot(snapshot,
+    fixture.selected.identity, fixture.selected.periodId, 'question_checkpoint_cache');
+  const selectedRow = coverage.questionRows.find((row) =>
+    row.internalQuestionId === fixture.selected.internalQuestionId);
+  const repairedReservation = transition.snapshot.stores.questions.reservations.find((row) =>
+    row.internalQuestionId === fixture.selected.internalQuestionId);
+
+  assert.equal(selectedRow.checkpointState, 'claimed');
+  assert.equal(selectedRow.checkpointDeliveryState, 'available');
+  assert.equal(repairedReservation.checkpointState, 'available');
+});
+
+test('QRC01: instruction creation reconciliation does not rewrite the analyzed snapshot', () => {
+  const fixture = createFixture('codex');
+  const snapshot = withInstructionCreationState(fixture.active);
+  const { coverage, transition } = assertAllowedReasonUsesOriginalSnapshot(snapshot,
+    fixture.selected.identity, fixture.selected.periodId, 'instruction_creation_state');
+  const rawInstruction = snapshot.stores.instructions.instructions.find((row) =>
+    row.recordType === 'detail');
+  const repairedInstruction = transition.snapshot.stores.instructions.instructions.find((row) =>
+    row.recordType === 'detail');
+
+  assert.equal(rawInstruction.deliveryCreationState, 'creating');
+  assert.equal(repairedInstruction.deliveryCreationState, 'checkpointed');
+  assert.equal(coverage.questionRows.find((row) =>
+    row.internalQuestionId === fixture.selected.internalQuestionId).deliveryCreationState,
+  fixture.active.stores.questions.reservations.find((row) =>
+    row.internalQuestionId === fixture.selected.internalQuestionId).deliveryCreationState);
+});
+
+test('QRC05: real PR and result deliveries remain outside question-period coverage', () => {
+  const fixture = createFixture('codex');
+  const initialCheckpoint = fixture.retired.stores.checkpoint;
+  const source = sourceForLaunch(initialCheckpoint, fixture.selected.launchRef);
+  const registration = registerReclamationTarget(initialCheckpoint, 'qrc05-pr-target', source);
+  let checkpoint = { ...initialCheckpoint, ledger: registration.ledger };
+  const prNotification = createReclamationDelivery(checkpoint, 'pr-notification', {
+    deliveryAttemptId: 'qrc05-pr-attempt',
+    logicalMessageId: 'qrc05-pr-message',
+    revision: 1,
+    payload: 'PR notification outside question-period coverage',
+    targetId: 'qrc05-pr-target',
+  }, source);
+  checkpoint = { ...checkpoint, ledger: prNotification.ledger };
+  const result = createReclamationDelivery(checkpoint, 'result', {
+    deliveryAttemptId: 'qrc05-result-attempt',
+    logicalMessageId: 'qrc05-result-message',
+    revision: 1,
+    payload: 'result outside question-period coverage',
+  }, source, {
+    executionId: source.currentOwner.periodId,
+    conversationId: source.conversationId,
+    sessionId: source.sessionId,
+    identity: source.identity,
+  });
+  checkpoint = { ...checkpoint, ledger: result.ledger };
+  const augmented = {
+    ...fixture.retired,
+    stores: { ...fixture.retired.stores, checkpoint },
+  };
+  const baselineCoverage = analyze(fixture.retired, fixture.selected.identity, fixture.selected.periodId);
+  const augmentedCoverage = analyze(augmented, fixture.selected.identity, fixture.selected.periodId);
+
+  assert.equal(registration.created, true);
+  assert.equal(prNotification.created, true);
+  assert.equal(prNotification.delivery.kind, 'pr-notification');
+  assert.equal(result.created, true);
+  assert.equal(result.delivery.kind, 'result');
+  assert.equal(getReclamationDelivery(checkpoint, 'qrc05-pr-attempt').kind, 'pr-notification');
+  assert.equal(getReclamationDelivery(checkpoint, 'qrc05-result-attempt').kind, 'result');
+  assert.deepEqual(augmentedCoverage.questionRows, baselineCoverage.questionRows);
+  assert.ok(augmentedCoverage.scopeLimitations.includes(
+    'nonquestion_checkpoint_and_instruction_obligations_not_covered'));
+});
+
+test('QRC01/QRC07: rejects unsafe input and snapshots that need retirement repair', () => {
   const fixture = createFixture('codex');
   const input = {
     anchor: fixture.retired.anchor,
