@@ -405,6 +405,7 @@ test('three legacy stores preserve question and instruction deliveries for both 
     const slotOrder = ['checkpoint', 'instructions', 'questions'];
     for (const { phase, prefixLength } of [
       { phase: 'prepared', prefixLength: 0 },
+      { phase: 'guarded', prefixLength: 0 },
       { phase: 'installing', prefixLength: 1 },
       { phase: 'installing', prefixLength: 2 },
       { phase: 'completed', prefixLength: 3 },

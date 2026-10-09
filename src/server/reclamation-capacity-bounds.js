@@ -884,12 +884,6 @@ function futureCorrelationsForDelivery(record, nativeItemId) {
       appliedCorrelation: applied,
     };
   }
-  if (record.recordType === 'reclaimed') {
-    return {
-      acceptedCorrelation: record.acceptedCorrelation,
-      appliedCorrelation: record.appliedCorrelation,
-    };
-  }
   const correlation = maxFutureCorrelation(record, nativeItemId);
   return { acceptedCorrelation: correlation, appliedCorrelation: correlation };
 }
@@ -997,6 +991,9 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
         (record.kind !== 'question' || earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS)) {
       candidates.push(reclaimedDeliveryCandidate(record,
         record.kind === 'question' ? currentCorrelations : correlations, operationId));
+      if (record.kind === 'question') {
+        candidates.push(reclaimedDeliveryCandidate(updated, correlations, operationId));
+      }
     }
     return candidates;
   }
@@ -1013,6 +1010,14 @@ function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operat
     if (['available', 'unknown'].includes(record.state) &&
         earliestTime <= MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS) {
       candidates.push(reclaimedDeliveryCandidate(record, currentCorrelations, operationId));
+    }
+    const reclaimableTerminalAt = MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS;
+    if (earliestTime <= reclaimableTerminalAt && retentionDeadlineFits(reclaimableTerminalAt)) {
+      const reclaimableApplied = normalizeDeliveryRecordV2Local({
+        ...futureApplied,
+        terminalAt: reclaimableTerminalAt,
+      });
+      candidates.push(reclaimedDeliveryCandidate(reclaimableApplied, correlations, operationId));
     }
     return candidates;
   }

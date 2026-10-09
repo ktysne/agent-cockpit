@@ -28,6 +28,7 @@ const {
   normalizeInstructionJournalV2Local,
   normalizeInstructionRecordV2Local,
 } = require('../src/server/delivery-reclamation-codec');
+const { encodeNormalized } = require('../src/server/reclamation-json-codec');
 const {
   FIXED_ANCHOR_MIGRATION_BOUNDS,
   FIXED_H_BOUNDS,
@@ -283,6 +284,75 @@ function availableQuestionCheckpoint() {
   delivery.appliedCorrelation = null;
   checkpoint.ledger.logicalTombstones[0].kind = 'question';
   return checkpoint;
+}
+
+function questionGraveFromDetail(detail, operationId) {
+  const digest = (value) => createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
+  const { source, target } = detail;
+  const launchKey = [source.claims.launchId, source.claims.runId, source.claims.attemptId];
+  return normalizeDeliveryRecordV2Local({
+    recordType: 'reclaimed',
+    deliveryAttemptId: detail.deliveryAttemptId,
+    kind: detail.kind,
+    logicalMessageId: detail.logicalMessageId,
+    revision: detail.revision,
+    sourceExecutionId: detail.sourceExecutionId,
+    payloadDigest: detail.payloadDigest,
+    state: detail.state,
+    terminalAt: detail.terminalAt,
+    cancelRequested: detail.cancelRequested,
+    ownerGeneration: detail.ownerGeneration,
+    acceptedCorrelation: detail.acceptedCorrelation,
+    appliedCorrelation: detail.appliedCorrelation,
+    sourceRef: {
+      launchRef: source.launchRef,
+      launchKey,
+      sourceClaimsDigest: digest(source.claims),
+      identity: source.identity,
+      executionBinding: source.executionBinding,
+      conversationId: source.conversationId,
+      sessionId: source.sessionId,
+    },
+    targetRef: {
+      kind: target.kind,
+      launchRef: target.launchRef,
+      launchKey,
+      targetClaimsDigest: digest(target.claims),
+      identity: target.identity,
+      periodId: target.periodId,
+      actor: target.actor,
+      conversationId: target.conversationId,
+      sessionId: target.sessionId,
+    },
+    reclamation: {
+      operationId,
+      reclaimedAt: MAX_SAFE_INTEGER,
+      reason: 'retired_question_period',
+    },
+  });
+}
+
+function futureAppliedQuestionFromDetail(detail) {
+  const correlation = {
+    deliveryAttemptId: detail.deliveryAttemptId,
+    revision: detail.revision,
+    payloadDigest: detail.payloadDigest,
+    targetPeriodId: detail.target.periodId,
+    nativeTurnId: MAX_ESCAPED_IDENTIFIER,
+    nativeItemId: MAX_ESCAPED_IDENTIFIER,
+    clientRequestId: detail.deliveryAttemptId,
+  };
+  return normalizeDeliveryRecordV2Local({
+    ...detail,
+    state: 'applied',
+    terminalAt: MAX_SAFE_INTEGER,
+    acceptedCorrelation: correlation,
+    appliedCorrelation: correlation,
+  });
+}
+
+function checkpointRecordBytes(record) {
+  return encodeNormalized({ ledger: { deliveries: [record] } }).sizeBytes;
 }
 
 function instructionSource() {
@@ -897,6 +967,116 @@ test('active question checkpoint reserve covers future correlation and terminal 
   });
   assert.equal(clear.canClear, false);
   assert.ok(clear.reserveBytes > currentBytes);
+});
+
+test('question checkpoint reserve includes max-correlation graves while preserving current correlations', () => {
+  const projection = projectLegacyCheckpointV2Local({
+    sourceBytes: sourceBytes(availableQuestionCheckpoint()),
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowance: null,
+  });
+  const current = projection.snapshot.ledger.deliveries[0];
+  const projectedFuture = futureAppliedQuestionFromDetail(current);
+  const reclaimableFuture = normalizeDeliveryRecordV2Local({
+    ...projectedFuture,
+    terminalAt: MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS,
+  });
+  const sameStateGrave = questionGraveFromDetail(current, OPERATION_ID);
+  const futureGrave = questionGraveFromDetail(reclaimableFuture, OPERATION_ID);
+  assert.equal(sameStateGrave.acceptedCorrelation, null);
+  assert.equal(sameStateGrave.appliedCorrelation, null);
+  assert.deepEqual(futureGrave.acceptedCorrelation, projectedFuture.acceptedCorrelation);
+  assert.deepEqual(futureGrave.appliedCorrelation, projectedFuture.appliedCorrelation);
+  assert.ok(checkpointRecordBytes(futureGrave) > checkpointRecordBytes(sameStateGrave));
+
+  const row = {
+    deliveryAttemptId: current.deliveryAttemptId,
+    candidates: [
+      { variant: 'current', record: current },
+      { variant: 'maxFutureDetail', record: projectedFuture },
+      { variant: 'reclaimed', record: futureGrave },
+    ],
+  };
+  assert.equal(row.candidates.length, 3);
+  const baseRecordBytes = checkpointRecordBytes(current);
+  const expectedGrowth = Math.max(
+    checkpointRecordBytes(projectedFuture),
+    checkpointRecordBytes(sameStateGrave),
+    checkpointRecordBytes(futureGrave),
+  ) - baseRecordBytes;
+  const explicit = measureCheckpointReservation({
+    snapshot: projection.snapshot,
+    deliveryCandidates: [row],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  const generated = measureCheckpointReservation({
+    snapshot: projection.snapshot,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.equal(explicit.detailGrowthBytes, expectedGrowth);
+  assert.equal(generated.detailGrowthBytes, expectedGrowth);
+
+  const appliedCurrent = normalizeDeliveryRecordV2Local({
+    ...current,
+    state: 'applied',
+    terminalAt: STARTED_AT,
+    acceptedCorrelation: { ...projectedFuture.appliedCorrelation, nativeItemId: null },
+    appliedCorrelation: projectedFuture.appliedCorrelation,
+  });
+  const appliedSnapshot = structuredClone(projection.snapshot);
+  appliedSnapshot.ledger.deliveries[0] = appliedCurrent;
+  const appliedFuture = normalizeDeliveryRecordV2Local({
+    ...appliedCurrent,
+    acceptedCorrelation: {
+      ...appliedCurrent.acceptedCorrelation,
+      nativeItemId: appliedCurrent.appliedCorrelation.nativeItemId,
+    },
+  });
+  const appliedCurrentGrave = questionGraveFromDetail(appliedCurrent, OPERATION_ID);
+  const appliedFutureGrave = questionGraveFromDetail(appliedFuture, OPERATION_ID);
+  assert.equal(appliedCurrentGrave.acceptedCorrelation.nativeItemId, null);
+  assert.equal(appliedFutureGrave.acceptedCorrelation.nativeItemId,
+    appliedCurrent.appliedCorrelation.nativeItemId);
+  assert.ok(checkpointRecordBytes(appliedFutureGrave) > checkpointRecordBytes(appliedCurrentGrave));
+
+  const appliedRow = {
+    deliveryAttemptId: appliedCurrent.deliveryAttemptId,
+    candidates: [
+      { variant: 'current', record: appliedCurrent },
+      { variant: 'maxFutureDetail', record: appliedFuture },
+      { variant: 'reclaimed', record: appliedFutureGrave },
+    ],
+  };
+  const appliedExpectedGrowth = Math.max(
+    checkpointRecordBytes(appliedFuture),
+    checkpointRecordBytes(appliedCurrentGrave),
+    checkpointRecordBytes(appliedFutureGrave),
+  ) - checkpointRecordBytes(appliedCurrent);
+  const appliedExplicit = measureCheckpointReservation({
+    snapshot: appliedSnapshot,
+    deliveryCandidates: [appliedRow],
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  const appliedGenerated = measureCheckpointReservation({
+    snapshot: appliedSnapshot,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID);
+  assert.equal(appliedExplicit.detailGrowthBytes, appliedExpectedGrowth);
+  assert.equal(appliedGenerated.detailGrowthBytes, appliedExpectedGrowth);
+
+  const deadlineOverflow = normalizeDeliveryRecordV2Local({
+    ...appliedCurrent,
+    acceptedCorrelation: appliedCurrent.appliedCorrelation,
+    terminalAt: MAX_SAFE_INTEGER - TERMINAL_RETENTION_MS + 1,
+  });
+  const overflowSnapshot = structuredClone(projection.snapshot);
+  overflowSnapshot.ledger.deliveries[0] = deadlineOverflow;
+  assert.equal(measureCheckpointReservation({
+    snapshot: overflowSnapshot,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID).detailGrowthBytes, 0);
 });
 
 test('checkpoint and instruction external candidate rows can increase but never reduce internal reserves', () => {
