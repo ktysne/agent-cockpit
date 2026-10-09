@@ -378,6 +378,8 @@ test('whole validation rejects future anchor growth when the current anchor stil
   assert.equal(paddedNullCapacity.fits, true);
   assert.ok(paddedNullCapacity.projectedBytes <= NORMAL_ANCHOR_MAX_BYTES);
   const paddedNullResult = validateQuestionCapsuleWholeRepresentation(paddedNullInput);
+  assert.ok(encodeQuestionReclamationAnchorV1Local(paddedNullResult.snapshot.anchor).bytes
+    .equals(encodeQuestionReclamationAnchorV1Local(exactProjectionAnchor).bytes));
   assert.deepEqual(paddedNullResult.counts, {
     capsulePairs: 0,
     checkpointCapsules: 0,
