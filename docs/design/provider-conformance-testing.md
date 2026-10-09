@@ -160,7 +160,8 @@ QR03〜QR06のprovider別検証は製品adapter、serviceと実ファイルstore
 期待値は[アンカー保存契約](question-reclamation-anchor.md)から定める。
 以下は後続のサービス接続も含む期待値の定義であり、全項目をこの段階で確認済みとはしない。
 ClaudeとCodexの相関を持つ旧形式を同じ保存手順へ通し、provider固有adapterと実runtimeの適合とは区別する。
-通常のservice、native factory、製品起動へ接続する試験は後続の実装範囲である。
+新形式を明示したservice compositionの期待値は次節で定める。
+native factoryと製品起動へ接続する試験は後続の実装範囲である。
 
 | ID | 入力と操作 | 独立した期待値と禁止副作用 |
 |---|---|---|
@@ -188,7 +189,36 @@ ENOSPCとrename後の例外でも保存済みファイルを保持して停止�
 | RC07 | 保存故障境界試験のnull保存後の再起動でgrant、操作IDと起算時刻の保持を確認 | 満杯の件数と新規受付の判定はPR3のguardで検証 |
 
 symlink拒否は注入fixtureでも検証し、実symlinkを作成する権限が無い環境では実ファイル試験をskipする。
-ここに列挙した確認範囲だけをfixtureの成功とし、未接続の受付guardや実Claude/Codex runtimeの成功には数えない。
+ここに列挙した確認範囲だけを移行fixtureの成功とし、serviceの受付guardと実Claude/Codex runtimeの結果は別に記録する。
+
+## 新形式serviceの質問期間guard
+
+ClaudeとCodexの完全identityを持つ質問service、delivery store、instruction serviceを同じアンカーcontextへ接続する。
+既定形式の経路は既存試験を維持し、新形式は明示したbackendとperiod gateを使用する。
+このfixtureはnative factoryや実runtimeの起動を含まない。
+
+| ID | 入力と操作 | 独立した期待値と禁止副作用 |
+|---|---|---|
+| ID-F08-RG01 | 冷起動中に公開操作を行い、stop、drain、prepareResumeから新形式を設置する | 冷起動の操作は受理せず、全準備の完了後だけ受付する。readyとdrainの循環待ち、旧形式へのfallbackを起こさない。 |
+| ID-F08-RG02 | 旧期間を失効させ、同identityとperiodでactor、generation、launchを変え、新しいtrusted期間も登録する | 旧期間の全質問操作と直接delivery操作を拒否する。新期間の受付は既存の認可と通常容量を満たす場合だけ許可する。 |
+| ID-F08-RG03 | queue投入後、保存前、sink直前に対象期間の失効を開始する | 取得済みtokenを失効させ、古い操作から保存とnative送信を起こさない。送信開始済みの結果不明をunknownのまま保持する。 |
+| ID-F08-RG04 | live退役のanchor、checkpoint、質問journalの各保存前後と再読取を失敗させ、新instanceを作る | anchorを先に保存し、保存済みの失効時刻と相関を保持して許可された冷起動修復だけを行う。anchor保存前に失敗した場合は冷起動時刻で隔離する。失敗したinstanceから書き続けず、新配信を生成しない。 |
+| ID-F08-RG05 | creatingで停止した配信の有無、合法なcacheの遅れ、不可能な作成段階とcheckpointの組を保存する | 存在する完全相関のcheckpointへ照合し、作成有無が不明ならindeterminateを保持する。作成済み必須記録の欠落や不正相関を正常へ読み替えない。 |
+| ID-F08-RG06 | 独立墓標、満杯の通常予約と件数、固定grant対象の既存記録を同居させる | 墓標とreservationを件数と予約量へ含めて新規受付を止め、ID再利用を拒否する。Gは対象となる既存遷移だけに使用し、本文やgrantを削除しない。 |
+| ID-F08-RG07 | 質問と同じcheckpointに通常指示、PR通知と別期間の質問を保存し、live退役と後着通知を行う | 対象質問だけを失効させ、他の記録とinstruction journalのcreating状態を変えない。通常指示とPR通知の完全相関による遅延更新を維持し、terminalAtを再発行しない。 |
+
+drainは受理済みのローカルqueue操作の完了または無副作用の拒否までを扱う。
+外部sinkのPromise完了を待つことや、失効によるnative取消の保証は含めない。
+質問cacheは質問serviceが更新し、delivery storeから別journalへの保存を行わない。
+`test/reclamation-service-conformance.test.js`は、実ファイルのpersistence、新形式context、質問・配送・指示service、provider delivery adapterを組み合わせ、Claude・Codex各7件、計14件で成功した。
+RG02の旧期間拒否と同identityの新期間受付、RG03の保存待ち中の失効と外部sink Promise、RG06の独立墓標・内部ID再利用・件数上限、RG07の別期間保持・通常指示とPR通知の後着更新・instruction.creatingを確認する。
+期間gateのunitは完全identityとperiodだけを失効キーとし、actorとownerGenerationを入力に含めない契約を確認する。
+同periodのactor・ownerGeneration差替えを実サービスで再登録する試験は、この結果に含めない。
+RG01、RG04、RG05と固定grantの容量判定は、contextと各serviceの関連試験で確認する。
+`test/reclamation-service-context.test.js`は33件で成功し、RG04の9保存境界を両providerで検証する18件を含む。
+故障後に同じ製品registrationとlaunchを使い、新しいpersistence・context・実サービスを起動して、ready、失効時刻と静的相関の維持、旧期間の拒否、追加sinkと追加保存が0件であることを確認する。
+instructionのnative adapterは未構成で、既存の製品registration・launch fixtureと固定verifierを使用する。
+native factory、実Claude/Codex runtime、native instruction adapterの適合は、このfixtureの成功から推定しない。
 
 ## Codex native pendingの表示
 

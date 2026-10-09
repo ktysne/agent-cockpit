@@ -9,11 +9,17 @@ const {
 } = require('./instruction-envelope');
 const {
   appendInstructionIntent,
+  appendInstructionIntentV2,
   createEmptyJournal,
   normalizeInstructionRecord,
   sourceProjectionFromDelivery,
   sourceProjectionFromLaunch,
+  updateInstructionCreationStateV2,
 } = require('./instruction-delivery-journal');
+const {
+  normalizeInstructionJournalV2Local,
+  normalizeInstructionRecordV2Local,
+} = require('./delivery-reclamation-codec');
 const { createInstructionInputCorrelator } = require('./instruction-input-correlator');
 
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -178,8 +184,16 @@ function createInstructionDeliveryService(options = {}) {
     }
   }
   const now = options.now || Date.now;
+  const reclamationWriter = journal.reclamationWriter || null;
+  const reclamationMode = reclamationWriter !== null;
+  if (reclamationMode && (typeof journal.canWrite !== 'function' ||
+      typeof reclamationWriter.stop !== 'function' ||
+      typeof reclamationWriter.drain !== 'function' || typeof reclamationWriter.prepareResume !== 'function')) {
+    throw serviceError('invalid_instruction_service_dependencies');
+  }
   const adaptersByProvider = { claude: adapters.claude || null, codex: adapters.codex || null };
   let accepting = true;
+  let reclamationPrepared = !reclamationMode;
   let blocked = false;
   let startupError = null;
   let journalState = null;
@@ -197,6 +211,23 @@ function createInstructionDeliveryService(options = {}) {
 
   function findIntent(id) {
     return journalState?.instructions.find((record) => record.deliveryAttemptId === id) || null;
+  }
+
+  function isServiceVisibleRecord(record) {
+    return !reclamationMode || record?.recordType === 'detail' &&
+      record.deliveryCreationState !== 'indeterminate' && record.reclamation === null;
+  }
+
+  function isServiceMutableRecord(record) {
+    return isServiceVisibleRecord(record) && (!reclamationMode ||
+      record.deliveryCreationState === 'checkpointed');
+  }
+
+  function requireServiceMutableRecord(record) {
+    if (!record) throw serviceError('instruction_not_found');
+    if (!isServiceVisibleRecord(record)) throw serviceError('instruction_recreation_forbidden');
+    if (!isServiceMutableRecord(record)) throw serviceError('instruction_creation_incomplete');
+    return record;
   }
 
   function providerAdapter(provider) {
@@ -281,6 +312,7 @@ function createInstructionDeliveryService(options = {}) {
   }
 
   async function validateExistingDelivery(record, provider) {
+    if (!isServiceVisibleRecord(record)) throw serviceError('instruction_recreation_forbidden');
     const delivery = await deliveryFor(record.deliveryAttemptId, provider);
     if (delivery && !deliveryMatchesRecord(delivery, record)) throw serviceError('instruction_delivery_mismatch');
     return delivery;
@@ -318,28 +350,81 @@ function createInstructionDeliveryService(options = {}) {
 
   async function createNow(input, allowAlternative = false, sourceOverride = null) {
     const intent = captureInput(input, allowAlternative, sourceOverride);
-    const attempted = appendInstructionIntent(journalState || createEmptyJournal(), intent.record);
+    const prior = findIntent(intent.record.deliveryAttemptId);
+    if (reclamationMode && prior && (!isServiceVisibleRecord(prior) ||
+        prior.deliveryCreationState === 'creating' || prior.deliveryCreationState === 'indeterminate')) {
+      throw serviceError('instruction_recreation_forbidden');
+    }
+    const attempted = reclamationMode
+      ? appendInstructionIntentV2(journalState, intent.record)
+      : appendInstructionIntent(journalState || createEmptyJournal(), intent.record);
     if (attempted.created) {
       journalState = await journal.save(attempted.journal);
     }
-    const savedIntent = attempted.record;
+    let savedIntent = attempted.record;
+    if (reclamationMode) {
+      if (!isServiceVisibleRecord(savedIntent)) throw serviceError('instruction_recreation_forbidden');
+      if (savedIntent.deliveryCreationState === 'checkpointed') {
+        const existingDelivery = await validateExistingDelivery(savedIntent, savedIntent.source.claims.provider);
+        if (!existingDelivery) throw serviceError('instruction_delivery_mismatch');
+        return {
+          outcome: 'existing',
+          delivery: existingDelivery,
+          instruction: projection(savedIntent, existingDelivery),
+        };
+      }
+      if (savedIntent.deliveryCreationState !== 'not_created') {
+        throw serviceError('instruction_recreation_forbidden');
+      }
+      const creating = updateInstructionCreationStateV2(journalState, savedIntent.deliveryAttemptId, 'creating');
+      journalState = await journal.save(creating.journal);
+      savedIntent = findIntent(intent.record.deliveryAttemptId);
+    }
     const provider = savedIntent.source.claims.provider;
     let adapter = providerAdapter(provider);
     let delivery = await validateExistingDelivery(savedIntent, provider);
     let createdNow = false;
     if (!delivery) {
       const create = adapter?.createInstructionDelivery || deliveryStore.createInstructionDelivery;
-      const created = await create.call(adapter || deliveryStore, {
-        launchRef: savedIntent.launchRef,
-        deliveryAttemptId: savedIntent.deliveryAttemptId,
-        logicalMessageId: savedIntent.logicalMessageId,
-        revision: savedIntent.revision,
-        payload: savedIntent.envelope,
-      });
-      delivery = created;
+      try {
+        delivery = await create.call(adapter || deliveryStore, {
+          launchRef: savedIntent.launchRef,
+          deliveryAttemptId: savedIntent.deliveryAttemptId,
+          logicalMessageId: savedIntent.logicalMessageId,
+          revision: savedIntent.revision,
+          payload: savedIntent.envelope,
+        });
+      } catch (error) {
+        if (!reclamationMode) throw error;
+        let recoveredDelivery;
+        try {
+          recoveredDelivery = await validateExistingDelivery(savedIntent, provider);
+        } catch {
+          throw error;
+        }
+        if (!recoveredDelivery) throw error;
+        if (deliveryMatchesRecord(recoveredDelivery, savedIntent)) {
+          const checkpointed = updateInstructionCreationStateV2(
+            journalState, savedIntent.deliveryAttemptId, 'checkpointed');
+          journalState = await journal.save(checkpointed.journal);
+          savedIntent = findIntent(savedIntent.deliveryAttemptId);
+          return {
+            outcome: attempted.created ? 'created' : 'existing',
+            delivery: recoveredDelivery,
+            instruction: projection(savedIntent, recoveredDelivery),
+          };
+        }
+        throw error;
+      }
       createdNow = true;
     }
     if (!deliveryMatchesRecord(delivery, savedIntent)) throw serviceError('instruction_delivery_mismatch');
+    if (reclamationMode) {
+      const checkpointed = updateInstructionCreationStateV2(
+        journalState, savedIntent.deliveryAttemptId, 'checkpointed');
+      journalState = await journal.save(checkpointed.journal);
+      savedIntent = findIntent(savedIntent.deliveryAttemptId);
+    }
     return {
       outcome: attempted.created || createdNow ? 'created' : 'existing',
       delivery,
@@ -355,7 +440,7 @@ function createInstructionDeliveryService(options = {}) {
 
   async function markUnknownNow(id, reason) {
     const record = findIntent(id);
-    if (!record) return false;
+    if (!record || !isServiceMutableRecord(record)) return false;
     const adapter = providerAdapter(record.source.claims.provider);
     if (!adapter) return false;
     let delivery;
@@ -369,7 +454,7 @@ function createInstructionDeliveryService(options = {}) {
     now,
     onApplied: (id, evidence, sourceToken) => enqueue(async () => {
       const record = findIntent(id);
-      if (!record || !correlator.isApplying(id, sourceToken, evidence)) return false;
+      if (!record || !isServiceMutableRecord(record) || !correlator.isApplying(id, sourceToken, evidence)) return false;
       const adapter = providerAdapter(record.source.claims.provider);
       if (!adapter) return false;
       const delivery = await adapter.get(id);
@@ -389,7 +474,9 @@ function createInstructionDeliveryService(options = {}) {
     onUnknown: (id, reason) => enqueue(() => markUnknownNow(id, reason), true),
     onFinished: (id, state, reason, sourceToken) => {
       const record = findIntent(id);
-      if (record) providerAdapter(record.source.claims.provider)?.closeInstructionObservation?.(id, sourceToken);
+      if (record && isServiceVisibleRecord(record)) {
+        providerAdapter(record.source.claims.provider)?.closeInstructionObservation?.(id, sourceToken);
+      }
     },
   });
 
@@ -402,7 +489,11 @@ function createInstructionDeliveryService(options = {}) {
     if (typeof adapter.onAccepted === 'function') {
       adapterUnsubscribers.push(adapter.onAccepted((id, sourceToken, accepted) => enqueue(async () => {
         const record = findIntent(id);
-        if (!record) throw serviceError('instruction_delivery_mismatch');
+        if (!record) {
+          if (reclamationMode) return false;
+          throw serviceError('instruction_delivery_mismatch');
+        }
+        if (!isServiceMutableRecord(record)) return false;
         const current = await adapter.get(id);
         if (!current || !deliveryMatchesRecord(current, record)) throw serviceError('instruction_delivery_mismatch');
         const correlation = deliveryCorrelation(current, accepted.nativeTurnId, null);
@@ -425,11 +516,26 @@ function createInstructionDeliveryService(options = {}) {
     await deliveryStore.ready;
     const loaded = await journal.load();
     if (!isRecord(loaded) || !Array.isArray(loaded.instructions)) throw serviceError('instruction_journal_unavailable');
-    journalState = loaded;
+    journalState = reclamationMode ? normalizeInstructionJournalV2Local(loaded) : loaded;
     for (const record of journalState.instructions) {
-      const normalized = normalizeInstructionRecord(record);
-      if (!sameJson(normalized, record)) throw serviceError('invalid_instruction_journal');
+      if (reclamationMode) {
+        if (!sameJson(normalizeInstructionRecordV2Local(record), record)) {
+          throw serviceError('invalid_instruction_journal');
+        }
+        if (!isServiceVisibleRecord(record)) continue;
+        if (record.deliveryCreationState === 'creating') {
+          throw serviceError('instruction_creation_recovery_required');
+        }
+      } else {
+        const normalized = normalizeInstructionRecord(record);
+        if (!sameJson(normalized, record)) throw serviceError('invalid_instruction_journal');
+      }
+      const normalized = reclamationMode ? record : normalizeInstructionRecord(record);
       const delivery = await validateExistingDelivery(normalized, normalized.source.claims.provider);
+      if (reclamationMode && (normalized.deliveryCreationState === 'checkpointed' && !delivery ||
+          normalized.deliveryCreationState === 'not_created' && delivery)) {
+        throw serviceError('instruction_delivery_mismatch');
+      }
       if (delivery && ['sending', 'accepted'].includes(delivery.state)) {
         if (delivery.state !== 'unknown') {
           await providerAdapter(normalized.source.claims.provider)?.markUnknown(normalized.deliveryAttemptId);
@@ -440,6 +546,9 @@ function createInstructionDeliveryService(options = {}) {
   }
 
   function ready() {
+    if (reclamationMode && !reclamationPrepared) {
+      return Promise.reject(serviceError('reclamation_writer_cold'));
+    }
     if (!initPromise) {
       initPromise = reconcile().catch((error) => {
         blocked = true;
@@ -450,9 +559,52 @@ function createInstructionDeliveryService(options = {}) {
     return initPromise;
   }
 
+  function backendCanWrite() {
+    let canWrite = false;
+    try { canWrite = journal.canWrite() === true; } catch {}
+    return canWrite;
+  }
+
+  async function prepareResume(fullSnapshot) {
+    if (!reclamationMode || closePromise) throw serviceError('instruction_service_closed');
+    const normalized = normalizeInstructionJournalV2Local(fullSnapshot?.stores?.instructions);
+    await reclamationWriter.prepareResume(fullSnapshot);
+    if (closePromise) throw serviceError('instruction_service_closed');
+    journalState = normalized;
+    initPromise = null;
+    startupError = null;
+    blocked = false;
+    reclamationPrepared = true;
+    accepting = true;
+  }
+
+  const serviceReclamationWriter = reclamationMode ? Object.freeze({
+    stop() {
+      accepting = false;
+      reclamationWriter.stop();
+    },
+    drain() {
+      return tail.then(() => reclamationWriter.drain());
+    },
+    prepareResume,
+  }) : null;
+
   function enqueue(operation, diagnostic = false) {
-    if (!accepting && !diagnostic) return Promise.reject(serviceError('instruction_service_closed'));
+    const canWrite = !reclamationMode || backendCanWrite();
+    if (reclamationMode && !reclamationPrepared) {
+      return Promise.reject(serviceError('reclamation_writer_cold'));
+    }
+    if (!canWrite) return Promise.reject(serviceError('reclamation_service_blocked'));
+    if (!accepting && (!diagnostic || reclamationMode)) {
+      return Promise.reject(serviceError('instruction_service_closed'));
+    }
     const result = tail.then(async () => {
+      if (reclamationMode && !backendCanWrite()) {
+        throw serviceError('reclamation_service_blocked');
+      }
+      if (reclamationMode && !reclamationPrepared) {
+        throw serviceError('reclamation_writer_cold');
+      }
       try { await ready(); }
       catch (error) { if (!diagnostic) throw error; }
       if (blocked && !diagnostic) throw serviceError(startupError?.code || 'instruction_service_blocked');
@@ -468,8 +620,7 @@ function createInstructionDeliveryService(options = {}) {
 
   async function sendNow(id) {
     if (!isIdentifier(id)) throw serviceError('instruction_invalid_request');
-    const record = findIntent(id);
-    if (!record) throw serviceError('instruction_not_found');
+    const record = requireServiceMutableRecord(findIntent(id));
     const adapter = mapForRecord(record);
     if (!adapter.available) throw serviceError('instruction_dispatch_unavailable');
     const delivery = await adapter.get(id);
@@ -531,8 +682,7 @@ function createInstructionDeliveryService(options = {}) {
 
   async function cancelNow(id) {
     if (!isIdentifier(id)) throw serviceError('instruction_invalid_request');
-    const record = findIntent(id);
-    if (!record) throw serviceError('instruction_not_found');
+    const record = requireServiceMutableRecord(findIntent(id));
     const adapter = mapForRecord(record);
     const current = await adapter.get(id);
     if (!current || !deliveryMatchesRecord(current, record)) throw serviceError('instruction_delivery_mismatch');
@@ -547,8 +697,7 @@ function createInstructionDeliveryService(options = {}) {
 
   async function supersedeUnsentNow(id, input) {
     if (!isIdentifier(id)) throw serviceError('instruction_invalid_request');
-    const oldRecord = findIntent(id);
-    if (!oldRecord) throw serviceError('instruction_not_found');
+    const oldRecord = requireServiceMutableRecord(findIntent(id));
     if (oldRecord.source.claims.origin !== 'standalone') throw serviceError('instruction_origin_mode_mismatch');
     const capturedAlternative = exactObject(input, ALTERNATIVE_FIELDS);
     if (!isIdentifier(capturedAlternative.newDeliveryAttemptId) ||
@@ -608,7 +757,7 @@ function createInstructionDeliveryService(options = {}) {
   async function getNow(id) {
     if (!isIdentifier(id)) return null;
     const record = findIntent(id);
-    if (!record) return null;
+    if (!record || !isServiceVisibleRecord(record)) return null;
     const delivery = await deliveryFor(id, record.source.claims.provider);
     if (delivery && !deliveryMatchesRecord(delivery, record)) throw serviceError('instruction_delivery_mismatch');
     return { delivery, instruction: projection(record, delivery) };
@@ -627,6 +776,7 @@ function createInstructionDeliveryService(options = {}) {
     let unmatchedCount = 0;
     const instructions = [];
     for (const record of journalState.instructions) {
+      if (!isServiceVisibleRecord(record)) continue;
       let delivery = null;
       try {
         delivery = await deliveryFor(record.deliveryAttemptId, record.source.claims.provider);
@@ -652,10 +802,10 @@ function createInstructionDeliveryService(options = {}) {
 
   function reportResponseLost(id) {
     if (!isIdentifier(id)) return Promise.reject(serviceError('instruction_invalid_request'));
-    correlator.unknown(id, 'instruction_response_lost');
+    if (!reclamationMode) correlator.unknown(id, 'instruction_response_lost');
     return enqueue(async () => {
       const record = findIntent(id);
-      if (!record) throw serviceError('instruction_not_found');
+      requireServiceMutableRecord(record);
       correlator.unknown(id, 'instruction_response_lost');
       const adapter = mapForRecord(record);
       const current = await adapter.get(id);
@@ -671,17 +821,22 @@ function createInstructionDeliveryService(options = {}) {
 
   function flush() {
     if (!accepting) return Promise.reject(serviceError('instruction_service_closed'));
+    if (reclamationMode && !reclamationPrepared) return Promise.reject(serviceError('reclamation_writer_cold'));
     return tail.then(() => ready()).then(() => Promise.all([journal.flush(), deliveryStore.flush()])).then(() => undefined);
   }
 
   function close() {
     if (closePromise) return closePromise;
     accepting = false;
+    if (reclamationMode) reclamationWriter.stop();
     correlator.close();
     closePromise = tail.then(async () => {
-      try { await ready(); } catch {}
+      if (!reclamationMode || reclamationPrepared) {
+        try { await ready(); } catch {}
+      }
       if (journalState) {
         for (const record of journalState.instructions) {
+          if (!isServiceVisibleRecord(record)) continue;
           const adapter = providerAdapter(record.source.claims.provider);
           if (!adapter) continue;
           try {
@@ -719,6 +874,7 @@ function createInstructionDeliveryService(options = {}) {
     reportResponseLost,
     flush,
     close,
+    ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter } : {}),
   });
 }
 

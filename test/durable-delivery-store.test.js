@@ -199,6 +199,278 @@ test('delivery store saves payload digests only and gives the sink one frozen de
   await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => {}), errorCode('payload_unavailable'));
 });
 
+test('reclamation delivery queue checks backend writability before admission and at dequeue', async (t) => {
+  const fixture = createFixture();
+  const checkpoint = {
+    schemaVersion: 3,
+    storeId: '11111111-1111-4111-8111-111111111111',
+    revision: 0,
+    registrations: {
+      conversations: [], executions: [], launches: [], runtimeLaunches: [], connections: [],
+      actors: [], handoffs: [], replayClaims: [], incompleteConversationIds: [],
+    },
+    ledger: { schemaVersion: 2, revision: 0, deliveries: [], notificationTargets: [], logicalTombstones: [] },
+    migrationAllowance: null,
+  };
+  let stored = clone(checkpoint);
+  let writable = false;
+  const backend = {
+    slot: 'checkpoint', normalByteLimit: 1024 * 1024,
+    canWrite() { return writable; },
+    async load() { return clone(stored); },
+    async save(candidate) { stored = clone(candidate); return clone(stored); },
+    async prepareResume(fullSnapshot) { stored = clone(fullSnapshot.stores.checkpoint); },
+    async flush() {},
+    async close() {},
+  };
+  const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend, periodGate },
+  });
+  t.after(() => store.close());
+
+  await assert.rejects(store.snapshot(), (error) => error.code === 'reclamation_writer_cold');
+  await store.ready;
+  await assert.rejects(store.snapshot(), (error) => error.code === 'reclamation_service_blocked');
+
+  writable = true;
+  const queued = store.snapshot();
+  writable = false;
+  await assert.rejects(queued, (error) => error.code === 'reclamation_service_blocked');
+
+  writable = true;
+  assert.equal((await store.snapshot()).schemaVersion, 2);
+});
+
+function emptyReclamationCheckpoint() {
+  return {
+    schemaVersion: 3,
+    storeId: '11111111-1111-4111-8111-111111111111',
+    revision: 0,
+    registrations: {
+      conversations: [], executions: [], launches: [], runtimeLaunches: [], connections: [],
+      actors: [], handoffs: [], replayClaims: [], incompleteConversationIds: [],
+    },
+    ledger: { schemaVersion: 2, revision: 0, deliveries: [], notificationTargets: [], logicalTombstones: [] },
+    migrationAllowance: null,
+  };
+}
+
+test('reclamation checkpoint write guards observe async rejection without calling arbitrary thenables', async (t) => {
+  let stored = emptyReclamationCheckpoint();
+  let saveCount = 0;
+  let thenCalled = false;
+  const backend = {
+    slot: 'checkpoint', normalByteLimit: 1024 * 1024,
+    canWrite() { return true; },
+    async load() { return clone(stored); },
+    async save(candidate, assertBeforeWrite) {
+      saveCount += 1;
+      assertBeforeWrite?.();
+      stored = clone(candidate);
+      return clone(stored);
+    },
+    async prepareResume(snapshot) { stored = clone(snapshot.stores.checkpoint); },
+    async flush() {},
+    async close() {},
+  };
+  const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+  const checkpointStore = createDurableCheckpointStore({ reclamation: { backend, periodGate } });
+  t.after(() => checkpointStore.close());
+  const candidate = await checkpointStore.load();
+  candidate.revision += 1;
+  candidate.ledger.revision += 1;
+
+  await assert.rejects(checkpointStore.save(candidate, async () => {
+    throw new Error('async guard failure');
+  }), (error) => error.code === 'invalid_checkpoint_write_guard');
+  await assert.rejects(checkpointStore.save(candidate, () => ({
+    then() { thenCalled = true; },
+  })), (error) => error.code === 'invalid_checkpoint_write_guard');
+
+  assert.equal(thenCalled, false);
+  assert.equal(saveCount, 0);
+  assert.equal(stored.revision, 0);
+});
+
+function createWriteBarrierBackend() {
+  const state = { checkpoint: emptyReclamationCheckpoint() };
+  let nextBarrier = null;
+  let nextResumeBarrier = null;
+  let lastWriteGuard;
+  const backend = {
+    slot: 'checkpoint', normalByteLimit: 1024 * 1024,
+    canWrite() { return true; },
+    async load() { return clone(state.checkpoint); },
+    async save(candidate, assertBeforeWrite) {
+      lastWriteGuard = assertBeforeWrite;
+      const barrier = nextBarrier;
+      nextBarrier = null;
+      if (barrier) {
+        barrier.started();
+        await barrier.wait;
+      }
+      assertBeforeWrite?.();
+      state.checkpoint = clone(candidate);
+      return clone(state.checkpoint);
+    },
+    async prepareResume(snapshot) {
+      const barrier = nextResumeBarrier;
+      nextResumeBarrier = null;
+      if (barrier) {
+        barrier.started();
+        await barrier.wait;
+      }
+      state.checkpoint = clone(snapshot.stores.checkpoint);
+    },
+    async flush() {},
+    async close() {},
+  };
+  return {
+    backend,
+    get checkpoint() { return clone(state.checkpoint); },
+    get lastWriteGuard() { return lastWriteGuard; },
+    pauseNextSave() {
+      let signalStarted;
+      let release;
+      const started = new Promise((resolve) => { signalStarted = resolve; });
+      const wait = new Promise((resolve) => { release = resolve; });
+      nextBarrier = { started: signalStarted, wait };
+      return { started, release };
+    },
+    pauseNextResume() {
+      let signalStarted;
+      let release;
+      const started = new Promise((resolve) => { signalStarted = resolve; });
+      const wait = new Promise((resolve) => { release = resolve; });
+      nextResumeBarrier = { started: signalStarted, wait };
+      return { started, release };
+    },
+  };
+}
+
+test('a closed reclamation delivery writer cannot resume from a snapshot', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend: persistence.backend, periodGate },
+  });
+  t.after(() => store.close());
+  await store.ready;
+  await store.close();
+
+  await assert.rejects(store.reclamationWriter.prepareResume({
+    anchor: {}, stores: { checkpoint: persistence.checkpoint },
+  }), errorCode('store_closed'));
+});
+
+test('closing during reclamation resume cannot reopen the delivery writer', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend: persistence.backend, periodGate },
+  });
+  t.after(() => store.close());
+  await store.ready;
+  store.reclamationWriter.stop();
+
+  const barrier = persistence.pauseNextResume();
+  const pending = store.reclamationWriter.prepareResume({
+    anchor: {}, stores: { checkpoint: persistence.checkpoint },
+  });
+  await barrier.started;
+  await store.close();
+  barrier.release();
+
+  await assert.rejects(pending, errorCode('store_closed'));
+  await assert.rejects(store.snapshot(), errorCode('store_closed'));
+});
+
+test('a question token is rechecked by the backend immediately before a delayed checkpoint write', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const token = {};
+  let tokenCurrent = true;
+  const periodGate = {
+    capture() { return token; },
+    assertCurrent(value) {
+      if (value !== token || !tokenCurrent) {
+        const error = new Error('question_period_retired');
+        error.code = 'question_period_retired';
+        throw error;
+      }
+    },
+    assertRetirement() {},
+  };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend: persistence.backend, periodGate },
+  });
+  t.after(() => store.close());
+  await store.ready;
+
+  const barrier = persistence.pauseNextSave();
+  const pending = store.createQuestionDelivery(
+    deliveryInput(fixture.source.launchRef, 'question-delayed-write'));
+  await barrier.started;
+  assert.equal(typeof persistence.lastWriteGuard, 'function');
+  tokenCurrent = false;
+  barrier.release();
+
+  await assert.rejects(pending, (error) => error.code === 'question_period_retired');
+  assert.equal(persistence.checkpoint.ledger.deliveries.length, 0);
+  const instruction = await store.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-after-question-reject'));
+  assert.equal(instruction.kind, 'instruction');
+});
+
+test('a retirement ticket is rechecked at delayed checkpoint I/O without blocking later writes', async (t) => {
+  const fixture = createFixture();
+  const persistence = createWriteBarrierBackend();
+  const ticket = {};
+  let ticketCurrent = true;
+  const periodGate = {
+    capture() { return {}; },
+    assertCurrent() {},
+    assertRetirement(value) {
+      if (value !== ticket || !ticketCurrent) {
+        const error = new Error('question_retirement_ticket_invalid');
+        error.code = 'question_retirement_ticket_invalid';
+        throw error;
+      }
+    },
+  };
+  const store = createDurableDeliveryStore({
+    ...fixture.dependencies,
+    reclamation: { backend: persistence.backend, periodGate },
+  });
+  t.after(() => store.close());
+  await store.ready;
+
+  await store.withQuestionRetirement(ticket, async (access) => {
+    const candidate = access.snapshot();
+    candidate.revision += 1;
+    candidate.ledger.revision += 1;
+    const barrier = persistence.pauseNextSave();
+    const pending = access.persist(candidate);
+    await barrier.started;
+    assert.equal(typeof persistence.lastWriteGuard, 'function');
+    ticketCurrent = false;
+    barrier.release();
+    await assert.rejects(pending, (error) => error.code === 'question_retirement_ticket_invalid');
+  });
+
+  assert.equal(persistence.checkpoint.revision, 0);
+  const instruction = await store.createInstructionDelivery(
+    deliveryInput(fixture.source.launchRef, 'instruction-after-retirement-reject'));
+  assert.equal(instruction.kind, 'instruction');
+});
+
 test('native recovery reads a cloned ready checkpoint without writing or capturing registries', async (t) => {
   const directory = await temporaryDirectory(t);
   const fixture = createFixture();

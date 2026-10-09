@@ -9,6 +9,12 @@ const {
   isSha256Digest,
   parseInstructionEnvelope,
 } = require('./instruction-envelope');
+const {
+  encodeInstructionJournalV2Local,
+  normalizeInstructionJournalV2Local,
+  normalizeInstructionRecordV2Local,
+} = require('./delivery-reclamation-codec');
+const { checkedCapacityAdd, measureInstructionReservation } = require('./reclamation-capacity-bounds');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
@@ -215,6 +221,15 @@ function logicalKey(record) {
   ]);
 }
 
+function logicalKeyV2(record) {
+  return JSON.stringify([
+    record.source.identity.provider,
+    record.source.executionBinding.periodId,
+    record.logicalMessageId,
+    record.revision,
+  ]);
+}
+
 function normalizeJournal(value, maxRecords = MAX_RECORDS) {
   const journal = exactObject(value, JOURNAL_FIELDS);
   if (journal.schemaVersion !== SCHEMA_VERSION || !Number.isSafeInteger(journal.revision) ||
@@ -285,6 +300,62 @@ function appendInstructionIntent(journalValue, recordValue, maxRecords = MAX_REC
   };
 }
 
+function appendInstructionIntentV2(journalValue, recordValue, maxRecords = MAX_RECORDS) {
+  const journal = normalizeInstructionJournalV2Local(journalValue, maxRecords);
+  const legacy = normalizeInstructionRecord(recordValue);
+  const record = normalizeInstructionRecordV2Local({
+    recordType: 'detail',
+    ...legacy,
+    deliveryCreationState: 'not_created',
+    reclamation: null,
+  });
+  const existing = journal.instructions.find((item) => item.deliveryAttemptId === record.deliveryAttemptId);
+  if (existing) {
+    if (existing.recordType !== 'detail' || existing.deliveryCreationState === 'indeterminate' ||
+        existing.reclamation !== null) {
+      throw journalError('instruction_recreation_forbidden');
+    }
+    const { recordType: _recordType, deliveryCreationState: _state, reclamation: _reclamation, ...existingIntent } = existing;
+    if (!sameInstructionIntent(existingIntent, legacy)) throw journalError('instruction_attempt_conflict');
+    return { journal, record: existing, created: false };
+  }
+  if (journal.instructions.some((item) => logicalKeyV2(item) === logicalKeyV2(record))) {
+    throw journalError('instruction_logical_conflict');
+  }
+  if (journal.instructions.length >= maxRecords) throw journalError('instruction_journal_full');
+  const candidate = normalizeInstructionJournalV2Local({
+    schemaVersion: 2,
+    revision: journal.revision + 1,
+    storeId: journal.storeId,
+    migrationAllowance: journal.migrationAllowance,
+    instructions: [...journal.instructions, record],
+  }, maxRecords);
+  return { journal: candidate, record, created: true };
+}
+
+function updateInstructionCreationStateV2(journalValue, deliveryAttemptId, nextState, maxRecords = MAX_RECORDS) {
+  const journal = normalizeInstructionJournalV2Local(journalValue, maxRecords);
+  if (!['creating', 'checkpointed'].includes(nextState)) throw journalError('invalid_instruction_creation_state');
+  const index = journal.instructions.findIndex((item) => item.deliveryAttemptId === deliveryAttemptId);
+  const current = journal.instructions[index];
+  if (!current || current.recordType !== 'detail' || current.reclamation !== null) {
+    throw journalError('instruction_recreation_forbidden');
+  }
+  const allowed = current.deliveryCreationState === 'not_created' && nextState === 'creating' ||
+    current.deliveryCreationState === 'creating' && nextState === 'checkpointed';
+  if (!allowed) throw journalError('invalid_instruction_creation_state');
+  const instructions = journal.instructions.slice();
+  instructions[index] = normalizeInstructionRecordV2Local({ ...current, deliveryCreationState: nextState });
+  const candidate = normalizeInstructionJournalV2Local({
+    schemaVersion: 2,
+    revision: journal.revision + 1,
+    storeId: journal.storeId,
+    migrationAllowance: journal.migrationAllowance,
+    instructions,
+  }, maxRecords);
+  return { journal: candidate, record: instructions[index], changed: true };
+}
+
 function serialize(value) {
   return JSON.stringify(value, null, 2) + '\n';
 }
@@ -296,7 +367,7 @@ function pathKey(value) {
 
 function createInstructionDeliveryJournal(options = {}) {
   if (!isRecord(options)) throw journalError('invalid_instruction_journal_options');
-  const allowed = ['filePath', 'maxBytes', 'maxRecords', 'atomicWrite', 'fileSystem'];
+  const allowed = ['filePath', 'maxBytes', 'maxRecords', 'atomicWrite', 'fileSystem', 'reclamation'];
   let optionKeys;
   try {
     optionKeys = Reflect.ownKeys(options);
@@ -306,6 +377,7 @@ function createInstructionDeliveryJournal(options = {}) {
   if (optionKeys.some((key) => typeof key !== 'string' || !allowed.includes(key))) {
     throw journalError('invalid_instruction_journal_options');
   }
+  if (Object.hasOwn(options, 'reclamation')) return createReclamationInstructionDeliveryJournal(options);
   const filePath = options.filePath;
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
@@ -462,14 +534,233 @@ function createInstructionDeliveryJournal(options = {}) {
   });
 }
 
+function createReclamationInstructionDeliveryJournal(options) {
+  const reclamation = options.reclamation;
+  if (!isRecord(reclamation) || Reflect.ownKeys(reclamation).length !== 2 ||
+      !Object.hasOwn(reclamation, 'backend') || !Object.hasOwn(reclamation, 'periodGate')) {
+    throw journalError('invalid_reclamation_instruction_backend');
+  }
+  const backend = Object.getOwnPropertyDescriptor(reclamation, 'backend')?.value;
+  const periodGate = Object.getOwnPropertyDescriptor(reclamation, 'periodGate')?.value;
+  if (!backend || backend.slot !== 'instructions' || typeof backend.canWrite !== 'function' ||
+      typeof backend.load !== 'function' ||
+      typeof backend.save !== 'function' || typeof backend.prepareResume !== 'function' ||
+      typeof backend.flush !== 'function' || typeof backend.close !== 'function' ||
+      !Number.isSafeInteger(backend.normalByteLimit) || backend.normalByteLimit < 1 ||
+      backend.normalByteLimit > MAX_BYTES || !periodGate || typeof periodGate.capture !== 'function' ||
+      typeof periodGate.assertCurrent !== 'function') {
+    throw journalError('invalid_reclamation_instruction_backend');
+  }
+  const maxBytes = options.maxBytes ?? backend.normalByteLimit;
+  const maxRecords = options.maxRecords ?? MAX_RECORDS;
+  if (maxBytes !== backend.normalByteLimit || !Number.isSafeInteger(maxRecords) ||
+      maxRecords < 1 || maxRecords > MAX_RECORDS) throw journalError('invalid_instruction_journal_options');
+
+  let accepting = true;
+  let prepared = false;
+  let hasLoaded = false;
+  let closed = false;
+  let writeBlocked = false;
+  let currentJournal = null;
+  let lastCommittedRevision = -1;
+  let tail = Promise.resolve();
+  let closePromise = null;
+
+  function assertBackendCanWrite() {
+    let canWrite = false;
+    try { canWrite = backend.canWrite() === true; } catch {}
+    if (!canWrite) throw journalError('reclamation_service_blocked');
+  }
+
+  function enqueue(operation) {
+    if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
+    try { assertBackendCanWrite(); }
+    catch (error) { return Promise.reject(error); }
+    const result = tail.then(() => {
+      assertBackendCanWrite();
+      return operation();
+    });
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  function measure(value, limitBytes) {
+    const normalized = normalizeInstructionJournalV2Local(value, maxRecords);
+    const reserved = measureInstructionReservation({ snapshot: normalized, currentByteLimit: maxBytes }).reservedBytes;
+    if (reserved > limitBytes) throw journalError('instruction_journal_capacity_reserved');
+    return normalized;
+  }
+
+  function transitionLimit(candidate) {
+    const grant = candidate.migrationAllowance;
+    if (grant === null) return maxBytes;
+    if (!currentJournal) return checkedCapacityAdd(maxBytes, grant.maxExtraBytes);
+    const previous = new Map(currentJournal.instructions.map((item) => [item.deliveryAttemptId, item]));
+    const roster = new Set(grant.eligibleAttemptIds);
+    const changed = candidate.instructions.filter((item) => {
+      const old = previous.get(item.deliveryAttemptId);
+      return old === undefined || !sameJson(old, item);
+    });
+    const allChangesEligible = changed.every((item) => previous.has(item.deliveryAttemptId) &&
+      roster.has(item.deliveryAttemptId));
+    return allChangesEligible ? checkedCapacityAdd(maxBytes, grant.maxExtraBytes) : maxBytes;
+  }
+
+  function assertTransition(candidate) {
+    if (!currentJournal || candidate.storeId !== currentJournal.storeId ||
+        candidate.revision !== currentJournal.revision + 1 ||
+        !sameJson(candidate.migrationAllowance, currentJournal.migrationAllowance)) {
+      throw journalError('instruction_journal_transition_rejected');
+    }
+    const nextById = new Map(candidate.instructions.map((item) => [item.deliveryAttemptId, item]));
+    for (const old of currentJournal.instructions) {
+      const next = nextById.get(old.deliveryAttemptId);
+      if (!next) throw journalError('instruction_journal_record_removed');
+      if (old.recordType === 'reclaimed' || old.deliveryCreationState === 'indeterminate' ||
+          old.reclamation !== null) {
+        if (!sameJson(old, next)) throw journalError('instruction_recreation_forbidden');
+        continue;
+      }
+      const sameBase = (() => {
+        const oldCopy = { ...old, deliveryCreationState: null };
+        const nextCopy = { ...next, deliveryCreationState: null };
+        return sameJson(oldCopy, nextCopy);
+      })();
+      const stateForward = old.deliveryCreationState === 'not_created' &&
+        next.deliveryCreationState === 'creating' || old.deliveryCreationState === 'creating' &&
+        next.deliveryCreationState === 'checkpointed';
+      if (!sameBase || !(sameJson(old, next) || stateForward)) {
+        throw journalError('instruction_creation_state_regressed');
+      }
+    }
+    for (const next of candidate.instructions) {
+      if (currentJournal.instructions.some((old) => old.deliveryAttemptId === next.deliveryAttemptId)) continue;
+      if (next.recordType !== 'detail' || next.deliveryCreationState !== 'not_created' ||
+          next.reclamation !== null) throw journalError('instruction_creation_state_invalid');
+    }
+  }
+
+  async function loadNow() {
+    if (closed) throw journalError('instruction_journal_closed');
+    if (hasLoaded) return structuredClone(currentJournal);
+    const loadedValue = await backend.load();
+    const grantBytes = loadedValue?.migrationAllowance?.maxExtraBytes ?? 0;
+    const loaded = measure(loadedValue, checkedCapacityAdd(backend.normalByteLimit, grantBytes));
+    currentJournal = loaded;
+    lastCommittedRevision = loaded.revision;
+    hasLoaded = true;
+    prepared = true;
+    return structuredClone(loaded);
+  }
+
+  function load() {
+    return enqueue(loadNow);
+  }
+
+  function save(value) {
+    if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
+    if (!prepared) return Promise.reject(journalError('reclamation_writer_cold'));
+    let normalized;
+    try {
+      normalized = normalizeInstructionJournalV2Local(value, maxRecords);
+      const encoded = encodeInstructionJournalV2Local(normalized, maxRecords);
+      if (encoded.sizeBytes > checkedCapacityAdd(maxBytes, normalized.migrationAllowance?.maxExtraBytes ?? 0)) {
+        throw journalError('instruction_journal_too_large');
+      }
+      normalized = structuredClone(normalized);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return enqueue(async () => {
+      if (closed) throw journalError('instruction_journal_closed');
+      if (!hasLoaded) await loadNow();
+      if (writeBlocked) throw journalError('instruction_journal_writer_blocked');
+      if (normalized.revision <= lastCommittedRevision) {
+        throw journalError('instruction_journal_revision_not_advanced');
+      }
+      assertTransition(normalized);
+      const limitBytes = transitionLimit(normalized);
+      const checked = measure(normalized, limitBytes);
+      try {
+        const saved = normalizeInstructionJournalV2Local(await backend.save(checked), maxRecords);
+        currentJournal = saved;
+        lastCommittedRevision = saved.revision;
+        return structuredClone(saved);
+      } catch (error) {
+        writeBlocked = true;
+        throw error;
+      }
+    });
+  }
+
+  function flush() {
+    if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
+    if (!prepared) return Promise.reject(journalError('reclamation_writer_cold'));
+    return tail.then(() => backend.flush());
+  }
+
+  async function prepareResume(fullSnapshot) {
+    if (closed || !isRecord(fullSnapshot) || !isRecord(fullSnapshot.stores) ||
+        !Object.hasOwn(fullSnapshot.stores, 'instructions')) {
+      throw journalError('invalid_reclamation_instruction_resume');
+    }
+    const raw = fullSnapshot.stores.instructions;
+    const grantBytes = raw?.migrationAllowance?.maxExtraBytes ?? 0;
+    const normalized = measure(raw, checkedCapacityAdd(backend.normalByteLimit, grantBytes));
+    await backend.prepareResume(fullSnapshot);
+    currentJournal = normalized;
+    lastCommittedRevision = normalized.revision;
+    hasLoaded = true;
+    prepared = true;
+    accepting = true;
+    writeBlocked = false;
+  }
+
+  function close() {
+    if (closePromise) return closePromise;
+    accepting = false;
+    closePromise = tail.then(() => { closed = true; });
+    return closePromise;
+  }
+
+  const reclamationWriter = Object.freeze({
+    stop: () => { accepting = false; },
+    drain: () => tail,
+    prepareResume,
+  });
+
+  function assertCapacityReserved(value) {
+    const normalized = normalizeInstructionJournalV2Local(value, maxRecords);
+    const limitBytes = checkedCapacityAdd(maxBytes, normalized.migrationAllowance?.maxExtraBytes ?? 0);
+    const reservedBytes = measureInstructionReservation({ snapshot: normalized, currentByteLimit: maxBytes }).reservedBytes;
+    if (reservedBytes > limitBytes) throw journalError('instruction_journal_capacity_reserved');
+    return reservedBytes;
+  }
+
+  return Object.freeze({
+    filePath: null,
+    maxBytes,
+    maxRecords,
+    canWrite: () => backend.canWrite() === true,
+    load,
+    save,
+    flush,
+    close,
+    assertCapacityReserved,
+    reclamationWriter,
+  });
+}
+
 module.exports = {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_RECORDS,
   appendInstructionIntent,
+  appendInstructionIntentV2,
   createEmptyJournal,
   createInstructionDeliveryJournal,
   normalizeInstructionRecord,
   normalizeJournal,
   sourceProjectionFromDelivery,
   sourceProjectionFromLaunch,
+  updateInstructionCreationStateV2,
 };

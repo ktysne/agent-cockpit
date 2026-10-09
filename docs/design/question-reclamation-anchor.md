@@ -4,8 +4,8 @@
 
 この文書は[容量回収計画](codex-capacity-reclamation.md)で定める保存契約である。
 局所codec、旧sourceの純粋な投影、store間照合と容量計算の入口を実装している。
-独立した保存層と移行coordinatorをテスト用compositionへ追加する。
-質問serviceと通常writerの新形式対応、native factoryと通常起動への接続は後続の範囲である。
+独立した保存層と移行coordinatorをテスト用compositionへ追加し、明示的な依存注入で質問serviceと通常writerを新形式へ接続する。
+native factoryと通常起動への接続は後続の範囲である。
 質問の永久失効を通常の journal と別の永続アンカーに保存する。
 アンカーは本文回収後も残し、質問に限った拒否の根拠とする。
 registry の execution を終了させず、通常指示の認可と runtime の稼働状態は変えない。
@@ -26,10 +26,13 @@ Local投影はgrantの発行資格やwriterの再開を判定しない。
 `inspectReclamationMigrationSnapshot` は固定slot順のtarget prefixとsource suffixを照合し、sourceから未設置targetを再構成する。
 active manifestはcompletedでも`reconciliation-required`を返し、manifest削除前の稼働を許可しない。
 `validateReclamationTransition` は前後snapshotを比較し、準備記録、操作ID、退役質問の状態、grantの不変条件を検査する。
+`validateReclamationStoreWrite`は稼働中のstore更新を原形で照合し、creatingや合法なcacheの遅れを冷起動の修復候補へ置き換えない。
+期間退役の入力とアンカー更新には対象だけを検査する専用入口を使い、対象外のinstruction journalを修復しない。
 ここでの`ready`はschemaと相関の整合を表し、保存済みであることやwriterを再開できることは表さない。
 
 各入口は時刻、UUID、source bytes、通常byte上限を呼び出し元から受け取り、時計、乱数、ファイル保存、registry、runtimeを呼ばない。
-既存reader、writer、service、標準起動には接続していない。
+これらの純粋な検証入口は、新形式を明示したservice compositionからも使用する。
+既存readerとwriterの既定形式、標準起動は変更しない。
 
 ## 保存層と移行coordinator
 
@@ -60,17 +63,66 @@ manifestをnullにする前にも、アンカー全体の一致と全targetの�
 manifestのtarget sizeは読取り前に固定C+H上界を検査し、未検証のサイズを読取上限に使わない。
 completed後は旧phaseとpost上界をともに満たす予約を先に確保し、nullの保存成功と再読取を確認してからpost予約へ縮小する。
 各writerの再開準備には検証済みの全snapshotを個別に複製して渡し、全準備の成功後に共有gateを開く。
-このgateはwriter全体の停止状態を表し、件数枠と通常予約に基づく新規質問の受付許可は後続のguardで検査する。
+このgateはwriter全体の停止状態を表し、件数枠と通常予約に基づく新規質問の受付許可はservice側のguardで検査する。
 
 I/O、指紋、容量確保、停止、再開準備の失敗ではgateを閉じたままにする。
 rename後の例外と再読取の失敗は保存結果不明として扱い、同じinstanceのstartを再試行に使わない。
 明示的なcloseで未完了I/Oとdrainを待ち、保存先所有とleaseを解放してから、新instanceで固定保存状態を検査する。
-既存の通常アンカーで相関の再照合が必要な状態は、PR2では通常退役の修復処理を行わず、writerを止めて診断する。
+移行coordinator単体は、通常アンカーで再照合が必要な状態を修復せず、writerを止めて診断する。
+以下のservice contextが、通常アンカーに対する許可済みの冷起動修復を先に行う。
 
 全slot未作成時の初期化は、dataを固定順に作成してから通常アンカーを最後に保存する。
 部分作成後に停止した新schemaとアンカー欠落の組は、初回作成と読み替えず自動復旧を拒否する。
 保存済みファイルを削除したり、必須slotへ空schemaを補って再開したりしない。
 この制限を含む保存境界のfixtureは[適合試験](provider-conformance-testing.md#旧保存形式の移行と容量予約)で定める。
+
+## 新形式のservice接続と期間gate
+
+`reclamation-service-context.js`が保存層、容量leaseと質問期間gateを共有する。
+serviceとwriterは`reclamation: { backend, periodGate }`を明示した場合だけ新形式を使用する。
+新形式の保存先を旧readerやwriterで開き直すfallbackは持たない。
+contextは全writerをstopして受理済みのローカル処理をdrainし、保存状態を検査してから再開準備を行う。
+公開操作はqueue追加前と実行時にbackendの共通稼働gateを検査し、全writerの準備が済むまでは拒否する。
+再開準備はqueueやreadyを待たず検証済みsnapshotを直接設置する。
+外部native sinkのPromise完了はdrainの対象に含めず、送信開始済みで結果が不明な記録はunknownを保持する。
+
+質問期間gateのkeyは完全identityとperiod IDである。
+actor、generation、launchの変更だけでは失効した期間を再開しない。
+質問操作はqueue投入前にtokenを取得し、queue実行時、保存直前、native sink直前に同じtokenを検査する。
+共有I/O queueで待った保存にも同じtoken検査を渡し、保存層のAPIを呼ぶ直前に同期で再検査する。
+保存開始前の失効は無副作用で拒否し、開始済みのatomic I/Oを物理的に取り消す保証は持たない。
+失効開始後に新しいtokenを取り直して先行操作を通すことは認めない。
+独立reservationと墓標の拒否は、質問詳細の検索や状態検査より先に行う。
+
+live退役はgateを同期で閉じ、質問queue、checkpoint queueの順に対象期間の操作を直列化する。
+ロック中は公開queueへ再入せず、専用accessでsnapshotを検査して直接保存する。
+アンカーの失効保存と再読取を先に行い、対象質問のcheckpoint、質問journalの順に同じ失効時刻を保存する。
+claimedはavailableへ、sendingとacceptedはunknownへ移し、attempt、digest、相関と取消状態を保持する。
+対象外の質問と通常指示、PR通知は変更せず、instruction journalのcreating復旧をlive退役へ混ぜない。
+checkpointの保存結果が不明なら共通writerを停止し、後着通知で質問の送信権限を復活させない。
+
+冷起動では保存済み質問の全期間を方式Aで失効させる。
+既存の失効時刻を保持し、局所形式とstore間照合が許可する修復候補だけを保存する。
+正常アンカーの修復と途中移行は分け、途中移行のoperation ID、時刻、grantを再発行しない。
+修復と移行は同じleaseをresizeして使い、追加容量を二重に予約しない。
+
+質問journalの配信作成段階とcacheは質問serviceが更新する。
+intentをnot_createdで保存し、creatingを保存してからcheckpointを作成する。
+成功したcheckpointの完全相関を確認してcheckpointedとcacheを保存する。
+checkpointだけが先へ進んだ合法なcacheの遅れは許容し、serviceの観測時、冷起動または退役時に照合する。
+creatingで停止し、対応checkpointが無い場合はindeterminateとして新作成を拒否する。
+creatingを保存した後の認可・容量拒否も、未完了の作成が無いことを証明する契約が無ければ同じattemptを再作成しない。
+contextが書込み可能でgetがnullという観測だけでは、注入adapterの非同期作成が終了したことを証明できない。
+完全相関が一致する保存済みcheckpointを確認できる場合は、単調遷移でcheckpointedへ進める。
+副作用前の拒否と全creatorの完了を証明する再試行契約は、native factoryと復旧の統合で別途設計する。
+通常指示も自身のserviceが作成段階を保存し、checkpoint writerから別journalを書き換えない。
+
+新規ID、registration、aliasの受付は全candidateの将来予約が通常上限B以内であることを要求する。
+新しい質問期間を受け付ける前に、全reservationの期間を失効記録へ移す将来量もアンカーの通常枠へ予約する。
+既存の対象記録の遷移だけに固定grant Gを使用し、既存のreservationと墓標を欠落させたりIDを再利用したりしない。
+件数上限には本文のある記録と墓標をともに数える。
+terminalAtは初めて確定終端になるcheckpoint保存で固定し、後着通知や再起動で更新しない。
+この接続は自動回収、本文削除、grant削除を実行しない。
 
 ## アンカーの形式
 
@@ -171,6 +223,8 @@ gateは対象の完全identityとperiod IDごとに `active`、`retiring`、`ret
 通常退役の正規化と途中復旧は[質問schema](common-question-reclamation-schema.md)に従い、claimedをavailable、sending/acceptedをunknownへ変更する。
 対象質問のattempt、digest、相関、cancel要求を保持し、他kindの状態を変更しない。
 gateの世代を捕捉済みの操作は再取得せず、最終sinkの世代検査を守って完了させる。再取得が必要な操作は副作用なしで即時拒否し、queue待機中に無条件で実行しない。
+退役開始後の検証失敗も共有contextを停止し、通常指示とPR通知を含む全writerを再起動まで閉じる。
+保存前の失敗であっても、process内のretiring状態を解除して同じ期間を再開する経路は設けない。
 送信操作はgateの世代番号を捕捉し、最終sinkを呼ぶ直前にも同期で再検査する。
 再検査からsinkの呼び出しまで `await` を挟まない。
 既にsinkを呼んだ配信を取り消せた扱いにはせず、結果不明ならunknownのまま保持する。
