@@ -465,6 +465,19 @@ Claude R1の論理墓標oracleの指摘を修正し、R2でblockerと要修正0�
 最終試験補強`2e05f46`で関連12件が成功した。製品コードは全体検証した`3937095`から変わっていない。
 件数枠解放、実保存の縮小、移行容量とメモリー節約は未実施として扱う。
 
+## 単体recordの相関検査とbyte上界
+
+`codex/question-capsule-record-bounds-209-20261010`は#332の収束head `ad9dc5e`を起点とする。
+既存のrecord単位normalizer、質問とgraveの相関、隔離後と終端後の保持期限を使う限定入口を追加した。
+配信なしの未選択と選択済みnone、indeterminateを保ち、null入力を全checkpointからの不存在の証明にはしない。
+既存snapshotの検査経路は置き換えず、保存schemaとruntimeの形式は変更しない。
+両providerの関連pair試験12件とbyte上界試験6件が成功した。
+単体recordの最大長候補は、2-space pretty JSONでClaudeのQ 44,566 byte、CP 109,624 byte、CodexのQ 44,564 byte、CP 109,620 byteだった。
+測定したQとCPは別々の単体入力であり、同じpairの合法性を測定値から推論しない。
+全nullable branchを含む保守的な構造上界はQ 90,224 byte、CP 161,394 byteで、正式capsuleのwrapperや辞書を含む上界ではない。
+Astraの読取監査でsourceの必須修正はなく、全体試験と指定Claudeクロスレビューは未完了である。
+後続は固定の件数とbyte上限を持つ単体Q/CP capsule codecとpair検査で、保存接続と件数枠解放はさらに別のgateとする。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

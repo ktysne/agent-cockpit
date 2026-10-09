@@ -11,6 +11,7 @@ const {
 } = require('./reclamation-codec-primitives');
 const {
   normalizeQuestionJournalV2Local,
+  normalizeQuestionReservation,
   questionCommonKeyDigest,
   questionRecordDigest,
 } = require('./common-question-reclamation-codec');
@@ -19,9 +20,11 @@ const {
 } = require('./question-reclamation-anchor-codec');
 const {
   normalizeCheckpointV3Local,
+  normalizeDeliveryRecordV2Local,
   normalizeInstructionJournalV2Local,
 } = require('./delivery-reclamation-codec');
 const { decodeSourceBytes, encodeNormalized } = require('./reclamation-json-codec');
+const { assertPlainDataTree: assertReclaimedQuestionPairData } = require('./reclamation-plain-data');
 const {
   canClearMigrationAllowance,
   FIXED_H_BOUNDS,
@@ -469,6 +472,30 @@ function validateQuestionGrave(reservation, delivery, code) {
   const normalized = validateQuestionDelivery(reservation, delivery, code);
   requireValue(normalized.sourceClaimsDigest === normalized.targetClaimsDigest, code);
   return normalized;
+}
+
+/** anchorやstore全体を照合せず、回収済み予約と配信墓標の一組を検査する。 */
+function normalizeReclaimedQuestionPair(value) {
+  assertReclaimedQuestionPairData(value, INVALID_SNAPSHOT, 3);
+  const input = captureRecord(value, ['reservation', 'delivery'], INVALID_SNAPSHOT);
+  const reservation = normalizeQuestionReservation(input.reservation);
+  const delivery = input.delivery === null ? null : normalizeDeliveryRecordV2Local(input.delivery);
+  requireValue(reservation.bodyState === 'reclaimed' && reservation.quarantinedAt !== null &&
+    reservation.reclamation !== null, INVALID_SNAPSHOT);
+
+  if (delivery === null) {
+    const expectedPresence = reservation.deliveryCreationState === 'not_created' ? 'none'
+      : reservation.deliveryCreationState === 'indeterminate' ? 'indeterminate' : null;
+    requireValue(reservation.reclamation.deliveryPresence === expectedPresence, INVALID_SNAPSHOT);
+    validateQuestionPreparationWithoutDelivery(reservation, INVALID_SNAPSHOT);
+  } else {
+    requireValue(reservation.deliveryCreationState === 'checkpointed' &&
+      reservation.reclamation.deliveryPresence === 'checkpoint', INVALID_SNAPSHOT);
+    validateQuestionGrave(reservation, delivery, INVALID_SNAPSHOT);
+    validateQuestionPreparation(reservation, delivery, INVALID_SNAPSHOT);
+  }
+
+  return makeRecord([['reservation', reservation], ['delivery', delivery]]);
 }
 
 function validateInstructionDelivery(instruction, delivery, code) {
@@ -1697,6 +1724,7 @@ function validateStoreTransition(previous, next, code) {
 
 module.exports = {
   inspectReclamationMigrationSnapshot,
+  normalizeReclaimedQuestionPair,
   validateQuestionPeriodRetirementInputs,
   validateQuestionPeriodRetirementAnchorTransition,
   validateReclamationSnapshot,
