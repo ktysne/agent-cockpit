@@ -27,8 +27,9 @@ main の PR #305（別のリポジトリで作った PR の登録）は、作業
 
 作業開始時の GitHub 照合では、Codex 対応 Issue の状態は対応表と一致し、open PR は 0 件だった（2026-10-09）。現在の作業 PR は以下の対応順序表で追跡する。
 
-同期 PR のレビューと並行して、#209 段階 2 の 1b（質問 codec）の独立した検証モジュールを実装する。
-同期 PR のレビュー後は、その PR の head を起点に #209 段階 2 の 1b（質問 codec）を積める。
+同期 PR の head を起点に、#209 段階 2 の 1b（質問 codec）の独立した検証モジュールと fixture を実装した。
+関連テスト39件と全体テスト1,997件は成功した。[PR #319](https://github.com/ktysne/agent-cockpit/pull/319) は Claude のクロスレビューで blocker・要修正がなく、1往復で収束した。
+マージ順は #318、#319 で、取り込みは開発者が行う。次は #209 段階2の1c（配信 codec）へ着手できる。
 
 ## 全体の流れ
 
@@ -61,7 +62,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a) | 1b 質問 codec、1c 配信 codec、1d store 間照合、段階 3 の自動回収の接続 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b) | 1b のマージ、1c 配信 codec、1d store 間照合、段階 3 の自動回収の接続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -102,7 +103,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 |---:|---|---|---|---|
 | 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | [#309](https://github.com/ktysne/agent-cockpit/pull/309)、base: feature | マージ済み（2026-10-09、merge SHA `3c4fee8`） |
 | 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | `codex/sync-main-305-20261009` で `origin/main` (`8a0314c`) を通常 merge し、差分を反映。競合解消と関連テスト347件、監査修正後の107件は成功。Claude レビューは1往復で収束し、開発者のマージ待ち（2026-10-09） |
-| 3 | #209 段階 2 の 1b | 質問 codec | 未作成、#318 の head を起点に積む | 独立 codec と fixture の実装は完了し、PR 作成前。完了条件は [容量回収計画](../design/codex-capacity-reclamation.md) |
+| 3 | #209 段階 2 の 1b | 質問 codec | [#319](https://github.com/ktysne/agent-cockpit/pull/319)、base: `codex/sync-main-305-20261009` | 独立 codec と fixture の実装は完了し、Claude レビューは1往復で収束。関連39件・全体1,997件成功。開発者のマージ待ち。外部 store 照合と容量条件は1dへ残す（2026-10-09） |
 | 4 | #209 段階 2 の 1c | 配信 codec | 未作成、1b の上 | 未着手 |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | 未作成、1c の上 | 未着手 |
 | 6 | #209 段階 3 | 自動回収の接続 | 未作成 | 未着手。独立墓標と移行の検証を終えた後 |

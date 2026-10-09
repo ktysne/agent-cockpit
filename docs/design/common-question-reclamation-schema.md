@@ -2,7 +2,21 @@
 
 この文書は[容量回収計画](codex-capacity-reclamation.md)の段階1における質問 journal の保存契約である。
 形式移行と世代失効の外側契約は[質問回収アンカー](question-reclamation-anchor.md)、配信 record の保存契約は[配信回収 schema](delivery-reclamation-schema.md)を正本とする。
-以下は実装前の契約であり、実装済み形式やruntime適合の証拠ではない。
+局所 schema の codec は実装済みである。保存処理への接続、形式移行、容量検査、runtime 適合は未確認である。
+
+## 質問 journal v2 の局所 codec
+
+`src/server/common-question-reclamation-codec.js` は、外部 store の照合と保存操作を行わない独立した入口である。
+`normalizeQuestionJournalV2Local` は journal と grant の局所構造、detail と reservation の対応、重複 ID と共通 key を検査する。
+`normalizeQuestionDetailV2` と `normalizeQuestionReservation` は単体の構造を検査する。
+`questionRecordDigest` と `questionCommonKeyDigest` は以下の正規化順序で compact JSON の digest を返し、`encodeQuestionJournalV2Local` は pretty JSON と末尾 LF の UTF-8 bytes、byte 数、ファイル指紋を返す。
+入力の getter と toJSON、継承された toJSON、暗黙の文字列変換は実行しない。
+
+Local 入口の成功は、アンカー・checkpoint・旧 source との照合、追加枠の発行資格、固定 `H_questions`、予約 byte の検証を意味しない。
+これらの検証と旧形式の投影は 1d へ残す。
+回収準備の checkpointState はこの文書の構造契約である 8 state を受け付け、退役後に到達可能な状態は外部照合で制限する。
+過去の snapshot に対する操作 ID や相関の不変性、7 日保持の経過、回収可否もこの単体 codec では判定しない。
+既存 reader、writer、service、標準起動からこの入口は呼ばない。
 
 ## 現行形式と上限
 
