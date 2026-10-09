@@ -362,6 +362,33 @@ test('prepared and reclaimed snapshots preserve delivery presence, quarantine ti
   };
   assert.equal(normalizeQuestionJournalV2Local(journal([], [reclaimed])).questions.length, 0);
 
+  assert.throws(() => normalizeQuestionReservation({ ...reclaimed, reclamation: null }));
+  assert.throws(() => normalizeQuestionReservation({ ...checkpoint.reservation, reclaimedAt: 5_010 }));
+  assert.throws(() => normalizeQuestionReservation({ ...checkpoint.reservation, quarantinedAt: null }));
+
+  const creatingDetail = toV2(selected, { deliveryCreationState: 'creating', quarantinedAt: 5_000 });
+  const creatingReservation = reservationFor(creatingDetail);
+  for (const [deliveryPresence, reclamationCheckpointState] of [
+    ['none', null],
+    ['indeterminate', 'unknown'],
+    ['checkpoint', 'available'],
+  ]) {
+    assert.throws(() => normalizeQuestionReservation({
+      ...creatingReservation,
+      reclamation: {
+        operationId: OPERATION_ID,
+        preparedAt: 5_010,
+        deliveryPresence,
+        checkpointState: reclamationCheckpointState,
+      },
+    }));
+  }
+
+  assert.throws(() => normalizeQuestionReservation({
+    ...checkpoint.reservation,
+    reclamation: { ...checkpoint.reservation.reclamation, checkpointState: 'accepted' },
+  }));
+
   assert.throws(() => normalizeQuestionJournalV2Local(journal([], [{ ...reclaimed, reclaimedAt: 5_009 }])));
   assert.throws(() => normalizeQuestionJournalV2Local(journal([checkpoint.detail], [reclaimed])));
   assert.throws(() => normalizeQuestionJournalV2Local(journal([checkpoint.detail], [

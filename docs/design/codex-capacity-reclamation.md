@@ -149,7 +149,7 @@ fixture の合格を実 runtime の適合確認と区別する。
 | 順序 | 範囲 | 完了条件 |
 |---|---|---|
 | 1a | strict helper、UTF-8 byteと指紋、容量算術 | getter、未知field、疎配列、不正UTF-8、escape、整数overflowを確認。既存readerとwriterへ接続しない |
-| 1b | 質問journal v2とreservationのcodec | 独立 codec と fixture を実装済み。detail、墓標、準備の正確なfield集合と局所不変条件を確認。保存接続と外部照合は1d以降 |
+| 1b | 質問journal v2とreservationのcodec | detail、墓標、準備の正確なfield集合と局所不変条件を確認。保存接続と外部照合は1d以降 |
 | 1c | ledger v2、checkpoint v3、instruction journal v2のcodec | variant、終端時刻、指示準備、本文なし形式を確認 |
 | 1d | アンカーcodec、store間照合、旧形式の投影、grantと固定H/T | 保存境界、不正相関、最大容量のpure fixtureと解析的上界を確認 |
 
