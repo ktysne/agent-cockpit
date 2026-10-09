@@ -134,6 +134,9 @@ fixtureの予約状態不明を実OSの容量喪失や実runtimeの故障へ読�
 このcold復旧を含む最終12件も成功し、全grantの保持、追加native送信なし、診断読取後と2回目のfresh起動後のbytes安定を確認した。
 低層の不正candidate試験は、公開操作で片方のworldだけが不正になる再現例を示すものではない。
 
+実装head `cf6e991`の全体`npm test`は2,481件成功、1件skip、失敗0件（全2,482件、exit0）だった。
+skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。
+
 注入したrename故障とfake native processの試験であり、実OS由来の故障や実vendor送信の証拠にはしない。
 自動回収、件数枠の解放、標準起動と設定画面への接続は後続である。
 
