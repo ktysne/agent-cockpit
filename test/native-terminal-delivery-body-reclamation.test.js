@@ -340,6 +340,8 @@ test('applied墓標は固定相関補完だけを許し、終端墓標は再作�
         assert.equal((await harness.reclaim(recreationScenario.delivery.deliveryAttemptId)).status, 'deferred');
         harness.setNow(cancelled.terminalAt + TERMINAL_RETENTION_MS);
         assert.equal((await harness.reclaim(recreationScenario.delivery.deliveryAttemptId)).status, 'complete');
+        assert.equal((await recreationScenario.adapter.get(recreationScenario.delivery.deliveryAttemptId)).recordType,
+          'reclaimed');
         const bytesWithTombstone = await harness.checkpointBytes();
         await assert.rejects(recreationScenario.adapter.createResultDelivery({
           ...deliveryInput(recreationScenario.targetLaunch.launchRef, `duplicate-${provider}-${kind}`),
@@ -381,6 +383,14 @@ test('applied墓標は固定相関補完だけを許し、終端墓標は再作�
       await assert.rejects(harness.deliveryAdapter(otherProvider(provider))
         .recordAccepted(scenario.delivery.deliveryAttemptId, appliedCorrelation), { code: 'provider_mismatch' });
       assert.deepEqual(await harness.checkpointBytes(), stableBytes);
+      if (kind === 'result') {
+        await assert.rejects(adapter.createResultDelivery({
+          ...deliveryInput(scenario.targetLaunch.launchRef, `${provider}-${kind}-cold-duplicate`),
+          logicalMessageId: scenario.delivery.logicalMessageId,
+          revision: scenario.delivery.revision,
+        }), { code: 'provider_mismatch' });
+        assert.deepEqual(await harness.checkpointBytes(), stableBytes);
+      }
 
       let sinkCalls = 0;
       await assert.rejects(adapter.sendStart(scenario.delivery.deliveryAttemptId, () => { sinkCalls += 1; }),
