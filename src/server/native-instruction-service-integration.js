@@ -936,11 +936,18 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation'));
     return reclamationContext.reclaimInstructionBody({ ...request, instructionService: service, deliveryStore: store });
   }
+  function reclaimTerminalDeliveryBody(value) {
+    if (reclamationContext === null) throw integrationError('reclamation_unavailable');
+    if (closing) throw integrationError('native_instruction_integration_closed');
+    const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_terminal_delivery_body_reclamation'));
+    return reclamationContext.reclaimTerminalDeliveryBody({ ...request, deliveryStore: store });
+  }
   const reclamation = reclamationContext === null ? null : Object.freeze({
     status: () => reclamationContext.status(),
     retireQuestionPeriod,
     reclaimQuestionBodies,
     reclaimInstructionBody,
+    reclaimTerminalDeliveryBody,
   });
   return Object.freeze({
     native,

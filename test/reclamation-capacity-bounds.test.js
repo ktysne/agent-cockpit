@@ -31,6 +31,7 @@ const {
 } = require('../src/server/delivery-reclamation-codec');
 const { encodeNormalized } = require('../src/server/reclamation-json-codec');
 const { projectInstructionDeliveryReferences } = require('../src/server/instruction-reclamation-correlation');
+const { projectNormalizedDeliveryReferences } = require('../src/server/reclamation-delivery-references');
 const {
   FIXED_ANCHOR_MIGRATION_BOUNDS,
   FIXED_H_BOUNDS,
@@ -358,6 +359,227 @@ function instructionGraveFromDetail(detail) {
       reason: 'terminal_retention',
     },
   });
+}
+
+function terminalDeliveryDetail(kind, acceptedKind) {
+  const sourceBytesValue = sourceBytes(legacyAppliedCheckpoint(acceptedKind));
+  const projection = projectLegacyCheckpointV2Local({
+    sourceBytes: sourceBytesValue,
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowance: null,
+  });
+  const current = projection.snapshot.ledger.deliveries[0];
+  const targetLaunch = kind === 'pr-notification'
+    ? {
+        launchRef: 'target-launch-ref',
+        claims: {
+          launchId: 'target-launch-id', runId: 'target-run-id', attemptId: 'target-attempt-id',
+          provider: 'codex', nativeIdKind: 'thread', hostId: 'target-host', homeScopeId: 'target-home',
+          origin: 'standalone', purpose: 'agent', originBinding: null,
+        },
+        identity: {
+          provider: 'codex', nativeIdKind: 'thread', hostId: 'target-host',
+          homeScopeId: 'target-home', nativeId: 'target-native',
+        },
+        executionBinding: { periodId: 'target-period', actor: { kind: 'agent', id: 'target-actor' } },
+        conversationId: 'target-conversation',
+        sessionId: 'target-session',
+      }
+    : null;
+  const ownerLaunch = kind === 'result'
+    ? {
+        launchRef: 'owner-launch-ref',
+        claims: {
+          launchId: 'owner-launch-id', runId: 'owner-run-id', attemptId: 'owner-attempt-id',
+          provider: 'codex', nativeIdKind: 'thread', hostId: 'owner-host', homeScopeId: 'owner-home',
+          origin: 'standalone', purpose: 'agent', originBinding: null,
+        },
+        identity: {
+          provider: 'codex', nativeIdKind: 'thread', hostId: 'owner-host',
+          homeScopeId: 'owner-home', nativeId: 'owner-native',
+        },
+        executionBinding: { periodId: 'owner-period', actor: { kind: 'agent', id: 'owner-actor' } },
+        conversationId: 'owner-conversation',
+        sessionId: 'owner-session',
+      }
+    : null;
+  const target = kind === 'question' || kind === 'instruction'
+    ? current.target
+    : ownerLaunch !== null
+      ? {
+        kind: 'owner', launchRef: null, claims: null,
+        identity: ownerLaunch.identity,
+        periodId: ownerLaunch.executionBinding.periodId,
+        actor: ownerLaunch.executionBinding.actor,
+        conversationId: ownerLaunch.conversationId,
+        sessionId: ownerLaunch.sessionId,
+      }
+      : targetLaunch === null
+      ? {
+        kind: 'owner', launchRef: null, claims: null,
+        identity: current.source.identity,
+        periodId: current.source.executionBinding.periodId,
+        actor: current.source.executionBinding.actor,
+        conversationId: current.source.conversationId,
+        sessionId: current.source.sessionId,
+      }
+      : {
+        kind: 'execution',
+        launchRef: targetLaunch.launchRef,
+        claims: targetLaunch.claims,
+        identity: targetLaunch.identity,
+        periodId: targetLaunch.executionBinding.periodId,
+        actor: targetLaunch.executionBinding.actor,
+        conversationId: targetLaunch.conversationId,
+        sessionId: targetLaunch.sessionId,
+      };
+  const appliedCorrelation = { ...current.appliedCorrelation, targetPeriodId: target.periodId };
+  const acceptedCorrelation = acceptedKind === 'none' ? null
+    : acceptedKind === 'partial'
+      ? { ...appliedCorrelation, nativeItemId: null }
+      : appliedCorrelation;
+  const detail = normalizeDeliveryRecordV2Local({
+    ...current,
+    kind,
+    target,
+    ownerGeneration: kind === 'result' ? 5 : null,
+    acceptedCorrelation,
+    appliedCorrelation,
+  });
+  return { detail, targetLaunch, ownerLaunch };
+}
+
+function terminalGraveFromDetail(detail, reclaimedAt = detail.terminalAt + TERMINAL_RETENTION_MS,
+    reason = 'terminal_retention') {
+  const refs = projectNormalizedDeliveryReferences(detail);
+  return normalizeDeliveryRecordV2Local({
+    recordType: 'reclaimed',
+    deliveryAttemptId: detail.deliveryAttemptId,
+    kind: detail.kind,
+    logicalMessageId: detail.logicalMessageId,
+    revision: detail.revision,
+    sourceExecutionId: detail.sourceExecutionId,
+    payloadDigest: detail.payloadDigest,
+    state: detail.state,
+    terminalAt: detail.terminalAt,
+    cancelRequested: detail.cancelRequested,
+    ownerGeneration: detail.ownerGeneration,
+    acceptedCorrelation: detail.acceptedCorrelation,
+    appliedCorrelation: detail.appliedCorrelation,
+    sourceRef: refs.sourceRef,
+    targetRef: refs.targetRef,
+    reclamation: {
+      operationId: OPERATION_ID,
+      reclaimedAt,
+      reason,
+    },
+  });
+}
+
+function appendRegisteredLaunch(snapshot, launch) {
+  const binding = launch.executionBinding;
+  const scope = {
+    provider: launch.claims.provider,
+    nativeIdKind: launch.claims.nativeIdKind,
+    hostId: launch.claims.hostId,
+    homeScopeId: launch.claims.homeScopeId,
+    connectionSlotId: `slot-${launch.launchRef}`,
+  };
+  const immutableExecutionClaims = {
+    ...launch.claims,
+    identity: launch.identity,
+    executionBinding: binding,
+  };
+  snapshot.registrations.conversations.push({ conversationId: launch.conversationId, identity: launch.identity });
+  snapshot.registrations.executions.push({
+    conversationId: launch.conversationId,
+    executionId: binding.periodId,
+    sessionId: launch.sessionId,
+    state: 'active',
+  });
+  snapshot.registrations.launches.push({
+    launchRef: launch.launchRef,
+    claims: launch.claims,
+    state: 'bound',
+    identity: launch.identity,
+    executionBinding: binding,
+    conversationId: launch.conversationId,
+    sessionId: launch.sessionId,
+  });
+  snapshot.registrations.runtimeLaunches.push({
+    launchRef: launch.launchRef,
+    claims: immutableExecutionClaims,
+    state: 'bound',
+    conversationId: launch.conversationId,
+    sessionId: launch.sessionId,
+    currentOwner: binding,
+    ownerGeneration: 0,
+  });
+  snapshot.registrations.connections.push({ scope, generation: 1, state: 'active' });
+  snapshot.registrations.actors.push({
+    identity: launch.identity,
+    periodId: binding.periodId,
+    actor: binding.actor,
+    contextId: `context-${launch.launchRef}`,
+    launchRef: null,
+    immutableExecutionClaims: null,
+    connectionScope: scope,
+    connectionGeneration: 1,
+    state: 'active',
+  });
+  snapshot.registrations.incompleteConversationIds.push(launch.conversationId);
+}
+
+function terminalDeliverySnapshot(kind, acceptedKind, recordType = 'reclaimed') {
+  const { detail, targetLaunch, ownerLaunch } = terminalDeliveryDetail(kind, acceptedKind);
+  const snapshot = structuredClone(projectLegacyCheckpointV2Local({
+    sourceBytes: sourceBytes(legacyAppliedCheckpoint('none')),
+    storeId: STORE_ID,
+    operationId: OPERATION_ID,
+    startedAt: STARTED_AT,
+    migrationAllowance: null,
+  }).snapshot);
+  const grave = terminalGraveFromDetail(detail, undefined,
+    kind === 'question' ? 'retired_question_period' : 'terminal_retention');
+  const currentRecord = recordType === 'detail' ? detail : grave;
+  const targetKey = targetLaunch === null ? null : [
+    targetLaunch.claims.launchId, targetLaunch.claims.runId, targetLaunch.claims.attemptId,
+  ];
+  const sourceKey = [detail.source.claims.launchId, detail.source.claims.runId, detail.source.claims.attemptId];
+  if (ownerLaunch !== null) {
+    const sourceRuntimeLaunch = snapshot.registrations.runtimeLaunches.find((item) =>
+      item.launchRef === detail.source.launchRef);
+    sourceRuntimeLaunch.currentOwner = ownerLaunch.executionBinding;
+    sourceRuntimeLaunch.ownerGeneration = detail.ownerGeneration;
+  }
+  if (targetLaunch !== null) appendRegisteredLaunch(snapshot, targetLaunch);
+  if (ownerLaunch !== null) appendRegisteredLaunch(snapshot, ownerLaunch);
+  snapshot.revision += 1;
+  snapshot.ledger.revision += 1;
+  snapshot.ledger.deliveries = [currentRecord];
+  snapshot.ledger.logicalTombstones = [{
+    kind,
+    sourceExecutionId: kind === 'pr-notification' ? null : detail.sourceExecutionId,
+    logicalMessageId: detail.logicalMessageId,
+    revision: detail.revision,
+    targetLaunchKey: targetKey,
+    sourceLaunchKey: kind === 'pr-notification' ? null : sourceKey,
+    payloadDigest: detail.payloadDigest,
+  }];
+  snapshot.ledger.notificationTargets = targetLaunch === null ? [] : [{
+    targetId: 'target-id',
+    launch: {
+      launchRef: targetLaunch.launchRef,
+      claims: targetLaunch.claims,
+      identity: targetLaunch.identity,
+      executionBinding: targetLaunch.executionBinding,
+      conversationId: targetLaunch.conversationId,
+      sessionId: targetLaunch.sessionId,
+    },
+  }];
+  return { detail, snapshot: normalizeCheckpointV3Local(snapshot), grave };
 }
 
 function futureAppliedQuestionFromDetail(detail) {
@@ -1233,6 +1455,98 @@ test('applied instruction graves reserve only fixed-ID accepted correlation comp
   });
   assert.ok(grant !== null);
   assert.ok(grant.maxExtraBytes <= FIXED_H_BOUNDS.checkpoint);
+});
+
+test('applied PR notification and result graves reserve only their fixed-ID accepted correlation completion', () => {
+  for (const kind of ['pr-notification', 'result']) {
+    for (const acceptedKind of ['none', 'partial', 'complete']) {
+      const graveFixture = terminalDeliverySnapshot(kind, acceptedKind);
+      const grave = graveFixture.grave;
+      const originalBytes = encodeCheckpointV3Local(graveFixture.snapshot).sizeBytes;
+      const measurement = measureCheckpointReservation({
+        snapshot: graveFixture.snapshot,
+        currentByteLimit: MAX_SOURCE_BYTES,
+      }, OPERATION_ID);
+      const applied = grave.appliedCorrelation;
+      const expectedAccepted = grave.acceptedCorrelation === null
+        ? structuredClone(applied)
+        : {
+          ...grave.acceptedCorrelation,
+          nativeTurnId: grave.acceptedCorrelation.nativeTurnId ?? applied.nativeTurnId,
+          nativeItemId: grave.acceptedCorrelation.nativeItemId ?? applied.nativeItemId,
+        };
+      const expandedGrave = normalizeDeliveryRecordV2Local({
+        ...grave,
+        acceptedCorrelation: expectedAccepted,
+      });
+      const expectedGrowth = Math.max(0,
+        checkpointRecordBytes(expandedGrave) - checkpointRecordBytes(grave));
+      assert.equal(measurement.detailGrowthBytes, expectedGrowth, `${kind}/${acceptedKind}`);
+      assert.equal(measurement.fits, true, `${kind}/${acceptedKind}`);
+      assert.equal(expectedAccepted.nativeTurnId, applied.nativeTurnId);
+      assert.equal(expectedAccepted.nativeItemId, applied.nativeItemId);
+      if (acceptedKind !== 'complete') assert.ok(measurement.detailGrowthBytes > 0, `${kind}/${acceptedKind}`);
+      const currentOnly = measureCheckpointReservation({
+        snapshot: graveFixture.snapshot,
+        deliveryCandidates: [{
+          deliveryAttemptId: grave.deliveryAttemptId,
+          candidates: [{ variant: 'current', record: grave }],
+        }],
+        currentByteLimit: MAX_SOURCE_BYTES,
+      }, OPERATION_ID);
+      assert.equal(currentOnly.detailGrowthBytes, measurement.detailGrowthBytes, `${kind}/${acceptedKind}`);
+      assert.equal(encodeCheckpointV3Local(graveFixture.snapshot).sizeBytes, originalBytes);
+
+      const detailFixture = terminalDeliverySnapshot(kind, acceptedKind, 'detail');
+      const detailMeasurement = measureCheckpointReservation({
+        snapshot: detailFixture.snapshot,
+        currentByteLimit: MAX_SOURCE_BYTES,
+      }, OPERATION_ID);
+      const expandedDetail = normalizeDeliveryRecordV2Local({
+        ...detailFixture.detail,
+        acceptedCorrelation: expectedAccepted,
+      });
+      const futureGrave = terminalGraveFromDetail(expandedDetail, MAX_SAFE_INTEGER);
+      const detailBytes = checkpointRecordBytes(detailFixture.detail);
+      const expectedDetailGrowth = Math.max(
+        checkpointRecordBytes(expandedDetail), checkpointRecordBytes(futureGrave), detailBytes,
+      ) - detailBytes;
+      assert.equal(detailMeasurement.detailGrowthBytes, expectedDetailGrowth, `${kind}/${acceptedKind}`);
+
+      const requiredLimit = measurement.reservedBytes;
+      const tooSmall = measureCheckpointReservation({
+        snapshot: graveFixture.snapshot,
+        currentByteLimit: requiredLimit - 1,
+      }, OPERATION_ID);
+      assert.equal(tooSmall.fits, false, `${kind}/${acceptedKind}`);
+    }
+  }
+
+  for (const kind of ['pr-notification', 'result']) {
+    for (const state of ['cancelled_before_send', 'superseded_before_send']) {
+      const applied = terminalDeliveryDetail(kind, 'none').detail;
+      const terminal = normalizeDeliveryRecordV2Local({
+        ...applied,
+        state,
+        acceptedCorrelation: null,
+        appliedCorrelation: null,
+      });
+      const snapshotFixture = terminalDeliverySnapshot(kind, 'none');
+      const snapshot = structuredClone(snapshotFixture.snapshot);
+      snapshot.ledger.deliveries[0] = terminalGraveFromDetail(terminal);
+      const normalized = normalizeCheckpointV3Local(snapshot);
+      assert.equal(measureCheckpointReservation({
+        snapshot: normalized,
+        currentByteLimit: MAX_SOURCE_BYTES,
+      }, OPERATION_ID).detailGrowthBytes, 0, `${kind}/${state}`);
+    }
+  }
+
+  const question = terminalDeliverySnapshot('question', 'partial');
+  assert.equal(measureCheckpointReservation({
+    snapshot: question.snapshot,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  }, OPERATION_ID).detailGrowthBytes, 0);
 });
 
 test('checkpoint and instruction external candidate rows can increase but never reduce internal reserves', () => {

@@ -26,6 +26,7 @@ const {
   normalizeCheckpointV3Local,
   normalizeDeliveryLedgerV2Local,
 } = require('./delivery-reclamation-codec');
+const { projectNormalizedDeliveryReferences } = require('./reclamation-delivery-references');
 const { projectInstructionDeliveryReferences } = require('./instruction-reclamation-correlation');
 const { checkedCapacityAdd, measureCheckpointReservation } = require('./reclamation-capacity-bounds');
 const {
@@ -52,6 +53,7 @@ const CORRELATION_FIELDS = [
 const STORE_INTERNALS = new WeakMap();
 const QUESTION_RETIREMENT_SCOPE = new AsyncLocalStorage();
 const INSTRUCTION_BODY_SCOPE = new AsyncLocalStorage();
+const TERMINAL_BODY_SCOPE = new AsyncLocalStorage();
 
 function storeError(code) {
   const error = new Error(code);
@@ -326,6 +328,7 @@ function createDurableDeliveryStore(options = {}) {
   let closePromise = null;
   const retirementScopeToken = {};
   const instructionBodyScopeToken = {};
+  const terminalBodyScopeToken = {};
 
   const ready = checkpointStore.load().then((checkpoint) => {
     if (reclamation) {
@@ -342,6 +345,7 @@ function createDurableDeliveryStore(options = {}) {
   });
 
   function enqueue(operation, allowBlocked = false) {
+    if (TERMINAL_BODY_SCOPE.getStore() === terminalBodyScopeToken) return Promise.reject(storeError('terminal_body_access_reentry'));
     if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) {
       return Promise.reject(storeError('instruction_body_access_reentry'));
     }
@@ -880,7 +884,7 @@ function createDurableDeliveryStore(options = {}) {
       assertQuestionTokenForDelivery(id, token);
       const delivery = currentDelivery(id);
       if (!delivery) throw storeError('delivery_not_found');
-      if (delivery.recordType === 'reclaimed' && !(delivery.kind === 'instruction' &&
+      if (delivery.recordType === 'reclaimed' && !(['instruction', 'pr-notification', 'result'].includes(delivery.kind) &&
           delivery.state === 'applied' && ['accepted', 'applied'].includes(operation))) {
         throw storeError('delivery_reclaimed');
       }
@@ -1042,6 +1046,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   function flush() {
+    if (TERMINAL_BODY_SCOPE.getStore() === terminalBodyScopeToken) return Promise.reject(storeError('terminal_body_access_reentry'));
     if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) return Promise.reject(storeError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(storeError('store_closed'));
     if (reclamation && !reclamationPrepared) return Promise.reject(storeError('reclamation_writer_cold'));
@@ -1191,6 +1196,76 @@ function createDurableDeliveryStore(options = {}) {
     });
   }
 
+  function withTerminalDeliveryBodyCheckpoint(value, callback) {
+    if (!reclamation || typeof callback !== 'function') throw storeError('invalid_terminal_delivery_body_reclamation');
+    const request = captureExactRecord(value, ['deliveryAttemptId'], 'invalid_terminal_delivery_body_reclamation');
+    const id = request.deliveryAttemptId;
+    if (!isIdentifier(id)) throw storeError('invalid_terminal_delivery_body_reclamation');
+    return enqueue(async () => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || TERMINAL_BODY_SCOPE.getStore() !== terminalBodyScopeToken) {
+          throw storeError('terminal_delivery_body_access_expired');
+        }
+        if (writerBlocked || !accepting || closePromise || !reclamationPrepared || !reclamation.backend.canWrite()) {
+          throw storeError('reclamation_service_blocked');
+        }
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return structuredClone(currentCheckpoint); },
+        async persist(value) {
+          assertAccess();
+          const candidate = normalizeCheckpointV3Local(value, limits.maxRecords ?? DEFAULT_MAX_RECORDS);
+          const previous = currentCheckpoint;
+          const old = currentDelivery(id);
+          const nextById = new Map(candidate.ledger.deliveries.map((item) => [item.deliveryAttemptId, item]));
+          const next = nextById.get(id);
+          if (!old || !['pr-notification', 'result'].includes(old.kind) || old.recordType !== 'detail' || !next ||
+              next.kind !== old.kind || next.recordType !== 'reclaimed' ||
+              next.reclamation.reason !== 'terminal_retention' || old.state !== next.state ||
+              old.terminalAt !== next.terminalAt || old.payloadDigest !== next.payloadDigest ||
+              old.cancelRequested !== next.cancelRequested ||
+              !jsonEqual(old.acceptedCorrelation, next.acceptedCorrelation) ||
+              !jsonEqual(old.appliedCorrelation, next.appliedCorrelation) ||
+              candidate.storeId !== previous.storeId || candidate.revision !== previous.revision + 1 ||
+              candidate.ledger.revision !== previous.ledger.revision + 1 ||
+              candidate.ledger.deliveries.length !== previous.ledger.deliveries.length ||
+              !jsonEqual(candidate.registrations, previous.registrations) ||
+              !jsonEqual(candidate.migrationAllowance, previous.migrationAllowance) ||
+              !jsonEqual(candidate.ledger.notificationTargets, previous.ledger.notificationTargets) ||
+              !jsonEqual(candidate.ledger.logicalTombstones, previous.ledger.logicalTombstones) ||
+              previous.ledger.deliveries.some((item, index) =>
+                candidate.ledger.deliveries[index].deliveryAttemptId !== item.deliveryAttemptId ||
+                (item.deliveryAttemptId !== id && !jsonEqual(item, candidate.ledger.deliveries[index])))) {
+            throw storeError('invalid_terminal_delivery_body_reclamation_candidate');
+          }
+          const refs = projectNormalizedDeliveryReferences(old);
+          if (old.deliveryAttemptId !== next.deliveryAttemptId || old.logicalMessageId !== next.logicalMessageId ||
+              old.revision !== next.revision || old.sourceExecutionId !== next.sourceExecutionId ||
+              !jsonEqual(old.ownerGeneration, next.ownerGeneration) ||
+              !jsonEqual(next.sourceRef, refs.sourceRef) ||
+              !jsonEqual(next.targetRef, refs.targetRef)) {
+            throw storeError('invalid_terminal_delivery_body_reclamation_candidate');
+          }
+          assertReclamationCheckpointCapacity(candidate, id, true);
+          assertAccess();
+          try {
+            const saved = await checkpointStore.save(candidate, assertAccess);
+            currentCheckpoint = saved;
+            return structuredClone(saved);
+          } catch (error) {
+            if (error.code === 'checkpoint_write_failed' || error.code === 'checkpoint_writer_blocked') {
+              writerBlocked = true;
+            }
+            throw error;
+          }
+        },
+      });
+      try { return await TERMINAL_BODY_SCOPE.run(terminalBodyScopeToken, () => callback(access)); }
+      finally { active = false; }
+    });
+  }
+
   async function withRetiredQuestionCheckpoint(value, callback) {
     if (!reclamation || typeof callback !== 'function') {
       throw storeError('invalid_question_body_reclamation');
@@ -1288,6 +1363,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   function close() {
+    if (TERMINAL_BODY_SCOPE.getStore() === terminalBodyScopeToken) return Promise.reject(storeError('terminal_body_access_reentry'));
     if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) return Promise.reject(storeError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
@@ -1337,6 +1413,7 @@ function createDurableDeliveryStore(options = {}) {
     storeValue.withQuestionRetirement = withQuestionRetirement;
     storeValue.withRetiredQuestionCheckpoint = withRetiredQuestionCheckpoint;
     storeValue.withInstructionBodyCheckpoint = withInstructionBodyCheckpoint;
+    storeValue.withTerminalDeliveryBodyCheckpoint = withTerminalDeliveryBodyCheckpoint;
   }
   const store = Object.freeze(storeValue);
   STORE_INTERNALS.set(store, {

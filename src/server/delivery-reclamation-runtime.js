@@ -152,8 +152,8 @@ function registerReclamationTarget(checkpoint, targetId, executionRecord) {
   return { ledger, target: ledger.notificationTargets.find((target) => target.targetId === targetId), created: true };
 }
 
-function transitionInstructionGrave(checkpoint, current, operation, correlation) {
-  if (current.kind !== 'instruction' || current.state !== 'applied' ||
+function transitionTerminalGrave(checkpoint, current, operation, correlation) {
+  if (!['instruction', 'pr-notification', 'result'].includes(current.kind) || current.state !== 'applied' ||
       !['accepted', 'applied'].includes(operation)) throw runtimeError('delivery_reclaimed');
   const fields = ['deliveryAttemptId', 'revision', 'payloadDigest', 'targetPeriodId',
     'nativeTurnId', 'nativeItemId', 'clientRequestId'];
@@ -190,7 +190,7 @@ function transitionReclamationDelivery(checkpoint, deliveryAttemptId, operation,
   const current = checkpoint.ledger.deliveries.find((record) =>
     record.deliveryAttemptId === deliveryAttemptId);
   if (!current) throw runtimeError('delivery_not_found');
-  if (current.recordType === 'reclaimed') return transitionInstructionGrave(checkpoint, current, operation, correlation);
+  if (current.recordType === 'reclaimed') return transitionTerminalGrave(checkpoint, current, operation, correlation);
   const result = transitionDelivery(legacyLedgerView(checkpoint), deliveryAttemptId, operation, correlation);
   if (!result.changed) return { ledger: checkpoint.ledger, delivery: current, changed: false };
   const terminalAt = current.terminalAt !== null ? current.terminalAt

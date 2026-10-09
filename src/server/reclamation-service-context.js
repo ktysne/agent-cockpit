@@ -44,6 +44,7 @@ const {
 } = require('./reclamation-store-consistency');
 const { planQuestionPeriodRetirement } = require('./question-period-retirement');
 const { planQuestionBodyReclamation } = require('./question-body-reclamation');
+const { planTerminalDeliveryBodyReclamation } = require('./terminal-delivery-body-reclamation');
 const { planInstructionBodyReclamation } = require('./instruction-body-reclamation');
 const { createQuestionPeriodGate } = require('./question-period-gate');
 
@@ -1127,6 +1128,88 @@ function createReclamationServiceContext(value) {
     }
   }
 
+  async function reclaimTerminalDeliveryBody(value) {
+    const captured = captureExactRecord(value, ['deliveryAttemptId', 'deliveryStore'],
+      'invalid_terminal_delivery_body_reclamation');
+    assertIdentifier(captured.deliveryAttemptId, 'invalid_terminal_delivery_body_reclamation');
+    const request = Object.freeze({ deliveryAttemptId: captured.deliveryAttemptId });
+    const store = captured.deliveryStore;
+    if (!store || typeof store.withTerminalDeliveryBodyCheckpoint !== 'function') {
+      throw contextError('invalid_terminal_delivery_body_reclamation');
+    }
+    requireValue(contextCanWrite(), 'reclamation_service_blocked');
+    try {
+      return await store.withTerminalDeliveryBodyCheckpoint(request, async (checkpointAccess) => {
+        const snapshot = () => {
+          requireValue(contextCanWrite() && anchor !== null && anchor.migration === null,
+            'reclamation_service_blocked');
+          const current = currentSnapshot();
+          current.stores.checkpoint = checkpointAccess.snapshot();
+          return current;
+        };
+        const base = snapshot();
+        const record = base.stores.checkpoint.ledger.deliveries.find((item) =>
+          item.deliveryAttemptId === request.deliveryAttemptId);
+        if (!record) throw contextError('delivery_not_found');
+        requireValue(['pr-notification', 'result'].includes(record.kind), 'invalid_terminal_delivery_body_reclamation_kind');
+        if (record.recordType === 'reclaimed') {
+          const completed = planTerminalDeliveryBodyReclamation({ ...base,
+            normalByteLimitsBySlot: limitsForTransitions,
+            deliveryAttemptId: request.deliveryAttemptId, now: record.reclamation.reclaimedAt });
+          requireValue(completed.status === 'complete', 'invalid_terminal_delivery_body_reclamation_plan');
+          return Object.freeze({ status: 'complete', deliveryAttemptId: request.deliveryAttemptId });
+        }
+        const clock = observeClock();
+        if (clock.now === null || !clock.synchronized) {
+          const validation = validateReclamationStoreWrite({ anchor: base.anchor,
+            previousStores: base.stores, nextStores: base.stores, normalByteLimitsBySlot: limitsForTransitions });
+          requireValue(validation.reasons.every((reason) =>
+            ['instruction_creation_state', 'question_creation_state', 'question_checkpoint_cache'].includes(reason)),
+          'invalid_terminal_delivery_body_reclamation_plan');
+          return Object.freeze({ status: 'deferred', deliveryAttemptId: request.deliveryAttemptId });
+        }
+        const planInput = { ...base, normalByteLimitsBySlot: limitsForTransitions,
+          deliveryAttemptId: request.deliveryAttemptId, now: clock.now };
+        let planned = planTerminalDeliveryBodyReclamation(planInput);
+        if (planned.status === 'eligible') {
+          planned = planTerminalDeliveryBodyReclamation({ ...planInput,
+            operationId: input.createOperationId ? input.createOperationId() : randomUUID() });
+        }
+        if (planned.status === 'deferred' || planned.status === 'complete') {
+          return Object.freeze({ status: planned.status, deliveryAttemptId: request.deliveryAttemptId });
+        }
+        requireValue(planned.status === 'planned' && Array.isArray(planned.steps) && planned.steps.length === 1,
+          'invalid_terminal_delivery_body_reclamation_plan');
+        for (const step of planned.steps) {
+          const current = snapshot();
+          requireValue(sameAnchor(current.anchor, step.snapshot.anchor), 'invalid_terminal_delivery_body_reclamation_plan');
+          const slot = step.slot;
+          requireValue(slot === 'checkpoint', 'invalid_terminal_delivery_body_reclamation_plan');
+          const candidate = normalizeStore(slot, step.snapshot.stores[slot]);
+          const nextStores = cloneSnapshot(current.stores);
+          nextStores[slot] = candidate;
+          const transition = validateReclamationStoreWrite({ anchor: current.anchor,
+            previousStores: current.stores, nextStores, normalByteLimitsBySlot: limitsForTransitions });
+          for (const otherSlot of STORE_ORDER) {
+            requireValue(nextStores[otherSlot] === null
+              ? transition.snapshot.stores[otherSlot] === null
+              : sameStore(otherSlot, transition.snapshot.stores[otherSlot], nextStores[otherSlot]),
+            'invalid_terminal_delivery_body_reclamation_plan');
+          }
+          requireValue(transition.reasons.every((reason) =>
+            ['instruction_creation_state', 'question_creation_state', 'question_checkpoint_cache'].includes(reason)),
+          'invalid_terminal_delivery_body_reclamation_plan');
+          const saved = await checkpointAccess.persist(candidate);
+          requireValue(sameStore(slot, candidate, saved), 'reclamation_persistence_readback_mismatch');
+        }
+        return Object.freeze({ status: 'complete', deliveryAttemptId: request.deliveryAttemptId });
+      });
+    } catch (error) {
+      if (!['delivery_not_found', 'invalid_terminal_delivery_body_reclamation_kind'].includes(error.code)) block(error);
+      throw error;
+    }
+  }
+
   function close() {
     if (closePromise !== null) return closePromise;
     closing = true;
@@ -1185,6 +1268,7 @@ function createReclamationServiceContext(value) {
     retireQuestionPeriod,
     reclaimQuestionBodies,
     reclaimInstructionBody,
+    reclaimTerminalDeliveryBody,
     close,
     status,
   });

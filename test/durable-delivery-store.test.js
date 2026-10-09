@@ -14,6 +14,7 @@ const {
   createProviderDeliveryAdapter,
   readNativeRecoverySnapshot,
 } = require('../src/server/durable-delivery-store');
+const { projectNormalizedDeliveryReferences } = require('../src/server/reclamation-delivery-references');
 const { projectInstructionDeliveryReferences } = require('../src/server/instruction-reclamation-correlation');
 
 const INSTRUCTION_BODY_RETENTION_MS = 604_800_000;
@@ -388,6 +389,43 @@ function createInstructionBodyFailureBackend() {
 function reclaimedInstructionCheckpoint(checkpoint, deliveryAttemptId) {
   const current = checkpoint.ledger.deliveries.find((item) => item.deliveryAttemptId === deliveryAttemptId);
   const refs = projectInstructionDeliveryReferences(current.source);
+  const grave = {
+    recordType: 'reclaimed',
+    deliveryAttemptId: current.deliveryAttemptId,
+    kind: current.kind,
+    logicalMessageId: current.logicalMessageId,
+    revision: current.revision,
+    sourceExecutionId: current.sourceExecutionId,
+    payloadDigest: current.payloadDigest,
+    state: current.state,
+    terminalAt: current.terminalAt,
+    cancelRequested: current.cancelRequested,
+    ownerGeneration: current.ownerGeneration,
+    acceptedCorrelation: current.acceptedCorrelation,
+    appliedCorrelation: current.appliedCorrelation,
+    sourceRef: refs.sourceRef,
+    targetRef: refs.targetRef,
+    reclamation: {
+      operationId: '44444444-4444-4444-8444-444444444444',
+      reclaimedAt: current.terminalAt + INSTRUCTION_BODY_RETENTION_MS,
+      reason: 'terminal_retention',
+    },
+  };
+  return {
+    ...checkpoint,
+    revision: checkpoint.revision + 1,
+    ledger: {
+      ...checkpoint.ledger,
+      revision: checkpoint.ledger.revision + 1,
+      deliveries: checkpoint.ledger.deliveries.map((item) =>
+        item.deliveryAttemptId === deliveryAttemptId ? grave : item),
+    },
+  };
+}
+
+function reclaimedTerminalDeliveryCheckpoint(checkpoint, deliveryAttemptId) {
+  const current = checkpoint.ledger.deliveries.find((item) => item.deliveryAttemptId === deliveryAttemptId);
+  const refs = projectNormalizedDeliveryReferences(current);
   const grave = {
     recordType: 'reclaimed',
     deliveryAttemptId: current.deliveryAttemptId,
@@ -1366,3 +1404,86 @@ test('instruction guarded applied commit token is used once after persistence', 
   assert.equal(duplicate.state, 'applied');
   assert.equal(guardCalls, 1);
 });
+
+for (const kind of ['pr-notification', 'result']) {
+  for (const provider of ['claude', 'codex']) {
+    test(`${provider} ${kind} terminal checkpoint scope preserves metadata and limits late correlation`, async (t) => {
+      const fixture = createFixture({ sourceProvider: kind === 'result' ? provider : provider === 'claude' ? 'codex' : 'claude',
+        targetProvider: provider });
+      const persistence = createInstructionBodyFailureBackend();
+      const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+      const store = createDurableDeliveryStore({ ...fixture.dependencies,
+        reclamation: { backend: persistence.backend, periodGate } });
+      t.after(() => store.close());
+      await store.ready;
+      const adapter = createProviderDeliveryAdapter(provider, store);
+      let delivery;
+      if (kind === 'result') delivery = await adapter.createResultDelivery(deliveryInput(fixture.source.launchRef, `${provider}-${kind}`));
+      else {
+        await adapter.registerPrNotificationTarget({ targetId: 'terminal-target', launchRef: fixture.target.launchRef });
+        delivery = await adapter.createPrNotification({ sourceLaunchRef: fixture.source.launchRef, targetId: 'terminal-target',
+          deliveryAttemptId: `${provider}-${kind}`, logicalMessageId: `${provider}-${kind}-logical`, revision: 1, payload: 'body' });
+      }
+      await adapter.sendStart(delivery.deliveryAttemptId, () => {});
+      const correlation = appliedCorrelation(delivery);
+      await adapter.recordApplied(delivery.deliveryAttemptId, correlation);
+      const before = await readNativeRecoverySnapshot(store);
+      let retainedAccess;
+      await store.withTerminalDeliveryBodyCheckpoint({ deliveryAttemptId: delivery.deliveryAttemptId }, async (access) => {
+        retainedAccess = access;
+        await assert.rejects(store.flush(), errorCode('terminal_body_access_reentry'));
+        await assert.rejects(store.close(), errorCode('terminal_body_access_reentry'));
+        await assert.rejects(adapter.cancel(delivery.deliveryAttemptId), errorCode('terminal_body_access_reentry'));
+        const candidate = reclaimedTerminalDeliveryCheckpoint(access.snapshot(), delivery.deliveryAttemptId);
+        const invalid = clone(candidate);
+        invalid.ledger.deliveries.find((item) => item.deliveryAttemptId === delivery.deliveryAttemptId).targetRef.sessionId = 'wrong-session';
+        await assert.rejects(access.persist(invalid), /invalid_delivery_(?:checkpoint_v3|ledger_v2)|invalid_terminal_delivery_body_reclamation_candidate/);
+        await access.persist(candidate);
+      });
+      assert.throws(() => retainedAccess.snapshot(), errorCode('terminal_delivery_body_access_expired'));
+      const grave = await adapter.get(delivery.deliveryAttemptId);
+      assert.equal(grave.recordType, 'reclaimed');
+      if (kind === 'result') {
+        assert.equal(grave.targetRef.launchRef, null);
+        assert.equal(grave.targetRef.launchKey, null);
+        assert.equal(grave.targetRef.targetClaimsDigest, null);
+      }
+      const after = await readNativeRecoverySnapshot(store);
+      assert.deepEqual(after.registrations, before.registrations);
+      assert.deepEqual(after.ledger.notificationTargets, before.ledger.notificationTargets);
+      assert.deepEqual(after.ledger.logicalTombstones, before.ledger.logicalTombstones);
+      const other = createProviderDeliveryAdapter(provider === 'claude' ? 'codex' : 'claude', store);
+      await assert.rejects(other.recordAccepted(delivery.deliveryAttemptId, correlation), errorCode('provider_mismatch'));
+      const writes = persistence.writeCount;
+      const accepted = await adapter.recordAccepted(delivery.deliveryAttemptId, correlation);
+      assert.deepEqual(clone(accepted.acceptedCorrelation), grave.appliedCorrelation);
+      await adapter.recordAccepted(delivery.deliveryAttemptId, correlation);
+      await adapter.recordApplied(delivery.deliveryAttemptId, correlation);
+      assert.equal(persistence.writeCount, writes + 1);
+      await assert.rejects(adapter.recordAccepted(delivery.deliveryAttemptId, { ...correlation, nativeTurnId: 'replacement' }),
+        errorCode('correlation_mismatch'));
+      await assert.rejects(adapter.sendStart(delivery.deliveryAttemptId, () => {}), errorCode('delivery_reclaimed'));
+      await assert.rejects(adapter.rehydratePayload(delivery.deliveryAttemptId, 'body'), errorCode('delivery_reclaimed'));
+    });
+  }
+}
+for (const failureCode of ['checkpoint_write_failed', 'checkpoint_writer_blocked']) {
+  test(`terminal checkpoint ${failureCode} latches the store despite a writable backend`, async (t) => {
+    const fixture = createFixture();
+    const persistence = createInstructionBodyFailureBackend();
+    const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+    const store = createDurableDeliveryStore({ ...fixture.dependencies,
+      reclamation: { backend: persistence.backend, periodGate } });
+    t.after(() => store.close());
+    await store.ready;
+    const adapter = createProviderDeliveryAdapter('claude', store);
+    const delivery = await adapter.createResultDelivery(deliveryInput(fixture.source.launchRef, `terminal-failure-${failureCode}`));
+    await adapter.cancel(delivery.deliveryAttemptId);
+    persistence.failNextWrite(failureCode);
+    await assert.rejects(store.withTerminalDeliveryBodyCheckpoint({ deliveryAttemptId: delivery.deliveryAttemptId }, async (access) => {
+      await access.persist(reclaimedTerminalDeliveryCheckpoint(access.snapshot(), delivery.deliveryAttemptId));
+    }), errorCode(failureCode));
+    assert.equal(persistence.backend.canWrite(), true);
+    await assert.rejects(store.claim(delivery.deliveryAttemptId), errorCode('store_writer_blocked'));
+  });
+}

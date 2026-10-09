@@ -59,9 +59,13 @@ Claudeのクロスレビューは3往復で収束し、PR #325は親ブランチ
 通常指示の確定終端回収は `codex/instruction-body-reclamation-209-20261009` で、PR #325のレビュー済みheadを起点に着手し、マージ済みfeatureの`f64db23`へ同期した。
 3保存境界と準備済み操作の冷起動復旧、墓標への互換相関追記を実装し、既存の観測権限を復活させない条件を確認する。
 関連47件、両providerの実factoryとservice listenerの36件、全体2,366件（head `88ea774`）は成功し、環境依存の1件はskip、失敗0件である。
-[PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとし、Claudeのクロスレビューは3往復で収束した。head `e8d94f3`では、store停止の直接回帰試験を含む32件と、factory関連36件が成功した。製品コードは全体検証済みの`88ea774`から変わっていない。
+[PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとし、Claudeのクロスレビューは3往復で収束し、featureへマージ済みである（merge SHA `598c218`）。head `e8d94f3`では、store停止の直接回帰試験を含む32件と、factory関連36件が成功した。製品コードは全体検証済みの`88ea774`から変わっていない。
 現保存層の全writer停止を維持し、質問単独失敗時の停止範囲の分離は後続に残す。
 個別墓標の件数枠を空ける世代集約は段階4であり、本文回収だけで#209を完了扱いにしない。
+PR通知とresultの確定終端回収は、PR #326のレビュー済みhead `3b93ee4`から`codex/terminal-delivery-body-reclamation-209-20261010`へスタックして着手し、親のマージ後にfeatureの`598c218`へ通常mergeで同期した。
+checkpoint内の本文と拒否情報を1回の保存で墓標へ置き換え、aliasと履歴、保存済みowner、logical tombstone、件数枠とgrantを保持する。
+明示factoryにはresult送信前の`verifyResultOwner`が未接続のため、resultのapplied回収は正規の保存済みcheckpointを使うcold fixtureで検証する。
+送信前owner照合と実vendorへの結果返却は[#180-B](https://github.com/ktysne/agent-cockpit/issues/180)の未接続範囲であり、この回収fixtureを実result送信の成功に数えない。
 
 ### 通常指示の本文回収の確認範囲
 
@@ -80,6 +84,17 @@ Codexのservice合成試験は、native fixtureの実際のACKとitem evidence�
 
 既存adapter観測のtoken照合と終了後失効は、両providerの単体試験8件に含める。
 Windowsの実symlink試験1件は作成権限によりskipで、注入fixtureによる拒否は成功した。
+
+### PR通知とresultの本文回収の確認範囲
+
+期待条件は[配信回収schema](../design/delivery-reclamation-schema.md#pr通知とresultの明示本文回収)のTDB01〜TDB06に置く。
+両providerの実factoryとファイル保存の関連5件は成功し、両kindの3確定終端、期限境界、非終端の延期、12保存故障境界とfresh起動、相関補完と再送拒否を確認した。
+PR通知のappliedはtrusted provider adapterの遷移で作り、resultのappliedと一部の非終端は正規の保存済みcheckpointをcold起動で読み込む。
+resultの実送信、異なるownerへのfactory返却、実runtimeの7日後通知の成功証跡には数えない。
+最終試験差分`ac1b2d4`と同じ試験内容でnative5件が成功した。製品コードは全体検証headから変わっていない。`ac1b2d4`からの最終更新はレビュー結果の文書記録だけである。`logical_conflict`の試験について、resultの再作成はliveの取消済み墓標で`logical_conflict`と保存なしを確認する。このcodeはlogical tombstoneの拒否と共通で、拒否した層は区別しない。cold appliedでは先行するprovider照合の拒否と保存なしを確認し、墓標による拒否へ読み替えない。
+非公開callback accessの再入と寿命はstore単体の試験で確認し、factory facadeへ試験用の保存口を公開しない。
+別ownerと非null grantの保全は、純粋な回収計画・参照投影・容量予約の関連25件で確認した。追加のowner世代試験を含む回収計画5件も成功し、accepted handoffで現在ownerが世代6へ進んだ後も、保存済みresultのownerと世代5を保持する。
+store/runtime関連39件と最終追加store/context7件は成功した。head `f589250`の全体`npm test`は2,389件成功、1件skip、失敗0件である。skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。
 
 ## 全体の流れ
 
@@ -112,7 +127,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収) | 通常指示、PR通知とresultの本文回収、段階3の自動実行と停止範囲の分離、段階4の世代集約 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収) | 段階3のgrant解放・停止範囲分離・自動実行、段階4の世代集約 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -162,7 +177,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)（base: feature） | 質問本文回収はfeatureへ集約済み。通常指示は`f64db23`起点の`codex/instruction-body-reclamation-209-20261009`で実装し、全体2,366件成功、1件skip（head `88ea774`）。head `e8d94f3`のstore32件・factory36件成功、Claudeレビュー3往復で収束。続いてPR通知とresult、自動実行と停止範囲の分離、段階4を進める |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)（base: feature） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327で実装し、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。続いて明示grant解放、質問journal局所停止、自動実行、段階4を進める |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |

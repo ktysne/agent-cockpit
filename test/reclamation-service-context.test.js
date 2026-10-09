@@ -855,3 +855,23 @@ for (const provider of PROVIDERS) {
     }
   }
 }
+
+test('terminal body reclamation captures only data fields and leaves writers available after unknown IDs', async (t) => {
+  const sandbox = await makeSandbox(t);
+  await sandbox.context.start(sandbox.writersBySlot);
+  let getterReads = 0;
+  const malformed = { deliveryStore: { withTerminalDeliveryBodyCheckpoint() {} } };
+  Object.defineProperty(malformed, 'deliveryAttemptId', { enumerable: true, get() { getterReads += 1; return 'unknown'; } });
+  await assert.rejects(sandbox.context.reclaimTerminalDeliveryBody(malformed),
+    /invalid_terminal_delivery_body_reclamation/);
+  assert.equal(getterReads, 0);
+  const before = sandbox.context.snapshot();
+  const store = { withTerminalDeliveryBodyCheckpoint(request, callback) {
+    assert.deepEqual(request, { deliveryAttemptId: 'unknown' });
+    return callback({ snapshot: () => structuredClone(before.stores.checkpoint) });
+  } };
+  await assert.rejects(sandbox.context.reclaimTerminalDeliveryBody({ deliveryAttemptId: 'unknown', deliveryStore: store }),
+    { code: 'delivery_not_found' });
+  assert.equal(sandbox.context.status().canWrite, true);
+  assert.deepEqual(sandbox.context.snapshot(), before);
+});
