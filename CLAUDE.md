@@ -19,7 +19,9 @@ hooks が送るイベントと、メインセッションが MCP ツールで書
 
 - 集約先の `codex/feature-codex-support` は `main` から作成し、本実装と関連するPoCや修正は集約先の最新headから `codex/` で始まる作業ブランチを作る。
 - PRの作成前とレビュー開始時に、実際のhead、base、headの起点をGitとGitHubで確認する。
-- 通常の作業PRは `codex/feature-codex-support` をbaseにする。
+- 通常の作業PRは `codex/feature-codex-support` をbaseにする。mainの変更は同期PRで集約先へ随時取り込む。
+- Codex対応の全体の流れ、現在地、次の作業、判断待ちは [docs/handover/codex-support.md](docs/handover/codex-support.md) が正本である。PRのマージ、Issueのクローズ、開発者の決定のたびに、その資料をその場で更新する。
+- PoCと用済みの引き継ぎ資料は作業ツリーに置かず、固定したコミットの参照だけを同資料の「資料の一覧」に残す。
 - 全作業、統合検証、レビューを終えた後に限り、集約先から `main` への最終PRを作る。
 - mainへ直接pushせず、mergeは既存の開発者確認フローで行う。
 - 現在のダッシュボードがマージできるのはbaseが既定ブランチのPRだけである。この制限を迂回せず、モデルの判断だけでfeature向けPRをマージしない。

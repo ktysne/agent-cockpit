@@ -1,12 +1,11 @@
 # PoC の結果
 
 Claude Code 2.1.284(デスクトップアプリ、Windows)で確かめた。
-再現に使った一式は `poc/` にある。
+再現に使った一式は、コミット 8c701b1 時点の [`poc/`](https://github.com/ktysne/agent-cockpit/tree/8c701b1e8a5718eccff69f84775f21171b6663d0/poc) にある。
+PoC の一式は作業ツリーから削除し、固定したコミットの参照だけを残す。
 
-CodexのフックとMCP識別の検証は[poc-codex-157.md](poc-codex-157.md)に記録する。
-Codexの共有app-server接続の検証は[poc-codex-158.md](poc-codex-158.md)に記録する。
-Codex委譲実行の識別の検証は[poc-codex-159.md](poc-codex-159.md)に記録する。
-Codexの質問回答と実行許可の分離の検証は[poc-codex-160.md](poc-codex-160.md)に記録する。
+Codex 対応の PoC(#157〜#164)の記録は、同じコミットの `docs/poc-codex-157.md` から `docs/poc-codex-164.md` にある。
+一覧は [docs/handover/codex-support.md](handover/codex-support.md) の「資料の一覧」に置く。
 Claudeの検証結果をCodexの実測結果へ読み替えない。
 
 ## 確かめたこと

@@ -206,7 +206,8 @@ runtimeの受付、pipe書込み成功、MCP応答を入力適用の証拠とみ
 
 共有契約モデルでは永続化snapshotを通したhandoff、復旧、競合、遅延イベントの試験を行う。
 
-契約モデルの確認には次のコマンドを使う。
+契約モデルは作業ツリーから削除済みで、コミット 8c701b1 時点の [`poc/codex-cross-contracts/`](https://github.com/ktysne/agent-cockpit/tree/8c701b1e8a5718eccff69f84775f21171b6663d0/poc/codex-cross-contracts) を参照する。
+確認し直すときは、そのコミットを取り出して次のコマンドを使う。
 
 ```text
 node --test --test-isolation=none poc/codex-cross-contracts/contract-model.test.js
