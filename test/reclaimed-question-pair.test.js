@@ -213,7 +213,7 @@ test('pair and logical tombstone guards reject accessors and proxies without run
     enumerable: true,
     get() { getterCalls += 1; return fixture.reservation; },
   });
-  assert.throws(() => normalizeReclaimedQuestionPair(getterInput));
+  assert.throws(() => normalizeReclaimedQuestionPair(getterInput), TypeError);
   assert.equal(getterCalls, 0);
 
   const pairProxyCounter = { count: 0 };
