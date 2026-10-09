@@ -103,6 +103,33 @@ intent の追加による保証は、プロセスクラッシュ後の整合性�
 失効の契機は、方式Aの再起動時に旧質問を隔離する時点、または対象期間の停止と恒久的な切り離しを証拠で確認した時点とする。
 再起動時の隔離では、同じ期間全体の共通質問を失効させる。
 
+### 質問世代の拒否包含の分析
+
+段階4の入口では、整合したanchorと三つのstoreのsnapshotから、失効periodで包含できる質問の拒否と残存する拒否義務を分析する。
+完全identityとperiodを失効集合へ照合し、別provider、host、home、native IDと別periodへ失効を広げない。
+形式移行中のsnapshotや不明な質問の二候補は分析対象にしない。
+既存のcreation状態とcheckpoint cacheの三つの照合理由は許容するが、退役などの修復が必要なsnapshotは拒否する。
+許容した場合も、修復した保存候補ではなく正規化した元のsnapshotを分析する。
+
+同じ共通質問keyの再登録と旧periodの送信と後着更新は、periodを失効した拒否の対象になる。
+一方、deliveryAttemptIdとinternalQuestionIdの全体での再利用拒否、配信結果の照会、store間の相関検査は別の義務として保持する。
+別periodの質問や通常指示で旧attempt IDを再利用できないことは、旧質問periodの失効だけでは説明できない。
+PR通知のtargetに対する論理keyの拒否も、sourceの質問periodへ置き換えない。
+
+この分析は保存候補や削除許可、受付再開の許可を返さない。
+本文を回収した記録についても、拒否を包含した分析結果だけで個別墓標を削除しない。
+個別件数枠の解放には、残存する拒否索引と結果照会、相関検査の保存契約を確定してから、保存順序とcold復旧を別途実装する必要がある。
+
+| ID | 期待条件 |
+|---|---|
+| QRC01 | 既存creation/cacheの三理由以外の不正や必要な修復をnot-coveredとして隠さない |
+| QRC02 | 同じ完全identityと失効periodの複数質問を包含し、別identityとperiodを拒否対象へ広げない |
+| QRC03 | retainedとreclaimedの本文状態を区別し、未作成のattemptの拒否義務を捏造しない |
+| QRC04 | 旧attemptを別kindや別periodで再利用した反例から、global attempt拒否を残す |
+| QRC05 | 通常指示とPR通知とresultの拒否を質問世代の包含として扱わない |
+| QRC06 | 既存gateとledgerを独立したoracleにし、期待値を新分析APIで生成しない |
+| QRC07 | immutableな分析情報だけを返し、保存、墓標削除、受付再開と新authorityを接続しない |
+
 ## 採用した回収条件
 
 | 判断 | 採用内容 | 比較した別案と影響 |

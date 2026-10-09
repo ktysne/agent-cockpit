@@ -431,6 +431,17 @@ skipは既存のファイルsymlink権限制約である。
 タイマーとprovider processのfixtureによる合格を、実runtimeの7日連続運転の成功と扱わない。
 後続は段階4の質問世代に対する拒否包含のpure検証で、墓標削除や既存のattempt拒否を弱める処理は先に接続しない。
 
+## 質問世代の拒否包含分析
+
+`codex/question-period-rejection-coverage-209-20261010`は#330の収束head `dde14cb`を起点とする。
+段階4の最初の作業は、失効periodが包含する質問の拒否をpure分析し、全体IDと結果照会など残すべき義務を示すことである。
+完全snapshotの照合、複数質問の肯定例、別kindと別periodのattempt ID衝突の反例をpure APIと試験へ実装した。
+ClaudeとCodexの正規化済みfixtureとstrict入力の3件が成功した。
+availableのgraveの状態照会義務と、CP記録がないindeterminateの対照例も確認した。
+入力不変とnested freezeを検証し、Astraの再監査で残る必須修正はない。
+全体試験とClaudeレビューは実行中である。
+墓標削除、件数枠解放、受付再開、保存schemaと標準起動の変更はまだ接続しない。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
