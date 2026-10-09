@@ -14,6 +14,9 @@ const {
   createProviderDeliveryAdapter,
   readNativeRecoverySnapshot,
 } = require('../src/server/durable-delivery-store');
+const { projectInstructionDeliveryReferences } = require('../src/server/instruction-reclamation-correlation');
+
+const INSTRUCTION_BODY_RETENTION_MS = 604_800_000;
 
 function identity(provider, tag) {
   return {
@@ -348,6 +351,109 @@ function createWriteBarrierBackend() {
       return { started, release };
     },
   };
+}
+
+function createInstructionBodyFailureBackend() {
+  const state = { checkpoint: emptyReclamationCheckpoint() };
+  let failureCode = null;
+  let writeCount = 0;
+  const backend = {
+    slot: 'checkpoint', normalByteLimit: 1024 * 1024,
+    canWrite() { return true; },
+    async load() { return clone(state.checkpoint); },
+    async save(candidate, assertBeforeWrite) {
+      assertBeforeWrite?.();
+      writeCount += 1;
+      state.checkpoint = clone(candidate);
+      if (failureCode !== null) {
+        const code = failureCode;
+        failureCode = null;
+        const error = new Error('injected checkpoint write failure');
+        error.code = code;
+        throw error;
+      }
+      return clone(state.checkpoint);
+    },
+    async prepareResume(snapshot) { state.checkpoint = clone(snapshot.stores.checkpoint); },
+    async flush() {},
+    async close() {},
+  };
+  return {
+    backend,
+    failNextWrite(code) { failureCode = code; },
+    get writeCount() { return writeCount; },
+  };
+}
+
+function reclaimedInstructionCheckpoint(checkpoint, deliveryAttemptId) {
+  const current = checkpoint.ledger.deliveries.find((item) => item.deliveryAttemptId === deliveryAttemptId);
+  const refs = projectInstructionDeliveryReferences(current.source);
+  const grave = {
+    recordType: 'reclaimed',
+    deliveryAttemptId: current.deliveryAttemptId,
+    kind: current.kind,
+    logicalMessageId: current.logicalMessageId,
+    revision: current.revision,
+    sourceExecutionId: current.sourceExecutionId,
+    payloadDigest: current.payloadDigest,
+    state: current.state,
+    terminalAt: current.terminalAt,
+    cancelRequested: current.cancelRequested,
+    ownerGeneration: current.ownerGeneration,
+    acceptedCorrelation: current.acceptedCorrelation,
+    appliedCorrelation: current.appliedCorrelation,
+    sourceRef: refs.sourceRef,
+    targetRef: refs.targetRef,
+    reclamation: {
+      operationId: '44444444-4444-4444-8444-444444444444',
+      reclaimedAt: current.terminalAt + INSTRUCTION_BODY_RETENTION_MS,
+      reason: 'terminal_retention',
+    },
+  };
+  return {
+    ...checkpoint,
+    revision: checkpoint.revision + 1,
+    ledger: {
+      ...checkpoint.ledger,
+      revision: checkpoint.ledger.revision + 1,
+      deliveries: checkpoint.ledger.deliveries.map((item) =>
+        item.deliveryAttemptId === deliveryAttemptId ? grave : item),
+    },
+  };
+}
+
+for (const failureCode of ['checkpoint_write_failed', 'checkpoint_writer_blocked']) {
+  test(`instruction body checkpoint ${failureCode} blocks subsequent delivery writes`, async (t) => {
+    const fixture = createFixture({ verifyInstructionTarget: () => true });
+    const persistence = createInstructionBodyFailureBackend();
+    const periodGate = { capture() { return {}; }, assertCurrent() {}, assertRetirement() {} };
+    const store = createDurableDeliveryStore({
+      ...fixture.dependencies,
+      reclamation: { backend: persistence.backend, periodGate },
+    });
+    t.after(() => store.close());
+    await store.ready;
+    const adapter = createProviderDeliveryAdapter('claude', store);
+    const delivery = await adapter.createInstructionDelivery(
+      deliveryInput(fixture.source.launchRef, `body-failure-${failureCode}`));
+    await adapter.sendStart(delivery.deliveryAttemptId, () => {});
+    await adapter.recordApplied(delivery.deliveryAttemptId, appliedCorrelation(delivery));
+    const current = await adapter.get(delivery.deliveryAttemptId);
+    assert.equal(current.state, 'applied');
+    const writesBeforeFailure = persistence.writeCount;
+    persistence.failNextWrite(failureCode);
+
+    await assert.rejects(store.withInstructionBodyCheckpoint({
+      deliveryAttemptId: delivery.deliveryAttemptId,
+    }, async (access) => {
+      await access.persist(reclaimedInstructionCheckpoint(
+        access.snapshot(), delivery.deliveryAttemptId));
+    }), errorCode(failureCode));
+    assert.equal(persistence.backend.canWrite(), true);
+    assert.equal(persistence.writeCount, writesBeforeFailure + 1);
+    await assert.rejects(store.claim(delivery.deliveryAttemptId), errorCode('store_writer_blocked'));
+    assert.equal(persistence.backend.canWrite(), true);
+  });
 }
 
 test('a closed reclamation delivery writer cannot resume from a snapshot', async (t) => {

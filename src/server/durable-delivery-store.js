@@ -26,6 +26,7 @@ const {
   normalizeCheckpointV3Local,
   normalizeDeliveryLedgerV2Local,
 } = require('./delivery-reclamation-codec');
+const { projectInstructionDeliveryReferences } = require('./instruction-reclamation-correlation');
 const { checkedCapacityAdd, measureCheckpointReservation } = require('./reclamation-capacity-bounds');
 const {
   createReclamationDelivery,
@@ -50,6 +51,7 @@ const CORRELATION_FIELDS = [
 ];
 const STORE_INTERNALS = new WeakMap();
 const QUESTION_RETIREMENT_SCOPE = new AsyncLocalStorage();
+const INSTRUCTION_BODY_SCOPE = new AsyncLocalStorage();
 
 function storeError(code) {
   const error = new Error(code);
@@ -323,6 +325,7 @@ function createDurableDeliveryStore(options = {}) {
   let tail = Promise.resolve();
   let closePromise = null;
   const retirementScopeToken = {};
+  const instructionBodyScopeToken = {};
 
   const ready = checkpointStore.load().then((checkpoint) => {
     if (reclamation) {
@@ -339,6 +342,9 @@ function createDurableDeliveryStore(options = {}) {
   });
 
   function enqueue(operation, allowBlocked = false) {
+    if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) {
+      return Promise.reject(storeError('instruction_body_access_reentry'));
+    }
     if (QUESTION_RETIREMENT_SCOPE.getStore() === retirementScopeToken) {
       return Promise.reject(storeError('question_retirement_queue_reentry'));
     }
@@ -459,11 +465,13 @@ function createDurableDeliveryStore(options = {}) {
     return candidate;
   }
 
-  async function persistCandidate(candidate, token = undefined) {
+  async function persistCandidate(candidate, token = undefined, commitGuard = undefined) {
     try {
-      const assertBeforeWrite = reclamation && token !== undefined
-        ? () => reclamation.periodGate.assertCurrent(token)
-        : undefined;
+      const assertBeforeWrite = token !== undefined || commitGuard !== undefined
+        ? () => {
+          if (reclamation && token !== undefined) reclamation.periodGate.assertCurrent(token);
+          commitGuard?.();
+        } : undefined;
       assertBeforeWrite?.();
       const saved = assertBeforeWrite === undefined
         ? await checkpointStore.save(candidate)
@@ -672,19 +680,7 @@ function createDurableDeliveryStore(options = {}) {
     return result.delivery;
   }
 
-  async function recordAppliedInstructionNow(id, correlation, beginCommit, provider) {
-    const delivery = currentDelivery(id);
-    if (!delivery) throw storeError('delivery_not_found');
-    if (delivery.recordType === 'reclaimed') throw storeError('delivery_reclaimed');
-    if (delivery.kind !== 'instruction') throw storeError('delivery_kind_mismatch');
-    if (!deliveryMatchesProvider(delivery, provider)) throw storeError('provider_mismatch');
-    const registrations = mergeCurrentRegistrations();
-    const transition = reclamation
-      ? transitionReclamationDelivery(currentCheckpoint, id, 'applied', correlation, options.now || Date.now)
-      : transitionDelivery(currentCheckpoint.ledger, id, 'applied', correlation);
-    if (!transition.changed) return transition.delivery;
-    const candidate = checkpointCandidate(registrations, transition.ledger,
-      reclamation && jsonEqual(registrations, currentCheckpoint.registrations) ? id : null);
+  function assertInstructionApplyCommit(beginCommit) {
     let guardResult;
     try { guardResult = beginCommit(); } catch { throw storeError('instruction_apply_commit_rejected'); }
     if (utilTypes.isPromise(guardResult)) {
@@ -692,6 +688,28 @@ function createDurableDeliveryStore(options = {}) {
       throw storeError('instruction_apply_commit_rejected');
     }
     if (guardResult !== true) throw storeError('instruction_apply_commit_rejected');
+  }
+
+  async function recordAppliedInstructionNow(id, correlation, beginCommit, provider) {
+    const delivery = currentDelivery(id);
+    if (!delivery) throw storeError('delivery_not_found');
+    if (delivery.recordType === 'reclaimed' && (!reclamation || delivery.state !== 'applied')) {
+      throw storeError('delivery_reclaimed');
+    }
+    if (delivery.kind !== 'instruction') throw storeError('delivery_kind_mismatch');
+    if (!deliveryMatchesProvider(delivery, provider)) throw storeError('provider_mismatch');
+    const registrations = delivery.recordType === 'reclaimed'
+      ? currentCheckpoint.registrations : mergeCurrentRegistrations();
+    const transition = reclamation
+      ? transitionReclamationDelivery(currentCheckpoint, id, 'applied', correlation, options.now || Date.now)
+      : transitionDelivery(currentCheckpoint.ledger, id, 'applied', correlation);
+    if (!transition.changed) {
+      if (delivery.recordType === 'reclaimed') assertInstructionApplyCommit(beginCommit);
+      return transition.delivery;
+    }
+    const candidate = checkpointCandidate(registrations, transition.ledger,
+      reclamation && jsonEqual(registrations, currentCheckpoint.registrations) ? id : null);
+    assertInstructionApplyCommit(beginCommit);
     const write = persistCandidate(candidate);
     await write;
     return transition.delivery;
@@ -862,7 +880,10 @@ function createDurableDeliveryStore(options = {}) {
       assertQuestionTokenForDelivery(id, token);
       const delivery = currentDelivery(id);
       if (!delivery) throw storeError('delivery_not_found');
-      if (delivery.recordType === 'reclaimed') throw storeError('delivery_reclaimed');
+      if (delivery.recordType === 'reclaimed' && !(delivery.kind === 'instruction' &&
+          delivery.state === 'applied' && ['accepted', 'applied'].includes(operation))) {
+        throw storeError('delivery_reclaimed');
+      }
       if (!deliveryMatchesProvider(delivery, provider)) throw storeError('provider_mismatch');
       return transitionNow(id, operation, correlation, token);
     });
@@ -875,6 +896,33 @@ function createDurableDeliveryStore(options = {}) {
     const captured = captureCorrelation(correlation);
     return enqueue(() => recordAppliedInstructionNow(id, captured, beginCommit, provider));
   }
+  function scopedRecordAcceptedInstruction(id, correlation, witness, provider) {
+    if (!isIdentifier(id) || typeof witness !== 'function') throw storeError('invalid_instruction_acceptance_guard');
+    const captured = captureCorrelation(correlation);
+    return enqueue(async () => {
+      const current = currentDelivery(id);
+      if (!current || current.kind !== 'instruction' || current.state !== 'applied' ||
+          !deliveryMatchesProvider(current, provider)) throw storeError('instruction_acceptance_conflict');
+      const assertWitness = () => {
+        let permitted;
+        try { permitted = witness(); } catch { throw storeError('instruction_acceptance_source_unavailable'); }
+        if (permitted !== true) {
+          if (utilTypes.isPromise(permitted)) Promise.prototype.then.call(permitted, undefined, () => {});
+          throw storeError('instruction_acceptance_source_unavailable');
+        }
+      };
+      assertWitness();
+      const result = reclamation
+        ? transitionReclamationDelivery(currentCheckpoint, id, 'accepted', captured, options.now || Date.now)
+        : transitionDelivery(currentCheckpoint.ledger, id, 'accepted', captured);
+      if (result.changed) {
+        await persistCandidate(checkpointCandidate(currentCheckpoint.registrations, result.ledger,
+          reclamation ? id : undefined), undefined, assertWitness);
+      } else assertWitness();
+      return result.delivery;
+    });
+  }
+
   function scopedSendStart(id, sink, provider) {
     if (!isIdentifier(id) || typeof sink !== 'function') throw storeError('invalid_send_start');
     const trustedSink = sink;
@@ -994,6 +1042,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   function flush() {
+    if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) return Promise.reject(storeError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(storeError('store_closed'));
     if (reclamation && !reclamationPrepared) return Promise.reject(storeError('reclamation_writer_cold'));
     if (reclamation) return tail.then(() => checkpointStore.flush());
@@ -1070,6 +1119,75 @@ function createDurableDeliveryStore(options = {}) {
       } finally {
         active = false;
       }
+    });
+  }
+
+  function withInstructionBodyCheckpoint(value, callback) {
+    if (!reclamation || typeof callback !== 'function') throw storeError('invalid_instruction_body_reclamation');
+    const request = captureExactRecord(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation');
+    const id = request.deliveryAttemptId;
+    if (!isIdentifier(id)) throw storeError('invalid_instruction_body_reclamation');
+    return enqueue(async () => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || INSTRUCTION_BODY_SCOPE.getStore() !== instructionBodyScopeToken) {
+          throw storeError('instruction_body_access_expired');
+        }
+        if (!accepting || closePromise || !reclamationPrepared || !reclamation.backend.canWrite()) {
+          throw storeError('reclamation_service_blocked');
+        }
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return structuredClone(currentCheckpoint); },
+        async persist(value) {
+          assertAccess();
+          const candidate = normalizeCheckpointV3Local(value, limits.maxRecords ?? DEFAULT_MAX_RECORDS);
+          const previous = currentCheckpoint;
+          const old = currentDelivery(id);
+          const nextById = new Map(candidate.ledger.deliveries.map((item) => [item.deliveryAttemptId, item]));
+          const next = nextById.get(id);
+          if (!old || old.kind !== 'instruction' || old.recordType !== 'detail' || !next ||
+              next.kind !== 'instruction' || next.recordType !== 'reclaimed' ||
+              next.reclamation.reason !== 'terminal_retention' || old.state !== next.state ||
+              old.terminalAt !== next.terminalAt || old.payloadDigest !== next.payloadDigest ||
+              old.cancelRequested !== next.cancelRequested ||
+              !jsonEqual(old.acceptedCorrelation, next.acceptedCorrelation) ||
+              !jsonEqual(old.appliedCorrelation, next.appliedCorrelation) ||
+              candidate.storeId !== previous.storeId || candidate.revision !== previous.revision + 1 ||
+              candidate.ledger.revision !== previous.ledger.revision + 1 ||
+              candidate.ledger.deliveries.length !== previous.ledger.deliveries.length ||
+              !jsonEqual(candidate.registrations, previous.registrations) ||
+              !jsonEqual(candidate.migrationAllowance, previous.migrationAllowance) ||
+              !jsonEqual(candidate.ledger.notificationTargets, previous.ledger.notificationTargets) ||
+              !jsonEqual(candidate.ledger.logicalTombstones, previous.ledger.logicalTombstones) ||
+              previous.ledger.deliveries.some((item) => item.deliveryAttemptId !== id &&
+                !jsonEqual(item, nextById.get(item.deliveryAttemptId)))) {
+            throw storeError('invalid_instruction_body_reclamation_candidate');
+          }
+          const refs = projectInstructionDeliveryReferences(old.source);
+          if (old.deliveryAttemptId !== next.deliveryAttemptId || old.logicalMessageId !== next.logicalMessageId ||
+              old.revision !== next.revision || old.sourceExecutionId !== next.sourceExecutionId ||
+              !jsonEqual(old.ownerGeneration, next.ownerGeneration) ||
+              !jsonEqual(old.target, refs.target) || !jsonEqual(next.sourceRef, refs.sourceRef) ||
+              !jsonEqual(next.targetRef, refs.targetRef)) {
+            throw storeError('invalid_instruction_body_reclamation_candidate');
+          }
+          assertReclamationCheckpointCapacity(candidate, id, true);
+          assertAccess();
+          try {
+            const saved = await checkpointStore.save(candidate, assertAccess);
+            currentCheckpoint = saved;
+            return structuredClone(saved);
+          } catch (error) {
+            if (error.code === 'checkpoint_write_failed' || error.code === 'checkpoint_writer_blocked') {
+              writerBlocked = true;
+            }
+            throw error;
+          }
+        },
+      });
+      try { return await INSTRUCTION_BODY_SCOPE.run(instructionBodyScopeToken, () => callback(access)); }
+      finally { active = false; }
     });
   }
 
@@ -1170,6 +1288,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   function close() {
+    if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) return Promise.reject(storeError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
     if (reclamation) {
@@ -1217,6 +1336,7 @@ function createDurableDeliveryStore(options = {}) {
     storeValue.reclamationWriter = reclamationWriter;
     storeValue.withQuestionRetirement = withQuestionRetirement;
     storeValue.withRetiredQuestionCheckpoint = withRetiredQuestionCheckpoint;
+    storeValue.withInstructionBodyCheckpoint = withInstructionBodyCheckpoint;
   }
   const store = Object.freeze(storeValue);
   STORE_INTERNALS.set(store, {
@@ -1225,7 +1345,7 @@ function createDurableDeliveryStore(options = {}) {
     createResultDelivery: createResultDeliveryForProvider,
     registerPrNotificationTarget: registerPrNotificationTargetForProvider,
     createPrNotification: createPrNotificationForProvider, scopedTransition, scopedSendStart,
-    recordAcceptedForProvider, recordAppliedForProvider, recordAppliedInstruction: scopedRecordAppliedInstruction, markUnknownForProvider,
+    recordAcceptedForProvider, recordAppliedForProvider, recordAppliedInstruction: scopedRecordAppliedInstruction, recordAcceptedInstruction: scopedRecordAcceptedInstruction, markUnknownForProvider,
     scopedRehydratePayload, scopedGet, readNativeRecoverySnapshot: readNativeRecoverySnapshotNow });
   return store;
 }
@@ -1255,6 +1375,8 @@ function createProviderDeliveryAdapter(provider, store) {
     sendStart: (id, sink) => internal.scopedSendStart(id, sink, provider),
     recordAccepted: (id, correlation) => internal.recordAcceptedForProvider(id, correlation, provider),
     recordApplied: (id, correlation) => internal.recordAppliedForProvider(id, correlation, provider),
+    recordAcceptedInstructionGuarded: (id, correlation, witness) =>
+      internal.recordAcceptedInstruction(id, correlation, witness, provider),
     recordAppliedInstructionGuarded: (id, correlation, beginCommit) =>
       internal.recordAppliedInstruction(id, correlation, beginCommit, provider),
     markUnknown: (id) => internal.markUnknownForProvider(id, provider),

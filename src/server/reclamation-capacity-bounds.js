@@ -865,7 +865,7 @@ function maxFutureCorrelation(record, nativeItemId) {
 }
 
 function futureCorrelationsForDelivery(record, nativeItemId) {
-  if (record.recordType === 'reclaimed' ||
+  if ((record.recordType === 'reclaimed' && !(record.kind === 'instruction' && record.state === 'applied')) ||
       ['cancelled_before_send', 'superseded_before_send'].includes(record.state)) {
     return {
       acceptedCorrelation: record.acceptedCorrelation,
@@ -962,7 +962,14 @@ function reclaimedDeliveryCandidate(record, correlations, operationId) {
 
 function futureDeliveryRecordCandidates(record, index, usedNativeItemIds, operationId, earliestTime = 0) {
   const candidates = [record];
-  if (record.recordType === 'reclaimed') return candidates;
+  if (record.recordType === 'reclaimed') {
+    if (record.kind === 'instruction' && record.state === 'applied') {
+      const correlations = futureCorrelationsForDelivery(record, null);
+      const expanded = reclaimedDeliveryCandidate(record, correlations, operationId);
+      if (!sameEmbeddedRecord(expanded, record)) candidates.push(expanded);
+    }
+    return candidates;
+  }
   const nativeItemId = nativeItemIdForRecord(index, usedNativeItemIds);
   const correlations = futureCorrelationsForDelivery(record, nativeItemId);
   const currentCorrelations = {

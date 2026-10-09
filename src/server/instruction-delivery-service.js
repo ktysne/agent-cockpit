@@ -1,5 +1,7 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { assertInstructionDeliveryBinding } = require('./instruction-reclamation-correlation');
 const { types: utilTypes } = require('node:util');
 const {
   createInstructionEnvelope,
@@ -119,7 +121,7 @@ function deliveryCorrelation(delivery, turnId, itemId = null) {
     deliveryAttemptId: delivery.deliveryAttemptId,
     revision: delivery.revision,
     payloadDigest: delivery.payloadDigest,
-    targetPeriodId: delivery.target.periodId,
+    targetPeriodId: (delivery.recordType === 'reclaimed' ? delivery.targetRef : delivery.target).periodId,
     nativeTurnId: turnId,
     nativeItemId: itemId,
     clientRequestId: delivery.deliveryAttemptId,
@@ -127,6 +129,10 @@ function deliveryCorrelation(delivery, turnId, itemId = null) {
 }
 
 function deliveryMatchesRecord(delivery, record) {
+  if (delivery?.recordType) {
+    try { assertInstructionDeliveryBinding(record, delivery, 'instruction_delivery_mismatch'); return true; }
+    catch { return false; }
+  }
   if (!delivery || delivery.kind !== 'instruction' ||
       delivery.deliveryAttemptId !== record.deliveryAttemptId ||
       delivery.logicalMessageId !== record.logicalMessageId || delivery.revision !== record.revision ||
@@ -198,6 +204,8 @@ function createInstructionDeliveryService(options = {}) {
   let startupError = null;
   let journalState = null;
   let initPromise = null;
+  const bodyScope = new AsyncLocalStorage();
+  const bodyScopeToken = {};
   let tail = Promise.resolve();
   let closePromise = null;
   const adapterUnsubscribers = [];
@@ -454,7 +462,8 @@ function createInstructionDeliveryService(options = {}) {
     now,
     onApplied: (id, evidence, sourceToken) => enqueue(async () => {
       const record = findIntent(id);
-      if (!record || !isServiceMutableRecord(record) || !correlator.isApplying(id, sourceToken, evidence)) return false;
+      if (!record || !(isServiceMutableRecord(record) || reclamationMode &&
+          record.deliveryCreationState === 'checkpointed' && record.reclamation !== null) || !correlator.isApplying(id, sourceToken, evidence)) return false;
       const adapter = providerAdapter(record.source.claims.provider);
       if (!adapter) return false;
       const delivery = await adapter.get(id);
@@ -474,7 +483,7 @@ function createInstructionDeliveryService(options = {}) {
     onUnknown: (id, reason) => enqueue(() => markUnknownNow(id, reason), true),
     onFinished: (id, state, reason, sourceToken) => {
       const record = findIntent(id);
-      if (record && isServiceVisibleRecord(record)) {
+      if (record) {
         providerAdapter(record.source.claims.provider)?.closeInstructionObservation?.(id, sourceToken);
       }
     },
@@ -493,10 +502,24 @@ function createInstructionDeliveryService(options = {}) {
           if (reclamationMode) return false;
           throw serviceError('instruction_delivery_mismatch');
         }
-        if (!isServiceMutableRecord(record)) return false;
+        const terminalEvidence = reclamationMode && record.deliveryCreationState === 'checkpointed' &&
+          record.reclamation !== null;
+        if (!isServiceMutableRecord(record) && !terminalEvidence) return false;
         const current = await adapter.get(id);
         if (!current || !deliveryMatchesRecord(current, record)) throw serviceError('instruction_delivery_mismatch');
         const correlation = deliveryCorrelation(current, accepted.nativeTurnId, null);
+        if (terminalEvidence) {
+          if (current.state !== 'applied' || typeof adapter.hasInstructionObservation !== 'function' ||
+              typeof adapter.recordAcceptedInstructionGuarded !== 'function') {
+            throw serviceError('instruction_acceptance_conflict');
+          }
+          const witness = () => accepting && !closePromise && backendCanWrite() &&
+            adapter.hasInstructionObservation(id, sourceToken) === true;
+          if (!witness()) throw serviceError('instruction_acceptance_source_unavailable');
+          const updated = await adapter.recordAcceptedInstructionGuarded(id, correlation, witness);
+          if (updated?.state !== 'applied') throw serviceError('instruction_acceptance_conflict');
+          return true;
+        }
         const updated = await adapter.recordAccepted(id, correlation);
         if (!updated || !['accepted', 'applied'].includes(updated.state)) {
           throw serviceError('instruction_acceptance_conflict');
@@ -595,6 +618,8 @@ function createInstructionDeliveryService(options = {}) {
   }) : null;
 
   function enqueue(operation, diagnostic = false) {
+    if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(serviceError(
+      'instruction_body_access_reentry'));
     const canWrite = !reclamationMode || backendCanWrite();
     if (reclamationMode && !reclamationPrepared) {
       return Promise.reject(serviceError('reclamation_writer_cold'));
@@ -617,6 +642,30 @@ function createInstructionDeliveryService(options = {}) {
     });
     tail = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  function withInstructionBody(value, callback) {
+    const request = Object.freeze(exactObject(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation'));
+    if (!reclamationMode || !isIdentifier(request.deliveryAttemptId) || typeof callback !== 'function' ||
+        typeof journal.withInstructionBody !== 'function') throw serviceError('invalid_instruction_body_reclamation');
+    return enqueue(() => journal.withInstructionBody(request, async (journalAccess) => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || bodyScope.getStore() !== bodyScopeToken) throw serviceError('instruction_body_access_expired');
+        if (!accepting || closePromise || !backendCanWrite()) throw serviceError('instruction_service_closed');
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return journalAccess.snapshot(); },
+        async persist(candidate) {
+          assertAccess();
+          const saved = await journalAccess.persist(candidate);
+          journalState = saved;
+          return structuredClone(saved);
+        },
+      });
+      try { return await bodyScope.run(bodyScopeToken, () => callback(access)); }
+      finally { active = false; }
+    }));
   }
 
   async function create(input) {
@@ -825,12 +874,14 @@ function createInstructionDeliveryService(options = {}) {
   }
 
   function flush() {
+    if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(serviceError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(serviceError('instruction_service_closed'));
     if (reclamationMode && !reclamationPrepared) return Promise.reject(serviceError('reclamation_writer_cold'));
     return tail.then(() => ready()).then(() => Promise.all([journal.flush(), deliveryStore.flush()])).then(() => undefined);
   }
 
   function close() {
+    if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(serviceError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
     if (reclamationMode) reclamationWriter.stop();
@@ -879,7 +930,7 @@ function createInstructionDeliveryService(options = {}) {
     reportResponseLost,
     flush,
     close,
-    ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter } : {}),
+    ...(serviceReclamationWriter ? { reclamationWriter: serviceReclamationWriter, withInstructionBody } : {}),
   });
 }
 

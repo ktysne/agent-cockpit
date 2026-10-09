@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs/promises');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('node:path');
 const { atomicWriteJson } = require('./json-storage');
 const {
@@ -14,6 +15,7 @@ const {
   normalizeInstructionJournalV2Local,
   normalizeInstructionRecordV2Local,
 } = require('./delivery-reclamation-codec');
+const { captureExactRecord } = require('./reclamation-codec-primitives');
 const { checkedCapacityAdd, measureInstructionReservation } = require('./reclamation-capacity-bounds');
 
 const SCHEMA_VERSION = 1;
@@ -556,6 +558,8 @@ function createReclamationInstructionDeliveryJournal(options) {
   if (maxBytes !== backend.normalByteLimit || !Number.isSafeInteger(maxRecords) ||
       maxRecords < 1 || maxRecords > MAX_RECORDS) throw journalError('invalid_instruction_journal_options');
 
+  const bodyScope = new AsyncLocalStorage();
+  const bodyScopeToken = {};
   let accepting = true;
   let prepared = false;
   let hasLoaded = false;
@@ -573,6 +577,8 @@ function createReclamationInstructionDeliveryJournal(options) {
   }
 
   function enqueue(operation) {
+    if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(journalError(
+      'instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
     try { assertBackendCanWrite(); }
     catch (error) { return Promise.reject(error); }
@@ -693,7 +699,69 @@ function createReclamationInstructionDeliveryJournal(options) {
     });
   }
 
+  function withInstructionBody(value, callback) {
+    const request = captureExactRecord(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation');
+    const id = request.deliveryAttemptId;
+    if (!isIdentifier(id) || typeof callback !== 'function') {
+      throw journalError('invalid_instruction_body_reclamation');
+    }
+    return enqueue(async () => {
+      if (!hasLoaded) await loadNow();
+      let active = true;
+      const assertAccess = () => {
+        if (!active || bodyScope.getStore() !== bodyScopeToken) {
+          throw journalError('instruction_body_access_expired');
+        }
+        if (!accepting || closed || closePromise || writeBlocked || !prepared) {
+          throw journalError('instruction_journal_closed');
+        }
+        assertBackendCanWrite();
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return structuredClone(currentJournal); },
+        async persist(value) {
+          assertAccess();
+          const candidate = normalizeInstructionJournalV2Local(value, maxRecords);
+          const old = currentJournal.instructions.find((item) => item.deliveryAttemptId === id);
+          const nextById = new Map(candidate.instructions.map((item) => [item.deliveryAttemptId, item]));
+          const next = nextById.get(id);
+          if (!old || !next || old.recordType !== 'detail' || old.deliveryCreationState !== 'checkpointed' ||
+              candidate.storeId !== currentJournal.storeId || candidate.revision !== currentJournal.revision + 1 ||
+              candidate.instructions.length !== currentJournal.instructions.length ||
+              !sameJson(candidate.migrationAllowance, currentJournal.migrationAllowance) ||
+              currentJournal.instructions.some((item) => item.deliveryAttemptId !== id &&
+                !sameJson(item, nextById.get(item.deliveryAttemptId)))) {
+            throw journalError('invalid_instruction_body_reclamation_candidate');
+          }
+          const preparing = old.reclamation === null && next.recordType === 'detail' && next.reclamation !== null;
+          const reclaiming = old.reclamation !== null && next.recordType === 'reclaimed' &&
+            sameJson(old.reclamation, next.reclamation);
+          const strip = (item) => {
+            const { recordType, reclamation, reclaimedAt, envelope, ...fixed } = item;
+            return fixed;
+          };
+          if (!(preparing || reclaiming) || !sameJson(strip(old), strip(next)) ||
+              preparing && old.envelope !== next.envelope ||
+              reclaiming && next.reclaimedAt < old.reclamation.preparedAt) {
+            throw journalError('invalid_instruction_body_reclamation_candidate');
+          }
+          const checked = measure(candidate, transitionLimit(candidate));
+          assertAccess();
+          try {
+            const saved = normalizeInstructionJournalV2Local(await backend.save(checked, assertAccess), maxRecords);
+            currentJournal = saved;
+            lastCommittedRevision = saved.revision;
+            return structuredClone(saved);
+          } catch (error) { writeBlocked = true; throw error; }
+        },
+      });
+      try { return await bodyScope.run(bodyScopeToken, () => callback(access)); }
+      finally { active = false; }
+    });
+  }
+
   function flush() {
+    if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(journalError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
     if (!prepared) return Promise.reject(journalError('reclamation_writer_cold'));
     return tail.then(() => backend.flush());
@@ -718,6 +786,7 @@ function createReclamationInstructionDeliveryJournal(options) {
   }
 
   function close() {
+    if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(journalError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
     closePromise = tail.then(() => { closed = true; });
@@ -749,6 +818,7 @@ function createReclamationInstructionDeliveryJournal(options) {
     close,
     assertCapacityReserved,
     reclamationWriter,
+    withInstructionBody,
   });
 }
 
