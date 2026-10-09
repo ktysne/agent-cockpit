@@ -513,6 +513,13 @@ Claude R3もblockerと要修正0件だった。
 製品コードは全体検証した`22bb7de`から変わっていない。
 保存接続、cold復旧、件数枠の解放と実runtime確認は未実施である。
 
+次の独立入口は`codex/question-capsule-file-codecs-209-20261010`で実装中で、基点は#335の`7926537`である。
+質問journal v3とcheckpoint v4へcapsuleを埋め込む局所codecと、chunk UUIDで両ファイルを対応させる全体検査を追加する。
+通常recordの配列は全順序の部分列とし、metadata配列順を保持する。
+新形式の現在byteと復元した旧形の将来予約を別に照合する。
+契約は[容量回収計画](../design/codex-capacity-reclamation.md#capsuleを埋め込む外側ファイルcodec)に置く。
+保存とcold復旧へは接続せず、新形式の将来予約と一時保存ピークを次の移行plannerで確かめる。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
