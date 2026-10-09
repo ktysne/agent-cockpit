@@ -16,6 +16,7 @@ const MAX_NOTIFICATION_TARGETS = 10_000;
 const MAX_LOGICAL_TOMBSTONES = 20_000;
 const MAX_CHECKPOINT_RECORDS = 50_000;
 const MAX_INSTRUCTIONS = 20_000;
+const MAX_ELIGIBLE_ATTEMPT_IDS = 20_000;
 const MAX_SOURCE_BYTES = 16_777_216;
 const MAX_INSTRUCTION_TEXT_BYTES = 64 * 1024;
 const MAX_INSTRUCTION_ENVELOPE_BYTES = 70 * 1024;
@@ -1167,7 +1168,7 @@ function normalizeMigrationAllowance(value, sourceSchemaVersion, code) {
   requireValue(grant.sourceSizeBytes <= MAX_SOURCE_BYTES, code);
   assertSha256(grant.sourceSha256, code);
   requireValue(Number.isSafeInteger(grant.maxExtraBytes) && grant.maxExtraBytes > 0, code);
-  const eligibleAttemptIds = normalizeStringIdentifiers(grant.eligibleAttemptIds, MAX_INSTRUCTIONS, code);
+  const eligibleAttemptIds = normalizeStringIdentifiers(grant.eligibleAttemptIds, MAX_ELIGIBLE_ATTEMPT_IDS, code);
   requireValue(new Set(eligibleAttemptIds).size === eligibleAttemptIds.length, code);
   return makeRecord([
     ['operationId', grant.operationId], ['sourceSchemaVersion', grant.sourceSchemaVersion],
@@ -1219,9 +1220,8 @@ function validateCheckpointDeliveryReferences(ledger, registrations, code) {
   const executions = new Map(registrations.executions.map((item) => [item.executionId, item]));
   const conversations = new Map(registrations.conversations.map((item) => [item.conversationId, item]));
   const registeredAliasTuples = new Set();
-  const actorExists = (identity, binding) => registrations.actors.some((actor) =>
-    actor.periodId === binding.periodId && actor.actor.kind === binding.actor.kind &&
-    actor.actor.id === binding.actor.id && sameIdentity(actor.identity, identity));
+  const actorKeys = new Set(registrations.actors.map((actor) => actorKey(actor.identity, actor.periodId, actor.actor)));
+  const actorExists = (identity, binding) => actorKeys.has(actorKey(identity, binding.periodId, binding.actor));
   const requireBoundProjection = (projection, codeForFailure) => {
     const launch = launches.get(projection.launchRef);
     if (!launchProjectionMatchesDetail(launch, projection)) reject(codeForFailure);

@@ -51,6 +51,31 @@ function claimsFor(provider, suffix, overrides = {}) {
   };
 }
 
+function canonicalClaimsDigest(claims) {
+  const originBinding = claims.originBinding === null
+    ? null
+    : {
+      periodId: claims.originBinding.periodId,
+      actor: {
+        kind: claims.originBinding.actor.kind,
+        id: claims.originBinding.actor.id,
+      },
+    };
+  const canonicalClaims = {
+    launchId: claims.launchId,
+    runId: claims.runId,
+    attemptId: claims.attemptId,
+    provider: claims.provider,
+    nativeIdKind: claims.nativeIdKind,
+    hostId: claims.hostId,
+    homeScopeId: claims.homeScopeId,
+    origin: claims.origin,
+    purpose: claims.purpose,
+    originBinding,
+  };
+  return sha256(JSON.stringify(canonicalClaims));
+}
+
 function sourceFor(provider = 'codex', suffix = 'one') {
   const claims = claimsFor(provider, suffix);
   return {
@@ -141,7 +166,7 @@ function deliveryFor(options = {}) {
   return record;
 }
 
-function sourceRefFor(source, digest = sha256(JSON.stringify(source.claims))) {
+function sourceRefFor(source, digest = canonicalClaimsDigest(source.claims)) {
   return {
     launchRef: source.launchRef,
     launchKey: [source.claims.launchId, source.claims.runId, source.claims.attemptId],
@@ -153,7 +178,7 @@ function sourceRefFor(source, digest = sha256(JSON.stringify(source.claims))) {
   };
 }
 
-function targetRefFor(target, digest = target.kind === 'execution' ? sha256(JSON.stringify(target.claims)) : null) {
+function targetRefFor(target, digest = target.kind === 'execution' ? canonicalClaimsDigest(target.claims) : null) {
   return {
     kind: target.kind,
     launchRef: target.launchRef,
@@ -252,71 +277,85 @@ function emptyRegistrations() {
 
 function registrationsFor(source, options = {}) {
   const registrations = emptyRegistrations();
-  const binding = source.executionBinding;
-  const scope = {
-    provider: source.identity.provider,
-    nativeIdKind: source.identity.nativeIdKind,
-    hostId: source.identity.hostId,
-    homeScopeId: source.identity.homeScopeId,
-    connectionSlotId: `slot-${source.launchRef}`,
-  };
-  registrations.conversations.push({
-    conversationId: source.conversationId,
-    identity: structuredClone(source.identity),
-  });
-  registrations.executions.push({
-    conversationId: source.conversationId,
-    executionId: binding.periodId,
-    sessionId: source.sessionId,
-    state: 'active',
-  });
-  registrations.launches.push({
-    launchRef: source.launchRef,
-    claims: structuredClone(source.claims),
-    state: 'bound',
-    identity: structuredClone(source.identity),
-    executionBinding: structuredClone(binding),
-    conversationId: source.conversationId,
-    sessionId: source.sessionId,
-  });
-  registrations.runtimeLaunches.push({
-    launchRef: source.launchRef,
-    claims: {
-      ...structuredClone(source.claims),
-      identity: structuredClone(source.identity),
+  const sources = options.sources || [source];
+  for (const registrationSource of sources) {
+    const binding = registrationSource.executionBinding;
+    const scope = {
+      provider: registrationSource.identity.provider,
+      nativeIdKind: registrationSource.identity.nativeIdKind,
+      hostId: registrationSource.identity.hostId,
+      homeScopeId: registrationSource.identity.homeScopeId,
+      connectionSlotId: `slot-${registrationSource.launchRef}`,
+    };
+    registrations.conversations.push({
+      conversationId: registrationSource.conversationId,
+      identity: structuredClone(registrationSource.identity),
+    });
+    registrations.executions.push({
+      conversationId: registrationSource.conversationId,
+      executionId: binding.periodId,
+      sessionId: registrationSource.sessionId,
+      state: 'active',
+    });
+    if (registrationSource.claims.originBinding !== null) {
+      registrations.executions.push({
+        conversationId: registrationSource.conversationId,
+        executionId: registrationSource.claims.originBinding.periodId,
+        sessionId: `${registrationSource.sessionId}-origin`,
+        state: 'ended',
+      });
+    }
+    registrations.launches.push({
+      launchRef: registrationSource.launchRef,
+      claims: structuredClone(registrationSource.claims),
+      state: 'bound',
+      identity: structuredClone(registrationSource.identity),
       executionBinding: structuredClone(binding),
-    },
-    state: 'bound',
-    conversationId: source.conversationId,
-    sessionId: source.sessionId,
-    currentOwner: structuredClone(options.currentOwner || binding),
-    ownerGeneration: options.runtimeOwnerGeneration ?? 0,
-  });
-  registrations.incompleteConversationIds.push(source.conversationId);
+      conversationId: registrationSource.conversationId,
+      sessionId: registrationSource.sessionId,
+    });
+    registrations.runtimeLaunches.push({
+      launchRef: registrationSource.launchRef,
+      claims: {
+        ...structuredClone(registrationSource.claims),
+        identity: structuredClone(registrationSource.identity),
+        executionBinding: structuredClone(binding),
+      },
+      state: 'bound',
+      conversationId: registrationSource.conversationId,
+      sessionId: registrationSource.sessionId,
+      currentOwner: structuredClone(options.currentOwner || binding),
+      ownerGeneration: options.runtimeOwnerGeneration ?? 0,
+    });
+    registrations.incompleteConversationIds.push(registrationSource.conversationId);
 
-  if (options.actor !== false) {
-    registrations.connections.push({
-      scope,
-      generation: options.connectionGeneration ?? 1,
-      state: 'active',
-    });
-    registrations.actors.push({
-      identity: structuredClone(source.identity),
-      periodId: binding.periodId,
-      actor: structuredClone(binding.actor),
-      contextId: `context-${source.launchRef}`,
-      launchRef: null,
-      immutableExecutionClaims: null,
-      connectionScope: structuredClone(scope),
-      connectionGeneration: options.actorConnectionGeneration ?? 1,
-      state: 'active',
-    });
+    if (options.actor !== false) {
+      registrations.connections.push({
+        scope,
+        generation: options.connectionGeneration ?? 1,
+        state: 'active',
+      });
+      registrations.actors.push({
+        identity: structuredClone(registrationSource.identity),
+        periodId: binding.periodId,
+        actor: structuredClone(binding.actor),
+        contextId: `context-${registrationSource.launchRef}`,
+        launchRef: null,
+        immutableExecutionClaims: null,
+        connectionScope: structuredClone(scope),
+        connectionGeneration: options.actorConnectionGeneration ?? 1,
+        state: 'active',
+      });
+    }
   }
   return registrations;
 }
 
 function checkpointFor(record, source, options = {}) {
-  const registrations = registrationsFor(source, options);
+  const registrations = registrationsFor(source, {
+    ...options,
+    sources: options.registrationSources || [source],
+  });
   if (options.incomplete === false) registrations.incompleteConversationIds = [];
   if (options.actor === false) registrations.actors = [];
   return {
@@ -324,7 +363,7 @@ function checkpointFor(record, source, options = {}) {
     storeId: UUID_A,
     revision: 1,
     registrations,
-    ledger: ledgerFor(record),
+    ledger: options.ledger || ledgerFor(record, { notificationTargets: options.notificationTargets || [] }),
     migrationAllowance: options.migrationAllowance ?? null,
   };
 }
@@ -533,10 +572,17 @@ test('enforces grave reason, terminal retention, and safe timestamp addition', (
   assertInvalid(() => normalizeDeliveryRecordV2Local(graveFor({ kind: 'question', reason: 'terminal_retention' })),
     'invalid_delivery_record_v2');
   assertInvalid(() => normalizeDeliveryRecordV2Local(graveFor({
+    kind: 'instruction', reason: 'retired_question_period',
+  })), 'invalid_delivery_record_v2');
+  assertInvalid(() => normalizeDeliveryRecordV2Local(graveFor({
     kind: 'instruction', state: 'available', reason: 'terminal_retention',
   })), 'invalid_delivery_record_v2');
   assertInvalid(() => normalizeDeliveryRecordV2Local(graveFor({ kind: 'question', state: 'claimed' })),
     'invalid_delivery_record_v2');
+
+  const missingTerminalTime = graveFor({ kind: 'instruction', state: 'applied' });
+  missingTerminalTime.terminalAt = null;
+  assertInvalid(() => normalizeDeliveryRecordV2Local(missingTerminalTime), 'invalid_delivery_record_v2');
 });
 
 test('normalizes an empty ledger and a complete delivery tombstone pair', () => {
@@ -652,6 +698,132 @@ test('uses registration claims digests for checkpoint grave references', () => {
   digestMismatch.targetRef.targetClaimsDigest = SHA_B;
   assertInvalid(() => normalizeCheckpointV3Local(checkpointFor(digestMismatch, source, { actor: false })),
     'invalid_delivery_checkpoint_v3');
+});
+
+test('checkpoint registration matching binds otherwise-valid delivery and registration snapshots', () => {
+  const registeredSource = sourceFor('codex', 'purpose-registration');
+  const registrationOnly = checkpointFor(null, registeredSource, { actor: false });
+  assert.doesNotThrow(() => normalizeCheckpointV3Local(registrationOnly));
+
+  const ledgerSource = structuredClone(registeredSource);
+  ledgerSource.claims.purpose = 'pr-creator';
+  const ledgerTarget = executionTargetFor(ledgerSource);
+  const detail = deliveryFor({ source: ledgerSource, target: ledgerTarget, suffix: 'purpose-ledger' });
+  const ledger = ledgerFor(detail);
+  assert.doesNotThrow(() => normalizeDeliveryLedgerV2Local(ledger));
+
+  registrationOnly.ledger = ledger;
+  assertInvalid(() => normalizeCheckpointV3Local(registrationOnly), 'invalid_delivery_checkpoint_v3');
+});
+
+test('checkpoint PR notification details and graves resolve registered target aliases', () => {
+  const source = sourceFor('codex', 'checkpoint-pr-source');
+  const targetSource = sourceFor('claude', 'checkpoint-pr-target');
+  const target = executionTargetFor(targetSource);
+  const alias = { targetId: 'checkpoint-pr-alias', launch: structuredClone(targetSource) };
+
+  const detail = deliveryFor({
+    kind: 'pr-notification', source, target, suffix: 'checkpoint-pr-detail',
+  });
+  const detailLedger = ledgerFor(detail, { notificationTargets: [alias] });
+  assert.doesNotThrow(() => normalizeDeliveryLedgerV2Local(detailLedger));
+  const detailCheckpoint = checkpointFor(detail, source, {
+    registrationSources: [source, targetSource],
+    ledger: detailLedger,
+  });
+  assert.equal(normalizeCheckpointV3Local(detailCheckpoint).ledger.deliveries[0].recordType, 'detail');
+
+  const grave = graveFor({ kind: 'pr-notification', source, target, state: 'applied', suffix: 'checkpoint-pr-grave' });
+  const graveLedger = ledgerFor(grave, { notificationTargets: [alias] });
+  assert.doesNotThrow(() => normalizeDeliveryLedgerV2Local(graveLedger));
+  const graveCheckpoint = checkpointFor(grave, source, {
+    registrationSources: [source, targetSource],
+    ledger: graveLedger,
+  });
+  assert.equal(normalizeCheckpointV3Local(graveCheckpoint).ledger.deliveries[0].recordType, 'reclaimed');
+});
+
+test('checkpoint rejects an alias and target projection changed together from valid registrations', () => {
+  const source = sourceFor('codex', 'pr-projection-source');
+  const registeredTarget = sourceFor('claude', 'pr-projection-target');
+  const changedTarget = structuredClone(registeredTarget);
+  changedTarget.identity.nativeId = 'different-target-native-id';
+  const detail = deliveryFor({
+    kind: 'pr-notification',
+    source,
+    target: executionTargetFor(changedTarget),
+    suffix: 'pr-projection',
+  });
+  const ledger = ledgerFor(detail, {
+    notificationTargets: [{ targetId: 'changed-alias', launch: changedTarget }],
+  });
+  assert.doesNotThrow(() => normalizeDeliveryLedgerV2Local(ledger));
+
+  const checkpoint = checkpointFor(detail, source, {
+    registrationSources: [source, registeredTarget],
+    ledger,
+  });
+  const emptyLedgerCheckpoint = structuredClone(checkpoint);
+  emptyLedgerCheckpoint.ledger = ledgerFor(null);
+  assert.doesNotThrow(() => normalizeCheckpointV3Local(emptyLedgerCheckpoint));
+  assertInvalid(() => normalizeCheckpointV3Local(checkpoint), 'invalid_delivery_checkpoint_v3');
+});
+
+test('checkpoint accepts result graves with owner targets and instruction delivery snapshots', () => {
+  const resultSource = sourceFor('codex', 'checkpoint-result-grave');
+  const resultGrave = graveFor({ kind: 'result', source: resultSource, state: 'applied' });
+  assert.equal(normalizeCheckpointV3Local(checkpointFor(resultGrave, resultSource))
+    .ledger.deliveries[0].targetRef.kind, 'owner');
+
+  const instructionSource = sourceFor('claude', 'checkpoint-instruction');
+  const instructionDetail = deliveryFor({ kind: 'instruction', source: instructionSource });
+  assert.equal(normalizeCheckpointV3Local(checkpointFor(instructionDetail, instructionSource, { actor: false }))
+    .ledger.deliveries[0].kind, 'instruction');
+
+  const instructionGrave = graveFor({ kind: 'instruction', source: instructionSource, state: 'applied' });
+  assert.equal(normalizeCheckpointV3Local(checkpointFor(instructionGrave, instructionSource, { actor: false }))
+    .ledger.deliveries[0].recordType, 'reclaimed');
+});
+
+test('grave claims digests use canonical nested origin binding order for delegated and review launches', () => {
+  const cases = [
+    { provider: 'codex', origin: 'delegated', purpose: 'agent', suffix: 'delegated-digest' },
+    { provider: 'claude', origin: 'review', purpose: 'cross-review', suffix: 'review-digest' },
+  ];
+  for (const item of cases) {
+    const source = sourceFor(item.provider, item.suffix);
+    source.claims.origin = item.origin;
+    source.claims.purpose = item.purpose;
+    source.claims.originBinding = {
+      actor: { kind: 'tool-use', id: `parent-${item.suffix}` },
+      periodId: `parent-period-${item.suffix}`,
+    };
+    const canonicalClaims = {
+      launchId: source.claims.launchId,
+      runId: source.claims.runId,
+      attemptId: source.claims.attemptId,
+      provider: source.claims.provider,
+      nativeIdKind: source.claims.nativeIdKind,
+      hostId: source.claims.hostId,
+      homeScopeId: source.claims.homeScopeId,
+      origin: item.origin,
+      purpose: item.purpose,
+      originBinding: {
+        periodId: source.claims.originBinding.periodId,
+        actor: {
+          kind: source.claims.originBinding.actor.kind,
+          id: source.claims.originBinding.actor.id,
+        },
+      },
+    };
+    const expectedClaimsDigest = sha256(JSON.stringify(canonicalClaims));
+    const grave = graveFor({ kind: 'question', source, suffix: item.suffix });
+    assert.equal(grave.sourceRef.sourceClaimsDigest, expectedClaimsDigest);
+    assert.equal(grave.targetRef.targetClaimsDigest, expectedClaimsDigest);
+
+    const checkpoint = checkpointFor(grave, source, { actor: false });
+    assert.equal(normalizeCheckpointV3Local(checkpoint).ledger.deliveries[0].recordType, 'reclaimed');
+  }
 });
 
 test('checks checkpoint detail references against launch and runtime registrations', () => {
@@ -1127,10 +1299,19 @@ test('encoders use canonical field order when input property order differs', () 
     migrationAllowance: null,
     instructions: [],
   };
+  const source = sourceFor('claude', 'canonical-one');
+  const delivery = deliveryFor({ source, suffix: 'canonical-one' });
+  const ledgerWithDelivery = ledgerFor(delivery);
+  const checkpointWithDelivery = checkpointFor(delivery, source, { actor: false });
+  const instruction = instructionFor({ suffix: 'canonical-one-instruction' });
+  const journalWithInstruction = instructionJournal([instruction]);
   const vectors = [
     [emptyLedger, encodeDeliveryLedgerV2Local],
     [emptyCheckpoint, encodeCheckpointV3Local],
     [emptyJournal, encodeInstructionJournalV2Local],
+    [ledgerWithDelivery, encodeDeliveryLedgerV2Local],
+    [checkpointWithDelivery, encodeCheckpointV3Local],
+    [journalWithInstruction, encodeInstructionJournalV2Local],
   ];
 
   for (const [canonicalValue, encode] of vectors) {
