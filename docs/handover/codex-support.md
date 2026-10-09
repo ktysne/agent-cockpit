@@ -59,10 +59,10 @@ Claudeのクロスレビューは3往復で収束し、PR #325は親ブランチ
 通常指示の確定終端回収は `codex/instruction-body-reclamation-209-20261009` で、PR #325のレビュー済みheadを起点に着手し、マージ済みfeatureの`f64db23`へ同期した。
 3保存境界と準備済み操作の冷起動復旧、墓標への互換相関追記を実装し、既存の観測権限を復活させない条件を確認する。
 関連47件、両providerの実factoryとservice listenerの36件、全体2,366件（head `88ea774`）は成功し、環境依存の1件はskip、失敗0件である。
-[PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとし、Claudeのクロスレビューは3往復で収束した。head `e8d94f3`では、store停止の直接回帰試験を含む32件と、factory関連36件が成功した。製品コードは全体検証済みの`88ea774`から変わっていない。
+[PR #326](https://github.com/ktysne/agent-cockpit/pull/326)はfeatureをbaseとし、Claudeのクロスレビューは3往復で収束し、featureへマージ済みである（merge SHA `598c218`）。head `e8d94f3`では、store停止の直接回帰試験を含む32件と、factory関連36件が成功した。製品コードは全体検証済みの`88ea774`から変わっていない。
 現保存層の全writer停止を維持し、質問単独失敗時の停止範囲の分離は後続に残す。
 個別墓標の件数枠を空ける世代集約は段階4であり、本文回収だけで#209を完了扱いにしない。
-PR通知とresultの確定終端回収は、PR #326のレビュー済みhead `3b93ee4`から`codex/terminal-delivery-body-reclamation-209-20261010`へスタックして着手した。
+PR通知とresultの確定終端回収は、PR #326のレビュー済みhead `3b93ee4`から`codex/terminal-delivery-body-reclamation-209-20261010`へスタックして着手し、親のマージ後にfeatureの`598c218`へ通常mergeで同期した。
 checkpoint内の本文と拒否情報を1回の保存で墓標へ置き換え、aliasと履歴、保存済みowner、logical tombstone、件数枠とgrantを保持する。
 明示factoryにはresult送信前の`verifyResultOwner`が未接続のため、resultのapplied回収は正規の保存済みcheckpointを使うcold fixtureで検証する。
 送信前owner照合と実vendorへの結果返却は[#180-B](https://github.com/ktysne/agent-cockpit/issues/180)の未接続範囲であり、この回収fixtureを実result送信の成功に数えない。
@@ -93,7 +93,7 @@ PR通知のappliedはtrusted provider adapterの遷移で作り、resultのappli
 resultの実送信、異なるownerへのfactory返却、実runtimeの7日後通知の成功証跡には数えない。
 非公開callback accessの再入と寿命はstore単体の試験で確認し、factory facadeへ試験用の保存口を公開しない。
 別ownerと非null grantの保全は、純粋な回収計画・参照投影・容量予約の関連25件で確認した。追加のowner世代試験を含む回収計画5件も成功し、accepted handoffで現在ownerが世代6へ進んだ後も、保存済みresultのownerと世代5を保持する。
-store/runtime関連39件と最終追加store/context7件は成功し、全体検証を実行している。
+store/runtime関連39件と最終追加store/context7件は成功した。head `f589250`の全体`npm test`は2,389件成功、1件skip、失敗0件である。skipはWindowsの実symlink作成権限に依存する1件で、注入fixtureの拒否は成功した。
 
 ## 全体の流れ
 
