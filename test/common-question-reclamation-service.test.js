@@ -38,6 +38,39 @@ test('grant question scope rejects recursive service queues and expires after ca
   await fixture.service.flush();
 });
 
+for (const failure of ['save', 'readback']) {
+  test(`grant question adapter latches its writer after ${failure} failure despite a writable backend`, async (t) => {
+    const sourceBytes = Buffer.from(`${JSON.stringify(kernel.createEmptyJournal(), null, 2)}\n`, 'utf8');
+    const initial = questionSnapshot({ migrationAllowance: {
+      operationId: OPERATION_ID, sourceSchemaVersion: 1, sourceSizeBytes: sourceBytes.length,
+      sourceSha256: createHash('sha256').update(sourceBytes).digest('hex'), maxExtraBytes: 1,
+      eligibleQuestionIds: [],
+    } });
+    const fixture = makeFixture(initial);
+    t.after(() => fixture.service.close());
+    await install(fixture);
+    const adapter = createCommonQuestionReclamationJournal({
+      backend: fixture.backendState.backend, periodGate: fixture.periodGate,
+    });
+    adapter.prepareResume(fixture.backendState.fullSnapshot);
+    let saves = 0;
+    fixture.backendState.backend.save = async (candidate) => {
+      saves += 1;
+      if (failure === 'save') throw Object.assign(new Error('save failed'), { code: 'injected_save_failure' });
+      return { ...candidate, revision: candidate.revision + 1 };
+    };
+    await assert.rejects(adapter.withMigrationAllowance((access) => access.persist({
+      ...access.snapshot(), revision: 1, migrationAllowance: null,
+    })), { code: failure === 'save' ? 'injected_save_failure' : 'question_journal_save_mismatch' });
+    assert.equal(fixture.backendState.backend.canWrite(), true);
+    assert.equal(saves, 1);
+    await assert.rejects(adapter.withMigrationAllowance(() => {}), { code: 'question_service_closed' });
+    await assert.rejects(adapter.save({}, null), { code: 'question_service_closed' });
+    assert.equal(saves, 1);
+    await adapter.close();
+  });
+}
+
 function clone(value) {
   return structuredClone(value);
 }

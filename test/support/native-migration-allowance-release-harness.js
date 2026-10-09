@@ -213,6 +213,8 @@ function createLeaseObserver(resizeFailure = null) {
   const originalExports = entry.exports;
   const acquisitions = [];
   const timeline = [];
+  const capturedWriters = new Map();
+  const backendSaveWaiters = new Map();
   let resizeFailureUsed = false;
   let leaseStatusUnknown = false;
   function currentLeaseStatus() {
@@ -322,16 +324,49 @@ function createLeaseObserver(resizeFailure = null) {
         close: () => persistence.close(),
         status: () => persistence.status(),
       });
-      return originalExports.createReclamationServiceContext({
+      const created = originalExports.createReclamationServiceContext({
         ...options,
         persistence: observedPersistence,
         capacityBudget: observedBudget,
+      });
+      const observedBackends = new Map();
+      return Object.freeze({
+        ...created,
+        backend(slot) {
+          if (!observedBackends.has(slot)) {
+            const backend = created.backend(slot);
+            observedBackends.set(slot, Object.freeze({
+              ...backend,
+              save(...args) {
+                timeline.push({ operation: 'context-backend-save', slot });
+                const waiters = backendSaveWaiters.get(slot);
+                if (waiters?.length) waiters.shift()();
+                return backend.save(...args);
+              },
+            }));
+          }
+          return observedBackends.get(slot);
+        },
+        releaseMigrationAllowance(value) {
+          if (value && typeof value === 'object' && typeof value.slot === 'string') {
+            capturedWriters.set(value.slot, value.writer);
+          }
+          return created.releaseMigrationAllowance(value);
+        },
       });
     },
   };
   return {
     acquisitions,
     timeline,
+    writerForSlot(slot) { return capturedWriters.get(slot) || null; },
+    waitForNextBackendSave(slot) {
+      return new Promise((resolve) => {
+        const waiters = backendSaveWaiters.get(slot) || [];
+        waiters.push(resolve);
+        backendSaveWaiters.set(slot, waiters);
+      });
+    },
     restore() {
       if (require.cache[contextPath] === entry) entry.exports = originalExports;
     },

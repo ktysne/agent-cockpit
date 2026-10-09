@@ -1250,6 +1250,7 @@ function createReclamationServiceContext(value) {
     requireValue(typeof slot === 'string' && configuredSlots.includes(slot) && writer &&
       typeof writer.withMigrationAllowance === 'function', 'invalid_migration_allowance_release');
     requireValue(contextCanWrite(), 'reclamation_service_blocked');
+    let persistStarted = false;
     try {
       return await writer.withMigrationAllowance(async (access) => {
         requireValue(contextCanWrite(), 'reclamation_service_blocked');
@@ -1258,13 +1259,14 @@ function createReclamationServiceContext(value) {
         const planned = planMigrationAllowanceRelease({ ...base, normalByteLimitsBySlot: limitsForTransitions, slot });
         if (planned.status === 'released') {
           const candidate = planned.snapshot.stores[slot];
+          persistStarted = true;
           const saved = await access.persist(candidate);
           requireValue(sameStore(slot, candidate, saved), 'reclamation_persistence_readback_mismatch');
         }
         return Object.freeze({ status: planned.status, slot });
       });
     } catch (error) {
-      block(error);
+      if (persistStarted) block(error);
       throw error;
     }
   }

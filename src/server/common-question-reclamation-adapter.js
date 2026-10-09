@@ -542,13 +542,18 @@ function createCommonQuestionReclamationJournal(value) {
               throw adapterError('invalid_reclamation_write_guard');
             }
           };
-          const saved = normalizeQuestionJournalV2Local(await backend.save(candidate, assertWrite), maxRecords);
-          if (!encodeQuestionJournalV2Local(saved, maxRecords).bytes.equals(encodeQuestionJournalV2Local(candidate, maxRecords).bytes)) {
-            throw adapterError('question_journal_save_mismatch');
+          try {
+            const saved = normalizeQuestionJournalV2Local(await backend.save(candidate, assertWrite), maxRecords);
+            if (!encodeQuestionJournalV2Local(saved, maxRecords).bytes.equals(encodeQuestionJournalV2Local(candidate, maxRecords).bytes)) {
+              throw adapterError('question_journal_save_mismatch');
+            }
+            snapshot = saved;
+            legacy = projectLegacyJournal(snapshot, maxRecords);
+            return structuredClone(saved);
+          } catch (error) {
+            stopped = true;
+            throw error;
           }
-          snapshot = saved;
-          legacy = projectLegacyJournal(snapshot, maxRecords);
-          return structuredClone(saved);
         },
       });
       try { return await grantScope.run(grantScopeToken, () => callback(access)); }

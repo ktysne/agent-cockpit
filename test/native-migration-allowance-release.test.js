@@ -325,6 +325,47 @@ for (const provider of PROVIDERS) {
     }
   });
 
+  for (const { slot, closedErrorCode } of [
+    { slot: 'questions', closedErrorCode: 'question_gate_closed' },
+    { slot: 'checkpoint', closedErrorCode: 'reclamation_service_blocked' },
+  ]) {
+    test(`${provider} rejects a queued ${slot} grant write after its writer closes`, async (t) => {
+      const sources = threeSlotLegacySources(provider);
+      const fixture = await makeHarness(t, provider, {
+        normalByteLimitsBySlot: limitsForPostBodyRelease(sources),
+      });
+      const { harness, leaseObserver } = fixture;
+      await prepareBodyCapacity(fixture);
+
+      const targetPath = harness.pathFor(slot);
+      const targetBytesBefore = await fs.readFile(targetPath);
+      const writesBefore = { ...harness.persistenceWriteCounts };
+      const instructionSnapshot = harness.reclamationContext.snapshot().stores.instructions;
+      const barrier = harness.faults.holdNextWrite('instructions');
+      const blockingWrite = harness.reclamationContext.backend('instructions').save({
+        ...structuredClone(instructionSnapshot),
+        revision: instructionSnapshot.revision + 1,
+      });
+      await barrier.entered;
+
+      const targetSaveQueued = leaseObserver.waitForNextBackendSave(slot);
+      const releasePromise = harness.reclamationService.releaseMigrationAllowance({ slot });
+      await targetSaveQueued;
+      const writer = leaseObserver.writerForSlot(slot);
+      assert.equal(typeof writer?.close, 'function');
+
+      const writerClosePromise = writer.close();
+      barrier.release();
+      await assert.rejects(releasePromise, { code: closedErrorCode });
+      await Promise.all([blockingWrite, writerClosePromise]);
+
+      assert.equal(harness.persistenceWriteCounts[slot], writesBefore[slot]);
+      assert.equal(harness.persistenceWriteCounts.instructions, writesBefore.instructions + 1);
+      assert.deepEqual(await fs.readFile(targetPath), targetBytesBefore);
+      assert.notEqual((await fixture.readJson(slot)).migrationAllowance, null);
+    });
+  }
+
   for (const resizeFailure of ['retained', 'unknown']) {
     test(`${provider} preserves capacity safety when lease shrink is ${resizeFailure}`, async (t) => {
       const sources = threeSlotLegacySources(provider);

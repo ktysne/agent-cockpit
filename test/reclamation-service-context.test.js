@@ -310,6 +310,49 @@ function limits() {
   return { checkpoint: NORMAL_LIMIT, instructions: NORMAL_LIMIT, questions: NORMAL_LIMIT };
 }
 
+test('grant rejection during a retirement checkpoint boundary keeps writers ready and retirement finishes', async (t) => {
+  const harness = await createReclamationServiceHarness('claude');
+  t.after(async () => {
+    harness.releaseCheckpointSave();
+    await harness.close();
+  });
+  const question = await prepareLiveQuestionDelivery(harness, 'retirement-grant-race', true);
+  harness.setNow(LIVE_RETIRE_AT);
+  harness.holdNextCheckpointSave();
+  const retirement = harness.context.retireQuestionPeriod({
+    identity: harness.resumed.child.identity,
+    periodId: harness.resumed.child.registration.executionId,
+    questionService: harness.questionService,
+    deliveryStore: harness.deliveryStore,
+  });
+  await harness.checkpointSaveEntered;
+  const duringRetirement = harness.context.snapshot();
+  assert.ok(duringRetirement.anchor.retiredQuestionPeriods.some((period) =>
+    period.periodId === harness.resumed.child.registration.executionId));
+  assert.equal(duringRetirement.stores.questions.questions.find((record) =>
+    record.internalQuestionId === question.internalQuestionId).quarantinedAt, null);
+  const beforeFiles = await Promise.all(['question-reclamation-anchor', ...SLOTS].map((slot) =>
+    fs.readFile(path.join(harness.directory, `${slot}.json`))));
+  const beforeWrites = structuredClone(harness.saveCounts);
+  const beforePersistence = structuredClone(harness.persistenceCounts);
+  await assert.rejects(harness.context.releaseMigrationAllowance({
+    slot: 'instructions', writer: harness.instructionService,
+  }), { code: 'invalid_migration_allowance_release' });
+  assert.equal(harness.context.status().state, 'ready');
+  assert.equal(harness.context.canWrite(), true);
+  assert.deepEqual(harness.saveCounts, beforeWrites);
+  assert.deepEqual(harness.persistenceCounts, beforePersistence);
+  const afterFiles = await Promise.all(['question-reclamation-anchor', ...SLOTS].map((slot) =>
+    fs.readFile(path.join(harness.directory, `${slot}.json`))));
+  assert.deepEqual(afterFiles, beforeFiles);
+  harness.releaseCheckpointSave();
+  assert.equal((await retirement).status, 'retired');
+  assert.equal(harness.context.status().state, 'ready');
+  assert.deepEqual(await harness.context.releaseMigrationAllowance({
+    slot: 'instructions', writer: harness.instructionService,
+  }), { status: 'already_clear', slot: 'instructions' });
+});
+
 for (const resizeOutcome of ['success', 'retained', 'unknown']) {
   test(`grant clear installs saved state before lease resize and handles ${resizeOutcome} reservation`, async (t) => {
     const stores = emptyStores();
