@@ -606,6 +606,19 @@ Claude R1はblockerと要修正0件。任意提案のevidence正常controlと完
 IのB-1拒否は公開材料検証の結果であり、内部の拒否層を直接観測した試験ではない。
 後続boundaryの未追跡source/testはこのPRと全体検証に含めていない。
 
+境界分類は`codex/question-capsule-migration-boundary-209-20261010`で、基点は#343の`a2814ef`である。
+正規material参照と外部anchor/Iを完全検証し、現在Q/CPを旧・準備済み・CP移転後・完了のbyte完全一致で分類する。
+CPなしは準備状態を一つに畳み、未知の混在組や意味一致だけの別byteを拒否する。
+返却は分類、CPの有無、observed指紋と四正本の現在logical byte表で、書き込みやlease、保存・再開の命令を返さない。
+既存atomic writerはbackupを作らず同じtempでrenameを再試行するが、cleanup失敗とcrashの残留物、別process、注入writer、fsync不在があり、この表の合計を真の保存ピークへ読み替えない。
+個別8件が成功し、両providerと混在の4境界、CPなしの3境界、非正規旧rawの完全一致、同サイズで意味一致するCP再formatの拒否、混在pairと材料改変、getter/Proxy/SAB、raw byte境界と入力不変を確認した。
+有効I grantがある場合も実I byteを合計へ加算する。構文、差分、CodeGraph変更後同期と調査も成功した。
+追跡済みテストを明示した全体検証は、`e2aaf17`で2746件成功、失敗0件、既存Windows symlink権限による1件skipだった。
+Claude R1はblockerと要修正0件に収束した。
+CPなしの同一byte入力を別名で再実行する試験と、detachそのものの試験は追加していない。
+上限+1入力の拒否は確認したが、上限照合層やparse前の拒否を独立に観測した試験ではない。
+後続容量評価の未追跡source/testは、このPRと全体検証に含めていない。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
