@@ -96,6 +96,10 @@ unknownと未確定状態は延期し、journalの準備、checkpointの墓標�
 回収済み墓標は保存なしで完了を返し、未回収候補を起動時に自動で回収しない。
 生のcontextやbackendは公開せず、nativeの停止時に自動で退役させる接続も加えない。
 
+`reclamation.releaseMigrationAllowance({ slot })`は、設定済みslotの全将来予約が通常枠に収まる場合だけgrant全体を解放する。
+保存とreadbackの後に同じleaseを縮小し、各writerとserviceのcacheへ反映する。
+条件と拒否・停止境界は[配信回収schema](delivery-reclamation-schema.md#migration-grantの明示解放)のGAR01〜GAR06に従う。
+
 移行は旧質問のidentityとperiodを永久失効させ、通常指示の相関と結果不明の記録を保持する。
 準備完了時の照合では、隔離済みでアンカーにも退役が記録された質問だけ、保存済みの完全相関を使う。
 現在の質問の認可は実行registryで照合し、古いlaunchやactorを復元して再認可しない。

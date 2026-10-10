@@ -942,12 +942,23 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_terminal_delivery_body_reclamation'));
     return reclamationContext.reclaimTerminalDeliveryBody({ ...request, deliveryStore: store });
   }
+  function releaseMigrationAllowance(value) {
+    if (reclamationContext === null) throw integrationError('reclamation_unavailable');
+    if (closing) throw integrationError('native_instruction_integration_closed');
+    const request = exactData(value, ['slot'], 'invalid_migration_allowance_release');
+    if (typeof request.slot !== 'string' || !['questions', 'instructions', 'checkpoint'].includes(request.slot)) {
+      throw integrationError('invalid_migration_allowance_release');
+    }
+    const writer = request.slot === 'questions' ? questionService : request.slot === 'instructions' ? service : store;
+    return reclamationContext.releaseMigrationAllowance({ slot: request.slot, writer });
+  }
   const reclamation = reclamationContext === null ? null : Object.freeze({
     status: () => reclamationContext.status(),
     retireQuestionPeriod,
     reclaimQuestionBodies,
     reclaimInstructionBody,
     reclaimTerminalDeliveryBody,
+    releaseMigrationAllowance,
   });
   return Object.freeze({
     native,

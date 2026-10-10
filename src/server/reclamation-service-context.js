@@ -45,6 +45,7 @@ const {
 const { planQuestionPeriodRetirement } = require('./question-period-retirement');
 const { planQuestionBodyReclamation } = require('./question-body-reclamation');
 const { planTerminalDeliveryBodyReclamation } = require('./terminal-delivery-body-reclamation');
+const { planMigrationAllowanceRelease } = require('./migration-allowance-release');
 const { planInstructionBodyReclamation } = require('./instruction-body-reclamation');
 const { createQuestionPeriodGate } = require('./question-period-gate');
 
@@ -531,6 +532,38 @@ function createReclamationServiceContext(value) {
             throw error;
           }
           stores[slot] = candidate;
+          if (previous.migrationAllowance !== null && candidate.migrationAllowance === null) {
+            const bytes = computePhysicalReclamationBounds({
+              anchorByteLimit: NORMAL_ANCHOR_MAX_BYTES,
+              slots: configuredSlots.map((currentSlot) => ({ slot: currentSlot,
+                sourceSizeBytes: stores[currentSlot].migrationAllowance?.sourceSizeBytes ?? 0,
+                normalByteLimit: normalByteLimitsBySlot[currentSlot],
+                grantBytes: stores[currentSlot].migrationAllowance?.maxExtraBytes ?? 0 })),
+            }).postMigrationReservationBytes;
+            let oldBytes;
+            try {
+              const oldStatus = lease.status();
+              requireValue(!oldStatus.released && Number.isSafeInteger(oldStatus.bytes) && oldStatus.bytes >= bytes,
+                'reclamation_capacity_reservation_unknown');
+              oldBytes = oldStatus.bytes;
+              lease.resize(bytes);
+              const resized = lease.status();
+              requireValue(!resized.released && Number.isSafeInteger(resized.bytes) && resized.bytes >= bytes,
+                'reclamation_capacity_reservation_unknown');
+            } catch {
+              let safelyRetained = false;
+              try {
+                const held = lease.status();
+                safelyRetained = Number.isSafeInteger(oldBytes) && !held.released &&
+                  Number.isSafeInteger(held.bytes) && held.bytes >= oldBytes;
+              } catch {}
+              if (!safelyRetained) {
+                const error = contextError('reclamation_capacity_reservation_unknown');
+                block(error);
+                throw error;
+              }
+            }
+          }
           return cloneSnapshot(candidate);
         });
       },
@@ -545,6 +578,7 @@ function createReclamationServiceContext(value) {
       },
       close,
       getSnapshot() {
+        if (blocked || closing || closed) throw contextError('reclamation_service_blocked');
         return cloneSnapshot(currentStore(slot));
       },
     });
@@ -1210,6 +1244,33 @@ function createReclamationServiceContext(value) {
     }
   }
 
+  async function releaseMigrationAllowance(value) {
+    const captured = captureExactRecord(value, ['slot', 'writer'], 'invalid_migration_allowance_release');
+    const { slot, writer } = captured;
+    requireValue(typeof slot === 'string' && configuredSlots.includes(slot) && writer &&
+      typeof writer.withMigrationAllowance === 'function', 'invalid_migration_allowance_release');
+    requireValue(contextCanWrite(), 'reclamation_service_blocked');
+    let persistStarted = false;
+    try {
+      return await writer.withMigrationAllowance(async (access) => {
+        requireValue(contextCanWrite(), 'reclamation_service_blocked');
+        const base = currentSnapshot();
+        base.stores[slot] = access.snapshot();
+        const planned = planMigrationAllowanceRelease({ ...base, normalByteLimitsBySlot: limitsForTransitions, slot });
+        if (planned.status === 'released') {
+          const candidate = planned.snapshot.stores[slot];
+          persistStarted = true;
+          const saved = await access.persist(candidate);
+          requireValue(sameStore(slot, candidate, saved), 'reclamation_persistence_readback_mismatch');
+        }
+        return Object.freeze({ status: planned.status, slot });
+      });
+    } catch (error) {
+      if (persistStarted) block(error);
+      throw error;
+    }
+  }
+
   function close() {
     if (closePromise !== null) return closePromise;
     closing = true;
@@ -1247,6 +1308,8 @@ function createReclamationServiceContext(value) {
   }
 
   function status() {
+    let coordinatorStatus = null;
+    try { coordinatorStatus = coordinator?.status() ?? null; } catch (error) { if (!blocked) throw error; }
     return Object.freeze({
       state: closed ? 'closed' : blocked ? 'blocked' : contextCanWrite() ? 'ready' : startPromise ? 'starting' : 'cold',
       canWrite: contextCanWrite(),
@@ -1254,7 +1317,7 @@ function createReclamationServiceContext(value) {
       closed,
       failureCode,
       gate: periodGate.snapshot(),
-      coordinator: coordinator?.status() ?? null,
+      coordinator: coordinatorStatus,
       capacity: capacityBudget.status(),
     });
   }
@@ -1269,6 +1332,7 @@ function createReclamationServiceContext(value) {
     reclaimQuestionBodies,
     reclaimInstructionBody,
     reclaimTerminalDeliveryBody,
+    releaseMigrationAllowance,
     close,
     status,
   });

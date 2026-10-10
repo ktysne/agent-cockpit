@@ -329,6 +329,8 @@ function createDurableDeliveryStore(options = {}) {
   const retirementScopeToken = {};
   const instructionBodyScopeToken = {};
   const terminalBodyScopeToken = {};
+  const grantScope = new AsyncLocalStorage();
+  const grantScopeToken = {};
 
   const ready = checkpointStore.load().then((checkpoint) => {
     if (reclamation) {
@@ -345,6 +347,7 @@ function createDurableDeliveryStore(options = {}) {
   });
 
   function enqueue(operation, allowBlocked = false) {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(storeError('migration_allowance_access_reentry'));
     if (TERMINAL_BODY_SCOPE.getStore() === terminalBodyScopeToken) return Promise.reject(storeError('terminal_body_access_reentry'));
     if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) {
       return Promise.reject(storeError('instruction_body_access_reentry'));
@@ -1046,6 +1049,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   function flush() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(storeError('migration_allowance_access_reentry'));
     if (TERMINAL_BODY_SCOPE.getStore() === terminalBodyScopeToken) return Promise.reject(storeError('terminal_body_access_reentry'));
     if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) return Promise.reject(storeError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(storeError('store_closed'));
@@ -1192,6 +1196,41 @@ function createDurableDeliveryStore(options = {}) {
         },
       });
       try { return await INSTRUCTION_BODY_SCOPE.run(instructionBodyScopeToken, () => callback(access)); }
+      finally { active = false; }
+    });
+  }
+
+  function withMigrationAllowance(callback) {
+    if (!reclamation || typeof callback !== 'function') throw storeError('invalid_migration_allowance_release');
+    return enqueue(async () => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || grantScope.getStore() !== grantScopeToken) throw storeError('migration_allowance_access_expired');
+        if (writerBlocked || !accepting || closePromise || !reclamationPrepared || !reclamation.backend.canWrite()) {
+          throw storeError('reclamation_service_blocked');
+        }
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return structuredClone(currentCheckpoint); },
+        async persist(value) {
+          assertAccess();
+          const candidate = normalizeCheckpointV3Local(value, limits.maxRecords ?? DEFAULT_MAX_RECORDS);
+          const fixed = structuredClone(candidate);
+          fixed.revision = currentCheckpoint.revision;
+          fixed.migrationAllowance = currentCheckpoint.migrationAllowance;
+          if (currentCheckpoint.migrationAllowance === null || candidate.migrationAllowance !== null ||
+              candidate.revision !== currentCheckpoint.revision + 1 || !jsonEqual(fixed, currentCheckpoint)) {
+            throw storeError('invalid_migration_allowance_release_candidate');
+          }
+          assertReclamationCheckpointCapacity(candidate, null, true);
+          try {
+            const saved = await checkpointStore.save(candidate, assertAccess);
+            currentCheckpoint = saved;
+            return structuredClone(saved);
+          } catch (error) { writerBlocked = true; throw error; }
+        },
+      });
+      try { return await grantScope.run(grantScopeToken, () => callback(access)); }
       finally { active = false; }
     });
   }
@@ -1363,6 +1402,7 @@ function createDurableDeliveryStore(options = {}) {
   }
 
   function close() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(storeError('migration_allowance_access_reentry'));
     if (TERMINAL_BODY_SCOPE.getStore() === terminalBodyScopeToken) return Promise.reject(storeError('terminal_body_access_reentry'));
     if (INSTRUCTION_BODY_SCOPE.getStore() === instructionBodyScopeToken) return Promise.reject(storeError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
@@ -1413,6 +1453,7 @@ function createDurableDeliveryStore(options = {}) {
     storeValue.withQuestionRetirement = withQuestionRetirement;
     storeValue.withRetiredQuestionCheckpoint = withRetiredQuestionCheckpoint;
     storeValue.withInstructionBodyCheckpoint = withInstructionBodyCheckpoint;
+    storeValue.withMigrationAllowance = withMigrationAllowance;
     storeValue.withTerminalDeliveryBodyCheckpoint = withTerminalDeliveryBodyCheckpoint;
   }
   const store = Object.freeze(storeValue);

@@ -194,6 +194,7 @@ fixture の合格を実 runtime の適合確認と区別する。
 | 4c | 自動実行 | 明示構成でopt-inし、single-flightの期限再判定、手動操作との競合、close時のdrain、局所停止下の継続とgrant解放を確認する |
 
 grant解放は現在のfile byteだけで判定せず、固定相関の補完を含む全将来予約を通常枠と照合する。
+明示入口と停止・保存の契約は[配信回収schema](delivery-reclamation-schema.md#migration-grantの明示解放)のGAR01〜GAR06に従う。
 質問journalの局所停止では、不確かなsnapshotを正常な保存状態として公開せず、そのslotのgrantと必要leaseを保持する。
 候補を限定できない破損、anchorまたは共有容量の障害まで、質問journalの停止分離へ一般化しない。
 自動実行は既存回収入口をqueue内で再判定して使い、unknownの終端化や質問期間の新規失効を行わない。

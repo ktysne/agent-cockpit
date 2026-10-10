@@ -203,6 +203,8 @@ function createCommonQuestionService(options = {}) {
   const creatingDeliveryQuestionIds = new Set();
   const retirementStorage = reclamationMode ? new AsyncLocalStorage() : null;
   const retirementScope = Object.freeze({});
+  const grantScope = new AsyncLocalStorage();
+  const grantScopeToken = {};
   const suppressed = new Set();
   const quarantinedQuestionIds = new Set();
 
@@ -244,6 +246,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   function enqueue(operation, diagnostic = false, periodToken = null) {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(serviceError('migration_allowance_access_reentry'));
     if (!accepting) return Promise.reject(serviceError('question_service_closed'));
     if (reclamationMode && retirementStorage.getStore() === retirementScope) {
       return Promise.reject(serviceError('question_retirement_queue_reentry'));
@@ -1360,6 +1363,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   function flush() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(serviceError('migration_allowance_access_reentry'));
     if (!accepting) return Promise.reject(serviceError('question_service_closed'));
     if (reclamationMode && writerStopped) return Promise.reject(serviceError('question_gate_closed'));
     return tail.then(() => ready()).then(() => Promise.all([
@@ -1398,6 +1402,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   async function withRetirementSnapshot(ticket, callback) {
+    if (grantScope.getStore() === grantScopeToken) throw serviceError('migration_allowance_access_reentry');
     if (!reclamationMode || typeof callback !== 'function') throw serviceError('question_reclamation_unavailable');
     if (retirementStorage.getStore() === retirementScope) throw serviceError('question_retirement_queue_reentry');
     if (!accepting || writerStopped) throw serviceError('question_gate_closed');
@@ -1436,7 +1441,31 @@ function createCommonQuestionService(options = {}) {
     return result;
   }
 
+  function withMigrationAllowance(callback) {
+    if (!reclamationMode || typeof callback !== 'function') throw serviceError('invalid_migration_allowance_release');
+    return enqueue(() => journal.withMigrationAllowance(async (journalAccess) => {
+      let active = true;
+      const assertAccess = () => {
+        if (!active || grantScope.getStore() !== grantScopeToken) throw serviceError('migration_allowance_access_expired');
+        if (!accepting || writerStopped || !sharedWriterCanWrite()) throw serviceError('question_gate_closed');
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return journalAccess.snapshot(); },
+        async persist(candidate) {
+          assertAccess();
+          const saved = await journalAccess.persist(candidate, assertAccess);
+          journalState = journal.getLegacySnapshot();
+          refreshQuarantinedQuestionIds();
+          return saved;
+        },
+      });
+      try { return await grantScope.run(grantScopeToken, () => callback(access)); }
+      finally { active = false; }
+    }));
+  }
+
   async function withRetiredQuestionBodies(value, callback) {
+    if (grantScope.getStore() === grantScopeToken) throw serviceError('migration_allowance_access_reentry');
     if (!reclamationMode || typeof callback !== 'function') {
       throw serviceError('question_reclamation_unavailable');
     }
@@ -1492,6 +1521,7 @@ function createCommonQuestionService(options = {}) {
   }
 
   function close() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(serviceError('migration_allowance_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
     if (reclamationMode) stopReclamationWriter();
@@ -1519,6 +1549,7 @@ function createCommonQuestionService(options = {}) {
     });
     api.withRetirementSnapshot = withRetirementSnapshot;
     api.withRetiredQuestionBodies = withRetiredQuestionBodies;
+    api.withMigrationAllowance = withMigrationAllowance;
   }
   return Object.freeze(api);
 }

@@ -20,6 +20,57 @@ const OPERATION_ID = '33333333-3333-4333-8333-333333333333';
 const identity = Object.freeze({ provider: 'claude', nativeIdKind: 'session', hostId: 'host-1',
   homeScopeId: 'home-1', nativeId: 'native-1' });
 
+test('grant question scope rejects recursive service queues and expires after callback return', async (t) => {
+  const fixture = makeFixture();
+  t.after(() => fixture.service.close());
+  await install(fixture);
+  let retained;
+  await fixture.service.withMigrationAllowance(async (access) => {
+    retained = access;
+    assert.equal(access.snapshot().storeId, STORE_ID);
+    for (const operation of [() => fixture.service.tick(), () => fixture.service.flush(), () => fixture.service.close(),
+      () => fixture.service.withMigrationAllowance(() => {})]) {
+      await assert.rejects(operation(), (error) => error.code === 'migration_allowance_access_reentry');
+    }
+  });
+  assert.throws(() => retained.snapshot(), (error) => error.code === 'migration_allowance_access_expired');
+  await assert.rejects(retained.persist({}), (error) => error.code === 'migration_allowance_access_expired');
+  await fixture.service.flush();
+});
+
+for (const failure of ['save', 'readback']) {
+  test(`grant question adapter latches its writer after ${failure} failure despite a writable backend`, async (t) => {
+    const sourceBytes = Buffer.from(`${JSON.stringify(kernel.createEmptyJournal(), null, 2)}\n`, 'utf8');
+    const initial = questionSnapshot({ migrationAllowance: {
+      operationId: OPERATION_ID, sourceSchemaVersion: 1, sourceSizeBytes: sourceBytes.length,
+      sourceSha256: createHash('sha256').update(sourceBytes).digest('hex'), maxExtraBytes: 1,
+      eligibleQuestionIds: [],
+    } });
+    const fixture = makeFixture(initial);
+    t.after(() => fixture.service.close());
+    await install(fixture);
+    const adapter = createCommonQuestionReclamationJournal({
+      backend: fixture.backendState.backend, periodGate: fixture.periodGate,
+    });
+    adapter.prepareResume(fixture.backendState.fullSnapshot);
+    let saves = 0;
+    fixture.backendState.backend.save = async (candidate) => {
+      saves += 1;
+      if (failure === 'save') throw Object.assign(new Error('save failed'), { code: 'injected_save_failure' });
+      return { ...candidate, revision: candidate.revision + 1 };
+    };
+    await assert.rejects(adapter.withMigrationAllowance((access) => access.persist({
+      ...access.snapshot(), revision: 1, migrationAllowance: null,
+    })), { code: failure === 'save' ? 'injected_save_failure' : 'question_journal_save_mismatch' });
+    assert.equal(fixture.backendState.backend.canWrite(), true);
+    assert.equal(saves, 1);
+    await assert.rejects(adapter.withMigrationAllowance(() => {}), { code: 'question_service_closed' });
+    await assert.rejects(adapter.save({}, null), { code: 'question_service_closed' });
+    assert.equal(saves, 1);
+    await adapter.close();
+  });
+}
+
 function clone(value) {
   return structuredClone(value);
 }

@@ -2,6 +2,7 @@
 
 const fs = require('node:fs/promises');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const { types: utilTypes } = require('node:util');
 const path = require('node:path');
 const { atomicWriteJson } = require('./json-storage');
 const {
@@ -560,6 +561,8 @@ function createReclamationInstructionDeliveryJournal(options) {
 
   const bodyScope = new AsyncLocalStorage();
   const bodyScopeToken = {};
+  const grantScope = new AsyncLocalStorage();
+  const grantScopeToken = {};
   let accepting = true;
   let prepared = false;
   let hasLoaded = false;
@@ -577,6 +580,7 @@ function createReclamationInstructionDeliveryJournal(options) {
   }
 
   function enqueue(operation) {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(journalError('migration_allowance_access_reentry'));
     if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(journalError(
       'instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
@@ -699,6 +703,51 @@ function createReclamationInstructionDeliveryJournal(options) {
     });
   }
 
+  function withMigrationAllowance(callback) {
+    if (typeof callback !== 'function') throw journalError('invalid_migration_allowance_release');
+    return enqueue(async () => {
+      if (!hasLoaded) await loadNow();
+      let active = true;
+      const assertAccess = () => {
+        if (!active || grantScope.getStore() !== grantScopeToken) throw journalError('migration_allowance_access_expired');
+        if (!accepting || closed || closePromise || writeBlocked || !prepared) throw journalError('instruction_journal_closed');
+        assertBackendCanWrite();
+      };
+      const access = Object.freeze({
+        snapshot() { assertAccess(); return structuredClone(currentJournal); },
+        async persist(value, serviceGuard = undefined) {
+          assertAccess();
+          if (serviceGuard !== undefined && typeof serviceGuard !== 'function') throw journalError('invalid_reclamation_write_guard');
+          const candidate = normalizeInstructionJournalV2Local(value, maxRecords);
+          const fixed = structuredClone(candidate);
+          fixed.revision = currentJournal.revision;
+          fixed.migrationAllowance = currentJournal.migrationAllowance;
+          if (currentJournal.migrationAllowance === null || candidate.migrationAllowance !== null ||
+              candidate.revision !== currentJournal.revision + 1 || !sameJson(fixed, currentJournal)) {
+            throw journalError('invalid_migration_allowance_release_candidate');
+          }
+          const checked = measure(candidate, maxBytes);
+          try {
+            const assertWrite = () => {
+              assertAccess();
+              const result = serviceGuard?.();
+              if (result !== undefined) {
+                if (utilTypes.isPromise(result)) Promise.prototype.catch.call(result, () => {});
+                throw journalError('invalid_reclamation_write_guard');
+              }
+            };
+            const saved = normalizeInstructionJournalV2Local(await backend.save(checked, assertWrite), maxRecords);
+            currentJournal = saved;
+            lastCommittedRevision = saved.revision;
+            return structuredClone(saved);
+          } catch (error) { writeBlocked = true; throw error; }
+        },
+      });
+      try { return await grantScope.run(grantScopeToken, () => callback(access)); }
+      finally { active = false; }
+    });
+  }
+
   function withInstructionBody(value, callback) {
     const request = captureExactRecord(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation');
     const id = request.deliveryAttemptId;
@@ -761,6 +810,7 @@ function createReclamationInstructionDeliveryJournal(options) {
   }
 
   function flush() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(journalError('migration_allowance_access_reentry'));
     if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(journalError('instruction_body_access_reentry'));
     if (!accepting) return Promise.reject(journalError('instruction_journal_closed'));
     if (!prepared) return Promise.reject(journalError('reclamation_writer_cold'));
@@ -786,6 +836,7 @@ function createReclamationInstructionDeliveryJournal(options) {
   }
 
   function close() {
+    if (grantScope.getStore() === grantScopeToken) return Promise.reject(journalError('migration_allowance_access_reentry'));
     if (bodyScope.getStore() === bodyScopeToken) return Promise.reject(journalError('instruction_body_access_reentry'));
     if (closePromise) return closePromise;
     accepting = false;
@@ -819,6 +870,7 @@ function createReclamationInstructionDeliveryJournal(options) {
     assertCapacityReserved,
     reclamationWriter,
     withInstructionBody,
+    withMigrationAllowance,
   });
 }
 
