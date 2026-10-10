@@ -509,6 +509,31 @@ crash後の材料可用性を証明するには、旧Q/CPの元byte列を保持�
 anchor/Iを外部正本として固定し、同じ材料からtargetを再生成できることを検証する。
 現loaderとの接続、永続配置、prepareとatomicピーク、保存とcold継続、新外側の将来予約、件数枠の解放とruntimeは別の採用条件とする。
 
+### 質問側のprepared material
+
+復旧材料の独立codecは通常journalとは別のv1形式とし、固定kind、manifest、旧Qと旧CPのraw byte列のcanonical base64を保持する。
+CPが無い場合だけ対応するbase64をnullにする。
+操作、store、指紋、選択とchunk、通常上限の正本は内包manifestとし、外側に重複して置かない。
+元rawの空白と重複keyもbyte単位で保持し、parse後の再stringifyで代用しない。
+target本体は重複保持せず、固定した外部anchor/Iと内包旧Q/CPから同じplannerで再生成する。
+将来plannerの再生成互換を変えるときは、prepared形式の版ごとの再生成契約を維持する。
+
+作成は同じ安全コピーを既存evidenceの検査とbase64格納に使う。
+局所normalize、encodeとdecodeはexactな形式、manifest、canonical base64とその実size/hash、全体byte上限を検査する。
+Q2/CP3の意味と全store整合は、外部anchor/Iを揃える完全検証のplannerとevidenceに委ねる。
+完全検証は内包sourceから再生成したtarget byte列を返し、外部正本を置換するbyte列や保存命令を返さない。
+返却値は独立したmutable値であり、後続利用時には変更後の値を再検証する。
+
+外側の実pretty JSONと末尾LFを16 MiB以内に制限する。
+manifestの実encode byte数とLF数から入れ子のindentを計算し、固定wrapperとbase64の予測長をcheckedな加算で合計する。
+予測が上限を超える場合は大きなbase64文字列を作る前に拒否し、最終serializerの実byte数と予測の一致も要求する。
+この政策は一部の合法な旧sourceを拒否し得る。Qの通常上限B、専用leaseとatomicピークを満たすとは認定しない。
+
+この段階で証明するのは渡された復旧材料の表現と再生成の一致である。
+実fileのdurableな可用性、通常readerのrouting、排他とsource最新性、信頼する通常上限の正本、保存admission、cold継続とruntimeは別に検証する。
+旧・準備済み・CP移転後・完了のbyte完全一致分類と、正本ファイルの現在logical byte表を次に検証する。
+temp、backup、orphanと別processのfileを含む保存ピークは、その表の合計に読み替えない。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
