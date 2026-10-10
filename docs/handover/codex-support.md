@@ -787,6 +787,7 @@ Claude R1はblockerと要修正が0件で収束した。
 process間排他は[#313](https://github.com/ktysne/agent-cockpit/issues/313)の範囲へ残す。
 実runtime、電源断耐久性と新schema writer接続も未実装または未確認として残す。
 検証source`ed9e1b1`をコミットし、固定headで全体検証と指定Claudeレビューを行う。
+PR [#359](https://github.com/ktysne/agent-cockpit/pull/359)はfeature向けDraftで、#358の後にマージする。
 関連9ファイルの237成功、失敗0、Windows実symlink権限skip1は最終stop記録の補強前である。
 監査補強後のcontextとfactory112件、最終context49件とcoordinator管理終了2件はすべて成功した。
 次は#313の参加writer、ファイル単位の所有、取得前I/O禁止とcrash後の回復条件を設計し、primitiveとwriter接続を分ける。
