@@ -386,7 +386,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | non-blocking の native 質問の待ち中の追加指示 | 送信を止めたままにするか、送ってよいか。推奨は実測するまで止めたままにする | PR #204 の本文 |
 | 電源断の保証 | 拒否情報の flush と保存順序の保証を電源断にも広げるか。推奨は広げない(現状はプロセスのクラッシュ後に限る) | [容量回収計画](../design/codex-capacity-reclamation.md)「容量予約と診断」 |
 | 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
-| writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。PIDやTTLだけでは奪取せず、停止を確認できない場合はmarkerを削除しない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
+| writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。現行トレイの強制再起動はmarkerを残すため、標準接続前にgraceful停止と最終解放確認を実装する。残留時は起動拒否とし、PID/TTLによる奪取やトレイの自動削除は行わない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
@@ -812,6 +812,8 @@ private primitive、標準writer接続、factory接続と横断試験は後続�
 専有Windows probeは競合同時取得、正常marker残留、大小文字とjunction alias、hardlinkの反例を確認した。
 対応filesystemの検出、未対応aliasの拒否、実process crashと実runtimeは未確認で、製品排他成功へ数えない。
 設計PRのレビュー後は、候補環境の基礎操作を確認し、限定path向けprivate primitiveと実process fixtureに進む。
+Claude R1はblocker0件、要修正3件で、トレイ再起動の接続条件、lease/sidecar/Mapの解放順と一般path接続前のfilesystem/alias検証を明記して再レビューする。
+一般保存先と標準再起動への接続は限定primitiveの完了に含めず、W11の停止/再起動とW12のcaller同期失敗を後続の完了条件にする。
 
 ## 起票していない候補
 

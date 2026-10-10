@@ -69,6 +69,12 @@ producerの停止を確認できなければunlinkを試みない。
 factoryのreleaseはPR #359の全終了確認後にだけ接続する。
 public close、子writerと旧ownerから最終解放へ迂回できないことを試験する。
 
+回収ownerの最終解放は容量leaseの解放成功確認、全sidecarのunlink成功確認、module内Map解放の順とする。
+standaloneで容量leaseを持たないwriterは、tail終了確認、sidecarのunlink成功確認、対応するMap解放の順とする。
+sidecar解放の失敗または結果不明ではMapを保持し、回収factoryのcloseは原因を含む`reclamation_ownership_retained`を返す。
+一部sidecarや容量leaseは既に解放され得るため、Map保持を全容量やdisk所有の保持と読み替えない。
+旧ownerは終端状態のままとし、再closeによる追加unlinkやMap解放を行わない。
+
 tokenの読取りとunlinkの間に原子的な条件付き削除は無い。
 このため、稼働ownerのmarkerを第三者が削除または置換しないことを協調protocolの前提にする。
 任意のfilesystem編集に対する排他とは主張しない。
@@ -77,6 +83,8 @@ tokenの読取りとunlinkの間に原子的な条件付き削除は無い。
 
 canonical parentとbasenameだけではhardlinkの別名を統一できない。
 sourceのhardlinkを拒否する案を優先し、所有中に第三者がhardlinkを追加しない前提も必要である。
+全sidecar取得後、source内容I/O前に既存sourceのnlinkを検査し、複数linkなら当該試行が作ったmarkerをrollbackして拒否する。
+未作成sourceにはnlink検査を要求せず、取得後の第三者によるnamespace変更は協調前提の対象外とする。
 symlink、junction、短縮名、case-sensitive directory、network mountとWindowsのpath namespaceの扱いは実装前に確定する。
 代替stream、末尾のdot/space、device名を含む非対応入力の拒否条件も、製品接続前に確認する。
 同じfile identityを共通keyへ解決するか、検出して拒否する手段が実証できない入力は対応済みと扱わない。
@@ -116,15 +124,29 @@ standalone checkpointにreclamation anchorを要求するものではない。
 専有fixtureの停止確認と、実運用の責任者による全停止確認は別の条件として記録する。
 本案の設計作業は、実データのmarker削除や外部process停止を許可するものではない。
 
+## 標準起動と再起動への接続条件
+
+現在のトレイ再起動は`src/tray/tray.ps1`で常駐サーバーを`Stop-Process -Force`により終了する。
+この終了ではwriterのcloseによるmarker除去を期待できず、排他接続後は通常の再起動でも次の取得が拒否される。
+標準writerへ接続する前に、トレイがgraceful停止を要求し、全writerの終了と最終解放の成功を確認してから再起動する手段を決め、実装と試験を行う。
+停止要求のAPIと完了通知の方式は未決で、停止要求の送信やprocess終了だけを解放成功の証明にしない。
+完了通知は対象の旧server instanceに結び付け、server.jsonの消失を成功の証拠にしない。
+停止が失敗または完了未確認なら再起動手順を失敗にし、次の通常起動へ進めない。
+停止失敗、強制終了またはcrash後にmarkerが残れば、次の起動は保存writerの取得を拒否し、永続化を省いたまま通常動作を続ける縮退起動は採用しない。
+トレイは残留markerを自動削除せず、全停止と新規起動禁止を確認した手動回復を必要とする。
+この接続条件を満たすまで標準起動へ排他を有効化しない。
+
 ## 実装を分ける順序
 
 1. 参加表、保証範囲、未確認条件と回復手順を設計PRにする。
-2. 対応条件を実証したprivate primitiveと実process fixtureを別PRで実装する。
-3. standalone保存入口へ接続し、取得前I/Oが無いことを確認する。
+2. 内部で準備した限定path向けprivate primitiveと実process fixtureを別PRで実装し、W01〜W07のprimitiveに対応する競合と故障を確認する。writer終了やfactoryの条件は接続段階へ残す。
+3. 一般保存先のfilesystem判定とW08のalias拒否を実証し、検出不能なら取得前に同期拒否する。standalone保存入口へ接続し、取得前I/Oが無いことを確認する。標準起動の有効化前に再起動の接続条件を満たす。
 4. factory全file setと二段階終了へ接続し、子backendの解放迂回を拒否する。
 5. 全参加writerを横断して異processの共有保存先を拒否し、#313の完了条件を確認する。
 
 試験は同時取得、部分競合、metadata write失敗、rollback失敗、release失敗、旧release再呼出し、crash残留、alias拒否、取得後再読込みを含む。
+standalone各constructorと移行/修復callerの親directory準備、取得時の同期throwの処理と起動失敗時のcleanupを接続PRの完了条件として照合する。
+標準standaloneのunlink失敗は原因を保持し、既存closeとのエラー互換を接続PRで固定する。回収factory専用のエラーcodeを暗黙に標準writerへ広げない。
 fixtureと実Claude/Codex runtimeの結果は別に記録する。
 fsyncと電源断耐久性は#210の境界を維持し、排他成功から推定しない。
 
