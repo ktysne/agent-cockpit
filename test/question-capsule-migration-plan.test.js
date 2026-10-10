@@ -94,6 +94,90 @@ function wholeInputFromSources(input) {
   };
 }
 
+function assertOldWholeReady(input) {
+  const whole = validateQuestionCapsuleWholeRepresentation(wholeInputFromSources(input));
+  const ready = validateReclamationSnapshot(whole.snapshot);
+  assert.equal(ready.status, 'ready');
+  assert.deepEqual(ready.reasons, []);
+  const checked = validateReclamationStoreWrite({
+    anchor: whole.snapshot.anchor,
+    previousStores: whole.snapshot.stores,
+    nextStores: whole.snapshot.stores,
+    normalByteLimitsBySlot: input.normalByteLimitsBySlot,
+  });
+  assert.equal(checked.status, 'checked');
+  assert.deepEqual(checked.reasons, []);
+  return whole;
+}
+
+function tombstoneForDelivery(delivery) {
+  return {
+    kind: delivery.kind,
+    sourceExecutionId: delivery.sourceExecutionId,
+    logicalMessageId: delivery.logicalMessageId,
+    revision: delivery.revision,
+    targetLaunchKey: null,
+    sourceLaunchKey: clone(delivery.sourceRef.launchKey),
+    payloadDigest: delivery.payloadDigest,
+  };
+}
+
+function addUnselectedCheckpointRows(fixture, count) {
+  const questionStore = decodeSourceBytes(fixture.input.sourceBytes.questions, MAX_SOURCE_BYTES).value;
+  const checkpoint = decodeSourceBytes(fixture.input.sourceBytes.checkpoint, MAX_SOURCE_BYTES).value;
+  const templateReservation = questionStore.reservations.find((reservation) =>
+    reservation.internalQuestionId === 'internal-1');
+  const templateDelivery = checkpoint.ledger.deliveries.find((delivery) =>
+    delivery.deliveryAttemptId === templateReservation.deliveryIntent.deliveryAttemptId);
+
+  for (let sequence = 0; sequence < count; sequence += 1) {
+    const suffix = String(sequence).padStart(4, '0');
+    const attemptId = `threshold-attempt-${suffix}`;
+    const logicalMessageId = `threshold-logical-${suffix}`;
+    const reservation = clone(templateReservation);
+    const delivery = clone(templateDelivery);
+    reservation.internalQuestionId = `threshold-internal-${suffix}`;
+    reservation.questionId = `threshold-public-${suffix}`;
+    reservation.deliveryIntent.deliveryAttemptId = attemptId;
+    reservation.deliveryIntent.logicalMessageId = logicalMessageId;
+    reservation.reclamation.operationId = `c0000000-0000-4000-8000-${String(sequence + 1).padStart(12, '0')}`;
+    delivery.deliveryAttemptId = attemptId;
+    delivery.logicalMessageId = logicalMessageId;
+    delivery.reclamation.operationId = reservation.reclamation.operationId;
+    for (const correlation of [delivery.acceptedCorrelation, delivery.appliedCorrelation]) {
+      if (correlation) {
+        correlation.deliveryAttemptId = attemptId;
+        correlation.clientRequestId = attemptId;
+        correlation.nativeItemId = `threshold-item-${suffix}`;
+        correlation.nativeTurnId = `threshold-turn-${suffix}`;
+      }
+    }
+    questionStore.reservations.push(reservation);
+    checkpoint.ledger.deliveries.push(delivery);
+    checkpoint.ledger.logicalTombstones.push(tombstoneForDelivery(delivery));
+  }
+
+  fixture.input.sourceBytes.questions = encodeNormalized(questionStore).bytes;
+  fixture.input.sourceBytes.checkpoint = encodeNormalized(checkpoint).bytes;
+}
+
+function createCheckpointNullFixture() {
+  const fixture = createQuestionCapsuleMigrationPlanFixture({ internalQuestionIds: ['internal-4'] });
+  const questionStore = decodeSourceBytes(fixture.input.sourceBytes.questions, MAX_SOURCE_BYTES).value;
+  questionStore.questions = [];
+  questionStore.reservations = questionStore.reservations.filter((reservation) =>
+    reservation.internalQuestionId === 'internal-4');
+  fixture.input.sourceBytes.questions = encodeNormalized(questionStore).bytes;
+  fixture.input.sourceBytes.checkpoint = null;
+  fixture.input.sourceBytes.instructions = null;
+  fixture.input.normalByteLimitsBySlot.checkpoint = null;
+  fixture.input.normalByteLimitsBySlot.instructions = null;
+  const whole = assertOldWholeReady(fixture.input);
+  fixture.snapshot = whole.snapshot;
+  fixture.wholeInput = wholeInputFromSources(fixture.input);
+  return fixture;
+}
+
 function padded(raw, size) {
   assert.ok(raw.byteLength <= size);
   const result = Buffer.alloc(size, 0x20);
@@ -252,17 +336,40 @@ test('instruction source bytes may use exactly B plus its verified grant', () =>
   assertInvalid(fixture.input);
 });
 
-test('source bytes reject invalid UTF-8 and mismatched null limits', () => {
+test('source and byte-limit null slots must match in both directions before parsing', (t) => {
+  const fixtures = [
+    (() => {
+      const fixture = createQuestionCapsuleMigrationPlanFixture();
+      assertOldOracle(fixture);
+      fixture.input.normalByteLimitsBySlot.checkpoint = null;
+      return fixture;
+    })(),
+    (() => {
+      const fixture = createQuestionCapsuleMigrationPlanFixture();
+      assertOldOracle(fixture);
+      fixture.input.sourceBytes.checkpoint = null;
+      return fixture;
+    })(),
+  ];
+  const parse = JSON.parse;
+  let parseCalls = 0;
+  t.mock.method(JSON, 'parse', (...args) => {
+    parseCalls += 1;
+    return parse(...args);
+  });
+  for (const fixture of fixtures) {
+    assertInvalid(fixture.input);
+    assert.equal(parseCalls, 0);
+  }
+});
+
+test('source bytes reject invalid UTF-8 and SharedArrayBuffer-backed views', () => {
   const invalidUtf8 = createQuestionCapsuleMigrationPlanFixture();
   invalidUtf8.input.sourceBytes.instructions = Buffer.concat([
     invalidUtf8.input.sourceBytes.instructions,
     Buffer.from([0xff]),
   ]);
   assertInvalid(invalidUtf8.input);
-  const nullMismatch = createQuestionCapsuleMigrationPlanFixture();
-  nullMismatch.input.sourceBytes.checkpoint = null;
-  nullMismatch.input.normalByteLimitsBySlot.checkpoint = null;
-  assertInvalid(nullMismatch.input);
   const shared = createQuestionCapsuleMigrationPlanFixture();
   const sharedBytes = new Uint8Array(new SharedArrayBuffer(shared.input.sourceBytes.questions.length));
   sharedBytes.set(shared.input.sourceBytes.questions);
@@ -288,14 +395,81 @@ test('byte views use native accessors without invoking subclass getters or itera
   assert.equal(traps, 0);
 });
 
-test('Q and CP migration grants must be null before planning', () => {
+test('Q and CP migration grants are rejected after an old-whole-ready control', () => {
   for (const slot of ['questions', 'checkpoint']) {
     const fixture = createQuestionCapsuleMigrationPlanFixture();
     const store = clone(fixture.snapshot.stores[slot]);
     store.migrationAllowance = clone(fixture.sourceGrants[slot]);
     fixture.input.sourceBytes[slot] = encodeNormalized(store).bytes;
+    const whole = assertOldWholeReady(fixture.input);
+    assert.deepEqual(plain(whole.snapshot.stores[slot].migrationAllowance),
+      plain(fixture.sourceGrants[slot]));
     assertInvalid(fixture.input);
   }
+});
+
+test('duplicate scopes and cross-scope IDs reject before parsing a valid old source', (t) => {
+  const duplicateScope = createQuestionCapsuleMigrationPlanFixture();
+  assertOldOracle(duplicateScope);
+  const duplicateScopeInput = clone(duplicateScope.input);
+  duplicateScopeInput.selection = [
+    clone(duplicateScope.input.selection[0]),
+    clone(duplicateScope.input.selection[0]),
+  ];
+
+  const repeatedId = createQuestionCapsuleMigrationPlanFixture();
+  assertOldOracle(repeatedId);
+  const firstScope = clone(repeatedId.input.selection[0]);
+  const crossScopeInput = clone(repeatedId.input);
+  crossScopeInput.selection = [firstScope, {
+    identity: clone(firstScope.identity),
+    periodId: `${firstScope.periodId}-other`,
+    internalQuestionIds: [firstScope.internalQuestionIds[0]],
+  }];
+
+  const parse = JSON.parse;
+  let parseCalls = 0;
+  t.mock.method(JSON, 'parse', (...args) => {
+    parseCalls += 1;
+    return parse(...args);
+  });
+  for (const input of [duplicateScopeInput, crossScopeInput]) {
+    assertInvalid(input);
+    assert.equal(parseCalls, 0);
+  }
+});
+
+test('empty selections and empty scope IDs reject before parsing a valid old source', (t) => {
+  const fixture = createQuestionCapsuleMigrationPlanFixture();
+  assertOldOracle(fixture);
+  const emptySelection = clone(fixture.input);
+  emptySelection.selection = [];
+  const emptyScopeIds = clone(fixture.input);
+  emptyScopeIds.selection[0].internalQuestionIds = [];
+
+  const parse = JSON.parse;
+  let parseCalls = 0;
+  t.mock.method(JSON, 'parse', (...args) => {
+    parseCalls += 1;
+    return parse(...args);
+  });
+  for (const input of [emptySelection, emptyScopeIds]) {
+    assertInvalid(input);
+    assert.equal(parseCalls, 0);
+  }
+});
+
+test('a none-only selection supports a null checkpoint file and instruction slot', () => {
+  const fixture = createCheckpointNullFixture();
+  const plan = planQuestionCapsuleFileMigration(fixture.input);
+  assert.equal(plan.targets.checkpoint, null);
+  assert.equal(plan.sourceFingerprints.checkpoint, null);
+  assert.equal(plan.sourceFingerprints.instructions, null);
+  assert.equal(plan.selectionSummary.questionReservationCount, 1);
+  assert.equal(plan.selectionSummary.checkpointDeliveryCount, 0);
+  assert.equal(plan.selectionSummary.checkpointChunkCount, 0);
+  assert.deepEqual(plain(restorePlan(fixture, plan)), plain(fixture.snapshot));
+  assert.deepEqual(plan.unusedChunkIds, fixture.input.chunkIds.slice(1));
 });
 
 test('an indeterminate selected reservation keeps its delivery lookup absent', () => {
@@ -330,24 +504,61 @@ test('unused chunk IDs are validated and insufficient or duplicate pools reject'
   assertInvalid(insufficient.input);
 });
 
-test('a selected reservation must exist in its retired scope and be reclaimed', () => {
-  for (const input of [
-    (() => {
-      const fixture = createQuestionCapsuleMigrationPlanFixture();
-      fixture.input.selection[0].internalQuestionIds[0] = 'missing-reservation';
-      return fixture.input;
-    })(),
-    (() => {
-      const fixture = createQuestionCapsuleMigrationPlanFixture();
-      fixture.input.selection[0].internalQuestionIds = ['internal-5'];
-      return fixture.input;
-    })(),
-    (() => {
-      const fixture = createQuestionCapsuleMigrationPlanFixture();
-      fixture.input.selection[0].identity.nativeId = 'unretired-native-id';
-      return fixture.input;
-    })(),
-  ]) assertInvalid(input);
+test('a selected reservation must exist and be reclaimed in its exact retired scope', () => {
+  const missing = createQuestionCapsuleMigrationPlanFixture();
+  assertOldOracle(missing);
+  missing.input.selection[0].internalQuestionIds[0] = 'missing-reservation';
+  assertInvalid(missing.input);
+
+  const unreclaimed = createQuestionCapsuleMigrationPlanFixture({ internalQuestionIds: ['internal-5'] });
+  assertOldOracle(unreclaimed);
+  const retained = unreclaimed.snapshot.stores.questions.reservations.find((row) =>
+    row.internalQuestionId === 'internal-5');
+  assert.equal(retained.bodyState, 'retained');
+  assert.deepEqual(unreclaimed.input.selection[0].identity, retained.identity);
+  assert.equal(unreclaimed.input.selection[0].periodId, retained.periodId);
+  assertInvalid(unreclaimed.input);
+});
+
+test('an old-whole source rejects after its selected reclaimed scope loses retired evidence', () => {
+  const fixture = createQuestionCapsuleMigrationPlanFixture({ internalQuestionIds: ['internal-4'] });
+  assertOldOracle(fixture);
+  const selectedScope = clone(fixture.input.selection[0]);
+  const anchor = decodeSourceBytes(fixture.input.sourceBytes.anchor, MAX_SOURCE_BYTES).value;
+  anchor.retiredQuestionPeriods = anchor.retiredQuestionPeriods.filter((period) =>
+    !(period.periodId === selectedScope.periodId &&
+      period.identity.nativeId === selectedScope.identity.nativeId));
+  fixture.input.sourceBytes.anchor = encodeNormalized(anchor).bytes;
+
+  const questionStore = decodeSourceBytes(fixture.input.sourceBytes.questions, MAX_SOURCE_BYTES).value;
+  const selected = questionStore.reservations.find((row) =>
+    row.internalQuestionId === selectedScope.internalQuestionIds[0]);
+  assert.equal(selected.bodyState, 'reclaimed');
+  assert.deepEqual(selected.identity, selectedScope.identity);
+  assert.equal(selected.periodId, selectedScope.periodId);
+  assert.throws(() => validateReclamationSnapshot({ anchor, stores: {
+    questions: questionStore,
+    checkpoint: decodeSourceBytes(fixture.input.sourceBytes.checkpoint, MAX_SOURCE_BYTES).value,
+    instructions: decodeSourceBytes(fixture.input.sourceBytes.instructions, MAX_SOURCE_BYTES).value,
+  } }), { name: 'TypeError', message: 'invalid_reclamation_snapshot' });
+  assertInvalid(fixture.input);
+});
+
+test('a live unretired reservation cannot be selected for migration', () => {
+  const fixture = createQuestionCapsuleMigrationPlanFixture({
+    ordinaryQuestionSelected: true,
+    internalQuestionIds: ['internal-5'],
+  });
+  assertOldOracle(fixture);
+  const reservation = fixture.snapshot.stores.questions.reservations.find((row) =>
+    row.internalQuestionId === 'internal-5');
+  assert.equal(reservation.bodyState, 'retained');
+  assert.equal(reservation.quarantinedAt, null);
+  assert.ok(!fixture.snapshot.anchor.retiredQuestionPeriods.some((period) =>
+    period.periodId === reservation.periodId && period.identity.nativeId === reservation.identity.nativeId));
+  assert.deepEqual(fixture.input.selection[0].identity, reservation.identity);
+  assert.equal(fixture.input.selection[0].periodId, reservation.periodId);
+  assertInvalid(fixture.input);
 });
 
 test('unselected deliveries in a selected logical group reject the whole plan', () => {
@@ -461,6 +672,29 @@ test('a scope splits at the 1 MiB capsule byte limit before reaching 256 entries
     ...firstChunk,
     reservations: [...firstChunk.reservations, firstRowOfNextChunk],
   }), { name: 'RangeError', message: 'question_capsule_too_large' });
+});
+
+test('encoded CP target bytes fit B exactly and reject B-1 after both old controls pass', () => {
+  const fixture = createQuestionCapsuleMigrationPlanFixture();
+  addUnselectedCheckpointRows(fixture, 768);
+  const baseline = planQuestionCapsuleFileMigration(fixture.input);
+  const targetSize = baseline.targets.checkpoint.sizeBytes;
+  const rawCheckpointSize = fixture.input.sourceBytes.checkpoint.byteLength;
+  assert.ok(rawCheckpointSize < targetSize - 1);
+
+  fixture.input.normalByteLimitsBySlot.checkpoint = targetSize;
+  const exactOldWhole = assertOldWholeReady(fixture.input);
+  assert.ok(rawCheckpointSize <= fixture.input.normalByteLimitsBySlot.checkpoint);
+  const exact = planQuestionCapsuleFileMigration(fixture.input);
+  assert.equal(exact.targets.checkpoint.sizeBytes, targetSize);
+  fixture.snapshot = exactOldWhole.snapshot;
+  assert.deepEqual(plain(restorePlan(fixture, exact)), plain(exactOldWhole.snapshot));
+
+  fixture.input.normalByteLimitsBySlot.checkpoint = targetSize - 1;
+  const smallerOldWhole = assertOldWholeReady(fixture.input);
+  assert.ok(rawCheckpointSize <= fixture.input.normalByteLimitsBySlot.checkpoint);
+  assert.deepEqual(plain(smallerOldWhole.snapshot), plain(exactOldWhole.snapshot));
+  assertInvalid(fixture.input);
 });
 
 test('input proxies and accessors are rejected before their traps run', () => {

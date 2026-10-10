@@ -524,11 +524,19 @@ skipはWindowsの実symlink権限によるもので、注入したsymlinkの拒�
 保存とcold復旧へは接続していない。
 次は旧rawファイルと新形式の対応を検証するpure移行plannerで、新形式の将来予約と一時保存ピークは別の後続検証に残す。
 
-その移行plannerは`codex/question-capsule-migration-plan-209-20261010`で実装中で、基点は#336の`1e7cbf2`である。
+その移行plannerは[#337](https://github.com/ktysne/agent-cockpit/pull/337)の`codex/question-capsule-migration-plan-209-20261010`で、基点は#336の`1e7cbf2`である。
 旧rawのfingerprint、退役scopeの選択とlogical groupの閉包、決定的なchunk分割、元の全順序と復元内容の一致を検証する。
 instructionsの有効なgrantを保持し、質問とcheckpointの変換へ流用しない。
 契約は[容量回収計画](../design/codex-capacity-reclamation.md#旧rawファイルからの移行計画)に置く。
 新形式の将来予約、prepareとatomic保存ピーク、実保存とcold、件数枠の解放は未達のまま残す。
+`81f97a1`で個別18件と全体2,685件が成功し、1件skip、失敗0件だった。
+Qの257件と1 MiBの分割、raw Iの16 MiBと有効grantの境界を確認した。
+CPのbyteによる分割と独立した件数境界は未確認である。
+Claude R1はblocker0件、試験の検出力について要修正2件だった。
+nullの対応、grant付きの合法source、選択の重複・空集合、CP-null正常系、回収状態と退役証拠、CP実byteのBとB−1を補強し、個別25件が成功した。
+両CP境界の旧wholeもready、自己遷移と容量条件を通り、raw byteの超過による拒否とは区別できている。
+退役証拠のない回収済みsourceは旧wholeで拒否されるため、plannerの局所条件だけを通る合法sourceは存在しない。
+製品コードは全体検証した`81f97a1`から変わっておらず、Claudeの妥当性確認へ進む。
 
 ## 起票していない候補
 
@@ -537,6 +545,8 @@ instructionsの有効なgrantを保持し、質問とcheckpointの変換へ流�
 
 | 候補 | 出所 |
 |---|---|
+| capsule移行plannerの候補encode反復と全選択delivery走査を計測し、runtimeへ接続する前に最適化の要否を決める | PR #337のClaude R1任意提案。現状はpure処理で、計測と最適化は未実施 |
+| 外側codecの結合検査で正規化とencodeを繰り返す費用を計測し、検証済み結果を内部で再利用する | PR #336のClaude R1任意提案。未検査値を信頼する公開入口は増やさない |
 | 復元実験、拒否包含分析と質問保存のplain-data preflightを共通化する。例外分類と入力の上限の差を先に照合する | PR #333のClaudeレビュー提案。現在の検査経路は保つ |
 | 隔離診断が呼ばれるたびに容量の予約量を計算し直す(標準起動へ接続する前に #209 で考慮する) | PR #293 の[コメント](https://github.com/ktysne/agent-cockpit/pull/293#issuecomment-6060612725) |
 | 未知の kind のセッションを非対話として扱う(許可リスト化するか) | PR #306 の[コメント](https://github.com/ktysne/agent-cockpit/pull/306#issuecomment-6065761647) |
