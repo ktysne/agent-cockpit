@@ -10,6 +10,7 @@ const {
   startNativeInstructionServer,
 } = require('../src/server/native-instruction-service-integration');
 const { startServer } = require('../src/server/server');
+const { AwayState } = require('../src/server/state');
 const { createTemporaryNativeInstructionHarness } = require('./support/native-instruction-integration-harness');
 const { jsonBody, request, uiHeaders } = require('./support/server');
 
@@ -42,6 +43,31 @@ function profiles(directory) {
 
 async function createDirectory() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'native-instruction-factory-'));
+}
+
+function assertTemporaryDirectory(directory) {
+  const root = path.resolve(os.tmpdir());
+  const target = path.resolve(directory);
+  const relative = path.relative(root, target);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('temporary cleanup target is outside os.tmpdir');
+  }
+}
+
+async function cleanupNativeShutdownFixture(directory, runtime) {
+  if (runtime) {
+    try { await runtime.close(); } catch {}
+    if (runtime.server.listening) throw new Error('server listener remains open after close');
+  }
+  assertTemporaryDirectory(directory);
+  await fs.rm(path.resolve(directory), { recursive: true, force: true });
+}
+
+function shutdownCloseOutcome(promise) {
+  return promise.then(
+    () => ({ status: 'fulfilled' }),
+    (reason) => ({ status: 'rejected', reason }),
+  );
 }
 
 function integrationOptions(directory) {
@@ -138,6 +164,97 @@ test('native server exposes a safe shutdown status after cleanup fails', async (
 
   await assert.rejects(runtime.close(), /fixture contains private cleanup detail/);
   assert.equal(runtime.shutdownError, 'shutdown_incomplete');
+});
+
+test('native server close は falsy な shutdown reason を初回と再 close に保持する', async (t) => {
+  const reasons = [
+    ['false', false], ['null', null], ['undefined', undefined], ['zero', 0], ['empty string', ''],
+  ];
+  const modes = ['synchronous throw', 'asynchronous reject'];
+  for (const [reasonName, reason] of reasons) {
+    for (const mode of modes) {
+      await t.test(`${reasonName}: ${mode}`, async (subtest) => {
+        const directory = await createDirectory();
+        let runtime;
+        subtest.after(() => cleanupNativeShutdownFixture(directory, runtime));
+        let shutdownCalls = 0;
+        runtime = await startNativeInstructionServer({
+          integrationOptions: integrationOptions(directory),
+          serverOptions: {
+            homeDir: path.join(directory, 'dashboard'),
+            claudeHome: path.join(directory, 'claude-home'),
+            port: 0,
+            onShutdown() {
+              shutdownCalls += 1;
+              if (mode === 'synchronous throw') throw reason;
+              return Promise.reject(reason);
+            },
+          },
+        });
+
+        const first = await shutdownCloseOutcome(runtime.close());
+        const second = await shutdownCloseOutcome(runtime.close());
+        for (const outcome of [first, second]) {
+          assert.equal(outcome.status, 'rejected');
+          assert.strictEqual(outcome.reason, reason);
+        }
+        assert.equal(shutdownCalls, 1);
+        assert.equal(runtime.server.listening, false);
+        assert.equal(runtime.shutdownError, 'shutdown_incomplete');
+        await assert.rejects(fs.access(path.join(directory, 'dashboard', 'server.json')), { code: 'ENOENT' });
+      });
+    }
+  }
+});
+
+test('native server close は integration の先行 falsy reason を後続 callback の失敗より優先する', async (t) => {
+  const reasons = [
+    ['false', false], ['null', null], ['undefined', undefined], ['zero', 0], ['empty string', ''],
+  ];
+  for (const [reasonName, reason] of reasons) {
+    await t.test(reasonName, async (subtest) => {
+      const directory = await createDirectory();
+      let runtime;
+      subtest.after(() => cleanupNativeShutdownFixture(directory, runtime));
+      let unsubscribeCalls = 0;
+      let shutdownCalls = 0;
+      const settings = {
+        getAutoApplySettings: () => ({ enabled: false, minimumWaitMs: 300_000 }),
+        getStatus: () => ({ status: 'ready', revision: 'shutdown-falsy-fixture', reason: null }),
+        subscribe: () => () => {
+          unsubscribeCalls += 1;
+          throw reason;
+        },
+      };
+      runtime = await startNativeInstructionServer({
+        integrationOptions: {
+          ...integrationOptions(directory),
+          commonQuestions: { away: new AwayState(directory), settings },
+        },
+        serverOptions: {
+          homeDir: path.join(directory, 'dashboard'),
+          claudeHome: path.join(directory, 'claude-home'),
+          port: 0,
+          onShutdown() {
+            shutdownCalls += 1;
+            throw new Error('later shutdown callback failure');
+          },
+        },
+      });
+
+      const first = await shutdownCloseOutcome(runtime.close());
+      const second = await shutdownCloseOutcome(runtime.close());
+      for (const outcome of [first, second]) {
+        assert.equal(outcome.status, 'rejected');
+        assert.strictEqual(outcome.reason, reason);
+      }
+      assert.equal(unsubscribeCalls, 1);
+      assert.equal(shutdownCalls, 1);
+      assert.equal(runtime.server.listening, false);
+      assert.equal(runtime.shutdownError, 'shutdown_incomplete');
+      await assert.rejects(fs.access(path.join(directory, 'dashboard', 'server.json')), { code: 'ENOENT' });
+    });
+  }
 });
 
 test('native server startup failure closes the integration and releases its journal path', async (t) => {

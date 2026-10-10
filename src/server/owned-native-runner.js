@@ -1352,41 +1352,49 @@ function createOwnedNativeRunner(options) {
     }
   }
 
-  function awaitOwnedRead(value, expectedGeneration, leaseToken, identity, context) {
+  function awaitOwnedRead(value, expectedGeneration, leaseToken, identity, context, readScope) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let timer = null;
+      let unsubscribe = () => {};
       const finish = (callback, result) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         cancellations.delete(cancel);
+        unsubscribe();
         callback(result);
       };
       const cancel = () => finish(reject, runnerError('operation_stopped'));
-      const timer = setTimeout(() => finish(reject, runnerError('rpc_timeout')), timeouts.rpcMs);
-      if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
-        finish(reject, runnerError('operation_stopped'));
-        return;
-      }
-      cancellations.add(cancel);
       Promise.resolve(value).then(
         (result) => {
-          if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+          if (readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
             finish(reject, runnerError('operation_stopped'));
           } else {
             finish(resolve, result);
           }
         },
-        () => finish(reject, runnerError('rpc_rejected')),
+        (error) => finish(reject,
+          error instanceof OwnedNativeRunnerError && ['stdin_write_failed', 'operation_stopped'].includes(error.code)
+            ? error
+            : runnerError('rpc_rejected')),
       );
+      unsubscribe = readScope.registerCancel(cancel);
+      if (settled) { unsubscribe(); return; }
+      if (readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+        cancel();
+        return;
+      }
+      cancellations.add(cancel);
+      timer = setTimeout(() => finish(reject, runnerError('rpc_timeout')), timeouts.rpcMs);
     });
   }
 
-  function sendOwnedReadRpc(method, params, expectedGeneration, leaseToken, identity, context) {
+  function sendOwnedReadRpc(method, params, expectedGeneration, leaseToken, identity, context, readScope) {
     retireStaleReadRpcs();
     if (!['thread/loaded/list', 'thread/read'].includes(method) ||
         pendingReadRpcs.size >= MAX_PENDING_READ_RPCS ||
-        !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+        readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
       throw runnerError('owned_read_unavailable');
     }
     const id = nextReadRpcId;
@@ -1409,13 +1417,15 @@ function createOwnedNativeRunner(options) {
     };
     const writeState = { id, settled: false, retired: false };
     pending.writeState = writeState;
+    const unsubscribeRetire = readScope.registerCancel(() =>
+      retirePendingRead(id, pending, runnerError('operation_stopped')));
     let writeAttempted = false;
     const writeResponse = new Promise((resolve, reject) => {
       try {
         const stdin = child && child.stdin;
         const write = stdin && stdin.write;
         if (!stdin || typeof write !== 'function' ||
-            !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
+            readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) {
           throw runnerError('owned_read_unavailable');
         }
         if (firstIssuedReadRpcId === null) firstIssuedReadRpcId = id;
@@ -1442,28 +1452,33 @@ function createOwnedNativeRunner(options) {
     });
     return (async () => {
       try {
-        await awaitOwnedRead(writeResponse, expectedGeneration, leaseToken, identity, context);
-        return await awaitOwnedRead(response, expectedGeneration, leaseToken, identity, context);
+        await awaitOwnedRead(writeResponse, expectedGeneration, leaseToken, identity, context, readScope);
+        return await awaitOwnedRead(response, expectedGeneration, leaseToken, identity, context, readScope);
       } catch (error) {
         if (pendingReadRpcs.get(id) === pending) retirePendingRead(id, pending, error);
         else retireReadWriteState(writeState);
-        if (writeAttempted && error.code === 'stdin_write_failed') fail('stdin_write_failed');
+        if (writeAttempted && error instanceof OwnedNativeRunnerError &&
+            error.code === 'stdin_write_failed' && isCurrent(expectedGeneration)) {
+          fail('stdin_write_failed');
+        }
         throw error instanceof OwnedNativeRunnerError ? error : runnerError('owned_read_failed');
+      } finally {
+        unsubscribeRetire();
       }
     })();
   }
 
-  async function readNativeCurrent({ leaseToken, requestToken }) {
+  async function readNativeCurrent({ leaseToken, requestToken }, readScope) {
     if (provider !== 'codex' || !sourceController || !requestToken || !isCurrent(generation) ||
         state !== 'running' || !startPromise) return null;
     const expectedGeneration = generation;
     const identity = nativeIdentity;
     const context = nativeContext;
-    if (!identity || !context || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) return null;
+    if (!identity || !context || readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context)) return null;
 
     const loadedResult = await sendOwnedReadRpc('thread/loaded/list', { limit: 100 },
-      expectedGeneration, leaseToken, identity, context);
-    if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
+      expectedGeneration, leaseToken, identity, context, readScope);
+    if (readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
         !isRecord(loadedResult) || !Array.isArray(loadedResult.data) ||
         loadedResult.data.some((threadId) => !isIdentifier(threadId)) ||
         !loadedResult.data.includes(identity.nativeId)) return null;
@@ -1471,8 +1486,8 @@ function createOwnedNativeRunner(options) {
     const readResult = await sendOwnedReadRpc('thread/read', {
       threadId: identity.nativeId,
       includeTurns: true,
-    }, expectedGeneration, leaseToken, identity, context);
-    if (!isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
+    }, expectedGeneration, leaseToken, identity, context, readScope);
+    if (readScope.isCancelled() || !isCurrentOwnedRead(expectedGeneration, leaseToken, identity, context) ||
         !isRecord(readResult) || !isRecord(readResult.thread) ||
         readResult.thread.id !== identity.nativeId || !Array.isArray(readResult.thread.turns)) return null;
     const matchingTurns = readResult.thread.turns.filter((turn) => isRecord(turn) && turn.id === context.nativeContextId);
