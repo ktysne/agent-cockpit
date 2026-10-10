@@ -835,3 +835,34 @@ Iの有効grantはIだけのB+Gで照合し、Q/CPへ借用しない。
 closeは新しい読み取りを直ちに禁止し、実行中の読み取りを待ち、同じPromiseを返す。
 この入口を標準起動へ接続する前に、capsuleを保存正本として保持する限定writer、admissionと排他、実保存と復旧、件数枠の解放を別に検証する。
 旧展開snapshotを既存旧writerへ渡して保存するとcapsuleと新形式が失われるため、保存の正本には使わない。
+
+### fixture専有保存先での既存更新backend
+
+`createQuestionCapsuleExistingUpdateBackend`はfixtureが所有する一時ディレクトリに限定した内部factoryである。
+標準起動や既存ユーザーディレクトリへ接続せず、constructorのpath、fingerprint、budgetは呼び出し元の認証を証明しない。
+固定した四正本をcanonical形式としてcold検査し、A/Iの期待raw指紋とQ3/CP4の結合検査が成立した場合だけ既存更新を受け付ける。
+旧Q2/CP3と未知entryを拒否し、inspectionの結果を保存権限へ昇格しない。
+
+外側Q3/CP4を保存正本として保持し、旧展開projectionは凍結した読み取り値だけに使う。
+質問はlateAnswers、checkpointは許可された非質問deliveryの進行だけを既存guardで検査する。
+単一queueで対象のrevision/size/hashを期待headと照合し、対象外slotにはその時点の最新値を使う。
+保存前と追加lease取得後に四正本のraw指紋を再照合し、観測した外部変更では全slotを停止する。
+
+追加leaseは、各slotの更新前後の保護量の最大値を合計し、対象の完全なtemp byteを加えた量を独立して確保する。
+Q/CPは実raw、新外側の現在と将来予約、旧展開の将来予約、旧容量計測の予約量の最大を保護する。
+Aはraw、canonical、pending period projectionと旧予約の最大を保護する。
+Iはraw、現在、将来、旧予約の最大をB+Gと照合してからGを加えて保護するため、grantを保守的に過剰予約する場合がある。
+baseline lease、B、Gから追加leaseを控除しない。
+
+内部filesystem adapterはtempのexclusive open直前でclosing/blockedを検査する。
+保存後は対象のexact raw readback、対象外指紋、結合検査と既存更新guardを確認してからheadをinstallする。
+結果不明のI/Oでは全slotを停止し、操作leaseはcloseまで保持する。
+入力不正、stale head、guardと容量の書込前拒否では、既知headが変わっていなければ次の合法操作を受け付ける。
+
+closeは即時受付を閉じ、未着手queueを拒否して進行中I/Oとreadbackを待つ。
+同じPromiseを返し、drain後に操作leaseとprocess内path ownerを返す。
+fresh instanceは全正本をcold検査し、未知orphanを自動削除しない。
+固定pause/fault enumはfixtureの試験制御であり、任意callbackを保存判定に使わない。
+
+同processの同path二重ownerを拒否するが、外process排他、path差替え競合、ABA、OS電源断耐久性を証明しない。
+両providerのnative file fixtureは実runtimeの結果ではなく、source authority、通常起動、移行開始と復旧、新受付、件数枠解放は別のgateに残る。

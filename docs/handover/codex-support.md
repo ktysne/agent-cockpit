@@ -681,6 +681,16 @@ R2の任意提案に従い、旧形式のraw空白B+1と作成・切詰め・追
 後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
 標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
 
+fixture専有の既存更新backendは`codex/question-capsule-existing-update-backend-209-20261011`で、PR #347のレビュー収束headからスタックする。
+Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に限定する。
+期待head、既存更新guard、四正本の保存前再照合、追加lease、wx直前close/blocked gate、exact readback後のhead installを接続した。
+結果不明では全slotを停止し、操作leaseをcloseまで保持する。baseline leaseとB/Gから追加予約を控除しない。
+固定版backend source blob `cfbc4466f8ad55c7c442fb32aa3fad2c528faaa6`の関連24件は成功、失敗とskipは0件だった。
+両providerとmixedの保存/cold reload、並行QCP、stale/whitelist/容量拒否、close、rename前後の故障、未知orphan、同path二重owner、新形式のchunk/order破損拒否を確認した。
+構文、空白、変更後CodeGraph同期と調査も成功した。追跡済み全体検証と指定Claudeレビューは未完了である。
+後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
+通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
