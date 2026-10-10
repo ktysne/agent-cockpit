@@ -285,6 +285,62 @@ CPの単体codecは確定終端から墓標作成までの7日保持を検査す
 容量超過は他の検査より先に検出される場合があるため、RangeErrorは容量以外の妥当性を保証しない。
 いずれの例外messageも保存や回復の許可を表さない。
 
+### 通常recordと複数capsuleの全体検査
+
+全体検査の入口は、通常ストアのwrapperとmetadata、質問capsuleのペア集合、全質問reservationと全deliveryの順序、アンカーと通常byte上限を受け取る。
+`validateQuestionCapsuleWholeRepresentation`は`formatVersion: 1`、`anchor`、`ordinaryStores`、`capsulePairs`、`deliveryAttemptOrder`、`questionReservationOrder`、`normalByteLimitsBySlot`を必須fieldとする。
+この入力は未永続のJS data契約であり、既存ファイルの外側schemaを変更しない。
+通常ストアからcapsuleへ移したreservationとgraveだけを除き、質問details、登録情報、論理墓標とrevisionは保持する。
+通常ストアだけでは論理groupが閉じない場合があるため、全recordを復元してから既存の全体normalizerを通す。
+
+全体の順序配列は通常recordとcapsuleの和集合を一対一で列挙する。
+欠落、余剰、重複と未定義IDを拒否し、Q detailsとCP metadataの配列順は通常ストアのまま保持する。
+同一periodの複数chunk、複数period、異なるproviderのchunkを許容する。
+複数chunkが同じ集約操作IDを共有してもよいが、操作IDをmapや重複除去の単独keyには使わず、recordのIDを全体で検査する。
+
+選択ペアのlogical contextは、通常CPに保持した全論理墓標から導く。
+別の選択contextを入力して正本を増やさない。
+復元した全ledgerへ既存の検査を適用し、全IDの一意性、論理groupの集合、superseded履歴の順序とnative item相関の再利用を検査する。
+この順序検査が示すのは「宣言された順序で履歴制約が成立すること」である。
+宣言が過去のledger順序と一致する証明は、永続移行時に元の順序を損失なく記録する処理で行う。
+
+対象capsuleごとに、完全identityとperiodがアンカーで退役済みであることを要求する。
+アンカーのmigrationと対象Q/CPのgrantはnullに限定し、非対象instructionのgrantは既存全体検査に委ねる。
+復元したraw snapshotを既存Snapshot検査へ渡し、readyかつ理由0件を要求する。
+同じrawストアをpreviousとnextにしたStoreWrite検査にも通し、checkedかつ理由0件を要求する。
+修復済み候補を自己遷移の入力に置き換えず、内容補完やmigration projectionで合格させない。
+
+資源の検査は展開前の総件数と、行ごとの有限訪問予算を組み合わせる。
+capsuleペアは20,000以下、通常と展開後のQ reservationとdeliveryの合計はそれぞれ20,000以下とする。
+CPの登録履歴は既存の合計50,000以下を適用し、ledgerのdelivery 20,000件、notification target 10,000件、logical tombstone 20,000件とは別枠で検査する。
+各capsuleの参照辞書件数はそのdelivery件数以下に制限し、metadata集合には既存schemaの件数上限を適用する。
+通常record、capsule、metadataの各行を有限予算で検査し、全入力へ一律10万訪問を要求しない。
+各行の予算は10万訪問で、schemaのfield数と配列上限から求めた保守上界を収容する。
+20,000件のeligible IDを持つgrantは20,010訪問以下、質問detailは700訪問以下、固定fieldの通常recordと登録行は100訪問以下として評価する。
+この上界は文字列長やbyte上限と全参照制約のもとで同時達成できる最大値を示さない。
+復元後の容量は各slotの実encoderと既存の将来予約measurerで別途検査する。
+measurerの`currentByteLimit`には通常上限Bを渡し、現在byteと予約byteの両方を、検査済みgrantがあればBとgrantの追加byteの和以下に要求する。
+StoreWriteの自己遷移だけでは実byte容量を検査しないため、checkedの成功でこの測定を省略しない。
+アンカーは自身と全質問scopeの退役予約を既存の通常上限へ照合し、Qがnullのときも空scope集合で測定する。
+共有表現の小ささで件数枠や通常byte上限を緩めない。
+これらは最大RSSや一時保存ピークの保証ではなく、巨大objectのown key列挙にも別の資源制約が残る。
+
+公開入口は不正入力を`invalid_question_capsule_whole_representation`のTypeErrorへ統一する。
+成功時には復元snapshot、件数と固定した検査範囲の情報を返す。
+件数はcapsuleペア、CP capsule、通常とcapsule別のreservationとdelivery、および各合計を示す。
+固定した範囲制約は、宣言順序の真正性、アンカーの永続化、新外側schema、保存と復旧、件数枠の解放、runtime接続の未検証を表す。
+渡されたアンカーの整合性を検査しても、実ファイルの真正性や保存完了を証明したことにはならない。
+保存接続、旧readerの拒否、cold復旧、件数枠の解放とruntime接続は後続条件として残す。
+
+| ID | 確かめる条件 |
+|---|---|
+| QCW01 | 両providerの通常recordと複数chunkを元snapshotなしに復元し、全observableと宣言順を保持する |
+| QCW02 | 全体IDと順序の重複、欠落、余剰を拒否し、操作IDの共有でrecordを上書きしない |
+| QCW03 | 全論理墓標との閉包、履歴順、native相関再利用を局所pairの成功後にも検査する |
+| QCW04 | 各capsuleの退役scope、grant解除、修復不要と全体容量の条件を要求する |
+| QCW05 | 展開前の総件数と行ごとの訪問上限でgetterとProxyを実行せず、入力を変更しない |
+| QCW06 | 検査結果を保存、削除、受付再開や件数枠解放の権限に使わない |
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
