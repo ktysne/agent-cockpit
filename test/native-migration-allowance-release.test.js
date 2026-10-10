@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { test } = require('node:test');
+const { createReclamationPersistence } = require('../src/server/reclamation-persistence');
 const {
   DATA_FILES,
   PROVIDERS,
@@ -368,7 +369,10 @@ for (const provider of PROVIDERS) {
   }
 
   for (const resizeFailure of ['retained', 'unknown']) {
-    test(`${provider} preserves capacity safety when lease shrink is ${resizeFailure}`, async (t) => {
+    const testName = resizeFailure === 'unknown'
+      ? `${provider} refuses restart while lease shrink status remains unknown`
+      : `${provider} preserves capacity safety when lease shrink is retained`;
+    test(testName, async (t) => {
       const sources = threeSlotLegacySources(provider);
       const fixture = await makeHarness(t, provider, {
         normalByteLimitsBySlot: limitsForPostBodyRelease(sources),
@@ -394,10 +398,30 @@ for (const provider of PROVIDERS) {
         assert.equal((await fixture.readJson('checkpoint')).migrationAllowance, null);
         assert.equal(harness.reclamationContext.status().state, 'blocked');
         assert.equal(harness.reclamationContext.status().capacity.activeLeaseCount, 1);
-        await harness.restart();
-        assert.equal(harness.reclamationContext.status().state, 'ready');
+        const acquisitionCount = leaseObserver.acquisitions.length;
+        const leaseRecord = leaseObserver.acquisitions[0];
+        let ownershipError;
+        const hasRetainedOwnershipError = error => {
+          const releaseUnconfirmed = error.cause?.code === 'reclamation_capacity_release_unconfirmed' ||
+            error.errors?.some(item => item?.code === 'reclamation_capacity_release_unconfirmed');
+          return error.code === 'reclamation_ownership_retained' && releaseUnconfirmed;
+        };
+        await assert.rejects(harness.restart(), error => {
+          ownershipError = error;
+          return hasRetainedOwnershipError(error);
+        });
+        await assert.rejects(harness.restart(), error => error === ownershipError);
+        await assert.rejects(harness.closeCurrent(), error => {
+          return error === ownershipError && hasRetainedOwnershipError(error);
+        });
+        assert.equal(leaseObserver.acquisitions.length, acquisitionCount);
+        assert.equal(leaseRecord.events.filter(({ operation }) => operation === 'release').length, 1);
         assert.equal((await fixture.readJson('checkpoint')).migrationAllowance, null);
-        assert.equal(harness.reclamationContext.status().capacity.activeLeaseCount, 1);
+        assert.throws(() => createReclamationPersistence({
+          anchorPath: path.join(fixture.directory, 'question-reclamation-anchor.json'),
+          slotPathsBySlot: Object.fromEntries(Object.entries(DATA_FILES).map(([slot, basename]) =>
+            [slot, path.join(fixture.directory, basename)])),
+        }), { code: 'reclamation_persistence_path_owned' });
       }
       assert.equal(nativeInstructionWriteCount(harness, provider), 0);
     });

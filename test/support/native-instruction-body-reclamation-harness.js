@@ -10,6 +10,46 @@ const {
   PROVIDERS,
 } = require('./native-instruction-integration-harness');
 
+const RECLAMATION_PERSISTENCE_ORIGINALS = new WeakMap();
+const RECLAMATION_CONTEXT_ORIGINALS = new WeakMap();
+const RECLAMATION_CONTEXT_FACTORY_WRAPPERS = new Set();
+
+function originalReclamationPersistence(value) {
+  let original = value;
+  while (RECLAMATION_PERSISTENCE_ORIGINALS.has(original)) {
+    original = RECLAMATION_PERSISTENCE_ORIGINALS.get(original);
+  }
+  return original;
+}
+
+function trackReclamationPersistenceWrapper(wrapper, original) {
+  if (!wrapper || typeof wrapper !== 'object' || !original || typeof original !== 'object') {
+    throw new TypeError('invalid reclamation persistence wrapper');
+  }
+  RECLAMATION_PERSISTENCE_ORIGINALS.set(wrapper, originalReclamationPersistence(original));
+}
+
+function originalReclamationServiceContext(value) {
+  let original = value;
+  while (RECLAMATION_CONTEXT_ORIGINALS.has(original)) {
+    original = RECLAMATION_CONTEXT_ORIGINALS.get(original);
+  }
+  return original;
+}
+
+function trackReclamationServiceContextWrapper(wrapper, original) {
+  if (!wrapper || typeof wrapper !== 'object' || !original || typeof original !== 'object') {
+    throw new TypeError('invalid reclamation service context wrapper');
+  }
+  RECLAMATION_CONTEXT_ORIGINALS.set(wrapper, originalReclamationServiceContext(original));
+}
+
+function registerReclamationContextFactoryWrapper(wrapper) {
+  if (typeof wrapper !== 'function') throw new TypeError('invalid reclamation context factory wrapper');
+  RECLAMATION_CONTEXT_FACTORY_WRAPPERS.add(wrapper);
+  return () => RECLAMATION_CONTEXT_FACTORY_WRAPPERS.delete(wrapper);
+}
+
 const DEFAULT_RECLAMATION = Object.freeze({
   maxAdditionalBytes: 64 * 1024 * 1024,
   normalByteLimitsBySlot: Object.freeze({
@@ -131,16 +171,16 @@ function loadFactory(faults) {
   const integrationPath = require.resolve('../../src/server/native-instruction-service-integration');
   require(compositionPath);
   require(persistencePath);
-  require(contextPath);
   require(durableStorePath);
   require(instructionAdapterPath);
-  const entries = [compositionPath, persistencePath, contextPath, durableStorePath, instructionAdapterPath]
+  const entries = [compositionPath, persistencePath, durableStorePath, instructionAdapterPath]
     .map((filename) => [filename, require.cache[filename]]);
+  const previousContextEntry = require.cache[contextPath] || null;
+  const previousContextExports = previousContextEntry?.exports ?? null;
   const previousIntegrationEntry = require.cache[integrationPath];
   const originals = Object.fromEntries(entries.map(([filename, entry]) => [filename, entry.exports]));
   const composition = { create: originals[compositionPath].createNativeLaunchComposition };
   const persistence = { create: originals[persistencePath].createReclamationPersistence };
-  const context = { create: originals[contextPath].createReclamationServiceContext };
   const adapters = { create: originals[instructionAdapterPath].createProviderInstructionAdapter };
   const delivery = { create: originals[durableStorePath].createProviderDeliveryAdapter };
   let nativeComposition = null;
@@ -211,110 +251,134 @@ function loadFactory(faults) {
     }
   }
 
-  require.cache[compositionPath].exports = {
-    ...originals[compositionPath],
-    createNativeLaunchComposition(options) {
-      nativeComposition = composition.create(options);
-      return nativeComposition;
-    },
-  };
-  require.cache[persistencePath].exports = {
-    ...originals[persistencePath],
-    createReclamationPersistence(options) { return faults.wrap(persistence.create(options)); },
-  };
-  require.cache[contextPath].exports = {
-    ...originals[contextPath],
-    createReclamationServiceContext(options) {
-      const created = context.create(options);
-      const wrappedBackends = new Map();
-      reclamationContext = Object.freeze({
-        ...created,
-        backend(slot) {
-          if (!wrappedBackends.has(slot)) {
-            const backend = created.backend(slot);
-            wrappedBackends.set(slot, Object.freeze({
-              ...backend,
-              save(...args) {
-                if (Object.hasOwn(backendSaveCounts, slot)) backendSaveCounts[slot] += 1;
-                return backend.save(...args);
-              },
-            }));
-          }
-          return wrappedBackends.get(slot);
-        },
-      });
-      return reclamationContext;
-    },
-  };
-  require.cache[durableStorePath].exports = {
-    ...originals[durableStorePath],
-    createProviderDeliveryAdapter(provider, store) {
-      const adapter = delivery.create(provider, store);
-      deliveryAdapters.set(provider, adapter);
-      return adapter;
-    },
-  };
-  require.cache[instructionAdapterPath].exports = {
-    ...originals[instructionAdapterPath],
-    createProviderInstructionAdapter(provider, options) {
-      const adapter = adapters.create(provider, options);
-      const wrapped = Object.freeze({
-        ...adapter,
-        onAccepted(listener) {
-          serviceAcceptedListeners.set(provider, listener);
-          return adapter.onAccepted((deliveryAttemptId, sourceToken, accepted) => {
-            const captured = { deliveryAttemptId, sourceToken, accepted: structuredClone(accepted) };
-            const hold = acceptedHolds.get(provider);
-            if (hold && hold.deliveryAttemptId === deliveryAttemptId && hold.captured === null) {
-              hold.captured = captured;
-              hold.resolveCaptured(captured);
-              return hold.completion;
-            }
-            return listener(deliveryAttemptId, sourceToken, accepted);
-          });
-        },
-        onEvidence(listener) {
-          return adapter.onEvidence((deliveryAttemptId, sourceToken, evidence) => {
-            evidenceByDelivery.set(deliveryAttemptId, { sourceToken, evidence: structuredClone(evidence) });
-            return listener(deliveryAttemptId, sourceToken, evidence);
-          });
-        },
-        hasInstructionObservation(deliveryAttemptId, sourceToken) {
-          return adapter.hasInstructionObservation(deliveryAttemptId, sourceToken);
-        },
-        async prepareInstructionDispatch(...args) {
-          const prepared = await adapter.prepareInstructionDispatch(...args);
-          if (prepared?.ok && prepared.sourceToken) sourceTokens.set(args[0]?.deliveryAttemptId, prepared.sourceToken);
-          return prepared;
-        },
-      });
-      instructionAdapters.set(provider, wrapped);
-      return wrapped;
-    },
-  };
-  delete require.cache[integrationPath];
-  let integrationModule;
   try {
+    require.cache[compositionPath].exports = {
+      ...originals[compositionPath],
+      createNativeLaunchComposition(options) {
+        nativeComposition = composition.create(options);
+        return nativeComposition;
+      },
+    };
+    require.cache[persistencePath].exports = {
+      ...originals[persistencePath],
+      createReclamationPersistence(options) {
+        const original = persistence.create(options);
+        const wrapped = faults.wrap(original);
+        trackReclamationPersistenceWrapper(wrapped, original);
+        return wrapped;
+      },
+      getReclamationPersistenceControl(value) {
+        return originals[persistencePath].getReclamationPersistenceControl(originalReclamationPersistence(value));
+      },
+    };
+    delete require.cache[contextPath];
+    const reloadedContextExports = require(contextPath);
+    let createContext = reloadedContextExports.createReclamationServiceContext;
+    for (const wrapContextFactory of RECLAMATION_CONTEXT_FACTORY_WRAPPERS) {
+      createContext = wrapContextFactory(createContext);
+    }
+    const context = { create: createContext };
+    require.cache[contextPath].exports = {
+      ...reloadedContextExports,
+      createReclamationServiceContext(options) {
+        const created = context.create(options);
+        const wrappedBackends = new Map();
+        reclamationContext = Object.freeze({
+          ...created,
+          backend(slot) {
+            if (!wrappedBackends.has(slot)) {
+              const backend = created.backend(slot);
+              wrappedBackends.set(slot, Object.freeze({
+                ...backend,
+                save(...args) {
+                  if (Object.hasOwn(backendSaveCounts, slot)) backendSaveCounts[slot] += 1;
+                  return backend.save(...args);
+                },
+              }));
+            }
+            return wrappedBackends.get(slot);
+          },
+        });
+        trackReclamationServiceContextWrapper(reclamationContext, created);
+        return reclamationContext;
+      },
+      getReclamationServiceContextControl(value) {
+        return reloadedContextExports.getReclamationServiceContextControl(originalReclamationServiceContext(value));
+      },
+    };
+    require.cache[durableStorePath].exports = {
+      ...originals[durableStorePath],
+      createProviderDeliveryAdapter(provider, store) {
+        const adapter = delivery.create(provider, store);
+        deliveryAdapters.set(provider, adapter);
+        return adapter;
+      },
+    };
+    require.cache[instructionAdapterPath].exports = {
+      ...originals[instructionAdapterPath],
+      createProviderInstructionAdapter(provider, options) {
+        const adapter = adapters.create(provider, options);
+        const wrapped = Object.freeze({
+          ...adapter,
+          onAccepted(listener) {
+            serviceAcceptedListeners.set(provider, listener);
+            return adapter.onAccepted((deliveryAttemptId, sourceToken, accepted) => {
+              const captured = { deliveryAttemptId, sourceToken, accepted: structuredClone(accepted) };
+              const hold = acceptedHolds.get(provider);
+              if (hold && hold.deliveryAttemptId === deliveryAttemptId && hold.captured === null) {
+                hold.captured = captured;
+                hold.resolveCaptured(captured);
+                return hold.completion;
+              }
+              return listener(deliveryAttemptId, sourceToken, accepted);
+            });
+          },
+          onEvidence(listener) {
+            return adapter.onEvidence((deliveryAttemptId, sourceToken, evidence) => {
+              evidenceByDelivery.set(deliveryAttemptId, { sourceToken, evidence: structuredClone(evidence) });
+              return listener(deliveryAttemptId, sourceToken, evidence);
+            });
+          },
+          hasInstructionObservation(deliveryAttemptId, sourceToken) {
+            return adapter.hasInstructionObservation(deliveryAttemptId, sourceToken);
+          },
+          async prepareInstructionDispatch(...args) {
+            const prepared = await adapter.prepareInstructionDispatch(...args);
+            if (prepared?.ok && prepared.sourceToken) sourceTokens.set(args[0]?.deliveryAttemptId, prepared.sourceToken);
+            return prepared;
+          },
+        });
+        instructionAdapters.set(provider, wrapped);
+        return wrapped;
+        },
+      };
+    delete require.cache[integrationPath];
+    let integrationModule;
     integrationModule = require(integrationPath);
+    return Object.freeze({
+      create: integrationModule.createNativeInstructionServiceIntegration,
+      getComposition: () => nativeComposition,
+      getContext: () => reclamationContext,
+      deliveryAdapter: (provider) => deliveryAdapters.get(provider) || null,
+      instructionAdapter: (provider) => instructionAdapters.get(provider) || null,
+      sourceToken: (id) => sourceTokens.get(id) || null,
+      serviceAcceptedListener: (provider) => serviceAcceptedListeners.get(provider) || null,
+      instructionEvidence: (id) => evidenceByDelivery.get(id) || null,
+      holdNextAccepted,
+      abandonAcceptedHolds,
+      backendSaveCount: (slot) => backendSaveCounts[slot] || 0,
+    });
   } finally {
     for (const [filename, entry] of entries) entry.exports = originals[filename];
+    if (previousContextEntry) {
+      previousContextEntry.exports = previousContextExports;
+      require.cache[contextPath] = previousContextEntry;
+    } else {
+      delete require.cache[contextPath];
+    }
     if (previousIntegrationEntry) require.cache[integrationPath] = previousIntegrationEntry;
     else delete require.cache[integrationPath];
   }
-
-  return Object.freeze({
-    create: integrationModule.createNativeInstructionServiceIntegration,
-    getComposition: () => nativeComposition,
-    getContext: () => reclamationContext,
-    deliveryAdapter: (provider) => deliveryAdapters.get(provider) || null,
-    instructionAdapter: (provider) => instructionAdapters.get(provider) || null,
-    sourceToken: (id) => sourceTokens.get(id) || null,
-    serviceAcceptedListener: (provider) => serviceAcceptedListeners.get(provider) || null,
-    instructionEvidence: (id) => evidenceByDelivery.get(id) || null,
-    holdNextAccepted,
-    abandonAcceptedHolds,
-    backendSaveCount: (slot) => backendSaveCounts[slot] || 0,
-  });
 }
 
 function createNativeInstructionBodyReclamationHarness(options) {
@@ -455,4 +519,10 @@ function createNativeInstructionBodyReclamationHarness(options) {
   });
 }
 
-module.exports = { createNativeInstructionBodyReclamationHarness, PROVIDERS };
+module.exports = {
+  createNativeInstructionBodyReclamationHarness,
+  PROVIDERS,
+  registerReclamationContextFactoryWrapper,
+  trackReclamationPersistenceWrapper,
+  trackReclamationServiceContextWrapper,
+};

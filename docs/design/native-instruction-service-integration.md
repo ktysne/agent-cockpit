@@ -401,7 +401,10 @@ contextはcoordinatorへ同じ管理を伝え、public optionsと返却facadeへ
 
 第二段階は各writerのstopとdrain、contextとpersistence I/O、scheduler、factory ticket、collectorと準備失敗cleanup、全nativeの停止と隔離を独立に確認した後だけ行う。
 service.closeの成功だけで確認を代用せず、保存失敗のcodeだけで解放可否を推測しない。
+設定の購読解除とrouter.closeの失敗も、終了未確認として保守的に所有を保持する。
 容量leaseの解放成功を確認してから同ownerのpath所有を解放し、解放済みフラグを実処理より先に設定しない。
+releaseが実行されてもstatusで解放を確認できなければpath所有は解放しない。
+この場合、容量予算が実際に減っている可能性と、path所有を保持する結果を区別する。
 保存が失敗してもこれらの終了を確認できれば所有を解放し、close中に捕捉した失敗があれば最初の理由を返す。
 
 停止やdrainを確認できない場合は所有を保持した終端状態にする。
@@ -410,6 +413,7 @@ service.closeの成功だけで確認を代用せず、保存失敗のcodeだけ
 所有保持時の回収factory.closeだけはcode `reclamation_ownership_retained`のAggregateErrorを返す。
 closeまたはstartup cleanup中に捕捉した最初の失敗があればcauseのown propertyとerrors先頭へfalsy値も含めて保持し、保持原因もerrorsへ残す。
 native.stop自体のcode、所有を解放できた保存失敗、標準modeの例外理由は変更しない。
+管理下の公開createOwnedCollectorは生成前の入力検査を含む構築失敗でもadmissionを退役させ、同admissionでの再試行を許可しない。
 
 この所有は同module内のpath Mapとprocess内容量予算に限る。
 別module、別process、標準writerと任意filesystem writerを排他せず、協調lockは方式と参加writerの決定後に別途接続する。

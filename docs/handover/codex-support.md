@@ -791,6 +791,10 @@ PR [#359](https://github.com/ktysne/agent-cockpit/pull/359)はfeature向けDraft
 関連9ファイルの237成功、失敗0、Windows実symlink権限skip1は最終stop記録の補強前である。
 監査補強後のcontextとfactory112件、最終context49件とcoordinator管理終了2件はすべて成功した。
 次は#313の参加writer、ファイル単位の所有、取得前I/O禁止とcrash後の回復条件を設計し、primitiveとwriter接続を分ける。
+固定head `5a3d50f`の全体テストは2792成功、119失敗、Windows実symlink権限skip2だった。
+本文回収とgrant解放の試験helperのprivate control引継ぎを補強し、未知leaseの再起動拒否を含む4試験群120件、factory lifetime72件、question write隔離16件が成功した。
+PR #359は固定headの全体再検証とClaude増分レビューが完了するまでマージ不可である。
+Claude R1はblockerと要修正が0件だった。
 
 ## 起票していない候補
 
