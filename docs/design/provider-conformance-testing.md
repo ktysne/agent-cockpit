@@ -491,10 +491,10 @@ contextの同期保存禁止とready拒否はticket drainより先に始め、�
 外部認証元作業、raw provider I/O、保存ownership解放順、電源断耐久性、新schema接続は対象外である。
 provider固有RPCと既存error codeの差は許容するが、追加送信、新規受付、authority再発行とcleanup失敗の成功変換は許容しない。
 両providerのfixture結果と実runtimeを別記し、未実行の保持点を成功へ合算しない。
-関連4ファイルの108件と、最初のtest-only監査修正後のlifetime51件が成功した。
+補強前の関連4ファイル108件と、最初のtest-only監査修正後のlifetime51件が成功した。
 Claude R1後の標準mode例外保持のtest補強を含むlifetime52件はすべて成功した。
 通常起動と非協調startの保留は両provider、観測readと故障注入はCodex fixtureを中心に確認する。
 構築中にcollector返却前のclose再入を起こす試験はprivate injectionであり、通常製品のcallback到達性とは分ける。
 固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
-52件へのtest補強後は全体未再実行で、製品sourceは全体検証時と同一である。
+52件へのtest補強後は全体未再実行で、検証source `d253639`以降に製品sourceの差分はない。
 実Claude/Codex runtimeは未実施である。
