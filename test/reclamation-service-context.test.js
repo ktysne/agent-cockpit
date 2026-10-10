@@ -438,25 +438,27 @@ function encodeStores(stores) {
 }
 
 async function makeSandbox(t, stores = emptyStores(), anchor = emptyAnchor(), atomicWriteBytes = undefined,
-  rawSlotOverrides = {}, normalByteLimitsBySlot = limits(), capacityBudget = undefined) {
+  rawSlotOverrides = {}, normalByteLimitsBySlot = limits(), capacityBudget = undefined, modules = undefined) {
+  const createPersistence = modules?.persistence.createReclamationPersistence ?? createReclamationPersistence;
+  const createContext = modules?.context.createReclamationServiceContext ?? createReclamationServiceContext;
   const tempRoot = await fs.realpath(os.tmpdir());
   const directory = await fs.mkdtemp(path.join(tempRoot, 'reclamation-context-'));
   const slotPathsBySlot = Object.fromEntries(SLOTS.map((slot) => [slot, path.join(directory, `${slot}.json`)]));
   const anchorPath = path.join(directory, 'question-reclamation-anchor.json');
-  const seed = createReclamationPersistence({ anchorPath, slotPathsBySlot });
+  const seed = createPersistence({ anchorPath, slotPathsBySlot });
   await seed.writeAnchorBytes(encodeQuestionReclamationAnchorV1Local(anchor).bytes, 16_777_216);
   const encodedStores = encodeStores(stores);
   for (const slot of SLOTS) {
     await seed.writeSlotBytes(slot, rawSlotOverrides[slot] ?? encodedStores[slot], 16_777_216);
   }
   await seed.close();
-  const persistence = createReclamationPersistence({
+  const persistence = createPersistence({
     anchorPath,
     slotPathsBySlot,
     ...(atomicWriteBytes ? { atomicWriteBytes } : {}),
   });
   const budget = capacityBudget ?? createReclamationCapacityBudget({ maxAdditionalBytes: 4_000_000_000 });
-  const context = createReclamationServiceContext({
+  const context = createContext({
     persistence,
     capacityBudget: budget,
     normalByteLimitsBySlot,
@@ -472,6 +474,153 @@ async function makeSandbox(t, stores = emptyStores(), anchor = emptyAnchor(), at
     await fs.rm(directory, { recursive: true, force: true });
   });
   return { context, persistence, capacityBudget: budget, writersBySlot, directory, anchorPath, slotPathsBySlot };
+}
+
+for (const phase of ['before', 'after']) {
+  test(`qualified question rename ${phase} failure freezes question reads but keeps nonquestion writers and lease`, async (t) => {
+    const { loadQuestionWriteIsolationModules } = require('./support/question-write-isolation-loader');
+    const modules = loadQuestionWriteIsolationModules();
+    const sandbox = await makeSandbox(t, emptyStores(), emptyAnchor(), undefined, {}, limits(), undefined, modules);
+    await sandbox.context.start(sandbox.writersBySlot);
+    const initial = sandbox.context.snapshot();
+    const beforeBytes = await fs.readFile(sandbox.slotPathsBySlot.questions);
+    const oldReservation = sandbox.capacityBudget.status().reservedBytes;
+    const qBackend = sandbox.context.backend('questions');
+    const candidate = { ...qBackend.getSnapshot(), revision: 1 };
+    modules.nativeFileSystem.armRenameRetryExhaustion({ targetPath: sandbox.slotPathsBySlot.questions, phase });
+    let questionError;
+    await assert.rejects(qBackend.save(candidate), (error) => {
+      questionError = error;
+      return error.code === 'EPERM';
+    });
+    assert.equal(sandbox.context.status().state, 'degraded');
+    assert.deepEqual(sandbox.context.status().slotHealth,
+      { checkpoint: 'ready', instructions: 'ready', questions: 'uncertain' });
+    assert.equal(qBackend.canWrite(), false);
+    assert.equal(sandbox.context.backend('instructions').canWrite(), true);
+    assert.throws(() => sandbox.context.snapshot(), { code: 'question_journal_uncertain' });
+    assert.throws(() => qBackend.getSnapshot(), { code: 'question_journal_uncertain' });
+    await assert.rejects(qBackend.load(), { code: 'question_journal_uncertain' });
+    await assert.rejects(qBackend.flush(), { code: 'question_journal_uncertain' });
+    for (const slot of SLOTS) {
+      assert.throws(() => sandbox.context.backend(slot).prepareResume(initial), { code: 'question_journal_uncertain' });
+    }
+    await assert.rejects(sandbox.context.start(sandbox.writersBySlot), { code: 'question_journal_uncertain' });
+    await assert.rejects(sandbox.context.releaseMigrationAllowance({}), { code: 'question_journal_uncertain' });
+    await assert.rejects(sandbox.context.retireQuestionPeriod({}), { code: 'question_journal_uncertain' });
+    const afterFault = await fs.readFile(sandbox.slotPathsBySlot.questions);
+    if (phase === 'before') assert.deepEqual(afterFault, beforeBytes);
+    else assert.equal(JSON.parse(afterFault).revision, 1);
+    const iBackend = sandbox.context.backend('instructions');
+    const instruction = iBackend.getSnapshot();
+    await iBackend.save({ ...instruction, revision: instruction.revision + 1 });
+    const cpBackend = sandbox.context.backend('checkpoint');
+    const checkpoint = cpBackend.getSnapshot();
+    await cpBackend.save({ ...checkpoint, revision: checkpoint.revision + 1,
+      ledger: { ...checkpoint.ledger, revision: checkpoint.ledger.revision + 1 } });
+    assert.equal(sandbox.capacityBudget.status().reservedBytes, oldReservation);
+    assert.deepEqual(await fs.readFile(sandbox.slotPathsBySlot.questions), afterFault);
+    assert.equal(sandbox.context.status().state, 'degraded');
+    const nextCheckpoint = cpBackend.getSnapshot();
+    modules.nativeFileSystem.armRenameRetryExhaustion({ targetPath: sandbox.slotPathsBySlot.checkpoint,
+      error: questionError });
+    await assert.rejects(cpBackend.save({ ...nextCheckpoint, revision: nextCheckpoint.revision + 1,
+      ledger: { ...nextCheckpoint.ledger, revision: nextCheckpoint.ledger.revision + 1 } }), { code: 'EPERM' });
+    assert.equal(sandbox.context.status().state, 'blocked');
+    assert.equal(iBackend.canWrite(), false);
+    assert.equal(sandbox.capacityBudget.status().reservedBytes, oldReservation);
+  });
+}
+
+test('queued nonquestion I/O rechecks close after local isolation and shared checkpoint uncertainty', async (t) => {
+  const { loadQuestionWriteIsolationModules } = require('./support/question-write-isolation-loader');
+  const modules = loadQuestionWriteIsolationModules();
+  const sandbox = await makeSandbox(t, emptyStores(), emptyAnchor(), undefined, {}, limits(), undefined, modules);
+  await sandbox.context.start(sandbox.writersBySlot);
+  const qBackend = sandbox.context.backend('questions');
+  const qCandidate = { ...qBackend.getSnapshot(), revision: 1 };
+  modules.nativeFileSystem.armRenameRetryExhaustion({ targetPath: sandbox.slotPathsBySlot.questions });
+  await assert.rejects(qBackend.save(qCandidate), { code: 'EPERM' });
+  const cpBackend = sandbox.context.backend('checkpoint');
+  const checkpoint = cpBackend.getSnapshot();
+  const barrier = modules.nativeFileSystem.armRenameRetryExhaustion({
+    targetPath: sandbox.slotPathsBySlot.checkpoint, hold: true,
+  });
+  t.after(() => barrier.release());
+  const checkpointWrite = cpBackend.save({ ...checkpoint, revision: checkpoint.revision + 1,
+    ledger: { ...checkpoint.ledger, revision: checkpoint.ledger.revision + 1 } });
+  const checkpointResult = assert.rejects(checkpointWrite, { code: 'EPERM' });
+  await barrier.entered;
+  const iBackend = sandbox.context.backend('instructions');
+  const instruction = iBackend.getSnapshot();
+  const beforeInstruction = await fs.readFile(sandbox.slotPathsBySlot.instructions);
+  const queued = iBackend.save({ ...instruction, revision: instruction.revision + 1 });
+  const queuedResult = assert.rejects(queued, { code: 'reclamation_service_blocked' });
+  const closing = sandbox.context.close();
+  barrier.release();
+  await Promise.all([checkpointResult, queuedResult, closing]);
+  assert.deepEqual(await fs.readFile(sandbox.slotPathsBySlot.instructions), beforeInstruction);
+  assert.equal(sandbox.context.status().state, 'closed');
+  assert.equal(sandbox.capacityBudget.status().reservedBytes, 0);
+});
+
+for (const phase of ['before', 'after']) {
+  test(`question grant rename ${phase} failure remains global and keeps the pre-write reservation`, async (t) => {
+    const { loadQuestionWriteIsolationModules } = require('./support/question-write-isolation-loader');
+    const { threeSlotLegacySources, limitsForPostBodyRelease } = require('./support/native-migration-allowance-release-harness');
+    const modules = loadQuestionWriteIsolationModules();
+    const sources = threeSlotLegacySources('claude');
+    const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'question-grant-isolation-'));
+    const slotPathsBySlot = Object.fromEntries(SLOTS.map((slot) => [slot, path.join(directory, `${slot}.json`)]));
+    await Promise.all(SLOTS.map((slot) => fs.writeFile(slotPathsBySlot[slot], sources[slot])));
+    const persistence = modules.persistence.createReclamationPersistence({
+      anchorPath: path.join(directory, 'question-reclamation-anchor.json'), slotPathsBySlot,
+    });
+    const capacityBudget = createReclamationCapacityBudget({ maxAdditionalBytes: 4_000_000_000 });
+    let now = 1_000_000;
+    const context = modules.context.createReclamationServiceContext({ persistence, capacityBudget,
+      normalByteLimitsBySlot: limitsForPostBodyRelease(sources), now: () => now });
+    t.after(async () => {
+      await context.close().catch(() => {});
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    const writers = Object.fromEntries(SLOTS.map((slot) => [slot, {
+      stop() {}, drain() {}, prepareResume(snapshot) { context.backend(slot).prepareResume(snapshot); },
+    }]));
+    await context.start(writers);
+    const qBackend = context.backend('questions');
+    const cpBackend = context.backend('checkpoint');
+    now = 1_604_800_001;
+    await context.reclaimQuestionBodies({ identity: sources.question.identity, periodId: 'period-1',
+      questionService: { async withRetiredQuestionBodies(request, callback) {
+        return callback({ snapshot: () => qBackend.getSnapshot(),
+          persist: (internalQuestionId, candidate) => qBackend.save(candidate) });
+      } },
+      deliveryStore: { async withRetiredQuestionCheckpoint(request, callback) {
+        return callback({ snapshot: () => cpBackend.getSnapshot(), persist: (candidate) => cpBackend.save(candidate) });
+      } },
+    });
+    let cached = qBackend.getSnapshot();
+    assert.notEqual(cached.migrationAllowance, null);
+    const oldReservation = capacityBudget.status().reservedBytes;
+    const before = await fs.readFile(slotPathsBySlot.questions);
+    modules.nativeFileSystem.armRenameRetryExhaustion({ targetPath: slotPathsBySlot.questions, phase });
+    await assert.rejects(context.releaseMigrationAllowance({ slot: 'questions', writer: {
+      async withMigrationAllowance(callback) {
+        return callback({ snapshot: () => structuredClone(cached), async persist(candidate) {
+          cached = await qBackend.save(candidate);
+          return cached;
+        } });
+      },
+    } }), { code: 'EPERM' });
+    assert.equal(context.status().state, 'blocked');
+    assert.equal(capacityBudget.status().reservedBytes, oldReservation);
+    assert.notEqual(cached.migrationAllowance, null);
+    for (const slot of SLOTS) assert.equal(context.backend(slot).canWrite(), false);
+    const after = await fs.readFile(slotPathsBySlot.questions);
+    if (phase === 'before') assert.deepEqual(after, before);
+    else assert.equal(JSON.parse(after).migrationAllowance, null);
+  });
 }
 
 test('cold loads wait for strict preparation and the gate opens after coordinator resume', async (t) => {

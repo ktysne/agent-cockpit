@@ -356,6 +356,35 @@ atomic保存とreadbackが一致するまで旧leaseを保持する。
 | GAR05 | scope寿命、queue再入、closeと実I/O直前のguardを検査する |
 | GAR06 | 保存結果不明では旧予約を維持して停止し、fresh起動で照合する。縮小失敗は予約保持の確実性で区別する |
 
+## 質問journalの限定した保存結果不明
+
+質問journalだけを停止する対象は、標準のatomic writerと起動時に固定した標準filesystem関数によるrename失敗に限定する。
+一時fileへの全byteの保存とcloseが完了し、`EPERM`または`EBUSY`の再試行を使い切り、一時fileの削除成功または不存在を確認した場合だけ、保存先を旧snapshotと候補snapshotの二通りに限定する。
+任意のfilesystemやatomic writer、path検査、readback、容量予約、一時fileの清掃結果不明、anchorと共有checkpointの失敗は全停止する。
+例外codeだけでは局所停止を認定せず、同じpersistence instanceが実行した保存の例外とbyte列を内部で一度だけ照合する。
+
+局所停止では二通りの質問snapshotを内部に保持し、質問の受付、回答、後着通知、送信、本文回収と質問に属するcheckpoint記録の変更を止める。
+不確かな質問snapshotを正常な最新状態として公開しない。
+anchor、全slotのmigration grantとleaseは固定し、期間退役とgrant解放も行わない。
+同じinstanceでの読み直しを再開条件にせず、新しいinstanceの完全なcold照合を必要とする。
+
+通常指示、PR通知、resultの保存は、旧質問snapshotと候補質問snapshotのそれぞれで既存StoreWriteと全将来予約の照合に合格した場合だけ継続する。
+両方に同じ質問snapshotをpreviousとnextとして差し込み、修復した質問状態を保存候補へ混ぜない。
+許可する照合理由は既存のcreationとcheckpoint cacheに限定し、退役途中の`question_retirement_snapshot`を除外する。
+共有checkpointの保存結果が不明になった場合は、この継続も停止する。
+
+| ID | 期待条件 |
+|---|---|
+| QWI01 | 標準renameの限定した失敗だけを局所停止し、任意writerや同じcodeの例外を認定しない |
+| QWI02 | 一時fileの残留がないことを確認し、旧leaseと全grantを保持する |
+| QWI03 | 質問の全書き込みと最新状態の読み出しを拒否し、質問checkpoint記録とanchorを固定する |
+| QWI04 | 非質問の保存を旧状態と候補状態の両方で照合し、一方だけで合法な保存を拒否する |
+| QWI05 | 同一instanceの認定した例外だけを区別し、再使用と別instanceの例外を認定しない。不明な保存失敗は全停止する |
+| QWI06 | 共有checkpointの結果不明では全停止し、新instanceのcold照合以外で質問を再開しない |
+
+この契約は任意の保存結果不明を局所化するものではない。
+標準filesystemの実OS障害、実native送信と自動回収の確認は別に記録する。
+
 ## PR通知のaliasと履歴
 
 現行PR通知の論理keyはkind、logical ID、revision、target launch tupleで決まり、source execution IDはkeyに入らない。

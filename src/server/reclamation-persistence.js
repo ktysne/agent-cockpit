@@ -24,6 +24,20 @@ const TYPED_ARRAY_LENGTH_GETTER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PR
 const TYPED_ARRAY_SET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, 'set').value;
 const BUFFER_ALLOC_UNSAFE = Buffer.allocUnsafe;
 const BUFFER_CONCAT = Buffer.concat;
+const BUFFER_COMPARE = Buffer.compare;
+const DEFAULT_NATIVE_FILE_SYSTEM = Object.freeze({
+  lstat: fs.lstat.bind(fs),
+  open: fs.open.bind(fs),
+  rename: fs.rename.bind(fs),
+  unlink: fs.unlink.bind(fs),
+});
+const DEFAULT_ATOMIC_FAILURES = new WeakMap();
+const SEEN_DEFAULT_ATOMIC_ERRORS = new WeakSet();
+const AMBIGUOUS_ATOMIC_ERRORS = new WeakSet();
+const BOUNDED_QUESTION_WRITE_FAILURES = new WeakMap();
+const SEEN_QUESTION_WRITE_ERRORS = new WeakSet();
+const AMBIGUOUS_QUESTION_WRITE_ERRORS = new WeakSet();
+const PERSISTENCE_HEALTH = new WeakMap();
 
 function persistenceError(code, Type = TypeError) {
   const error = new Type(code);
@@ -107,10 +121,12 @@ function captureOptions(value) {
     throw persistenceError('invalid_reclamation_anchor_path');
   }
   const { pathsBySlot, configuredSlots } = captureSlotPaths(captured.get('slotPathsBySlot'));
-  const fileSystem = captured.has('fileSystem') && captured.get('fileSystem') !== undefined
+  const fileSystemWasSpecified = captured.has('fileSystem');
+  const atomicWriterWasSpecified = captured.has('atomicWriteBytes');
+  const fileSystem = fileSystemWasSpecified && captured.get('fileSystem') !== undefined
     ? captured.get('fileSystem')
-    : fs;
-  const atomicWriteBytes = captured.has('atomicWriteBytes') && captured.get('atomicWriteBytes') !== undefined
+    : DEFAULT_NATIVE_FILE_SYSTEM;
+  const atomicWriteBytes = atomicWriterWasSpecified && captured.get('atomicWriteBytes') !== undefined
     ? captured.get('atomicWriteBytes')
     : defaultAtomicWriteBytes;
   if (fileSystem === null || typeof fileSystem !== 'object' ||
@@ -120,6 +136,9 @@ function captureOptions(value) {
   if (typeof atomicWriteBytes !== 'function') {
     throw persistenceError('invalid_reclamation_atomic_writer');
   }
+  const atomicWriterFileSystem = fileSystemWasSpecified && captured.get('fileSystem') !== undefined
+    ? fileSystem
+    : (atomicWriteBytes === defaultAtomicWriteBytes ? fileSystem : fs);
 
   const allPaths = new Map([[canonicalPathKey(anchorPath), 'anchor']]);
   for (const slot of configuredSlots) {
@@ -128,7 +147,16 @@ function captureOptions(value) {
     if (allPaths.has(key)) throw persistenceError('reclamation_persistence_path_alias');
     allPaths.set(key, slot);
   }
-  return { anchorPath, pathsBySlot, configuredSlots, fileSystem, atomicWriteBytes, allPaths };
+  return {
+    anchorPath,
+    pathsBySlot,
+    configuredSlots,
+    fileSystem,
+    atomicWriteBytes,
+    atomicWriterFileSystem,
+    allPaths,
+    canCertifyQuestionRenameFailure: !fileSystemWasSpecified && !atomicWriterWasSpecified,
+  };
 }
 
 function captureMaximumBytes(value) {
@@ -236,18 +264,22 @@ async function defaultAtomicWriteBytes(targetPath, bytes, fileSystem) {
   const temporaryPath = path.join(path.dirname(targetPath),
     `.${path.basename(targetPath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
   let handle = null;
+  let temporaryFileClosed = false;
+  let renameRetryExhausted = false;
   try {
     handle = await fileSystem.open(temporaryPath, 'wx', 0o600);
     await handle.writeFile(bytes);
     await handle.close();
     handle = null;
+    temporaryFileClosed = true;
     for (let attempt = 0; ; attempt += 1) {
       try {
         await fileSystem.rename(temporaryPath, targetPath);
         return;
       } catch (error) {
-        if (!error || !['EPERM', 'EBUSY'].includes(error.code) ||
-            attempt >= RENAME_RETRY_DELAYS_MS.length) {
+        const retryable = Boolean(error && ['EPERM', 'EBUSY'].includes(error.code));
+        if (!retryable || attempt >= RENAME_RETRY_DELAYS_MS.length) {
+          renameRetryExhausted = retryable && attempt >= RENAME_RETRY_DELAYS_MS.length;
           throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAYS_MS[attempt]));
@@ -255,14 +287,80 @@ async function defaultAtomicWriteBytes(targetPath, bytes, fileSystem) {
     }
   } catch (error) {
     if (handle !== null) await handle.close().catch(() => {});
-    await fileSystem.unlink(temporaryPath).catch(() => {});
+    let cleanupConfirmed = false;
+    try {
+      await fileSystem.unlink(temporaryPath);
+      cleanupConfirmed = true;
+    } catch (cleanupError) {
+      cleanupConfirmed = cleanupError?.code === 'ENOENT';
+    }
+    if (fileSystem === DEFAULT_NATIVE_FILE_SYSTEM && temporaryFileClosed && renameRetryExhausted &&
+        cleanupConfirmed) {
+      rememberDefaultAtomicFailure(error, targetPath, bytes);
+    }
     throw error;
   }
 }
 
+function isWeakKey(value) {
+  return value !== null && (typeof value === 'object' || typeof value === 'function');
+}
+
+function rememberDefaultAtomicFailure(error, targetPath, bytes) {
+  if (!isWeakKey(error) || AMBIGUOUS_ATOMIC_ERRORS.has(error)) return;
+  if (SEEN_DEFAULT_ATOMIC_ERRORS.has(error)) {
+    DEFAULT_ATOMIC_FAILURES.delete(error);
+    AMBIGUOUS_ATOMIC_ERRORS.add(error);
+    if (BOUNDED_QUESTION_WRITE_FAILURES.has(error)) {
+      BOUNDED_QUESTION_WRITE_FAILURES.delete(error);
+      AMBIGUOUS_QUESTION_WRITE_ERRORS.add(error);
+    }
+    return;
+  }
+  SEEN_DEFAULT_ATOMIC_ERRORS.add(error);
+  let capturedBytes;
+  try { capturedBytes = cloneBytes(bytes, MAX_BUFFER_BYTES); } catch { return; }
+  DEFAULT_ATOMIC_FAILURES.set(error, { targetPath, bytes: capturedBytes });
+}
+
+function takeDefaultAtomicFailure(error) {
+  if (!isWeakKey(error) || AMBIGUOUS_ATOMIC_ERRORS.has(error)) return null;
+  const failure = DEFAULT_ATOMIC_FAILURES.get(error) || null;
+  DEFAULT_ATOMIC_FAILURES.delete(error);
+  return failure;
+}
+
+function sameBytes(left, right) {
+  return left.length === right.length && BUFFER_COMPARE.call(Buffer, left, right) === 0;
+}
+
+function consumeBoundedQuestionWriteFailure(persistence, error, attemptedBytes) {
+  if (!isWeakKey(persistence) || !isWeakKey(error)) return false;
+  const health = PERSISTENCE_HEALTH.get(persistence);
+  const failure = BOUNDED_QUESTION_WRITE_FAILURES.get(error);
+  if (!health || health.closed || !health.questionWriteBlocked || !failure ||
+      AMBIGUOUS_ATOMIC_ERRORS.has(error) || AMBIGUOUS_QUESTION_WRITE_ERRORS.has(error) ||
+      failure.persistence !== persistence || failure.slot !== 'questions') return false;
+  let bytes;
+  try { bytes = cloneBytes(attemptedBytes, MAX_BUFFER_BYTES); } catch { return false; }
+  if (!sameBytes(failure.bytes, bytes)) return false;
+  BOUNDED_QUESTION_WRITE_FAILURES.delete(error);
+  health.pendingQuestionFailure = false;
+  health.pendingQuestionError = null;
+  return true;
+}
+
 function createReclamationPersistence(options) {
   const captured = captureOptions(options);
-  const { anchorPath, pathsBySlot, configuredSlots, fileSystem, atomicWriteBytes, allPaths } = captured;
+  const {
+    anchorPath,
+    pathsBySlot,
+    configuredSlots,
+    fileSystem,
+    atomicWriteBytes,
+    atomicWriterFileSystem,
+    allPaths,
+  } = captured;
   for (const key of allPaths.keys()) {
     if (OWNED_PATHS.has(key)) throw persistenceError('reclamation_persistence_path_owned');
   }
@@ -272,8 +370,15 @@ function createReclamationPersistence(options) {
 
   let closed = false;
   let writeBlocked = false;
+  const health = {
+    closed: false,
+    questionWriteBlocked: false,
+    pendingQuestionFailure: false,
+    pendingQuestionError: null,
+  };
   let pending = Promise.resolve();
   let closePromise = null;
+  let persistenceAdapter = null;
 
   function enqueue(operation) {
     if (closed) return Promise.reject(persistenceError('reclamation_persistence_closed'));
@@ -298,7 +403,7 @@ function createReclamationPersistence(options) {
     return enqueue(() => readBoundedFile(filePath, capturedLimit, fileSystem));
   }
 
-  function writeBytes(filePath, bytes, maximumBytes) {
+  function writeBytes(filePath, bytes, maximumBytes, slot) {
     let capturedBytes;
     try {
       capturedBytes = cloneBytes(bytes, captureMaximumBytes(maximumBytes));
@@ -307,11 +412,40 @@ function createReclamationPersistence(options) {
     }
     return enqueue(async () => {
       if (writeBlocked) throw persistenceError('reclamation_persistence_write_blocked');
+      if (health.pendingQuestionFailure) {
+        throw persistenceError('reclamation_persistence_question_failure_pending');
+      }
+      if (slot === 'questions' && health.questionWriteBlocked) {
+        throw persistenceError('reclamation_persistence_question_write_blocked');
+      }
       try {
         await inspectRegularFilePath(filePath, fileSystem);
-        await atomicWriteBytes(filePath, capturedBytes, fileSystem);
+        await atomicWriteBytes(filePath, capturedBytes, atomicWriterFileSystem);
       } catch (error) {
-        writeBlocked = true;
+        const atomicFailure = takeDefaultAtomicFailure(error);
+        let localQuestionFailure = false;
+        if (!health.closed && captured.canCertifyQuestionRenameFailure && slot === 'questions' &&
+            fileSystem === DEFAULT_NATIVE_FILE_SYSTEM && atomicWriteBytes === defaultAtomicWriteBytes &&
+            atomicFailure && atomicFailure.targetPath === filePath &&
+            sameBytes(atomicFailure.bytes, capturedBytes) && persistenceAdapter !== null &&
+            !AMBIGUOUS_QUESTION_WRITE_ERRORS.has(error)) {
+          if (SEEN_QUESTION_WRITE_ERRORS.has(error)) {
+            BOUNDED_QUESTION_WRITE_FAILURES.delete(error);
+            AMBIGUOUS_QUESTION_WRITE_ERRORS.add(error);
+          } else {
+            SEEN_QUESTION_WRITE_ERRORS.add(error);
+            BOUNDED_QUESTION_WRITE_FAILURES.set(error, {
+              persistence: persistenceAdapter,
+              slot,
+              bytes: cloneBytes(capturedBytes, MAX_BUFFER_BYTES),
+            });
+            health.questionWriteBlocked = true;
+            health.pendingQuestionFailure = true;
+            health.pendingQuestionError = error;
+            localQuestionFailure = true;
+          }
+        }
+        if (!localQuestionFailure) writeBlocked = true;
         throw error;
       }
     });
@@ -328,27 +462,35 @@ function createReclamationPersistence(options) {
     if (typeof slot !== 'string' || !pathsBySlot.has(slot)) {
       return Promise.reject(persistenceError('reclamation_persistence_slot_not_configured'));
     }
-    return writeBytes(pathsBySlot.get(slot), bytes, maximumBytes);
+    return writeBytes(pathsBySlot.get(slot), bytes, maximumBytes, slot);
   }
 
   function close() {
     if (closePromise !== null) return closePromise;
     closed = true;
+    health.closed = true;
+    if (health.pendingQuestionError !== null) {
+      BOUNDED_QUESTION_WRITE_FAILURES.delete(health.pendingQuestionError);
+      health.pendingQuestionError = null;
+    }
+    health.pendingQuestionFailure = false;
     closePromise = pending.then(() => {
       releaseOwnership();
     });
     return closePromise;
   }
 
-  return Object.freeze({
+  persistenceAdapter = Object.freeze({
     configuredSlots,
     readAnchorBytes: (maximumBytes) => readBytes(anchorPath, maximumBytes),
     readSlotBytes,
-    writeAnchorBytes: (bytes, maximumBytes) => writeBytes(anchorPath, bytes, maximumBytes),
+    writeAnchorBytes: (bytes, maximumBytes) => writeBytes(anchorPath, bytes, maximumBytes, 'anchor'),
     writeSlotBytes,
     close,
     status: () => ({ closed, writeBlocked }),
   });
+  PERSISTENCE_HEALTH.set(persistenceAdapter, health);
+  return persistenceAdapter;
 }
 
-module.exports = { createReclamationPersistence };
+module.exports = { consumeBoundedQuestionWriteFailure, createReclamationPersistence };

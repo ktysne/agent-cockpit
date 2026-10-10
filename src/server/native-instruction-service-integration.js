@@ -868,8 +868,19 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   const native = Object.freeze({ admitLaunch, createOwnedCollector, startLaunch, stop, getLaunchState,
     ownedExecutionSnapshot, getOwnedStopState, stopOwnedExecution });
-  function getQuestionQuarantineStatus() {
+  function readQuestionHealth() {
+    if (reclamationContext === null) return 'known';
+    try {
+      return reclamationContext.status().slotHealth?.questions === 'uncertain' ? 'uncertain' : 'known';
+    } catch { return 'unknown'; }
+  }
+  function getQuestionQuarantineStatus(questionHealth) {
     if (!questionService) return null;
+    if (questionHealth !== 'known') {
+      return Object.freeze({ status: 'unavailable', reason: questionHealth === 'uncertain'
+        ? 'question_journal_uncertain' : 'question_quarantine_status_unavailable',
+        quarantinedCount: 0, reservedBytes: null, remainingBytes: null, remainingCount: null });
+    }
     const unavailable = Object.freeze({ status: 'unavailable', reason: 'question_quarantine_status_unavailable',
       quarantinedCount: 0, reservedBytes: null, remainingBytes: null, remainingCount: null });
     try {
@@ -894,10 +905,13 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     } catch { return unavailable; }
   }
   function getStatus() {
+    const questionHealth = readQuestionHealth();
     return Object.freeze({ commonQuestions: Object.freeze({
-      status: closing ? 'closed' : questionService ? 'ready' : 'unconfigured',
+      status: closing ? 'closed' : questionService
+        ? questionHealth === 'known' ? 'ready' : 'unavailable'
+        : 'unconfigured',
       settings: options.commonQuestions ? getSettingsStatus() : null,
-      quarantine: getQuestionQuarantineStatus(),
+      quarantine: getQuestionQuarantineStatus(questionHealth),
     }) });
   }
   function retireQuestionPeriod(value) {

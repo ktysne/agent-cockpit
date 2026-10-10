@@ -191,6 +191,17 @@ function createCommonQuestionReclamationJournal(value) {
     return snapshot;
   }
 
+  function assertQuestionReadKnown() {
+    const guard = backend.assertQuestionReadable;
+    if (guard === undefined) return;
+    if (typeof guard !== 'function') throw adapterError('invalid_reclamation_read_guard');
+    const result = guard.call(backend);
+    if (result !== undefined) {
+      if (utilTypes.isPromise(result)) Promise.prototype.catch.call(result, () => {});
+      throw adapterError('invalid_reclamation_read_guard');
+    }
+  }
+
   function currentReservationById(internalQuestionId) {
     return requireInstalled().reservations.find((item) => item.internalQuestionId === internalQuestionId) || null;
   }
@@ -386,20 +397,24 @@ function createCommonQuestionReclamationJournal(value) {
   }
 
   function findReservation(identity, periodId, questionId) {
+    assertQuestionReadKnown();
     return requireInstalled().reservations.find((item) =>
       reservationMatchesKey(item, identity, periodId, questionId)) || null;
   }
 
   function getReservation(internalQuestionId) {
+    assertQuestionReadKnown();
     const reservation = currentReservationById(internalQuestionId);
     return reservation ? structuredClone(reservation) : null;
   }
 
   function getSnapshot() {
+    assertQuestionReadKnown();
     return structuredClone(requireInstalled());
   }
 
   function getLegacySnapshot() {
+    assertQuestionReadKnown();
     requireInstalled();
     return structuredClone(legacy);
   }
@@ -562,6 +577,7 @@ function createCommonQuestionReclamationJournal(value) {
   }
 
   function load() {
+    assertQuestionReadKnown();
     return Promise.resolve(structuredClone(projectLegacyJournal(requireInstalled(), maxRecords)));
   }
 
