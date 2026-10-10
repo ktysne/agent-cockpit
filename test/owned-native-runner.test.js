@@ -14,9 +14,10 @@ const LOGIN_ID = 'login_test_1';
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=test';
 
 class FakePipe extends EventEmitter {
-  constructor(onWrite) {
+  constructor(onWrite, onWriteCallback) {
     super();
     this.onWrite = onWrite;
+    this.onWriteCallback = onWriteCallback;
     this.writes = [];
     this.ended = false;
   }
@@ -25,7 +26,10 @@ class FakePipe extends EventEmitter {
     const text = value.toString();
     this.writes.push(text);
     if (this.onWrite) this.onWrite(text);
-    queueMicrotask(() => { if (callback) callback(); });
+    if (callback) {
+      if (this.onWriteCallback) this.onWriteCallback(text, callback);
+      else queueMicrotask(() => callback());
+    }
     return true;
   }
 
@@ -41,7 +45,10 @@ class FakeChild extends EventEmitter {
     this.stderr = new EventEmitter();
     this.killCalls = [];
     this.exited = false;
-    this.stdin = new FakePipe(onWrite ? (text) => onWrite(text, this) : null);
+    this.stdin = new FakePipe(
+      onWrite ? (text) => onWrite(text, this) : null,
+      options.onWriteCallback ? (text, callback) => options.onWriteCallback(text, callback, this) : null,
+    );
     this.killEvents = options.killEvents || ['exit', 'close'];
     this.killResult = options.killResult ?? true;
     this.killError = options.killError || null;
@@ -143,6 +150,27 @@ function codexLoginCompleted(loginId = LOGIN_ID, success = true) {
 
 function codexTurnCompleted(threadId = 'thread_native_1', turnId = 'turn_native_1') {
   return codexNotification('turn/completed', { threadId, turn: { id: turnId, status: 'completed' } });
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function observeStart(promise) {
+  return promise.then(
+    (value) => ({ status: 'resolved', value }),
+    (error) => ({ status: 'rejected', error }),
+  );
+}
+
+function nextImmediate() {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function codexResponder(options = {}) {
@@ -2241,6 +2269,229 @@ function ownedCodexInstructionMetadata({ mode = 'steer', expectedTurnId = 'turn_
   };
 }
 
+async function createReadCancellationFixture(t) {
+  const workspace = createWorkspace(t);
+  const claim = Object.freeze({});
+  const harness = createOwnedCodexHarness(workspace);
+  let capability;
+  const runner = createOwnedCodexRunner(workspace, harness, claim, {
+    onSourceReady: (value) => { capability = value; },
+    timeouts: { startupMs: 1000, rpcMs: 5000, loginMs: 1000, stopMs: 100 },
+  });
+  t.after(() => runner.stop());
+  await runner.start({ inputText: 'fixed task' });
+  const source = getOwnedSource(capability);
+  assert.equal(source.bindOwner(claim), true);
+  const lease = source.acquireReadLease(Object.freeze({}));
+  return { harness, runner, source, lease, capability };
+}
+
+function holdNextOwnedRead(t, fixture, method, { responseFirst = false, callbackFirst = false, onWrite } = {}) {
+  const { harness } = fixture;
+  const stdin = harness.child.stdin;
+  const originalWrite = stdin.write.bind(stdin);
+  const reached = deferred();
+  let held = false;
+  let respond;
+  let completeWrite;
+  let responseReleased = false;
+  let writeReleased = false;
+  const releaseResponse = () => {
+    if (!respond || responseReleased) return;
+    responseReleased = true;
+    respond();
+  };
+  const releaseWrite = (error) => {
+    if (!completeWrite || writeReleased) return;
+    writeReleased = true;
+    completeWrite(error);
+  };
+  t.after(() => { try { releaseResponse(); } finally { releaseWrite(); } });
+  stdin.write = (line, callback) => {
+    const request = JSON.parse(line.toString());
+    if (request.method !== method || held) return originalWrite(line, callback);
+    held = true;
+    stdin.writes.push(line.toString());
+    harness.methods.push(method);
+    harness.requests.push({ method, id: request.id });
+    respond = () => {
+      harness.child.send(codexResponse(request.id, method === 'thread/loaded/list'
+        ? { data: ['thread_native_1'], nextCursor: null }
+        : { thread: { id: 'thread_native_1', turns: [{ id: 'turn_native_1', status: 'inProgress' }] } }));
+    };
+    completeWrite = (error) => callback(error);
+    if (responseFirst) releaseResponse();
+    if (callbackFirst) releaseWrite();
+    onWrite?.();
+    reached.resolve();
+    return true;
+  };
+  return { reached: reached.promise, respond: releaseResponse, completeWrite: releaseWrite };
+}
+
+for (const method of ['thread/loaded/list', 'thread/read']) {
+  for (const phase of ['response-first', 'callback-first', 'both-pending']) {
+    test(`ID-F209-R01 ${method} ${phase}: release alone settles read before raw work completes`, { timeout: 3000 }, async (t) => {
+      const fixture = await createReadCancellationFixture(t);
+      const held = holdNextOwnedRead(t, fixture, method, {
+        responseFirst: phase === 'response-first', callbackFirst: phase === 'callback-first',
+      });
+      const pending = fixture.source.readCurrent(fixture.lease);
+      await held.reached;
+      assert.equal(fixture.source.releaseReadLease(fixture.lease), true);
+      assert.equal(fixture.source.releaseReadLease(fixture.lease), false);
+      const result = await pending;
+      assert.equal(result.status, 'unknown');
+      assert.equal(result.receipt, null);
+      assert.equal(fixture.runner.snapshot().state, 'running');
+      assert.equal(fixture.harness.child.killCalls.length, 0);
+      const methodsBeforeLate = [...fixture.harness.methods];
+      if (phase !== 'response-first') held.respond();
+      if (phase !== 'callback-first') held.completeWrite();
+      await nextImmediate();
+      assert.deepEqual(fixture.harness.methods, methodsBeforeLate);
+      const nextLease = fixture.source.acquireReadLease(Object.freeze({}));
+      const fresh = await fixture.source.readCurrent(nextLease);
+      assert.equal(fresh.status, 'attested');
+      assert.equal(fixture.source.consumeReadReceipt(nextLease, fresh.receipt), true);
+    });
+  }
+}
+
+test('ID-F209-R01 old raw response and write callback do not disturb a new lease receipt', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const held = holdNextOwnedRead(t, fixture, 'thread/read');
+  const oldRead = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  fixture.source.releaseReadLease(fixture.lease);
+  assert.equal((await oldRead).status, 'unknown');
+  const nextLease = fixture.source.acquireReadLease(Object.freeze({}));
+  const fresh = await fixture.source.readCurrent(nextLease);
+  held.respond();
+  held.completeWrite();
+  await nextImmediate();
+  assert.equal(fresh.status, 'attested');
+  assert.equal(fixture.source.consumeReadReceipt(nextLease, fresh.receipt), true);
+  assert.equal(fixture.runner.snapshot().state, 'running');
+});
+
+test('ID-F209-R01 release after raw loaded-list response and write settlement prevents thread-read', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list');
+  const read = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  held.respond();
+  held.completeWrite();
+  queueMicrotask(() => fixture.source.releaseReadLease(fixture.lease));
+  assert.equal((await read).status, 'unknown');
+  assert.equal(fixture.harness.methods.includes('thread/read'), false);
+});
+
+for (const callbackTiming of ['synchronous', 'late-success', 'late-error']) {
+  test(`ID-F209-R01 synchronous write release with ${callbackTiming} consumes raw settlement`, { timeout: 3000 }, async (t) => {
+    const fixture = await createReadCancellationFixture(t);
+    const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list', {
+      responseFirst: true,
+      onWrite: () => {
+        fixture.source.releaseReadLease(fixture.lease);
+        if (callbackTiming === 'synchronous') held.completeWrite();
+      },
+    });
+    const read = fixture.source.readCurrent(fixture.lease);
+    await held.reached;
+    assert.equal((await read).status, 'unknown');
+    assert.equal(fixture.harness.methods.includes('thread/read'), false);
+    if (callbackTiming !== 'synchronous') held.completeWrite(callbackTiming === 'late-error' ? new Error('physical pipe failure') : undefined);
+    await nextImmediate();
+    assert.equal(fixture.runner.snapshot().state, callbackTiming === 'late-error' ? 'failed' : 'running');
+    assert.equal(fixture.runner.snapshot().failureCode, callbackTiming === 'late-error' ? 'stdin_write_failed' : null);
+    if (callbackTiming !== 'late-error') {
+      const nextLease = fixture.source.acquireReadLease(Object.freeze({}));
+      assert.equal((await fixture.source.readCurrent(nextLease)).status, 'attested');
+    }
+  });
+}
+
+test('ID-F209-R01 source invalidation by stop cancels a response-first pending write', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list', { responseFirst: true });
+  const pending = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  const stop = fixture.runner.stop();
+  assert.equal((await pending).status, 'unknown');
+  await stop;
+  held.completeWrite(new Error('old generation error'));
+  await nextImmediate();
+  assert.equal(fixture.runner.snapshot().state, 'stopped');
+  assert.equal(fixture.runner.snapshot().failureCode, null);
+});
+
+test('ID-F209-R01 cancelling one runner read preserves another runner pending read', { timeout: 3000 }, async (t) => {
+  const first = await createReadCancellationFixture(t);
+  const second = await createReadCancellationFixture(t);
+  const firstHeld = holdNextOwnedRead(t, first, 'thread/read');
+  const secondHeld = holdNextOwnedRead(t, second, 'thread/read');
+  const firstRead = first.source.readCurrent(first.lease);
+  let secondSettled = false;
+  const secondRead = second.source.readCurrent(second.lease).then((result) => { secondSettled = true; return result; });
+  await Promise.all([firstHeld.reached, secondHeld.reached]);
+  first.source.releaseReadLease(first.lease);
+  assert.equal((await firstRead).status, 'unknown');
+  await nextImmediate();
+  assert.equal(secondSettled, false);
+  assert.equal(second.source.checkLease(second.lease), true);
+  secondHeld.respond();
+  secondHeld.completeWrite();
+  const fresh = await secondRead;
+  assert.equal(fresh.status, 'attested');
+  assert.equal(second.source.consumeReadReceipt(second.lease, fresh.receipt), true);
+  firstHeld.respond();
+  firstHeld.completeWrite();
+});
+
+test('ID-F209-R01 read cancellation leaves pending instruction transport until the authority-checked ACK', { timeout: 3000 }, async (t) => {
+  const fixture = await createReadCancellationFixture(t);
+  const writer = getOwnedInstructionWriter(fixture.capability);
+  const metadata = ownedCodexInstructionMetadata();
+  const token = writer.prepare(metadata);
+  assert.ok(token);
+  const stdin = fixture.harness.child.stdin;
+  const originalOnWrite = stdin.onWrite;
+  let instructionId;
+  let instructionAckReleased = false;
+  const releaseInstructionAck = () => {
+    if (instructionId === undefined || instructionAckReleased) return;
+    instructionAckReleased = true;
+    fixture.harness.child.send(codexResponse(instructionId, { turnId: 'turn_native_1' }));
+  };
+  t.after(releaseInstructionAck);
+  stdin.onWrite = (line) => {
+    const request = JSON.parse(line);
+    if (request.method === 'turn/steer') { instructionId = request.id; return; }
+    originalOnWrite(line);
+  };
+  let instructionSettled = false;
+  const input = [{ type: 'text', text: 'instruction input', text_elements: [] }];
+  const ack = writer.dispatchNow(token, { ...metadata, input }, () => true).then(
+    (value) => { instructionSettled = true; return { value }; },
+    (error) => { instructionSettled = true; return { error }; },
+  );
+  assert.ok(instructionId);
+  const held = holdNextOwnedRead(t, fixture, 'thread/read');
+  const read = fixture.source.readCurrent(fixture.lease);
+  await held.reached;
+  fixture.source.releaseReadLease(fixture.lease);
+  assert.equal((await read).status, 'unknown');
+  await nextImmediate();
+  assert.equal(instructionSettled, false);
+  assert.equal(fixture.runner.snapshot().state, 'running');
+  releaseInstructionAck();
+  assert.ok((await ack).error);
+  assert.equal(fixture.runner.snapshot().state, 'running');
+  held.respond();
+  held.completeWrite();
+});
+
 test('owned Codex source reads only its current loaded turn over the existing pipe', async (t) => {
   const workspace = createWorkspace(t);
   const claim = Object.freeze({});
@@ -2675,3 +2926,241 @@ test('a duplicate resolution during terminal callback does not consume the defer
   assert.equal(waitReplies(harness).length, 0);
   await runner.stop();
 });
+
+function createStartCancellationFixture(workspace, provider, stage) {
+  const barriers = new Map();
+  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], releaseLate: () => {} };
+  const barrier = (name) => {
+    if (!barriers.has(name)) barriers.set(name, deferred());
+    return barriers.get(name);
+  };
+  const reached = (name) => barrier(name).resolve();
+  const stageForResponse = {
+    'codex-initialize-response': 'initialize',
+    'codex-login-start-response': 'account/login/start',
+    'codex-thread-start-response': 'thread/start',
+    'codex-turn-start-response': 'turn/start',
+  }[stage];
+  const heldWriteName = stage === 'claude-initial-write' ? 'claude-initial-write' :
+    stage === 'codex-initialize-write' ? 'codex-rpc-write:initialize' :
+      stage === 'codex-initialized-write' ? 'codex-initialized-write' : null;
+
+  function responseFor(request) {
+    if (request.method === 'initialize') return codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } });
+    if (request.method === 'account/login/start') return codexResponse(request.id, {
+      type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+    });
+    if (request.method === 'thread/start') return codexResponse(request.id, { thread: { id: 'thread_native_1' } });
+    if (request.method === 'turn/start') return codexResponse(request.id, { turn: { id: 'turn_native_1' } });
+    throw new Error(`unexpected startup method: ${request.method}`);
+  }
+
+  const spawnImpl = () => {
+    state.spawnCalls += 1;
+    state.child = new FakeChild((line, child) => {
+      state.writes.push(line);
+      const request = JSON.parse(line);
+      if (provider === 'claude') {
+        if (request.type === 'user') reached('claude-user-write');
+        return;
+      }
+      if (request.method === 'initialized') {
+        reached('codex-initialized-write');
+        return;
+      }
+      if (!request.method || !Object.hasOwn(request, 'id')) return;
+      state.methods.push(request.method);
+      reached(`request:${request.method}`);
+      const response = responseFor(request);
+      if (request.method === stageForResponse) {
+        state.releaseLate = () => child.send(response);
+      } else {
+        child.send(response);
+        state.responses.push(request.method);
+        reached(`response:${request.method}`);
+      }
+    }, {
+      onWriteCallback(text, callback, child) {
+        let writeName = 'other-write';
+        if (provider === 'claude' && JSON.parse(text).type === 'user') writeName = 'claude-initial-write';
+        else if (provider === 'codex') {
+          const request = JSON.parse(text);
+          writeName = request.method === 'initialized' ? 'codex-initialized-write' : `codex-rpc-write:${request.method}`;
+        }
+        reached(`write-callback:${writeName}`);
+        const complete = () => {
+          callback();
+          reached(`write-complete:${writeName}`);
+        };
+        if (writeName === heldWriteName) {
+          state.releaseLate = complete;
+          reached('held-write-callback');
+        } else {
+          queueMicrotask(complete);
+        }
+      },
+    });
+    reached('spawn-created');
+    if (stage !== 'claude-spawn') setImmediate(() => state.child.emit('spawn'));
+    return state.child;
+  };
+
+  const runnerOptions = baseOptions(workspace, provider, {
+    ...(provider === 'claude' ? { getAuthentication: () => {
+      reached('authentication-requested');
+      return stage === 'claude-authentication' ? barrier('authentication-result').promise : { oauthToken: 'fixture-oauth-token' };
+    } } : {}),
+    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId }) => {
+      reached('authentication-prompt');
+      if (stage === 'codex-login-completion') {
+        state.releaseLate = () => state.child.send(codexLoginCompleted(loginId));
+      } else {
+        state.child.send(codexLoginCompleted(loginId));
+      }
+    } } : {}),
+    spawnImpl,
+    onNative: (event) => {
+      state.events.push(event);
+      reached(`native:${event.type}`);
+    },
+    timeouts: { startupMs: 5000, rpcMs: 5000, loginMs: 5000, stopMs: 100 },
+  });
+  const runner = createOwnedNativeRunner(runnerOptions);
+
+  return {
+    runner,
+    state,
+    wait: (name) => barrier(name).promise,
+    releaseAuthentication: () => barrier('authentication-result').resolve({ oauthToken: 'late-oauth-token' }),
+    releaseLate: () => state.releaseLate(),
+  };
+}
+
+async function waitForCodexResponseBarrier(fixture, method) {
+  await fixture.wait(`request:${method}`);
+  await fixture.wait(`write-complete:codex-rpc-write:${method}`);
+  await nextImmediate();
+}
+
+for (const stage of ['claude-authentication', 'claude-spawn', 'claude-initial-write', 'claude-context-ready']) {
+  test(`ID-F209-S01 Claude ${stage}: stop settles start and late input cannot advance it`, { timeout: 7000 }, async (t) => {
+    const workspace = createWorkspace(t);
+    const fixture = createStartCancellationFixture(workspace, 'claude', stage);
+    const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    let stopSnapshot;
+    let writesBeforeLate;
+    try {
+      if (stage === 'claude-authentication') {
+        await fixture.wait('authentication-requested');
+      } else if (stage === 'claude-spawn') {
+        await fixture.wait('spawn-created');
+      } else if (stage === 'claude-initial-write') {
+        await fixture.wait('held-write-callback');
+      } else {
+        await fixture.wait('write-complete:claude-initial-write');
+        await nextImmediate();
+        fixture.state.child.send({ type: 'system', subtype: 'init', session_id: 'session_native_1' });
+        await fixture.wait('native:identity');
+        await nextImmediate();
+      }
+
+      stopSnapshot = await fixture.runner.stop();
+      writesBeforeLate = fixture.state.writes.slice();
+      const outcome = await startOutcome;
+      assert.equal(outcome.status, 'rejected');
+      assert.equal(outcome.error.code, 'operation_stopped');
+      if (fixture.state.child) {
+        assert.equal(stopSnapshot.childExited, true);
+        assert.equal(stopSnapshot.childClosed, true);
+        assert.equal(stopSnapshot.ownedChildActive, false);
+      } else {
+        assert.equal(fixture.state.spawnCalls, 0);
+      }
+
+      if (stage === 'claude-authentication') fixture.releaseAuthentication();
+      if (stage === 'claude-spawn') fixture.state.child.emit('spawn');
+      fixture.releaseLate();
+      if (stage === 'claude-context-ready') {
+        fixture.state.child.send({
+          type: 'stream_event', session_id: 'session_native_1', parent_tool_use_id: null,
+          event: { type: 'message_start', message: { id: 'late_context', role: 'assistant' } },
+        });
+      }
+      await nextImmediate();
+      assert.deepEqual(fixture.state.writes, writesBeforeLate);
+      assert.equal(fixture.state.spawnCalls, stage === 'claude-authentication' ? 0 : 1);
+      assert.deepEqual(fixture.state.events.map((event) => event.type), stage === 'claude-context-ready' ? ['identity'] : []);
+      assert.equal(fixture.runner.snapshot().contextState, 'none');
+    } finally {
+      await fixture.runner.stop();
+      if (stage === 'claude-authentication') fixture.releaseAuthentication();
+      if (stage === 'claude-spawn' && fixture.state.child) fixture.state.child.emit('spawn');
+      fixture.releaseLate();
+      await nextImmediate();
+      await startOutcome;
+    }
+  });
+}
+
+for (const stage of [
+  'codex-initialize-response',
+  'codex-initialize-write',
+  'codex-initialized-write',
+  'codex-login-start-response',
+  'codex-login-completion',
+  'codex-thread-start-response',
+  'codex-turn-start-response',
+]) {
+  test(`ID-F209-S01 Codex ${stage}: stop settles start and late input cannot advance it`, { timeout: 7000 }, async (t) => {
+    const workspace = createWorkspace(t);
+    const fixture = createStartCancellationFixture(workspace, 'codex', stage);
+    const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    let expectedMethods;
+    let writesBeforeLate;
+    try {
+      if (stage === 'codex-initialize-write') {
+        await fixture.wait('held-write-callback');
+        await fixture.wait('response:initialize');
+        assert.deepEqual(fixture.state.responses, ['initialize']);
+        expectedMethods = ['initialize'];
+      } else if (stage === 'codex-initialized-write') {
+        await fixture.wait('held-write-callback');
+        expectedMethods = ['initialize'];
+      } else if (stage === 'codex-login-completion') {
+        await fixture.wait('authentication-prompt');
+        await nextImmediate();
+        expectedMethods = ['initialize', 'account/login/start'];
+      } else {
+        const targetMethod = {
+          'codex-initialize-response': 'initialize',
+          'codex-login-start-response': 'account/login/start',
+          'codex-thread-start-response': 'thread/start',
+          'codex-turn-start-response': 'turn/start',
+        }[stage];
+        await waitForCodexResponseBarrier(fixture, targetMethod);
+        expectedMethods = fixture.state.methods.slice();
+      }
+
+      const stopSnapshot = await fixture.runner.stop();
+      writesBeforeLate = fixture.state.writes.slice();
+      const outcome = await startOutcome;
+      assert.equal(outcome.status, 'rejected');
+      assert.equal(outcome.error.code, 'operation_stopped');
+      assert.equal(stopSnapshot.childExited, true);
+      assert.equal(stopSnapshot.childClosed, true);
+      assert.equal(stopSnapshot.ownedChildActive, false);
+
+      fixture.releaseLate();
+      await nextImmediate();
+      assert.deepEqual(fixture.state.writes, writesBeforeLate);
+      assert.deepEqual(fixture.state.methods, expectedMethods);
+      assert.deepEqual(fixture.state.events.map((event) => event.type), stage === 'codex-turn-start-response' ? ['identity'] : []);
+      assert.equal(fixture.runner.snapshot().contextState, 'none');
+    } finally {
+      await fixture.runner.stop();
+      fixture.releaseLate();
+      await nextImmediate();
+      await startOutcome;
+    }
+  });
+}
