@@ -656,6 +656,20 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+## main配布物同期と次の作業
+
+2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
+featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4ファイルだけを取り込む。
+feature向け同期PRの検証と指定Claudeレビューを進める。
+
+未マージのReady PRは#347、#348、#349の順にfeatureへ取り込める。
+いずれもbaseはfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)もReadyであり、この系列とは独立して取り込める。
+#351のsource `4db527e`は全体2802件成功、失敗0、Windows実symlink権限skip2で、指定Claudeレビューは1往復で必須指摘なしである。
+最終`62e18b2`は結果と確認範囲の文書記録だけである。
+各PRのfixture合格を実runtime適合や新schemaの通常接続とは扱わない。
+同期後の次の作業はnative startの段階別取消検証であり、観測readの取消とdrainは別PRに残す。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
