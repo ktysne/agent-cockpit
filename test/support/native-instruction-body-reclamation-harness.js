@@ -350,8 +350,8 @@ function loadFactory(faults) {
         });
         instructionAdapters.set(provider, wrapped);
         return wrapped;
-        },
-      };
+      },
+    };
     delete require.cache[integrationPath];
     let integrationModule;
     integrationModule = require(integrationPath);

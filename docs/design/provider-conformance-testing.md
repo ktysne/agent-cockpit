@@ -533,6 +533,7 @@ backend.closeとcoordinator.closeはfactory全体drainを逆待ちせず、Map�
 
 設定購読解除とrouter.closeの失敗も保守的な所有保持の対象とする。
 これら二つの個別故障を対照にするfixtureは未追加である。
+managed collectorの生成前入力検査失敗によるadmission退役の個別fixtureも未追加で、bind失敗後のcleanupと区別する。
 
 第二段階は全native物理停止と隔離、collectorと準備失敗cleanup、serviceに依存しないwriter tail、schedulerとfactory gate、context/persistence I/Oの終了確認後にだけ行う。
 容量leaseの解放成功後に同ownerのpath Mapを解放し、解放完了のフラグを先行させない。
@@ -566,5 +567,10 @@ stop失敗を後続成功で消さず、同期throwと非同期rejectのfalsy理
 互換補強後は、lease解放状態が不明な場合の再起動拒否を含め、4試験群120件がすべて成功した。
 factory lifetimeの72件とquestion write隔離の16件も成功した。
 未知leaseの両provider対照では同じAggregateError、release一度だけ、直接のpath再取得拒否、保存済みgrant nullとnative送信0を確認した。
-この全体失敗が解消するまでマージ可能とは扱わない。
+初回全体失敗後はDraftを維持し、製品条件を弱めずhelperと試験期待値を修正した。
 Claude R1はblockerと要修正が0件で、任意提案の保持範囲を文書で明確化した。
+互換補強後の固定head `30f6e85`は全体2911件成功、失敗0、Windows実symlink権限によるskip2、228867.7931msだった。
+Claude R2もblockerと要修正が0件で、実originalへの転送とcache復元、未知leaseの期待値との整合を確認した。
+restartは旧factoryのclose拒否で止まり、同pathの新owner取得拒否は直接persistenceを作る対照で確認する。
+最終の字下げ整理と重複変数除去後も構文確認と未知leaseの2件が成功した。
+製品コードは全体検証headから不変で、軽微な整形と結果記録だけのため全体再実行とR3は省略した。

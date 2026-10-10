@@ -787,14 +787,18 @@ Claude R1はblockerと要修正が0件で収束した。
 process間排他は[#313](https://github.com/ktysne/agent-cockpit/issues/313)の範囲へ残す。
 実runtime、電源断耐久性と新schema writer接続も未実装または未確認として残す。
 検証source`ed9e1b1`をコミットし、固定headで全体検証と指定Claudeレビューを行う。
-PR [#359](https://github.com/ktysne/agent-cockpit/pull/359)はfeature向けDraftで、#358の後にマージする。
+PR [#359](https://github.com/ktysne/agent-cockpit/pull/359)はfeature向けReadyで、#358の後にマージする。
 関連9ファイルの237成功、失敗0、Windows実symlink権限skip1は最終stop記録の補強前である。
 監査補強後のcontextとfactory112件、最終context49件とcoordinator管理終了2件はすべて成功した。
 次は#313の参加writer、ファイル単位の所有、取得前I/O禁止とcrash後の回復条件を設計し、primitiveとwriter接続を分ける。
 固定head `5a3d50f`の全体テストは2792成功、119失敗、Windows実symlink権限skip2だった。
 本文回収とgrant解放の試験helperのprivate control引継ぎを補強し、未知leaseの再起動拒否を含む4試験群120件、factory lifetime72件、question write隔離16件が成功した。
-PR #359は固定headの全体再検証とClaude増分レビューが完了するまでマージ不可である。
+修正後の固定headで全体再検証とClaude増分レビューを行った。
 Claude R1はblockerと要修正が0件だった。
+互換補強後の固定head `30f6e85`は全体2911成功、失敗0、Windows実symlink権限skip2だった。
+Claude R2もblockerと要修正が0件で、最終の軽微な整形後の構文確認と未知lease2件も成功した。
+レビューは2往復で収束し、PR #359はマージ可能である。
+マージ順は#351→#352→#353→#354→#356→#357→#358→#359で、モデルはマージしない。
 
 ## 起票していない候補
 

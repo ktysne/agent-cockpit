@@ -370,7 +370,7 @@ for (const provider of PROVIDERS) {
 
   for (const resizeFailure of ['retained', 'unknown']) {
     const testName = resizeFailure === 'unknown'
-      ? `${provider} refuses restart while lease shrink status remains unknown`
+      ? `${provider} retains ownership and refuses restart while lease shrink status remains unknown`
       : `${provider} preserves capacity safety when lease shrink is retained`;
     test(testName, async (t) => {
       const sources = threeSlotLegacySources(provider);
@@ -399,7 +399,6 @@ for (const provider of PROVIDERS) {
         assert.equal(harness.reclamationContext.status().state, 'blocked');
         assert.equal(harness.reclamationContext.status().capacity.activeLeaseCount, 1);
         const acquisitionCount = leaseObserver.acquisitions.length;
-        const leaseRecord = leaseObserver.acquisitions[0];
         let ownershipError;
         const hasRetainedOwnershipError = error => {
           const releaseUnconfirmed = error.cause?.code === 'reclamation_capacity_release_unconfirmed' ||
