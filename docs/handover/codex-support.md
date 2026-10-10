@@ -672,7 +672,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 | [#353](https://github.com/ktysne/agent-cockpit/pull/353)、`36c1c63` | native起動の段階別取消検証 | `cd39352`で全体2794成功、失敗0、Windows実symlink権限skip2。test補強後`1912130`で関連192成功、Claude R2で必須0。製品source無変更 |
 | [#354](https://github.com/ktysne/agent-cockpit/pull/354)、検証source `b70816d` | lease単位のnative read協調取消 | 関連120成功、全体2836成功、失敗0、Windows実symlink権限skip2。修正後関連120成功、source無変更、Claude R2で必須0 |
 | [#356](https://github.com/ktysne/agent-cockpit/pull/356)、検証source `f449304` | collectorの恒久受付停止とprivate drain | 関連145成功、全体2849成功、失敗0、Windows実symlink権限skip2。Claude R2で必須0。#354の後に取り込む |
-| [#357](https://github.com/ktysne/agent-cockpit/pull/357)、検証source `d253639` | native startとcollectorのfactory終了追跡 | `9379162`で全体2885成功、失敗0、Windows実symlink権限skip2。Claude R1で必須0、任意のtest補強を確認中。#356の後に取り込む |
+| [#357](https://github.com/ktysne/agent-cockpit/pull/357)、検証source `d253639` | native startとcollectorのfactory終了追跡 | `9379162`で全体2885成功、失敗0、Windows実symlink権限skip2。test補強後はlifetime52成功、全体未再実行、製品source無変更。Claude R2の検証範囲記載を補正し確認中。#356の後に取り込む |
 
 #347、#348、#349はこの順でマージする。
 #351、#352、#353はそれぞれこの系列と独立して取り込める。
@@ -746,9 +746,12 @@ PR [#357](https://github.com/ktysne/agent-cockpit/pull/357)はDraftで、source�
 生成済み資源の準備失敗は同期throwを保ち、後始末とticketの終了を別途待つ。
 標準mode、contextの保存禁止開始と物理停止の照合条件を維持する。
 実装済みで、関連4ファイルの108件が成功し、失敗とskipは0件である。
-最後のtest-only監査修正後もlifetimeの51件が成功し、製品sourceとharnessは先行108件の検証時と同一である。
+最初のtest-only監査修正後もlifetime51件が成功した。
+Claude R1の任意提案を反映後はlifetime52件だけを再実行し、すべて成功した。
+補強後の全体テストは未再実行で、製品sourceは全体検証時と同一である。
 固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
-Claude R1はblockerと要修正が0件で、標準modeの例外保持と保持点の観測を任意提案として補強する。
+Claude R1はblockerと要修正が0件で、標準modeの例外保持を補強し、既存保持点の観測を照合した。
+R2の検証範囲記載の指摘を反映し、全体検証と補強後の関連検証を区別した。
 構築中のclose再入による後着collector回収はprivate injectionであり、通常製品のcallback到達性を示さない。
 実runtime、raw I/Oと保存ownership解放順は対象外である。
 次は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)のread write故障分類を修正し、その後にcontextの二段階終了を設計する。
