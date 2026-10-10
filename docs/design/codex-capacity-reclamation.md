@@ -479,6 +479,31 @@ lateAnswersのprefix、最大件数と値域、状態遷移と相関の不変条
 実sourceの最新性、queue排他、prepareとatomic保存ピーク、実保存とcold復旧、新規受付、件数枠の解放とruntime接続は保証しない。
 数値の一致だけを根拠に対象操作を広げず、操作の追加ごとに容量候補とstore間同期を再検証する。
 
+### 移行のprepare manifestとbyte証拠
+
+prepare manifestは質問journalとcheckpointの通常schemaから独立したv1形式とする。
+操作UUID、store ID、sourceのanchor/Q/CP/IとtargetのQ/CPの指紋、完全scopeと内部質問IDの選択集合、実使用chunk ID、slotごとの通常上限を保持する。
+指紋はnullまたは実byte数とSHA-256であり、schemaやrevisionを重複して保持しない。
+選択集合を正規順へそろえ、chunkは実割当順を保持し、未使用poolを省く。
+
+局所codecは形式と有限件数、field上限、slotの存在と通常上限の対応を検査する。
+manifestの実pretty JSONと末尾LFを16 MiB以内に制限する。
+これは初版の明示的な受理政策であり、全ての合法sourceが移行できることや通常上限B内に収まることの証明ではない。
+各文字列のJSON表現の非負byte合計を正規化中に加算し、16 MiBを超えた場合は全体文字列を作る前に拒否する。
+この下界を通った入力にも最終の実encode上限を要求する。
+normalizeとdecode、evidenceの入口にも同じ実encode検査を適用し、compact rawだけが上限内の入力を受理しない。
+
+作成入口は既存raw plannerの実結果から指紋とstore ID、使用chunkを作る。
+byte証拠の検査はmanifestの選択、操作、使用chunkと通常上限で同plannerを再実行する。
+sourceの全指紋、store、target指紋とchunk割当順を照合し、未使用chunkが残る入力を拒否する。
+呼出側から渡されたtarget Q/CPのbyte列を安全にコピーし、実byte数、hashと再生成byteの完全一致を検査する。
+成功は渡された材料との一致であり、実pathの最新性やtarget fileの存在を示さない。
+
+source/targetの本体はmanifestに入れない。
+crash後の材料可用性を証明するには、旧Q/CPの元byte列を保持する明示的な質問側prepared形式を後続で設計する。
+anchor/Iを外部正本として固定し、同じ材料からtargetを再生成できることを検証する。
+現loaderとの接続、永続配置、prepareとatomicピーク、保存とcold継続、新外側の将来予約、件数枠の解放とruntimeは別の採用条件とする。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
