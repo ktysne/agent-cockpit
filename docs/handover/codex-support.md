@@ -540,11 +540,21 @@ nullの対応、grant付きの合法source、選択の重複・空集合、CP-nu
 Claude R2はblockerと要修正0件で収束した。
 任意提案のうちCPの境界を指す文言を明確にした。退役済み未回収fixtureの条件をassertへ追加する案は、現在のfixtureを確認済みであり、今回は非対応とした。
 
-続く既存更新の容量検証は`codex/question-capsule-existing-update-capacity-209-20261010`で、基点は#337の`e2a399d`である。
+続く既存更新の容量検証は[#338](https://github.com/ktysne/agent-cockpit/pull/338)の`codex/question-capsule-existing-update-capacity-209-20261010`で、基点は#337の`e2a399d`である。
 新外側の現在byteに、旧復元形の非負なrecord成長とrevision成長を加える局所helperを実装している。
 保証は、通常recordのID、件数、所属、capsule、順序とmetadataを固定した既存field更新に限定する。
 保存へ接続する前に、実際の前後状態がこの固定構造を守るguardを別に検証する。
 アンカーと全storeの整合、新規受付、prepareとatomic保存ピーク、保存とcold、件数枠の解放と実runtimeは後続である。
+個別9件、構文と差分検査、CodeGraph同期と調査が成功した。
+テスト側の復元内容と全配列順が独立旧fixtureと一致し、helperのbyte測定がその旧測定と一致することを確認した。
+helper内部の復元順序を直接観測した試験ではない。
+最大escapedfieldの代表更新とrevision成長を確認したが、全候補variantの実更新は未確認である。
+Claude R1はblockerと要修正0件に収束した。`c73836e`で全体2,701件成功、1件skip、失敗0件。skipはWindows実symlink権限による。
+
+後続の更新guardは、構造不変だけでは旧容量候補の操作範囲を認定できないため、初版で許可するfieldを限定する。
+no-opとwrapper revision、選択済み通常質問のlateAnswers追記、非質問の通常deliveryの状態と相関の進行を対象にする。
+質問record revision、selection、held、question delivery、本文回収は固定する。
+両時点の全体整合、真の旧before/after遷移、新予約fitと次状態実byteの照合も要求する。
 
 ## 起票していない候補
 
