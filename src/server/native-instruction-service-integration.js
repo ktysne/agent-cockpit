@@ -1426,10 +1426,10 @@ async function startNativeInstructionServer(inputOptions) {
       ownedExecutionSnapshot: integration.native.ownedExecutionSnapshot,
       stopOwnedExecution: integration.native.stopOwnedExecution,
       onShutdown: async () => {
-        let failure = null;
-        try { await integration.close(); } catch (error) { failure = error; }
-        try { await previousShutdown?.(); } catch (error) { failure ||= error; }
-        if (failure) throw failure;
+        const failure = createFailureCapture();
+        try { await integration.close(); } catch (error) { failure.capture(error); }
+        try { await previousShutdown?.(); } catch (error) { failure.capture(error); }
+        failure.throwIfFailed();
       },
     });
   } catch (error) {
@@ -1443,10 +1443,10 @@ async function startNativeInstructionServer(inputOptions) {
   async function close() {
     if (closePromise) return closePromise;
     closePromise = (async () => {
-      let failure = null;
-      try { await runtime.close(); } catch (error) { failure = error; }
-      try { await integration.close(); } catch (error) { failure ||= error; }
-      if (failure) throw failure;
+      const failure = createFailureCapture();
+      try { await runtime.close(); } catch (error) { failure.capture(error); }
+      try { await integration.close(); } catch (error) { failure.capture(error); }
+      failure.throwIfFailed();
     })();
     return closePromise;
   }

@@ -58,6 +58,10 @@ adapterの準備前にはverifierがfalseを返す。
 HTTP requestにはnative profile allowlist、receipt、writer capabilityによる認可を追加しない。
 起動は明示opt-inであり、既定daemonや恒久HOMEへprofileを追加しない。
 
+serverの終了wrapperはintegrationと既存shutdown callbackを順に終了し、失敗後も後続cleanupを試す。
+公開closeもserverとintegrationの終了を試し、最初の失敗理由をfalsy値も含めて保持する。
+通常serverの終了診断と再closeの契約は[常駐サーバーの設計](server.md#起動と寿命)に従う。
+
 ## 共通質問の明示構成
 
 ### 保存形式の移行を使う明示構成
