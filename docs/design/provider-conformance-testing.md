@@ -668,3 +668,30 @@ IDの固定長を明示し、末尾改行と各期待IDの不一致を検証し�
 Claude R2はblockerと要修正が0件で、C04の上限検査の退行を検出できる反例を確認して収束した。
 停止結果の保存と停止手続き、両provider実runtimeと製品排他は未確認のままである。
 停止全体の設計[PR #364](https://github.com/ktysne/agent-cockpit/pull/364)はレビュー未収束で、この独立codecの前提にしない。
+
+### 停止結果storeの独立条件
+
+以下は[限定内部store](stop-ensure-result-store.md)の実装前期待値である。
+同インスタンスのwrite latchとbounded I/Oだけを確認し、異process排他、ACL、writer所有を成功へ読み替えない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-R01 | expected-ID helperを直接呼び、encode/decodeも使う | 第4の内部exportだけを追加。厳格schemaと固定長、getter/Proxy非実行、入力独立freezeを保持 |
+| ID-F313-R02 | shutdown/startupを実temporary rootへ保存して照合する | 導出固定basename、writtenとvalid、期待ID一致。APIはread/writeのみ、製品callerゼロ |
+| ID-F313-R03 | 不正factory/record/expectedIDを与える | 未知field、accessor、path/ID形式を副作用前に拒否。I/O 0回、任意診断を返さない |
+| ID-F313-R04 | target不在と親消失、nonregular/symlinkを与える | targetENOENTだけmissing、親消失/不明とnonregularはunknown。ENOENT時親再確認 |
+| ID-F313-R05 | 4096/4097 byte、stat後伸長、short readと不正返値を与える | read最大4097固定buffer、short正進捗は続行、0EOF。過大statでbody read0、契約外返値はunknown |
+| ID-F313-R06 | read/stat/open/close失敗とcodec不一致を与える | 最初の固定診断と後続closeFailedを保持。close不明でvalid/missingなし、handle close一度 |
+| ID-F313-R07 | 同keyの即時再送、完了後再送と同期再入を行う | I/O前latch登録、同bytesは同Promise、異bytesはconflict、unknown後も再送でI/O増加0 |
+| ID-F313-R08 | short write、0/過大返値、write故障を与える | Buffer viewだけを正進捗で書く。最初の診断保持、known handle close一度 |
+| ID-F313-R09 | open副作用後rejectとclose不明を与える | 未確認handleを再close/unlinkしない。temp残留可能性を解消済みとしない |
+| ID-F313-R10 | rename前失敗/副作用後rejectとcleanup失敗を与える | targetを消さずreadback成功化なし。known-created/closed自己tempだけ一度cleanupし、first diagnosticとcleanupFailed保持 |
+| ID-F313-R11 | 既存targetと他file/temp/markerを置く | 既存は拒否、無関係なfileは不変。事前確認をcross-store/processのno-replace証拠としない |
+| ID-F313-R12 | 結果objectを変更し、実fixtureをcleanupする | 結果freeze、任意原因/path/本文なし。全実handle終了とresolved自作os.tmpdir root確認後だけfixture cleanup |
+
+R01〜R12を含むcodec/storeの関連試験44件は成功し、失敗とskipは0件だった。
+4ファイルの構文確認も成功した。
+実temporary rootでshutdownとstartup双方を保存して読み、全handle close確認後に自作rootをcleanupした。
+不明handle、closeとrenameの副作用後失敗はfake filesystemで確認し、実descriptorを故意に漏らしていない。
+全体試験と指定Claudeレビューは未実施で、製品停止と両provider実runtimeの合格には数えない。
+record単位の上限はstore全体のメモリー容量を保証せず、製品enable前の設計条件に残す。

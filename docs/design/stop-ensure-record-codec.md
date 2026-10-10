@@ -27,6 +27,8 @@ decodeStopEnsureRecord(buffer, expectedIds)はBufferだけを受け、4096 byte�
 入力が定義したbyteLengthの値やgetterを使わず、実際のbyte長で検査する。
 不正UTF-8をreplacementで通さず、JSONの外側空白は許容し、BOMはJSON不正として拒否する。
 shutdownの期待IDはkind、instanceId、requestId、startupはkind、scopeId、attemptIdを必須の固定schemaとする。
+normalizeStopEnsureExpectedIds(expectedIds)は同じ期待ID検証を独立した内部APIとして提供し、入力から独立したfreeze済みnull prototype recordを返す。
+decodeと限定storeはこのhelperを共用し、導出basenameの前に検証する。正規化IDを認証や管理権限と扱わない。
 不正期待IDとrecord不一致も拒否し、decodeは入力から独立したnull prototypeのfreeze済みrecordを返す。
 診断はTypeErrorの固定message invalid_stop_ensure_recordに限定し、入力、stack、secretと任意原因を追加しない。
 MAX_STOP_ENSURE_RECORD_BYTESは4096である。

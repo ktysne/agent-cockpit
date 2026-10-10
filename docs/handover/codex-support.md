@@ -947,3 +947,15 @@ PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブラン
 Claude増分R2はblockerと要修正0件で収束した。結果記録だけの最終追記ではsrc/testを変えず、全体試験と追加レビューを反復しない。
 PR #365はマージ可能で、#363の後に取り込む。未収束#364は前提にせず、次はbounded result storeの内部fixtureへ進む。
 ファイル保存、private controller、管理排他、ACL、tray/ensure接続、全writerと実providerは未実装または未確認のままである。
+
+### 停止結果storeの内部fixture
+
+最新featureからcodex/stop-result-store-313-20261011を作り、codec PR #365最終head aa48d7b115076bfc37ac7f269921781a6ddfa8d2を通常mergeした。
+未収束PR #364は取り込まない。
+[限定store設計](../design/stop-ensure-result-store.md)とR01〜R12を実装前に記録した。
+AstraへFS失敗境界を相談し、close不明時のtemp削除禁止、short I/O、親消失の分類とlocal latchの容量境界を採用した。
+Luna Maxへstoreとexpected-ID helperの実装を委譲し、編集停止後に差分を監査した。
+関連44件、4ファイルの構文確認と差分checkは成功した。
+実temporary rootで両kindの保存と読取りを確認し、fake filesystemで不明結果と限定cleanupを確認した。
+次はDraft PRを作成し、固定headで全体試験と指定Claudeレビューを行う。
+製品caller、管理protocol、ACL、一般filesystem、全writerと実runtimeへは接続しない。

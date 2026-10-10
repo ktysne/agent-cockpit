@@ -2,7 +2,12 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { encodeStopEnsureRecord, decodeStopEnsureRecord, MAX_STOP_ENSURE_RECORD_BYTES } =
+const {
+  encodeStopEnsureRecord,
+  decodeStopEnsureRecord,
+  normalizeStopEnsureExpectedIds,
+  MAX_STOP_ENSURE_RECORD_BYTES,
+} =
   require('../src/server/stop-ensure-record-codec');
 
 const INSTANCE_ID = 'a5f9b3c1-6d72-4f80-9b31-2c6d8e4f7012';
@@ -86,8 +91,51 @@ function encodeJson(json) {
 test('only the fixed codec API and byte limit are exported', () => {
   assert.deepEqual(Object.keys(require('../src/server/stop-ensure-record-codec')).sort(), [
     'MAX_STOP_ENSURE_RECORD_BYTES', 'decodeStopEnsureRecord', 'encodeStopEnsureRecord',
+    'normalizeStopEnsureExpectedIds',
   ]);
   assert.equal(MAX_STOP_ENSURE_RECORD_BYTES, 4096);
+});
+
+test('expected ID normalization returns independent frozen null-prototype records', () => {
+  for (const original of [EXPECTED_SHUTDOWN, EXPECTED_STARTUP]) {
+    const input = { ...original };
+    const normalized = normalizeStopEnsureExpectedIds(input);
+    input[Object.keys(input)[1]] = 'changed';
+    assert.equal(Object.getPrototypeOf(normalized), null);
+    assert.equal(Object.isFrozen(normalized), true);
+    assert.deepEqual(normalized, nullPrototypeRecord(Object.entries(original)));
+    assert.throws(() => { normalized.kind = 'changed'; }, TypeError);
+  }
+});
+
+test('expected ID normalization rejects malformed schemas without invoking accessors or proxy traps', () => {
+  for (const invalid of [
+    undefined,
+    null,
+    [],
+    { ...EXPECTED_SHUTDOWN, extra: true },
+    { ...EXPECTED_SHUTDOWN, instanceId: INSTANCE_ID.toUpperCase() },
+    { ...EXPECTED_STARTUP, scopeId: SCOPE_ID.replace('a', '/') },
+    Object.assign(Object.create({}), EXPECTED_SHUTDOWN),
+  ]) {
+    assertInvalid(() => normalizeStopEnsureExpectedIds(invalid));
+  }
+
+  let getterCalls = 0;
+  const accessor = { ...EXPECTED_SHUTDOWN };
+  Object.defineProperty(accessor, 'instanceId', {
+    enumerable: true,
+    get() { getterCalls += 1; throw new Error('getter must not run'); },
+  });
+  assertInvalid(() => normalizeStopEnsureExpectedIds(accessor));
+  let trapCalls = 0;
+  const proxy = new Proxy(EXPECTED_STARTUP, {
+    getPrototypeOf() { trapCalls += 1; throw new Error('trap'); },
+    ownKeys() { trapCalls += 1; throw new Error('trap'); },
+  });
+  assertInvalid(() => normalizeStopEnsureExpectedIds(proxy));
+  assert.equal(getterCalls, 0);
+  assert.equal(trapCalls, 0);
 });
 
 test('all seven schema-valid status and reason combinations roundtrip to canonical UTF-8 JSON', () => {
