@@ -584,7 +584,11 @@ byte証拠の検査は保存された選択とUUID、上限でraw plannerを再�
 anchor/Iは固定した外部正本として扱い、既存Q3へ未知fieldを足さない。実保存、排他、atomicピーク、cold継続とruntimeは後続に残る。
 個別10件が成功し、#339で失敗していたsource backing ArrayBuffer getterも0回で検査を通った。
 両providerと混在、CPなし、raw空白と重複key、指紋とstore・選択・target byteの改変、件数と文字列予算、compact rawは収まるがpretty encodeが超過する全入口の拒否、getter/Proxy非実行と入力不変を確認した。
-構文と差分、CodeGraph変更後同期と調査も成功した。全体テストとClaudeレビューへ進む。
+構文と差分、CodeGraph変更後同期と調査も成功した。
+[PR #342](https://github.com/ktysne/agent-cockpit/pull/342)の`f7e7894`で追跡済み全体の再実行は2,726件成功、1件skip、失敗0件だった。skipはWindows実symlink権限による。
+初回は既存issuer統合テストがファイル単位で失敗したが、単独10件と全体再実行では成功し、原因は未特定である。初回ログも保持した。
+Claude R1はblockerと要修正0件に収束した。Bの改変はbyte証拠だけでは検出せず、信頼する設定の正本との照合は保存接続時に別途要求する。
+後続prepared materialの未追跡source/testはこのPRと全体検証に含めていない。
 
 ## 起票していない候補
 

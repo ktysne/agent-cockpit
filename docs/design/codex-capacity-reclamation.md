@@ -486,18 +486,23 @@ prepare manifestは質問journalとcheckpointの通常schemaから独立したv1
 指紋はnullまたは実byte数とSHA-256であり、schemaやrevisionを重複して保持しない。
 選択集合を正規順へそろえ、chunkは実割当順を保持し、未使用poolを省く。
 
-局所codecは形式と有限件数、field上限、slotの存在と通常上限の対応を検査する。
+局所codecは形式と有限件数、field上限、slotと通常上限のnull状態の対応を検査する。
+指紋のsizeと通常上限の大小関係は局所検査の対象にせず、実sourceを使うplannerとevidenceで照合する。
 manifestの実pretty JSONと末尾LFを16 MiB以内に制限する。
 これは初版の明示的な受理政策であり、全ての合法sourceが移行できることや通常上限B内に収まることの証明ではない。
 各文字列のJSON表現の非負byte合計を正規化中に加算し、16 MiBを超えた場合は全体文字列を作る前に拒否する。
 この下界を通った入力にも最終の実encode上限を要求する。
 normalizeとdecode、evidenceの入口にも同じ実encode検査を適用し、compact rawだけが上限内の入力を受理しない。
+decodeは他のraw JSON codecと同様に空白と重複keyを許容して正規化し、重複keyは最後の値を採用する。
+受理したraw byteの指紋と正規encode byteの指紋を同一視しない。
 
 作成入口は既存raw plannerの実結果から指紋とstore ID、使用chunkを作る。
 byte証拠の検査はmanifestの選択、操作、使用chunkと通常上限で同plannerを再実行する。
 sourceの全指紋、store、target指紋とchunk割当順を照合し、未使用chunkが残る入力を拒否する。
 呼出側から渡されたtarget Q/CPのbyte列を安全にコピーし、実byte数、hashと再生成byteの完全一致を検査する。
 成功は渡された材料との一致であり、実pathの最新性やtarget fileの存在を示さない。
+通常上限は呼出側が渡す設定値であり、受理可能な大きい値への改変をbyte証拠だけでは検出しない。
+保存へ接続するときは信頼する設定の正本と別に照合する。
 
 source/targetの本体はmanifestに入れない。
 crash後の材料可用性を証明するには、旧Q/CPの元byte列を保持する明示的な質問側prepared形式を後続で設計する。
