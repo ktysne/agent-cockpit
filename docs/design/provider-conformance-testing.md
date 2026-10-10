@@ -701,3 +701,26 @@ cleanupFailed:falseの意味、字句的path比較と設計資料の時点依存
 最終の結果記録ではsrc/testを変えず、全体試験と追加レビューを反復しない。
 製品停止と両provider実runtimeの合格には数えない。
 record単位の上限はstore全体のメモリー容量を保証せず、製品enable前の設計条件に残す。
+
+### 停止手続きの内部coordinatorの独立条件
+
+以下は[限定内部coordinator](stop-ensure-shutdown-coordinator.md)の実装前期待値である。
+注入fixture手続きの完了と通知成否を別軸で検証し、製品停止、writer解放と再起動許可へ読み替えない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-Q01 | factoryとrequestへ未知field/accessor/Proxy/不正IDを与える | fixed error、getter/trapとprocedure/store I/O 0。factoryのinstance形式は初回requestで検査 |
+| ID-F313-Q02 | 同requestを保留中とsettled後に再送し、別request/旧instanceを与える | 同Promise、operation 1回、別request/旧instanceは副作用前拒否 |
+| ID-F313-Q03 | procedureを成功/同期throw/非同期rejectにする | completed/nullかfailed/shutdown_incomplete recordを一度通知し、falsy全5理由をprivate completionへ保持 |
+| ID-F313-Q04 | procedureの成功/失敗と通知written/unknownを組み合わせる | 二軸4組を保持。通知成功は手続き失敗を消さず通知不明は手続き成功を再起動許可にしない |
+| ID-F313-Q05 | 通知throw/reject/契約外返値/任意診断、直接then accessorとProxyを与える | notification_unconfirmedとcleanupFailed:null、原手続きreason不変。直接返値を同化せずgetter/trapを呼ばない。任意原因をrecord/snapshotへ出さない |
+| ID-F313-Q06 | procedure/store callbackから同期再入する | callback前latch、operation/通知1回、同Promiseを返す |
+| ID-F313-Q07 | procedureがcompletion自身を直接返し、間接自己待ちも与える | 直接はfailed通知、間接はpendingで成功化しない。依存が自分のcompletionをawaitしない前提 |
+| ID-F313-Q08 | procedureと通知を保留しsnapshotを読む | idle/running/notifying/settledだけ、pending結果を確定させず所有解放を示さない |
+| ID-F313-Q09 | unknown/failure後に同requestを再送し依存methodを差替える | callback/store再実行0、factory時captureを使う |
+| ID-F313-Q10 | codec/実storeを結合する | terminal recordを照合、own temporary rootを全handle終了後だけcleanup。製品callerゼロ |
+
+Q01〜Q10の関連fixture試験は36件成功し、失敗とskipは0件である。
+全体試験とClaudeレビューは固定headで続けて確認する。
+製品停止、管理protocol、writer接続と両provider実runtimeは未実行である。
+製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
