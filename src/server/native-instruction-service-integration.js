@@ -20,6 +20,7 @@ const { MAX_JOURNAL_RECORDS } = require('./common-question-kernel');
 const { createReclamationPersistence } = require('./reclamation-persistence');
 const { createReclamationCapacityBudget } = require('./reclamation-capacity-reservation');
 const { createReclamationServiceContext } = require('./reclamation-service-context');
+const { createNativeFactoryLifetimeGate } = require('./native-factory-lifetime-gate');
 const {
   createReclamationScheduler,
   MAX_RECLAMATION_SCHEDULER_INTERVAL_MS,
@@ -350,6 +351,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   let reclamationPersistence = null;
   let reclamationContext = null;
   let reclamationScheduler = null;
+  const lifetimeGate = options.reclamation ? createNativeFactoryLifetimeGate() : null;
   let closing = false;
   let closePromise = null;
   let providerDeliveryAdapters;
@@ -400,6 +402,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   async function cleanupPartial() {
     closing = true;
+    lifetimeGate?.stopAdmission();
     let failure = null;
     let contextClosePromise = null;
     const attempt = async (operation) => {
@@ -432,6 +435,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     await attempt(() => reclamationScheduler?.drain());
     if (contextClosePromise !== null) await attempt(() => contextClosePromise);
     else if (reclamationContext === null) await attempt(() => reclamationPersistence?.close?.());
+    if (lifetimeGate !== null) await attempt(() => lifetimeGate.drain());
     if (failure !== null && options.reclamation) throw failure;
   }
 
@@ -522,7 +526,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       providerInstructionAdapters,
       launchRegistry: launchKernel.registry,
       ...(options.reclamation ? { now: reclamationNow } : options.now ? { now: options.now } : {}),
-    });
+    }, lifetimeGate);
     if (options.reclamation) {
       questionService = createCommonQuestionService({
         reclamation: {
@@ -538,7 +542,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         away: options.commonQuestions.away,
         getAutoApplySettings,
         now: reclamationNow,
-      });
+      }, lifetimeGate);
       await reclamationContext.start({
         checkpoint: store.reclamationWriter,
         instructions: service.reclamationWriter,
@@ -863,7 +867,13 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
 
   async function close() {
     if (closePromise) return closePromise;
+    let resolveClose;
+    let rejectClose;
+    if (lifetimeGate !== null) {
+      closePromise = new Promise((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
+    }
     closing = true;
+    lifetimeGate?.stopAdmission();
     let failure = null;
     let contextClosePromise = null;
     try { reclamationScheduler?.stop(); } catch (error) { failure = error; }
@@ -873,7 +883,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         contextClosePromise.catch(() => {});
       } catch (error) { failure ||= error; }
     }
-    closePromise = (async () => {
+    const shutdown = (async () => {
       const attempt = async (operation) => {
         try { await operation(); } catch (error) { failure ||= error; }
       };
@@ -888,8 +898,11 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       await attempt(() => store.close());
       await attempt(() => reclamationScheduler?.drain());
       if (contextClosePromise !== null) await attempt(() => contextClosePromise);
+      if (lifetimeGate !== null) await attempt(() => lifetimeGate.drain());
       if (failure) throw failure;
     })();
+    if (lifetimeGate === null) closePromise = shutdown;
+    else shutdown.then(resolveClose, rejectClose);
     return closePromise;
   }
 
@@ -954,7 +967,8 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     const hasReason = keys.includes('reason');
     const request = exactData(value, hasReason ? ['identity', 'periodId', 'reason'] : ['identity', 'periodId'],
       'invalid_question_period_retirement');
-    return reclamationContext.retireQuestionPeriod({ ...request, questionService, deliveryStore: store });
+    return runLifetimeOperation('retire-question-period', () =>
+      reclamationContext.retireQuestionPeriod({ ...request, questionService, deliveryStore: store }));
   }
   function reclaimQuestionBodies(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
@@ -965,23 +979,25 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         'invalid_question_body_reclamation')),
       periodId: captured.periodId,
     });
-    return reclamationContext.reclaimQuestionBodies({
+    return runLifetimeOperation('reclaim-question-bodies', () => reclamationContext.reclaimQuestionBodies({
       ...request,
       questionService,
       deliveryStore: store,
-    });
+    }));
   }
   function reclaimInstructionBody(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
     if (closing) throw integrationError('native_instruction_integration_closed');
     const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation'));
-    return reclamationContext.reclaimInstructionBody({ ...request, instructionService: service, deliveryStore: store });
+    return runLifetimeOperation('reclaim-instruction-body', () =>
+      reclamationContext.reclaimInstructionBody({ ...request, instructionService: service, deliveryStore: store }));
   }
   function reclaimTerminalDeliveryBody(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
     if (closing) throw integrationError('native_instruction_integration_closed');
     const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_terminal_delivery_body_reclamation'));
-    return reclamationContext.reclaimTerminalDeliveryBody({ ...request, deliveryStore: store });
+    return runLifetimeOperation('reclaim-terminal-delivery-body', () =>
+      reclamationContext.reclaimTerminalDeliveryBody({ ...request, deliveryStore: store }));
   }
   function releaseMigrationAllowance(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
@@ -991,7 +1007,17 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       throw integrationError('invalid_migration_allowance_release');
     }
     const writer = request.slot === 'questions' ? questionService : request.slot === 'instructions' ? service : store;
-    return reclamationContext.releaseMigrationAllowance({ slot: request.slot, writer });
+    return runLifetimeOperation('release-migration-allowance', () =>
+      reclamationContext.releaseMigrationAllowance({ slot: request.slot, writer }));
+  }
+  function runLifetimeOperation(kind, operation) {
+    const ticket = lifetimeGate.enter(kind);
+    try {
+      return Promise.resolve(operation()).finally(() => ticket.release());
+    } catch (error) {
+      ticket.release();
+      throw error;
+    }
   }
   const reclamation = reclamationContext === null ? null : Object.freeze({
     status: () => reclamationScheduler === null ? reclamationContext.status() :
@@ -1032,7 +1058,9 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         }),
         releaseGrants: (slot) => runScheduledReclamation(() => releaseMigrationAllowance({ slot })),
       });
-      reclamationScheduler.start();
+      const startupTicket = lifetimeGate.enter('scheduler-start');
+      try { reclamationScheduler.start(); }
+      finally { startupTicket.release(); }
     } catch (error) {
       try { await cleanupPartial(); }
       catch (cleanupError) {

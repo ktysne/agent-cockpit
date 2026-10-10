@@ -656,6 +656,32 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+## 回収機能のレビュー済みPRと後続
+
+2026-10-11の照合で、以下はfeature向けのReady PRであり、未マージである。
+作業PRのbaseをfeatureに統一する規則に合わせ、#348と#349もbaseをfeatureへ変更した。
+headの内容は変更していない。
+
+| 順序 | PRとhead | 内容 | 検証とレビュー |
+|---|---|---|---|
+| 1 | [#347](https://github.com/ktysne/agent-cockpit/pull/347)、`2228696` | capsule移行状態の読み取り専用inspection | source `8ed160c`で全体2804成功、失敗0、Windows権限skip3。最終test追加後もClaude R3で必須0 |
+| 2 | [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
+| 3 | [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。test/helper補強後関連22成功、Claude R2で必須0 |
+
+既存PRは#347、#348、#349の順にマージできる。
+fixtureの合格を通常native factoryへの新schema接続や実runtimeの成功には数えない。
+
+後続の`codex/native-factory-lifetime-gate-feature-209-20261011`は、最新featureの`c731abe`から作成した。
+既存factoryとserviceの対象sourceは#347〜#349の前後で同じため、そのマージを前提にせず統合を進める。
+質問と指示の共通queue、回収coreとschedulerで操作の受付と終了を追跡し、closeで新受付を同期的に停止する。
+既存context.closeの開始順を保ち、受理済み処理の取消や失敗も終了として待つ。
+両providerの機能適合シナリオは[ID-F209-L01](../design/provider-conformance-testing.md)に定義した。
+関連検証、全体検証と指定Claudeレビューは統合後に行う。
+
+nativeの長時間startと観測readの取消は別段階で確認する。
+epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
+同rootの協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
