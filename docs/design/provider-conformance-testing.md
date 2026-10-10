@@ -379,7 +379,11 @@ providerの識別子、時刻と既存取消のerror codeの差を許容する�
 
 両providerのfixture適合と実runtimeを分けて記録する。
 acceptedへの実到達と登録済みlistenerの後着拒否は、両providerで確認する。
+後着拒否はserviceへ登録したlistenerを直接呼ぶcontrolであり、adapter/routerを通した後着経路の確認ではない。
 listenerの保存中にcloseされるcontrolはunknownを両provider、appliedを現fixtureが対応するCodexで確認する。
 Claudeのlive appliedは未確認であり、cold checkpointのseedや別のcallbackで代用しない。
 このシナリオはnativeの長時間startやread待機の物理取消、外process排他、新schema保存許可、電源断耐久性、件数枠解放を証明しない。
 実Claude/Codex runtimeの適合は横断統合試験に残す。
+`4db527e`の新factory試験15件とgate単体7件を含む関連11ファイルは248件成功、失敗0、skip0である。
+同じheadの全体`npm test`は2802件成功、失敗0、Windows実symlink権限によるskip2である。
+このskip数には未実行のClaude live appliedと実runtimeを含めず、上記の未確認境界として別に扱う。

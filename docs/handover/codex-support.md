@@ -676,7 +676,12 @@ fixtureの合格を通常native factoryへの新schema接続や実runtimeの成�
 質問と指示の共通queue、回収coreとschedulerで操作の受付と終了を追跡し、closeで新受付を同期的に停止する。
 既存context.closeの開始順を保ち、受理済み処理の取消や失敗も終了として待つ。
 両providerの機能適合シナリオは[ID-F209-L01](../design/provider-conformance-testing.md)に定義した。
-関連検証、全体検証と指定Claudeレビューは統合後に行う。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)はfeature向けで、#347〜#349とは独立してマージできる。
+source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功し、失敗0、全体のWindows実symlink権限skip2である。
+標準挙動の追加subset26件も成功した。
+指定Claudeレビューは1往復でblocker・要修正なしとなり、追跡入口と同期scheduler起動の限定を文書へ補足した。
+新factory fixture15件はacceptedへの実到達と後着拒否を両provider、保存中closeをunknown両provider・applied Codexで確認する。
+Claude live appliedと両providerの実runtimeは未確認であり、skip0を適合済みとは読み替えない。
 
 nativeの長時間startと観測readの取消は別段階で確認する。
 epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
