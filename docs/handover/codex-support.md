@@ -687,13 +687,15 @@ Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に�
 結果不明では全slotを停止し、操作leaseをcloseまで保持する。baseline leaseとB/Gから追加予約を控除しない。
 固定版backend source blob `cfbc4466f8ad55c7c442fb32aa3fad2c528faaa6`の関連24件は成功、失敗とskipは0件だった。
 両providerとmixedの保存/cold reload、並行QCP、stale/whitelist/容量拒否、close、rename前後の故障、未知orphan、同path二重owner、新形式のchunk/order破損拒否を確認した。
-構文、空白、変更後CodeGraph同期と調査も成功した。PR #348はPR #347を親にしたDraftである。
+構文、空白、変更後CodeGraph同期と調査も成功した。PR #348はPR #347を親にしたスタックである。
 追跡済み全体検証は`8c335d5`で2829件成功、失敗0件、Windows symlink権限による3件skip、372244.7484msだった。
 指定Claude R1の要修正2件をtest/helperで補強し、関連27件が成功、失敗とskipは0件だった。製品sourceは変更していない。
 公開測定primitiveと実byteから独立に求めた全slot前後最大量と対象tempを、pause中の実予約量およびbaseline込み総予算の1byte境界で照合した。
 正のI grant加算、CP/Iなしの合法Q保存、close時のqueued save拒否とqueue0・raw不変・予約復帰も確認した。
 指定Claude R2は試験補強を妥当と確認し、I上流拒否の文書参照を要修正1件として指摘した。既存whole試験のB+G境界と全体検証の成功を照合し、設計資料へ試験名を追記した。
 総予算の1byte境界はQ保存を対象とし、CP保存のtarget tempの独立した予算境界は未固定である。
+文書修正37d873fは指定Claude R3でblockerと要修正0件となり、3往復で収束した。PR #348はReadyで、PR #347、#348の順にマージできる。
+最終の結果記録と任意の文言調整だけの文書差分は、cross-reviewの軽微例外により追加レビューを省略する。
 後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
 通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
 
