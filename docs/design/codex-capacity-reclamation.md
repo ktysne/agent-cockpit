@@ -534,6 +534,32 @@ manifestの実encode byte数とLF数から入れ子のindentを計算し、固�
 旧・準備済み・CP移転後・完了のbyte完全一致分類と、正本ファイルの現在logical byte表を次に検証する。
 temp、backup、orphanと別processのfileを含む保存ピークは、その表の合計に読み替えない。
 
+### 移行境界のbyte分類と現在容量
+
+境界分類は正規encodeとbyte完全一致するprepared materialを照合基準とし、固定した外部anchor/Iで完全材料検証を通す。
+内包旧sourceと再生成targetを使い、現在Q/CPを意味の推測やrepairなしで次の組に照合する。
+
+| 境界 | 現在Q | 現在CP |
+|---|---|---|
+| source | 旧Qの元byte列 | 旧CPの元byte列 |
+| prepared | prepared materialの正規byte列 | 旧CPの元byte列 |
+| checkpoint_moved | prepared materialの正規byte列 | 再生成target CP |
+| complete | 再生成target Q | 再生成target CP |
+
+CP不在の場合はpreparedとcheckpoint_movedをpreparedの一状態へ明示的に畳む。
+通常JSONの意味が同じでも、提出byteが一致しない組を受理しない。
+旧Qとtarget CP、target Qと旧CP、別operationの材料や不一致slotを推測して修復しない。
+prepared materialの局所decoderが非正規raw JSONを許すことと、この照合基準に正規encode byteを要求することを区別する。
+
+返却するcheckpointPresentはCPの有無を示し、次に書くfileの指示ではない。
+observed指紋とcurrent byte表は同じ安全コピーから計算し、不在slotを0としてanchor/I/Q/CPの四正本をcheckedな加算で合計する。
+I grantの未使用枠をQ準備の余白として控除しない。
+prepared material内部に旧Q/CPがあっても、現在CPとの重複をbyte表から差し引かない。
+
+この表は現在のlogical byte数であり、filesystemのallocated blocks、temp、backup、orphan、別processのfile、将来予約とleaseを含まない。
+completeの分類は提出byteの一致だけで、過去の保存手順やdurableな完了を認証しない。
+信頼する通常上限とsourceの最新性、実排他、保存admission、atomicピーク、readback、残留物とcold復旧は後続の採用条件とする。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
