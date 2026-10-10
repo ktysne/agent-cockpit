@@ -660,7 +660,10 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 
 2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
 featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4ファイルだけを取り込む。
-feature向け同期PRの検証と指定Claudeレビューを進める。
+[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)はfeature向けで、関連2件とCLI定義読み取りの5条件、構文・空白・上流同期checkが成功した。
+指定Claudeレビューは1往復でblocker・要修正なしである。
+アプリsourceは無変更のため全体テストの重複実行は省略し、#351のfeature baseに対する検証証跡を参照する。
+上流配布物の関数冒頭コメントにある一般説明の補足は任意候補であり、このリポジトリで配布物を手編集しない。
 
 未マージのReady PRは#347、#348、#349の順にfeatureへ取り込める。
 いずれもbaseはfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
