@@ -512,6 +512,7 @@ test('ID-F209-S01 Claude composition stop settles the real runner while context-
     await identitySeen.promise;
     await nextImmediate();
     assert.equal(fixture.composition.resolveProof(fixture.composition.snapshot().launches[0].launchRef), null);
+    assert.equal(fixture.composition.snapshot().launches[0].nativeId, 'session-integration');
 
     const stopped = await fixture.composition.stop(receipt);
     const outcome = await startOutcome;

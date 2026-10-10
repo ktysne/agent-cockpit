@@ -667,6 +667,9 @@ baseはすべてfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564
 後続の`codex/native-start-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351と#352のsourceには依存しない。
 native起動の段階別取消を、実runnerとcompositionの保持点で確認する。
 共通の適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)に定義した。
+[PR #353](https://github.com/ktysne/agent-cockpit/pull/353)の`cd39352`で全体2794件成功、失敗0、Windows実symlink権限skip2である。
+製品sourceは無変更で、段階別取消の追加14件を含む関連2ファイルはin-processで192件成功した。
+Claude R1の必須指摘として後着による追加writeの直接比較を補強し、関連テストとR2で確認する。
 観測readの取消とdrain、factory ticketへの接続、協調writer ownership、新schemaの通常接続と実runtimeは後続に残す。
 
 ## 起票していない候補

@@ -2825,6 +2825,7 @@ for (const stage of ['claude-authentication', 'claude-spawn', 'claude-initial-wr
     const fixture = createStartCancellationFixture(workspace, 'claude', stage);
     const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
     let stopSnapshot;
+    let writesBeforeLate;
     try {
       if (stage === 'claude-authentication') {
         await fixture.wait('authentication-requested');
@@ -2841,6 +2842,7 @@ for (const stage of ['claude-authentication', 'claude-spawn', 'claude-initial-wr
       }
 
       stopSnapshot = await fixture.runner.stop();
+      writesBeforeLate = fixture.state.writes.slice();
       const outcome = await startOutcome;
       assert.equal(outcome.status, 'rejected');
       assert.equal(outcome.error.code, 'operation_stopped');
@@ -2862,6 +2864,7 @@ for (const stage of ['claude-authentication', 'claude-spawn', 'claude-initial-wr
         });
       }
       await nextImmediate();
+      assert.deepEqual(fixture.state.writes, writesBeforeLate);
       assert.equal(fixture.state.spawnCalls, stage === 'claude-authentication' ? 0 : 1);
       assert.deepEqual(fixture.state.events.map((event) => event.type), stage === 'claude-context-ready' ? ['identity'] : []);
       assert.equal(fixture.runner.snapshot().contextState, 'none');
@@ -2890,6 +2893,7 @@ for (const stage of [
     const fixture = createStartCancellationFixture(workspace, 'codex', stage);
     const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
     let expectedMethods;
+    let writesBeforeLate;
     try {
       if (stage === 'codex-initialize-write') {
         await fixture.wait('held-write-callback');
@@ -2915,6 +2919,7 @@ for (const stage of [
       }
 
       const stopSnapshot = await fixture.runner.stop();
+      writesBeforeLate = fixture.state.writes.slice();
       const outcome = await startOutcome;
       assert.equal(outcome.status, 'rejected');
       assert.equal(outcome.error.code, 'operation_stopped');
@@ -2924,6 +2929,7 @@ for (const stage of [
 
       fixture.releaseLate();
       await nextImmediate();
+      assert.deepEqual(fixture.state.writes, writesBeforeLate);
       assert.deepEqual(fixture.state.methods, expectedMethods);
       assert.deepEqual(fixture.state.events.map((event) => event.type), stage === 'codex-turn-start-response' ? ['identity'] : []);
       assert.equal(fixture.runner.snapshot().contextState, 'none');

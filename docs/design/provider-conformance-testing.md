@@ -378,3 +378,7 @@ providerごとのRPC、認証方式、既存error codeの差は許容するが�
 外部認証元の作業自体、観測readの取消とdrain、factory ticketへの接続と全I/O終了は対象外である。
 両providerのfixture結果と実runtimeを分けて記録し、実Claude/Codex runtimeの適合は横断統合試験に残す。
 今回のfixtureは通常起動profileで確認し、wait profile固有のtransport開始待機は未確認として分ける。
+Codexのwrite callback保留はinitialize RPC（応答先着）とinitialized通知で確認する。
+login、thread、turnの各RPCは応答待ちを確認し、それぞれのwrite callback保留は未確認である。
+`cd39352`の関連2ファイルはin-processで192件成功し、通常`npm test`では全体2794件成功、失敗0、Windows実symlink権限skip2である。
+後着による追加writeを検出するassert補強は、製品sourceを変更せず関連テストとClaude再レビューで確認する。
