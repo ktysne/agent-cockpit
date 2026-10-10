@@ -613,7 +613,11 @@ CPなしは準備状態を一つに畳み、未知の混在組や意味一致だ
 既存atomic writerはbackupを作らず同じtempでrenameを再試行するが、cleanup失敗とcrashの残留物、別process、注入writer、fsync不在があり、この表の合計を真の保存ピークへ読み替えない。
 個別8件が成功し、両providerと混在の4境界、CPなしの3境界、非正規旧rawの完全一致、同サイズで意味一致するCP再formatの拒否、混在pairと材料改変、getter/Proxy/SAB、raw byte境界と入力不変を確認した。
 有効I grantがある場合も実I byteを合計へ加算する。構文、差分、CodeGraph変更後同期と調査も成功した。
-全体テストとClaudeレビューへ進む。
+追跡済みテストを明示した全体検証は、`e2aaf17`で2746件成功、失敗0件、既存Windows symlink権限による1件skipだった。
+Claude R1はblockerと要修正0件に収束した。
+CPなしの同一byte入力を別名で再実行する試験と、detachそのものの試験は追加していない。
+上限+1入力の拒否は確認したが、上限照合層やparse前の拒否を独立に観測した試験ではない。
+後続容量評価の未追跡source/testは、このPRと全体検証に含めていない。
 
 ## 起票していない候補
 
