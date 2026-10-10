@@ -40,6 +40,7 @@ const { planMigrationAllowanceRelease } = require('../src/server/migration-allow
 const {
   MAX_SOURCE_BYTES,
   measureInstructionReservation,
+  measureQuestionJournalReservationBytes,
 } = require('../src/server/reclamation-capacity-bounds');
 const { validateReclamationSnapshot } = require('../src/server/reclamation-store-consistency');
 const { createQuestionCapsuleWholeValidationFixture } = require('./helpers/question-capsule-whole-validation-fixtures');
@@ -51,7 +52,8 @@ const FILES = Object.freeze({
   checkpoint: 'delivery-checkpoint.json',
   instructions: 'instruction-journal.json',
 });
-const WRITE_ACCESS_FLAGS = fsConstants.O_WRONLY | fsConstants.O_RDWR;
+const WRITE_ACCESS_FLAGS = fsConstants.O_WRONLY | fsConstants.O_RDWR |
+  (fsConstants.O_CREAT ?? 0) | (fsConstants.O_TRUNC ?? 0) | (fsConstants.O_APPEND ?? 0);
 const ALL_LIMITS = Object.freeze({
   questions: MAX_SOURCE_BYTES,
   checkpoint: MAX_SOURCE_BYTES,
@@ -287,6 +289,55 @@ test('legacy Q2/CP3 capacity failure at canonical B minus one retains every slot
     assert.equal(result.measurements.restoredLegacyFutureBySlot.checkpoint.fits, true);
     assert.equal(result.measurements.restoredLegacyFutureBySlot.instructions.fits, true);
     assert.ok(result.counts.restoredLegacyView.questions);
+  });
+});
+
+test('legacy Q2/CP3 raw whitespace one byte over B blocks while normalized and future sizes fit', async () => {
+  const fixture = fixtureFor('claude');
+  const raw = legacyBytes(fixture);
+  const normalizedCurrentBytes = encodeQuestionJournalV2Local(fixture.snapshot.stores.questions).sizeBytes;
+  const maxLimitMeasurement = measureQuestionJournalReservationBytes({
+    snapshot: fixture.snapshot.stores.questions,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  });
+  const questionLimit = Math.max(normalizedCurrentBytes, maxLimitMeasurement.reservedBytes);
+  const questionCapacity = measureQuestionJournalReservationBytes({
+    snapshot: fixture.snapshot.stores.questions,
+    currentByteLimit: questionLimit,
+  });
+  assert.ok(questionLimit <= MAX_SOURCE_BYTES);
+  assert.ok(normalizedCurrentBytes <= questionLimit);
+  assert.ok(questionCapacity.reservedBytes <= questionLimit);
+  assert.equal(questionCapacity.fits, true);
+  assert.doesNotThrow(() => validateQuestionCapsuleWholeRepresentation(legacyWholeInput(
+    fixture.snapshot, { ...ALL_LIMITS, questions: questionLimit })));
+
+  raw.questions = Buffer.concat([
+    raw.questions,
+    Buffer.alloc(questionLimit + 1 - raw.questions.length, 0x20),
+  ]);
+  assert.equal(raw.questions.length, questionLimit + 1);
+  await withDirectory(raw, async (root) => {
+    const before = await directoryState(root);
+    const result = await openQuestionCapsuleInspection(options(root, {
+      ...ALL_LIMITS,
+      questions: questionLimit,
+    })).inspect();
+    const after = await directoryState(root);
+    const questionMeasurement = result.measurements.restoredLegacyFutureBySlot.questions;
+
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['capacity_not_fit']);
+    assert.equal(result.representation, 'legacy_q2_cp3');
+    assert.equal(questionMeasurement.rawCurrentBytes, questionLimit + 1);
+    assert.equal(questionMeasurement.normalizedCurrentBytes, normalizedCurrentBytes);
+    assert.equal(questionMeasurement.reservedBytes, questionCapacity.reservedBytes);
+    assert.equal(questionMeasurement.fits, false);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.anchor.fits, true);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.checkpoint.fits, true);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.instructions.fits, true);
+    assert.equal(result.files.questions.sha256, createHash('sha256').update(raw.questions).digest('hex'));
+    assert.deepEqual(after, before);
   });
 });
 
@@ -605,6 +656,9 @@ test('ready and blocked inspections use only read-only file opens and no filesys
   assert.ok(Number.isInteger(WRITE_ACCESS_FLAGS) && WRITE_ACCESS_FLAGS > 0);
   assert.notEqual(fsConstants.O_WRONLY & WRITE_ACCESS_FLAGS, 0);
   assert.notEqual(fsConstants.O_RDWR & WRITE_ACCESS_FLAGS, 0);
+  for (const flag of [fsConstants.O_CREAT, fsConstants.O_TRUNC, fsConstants.O_APPEND]) {
+    if (Number.isInteger(flag)) assert.notEqual(flag & WRITE_ACCESS_FLAGS, 0);
+  }
   const fixture = fixtureFor('claude');
   const current = capsuleBytes(fixture);
   for (const [bytes, expectedStatus] of [
