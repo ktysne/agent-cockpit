@@ -571,7 +571,9 @@ whitelistの各条件を単独で外した否定controlは未確認で、代表�
 intrinsicで取得したbufferをBuffer.fromへ直接渡す経路で1回の呼び出しを再現した。
 `codex/raw-arraybuffer-getter-isolation-339-20261010`で標準Uint8Array viewを経由する独立コピーへ変更した。
 offsetを持つsubclass viewに入力自身と背後ArrayBufferの独自getterを置き、対象byteだけのparseとhash、getter実行0回を回帰試験で検査する。
-この修正の検証とレビュー後、後続prepare manifestを別ブランチで検証する。
+[PR #341](https://github.com/ktysne/agent-cockpit/pull/341)の`27ba27f`でraw codec個別12件と追跡済み全体2,716件が成功、1件skip、失敗0件だった。skipはWindows実symlink権限による。
+Claude R1はblockerと要修正0件に収束した。後続prepareの未追跡source/testはこのPRと全体検証に含めていない。
+この修正を基点に、後続prepare manifestを別ブランチで検証する。
 
 ## 起票していない候補
 
