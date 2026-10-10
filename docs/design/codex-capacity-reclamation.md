@@ -440,6 +440,23 @@ chunk IDは決定したchunk順にpoolから割り当てる。
 結果にはsourceのfingerprint、質問とcheckpointのtarget値・bytes・size・hash、選択の要約、使用済みと未使用のchunk ID、未検証範囲を返す。
 anchorとinstructionsは変更対象にせず、実保存、cold復旧、新規受付と実runtimeは後続の検証に残す。
 
+### 新外側の既存record更新に限定した予約量
+
+質問journal v3とcheckpoint v4の局所容量helperは、実encoderで新外側の現在byteを測り、宣言順序で旧形へ復元して既存の公開measurerを使う。
+旧測定はrecordごとの非負増分とrevision増分を加算するため、固定構造での既存record更新に対し、新現在byteへ旧予約byteと旧現在byteの差を加える。
+差の非負性とsafe integerを検査し、checkedな加算で新予約量を得る。
+16 MiBを超える予約量も丸めず返し、通常上限Bに収まるかをfitsで区別する。
+
+対象操作は既存候補が規定する通常recordのfield置換とroot・ledger revisionの増加に限る。
+通常recordのID、配列所属と件数、capsule、chunk、全順序配列、metadataとgrantは不変でなければならない。
+質問の通常recordは旧形と同じroot直下、checkpoint deliveryは同じledger配列内にあり、record断片のindent、escapeとrevision成長が一致する。
+capsule内の回収済みrecordに旧候補の正増分が残る場合も加えるため、縮小と相殺しない安全側の測定になる。
+旧measurerの加算構造を変える場合は、この転用の証明も再確認する。
+
+helperのfitsは局所的な予約量の結果であり、アンカーや全storeの適合、保存許可を認定しない。
+新規受付、record追加・削除、順序追記、metadata更新、capsuleの再分割、grant変更、prepareとatomic保存ピークは保証しない。
+後続のtransition入口へ接続するときは、実際の前後状態がこの固定構造を守ることを別のguardで検査する。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。

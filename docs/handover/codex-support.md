@@ -540,6 +540,12 @@ nullの対応、grant付きの合法source、選択の重複・空集合、CP-nu
 Claude R2はblockerと要修正0件で収束した。
 任意提案のうちCPの境界を指す文言を明確にした。退役済み未回収fixtureの条件をassertへ追加する案は、現在のfixtureを確認済みであり、今回は非対応とした。
 
+続く既存更新の容量検証は`codex/question-capsule-existing-update-capacity-209-20261010`で、基点は#337の`e2a399d`である。
+新外側の現在byteに、旧復元形の非負なrecord成長とrevision成長を加える局所helperを実装している。
+保証は、通常recordのID、件数、所属、capsule、順序とmetadataを固定した既存field更新に限定する。
+保存へ接続する前に、実際の前後状態がこの固定構造を守るguardを別に検証する。
+アンカーと全storeの整合、新規受付、prepareとatomic保存ピーク、保存とcold、件数枠の解放と実runtimeは後続である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
