@@ -614,7 +614,7 @@ Windows、Node v24.15.0の専有probeではwx一勝/一件EEXIST、正常終了�
 | ID-F313-P04 | quiesceを保留/失敗/再入させる | 最初にclose Promiseを保存。保留中unlinkなし、失敗は同じPromiseと理由、Map保持。自己待ちによる解放なし |
 | ID-F313-P05 | unlink失敗/結果不明後にcloseを繰返す | 各自己markerを逆順一度ずつ処理し全失敗を保持。Map保持と旧capability終端、追加unlinkなし |
 | ID-F313-P06 | 正常close後に新ownerを取得し旧closeを繰返す | 同じ旧close Promiseで追加操作なし、新marker不変 |
-| ID-F313-P07 | 実process二つをbarrierで同時取得へ進める | 一勝/一件競合拒否、勝者保持中の第三者も拒否。敗者の取得後fixture処理は0回 |
+| ID-F313-P07 | 実process二つのreadyを待ってから双方へ取得を指示する | 一勝/一件競合拒否、勝者保持中の第三者も拒否。敗者の取得後fixture処理は0回。OS schedulingの厳密な同時性と実processでの部分rollbackはこの試験の対象に含めない |
 | ID-F313-P08 | 実processのcloseを始めquiesceを保留する | marker残存を確認後にbarrier解除。全unlink後に新process取得成功 |
 | ID-F313-P09 | 所有childがcloseなしにprocess.exitする | childのexit/close後もmarker残留、次取得拒否。OS crashや電源断とは区別 |
 | ID-F313-P10 | 取得操作へ同期再入する | 全keyのMap予約により再入のfilesystem操作なし。正常rollbackでのみ予約解除 |
@@ -622,3 +622,4 @@ Windows、Node v24.15.0の専有probeではwx一勝/一件EEXIST、正常終了�
 P01〜P10を含む`test/writer-exclusion.test.js`は19件成功、失敗0件で、実child processの競合、quiesce保留、再取得とcloseなし終了を確認した。
 通常sandboxではtest runnerの子process起動がEPERMになったため、この対象試験を昇格実行した。
 実process fixtureの成功は両provider実runtimeや一般保存先のfilesystem対応の証拠には数えない。
+実装head `7a4e23f`の全体`npm test`は2,930件成功、失敗0件、Windowsの実symlink試験2件skipだった。

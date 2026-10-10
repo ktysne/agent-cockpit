@@ -182,6 +182,8 @@ fdは0も有効値で、close結果不明では同じfdを再closeせず、そ�
 ownerは最初のclose Promiseをquiesce呼出し前に保存し、全close呼出しへ同じ参照を返す。
 quiesceのresolveは内部callbackの完了を意味し、実producerの停止をprimitive自体が検証したとは扱わない。
 callbackから同じownerのcloseを待つ自己待ちは禁止し、保留や失敗をtimeoutで強制解放しない。
+直接返されたclose Promiseは一致検査で拒否するが、async手続きなどで包まれた自己待ちは検出できず、未決のままmarkerとMap予約を保持する。
+markerのnonceは診断用で、この限定primitiveは解放時に読み戻して照合しない。稼働中のmarkerを別processが置換しない協調protocolを前提にする。
 実writer接続時は停止対象、後着write禁止とdrainの完全性を別途監査する。
 
 ## 自走中の仮判断

@@ -828,7 +828,9 @@ Astraの実装前監査に従い、内部prepare/acquireと同一close Promise�
 opaque集合は入力を固定する仕組みであり、一般pathのfilesystem判定やproducer停止の証明器とは扱わない。
 専有fixtureではWinAPIでC:\のNTFSとcase-sensitive無効を照合し、同fixtureのwx/write/close/EEXIST/unlink/再取得を確認した。
 primitiveと実process fixtureを実装し、関連試験は19件成功、失敗0件、新規4ファイルの構文確認も成功した。
-全体検証と指定Claudeレビューはこれから行う。
+[PR #362](https://github.com/ktysne/agent-cockpit/pull/362)の実装head `7a4e23f`で全体検証は2,930件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+指定Claude R1はblockerと要修正が0件で収束した。提案から自己待ちの検出範囲、診断nonce、実process試験の範囲を文書へ明記した。
+PRは#360の後にマージする。実装と試験のソースを固定したまま、検証結果と文書明確化を記録する。
 一般pathのW08、停止/ensureの方式、writer接続、W11の製品統合と両provider runtimeは後続のままである。
 停止の前提調査で[Issue #361](https://github.com/ktysne/agent-cockpit/issues/361)を起票した。
 serverとnative終了wrapperが失敗理由のtruthinessを判定するため、falsyなthrow/rejectを成功と取り違える。
