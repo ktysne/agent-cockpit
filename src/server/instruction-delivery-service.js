@@ -157,7 +157,7 @@ function deliveryMatchesRecord(delivery, record) {
   }
 }
 
-function createInstructionDeliveryService(options = {}) {
+function createInstructionDeliveryService(options = {}, lifetimeGate = null) {
   if (!isRecord(options)) throw serviceError('invalid_instruction_service_dependencies');
   let optionKeys;
   try { optionKeys = Reflect.ownKeys(options); } catch { throw serviceError('invalid_instruction_service_dependencies'); }
@@ -631,7 +631,10 @@ function createInstructionDeliveryService(options = {}) {
     if (!accepting && (!diagnostic || reclamationMode)) {
       return Promise.reject(serviceError('instruction_service_closed'));
     }
-    const result = tail.then(async () => {
+    let lifetimeTicket;
+    try { lifetimeTicket = lifetimeGate?.enter('instruction-queue'); }
+    catch (error) { return Promise.reject(error); }
+    const queued = tail.then(async () => {
       if (reclamationMode && !backendCanWrite()) {
         throw serviceError('reclamation_service_blocked');
       }
@@ -643,6 +646,7 @@ function createInstructionDeliveryService(options = {}) {
       if (blocked && !diagnostic) throw serviceError(startupError?.code || 'instruction_service_blocked');
       return operation();
     });
+    const result = lifetimeTicket ? queued.finally(() => lifetimeTicket.release()) : queued;
     tail = result.then(() => undefined, () => undefined);
     return result;
   }

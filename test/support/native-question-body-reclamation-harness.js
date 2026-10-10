@@ -11,6 +11,16 @@ const {
   PROVIDERS,
 } = require('./native-instruction-integration-harness');
 
+const RECLAMATION_PERSISTENCE_ORIGINALS = new WeakMap();
+
+function originalReclamationPersistence(value) {
+  let original = value;
+  while (RECLAMATION_PERSISTENCE_ORIGINALS.has(original)) {
+    original = RECLAMATION_PERSISTENCE_ORIGINALS.get(original);
+  }
+  return original;
+}
+
 function createPersistenceFaults() {
   let armed = null;
   let writeBarrier = null;
@@ -118,66 +128,82 @@ function loadFactory(faults) {
   const integrationPath = require.resolve('../../src/server/native-instruction-service-integration');
   require(compositionPath);
   require(persistencePath);
-  require(contextPath);
   require(deliveryStorePath);
   const compositionEntry = require.cache[compositionPath];
   const persistenceEntry = require.cache[persistencePath];
-  const contextEntry = require.cache[contextPath];
+  const previousContextEntry = require.cache[contextPath] || null;
+  const previousContextExports = previousContextEntry?.exports ?? null;
   const deliveryStoreEntry = require.cache[deliveryStorePath];
   const previousIntegrationEntry = require.cache[integrationPath];
   const originalCompositionExports = compositionEntry.exports;
   const originalPersistenceExports = persistenceEntry.exports;
-  const originalContextExports = contextEntry.exports;
   const originalDeliveryStoreExports = deliveryStoreEntry.exports;
   const createComposition = originalCompositionExports.createNativeLaunchComposition;
   const createPersistence = originalPersistenceExports.createReclamationPersistence;
-  const createContext = originalContextExports.createReclamationServiceContext;
   const createDurableDeliveryStore = originalDeliveryStoreExports.createDurableDeliveryStore;
   const createProviderDeliveryAdapter = originalDeliveryStoreExports.createProviderDeliveryAdapter;
   let composition = null;
   let context = null;
   const deliveryAdapters = new Map();
 
-  compositionEntry.exports = {
-    ...originalCompositionExports,
-    createNativeLaunchComposition(options) {
-      composition = createComposition(options);
-      return composition;
-    },
-  };
-  persistenceEntry.exports = {
-    ...originalPersistenceExports,
-    createReclamationPersistence(options) {
-      return faults.wrap(createPersistence(options));
-    },
-  };
-  contextEntry.exports = {
-    ...originalContextExports,
-    createReclamationServiceContext(options) {
-      context = createContext(options);
-      return context;
-    },
-  };
-  deliveryStoreEntry.exports = {
-    ...originalDeliveryStoreExports,
-    createDurableDeliveryStore(options) {
-      return createDurableDeliveryStore(options);
-    },
-    createProviderDeliveryAdapter(provider, store) {
-      const adapter = createProviderDeliveryAdapter(provider, store);
-      deliveryAdapters.set(provider, adapter);
-      return adapter;
-    },
-  };
-  delete require.cache[integrationPath];
   let integrationModule;
   try {
+    compositionEntry.exports = {
+      ...originalCompositionExports,
+      createNativeLaunchComposition(options) {
+        composition = createComposition(options);
+        return composition;
+      },
+    };
+    persistenceEntry.exports = {
+      ...originalPersistenceExports,
+      createReclamationPersistence(options) {
+        const original = createPersistence(options);
+        const wrapped = faults.wrap(original);
+        RECLAMATION_PERSISTENCE_ORIGINALS.set(wrapped, originalReclamationPersistence(original));
+        return wrapped;
+      },
+      getReclamationPersistenceControl(value) {
+        return originalPersistenceExports.getReclamationPersistenceControl(originalReclamationPersistence(value));
+      },
+    };
+    delete require.cache[contextPath];
+    const reloadedContextExports = require(contextPath);
+    const contextEntry = require.cache[contextPath];
+    const createContext = reloadedContextExports.createReclamationServiceContext;
+    contextEntry.exports = {
+      ...reloadedContextExports,
+      createReclamationServiceContext(options) {
+        context = createContext(options);
+        return context;
+      },
+      getReclamationServiceContextControl(value) {
+        return reloadedContextExports.getReclamationServiceContextControl(value);
+      },
+    };
+    deliveryStoreEntry.exports = {
+      ...originalDeliveryStoreExports,
+      createDurableDeliveryStore(options) {
+        return createDurableDeliveryStore(options);
+      },
+      createProviderDeliveryAdapter(provider, store) {
+        const adapter = createProviderDeliveryAdapter(provider, store);
+        deliveryAdapters.set(provider, adapter);
+        return adapter;
+      },
+    };
+    delete require.cache[integrationPath];
     integrationModule = require(integrationPath);
   } finally {
     compositionEntry.exports = originalCompositionExports;
     persistenceEntry.exports = originalPersistenceExports;
-    contextEntry.exports = originalContextExports;
     deliveryStoreEntry.exports = originalDeliveryStoreExports;
+    if (previousContextEntry) {
+      previousContextEntry.exports = previousContextExports;
+      require.cache[contextPath] = previousContextEntry;
+    } else {
+      delete require.cache[contextPath];
+    }
     if (previousIntegrationEntry) require.cache[integrationPath] = previousIntegrationEntry;
     else delete require.cache[integrationPath];
   }

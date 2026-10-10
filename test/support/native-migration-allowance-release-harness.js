@@ -7,7 +7,12 @@ const path = require('node:path');
 const { createQuestionRecord, selectionFor } = require('../../src/server/common-question-kernel');
 const { createDelivery, createEmptyLedger } = require('../../src/server/delivery-ledger');
 const { makeEmptyCheckpoint } = require('../../src/server/durable-checkpoint');
-const { createNativeInstructionBodyReclamationHarness } = require('./native-instruction-body-reclamation-harness');
+const {
+  createNativeInstructionBodyReclamationHarness,
+  registerReclamationContextFactoryWrapper,
+  trackReclamationPersistenceWrapper,
+  trackReclamationServiceContextWrapper,
+} = require('./native-instruction-body-reclamation-harness');
 
 const PROVIDERS = Object.freeze(['claude', 'codex']);
 const DATA_FILES = Object.freeze({
@@ -207,10 +212,6 @@ function reclamationConfig(normalByteLimitsBySlot, overrides = {}) {
 }
 
 function createLeaseObserver(resizeFailure = null) {
-  const contextPath = require.resolve('../../src/server/reclamation-service-context');
-  require(contextPath);
-  const entry = require.cache[contextPath];
-  const originalExports = entry.exports;
   const acquisitions = [];
   const timeline = [];
   const capturedWriters = new Map();
@@ -221,9 +222,7 @@ function createLeaseObserver(resizeFailure = null) {
     const latest = acquisitions.at(-1);
     try { return latest?.lease?.status() ?? null; } catch { return null; }
   }
-  entry.exports = {
-    ...originalExports,
-    createReclamationServiceContext(options) {
+  const unregisterContextFactoryWrapper = registerReclamationContextFactoryWrapper((createContext) => (options) => {
       const budget = options.capacityBudget;
       const observedBudget = Object.freeze({
         status: () => budget.status(),
@@ -324,13 +323,14 @@ function createLeaseObserver(resizeFailure = null) {
         close: () => persistence.close(),
         status: () => persistence.status(),
       });
-      const created = originalExports.createReclamationServiceContext({
+      trackReclamationPersistenceWrapper(observedPersistence, persistence);
+      const created = createContext({
         ...options,
         persistence: observedPersistence,
         capacityBudget: observedBudget,
       });
       const observedBackends = new Map();
-      return Object.freeze({
+      const observedContext = Object.freeze({
         ...created,
         backend(slot) {
           if (!observedBackends.has(slot)) {
@@ -354,8 +354,9 @@ function createLeaseObserver(resizeFailure = null) {
           return created.releaseMigrationAllowance(value);
         },
       });
-    },
-  };
+      trackReclamationServiceContextWrapper(observedContext, created);
+      return observedContext;
+    });
   return {
     acquisitions,
     timeline,
@@ -368,7 +369,7 @@ function createLeaseObserver(resizeFailure = null) {
       });
     },
     restore() {
-      if (require.cache[contextPath] === entry) entry.exports = originalExports;
+      unregisterContextFactoryWrapper();
     },
   };
 }

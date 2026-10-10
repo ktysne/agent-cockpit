@@ -176,3 +176,10 @@ instructionのsend-startとpayload復元では、信頼済み組立が注入し�
 欠落、例外、Promise、falseは配信を保留する。
 保存後にも同じ認可を検証し、通常のcurrentProofを緩めずに停止standalone専用能力を扱う。
 送信方針、指示ジャーナル、native入力digestと受付の相関は[通常指示の配信契約](instruction-delivery.md)で定める。
+
+## プロセス間のwriter排他
+
+現行の同path Mapは同module/process内だけの排他であり、別processの更新順序を直列化しない。
+#313の[保存writerのプロセス間排他](writer-ownership-exclusion.md)で、standaloneとfactoryの共通単位、取得前I/O禁止、解放と回復の条件を定める。
+設計の採用だけで排他実装を有効にせず、private primitive、全writer接続と実process試験を完了条件にする。
+#210のfsyncと電源断耐久性は、writer排他とは別に検証する。
