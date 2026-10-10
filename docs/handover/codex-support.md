@@ -860,7 +860,10 @@ TTL付きstart.lockとattempt別recordだけでは旧管理者のcurrent上書�
 次は製品callerを作らず、単一private controllerとbounded record codec/storeをfixtureで検証する。
 異process管理排他、ACL、全producer drain、tray/ensure接続と実markerのW11はその後の完了条件である。
 指定Claude R1の要修正7件を受け、requestIdの生成と検証、メモリ内状態、共通停止operation、instance導入と並行起動の分類を補正した。
-R2の要修正2件を受け、本文要件の適合表への反映と並行起動の権限/current/launch数を明確化し、分類fixtureと製品試験を分けて再確認する。
+R2の要修正2件を受け、本文要件の適合表への反映と並行起動の権限/current/launch数を明確化し、分類fixtureと製品試験を分けた。
+R3でも本文と適合表の漏れ、敗者の未確認所有が残るscopeの新規起動判断の2件が残り、2文書にまたがるため3往復上限で中断した。PR #364はDraftでマージ不可である。
+推奨は管理者が不整合を検出し、未確認所有が残るscopeの新規launchを禁止してW09の手動回復へ進め、適合表も補正して追加レビューすること。再開の判断を待つ。
+初回codecには残存指摘の影響がないため、レビュー済み#363を親に純粋codecだけを別PRで先行し、#364の未収束headを取り込まない。
 本PRは文書のみでテストを実行せず、親#363からsrc/test不変を確認する。親の全体2,969件成功、失敗0件、実symlink2件skipは親実装の結果として保持し、新設計の成功証拠としない。
 
 ## 起票していない候補
