@@ -721,6 +721,8 @@ collector単独の追跡とfactory接続は別PRに分ける。
 この後続PRは#354の取り込み後にマージする。
 
 collectorの内部制御と最外側処理の追跡を実装した。
+PR [#356](https://github.com/ktysne/agent-cockpit/pull/356)はDraftで、#354の後に取り込む。
+sourceの検証対象は`d5f15c1`である。
 実装前に[ID-F209-C01](../design/provider-conformance-testing.md)を定義した。
 通常disconnect後の再接続と公開APIを保ち、恒久停止、非協調readのdrain保留、同期再入を確認する。
 factory ticket接続とcloseの停止順はこの段階に含めない。
