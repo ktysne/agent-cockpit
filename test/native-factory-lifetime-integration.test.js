@@ -670,3 +670,17 @@ for (const [fault, reason] of [['stopError', undefined], ['collectorDrainError',
     assert.equal(harness.control.active, 0);
   });
 }
+
+test('standard factory close preserves every falsy service cleanup rejection reason', async t => {
+  for (const reason of [undefined, null, false, 0, '']) {
+    const harness = await fixture(t, { standard: true });
+    const integration = await harness.ready;
+    harness.control.serviceCloseError = reason;
+    const closed = await observe(integration.close());
+    assert.equal(Object.hasOwn(closed, 'error'), true);
+    assert.equal(closed.error, reason);
+    assert.ok(harness.control.events.includes('service-close'));
+    assert.equal(harness.control.gateCount, 0);
+    assert.equal(harness.control.active, 0);
+  }
+});

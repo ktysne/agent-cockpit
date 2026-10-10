@@ -494,4 +494,5 @@ provider固有RPCと既存error codeの差は許容するが、追加送信、�
 関連4ファイルの108件と、最後のtest-only監査修正後のlifetime51件が成功した。
 通常起動と非協調startの保留は両provider、観測readと故障注入はCodex fixtureを中心に確認する。
 構築中にcollector返却前のclose再入を起こす試験はprivate injectionであり、通常製品のcallback到達性とは分ける。
-全体テストと実Claude/Codex runtimeは未実施である。
+固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
+実Claude/Codex runtimeは未実施である。

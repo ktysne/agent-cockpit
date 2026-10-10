@@ -133,7 +133,9 @@ function loadFactory(control) {
       async close() {
         control.events.push('service-close');
         if (control.serviceCloseBarrier) await control.serviceCloseBarrier.wait();
-        return control.instruction.close();
+        const result = await control.instruction.close();
+        if (Object.hasOwn(control, 'serviceCloseError')) throw control.serviceCloseError;
+        return result;
       },
     });
   });
