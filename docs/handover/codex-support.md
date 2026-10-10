@@ -699,6 +699,14 @@ Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に�
 後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
 通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
 
+fixture専有の限定操作ライフサイクルは`codex/question-capsule-restricted-lifecycle-209-20261011`で、PR #348のレビュー収束headからスタックする。
+後着回答と固定非質問delivery進行の受付を、最新candidate生成、保存、closeとcold reopenへ接続するtest helperを追加した。
+保存APIやpathをfacadeへ公開せず、closing/blockedを表示stateより優先する。
+固定IDの拒否とcapsule/orderの保持を確認し、全lookupの一般的な同値性は未確認である。
+関連18件は成功、失敗とskipは0件、84.29秒だった。後着回答10件保存と11件目の無保存拒否、元selectionのハッシュ維持も確認した。構文、空白とCodeGraph同期・調査は成功した。
+全体検証と指定ClaudeレビューはPR作成後に行う。
+後続は既存explicit reclamation factoryの受付停止と進行中処理drainのlifetime gateを統合し、次に同rootの協調writer ownershipへ進む。
+通常新schema writerへの接続、外process排他、runtime authority、OS耐久性と件数枠解放は未達である。
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

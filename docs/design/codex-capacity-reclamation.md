@@ -869,3 +869,24 @@ fresh instanceは全正本をcold検査し、未知orphanを自動削除しな�
 
 同processの同path二重ownerを拒否するが、外process排他、path差替え競合、ABA、OS電源断耐久性を証明しない。
 両providerのnative file fixtureは実runtimeの結果ではなく、source authority、通常起動、移行開始と復旧、新受付、件数枠解放は別のgateに残る。
+
+### fixture専有の限定操作ライフサイクル
+
+限定操作facadeはtest helper内に置き、専有workspace、backend、時計、queueと固定故障scenarioを所有する。
+呼出し側へpath、budget、raw正本、candidateと保存APIを返さない。
+操作は選択済みの保持中ordinary質問への後着回答と、fixture内の非質問deliveryの固定進行に限定する。
+queue内で最新の保存済みQ3/CP4を読み、変更したordinary rowだけを外側正本へ反映する。
+元のselection、capsule/chunkとorderを保ち、duplicateは保存しない。
+未選択、capsule内、retired、missingや入力不正は保存前に拒否する。
+固定配送相関はfixtureの制御値であり、runtime observation authorityの証拠には使わない。
+
+closeは同期で受付を閉じ、backend closeとqueue settlementを待つ。
+closingまたはblocked中にloadが終わってもreadyへ戻さない。
+closeはworkspaceとbaseline leaseを保持し、reopenは同じ保存先へ新しいbackendを作ってcold検査する。
+保存結果不明では全操作を停止し、再検査で読めた状態を元操作の成功証明へ読み替えない。
+disposeは終端で、close/drain後にfixtureが所有する既知故障tempとworkspaceを検証付きで片付ける。
+不明なtempや所有を照合できない保存先を削除しない。
+
+試験は両provider、Q/CPの操作順、後着回答上限、duplicate、限定受付、capsuleとorderの保持、追加lease、close時の未着手操作、rename前後の故障とcold reopenを扱う。
+拒否確認は固定fixtureのIDと構造照合に限り、全lookupの一般的な同値性やclose競合の全実行順を証明しない。
+通常native factory、provider listener、schedulerとserviceへの配線は別段階である。
