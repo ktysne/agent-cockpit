@@ -6,12 +6,16 @@ const os = require('node:os');
 const path = require('node:path');
 const { types } = require('node:util');
 const { createQuestionCapsuleFilesFixture } = require('./question-capsule-files-fixtures');
+const { createQuestionCapsuleMigrationPlanFixture } = require('./question-capsule-migration-plan-fixtures');
 const { createQuestionCapsuleExistingUpdateBackend } =
   require('../../src/server/question-capsule-existing-update-backend');
+const { planQuestionCapsuleFileMigration } = require('../../src/server/question-capsule-migration-plan');
+const { encodeNormalized, decodeSourceBytes } = require('../../src/server/reclamation-json-codec');
 const { encodeCapsuleCheckpointV4Local } = require('../../src/server/question-capsule-checkpoint-codec');
 const { encodeInstructionJournalV2Local } = require('../../src/server/delivery-reclamation-codec');
 const { encodeQuestionReclamationAnchorV1Local } = require('../../src/server/question-reclamation-anchor-codec');
 const { encodeQuestionCapsuleJournalV3Local } = require('../../src/server/question-capsule-journal-codec');
+const { MAX_SOURCE_BYTES } = require('../../src/server/reclamation-capacity-bounds');
 const { createReclamationCapacityBudget, measureReclamationStoreCapacity } =
   require('../../src/server/reclamation-capacity-reservation');
 const { validateQuestionCapsuleFiles } = require('../../src/server/question-capsule-files-validation');
@@ -33,12 +37,20 @@ const FAILURE_POINTS = new Set([
   'checkpoint_before_rename',
   'checkpoint_after_rename_before_readback',
 ]);
-const OPTION_NAMES = new Set(['provider', 'secondaryProvider', 'ordinaryQuestionSelected', 'maxAdditionalBytes']);
+const FIXTURE_SCENARIOS = new Set(['standard', 'checkpoint-instructions-null']);
+const FIXTURE_OPTION_NAMES = new Set(['scenario', 'provider', 'secondaryProvider', 'ordinaryQuestionSelected']);
+const OPTION_NAMES = new Set([...FIXTURE_OPTION_NAMES, 'maxAdditionalBytes']);
 const BACKEND_OPTION_NAMES = new Set(['pausePoint', 'failurePoint']);
 const TEMPORARY_FILE = /^\.(?:question-reclamation-anchor\.json|common-question-journal\.json|delivery-checkpoint\.json|instruction-journal\.json)\.\d+\.[0-9a-f-]{36}\.tmp$/;
 const ACTIVE_ROOTS = new Set();
 const INVALID_WORKSPACE = 'invalid_question_capsule_existing_update_workspace';
 const DEFAULT_MAX_ADDITIONAL_BYTES = 64 * 1024 * 1024;
+const DEFAULT_FIXTURE_OPTIONS = {
+  scenario: 'standard',
+  provider: 'claude',
+  secondaryProvider: null,
+  ordinaryQuestionSelected: true,
+};
 
 function fail(code = INVALID_WORKSPACE) {
   const error = new TypeError(code);
@@ -113,6 +125,66 @@ function baselineReservation(fixture, bytes) {
     total + Math.max(bytes[slot].length, capacity.slots[slot].reserveBytes), 0);
 }
 
+function requireFixtureOptions(options) {
+  requireValue(FIXTURE_SCENARIOS.has(options.scenario));
+  requireValue(PROVIDERS.has(options.provider));
+  requireValue(options.secondaryProvider === null || PROVIDERS.has(options.secondaryProvider));
+  requireValue(options.secondaryProvider === null || options.secondaryProvider !== options.provider);
+  requireValue(typeof options.ordinaryQuestionSelected === 'boolean');
+}
+
+function makeCheckpointInstructionsNullFixture(options) {
+  const sourceFixture = createQuestionCapsuleMigrationPlanFixture({
+    provider: options.provider,
+    secondaryProvider: options.secondaryProvider,
+    ordinaryQuestionSelected: options.ordinaryQuestionSelected,
+    internalQuestionIds: ['internal-4'],
+  });
+  const questionStore = decodeSourceBytes(sourceFixture.input.sourceBytes.questions, MAX_SOURCE_BYTES).value;
+  questionStore.questions = [];
+  questionStore.reservations = questionStore.reservations.filter((row) =>
+    row.internalQuestionId === 'internal-4');
+  sourceFixture.input.sourceBytes.questions = encodeNormalized(questionStore).bytes;
+  sourceFixture.input.sourceBytes.checkpoint = null;
+  sourceFixture.input.sourceBytes.instructions = null;
+  sourceFixture.input.normalByteLimitsBySlot.checkpoint = null;
+  sourceFixture.input.normalByteLimitsBySlot.instructions = null;
+
+  const planned = planQuestionCapsuleFileMigration(sourceFixture.input);
+  const input = {
+    anchor: structuredClone(sourceFixture.snapshot.anchor),
+    questionFile: planned.targets.questions.value,
+    checkpointFile: null,
+    instructionStore: null,
+    normalByteLimitsBySlot: structuredClone(sourceFixture.input.normalByteLimitsBySlot),
+  };
+  const validated = validateQuestionCapsuleFiles(input);
+  requireValue(validated.snapshot.stores.checkpoint === null &&
+    validated.snapshot.stores.instructions === null);
+  return {
+    input,
+    snapshot: validated.snapshot,
+    questionFile: input.questionFile,
+    checkpointFile: null,
+  };
+}
+
+function makeFixture(options) {
+  return options.scenario === 'standard'
+    ? createQuestionCapsuleFilesFixture({
+      provider: options.provider,
+      secondaryProvider: options.secondaryProvider,
+      ordinaryQuestionSelected: options.ordinaryQuestionSelected,
+    })
+    : makeCheckpointInstructionsNullFixture(options);
+}
+
+function createQuestionCapsuleExistingUpdateFixture(value = {}) {
+  const options = captureOptionalRecord(value, FIXTURE_OPTION_NAMES, DEFAULT_FIXTURE_OPTIONS);
+  requireFixtureOptions(options);
+  return makeFixture(options);
+}
+
 function expectedEntries(bytes) {
   return SLOT_NAMES.filter((slot) => bytes[slot] !== null).map((slot) => FILE_BASENAMES[slot]).sort();
 }
@@ -150,22 +222,13 @@ function captureBackendOptions(value) {
 
 async function createQuestionCapsuleExistingUpdateWorkspace(value = {}) {
   const options = captureOptionalRecord(value, OPTION_NAMES, {
-    provider: 'claude',
-    secondaryProvider: null,
-    ordinaryQuestionSelected: true,
+    ...DEFAULT_FIXTURE_OPTIONS,
     maxAdditionalBytes: DEFAULT_MAX_ADDITIONAL_BYTES,
   });
-  requireValue(PROVIDERS.has(options.provider));
-  requireValue(options.secondaryProvider === null || PROVIDERS.has(options.secondaryProvider));
-  requireValue(options.secondaryProvider === null || options.secondaryProvider !== options.provider);
-  requireValue(typeof options.ordinaryQuestionSelected === 'boolean');
+  requireFixtureOptions(options);
   requireValue(Number.isSafeInteger(options.maxAdditionalBytes) && options.maxAdditionalBytes >= 0);
 
-  const fixture = createQuestionCapsuleFilesFixture({
-    provider: options.provider,
-    secondaryProvider: options.secondaryProvider,
-    ordinaryQuestionSelected: options.ordinaryQuestionSelected,
-  });
+  const fixture = makeFixture(options);
   const bytes = encodeFixture(fixture);
   const baselineBytes = baselineReservation(fixture, bytes);
   const budget = createReclamationCapacityBudget({ maxAdditionalBytes: options.maxAdditionalBytes });
@@ -308,4 +371,7 @@ async function createQuestionCapsuleExistingUpdateWorkspace(value = {}) {
   });
 }
 
-module.exports = { createQuestionCapsuleExistingUpdateWorkspace };
+module.exports = {
+  createQuestionCapsuleExistingUpdateFixture,
+  createQuestionCapsuleExistingUpdateWorkspace,
+};

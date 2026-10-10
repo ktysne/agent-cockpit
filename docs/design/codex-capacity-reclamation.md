@@ -853,6 +853,8 @@ Q/CPは実raw、新外側の現在と将来予約、旧展開の将来予約、�
 Aはraw、canonical、pending period projectionと旧予約の最大を保護する。
 Iはraw、現在、将来、旧予約の最大をB+Gと照合してからGを加えて保護するため、grantを保守的に過剰予約する場合がある。
 baseline lease、B、Gから追加leaseを控除しない。
+IのB+G照合はcold joint検査と旧容量計測でも行うため、後段の保護量計算だけで不足を拒否する合法入口は作らない。
+検証では合法grantの追加予約量を独立計測し、上流の容量拒否と後段だけの到達性を区別する。
 
 内部filesystem adapterはtempのexclusive open直前でclosing/blockedを検査する。
 保存後は対象のexact raw readback、対象外指紋、結合検査と既存更新guardを確認してからheadをinstallする。
