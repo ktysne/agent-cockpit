@@ -660,7 +660,7 @@ writer排他の製品接続、graceful再起動と両provider実runtimeはこの
 | ID-F313-ST09 | ensure接続 | healthy現在instanceを古い拒否より優先。起動前/待機中とstart lock敗者で拒否を共有し、eventごとの全deadline反復を避ける。拒否してもhookはproviderセッションを止めず、出力なしで正常終了する |
 | ID-F313-ST10 | ensure接続 | 古いrecord、破損と通知不能をunknownとして扱う。手動再attemptはmarkerを削除せず実取得をやり直す |
 | ID-F313-ST11 | writer接続 | 実markerの正常再起動、残留拒否と通知をW11で再確認し、factoryと全参加writerへ追加するたびに再検証。管理権限、全writer取得、内容I/O、listen/readyの順を照合し、途中取得の敗者は内容I/Oなしで自己writerを解放する。未知解放を成功化しない |
-| ID-F313-ST12 | 製品管理protocol | ST06の権限条件を前提に、同scopeでfresh health検査後のready公開と後続ensureを競合させる。同じstarting世代内で有効管理権限は高々一つ、公開currentは高々一つ、新規launchは高々一回 |
+| ID-F313-ST12 | 製品管理protocol | ST06の権限条件を前提に、同scopeでfresh health検査後のready公開と後続ensureを競合させる。同じstarting世代内で同時に有効な管理権限と認可currentは各高々一つ、新規launchは高々一回。権限を得ない競合者のlaunch、内容I/Oとprovider起動は0回。故障のない成功経路は一回のlaunchからreadyへ進む |
 | ID-F313-ST12A | 製品故障試験 | 正常protocolのlaunch数試験とは分け、旧TTL lockによる二重launchを故障入力にする。全writer取得前の拒否は内容I/O 0回。全取得後のlisten等の失敗は停止/drainと自己writer全解放、敗者終了を追跡し、不明なら管理状態を解除しない |
 | ID-F313-ST13 | ensure接続 | server.jsonとhealth双方のinstanceId/state、app、pid、startedAtとscopeを照合。旧形式のID欠落、stopping、不一致でgracefulを実行せず、強制終了や自動launchへfallbackしない |
 | ID-F313-ST14 | 停止接続 | 全writer解放後、completed公開前にprocessを終了させる。結果未確認を成功と推定せず再起動を中止し、全停止を確認する手動回復へ進む |
