@@ -461,6 +461,6 @@ ticket取得関数は最初の処理受付前に一度だけ設定し、受付�
 
 内部binding単体と実runnerのfixture結果、両providerの実runtimeを分けて記録する。
 factory ticket接続、factory close順、子の物理停止、provider元作業のdrainと保存ownership解放はこの段階の対象外である。
-PR #356の初期head `dc6ec22`は関連144件と全体2848件が成功し、失敗0、全体はWindows実symlink権限skip2である。
-ticket解放例外の失敗判定を修正した関連145件も成功した。修正headの全体検証は未実施である。
+PR #356のsource `f449304`は関連145件と全体2849件が成功し、失敗0、全体はWindows実symlink権限skip2である。
+ticket解放のfalsy例外理由を保ち、先行する失敗理由を後始末の例外で置き換えないことを確認した。
 実Claude/Codex runtimeとfactory ticket接続は未実施である。

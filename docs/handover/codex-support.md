@@ -659,7 +659,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 ## 回収機能のレビュー済みPRと後続
 
 2026-10-11のGitHub照合では、次のPRはすべてfeature向けで未マージである。
-#347〜#349と#351〜#354はReadyとして扱える。
+#347〜#349、#351〜#354と#356はReadyとして扱える。
 #348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
 
 | PRとhead | 内容 | 検証とレビュー |
@@ -671,6 +671,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 | [#352](https://github.com/ktysne/agent-cockpit/pull/352)、`2ea0c83` | main #350の配布物同期 | 関連2件、CLI定義読み取り5条件、構文、空白、上流同期check成功。Claude R1で必須0。アプリsource無変更 |
 | [#353](https://github.com/ktysne/agent-cockpit/pull/353)、`36c1c63` | native起動の段階別取消検証 | `cd39352`で全体2794成功、失敗0、Windows実symlink権限skip2。test補強後`1912130`で関連192成功、Claude R2で必須0。製品source無変更 |
 | [#354](https://github.com/ktysne/agent-cockpit/pull/354)、検証source `b70816d` | lease単位のnative read協調取消 | 関連120成功、全体2836成功、失敗0、Windows実symlink権限skip2。修正後関連120成功、source無変更、Claude R2で必須0 |
+| [#356](https://github.com/ktysne/agent-cockpit/pull/356)、検証source `f449304` | collectorの恒久受付停止とprivate drain | 関連145成功、全体2849成功、失敗0、Windows実symlink権限skip2。Claude R2で必須0。#354の後に取り込む |
 
 #347、#348、#349はこの順でマージする。
 #351、#352、#353はそれぞれこの系列と独立して取り込める。
@@ -721,16 +722,17 @@ collector単独の追跡とfactory接続は別PRに分ける。
 この後続PRは#354の取り込み後にマージする。
 
 collectorの内部制御と最外側処理の追跡を実装した。
-PR [#356](https://github.com/ktysne/agent-cockpit/pull/356)はDraftで、#354の後に取り込む。
-sourceの検証対象は`d5f15c1`である。
+PR [#356](https://github.com/ktysne/agent-cockpit/pull/356)はReadyで、#354の後に取り込む。
+sourceの検証対象は`f449304`である。
 実装前に[ID-F209-C01](../design/provider-conformance-testing.md)を定義した。
 通常disconnect後の再接続と公開APIを保ち、恒久停止、非協調readのdrain保留、同期再入を確認する。
 factory ticket接続とcloseの停止順はこの段階に含めない。
-関連するcollectorとcompositionの144件が成功し、失敗とskipは0件である。
-固定head `dc6ec22`の全体テストは2848件成功、失敗0、Windows実symlink権限skip2である。
-Claude R1はblockerと要修正0件で、任意提案のうちticket解放例外の失敗判定を修正中である。
+関連するcollectorとcompositionの145件が成功し、失敗とskipは0件である。
+固定head `f449304`の全体テストは2849件成功、失敗0、Windows実symlink権限skip2である。
+ticket解放例外の失敗判定を修正し、Claude R2はblockerと要修正0件で収束した。
 非協調readは明示解放までdrainを保留し、通常disconnectのPromise契約と接続待ちの表示を維持する。
 実runtime、raw provider I/Oの終了、factory closeとの接続は未確認である。
+次は明示的回収factoryへstartとcollectorのticketを接続し、全native停止の開始後にserviceとdrainを合流する。
 
 ## 起票していない候補
 
