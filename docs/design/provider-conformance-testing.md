@@ -435,3 +435,29 @@ loaded-listのraw応答とwrite解放後のmicrotask取消で次RPC不送信を�
 source無効化はsource単体で確認し、実runnerではglobal取消も行うstop経由で確認した。
 runnerは公開APIから新childへ再起動できないため、旧generationの後着writeエラーはstopped状態の不変までを確認し、新childへの影響は未確認である。
 実Claude/Codex runtimeのread取消は未実施である。
+
+## owned collectorの内部終了追跡 (#209)
+
+`ID-F209-C01`は、owned collectorの受付停止と非同期処理の終了追跡を確認する。
+実runnerとcompositionのfixtureを能力条件とし、Codexは保留したreadの協調取消、Claudeはunsupported readと共通の接続停止を期待する。
+公開collectorとcomposition wrapperの項目、options許可項目、通常disconnect後の再接続を維持する。
+
+内部の恒久受付停止後にconnect、observe、reconcileを開始せず、collectorのproofとpositive observationを返さない。
+外側compositionのauthority失効と実read取消には、別途disconnectまたはnative stopが必要である。
+恒久停止だけで元のreadが終了したとは扱わない。
+connect、observe、reconcileの受付済み処理が、結果判定と内部後始末まで終了してからprivate drainを完了する。
+同じconnect試行のPromiseを共有し、reconcileの内部observeを重複計上しない。
+
+再入可能なbinding、観測callback、ticket取得より先に処理を登録する。
+ticket取得中のconnect再入、受付停止と例外でも二重開始や未登録の仕事を作らない。
+ticket解放の例外でも記録の終了を通知し、例外を成功へ変換しない。
+ticket取得関数は最初の処理受付前に一度だけ設定し、受付履歴がある場合と停止後は拒否する。
+
+旧接続の遅延完了またはrejectが、新しい接続のPromise、state、loanを変更しないことを確認する。
+停止後のnative eventと同期callbackからの再入でもpositive observationを再発行しない。
+非協調bindingのreadは明示解放までdrainを未完了に保ち、epoch、timeoutやPromise.raceを終了の証拠にしない。
+保持点とPromise終了を観測し、失敗時にも保留点を明示解放する。
+
+内部binding単体と実runnerのfixture結果、両providerの実runtimeを分けて記録する。
+factory ticket接続、factory close順、子の物理停止、provider元作業のdrainと保存ownership解放はこの段階の対象外である。
+実装と検証結果はPR作成時にheadとともに記録する。

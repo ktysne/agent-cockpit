@@ -336,3 +336,23 @@ scopeを無視する注入readerの元Promiseを一般に取消する契約は�
 ラッパー終了はproviderの元作業、raw callback、collectorやfactoryのdrainを証明しない。
 これらの接続と終了追跡は別の検証として扱う。
 共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-R01`に定義する。
+
+## owned collectorの内部終了追跡
+
+owned collectorは、connect、observe、reconcileの最外側処理を内部で追跡する。
+binding、観測callbackとticket取得を呼ぶ前に処理を登録し、結果判定と内部後始末が成功または失敗で終了した後に記録を解放する。
+同じconnect試行はPromiseを共有し、reconcile内部のobserveを別の最外側処理として数えない。
+
+恒久的な受付停止とdrainの制御はmodule内WeakMapに保持する。
+compositionが返すsnapshot wrapperも同じ制御へ対応付け、公開facadeとoptionsへ新しい項目を追加しない。
+ticket取得関数の設定は最初の処理受付前に一度だけ許可し、設定しない場合もcollector単独で終了追跡を行う。
+ticket解放は同期関数とし、その例外でも記録を解放して処理の失敗を返す。
+
+通常disconnectと既存のcloseは再接続可能な意味を維持する。
+内部の恒久停止は後続受付とcollectorのproof、positive observationを拒否するが、外側compositionのauthorityを単独で失効させない。
+disconnectまたはnative stopによる論理失効と協調取消を開始した後に、受付済み処理のdrainを待つ。
+旧処理の後始末で新接続のPromise、state、loanを変更しない。
+
+collector drainはwrapper処理の終了を確認するものであり、非協調readerの元Promiseが未完了ならdrainも未完了のまま残る。
+factory ticketとcloseへの接続、子の停止確認、保存ownership解放は別の条件として扱う。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-C01`に定義する。

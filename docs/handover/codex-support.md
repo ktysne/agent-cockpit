@@ -714,6 +714,21 @@ collector単独の追跡とfactory接続は別PRに分ける。
 取消前のstdin write故障がrunner failureへ進まない既存の挙動は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)に記録し、今回のread取消とは分けて対応する。
 協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
 
+## owned collector終了追跡の現在地
+
+`codex/native-collector-private-drain-209-20261011`は最新feature `c731abe`から作成し、PR #354のレビュー済みhead `45eea5d`を通常mergeした。
+開始時のheadは`e574863`で、#351〜#354を祖先として保持する。
+この後続PRは#354の取り込み後にマージする。
+
+collectorの内部制御と最外側処理の追跡を実装した。
+実装前に[ID-F209-C01](../design/provider-conformance-testing.md)を定義した。
+通常disconnect後の再接続と公開APIを保ち、恒久停止、非協調readのdrain保留、同期再入を確認する。
+factory ticket接続とcloseの停止順はこの段階に含めない。
+関連するcollectorとcompositionの144件が成功し、失敗とskipは0件である。
+全体テストとClaudeレビューは未実施で、PR作成後に固定headで実行する。
+非協調readは明示解放までdrainを保留し、通常disconnectのPromise契約と接続待ちの表示を維持する。
+実runtime、raw provider I/Oの終了、factory closeとの接続は未確認である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
