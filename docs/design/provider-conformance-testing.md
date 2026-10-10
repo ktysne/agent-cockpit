@@ -588,7 +588,7 @@ private primitive、standalone接続、factory接続、全参加writerの横断�
 | ID-F313-W03 | metadata保存とrollbackを故障させる | 不完全markerも占有として拒否し、元の失敗とrollback failureを両方保持 |
 | ID-F313-W04 | native、writer、readbackまたはcollectorを保留してcloseする | 終了未確認中はunlinkを試みず、子backendのcloseから最終解放へ迂回しない |
 | ID-F313-W05 | 正常release後に新ownerを取得し旧releaseを繰返す | 旧ownerは保存とunlinkを追加せず、新ownerのmarkerと保存内容を変えない |
-| ID-F313-W06 | 停止確認後のunlinkを失敗または結果不明にする | 旧capabilityを再利用せず、自動retryしない。Mapを保持し、回収factory closeはreclamation_ownership_retained。標準standaloneは接続PRで定めた既存closeとの互換形式で原因を保持。既に解放された容量やmarker残存不明を保持確認済みと報告しない |
+| ID-F313-W06 | 停止確認後のunlinkを失敗または結果不明にする | 旧capabilityを再利用せず、自動retryしない。残る自己markerも逆順に一度ずつ処理し全失敗を集約。Mapを保持し、回収factory closeはreclamation_ownership_retained。標準standaloneは接続PRで定める既存closeとの互換形式で原因を保持。既に解放された容量やmarker残存不明を保持確認済みと報告しない |
 | ID-F313-W07 | 所有後のprocess crashと次の起動を観測する | 残留markerをTTL/PIDだけで奪取せず、取得を拒否。正常終了probeと区別する |
 | ID-F313-W08 | 大小文字、junction、hardlink、短縮名と対象外filesystemを与える | 対応範囲で同じfileが共通keyとなるか、入力を取得前後の適切な境界で拒否。検出できない範囲を許容しない |
 | ID-F313-W09 | 全participant停止と新規起動禁止のfixtureで回復する | 特定markerだけを処理し、次ownerは取得後に保存形式に応じたcold recoveryを完了してから保存再開 |

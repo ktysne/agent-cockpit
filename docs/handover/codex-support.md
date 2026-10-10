@@ -805,8 +805,8 @@ Claude R2もblockerと要修正が0件で、最終の軽微な整形後の構文
 
 `codex/writer-exclusion-design-313-20261011`を最新feature `c731abe`から作り、PR #359の最終head `8fa81f5`を通常mergeした。
 起点は`05e6f79`で、[排他設計](../design/writer-ownership-exclusion.md)と適合試験計画を先に記録する。
-PR [#360](https://github.com/ktysne/agent-cockpit/pull/360)はfeature向けDraftで、設計sourceは`ddbcc5e`である。
-製品src/testは親#359から不変。文書差分の指定Claudeレビューを行う。
+PR [#360](https://github.com/ktysne/agent-cockpit/pull/360)の設計sourceは`ddbcc5e`で、R1/R2対応は`83dd295`と`bc1db69`である。
+製品src/testは親#359から不変。文書差分の指定Claudeレビューを3往復行った。
 Astraの助言を反映し、per-file sidecarを共通単位にし、factoryの全file set取得とstandalone参加をそろえる。
 private primitive、標準writer接続、factory接続と横断試験は後続であり、#313を完了扱いにしない。
 専有Windows probeは競合同時取得、正常marker残留、大小文字とjunction alias、hardlinkの反例を確認した。
@@ -816,6 +816,9 @@ Claude R1はblocker0件、要修正3件で、トレイ再起動の接続条件�
 一般保存先と標準再起動への接続は限定primitiveの完了に含めず、W11の停止/再起動とW12のcaller同期失敗を後続の完了条件にする。
 Claude R2で見つかったensureの反復起動と接続/有効化の曖昧さを、standalone接続前にW08と停止/ensureの先行fixture試験を行い、接続PR自身でW11の製品統合条件を満たす順序へ修正する。
 短命状態fileや内部optionの方式は未採用で、実writer接続より先に拒否応答と再起動の手段を固定して試験する。
+R3はblocker0件、要修正1件で、設計一ファイルの手順5/6へfactoryと全参加writerのW11再確認を追記した。
+3往復後の局所修正ルールに従い、主セッションが文書整合を確認して収束とする。製品fixtureと実runtimeは未実行のままである。
+PR #360はレビュー修正後にマージ可能とし、順序は#351→#352→#353→#354→#356→#357→#358→#359→#360である。
 
 ## 起票していない候補
 
