@@ -575,6 +575,21 @@ offsetを持つsubclass viewに入力自身と背後ArrayBufferの独自getter�
 Claude R1はblockerと要修正0件に収束した。後続prepareの未追跡source/testはこのPRと全体検証に含めていない。
 この修正を基点に、後続prepare manifestを別ブランチで検証する。
 
+prepare manifestは`codex/question-capsule-prepare-manifest-209-20261010`で、基点は#341の`b07e63b`である。
+操作、store、source/targetの指紋、完全scopeの選択集合、使用chunk割当順と通常上限を独立v1形式で保持する。
+局所codecは有限件数とfield上限、全入口の実pretty JSON 16 MiB政策を検査する。
+byte証拠の検査は保存された選択とUUID、上限でraw plannerを再実行し、全source/target指紋と渡されたtarget byte列の完全一致を要求する。
+成功は渡された材料の一致だけであり、保存許可や復旧許可ではない。
+後続は旧Q/CPの元byte列を保持する質問側の明示prepared形式を検証する。
+anchor/Iは固定した外部正本として扱い、既存Q3へ未知fieldを足さない。実保存、排他、atomicピーク、cold継続とruntimeは後続に残る。
+個別10件が成功し、#339で失敗していたsource backing ArrayBuffer getterも0回で検査を通った。
+両providerと混在、CPなし、raw空白と重複key、指紋とstore・選択・target byteの改変、件数と文字列予算、compact rawは収まるがpretty encodeが超過する全入口の拒否、getter/Proxy非実行と入力不変を確認した。
+構文と差分、CodeGraph変更後同期と調査も成功した。
+[PR #342](https://github.com/ktysne/agent-cockpit/pull/342)の`f7e7894`で追跡済み全体の再実行は2,726件成功、1件skip、失敗0件だった。skipはWindows実symlink権限による。
+初回は既存issuer統合テストがファイル単位で失敗したが、単独10件と全体再実行では成功し、原因は未特定である。初回ログも保持した。
+Claude R1はblockerと要修正0件に収束した。Bの改変はbyte証拠だけでは検出せず、信頼する設定の正本との照合は保存接続時に別途要求する。
+後続prepared materialの未追跡source/testはこのPRと全体検証に含めていない。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
