@@ -645,7 +645,14 @@ child-processを起動できない初回経路の未実施を分け、昇格実�
 before-renameの残留tempではfresh openを拒否し、after-rename-before-readbackでは観測した既知byte境界から再開した。
 容量不足の移行writeなし、停止後の同instance再試行拒否、close/drain、凍結facade、欠落と改変と未知entryも確認した。
 3ファイルの構文、空白、CodeGraph変更後同期と調査は成功した。
-全体検証と指定Claudeレビューへ進み、標準runtime、外process排他、OS耐久性は未達として扱う。
+追跡済み全体テストは`d8cf39c`で2780件成功、失敗0件、既存とworkspaceのWindows symlink権限による2件skipだった。
+指定Claude R1の要修正2件をtest側で修正し、関連テストは25件成功、失敗0件、Windows symlink権限による1件skipだった。
+全所有childの終了確認後に所有rootを回収し、seed済み四正本から独立計算した元予約と追加予約を照合する。
+helper本体は変えていないため、全体検証は上記commit、修正後は関連テストの結果を併記する。
+fresh-processはclaude、faultはclaudeとcodex、I grantはclaudeで確認したため、全providerと全条件の組合せは未確認である。
+fixtureのpause通知はIPC親の有無に依存し、同process試験のpause待ちは約1秒のpoll上限を持つ。
+closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
+標準runtime、外process排他、OS耐久性は未達として扱う。
 
 ## 起票していない候補
 

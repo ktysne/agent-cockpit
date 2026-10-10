@@ -13,6 +13,13 @@ const {
   FILE_BASENAMES,
   recoverFixtureWorkspace,
 } = require('./helpers/question-capsule-migration-workspace');
+const { createQuestionCapsuleMigrationPlanFixture } = require('./helpers/question-capsule-migration-plan-fixtures');
+const { planQuestionCapsuleFileMigration } = require('../src/server/question-capsule-migration-plan');
+const { createQuestionCapsulePrepareManifest } = require('../src/server/question-capsule-prepare-manifest-codec');
+const { createQuestionCapsulePreparedMaterial } = require('../src/server/question-capsule-prepared-material-codec');
+const { assessQuestionCapsuleMigrationCapacity } = require('../src/server/question-capsule-migration-capacity');
+const { decodeSourceBytes } = require('../src/server/reclamation-json-codec');
+const { MAX_SOURCE_BYTES } = require('../src/server/reclamation-capacity-bounds');
 const {
   decodeCapsuleCheckpointV4Local,
   encodeCapsuleCheckpointV4Local,
@@ -37,6 +44,83 @@ function requirements(provider, scenario) {
   return REQUIREMENTS.get(key);
 }
 
+function metadataFor(provider, scenario) {
+  const options = provider === 'mixed'
+    ? { provider: 'claude', secondaryProvider: 'codex', ordinaryQuestionSelected: true }
+    : { provider, ordinaryQuestionSelected: true };
+  if (scenario === 'checkpoint-null') options.internalQuestionIds = ['internal-4'];
+  const fixture = createQuestionCapsuleMigrationPlanFixture(options);
+  const normalByteLimitsBySlot = structuredClone(fixture.input.normalByteLimitsBySlot);
+  if (scenario === 'checkpoint-null') {
+    normalByteLimitsBySlot.checkpoint = null;
+    normalByteLimitsBySlot.instructions = null;
+  }
+  return { fixture, normalByteLimitsBySlot };
+}
+
+function independentReservationFromSeededBytes(files, provider, scenario) {
+  const { fixture, normalByteLimitsBySlot } = metadataFor(provider, scenario);
+  const sourceBytes = {
+    anchor: files.get(FILE_BASENAMES.anchor),
+    questions: files.get(FILE_BASENAMES.questions),
+    checkpoint: files.get(FILE_BASENAMES.checkpoint) ?? null,
+    instructions: files.get(FILE_BASENAMES.instructions) ?? null,
+  };
+  assert.ok(sourceBytes.anchor && sourceBytes.questions);
+  assert.equal(sourceBytes.checkpoint === null, scenario === 'checkpoint-null');
+  assert.equal(sourceBytes.instructions === null, scenario === 'checkpoint-null');
+
+  const plannerInput = {
+    sourceBytes,
+    normalByteLimitsBySlot,
+    selection: structuredClone(fixture.input.selection),
+    operationId: fixture.input.operationId,
+    chunkIds: [...fixture.input.chunkIds],
+  };
+  const manifest = createQuestionCapsulePrepareManifest(plannerInput);
+  const plan = planQuestionCapsuleFileMigration(plannerInput);
+  const targetBytes = {
+    questions: plan.targets.questions.bytes,
+    checkpoint: plan.targets.checkpoint?.bytes ?? null,
+  };
+  const material = createQuestionCapsulePreparedMaterial({
+    manifest: manifest.manifest,
+    sourceBytes,
+    targetBytes,
+  });
+  const assessment = assessQuestionCapsuleMigrationCapacity({
+    materialBytes: material.bytes,
+    anchorBytes: sourceBytes.anchor,
+    instructionBytes: sourceBytes.instructions,
+    expectedNormalByteLimitsBySlot: normalByteLimitsBySlot,
+  });
+
+  function oldSlotBytes(measurement) {
+    if (measurement === null) return 0;
+    assert.ok(Number.isSafeInteger(measurement.rawCurrentBytes) && measurement.rawCurrentBytes >= 0);
+    assert.ok(Number.isSafeInteger(measurement.reservedBytes) && measurement.reservedBytes >= 0);
+    return Math.max(measurement.rawCurrentBytes, measurement.reservedBytes);
+  }
+
+  const baselineBySlot = {
+    anchor: oldSlotBytes(assessment.measurements.anchor),
+    instructions: oldSlotBytes(assessment.measurements.instructions),
+    questions: oldSlotBytes(assessment.measurements.source.questions),
+    checkpoint: oldSlotBytes(assessment.measurements.source.checkpoint),
+  };
+  const baselineBytes = Object.values(baselineBySlot).reduce((sum, bytes) => sum + bytes, 0);
+  assert.ok(Number.isSafeInteger(baselineBytes));
+
+  const protectedTotals = Object.values(assessment.boundaries).map((boundary) => boundary.protectedTotalBytes);
+  const conditionalTemps = Object.values(assessment.singleTempCandidates)
+    .map((candidate) => candidate.conditionalReservationBytes);
+  const allOperationCandidates = [...protectedTotals, ...conditionalTemps];
+  assert.ok(allOperationCandidates.length > 0);
+  assert.ok(allOperationCandidates.every((bytes) => Number.isSafeInteger(bytes) && bytes >= 0));
+  const operationBytes = Math.max(...allOperationCandidates);
+  return { baselineBytes, operationBytes, totalBytes: baselineBytes + operationBytes, baselineBySlot };
+}
+
 async function readKnownFiles(root) {
   const result = new Map();
   for (const basename of WORKSPACE_FILES) {
@@ -56,9 +140,10 @@ async function assertKnownFilesEqual(root, expected) {
 }
 
 function spawnFixtureChild(input) {
+  const { cleanup, ...childInput } = input;
   let child;
   try {
-    child = fork(CHILD_PATH, [JSON.stringify(input)], {
+    child = fork(CHILD_PATH, [JSON.stringify(childInput)], {
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
   } catch (error) {
@@ -68,19 +153,36 @@ function spawnFixtureChild(input) {
   const queued = [];
   const waiters = [];
   let exitInfo = null;
-  const exit = new Promise((resolve) => {
-    child.once('exit', (code, signal) => {
-      exitInfo = { code, signal };
-      resolve(exitInfo);
-      for (const waiter of [...waiters]) {
-        clearTimeout(waiter.timer);
-        waiter.reject(new Error(`child exited before ${waiter.type}: ${code}/${signal}`));
-      }
-      waiters.length = 0;
-    });
+  let spawnError = null;
+  let resolveExit;
+  const exit = new Promise((resolve) => { resolveExit = resolve; });
+
+  function rejectWaiters(error) {
+    for (const waiter of [...waiters]) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    waiters.length = 0;
+  }
+
+  function finishExit(result) {
+    if (exitInfo !== null) return;
+    exitInfo = result;
+    resolveExit(exitInfo);
+    rejectWaiters(new Error(`child exited before requested message: ${result.code}/${result.signal}`));
+  }
+
+  child.once('exit', (code, signal) => finishExit({ code, signal }));
+  child.on('error', (error) => {
+    spawnError = error;
+    rejectWaiters(error);
+    if (child.pid === undefined) finishExit({ code: null, signal: null, error });
   });
 
   child.on('message', (message) => {
+    if (message?.type === 'created' && typeof message.root === 'string') {
+      cleanup.registerRoot(message.root, input.maxAdditionalBytes);
+    }
     const index = waiters.findIndex((waiter) => waiter.type === message?.type);
     if (index === -1) {
       queued.push(message);
@@ -94,37 +196,78 @@ function spawnFixtureChild(input) {
   function waitFor(type) {
     const index = queued.findIndex((message) => message?.type === type);
     if (index !== -1) return Promise.resolve(queued.splice(index, 1)[0]);
-    if (exitInfo) return Promise.reject(new Error(`child exited before ${type}: ${exitInfo.code}/${exitInfo.signal}`));
+    if (exitInfo) return Promise.reject(spawnError || new Error(`child exited before ${type}: ${exitInfo.code}/${exitInfo.signal}`));
     return new Promise((resolve, reject) => {
       const waiter = { type, resolve, reject, timer: null };
       waiter.timer = setTimeout(() => {
         const waiterIndex = waiters.indexOf(waiter);
         if (waiterIndex !== -1) waiters.splice(waiterIndex, 1);
         reject(new Error(`timed out waiting for child ${type}`));
-        child.kill();
       }, CHILD_TIMEOUT_MS);
       waiters.push(waiter);
     });
   }
 
-  return { child, exit, waitFor };
+  const handle = { child, exit, waitFor, get exitInfo() { return exitInfo; }, get spawnError() { return spawnError; } };
+  cleanup.registerChild(handle);
+  return handle;
 }
 
 async function killAndWait(childHandle) {
-  if (childHandle.child.exitCode !== null || childHandle.child.signalCode !== null) {
-    return childHandle.exit;
+  if (childHandle.exitInfo !== null) return childHandle.exit;
+  if (childHandle.spawnError && childHandle.child.pid === undefined) return childHandle.exit;
+  if (childHandle.child.exitCode === null && childHandle.child.signalCode === null) {
+    try {
+      childHandle.child.kill('SIGKILL');
+    } catch (error) {
+      if (childHandle.exitInfo === null) throw error;
+    }
   }
-  childHandle.child.kill('SIGKILL');
   return childHandle.exit;
 }
 
-async function createFreshRecovery(input) {
+function registerOwnedCleanup(t) {
+  const children = new Set();
+  const roots = new Map();
+  const cleanup = {
+    registerChild(child) { children.add(child); },
+    registerRoot(root, maxAdditionalBytes) { roots.set(root, maxAdditionalBytes); },
+    forgetRoot(root) { roots.delete(root); },
+  };
+  t.after(async () => {
+    let allChildrenExited = true;
+    for (const child of children) {
+      try {
+        await killAndWait(child);
+      } catch (error) {
+        allChildrenExited = false;
+        console.error(`fixture child cleanup failed: ${error?.message || error}`);
+      }
+    }
+    if (!allChildrenExited) {
+      for (const root of roots.keys()) console.error(`fixture root cleanup deferred while a child may run: ${root}`);
+      return;
+    }
+    for (const [root, maxAdditionalBytes] of roots) {
+      try {
+        const owner = await recoverFixtureWorkspace({ root, maxAdditionalBytes });
+        await owner.dispose();
+      } catch (error) {
+        console.error(`fixture root cleanup left unchanged: ${root}: ${error?.code || error?.message || error}`);
+      }
+    }
+  });
+  return cleanup;
+}
+
+async function createFreshRecovery(input, cleanup) {
   const childHandle = spawnFixtureChild({
     command: 'recover',
     root: input.root,
     maxAdditionalBytes: input.maxAdditionalBytes,
     failurePoint: input.failurePoint ?? null,
     pauseAfterBoundary: input.pauseAfterBoundary ?? null,
+    cleanup,
   });
   return childHandle;
 }
@@ -168,16 +311,28 @@ test('native migration succeeds for both providers, mixed periods, null checkpoi
       });
       try {
         const before = await readKnownFiles(workspace.root);
+        const independent = independentReservationFromSeededBytes(before, provider, scenario);
+        const estimate = requirements(provider, scenario);
+        assert.equal(estimate.baselineBytes, independent.baselineBytes);
+        assert.equal(estimate.operationBytes, independent.operationBytes);
+        assert.equal(estimate.maxAdditionalBytesForStart, independent.totalBytes);
+        assert.equal(maxBudget(provider, scenario), independent.totalBytes);
+        if (scenario === 'checkpoint-null') {
+          assert.equal(before.has(FILE_BASENAMES.instructions), false);
+        } else {
+          const instructionStore = decodeSourceBytes(before.get(FILE_BASENAMES.instructions), MAX_SOURCE_BYTES).value;
+          assert.equal(instructionStore.migrationAllowance === null, scenario !== 'instruction-grant');
+        }
         const initial = workspace.status();
         assert.equal(initial.status, 'source');
-        assert.equal(initial.baselineLeaseBytes, requirements(provider, scenario).baselineBytes);
+        assert.equal(initial.baselineLeaseBytes, independent.baselineBytes);
         assert.equal(initial.operationLeaseBytes, 0);
 
         const result = await workspace.start();
         assert.equal(result.status, 'complete');
         assert.equal(result.boundary, 'complete');
         assert.equal(result.operationLeaseHeld, true);
-        assert.ok(result.operationLeaseBytes > 0);
+        assert.equal(result.operationLeaseBytes, independent.operationBytes);
         assert.equal(result.migrationWriteCount, scenario === 'checkpoint-null' ? 2 : 3);
 
         const after = await readKnownFiles(workspace.root);
@@ -198,7 +353,7 @@ test('native migration succeeds for both providers, mixed periods, null checkpoi
         const closed = await workspace.close();
         assert.equal(closed.operationLeaseBytes, 0);
         assert.equal(closed.operationLeaseHeld, false);
-        assert.ok(closed.baselineLeaseBytes > 0);
+        assert.equal(closed.baselineLeaseBytes, independent.baselineBytes);
         const disposed = await workspace.dispose();
         assert.equal(disposed.baselineLeaseBytes, 0);
       } finally {
@@ -229,14 +384,20 @@ test('source recovery reports unprepared without starting migration writes', asy
 });
 
 test('operation-capacity shortage leaves seeded source files unchanged and takes no migration write', async () => {
-  const requirements = estimateFixtureRequirements({ provider: 'claude', scenario: 'normal' });
+  const capacityLimit = maxBudget('claude', 'normal') - 1;
   const workspace = await createFixtureWorkspace({
     provider: 'claude',
     scenario: 'normal',
-    maxAdditionalBytes: requirements.maxAdditionalBytesForStart - 1,
+    maxAdditionalBytes: capacityLimit,
   });
   try {
     const before = await readKnownFiles(workspace.root);
+    const independent = independentReservationFromSeededBytes(before, 'claude', 'normal');
+    const estimate = requirements('claude', 'normal');
+    assert.equal(estimate.baselineBytes, independent.baselineBytes);
+    assert.equal(estimate.operationBytes, independent.operationBytes);
+    assert.equal(capacityLimit, independent.totalBytes - 1);
+    assert.equal(workspace.status().baselineLeaseBytes, independent.baselineBytes);
     const result = await workspace.start();
     assert.equal(result.status, 'blocked');
     assert.equal(result.blockedReason, 'reclamation_capacity_exceeded');
@@ -282,12 +443,14 @@ test('close drains a paused operation, prevents its next boundary, and is idempo
 });
 
 test('a fresh process resumes only from a known saved boundary and reports final provenance as unknown', async (t) => {
+  const cleanup = registerOwnedCleanup(t);
   const provider = 'claude';
   const scenario = 'normal';
   const maxAdditionalBytes = maxBudget(provider, scenario);
   const first = spawnFixtureChild({
     command: 'seed-and-start', provider, scenario, maxAdditionalBytes,
     failurePoint: null, pauseAfterBoundary: 'prepared',
+    cleanup,
   });
   if (first.unavailable) {
     t.skip(`fresh-process execution is unavailable: ${first.unavailable.code}`);
@@ -300,18 +463,30 @@ test('a fresh process resumes only from a known saved boundary and reports final
 
   const second = await createFreshRecovery({
     root: created.root, maxAdditionalBytes, pauseAfterBoundary: 'checkpoint_moved',
-  });
+  }, cleanup);
+  if (second.unavailable) {
+    t.skip(`fresh-process recovery is unavailable: ${second.unavailable.code}`);
+    return;
+  }
   const moved = await second.waitFor('paused');
   assert.equal(moved.boundary, 'checkpoint_moved');
   await killAndWait(second);
 
-  const third = await createFreshRecovery({ root: created.root, maxAdditionalBytes });
+  const third = await createFreshRecovery({ root: created.root, maxAdditionalBytes }, cleanup);
+  if (third.unavailable) {
+    t.skip(`fresh-process recovery is unavailable: ${third.unavailable.code}`);
+    return;
+  }
   const completed = await third.waitFor('result');
   assert.equal(completed.result.outcome, 'resumed_operation');
   assert.equal(completed.result.boundary, 'complete');
   assert.equal((await third.exit).code, 0);
 
-  const fourth = await createFreshRecovery({ root: created.root, maxAdditionalBytes });
+  const fourth = await createFreshRecovery({ root: created.root, maxAdditionalBytes }, cleanup);
+  if (fourth.unavailable) {
+    t.skip(`fresh-process recovery is unavailable: ${fourth.unavailable.code}`);
+    return;
+  }
   const alreadyMigrated = await fourth.waitFor('result');
   assert.equal(alreadyMigrated.result.outcome, 'already_migrated_representation');
   assert.equal(alreadyMigrated.result.operationProvenance, 'unknown');
@@ -319,17 +494,20 @@ test('a fresh process resumes only from a known saved boundary and reports final
 
   const owner = await recoverFixtureWorkspace({ root: created.root, maxAdditionalBytes });
   await owner.dispose();
+  cleanup.forgetRoot(created.root);
 });
 
 test('each fixed writer failure either blocks on an orphan or resumes from the exact renamed boundary', async (t) => {
   for (const failurePoint of FAILURE_POINTS) {
     await t.test(failurePoint, async (subtest) => {
-      const provider = 'codex';
+      const cleanup = registerOwnedCleanup(subtest);
+      const provider = failurePoint.startsWith('question_prepare') ? 'codex' : 'claude';
       const scenario = 'normal';
       const maxAdditionalBytes = maxBudget(provider, scenario);
       const writer = spawnFixtureChild({
         command: 'seed-and-start', provider, scenario, maxAdditionalBytes,
         failurePoint, pauseAfterBoundary: null,
+        cleanup,
       });
       if (writer.unavailable) {
         subtest.skip(`fresh-process execution is unavailable: ${writer.unavailable.code}`);
@@ -341,17 +519,26 @@ test('each fixed writer failure either blocks on an orphan or resumes from the e
       assert.equal((await writer.exit).code, 0);
 
       if (failurePoint.endsWith('_before_rename')) {
-        const recovery = await createFreshRecovery({ root: created.root, maxAdditionalBytes });
+        const recovery = await createFreshRecovery({ root: created.root, maxAdditionalBytes }, cleanup);
+        if (recovery.unavailable) {
+          subtest.skip(`fresh-process recovery is unavailable: ${recovery.unavailable.code}`);
+          return;
+        }
         const failure = await recovery.waitFor('error');
         assert.equal(failure.code, 'unresolved_atomic_temp_or_orphan');
         assert.notEqual((await recovery.exit).code, 0);
         await removeOwnedWriterTemp(created.root);
         const owner = await recoverFixtureWorkspace({ root: created.root, maxAdditionalBytes });
         await owner.dispose();
+        cleanup.forgetRoot(created.root);
         return;
       }
 
-      const recovery = await createFreshRecovery({ root: created.root, maxAdditionalBytes });
+      const recovery = await createFreshRecovery({ root: created.root, maxAdditionalBytes }, cleanup);
+      if (recovery.unavailable) {
+        subtest.skip(`fresh-process recovery is unavailable: ${recovery.unavailable.code}`);
+        return;
+      }
       const result = await recovery.waitFor('result');
       if (failurePoint === 'question_target_after_rename_before_readback') {
         assert.equal(result.result.outcome, 'already_migrated_representation');
@@ -362,6 +549,7 @@ test('each fixed writer failure either blocks on an orphan or resumes from the e
       assert.equal((await recovery.exit).code, 0);
       const owner = await recoverFixtureWorkspace({ root: created.root, maxAdditionalBytes });
       await owner.dispose();
+      cleanup.forgetRoot(created.root);
     });
   }
 });
