@@ -31,9 +31,9 @@ function createSource(t, values = {}) {
     hostId: 'host_test',
     homeScopeId: 'home_test',
     ownedSourceClaim: claim,
-    readNativeCurrent: async (request) => {
+    readNativeCurrent: async (request, scope) => {
       calls += 1;
-      return reader(request);
+      return reader(request, scope);
     },
   });
   const facade = getOwnedSource(created.capability);
@@ -208,4 +208,159 @@ test('Claude owned sources report unsupported and never invoke read transport', 
   assert.equal(result.status, 'unsupported');
   assert.equal(result.receipt, null);
   assert.equal(source.calls(), 0);
+});
+
+test('read scope exposes only frozen registration functions and release cancels once', async (t) => {
+  let scope;
+  let cancellations = 0;
+  let removedCallbacks = 0;
+  const source = createSource(t, {
+    readNativeCurrent: (request, value) => new Promise((resolve) => {
+      scope = value;
+      assert.equal(Object.isFrozen(request), true);
+      assert.deepEqual(Object.keys(request).sort(), ['leaseToken', 'requestToken']);
+      assert.equal(Object.isFrozen(scope), true);
+      assert.deepEqual(Object.keys(scope).sort(), ['isCancelled', 'registerCancel']);
+      assert.equal(Object.values(request.leaseToken).includes(scope), false);
+      assert.equal(Object.values(request.leaseToken.source).includes(scope), false);
+      assert.deepEqual(Object.keys(request.leaseToken).sort(), [
+        'active', 'connectionReceipt', 'id', 'reading', 'requestToken', 'source', 'subscriptions',
+      ].sort());
+      assert.deepEqual(Object.keys(request.leaseToken.source).sort(), [
+        'activeLease', 'claim', 'currentContext', 'currentIdentity', 'facade', 'homeScopeId',
+        'hostId', 'invalidated', 'nextLeaseId', 'owner', 'provider', 'readNativeCurrent',
+        'ready', 'terminalSubscribers', 'terminals',
+      ].sort());
+      const unsubscribe = scope.registerCancel(() => { removedCallbacks += 1; });
+      unsubscribe();
+      unsubscribe();
+      scope.registerCancel(() => { throw new Error('isolated callback'); });
+      scope.registerCancel(() => { cancellations += 1; resolve(null); });
+    }),
+  });
+  const read = source.facade.readCurrent(source.lease);
+  assert.equal(source.facade.releaseReadLease(source.lease), true);
+  assert.equal(scope.isCancelled(), true);
+  assert.equal(cancellations, 1);
+  assert.equal(source.facade.releaseReadLease(source.lease), false);
+  assert.equal((await read).status, 'unknown');
+  assert.equal(removedCallbacks, 0);
+  scope.registerCancel(() => { cancellations += 1; })();
+  assert.equal(cancellations, 2);
+});
+
+test('synchronous release before read registration cancels late registration immediately', async (t) => {
+  const source = createSource(t);
+  source.controller.observeIdentity(IDENTITY);
+  source.controller.observeContext(IDENTITY, CONTEXT);
+  let notified = 0;
+  let releaseResult;
+  source.setReader((request, scope) => {
+    releaseResult = source.facade.releaseReadLease(source.lease);
+    const unsubscribe = scope.registerCancel(() => { notified += 1; });
+    unsubscribe();
+    unsubscribe();
+    return { requestToken: request.requestToken, identity: IDENTITY, context: CONTEXT, activity: 'inProgress' };
+  });
+  assert.equal((await source.facade.readCurrent(source.lease)).status, 'unknown');
+  assert.equal(notified, 1);
+  assert.equal(releaseResult, true);
+  assert.equal(source.facade.checkLease(source.lease), false);
+});
+
+test('old scope cancellation reentry cannot cancel a newly acquired lease read', async (t) => {
+  const source = createSource(t);
+  source.controller.observeIdentity(IDENTITY);
+  source.controller.observeContext(IDENTITY, CONTEXT);
+  let newLease;
+  let newRead;
+  let newScope;
+  let finishNew;
+  let finishOld;
+  t.after(() => { finishOld?.(); finishNew?.(); });
+  source.setReader((request, scope) => new Promise((resolve) => {
+    finishOld = () => resolve(null);
+    scope.registerCancel(() => {
+      assert.equal(source.facade.checkLease(source.lease), false);
+      newLease = source.facade.acquireReadLease(Object.freeze({}));
+      source.setReader((nextRequest, nextScope) => new Promise((finish) => {
+        newScope = nextScope;
+        finishNew = () => finish({ requestToken: nextRequest.requestToken, identity: IDENTITY, context: CONTEXT, activity: 'inProgress' });
+      }));
+      newRead = source.facade.readCurrent(newLease);
+      resolve(null);
+    });
+  }));
+  const oldRead = source.facade.readCurrent(source.lease);
+  source.facade.releaseReadLease(source.lease);
+  assert.equal((await oldRead).status, 'unknown');
+  assert.equal(newScope.isCancelled(), false);
+  assert.equal(source.facade.checkLease(newLease), true);
+  finishNew();
+  const result = await newRead;
+  assert.equal(result.status, 'attested');
+  assert.equal(source.facade.consumeReadReceipt(newLease, result.receipt), true);
+});
+
+test('invalidate cancels all retained scopes after authority expires despite callback exceptions', async (t) => {
+  const source = createSource(t);
+  const scopes = [];
+  const finishes = [];
+  t.after(() => finishes.forEach((finish) => finish()));
+  const notifications = [];
+  const authorityAtNotification = [];
+  source.setReader((request, scope) => new Promise((resolve) => {
+    const index = scopes.length;
+    scopes.push(scope);
+    finishes.push(() => resolve(null));
+    scope.registerCancel(() => { throw new Error('cancel callback'); });
+    scope.registerCancel(() => {
+      notifications.push(index);
+      authorityAtNotification.push(source.facade.checkLease(index === 0 ? source.lease : nextLease));
+    });
+  }));
+  const first = source.facade.readCurrent(source.lease);
+  source.facade.releaseReadLease(source.lease);
+  const nextLease = source.facade.acquireReadLease(Object.freeze({}));
+  const second = source.facade.readCurrent(nextLease);
+  assert.equal(source.controller.invalidate(), true);
+  assert.equal(source.controller.invalidate(), false);
+  assert.deepEqual(notifications, [0, 1]);
+  assert.deepEqual(authorityAtNotification, [false, false]);
+  assert.equal(scopes.every((scope) => scope.isCancelled()), true);
+  finishes.forEach((finish) => finish());
+  assert.equal((await first).status, 'unknown');
+  assert.equal((await second).status, 'unknown');
+});
+
+test('normal read completion disposes callbacks without cancelling or invalidating its receipt', async (t) => {
+  const source = createSource(t);
+  let scope;
+  let cancellations = 0;
+  source.controller.observeIdentity(IDENTITY);
+  source.controller.observeContext(IDENTITY, CONTEXT);
+  source.setReader(({ requestToken }, value) => {
+    scope = value;
+    scope.registerCancel(() => { cancellations += 1; });
+    return { requestToken, identity: IDENTITY, context: CONTEXT, activity: 'inProgress' };
+  });
+  const result = await source.facade.readCurrent(source.lease);
+  assert.equal(scope.isCancelled(), false);
+  assert.equal(source.facade.consumeReadReceipt(source.lease, result.receipt), true);
+  scope.registerCancel(() => { cancellations += 1; });
+  source.facade.releaseReadLease(source.lease);
+  assert.equal(cancellations, 0);
+});
+
+test('a scope-ignoring reader remains pending after release until its own work settles', async (t) => {
+  let finish;
+  t.after(() => finish?.(null));
+  let settled = false;
+  const source = createSource(t, { readNativeCurrent: () => new Promise((resolve) => { finish = resolve; }) });
+  const pending = source.facade.readCurrent(source.lease).then((result) => { settled = true; return result; });
+  source.facade.releaseReadLease(source.lease);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  finish(null);
+  assert.equal((await pending).status, 'unknown');
 });

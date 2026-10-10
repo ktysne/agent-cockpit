@@ -359,3 +359,218 @@ ID-F11-B03 は ended tombstone と explicit order を検証する共通 kernel u
 対応する試験は [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) と [conversation-registry.test.js](../../test/conversation-registry.test.js) にある。
 
 この結果は passive registration bootstrap の適合に限り、fresh evidence reconciliation や Issue #177 全体の runtime 復旧を示さない。
+
+## 明示的回収factoryの操作受付と終了 (#209)
+
+`ID-F209-L01`は、ClaudeとCodexの実factory fixtureで共通の受付停止を確認するシナリオである。
+回収を明示的に有効にしたfactoryと、質問および指示serviceの保存を保持できるfixtureを能力条件とする。
+service queue、provider後着callback、質問timer、回収coreとschedulerを対象にする。
+
+保存を一度進行中に保持し、未着手の操作を追加してcloseを呼ぶ。
+close呼出し直後から新しいticketを発行せず、受付済み操作は成功、取消または失敗で終了し、ticketを一度だけ返すことを期待する。
+closeの完了時点で対象ticketが残らず、既存contextと保存処理のcloseも終了していることを観測する。
+後着callbackや保存済みtimerをclose後に呼んでも、新しい保存を開始しない。
+完了は保持点の明示解放とPromiseの終了で確認し、固定のsleepを成功条件にしない。
+
+contextの同期的な保存禁止とready拒否は、ticketのdrainを待つ前に行う。
+起動失敗とsettings解除からの同期close再入でも終了が循環しないことを確認する。
+回収無効の標準modeはgateを生成せず、既存APIとcloseの契約を保つ。
+providerの識別子、時刻と既存取消のerror codeの差を許容するが、追加送信、追加保存、受付再開、authorityの再発行は許容しない。
+
+両providerのfixture適合と実runtimeを分けて記録する。
+acceptedへの実到達と登録済みlistenerの後着拒否は、両providerで確認する。
+後着拒否はserviceへ登録したlistenerを直接呼ぶcontrolであり、adapter/routerを通した後着経路の確認ではない。
+listenerの保存中にcloseされるcontrolはunknownを両provider、appliedを現fixtureが対応するCodexで確認する。
+Claudeのlive appliedは未確認であり、cold checkpointのseedや別のcallbackで代用しない。
+このシナリオはnativeの長時間startやread待機の物理取消、外process排他、新schema保存許可、電源断耐久性、件数枠解放を証明しない。
+実Claude/Codex runtimeの適合は横断統合試験に残す。
+`4db527e`の新factory試験15件とgate単体7件を含む関連11ファイルは248件成功、失敗0、skip0である。
+同じheadの全体`npm test`は2802件成功、失敗0、Windows実symlink権限によるskip2である。
+このskip数には未実行のClaude live appliedと実runtimeを含めず、上記の未確認境界として別に扱う。
+
+## native起動待機の取消 (#209)
+
+`ID-F209-S01`は、実owned runnerとcompositionを使い、開始途中の停止で開始Promiseが終了することを確認する。
+Claudeは外部認証、spawn、初回入力write、context-readyの保持点を能力条件とする。
+Codexはinitialize、initialized通知、login開始と完了、thread開始、turn開始の応答またはwrite callbackを保持できることを条件とする。
+停止後に保持点を解放しても、次の起動段階、context、runtime proofを新たに発行しないことを期待する。
+停止前に発行済みのidentityは存在し得るが、停止後の再認可を許容しない。
+
+開始Promiseの終了と子プロセスの停止確認は別々に観測する。
+子のexit、closeと非activeが揃った場合だけ停止確認済みとし、欠ける場合は未確認のまま扱う。
+epoch、timeout、kill呼出しやPromiseの終了を物理停止の証拠にしない。
+保持点の明示解放と状態・eventの観測で確認し、固定sleepを成功条件にしない。
+任意注入runnerの未settled startをcompositionが一般に取消できるとは主張せず、負例はテスト側で明示解放する。
+
+providerごとのRPC、認証方式、既存error codeの差は許容するが、後着による起動再開とauthority再発行は許容しない。
+外部認証元の作業自体、観測readの取消とdrain、factory ticketへの接続と全I/O終了は対象外である。
+両providerのfixture結果と実runtimeを分けて記録し、実Claude/Codex runtimeの適合は横断統合試験に残す。
+今回のfixtureは通常起動profileで確認し、wait profile固有のtransport開始待機は未確認として分ける。
+Codexのwrite callback保留はinitialize RPC（応答先着）とinitialized通知で確認する。
+login、thread、turnの各RPCは応答待ちを確認し、それぞれのwrite callback保留は未確認である。
+停止後の追加writeは、後着解放前後のwrite履歴の直接比較で検出する。
+
+## native readのlease取消 (#209)
+
+`ID-F209-R01`は、実owned sourceとCodex runnerを接続したfixtureで、lease解放またはsource無効化によるread待機の終了を確認する。
+Claudeのnative readはunsupportedを期待し、transportを呼ばないことを確認する。
+両providerの実runtime結果は、このfixture結果とは別に記録する。
+
+Codexのloaded-listとthread-readについて、応答待ち、write callback待ち、応答先着、段階間の解放、write中の同期解放を保持点で再現する。
+次のreadやrunner停止を呼ばず、lease解放だけで元のreadがunknownへ終了し、後着応答からreceiptや追加RPCを作らないことを期待する。
+旧leaseの後着callbackと新leaseのreadを重ね、新しいreceiptと独立したrunnerへ取消が波及しないことを確認する。
+通常完了したreceiptの一度だけの消費と、timeout・provider拒否後のrunner生存を維持する。
+
+取消登録前の解放、取消済みscopeへの同期登録、二重取消、callback例外でも後始末を確認する。
+後着write拒否を未処理rejectionにせず、現generationのpipe故障は既存のfailureへ進め、旧generationのcallbackは新childを止めない。
+read取消はinstruction transportを一括取消しない。
+ただし同じleaseの解放はinstructionのauthorityも失効させるため、後着ACKの成功は期待しない。
+
+保持点の明示解放とPromise終了を観測し、固定sleepを成功条件にしない。
+追加scopeを無視する注入readerはpendingのまま残る負例として明示解放する。
+ラッパーの終了をproviderの元作業、raw write callback、collector、factoryのdrainや保存先所有の解放へ読み替えない。
+source `b70816d`の関連2ファイルはin-processで120件成功し、追加20件で保持点と負例を確認した。
+同sourceの全体`npm test`は2836件成功、失敗0、Windows実symlink権限skip2である。
+loaded-listのraw応答とwrite解放後のmicrotask取消で次RPC不送信を確認するが、内部continuationの各境界は独立計測していない。
+source無効化はsource単体で確認し、実runnerではglobal取消も行うstop経由で確認した。
+runnerは公開APIから新childへ再起動できないため、旧generationの後着writeエラーはstopped状態の不変までを確認し、新childへの影響は未確認である。
+実Claude/Codex runtimeのread取消は未実施である。
+
+## owned collectorの内部終了追跡 (#209)
+
+`ID-F209-C01`は、owned collectorの受付停止と非同期処理の終了追跡を確認する。
+実runnerとcompositionのfixtureを能力条件とし、Codexは保留したreadの協調取消、Claudeはunsupported readと共通の接続停止を期待する。
+公開collectorとcomposition wrapperの項目、options許可項目、通常disconnect後の再接続を維持する。
+
+内部の恒久受付停止後にconnect、observe、reconcileを開始せず、collectorのproofとpositive observationを返さない。
+外側compositionのauthority失効と実read取消には、別途disconnectまたはnative stopが必要である。
+恒久停止だけで元のreadが終了したとは扱わない。
+connect、observe、reconcileの受付済み処理が、結果判定と内部後始末まで終了してからprivate drainを完了する。
+同じconnect試行のPromiseを共有し、reconcileの内部observeを重複計上しない。
+
+再入可能なbinding、観測callback、ticket取得より先に処理を登録する。
+ticket取得中のconnect再入、受付停止と例外でも二重開始や未登録の仕事を作らない。
+ticket解放の例外でも記録の終了を通知し、例外を成功へ変換しない。
+接続確立後のticket解放例外では接続が残り得るため、呼び出し側がdisconnectで回収する。
+ticket取得関数は最初の処理受付前に一度だけ設定し、受付履歴がある場合と停止後は拒否する。
+
+旧接続の遅延完了またはrejectが、新しい接続のPromise、state、loanを変更しないことを確認する。
+停止後のnative eventと同期callbackからの再入でもpositive observationを再発行しない。
+非協調bindingのreadは明示解放までdrainを未完了に保ち、epoch、timeoutやPromise.raceを終了の証拠にしない。
+保持点とPromise終了を観測し、失敗時にも保留点を明示解放する。
+
+内部binding単体と実runnerのfixture結果、両providerの実runtimeを分けて記録する。
+factory ticket接続、factory close順、子の物理停止、provider元作業のdrainと保存ownership解放はこの段階の対象外である。
+PR #356のsource `f449304`は関連145件と全体2849件が成功し、失敗0、全体はWindows実symlink権限skip2である。
+ticket解放のfalsy例外理由を保ち、先行する失敗理由を後始末の例外で置き換えないことを確認した。
+実Claude/Codex runtimeとfactory ticket接続は未実施である。
+
+## native factoryの起動・観測と終了追跡 (#209)
+
+`ID-F209-L02`は、明示的回収factoryと実owned runner/compositionのfixtureで、native startとcollector処理をfactory寿命へ接続する。
+ClaudeとCodexの通常起動、Codexの観測read、共通のcollector接続と停止を能力条件とする。
+Claudeのreadはunsupportedを期待し、実runtimeの結果とは分けて記録する。
+
+closeは同期に新規ticketを拒否し、全collectorの受付停止後に全nativeの停止を開始する。
+service closeが保留されても停止開始を遅らせず、一件の停止保留や例外で他entryの停止開始を妨げない。
+受付済みstartとcollector処理は結果判定および後始末までticketを保持し、非協調処理が未完了ならcloseも未完了のままとする。
+起動失敗のstop coreはstart自身、collector drain、factory gate drainを待たず、自己待ちを作らない。
+
+start、stop、closeの同期再入は先行Promiseを共用し、二重spawn、二重停止、停止後のrunning復活を許容しない。
+生成済みcollectorとcleanupはcallback前にentryへ登録する。
+collector準備失敗は元の同期throwを保持し、生成済み資源の後始末が終わるまでticketを返さない。
+後始末の失敗は元のthrowを置き換えず、後続closeで確認する。
+control不在やbind拒否ではcollectorを公開せず、ticketがゼロでもdrain成功と扱わない。
+entry登録後のrouter attach失敗とdirect collector作成失敗も後始末の待機対象とする。
+
+初期化失敗でadmission集合を参照でき、composition未生成の空集合へnative停止を呼ばない。
+contextの同期保存禁止とready拒否はticket drainより先に始め、標準modeでは既存停止順と返却条件を維持する。
+物理停止はexit、closeと非activeを独立観測し、wrapper settlementだけで成功へ変換しない。
+保持点はfinallyで明示解放し、callback内で捕捉されるassertを成功の証拠にしない。
+
+外部認証元作業、raw provider I/O、保存ownership解放順、電源断耐久性、新schema接続は対象外である。
+provider固有RPCと既存error codeの差は許容するが、追加送信、新規受付、authority再発行とcleanup失敗の成功変換は許容しない。
+両providerのfixture結果と実runtimeを別記し、未実行の保持点を成功へ合算しない。
+補強前の関連4ファイル108件と、最初のtest-only監査修正後のlifetime51件が成功した。
+Claude R1後の標準mode例外保持のtest補強を含むlifetime52件はすべて成功した。
+通常起動と非協調startの保留は両provider、観測readと故障注入はCodex fixtureを中心に確認する。
+構築中にcollector返却前のclose再入を起こす試験はprivate injectionであり、通常製品のcallback到達性とは分ける。
+固定head `9379162`の全体テストは2885件成功、失敗0、Windows実symlink権限によるskip2である。
+52件へのtest補強後は全体未再実行で、検証source `d253639`以降に製品sourceの差分はない。
+実Claude/Codex runtimeは未実施である。
+
+## native readのwrite故障分類 (#355)
+
+`ID-F209-R02`はCodexのowned readonly RPCのwrite故障を、provider拒否と論理取消から区別する。
+対象RPCは`thread/loaded/list`と`thread/read`で、Claudeの同等readはunsupportedのままとする。
+
+取消前にwrite callbackがErrorを返す場合、readはunknownとなり、現行runnerは`failed`と`stdin_write_failed`を記録して子の停止を一度だけ開始する。
+writeの同期throwはundefined、null、false、0、空文字を含めて物理write故障に包む。
+callbackのnullまたはundefinedはNode Writableの成功として扱い、同期throwと混同しない。
+providerのJSON-RPC refusalとread timeoutはreadをunknownにするが、物理write故障を伴わなければrunnerをfailedへ変えない。
+
+lease取消後の後着write failureは同じrunner generationが現行の場合に失敗を記録する。
+stopでgenerationが失効した後は、旧callbackがfailureCodeを作ったりchild停止を追加したりしない。
+同じrunnerを再startするAPIは無いため、別runnerを旧generationの後継として検証したとは扱わない。
+read専用処理の分類だけを変更し、instruction ACKとbulk取消の契約を広げない。
+
+FakeChildのwrite保持点と実owned sourceを使うfixtureで確認する。
+実Codex runtime、実stdio故障、外部認証元作業は未実施であり、fixtureの合格へ混ぜない。
+
+runnerとsourceの関連123件は成功し、失敗0件である。
+固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
+Claude R1はblockerと要修正が0件で収束した。
+実Codex runtimeと実stdio故障は未実施である。
+
+## 回収factoryの二段階終了とprocess内所有保持 (#209)
+
+`ID-F209-O01`は明示的回収factoryで、同期の保存禁止と所有権の最終解放を分けるfixture契約である。
+ClaudeとCodexの同一終了条件を確認し、provider固有read能力と実runtimeの結果を分ける。
+
+第一段階は新規factory ticket、context保存、ready待機とwriter受付を停止する。
+受付済みwriteとreadback、writer tail、context startup/I/O、coordinator startupのsettlement後にpersistenceの新規enqueueを停止し、そのpending queueをdrainする。
+backend.closeとcoordinator.closeはfactory全体drainを逆待ちせず、Map所有権と実容量leaseを解放しない。
+
+設定購読解除とrouter.closeの失敗も保守的な所有保持の対象とする。
+これら二つの個別故障を対照にするfixtureは未追加である。
+managed collectorの生成前入力検査失敗によるadmission退役の個別fixtureも未追加で、bind失敗後のcleanupと区別する。
+
+第二段階は全native物理停止と隔離、collectorと準備失敗cleanup、serviceに依存しないwriter tail、schedulerとfactory gate、context/persistence I/Oの終了確認後にだけ行う。
+容量leaseの解放成功後に同ownerのpath Mapを解放し、解放完了のフラグを先行させない。
+leaseの実release後もstatusが不明なら、path再取得と同factoryの再起動を拒否する。
+実容量予算の減少とpath所有の保持を別に観測し、繰返しcloseでreleaseを追加しないことを確認する。
+通常の保存失敗があっても独立に終了を確認できれば解放し、close中に捕捉した失敗があれば最初の理由を返す。
+停止またはdrainを確認できない場合はstickyな所有保持とし、timeout、後着通知、再closeとGCで自動解放しない。
+同じprocess寿命中の同path再取得は拒否する。
+
+所有保持となる回収factory.closeだけはcode `reclamation_ownership_retained`のAggregateErrorで返す。
+closeまたはstartup cleanup中に捕捉した最初の失敗はcauseのown propertyとerrors先頭へfalsy値も含めて保持し、保持理由もerrorsに残す。
+confirmed release後の保存失敗、standard mode、standalone context/coordinator/persistenceとnative.stop自体の既存エラーは維持する。
+
+保持fixtureはticket、native readとwrite/readbackを別々に保留し、保存禁止後もMap所有権と容量leaseの保持を確認する。
+正常終了後の同path再取得、保存失敗後の安全な解放、writer drain失敗、control不在、exit-only/close-only、lease release throw、初期化各段階の失敗、同期再入とbackend/coordinator経由の解放迂回拒否を対照にする。
+新ownerの取得後も旧provider callbackと旧backend保存がfile bytes/revisionを変えず、旧gateを開き直さないことを確認する。
+保持点はfinallyで解放し、同pathの保持試験に使ったrootを別試験へ流用しない。
+
+対象の所有権は同module内Mapとprocess内容量予算に限る。
+他module、process間lock、標準writer、任意filesystem writer、実runtime、OS耐久性とpower lossは未確認で、fixture成功へ合算しない。
+明示再確認と所有保持の詳細診断は別作業であり、この契約は可用性回復APIを含まない。
+
+検証sourceは`ed9e1b1`である。
+関連9ファイルは237件成功、失敗0、Windows実symlink権限によるskip1だった。
+この結果は最終の質問stop失敗記録と追加試験の前である。
+所有保持と保存失敗の監査補強後はcontextとfactoryの112件が成功し、最終contextの49件とcoordinatorの管理終了2件も成功した。
+実ticket、native readとwrite/readbackの保持中は容量leaseと同pathの取得拒否を確認し、保存失敗後はclose失敗の注入を足さずに安全な解放を確認した。
+stop失敗を後続成功で消さず、同期throwと非同期rejectのfalsy理由を保持する。
+固定head `5a3d50f`の全体テストは2792件成功、119件失敗、Windows実symlink権限によるskip2だった。
+本文回収とgrant解放の既存helperが、cloneしたpersistenceとcontextへ元のprivate controlを引き継がず起動を拒否されるため、helperの互換補強を行う。
+互換補強後は、lease解放状態が不明な場合の再起動拒否を含め、4試験群120件がすべて成功した。
+factory lifetimeの72件とquestion write隔離の16件も成功した。
+未知leaseの両provider対照では同じAggregateError、release一度だけ、直接のpath再取得拒否、保存済みgrant nullとnative送信0を確認した。
+初回全体失敗後はDraftを維持し、製品条件を弱めずhelperと試験期待値を修正した。
+Claude R1はblockerと要修正が0件で、任意提案の保持範囲を文書で明確化した。
+互換補強後の固定head `30f6e85`は全体2911件成功、失敗0、Windows実symlink権限によるskip2、228867.7931msだった。
+Claude R2もblockerと要修正が0件で、実originalへの転送とcache復元、未知leaseの期待値との整合を確認した。
+restartは旧factoryのclose拒否で止まり、同pathの新owner取得拒否は直接persistenceを作る対照で確認する。
+最終の字下げ整理と重複変数除去後も構文確認と未知leaseの2件が成功した。
+製品コードは全体検証headから不変で、軽微な整形と結果記録だけのため全体再実行とR3は省略した。

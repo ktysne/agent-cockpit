@@ -105,6 +105,46 @@ function createOwnedNativeSource(options) {
   };
   const capability = Object.freeze(Object.create(null));
   SOURCE_CAPABILITIES.set(capability, source);
+  const readScopes = new Set();
+  const leaseReadScopes = new WeakMap();
+
+  function createReadScope(leaseRecord) {
+    let cancelled = false;
+    let disposed = false;
+    const callbacks = new Set();
+    const notify = (callback) => { try { callback(); } catch {} };
+    const scope = {
+      capability: Object.freeze({
+        registerCancel(callback) {
+          if (typeof callback !== 'function') return () => {};
+          if (cancelled) { notify(callback); return () => {}; }
+          if (disposed) return () => {};
+          const registration = { callback };
+          callbacks.add(registration);
+          return () => callbacks.delete(registration);
+        },
+        isCancelled() { return cancelled; },
+      }),
+      cancel() {
+        if (cancelled || disposed) return;
+        cancelled = true;
+        const pending = [...callbacks];
+        callbacks.clear();
+        for (const registration of pending) notify(registration.callback);
+      },
+      dispose() {
+        disposed = true;
+        callbacks.clear();
+        readScopes.delete(scope);
+        leaseReadScopes.get(leaseRecord)?.delete(scope);
+      },
+    };
+    let scopes = leaseReadScopes.get(leaseRecord);
+    if (!scopes) { scopes = new Set(); leaseReadScopes.set(leaseRecord, scopes); }
+    scopes.add(scope);
+    readScopes.add(scope);
+    return scope;
+  }
 
   function checkSource() {
     return source.ready && !source.invalidated;
@@ -186,13 +226,14 @@ function createOwnedNativeSource(options) {
       leaseRecord.reading = true;
       const requestToken = Object.freeze(Object.create(null));
       leaseRecord.requestToken = requestToken;
+      const readScope = createReadScope(leaseRecord);
       let receiptIssued = false;
       try {
         const candidate = await source.readNativeCurrent(Object.freeze({
           leaseToken: leaseRecord,
           requestToken,
-        }));
-        if (!isLeaseRecordCurrent(leaseRecord) ||
+        }), readScope.capability);
+        if (readScope.capability.isCancelled() || !isLeaseRecordCurrent(leaseRecord) ||
             !candidate || typeof candidate !== 'object' || Array.isArray(candidate) ||
             !hasExactKeys(candidate, ['requestToken', 'identity', 'context', 'activity']) ||
             candidate.requestToken !== requestToken ||
@@ -225,6 +266,7 @@ function createOwnedNativeSource(options) {
       } catch {
         return unknownResult();
       } finally {
+        readScope.dispose();
         leaseRecord.reading = false;
         if (!receiptIssued && leaseRecord.requestToken === requestToken) leaseRecord.requestToken = null;
       }
@@ -265,6 +307,7 @@ function createOwnedNativeSource(options) {
       for (const subscription of leaseRecord.subscriptions) subscription.active = false;
       leaseRecord.subscriptions.clear();
       source.activeLease = null;
+      for (const scope of [...(leaseReadScopes.get(leaseRecord) || [])]) scope.cancel();
       return true;
     },
 
@@ -311,6 +354,7 @@ function createOwnedNativeSource(options) {
       }
       for (const subscription of source.terminalSubscribers) subscription.active = false;
       source.terminalSubscribers.clear();
+      for (const scope of [...readScopes]) scope.cancel();
       return true;
     },
     observeIdentity(value) {

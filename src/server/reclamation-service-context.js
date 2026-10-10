@@ -1,5 +1,8 @@
 'use strict';
 
+const LIFETIME_CONTROLS = new WeakMap();
+function getReclamationServiceContextControl(value) { return LIFETIME_CONTROLS.get(value) || null; }
+
 const { randomUUID } = require('node:crypto');
 const { types: utilTypes } = require('node:util');
 const {
@@ -35,9 +38,9 @@ const {
   normalizeQuestionReclamationAnchorV1Local,
 } = require('./question-reclamation-anchor-codec');
 const { decodeSourceBytes, encodeNormalized } = require('./reclamation-json-codec');
-const { consumeBoundedQuestionWriteFailure } = require('./reclamation-persistence');
+const { consumeBoundedQuestionWriteFailure, getReclamationPersistenceControl } = require('./reclamation-persistence');
 const { validateQuestionUncertainStoreWrite } = require('./question-uncertain-store-write');
-const { createReclamationMigrationCoordinator } = require('./reclamation-migration-coordinator');
+const { createReclamationMigrationCoordinator, getReclamationMigrationCoordinatorControl } = require('./reclamation-migration-coordinator');
 const {
   validateQuestionPeriodRetirementAnchorTransition,
   validateReclamationSnapshot,
@@ -282,6 +285,14 @@ function createReclamationServiceContext(value) {
   const input = captureOptions(value);
   const { persistence, configuredSlots, normalByteLimitsBySlot, capacityBudget } = input;
   const limitsForTransitions = fullLimits(configuredSlots, normalByteLimitsBySlot);
+  let managed = false;
+  let backendOperationStarted = false;
+  let persistenceOwner = null;
+  let coordinatorOwner = null;
+  let firstPhaseDone = false;
+  let finalPromise = null;
+  const retentionReasons = [];
+  const stopReceipts = [];
   let anchor = null;
   let stores = makeRecord(STORE_ORDER.map((slot) => [slot, null]));
   let coordinator = null;
@@ -352,9 +363,12 @@ function createReclamationServiceContext(value) {
     uncertainQuestions = questionCandidates;
     questionFailureCode = errorCodeFrom(error);
     localQuestionErrors.add(error);
-    try {
-      Promise.resolve(writersBySlot.questions.stop()).catch((stopError) => { block(stopError); });
-    } catch (stopError) { block(stopError); }
+    if (managed) recordWriterStop(writersBySlot.questions, block);
+    else {
+      try {
+        Promise.resolve(writersBySlot.questions.stop()).catch((stopError) => { block(stopError); });
+      } catch (stopError) { block(stopError); }
+    }
     return !blocked;
   }
 
@@ -462,7 +476,8 @@ function createReclamationServiceContext(value) {
     }
     if (writersBySlot !== null) {
       for (const slot of configuredSlots) {
-        try { Promise.resolve(writersBySlot[slot].stop()).catch(() => {}); } catch {}
+        if (managed) recordWriterStop(writersBySlot[slot]);
+        else { try { Promise.resolve(writersBySlot[slot].stop()).catch(() => {}); } catch {} }
       }
     }
   }
@@ -488,9 +503,18 @@ function createReclamationServiceContext(value) {
         },
         release() {
           if (released) return false;
+          if (!managed) {
+            released = true;
+            leaseReleased = true;
+            return acquired.release();
+          }
+          const result = acquired.release();
+          const latest = acquired.status();
+          requireValue(result === true && latest?.released === true && latest.bytes === 0,
+            'reclamation_capacity_release_unconfirmed');
           released = true;
           leaseReleased = true;
-          return acquired.release();
+          return result;
         },
         status() {
           return acquired.status();
@@ -505,7 +529,11 @@ function createReclamationServiceContext(value) {
     return Object.freeze({
       acquire(bytes) {
         acquireOrResize(lease === null ? bytes : Math.max(lease.status().bytes, bytes));
-        return lease;
+        return managed ? Object.freeze({
+          resize: nextBytes => lease.resize(nextBytes),
+          status: () => lease.status(),
+          release: () => false,
+        }) : lease;
       },
       status: () => capacityBudget.status(),
     });
@@ -539,6 +567,8 @@ function createReclamationServiceContext(value) {
     }
     const drained = await Promise.allSettled(drainResults);
     if (stopped.some((item) => item.status === 'rejected') || drained.some((item) => item.status === 'rejected')) {
+      if (managed) retentionReasons.push(...stopped.filter(item => item.status === 'rejected').map(item => item.reason),
+        ...drained.filter(item => item.status === 'rejected').map(item => item.reason));
       throw contextError('reclamation_writer_stop_or_drain_failed');
     }
   }
@@ -591,6 +621,7 @@ function createReclamationServiceContext(value) {
         return anchor.storeId;
       },
       async load() {
+        backendOperationStarted = true;
         await ready;
         if (slot === 'questions') assertQuestionsKnown();
         if (!opened || blocked || closing || closed) throw contextError('reclamation_service_blocked');
@@ -608,6 +639,7 @@ function createReclamationServiceContext(value) {
         } catch (error) {
           return Promise.reject(error);
         }
+        backendOperationStarted = true;
         return enqueueIO(async () => {
           if (slot === 'questions') assertQuestionsKnown();
           requireValue(contextCanWrite(), 'reclamation_service_blocked');
@@ -685,11 +717,13 @@ function createReclamationServiceContext(value) {
         });
       },
       prepareResume(snapshot) {
+        backendOperationStarted = true;
         assertQuestionsKnown();
         if (closing || closed || blocked) throw contextError('reclamation_service_blocked');
         installSnapshot(snapshot);
       },
       flush() {
+        backendOperationStarted = true;
         return ioTail.then(() => {
           if (slot === 'questions') assertQuestionsKnown();
           if (blocked || closing || closed) throw contextError('reclamation_service_blocked');
@@ -947,16 +981,33 @@ function createReclamationServiceContext(value) {
     if (closing || closed) return Promise.reject(contextError('reclamation_service_context_closed'));
     if (blocked) return Promise.reject(contextError('reclamation_service_blocked'));
     writersBySlot = assertWriterMap(writersValue);
-    coordinator = createReclamationMigrationCoordinator({
-      persistence,
-      writersBySlot,
-      capacityBudget: capacityLeaseFacade(),
-      normalByteLimitsBySlot,
-      ...(input.now === Date.now ? {} : { now: input.now }),
-      ...(input.createStoreId ? { createStoreId: input.createStoreId } : {}),
-      ...(input.createOperationId ? { createOperationId: input.createOperationId } : {}),
-    });
-    startPromise = (async () => {
+    let startResolve;
+    let startReject;
+    if (managed) {
+      startPromise = new Promise((resolve, reject) => { startResolve = resolve; startReject = reject; });
+      startPromise.catch(() => {});
+    }
+    try {
+      coordinator = createReclamationMigrationCoordinator({
+        persistence,
+        writersBySlot,
+        capacityBudget: capacityLeaseFacade(),
+        normalByteLimitsBySlot,
+        ...(input.now === Date.now ? {} : { now: input.now }),
+        ...(input.createStoreId ? { createStoreId: input.createStoreId } : {}),
+        ...(input.createOperationId ? { createOperationId: input.createOperationId } : {}),
+      });
+      if (managed) {
+        const control = getReclamationMigrationCoordinatorControl(coordinator);
+        coordinatorOwner = control?.bindOwner() || null;
+        if (!coordinatorOwner) {
+          const error = contextError('reclamation_coordinator_control_unavailable');
+          retentionReasons.push(error);
+          throw error;
+        }
+      }
+    } catch (error) { startReject?.(error); throw error; }
+    const work = (async () => {
       try {
         observeClock();
         await stopAndDrainWriters();
@@ -973,6 +1024,8 @@ function createReclamationServiceContext(value) {
         throw error;
       }
     })();
+    if (managed) work.then(startResolve, startReject);
+    else startPromise = work;
     return startPromise;
   }
 
@@ -1401,7 +1454,7 @@ function createReclamationServiceContext(value) {
     }
   }
 
-  function close() {
+  function closeStandard() {
     if (closePromise !== null) return closePromise;
     closing = true;
     opened = false;
@@ -1411,7 +1464,8 @@ function createReclamationServiceContext(value) {
     }
     if (writersBySlot !== null) {
       for (const slot of configuredSlots) {
-        try { Promise.resolve(writersBySlot[slot].stop()).catch(() => {}); } catch {}
+        if (managed) recordWriterStop(writersBySlot[slot]);
+        else { try { Promise.resolve(writersBySlot[slot].stop()).catch(() => {}); } catch {} }
       }
     }
     closePromise = (async () => {
@@ -1437,6 +1491,75 @@ function createReclamationServiceContext(value) {
     return closePromise;
   }
 
+  function recordWriterStop(writer, onFailure = undefined) {
+    let receipt;
+    try { receipt = Promise.resolve(writer.stop()); }
+    catch (error) {
+      retentionReasons.push(error);
+      onFailure?.(error);
+      return;
+    }
+    stopReceipts.push(receipt.catch(error => { retentionReasons.push(error); onFailure?.(error); }));
+  }
+
+  function close() {
+    if (!managed) return closeStandard();
+    if (closePromise !== null) return closePromise;
+    let resolveClose;
+    let rejectClose;
+    closePromise = new Promise((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
+    closePromise.catch(() => {});
+    closing = true;
+    opened = false;
+    if (readyPending) { readyPending = false; readyReject?.(contextError('reclamation_service_context_closed')); }
+    if (writersBySlot !== null) for (const slot of configuredSlots) recordWriterStop(writersBySlot[slot]);
+    let coordinatorStop = null;
+    if (coordinatorOwner) {
+      try { coordinatorStop = Promise.resolve(coordinatorOwner.stopAndDrain()); }
+      catch (error) { coordinatorStop = Promise.reject(error); }
+      coordinatorStop.catch(() => {});
+    } else if (coordinator !== null) retentionReasons.push(contextError('reclamation_coordinator_control_unavailable'));
+    const work = (async () => {
+      if (startPromise !== null) await startPromise.catch(() => {});
+      await ioTail;
+      let settledStops = 0;
+      while (settledStops < stopReceipts.length) {
+        const pendingStops = stopReceipts.slice(settledStops);
+        settledStops += pendingStops.length;
+        await Promise.all(pendingStops);
+      }
+      if (writersBySlot !== null) {
+        try { await stopAndDrainWriters(); } catch {}
+      }
+      if (coordinatorStop) {
+        try { await coordinatorStop; } catch (error) { retentionReasons.push(error); }
+        retentionReasons.push(...coordinatorOwner.retentionReasons());
+      }
+      try { await persistenceOwner.stopAndDrain(); } catch (error) { retentionReasons.push(error); }
+      closed = true;
+      closing = false;
+      firstPhaseDone = true;
+      if (retentionReasons.length) throw retentionReasons[0];
+    })();
+    work.then(resolveClose, rejectClose);
+    return closePromise;
+  }
+
+  function finalize() {
+    if (finalPromise !== null) return finalPromise;
+    let resolveFinal;
+    let rejectFinal;
+    finalPromise = new Promise((resolve, reject) => { resolveFinal = resolve; rejectFinal = reject; });
+    finalPromise.catch(() => {});
+    const work = (async () => {
+      requireValue(firstPhaseDone && retentionReasons.length === 0, 'reclamation_context_drain_unconfirmed');
+      if (lease !== null && !leaseReleased) lease.release();
+      await persistenceOwner.finalize();
+    })();
+    work.then(resolveFinal, error => { retentionReasons.push(error); rejectFinal(error); });
+    return finalPromise;
+  }
+
   function status() {
     let coordinatorStatus = null;
     try { coordinatorStatus = coordinator?.status() ?? null; } catch (error) { if (!blocked) throw error; }
@@ -1456,7 +1579,7 @@ function createReclamationServiceContext(value) {
     });
   }
 
-  return Object.freeze({
+  const api = Object.freeze({
     periodGate,
     backend,
     start,
@@ -1472,6 +1595,18 @@ function createReclamationServiceContext(value) {
     close,
     status,
   });
+  LIFETIME_CONTROLS.set(api, Object.freeze({
+    bindOwner(owner) {
+      if (managed || backendOperationStarted || startPromise !== null || closePromise !== null || coordinator !== null) return false;
+      const control = getReclamationPersistenceControl(persistence);
+      const delegated = control?.transferOwner(owner);
+      if (!delegated) return false;
+      persistenceOwner = delegated;
+      managed = true;
+      return Object.freeze({ stopAndDrain: close, finalize, retentionReasons: () => [...retentionReasons] });
+    },
+  }));
+  return api;
 }
 
-module.exports = { createReclamationServiceContext };
+module.exports = { createReclamationServiceContext, getReclamationServiceContextControl };
