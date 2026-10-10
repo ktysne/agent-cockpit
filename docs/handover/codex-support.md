@@ -691,7 +691,9 @@ Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に�
 追跡済み全体検証は`8c335d5`で2829件成功、失敗0件、Windows symlink権限による3件skip、372244.7484msだった。
 指定Claude R1の要修正2件をtest/helperで補強し、関連27件が成功、失敗とskipは0件だった。製品sourceは変更していない。
 公開測定primitiveと実byteから独立に求めた全slot前後最大量と対象tempを、pause中の実予約量およびbaseline込み総予算の1byte境界で照合した。
-正のI grant加算、CP/Iなしの合法Q保存、close時のqueued save拒否とqueue0・raw不変・予約復帰も確認した。指定Claude R2は未完了である。
+正のI grant加算、CP/Iなしの合法Q保存、close時のqueued save拒否とqueue0・raw不変・予約復帰も確認した。
+指定Claude R2は試験補強を妥当と確認し、I上流拒否の文書参照を要修正1件として指摘した。既存whole試験のB+G境界と全体検証の成功を照合し、設計資料へ試験名を追記した。
+総予算の1byte境界はQ保存を対象とし、CP保存のtarget tempの独立した予算境界は未固定である。
 後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
 通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
 
@@ -704,7 +706,7 @@ Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に�
 |---|---|
 | capsule移行plannerの候補encode反復と全選択delivery走査を計測し、runtimeへ接続する前に最適化の要否を決める | PR #337のClaude R1任意提案。現状はpure処理で、計測と最適化は未実施 |
 | inspectionの全容量表がfitした後、実Bの最終whole/joint検査だけが失敗する入力の構成可否を特性化する | PR #347のClaude R2任意提案。現状は最終検査の失敗をinvalidとして停止し、容量不足とは推測しない |
-| fixture専有backendの短縮名・symlink tmpの扱い、closing中loadの表示state、prewrite読取失敗と指紋差異の診断を整理する | PR #348のClaude R1任意提案。現環境は関連24件成功。closing受付gateと不明時停止は維持し、他OS・tmp構成の成功は未実証 |
+| fixture専有backendの短縮名・symlink tmpの扱い、closing中loadの表示state、prewrite読取失敗と指紋差異の診断を整理する | PR #348のClaude R1任意提案。初回関連試験は24件成功、R1補強後は27件成功。closing受付gateと不明時停止は維持し、他OS・tmp構成の成功は未実証 |
 | 外側codecの結合検査で正規化とencodeを繰り返す費用を計測し、検証済み結果を内部で再利用する | PR #336のClaude R1任意提案。未検査値を信頼する公開入口は増やさない |
 | 復元実験、拒否包含分析と質問保存のplain-data preflightを共通化する。例外分類と入力の上限の差を先に照合する | PR #333のClaudeレビュー提案。現在の検査経路は保つ |
 | 隔離診断が呼ばれるたびに容量の予約量を計算し直す(標準起動へ接続する前に #209 で考慮する) | PR #293 の[コメント](https://github.com/ktysne/agent-cockpit/pull/293#issuecomment-6060612725) |

@@ -854,7 +854,8 @@ Aはraw、canonical、pending period projectionと旧予約の最大を保護す
 Iはraw、現在、将来、旧予約の最大をB+Gと照合してからGを加えて保護するため、grantを保守的に過剰予約する場合がある。
 baseline lease、B、Gから追加leaseを控除しない。
 IのB+G照合はcold joint検査と旧容量計測でも行うため、後段の保護量計算だけで不足を拒否する合法入口は作らない。
-検証では合法grantの追加予約量を独立計測し、上流の容量拒否と後段だけの到達性を区別する。
+上流のI容量拒否は`test/question-capsule-whole-validation.test.js`の`whole validation enforces each legacy future-reservation byte limit exactly`で、将来予約と現在byteのB+G境界を確認する。
+今回のbackend試験は合法grantの追加予約量と総予算境界を確認し、後段の保護量計算だけの拒否到達を確認対象に含めない。
 
 内部filesystem adapterはtempのexclusive open直前でclosing/blockedを検査する。
 保存後は対象のexact raw readback、対象外指紋、結合検査と既存更新guardを確認してからheadをinstallする。
