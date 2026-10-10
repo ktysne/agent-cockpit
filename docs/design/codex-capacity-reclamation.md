@@ -341,6 +341,63 @@ StoreWriteの自己遷移だけでは実byte容量を検査しないため、che
 | QCW05 | 展開前の総件数と行ごとの訪問上限でgetterとProxyを実行せず、入力を変更しない |
 | QCW06 | 検査結果を保存、削除、受付再開や件数枠解放の権限に使わない |
 
+### Capsuleを埋め込む外側ファイルcodec
+
+質問journal v3とcheckpoint v4は、通常recordとcapsuleを同じファイルへ置く独立した形式とする。
+既存readerとwriterの受付schemaは拡張せず、新形式の保存とcold復旧は別の接続条件に残す。
+局所codecの合格は、そのファイルから復元した旧局所ストアの合法性を表す。
+アンカーの退役、他slotとの相関と全体容量は全体検査で確かめる。
+
+| ファイル | 必須field |
+|---|---|
+| 質問journal v3 | `schemaVersion`、`storeId`、`revision`、`questions`、`reservations`、`migrationAllowance`、`questionCapsules`、`reservationOrder` |
+| checkpoint v4 | `schemaVersion`、`storeId`、`revision`、`registrations`、`ledger`、`migrationAllowance`、`checkpointCapsules`、`deliveryAttemptOrder` |
+
+初版では両形式の`migrationAllowance`をnullに限定する。
+非対象のinstruction journalに妥当なgrantがある場合は既存の全体検査へ渡す。
+checkpoint内のledgerはv2のfieldを保持し、capsuleへ移したdeliveryだけを除く。
+局所codecは全recordを復元してから既存の局所normalizerへ渡し、穴のある通常ledgerを先に正規化しない。
+
+capsule配列のentryは`chunkId`と`capsule`だけを持つ。
+chunk IDはUUID v4でファイル内一意とし、正規化結果はその文字列の順に並べる。
+各capsuleのstore IDは外側ファイルのstore IDと一致させる。
+両ファイルの対応はchunk IDで決め、操作IDや配列位置だけで結合しない。
+CPだけにあるchunkは拒否し、必要なCPがない質問chunkは既存全体検査で拒否する。
+全質問がnoneまたはindeterminateのchunkにはCPを要求しない。
+
+全record順序は通常recordとcapsuleの展開結果を一対一で列挙する。
+通常reservationとdeliveryの配列順は、宣言された全順序の部分列とする。
+chunkの正規順は履歴順を表さず、質問detailsと登録情報などのmetadata配列順を保持する。
+宣言順序の合法性を検査しても、実際の過去の順序を証明したことにはならない。
+
+局所入口のnormalizeとdecodeは正規化したファイル値を返す。
+encodeはその値と、2-space indentと末尾改行を含むbyte列、サイズ、SHA-256を返す。
+入力を変更せず、戻り値をfreezeしない。
+raw byteと正規化後の保存byteは各16,777,216 bytes以下とし、rawの上限はJSON解析前に照合する。
+展開前の件数、各capsuleの上限、metadataと行ごとの訪問予算は既存全体検査と同じ枠を維持する。
+通常recordとcapsuleの合計が上限を超えたchunkで打ち切り、後続chunkを調べない。
+
+`validateQuestionCapsuleFiles`は`anchor`、`questionFile`、`checkpointFile`、`instructionStore`、`normalByteLimitsBySlot`を受け取る。
+未作成slotは明示的なnullとし、その通常byte上限もnullを要求する。
+局所codecではnullを受け付けない。
+全体入口は旧形へ復元したsnapshotの整合性と将来容量に加え、新形式でserializeした現在byteを各slotの通常上限へ照合する。
+新wrapperと順序配列の追加で、旧形で合法なsnapshotが新形式の枠に収まらない場合は拒否する。
+
+質問の局所入口は`invalid_question_capsule_journal_v3`、CPの局所入口は`invalid_capsule_checkpoint_v4`、全体入口は`invalid_question_capsule_files`のTypeErrorへ不正入力と容量超過を統一する。
+全体結果は復元snapshot、件数と固定した範囲制約だけを返す。
+既存の6つの範囲制約に`new_outer_future_capacity_not_verified`を加え、新外側形式の将来成長を未検証として示す。
+`persistent_outer_schema_not_verified`は実保存への接続が未検証であることを表し、独立codecで確認したfieldの合法性とは区別する。
+新形式の将来予約、移行sourceの真正な順序、一時保存ピーク、保存とcold復旧、件数枠の解放は後続で検証する。
+
+| ID | 確かめる条件 |
+|---|---|
+| QCF01 | 両providerと混在snapshotを局所encodeとdecodeから全体復元し、元observableを保持する |
+| QCF02 | chunkをUUIDで対応させ、並べ替えを正規化し、重複、余剰と必要CP欠落を拒否する |
+| QCF03 | 宣言順序の完全性と通常配列の部分列条件を要求し、metadata配列順を保持する |
+| QCF04 | raw解析前上限、新現在byteと旧将来容量を別々に照合し、例外を固定する |
+| QCF05 | getterとProxyを実行せず、有限な展開件数と行予算で入力を変更せず検査する |
+| QCF06 | 旧readerが新schemaを拒否し、局所合格を保存、復旧と件数枠解放へ読み替えない |
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
