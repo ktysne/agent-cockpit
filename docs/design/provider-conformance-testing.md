@@ -387,3 +387,25 @@ Claudeのlive appliedは未確認であり、cold checkpointのseedや別のcall
 `4db527e`の新factory試験15件とgate単体7件を含む関連11ファイルは248件成功、失敗0、skip0である。
 同じheadの全体`npm test`は2802件成功、失敗0、Windows実symlink権限によるskip2である。
 このskip数には未実行のClaude live appliedと実runtimeを含めず、上記の未確認境界として別に扱う。
+
+## native起動待機の取消 (#209)
+
+`ID-F209-S01`は、実owned runnerとcompositionを使い、開始途中の停止で開始Promiseが終了することを確認する。
+Claudeは外部認証、spawn、初回入力write、context-readyの保持点を能力条件とする。
+Codexはinitialize、initialized通知、login開始と完了、thread開始、turn開始の応答またはwrite callbackを保持できることを条件とする。
+停止後に保持点を解放しても、次の起動段階、context、runtime proofを新たに発行しないことを期待する。
+停止前に発行済みのidentityは存在し得るが、停止後の再認可を許容しない。
+
+開始Promiseの終了と子プロセスの停止確認は別々に観測する。
+子のexit、closeと非activeが揃った場合だけ停止確認済みとし、欠ける場合は未確認のまま扱う。
+epoch、timeout、kill呼出しやPromiseの終了を物理停止の証拠にしない。
+保持点の明示解放と状態・eventの観測で確認し、固定sleepを成功条件にしない。
+任意注入runnerの未settled startをcompositionが一般に取消できるとは主張せず、負例はテスト側で明示解放する。
+
+providerごとのRPC、認証方式、既存error codeの差は許容するが、後着による起動再開とauthority再発行は許容しない。
+外部認証元の作業自体、観測readの取消とdrain、factory ticketへの接続と全I/O終了は対象外である。
+両providerのfixture結果と実runtimeを分けて記録し、実Claude/Codex runtimeの適合は横断統合試験に残す。
+今回のfixtureは通常起動profileで確認し、wait profile固有のtransport開始待機は未確認として分ける。
+Codexのwrite callback保留はinitialize RPC（応答先着）とinitialized通知で確認する。
+login、thread、turnの各RPCは応答待ちを確認し、それぞれのwrite callback保留は未確認である。
+停止後の追加writeは、後着解放前後のwrite履歴の直接比較で検出する。

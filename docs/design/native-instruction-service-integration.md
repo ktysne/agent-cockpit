@@ -303,3 +303,16 @@ nativeの長時間startと観測readは、この段階のticket網羅に含め�
 epochによる結果無効化、detach、timeoutを物理停止やI/O終了の証拠にしない。
 協調するprocess間の保存先lock、新schema writerの許可、実runtime適合、電源断耐久性と件数枠解放は別の条件である。
 共通のfixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L01`に定義する。
+
+## native開始Promiseと停止の確認
+
+owned runnerの開始待機は、停止時の内部取消により開始Promiseを終了させる。
+停止後の認証結果、write callback、RPC応答とcontext通知で起動を再開しない。
+外部認証元が始めた作業自体の停止は契約に含めない。
+compositionは実runnerの開始Promiseを採用するため、その終了と子の停止確認を別々に扱う。
+任意注入runnerのstart Promiseをcompositionが一般に取消する契約は持たない。
+
+子のexit、close、非activeの3条件が揃うまで、停止確認済みとは扱わない。
+開始Promiseの終了だけで子のI/O終了や保存先所有の解放を判断しない。
+観測readの取消とdrain、factory ticketへの接続は別の検証である。
+段階別の共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-S01`に定義する。

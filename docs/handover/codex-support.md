@@ -703,6 +703,25 @@ featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4�
 各PRのfixture合格を実runtime適合や新schemaの通常接続とは扱わない。
 同期後の次の作業はnative startの段階別取消検証であり、観測readの取消とdrainは別PRに残す。
 
+## native起動取消の段階別検証
+
+2026-10-11の未マージReady PRは、#347、#348、#349の順にfeatureへ取り込める。
+baseはすべてfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)（`62e18b2`）とmain #350の同期[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)（`2ea0c83`）もReadyで、この系列とは独立して取り込める。
+#351はsource `4db527e`で全体2802成功、失敗0、Windows実symlink権限skip2、Claudeレビュー1往復で必須指摘なしである。
+#352はfeature/mainを祖先として保持する通常mergeで、関連2件、CLI定義読み取り5条件と上流同期checkが成功し、Claudeレビュー1往復で必須指摘なしである。
+
+後続の`codex/native-start-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351と#352のsourceには依存しない。
+native起動の段階別取消を、実runnerとcompositionの保持点で確認する。
+共通の適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)に定義した。
+[PR #353](https://github.com/ktysne/agent-cockpit/pull/353)の`cd39352`で全体2794件成功、失敗0、Windows実symlink権限skip2である。
+製品sourceは無変更で、段階別取消の追加14件を含む関連2ファイルはin-processで192件成功した。
+Claude R1の必須指摘として後着による追加writeの直接比較を全11stageへ補強した。
+`1912130`の関連192件は成功し、製品sourceは全体検証済みheadから変わっていない。
+Claude R2はblockerと要修正なしとなり、PR #353はReadyとして扱える。
+Codex login、thread、turnの個別write callback保留とwait profile固有待機は未確認であり、追加の検証候補として残す。
+観測readの取消とdrain、factory ticketへの接続、協調writer ownership、新schemaの通常接続と実runtimeは後続に残す。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
