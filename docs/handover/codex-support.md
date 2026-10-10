@@ -686,6 +686,22 @@ Claude live appliedと両providerの実runtimeは未確認であり、skip0を�
 nativeの長時間startと観測readの取消は別段階で確認する。
 epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
 同rootの協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
+## main配布物同期と次の作業
+
+2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
+featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4ファイルだけを取り込む。
+[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)はfeature向けで、関連2件とCLI定義読み取りの5条件、構文・空白・上流同期checkが成功した。
+指定Claudeレビューは1往復でblocker・要修正なしである。
+アプリsourceは無変更のため全体テストの重複実行は省略し、#351のfeature baseに対する検証証跡を参照する。
+上流配布物の関数冒頭コメントにある一般説明の補足は任意候補であり、このリポジトリで配布物を手編集しない。
+
+未マージのReady PRは#347、#348、#349の順にfeatureへ取り込める。
+いずれもbaseはfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)もReadyであり、この系列とは独立して取り込める。
+#351のsource `4db527e`は全体2802件成功、失敗0、Windows実symlink権限skip2で、指定Claudeレビューは1往復で必須指摘なしである。
+最終`62e18b2`は結果と確認範囲の文書記録だけである。
+各PRのfixture合格を実runtime適合や新schemaの通常接続とは扱わない。
+同期後の次の作業はnative startの段階別取消検証であり、観測readの取消とdrainは別PRに残す。
 
 ## 起票していない候補
 
