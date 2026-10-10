@@ -739,6 +739,7 @@ ticket解放例外の失敗判定を修正し、Claude R2はblockerと要修正0
 `codex/native-factory-private-drain-209-20261011`は最新feature `c731abe`を起点に、PR #356のレビュー済みhead `f394c37`を通常mergeした。
 開始headは`358f512`で、#351〜#354と#356を祖先として保持する。
 マージ順は#356の後である。
+PR [#357](https://github.com/ktysne/agent-cockpit/pull/357)はDraftで、source検証対象は`d253639`である。
 実装前に[ID-F209-L02](../design/provider-conformance-testing.md)を定義した。
 明示的回収modeでstartとcollectorの処理を追跡し、全native停止の開始をservice待機より先に行う。
 生成済み資源の準備失敗は同期throwを保ち、後始末とticketの終了を別途待つ。
