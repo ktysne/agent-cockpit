@@ -518,4 +518,6 @@ FakeChildのwrite保持点と実owned sourceを使うfixtureで確認する。
 実Codex runtime、実stdio故障、外部認証元作業は未実施であり、fixtureの合格へ混ぜない。
 
 runnerとsourceの関連123件は成功し、失敗0件である。
-全体テストと実Codex runtime、実stdio故障は未実施である。
+固定head `d12453b`の全体テストは2889件成功、失敗0、Windows実symlink権限によるskip2である。
+Claude R1はblockerと要修正が0件で収束した。
+実Codex runtimeと実stdio故障は未実施である。
