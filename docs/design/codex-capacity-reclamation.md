@@ -457,6 +457,28 @@ helperのfitsは局所的な予約量の結果であり、アンカーや全stor
 新規受付、record追加・削除、順序追記、metadata更新、capsuleの再分割、grant変更、prepareとatomic保存ピークは保証しない。
 後続のtransition入口へ接続するときは、実際の前後状態がこの固定構造を守ることを別のguardで検査する。
 
+### 固定構造の既存更新の検査
+
+更新検査は同じanchorとinstruction storeに対する、新外側Q3/CP4の前後二時点を受け取るpure入口とする。
+両時点の局所codecと結合検査、旧復元形の真のbefore/after遷移、固定構造、局所予約量を別々に検査する。
+片側の自己遷移成功を、二時点の遷移検査の代用にしない。
+
+固定する構造はslotのnull状態、store ID、全capsuleとchunk、全順序配列、grant、metadata、通常recordのID、所属、件数と配列順である。
+CPのregistrations、notificationTargetsとlogicalTombstonesも全値を固定する。
+通常fieldの更新は旧遷移の受理だけでは容量候補の範囲と認定できないため、初版の操作集合を次へ絞る。
+
+- no-opとQ/CPのroot revision、CPのledger revisionの増加。
+- 選択済みで回収を開始していない通常質問のlateAnswers追記。他のdetail fieldとreservationの全値は固定する。
+- 非質問の通常delivery detailのstate、cancelRequested、terminalAt、acceptedCorrelationとappliedCorrelationの進行。他のfieldは固定する。
+
+質問record revision、selection、held、externalResolutionとcancelledAt、question delivery、grave、reclamation、detailからgraveへの変更は初版の対象外にする。
+lateAnswersのprefix、最大件数と値域、状態遷移と相関の不変条件は既存codecと旧遷移で検査する。
+両時点の全体整合と容量fit、次状態の実byteが前状態の予約量以下であることも要求する。
+
+返却する検証済みsnapshotと測定値は、渡された二時点に対する結果である。
+実sourceの最新性、queue排他、prepareとatomic保存ピーク、実保存とcold復旧、新規受付、件数枠の解放とruntime接続は保証しない。
+数値の一致だけを根拠に対象操作を広げず、操作の追加ごとに容量候補とstore間同期を再検証する。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。

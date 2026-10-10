@@ -551,10 +551,22 @@ helper内部の復元順序を直接観測した試験ではない。
 最大escapedfieldの代表更新とrevision成長を確認したが、全候補variantの実更新は未確認である。
 Claude R1はblockerと要修正0件に収束した。`c73836e`で全体2,701件成功、1件skip、失敗0件。skipはWindows実symlink権限による。
 
-後続の更新guardは、構造不変だけでは旧容量候補の操作範囲を認定できないため、初版で許可するfieldを限定する。
+後続の更新guardは`codex/question-capsule-existing-update-validation-209-20261010`で、基点は#338の`ae1a455`である。
+構造不変だけでは旧容量候補の操作範囲を認定できないため、初版で許可するfieldを限定する。
 no-opとwrapper revision、選択済み通常質問のlateAnswers追記、非質問の通常deliveryの状態と相関の進行を対象にする。
 質問record revision、selection、held、question delivery、本文回収は固定する。
 両時点の全体整合、真の旧before/after遷移、新予約fitと次状態実byteの照合も要求する。
+契約は[容量回収計画](../design/codex-capacity-reclamation.md#固定構造の既存更新の検査)に置く。
+個別14件が成功し、最後のテスト変更後にQ/CPそれぞれの容量境界1件を再確認した。
+capsule metadata、Q/CP順序とheldは両jointと真の旧遷移が受理するcontrolから、新guardの拒否を確認した。
+Q/CPのB境界は一方だけを旧予約量へ下げ、他方の新予約fitと旧全体遷移成功を保って、新予約だけが超えることを確認した。
+Q detailとreservationのrevision増加は両jointを通るが旧遷移で拒否され、新whitelistの独立検出証拠にはしていない。
+行追加と削除、非capsule CP metadata、revision逆行、cache不整合の独立controlは未確認である。
+構文と差分検査、CodeGraph変更後同期と調査が成功した。全体検証とClaudeレビューへ進む。
+
+共通raw JSON codecが背後のArrayBufferの独自byteLength getterを呼ぶ問題を[Issue #339](https://github.com/ktysne/agent-cockpit/issues/339)へ起票した。
+intrinsicで取得したbufferをBuffer.fromへ直接渡す経路で1回の呼び出しを再現した。
+更新guardの後で標準Uint8Array viewを経由するコピーへ直し、prepare manifestの検証へ進む。
 
 ## 起票していない候補
 
