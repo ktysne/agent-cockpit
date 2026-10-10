@@ -805,6 +805,8 @@ Claude R2もblockerと要修正が0件で、最終の軽微な整形後の構文
 
 `codex/writer-exclusion-design-313-20261011`を最新feature `c731abe`から作り、PR #359の最終head `8fa81f5`を通常mergeした。
 起点は`05e6f79`で、[排他設計](../design/writer-ownership-exclusion.md)と適合試験計画を先に記録する。
+PR [#360](https://github.com/ktysne/agent-cockpit/pull/360)はfeature向けDraftで、設計sourceは`ddbcc5e`である。
+製品src/testは親#359から不変。文書差分の指定Claudeレビューを行う。
 Astraの助言を反映し、per-file sidecarを共通単位にし、factoryの全file set取得とstandalone参加をそろえる。
 private primitive、標準writer接続、factory接続と横断試験は後続であり、#313を完了扱いにしない。
 専有Windows probeは競合同時取得、正常marker残留、大小文字とjunction alias、hardlinkの反例を確認した。
