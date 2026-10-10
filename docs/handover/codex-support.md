@@ -601,7 +601,10 @@ CPなし、両providerと混在、raw空白と重複keyの保持、有効I grant
 合法な旧sourceが外側上限を超える作成controlでは、base64文字列の生成0回で拒否することを確認した。
 `d87c6f6`の追跡済み全体は2,738件成功、1件skip、失敗0件だった。skipはWindows実symlink権限による。
 Claude R1はblockerと要修正0件。任意提案のevidence正常controlと完全材料検証のI容量境界を補強し、対象2件が成功した。
-製品コードは全体検証した`d87c6f6`から変更していない。Claudeの妥当性確認へ進む。
+製品コードは全体検証した`d87c6f6`から変更していない。
+[PR #343](https://github.com/ktysne/agent-cockpit/pull/343)のClaude R2もblockerと要修正0件に収束し、試験補強後の`8400b3c`で専用12件が成功した。
+IのB-1拒否は公開材料検証の結果であり、内部の拒否層を直接観測した試験ではない。
+後続boundaryの未追跡source/testはこのPRと全体検証に含めていない。
 
 ## 起票していない候補
 
