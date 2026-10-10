@@ -76,4 +76,3 @@ unknown descriptorはfake filesystemで検証し、実fdを漏らすfixtureを�
 実temporary rootのcleanupは全実handleの終了を確認し、解決済み絶対pathが自作のos.tmpdir配下にあることを検査してから行う。
 fixture cleanupの成功は製品のcleanupや所有解放の証拠ではない。
 製品管理protocol、ACL、一般filesystem、全writer、両provider実runtimeは後続gateである。
-
