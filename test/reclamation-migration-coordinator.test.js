@@ -1161,3 +1161,49 @@ test('every durable anchor and slot boundary fails closed and recovers only the 
     await recoveryCoordinator.close();
   }
 });
+
+test('ID-F209-O01 managed coordinator close never releases shared persistence or capacity', async () => {
+  const { getReclamationMigrationCoordinatorControl } = require('../src/server/reclamation-migration-coordinator');
+  const slots = ['questions'];
+  const memory = memoryPersistence(slots);
+  const tracked = trackedCapacityBudget();
+  const coordinator = createReclamationMigrationCoordinator(coordinatorOptions({
+    persistence: memory.persistence, configuredSlots: slots, events: memory.events, capacityBudget: tracked.capacityBudget,
+  }));
+  const owner = getReclamationMigrationCoordinatorControl(coordinator).bindOwner();
+  assert.ok(owner);
+  await coordinator.start();
+  await coordinator.close();
+  assert.equal(memory.data.closed, false);
+  assert.equal(tracked.history.released, 0);
+  assert.deepEqual(owner.retentionReasons(), []);
+  assert.equal(coordinator.canWrite(), false);
+});
+
+test('ID-F209-O01 managed coordinator close during startup never reopens its gate or releases downstream ownership', async () => {
+  const { getReclamationMigrationCoordinatorControl } = require('../src/server/reclamation-migration-coordinator');
+  const slots = ['questions'];
+  const memory = memoryPersistence(slots);
+  const entered = deferred();
+  const barrier = deferred();
+  const coordinator = createReclamationMigrationCoordinator(coordinatorOptions({
+    persistence: memory.persistence, configuredSlots: slots, events: memory.events,
+    hooks: { drain() { entered.resolve(); return barrier.promise; } },
+  }));
+  const owner = getReclamationMigrationCoordinatorControl(coordinator).bindOwner();
+  const started = coordinator.start();
+  started.catch(() => {});
+  let closed;
+  try {
+    await entered.promise;
+    closed = coordinator.close();
+    assert.equal(coordinator.canWrite(), false);
+    barrier.resolve();
+    await assert.rejects(started);
+    await closed;
+    assert.equal(coordinator.canWrite(), false);
+    assert.equal(memory.data.closed, false);
+    assert.deepEqual(owner.retentionReasons(), []);
+    assert.equal(memory.events.some(event => event[0].startsWith('read-') || event[0].startsWith('write-')), false);
+  } finally { barrier.resolve(); await started.catch(() => {}); await closed; }
+});
