@@ -347,6 +347,7 @@ binding、観測callbackとticket取得を呼ぶ前に処理を登録し、結�
 compositionが返すsnapshot wrapperも同じ制御へ対応付け、公開facadeとoptionsへ新しい項目を追加しない。
 ticket取得関数の設定は最初の処理受付前に一度だけ許可し、設定しない場合もcollector単独で終了追跡を行う。
 ticket解放は同期関数とし、その例外でも記録を解放して処理の失敗を返す。
+接続確立後のticket解放が失敗した場合、呼び出し側がdisconnectして確立済みの接続を回収する。
 
 通常disconnectと既存のcloseは再接続可能な意味を維持する。
 内部の恒久停止は後続受付とcollectorのproof、positive observationを拒否するが、外側compositionのauthorityを単独で失効させない。

@@ -544,6 +544,50 @@ test('ID-F209-C01 acquisition and release failures reject while operation record
   await unknownReadCase.control.drain();
 });
 
+test('ID-F209-C01 falsy callback failures stay rejected and ticket release preserves the first reason', async (t) => {
+  for (const releaseFailure of [undefined, null, false, 0, '']) {
+    const f = privateFixture(t);
+    assert.equal(f.control.bindTicketAcquirer(() => () => { throw releaseFailure; }), true);
+    const connecting = f.collector.connect();
+    const settlement = connecting.then(
+      (value) => ({ status: 'fulfilled', value }),
+      (error) => ({ status: 'rejected', error }),
+    );
+    f.control.stopAdmission();
+    const draining = f.control.drain();
+    const result = await settlement;
+    assert.equal(result.status, 'rejected');
+    assert.ok(Object.is(result.error, releaseFailure));
+    await draining;
+    assert.equal(f.attachCount(), 1);
+  }
+
+  const primaryCase = privateFixture(t);
+  assert.equal(primaryCase.control.bindTicketAcquirer((kind) => kind === 'observe'
+    ? () => { throw false; }
+    : () => {}), true);
+  assert.equal((await primaryCase.collector.connect()).status, 'connected');
+  primaryCase.callbacks.read = () => { throw null; };
+  const observing = primaryCase.collector.observeKnownThread('native-id');
+  const observationSettlement = observing.then(
+    (value) => ({ status: 'fulfilled', value }),
+    (error) => ({ status: 'rejected', error }),
+  );
+  const observationResult = await observationSettlement;
+  assert.equal(observationResult.status, 'rejected');
+  assert.equal(observationResult.error, null);
+  primaryCase.callbacks.read = null;
+  primaryCase.control.stopAdmission();
+  await primaryCase.collector.disconnect();
+  await primaryCase.control.drain();
+
+  const unknownCase = privateFixture(t);
+  unknownCase.setNextAttach(() => null);
+  assert.deepEqual(await unknownCase.collector.connect(), {
+    status: 'unknown', reason: 'owned_source_unavailable',
+  });
+});
+
 test('ID-F209-C01 disconnect keeps detach and pending-cancel failures as Promise rejections', async (t) => {
   const detachCase = privateFixture(t);
   await detachCase.collector.connect();

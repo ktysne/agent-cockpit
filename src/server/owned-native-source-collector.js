@@ -71,7 +71,7 @@ function createOwnedNativeSourceCollector(options, sanitizeSnapshot) {
     let release = () => {};
     let finished = false;
 
-    function complete(error, result) {
+    function complete(error, result, failed = false) {
       if (finished) return;
       finished = true;
       let finalError = error;
@@ -82,26 +82,34 @@ function createOwnedNativeSourceCollector(options, sanitizeSnapshot) {
           throw new TypeError('owned collector ticket release must be synchronous');
         }
       } catch (releaseError) {
-        if (!finalError) finalError = releaseError;
+        if (!failed) {
+          failed = true;
+          finalError = releaseError;
+        }
       } finally {
         try { hooks.onSettled?.(operation); }
-        catch (settleError) { if (!finalError) finalError = settleError; }
+        catch (settleError) {
+          if (!failed) {
+            failed = true;
+            finalError = settleError;
+          }
+        }
         operations.delete(operation);
         resolveSettled();
       }
-      if (finalError) rejectResult(finalError);
+      if (failed) rejectResult(finalError);
       else resolveResult(operationCurrent(operation) ? result : rejectedResult);
     }
 
     try { hooks.onRegistered?.(operation, resultPromise); }
-    catch (error) { complete(error); return resultPromise; }
+    catch (error) { complete(error, undefined, true); return resultPromise; }
 
     try {
       const acquiredRelease = ticketAcquirer ? ticketAcquirer(kind) : () => {};
       if (typeof acquiredRelease !== 'function') throw new TypeError('owned collector ticket acquirer must return a release function');
       release = acquiredRelease;
     } catch (error) {
-      complete(error);
+      complete(error, undefined, true);
       return resultPromise;
     }
 
@@ -112,10 +120,10 @@ function createOwnedNativeSourceCollector(options, sanitizeSnapshot) {
 
     let work;
     try { work = execute(operation); }
-    catch (error) { complete(error); return resultPromise; }
+    catch (error) { complete(error, undefined, true); return resultPromise; }
     Promise.resolve(work).then(
       (result) => complete(null, result),
-      (error) => complete(error),
+      (error) => complete(error, undefined, true),
     );
     return resultPromise;
   }

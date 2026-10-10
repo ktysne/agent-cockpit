@@ -451,6 +451,7 @@ connect、observe、reconcileの受付済み処理が、結果判定と内部後
 再入可能なbinding、観測callback、ticket取得より先に処理を登録する。
 ticket取得中のconnect再入、受付停止と例外でも二重開始や未登録の仕事を作らない。
 ticket解放の例外でも記録の終了を通知し、例外を成功へ変換しない。
+接続確立後のticket解放例外では接続が残り得るため、呼び出し側がdisconnectで回収する。
 ticket取得関数は最初の処理受付前に一度だけ設定し、受付履歴がある場合と停止後は拒否する。
 
 旧接続の遅延完了またはrejectが、新しい接続のPromise、state、loanを変更しないことを確認する。
@@ -460,4 +461,6 @@ ticket取得関数は最初の処理受付前に一度だけ設定し、受付�
 
 内部binding単体と実runnerのfixture結果、両providerの実runtimeを分けて記録する。
 factory ticket接続、factory close順、子の物理停止、provider元作業のdrainと保存ownership解放はこの段階の対象外である。
-実装と検証結果はPR作成時にheadとともに記録する。
+PR #356の初期head `dc6ec22`は関連144件と全体2848件が成功し、失敗0、全体はWindows実symlink権限skip2である。
+ticket解放例外の失敗判定を修正した関連145件も成功した。修正headの全体検証は未実施である。
+実Claude/Codex runtimeとfactory ticket接続は未実施である。

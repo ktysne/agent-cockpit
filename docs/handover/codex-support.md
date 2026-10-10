@@ -727,7 +727,8 @@ sourceの検証対象は`d5f15c1`である。
 通常disconnect後の再接続と公開APIを保ち、恒久停止、非協調readのdrain保留、同期再入を確認する。
 factory ticket接続とcloseの停止順はこの段階に含めない。
 関連するcollectorとcompositionの144件が成功し、失敗とskipは0件である。
-全体テストとClaudeレビューは未実施で、PR作成後に固定headで実行する。
+固定head `dc6ec22`の全体テストは2848件成功、失敗0、Windows実symlink権限skip2である。
+Claude R1はblockerと要修正0件で、任意提案のうちticket解放例外の失敗判定を修正中である。
 非協調readは明示解放までdrainを保留し、通常disconnectのPromise契約と接続待ちの表示を維持する。
 実runtime、raw provider I/Oの終了、factory closeとの接続は未確認である。
 
