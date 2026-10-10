@@ -749,3 +749,33 @@ test('the isolated loader leaves global module cache and native filesystem refer
   assert.equal(require.cache[persistencePath], cachedPersistence);
   assert.equal(fsp.rename, nativeRename);
 });
+
+test('ID-F209-O01 managed persistence first phase retains paths and finalizes only its original ownership', async t => {
+  const { getReclamationPersistenceControl } = require('../src/server/reclamation-persistence');
+  const fixture = await createFixture(t);
+  const persistence = persistenceFor(fixture);
+  const control = getReclamationPersistenceControl(persistence);
+  assert.equal(getReclamationPersistenceControl({ ...persistence }), null);
+  const owner = control.bindOwner();
+  assert.ok(owner);
+  assert.equal(control.bindOwner(), false);
+  await persistence.close();
+  assert.throws(() => persistenceFor(fixture), { code: 'reclamation_persistence_path_owned' });
+  await owner.finalize();
+  const next = persistenceFor(fixture);
+  try {
+    await owner.finalize();
+    assert.throws(() => persistenceFor(fixture), { code: 'reclamation_persistence_path_owned' });
+  } finally { await next.close(); }
+});
+
+test('ID-F209-O01 persistence management is refused after read admission', async t => {
+  const { getReclamationPersistenceControl } = require('../src/server/reclamation-persistence');
+  const fixture = await createFixture(t);
+  const persistence = persistenceFor(fixture);
+  try {
+    const read = persistence.readAnchorBytes(100);
+    assert.equal(getReclamationPersistenceControl(persistence).bindOwner(), false);
+    await read;
+  } finally { await persistence.close(); }
+});
