@@ -562,7 +562,10 @@ capsule metadata、Q/CP順序とheldは両jointと真の旧遷移が受理する
 Q/CPのB境界は一方だけを旧予約量へ下げ、他方の新予約fitと旧全体遷移成功を保って、新予約だけが超えることを確認した。
 Q detailとreservationのrevision増加は両jointを通るが旧遷移で拒否され、新whitelistの独立検出証拠にはしていない。
 行追加と削除、非capsule CP metadata、revision逆行、cache不整合の独立controlは未確認である。
-構文と差分検査、CodeGraph変更後同期と調査が成功した。全体検証とClaudeレビューへ進む。
+構文と差分検査、CodeGraph変更後同期と調査が成功した。
+[PR #340](https://github.com/ktysne/agent-cockpit/pull/340)の`3f5798b`で追跡済みの全テストをNode runnerへ渡し、2,715件成功、1件skip、失敗0件を確認した。skipはWindows実symlink権限による。
+Claude R1はblockerと要修正0件に収束した。後続prepareの未追跡ファイル2件は、このPRと全体検証に含めていない。
+whitelistの各条件を単独で外した否定controlは未確認で、代表的な受理と候補外更新の拒否を確認した範囲にとどめる。
 
 共通raw JSON codecが背後のArrayBufferの独自byteLength getterを呼ぶ問題を[Issue #339](https://github.com/ktysne/agent-cockpit/issues/339)へ起票した。
 intrinsicで取得したbufferをBuffer.fromへ直接渡す経路で1回の呼び出しを再現した。

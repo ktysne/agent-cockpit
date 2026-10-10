@@ -468,7 +468,7 @@ CPのregistrations、notificationTargetsとlogicalTombstonesも全値を固定�
 通常fieldの更新は旧遷移の受理だけでは容量候補の範囲と認定できないため、初版の操作集合を次へ絞る。
 
 - no-opとQ/CPのroot revision、CPのledger revisionの増加。
-- 選択済みで回収を開始していない通常質問のlateAnswers追記。他のdetail fieldとreservationの全値は固定する。
+- 選択済みで、questionとreservationが隔離されておらず、本文が保持されていて回収を開始していない通常質問のlateAnswers追記。他のdetail fieldとreservationの全値は固定する。
 - 非質問の通常delivery detailのstate、cancelRequested、terminalAt、acceptedCorrelationとappliedCorrelationの進行。他のfieldは固定する。
 
 質問record revision、selection、held、externalResolutionとcancelledAt、question delivery、grave、reclamation、detailからgraveへの変更は初版の対象外にする。
