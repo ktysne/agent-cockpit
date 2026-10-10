@@ -11,7 +11,10 @@ const { getOwnedWaitSource } = require('./owned-native-claude-wait');
 const { createOwnedInstructionDispatch } = require('./owned-native-instruction-dispatch');
 const { getOwnedInstructionWriter, MAX_INSTRUCTION_DISPATCHES } = require('./owned-native-instruction-writer');
 const { createManagedCollector, sanitizeManagedCollectorSnapshot } = require('./managed-collector');
-const { createOwnedSourceAccessor } = require('./owned-native-source-collector');
+const {
+  createOwnedSourceAccessor,
+  aliasOwnedNativeCollectorControl,
+} = require('./owned-native-source-collector');
 
 const PROVIDER_NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
 const MAX_PROFILES = 16;
@@ -1625,7 +1628,9 @@ function createNativeLaunchComposition(options = {}) {
         contextId: record.currentContextId }; },
     });
     const collector = createManagedCollector({ ownedSourceAccessor: accessor, ...options });
-    record.ownedCollector = Object.freeze({ ...collector, snapshot: () => sanitizeManagedCollectorSnapshot(collector.snapshot()) });
+    const ownedCollector = Object.freeze({ ...collector, snapshot: () => sanitizeManagedCollectorSnapshot(collector.snapshot()) });
+    if (!aliasOwnedNativeCollectorControl(collector, ownedCollector)) throw compositionError('owned_collector_invalid');
+    record.ownedCollector = ownedCollector;
     return record.ownedCollector;
   }
 
