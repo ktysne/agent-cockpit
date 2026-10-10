@@ -811,12 +811,18 @@ instructionの作成前・作成中の状態文字列の成長は、準備期限
 
 固定した四正本を通常ファイルとして読み、path componentのsymlink、開いたfileのidentity、実readの上限、読み取り後のidentityを検査する。
 四正本を再読してraw指紋とidentityを照合し、対象basenameに続くtemp・backup候補があれば停止する。
-この検査は観測した変更の検出であり、外process排他、ABA、返却後の最新性、未知残留物の完全な検出を証明しない。
+この検査は観測した変更の検出であり、外process排他、path componentの差し替え競合、ABA、返却後の最新性、未知残留物の完全な検出を証明しない。
 
-旧Q2/CP3は全体検査とready snapshot検査、新Q3/CP4はjoint検査と新外側の既存更新将来予約を使う。
+旧Q2/CP3は局所検査後に元snapshotのreadyと修復要否を確認し、修復が必要ならsnapshot_requires_repairで停止する。
+元snapshotがreadyの場合は、存在slotの上限を固定MAXにした全体検査と自己遷移検査を先に行う。
+新Q3/CP4も存在slotの固定MAXによるjoint検査を先に行い、旧形式とともに実際の設定Bで全容量表を作ってから不足を判定する。
+意味検査が成立した範囲で設定Bが不足する場合は、件数と容量表を保持してcapacity_not_fitを返す。
+最後に実際の設定Bによる全体検査を行い、その失敗を容量不足と推測しない。
 canonical prepared materialは外部anchor/Iとの完全照合、設定Bとの一致、条件付き容量評価、現在CPのbyte境界分類を行う。
 未知schema、混在形式、修復必要、欠落、上限不一致と容量不足は固定した理由でblockedとし、書き換えない。
 Iの有効grantはIだけのB+Gで照合し、Q/CPへ借用しない。
+初版の旧Q/CPはgrantのない形式に限定し、局所検査に合格したgrantあり形式は未対応の理由で停止する。
+固定MAXによる全体検査にもアンカーの固定上限と復元将来予約の上限が残るため、そこで失敗した入力の意味破損と容量超過を完全には分類しない。
 
 結果の`inspectionStatus`は`inspected`または`blocked`であり、service readyや保存・復旧の権限を表さない。
 診断にはrawサイズとhash、形式、準備済み境界、容量表、件数表を返し、raw本文、store、token、内部識別子と例外本文は返さない。

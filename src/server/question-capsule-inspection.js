@@ -69,6 +69,7 @@ const SCOPE_LIMITATIONS = Object.freeze([
   'source_freshness_after_return_not_verified',
   'external_writer_exclusion_not_verified',
   'aba_changes_not_excluded',
+  'path_component_race_not_excluded',
   'orphan_and_backup_detection_not_exhaustive',
   'filesystem_allocation_and_os_durability_not_verified',
   'atomic_write_and_readback_not_verified',
@@ -305,7 +306,7 @@ function decodeRaw(entry, maxBytes) {
   }
 }
 
-function assertNormalizedWhole(snapshot) {
+function requireReadySnapshot(snapshot) {
   let result;
   try {
     result = validateReclamationSnapshot(snapshot);
@@ -335,7 +336,7 @@ function validateLegacyWhole(anchor, questions, checkpoint, instructions, limits
   } catch {
     block('invalid_representation');
   }
-  return { ...result, snapshot: assertNormalizedWhole(result.snapshot) };
+  return result;
 }
 
 function measureLegacySlots(snapshot, actualBytes, limits) {
@@ -345,12 +346,13 @@ function measureLegacySlots(snapshot, actualBytes, limits) {
     periodId: reservation.periodId,
   }));
   const anchorCapacity = measurePendingQuestionPeriodCapacity(snapshot.anchor, activePeriods);
-  if (!anchorCapacity.fits || anchorCapacity.projectedBytes === null ||
-      Math.max(actualBytes.anchor, anchorCapacity.projectedBytes) > NORMAL_ANCHOR_MAX_BYTES) {
-    block('capacity_not_fit');
-  }
   const restoredLegacyFutureBySlot = {
-    anchor: { rawCurrentBytes: actualBytes.anchor, reservedBytes: anchorCapacity.projectedBytes },
+    anchor: {
+      rawCurrentBytes: actualBytes.anchor,
+      reservedBytes: anchorCapacity.projectedBytes,
+      fits: anchorCapacity.fits && anchorCapacity.projectedBytes !== null &&
+        Math.max(actualBytes.anchor, anchorCapacity.projectedBytes) <= NORMAL_ANCHOR_MAX_BYTES,
+    },
     questions: null,
     checkpoint: null,
     instructions: null,
@@ -369,18 +371,27 @@ function measureLegacySlots(snapshot, actualBytes, limits) {
         ? measureCheckpointReservation({ snapshot: store, currentByteLimit: limit })
         : measureInstructionReservation({ snapshot: store, currentByteLimit: limit });
     const grantedExtraBytes = store.migrationAllowance?.maxExtraBytes ?? 0;
-    const writableLimit = limit + grantedExtraBytes;
-    if (Math.max(rawCurrentBytes ?? 0, reservation.currentBytes, reservation.reservedBytes) > writableLimit) {
-      block('capacity_not_fit');
-    }
+    const writableLimit = checkedCapacityAdd(limit, grantedExtraBytes);
     restoredLegacyFutureBySlot[slot] = {
       rawCurrentBytes,
       normalizedCurrentBytes: reservation.currentBytes,
       reservedBytes: reservation.reservedBytes,
       grantedExtraBytes,
+      fits: Math.max(rawCurrentBytes ?? 0, reservation.currentBytes, reservation.reservedBytes) <= writableLimit,
     };
   }
   return restoredLegacyFutureBySlot;
+}
+
+function allPresentSlotsFit(measurements) {
+  return Object.values(measurements).every((measurement) => measurement === null || measurement.fits === true);
+}
+
+function relaxedLimitsFor(values) {
+  return Object.fromEntries(LIMIT_FIELDS.map((slot) => [
+    slot,
+    values[slot] === null ? null : MAX_SOURCE_BYTES,
+  ]));
 }
 
 function countLegacy(snapshot) {
@@ -450,25 +461,30 @@ function buildNewCapsuleResult(values, limits, captures, report) {
       questionFile,
       checkpointFile,
       instructionStore: values.instructions,
-      normalByteLimitsBySlot: limits,
+      normalByteLimitsBySlot: relaxedLimitsFor({
+        questions: questionFile,
+        checkpoint: checkpointFile,
+        instructions: values.instructions,
+      }),
     });
   } catch {
     block('invalid_representation');
   }
-  const snapshot = assertNormalizedWhole(joint.snapshot);
+  const snapshot = joint.snapshot;
   report.representation = 'capsule_q3_cp4';
   report.operationProvenance = 'unknown';
   report.counts = {
     restoredLegacyView: countLegacy(snapshot),
     targetCapsuleView: countCapsuleFiles(questionFile, checkpointFile, snapshot),
   };
-  report.measurements.restoredLegacyFutureBySlot = measureLegacySlots(snapshot,
+  const restoredLegacyFutureBySlot = measureLegacySlots(snapshot,
     {
       anchor: captures.anchor.bytes.length,
       questions: null,
       checkpoint: null,
       instructions: captures.instructions?.bytes.length ?? null,
     }, limits);
+  report.measurements.restoredLegacyFutureBySlot = restoredLegacyFutureBySlot;
 
   const questionCapacity = measureQuestionCapsuleExistingUpdateReservation({ questionFile, currentByteLimit: limits.questions });
   const checkpointCapacity = checkpointFile === null ? null
@@ -478,20 +494,28 @@ function buildNewCapsuleResult(values, limits, captures, report) {
       rawCurrentBytes: captures.questions.bytes.length,
       normalizedCurrentBytes: questionCapacity.currentBytes,
       reservedBytes: questionCapacity.reservedBytes,
+      fits: questionCapacity.fits && captures.questions.bytes.length <= limits.questions,
     },
     checkpoint: checkpointCapacity === null ? null : {
       rawCurrentBytes: captures.checkpoint.bytes.length,
       normalizedCurrentBytes: checkpointCapacity.currentBytes,
       reservedBytes: checkpointCapacity.reservedBytes,
+      fits: checkpointCapacity.fits && captures.checkpoint.bytes.length <= limits.checkpoint,
     },
   };
-  if (!questionCapacity.fits || (checkpointCapacity !== null && !checkpointCapacity.fits)) {
-    block('capacity_not_fit');
-  }
-  const instructionGrant = snapshot.stores.instructions?.migrationAllowance?.maxExtraBytes ?? 0;
-  if (captures.instructions !== null &&
-      captures.instructions.bytes.length > limits.instructions + instructionGrant) {
-    block('capacity_not_fit');
+  if (!allPresentSlotsFit(restoredLegacyFutureBySlot) ||
+      !allPresentSlotsFit(report.measurements.targetFixedFutureBySlot)) block('capacity_not_fit');
+
+  try {
+    validateQuestionCapsuleFiles({
+      anchor: values.anchor,
+      questionFile,
+      checkpointFile,
+      instructionStore: values.instructions,
+      normalByteLimitsBySlot: limits,
+    });
+  } catch {
+    block('invalid_representation');
   }
 }
 
@@ -591,30 +615,30 @@ function parseAndValidate(captures, limits) {
       const questions = normalizeQuestionJournalV2Local(q);
       const checkpoint = values.checkpoint === null ? null : normalizeCheckpointV3Local(values.checkpoint);
       const instructions = values.instructions === null ? null : normalizeInstructionJournalV2Local(values.instructions);
-      const whole = validateLegacyWhole(values.anchor, questions, checkpoint, instructions, limits);
       report.representation = 'legacy_q2_cp3';
-      report.counts.restoredLegacyView = countLegacy(whole.snapshot);
-      report.measurements.restoredLegacyFutureBySlot = measureLegacySlots(whole.snapshot,
+      report.operationProvenance = null;
+      requireReadySnapshot({
+        anchor: values.anchor,
+        stores: { questions, checkpoint, instructions },
+      });
+      if ((questions !== null && questions.migrationAllowance !== null) ||
+          (checkpoint !== null && checkpoint.migrationAllowance !== null)) {
+        block('unsupported_legacy_q_cp_grant');
+      }
+      const expandedLimits = relaxedLimitsFor({ questions, checkpoint, instructions });
+      const expandedWhole = validateLegacyWhole(values.anchor, questions, checkpoint, instructions, expandedLimits);
+      report.representation = 'legacy_q2_cp3';
+      report.counts.restoredLegacyView = countLegacy(expandedWhole.snapshot);
+      const restoredLegacyFutureBySlot = measureLegacySlots(expandedWhole.snapshot,
         Object.fromEntries(BYTE_SLOTS.map((slot) => [slot, captures[slot]?.bytes.length ?? 0])), limits);
+      report.measurements.restoredLegacyFutureBySlot = restoredLegacyFutureBySlot;
+      if (!allPresentSlotsFit(restoredLegacyFutureBySlot)) block('capacity_not_fit');
+      validateLegacyWhole(values.anchor, questions, checkpoint, instructions, limits);
     } else {
       const checkpointVersion = values.checkpoint?.schemaVersion;
       if ((q?.schemaVersion === 2 && checkpointVersion === 4) ||
           (q?.schemaVersion === 3 && checkpointVersion === 3)) block('mixed_representation');
       block('unsupported_representation');
-    }
-    if (report.representation === 'capsule_q3_cp4') {
-      for (const slot of ['questions', 'checkpoint']) {
-        if (limits[slot] !== null && captures[slot].bytes.length > limits[slot]) {
-          block('capacity_not_fit');
-        }
-      }
-    }
-    if (report.representation === 'prepared_material_v1' && report.preparedBoundary === 'complete') {
-      for (const slot of ['questions', 'checkpoint']) {
-        if (limits[slot] !== null && captures[slot].bytes.length > limits[slot]) {
-          block('capacity_not_fit');
-        }
-      }
     }
     report.inspectionStatus = 'inspected';
     report.reasons = [];
@@ -638,7 +662,7 @@ async function readRound(root, limits) {
   }
   const candidatesAfter = await scanOrphanCandidates(root);
   if (candidatesAfter.length > 0) block('orphan_candidate_present');
-  return { captures, candidates };
+  return { captures };
 }
 
 async function inspectOnce(configuration) {
@@ -646,8 +670,7 @@ async function inspectOnce(configuration) {
   try {
     first = await readRound(configuration.root, configuration.limits);
     const second = await readRound(configuration.root, configuration.limits);
-    if (first.candidates.join('\n') !== second.candidates.join('\n') ||
-        BYTE_SLOTS.some((slot) => !sameCapture(first.captures[slot], second.captures[slot]))) {
+    if (BYTE_SLOTS.some((slot) => !sameCapture(first.captures[slot], second.captures[slot]))) {
       block('source_changed_during_inspection');
     }
     return parseAndValidate(first.captures, configuration.limits);

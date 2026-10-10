@@ -35,10 +35,15 @@ const {
   validateQuestionCapsulePreparedMaterial,
 } = require('../src/server/question-capsule-prepared-material-codec');
 const { planQuestionCapsuleFileMigration } = require('../src/server/question-capsule-migration-plan');
+const { measureQuestionCapsuleExistingUpdateReservation } = require('../src/server/question-capsule-existing-update-capacity');
+const { planMigrationAllowanceRelease } = require('../src/server/migration-allowance-release');
 const {
   MAX_SOURCE_BYTES,
   measureInstructionReservation,
 } = require('../src/server/reclamation-capacity-bounds');
+const { validateReclamationSnapshot } = require('../src/server/reclamation-store-consistency');
+const { createQuestionCapsuleWholeValidationFixture } = require('./helpers/question-capsule-whole-validation-fixtures');
+const { validateQuestionCapsuleWholeRepresentation } = require('../src/server/question-capsule-whole-validation');
 
 const FILES = Object.freeze({
   anchor: 'question-reclamation-anchor.json',
@@ -46,6 +51,7 @@ const FILES = Object.freeze({
   checkpoint: 'delivery-checkpoint.json',
   instructions: 'instruction-journal.json',
 });
+const WRITE_ACCESS_FLAGS = fsConstants.O_WRONLY | fsConstants.O_RDWR;
 const ALL_LIMITS = Object.freeze({
   questions: MAX_SOURCE_BYTES,
   checkpoint: MAX_SOURCE_BYTES,
@@ -67,6 +73,20 @@ function legacyBytes(fixture) {
       ? null : encodeCheckpointV3Local(snapshot.stores.checkpoint).bytes,
     instructions: snapshot.stores.instructions === null
       ? null : encodeInstructionJournalV2Local(snapshot.stores.instructions).bytes,
+  };
+}
+
+function legacyWholeInput(snapshot, limits = ALL_LIMITS) {
+  return {
+    formatVersion: 1,
+    anchor: snapshot.anchor,
+    ordinaryStores: snapshot.stores,
+    capsulePairs: [],
+    deliveryAttemptOrder: snapshot.stores.checkpoint === null ? []
+      : snapshot.stores.checkpoint.ledger.deliveries.map((delivery) => delivery.deliveryAttemptId),
+    questionReservationOrder: snapshot.stores.questions === null ? []
+      : snapshot.stores.questions.reservations.map((reservation) => reservation.internalQuestionId),
+    normalByteLimitsBySlot: limits,
   };
 }
 
@@ -242,6 +262,7 @@ test('legacy Q2/CP3 inspection reports reconstructed reservations and leaves fil
     assert.equal(result.files.questions.sizeBytes, raw.questions.length);
     assert.equal(result.files.questions.sha256, createHash('sha256').update(raw.questions).digest('hex'));
     assert.equal(Object.isFrozen(result.scopeLimitations), true);
+    assert.ok(result.scopeLimitations.includes('path_component_race_not_excluded'));
     assert.deepEqual(after.names, before.names);
     for (const name of before.names) {
       assert.deepEqual(after.files[name].bytes, before.files[name].bytes);
@@ -249,6 +270,79 @@ test('legacy Q2/CP3 inspection reports reconstructed reservations and leaves fil
       assert.equal(after.files[name].mtimeNs, before.files[name].mtimeNs);
     }
   });
+});
+
+test('legacy Q2/CP3 capacity failure at canonical B minus one retains every slot measurement', async () => {
+  const fixture = fixtureFor('claude');
+  const raw = legacyBytes(fixture);
+  const limits = { ...ALL_LIMITS, questions: raw.questions.length - 1 };
+  await withDirectory(raw, async (root) => {
+    const result = await openQuestionCapsuleInspection(options(root, limits)).inspect();
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['capacity_not_fit']);
+    assert.equal(result.representation, 'legacy_q2_cp3');
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.questions.rawCurrentBytes,
+      raw.questions.length);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.questions.fits, false);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.checkpoint.fits, true);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.instructions.fits, true);
+    assert.ok(result.counts.restoredLegacyView.questions);
+  });
+});
+
+test('legacy Q2/CP3 repair state is classified before configured-B capacity', async () => {
+  const fixture = fixtureFor('claude');
+  assert.doesNotThrow(() => validateQuestionCapsuleWholeRepresentation(legacyWholeInput(fixture.snapshot)));
+  const snapshot = structuredClone(fixture.snapshot);
+  const retained = snapshot.stores.questions.reservations.find((reservation) =>
+    reservation.bodyState === 'retained' && reservation.reclamation === null && reservation.quarantinedAt === null);
+  assert.ok(retained);
+  const retiredAt = Math.max(0, ...snapshot.anchor.retiredQuestionPeriods.map((period) => period.retiredAt)) + 1;
+  snapshot.anchor.retiredQuestionPeriods.push({
+    identity: structuredClone(retained.identity),
+    periodId: retained.periodId,
+    retiredAt,
+    reason: 'confirmed-retirement',
+  });
+  const snapshotResult = validateReclamationSnapshot(snapshot);
+  assert.equal(snapshotResult.status, 'reconciliation-required');
+  assert.deepEqual(snapshotResult.reasons, ['question_retirement_snapshot']);
+  const raw = legacyBytes({ snapshot });
+  const before = await materializeFiles(raw);
+  try {
+    const beforeState = await directoryState(before);
+    const result = await openQuestionCapsuleInspection(options(before, {
+      ...ALL_LIMITS,
+      questions: raw.questions.length - 1,
+    })).inspect();
+    const afterState = await directoryState(before);
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['snapshot_requires_repair']);
+    assert.deepEqual(afterState, beforeState);
+  } finally {
+    await removeInspectionDirectory(before);
+  }
+});
+
+test('legacy Q2/CP3 grant rows are explicitly unsupported after valid local normalization', async () => {
+  const generated = createQuestionCapsuleWholeValidationFixture({ ordinaryQuestionSelected: true });
+  for (const slot of ['questions', 'checkpoint']) {
+    const snapshot = structuredClone(generated.snapshot);
+    snapshot.stores[slot].migrationAllowance = structuredClone(generated.sourceGrants[slot]);
+    const validSnapshot = validateReclamationSnapshot(snapshot);
+    assert.equal(validSnapshot.status, 'ready');
+    assert.deepEqual(validSnapshot.reasons, []);
+    assert.equal(validateQuestionCapsuleWholeRepresentation(legacyWholeInput(snapshot))
+      .snapshot.stores[slot].migrationAllowance.maxExtraBytes,
+    generated.sourceGrants[slot].maxExtraBytes);
+    const raw = legacyBytes({ snapshot });
+    await withDirectory(raw, async (root) => {
+      const result = await openQuestionCapsuleInspection(options(root)).inspect();
+      assert.equal(result.inspectionStatus, 'blocked', slot);
+      assert.equal(result.representation, 'legacy_q2_cp3', slot);
+      assert.deepEqual(result.reasons, ['unsupported_legacy_q_cp_grant'], slot);
+    });
+  }
 });
 
 test('Q3/CP4 inspection separates ordinary records, wrappers, entries, and restored rows for both providers', async () => {
@@ -275,6 +369,111 @@ test('Q3/CP4 inspection separates ordinary records, wrappers, entries, and resto
         result.measurements.targetFixedFutureBySlot.questions.normalizedCurrentBytes);
     });
   }
+});
+
+test('Q3/CP4 capacity failure at canonical B minus one retains counts and both capacity tables', async () => {
+  const fixture = fixtureFor('claude');
+  const raw = capsuleBytes(fixture);
+  const questionLimit = raw.questions.length - 1;
+  assert.equal(raw.questions.length, encodeQuestionCapsuleJournalV3Local(fixture.questionFile).sizeBytes);
+  assert.ok(questionLimit < MAX_SOURCE_BYTES);
+  await withDirectory(raw, async (root) => {
+    const result = await openQuestionCapsuleInspection(options(root, {
+      ...ALL_LIMITS,
+      questions: questionLimit,
+    })).inspect();
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['capacity_not_fit']);
+    assert.equal(result.representation, 'capsule_q3_cp4');
+    assert.ok(result.counts.restoredLegacyView.questions);
+    assert.ok(result.counts.targetCapsuleView.questions);
+    assert.equal(result.measurements.targetFixedFutureBySlot.questions.fits, false);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.questions.fits, false);
+    assert.ok(result.measurements.restoredLegacyFutureBySlot.anchor);
+    assert.equal(result.measurements.targetFixedFutureBySlot.checkpoint.fits, true);
+  });
+});
+
+test('Q3/CP4 raw whitespace at B plus one is capacity-blocked after normalized bytes fit', async () => {
+  const fixture = fixtureFor('claude');
+  const raw = capsuleBytes(fixture);
+  const questionCapacity = measureQuestionCapsuleExistingUpdateReservation({
+    questionFile: fixture.questionFile,
+    currentByteLimit: MAX_SOURCE_BYTES,
+  });
+  const questionLimit = Math.max(raw.questions.length, questionCapacity.reservedBytes);
+  assert.equal(questionCapacity.currentBytes, raw.questions.length);
+  assert.ok(questionLimit < MAX_SOURCE_BYTES);
+  const padded = {
+    ...raw,
+    questions: Buffer.concat([raw.questions, Buffer.alloc(questionLimit + 1 - raw.questions.length, 0x20)]),
+  };
+  assert.equal(padded.questions.length, questionLimit + 1);
+  await withDirectory(padded, async (root) => {
+    const result = await openQuestionCapsuleInspection(options(root, {
+      ...ALL_LIMITS,
+      questions: questionLimit,
+    })).inspect();
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['capacity_not_fit']);
+    assert.equal(result.measurements.targetFixedFutureBySlot.questions.rawCurrentBytes, questionLimit + 1);
+    assert.equal(result.measurements.targetFixedFutureBySlot.questions.normalizedCurrentBytes, raw.questions.length);
+    assert.equal(result.measurements.targetFixedFutureBySlot.questions.fits, false);
+    assert.ok(result.measurements.targetFixedFutureBySlot.questions.reservedBytes <= questionLimit);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.questions.fits, true);
+  });
+});
+
+test('Q3/CP4 instruction at canonical B minus one reaches measurement and retains the whole table', async () => {
+  const originalFixture = fixtureFor('claude');
+  const release = planMigrationAllowanceRelease({
+    anchor: originalFixture.snapshot.anchor,
+    stores: originalFixture.snapshot.stores,
+    normalByteLimitsBySlot: ALL_LIMITS,
+    slot: 'instructions',
+  });
+  assert.equal(release.status, 'released');
+  assert.equal(validateReclamationSnapshot(release.snapshot).status, 'ready');
+  const fixture = {
+    ...originalFixture,
+    input: { ...originalFixture.input, instructionStore: release.snapshot.stores.instructions },
+  };
+  const raw = capsuleBytes(fixture);
+  assert.equal(fixture.input.instructionStore.migrationAllowance, null);
+  assert.equal(raw.instructions.length, encodeInstructionJournalV2Local(fixture.input.instructionStore).sizeBytes);
+  await withDirectory(raw, async (root) => {
+    const result = await openQuestionCapsuleInspection(options(root, {
+      ...ALL_LIMITS,
+      instructions: raw.instructions.length - 1,
+    })).inspect();
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['capacity_not_fit']);
+    assert.equal(result.representation, 'capsule_q3_cp4');
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.instructions.fits, false);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.instructions.rawCurrentBytes, raw.instructions.length);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.questions.fits, true);
+    assert.equal(result.measurements.restoredLegacyFutureBySlot.checkpoint.fits, true);
+    assert.equal(result.measurements.targetFixedFutureBySlot.questions.fits, true);
+    assert.equal(result.measurements.targetFixedFutureBySlot.checkpoint.fits, true);
+  });
+});
+
+test('a Q3/CP4 meaning error with low B remains invalid representation', async () => {
+  const fixture = fixtureFor('claude');
+  const raw = capsuleBytes(fixture);
+  const mismatchedAnchor = structuredClone(fixture.input.anchor);
+  mismatchedAnchor.storeId = '99999999-9999-4999-8999-999999999999';
+  const anchorBytes = encodeQuestionReclamationAnchorV1Local(mismatchedAnchor).bytes;
+  assert.doesNotThrow(() => encodeQuestionCapsuleJournalV3Local(fixture.questionFile));
+  await withDirectory({ ...raw, anchor: anchorBytes }, async (root) => {
+    const result = await openQuestionCapsuleInspection(options(root, {
+      ...ALL_LIMITS,
+      questions: raw.questions.length - 1,
+    })).inspect();
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['invalid_representation']);
+    assert.equal(result.measurements.targetFixedFutureBySlot.questions, null);
+  });
 });
 
 test('prepared inspection identifies prepared and checkpoint-moved physical boundaries', async () => {
@@ -403,6 +602,9 @@ test('Q3/CP4 instruction raw bytes may reach B plus the verified grant, but not 
 });
 
 test('ready and blocked inspections use only read-only file opens and no filesystem mutation APIs', async () => {
+  assert.ok(Number.isInteger(WRITE_ACCESS_FLAGS) && WRITE_ACCESS_FLAGS > 0);
+  assert.notEqual(fsConstants.O_WRONLY & WRITE_ACCESS_FLAGS, 0);
+  assert.notEqual(fsConstants.O_RDWR & WRITE_ACCESS_FLAGS, 0);
   const fixture = fixtureFor('claude');
   const current = capsuleBytes(fixture);
   for (const [bytes, expectedStatus] of [
@@ -418,10 +620,22 @@ test('ready and blocked inspections use only read-only file opens and no filesys
       assert.equal(observed.result.inspectionStatus, expectedStatus);
       assert.ok(observed.openedFlags.length > 0);
       assert.ok(observed.openedFlags.every((flags) => Number.isInteger(flags) &&
-        (flags & fsConstants.O_ACCMODE) === fsConstants.O_RDONLY));
+        (flags & WRITE_ACCESS_FLAGS) === 0));
       assert.deepEqual(observed.mutations, []);
     });
   }
+  await withWorkspace('normal', 'claude', 'prepared', async (root, limits) => {
+    const observed = await withReadOnlyFilesystemSpy(async ({ openedFlags, mutations }) => ({
+      result: await openQuestionCapsuleInspection(options(root, limits)).inspect(),
+      openedFlags,
+      mutations,
+    }));
+    assert.equal(observed.result.inspectionStatus, 'inspected');
+    assert.equal(observed.result.representation, 'prepared_material_v1');
+    assert.ok(observed.openedFlags.every((flags) => Number.isInteger(flags) &&
+      (flags & WRITE_ACCESS_FLAGS) === 0));
+    assert.deepEqual(observed.mutations, []);
+  });
 });
 
 test('prepared material whose manifest limits differ from configured limits is blocked', async () => {
@@ -446,6 +660,11 @@ test('unknown schemas, mixed Q/CP versions, missing required files, presence mis
     assert.equal(result.inspectionStatus, 'blocked');
     assert.deepEqual(result.reasons, ['mixed_representation']);
   });
+  await withDirectory({ ...current, checkpoint: legacyBytes(fixture).checkpoint }, async (root) => {
+    const result = await openQuestionCapsuleInspection(options(root)).inspect();
+    assert.equal(result.inspectionStatus, 'blocked');
+    assert.deepEqual(result.reasons, ['mixed_representation']);
+  });
   await withDirectory({ ...current, questions: null }, async (root) => {
     const result = await openQuestionCapsuleInspection(options(root)).inspect();
     assert.equal(result.inspectionStatus, 'blocked');
@@ -460,6 +679,41 @@ test('unknown schemas, mixed Q/CP versions, missing required files, presence mis
     const orphan = await openQuestionCapsuleInspection(options(root)).inspect();
     assert.equal(orphan.inspectionStatus, 'blocked');
     assert.deepEqual(orphan.reasons, ['orphan_candidate_present']);
+  });
+});
+
+test('inspection blocks a junction at a canonical data-directory path', async (t) => {
+  const fixture = fixtureFor('claude');
+  const bytes = capsuleBytes(fixture);
+  await withDirectory(bytes, async (root) => {
+    const target = path.join(root, 'target-data');
+    const junction = path.join(root, 'linked-data');
+    await fs.mkdir(target);
+    for (const filename of Object.values(FILES)) {
+      const source = path.join(root, filename);
+      try {
+        await fs.rename(source, path.join(target, filename));
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+    }
+    try {
+      await fs.symlink(target, junction, 'junction');
+    } catch (error) {
+      if (['EACCES', 'ENOTSUP', 'EPERM'].includes(error.code)) {
+        t.skip('the test environment does not allow creating directory junctions');
+        return;
+      }
+      throw error;
+    }
+    try {
+      const result = await openQuestionCapsuleInspection(options(junction)).inspect();
+      assert.equal(result.inspectionStatus, 'blocked');
+      assert.deepEqual(result.reasons, ['unsafe_directory_path']);
+    } finally {
+      await fs.unlink(junction);
+    }
   });
 });
 
