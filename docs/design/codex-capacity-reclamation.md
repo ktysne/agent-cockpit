@@ -560,6 +560,41 @@ prepared material内部に旧Q/CPがあっても、現在CPとの重複をbyte�
 completeの分類は提出byteの一致だけで、過去の保存手順やdurableな完了を認証しない。
 信頼する通常上限とsourceの最新性、実排他、保存admission、atomicピーク、readback、残留物とcold復旧は後続の採用条件とする。
 
+### 条件付きの移行容量評価
+
+容量評価は正規prepared materialと固定した外部anchor/Iから旧sourceとtargetを再生成し、期待する通常上限をmanifestの上限と値で照合する。
+上限の設定元の信頼性は呼び出し元で検証する必要があり、この値一致だけで認証しない。
+不正な材料、上限不一致、旧sourceの容量前提違反は固定TypeErrorで拒否する。
+正当な材料の準備サイズや新しい将来予約が通常枠を超える場合は、`stableBoundsFit:false`として測定結果を返す。
+
+質問の準備材料全体をE、通常上限をBqとすると、初版の対象はE≤Bqかつtarget Qの全将来予約≤Bqである。
+checkpointもtargetの全将来予約を自身の通常上限と照合し、slot間で余白を融通しない。
+旧Q/CPは既存の将来予約測定、新Q/CPはcapsule既存更新の測定を使う。
+anchorは選択対象に限らず、旧Qの全予約のidentityとperiodから将来予約を測定する。
+Iは自身の通常上限を既存測定へ渡し、有効grantを含む自身の枠でrawと将来予約を保護する。
+
+返却する各境界のcurrent表は、計画から再生成した四正本の期待byte数である。
+実filesystemの状態を観測した表として扱わない。
+source、prepared、checkpoint_movedでは、Q/CPごとに現在rawと旧将来予約と新将来予約の最大値をprotected表へ載せる。
+completeではtarget rawとtarget将来予約の最大値を載せるが、この低下をleaseの縮小や解放許可に使わない。
+anchorとIは全境界でrawと自身の将来予約の最大値を保持し、材料内の旧sourceと外に残るCPの重複を控除しない。
+CP不在はcheckpoint_moved境界を省き、CPと不在Iのbyteを0とする。
+
+単一tempの候補は次の保存直前表へtempの実byteを加える。
+logicalBytesはcurrent合計との和、conditionalReservationBytesはprotected合計との和であり、追加lease量を表さない。
+
+| 保存候補 | 保存直前の境界 | tempのbyte |
+|---|---|---|
+| questionPrepare | source | E |
+| checkpointTarget（CP存在時のみ） | prepared | target CP |
+| questionTarget | checkpoint_moved（CP不在はprepared） | target Q |
+
+この評価は全writer停止、元anchor/I不変、単一操作、単一atomic temp、未知orphan/backup不在、完了まで材料不変、完了まで旧と新の将来予約を保持するという固定した仮定を返す。
+呼び出し元のbooleanで仮定の成立を認定しない。
+旧migration用の永続grantを取得すると固定した元sourceが変わるため、そのprotocolをこの評価へ流用しない。
+実排他、source最新性、追加operation leaseの会計、orphan検査、atomic保存とreadback、OS耐久性、cold復旧とruntime接続は別に検証する。
+`stableBoundsFit`は通常slot枠への収まりだけを示し、保存や再開の許可を返さない。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
