@@ -595,11 +595,13 @@ prepared materialは`codex/question-capsule-prepared-material-209-20261010`で�
 通常journalへ未知fieldを追加せず、現loaderやwriterへは接続しない。
 16 MiBの外側受理政策を、manifestの入れ子indentとbase64長を含めて文字列生成前に検査する。
 局所検査と完全材料検証を分け、通常上限B、durable可用性、保存とcoldの成功を認定しない。
-個別12件と最後のraw getter補強1件が成功し、構文、差分、CodeGraph同期と調査も成功した。
+専用テスト12件が成功し、そのうちraw getterの1件は最終補強後にも成功した。構文、差分、CodeGraph同期と調査も成功した。
 CPなし、両providerと混在、raw空白と重複keyの保持、有効I grantとB+G境界、指紋と外部材料変更、getter/Proxy/SAB、入力不変を確認した。
 16 MiBちょうどと+1は局所codecの境界fixtureで検査したもので、完全検証を通るQ2の意味を示す試験ではない。
 合法な旧sourceが外側上限を超える作成controlでは、base64文字列の生成0回で拒否することを確認した。
-全体テストとClaudeレビューへ進む。
+`d87c6f6`の追跡済み全体は2,738件成功、1件skip、失敗0件だった。skipはWindows実symlink権限による。
+Claude R1はblockerと要修正0件。任意提案のevidence正常controlと完全材料検証のI容量境界を補強し、対象2件が成功した。
+製品コードは全体検証した`d87c6f6`から変更していない。Claudeの妥当性確認へ進む。
 
 ## 起票していない候補
 

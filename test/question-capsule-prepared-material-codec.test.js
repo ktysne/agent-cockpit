@@ -7,6 +7,7 @@ const { types } = require('node:util');
 const {
   createQuestionCapsulePrepareManifest,
   normalizeQuestionCapsulePrepareManifest,
+  validateQuestionCapsulePrepareEvidence,
 } = require('../src/server/question-capsule-prepare-manifest-codec');
 const {
   createQuestionCapsulePreparedMaterial,
@@ -387,20 +388,22 @@ test('material creation rejects over-cap source bytes before generating base64',
   fixture.input.normalByteLimitsBySlot.questions = MAX_SOURCE_BYTES;
   const manifest = createQuestionCapsulePrepareManifest(fixture.input).manifest;
   const plan = planQuestionCapsuleFileMigration(fixture.input);
-  let base64Calls = 0;
-  const toString = Buffer.prototype.toString;
-  t.mock.method(Buffer.prototype, 'toString', function (encoding, ...args) {
-    if (encoding === 'base64') base64Calls += 1;
-    return Reflect.apply(toString, this, [encoding, ...args]);
-  });
-  assertInvalid({
+  const input = {
     manifest,
     sourceBytes: fixture.input.sourceBytes,
     targetBytes: {
       questions: plan.targets.questions.bytes,
       checkpoint: plan.targets.checkpoint?.bytes ?? null,
     },
-  }, createQuestionCapsulePreparedMaterial);
+  };
+  assert.doesNotThrow(() => validateQuestionCapsulePrepareEvidence(input));
+  let base64Calls = 0;
+  const toString = Buffer.prototype.toString;
+  t.mock.method(Buffer.prototype, 'toString', function (encoding, ...args) {
+    if (encoding === 'base64') base64Calls += 1;
+    return Reflect.apply(toString, this, [encoding, ...args]);
+  });
+  assertInvalid(input, createQuestionCapsulePreparedMaterial);
   assert.equal(base64Calls, 0);
 });
 
@@ -504,6 +507,14 @@ test('raw instruction bytes accept exactly B plus the verified I grant upper bou
   });
   assert.equal(validated.sourceFingerprints.instructions.sizeBytes,
     fixture.input.sourceBytes.instructions.length);
+
+  const loweredNormalLimit = clone(created.material);
+  loweredNormalLimit.manifest.normalByteLimitsBySlot.instructions -= 1;
+  assertInvalid({
+    material: loweredNormalLimit,
+    anchorBytes: fixture.input.sourceBytes.anchor,
+    instructionBytes: fixture.input.sourceBytes.instructions,
+  }, validateQuestionCapsulePreparedMaterial);
 
   const overGrant = createQuestionCapsuleMigrationPlanFixture({});
   const originalInstructions = overGrant.input.sourceBytes.instructions;
