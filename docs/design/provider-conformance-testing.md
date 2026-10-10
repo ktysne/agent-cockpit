@@ -359,3 +359,31 @@ ID-F11-B03 は ended tombstone と explicit order を検証する共通 kernel u
 対応する試験は [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) と [conversation-registry.test.js](../../test/conversation-registry.test.js) にある。
 
 この結果は passive registration bootstrap の適合に限り、fresh evidence reconciliation や Issue #177 全体の runtime 復旧を示さない。
+
+## 明示的回収factoryの操作受付と終了 (#209)
+
+`ID-F209-L01`は、ClaudeとCodexの実factory fixtureで共通の受付停止を確認するシナリオである。
+回収を明示的に有効にしたfactoryと、質問および指示serviceの保存を保持できるfixtureを能力条件とする。
+service queue、provider後着callback、質問timer、回収coreとschedulerを対象にする。
+
+保存を一度進行中に保持し、未着手の操作を追加してcloseを呼ぶ。
+close呼出し直後から新しいticketを発行せず、受付済み操作は成功、取消または失敗で終了し、ticketを一度だけ返すことを期待する。
+closeの完了時点で対象ticketが残らず、既存contextと保存処理のcloseも終了していることを観測する。
+後着callbackや保存済みtimerをclose後に呼んでも、新しい保存を開始しない。
+完了は保持点の明示解放とPromiseの終了で確認し、固定のsleepを成功条件にしない。
+
+contextの同期的な保存禁止とready拒否は、ticketのdrainを待つ前に行う。
+起動失敗とsettings解除からの同期close再入でも終了が循環しないことを確認する。
+回収無効の標準modeはgateを生成せず、既存APIとcloseの契約を保つ。
+providerの識別子、時刻と既存取消のerror codeの差を許容するが、追加送信、追加保存、受付再開、authorityの再発行は許容しない。
+
+両providerのfixture適合と実runtimeを分けて記録する。
+acceptedへの実到達と登録済みlistenerの後着拒否は、両providerで確認する。
+後着拒否はserviceへ登録したlistenerを直接呼ぶcontrolであり、adapter/routerを通した後着経路の確認ではない。
+listenerの保存中にcloseされるcontrolはunknownを両provider、appliedを現fixtureが対応するCodexで確認する。
+Claudeのlive appliedは未確認であり、cold checkpointのseedや別のcallbackで代用しない。
+このシナリオはnativeの長時間startやread待機の物理取消、外process排他、新schema保存許可、電源断耐久性、件数枠解放を証明しない。
+実Claude/Codex runtimeの適合は横断統合試験に残す。
+`4db527e`の新factory試験15件とgate単体7件を含む関連11ファイルは248件成功、失敗0、skip0である。
+同じheadの全体`npm test`は2802件成功、失敗0、Windows実symlink権限によるskip2である。
+このskip数には未実行のClaude live appliedと実runtimeを含めず、上記の未確認境界として別に扱う。
