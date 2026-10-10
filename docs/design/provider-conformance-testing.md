@@ -574,3 +574,27 @@ Claude R2もblockerと要修正が0件で、実originalへの転送とcache復�
 restartは旧factoryのclose拒否で止まり、同pathの新owner取得拒否は直接persistenceを作る対照で確認する。
 最終の字下げ整理と重複変数除去後も構文確認と未知leaseの2件が成功した。
 製品コードは全体検証headから不変で、軽微な整形と結果記録だけのため全体再実行とR3は省略した。
+
+## writerのプロセス間排他 (#313)
+
+以下は[排他設計](writer-ownership-exclusion.md)の後続実装に対する期待条件で、製品fixtureは未実装である。
+private primitive、standalone接続、factory接続、全参加writerの横断確認を別段階で記録する。
+専有probeとfixtureの成功を、Claude/Codex実runtimeの成功へ読み替えない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-W01 | 2つの実processをbarrierで同じ保存先取得へ進める | 参加したwriterの一方だけが取得し、敗者のsource load、fingerprint、temp作成とnative起動は0回 |
+| ID-F313-W02 | factory集合の途中で競合させる | 新規source内容I/Oを始めず、当該試行が作ったmarkerだけをrollback。既存ownerのmarkerは不変 |
+| ID-F313-W03 | metadata保存とrollbackを故障させる | 不完全markerも占有として拒否し、元の失敗とrollback failureを両方保持 |
+| ID-F313-W04 | native、writer、readbackまたはcollectorを保留してcloseする | 終了未確認中はunlinkを試みず、子backendのcloseから最終解放へ迂回しない |
+| ID-F313-W05 | 正常release後に新ownerを取得し旧releaseを繰返す | 旧ownerは保存とunlinkを追加せず、新ownerのmarkerと保存内容を変えない |
+| ID-F313-W06 | 停止確認後のunlinkを失敗または結果不明にする | 旧capabilityを再利用せず、自動retryしない。marker残存が不明ならdisk所有保持を確認済みと報告しない |
+| ID-F313-W07 | 所有後のprocess crashと次の起動を観測する | 残留markerをTTL/PIDだけで奪取せず、取得を拒否。正常終了probeと区別する |
+| ID-F313-W08 | 大小文字、junction、hardlink、短縮名と対象外filesystemを与える | 対応範囲で同じfileが共通keyとなるか、入力を取得前後の適切な境界で拒否。検出できない範囲を許容しない |
+| ID-F313-W09 | 全participant停止と新規起動禁止のfixtureで回復する | 特定markerだけを処理し、次ownerは取得後に保存形式に応じたcold recoveryを完了してから保存再開 |
+| ID-F313-W10 | standaloneとfactory、全低層writerを同じ保存先へ重ねる | 共通protocolで競合。公開constructorと移行/修復経路を照合し、未参加writerや旧versionとの共存は非対応として接続途中を全体排他成功としない |
+
+W01〜W10の製品試験と両provider実runtimeは未実行である。
+Windows、Node v24.15.0の専有probeではwx一勝/一件EEXIST、正常終了後のmarker残留、close後の明示unlinkと再取得を観測した。
+別名hardlinkでは双方のsidecarを取得できる反例があり、大小文字と親junctionのaliasは同じrealpath/dev/inoになった。
+これらは方式検討の証拠で、OS crash、電源断、他volume、network、全aliasと全writer接続を保証しない。
