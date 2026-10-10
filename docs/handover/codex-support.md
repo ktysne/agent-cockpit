@@ -656,7 +656,6 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
-
 指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
 PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
 
@@ -667,8 +666,13 @@ Iの有効grantはIだけの通常枠と合算する。
 個別試験は16件成功、失敗0件、Windows sandboxがsymlink作成を拒否した1件skipだった。
 両providerとmixedの新形式、旧形式のraw空白、prepared/CP移転後/CPなし、I raw=B+G/B+G+1、合法材料E=B+1の診断保持を確認した。
 readonly openとmutation API未呼出し、再読時の変更検出、close/drain、結果の分離と設定コピーを確認した。
-whole validator自身がreadyと理由0件を必須とするため、修復待ちの診断だけを通すfixtureは構成できない。
-構文、空白、CodeGraph変更後同期と調査は成功し、追跡済み全体とClaudeレビューへ進む。
+現実装ではwhole validatorが先にreadyを必須としており、後段のsnapshot_requires_repairへ到達しない。この診断順序はR1要修正の対象である。
+構文、空白、CodeGraph変更後同期と調査は成功した。
+追跡済み全体テストは`fbdc55d`で2796件成功、失敗0件、Windows symlink権限による3件skip、285098.9846msだった。
+指定Claude R1は要修正1件で、修復必要とcanonical/future容量不足がinvalid_representationにまとめられる診断契約の差異を指摘した。
+PR #347はDraftのまま、PC終了の停止指示により修正へ着手せず停止する。
+再開時は旧snapshotの修復診断と構造検証・設定Bの容量不足を分け、診断表保持と対照試験を追加してClaude R2を実施する。
+旧Q/CP grantの対応範囲、path component競合の明示、junction対照、不要分岐と追加read-only試験もR1の判断記録に残した。
 後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
 標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
 
