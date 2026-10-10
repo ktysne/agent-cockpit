@@ -181,7 +181,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #179 | 混在実行の PR 登録と review 帰属 | 3 | | 未着手。#166、#167、#170、#171、#175、#177、#180 の境界が接続した後 |
 | #180 | 共通 dispatcher と vendor 別 runner | 3 | #194、#195(先行部分) | #180-B(dispatcher、両 vendor runner、cancel、結果返却) |
 | #207 | feature の本番起動で Claude の MCP 書込みが拒否される | 4 | #234、#238 | 既定 composition の接続、実 runtime 試験(Claude 側の担当) |
-| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放)、#329(質問局所停止)、#330(明示自動回収) | grant解放はレビュー収束。段階3の限定した質問局所停止は#329でレビュー収束。自動実行は#330でレビュー収束。段階4の拒否包含分析と世代集約が後続 |
+| #209 | 配信 checkpoint と質問 journal が満杯になる | 4 | #301、#302、#307(段階 2 の 1a)、#319(1b)、#320(1c)、#321(1d)、#322(PR2)、#323(PR3)、#324(PR4)、#325(質問本文回収)、#326(通常指示本文回収)、#327(PR通知/result本文回収)、#328(grant解放)、#329(質問局所停止)、#330(明示自動回収) | grant解放はレビュー収束。段階3の限定した質問局所停止は#329でレビュー収束。自動実行は#330でレビュー収束。段階4の拒否包含分析は#331でレビュー収束。世代集約が後続 |
 | #210 | 再起動や書込み失敗で質問サービスが止まったまま戻らない | 4 | #236(部分) | 再照合後の checkpoint 更新、同じ start の再送の扱い |
 | #211 | owned runner が native 要求の件数上限で落ちる | 4 | #227、#269、#273、#274 | 実 runtime での上限境界、明示停止、遅延 resolved の確認 |
 | #212 | イベント投影が欠落を検出すると固まる | 4 | | collector の復帰証拠と指示 projection の接続条件の確認 |
@@ -231,7 +231,7 @@ main 側の不具合として #316(idle で補った後の古い推定の再表�
 | 6 | #209 段階2のPR2 | アンカーstore、移行coordinator、専用枠 | [#322](https://github.com/ktysne/agent-cockpit/pull/322)、base: feature | マージ済み（2026-10-09、merge SHA `557e547`）。全体2,144件成功・1件skip、Claudeレビュー2往復で収束。テスト用compositionまでで、製品起動へ接続しない |
 | 7 | #209 段階2のPR3 | 質問gate、serviceとdelivery storeの新形式対応 | [#323](https://github.com/ktysne/agent-cockpit/pull/323)、base: feature | マージ済み（`977e4fe`）。最終全体2,228件成功・1件skip、Claudeレビュー3往復で収束。native factoryと実runtimeは未接続 |
 | 8 | #209 段階2のPR4 | 明示的なnative factoryへの移行と稼働の統合 | [#324](https://github.com/ktysne/agent-cockpit/pull/324) | featureへマージ済み。全体2,256件成功、1件skip。Claudeレビューの記録はPRコメントを参照。標準起動と設定画面は未接続、実runtimeは未検証 |
-| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature）、[#329](https://github.com/ktysne/agent-cockpit/pull/329)（base: #328）、[#330](https://github.com/ktysne/agent-cockpit/pull/330)（base: #329） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。既定offの自動実行は#330でレビュー収束。全体2,525件成功と1件skip（source `a787e89`）、最終補強の単体19件成功（`4f69c03`）。次は段階4の拒否包含分析を進める |
+| 9 | #209 段階3と段階4 | 本文回収、自動実行、世代集約 | [#325](https://github.com/ktysne/agent-cockpit/pull/325)、[#326](https://github.com/ktysne/agent-cockpit/pull/326)、[#327](https://github.com/ktysne/agent-cockpit/pull/327)、[#328](https://github.com/ktysne/agent-cockpit/pull/328)（base: feature）、[#329](https://github.com/ktysne/agent-cockpit/pull/329)（base: #328）、[#330](https://github.com/ktysne/agent-cockpit/pull/330)（base: #329） | 質問と通常指示の本文回収はfeatureへ集約済み。#326のmerge SHAは`598c218`。PR通知とresultは#327でfeatureへ集約済み（merge `ea908c2`）で、全体2,389件成功・1件skip（head `f589250`）。Claude R1の引き継ぎ表修正と拒否理由の試験補強を反映した。R2の任意提案を反映し、Claude R3でblocker・要修正0件に収束した。最終試験差分`ac1b2d4`と同じ内容でnative5件成功。明示grant解放は#328で実装し、Claude R1の必須指摘を修正、R3でblockerと要修正0件に収束した。全体2,442件成功・1件skip（head `dfd536b`）、最終assert補強の関連4件成功（head `7a473c7`）。質問journal局所停止は#329でClaude R3に収束し、全体2,485件成功と1件skip、最終補強のnative16件とpersistence20件成功を確認した。既定offの自動実行は#330でレビュー収束。全体2,525件成功と1件skip（source `a787e89`）、最終補強の単体19件成功（`4f69c03`）。段階4の拒否包含分析は[#331](https://github.com/ktysne/agent-cockpit/pull/331)（base: #330）でレビュー収束。全体2,528件成功・1件skip（head `bab5d51`）。次は拒否索引候補から既存grave形へのpure projectionを検証する |
 | 10 | #216 段階 3 | 設定画面と標準起動への接続 | 未作成 | 未着手。順 9 の回収条件を満たした後 |
 | 11 | #211 の実 runtime | 128 件の境界、明示停止、遅延 resolved | 未作成 | 未着手。「実 runtime 確認の計画」の #211 の節 |
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |
@@ -430,6 +430,24 @@ skipは既存のファイルsymlink権限制約である。
 親ブランチをbaseにしたまま子をマージしない。モデルはPRをマージしない。
 タイマーとprovider processのfixtureによる合格を、実runtimeの7日連続運転の成功と扱わない。
 後続は段階4の質問世代に対する拒否包含のpure検証で、墓標削除や既存のattempt拒否を弱める処理は先に接続しない。
+
+## 質問世代の拒否包含分析
+
+`codex/question-period-rejection-coverage-209-20261010`は#330の収束head `dde14cb`を起点とする。
+段階4の最初の作業は、失効periodが包含する質問の拒否をpure分析し、全体IDと結果照会など残すべき義務を示すことである。
+完全snapshotの照合、複数質問の肯定例、別kindと別periodのattempt ID衝突の反例をpure APIと試験へ実装した。
+ClaudeとCodexの正規化済みfixtureとstrict入力の3件が成功した。
+availableのgraveの状態照会義務と、CP記録がないindeterminateの対照例も確認した。
+入力不変とnested freezeを検証した。
+全体試験はhead `bab5d51`で2,528件成功、1件skip、失敗0件だった。
+Claude初回レビューの許容三理由の試験不足を補強し、関連7件が成功した。
+自己遷移検査と補修候補生成のAPIを区別して、元の入力値が分析されることを確認した。
+PR通知とresultの実レコードを追加しても、質問の分析行は変わらなかった。
+Claude R2とR3でblockerと要修正0件に収束した。
+最終補強は関連7件で成功し、PR/resultの追加をStoreWrite遷移と分析出力全体の一致で確認した。
+マージ順は#328、#329、#330、#331。各親をfeatureへ集約した後、子へ通常mergeで取り込み、baseをfeatureへ付け替えてからマージする。
+次は拒否索引候補から既存grave形へのpure projectionを検証する。
+墓標削除、件数枠解放、受付再開、保存schemaと標準起動の変更はまだ接続しない。
 
 ## 起票していない候補
 
