@@ -911,7 +911,7 @@ async function startServer(options = {}) {
   pullRequestTracker.onRefreshed = (owner, repo) => pullRequestMergeManager.checkReservations?.(owner, repo);
   let info = null;
   let closing = null;
-  let shutdownError = null;
+  let shutdownFailed = false;
   let lastRequestAt = Date.now();
   const notificationTimers = new Map();
   const notificationReads = new Map();
@@ -1045,16 +1045,22 @@ async function startServer(options = {}) {
     if (state.snapshot().sessions.length > 0) return;
     if (await hasSessionJsonFiles(claudeHome)) return;
     logLine(homeDir, 'stopping after idle timeout');
-    await close().catch((error) => { shutdownError ||= error; });
+    await close().catch(() => { shutdownFailed = true; });
   }, 60_000);
   idleTimer.unref();
 
   async function close() {
     if (closing) return closing;
     closing = (async () => {
-      let failure = null;
+      let failed = false;
+      let failure;
       const attempt = async (operation) => {
-        try { await operation(); } catch (error) { failure ||= error; }
+        try { await operation(); } catch (error) {
+          if (!failed) {
+            failed = true;
+            failure = error;
+          }
+        }
       };
       clearInterval(idleTimer);
       clearInterval(sessionScanTimer);
@@ -1076,8 +1082,8 @@ async function startServer(options = {}) {
       await attempt(() => Promise.all([state.flushPersistence?.(), away.flushPersistence?.(), routing.flush?.()].filter(Boolean)));
       await attempt(() => removeServerInfoIfOwned(homeDir, info));
       await attempt(() => options.onShutdown?.());
-      if (failure) {
-        shutdownError = failure;
+      if (failed) {
+        shutdownFailed = true;
         logLine(homeDir, 'shutdown incomplete');
         throw failure;
       }
@@ -1088,7 +1094,7 @@ async function startServer(options = {}) {
 
   return { server, state, away, routing, answerDelivery, questionService, instructionService, pullRequestTracker,
     pullRequestMergeManager, info, homeDir, close,
-    get shutdownError() { return shutdownError ? 'shutdown_incomplete' : null; } };
+    get shutdownError() { return shutdownFailed ? 'shutdown_incomplete' : null; } };
 }
 
 function parseArguments(argv) {

@@ -58,6 +58,10 @@ adapterの準備前にはverifierがfalseを返す。
 HTTP requestにはnative profile allowlist、receipt、writer capabilityによる認可を追加しない。
 起動は明示opt-inであり、既定daemonや恒久HOMEへprofileを追加しない。
 
+serverの終了wrapperはintegrationと既存shutdown callbackを順に終了し、失敗後も後続cleanupを試す。
+公開closeもserverとintegrationの終了を試し、最初の失敗理由をfalsy値も含めて保持する。
+通常serverの終了診断と再closeの契約は[常駐サーバーの設計](server.md#起動と寿命)に従う。
+
 ## 共通質問の明示構成
 
 ### 保存形式の移行を使う明示構成
@@ -177,7 +181,7 @@ terminal contextはcompositionの`instructionTargetState`が`stopped`を返す�
 compositionの`result.accepted/status`は元の観測結果を保ち、terminal判定で書き換えない。
 各await後にadmissionのstarting状態を再確認し、stopやcloseによる失効後に観測を続けない。
 失敗時はadmissionをretireし、native stopを試みる。
-`stop`は最初にrouter capabilityを無効化し、collectorを切断してからcompositionへstopを依頼する。
+`stop`はcompositionの停止を開始し、router capabilityを無効化してcollectorを切断する。
 snapshotの`processState === 'stopped'`だけを停止成功とし、確認できない場合は`stop_unconfirmed`を残して固定error codeでrejectする。
 server close hookは既存flushが失敗しても実行し、server info削除と全cleanupを試す。失敗時の公開statusは固定値`shutdown_incomplete`とし、error messageやtokenを返さない。
 factory closeはservice、router、admissionごとのowned process、storeのflush/closeを順に行い、部分初期化失敗時も作成済みresourceを解放する。
@@ -279,3 +283,143 @@ contextの開始・終了と所有世代の変更でrevisionを単調に進め�
 128件を保持しただけでは容量超過と推定せず、runnerのstickyな容量保留を投影する。
 `failed`は起動失敗の正当な状態として表示し、停止できる所有実行を一覧から除かない。
 これらの境界はfake childと製品HTTP経路のfixtureで確認し、実Codex・Claudeの停止結果とは区別する。
+
+## 明示的回収modeの操作受付と終了
+
+回収を明示的に有効にしたfactoryは、操作の受付と終了を追跡するlifetime gateを内部に保持する。
+質問と指示serviceの共通queueで受付時にticketを取得し、未着手の仕事も追跡する。
+timerとproviderの後着callbackも同じ受付点を通し、成功、取消または失敗で処理が終了したときにticketを一度だけ返す。
+回収coreとschedulerはfactoryの同じgateを使い、外部facadeとschedulerの入口で同じ操作を重複して数えない。
+外向きAPIへgateやticketを返さず、標準modeではgateを生成しない。
+ticketの対象は共通enqueueとfactoryの回収facadeを通る処理である。
+serviceのflushと直接のsnapshot/body scopeは既存closeのtail待ちで扱い、gateによる全入口網羅とは数えない。
+scheduler起動のticketは同期呼出しの例外も解放するためのもので、非同期passのdrainを担わない。
+
+closeは最初のawaitより前に新受付を停止する。
+回収modeでは共有close Promiseをsettings解除などの同期callbackより先に確立し、再入しても停止処理を二重実行しない。
+既存context.closeの同期的な保存禁止とready拒否は、ticketのdrain前に開始する。
+producer、service、schedulerと既存closeの終了を待ち、gateのticketが残っていないことを確認する。
+起動失敗のcleanupでも同じ受付停止を行い、準備待ちの処理とdrainを循環させない。
+受理済みの全操作が正常保存に成功することや、全ticketが返るまで容量leaseを必ず保持することは契約に含めない。
+
+nativeの長時間startと観測readは共通queueのticketでは追跡せず、下記のnative寿命接続で対象にする。
+その待機をprivate stopで終了できることを段階別に確認してから、factoryの追跡へ接続する。
+epochによる結果無効化、detach、timeoutを物理停止やI/O終了の証拠にしない。
+協調するprocess間の保存先lock、新schema writerの許可、実runtime適合、電源断耐久性と件数枠解放は別の条件である。
+共通のfixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L01`に定義する。
+
+## native開始Promiseと停止の確認
+
+owned runnerの開始待機は、停止時の内部取消により開始Promiseを終了させる。
+停止後の認証結果、write callback、RPC応答とcontext通知で起動を再開しない。
+外部認証元が始めた作業自体の停止は契約に含めない。
+compositionは実runnerの開始Promiseを採用するため、その終了と子の停止確認を別々に扱う。
+任意注入runnerのstart Promiseをcompositionが一般に取消する契約は持たない。
+
+子のexit、close、非activeの3条件が揃うまで、停止確認済みとは扱わない。
+開始Promiseの終了だけで子のI/O終了や保存先所有の解放を判断しない。
+観測readの取消とdrain、factory ticketへの接続は別の検証である。
+段階別の共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-S01`に定義する。
+
+## native readの協調取消
+
+owned sourceはread単位の取消登録を内部で保持し、lease解放またはsource無効化で対象readへ通知する。
+leaseとrequest tokenの失効を先に完了させ、同期callbackが新leaseを取得しても旧readの取消へ混ぜない。
+取消controllerはsourceのクロージャー内に保持し、渡したlease tokenから参照できる通常プロパティへ置かない。
+
+readerの第1引数は既存の凍結したleaseTokenとrequestTokenを維持する。
+第2引数は凍結したregisterCancelとisCancelledだけを持つ内部scopeであり、公開facade、options、receiptの項目を増やさない。
+実Codex runnerは応答待ちとwrite callback待ちをこのscopeへ結び付け、取消でoperation_stoppedを返し、sourceはunknownへ終了する。
+正常完了したreceiptの消費契約は維持する。
+
+read取消からrunner全体やinstruction transportを一括取消しない。
+同じleaseの解放によるinstruction authorityの失効は既存どおり行う。
+後着writeエラーは現generationの共有pipe故障として扱い、旧generationのcallbackで新childを停止しない。
+
+scopeを無視する注入readerの元Promiseを一般に取消する契約は持たない。
+ラッパー終了はproviderの元作業、raw callback、collectorやfactoryのdrainを証明しない。
+これらの接続と終了追跡は別の検証として扱う。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-R01`に定義する。
+
+## owned collectorの内部終了追跡
+
+owned collectorは、connect、observe、reconcileの最外側処理を内部で追跡する。
+binding、観測callbackとticket取得を呼ぶ前に処理を登録し、結果判定と内部後始末が成功または失敗で終了した後に記録を解放する。
+同じconnect試行はPromiseを共有し、reconcile内部のobserveを別の最外側処理として数えない。
+
+恒久的な受付停止とdrainの制御はmodule内WeakMapに保持する。
+compositionが返すsnapshot wrapperも同じ制御へ対応付け、公開facadeとoptionsへ新しい項目を追加しない。
+ticket取得関数の設定は最初の処理受付前に一度だけ許可し、設定しない場合もcollector単独で終了追跡を行う。
+ticket解放は同期関数とし、その例外でも記録を解放して処理の失敗を返す。
+接続確立後のticket解放が失敗した場合、呼び出し側がdisconnectして確立済みの接続を回収する。
+
+通常disconnectと既存のcloseは再接続可能な意味を維持する。
+内部の恒久停止は後続受付とcollectorのproof、positive observationを拒否するが、外側compositionのauthorityを単独で失効させない。
+disconnectまたはnative stopによる論理失効と協調取消を開始した後に、受付済み処理のdrainを待つ。
+旧処理の後始末で新接続のPromise、state、loanを変更しない。
+
+collector drainはwrapper処理の終了を確認するものであり、非協調readerの元Promiseが未完了ならdrainも未完了のまま残る。
+factory ticketとcloseへの接続、子の停止確認、保存ownership解放は別の条件として扱う。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-C01`に定義する。
+
+## 明示的回収factoryへのnative寿命接続
+
+明示的回収modeでは、native startの受付から結果判定と後始末までfactory ticketを保持する。
+collectorを生成したら、呼び出し側へ返す前に内部制御を取得して同期ticket取得関数を設定する。
+内部制御が無い場合と設定拒否は接続失敗とし、collectorを公開しない。
+標準modeにはこのticketとprivate drainを追加しない。
+
+start、stopとcloseは、再入可能な処理を呼ぶ前に共有Promiseを設定する。
+同じ起動入力の再入は同じstart Promiseを返し、異なる入力の競合は既存の拒否を維持する。
+生成済みcollector、controlと準備失敗の後始末をentryに保持し、callbackからcloseが再入しても待機対象を見失わない。
+準備失敗で元の同期throwを返す場合も、後始末の終了までticketの所有を移して保持する。
+後始末の失敗は元のthrowを置き換えず、closeがその結果を確認する。
+
+closeはfactoryの受付を同期に止め、全collectorの受付停止を済ませてから全nativeの停止を開始する。
+一件の停止保留や失敗で他entryの停止開始を遅らせず、全停止を開始してからserviceのcloseをawaitする。
+その後にnative停止、collector drain、準備失敗の後始末、scheduler、contextとfactory gateの終了を合流する。
+gateのticket終了だけで後始末の成功を推定しない。
+stop coreはstart Promise、collector drainとfactory gate drainを待たず、起動失敗からの自己待ちを作らない。
+
+初期化途中の後始末が参照するadmission集合は、最初のtryより前に初期化する。
+compositionが未生成で集合が空ならnative stopを呼ばず、非空でcompositionが無い場合は不変条件違反として扱う。
+controlが欠けるcollectorは、既知の後始末が終了しても全処理のdrainを証明できたと扱わない。
+非協調startやreadが保留されればticketとcloseも保留し、timeoutやepochで返さない。
+
+contextの同期保存禁止とready拒否はticket drainより先に始める。
+同期保存禁止の開始だけで保存ownershipの解放を許可せず、最終解放は次節の終了確認に従う。
+wrapperの終了と子の物理停止も別条件とし、exit、closeと非activeの照合を維持する。
+実runtime、raw provider I/O、外部認証元作業、電源断耐久性、新schema接続は別の検証に残す。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L02`に定義する。
+
+## 明示的回収factoryの二段階終了
+
+回収factoryはpersistenceとcontextの構築直後、処理開始前に私有制御へ一度だけ所有を設定する。
+contextはcoordinatorへ同じ管理を伝え、public optionsと返却facadeへ解放権限を追加しない。
+単独で作るcontext、coordinator、persistenceと標準factoryのcloseは従来の終了契約を維持する。
+
+第一段階はfactoryとcontextの新受付を同期に拒否し、ready待機を解除してwriterを停止する。
+受付済みwriteとreadback、startupとcontext I/Oが終端に達した後にpersistenceの受付を閉じ、pending queueを待つ。
+管理下のbackend.closeとcoordinator.closeは第一段階だけを行い、factory gateや最終解放を逆待ちしない。
+この段階では保存pathの所有Mapと実容量leaseを保持する。
+
+第二段階は各writerのstopとdrain、contextとpersistence I/O、scheduler、factory ticket、collectorと準備失敗cleanup、全nativeの停止と隔離を独立に確認した後だけ行う。
+service.closeの成功だけで確認を代用せず、保存失敗のcodeだけで解放可否を推測しない。
+設定の購読解除とrouter.closeの失敗も、終了未確認として保守的に所有を保持する。
+容量leaseの解放成功を確認してから同ownerのpath所有を解放し、解放済みフラグを実処理より先に設定しない。
+releaseが実行されてもstatusで解放を確認できなければpath所有は解放しない。
+この場合、容量予算が実際に減っている可能性と、path所有を保持する結果を区別する。
+保存が失敗してもこれらの終了を確認できれば所有を解放し、close中に捕捉した失敗があれば最初の理由を返す。
+
+停止やdrainを確認できない場合は所有を保持した終端状態にする。
+再closeと後着child通知でも再判定せず、timeoutやGCで自動解放しない。
+同じprocessの寿命中にそのpathを再取得できず、明示再確認と保持状態の詳細診断は別作業である。
+所有保持時の回収factory.closeだけはcode `reclamation_ownership_retained`のAggregateErrorを返す。
+closeまたはstartup cleanup中に捕捉した最初の失敗があればcauseのown propertyとerrors先頭へfalsy値も含めて保持し、保持原因もerrorsへ残す。
+native.stop自体のcode、所有を解放できた保存失敗、標準modeの例外理由は変更しない。
+管理下の公開createOwnedCollectorは生成前の入力検査を含む構築失敗でもadmissionを退役させ、同admissionでの再試行を許可しない。
+
+この所有は同module内のpath Mapとprocess内容量予算に限る。
+別module、別process、標準writerと任意filesystem writerを排他せず、協調lockは方式と参加writerの決定後に別途接続する。
+実runtime、OS耐久性と電源断の保証へ読み替えない。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-O01`に定義する。
