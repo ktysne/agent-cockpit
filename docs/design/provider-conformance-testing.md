@@ -640,3 +640,24 @@ S01〜S03を含む通常server試験87件とnative factory試験38件は成功�
 実装head `2ec748b`の全体試験は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
 指定Claude R1はblockerと要修正が0件で収束した。
 writer排他の製品接続、graceful再起動と両provider実runtimeはこの試験の成功に含めない。
+
+### 停止とensureの後続期待条件
+
+[停止とensureの設計](server-stop-ensure.md)の期待値を内部fixtureと製品接続に分ける。
+以下は全て未実行であり、単一controllerの成功を異process管理排他へ読み替えない。
+
+| ID | 段階 | 操作と期待条件 |
+| --- | --- | --- |
+| ID-F313-ST01 | 内部fixture | 固定recordの往復、4 KiB境界と期待ID照合。不正field、accessor、statusとreasonの組合せを拒否 |
+| ID-F313-ST02 | 内部fixture | 導出basenameの保存と上限付き読取り。部分file、通知書込み失敗と結果不明を成功へ変換しない |
+| ID-F313-ST03 | 内部fixture | 同じ停止requestは一度の手続きとPromiseを共有。別requestと旧instanceは受理しない |
+| ID-F313-ST04 | 内部fixture | starting/stopping中の新attemptを拒否し、旧attemptの結果でcurrentを更新しない。blockedの明示retryだけで世代を進める |
+| ID-F313-ST05 | 内部fixture | 停止手続きがfalsyで失敗しても理由を保持。通知側切断で停止を破棄せず、fixtureの完了を製品writer解放と表現しない |
+| ID-F313-ST06 | 製品管理protocol | ACLと管理権限を実processで照合。旧管理者の遅延再開、TTLとcrash後に新currentの上書きやlaunchを許さない |
+| ID-F313-ST07 | 製品管理protocol | HTTP終了後のfinal release保留もstoppingとして共有し、並行ensureが後継を開始しない |
+| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認 |
+| ID-F313-ST09 | ensure接続 | healthy現在instanceを古い拒否より優先。起動前/待機中とstart lock敗者で拒否を共有し、eventごとの全deadline反復を避ける |
+| ID-F313-ST10 | ensure接続 | 古いrecord、破損と通知不能をunknownとして扱う。手動再attemptはmarkerを削除せず実取得をやり直す |
+| ID-F313-ST11 | writer接続 | 実markerの正常再起動、残留拒否と通知をW11で再確認し、factoryと全参加writerへ追加するたびに再検証 |
+
+実providerの停止と再起動は、上記fixtureの成功から推定せず別に記録する。

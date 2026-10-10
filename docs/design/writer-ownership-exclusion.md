@@ -3,7 +3,8 @@
 ## 設計の位置づけ
 
 この文書は#313の参加条件と後続実装の完了条件を定める。
-共通所有単位、取得前の保存内容I/O禁止、子writerの権限と自動奪取禁止を設計上採用し、具体的なOS検出とprimitiveは未実装とする。
+共通所有単位、取得前の保存内容I/O禁止、子writerの権限と自動奪取禁止を設計上採用する。
+限定fixture向けprimitiveは実装済みで、一般保存先のOS検出と製品writer接続は未実装である。
 現行製品はmodule内Mapで同一pathのwriterを拒否するが、別processの更新は直列化できない。
 本案だけで#313を完了したとは扱わず、全参加writerの接続と実process試験が必要である。
 
@@ -133,7 +134,8 @@ standalone checkpointにreclamation anchorを要求するものではない。
 現在のトレイ再起動は`src/tray/tray.ps1`で常駐サーバーを`Stop-Process -Force`により終了する。
 この終了ではwriterのcloseによるmarker除去を期待できず、排他接続後は通常の再起動でも次の取得が拒否される。
 標準writerへ接続する前に、トレイがgraceful停止を要求し、全writerの終了と最終解放の成功を確認してから再起動する手段を決め、実装と試験を行う。
-停止要求のAPIと完了通知の方式は未決で、停止要求の送信やprocess終了だけを解放成功の証明にしない。
+停止要求と完了通知は[停止とensureの設計](server-stop-ensure.md)で認証HTTP受付とinstance/request別結果fileを仮推奨とする。
+ACL、起動管理protocolと全終了確認の製品接続は未実装で、停止要求の送信やprocess終了だけを解放成功の証明にしない。
 HTTPの停止要求口を作る場合は、既存書込み口と同じHost、起動ごとの秘密値とOriginの照合条件を守る。
 Windowsのgraceful停止はprocessの強制終了やシグナルに依存せず、明示した停止手段を使う。
 完了通知は対象の旧server instanceに結び付け、server.jsonの消失を成功の証拠にしない。

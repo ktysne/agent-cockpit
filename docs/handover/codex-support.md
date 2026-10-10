@@ -849,6 +849,16 @@ serverとnative終了wrapperが失敗理由のtruthinessを判定するため、
 指定Claude R1はblockerと要修正が0件で収束した。提案は範囲と既存契約を確認し、実装変更を加えなかった。
 PRは#362の後にマージし、#361の完了はfeatureへの取り込み後に照合する。
 
+### 停止とensureの設計
+
+`codex/stop-ensure-design-313-20261011`を最新feature `c731abe`から作り、PR #363の最終head `6d8e03d`を通常mergeした。
+起点は`e5f8434`で、[停止とensureの設計](../design/server-stop-ensure.md)へ認証HTTP受付、instance/request別結果fileと共有起動管理protocolの条件を記録する。
+結果file、明示再attemptとuiSecret系の停止権限は自走中の仮推奨で、Windows ACLと管理権限の方式は未確定である。
+TTL付きstart.lockとattempt別recordだけでは旧管理者のcurrent上書きを防げず、HTTP終了後の解放保留も全ensureへstoppingとして共有する必要がある。
+次は製品callerを作らず、単一private controllerとbounded record codec/storeをfixtureで検証する。
+異process管理排他、ACL、全producer drain、tray/ensure接続と実markerのW11はその後の完了条件である。
+設計差分の指定Claudeレビューはこれから行う。親#363からsrc/testを変更せず、親の全体2,969件成功、失敗0件、実symlink2件skipを根拠として保持する。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
@@ -894,6 +904,7 @@ Claude の owned wait の共通質問サービスへの接続は #174 の[コメ
 | [共通質問と回答配信](../design/common-questions.md)、[共通質問の自動適用設定](../design/common-question-settings-module.md)、[Claude owned native wait](../design/owned-native-claude-wait.md)、[ネイティブ runner の actor 寿命と固定 wait profile](../design/owned-native-wait-profile.md) | #174、#216、#211 の質問と待ち |
 | [Native 登録履歴の受動復旧](../design/native-recovery-checkpoint.md)、[Claude の delegated handoff と proof 再照合の実測](../design/native-handoff-live-reconciliation.md) | #177-B の復旧 |
 | [質問と配信記録の容量回収計画](../design/codex-capacity-reclamation.md)、[共通質問の回収 schema](../design/common-question-reclamation-schema.md)、[配信記録の回収 schema](../design/delivery-reclamation-schema.md)、[質問の永久失効と移行アンカー](../design/question-reclamation-anchor.md) | #209 の回収 |
+| [保存writerのprocess間排他](../design/writer-ownership-exclusion.md)、[サーバー停止とensure](../design/server-stop-ensure.md) | #313の取得、終了確認、起動拒否と製品接続条件 |
 | [Claude の writer の発行](../design/claude-local-issuer.md) | #207 の Claude 側 |
 | [docs/handover/2026-10-02.md](2026-10-02.md) | cockpit 本体(main 側)の計画書。Codex 対応の進みは書かない |
 

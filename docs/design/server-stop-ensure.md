@@ -1,0 +1,109 @@
+# 常駐サーバーの停止と起動拒否通知
+
+## 位置づけ
+
+#313のwriter排他を標準起動へ接続する前に、停止要求、終了結果、ensureの起動拒否を区別する。
+本案は認証HTTP受付とinstance/request別の結果fileを仮推奨とする。
+内部状態機械とcodecのfixtureを先行し、Windows ACL、保存先の条件、全producer停止の接続が未確認の段階で製品の解放成功を発行しない。
+
+## 停止受付
+
+POSTの専用routeは既存のui-optional-origin認証を使い、Host、uiSecret、Originを照合する。
+同じuiSecretを持つlocal UIにも権限があり、tray本人をHTTPだけで区別したとは扱わない。
+厳格schemaの本文はexpectedInstanceIdとrequestIdだけを受け付ける。
+両IDは相関IDであり、secret、任意path、PID操作、marker削除、PR操作は本文に入れない。
+
+起動ごとのinstanceIdと一致する最初のrequestだけを受け付ける。
+同じrequestは同じ受付結果を返し、別requestは競合拒否する。
+認証とschema検証後、最初のawaitより前に新規受付を閉じる。
+受付応答を完結し、独立した一度限りの停止Promiseでcleanupを開始する。
+応答のfinishとcloseの双方を扱い、切断でも停止開始を失わない。
+停止request自身をdrain ticketへ入れず、request handlerからserver.close完了を待たない。
+
+## 受付停止と終了確認
+
+変更route、hook/MCP更新、nativeの新規start/read、定期処理、settings通知と、副作用を持つGETの新規受付を停止対象として棚卸しする。
+既受付のoperationは終了まで追跡し、cleanupに必要な保存は私有経路として許す。
+HTTP応答完了、transport切断、processのexitをoperation終了の代替にしない。
+停止中healthをensureがhealthyとして再利用しない。
+
+終了結果の成功は、全producer停止、inflight drain、writer final release、factory/onShutdownを含むcloseの成功後だけ確定する。
+失敗理由は#361の失敗状態と理由の分離を使い、falsyも成功へ変換しない。
+失敗、保留、通知書込み失敗、timeout、server.json消失とprocess終了だけでは再起動しない。
+trayは旧instance/requestの成功結果と、取得済み旧process handleの終了を確認してからensureへ進む。
+PIDの一致だけで旧processを識別しない。
+
+## 結果の記録
+
+内部fixtureのrecordはversion 1のplain dataとし、未知field、accessorと不正prototypeを拒否する。
+instanceId、requestIdとattemptIdは起動管理側が生成するUUID形式、scopeIdは64桁の小文字hex識別子を候補とする。
+scopeの算出に必要な設定世代とsource setの照合は製品接続前に確定し、hex形式の検証だけで同じ保存対象を証明しない。
+JSONのUTF-8 byte長は4 KiBを上限とし、読取りも上限を超えて全文を取り込まない。
+
+| kind | 固定field | statusとreasonCode |
+| --- | --- | --- |
+| shutdown | version、kind、instanceId、requestId、status、reasonCode | completed/null、failed/shutdown_incomplete |
+| startup | version、kind、scopeId、attemptId、instanceId、status、reasonCode | startedはinstanceId必須でreasonCodeはnull。blockedはinstanceIdがnullで理由は許可された起動拒否codeだけ |
+
+completedは停止手続きの完了を表す。内部fixtureでは注入した手続きの終了に限り、製品では全終了条件を確認するcoordinatorの完了後だけ発行する。
+startedもchildの起動手続き完了の記録であり、ensureは別に現在instanceのhealthを照合する。
+内部fixtureの起動拒否codeはwriter_occupied、filesystem_unsupported、startup_failed、startup_unconfirmedに限定する。
+実writerの失敗との対応は製品接続前に監査し、未知の例外を解放成功や再起動許可へ変換しない。
+
+結果は管理側が導出するinstance/request別の固定形式名へ書き、呼出し側にpathを指定させない。
+control-planeの名前空間をsource保存先とwriter sidecarから分ける。
+結果recordは上記の固定schemaに限定し、任意例外message、stack、secretと環境変数を残さない。
+読み取りは長さ、schema、ID一致を検査し、旧instanceや別requestの成功を無視する。
+原子的公開は途中fileを成功recordと誤読させないために使い、#210の電源断耐久性を証明したとは扱わない。
+
+停止結果writerは対象instanceだけ、tray/ensureはreaderだけとする。
+request別とattempt別の終端recordは一度だけ公開し、公開後に変更しない。単一controllerの重複防止と、製品管理protocolによる異processの公開権限を分けて検証する。
+結果fileを読むことや削除することはwriterの所有解放権限にならない。
+mode 0600だけでWindowsのowner-only条件を達成したとは扱わず、directoryとfileのACL検証を有効化条件にする。
+同一OS userの悪意あるprocessに対する改ざん防止を保証しない。
+ACLの準備方式が未確定なら製品へ接続せず、private codec/storeのfixtureまで進める。
+
+## ensureと起動拒否
+
+拒否recordは起動profile、設定世代と所有対象source setの管理識別子へ結び付ける。
+path文字列の正規化を任意filesystemのfile identity証明にしない。
+起動管理者がattemptIdを作り、当該childだけが同attemptの結果を発行する。
+attempt別recordを使い、旧childが新attemptの状態を上書きしない。
+共有current pointerの更新者と並行起動条件は内部機構で固定し、期限付きstart.lockを厳密な全起動直列化やwriter所有の証拠に流用しない。
+attempt別recordはchildの結果衝突だけを防ぐ。current更新と再attempt承認には、旧管理者と新管理者が併存しない起動管理protocolを別途実装して実証する。
+childはcurrentを書かず、起動管理者は有効な排他的管理権限を持つ間だけcurrent公開とlaunchを行う。
+同scopeのstartingまたはstoppingが未完了なら別attemptを承認しない。
+既存start.lock、事前のcurrent一致検査、時刻とatomic renameだけではこの条件を満たさず、方式未達の間は共有ensureへ接続しない。
+
+ensureはまず現在instanceのhealthを照合し、healthyなら古い拒否recordより優先する。
+停止中instanceがある場合は後継を開始しない。
+HTTP停止後もonShutdownとfinal releaseが保留する区間は管理protocolへstoppingとして残す。
+成功結果と旧process終了の照合まで新attemptを認可せず、server.json消失、health不応答とTTLで解除しない。
+停止前に管理状態の公開を確認するか、同等の排他的管理権限を保持する。通知不能をtrayだけの起動中止で補って全ensureに有効としない。
+同scopeの確定拒否は新規launch前とhealth待機中に確認し、start lock敗者にも伝達する。
+次のhook eventが別processで来ても確定拒否を共有し、全deadlineの起動待ちを繰り返さない。
+spawn成功を起動成功にしない。
+
+確定拒否はTTLだけで解除せず、管理者の明示再attemptで実取得を再実行する案を仮推奨とする。
+再attemptは拒否抑止だけを更新し、markerを削除しない。
+不正recordや読取り不能は解放成功へ変換せず、短い診断失敗とする。
+結果fileが作れない場合の通知は未確認であり、既存deadlineを上限にするだけでは反復抑止の達成と扱わない。
+管理側も記録不能なら既知拒否を共有できるとは主張しない。
+
+## 分割と完了条件
+
+1. 本設計の権限、状態遷移、結果媒体の仮推奨と未確認条件をClaudeレビューへ通す。
+2. private shutdown coordinator、record codec/storeと単一controller内のattempt照合をfixtureで検証する。この直列化を異processの管理排他と扱わない。
+3. 起動管理protocolの公開権限、ACL、同scope並行起動、旧管理者の遅延再開、crash残留、stopping保持と通知不能を実processで検証する。
+4. 管理protocolと受付棚卸しを確認して認証停止route、tray、共有ensureへ接続する。実sidecarが未接続なら製品W11完了としない。
+5. 一般filesystem gateが成立後、standalone writerへ接続して実markerの正常再起動、残留拒否と反復遅延回避を確認する。
+6. factoryの全集合と全writerへ接続し、追加markerを含むW11を再確認する。
+
+認証拒否、二重要求、HTTP自己待ち、保留drain、falsy失敗、通知失敗、古い結果、並行ensure、healthy優先と再attemptを適合試験へ事前記録する。
+fixtureと両provider実runtimeは別に記録する。
+
+## 開発者の判断事項
+
+結果file方式、確定拒否の明示再attempt、既存uiSecretの停止権限を自走中の仮推奨とする。
+Windows ACLの配布準備方式、手動再attemptの公開操作、対象OS/filesystem、既存同期constructorの互換条件は決定済みとしない。
+この判断待ちでもprivate状態機械とcodecのfixtureは先行できる。
