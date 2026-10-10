@@ -658,7 +658,8 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 
 ## 回収機能のレビュー済みPRと後続
 
-2026-10-11のGitHub照合では、次のPRはすべてfeature向けのReadyで、未マージ、MERGEABLE/CLEANである。
+2026-10-11のGitHub照合では、次のPRはすべてfeature向けで未マージである。
+#347〜#349と#351〜#353はReady、MERGEABLE/CLEANであり、#354はレビュー対応中のDraftである。
 #348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
 
 | PRとhead | 内容 | 検証とレビュー |
@@ -669,6 +670,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 | [#351](https://github.com/ktysne/agent-cockpit/pull/351)、`62e18b2` | 明示的回収factoryの操作受付停止と終了追跡 | source `4db527e`で関連248成功、全体2802成功、失敗0、Windows実symlink権限skip2。標準挙動subset26成功、Claude R1で必須0 |
 | [#352](https://github.com/ktysne/agent-cockpit/pull/352)、`2ea0c83` | main #350の配布物同期 | 関連2件、CLI定義読み取り5条件、構文、空白、上流同期check成功。Claude R1で必須0。アプリsource無変更 |
 | [#353](https://github.com/ktysne/agent-cockpit/pull/353)、`36c1c63` | native起動の段階別取消検証 | `cd39352`で全体2794成功、失敗0、Windows実symlink権限skip2。test補強後`1912130`で関連192成功、Claude R2で必須0。製品source無変更 |
+| [#354](https://github.com/ktysne/agent-cockpit/pull/354)、検証source `b70816d` | lease単位のnative read協調取消 | 関連120成功、全体2836成功、失敗0、Windows実symlink権限skip2。Claude R1はblocker0、要修正は現在地の文書1件。対応後の妥当性確認待ち |
 
 #347、#348、#349はこの順でマージする。
 #351、#352、#353はそれぞれこの系列と独立して取り込める。
@@ -696,14 +698,19 @@ Codex login、thread、turnの個別write callback保留とwait profile固有待
 この後続PRは#351、#352、#353の取り込み後にマージする。
 #347〜#349の未マージsourceはこのブランチへ取り込んでいない。
 
-次の実装は、lease解放またはsource無効化によるCodex native readラッパーの協調取消である。
+PR #354に、lease解放またはsource無効化によるCodex native readラッパーの協調取消を実装した。
 既存のleaseとrequest tokenを先に失効させ、対象readだけをunknownへ終了させる。
 取消権限はsource内部に保持し、正常完了したreceiptとinstruction transportの境界を維持する。
-実装前に[ID-F209-R01](../design/provider-conformance-testing.md)を定義した。
-fixture結果は検証後に追記する。
+適合条件とfixture結果は[ID-F209-R01](../design/provider-conformance-testing.md)にある。
+source `b70816d`で追加20件を含む関連120件と全体2836件が成功し、失敗0、全体はWindows実symlink権限skip2である。
+実Claude/Codex runtimeのread取消は未実施である。
+Claude R1の要修正はこの資料の進みの記録であり、対応後の妥当性確認を行う。
+loaded-list後のmicrotask取消は次RPC不送信を確認するが、内部continuationの各境界は独立計測していない。
 
 ラッパー終了とraw callbackの終了を分け、epochやdetachをI/O終了の証拠にしない。
 次はcollectorのprivate drainとfactory ticketへの接続を進める。
+collector単独の追跡とfactory接続は別PRに分ける。
+取消前のstdin write故障がrunner failureへ進まない既存の挙動は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)に記録し、今回のread取消とは分けて対応する。
 協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
 
 ## 起票していない候補

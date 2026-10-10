@@ -2375,7 +2375,7 @@ test('ID-F209-R01 old raw response and write callback do not disturb a new lease
   assert.equal(fixture.runner.snapshot().state, 'running');
 });
 
-test('ID-F209-R01 release between loaded-list settlement and thread-read does not send the next RPC', { timeout: 3000 }, async (t) => {
+test('ID-F209-R01 release after raw loaded-list response and write settlement prevents thread-read', { timeout: 3000 }, async (t) => {
   const fixture = await createReadCancellationFixture(t);
   const held = holdNextOwnedRead(t, fixture, 'thread/loaded/list');
   const read = fixture.source.readCurrent(fixture.lease);

@@ -429,7 +429,9 @@ read取消はinstruction transportを一括取消しない。
 保持点の明示解放とPromise終了を観測し、固定sleepを成功条件にしない。
 追加scopeを無視する注入readerはpendingのまま残る負例として明示解放する。
 ラッパーの終了をproviderの元作業、raw write callback、collector、factoryのdrainや保存先所有の解放へ読み替えない。
-sourceとrunnerの関連2ファイルはin-processで120件成功し、追加20件で上記の保持点と負例を確認した。
+source `b70816d`の関連2ファイルはin-processで120件成功し、追加20件で保持点と負例を確認した。
+同sourceの全体`npm test`は2836件成功、失敗0、Windows実symlink権限skip2である。
+loaded-listのraw応答とwrite解放後のmicrotask取消で次RPC不送信を確認するが、内部continuationの各境界は独立計測していない。
 source無効化はsource単体で確認し、実runnerではglobal取消も行うstop経由で確認した。
 runnerは公開APIから新childへ再起動できないため、旧generationの後着writeエラーはstopped状態の不変までを確認し、新childへの影響は未確認である。
 実Claude/Codex runtimeのread取消は未実施である。
