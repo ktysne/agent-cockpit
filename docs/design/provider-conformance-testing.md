@@ -722,7 +722,6 @@ record単位の上限はstore全体のメモリー容量を保証せず、製品
 
 Q01〜Q10のレビュー補強後の関連fixture試験は37件成功し、失敗とskipは0件である。
 固定head `1766a90` の全体試験は3,049件成功、失敗0件、Windows実symlink権限によるskip2件である。
-同headのClaude R1はblocker0件、要修正1件で、receiverとrecordの凍結をcallback外で検証する試験補強を行った。
-同sourceの全体結果を保持し、補強したtestと文書だけを増分レビューで確認する。
+receiverとrecordの凍結はcallback外で検証する。
 製品停止、管理protocol、writer接続と両provider実runtimeは未実行である。
 製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。

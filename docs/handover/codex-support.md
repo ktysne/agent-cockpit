@@ -986,4 +986,8 @@ Claude R1はblocker0件、要修正1件で、callback内のassertが実装に捕
 実装本体の必須修正はなく、procedureが返すPromiseの信頼前提とfactoryのaccessor拒否試験も明確にする。
 レビュー補強後の関連試験37件と構文確認は成功した。
 全体試験のheadからsrcは不変で、testと文書の変更をClaudeの増分レビューで確認する。
+補強head `6d629df` のClaude R2はblockerと要修正が0件で、2往復で収束した。
+PR #367はマージ可能で、#366の後に取り込む。
+最終変更は検証結果と文書の整理だけで、実装と補強済み試験は増分レビュー時から不変である。
+次は停止設計の判断待ちに依存しない#311のMCP書き込み再送抑止へ進む。
 製品停止、HTTP、既存public close、scope/current/attempt、ACLとwriter所有には接続しない。
