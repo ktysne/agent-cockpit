@@ -181,6 +181,47 @@ commit `3937095` のfixtureを同じcompact JSONで測定したサイズは次�
 全snapshotは元の値を測定したもので、候補への永続置換は行っていない。
 最大field、参照が全固有の場合、複数capsuleと移行時の重複保持は後続で測定する。
 
+### 単体recordの検査と上界
+
+元snapshotとの往復実験に続き、回収済みの質問reservationと配信graveの局所相関を単独で検査する入口を用意する。
+`normalizeReclaimedQuestionPair`は、既存のrecord単位normalizerと相関検査、隔離後と終端後の7日保持の検査を再利用する。
+配信ありでは同じattempt、logical key、完全参照、digest、状態と本文回収操作を要求し、配信なしではnoneとindeterminateを区別する。
+返すのは正規化した記録だけで、anchorの永久失効、checkpoint全体からの不存在、全記録のID一意性や削除許可は認定しない。
+論理墓標の単体normalizerも公開し、既存ledger全体の件数枠を単体recordの合否へ流用しない。
+既存snapshotの検査分岐と受理上限は保つ。
+不正な入力はTypeErrorで拒否し、messageは既存record normalizerとsnapshot整合検査の分類を引き継ぐ。
+後続capsuleの入口ではこれらを一括して不正入力として扱い、局所例外のmessageから保存や復旧の許可を決めない。
+
+| ID | 期待条件 |
+|---|---|
+| QRP01 | 両providerの回収済みavailable、unknownと各確定終端を状態を変えずに正規化する |
+| QRP02 | 未選択と選択済みのnone、indeterminateを区別し、CPなしから配信を生成しない |
+| QRP03 | 単体codecが受理する記録でも、attempt、参照、digest、session、状態と本文回収操作の不一致をpairで拒否する |
+| QRP04 | 隔離後と終端後の7日保持の各境界を検査し、未回収または準備中の予約は受理しない |
+| QRP05 | getterとProxyのtrapを実行せず、循環、過深入力、不正な配列と非JSON値を拒否する |
+| QRP06 | 呼び出し元の記録を変更または凍結せず、局所検査と全snapshotの証拠範囲を分ける |
+| QRP07 | 最大長候補の実測とnullable branchを含む保守的な構造上界を区別する |
+
+回収済みrecordには質問本文がなく、残る識別子、digest、UUIDと整数には有限の上限がある。
+識別子は最大512 UTF-16 code unitで、JSON文字列の安全側の上界は引用符を含めて`6 × 512 + 2` byteとする。
+合法fixtureのserializer実測と、fieldの型から導く解析上界を区別する。
+最大長だけを各fieldへ代入すると相関や保持期限を壊すため、状態と時刻の整合も既存の検査で確認する。
+
+保守的な構造上界には、質問のintentとexternal resolution、配信のacceptedとapplied correlationをすべて非nullで含むfield treeを用いる。
+各文字列にはenum、digestとUUIDも含めて3,074 byteを割り当て、安全な非負整数には16桁、booleanには5 byte、nullには4 byteを割り当てる。
+固定のproperty名、comma、indentと末尾LFを別に数える。
+この2-space pretty JSONの上界は、質問reservation一件が90,224 byte、question grave一件が161,394 byteとなる。
+相関条件を外して最大のbranchを組み合わせた上側の境界であり、この量を持つ合法な一件が存在するという主張ではない。
+CPのowner targetと質問本文は対象外で、nullableな小さいbranchは同じfield tree以下に収まることを試験する。
+単体normalizerを通した大きなQとCPの測定入力は別々の記録で、同じpairや完全snapshotの合法性を測定結果から推論しない。
+正式capsuleのwrapper、辞書、配列indentと索引の桁数を含めた総量は、後続codecで独立に計算する。
+
+後続の単体capsule形式では、件数とserialized byteの固定上限を独立に検査する。
+byteが先に上限へ達する場合も拒否し、件数上限までの任意の合法recordを収容する契約にはしない。
+各配信はsourceとtargetを一つずつ参照するため、それぞれの参照辞書の件数は配信件数以下に制限できる。
+この上限は単体形式の資源政策であり、通常slotの予算やgrantを増やす許可にはならない。
+全capsuleと通常記録の合計、移行時の重複保持と保存用一時ファイルは、別の容量検査を必要とする。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。

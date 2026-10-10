@@ -10,6 +10,7 @@ const {
   captureExactRecord,
 } = require('./reclamation-codec-primitives');
 const { encodeNormalized } = require('./reclamation-json-codec');
+const { assertPlainDataTree: assertLogicalTombstoneData } = require('./reclamation-plain-data');
 
 const MAX_DELIVERIES = 20_000;
 const MAX_NOTIFICATION_TARGETS = 10_000;
@@ -607,6 +608,12 @@ function normalizeTombstone(value) {
     ['targetLaunchKey', targetLaunchKey], ['sourceLaunchKey', sourceLaunchKey],
     ['payloadDigest', tombstone.payloadDigest],
   ]);
+}
+
+/** 配信ledgerの論理墓標一件について局所schemaだけを検証する。 */
+function normalizeLogicalTombstoneV2Local(value) {
+  assertLogicalTombstoneData(value, INVALID_LEDGER, 3);
+  return normalizeTombstone(value);
 }
 
 function deliveryTargetProjection(record) {
@@ -1540,6 +1547,7 @@ module.exports = {
   encodeCheckpointV3Local,
   encodeDeliveryLedgerV2Local,
   encodeInstructionJournalV2Local,
+  normalizeLogicalTombstoneV2Local,
   normalizeCheckpointV3Local,
   normalizeDeliveryLedgerV2Local,
   normalizeDeliveryRecordV2Local,
