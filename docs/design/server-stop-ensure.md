@@ -28,6 +28,8 @@ HTTP、idle、signalと公開closeは、一つのprivate停止operationとlatch�
 非HTTP停止が先行した場合は内部生成requestIdで記録し、新HTTP要求は409 stoppingで非受理とする。
 trayはその要求の成功結果を待たず再起動を中止し、内部結果を別のHTTP requestIdへコピーしない。
 HTTPが先なら同requestの再送だけを同じ受付とし、後続の他入口は既存operationへ合流する。
+非受理409のreasonはstoppingとrequest_conflictに分け、trayはどちらも診断を表示して再起動を中止する。
+listener閉鎖後は再送せず、結果fileと取得済み旧process handleで判断する。
 
 製品接続時にserver.jsonとhealthへ起動ごとのinstanceIdとstateを追加し、app、instanceId、pid、startedAtと管理されたscopeを照合する。
 trayは照合済みinstanceIdを要求へ使い、running一致時だけensureが現在instanceを再利用する。
@@ -108,6 +110,12 @@ directory準備とpath metadata検査は内容I/Oと分け、factoryを含む全
 敗者childのattempt別拒否はscope全体のblocked状態と区別し、管理側は結果採用時にも同scopeの確認済みrunning instanceを優先する。
 遅延敗者の拒否をscope抑止へ昇格せず、EADDRINUSEと無関係なport占有をwriter_occupiedやhealthy成功へ変換しない。
 fresh health再確認だけではready公開とのraceを防げず、current公開権限と重複launch禁止の管理protocolを製品接続条件として維持する。
+同scopeの同じstarting世代で、有効な管理権限と公開currentはそれぞれ高々一つ、新規launchも高々一回とする。
+旧TTL lockによる二重起動は正常protocolのlaunch数試験と分けた故障入力とし、全writer取得前に拒否された敗者のsource内容I/Oは0回とする。
+全取得後の内容I/Oやlistenで失敗したchildは、停止とdrain、自己取得writerの解放と終了を追跡し、内容I/Oが無かったとは主張しない。
+敗者の解放や終了が不明なら管理状態を解除せず、確認済み停止へ変換しない。
+running記録のままprocessが消えた場合も、残留markerは取得拒否と手動回復へ進む。
+markerが無いことだけではlaunchを許可せず、旧participantの終了、管理権限と全writer取得の製品条件を確認する。
 
 確定拒否はTTLだけで解除せず、管理者の明示再attemptで実取得を再実行する案を仮推奨とする。
 再attemptは拒否抑止だけを更新し、markerを削除しない。
@@ -125,7 +133,7 @@ fresh health再確認だけではready公開とのraceを防げず、current公�
 5. 一般filesystem gateが成立後、standalone writerへ接続して実markerの正常再起動、残留拒否と反復遅延回避を確認する。
 6. factoryの全集合と全writerへ接続し、追加markerを含むW11を再確認する。
 
-認証拒否、二重要求、HTTP自己待ち、保留drain、falsy失敗、通知失敗、古い結果、並行ensure、healthy優先と再attemptを適合試験へ事前記録する。
+認証とID検証、二重要求、全受付とmergeの停止、HTTP自己待ち、保留drain、falsy失敗、通知前crash、古い結果、instance/state互換、並行ensureの権限とlaunch数、healthy優先と再attemptを適合試験へ事前記録する。
 接続PRでserver.mdの通信schemaとroute認証表を更新し、現行のtray専用routeに関するコメントも実装と照合する。
 trayはWindows PowerShell 5.1で検証し、HTTP例外をApplication.Runへ伝播させず診断と再起動中止にする。
 fixtureと両provider実runtimeは別に記録する。
