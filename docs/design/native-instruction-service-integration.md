@@ -279,3 +279,16 @@ contextの開始・終了と所有世代の変更でrevisionを単調に進め�
 128件を保持しただけでは容量超過と推定せず、runnerのstickyな容量保留を投影する。
 `failed`は起動失敗の正当な状態として表示し、停止できる所有実行を一覧から除かない。
 これらの境界はfake childと製品HTTP経路のfixtureで確認し、実Codex・Claudeの停止結果とは区別する。
+
+## native開始Promiseと停止の確認
+
+owned runnerの開始待機は、停止時の内部取消により開始Promiseを終了させる。
+停止後の認証結果、write callback、RPC応答とcontext通知で起動を再開しない。
+外部認証元が始めた作業自体の停止は契約に含めない。
+compositionは実runnerの開始Promiseを採用するため、その終了と子の停止確認を別々に扱う。
+任意注入runnerのstart Promiseをcompositionが一般に取消する契約は持たない。
+
+子のexit、close、非activeの3条件が揃うまで、停止確認済みとは扱わない。
+開始Promiseの終了だけで子のI/O終了や保存先所有の解放を判断しない。
+観測readの取消とdrain、factory ticketへの接続は別の検証である。
+段階別の共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-S01`に定義する。

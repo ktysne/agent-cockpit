@@ -656,6 +656,19 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+## native起動取消の段階別検証
+
+2026-10-11の未マージReady PRは、#347、#348、#349の順にfeatureへ取り込める。
+baseはすべてfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)（`62e18b2`）とmain #350の同期[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)（`2ea0c83`）もReadyで、この系列とは独立して取り込める。
+#351はsource `4db527e`で全体2802成功、失敗0、Windows実symlink権限skip2、Claudeレビュー1往復で必須指摘なしである。
+#352はfeature/mainを祖先として保持する通常mergeで、関連2件、CLI定義読み取り5条件と上流同期checkが成功し、Claudeレビュー1往復で必須指摘なしである。
+
+後続の`codex/native-start-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351と#352のsourceには依存しない。
+native起動の段階別取消を、実runnerとcompositionの保持点で確認する。
+共通の適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)に定義した。
+観測readの取消とdrain、factory ticketへの接続、協調writer ownership、新schemaの通常接続と実runtimeは後続に残す。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

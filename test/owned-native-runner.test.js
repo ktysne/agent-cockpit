@@ -14,9 +14,10 @@ const LOGIN_ID = 'login_test_1';
 const LOGIN_URL = 'https://auth.openai.com/oauth/authorize?code=test';
 
 class FakePipe extends EventEmitter {
-  constructor(onWrite) {
+  constructor(onWrite, onWriteCallback) {
     super();
     this.onWrite = onWrite;
+    this.onWriteCallback = onWriteCallback;
     this.writes = [];
     this.ended = false;
   }
@@ -25,7 +26,10 @@ class FakePipe extends EventEmitter {
     const text = value.toString();
     this.writes.push(text);
     if (this.onWrite) this.onWrite(text);
-    queueMicrotask(() => { if (callback) callback(); });
+    if (callback) {
+      if (this.onWriteCallback) this.onWriteCallback(text, callback);
+      else queueMicrotask(() => callback());
+    }
     return true;
   }
 
@@ -41,7 +45,10 @@ class FakeChild extends EventEmitter {
     this.stderr = new EventEmitter();
     this.killCalls = [];
     this.exited = false;
-    this.stdin = new FakePipe(onWrite ? (text) => onWrite(text, this) : null);
+    this.stdin = new FakePipe(
+      onWrite ? (text) => onWrite(text, this) : null,
+      options.onWriteCallback ? (text, callback) => options.onWriteCallback(text, callback, this) : null,
+    );
     this.killEvents = options.killEvents || ['exit', 'close'];
     this.killResult = options.killResult ?? true;
     this.killError = options.killError || null;
@@ -143,6 +150,27 @@ function codexLoginCompleted(loginId = LOGIN_ID, success = true) {
 
 function codexTurnCompleted(threadId = 'thread_native_1', turnId = 'turn_native_1') {
   return codexNotification('turn/completed', { threadId, turn: { id: turnId, status: 'completed' } });
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function observeStart(promise) {
+  return promise.then(
+    (value) => ({ status: 'resolved', value }),
+    (error) => ({ status: 'rejected', error }),
+  );
+}
+
+function nextImmediate() {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function codexResponder(options = {}) {
@@ -2675,3 +2703,235 @@ test('a duplicate resolution during terminal callback does not consume the defer
   assert.equal(waitReplies(harness).length, 0);
   await runner.stop();
 });
+
+function createStartCancellationFixture(workspace, provider, stage) {
+  const barriers = new Map();
+  const state = { child: null, spawnCalls: 0, methods: [], responses: [], events: [], writes: [], releaseLate: () => {} };
+  const barrier = (name) => {
+    if (!barriers.has(name)) barriers.set(name, deferred());
+    return barriers.get(name);
+  };
+  const reached = (name) => barrier(name).resolve();
+  const stageForResponse = {
+    'codex-initialize-response': 'initialize',
+    'codex-login-start-response': 'account/login/start',
+    'codex-thread-start-response': 'thread/start',
+    'codex-turn-start-response': 'turn/start',
+  }[stage];
+  const heldWriteName = stage === 'claude-initial-write' ? 'claude-initial-write' :
+    stage === 'codex-initialize-write' ? 'codex-rpc-write:initialize' :
+      stage === 'codex-initialized-write' ? 'codex-initialized-write' : null;
+
+  function responseFor(request) {
+    if (request.method === 'initialize') return codexResponse(request.id, { serverInfo: { name: 'codex', version: 'test' } });
+    if (request.method === 'account/login/start') return codexResponse(request.id, {
+      type: 'chatgpt', loginId: LOGIN_ID, authUrl: LOGIN_URL,
+    });
+    if (request.method === 'thread/start') return codexResponse(request.id, { thread: { id: 'thread_native_1' } });
+    if (request.method === 'turn/start') return codexResponse(request.id, { turn: { id: 'turn_native_1' } });
+    throw new Error(`unexpected startup method: ${request.method}`);
+  }
+
+  const spawnImpl = () => {
+    state.spawnCalls += 1;
+    state.child = new FakeChild((line, child) => {
+      state.writes.push(line);
+      const request = JSON.parse(line);
+      if (provider === 'claude') {
+        if (request.type === 'user') reached('claude-user-write');
+        return;
+      }
+      if (request.method === 'initialized') {
+        reached('codex-initialized-write');
+        return;
+      }
+      if (!request.method || !Object.hasOwn(request, 'id')) return;
+      state.methods.push(request.method);
+      reached(`request:${request.method}`);
+      const response = responseFor(request);
+      if (request.method === stageForResponse) {
+        state.releaseLate = () => child.send(response);
+      } else {
+        child.send(response);
+        state.responses.push(request.method);
+        reached(`response:${request.method}`);
+      }
+    }, {
+      onWriteCallback(text, callback, child) {
+        let writeName = 'other-write';
+        if (provider === 'claude' && JSON.parse(text).type === 'user') writeName = 'claude-initial-write';
+        else if (provider === 'codex') {
+          const request = JSON.parse(text);
+          writeName = request.method === 'initialized' ? 'codex-initialized-write' : `codex-rpc-write:${request.method}`;
+        }
+        reached(`write-callback:${writeName}`);
+        const complete = () => {
+          callback();
+          reached(`write-complete:${writeName}`);
+        };
+        if (writeName === heldWriteName) {
+          state.releaseLate = complete;
+          reached('held-write-callback');
+        } else {
+          queueMicrotask(complete);
+        }
+      },
+    });
+    reached('spawn-created');
+    if (stage !== 'claude-spawn') setImmediate(() => state.child.emit('spawn'));
+    return state.child;
+  };
+
+  const runnerOptions = baseOptions(workspace, provider, {
+    ...(provider === 'claude' ? { getAuthentication: () => {
+      reached('authentication-requested');
+      return stage === 'claude-authentication' ? barrier('authentication-result').promise : { oauthToken: 'fixture-oauth-token' };
+    } } : {}),
+    ...(provider === 'codex' ? { onAuthenticationRequired: ({ loginId }) => {
+      reached('authentication-prompt');
+      if (stage === 'codex-login-completion') {
+        state.releaseLate = () => state.child.send(codexLoginCompleted(loginId));
+      } else {
+        state.child.send(codexLoginCompleted(loginId));
+      }
+    } } : {}),
+    spawnImpl,
+    onNative: (event) => {
+      state.events.push(event);
+      reached(`native:${event.type}`);
+    },
+    timeouts: { startupMs: 5000, rpcMs: 5000, loginMs: 5000, stopMs: 100 },
+  });
+  const runner = createOwnedNativeRunner(runnerOptions);
+
+  return {
+    runner,
+    state,
+    wait: (name) => barrier(name).promise,
+    releaseAuthentication: () => barrier('authentication-result').resolve({ oauthToken: 'late-oauth-token' }),
+    releaseLate: () => state.releaseLate(),
+  };
+}
+
+async function waitForCodexResponseBarrier(fixture, method) {
+  await fixture.wait(`request:${method}`);
+  await fixture.wait(`write-complete:codex-rpc-write:${method}`);
+  await nextImmediate();
+}
+
+for (const stage of ['claude-authentication', 'claude-spawn', 'claude-initial-write', 'claude-context-ready']) {
+  test(`ID-F209-S01 Claude ${stage}: stop settles start and late input cannot advance it`, { timeout: 7000 }, async (t) => {
+    const workspace = createWorkspace(t);
+    const fixture = createStartCancellationFixture(workspace, 'claude', stage);
+    const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    let stopSnapshot;
+    try {
+      if (stage === 'claude-authentication') {
+        await fixture.wait('authentication-requested');
+      } else if (stage === 'claude-spawn') {
+        await fixture.wait('spawn-created');
+      } else if (stage === 'claude-initial-write') {
+        await fixture.wait('held-write-callback');
+      } else {
+        await fixture.wait('write-complete:claude-initial-write');
+        await nextImmediate();
+        fixture.state.child.send({ type: 'system', subtype: 'init', session_id: 'session_native_1' });
+        await fixture.wait('native:identity');
+        await nextImmediate();
+      }
+
+      stopSnapshot = await fixture.runner.stop();
+      const outcome = await startOutcome;
+      assert.equal(outcome.status, 'rejected');
+      assert.equal(outcome.error.code, 'operation_stopped');
+      if (fixture.state.child) {
+        assert.equal(stopSnapshot.childExited, true);
+        assert.equal(stopSnapshot.childClosed, true);
+        assert.equal(stopSnapshot.ownedChildActive, false);
+      } else {
+        assert.equal(fixture.state.spawnCalls, 0);
+      }
+
+      if (stage === 'claude-authentication') fixture.releaseAuthentication();
+      if (stage === 'claude-spawn') fixture.state.child.emit('spawn');
+      fixture.releaseLate();
+      if (stage === 'claude-context-ready') {
+        fixture.state.child.send({
+          type: 'stream_event', session_id: 'session_native_1', parent_tool_use_id: null,
+          event: { type: 'message_start', message: { id: 'late_context', role: 'assistant' } },
+        });
+      }
+      await nextImmediate();
+      assert.equal(fixture.state.spawnCalls, stage === 'claude-authentication' ? 0 : 1);
+      assert.deepEqual(fixture.state.events.map((event) => event.type), stage === 'claude-context-ready' ? ['identity'] : []);
+      assert.equal(fixture.runner.snapshot().contextState, 'none');
+    } finally {
+      await fixture.runner.stop();
+      if (stage === 'claude-authentication') fixture.releaseAuthentication();
+      if (stage === 'claude-spawn' && fixture.state.child) fixture.state.child.emit('spawn');
+      fixture.releaseLate();
+      await nextImmediate();
+      await startOutcome;
+    }
+  });
+}
+
+for (const stage of [
+  'codex-initialize-response',
+  'codex-initialize-write',
+  'codex-initialized-write',
+  'codex-login-start-response',
+  'codex-login-completion',
+  'codex-thread-start-response',
+  'codex-turn-start-response',
+]) {
+  test(`ID-F209-S01 Codex ${stage}: stop settles start and late input cannot advance it`, { timeout: 7000 }, async (t) => {
+    const workspace = createWorkspace(t);
+    const fixture = createStartCancellationFixture(workspace, 'codex', stage);
+    const startOutcome = observeStart(fixture.runner.start({ inputText: 'private start input' }));
+    let expectedMethods;
+    try {
+      if (stage === 'codex-initialize-write') {
+        await fixture.wait('held-write-callback');
+        await fixture.wait('response:initialize');
+        assert.deepEqual(fixture.state.responses, ['initialize']);
+        expectedMethods = ['initialize'];
+      } else if (stage === 'codex-initialized-write') {
+        await fixture.wait('held-write-callback');
+        expectedMethods = ['initialize'];
+      } else if (stage === 'codex-login-completion') {
+        await fixture.wait('authentication-prompt');
+        await nextImmediate();
+        expectedMethods = ['initialize', 'account/login/start'];
+      } else {
+        const targetMethod = {
+          'codex-initialize-response': 'initialize',
+          'codex-login-start-response': 'account/login/start',
+          'codex-thread-start-response': 'thread/start',
+          'codex-turn-start-response': 'turn/start',
+        }[stage];
+        await waitForCodexResponseBarrier(fixture, targetMethod);
+        expectedMethods = fixture.state.methods.slice();
+      }
+
+      const stopSnapshot = await fixture.runner.stop();
+      const outcome = await startOutcome;
+      assert.equal(outcome.status, 'rejected');
+      assert.equal(outcome.error.code, 'operation_stopped');
+      assert.equal(stopSnapshot.childExited, true);
+      assert.equal(stopSnapshot.childClosed, true);
+      assert.equal(stopSnapshot.ownedChildActive, false);
+
+      fixture.releaseLate();
+      await nextImmediate();
+      assert.deepEqual(fixture.state.methods, expectedMethods);
+      assert.deepEqual(fixture.state.events.map((event) => event.type), stage === 'codex-turn-start-response' ? ['identity'] : []);
+      assert.equal(fixture.runner.snapshot().contextState, 'none');
+    } finally {
+      await fixture.runner.stop();
+      fixture.releaseLate();
+      await nextImmediate();
+      await startOutcome;
+    }
+  });
+}

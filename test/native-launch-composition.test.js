@@ -18,6 +18,23 @@ const PROVIDERS = ['claude', 'codex'];
 const NATIVE_ID_KINDS = Object.freeze({ claude: 'session', codex: 'thread' });
 const EXPECTED_HOME = path.resolve(os.tmpdir(), 'native-composition-home');
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
+
+function observeStart(promise) {
+  return promise.then(
+    (value) => ({ status: 'resolved', value }),
+    (error) => ({ status: 'rejected', error }),
+  );
+}
+
+function nextImmediate() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function evidence(evidenceId, extra = {}) {
   return {
     evidenceId,
@@ -310,6 +327,11 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
       try { request = JSON.parse(line); } catch { request = null; }
       if (provider === 'claude') {
         if (request?.type === 'user') {
+          if (options.holdClaudeContextReady) {
+            child.send({ type: 'system', subtype: 'init', session_id: options.nativeId || 'session-integration' });
+            options.onClaudeIdentity?.();
+            return;
+          }
           child.send(
             { type: 'system', subtype: 'init', session_id: options.nativeId || 'session-integration' },
             {
@@ -336,7 +358,9 @@ function createOwnedRunnerFactory(workspace, provider, options = {}) {
       } else if (request.method === 'thread/start') {
         child.send({ id: request.id, result: { thread: { id: options.nativeId || 'thread-integration' } } });
       } else if (request.method === 'turn/start') {
-        child.send({ id: request.id, result: { turn: { id: 'turn-integration' } } });
+        const response = { id: request.id, result: { turn: { id: 'turn-integration' } } };
+        if (options.holdTurnStart) options.onTurnStart?.(() => child.send(response));
+        else child.send(response);
       }
     }, { suppressKillClose: options.suppressKillClose });
     setImmediate(() => harness.child.emit('spawn'));
@@ -474,6 +498,127 @@ test('stop before the start microtask prevents a runner spawn', async () => {
   assert.equal(fixture.runners[0].startCalls, 0);
   assert.equal(fixture.runners[0].stopCalls, 1);
   assert.equal(fixture.registrationKernel.registry.snapshot().executions.length, 0);
+});
+
+test('ID-F209-S01 Claude composition stop settles the real runner while context-ready is pending', { timeout: 7000 }, async (t) => {
+  const identitySeen = deferred();
+  const fixture = createOwnedCompositionFixture(t, 'claude', {
+    holdClaudeContextReady: true,
+    onClaudeIdentity: () => identitySeen.resolve(),
+  });
+  const receipt = fixture.admission('claude', 'start-cancel-context-ready');
+  const startOutcome = observeStart(fixture.composition.start(receipt, { inputText: 'private Claude input' }));
+  try {
+    await identitySeen.promise;
+    await nextImmediate();
+    assert.equal(fixture.composition.resolveProof(fixture.composition.snapshot().launches[0].launchRef), null);
+
+    const stopped = await fixture.composition.stop(receipt);
+    const outcome = await startOutcome;
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, 'operation_stopped');
+    assert.equal(stopped.processState, 'stopped');
+    assert.equal(fixture.nativeHarness.runner.snapshot().childExited, true);
+    assert.equal(fixture.nativeHarness.runner.snapshot().childClosed, true);
+    assert.equal(fixture.nativeHarness.runner.snapshot().ownedChildActive, false);
+
+    const attestations = fixture.runtimeCalls.attestActor;
+    fixture.nativeHarness.child.send({
+      type: 'stream_event', session_id: 'session-integration', parent_tool_use_id: null,
+      event: { type: 'message_start', message: { id: 'late_claude_context', role: 'assistant' } },
+    });
+    await nextImmediate();
+    assert.equal(fixture.composition.resolveProof(fixture.composition.snapshot().launches[0].launchRef), null);
+    assert.equal(fixture.runtimeCalls.attestActor, attestations);
+    assert.equal(fixture.nativeHarness.runner.snapshot().contextState, 'none');
+  } finally {
+    await fixture.composition.stop(receipt);
+    await startOutcome;
+  }
+});
+
+test('ID-F209-S01 Codex composition stop settles the real runner while turn/start response is pending', { timeout: 7000 }, async (t) => {
+  const turnStartSeen = deferred();
+  let releaseTurnStart = () => {};
+  const fixture = createOwnedCompositionFixture(t, 'codex', {
+    holdTurnStart: true,
+    onTurnStart: (release) => { releaseTurnStart = release; turnStartSeen.resolve(); },
+  });
+  const receipt = fixture.admission('codex', 'start-cancel-turn-response');
+  const startOutcome = observeStart(fixture.composition.start(receipt, { inputText: 'private Codex input' }));
+  try {
+    await turnStartSeen.promise;
+    await nextImmediate();
+    const launchRef = fixture.composition.snapshot().launches[0].launchRef;
+    assert.equal(fixture.composition.resolveProof(launchRef), null);
+    assert.deepEqual(fixture.nativeHarness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
+
+    const stopped = await fixture.composition.stop(receipt);
+    const outcome = await startOutcome;
+    assert.equal(outcome.status, 'rejected');
+    assert.equal(outcome.error.code, 'operation_stopped');
+    assert.equal(stopped.processState, 'stopped');
+    assert.equal(fixture.nativeHarness.runner.snapshot().childExited, true);
+    assert.equal(fixture.nativeHarness.runner.snapshot().childClosed, true);
+    assert.equal(fixture.nativeHarness.runner.snapshot().ownedChildActive, false);
+
+    const attestations = fixture.runtimeCalls.attestActor;
+    releaseTurnStart();
+    await nextImmediate();
+    assert.equal(fixture.composition.resolveProof(launchRef), null);
+    assert.equal(fixture.runtimeCalls.attestActor, attestations);
+    assert.equal(fixture.nativeHarness.runner.snapshot().contextState, 'none');
+    assert.deepEqual(fixture.nativeHarness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
+  } finally {
+    await fixture.composition.stop(receipt);
+    releaseTurnStart();
+    await nextImmediate();
+    await startOutcome;
+  }
+});
+
+test('ID-F209-S01 an injected runner start remains pending after stop until the test releases it', { timeout: 7000 }, async () => {
+  const startEntered = deferred();
+  const finishStart = deferred();
+  let startSettled = false;
+  let stopCalls = 0;
+  const fixture = createFixture({
+    runnerFactory(runnerOptions) {
+      return {
+        options: runnerOptions,
+        start() {
+          startEntered.resolve();
+          return finishStart.promise;
+        },
+        stop() {
+          stopCalls += 1;
+          return { childExited: false, childClosed: false, ownedChildActive: true };
+        },
+        snapshot() { return { childExited: false, childClosed: false, ownedChildActive: true }; },
+      };
+    },
+  });
+  const receipt = fixture.admission('claude', 'injected-start-not-cancellable');
+  const startOutcome = observeStart(fixture.composition.start(receipt, { inputText: 'private injected input' }))
+    .then((outcome) => { startSettled = true; return outcome; });
+  try {
+    await startEntered.promise;
+    assert.equal(startSettled, false);
+    const stopped = await fixture.composition.stop(receipt);
+    assert.equal(stopCalls, 1);
+    assert.equal(stopped.processState, 'stop_unconfirmed');
+    assert.equal(startSettled, false);
+    assert.equal(fixture.composition.resolveProof(fixture.composition.snapshot().launches[0].launchRef), null);
+
+    finishStart.resolve({ state: 'started' });
+    await startOutcome;
+    assert.equal(startSettled, true);
+    assert.equal(fixture.composition.resolveProof(fixture.composition.snapshot().launches[0].launchRef), null);
+  } finally {
+    finishStart.resolve({ state: 'released' });
+    if (stopCalls === 0) await fixture.composition.stop(receipt);
+    await startOutcome;
+  }
 });
 
 test('unmatched identity and nested Claude messages cannot create actor proof', async () => {
