@@ -313,26 +313,37 @@ test('decode requires matching shutdown request ID and startup scope and attempt
 test('decode enforces the UTF-8 byte limit before accepting JSON', () => {
   const valid = encodeJson(VALID_RECORDS[0].json);
   const atLimit = Buffer.concat([valid, Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES - valid.byteLength, 0x20)]);
+  const overLimitValidJson = Buffer.concat([
+    valid,
+    Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES + 1 - valid.byteLength, 0x20),
+  ]);
   assert.equal(atLimit.byteLength, MAX_STOP_ENSURE_RECORD_BYTES);
+  assert.equal(overLimitValidJson.byteLength, MAX_STOP_ENSURE_RECORD_BYTES + 1);
   assert.equal(decodeStopEnsureRecord(atLimit, EXPECTED_SHUTDOWN).status, 'completed');
-
-  const overLimit = Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES + 1, 0xff);
-  assertInvalid(() => decodeStopEnsureRecord(overLimit, EXPECTED_SHUTDOWN));
+  assertInvalid(() => decodeStopEnsureRecord(overLimitValidJson, EXPECTED_SHUTDOWN));
   assertInvalid(() => decodeStopEnsureRecord(Buffer.from(' '), EXPECTED_SHUTDOWN));
 });
 
 test('decode uses intrinsic Buffer size and rejects proxies before reading byte-length properties', () => {
-  const overLimit = Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES + 1, 0x20);
-  Object.defineProperty(overLimit, 'byteLength', { configurable: true, value: 1 });
-  Object.defineProperty(overLimit, 'length', { configurable: true, value: 1 });
-  assert.equal(overLimit.byteLength, 1);
-  assert.equal(overLimit.length, 1);
-  assertInvalid(() => decodeStopEnsureRecord(overLimit, EXPECTED_SHUTDOWN));
+  const valid = encodeJson(VALID_RECORDS[0].json);
+  const overLimitValidJson = Buffer.concat([
+    valid,
+    Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES + 1 - valid.byteLength, 0x20),
+  ]);
+  Object.defineProperty(overLimitValidJson, 'byteLength', { configurable: true, value: MAX_STOP_ENSURE_RECORD_BYTES });
+  Object.defineProperty(overLimitValidJson, 'length', { configurable: true, value: MAX_STOP_ENSURE_RECORD_BYTES });
+  assert.equal(overLimitValidJson.byteLength, MAX_STOP_ENSURE_RECORD_BYTES);
+  assert.equal(overLimitValidJson.length, MAX_STOP_ENSURE_RECORD_BYTES);
+  assertInvalid(() => decodeStopEnsureRecord(overLimitValidJson, EXPECTED_SHUTDOWN));
 
   class BufferSubclass extends Buffer {}
-  const subclassed = Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES + 1, 0x20);
+  const subclassed = Buffer.concat([
+    valid,
+    Buffer.alloc(MAX_STOP_ENSURE_RECORD_BYTES + 1 - valid.byteLength, 0x20),
+  ]);
   Object.setPrototypeOf(subclassed, BufferSubclass.prototype);
   assert.equal(Buffer.isBuffer(subclassed), true);
+  assert.equal(subclassed.byteLength, MAX_STOP_ENSURE_RECORD_BYTES + 1);
   assertInvalid(() => decodeStopEnsureRecord(subclassed, EXPECTED_SHUTDOWN));
 
   let byteLengthGetterCalls = 0;

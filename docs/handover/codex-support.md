@@ -939,6 +939,9 @@ PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブラン
 初回の純粋codecには残存指摘の影響がないため、レビュー済み#363最終headを通常mergeした別branchで先行する。
 未収束の#364は取り込まない。
 [codec設計](../design/stop-ensure-record-codec.md)とC01〜C07の独立期待条件を実装前に記録した。
-純粋codecと関連試験を実装し、監査で末尾改行のIDとBuffer実byte長の検査を補強した。関連17件と構文確認は成功した。
-全体試験と指定Claudeレビューはこれから行い、結果を確認するまでDraftとする。
+純粋codecと関連試験を実装し、IDの固定長を明示してBuffer実byte長の検査を補強した。関連17件と構文確認は成功した。
+ブランチはcodex/stop-record-codec-313-20261011、PR #365のbaseはcodex/feature-codex-supportで、head `6884318`をGitHubと照合した。
+同headの全体試験は2,986件成功、失敗0件、Windows実symlink2件skipだった。
+指定Claude R1はblocker0、要修正1件で、合法JSONによる4097 byte上限超過と偽装Bufferの反例を補強し、関連17件と構文確認が成功した。
+全体試験headから製品src不変を確認し、test入力の補強だけのため全体は反復せず、Claude増分R2を実施する。
 ファイル保存、private controller、管理排他、ACL、tray/ensure接続、全writerと実providerは未実装または未確認のままである。

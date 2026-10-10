@@ -35,4 +35,5 @@ MAX_STOP_ENSURE_RECORD_BYTESは4096である。
 
 Bufferの入力上限はファイルのbounded readを証明せず、basename導出と保存は別moduleで確認する。
 completedとstartedはschema上の値で、codecが実際の停止や起動を確認したことを意味しない。
+decodeはJSON.parseの数値表記とescapeを正規化し、重複keyは最後の値を採用する。元byte列の同一性、署名と真正性は保証しない。
 store、controllerと製品接続には別の期待条件、権限設計と実runtime検証が必要である。

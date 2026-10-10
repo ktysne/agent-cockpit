@@ -660,6 +660,10 @@ decode後は入力から独立した、固定primitive fieldだけのfreeze済�
 | ID-F313-C07 | encode/decode後に入力を変更し、Object.prototype.toJSONを故障fixtureで追加する | 返却recordはfreeze済み独立コピーで、入力と継承toJSONにより出力を変更しない。fixtureはprototypeを必ず復元 |
 
 C01〜C07を含む関連試験は17件成功、失敗0件で、両moduleの構文確認も成功した。
-監査で末尾改行のIDとBufferの見かけのbyteLengthによる上限迂回を補正し、実長と各期待IDの不一致を確認した。
+IDの固定長を明示し、末尾改行と各期待IDの不一致を検証した。Bufferの見かけのbyteLengthを信用せず実長を確認する。
+実装head `6884318`の全体試験は2,986件成功、失敗0件、Windows実symlink試験2件skipだった。
+指定Claude R1はcodec本体に要修正なし、C04の上限超過入力の判別力不足が1件あった。
+合法JSONを4097 byteへ拡張した入力と偽装Bufferへ補強後も、関連17件と構文確認が成功した。
+全体試験headから製品srcは不変で、testの入力だけを補強したため全体試験は反復しない。
 停止結果の保存と停止手続き、両provider実runtimeと製品排他は未確認のままである。
 停止全体の設計[PR #364](https://github.com/ktysne/agent-cockpit/pull/364)はレビュー未収束で、この独立codecの前提にしない。
