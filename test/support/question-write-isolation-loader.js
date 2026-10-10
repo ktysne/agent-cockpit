@@ -29,6 +29,11 @@ function createNativeFileSystemFixture() {
   const events = [];
   let armedRenameFailure = null;
 
+  async function open(filePath, ...args) {
+    events.push({ operation: 'open', targetPath: filePath });
+    return native.open(filePath, ...args);
+  }
+
   async function rename(temporaryPath, targetPath) {
     const fault = armedRenameFailure;
     if (!fault || fault.targetPath !== targetPath) return native.rename(temporaryPath, targetPath);
@@ -82,7 +87,7 @@ function createNativeFileSystemFixture() {
 
   const fileSystem = Object.freeze({
     lstat: native.lstat,
-    open: native.open,
+    open,
     rename,
     unlink,
     writeFile: native.writeFile,
@@ -129,6 +134,9 @@ function createNativeFileSystemFixture() {
     renameCalls(targetPath) {
       return events.filter((event) => event.operation === 'rename' && event.targetPath === targetPath).length;
     },
+    openCalls(targetPath) {
+      return events.filter((event) => event.operation === 'open' && event.targetPath === targetPath).length;
+    },
     cleanupCalls(targetPath) {
       return events.filter((event) => ['unlink-removed', 'unlink-missing', 'unlink-failed']
         .includes(event.operation) && event.targetPath === targetPath).length;
@@ -169,11 +177,15 @@ function compileIsolated(filename, overrides = {}) {
   return isolatedModule.exports;
 }
 
-function loadQuestionWriteIsolationModules() {
+function loadQuestionWriteIsolationModules(options = {}) {
   const nativeFileSystem = createNativeFileSystemFixture();
   const persistencePath = require.resolve('../../src/server/reclamation-persistence');
   const contextPath = require.resolve('../../src/server/reclamation-service-context');
   const integrationPath = require.resolve('../../src/server/native-instruction-service-integration');
+  const schedulers = [];
+  const integrationOverrides = {
+    './native-launch-composition': null,
+  };
   const persistence = compileIsolated(persistencePath, {
     'node:fs/promises': nativeFileSystem.fileSystem,
   });
@@ -200,11 +212,25 @@ function loadQuestionWriteIsolationModules() {
       return created;
     },
   });
-  const integration = compileIsolated(integrationPath, {
-    './native-launch-composition': observedComposition,
-    './reclamation-persistence': persistence,
-    './reclamation-service-context': observedContext,
-  });
+  integrationOverrides['./native-launch-composition'] = observedComposition;
+  integrationOverrides['./reclamation-persistence'] = persistence;
+  integrationOverrides['./reclamation-service-context'] = observedContext;
+  if (options.schedulerTimers !== undefined) {
+    const schedulerModule = require('../../src/server/reclamation-scheduler');
+    integrationOverrides['./reclamation-scheduler'] = Object.freeze({
+      ...schedulerModule,
+      createReclamationScheduler(input) {
+        const created = schedulerModule.createReclamationScheduler({
+          ...input,
+          setTimeoutImpl: options.schedulerTimers.setTimeoutImpl,
+          clearTimeoutImpl: options.schedulerTimers.clearTimeoutImpl,
+        });
+        schedulers.push(created);
+        return created;
+      },
+    });
+  }
+  const integration = compileIsolated(integrationPath, integrationOverrides);
   return Object.freeze({
     nativeFileSystem,
     persistence,
@@ -213,6 +239,7 @@ function loadQuestionWriteIsolationModules() {
     observer: Object.freeze({
       contexts: () => Object.freeze([...contexts]),
       compositions: () => Object.freeze([...compositions]),
+      schedulers: () => Object.freeze([...schedulers]),
     }),
   });
 }

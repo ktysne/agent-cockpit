@@ -49,7 +49,9 @@ async function createNativeQuestionWriteIsolationHarness(provider, options = {})
     .map((directoryPath) => fs.mkdir(directoryPath, { recursive: true })));
   const normalLimits = options.normalByteLimitsBySlot || normalByteLimitsBySlot(sources,
     options.paddingBytes ?? 16 * 1024);
-  const modules = loadQuestionWriteIsolationModules();
+  const modules = loadQuestionWriteIsolationModules(options.schedulerTimers === undefined
+    ? {} : { schedulerTimers: options.schedulerTimers });
+  options.onModules?.(modules);
   const processesByProvider = new Map(PROVIDERS.map((value) => [value, []]));
   let now = options.initialNow ?? 1_000_000;
   let integration = null;
@@ -87,7 +89,8 @@ async function createNativeQuestionWriteIsolationHarness(provider, options = {})
         onAuthenticationRequired,
         now: () => now,
         commonQuestions: questionDependencies(),
-        reclamation: reclamationConfig(normalLimits),
+        reclamation: reclamationConfig(normalLimits, Object.hasOwn(options, 'autoReclaim')
+          ? { autoReclaim: options.autoReclaim } : {}),
       });
       await Promise.all([created.service.ready(), created.questionService.ready()]);
       return created;

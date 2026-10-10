@@ -20,6 +20,11 @@ const { MAX_JOURNAL_RECORDS } = require('./common-question-kernel');
 const { createReclamationPersistence } = require('./reclamation-persistence');
 const { createReclamationCapacityBudget } = require('./reclamation-capacity-reservation');
 const { createReclamationServiceContext } = require('./reclamation-service-context');
+const {
+  createReclamationScheduler,
+  MAX_RECLAMATION_SCHEDULER_INTERVAL_MS,
+  MAX_RECLAMATION_SCHEDULER_OPERATIONS_PER_PASS,
+} = require('./reclamation-scheduler');
 const { MAX_SOURCE_BYTES } = require('./reclamation-capacity-bounds');
 
 const PROVIDERS = new Set(['claude', 'codex']);
@@ -199,11 +204,25 @@ function captureReclamationLimitMap(value, maximums) {
   return Object.freeze(limits);
 }
 
+function captureAutoReclaim(value) {
+  if (value === false) return false;
+  if (utilTypes.isProxy(value)) throw integrationError('invalid_reclamation_options');
+  const config = exactData(value, ['intervalMs', 'maxOperationsPerPass'], 'invalid_reclamation_options');
+  if (!Number.isSafeInteger(config.intervalMs) || config.intervalMs < 1 ||
+      config.intervalMs > MAX_RECLAMATION_SCHEDULER_INTERVAL_MS ||
+      !Number.isSafeInteger(config.maxOperationsPerPass) || config.maxOperationsPerPass < 1 ||
+      config.maxOperationsPerPass > MAX_RECLAMATION_SCHEDULER_OPERATIONS_PER_PASS) {
+    throw integrationError('invalid_reclamation_options');
+  }
+  return Object.freeze(config);
+}
+
 function captureReclamationOptions(value) {
+  if (utilTypes.isProxy(value)) throw integrationError('invalid_reclamation_options');
   let fields;
   try { fields = Reflect.ownKeys(value); } catch { throw integrationError('invalid_reclamation_options'); }
   if (!isRecord(value) || fields.some((field) => typeof field !== 'string' ||
-      !['maxAdditionalBytes', 'normalByteLimitsBySlot', 'maxRecordsBySlot'].includes(field)) ||
+      !['maxAdditionalBytes', 'normalByteLimitsBySlot', 'maxRecordsBySlot', 'autoReclaim'].includes(field)) ||
       !fields.includes('maxAdditionalBytes') || !fields.includes('normalByteLimitsBySlot')) {
     throw integrationError('invalid_reclamation_options');
   }
@@ -215,7 +234,9 @@ function captureReclamationOptions(value) {
   const maxRecordsBySlot = fields.includes('maxRecordsBySlot')
     ? captureReclamationLimitMap(config.maxRecordsBySlot, RECLAMATION_MAX_RECORDS_BY_SLOT)
     : Object.freeze({ ...RECLAMATION_MAX_RECORDS_BY_SLOT });
-  return Object.freeze({ maxAdditionalBytes: config.maxAdditionalBytes, normalByteLimitsBySlot, maxRecordsBySlot });
+  const autoReclaim = fields.includes('autoReclaim') ? captureAutoReclaim(config.autoReclaim) : false;
+  return Object.freeze({ maxAdditionalBytes: config.maxAdditionalBytes, normalByteLimitsBySlot, maxRecordsBySlot,
+    autoReclaim });
 }
 
 function captureFactoryOptions(value) {
@@ -328,6 +349,9 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   let journal;
   let reclamationPersistence = null;
   let reclamationContext = null;
+  let reclamationScheduler = null;
+  let closing = false;
+  let closePromise = null;
   let providerDeliveryAdapters;
   let providerInstructionAdapters;
   let service;
@@ -375,11 +399,13 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   }
 
   async function cleanupPartial() {
+    closing = true;
     let failure = null;
     let contextClosePromise = null;
     const attempt = async (operation) => {
       try { await operation(); } catch (error) { failure ||= error; }
     };
+    try { reclamationScheduler?.stop(); } catch (error) { failure ||= error; }
     if (reclamationContext !== null) {
       try {
         contextClosePromise = reclamationContext.close();
@@ -403,6 +429,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     }
     if (reclamationContext === null) await attempt(() => store?.flush?.());
     await attempt(() => store?.close?.());
+    await attempt(() => reclamationScheduler?.drain());
     if (contextClosePromise !== null) await attempt(() => contextClosePromise);
     else if (reclamationContext === null) await attempt(() => reclamationPersistence?.close?.());
     if (failure !== null && options.reclamation) throw failure;
@@ -555,8 +582,6 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   const admissionByReceipt = new WeakMap();
   const admissions = new Set();
   const admissionsByLaunchRef = new Map();
-  let closing = false;
-  let closePromise = null;
 
   function entryFor(receipt) {
     const entry = receipt && (typeof receipt === 'object' || typeof receipt === 'function')
@@ -841,11 +866,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     closing = true;
     let failure = null;
     let contextClosePromise = null;
+    try { reclamationScheduler?.stop(); } catch (error) { failure = error; }
     if (reclamationContext !== null) {
       try {
         contextClosePromise = reclamationContext.close();
         contextClosePromise.catch(() => {});
-      } catch (error) { failure = error; }
+      } catch (error) { failure ||= error; }
     }
     closePromise = (async () => {
       const attempt = async (operation) => {
@@ -860,6 +886,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       }
       if (reclamationContext === null) await attempt(() => store.flush());
       await attempt(() => store.close());
+      await attempt(() => reclamationScheduler?.drain());
       if (contextClosePromise !== null) await attempt(() => contextClosePromise);
       if (failure) throw failure;
     })();
@@ -967,13 +994,54 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     return reclamationContext.releaseMigrationAllowance({ slot: request.slot, writer });
   }
   const reclamation = reclamationContext === null ? null : Object.freeze({
-    status: () => reclamationContext.status(),
+    status: () => reclamationScheduler === null ? reclamationContext.status() :
+      Object.freeze({ ...reclamationContext.status(), scheduler: reclamationScheduler.status() }),
     retireQuestionPeriod,
     reclaimQuestionBodies,
     reclaimInstructionBody,
     reclaimTerminalDeliveryBody,
     releaseMigrationAllowance,
   });
+  async function runScheduledReclamation(operation) {
+    if (closing) return Object.freeze({ status: 'skipped' });
+    try {
+      const result = await operation();
+      return Object.freeze({ status: result.status });
+    }
+    catch (error) {
+      if (closing) return Object.freeze({ status: 'skipped' });
+      if (reclamationContext.isQuestionUncertaintyError(error) &&
+          reclamationContext.listReclamationCandidates().state === 'degraded') {
+        return Object.freeze({ status: 'skipped' });
+      }
+      throw error;
+    }
+  }
+  if (options.reclamation?.autoReclaim) {
+    try {
+      reclamationScheduler = createReclamationScheduler({
+        ...options.reclamation.autoReclaim,
+        listCandidates: () => reclamationContext.listReclamationCandidates(),
+        reclaimCandidate: (candidate) => runScheduledReclamation(() => {
+          if (candidate.kind === 'question-period') {
+            return reclaimQuestionBodies({ identity: candidate.identity, periodId: candidate.periodId });
+          }
+          const request = { deliveryAttemptId: candidate.deliveryAttemptId };
+          return candidate.kind === 'instruction' ? reclaimInstructionBody(request) :
+            reclaimTerminalDeliveryBody(request);
+        }),
+        releaseGrants: (slot) => runScheduledReclamation(() => releaseMigrationAllowance({ slot })),
+      });
+      reclamationScheduler.start();
+    } catch (error) {
+      try { await cleanupPartial(); }
+      catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'native instruction integration startup cleanup failed',
+          { cause: error });
+      }
+      throw error;
+    }
+  }
   return Object.freeze({
     native,
     service,

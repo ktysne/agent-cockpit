@@ -397,6 +397,54 @@ function createReclamationServiceContext(value) {
     return makeRecord([['anchor', cloneSnapshot(anchor)], ['stores', cloneSnapshot(stores)]]);
   }
 
+  function listReclamationCandidates() {
+    if (!contextCanWrite()) return Object.freeze({ state: 'unavailable',
+      bodyCandidates: Object.freeze([]), grantSlots: Object.freeze([]) });
+    if (uncertainQuestions !== null) {
+      validateQuestionUncertainStoreWrite({ anchor, previousStores: stores, nextStores: stores,
+        questionCandidates: uncertainQuestions, normalByteLimitsBySlot: limitsForTransitions });
+    } else {
+      const validation = validateReclamationStoreWrite({ anchor, previousStores: stores,
+        nextStores: stores, normalByteLimitsBySlot: limitsForTransitions });
+      requireValue(validation.reasons.every((reason) =>
+        ['instruction_creation_state', 'question_creation_state', 'question_checkpoint_cache'].includes(reason)),
+      'reclamation_snapshot_requires_reconciliation');
+    }
+    const bodyCandidates = [];
+    if (uncertainQuestions === null && stores.questions !== null) {
+      const retainedPeriods = new Set(stores.questions.reservations.filter((reservation) =>
+        reservation.bodyState === 'retained').map((reservation) =>
+        identityPeriodKey(reservation.identity, reservation.periodId)));
+      for (const period of anchor.retiredQuestionPeriods) {
+        if (retainedPeriods.has(identityPeriodKey(period.identity, period.periodId))) {
+          bodyCandidates.push({ kind: 'question-period', identity: cloneSnapshot(period.identity),
+            periodId: period.periodId });
+        }
+      }
+    }
+    const deliveries = stores.checkpoint?.ledger.deliveries ?? [];
+    const deliveriesById = new Map(deliveries.map((record) => [record.deliveryAttemptId, record]));
+    const terminalStates = new Set(['applied', 'cancelled_before_send', 'superseded_before_send']);
+    for (const record of stores.instructions?.instructions ?? []) {
+      if (record.recordType !== 'detail') continue;
+      const delivery = deliveriesById.get(record.deliveryAttemptId);
+      if (record.reclamation !== null || record.deliveryCreationState === 'checkpointed' &&
+          delivery?.recordType === 'detail' && terminalStates.has(delivery.state)) {
+        bodyCandidates.push({ kind: 'instruction', deliveryAttemptId: record.deliveryAttemptId });
+      }
+    }
+    for (const record of deliveries) {
+      if (record.recordType === 'detail' && ['pr-notification', 'result'].includes(record.kind) &&
+          terminalStates.has(record.state)) {
+        bodyCandidates.push({ kind: 'terminal-delivery', deliveryAttemptId: record.deliveryAttemptId });
+      }
+    }
+    const grantSlots = uncertainQuestions === null ? configuredSlots.filter((slot) =>
+      stores[slot].migrationAllowance !== null) : [];
+    return freezeQuestionCandidate({ state: uncertainQuestions === null ? 'ready' : 'degraded',
+      bodyCandidates, grantSlots });
+  }
+
   function currentStore(slot) {
     if (!configuredSlots.includes(slot)) throw contextError('reclamation_persistence_slot_not_configured');
     if (!opened || stores[slot] === null) throw contextError('reclamation_writer_cold');
@@ -1414,6 +1462,8 @@ function createReclamationServiceContext(value) {
     start,
     canWrite: contextCanWrite,
     snapshot: currentSnapshot,
+    listReclamationCandidates,
+    isQuestionUncertaintyError: (error) => localQuestionErrors.has(error),
     retireQuestionPeriod,
     reclaimQuestionBodies,
     reclaimInstructionBody,

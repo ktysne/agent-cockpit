@@ -348,6 +348,13 @@ test('grant rejection during a retirement checkpoint boundary keeps writers read
   harness.releaseCheckpointSave();
   assert.equal((await retirement).status, 'retired');
   assert.equal(harness.context.status().state, 'ready');
+  const candidates = harness.context.listReclamationCandidates();
+  const questionPeriods = candidates.bodyCandidates.filter((candidate) => candidate.kind === 'question-period');
+  assert.deepEqual(questionPeriods, [{ kind: 'question-period', identity: harness.resumed.child.identity,
+    periodId: harness.resumed.child.registration.executionId }]);
+  assert.equal(Object.isFrozen(candidates), true);
+  assert.equal(Object.isFrozen(candidates.bodyCandidates), true);
+  assert.equal(Object.isFrozen(questionPeriods[0].identity), true);
   assert.deepEqual(await harness.context.releaseMigrationAllowance({
     slot: 'instructions', writer: harness.instructionService,
   }), { status: 'already_clear', slot: 'instructions' });
@@ -494,6 +501,14 @@ for (const phase of ['before', 'after']) {
       return error.code === 'EPERM';
     });
     assert.equal(sandbox.context.status().state, 'degraded');
+    assert.deepEqual(sandbox.context.listReclamationCandidates(),
+      { state: 'degraded', bodyCandidates: [], grantSlots: [] });
+    assert.equal(sandbox.context.isQuestionUncertaintyError(questionError), true);
+    assert.equal(sandbox.context.isQuestionUncertaintyError(Object.assign(new Error(), { code: 'EPERM' })), false);
+    assert.equal(sandbox.context.isQuestionUncertaintyError(new Error('wrapped', { cause: questionError })), false);
+    assert.equal(sandbox.context.isQuestionUncertaintyError(null), false);
+    const otherContext = await makeSandbox(t);
+    assert.equal(otherContext.context.isQuestionUncertaintyError(questionError), false);
     assert.deepEqual(sandbox.context.status().slotHealth,
       { checkpoint: 'ready', instructions: 'ready', questions: 'uncertain' });
     assert.equal(qBackend.canWrite(), false);
@@ -1142,4 +1157,19 @@ test('terminal body reclamation captures only data fields and leaves writers ava
     { code: 'delivery_not_found' });
   assert.equal(sandbox.context.status().canWrite, true);
   assert.deepEqual(sandbox.context.snapshot(), before);
+});
+
+test('internal reclamation candidates contain frozen IDs only and stop enumerating after close', async (t) => {
+  const sandbox = await makeSandbox(t, emptyStores(), emptyAnchor());
+  assert.deepEqual(sandbox.context.listReclamationCandidates(),
+    { state: 'unavailable', bodyCandidates: [], grantSlots: [] });
+  await sandbox.context.start(sandbox.writersBySlot);
+  const candidates = sandbox.context.listReclamationCandidates();
+  assert.deepEqual(candidates, { state: 'ready', bodyCandidates: [], grantSlots: [] });
+  assert.equal(Object.isFrozen(candidates.bodyCandidates), true);
+  assert.equal(Object.isFrozen(candidates.grantSlots), true);
+  assert.equal(sandbox.context.isQuestionUncertaintyError(new Error()), false);
+  await sandbox.context.close();
+  assert.deepEqual(sandbox.context.listReclamationCandidates(),
+    { state: 'unavailable', bodyCandidates: [], grantSlots: [] });
 });
