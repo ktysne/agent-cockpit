@@ -704,10 +704,11 @@ fixture専有の限定操作ライフサイクルは`codex/question-capsule-rest
 保存APIやpathをfacadeへ公開せず、closing/blockedを表示stateより優先する。
 固定IDの拒否とcapsule/orderの保持を確認し、全lookupの一般的な同値性は未確認である。
 関連18件は成功、失敗とskipは0件、84.29秒だった。後着回答10件保存と11件目の無保存拒否、元selectionのハッシュ維持も確認した。構文、空白とCodeGraph同期・調査は成功した。
-PR #349はPR #348を親にしたDraftである。確定604ddddの追跡済み全体検証は2850件成功、失敗0件、Windows symlink権限による3件skip、341439.0968msだった。
+PR #349はPR #348を親にしたスタックである。確定604ddddの追跡済み全体検証は2850件成功、失敗0件、Windows symlink権限による3件skip、341439.0968msだった。
 指定Claude R1のdispose失敗時cleanupと再試行の要修正1件を補強した。固定cleanup境界故障の再試行、未知fileの所有ガード拒否、disposing/blocked表示、上限専用理由と同時reopenを含む関連22件は成功、失敗とskipは0件、58940.6133msだった。
-source/backend/workspaceは変更せず、test/helperの補強後は関連検証を行い、全体検証は604ddddの結果と分ける。指定Claude R2で妥当性を確認する。
-後続は既存explicit reclamation factoryの受付停止と進行中処理drainのlifetime gateを統合し、次に同rootの協調writer ownershipへ進む。
+source/backend/workspaceは変更せず、test/helperの補強後は関連検証を行い、全体検証は604ddddの結果と分ける。指定Claude R2は53f6bcfを妥当と確認し、blockerと要修正0件で2往復のレビューが収束した。PR #349はReadyで、#347、#348、#349の順にマージできる。
+最終の結果記録と既存のcleanup制約の文書化だけの差分は、cross-reviewの軽微文書例外として追加レビューを省略する。
+後続は既存explicit reclamation factoryのservice queueと回収core/schedulerの受付停止・settlement gateを統合する。既存context.closeの開始順を保ち、native長時間待機の取消と協調writer ownershipは別段階で確認する。
 通常新schema writerへの接続、外process排他、runtime authority、OS耐久性と件数枠解放は未達である。
 
 ## 起票していない候補
