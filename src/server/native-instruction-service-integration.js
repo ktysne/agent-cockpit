@@ -17,9 +17,11 @@ const { createProviderInstructionAdapter } = require('./provider-instruction-ada
 const { createNativeLaunchComposition } = require('./native-launch-composition');
 const { createCommonQuestionService } = require('./common-question-service');
 const { MAX_JOURNAL_RECORDS } = require('./common-question-kernel');
-const { createReclamationPersistence } = require('./reclamation-persistence');
+const { createReclamationPersistence, getReclamationPersistenceControl } = require('./reclamation-persistence');
 const { createReclamationCapacityBudget } = require('./reclamation-capacity-reservation');
-const { createReclamationServiceContext } = require('./reclamation-service-context');
+const { createReclamationServiceContext, getReclamationServiceContextControl } = require('./reclamation-service-context');
+const { createNativeFactoryLifetimeGate } = require('./native-factory-lifetime-gate');
+const { getOwnedNativeCollectorControl } = require('./owned-native-source-collector');
 const {
   createReclamationScheduler,
   MAX_RECLAMATION_SCHEDULER_INTERVAL_MS,
@@ -65,6 +67,17 @@ function integrationError(code) {
   const error = new Error('native instruction service integration rejected the operation');
   error.code = code;
   return error;
+}
+
+function createFailureCapture() {
+  let failed = false;
+  let reason;
+  return {
+    capture(value) { if (!failed) { failed = true; reason = value; } },
+    get failed() { return failed; },
+    get reason() { return reason; },
+    throwIfFailed() { if (failed) throw reason; },
+  };
 }
 
 function isRecord(value) {
@@ -349,9 +362,16 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   let journal;
   let reclamationPersistence = null;
   let reclamationContext = null;
+  let persistenceOwner = null;
+  let contextOwner = null;
+  const retentionReasons = [];
   let reclamationScheduler = null;
+  const lifetimeGate = options.reclamation ? createNativeFactoryLifetimeGate() : null;
   let closing = false;
   let closePromise = null;
+  const admissionByReceipt = new WeakMap();
+  const admissions = new Set();
+  const admissionsByLaunchRef = new Map();
   let providerDeliveryAdapters;
   let providerInstructionAdapters;
   let service;
@@ -398,41 +418,92 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     unsubscribe?.();
   }
 
+  async function finishOwnership(failure, confirm) {
+    for (const producer of [store, service, questionService]) {
+      if (!producer) continue;
+      const writer = producer.reclamationWriter;
+      if (!writer || typeof writer.stop !== 'function' || typeof writer.drain !== 'function') {
+        const error = integrationError('reclamation_writer_control_unavailable');
+        failure.capture(error);
+        retentionReasons.push(error);
+        continue;
+      }
+      await confirm(() => writer.stop());
+      await confirm(() => writer.drain());
+    }
+    if (reclamationScheduler) {
+      await confirm(() => {
+        const latest = reclamationScheduler.status();
+        if (latest.stopped !== true || latest.running !== false || latest.timerPending !== false) {
+          throw integrationError('reclamation_scheduler_stop_unconfirmed');
+        }
+      });
+    }
+    if (contextOwner) retentionReasons.push(...contextOwner.retentionReasons());
+    else if (reclamationContext !== null || reclamationPersistence !== null && !persistenceOwner) {
+      retentionReasons.push(integrationError('reclamation_ownership_control_unavailable'));
+    }
+    if (retentionReasons.length === 0) {
+      await confirm(() => contextOwner ? contextOwner.finalize() : persistenceOwner?.finalize());
+    }
+    if (retentionReasons.length) {
+      const errors = failure.failed ? [failure.reason, ...retentionReasons] : [...retentionReasons];
+      const retained = failure.failed
+        ? new AggregateError(errors, 'reclamation ownership remains retained', { cause: failure.reason })
+        : new AggregateError(errors, 'reclamation ownership remains retained');
+      retained.code = 'reclamation_ownership_retained';
+      throw retained;
+    }
+  }
+
   async function cleanupPartial() {
     closing = true;
-    let failure = null;
+    lifetimeGate?.stopAdmission();
+    const failure = createFailureCapture();
     let contextClosePromise = null;
-    const attempt = async (operation) => {
-      try { await operation(); } catch (error) { failure ||= error; }
+    const attempt = async (operation, blocksRelease = false) => {
+      try { await operation(); } catch (error) {
+        failure.capture(error);
+        if (blocksRelease && lifetimeGate !== null) retentionReasons.push(error);
+      }
     };
-    try { reclamationScheduler?.stop(); } catch (error) { failure ||= error; }
+    const confirm = operation => attempt(operation, true);
+    try { reclamationScheduler?.stop(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
     if (reclamationContext !== null) {
       try {
-        contextClosePromise = reclamationContext.close();
+        contextClosePromise = contextOwner ? contextOwner.stopAndDrain() : Promise.reject(integrationError('reclamation_context_control_unavailable'));
         contextClosePromise.catch(() => {});
-      } catch (error) { failure ||= error; }
+      } catch (error) { failure.capture(error); retentionReasons.push(error); }
     }
-    await attempt(() => stopSettingsNotifications());
+    const nativeShutdown = lifetimeGate === null ? null : beginNativeShutdown();
+    if (nativeShutdown?.failure.failed) { failure.capture(nativeShutdown.failure.reason); retentionReasons.push(nativeShutdown.failure.reason); }
+    await confirm(() => stopSettingsNotifications());
     await attempt(() => questionService?.close?.());
     await attempt(() => service?.close?.());
+    if (nativeShutdown) await drainNativeShutdown(nativeShutdown, confirm);
     if (!service) {
       for (const adapter of Object.values(providerInstructionAdapters || {})) {
-        try { adapter?.close?.(); } catch (error) { failure ||= error; }
+        try { adapter?.close?.(); } catch (error) { failure.capture(error); }
       }
       for (const adapter of Object.values(providerDeliveryAdapters || {})) {
-        try { adapter?.close?.(); } catch (error) { failure ||= error; }
+        try { adapter?.close?.(); } catch (error) { failure.capture(error); }
       }
       await attempt(() => journal?.close?.());
     }
     for (const router of Object.values(routers)) {
-      try { router.close(); } catch (error) { failure ||= error; }
+      try { router.close(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
     }
     if (reclamationContext === null) await attempt(() => store?.flush?.());
     await attempt(() => store?.close?.());
-    await attempt(() => reclamationScheduler?.drain());
-    if (contextClosePromise !== null) await attempt(() => contextClosePromise);
-    else if (reclamationContext === null) await attempt(() => reclamationPersistence?.close?.());
-    if (failure !== null && options.reclamation) throw failure;
+    await confirm(() => reclamationScheduler?.drain());
+    if (contextClosePromise !== null) await confirm(() => contextClosePromise);
+    else if (reclamationPersistence !== null && persistenceOwner) await confirm(() => persistenceOwner.stopAndDrain());
+    if (lifetimeGate !== null) {
+      await confirm(() => lifetimeGate.drain());
+      await awaitPreparationCleanups(nativeShutdown.entries, confirm);
+      await finishOwnership(failure, confirm);
+    }
+    if (options.reclamation) failure.throwIfFailed();
   }
 
   try {
@@ -446,6 +517,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
           questions: commonQuestionJournalPath,
         },
       });
+      persistenceOwner = getReclamationPersistenceControl(reclamationPersistence)?.bindOwner() || null;
+      if (!persistenceOwner) {
+        const error = integrationError('reclamation_persistence_control_unavailable');
+        retentionReasons.push(error);
+        throw error;
+      }
       const capacityBudget = createReclamationCapacityBudget({
         maxAdditionalBytes: options.reclamation.maxAdditionalBytes,
       });
@@ -455,6 +532,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         capacityBudget,
         now: reclamationNow,
       });
+      contextOwner = getReclamationServiceContextControl(reclamationContext)?.bindOwner(persistenceOwner) || null;
+      if (!contextOwner) {
+        const error = integrationError('reclamation_context_control_unavailable');
+        retentionReasons.push(error);
+        throw error;
+      }
     }
     composition = createNativeLaunchComposition({
       registrationKernel,
@@ -522,7 +605,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       providerInstructionAdapters,
       launchRegistry: launchKernel.registry,
       ...(options.reclamation ? { now: reclamationNow } : options.now ? { now: options.now } : {}),
-    });
+    }, lifetimeGate);
     if (options.reclamation) {
       questionService = createCommonQuestionService({
         reclamation: {
@@ -538,7 +621,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         away: options.commonQuestions.away,
         getAutoApplySettings,
         now: reclamationNow,
-      });
+      }, lifetimeGate);
       await reclamationContext.start({
         checkpoint: store.reclamationWriter,
         instructions: service.reclamationWriter,
@@ -578,10 +661,6 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     }
     throw error;
   }
-
-  const admissionByReceipt = new WeakMap();
-  const admissions = new Set();
-  const admissionsByLaunchRef = new Map();
 
   function entryFor(receipt) {
     const entry = receipt && (typeof receipt === 'object' || typeof receipt === 'function')
@@ -682,6 +761,10 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   }
 
   function admitLaunch(value) {
+    return admitLaunchCore(value);
+  }
+
+  function admitLaunchCore(value, registerEntry) {
     if (closing) throw integrationError('native_instruction_integration_closed');
     const admission = captureAdmissionInput(value);
     const receipt = composition.admitLaunch(admission);
@@ -696,18 +779,33 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       existing.launchRef = state.launchRef;
       admissionsByLaunchRef.set(state.launchRef, existing);
       existing.detach = routers[provider].attachAdmission(receipt);
+      if (lifetimeGate !== null && (closing || !['admitted', 'starting', 'running'].includes(existing.state))) {
+        stop(receipt).catch(() => {});
+        throw integrationError('native_instruction_integration_closed');
+      }
       return receipt;
     }
     const entry = { receipt, provider, router: routers[provider], detach: null, collector: null,
+      pendingCollector: null, collectorControl: null, cleanupPromise: null, cleanupFailure: createFailureCapture(),
+      cleanupFinalizers: [], cleanupSettled: false,
       state: 'admitted', startInputText: null, startPromise: null, stopPromise: null,
       launchRef: null, isolationConfirmed: false, predecessorReceipt: null, predecessorReceiptBound: false };
     entry.launchRef = composition.ownedStopState(receipt).launchRef;
     admissionByReceipt.set(receipt, entry);
     admissions.add(entry);
     admissionsByLaunchRef.set(entry.launchRef, entry);
+    registerEntry?.(entry);
     try {
       entry.detach = entry.router.attachAdmission(receipt);
+      if (lifetimeGate !== null && (closing || !['admitted', 'starting', 'running'].includes(entry.state))) {
+        stop(receipt).catch(() => {});
+        throw integrationError('native_instruction_integration_closed');
+      }
     } catch (error) {
+      if (lifetimeGate !== null) {
+        beginPreparationCleanup(entry);
+        throw error;
+      }
       entry.state = 'failed';
       entry.stopPromise = Promise.resolve().then(() => composition.stop(receipt)).then((snapshot) => {
         entry.state = snapshot?.processState === 'stopped' ? 'stopped' : 'stop_unconfirmed';
@@ -727,11 +825,175 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     if (closing) throw integrationError('native_instruction_integration_closed');
     const entry = entryFor(receipt);
     if (!['admitted', 'starting', 'running'].includes(entry.state)) throw integrationError('admission_retired');
-    if (!entry.collector) entry.collector = composition.createOwnedCollector(receipt, collectorOptions);
+    if (lifetimeGate === null) {
+      if (!entry.collector) entry.collector = composition.createOwnedCollector(receipt, collectorOptions);
+      return entry.collector;
+    }
+    if (entry.collector) return entry.collector;
+    if (entry.pendingCollector || entry.cleanupPromise) throw integrationError('owned_collector_initialization_failed');
+    let bound = false;
+    try {
+      entry.pendingCollector = composition.createOwnedCollector(receipt, collectorOptions);
+      entry.collectorControl = getOwnedNativeCollectorControl(entry.pendingCollector);
+      if (!entry.collectorControl) {
+        const error = integrationError('owned_collector_control_unavailable');
+        entry.cleanupFailure.capture(error);
+        throw error;
+      }
+      if (!entry.collectorControl.bindTicketAcquirer((kind) => {
+        if (closing || !['admitted', 'starting', 'running'].includes(entry.state)) {
+          throw integrationError('native_instruction_integration_closed');
+        }
+        const ticket = lifetimeGate.enter('native-collector-' + kind);
+        return () => ticket.release();
+      })) {
+        const error = integrationError('owned_collector_ticket_binding_failed');
+        entry.cleanupFailure.capture(error);
+        throw error;
+      }
+      bound = true;
+      if (closing || !['admitted', 'starting', 'running'].includes(entry.state)) {
+        throw integrationError('native_instruction_integration_closed');
+      }
+      entry.collector = entry.pendingCollector;
+      entry.pendingCollector = null;
+    } catch (error) {
+      if (entry.pendingCollector && !bound) entry.cleanupFailure.capture(error);
+      beginPreparationCleanup(entry);
+      throw error;
+    }
     return entry.collector;
   }
 
   function stop(receipt) {
+    if (lifetimeGate !== null) return stopCore(entryFor(receipt));
+    return stopStandard(receipt);
+  }
+
+  function stopCore(entry) {
+    if (entry.stopPromise) return entry.stopPromise;
+    let resolveStop;
+    let rejectStop;
+    entry.stopPromise = new Promise((resolve, reject) => { resolveStop = resolve; rejectStop = reject; });
+    entry.stopPromise.catch(() => {});
+    entry.state = 'stopping';
+    const failure = createFailureCapture();
+    try { entry.collectorControl?.stopAdmission(); } catch (error) { failure.capture(error); }
+    let compositionStop;
+    try {
+      if (!composition) throw integrationError('native_composition_unavailable');
+      compositionStop = Promise.resolve(composition.stop(entry.receipt));
+    } catch (error) { compositionStop = Promise.reject(error); }
+    compositionStop.catch(() => {});
+    let routerDetached = false;
+    try { routerDetached = (entry.detach ? entry.detach() : entry.router.detachAdmission(entry.receipt)) === true; }
+    catch (error) { failure.capture(error); }
+    entry.detach = null;
+    entry.isolationConfirmed = false;
+    const collector = entry.collector || entry.pendingCollector;
+    let disconnect = null;
+    if (collector) {
+      try { disconnect = Promise.resolve(collector.disconnect()); }
+      catch (error) { disconnect = Promise.reject(error); }
+      disconnect.catch(() => {});
+    }
+    const completion = (async () => {
+      let collectorDetached = !collector;
+      if (disconnect) {
+        try { collectorDetached = (await disconnect)?.status === 'disconnected'; }
+        catch (error) { failure.capture(error); }
+      }
+      try { await compositionStop; } catch (error) { failure.capture(error); }
+      let latest = null;
+      try { latest = composition.ownedStopState(entry.receipt); } catch (error) { failure.capture(error); }
+      entry.state = latest?.processState === 'stopped' ? 'stopped' : 'stop_unconfirmed';
+      entry.isolationConfirmed = routerDetached && collectorDetached;
+      if (latest?.processState !== 'stopped') failure.capture(integrationError('native_process_stop_unconfirmed'));
+      if (!entry.isolationConfirmed) failure.capture(integrationError('native_instruction_isolation_unconfirmed'));
+      failure.throwIfFailed();
+      return true;
+    })();
+    completion.then(resolveStop, rejectStop);
+    return entry.stopPromise;
+  }
+
+  function beginPreparationCleanup(entry, finalize) {
+    if (finalize) {
+      if (entry.cleanupSettled) finalize();
+      else entry.cleanupFinalizers.push(finalize);
+    }
+    if (entry.cleanupPromise) return entry.cleanupPromise;
+    let resolveCleanup;
+    let rejectCleanup;
+    entry.cleanupPromise = new Promise((resolve, reject) => { resolveCleanup = resolve; rejectCleanup = reject; });
+    entry.cleanupPromise.catch(() => {});
+    const collector = entry.collector || entry.pendingCollector;
+    try { entry.collectorControl?.stopAdmission(); } catch (error) { entry.cleanupFailure.capture(error); }
+    let disconnected = null;
+    if (collector) {
+      try { disconnected = Promise.resolve(collector.disconnect()); }
+      catch (error) { disconnected = Promise.reject(error); }
+      disconnected.catch(() => {});
+    }
+    let stopped;
+    try { stopped = stopCore(entry); } catch (error) { stopped = Promise.reject(error); }
+    stopped.catch(() => {});
+    const completion = (async () => {
+      try {
+        if (disconnected) {
+          try {
+            if ((await disconnected)?.status !== 'disconnected') {
+              entry.cleanupFailure.capture(integrationError('native_instruction_isolation_unconfirmed'));
+            }
+          } catch (error) { entry.cleanupFailure.capture(error); }
+        }
+        try { await stopped; } catch (error) { entry.cleanupFailure.capture(error); }
+        if (entry.collectorControl) {
+          try { await entry.collectorControl.drain(); } catch (error) { entry.cleanupFailure.capture(error); }
+        } else if (entry.pendingCollector) {
+          entry.cleanupFailure.capture(integrationError('owned_collector_control_unavailable'));
+        }
+      } finally {
+        entry.cleanupSettled = true;
+        for (const finalizer of entry.cleanupFinalizers.splice(0)) {
+          try { finalizer(); } catch (error) { entry.cleanupFailure.capture(error); }
+        }
+      }
+      entry.cleanupFailure.throwIfFailed();
+    })();
+    completion.then(resolveCleanup, rejectCleanup);
+    return entry.cleanupPromise;
+  }
+
+  function beginNativeShutdown() {
+    const entries = [...admissions].reverse();
+    const failure = createFailureCapture();
+    for (const entry of entries) {
+      try { entry.collectorControl?.stopAdmission(); } catch (error) { failure.capture(error); }
+    }
+    const stops = entries.map((entry) => {
+      let pending;
+      try { pending = stopCore(entry); } catch (error) { pending = Promise.reject(error); }
+      pending.catch(() => {});
+      return pending;
+    });
+    return { entries, stops, failure };
+  }
+
+  async function awaitPreparationCleanups(entries, attempt) {
+    await Promise.all(entries.map((entry) => attempt(async () => {
+      if (entry.cleanupPromise) await entry.cleanupPromise;
+      entry.cleanupFailure.throwIfFailed();
+    })));
+  }
+
+  async function drainNativeShutdown(shutdown, attempt) {
+    await Promise.all(shutdown.stops.map((pending) => attempt(() => pending)));
+    await Promise.all(shutdown.entries.map((entry) => attempt(() => entry.collectorControl?.drain())));
+    await awaitPreparationCleanups(shutdown.entries, attempt);
+  }
+
+  function stopStandard(receipt) {
     const entry = entryFor(receipt);
     if (entry.stopPromise) return entry.stopPromise;
     entry.state = 'stopping';
@@ -785,6 +1047,22 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
   }
 
   function startLaunch(value) {
+    if (lifetimeGate === null) return startLaunchCore(value, null);
+    if (closing) throw integrationError('native_instruction_integration_closed');
+    const ticket = lifetimeGate.enter('native-start');
+    const lifetime = { entry: null, rejectStart: null, release: () => ticket.release() };
+    try { return startLaunchCore(value, lifetime); }
+    catch (error) {
+      if (lifetime.entry && (lifetime.rejectStart || lifetime.entry.cleanupPromise || lifetime.entry.stopPromise)) {
+        beginPreparationCleanup(lifetime.entry, () => {
+          try { lifetime.rejectStart?.(error); } finally { lifetime.release(); }
+        });
+      } else lifetime.release();
+      throw error;
+    }
+  }
+
+  function startLaunchCore(value, lifetime) {
     if (closing) throw integrationError('native_instruction_integration_closed');
     const { admission, inputText, predecessorReceipt } = captureLaunchStart(value);
     let predecessor = null;
@@ -799,11 +1077,12 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         throw integrationError('predecessor_stop_unconfirmed');
       }
     }
-    const receipt = admitLaunch(admission);
+    const receipt = admitLaunchCore(admission, lifetime ? (entry) => { lifetime.entry = entry; } : null);
     const entry = entryFor(receipt);
     if (entry.startPromise) {
       if (entry.startInputText !== inputText || !entry.predecessorReceiptBound ||
           entry.predecessorReceipt !== predecessorReceipt) throw integrationError('attempt_conflict');
+      lifetime?.release();
       return entry.startPromise;
     }
     if (entry.state !== 'admitted') throw integrationError('admission_retired');
@@ -814,14 +1093,22 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     entry.predecessorReceiptBound = true;
     entry.startInputText = inputText;
     entry.state = 'starting';
+    let resolveStart;
+    let rejectStart;
+    if (lifetime) {
+      lifetime.entry = entry;
+      entry.startPromise = new Promise((resolve, reject) => { resolveStart = resolve; rejectStart = reject; });
+      entry.startPromise.catch(() => {});
+      lifetime.rejectStart = rejectStart;
+    }
     let collector;
     try {
       collector = createOwnedCollector(receipt);
     } catch (error) {
-      stop(receipt).catch(() => {});
+      if (lifetime === null) stop(receipt).catch(() => {});
       throw error;
     }
-    entry.startPromise = (async () => {
+    const operation = (async () => {
       try {
         if (predecessor) {
           const priorState = ownedExecutionFor(predecessor);
@@ -849,6 +1136,7 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         if (!(activeProof && activeObserved) && !stopped) {
           throw integrationError('native_execution_proof_unavailable');
         }
+        if (lifetime && (closing || entry.state !== 'starting')) throw integrationError('native_launch_invalidated');
         entry.launchRef = result.launchRef;
         admissionsByLaunchRef.set(result.launchRef, entry);
         entry.state = 'running';
@@ -856,40 +1144,64 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       } catch (error) {
         await stop(receipt).catch(() => {});
         throw error;
+      } finally {
+        lifetime?.release();
       }
     })();
+    if (lifetime) operation.then(resolveStart, rejectStart);
+    else entry.startPromise = operation;
     return entry.startPromise;
   }
 
   async function close() {
     if (closePromise) return closePromise;
+    let resolveClose;
+    let rejectClose;
+    if (lifetimeGate !== null) {
+      closePromise = new Promise((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
+    }
     closing = true;
-    let failure = null;
+    lifetimeGate?.stopAdmission();
+    const failure = createFailureCapture();
     let contextClosePromise = null;
-    try { reclamationScheduler?.stop(); } catch (error) { failure = error; }
+    try { reclamationScheduler?.stop(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
     if (reclamationContext !== null) {
       try {
-        contextClosePromise = reclamationContext.close();
+        contextClosePromise = contextOwner ? contextOwner.stopAndDrain() : Promise.reject(integrationError('reclamation_context_control_unavailable'));
         contextClosePromise.catch(() => {});
-      } catch (error) { failure ||= error; }
+      } catch (error) { failure.capture(error); retentionReasons.push(error); }
     }
-    closePromise = (async () => {
-      const attempt = async (operation) => {
-        try { await operation(); } catch (error) { failure ||= error; }
+    const nativeShutdown = lifetimeGate === null ? null : beginNativeShutdown();
+    if (nativeShutdown?.failure.failed) { failure.capture(nativeShutdown.failure.reason); retentionReasons.push(nativeShutdown.failure.reason); }
+    const shutdown = (async () => {
+      const attempt = async (operation, blocksRelease = false) => {
+        try { await operation(); } catch (error) {
+          failure.capture(error);
+          if (blocksRelease && lifetimeGate !== null) retentionReasons.push(error);
+        }
       };
-      try { stopSettingsNotifications(); } catch (error) { failure ||= error; }
+      const confirm = operation => attempt(operation, true);
+      try { stopSettingsNotifications(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
       await attempt(() => questionService?.close());
       await attempt(() => service.close());
-      for (const entry of [...admissions].reverse()) await attempt(() => stop(entry.receipt));
+      if (nativeShutdown) await drainNativeShutdown(nativeShutdown, confirm);
+      else for (const entry of [...admissions].reverse()) await attempt(() => stop(entry.receipt));
       for (const router of Object.values(routers)) {
-        try { router.close(); } catch (error) { failure ||= error; }
+        try { router.close(); } catch (error) { failure.capture(error); retentionReasons.push(error); }
       }
       if (reclamationContext === null) await attempt(() => store.flush());
       await attempt(() => store.close());
-      await attempt(() => reclamationScheduler?.drain());
-      if (contextClosePromise !== null) await attempt(() => contextClosePromise);
-      if (failure) throw failure;
+      await confirm(() => reclamationScheduler?.drain());
+      if (contextClosePromise !== null) await confirm(() => contextClosePromise);
+      if (lifetimeGate !== null) {
+        await confirm(() => lifetimeGate.drain());
+        await awaitPreparationCleanups(nativeShutdown.entries, confirm);
+        await finishOwnership(failure, confirm);
+      }
+      failure.throwIfFailed();
     })();
+    if (lifetimeGate === null) closePromise = shutdown;
+    else shutdown.then(resolveClose, rejectClose);
     return closePromise;
   }
 
@@ -954,7 +1266,8 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
     const hasReason = keys.includes('reason');
     const request = exactData(value, hasReason ? ['identity', 'periodId', 'reason'] : ['identity', 'periodId'],
       'invalid_question_period_retirement');
-    return reclamationContext.retireQuestionPeriod({ ...request, questionService, deliveryStore: store });
+    return runLifetimeOperation('retire-question-period', () =>
+      reclamationContext.retireQuestionPeriod({ ...request, questionService, deliveryStore: store }));
   }
   function reclaimQuestionBodies(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
@@ -965,23 +1278,25 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         'invalid_question_body_reclamation')),
       periodId: captured.periodId,
     });
-    return reclamationContext.reclaimQuestionBodies({
+    return runLifetimeOperation('reclaim-question-bodies', () => reclamationContext.reclaimQuestionBodies({
       ...request,
       questionService,
       deliveryStore: store,
-    });
+    }));
   }
   function reclaimInstructionBody(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
     if (closing) throw integrationError('native_instruction_integration_closed');
     const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_instruction_body_reclamation'));
-    return reclamationContext.reclaimInstructionBody({ ...request, instructionService: service, deliveryStore: store });
+    return runLifetimeOperation('reclaim-instruction-body', () =>
+      reclamationContext.reclaimInstructionBody({ ...request, instructionService: service, deliveryStore: store }));
   }
   function reclaimTerminalDeliveryBody(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
     if (closing) throw integrationError('native_instruction_integration_closed');
     const request = Object.freeze(exactData(value, ['deliveryAttemptId'], 'invalid_terminal_delivery_body_reclamation'));
-    return reclamationContext.reclaimTerminalDeliveryBody({ ...request, deliveryStore: store });
+    return runLifetimeOperation('reclaim-terminal-delivery-body', () =>
+      reclamationContext.reclaimTerminalDeliveryBody({ ...request, deliveryStore: store }));
   }
   function releaseMigrationAllowance(value) {
     if (reclamationContext === null) throw integrationError('reclamation_unavailable');
@@ -991,7 +1306,17 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
       throw integrationError('invalid_migration_allowance_release');
     }
     const writer = request.slot === 'questions' ? questionService : request.slot === 'instructions' ? service : store;
-    return reclamationContext.releaseMigrationAllowance({ slot: request.slot, writer });
+    return runLifetimeOperation('release-migration-allowance', () =>
+      reclamationContext.releaseMigrationAllowance({ slot: request.slot, writer }));
+  }
+  function runLifetimeOperation(kind, operation) {
+    const ticket = lifetimeGate.enter(kind);
+    try {
+      return Promise.resolve(operation()).finally(() => ticket.release());
+    } catch (error) {
+      ticket.release();
+      throw error;
+    }
   }
   const reclamation = reclamationContext === null ? null : Object.freeze({
     status: () => reclamationScheduler === null ? reclamationContext.status() :
@@ -1032,7 +1357,9 @@ async function createNativeInstructionServiceIntegration(inputOptions) {
         }),
         releaseGrants: (slot) => runScheduledReclamation(() => releaseMigrationAllowance({ slot })),
       });
-      reclamationScheduler.start();
+      const startupTicket = lifetimeGate.enter('scheduler-start');
+      try { reclamationScheduler.start(); }
+      finally { startupTicket.release(); }
     } catch (error) {
       try { await cleanupPartial(); }
       catch (cleanupError) {
@@ -1099,10 +1426,10 @@ async function startNativeInstructionServer(inputOptions) {
       ownedExecutionSnapshot: integration.native.ownedExecutionSnapshot,
       stopOwnedExecution: integration.native.stopOwnedExecution,
       onShutdown: async () => {
-        let failure = null;
-        try { await integration.close(); } catch (error) { failure = error; }
-        try { await previousShutdown?.(); } catch (error) { failure ||= error; }
-        if (failure) throw failure;
+        const failure = createFailureCapture();
+        try { await integration.close(); } catch (error) { failure.capture(error); }
+        try { await previousShutdown?.(); } catch (error) { failure.capture(error); }
+        failure.throwIfFailed();
       },
     });
   } catch (error) {
@@ -1116,10 +1443,10 @@ async function startNativeInstructionServer(inputOptions) {
   async function close() {
     if (closePromise) return closePromise;
     closePromise = (async () => {
-      let failure = null;
-      try { await runtime.close(); } catch (error) { failure = error; }
-      try { await integration.close(); } catch (error) { failure ||= error; }
-      if (failure) throw failure;
+      const failure = createFailureCapture();
+      try { await runtime.close(); } catch (error) { failure.capture(error); }
+      try { await integration.close(); } catch (error) { failure.capture(error); }
+      failure.throwIfFailed();
     })();
     return closePromise;
   }
