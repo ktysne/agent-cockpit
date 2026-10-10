@@ -759,6 +759,17 @@ Claude R3はblockerと要修正が0件で収束した。
 contextの保存禁止開始と保存所有権の最終解放を分け、factoryの未終了処理が残る間の所有権保持を検証する。
 process間の協調lockは方式と参加writerの決定後に別PRで扱い、process内の終了順確認を排他保証へ読み替えない。
 
+## native readのwrite故障分類の後続
+
+[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)は、取消前のreadonly RPC write故障が一般のRPC拒否へ変換され、runnerがrunningのままになる不具合を扱う。
+`codex/native-read-write-failure-355-20261011`を最新feature `c731abe`から作成し、PR #357のレビュー済みhead `a69bb80`を通常mergeした。
+開始headは`bc9a331`で、マージ順は#357の後である。
+実装前に[ID-F209-R02](../design/provider-conformance-testing.md)を定義した。
+制御済みのwrite故障と論理取消だけを保持し、provider拒否、timeoutと失効generationの契約を維持する。
+FakeChildと実owned sourceの関連123件は成功し、失敗0件である。
+全体テストとClaudeレビューはPR作成後の固定headで実行する。
+実runtimeと実stdio故障は未実施である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
