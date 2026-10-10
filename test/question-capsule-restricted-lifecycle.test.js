@@ -1,19 +1,27 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const test = require('node:test');
 const { createQuestionCapsuleRestrictedLifecycle } =
   require('./helpers/question-capsule-restricted-lifecycle');
+const { createQuestionCapsuleExistingUpdateWorkspace } =
+  require('./helpers/question-capsule-existing-update-workspace');
 const { MAX_LATE_ANSWERS } = require('../src/server/common-question-kernel');
 
 const NOT_STARTED = 'question_capsule_restricted_lifecycle_not_started';
 const CLOSED = 'question_capsule_restricted_lifecycle_closed';
 const UNSUPPORTED = 'question_capsule_restricted_lifecycle_unsupported_operation';
 const INVALID = 'invalid_question_capsule_restricted_lifecycle';
+const LATE_ANSWER_CAPACITY = 'question_capsule_restricted_lifecycle_late_answer_capacity';
+const DISPOSE_TEST_FAILURE = 'question_capsule_restricted_lifecycle_dispose_test_failure';
 const BACKEND_BLOCKED = 'question_capsule_existing_update_backend_blocked';
 const BACKEND_CLOSED = 'question_capsule_existing_update_backend_closed';
 const BACKEND_INVALID = 'invalid_question_capsule_existing_update_backend';
+const WORKSPACE_UNKNOWN_FILE = 'question_capsule_existing_update_workspace_unknown_file';
 const CAPACITY = 'reclamation_capacity_exceeded';
+const UNKNOWN_MARKER_NAME = 'restricted-lifecycle-owned-test-marker';
 const LATE_ANSWER = Object.freeze([Object.freeze({
   questionId: 'question-5',
   optionIds: Object.freeze([]),
@@ -150,7 +158,7 @@ test('the facade accepts MAX_LATE_ANSWERS and rejects the next answer without wr
       optionIds: [],
       freeText: 'capacity boundary answer 11',
     }],
-  }), INVALID);
+  }), LATE_ANSWER_CAPACITY);
 
   const afterRejectedAnswer = lifecycle.status();
   assert.equal(afterRejectedAnswer.state, 'ready');
@@ -163,6 +171,16 @@ test('the facade accepts MAX_LATE_ANSWERS and rejects the next answer without wr
   assert.deepEqual(afterRejectedAnswer.saveAttempts, writeCountsAtCapacity.attempts);
   assert.deepEqual(afterRejectedAnswer.completedSaves, writeCountsAtCapacity.completed);
   assert.deepEqual(afterRejectedAnswer.structure, initial.structure);
+});
+
+test('a failed initial load exposes a blocked state and reason', async (t) => {
+  const lifecycle = await fixture(t, 'claude', 'start_invalid');
+  await assert.rejects(lifecycle.start(), (error) => error instanceof Error);
+  const failed = lifecycle.status();
+  assert.equal(failed.state, 'blocked');
+  assert.equal(failed.blocked, true);
+  assert.equal(typeof failed.blockedReason, 'string');
+  assert.notEqual(failed.blockedReason, '');
 });
 
 test('capsule, retired, missing, initial-selection, and malformed requests reject before writing', async (t) => {
@@ -305,6 +323,85 @@ test('known before-rename orphans block cold reopen and only the fixture owner r
       assert.equal(lifecycle.status().state, 'disposed');
     });
   }
+});
+
+test('dispose remains retryable after a fixed cleanup-boundary failure', async (t) => {
+  const lifecycle = await fixture(t, 'codex', 'dispose_cleanup_once');
+  await lifecycle.start();
+  await rejectsCode(lifecycle.submitLateAnswer({
+    internalQuestionId: 'internal-5',
+    answers: clone(LATE_ANSWER),
+  }), BACKEND_BLOCKED);
+  await lifecycle.close();
+
+  const firstAttempt = lifecycle.dispose();
+  assert.strictEqual(lifecycle.dispose(), firstAttempt);
+  await rejectsCode(firstAttempt, DISPOSE_TEST_FAILURE);
+  const afterFailure = lifecycle.status();
+  assert.equal(afterFailure.state, 'disposing');
+  assert.equal(afterFailure.disposing, true);
+  assert.equal(afterFailure.disposed, false);
+  assert.equal(afterFailure.baselineLeaseHeld, true);
+  assert.equal(afterFailure.operationLeaseHeld, false);
+  await rejectsCode(lifecycle.start(), CLOSED);
+  await rejectsCode(lifecycle.reopen(), CLOSED);
+
+  const retry = lifecycle.dispose();
+  assert.notStrictEqual(retry, firstAttempt);
+  const disposed = await retry;
+  assert.equal(disposed.state, 'disposed');
+  assert.equal(disposed.disposing, false);
+  assert.equal(disposed.disposed, true);
+  assert.equal(disposed.baselineLeaseHeld, false);
+});
+
+test('workspace disposal preserves an unexpected entry and can retry after its owner removes it', async (t) => {
+  const workspace = await createQuestionCapsuleExistingUpdateWorkspace({ provider: 'claude' });
+  const rootPath = path.resolve(workspace.root);
+  const markerPath = path.join(rootPath, UNKNOWN_MARKER_NAME);
+  const markerBytes = Buffer.from('fixture-owned marker');
+  let markerCreated = false;
+
+  async function removeOwnedMarker() {
+    if (!markerCreated) return;
+    assert.equal(path.isAbsolute(markerPath), true);
+    assert.equal(path.resolve(markerPath), markerPath);
+    assert.equal(path.dirname(markerPath), rootPath);
+    const realRoot = await fs.realpath(rootPath);
+    assert.equal(await fs.realpath(path.dirname(markerPath)), realRoot);
+    const markerStat = await fs.lstat(markerPath);
+    assert.equal(markerStat.isFile(), true);
+    assert.equal(markerStat.isSymbolicLink(), false);
+    await fs.unlink(markerPath);
+    markerCreated = false;
+  }
+
+  t.after(async () => {
+    await removeOwnedMarker();
+    await workspace.dispose();
+  });
+
+  assert.equal(workspace.root, rootPath);
+  await fs.writeFile(markerPath, markerBytes, { flag: 'wx' });
+  markerCreated = true;
+  await rejectsCode(workspace.dispose(), WORKSPACE_UNKNOWN_FILE);
+  assert.deepEqual(await fs.readFile(markerPath), markerBytes);
+  assert.equal((await fs.stat(rootPath)).isDirectory(), true);
+
+  await removeOwnedMarker();
+  await workspace.dispose();
+  await assert.rejects(fs.stat(rootPath), (error) => error?.code === 'ENOENT');
+});
+
+test('simultaneous cold reopen calls share the same completion', async (t) => {
+  const lifecycle = await fixture(t, 'claude');
+  await lifecycle.start();
+  await lifecycle.close();
+
+  const first = lifecycle.reopen();
+  const second = lifecycle.reopen();
+  assert.strictEqual(first, second);
+  assert.equal((await first).state, 'ready');
 });
 
 test('dispose is terminal and repeated close shares the same completion', async (t) => {

@@ -16,19 +16,23 @@ const NOT_STARTED = 'question_capsule_restricted_lifecycle_not_started';
 const CLOSED = 'question_capsule_restricted_lifecycle_closed';
 const BLOCKED = 'question_capsule_restricted_lifecycle_blocked';
 const UNSUPPORTED = 'question_capsule_restricted_lifecycle_unsupported_operation';
+const LATE_ANSWER_CAPACITY = 'question_capsule_restricted_lifecycle_late_answer_capacity';
+const DISPOSE_TEST_FAILURE = 'question_capsule_restricted_lifecycle_dispose_test_failure';
 const OPTIONS = Object.freeze(['provider', 'scenario']);
 const PROVIDERS = new Set(['claude', 'codex']);
 const SCENARIOS = new Set([
   'standard',
   'unselected',
   'budget_shortage',
+  'start_invalid',
   'pause_before_temp_open',
   'question_before_rename',
   'question_after_rename',
   'checkpoint_before_rename',
   'checkpoint_after_rename',
+  'dispose_cleanup_once',
 ]);
-const BEFORE_RENAME_SCENARIOS = new Set(['question_before_rename', 'checkpoint_before_rename']);
+const QUESTION_BEFORE_RENAME_SCENARIOS = new Set(['question_before_rename', 'dispose_cleanup_once']);
 const FIXTURE_QUESTION_ID = 'internal-5';
 const ACCEPTED_CORRELATION_FIELDS = Object.freeze([
   'deliveryAttemptId', 'revision', 'payloadDigest', 'targetPeriodId',
@@ -53,6 +57,7 @@ function captureOptions(value) {
 }
 
 function backendOptionsFor(scenario) {
+  if (scenario === 'dispose_cleanup_once') return { failurePoint: 'questions_before_rename' };
   if (scenario === 'pause_before_temp_open') return { pausePoint: 'before_atomic_temp_open' };
   if (scenario === 'question_before_rename') return { failurePoint: 'questions_before_rename' };
   if (scenario === 'question_after_rename') {
@@ -68,7 +73,16 @@ function backendOptionsFor(scenario) {
 async function createWorkspace(provider, scenario) {
   const ordinaryQuestionSelected = scenario !== 'unselected';
   if (scenario !== 'budget_shortage') {
-    return createQuestionCapsuleExistingUpdateWorkspace({ provider, ordinaryQuestionSelected });
+    const workspace = await createQuestionCapsuleExistingUpdateWorkspace({ provider, ordinaryQuestionSelected });
+    if (scenario === 'start_invalid') {
+      try {
+        await workspace.replaceBytesForTest('questions', Buffer.from('{}'));
+      } catch (error) {
+        await workspace.dispose();
+        throw error;
+      }
+    }
+    return workspace;
   }
 
   const reference = await createQuestionCapsuleExistingUpdateWorkspace({ provider, ordinaryQuestionSelected });
@@ -154,6 +168,7 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   let started = false;
   let closing = false;
   let closed = false;
+  let disposeRequested = false;
   let disposed = false;
   let blockedReason = null;
   let outcomeUnknown = false;
@@ -170,6 +185,7 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   let closePromise = null;
   let reopenPromise = null;
   let disposePromise = null;
+  let disposeBoundaryFailureConsumed = false;
   let lastOperation = null;
 
   function backendStatus() {
@@ -182,7 +198,7 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
       blockedReason = status.blockedReason;
       if (status.blockedReason === 'write_result_unknown') {
         outcomeUnknown = true;
-        const questionFault = scenario === 'question_before_rename' &&
+        const questionFault = QUESTION_BEFORE_RENAME_SCENARIOS.has(scenario) &&
           activeOperation === 'submit_late_answer';
         const checkpointFault = scenario === 'checkpoint_before_rename' &&
           activeOperation === 'advance_fixture_delivery';
@@ -194,13 +210,13 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   }
 
   function ensureOpen() {
-    if (disposed || closing || closed) throw failure(CLOSED);
+    if (disposeRequested || disposed || closing || closed) throw failure(CLOSED);
     const status = refreshLatch();
     if (blockedReason !== null || status.blockedReason !== null) throw failure(BLOCKED);
   }
 
   function enqueue(name, operation) {
-    if (disposed || closing || closed) return Promise.reject(failure(CLOSED));
+    if (disposeRequested || disposed || closing || closed) return Promise.reject(failure(CLOSED));
     pendingOperations += 1;
     const run = tail.then(async () => {
       pendingOperations -= 1;
@@ -222,12 +238,12 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   function updateCurrent(loaded) {
     current = loaded;
     const status = refreshLatch();
-    if (!closing && !closed && !disposed && status.blockedReason === null) state = 'ready';
+    if (!disposeRequested && !closing && !closed && !disposed && status.blockedReason === null) state = 'ready';
   }
 
   async function loadLatest() {
     const loaded = await backend.load();
-    if (closing || closed || disposed) throw failure(CLOSED);
+    if (disposeRequested || closing || closed || disposed) throw failure(CLOSED);
     const status = refreshLatch();
     if (status.blockedReason !== null) throw failure(BLOCKED);
     updateCurrent(loaded);
@@ -237,8 +253,9 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   function publicStatus() {
     const backend = backendStatus();
     const ws = workspace.status();
-    const blocked = blockedReason !== null || backend.blockedReason !== null;
+    const blocked = blockedReason !== null || backend.blockedReason !== null || state === 'blocked';
     const visibleState = disposed ? 'disposed'
+      : disposeRequested ? 'disposing'
       : closing ? 'closing'
         : blocked ? 'blocked'
           : closed ? 'closed'
@@ -249,6 +266,7 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
       closing,
       closed,
       disposed,
+      disposing: disposeRequested && !disposed,
       blocked,
       blockedReason: blockedReason ?? backend.blockedReason,
       outcomeUnknown,
@@ -270,14 +288,14 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
 
   function start(...args) {
     if (args.length !== 0) return Promise.reject(failure(INVALID));
-    if (disposed || closing || closed) return Promise.reject(failure(CLOSED));
+    if (disposeRequested || disposed || closing || closed) return Promise.reject(failure(CLOSED));
     if (started) return Promise.resolve(publicStatus());
     if (startPromise !== null) return startPromise;
     startPromise = enqueue('start', async () => {
       state = 'loading';
       try {
         const loaded = await backend.load();
-        if (closing || closed || disposed) throw failure(CLOSED);
+        if (disposeRequested || closing || closed || disposed) throw failure(CLOSED);
         current = loaded;
         const status = refreshLatch();
         if (status.blockedReason !== null) throw failure(BLOCKED);
@@ -287,7 +305,10 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
         return publicStatus();
       } catch (error) {
         refreshLatch();
-        if (!closing && !closed && !disposed && blockedReason === null) state = 'blocked';
+        if (!disposeRequested && !closing && !closed && !disposed && blockedReason === null) {
+          blockedReason = error?.code || error?.message || INVALID;
+          state = 'blocked';
+        }
         throw error;
       }
     });
@@ -295,7 +316,7 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   }
 
   function requireStarted() {
-    if (disposed || closing || closed) throw failure(CLOSED);
+    if (disposeRequested || disposed || closing || closed) throw failure(CLOSED);
     if (!started) throw failure(NOT_STARTED);
     ensureOpen();
   }
@@ -338,7 +359,8 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
       let selection;
       try {
         selection = selectionFor(detail, input.answers, 'manual', logicalTime, `restricted-late-${logicalTime}`);
-      } catch {
+      } catch (error) {
+        if (error?.code === 'late_answer_capacity') throw failure(LATE_ANSWER_CAPACITY);
         throw failure(INVALID);
       }
       if (selection.outcome === 'duplicate') {
@@ -425,7 +447,7 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
 
   function waitForPause(...args) {
     if (args.length !== 0) return Promise.reject(failure(INVALID));
-    if (disposed) return Promise.resolve(false);
+    if (disposeRequested || disposed) return Promise.resolve(false);
     return backend.waitForPause();
   }
 
@@ -454,9 +476,9 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
 
   function reopen(...args) {
     if (args.length !== 0) return Promise.reject(failure(INVALID));
-    if (disposed) return Promise.reject(failure(CLOSED));
-    if (!closed || closing) return Promise.reject(failure(UNSUPPORTED));
+    if (disposeRequested || disposed) return Promise.reject(failure(CLOSED));
     if (reopenPromise !== null) return reopenPromise;
+    if (!closed || closing) return Promise.reject(failure(UNSUPPORTED));
     try {
       backend = workspace.openBackend();
       closing = false;
@@ -477,26 +499,52 @@ async function createQuestionCapsuleRestrictedLifecycle(value) {
   function dispose(...args) {
     if (args.length !== 0) return Promise.reject(failure(INVALID));
     if (disposePromise !== null) return disposePromise;
-    disposed = true;
+    if (disposed) return Promise.resolve(publicStatus());
+    disposeRequested = true;
     closing = true;
     started = false;
     state = 'disposing';
     let backendClosing;
     try { backendClosing = backend.close(); } catch (error) { backendClosing = Promise.reject(error); }
     const closingTail = tail;
-    disposePromise = (async () => {
-      await Promise.all([closingTail, backendClosing]);
-      if (knownOrphan) {
-        const removed = await workspace.cleanupInjectedOrphan();
-        requireValue(removed === 1, 'question_capsule_restricted_lifecycle_cleanup_failed');
-        knownOrphan = false;
-      }
-      await workspace.dispose();
+    const attempt = (async () => {
+      const settlements = await Promise.allSettled([closingTail, backendClosing]);
+      const drainFailure = settlements.find((result) => result.status === 'rejected');
+      if (drainFailure) throw drainFailure.reason;
       closed = true;
       closing = false;
-      state = 'disposed';
+
+      if (scenario === 'dispose_cleanup_once' && !disposeBoundaryFailureConsumed) {
+        disposeBoundaryFailureConsumed = true;
+        throw failure(DISPOSE_TEST_FAILURE);
+      }
+
+      let firstCleanupError = null;
+      if (knownOrphan) {
+        try {
+          const removed = await workspace.cleanupInjectedOrphan();
+          requireValue(removed === 1, 'question_capsule_restricted_lifecycle_cleanup_failed');
+          knownOrphan = false;
+        } catch (error) {
+          firstCleanupError = error;
+        }
+      }
+      try {
+        await workspace.dispose();
+        knownOrphan = false;
+        disposed = true;
+        closing = false;
+        state = 'disposed';
+      } catch (error) {
+        firstCleanupError ??= error;
+      }
+      if (firstCleanupError) throw firstCleanupError;
       return publicStatus();
     })();
+    disposePromise = attempt.catch((error) => {
+      disposePromise = null;
+      throw error;
+    });
     return disposePromise;
   }
 
