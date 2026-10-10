@@ -569,7 +569,9 @@ whitelistの各条件を単独で外した否定controlは未確認で、代表�
 
 共通raw JSON codecが背後のArrayBufferの独自byteLength getterを呼ぶ問題を[Issue #339](https://github.com/ktysne/agent-cockpit/issues/339)へ起票した。
 intrinsicで取得したbufferをBuffer.fromへ直接渡す経路で1回の呼び出しを再現した。
-更新guardの後で標準Uint8Array viewを経由するコピーへ直し、prepare manifestの検証へ進む。
+`codex/raw-arraybuffer-getter-isolation-339-20261010`で標準Uint8Array viewを経由する独立コピーへ変更した。
+offsetを持つsubclass viewに入力自身と背後ArrayBufferの独自getterを置き、対象byteだけのparseとhash、getter実行0回を回帰試験で検査する。
+この修正の検証とレビュー後、後続prepare manifestを別ブランチで検証する。
 
 ## 起票していない候補
 
