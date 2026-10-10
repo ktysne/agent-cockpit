@@ -57,6 +57,43 @@ test('decode は Uint8Array view の対象 byte だけを複製して指紋を�
   assert.equal(decoded.sha256, digest(Buffer.from([0x7b, 0x7d])));
 });
 
+test('decode は ArrayBuffer と Uint8Array の独自 getter を実行せず byte を複製する', () => {
+  class CustomBytes extends Uint8Array {}
+  const backing = new CustomBytes([0x78, 0x7b, 0x7d, 0x79]);
+  const source = backing.subarray(1, 3);
+  const arrayBuffer = Reflect.apply(
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), 'buffer').get,
+    source,
+    [],
+  );
+  let getterCalls = 0;
+  const recordGetter = () => {
+    getterCalls += 1;
+    throw new Error('unexpected user-defined getter');
+  };
+
+  Object.defineProperty(arrayBuffer, 'byteLength', { get: recordGetter });
+  for (const property of ['buffer', 'byteOffset', 'byteLength', Symbol.iterator]) {
+    Object.defineProperty(source, property, { configurable: true, get: recordGetter });
+  }
+  const species = {};
+  Object.defineProperty(species, Symbol.species, { get: recordGetter });
+  Object.defineProperty(source, 'constructor', {
+    configurable: true,
+    get() {
+      getterCalls += 1;
+      return species;
+    },
+  });
+
+  const decoded = decodeSourceBytes(source, 2);
+
+  assert.deepEqual(decoded.value, {});
+  assert.equal(decoded.sizeBytes, 2);
+  assert.equal(decoded.sha256, digest(Buffer.from([0x7b, 0x7d])));
+  assert.equal(getterCalls, 0);
+});
+
 test('encode は plain JSON data を pretty JSON と LF で UTF-8 化する', () => {
   const value = Object.create(null);
   Object.defineProperty(value, '__proto__', { value: 'safe', enumerable: true });

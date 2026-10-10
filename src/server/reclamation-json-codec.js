@@ -28,7 +28,7 @@ function copyUint8Array(bytes) {
     const buffer = Reflect.apply(getTypedArrayBuffer, bytes, []);
     const byteOffset = Reflect.apply(getTypedArrayByteOffset, bytes, []);
     const byteLength = Reflect.apply(getTypedArrayByteLength, bytes, []);
-    return Buffer.from(Buffer.from(buffer, byteOffset, byteLength));
+    return Buffer.from(new Uint8Array(buffer, byteOffset, byteLength));
   } catch {
     throw new TypeError(INVALID_SOURCE_BYTES);
   }
