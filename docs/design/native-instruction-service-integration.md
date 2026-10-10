@@ -316,3 +316,23 @@ compositionは実runnerの開始Promiseを採用するため、その終了と�
 開始Promiseの終了だけで子のI/O終了や保存先所有の解放を判断しない。
 観測readの取消とdrain、factory ticketへの接続は別の検証である。
 段階別の共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-S01`に定義する。
+
+## native readの協調取消
+
+owned sourceはread単位の取消登録を内部で保持し、lease解放またはsource無効化で対象readへ通知する。
+leaseとrequest tokenの失効を先に完了させ、同期callbackが新leaseを取得しても旧readの取消へ混ぜない。
+取消controllerはsourceのクロージャー内に保持し、渡したlease tokenから参照できる通常プロパティへ置かない。
+
+readerの第1引数は既存の凍結したleaseTokenとrequestTokenを維持する。
+第2引数は凍結したregisterCancelとisCancelledだけを持つ内部scopeであり、公開facade、options、receiptの項目を増やさない。
+実Codex runnerは応答待ちとwrite callback待ちをこのscopeへ結び付け、取消でoperation_stoppedを返し、sourceはunknownへ終了する。
+正常完了したreceiptの消費契約は維持する。
+
+read取消からrunner全体やinstruction transportを一括取消しない。
+同じleaseの解放によるinstruction authorityの失効は既存どおり行う。
+後着writeエラーは現generationの共有pipe故障として扱い、旧generationのcallbackで新childを停止しない。
+
+scopeを無視する注入readerの元Promiseを一般に取消する契約は持たない。
+ラッパー終了はproviderの元作業、raw callback、collectorやfactoryのdrainを証明しない。
+これらの接続と終了追跡は別の検証として扱う。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-R01`に定義する。

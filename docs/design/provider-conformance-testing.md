@@ -409,3 +409,27 @@ providerごとのRPC、認証方式、既存error codeの差は許容するが�
 Codexのwrite callback保留はinitialize RPC（応答先着）とinitialized通知で確認する。
 login、thread、turnの各RPCは応答待ちを確認し、それぞれのwrite callback保留は未確認である。
 停止後の追加writeは、後着解放前後のwrite履歴の直接比較で検出する。
+
+## native readのlease取消 (#209)
+
+`ID-F209-R01`は、実owned sourceとCodex runnerを接続したfixtureで、lease解放またはsource無効化によるread待機の終了を確認する。
+Claudeのnative readはunsupportedを期待し、transportを呼ばないことを確認する。
+両providerの実runtime結果は、このfixture結果とは別に記録する。
+
+Codexのloaded-listとthread-readについて、応答待ち、write callback待ち、応答先着、段階間の解放、write中の同期解放を保持点で再現する。
+次のreadやrunner停止を呼ばず、lease解放だけで元のreadがunknownへ終了し、後着応答からreceiptや追加RPCを作らないことを期待する。
+旧leaseの後着callbackと新leaseのreadを重ね、新しいreceiptと独立したrunnerへ取消が波及しないことを確認する。
+通常完了したreceiptの一度だけの消費と、timeout・provider拒否後のrunner生存を維持する。
+
+取消登録前の解放、取消済みscopeへの同期登録、二重取消、callback例外でも後始末を確認する。
+後着write拒否を未処理rejectionにせず、現generationのpipe故障は既存のfailureへ進め、旧generationのcallbackは新childを止めない。
+read取消はinstruction transportを一括取消しない。
+ただし同じleaseの解放はinstructionのauthorityも失効させるため、後着ACKの成功は期待しない。
+
+保持点の明示解放とPromise終了を観測し、固定sleepを成功条件にしない。
+追加scopeを無視する注入readerはpendingのまま残る負例として明示解放する。
+ラッパーの終了をproviderの元作業、raw write callback、collector、factoryのdrainや保存先所有の解放へ読み替えない。
+sourceとrunnerの関連2ファイルはin-processで120件成功し、追加20件で上記の保持点と負例を確認した。
+source無効化はsource単体で確認し、実runnerではglobal取消も行うstop経由で確認した。
+runnerは公開APIから新childへ再起動できないため、旧generationの後着writeエラーはstopped状態の不変までを確認し、新childへの影響は未確認である。
+実Claude/Codex runtimeのread取消は未実施である。

@@ -658,69 +658,53 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 
 ## 回収機能のレビュー済みPRと後続
 
-2026-10-11の照合で、以下はfeature向けのReady PRであり、未マージである。
-作業PRのbaseをfeatureに統一する規則に合わせ、#348と#349もbaseをfeatureへ変更した。
-headの内容は変更していない。
+2026-10-11のGitHub照合では、次のPRはすべてfeature向けのReadyで、未マージ、MERGEABLE/CLEANである。
+#348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
 
-| 順序 | PRとhead | 内容 | 検証とレビュー |
-|---|---|---|---|
-| 1 | [#347](https://github.com/ktysne/agent-cockpit/pull/347)、`2228696` | capsule移行状態の読み取り専用inspection | source `8ed160c`で全体2804成功、失敗0、Windows権限skip3。最終test追加後もClaude R3で必須0 |
-| 2 | [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
-| 3 | [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。test/helper補強後関連22成功、Claude R2で必須0 |
+| PRとhead | 内容 | 検証とレビュー |
+|---|---|---|
+| [#347](https://github.com/ktysne/agent-cockpit/pull/347)、`2228696` | capsule移行状態の読み取り専用inspection | source `8ed160c`で全体2804成功、失敗0、Windows権限skip3。追加test後のClaude R3で必須0 |
+| [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
+| [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。補強後関連22成功、Claude R2で必須0 |
+| [#351](https://github.com/ktysne/agent-cockpit/pull/351)、`62e18b2` | 明示的回収factoryの操作受付停止と終了追跡 | source `4db527e`で関連248成功、全体2802成功、失敗0、Windows実symlink権限skip2。標準挙動subset26成功、Claude R1で必須0 |
+| [#352](https://github.com/ktysne/agent-cockpit/pull/352)、`2ea0c83` | main #350の配布物同期 | 関連2件、CLI定義読み取り5条件、構文、空白、上流同期check成功。Claude R1で必須0。アプリsource無変更 |
+| [#353](https://github.com/ktysne/agent-cockpit/pull/353)、`36c1c63` | native起動の段階別取消検証 | `cd39352`で全体2794成功、失敗0、Windows実symlink権限skip2。test補強後`1912130`で関連192成功、Claude R2で必須0。製品source無変更 |
 
-既存PRは#347、#348、#349の順にマージできる。
-fixtureの合格を通常native factoryへの新schema接続や実runtimeの成功には数えない。
+#347、#348、#349はこの順でマージする。
+#351、#352、#353はそれぞれこの系列と独立して取り込める。
+#352はfeature `c731abe`とmain `518b946`を祖先として残す通常mergeで、配布物4ファイルを取り込む。
+アプリ全体テストは重複実行せず、#351のfeature baseに対する証跡を参照する。
+配布物の関数冒頭コメントの補足は上流向けの任意候補であり、手編集しない。
 
-後続の`codex/native-factory-lifetime-gate-feature-209-20261011`は、最新featureの`c731abe`から作成した。
-既存factoryとserviceの対象sourceは#347〜#349の前後で同じため、そのマージを前提にせず統合を進める。
-質問と指示の共通queue、回収coreとschedulerで操作の受付と終了を追跡し、closeで新受付を同期的に停止する。
-既存context.closeの開始順を保ち、受理済み処理の取消や失敗も終了として待つ。
-両providerの機能適合シナリオは[ID-F209-L01](../design/provider-conformance-testing.md)に定義した。
-[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)はfeature向けで、#347〜#349とは独立してマージできる。
-source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功し、失敗0、全体のWindows実symlink権限skip2である。
-標準挙動の追加subset26件も成功した。
-指定Claudeレビューは1往復でblocker・要修正なしとなり、追跡入口と同期scheduler起動の限定を文書へ補足した。
-新factory fixture15件はacceptedへの実到達と後着拒否を両provider、保存中closeをunknown両provider・applied Codexで確認する。
-Claude live appliedと両providerの実runtimeは未確認であり、skip0を適合済みとは読み替えない。
+#351のfactory fixture15件とgate単体7件は、共通queue、回収core、schedulerで新受付を同期停止し、受付済み操作の成功、取消または失敗による終了を確認する。
+context.closeの保存禁止とready拒否はticketのdrain前に開始する。
+適合条件は[ID-F209-L01](../design/provider-conformance-testing.md)にある。
+acceptedへの実到達と登録済みlistenerの後着拒否は両providerで確認するが、後着経路はlistener直接呼出しでありadapter/router全体を通さない。
+保存中closeはunknownを両provider、appliedをCodexで確認する。
+Claude live appliedと両providerの実runtimeは未確認である。
 
-nativeの長時間startと観測readの取消は別段階で確認する。
-epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
-同rootの協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
-## main配布物同期と次の作業
+#353の追加14件は、通常起動profileの実runnerとcompositionを保持点で確認する。
+R1の必須指摘に対応し、全11stageで後着解放前後のwrite履歴を直接比較した。
+適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)にある。
+Codex login、thread、turnの個別write callback保留とwait profile固有待機は未確認である。
+最終headの文書記録とtestのみの補強を、製品sourceの全体検証結果と分けて扱う。
 
-2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
-featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4ファイルだけを取り込む。
-[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)はfeature向けで、関連2件とCLI定義読み取りの5条件、構文・空白・上流同期checkが成功した。
-指定Claudeレビューは1往復でblocker・要修正なしである。
-アプリsourceは無変更のため全体テストの重複実行は省略し、#351のfeature baseに対する検証証跡を参照する。
-上流配布物の関数冒頭コメントにある一般説明の補足は任意候補であり、このリポジトリで配布物を手編集しない。
+## native read取消の現在地
 
-未マージのReady PRは#347、#348、#349の順にfeatureへ取り込める。
-いずれもbaseはfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
-[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)もReadyであり、この系列とは独立して取り込める。
-#351のsource `4db527e`は全体2802件成功、失敗0、Windows実symlink権限skip2で、指定Claudeレビューは1往復で必須指摘なしである。
-最終`62e18b2`は結果と確認範囲の文書記録だけである。
-各PRのfixture合格を実runtime適合や新schemaの通常接続とは扱わない。
-同期後の次の作業はnative startの段階別取消検証であり、観測readの取消とdrainは別PRに残す。
+`codex/native-read-lease-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351、#352、#353のレビュー済みheadをこの順で通常mergeした。
+作業開始時のheadは`57cd63f`であり、製品sourceにmerge conflictはなく、設計と引き継ぎ資料の両方の内容を保持した。
+この後続PRは#351、#352、#353の取り込み後にマージする。
+#347〜#349の未マージsourceはこのブランチへ取り込んでいない。
 
-## native起動取消の段階別検証
+次の実装は、lease解放またはsource無効化によるCodex native readラッパーの協調取消である。
+既存のleaseとrequest tokenを先に失効させ、対象readだけをunknownへ終了させる。
+取消権限はsource内部に保持し、正常完了したreceiptとinstruction transportの境界を維持する。
+実装前に[ID-F209-R01](../design/provider-conformance-testing.md)を定義した。
+fixture結果は検証後に追記する。
 
-2026-10-11の未マージReady PRは、#347、#348、#349の順にfeatureへ取り込める。
-baseはすべてfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
-[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)（`62e18b2`）とmain #350の同期[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)（`2ea0c83`）もReadyで、この系列とは独立して取り込める。
-#351はsource `4db527e`で全体2802成功、失敗0、Windows実symlink権限skip2、Claudeレビュー1往復で必須指摘なしである。
-#352はfeature/mainを祖先として保持する通常mergeで、関連2件、CLI定義読み取り5条件と上流同期checkが成功し、Claudeレビュー1往復で必須指摘なしである。
-
-後続の`codex/native-start-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351と#352のsourceには依存しない。
-native起動の段階別取消を、実runnerとcompositionの保持点で確認する。
-共通の適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)に定義した。
-[PR #353](https://github.com/ktysne/agent-cockpit/pull/353)の`cd39352`で全体2794件成功、失敗0、Windows実symlink権限skip2である。
-製品sourceは無変更で、段階別取消の追加14件を含む関連2ファイルはin-processで192件成功した。
-Claude R1の必須指摘として後着による追加writeの直接比較を全11stageへ補強した。
-`1912130`の関連192件は成功し、製品sourceは全体検証済みheadから変わっていない。
-Claude R2はblockerと要修正なしとなり、PR #353はReadyとして扱える。
-Codex login、thread、turnの個別write callback保留とwait profile固有待機は未確認であり、追加の検証候補として残す。
-観測readの取消とdrain、factory ticketへの接続、協調writer ownership、新schemaの通常接続と実runtimeは後続に残す。
+ラッパー終了とraw callbackの終了を分け、epochやdetachをI/O終了の証拠にしない。
+次はcollectorのprivate drainとfactory ticketへの接続を進める。
+協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
 
 ## 起票していない候補
 
