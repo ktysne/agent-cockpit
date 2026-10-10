@@ -595,6 +595,34 @@ logicalBytesはcurrent合計との和、conditionalReservationBytesはprotected�
 実排他、source最新性、追加operation leaseの会計、orphan検査、atomic保存とreadback、OS耐久性、cold復旧とruntime接続は別に検証する。
 `stableBoundsFit`は通常slot枠への収まりだけを示し、保存や再開の許可を返さない。
 
+### 専有fixtureでの保存と限定復旧
+
+保存順序の初版検証はtest helperに置き、列挙済みのfake fixtureから内部で新規作成する一時directoryに限定する。
+作成入口は任意の保存先、source、basenameや安全確認callbackを受け取らない。
+fresh processで開く際は、固定prefixのroot、識別marker、期待するentry集合、非symlinkの通常fileを検査する。
+markerはBの信頼する正本や外process排他の認証には使わない。
+markerとfilesystem metadataのbyteは四正本の容量評価に含めない。
+
+fixtureの元予約と操作予約は同じprocess内budgetの別leaseとして保持する。
+元予約は旧四正本の各rawと将来予約の最大値の合計、操作予約は全protected境界合計と全conditional temp候補の最大値を全量追加する。
+元予約、BやI grantを控除しない過大予約policyであり、最小追加必要量やdisk free spaceの確保を表さない。
+予算不足ではseed済みsourceを維持し、移行の最初のwriteへ進まない。
+
+移行は、固定sourceの再read照合、Qへの正規material保存とreadback、存在するCPのtarget保存とreadback、Qのtarget保存とreadbackの順に進める。
+各境界で元anchor/I不変とQ/CPの既知byte組を照合する。
+実I/O例外とreadback不一致は同instanceを停止し、同instanceで再試行しない。
+closeは即座に次境界開始を禁止し、進行中I/Oのdrain後に操作leaseを解放する。
+元予約はfixture所有者のdisposeまで保持する。
+
+fresh recoveryはpreparedまたはcheckpoint_movedの材料を完全検証し、同操作だけを再開する。
+材料のない旧sourceはsource_unpreparedとして無書込で返し、復旧入口で新操作を開始しない。
+最終Q3/CP4は現在のjoint整合と容量を検証してalready_migrated_representationと返すが、過去の同operation完了を証明しない。
+未知の混在、欠落、改変や残留temp/orphanは停止し、自動削除やrepairを行わない。
+
+別processの終了後に観測した完全fileによる復旧と、電源断やOS crashへの耐久性を分ける。
+fixture writerのwrite/close/rename/readbackにはfsync保証がなく、標準runtimeのloader、稼働writerの停止、外process排他、実容量会計へは接続しない。
+faultとpauseはtest用の固定enumで表し、実OS故障を起こした試験として数えない。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。

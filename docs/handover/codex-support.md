@@ -635,6 +635,18 @@ I固有の期待上限不一致とB+G+1の独立拒否対照は、この専用�
 後続workspaceの未追跡helper/testは、このPRと全体検証に含めていない。
 実保存と限定復旧は専有実験directoryでの次段階とする。
 
+保存fixtureは`codex/question-capsule-migration-workspace-209-20261010`で進め、基点は#345の`e426538`である。
+任意の既存directoryを開くproduction coordinatorは作らず、fake fixtureを内部mkdtempへseedするtest helperで三保存境界を検証する。
+元予約を保持した共有budgetへ条件付き表の全量を別leaseとして追加し、原anchor/I不変と各境界のbyteをreadbackで照合する。
+source_unpreparedでは復旧のwriteを行わず、材料のある既知境界だけを同操作として継続する。
+最終新形式は整合性を確認しても過去operationのprovenanceを不明として返す。
+専用試験は25件成功、失敗0件、symlink作成EPERMによる1件skipだった。
+child-processを起動できない初回経路の未実施を分け、昇格実行で別processの限定復旧と6保存faultを確認した。
+before-renameの残留tempではfresh openを拒否し、after-rename-before-readbackでは観測した既知byte境界から再開した。
+容量不足の移行writeなし、停止後の同instance再試行拒否、close/drain、凍結facade、欠落と改変と未知entryも確認した。
+3ファイルの構文、空白、CodeGraph変更後同期と調査は成功した。
+全体検証と指定Claudeレビューへ進み、標準runtime、外process排他、OS耐久性は未達として扱う。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
