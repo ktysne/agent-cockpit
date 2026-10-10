@@ -14,7 +14,7 @@ fetch前の準備失敗と期限切れは、従来の失敗と期限の扱いを
 新policyがfalseなら、開始後の結果不明で同じPOSTを再送しない。
 結果はok:false、status:null、json:nullに、outcomeUnknown:trueとclient分類code REQUEST_OUTCOME_UNKNOWNを付ける。
 実際のtimeoutには既存のtimedOut:trueも保持し、非timeoutをtimeoutと呼ばない。
-結果不明の後にensure、server.jsonの再読取りとwriter refreshを追加実行しない。
+結果不明の元POSTを再送するためにensure、server.jsonの再読取りとwriter refreshを追加実行しない。
 abortと応答が届かないことを、サーバー側の取消や未適用の証拠にはしない。
 遅れた応答でも結果を差し替えず、再送を始めない。
 retryAfterTimeout:falseの既存契約も維持し、新policyの既定trueで打ち消さない。
@@ -27,13 +27,16 @@ hookとGETの既定retryは維持する。
 認証更新後の要求が結果不明になった場合も、それ以上送らない。
 HTTP500などの既知応答の扱いは変えない。
 MCPのplan、判断追加と更新、PR登録、レビュー不要記録と共通質問経路へ同じpolicyを適用する。
+writer照合のPOST /api/claude/writerは対象外で、既存のretryを維持する。
 結果不明では記録失敗を断定せず、同じ書き込みを繰り返す前にダッシュボードの反映状態を確認するよう案内する。
 任意の通信エラーmessage、URL、secretとcauseをMCP返答へ出さない。
 answer-pollは元POSTを一度だけ送り、応答紛失の独立通知も既存どおり一度だけとする。
 独立通知の結果が不明でも元pollを再実行しない。
+独立通知は別の要求であり、その初回ensureは元pollの再送ではない。
 
 ## 検証範囲
 
 送信回数とサーバー側の効果回数を別々に観測し、両providerのwriterを使うfixtureで契約を確認する。
 通信stubの成功をサーバーの冪等性や両provider実runtimeの成功とは扱わない。
+実HTTPの効果はfixture内のcounterであり、Cockpitの判断採番や状態保存を再現したものではない。
 適合期待値は[provider適合試験](provider-conformance-testing.md)のID-F311-M01〜M08に置く。

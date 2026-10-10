@@ -192,7 +192,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
-| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | | MCP専用policyとfetch開始境界を定義し、結果不明時の再送抑止を実装中 |
+| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
 | #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | | 2026-10-09 起票。計測してから回収条件と索引を決める |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
@@ -1002,5 +1002,12 @@ Luna Maxが送信clientとMCPの接続、関連試験の4ファイルを実装�
 同期fetch throw、JSON待ちtimeoutと401の既定policy対照、効果後の実HTTP切断も補強した。
 関連試験48件と構文確認4件は成功し、失敗とskipは0件である。
 両providerのwriter fixtureで効果後の切断とJSON解析失敗を確認し、POSTと効果はそれぞれ1回、追加ensureとrefreshは0回だった。
-次は固定headで全体検証と指定Claudeレビューを行う。
+PR [#368](https://github.com/ktysne/agent-cockpit/pull/368)の固定head `f045d13` で全体検証と指定Claudeレビューを行った。
+全体試験は3,060件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1はblockerと要修正が0件で、1往復で収束した。
+開発者の連続作業をスタックする指示に従い、#367の後に積んでいる。
+PR #368はマージ可能で、#367の後に取り込む。
+最終変更は検証結果と文書範囲の明確化だけで、実装と試験は固定headから不変である。
+既定readServerInfoは内部で失敗を捕捉するが、注入したreadInfoが401後にthrowした場合は保守的に結果不明へ分類する制限がある。
+次は#312の表示墓標の件数、走査量と状態取得時間を、仕様を変えない専有fixtureで先行計測する。
 実Cockpitの冪等性と両provider実runtimeの成功とは扱わない。

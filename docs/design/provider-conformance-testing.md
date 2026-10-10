@@ -742,5 +742,6 @@ receiverとrecordの凍結はcallback外で検証する。
 
 M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
 実loopbackの効果後切断とJSON解析失敗は、Claude/Codexの各writer fixtureでPOST1回、効果1回、追加ensureとrefresh0回を確認した。
-全体試験と両provider実runtimeは未確認である。
+固定head `f045d13` の全体試験は3,060件成功、失敗0件、Windows実symlink権限によるskip2件である。
+両provider実runtimeは未確認である。
 製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
