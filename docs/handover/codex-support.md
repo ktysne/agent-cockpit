@@ -764,6 +764,7 @@ process間の協調lockは方式と参加writerの決定後に別PRで扱い、p
 [Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)は、取消前のreadonly RPC write故障が一般のRPC拒否へ変換され、runnerがrunningのままになる不具合を扱う。
 `codex/native-read-write-failure-355-20261011`を最新feature `c731abe`から作成し、PR #357のレビュー済みhead `a69bb80`を通常mergeした。
 開始headは`bc9a331`で、マージ順は#357の後である。
+PR [#358](https://github.com/ktysne/agent-cockpit/pull/358)はDraftで、検証sourceは`bbd9d15`である。
 実装前に[ID-F209-R02](../design/provider-conformance-testing.md)を定義した。
 制御済みのwrite故障と論理取消だけを保持し、provider拒否、timeoutと失効generationの契約を維持する。
 FakeChildと実owned sourceの関連123件は成功し、失敗0件である。
