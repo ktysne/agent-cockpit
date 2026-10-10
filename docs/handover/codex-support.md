@@ -194,7 +194,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
 | #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | | 2026-10-09 起票。結果不明の書き込みを再送しない |
 | #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | | 2026-10-09 起票。計測してから回収条件と索引を決める |
-| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366 | 限定排他primitive、codecとresult storeはレビュー収束。停止全体の#364はDraftで判断待ち。内部shutdown coordinatorを先行し、製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
+| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codecとresult storeはレビュー収束。停止全体の#364はDraftで判断待ち。内部shutdown coordinatorの#367を先行し、製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
@@ -980,5 +980,10 @@ Astraへ先行範囲を相談し、手続きと通知の二軸、callback前の�
 Luna Maxがmoduleと関連試験の2ファイルを実装し、編集停止後に差分を監査した。
 関連fixture試験36件と構文確認2件は成功し、失敗とskipは0件である。
 CodeGraphで製品callerがないことを確認した。
-次は固定headで全体試験と指定Claudeレビューを行う。
+PR [#367](https://github.com/ktysne/agent-cockpit/pull/367)をfeature向けDraftで作成し、固定head `1766a90` で全体試験と指定Claudeレビューを行った。
+全体試験は3,049件成功、失敗0件、Windows実symlink権限によるskip2件である。
+Claude R1はblocker0件、要修正1件で、callback内のassertが実装に捕捉されるテストを外側の観測値検証へ補強する。
+実装本体の必須修正はなく、procedureが返すPromiseの信頼前提とfactoryのaccessor拒否試験も明確にする。
+レビュー補強後の関連試験37件と構文確認は成功した。
+全体試験のheadからsrcは不変で、testと文書の変更をClaudeの増分レビューで確認する。
 製品停止、HTTP、既存public close、scope/current/attempt、ACLとwriter所有には接続しない。

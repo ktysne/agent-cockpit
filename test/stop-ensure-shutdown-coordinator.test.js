@@ -119,6 +119,40 @@ test('factory rejects unsafe shapes before callbacks or store access', () => {
   assert.equal(proxyTraps, 0);
 });
 
+test('factory rejects accessors for each required option and a proxied result store without side effects', () => {
+  const requiredKeys = ['instanceId', 'runShutdownProcedure', 'resultStore'];
+  let getterCalls = 0;
+  for (const key of requiredKeys) {
+    const options = {
+      instanceId: INSTANCE_ID,
+      runShutdownProcedure() {},
+      resultStore: { writeResult() { return { status: 'written' }; } },
+    };
+    const value = options[key];
+    Object.defineProperty(options, key, {
+      configurable: true,
+      enumerable: true,
+      get() { getterCalls += 1; return value; },
+    });
+    assert.throws(() => createStopEnsureShutdownCoordinator(options),
+      (error) => assertTypeError(error, 'invalid_stop_ensure_shutdown_options'));
+  }
+  assert.equal(getterCalls, 0);
+
+  let proxyTraps = 0;
+  const resultStore = new Proxy({ writeResult() { return { status: 'written' }; } }, {
+    get() { proxyTraps += 1; throw new Error('store proxy trap'); },
+    ownKeys() { proxyTraps += 1; throw new Error('store proxy trap'); },
+    getOwnPropertyDescriptor() { proxyTraps += 1; throw new Error('store proxy trap'); },
+  });
+  assert.throws(() => createStopEnsureShutdownCoordinator({
+    instanceId: INSTANCE_ID,
+    runShutdownProcedure() {},
+    resultStore,
+  }), (error) => assertTypeError(error, 'invalid_stop_ensure_shutdown_options'));
+  assert.equal(proxyTraps, 0);
+});
+
 test('constructor instance UUID is validated through the codec on first request', () => {
   let procedureCalls = 0;
   let notificationCalls = 0;
@@ -239,11 +273,13 @@ test('same request shares its deferred promise across synchronous reentry and se
 test('captured store writer keeps its receiver and ignores later method replacement', async () => {
   let originalCalls = 0;
   let replacementCalls = 0;
+  let observedReceiver;
+  let observedRecord;
   const resultStore = {
     writeResult(record) {
       originalCalls += 1;
-      assert.equal(this, resultStore);
-      assert.equal(Object.isFrozen(record), true);
+      observedReceiver = this;
+      observedRecord = record;
       return { status: 'written' };
     },
   };
@@ -254,7 +290,16 @@ test('captured store writer keeps its receiver and ignores later method replacem
   });
   resultStore.writeResult = () => { replacementCalls += 1; return { status: 'written' }; };
 
-  await coordinator.requestShutdown(request());
+  const completion = await coordinator.requestShutdown(request());
+  assert.equal(observedReceiver, resultStore);
+  assert.equal(Object.isFrozen(observedRecord), true);
+  assert.equal(observedRecord.version, 1);
+  assert.equal(observedRecord.kind, 'shutdown');
+  assert.equal(observedRecord.instanceId, INSTANCE_ID);
+  assert.equal(observedRecord.requestId, REQUEST_ID);
+  assert.equal(observedRecord.status, 'completed');
+  assert.equal(observedRecord.reasonCode, null);
+  assert.deepEqual(completion.notification, { status: 'written' });
   assert.equal(originalCalls, 1);
   assert.equal(replacementCalls, 0);
 });
