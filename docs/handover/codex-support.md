@@ -845,7 +845,9 @@ serverとnative終了wrapperが失敗理由のtruthinessを判定するため、
 公開closeの形、終了順、診断値を維持し、起動失敗cleanupと標準native stopはこの修正に含めない。
 起動失敗cleanupの追加shutdown理由にもtruthiness判定があり、falsyな追加理由をAggregateErrorへ含めない箇所を静的確認した。起動の元の失敗はthrowされるため、今回のclose成功への取り違えとは分けて後続で検証する。
 関連試験は通常server87件とnative factory38件が成功し、失敗とskipは0件だった。変更4ファイルの構文確認も成功した。
-全体検証と指定Claudeレビューはこれから行う。
+[PR #363](https://github.com/ktysne/agent-cockpit/pull/363)の実装head `2ec748b`で全体検証は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+指定Claude R1はblockerと要修正が0件で収束した。提案は範囲と既存契約を確認し、実装変更を加えなかった。
+PRは#362の後にマージし、#361の完了はfeatureへの取り込み後に照合する。
 
 ## 起票していない候補
 

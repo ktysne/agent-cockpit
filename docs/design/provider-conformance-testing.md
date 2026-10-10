@@ -637,5 +637,6 @@ P01〜P10を含む`test/writer-exclusion.test.js`は19件成功、失敗0件で�
 
 S01〜S03を含む通常server試験87件とnative factory試験38件は成功し、失敗とskipは0件だった。
 通常sandboxのharness子process起動がEPERMとなったため、同じ対象試験を昇格実行した。
-全体試験と指定Claudeレビューは未実行である。
+実装head `2ec748b`の全体試験は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+指定Claude R1はblockerと要修正が0件で収束した。
 writer排他の製品接続、graceful再起動と両provider実runtimeはこの試験の成功に含めない。
