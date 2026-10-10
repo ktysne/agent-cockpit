@@ -590,6 +590,17 @@ anchor/Iは固定した外部正本として扱い、既存Q3へ未知fieldを�
 Claude R1はblockerと要修正0件に収束した。Bの改変はbyte証拠だけでは検出せず、信頼する設定の正本との照合は保存接続時に別途要求する。
 後続prepared materialの未追跡source/testはこのPRと全体検証に含めていない。
 
+prepared materialは`codex/question-capsule-prepared-material-209-20261010`で、基点は#342の`3b6a07b`である。
+旧Q/CPのraw byte列をcanonical base64で保持し、manifestと固定した外部anchor/Iから同じtargetを再生成する独立codecを実装する。
+通常journalへ未知fieldを追加せず、現loaderやwriterへは接続しない。
+16 MiBの外側受理政策を、manifestの入れ子indentとbase64長を含めて文字列生成前に検査する。
+局所検査と完全材料検証を分け、通常上限B、durable可用性、保存とcoldの成功を認定しない。
+個別12件と最後のraw getter補強1件が成功し、構文、差分、CodeGraph同期と調査も成功した。
+CPなし、両providerと混在、raw空白と重複keyの保持、有効I grantとB+G境界、指紋と外部材料変更、getter/Proxy/SAB、入力不変を確認した。
+16 MiBちょうどと+1は局所codecの境界fixtureで検査したもので、完全検証を通るQ2の意味を示す試験ではない。
+合法な旧sourceが外側上限を超える作成controlでは、base64文字列の生成0回で拒否することを確認した。
+全体テストとClaudeレビューへ進む。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
