@@ -192,9 +192,9 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
-| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | | 2026-10-09 起票。結果不明の書き込みを再送しない |
+| #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | | MCP専用policyとfetch開始境界を定義し、結果不明時の再送抑止を実装中 |
 | #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | | 2026-10-09 起票。計測してから回収条件と索引を決める |
-| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codecとresult storeはレビュー収束。停止全体の#364はDraftで判断待ち。内部shutdown coordinatorの#367を先行し、製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
+| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
@@ -991,3 +991,16 @@ PR #367はマージ可能で、#366の後に取り込む。
 最終変更は検証結果と文書の整理だけで、実装と補強済み試験は増分レビュー時から不変である。
 次は停止設計の判断待ちに依存しない#311のMCP書き込み再送抑止へ進む。
 製品停止、HTTP、既存public close、scope/current/attempt、ACLとwriter所有には接続しない。
+
+### MCP書き込みの結果不明の再送抑止
+
+最新featureからcodex/mcp-unknown-write-retry-311-20261011を作り、PR #367最終head `ec2c3b6d5a196bf0f36a4a09ea84dd02c9e48e32`を通常mergeした。
+未収束PR #364を取り込まず、停止管理protocolから独立した#311へ進む。
+Astraへ設計を相談し、MCP専用policy、fetch呼出し直前の開始境界、認証拒否後の既存retry維持を採用した。
+[MCP結果不明の契約](../design/mcp-write-outcome.md)とM01〜M08の適合期待値を実装前に記録した。
+Luna Maxが送信clientとMCPの接続、関連試験の4ファイルを実装し、編集停止後に差分を監査した。
+同期fetch throw、JSON待ちtimeoutと401の既定policy対照、効果後の実HTTP切断も補強した。
+関連試験48件と構文確認4件は成功し、失敗とskipは0件である。
+両providerのwriter fixtureで効果後の切断とJSON解析失敗を確認し、POSTと効果はそれぞれ1回、追加ensureとrefreshは0回だった。
+次は固定headで全体検証と指定Claudeレビューを行う。
+実Cockpitの冪等性と両provider実runtimeの成功とは扱わない。

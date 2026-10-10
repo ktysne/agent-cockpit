@@ -724,4 +724,23 @@ Q01〜Q10のレビュー補強後の関連fixture試験は37件成功し、失�
 固定head `1766a90` の全体試験は3,049件成功、失敗0件、Windows実symlink権限によるskip2件である。
 receiverとrecordの凍結はcallback外で検証する。
 製品停止、管理protocol、writer接続と両provider実runtimeは未実行である。
+
+## MCP書き込みの結果不明と再送 (#311)
+
+以下は[MCP書き込みの契約](mcp-write-outcome.md)の実装前期待値である。
+
+| ID | 操作 | 合格条件 |
+|---|---|---|
+| ID-F311-M01 | MCP実入口から書き込み、効果を記録してからfetchをrejectする | 対象POST1回、効果1回、同POST再送と追加ensure/readInfo/refresh 0回、MCPは結果不明と反映確認を案内 |
+| ID-F311-M02 | 成功HTTPのJSON解析を失敗させる | POST1回、再送0回、非timeoutの結果不明、任意エラーとsecretを返さない |
+| ID-F311-M03 | fetch同期throw、非同期切断、開始後timeoutとJSON待ちtimeoutを与える | いずれも開始済みと分類して再送0回。実timeoutだけtimedOutを保持 |
+| ID-F311-M04 | fetch前の準備失敗と期限切れを与える | 送信0回、結果不明とは分類せず既存の開始前失敗と期限の扱いを保持 |
+| ID-F311-M05 | 明示401でsecretを更新し、明示403でwriterを更新する | 従来上限で再送できる。更新後の要求が結果不明なら追加再送0回 |
+| ID-F311-M06 | plan/判断/PR/レビュー不要/質問登録とstatus/pollを呼ぶ | 各MCP経路で同じ結果不明の案内。answer-poll元POST1回と独立response-lost1回を別に数える |
+| ID-F311-M07 | postToServerの既定policyと旧retryAfterTimeout:falseを対照にする | 既定の接続失敗とJSON失敗後のretry、旧timeout抑止、hookとGETの契約を維持 |
+| ID-F311-M08 | timeout後に元応答が遅れて到着する | 返した結果を差替えず再送0回。abortを未適用の証拠にしない |
+
+M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
+実loopbackの効果後切断とJSON解析失敗は、Claude/Codexの各writer fixtureでPOST1回、効果1回、追加ensureとrefresh0回を確認した。
+全体試験と両provider実runtimeは未確認である。
 製品caller、HTTP、管理protocol、ACL、全writerと両provider実runtimeは後続gateである。
