@@ -524,6 +524,12 @@ skipはWindowsの実symlink権限によるもので、注入したsymlinkの拒�
 保存とcold復旧へは接続していない。
 次は旧rawファイルと新形式の対応を検証するpure移行plannerで、新形式の将来予約と一時保存ピークは別の後続検証に残す。
 
+その移行plannerは`codex/question-capsule-migration-plan-209-20261010`で実装中で、基点は#336の`1e7cbf2`である。
+旧rawのfingerprint、退役scopeの選択とlogical groupの閉包、決定的なchunk分割、元の全順序と復元内容の一致を検証する。
+instructionsの有効なgrantを保持し、質問とcheckpointの変換へ流用しない。
+契約は[容量回収計画](../design/codex-capacity-reclamation.md#旧rawファイルからの移行計画)に置く。
+新形式の将来予約、prepareとatomic保存ピーク、実保存とcold、件数枠の解放は未達のまま残す。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

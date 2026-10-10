@@ -398,6 +398,48 @@ raw byteと正規化後の保存byteは各16,777,216 bytes以下とし、rawの�
 | QCF05 | getterとProxyを実行せず、有限な展開件数と行予算で入力を変更せず検査する |
 | QCF06 | 旧readerが新schemaを拒否し、局所合格を保存、復旧と件数枠解放へ読み替えない |
 
+### 旧rawファイルからの移行計画
+
+移行の独立入口は、渡された旧ファイルのbyte列から質問journal v3とcheckpoint v4を作るpure plannerとする。
+filesystem、時計、乱数を使わず、保存開始や削除、件数枠の解放を許可する結果は返さない。
+新形式の将来予約とatomic保存ピークは、この入口の合格条件に含めず、後続で別に証明する。
+
+入力は、anchor、questions、checkpoint、instructionsのraw byte列、slotごとの通常byte上限、選択集合、操作UUIDとchunk UUIDのpoolである。
+選択集合は完全identity、period ID、内部質問IDの非空集合を指定し、scopeと内部IDの重複を拒否する。
+操作UUIDは各capsuleで共有でき、chunk UUIDは対応付けのため別に一意とする。
+poolは未使用分も検査し、使用したUUIDと残ったUUIDを結果で区別する。
+必要数に足りない場合は拒否し、planner内でUUIDを発行しない。
+
+raw入力は共有bufferとProxyを拒否したbyte viewから一度だけコピーする。
+同じコピーをhashとparseに使い、呼出側のgetterやiteratorを実行しない。
+rawのhashとsizeは空白と重複JSON keyも含み、正規化した値のdigestとは区別する。
+重複keyは既存parserの最後の値を採用する方針を維持し、不正UTF-8は拒否する。
+この照合は渡されたbyte列との対応だけを検証し、実pathの最新値を認証しない。
+保存へ接続するときは、保存直前の再読と競合防止を別に設ける。
+
+質問とcheckpointはraw 16 MiB以内かつ通常上限B以内、grantはnullを要求する。
+instructionsは有効な移行grantを保持できるため、parse前の絶対上限を16 MiBと固定Hの和とする。
+parse後は有効なgrantを照合し、実raw sizeと旧形式の現在byte・将来予約をBとGの和へ別々に照合する。
+固定Hだけをgrantとして認めず、instructionsのgrantを質問とcheckpointの変換予算へ使わない。
+nullのslotは通常上限もnullでなければならない。
+アンカーに進行中のmigrationがなく、旧全体検査のreadyとraw自己遷移のcheckedが理由0件で成立し、退役予約を含む容量検査に通ることを要求する。
+
+選択質問は、アンカーで完全scopeが退役済みで、本文回収が完了していなければならない。
+checkpointの質問墓標がある場合は同時に移し、noneとindeterminateに墓標を補ってはならない。
+初版では、選択したlogical groupに未選択のdeliveryが残る場合を拒否する。
+logical tombstoneはcheckpointの通常配列へ保持する。
+
+scopeと内部質問IDをordinal順に並べ、各候補chunkの実encoderで質問・checkpoint各256件と各1 MiBを確認する。
+次のentryが上限を超える場合は現在chunkを確定し、単一entryでも収まらない場合は計画全体を拒否する。
+呼出側の選択順によってpackingを変えず、対象を黙って落とさない。
+chunk IDは決定したchunk順にpoolから割り当てる。
+
+元の正規化済み配列から全順序を一度取得し、通常recordの部分列とmetadataの順序を保持する。
+生成ファイルはencode、decode、両ファイルの全体検査を通し、復元した全意味fieldと全配列順が旧snapshotと一致することを要求する。
+新外側の実byteが16 MiBとB以内であることも、旧形の将来予約とは別に検査する。
+結果にはsourceのfingerprint、質問とcheckpointのtarget値・bytes・size・hash、選択の要約、使用済みと未使用のchunk ID、未検証範囲を返す。
+anchorとinstructionsは変更対象にせず、実保存、cold復旧、新規受付と実runtimeは後続の検証に残す。
+
 ### 永続集約への条件
 
 復元実験の後は、codecと相関検査、移行plannerと容量上界、ファイル間の保存とcold復旧、件数枠と診断を分けて実装する。
