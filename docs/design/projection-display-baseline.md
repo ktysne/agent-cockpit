@@ -10,7 +10,7 @@
 DashboardStateへ専用writerを注入し、固定seed、session IDと時刻のstoreを専用in-memory filesystemで復元する。
 readFileは指定fixtureのstore.json以外を拒否し、実ディスクへfallbackしない。
 少量の実state操作と合成storeの復元結果を照合する。
-保存recordはproductionと同じprovider/sessionの正規順に並べ、復元直後とflush後に保存pendingなしとwriter書き込み0回を検査する。
+保存recordはproductionと同じprovider/sessionの正規順に並べ、復元直後に保存pendingなしを検査し、flush後もwriter書き込み0回を確認する。
 別providerと古い書き込みでは削除記録を保持し、同providerの新しいverified-write操作だけで対象の削除記録を解除する。
 この確認はstate methodのfixtureであり、HTTP認証とruntime authorityの証拠ではない。
 
@@ -41,6 +41,8 @@ UI版fileの初回読取りは定常route sampleと混ぜない。
 定常routeの時間にはcached UI stampの確認のためのfs.statを含む。
 各phaseのsample数、warmup数、中央値、p95と最大値をNode、OS、入力条件とともに出す。
 lookup batchの回数は観測したroute lookup数にそろえ、対象IDのround-robin順はrouteの呼出順とは別に定義する。
+Sが正ならactive ID、Sが0ならprojection-only IDをlookup batchの対象にする。
+このfixtureではSが正の場合のprojectionもactive IDへ対応させるため、製品で起こりうるactiveとprojection-onlyの混在分布は測定していない。
 計時の前後でcanonical store JSON、versionとMap.sizeが変わらないことを確認する。
 少数sampleのp95は参考値である。
 件数とbyte数は同じ入力で再現でき、時間は環境依存とする。
@@ -103,6 +105,7 @@ provider別条件とboth/unknown条件も実yieldと期待値が一致した。
 
 この観測は全件走査のN×lookup回数を確認するもので、時間の厳密な比例や許容閾値を証明しない。
 小規模試験6件と2ファイルの構文確認は成功した。
+固定head `58e8615` の全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件で、指定Claude R2はblockerと要修正0件に収束した。
 routeの時間には応答JSON生成を含め、件数用sinkのJSON解析を含めない。
 同じIDのCodex削除を解除した後もClaude削除を保持すること、両providerとunknown出自の統合抑止もfixtureで確認した。
 保持条件を変えずにsession別参照を設ける案を次の設計候補とし、回収条件は別に検討する。

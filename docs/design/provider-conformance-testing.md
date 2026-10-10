@@ -768,4 +768,5 @@ N=10000、S=8、P=8では両providerともlookup 16回、実yield 160000で期�
 結果と実行条件は先行計測の設計資料へ記録した。
 単providerの辞書順とbothの複数provider対でも保存pendingなし、書き戻し0回を確認し、その条件で再計測した。
 両provider実runtime、実データの長期保持と並行負荷は未確認である。
-全体試験と指定Claudeレビューは次に行う。
+固定head `58e8615` の全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+指定Claude R2はblockerと要修正0件で収束した。
