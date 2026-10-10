@@ -48,10 +48,10 @@ test('provider scenarios count N as total records and keep unknown provenance ou
   assert.equal(result.schemaVersion, 1);
   assert.equal(result.scenarios.length, 4);
   const routeExpectations = {
-    claude: { sessions: 1, questions: 1, instructions: 0 },
-    codex: { sessions: 1, questions: 1, instructions: 0 },
-    both: { sessions: 2, questions: 0, instructions: 0 },
-    unknown: { sessions: 1, questions: 0, instructions: 0 },
+    claude: { sessions: 1, questions: 1, instructions: 0, lookupCalls: 4 },
+    codex: { sessions: 1, questions: 1, instructions: 0, lookupCalls: 4 },
+    both: { sessions: 2, questions: 0, instructions: 0, lookupCalls: 2 },
+    unknown: { sessions: 1, questions: 0, instructions: 0, lookupCalls: 3 },
   };
   for (const scenario of result.scenarios) {
     assert.equal(scenario.counts.inputRecordCount, 3);
@@ -65,6 +65,8 @@ test('provider scenarios count N as total records and keep unknown provenance ou
     assert.equal(scenario.counts.routeSessionCount, expectedRoute.sessions);
     assert.equal(scenario.counts.routeProjectionCounts.questions, expectedRoute.questions);
     assert.equal(scenario.counts.routeProjectionCounts.instructions, expectedRoute.instructions);
+    assert.equal(scenario.counts.lookupCallsMeasured, expectedRoute.lookupCalls);
+    assert.equal(scenario.fixture.lookupBatchSize, expectedRoute.lookupCalls);
     assert.equal(
       scenario.counts.recordsByProvider.claude + scenario.counts.recordsByProvider.codex,
       scenario.counts.inputRecordCount,
@@ -135,6 +137,50 @@ test('CLI keeps argument diagnostics and redacts arbitrary runtime errors', asyn
   assert.match(budgetError.value, /estimated iterator work limit/);
 });
 
+test('canonical store order restores without scheduling normalization writes', async () => {
+  const temporary = await createTemporaryRoot();
+  try {
+    const longOptions = parseArgs([
+      '--sweep', 'tombstones', '--tombstones', '11', '--sessions', '2',
+      '--projections', '0', '--samples', '1', '--warmup', '0', '--provider-mode', 'claude',
+    ]);
+    const [longScenario] = buildScenarios(longOptions);
+    const longFixture = await createScenarioFixture(longScenario, temporary.root);
+    const longRecords = JSON.parse(longFixture.storeJson).projectionDisplaySettings;
+    const historyTenIndex = longRecords.findIndex((record) => record.session_id.endsWith('history-10'));
+    const historyEightIndex = longRecords.findIndex((record) => record.session_id.endsWith('history-8'));
+    assert.ok(historyTenIndex >= 0 && historyEightIndex >= 0);
+    assert.ok(historyTenIndex < historyEightIndex);
+    assert.equal(longFixture.filesystemCalls.writerWrites, 0);
+    assert.equal(longFixture.state.storeWritePending, false);
+    assert.equal(longFixture.filesystemCalls.rename, 0);
+    assert.deepEqual(longFixture.filesystemCalls.rejected, []);
+
+    const pairOptions = parseArgs([
+      '--sweep', 'tombstones', '--tombstones', '6', '--sessions', '2',
+      '--projections', '0', '--samples', '1', '--warmup', '0', '--provider-mode', 'both',
+    ]);
+    const [pairScenario] = buildScenarios(pairOptions);
+    const pairFixture = await createScenarioFixture(pairScenario, temporary.root);
+    const pairRecords = JSON.parse(pairFixture.storeJson).projectionDisplaySettings;
+    const claudeSessionIds = pairRecords.filter((record) => record.provider === 'claude')
+      .map((record) => record.session_id);
+    const codexSessionIds = pairRecords.filter((record) => record.provider === 'codex')
+      .map((record) => record.session_id);
+    assert.deepEqual(pairRecords.map((record) => record.provider), [
+      'claude', 'claude', 'claude', 'codex', 'codex', 'codex',
+    ]);
+    assert.equal(new Set(claudeSessionIds).size, 3);
+    assert.deepEqual(claudeSessionIds, codexSessionIds);
+    assert.equal(pairFixture.filesystemCalls.writerWrites, 0);
+    assert.equal(pairFixture.state.storeWritePending, false);
+    assert.equal(pairFixture.filesystemCalls.rename, 0);
+    assert.deepEqual(pairFixture.filesystemCalls.rejected, []);
+  } finally {
+    await temporary.cleanup();
+  }
+});
+
 test('churn retains active and historical provenance counts as separate rows', async () => {
   const options = parseArgs([
     '--sweep', 'churn', '--fixed-tombstones', '1', '--sessions', '2',
@@ -148,7 +194,7 @@ test('churn retains active and historical provenance counts as separate rows', a
   assert.equal(scenario.fixture.churn, 2);
 });
 
-test('route projection counts reflect the supplied session fixture and byte counting does not visit the instrumented map', async () => {
+test('count aggregation leaves lookup metrics unchanged after the instance wrapper is removed', async () => {
   const options = parseArgs([
     '--sweep', 'tombstones', '--tombstones', '1', '--sessions', '1',
     '--projections', '2', '--samples', '1', '--warmup', '0', '--provider-mode', 'claude',
@@ -167,18 +213,24 @@ test('route projection counts reflect the supplied session fixture and byte coun
       fixture.projections,
       temporary.webPath,
     ).readState();
-    const observed = { ...counter.metrics };
-    counter.stop();
-    assert.ok(observed.iteratorYields > 0);
-
-    const counts = countState(fixture.state, routeResult, {
-      ...observed,
+    const routeMetrics = { ...counter.metrics };
+    countState(fixture.state, routeResult, {
+      ...routeMetrics,
       inputRecordCount: fixture.records.length,
       projections: fixture.projections,
     });
-    assert.deepEqual(counter.metrics, observed);
-    assert.equal(counts.lookupCallsMeasured, observed.lookupCalls);
-    assert.equal(counts.iteratorYieldsMeasured, observed.iteratorYields);
+    assert.ok(counter.metrics.iteratorYields > routeMetrics.iteratorYields);
+    const afterInstrumentedAggregation = { ...counter.metrics };
+    counter.stop();
+
+    const counts = countState(fixture.state, routeResult, {
+      ...routeMetrics,
+      inputRecordCount: fixture.records.length,
+      projections: fixture.projections,
+    });
+    assert.deepEqual(counter.metrics, afterInstrumentedAggregation);
+    assert.equal(counts.lookupCallsMeasured, routeMetrics.lookupCalls);
+    assert.equal(counts.iteratorYieldsMeasured, routeMetrics.iteratorYields);
     assert.equal(counts.iteratorYieldsExpected, counts.restoredMapSize * counts.lookupCallsMeasured);
     assert.equal(counts.routeSessionCount, 1);
     assert.deepEqual(counts.routeProjectionCounts, { questions: 1, instructions: 1 });

@@ -762,9 +762,10 @@ state fixtureとrouteの合成依存を対象にし、両provider実runtimeの�
 | ID-F312-D07 | churnとhide/unhide/delete/繰返しdeleteを行う | providerの曖昧性と墓標保持は現仕様どおり。TTL/GC/索引/拒否/telemetryを追加しない |
 | ID-F312-D08 | 小規模testと手動CLIで不正入力と出力を確認する | 不正入力を構築前拒否。件数/schemaは再現可能、通常testに重いloopや固定ms閾値なし |
 
-D01〜D08の小規模fixture試験5件と2ファイルの構文確認は成功した。
+D01〜D08のレビュー補強後の小規模fixture試験6件と2ファイルの構文確認は成功した。
 rootは全15条件とCodexのN sweep4条件を25 sample、warmup 1で計測した。
 N=10000、S=8、P=8では両providerともlookup 16回、実yield 160000で期待値と一致した。
 結果と実行条件は先行計測の設計資料へ記録した。
+単providerの辞書順とbothの複数provider対でも保存pendingなし、書き戻し0回を確認し、その条件で再計測した。
 両provider実runtime、実データの長期保持と並行負荷は未確認である。
 全体試験と指定Claudeレビューは次に行う。

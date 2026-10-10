@@ -179,10 +179,9 @@ function validateWorkBudget(options, scenarios = buildScenarios(options)) {
     if (recordCount > LIMITS.recordsPerScenario) throw new Error('scenario exceeds the per-fixture record limit');
     totalFixtureRecords += recordCount * fixtureBuildsPerScenario;
     const routeLookupCalls = scenario.sessions + scenario.projections;
-    const lookupCallsPerBatch = Math.max(1, routeLookupCalls);
     totalIteratorWork += scenario.tombstones * (
       routeLookupCalls * routeRunsPerScenario +
-      lookupCallsPerBatch * (options.samples + options.warmup)
+      routeLookupCalls * (options.samples + options.warmup)
     );
   }
 
@@ -261,12 +260,14 @@ function createProjectionRecords(scenario) {
 
 function createStoreJson(records) {
   const store = new DashboardState().serializeStore();
-  store.projectionDisplaySettings = records.map((record) => ({ ...record }));
+  store.projectionDisplaySettings = records.map((record) => ({ ...record }))
+    .sort((left, right) => `${left.provider}\0${left.session_id}`
+      .localeCompare(`${right.provider}\0${right.session_id}`));
   return JSON.stringify(store);
 }
 
 function createMemoryFileSystem(homeDir, storeJson) {
-  const calls = { readFile: 0, rename: 0, rejected: [] };
+  const calls = { readFile: 0, rename: 0, writerWrites: 0, rejected: [] };
   const storePath = path.resolve(homeDir, 'store.json');
   const operations = {
     async readFile(filePath, encoding) {
@@ -310,8 +311,12 @@ async function loadStateFromStoreJson(storeJson, fixtureRoot) {
     writer: createWriter(memory.calls),
     now: FIXED_NOW,
   });
+  if (state.storeWritePending !== false || memory.calls.writerWrites !== 0) {
+    throw new Error('store restore requested a normalization write');
+  }
   await state.flushPersistence();
-  if (memory.calls.rename !== 0 || memory.calls.rejected.length !== 0 || memory.calls.readFile !== 1) {
+  if (state.storeWritePending !== false || memory.calls.writerWrites !== 0 || memory.calls.rename !== 0 ||
+      memory.calls.rejected.length !== 0 || memory.calls.readFile !== 1) {
     throw new Error('store restore used an unexpected filesystem path or operation');
   }
   state.generatedAt = FIXED_TIME;
@@ -540,8 +545,7 @@ async function measurePhase(operation, samples, warmup) {
   };
 }
 
-function lookupTargets(scenario) {
-  const count = Math.max(1, scenario.sessions + scenario.projections);
+function lookupTargets(scenario, count) {
   return Array.from({ length: count }, (_, index) => scenario.sessions === 0
     ? sessionId(scenario.seed, 'projection-only', index % Math.max(1, scenario.projections))
     : sessionId(scenario.seed, 'active', index % scenario.sessions));
@@ -562,6 +566,9 @@ async function measureScenario(scenario, options, fixtureRoot, webPath) {
   if (counts.iteratorYieldsMeasured !== counts.iteratorYieldsExpected) {
     throw new Error('measured iterator yields differ from Map.size × lookup calls');
   }
+  if (counts.lookupCallsMeasured > scenario.sessions + scenario.projections) {
+    throw new Error('route lookup calls exceed the scenario work estimate');
+  }
 
   const construction = await measurePhase(async () => {
     await createScenarioFixture(scenario, fixtureRoot);
@@ -572,8 +579,14 @@ async function measureScenario(scenario, options, fixtureRoot, webPath) {
   }
   const harness = createReadRouteHarness(timingFixture.state, timingFixture.projections, webPath);
   await harness.readState();
-  const lookups = lookupTargets(scenario);
+  const lookupBatchSize = counts.lookupCallsMeasured;
+  const lookups = lookupTargets(scenario, lookupBatchSize);
   const storeValue = timingFixture.state.serializeStore();
+  const stateBeforeTiming = {
+    canonicalStoreJson: JSON.stringify(storeValue),
+    version: timingFixture.state.version,
+    displayMapSize: timingFixture.state.projectionDisplaySettings.size,
+  };
 
   const timings = {
     fixtureConstruction: construction,
@@ -587,6 +600,14 @@ async function measureScenario(scenario, options, fixtureRoot, webPath) {
     storeLoadNormalizeRestore: await measurePhase(
       () => loadStateFromStoreJson(timingFixture.storeJson, fixtureRoot), options.samples, options.warmup),
   };
+  const stateAfterTiming = {
+    canonicalStoreJson: JSON.stringify(timingFixture.state.serializeStore()),
+    version: timingFixture.state.version,
+    displayMapSize: timingFixture.state.projectionDisplaySettings.size,
+  };
+  if (JSON.stringify(stateAfterTiming) !== JSON.stringify(stateBeforeTiming)) {
+    throw new Error('timing phases mutated the measurement fixture');
+  }
 
   return {
     id: scenario.id,
@@ -598,6 +619,8 @@ async function measureScenario(scenario, options, fixtureRoot, webPath) {
       providerMode: scenario.providerMode,
       churn: scenario.churn,
       seed: scenario.seed,
+      lookupBatchSize,
+      lookupBatchTargetPattern: 'active-session or projection-only fixture IDs in round-robin order, independent of route traversal order',
       recordComposition: {
         totalRecords: scenario.tombstones,
         sameSessionClaudeCodexPairs: scenario.providerMode === 'both'
@@ -688,7 +711,7 @@ async function verifyLifecycleSemantics() {
   return {
     apiRestoreEqual: true,
     staleAndOtherProviderWritesPreserveDeletion: true,
-    newerSameProviderWriteClearsDeletion: true,
+    newerProviderWriteClearsOnlyItsRecord: true,
     syntheticRestoreEqual: true,
   };
 }

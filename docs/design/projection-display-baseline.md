@@ -10,6 +10,7 @@
 DashboardStateへ専用writerを注入し、固定seed、session IDと時刻のstoreを専用in-memory filesystemで復元する。
 readFileは指定fixtureのstore.json以外を拒否し、実ディスクへfallbackしない。
 少量の実state操作と合成storeの復元結果を照合する。
+保存recordはproductionと同じprovider/sessionの正規順に並べ、復元直後とflush後に保存pendingなしとwriter書き込み0回を検査する。
 別providerと古い書き込みでは削除記録を保持し、同providerの新しいverified-write操作だけで対象の削除記録を解除する。
 この確認はstate methodのfixtureであり、HTTP認証とruntime authorityの証拠ではない。
 
@@ -35,8 +36,12 @@ churn条件は残存した出自履歴を合成して置くもので、実runtim
 store全体と表示墓標部分のUTF-8 JSON byte数を分け、heap byte数とは呼ばない。
 
 単調時計で構築、lookup、snapshot、routeと応答JSON、serializeとJSON化、loadと復元を分ける。
+構築はloadと復元を含むため、各phaseの時間を足し合わせない。
 UI版fileの初回読取りは定常route sampleと混ぜない。
+定常routeの時間にはcached UI stampの確認のためのfs.statを含む。
 各phaseのsample数、warmup数、中央値、p95と最大値をNode、OS、入力条件とともに出す。
+lookup batchの回数は観測したroute lookup数にそろえ、対象IDのround-robin順はrouteの呼出順とは別に定義する。
+計時の前後でcanonical store JSON、versionとMap.sizeが変わらないことを確認する。
 少数sampleのp95は参考値である。
 件数とbyte数は同じ入力で再現でき、時間は環境依存とする。
 
@@ -71,7 +76,8 @@ node tools/manual/projection-display-baseline.js --sweep tombstones --tombstones
 2026-10-11にNode v24.15.0、Windows_NT、win32、x64で上記2つの計測commandを実行した。
 seedは312、各phaseは25 sample、warmupは1回で、同時に全体試験やクロスレビューを走らせていない。
 他のアプリの負荷は制御していないため、時間はこの実行環境の参考値である。
-計測scriptのSHA-256は `6a570d1615bec9ef67b41ca85eeed7af3be071ed60b58ad3bb731d5726533086` である。
+計測scriptのSHA-256は `bf68c34f4f3cc63899ec93302f893c1c78df09ea563763a7185537fa24a8103b` である。
+レビューで見つかったfixture順序による書き戻しを排除した後に再計測した値である。
 全15条件とCodexのN sweep4条件は完了した。
 
 S=8、P=8のN sweepでは、両providerともlookupは16回で、実iterator yieldはN×16と一致した。
@@ -79,23 +85,24 @@ S=8、P=8のN sweepでは、両providerともlookupは16回で、実iterator yie
 
 | provider | N | 実yield | store byte | route中央値 | route p95 | serialize中央値 | load/normalize/restore中央値 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Claude | 0 | 0 | 364 | 0.181 | 0.291 | 0.002 | 0.045 |
-| Claude | 100 | 1600 | 11411 | 0.162 | 0.280 | 0.160 | 0.913 |
-| Claude | 1000 | 16000 | 111911 | 0.339 | 0.609 | 1.304 | 6.305 |
-| Claude | 10000 | 160000 | 1125911 | 1.857 | 1.984 | 10.654 | 60.174 |
-| Codex | 0 | 0 | 364 | 0.175 | 0.320 | 0.003 | 0.048 |
-| Codex | 100 | 1600 | 11311 | 0.162 | 0.299 | 0.163 | 0.837 |
-| Codex | 1000 | 16000 | 110911 | 0.322 | 0.609 | 1.271 | 7.194 |
-| Codex | 10000 | 160000 | 1115911 | 1.826 | 1.880 | 10.604 | 61.492 |
+| Claude | 0 | 0 | 364 | 0.196 | 0.382 | 0.002 | 0.044 |
+| Claude | 100 | 1600 | 11411 | 0.158 | 0.272 | 0.060 | 0.528 |
+| Claude | 1000 | 16000 | 111911 | 0.307 | 0.414 | 0.588 | 4.213 |
+| Claude | 10000 | 160000 | 1125911 | 1.829 | 2.010 | 6.044 | 45.534 |
+| Codex | 0 | 0 | 364 | 0.172 | 0.290 | 0.002 | 0.043 |
+| Codex | 100 | 1600 | 11311 | 0.160 | 0.282 | 0.060 | 0.518 |
+| Codex | 1000 | 16000 | 110911 | 0.303 | 0.429 | 0.589 | 4.257 |
+| Codex | 10000 | 160000 | 1115911 | 1.828 | 2.012 | 5.869 | 46.351 |
 
 N=1000でSを1、8、32と変えた条件では、P=8のままlookupは9、16、40回、実yieldは9000、16000、40000だった。
 N=1000、S=8でPを0、8、32と変えた条件では、lookupは8、16、40回、実yieldは8000、16000、40000だった。
 provider別条件とboth/unknown条件も実yieldと期待値が一致した。
 履歴残存の合成条件ではactive 8件を保ったまま出自Mapが108 key、108 provider要素、unknown Setが29件、非active履歴が100件だった。
-同じN/S/P/providerで履歴のない条件とstore byte数はともに11411で、メモリー出自履歴を保存量へ混ぜていない。
+比較先はproviders sweepのunknown条件（N=100、S=8、P=8、churn=0）であり、履歴残存条件とstore byte数はともに11411だった。
+メモリー出自履歴を保存量へ混ぜていない。
 
 この観測は全件走査のN×lookup回数を確認するもので、時間の厳密な比例や許容閾値を証明しない。
-小規模試験5件と2ファイルの構文確認は成功した。
+小規模試験6件と2ファイルの構文確認は成功した。
 routeの時間には応答JSON生成を含め、件数用sinkのJSON解析を含めない。
 同じIDのCodex削除を解除した後もClaude削除を保持すること、両providerとunknown出自の統合抑止もfixtureで確認した。
 保持条件を変えずにsession別参照を設ける案を次の設計候補とし、回収条件は別に検討する。
