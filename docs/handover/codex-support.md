@@ -676,6 +676,7 @@ PR #347のR1修正では、旧snapshotの修復診断を前段に置き、全存
 修復待ち、旧と新の容量境界、低容量と意味不正の対照を含む関連25件は24件成功、失敗0件、file symlink権限による1件skipだった。directory junctionの拒否は成功した。
 R2の任意提案に従い、旧形式のraw空白B+1と作成・切詰め・追記open flagの拒否検査を補強し、対象2件が成功した。製品コードは変更せず、全体検証を繰り返していない。
 指定Claude R2はblockerと要修正0件で収束した。修正後の追跡済み全体検証は`8ed160c`で2804件成功、失敗0件、Windows symlink権限による3件skip、324039.0846msだった。
+追加testと文書の最終差分`1b68a20`も指定Claude R3でblockerと要修正0件だった。PR #347はfeature向けにレビュー収束し、後続の限定保存backendをスタックできる。
 旧Q/CP grantの対応範囲、path component競合の明示、junction対照、不要分岐と追加read-only試験もR1の判断記録に残した。
 後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
 標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
