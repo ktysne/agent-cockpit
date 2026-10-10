@@ -802,3 +802,30 @@ instruction journal単体の予約計算はcheckpointの現在stateを持たな�
 instructionの作成前・作成中の状態文字列の成長は、準備期限をsafe integerで表せるかにかかわらず予約する。
 呼び出し側が渡す候補は内部候補との最大値に加え、候補の省略で予約量を減らさない。
 この予約量は厳密な到達可能最大値や回収許可を表さず、回収操作のstateと時刻はstore間照合で別に検査する。
+
+### 実保存先の読み取り専用inspection
+
+`openQuestionCapsuleInspection({dataDirectory, normalByteLimitsBySlot})`は、既存の絶対pathと質問・checkpoint・instructionの通常byte上限を受け取り、凍結した`{inspect, close}`だけを返す。
+質問の上限は必須で、checkpointとinstructionはnullの上限とファイル不在を対応させる。
+既存のnative service factoryを呼ばず、ディレクトリ作成、修復、保存、移行の継続、providerとschedulerの起動は行わない。
+
+固定した四正本を通常ファイルとして読み、path componentのsymlink、開いたfileのidentity、実readの上限、読み取り後のidentityを検査する。
+四正本を再読してraw指紋とidentityを照合し、対象basenameに続くtemp・backup候補があれば停止する。
+この検査は観測した変更の検出であり、外process排他、ABA、返却後の最新性、未知残留物の完全な検出を証明しない。
+
+旧Q2/CP3は全体検査とready snapshot検査、新Q3/CP4はjoint検査と新外側の既存更新将来予約を使う。
+canonical prepared materialは外部anchor/Iとの完全照合、設定Bとの一致、条件付き容量評価、現在CPのbyte境界分類を行う。
+未知schema、混在形式、修復必要、欠落、上限不一致と容量不足は固定した理由でblockedとし、書き換えない。
+Iの有効grantはIだけのB+Gで照合し、Q/CPへ借用しない。
+
+結果の`inspectionStatus`は`inspected`または`blocked`であり、service readyや保存・復旧の権限を表さない。
+診断にはrawサイズとhash、形式、準備済み境界、容量表、件数表を返し、raw本文、store、token、内部識別子と例外本文は返さない。
+容量は実際の四正本byte、旧形へ復元した将来予約、新外側の固定構造将来予約を区別する。
+件数は質問detailと通常reservation、capsule wrapperとentry、復元総reservationを分け、CPでも通常deliveryと復元総deliveryを分ける。
+準備済みでは旧sourceと予定targetの件数を物理的な現在境界と区別する。
+旧展開形式の件数上限を維持し、空き件数枠が増えたとは返さない。
+
+同時inspectは一つの読み取りを共有し、各呼び出しへ分離した診断を返す。
+closeは新しい読み取りを直ちに禁止し、実行中の読み取りを待ち、同じPromiseを返す。
+この入口を標準起動へ接続する前に、capsuleを保存正本として保持する限定writer、admissionと排他、実保存と復旧、件数枠の解放を別に検証する。
+旧展開snapshotを既存旧writerへ渡して保存するとcapsuleと新形式が失われるため、保存の正本には使わない。

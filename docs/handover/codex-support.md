@@ -656,6 +656,22 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+
+指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
+PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
+
+実保存先のinspectionは`codex/question-capsule-inspection-209-20261010`で、#346のレビュー済みheadから進める。
+明示的なreadonly factoryだけを公開し、旧Q2/CP3、新Q3/CP4とcanonical prepared materialを固定した四正本から検査する。
+rawのfingerprint、復元旧形と新外側の容量、通常行とcapsule entryと復元総件数を分け、保存・復旧・service readyの権限を返さない。
+Iの有効grantはIだけの通常枠と合算する。
+個別試験は16件成功、失敗0件、Windows sandboxがsymlink作成を拒否した1件skipだった。
+両providerとmixedの新形式、旧形式のraw空白、prepared/CP移転後/CPなし、I raw=B+G/B+G+1、合法材料E=B+1の診断保持を確認した。
+readonly openとmutation API未呼出し、再読時の変更検出、close/drain、結果の分離と設定コピーを確認した。
+whole validator自身がreadyと理由0件を必須とするため、修復待ちの診断だけを通すfixtureは構成できない。
+構文、空白、CodeGraph変更後同期と調査は成功し、追跡済み全体とClaudeレビューへ進む。
+後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
+標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
@@ -735,6 +751,3 @@ main に feature へ未同期の変更があれば、先に同期 PR を feature
 fixture の合格を実 runtime の合格と読み替えず、未実施を成功に数えないでください。
 PR のマージや Issue のクローズをしたら、この資料の表を同じ PR で更新してください。
 ```
-
-指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
-PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
