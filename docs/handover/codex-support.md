@@ -647,7 +647,9 @@ before-renameの残留tempではfresh openを拒否し、after-rename-before-rea
 3ファイルの構文、空白、CodeGraph変更後同期と調査は成功した。
 追跡済み全体テストは`d8cf39c`で2780件成功、失敗0件、既存とworkspaceのWindows symlink権限による2件skipだった。
 指定Claude R1の要修正2件をtest側で修正し、関連テストは25件成功、失敗0件、Windows symlink権限による1件skipだった。
-全所有childの終了確認後に所有rootを回収し、seed済み四正本から独立計算した元予約と追加予約を照合する。
+全所有childの終了確認後に所有rootを回収する。
+seed済み四正本を読み直し、helperとは別にslot別max合計と全候補maxで予約を集計し、facadeの実測と照合する。
+slot別の計測値はcapacity moduleの出力に依存し、同module自体の算定誤りを検出する独立oracleではない。
 helper本体は変えていないため、全体検証は上記commit、修正後は関連テストの結果を併記する。
 fresh-processはclaude、faultはclaudeとcodex、I grantはclaudeで確認したため、全providerと全条件の組合せは未確認である。
 fixtureのpause通知はIPC親の有無に依存し、同process試験のpause待ちは約1秒のpoll上限を持つ。
@@ -733,3 +735,6 @@ main に feature へ未同期の変更があれば、先に同期 PR を feature
 fixture の合格を実 runtime の合格と読み替えず、未実施を成功に数えないでください。
 PR のマージや Issue のクローズをしたら、この資料の表を同じ PR で更新してください。
 ```
+
+指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
+PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
