@@ -72,6 +72,7 @@ public close、子writerと旧ownerから最終解放へ迂回できないこと
 回収ownerの最終解放は容量leaseの解放成功確認、全sidecarのunlink成功確認、module内Map解放の順とする。
 standaloneで容量leaseを持たないwriterは、tail終了確認、sidecarのunlink成功確認、対応するMap解放の順とする。
 sidecar解放の失敗または結果不明ではMapを保持し、回収factoryのcloseは原因を含む`reclamation_ownership_retained`を返す。
+drain確認後は一件のunlink失敗で打ち切らず、残る自己markerも逆順に一度ずつ処理し、全失敗を集約する。
 一部sidecarや容量leaseは既に解放され得るため、Map保持を全容量やdisk所有の保持と読み替えない。
 旧ownerは終端状態のままとし、再closeによる追加unlinkやMap解放を行わない。
 
@@ -104,6 +105,10 @@ symlink、junction、短縮名、case-sensitive directory、network mountとWind
 .NET DriveInfoは`C:\`をNTFSと報告したが、mount pointを追ったfixtureごとのvolume照合は未実行である。
 directoryのcase-sensitive設定、短縮名、networkと全aliasの対応をこの結果だけで保証しない。
 
+後続の別専有fixtureではGetVolumePathNameWとGetVolumeInformationWでそのfixtureのvolumeを`C:\`、filesystemをNTFSと照合した。
+同じfixtureのread-only fsutil照会はcase-sensitive属性が無効と報告し、wx、metadata write、close、残留時EEXIST、unlink後の再取得を観測した。
+この追加証拠も当該fixtureに限り、他rootの検出や製品のfilesystem gateを実装済みとは扱わない。
+
 Nodeのwxは既存pathを拒否するが、network filesystem全般の排他保証へ拡張しない。
 primitive開始前は公式仕様と専有probeで候補環境の基礎操作を確認する。
 primitive PRの完了前は製品primitiveと実process fixtureで競合と故障を確認する。
@@ -130,19 +135,30 @@ standalone checkpointにreclamation anchorを要求するものではない。
 この終了ではwriterのcloseによるmarker除去を期待できず、排他接続後は通常の再起動でも次の取得が拒否される。
 標準writerへ接続する前に、トレイがgraceful停止を要求し、全writerの終了と最終解放の成功を確認してから再起動する手段を決め、実装と試験を行う。
 停止要求のAPIと完了通知の方式は未決で、停止要求の送信やprocess終了だけを解放成功の証明にしない。
+Windowsのgraceful停止はprocessの強制終了やシグナルに依存せず、明示した停止手段を使う。
 完了通知は対象の旧server instanceに結び付け、server.jsonの消失を成功の証拠にしない。
 停止が失敗または完了未確認なら再起動手順を失敗にし、次の通常起動へ進めない。
-停止失敗、強制終了またはcrash後にmarkerが残れば、次の起動は保存writerの取得を拒否し、永続化を省いたまま通常動作を続ける縮退起動は採用しない。
+停止失敗、強制終了またはcrash後にmarkerが残れば、次の起動は保存writerの取得を拒否する。
+永続化を省いたまま通常動作を続ける縮退起動は、自走中の推奨として採らない仮判断である。
 トレイは残留markerを自動削除せず、全停止と新規起動禁止を確認した手動回復を必要とする。
 この接続条件を満たすまで標準起動へ排他を有効化しない。
+
+フックとMCPからのensureによる自動起動も、標準接続前の確認対象とする。
+保存writerの取得拒否を認識したensureは、hook eventごとに再起動とhealth待ちをdeadlineまで繰返さず、拒否理由を保ったまま速やかに失敗を返す。
+拒否状態の伝達、表示と手動回復後の再試行条件は後続設計で固定し、未確認の短命状態fileをここで実装方式として採用しない。
+拒否理由と回復操作を表示し、その表示が元のhook処理を長時間妨げないことを確認する。
+ensureはmarkerを自動削除せず、拒否状態から成功した旧/新server instanceへ誤って状態を引き継がないことも試験する。
 
 ## 実装を分ける順序
 
 1. 参加表、保証範囲、未確認条件と回復手順を設計PRにする。
 2. 内部で準備した限定path向けprivate primitiveと実process fixtureを別PRで実装し、W01〜W07のprimitiveに対応する競合と故障を確認する。writer終了やfactoryの条件は接続段階へ残す。
-3. 一般保存先のfilesystem判定とW08のalias拒否を実証し、検出不能なら取得前に同期拒否する。standalone保存入口へ接続し、取得前I/Oが無いことを確認する。標準起動の有効化前に再起動の接続条件を満たす。
-4. factory全file setと二段階終了へ接続し、子backendの解放迂回を拒否する。
-5. 全参加writerを横断して異processの共有保存先を拒否し、#313の完了条件を確認する。
+3. 一般保存先のfilesystem判定とW08のalias拒否を実証し、検出不能なら取得前に同期拒否する。W11に必要なgraceful再起動とensureの拒否応答を先行実装し、fixtureで試験する。
+4. 手順3の全前提を満たした後にstandalone保存入口へ接続し、取得前I/O、W12の同期失敗処理と実markerによるW11の統合条件を確認する。接続PR自身の完了条件に全結果を含め、接続済みで再起動条件が未達の状態を製品へ入れない。
+5. factory全file setと二段階終了へ接続し、子backendの解放迂回を拒否する。W04の全終了確認とW06のMap保持/close結果を製品層で確認する。
+6. 全参加writerを横断して異processの共有保存先を拒否し、#313の完了条件を確認する。
+
+fixture専用段階には製品callerを作らず、先行fixtureの成功をW11の製品統合確認へ読み替えない。
 
 試験は同時取得、部分競合、metadata write失敗、rollback失敗、release失敗、旧release再呼出し、crash残留、alias拒否、取得後再読込みを含む。
 standalone各constructorと移行/修復callerの親directory準備、取得時の同期throwの処理と起動失敗時のcleanupを接続PRの完了条件として照合する。
