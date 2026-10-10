@@ -820,6 +820,21 @@ R3はblocker0件、要修正1件で、設計一ファイルの手順5/6へfactor
 3往復後の局所修正ルールに従い、主セッションが文書整合を確認して収束とする。製品fixtureと実runtimeは未実行のままである。
 PR #360はレビュー修正後にマージ可能とし、順序は#351→#352→#353→#354→#356→#357→#358→#359→#360である。
 
+### 限定fixture向けの排他primitive
+
+`codex/writer-exclusion-primitive-313-20261011`を最新feature `c731abe`から作り、PR #360の最終head `4d7bf51`を通常mergeした。
+起点は`a456aea`で、実装前にP01〜P10のprimitive期待条件を記録した。
+Astraの実装前監査に従い、内部prepare/acquireと同一close Promiseを使い、製品callerを作らない。
+opaque集合は入力を固定する仕組みであり、一般pathのfilesystem判定やproducer停止の証明器とは扱わない。
+専有fixtureではWinAPIでC:\のNTFSとcase-sensitive無効を照合し、同fixtureのwx/write/close/EEXIST/unlink/再取得を確認した。
+primitiveと実process fixtureを実装し、関連試験は19件成功、失敗0件、新規4ファイルの構文確認も成功した。
+全体検証と指定Claudeレビューはこれから行う。
+一般pathのW08、停止/ensureの方式、writer接続、W11の製品統合と両provider runtimeは後続のままである。
+停止の前提調査で[Issue #361](https://github.com/ktysne/agent-cockpit/issues/361)を起票した。
+serverとnative終了wrapperが失敗理由のtruthinessを判定するため、falsyなthrow/rejectを成功と取り違える。
+通常serverの専有loopback fixtureでは5種類すべての初回/再closeがresolveした。native wrapperは静的確認のみである。
+この修正はprimitiveと別PRへ分け、全writer停止通知の接続前に失敗の有無と理由を分離して検証する。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

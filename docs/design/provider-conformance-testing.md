@@ -600,3 +600,25 @@ W01〜W12の製品試験と両provider実runtimeは未実行である。
 Windows、Node v24.15.0の専有probeではwx一勝/一件EEXIST、正常終了後のmarker残留、close後の明示unlinkと再取得を観測した。
 別名hardlinkでは双方のsidecarを取得できる反例があり、大小文字と親junctionのaliasは同じrealpath/dev/inoになった。
 これらは方式検討の証拠で、OS crash、電源断、他volume、network、全aliasと全writer接続を保証しない。
+
+### 限定primitiveのfixture条件
+
+以下は内部moduleだけの期待条件で、実装前に記録する。
+製品callerと実providerは未接続であり、成功してもW01〜W12の製品条件全体を完了扱いにしない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-P01 | opaque prepared集合を取得する | 固定slot集合の同期取得。偽造/clone参照、重複、未作成親を拒否し、source内容I/Oなし |
+| ID-F313-P02 | 部分競合とmetadata故障を注入する | 自己markerだけ逆順rollback。元falsy理由とcleanup失敗を保持し、未知結果ではMap予約を保持 |
+| ID-F313-P03 | fd0、short write、0進捗とclose不明を与える | fd0は有効、正進捗writeを完了。未知fdを再close/unlinkせず、漏れを解消済みとしない |
+| ID-F313-P04 | quiesceを保留/失敗/再入させる | 最初にclose Promiseを保存。保留中unlinkなし、失敗は同じPromiseと理由、Map保持。自己待ちによる解放なし |
+| ID-F313-P05 | unlink失敗/結果不明後にcloseを繰返す | 各自己markerを逆順一度ずつ処理し全失敗を保持。Map保持と旧capability終端、追加unlinkなし |
+| ID-F313-P06 | 正常close後に新ownerを取得し旧closeを繰返す | 同じ旧close Promiseで追加操作なし、新marker不変 |
+| ID-F313-P07 | 実process二つをbarrierで同時取得へ進める | 一勝/一件競合拒否、勝者保持中の第三者も拒否。敗者の取得後fixture処理は0回 |
+| ID-F313-P08 | 実processのcloseを始めquiesceを保留する | marker残存を確認後にbarrier解除。全unlink後に新process取得成功 |
+| ID-F313-P09 | 所有childがcloseなしにprocess.exitする | childのexit/close後もmarker残留、次取得拒否。OS crashや電源断とは区別 |
+| ID-F313-P10 | 取得操作へ同期再入する | 全keyのMap予約により再入のfilesystem操作なし。正常rollbackでのみ予約解除 |
+
+P01〜P10を含む`test/writer-exclusion.test.js`は19件成功、失敗0件で、実child processの競合、quiesce保留、再取得とcloseなし終了を確認した。
+通常sandboxではtest runnerの子process起動がEPERMになったため、この対象試験を昇格実行した。
+実process fixtureの成功は両provider実runtimeや一般保存先のfilesystem対応の証拠には数えない。

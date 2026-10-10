@@ -166,6 +166,24 @@ standalone各constructorと移行/修復callerの親directory準備、取得時�
 fixtureと実Claude/Codex runtimeの結果は別に記録する。
 fsyncと電源断耐久性は#210の境界を維持し、排他成功から推定しない。
 
+## 限定primitiveの実装条件
+
+内部moduleのprepareは既存rootと固定slot名から保存先集合を固定し、WeakMapに対応するopaque capabilityを返す。
+prepareはdirectoryを作らず、所有取得もfilesystem対応の証明も行わない。
+acquireはその参照と信頼されたowner coordinatorのquiesce手続きを受け、同期で集合取得を完了する。
+試験が専有rootだけを渡す運用範囲に限定し、製品callerは作らない。任意rootを受ける内部API自体を対応filesystemの検出gateと扱わない。
+child writerは未接続のため、child capabilityの発行は後続接続へ残す。
+
+全keyをprocess内Mapへ予約してからfilesystem操作を開始し、mockからの再入も取得前に拒否する。
+metadataのshort writeは正のbyte進捗を確認して完了まで続け、0や契約外の返値を拒否する。
+fdは0も有効値で、close結果不明では同じfdを再closeせず、そのmarkerもunlinkしない。
+部分rollbackの結果不明ではMap予約を保守的に保持し、元のfalsy理由もcleanup失敗とともに残す。
+
+ownerは最初のclose Promiseをquiesce呼出し前に保存し、全close呼出しへ同じ参照を返す。
+quiesceのresolveは内部callbackの完了を意味し、実producerの停止をprimitive自体が検証したとは扱わない。
+callbackから同じownerのcloseを待つ自己待ちは禁止し、保留や失敗をtimeoutで強制解放しない。
+実writer接続時は停止対象、後着write禁止とdrainの完全性を別途監査する。
+
 ## 自走中の仮判断
 
 即時競合拒否、自動奪取なし、解放不明時の旧owner再利用と自動retry禁止を推奨候補にする。
