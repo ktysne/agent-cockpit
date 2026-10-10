@@ -734,6 +734,21 @@ ticket解放例外の失敗判定を修正し、Claude R2はblockerと要修正0
 実runtime、raw provider I/Oの終了、factory closeとの接続は未確認である。
 次は明示的回収factoryへstartとcollectorのticketを接続し、全native停止の開始後にserviceとdrainを合流する。
 
+## native factory終了追跡の後続
+
+`codex/native-factory-private-drain-209-20261011`は最新feature `c731abe`を起点に、PR #356のレビュー済みhead `f394c37`を通常mergeした。
+開始headは`358f512`で、#351〜#354と#356を祖先として保持する。
+マージ順は#356の後である。
+実装前に[ID-F209-L02](../design/provider-conformance-testing.md)を定義した。
+明示的回収modeでstartとcollectorの処理を追跡し、全native停止の開始をservice待機より先に行う。
+生成済み資源の準備失敗は同期throwを保ち、後始末とticketの終了を別途待つ。
+標準mode、contextの保存禁止開始と物理停止の照合条件を維持する。
+実装済みで、関連4ファイルの108件が成功し、失敗とskipは0件である。
+最後のtest-only監査修正後もlifetimeの51件が成功し、製品sourceとharnessは先行108件の検証時と同一である。
+全体テストとClaudeレビューは未実施で、PR作成後に固定headで実行する。
+構築中のclose再入による後着collector回収はprivate injectionであり、通常製品のcallback到達性を示さない。
+実runtime、raw I/Oと保存ownership解放順は対象外である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。

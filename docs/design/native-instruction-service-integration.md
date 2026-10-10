@@ -177,7 +177,7 @@ terminal contextはcompositionの`instructionTargetState`が`stopped`を返す�
 compositionの`result.accepted/status`は元の観測結果を保ち、terminal判定で書き換えない。
 各await後にadmissionのstarting状態を再確認し、stopやcloseによる失効後に観測を続けない。
 失敗時はadmissionをretireし、native stopを試みる。
-`stop`は最初にrouter capabilityを無効化し、collectorを切断してからcompositionへstopを依頼する。
+`stop`はcompositionの停止を開始し、router capabilityを無効化してcollectorを切断する。
 snapshotの`processState === 'stopped'`だけを停止成功とし、確認できない場合は`stop_unconfirmed`を残して固定error codeでrejectする。
 server close hookは既存flushが失敗しても実行し、server info削除と全cleanupを試す。失敗時の公開statusは固定値`shutdown_incomplete`とし、error messageやtokenを返さない。
 factory closeはservice、router、admissionごとのowned process、storeのflush/closeを順に行い、部分初期化失敗時も作成済みresourceを解放する。
@@ -298,7 +298,7 @@ producer、service、schedulerと既存closeの終了を待ち、gateのticket�
 起動失敗のcleanupでも同じ受付停止を行い、準備待ちの処理とdrainを循環させない。
 受理済みの全操作が正常保存に成功することや、全ticketが返るまで容量leaseを必ず保持することは契約に含めない。
 
-nativeの長時間startと観測readは、この段階のticket網羅に含めない。
+nativeの長時間startと観測readは共通queueのticketでは追跡せず、下記のnative寿命接続で対象にする。
 その待機をprivate stopで終了できることを段階別に確認してから、factoryの追跡へ接続する。
 epochによる結果無効化、detach、timeoutを物理停止やI/O終了の証拠にしない。
 協調するprocess間の保存先lock、新schema writerの許可、実runtime適合、電源断耐久性と件数枠解放は別の条件である。
@@ -357,3 +357,33 @@ disconnectまたはnative stopによる論理失効と協調取消を開始し�
 collector drainはwrapper処理の終了を確認するものであり、非協調readerの元Promiseが未完了ならdrainも未完了のまま残る。
 factory ticketとcloseへの接続、子の停止確認、保存ownership解放は別の条件として扱う。
 共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-C01`に定義する。
+
+## 明示的回収factoryへのnative寿命接続
+
+明示的回収modeでは、native startの受付から結果判定と後始末までfactory ticketを保持する。
+collectorを生成したら、呼び出し側へ返す前に内部制御を取得して同期ticket取得関数を設定する。
+内部制御が無い場合と設定拒否は接続失敗とし、collectorを公開しない。
+標準modeにはこのticketとprivate drainを追加しない。
+
+start、stopとcloseは、再入可能な処理を呼ぶ前に共有Promiseを設定する。
+同じ起動入力の再入は同じstart Promiseを返し、異なる入力の競合は既存の拒否を維持する。
+生成済みcollector、controlと準備失敗の後始末をentryに保持し、callbackからcloseが再入しても待機対象を見失わない。
+準備失敗で元の同期throwを返す場合も、後始末の終了までticketの所有を移して保持する。
+後始末の失敗は元のthrowを置き換えず、closeがその結果を確認する。
+
+closeはfactoryの受付を同期に止め、全collectorの受付停止を済ませてから全nativeの停止を開始する。
+一件の停止保留や失敗で他entryの停止開始を遅らせず、全停止を開始してからserviceのcloseをawaitする。
+その後にnative停止、collector drain、準備失敗の後始末、scheduler、contextとfactory gateの終了を合流する。
+gateのticket終了だけで後始末の成功を推定しない。
+stop coreはstart Promise、collector drainとfactory gate drainを待たず、起動失敗からの自己待ちを作らない。
+
+初期化途中の後始末が参照するadmission集合は、最初のtryより前に初期化する。
+compositionが未生成で集合が空ならnative stopを呼ばず、非空でcompositionが無い場合は不変条件違反として扱う。
+controlが欠けるcollectorは、既知の後始末が終了しても全処理のdrainを証明できたと扱わない。
+非協調startやreadが保留されればticketとcloseも保留し、timeoutやepochで返さない。
+
+contextの同期保存禁止とready拒否はticket drainより先に始める。
+この順序は保存ownershipの解放順を保証しない。
+wrapperの終了と子の物理停止も別条件とし、exit、closeと非activeの照合を維持する。
+実runtime、raw provider I/O、外部認証元作業、電源断耐久性、新schema接続は別の検証に残す。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L02`に定義する。
