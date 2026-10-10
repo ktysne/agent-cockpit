@@ -687,11 +687,17 @@ Claude R2はblockerと要修正が0件で、C04の上限検査の退行を検出
 | ID-F313-R09 | open副作用後rejectとclose不明を与える | 未確認handleを再close/unlinkしない。temp残留可能性を解消済みとしない |
 | ID-F313-R10 | rename前失敗/副作用後rejectとcleanup失敗を与える | targetを消さずreadback成功化なし。known-created/closed自己tempだけ一度cleanupし、first diagnosticとcleanupFailed保持 |
 | ID-F313-R11 | 既存targetと他file/temp/markerを置く | 既存は拒否、無関係なfileは不変。事前確認をcross-store/processのno-replace証拠としない |
-| ID-F313-R12 | 結果objectを変更し、実fixtureをcleanupする | 結果freeze、任意原因/path/本文なし。全実handle終了とresolved自作os.tmpdir root確認後だけfixture cleanup |
+| ID-F313-R12 | 結果objectを変更し、実fixtureをcleanupする | 結果freeze、任意原因/path/本文なし。全実handle終了と字句的に解決済みの自作os.tmpdir root確認後だけfixture cleanup |
 
 R01〜R12を含むcodec/storeの関連試験44件は成功し、失敗とskipは0件だった。
 4ファイルの構文確認も成功した。
 実temporary rootでshutdownとstartup双方を保存して読み、全handle close確認後に自作rootをcleanupした。
 不明handle、closeとrenameの副作用後失敗はfake filesystemで確認し、実descriptorを故意に漏らしていない。
-全体試験と指定Claudeレビューは未実施で、製品停止と両provider実runtimeの合格には数えない。
+固定head `df4fdbd`のnpm test（process隔離、concurrency 2）は3,013件成功、失敗0件、Windows実symlink2件skipだった。
+同headのinprocess全体実行はrootが中断したため未完了である。停滞位置の既存PR試験単独1件と同file153件は成功したが、その結果で全体の成功を代替していない。
+指定Claude R1はblockerと要修正が0件で収束した。
+cleanupFailed:falseの意味、字句的path比較と設計資料の時点依存記述を文書だけで明確化した。
+追加の故障分岐試験は任意提案として後続候補へ残し、故障値の全組合せを網羅したとは扱わない。
+最終の結果記録ではsrc/testを変えず、全体試験と追加レビューを反復しない。
+製品停止と両provider実runtimeの合格には数えない。
 record単位の上限はstore全体のメモリー容量を保証せず、製品enable前の設計条件に残す。

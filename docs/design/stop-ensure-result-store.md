@@ -7,13 +7,14 @@
 この信頼はcallerの前提であり、path検査でACL、一般alias、真正性を認定しない。
 fixtureのdirectory、targetとtempを他主体が差し替えない条件とする。
 別storeや異processの上書き排他、共有current、管理protocol、製品callerとwriter所有には接続しない。
-未収束の停止全体設計PR #364を取り込まず、レビュー済みcodec PR #365から独立して進める。
+停止全体の製品管理protocolから独立した内部moduleとして検証する。
 
 ## APIと名前
 
 createStopEnsureResultStoreの入力はcontrolDirectoryと任意のfixture専用fileSystemだけのplain own-dataで、未知fieldとaccessorを拒否する。
 controlDirectoryは正規の絶対pathへ限定し、最初のI/Oで既存directoryを照合する。
 fileSystemはlstat、open、rename、unlinkだけの内部依存で、methodを生成時にcaptureする。
+注入methodはcapture済みのmethod集合をreceiverとし、元objectの可変stateへthis経由で依存しない。
 handleのclose()の正常結果はundefinedとし、契約外の値は未確認として扱う。
 返すfreeze済みobjectはreadResult(expectedIds)とwriteResult(record)だけを持つ。
 任意filename、PID、TTL、削除と所有解放のAPIは持たない。
@@ -57,6 +58,8 @@ writtenはrename正常終了の観測だけで、耐久性、実停止とwriter�
 親不在はdirectory_unavailable、temp open不明はrecord_open_unknown、write不明はrecord_write_failed、close不明はrecord_close_unknown、rename不明はrecord_rename_unknownとする。
 その他のwrite I/O不明はrecord_io_failedである。
 最初の診断を保持し、後続cleanupの失敗はcleanupFailedへ分ける。
+cleanupFailed:falseは観測したcleanup失敗がないことだけを示し、open/close不明時のtemp残留やdescriptor残留を否定しない。
+handle不備では利用可能なcloseを一度試みても結果を解放の証拠にせず、tempを削除しない。
 
 自己tempをwxとmode 0600で作り、正のshort writeを残量分続け、known close後にrenameを一度だけ行う。
 bytesWrittenは残量以下の正整数へ限定し、0と契約外値はunknownにする。残量のwriteは失敗後のretryではない。
@@ -73,6 +76,7 @@ target、marker、他tempとdirectoryをcleanupへ広げない。
 ## 検証と後続
 
 unknown descriptorはfake filesystemで検証し、実fdを漏らすfixtureを作らない。
-実temporary rootのcleanupは全実handleの終了を確認し、解決済み絶対pathが自作のos.tmpdir配下にあることを検査してから行う。
+実temporary rootのcleanupは全実handleの終了を確認し、字句的に解決済みの絶対pathが自作のos.tmpdir配下にあることを検査してから行う。
+path.resolveによる比較であり、一般aliasやtmpdirの外部差替えを検証するものではない。
 fixture cleanupの成功は製品のcleanupや所有解放の証拠ではない。
 製品管理protocol、ACL、一般filesystem、全writer、両provider実runtimeは後続gateである。
