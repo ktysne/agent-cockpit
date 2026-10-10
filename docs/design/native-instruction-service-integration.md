@@ -279,3 +279,60 @@ contextの開始・終了と所有世代の変更でrevisionを単調に進め�
 128件を保持しただけでは容量超過と推定せず、runnerのstickyな容量保留を投影する。
 `failed`は起動失敗の正当な状態として表示し、停止できる所有実行を一覧から除かない。
 これらの境界はfake childと製品HTTP経路のfixtureで確認し、実Codex・Claudeの停止結果とは区別する。
+
+## 明示的回収modeの操作受付と終了
+
+回収を明示的に有効にしたfactoryは、操作の受付と終了を追跡するlifetime gateを内部に保持する。
+質問と指示serviceの共通queueで受付時にticketを取得し、未着手の仕事も追跡する。
+timerとproviderの後着callbackも同じ受付点を通し、成功、取消または失敗で処理が終了したときにticketを一度だけ返す。
+回収coreとschedulerはfactoryの同じgateを使い、外部facadeとschedulerの入口で同じ操作を重複して数えない。
+外向きAPIへgateやticketを返さず、標準modeではgateを生成しない。
+ticketの対象は共通enqueueとfactoryの回収facadeを通る処理である。
+serviceのflushと直接のsnapshot/body scopeは既存closeのtail待ちで扱い、gateによる全入口網羅とは数えない。
+scheduler起動のticketは同期呼出しの例外も解放するためのもので、非同期passのdrainを担わない。
+
+closeは最初のawaitより前に新受付を停止する。
+回収modeでは共有close Promiseをsettings解除などの同期callbackより先に確立し、再入しても停止処理を二重実行しない。
+既存context.closeの同期的な保存禁止とready拒否は、ticketのdrain前に開始する。
+producer、service、schedulerと既存closeの終了を待ち、gateのticketが残っていないことを確認する。
+起動失敗のcleanupでも同じ受付停止を行い、準備待ちの処理とdrainを循環させない。
+受理済みの全操作が正常保存に成功することや、全ticketが返るまで容量leaseを必ず保持することは契約に含めない。
+
+nativeの長時間startと観測readは、この段階のticket網羅に含めない。
+その待機をprivate stopで終了できることを段階別に確認してから、factoryの追跡へ接続する。
+epochによる結果無効化、detach、timeoutを物理停止やI/O終了の証拠にしない。
+協調するprocess間の保存先lock、新schema writerの許可、実runtime適合、電源断耐久性と件数枠解放は別の条件である。
+共通のfixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-L01`に定義する。
+
+## native開始Promiseと停止の確認
+
+owned runnerの開始待機は、停止時の内部取消により開始Promiseを終了させる。
+停止後の認証結果、write callback、RPC応答とcontext通知で起動を再開しない。
+外部認証元が始めた作業自体の停止は契約に含めない。
+compositionは実runnerの開始Promiseを採用するため、その終了と子の停止確認を別々に扱う。
+任意注入runnerのstart Promiseをcompositionが一般に取消する契約は持たない。
+
+子のexit、close、非activeの3条件が揃うまで、停止確認済みとは扱わない。
+開始Promiseの終了だけで子のI/O終了や保存先所有の解放を判断しない。
+観測readの取消とdrain、factory ticketへの接続は別の検証である。
+段階別の共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-S01`に定義する。
+
+## native readの協調取消
+
+owned sourceはread単位の取消登録を内部で保持し、lease解放またはsource無効化で対象readへ通知する。
+leaseとrequest tokenの失効を先に完了させ、同期callbackが新leaseを取得しても旧readの取消へ混ぜない。
+取消controllerはsourceのクロージャー内に保持し、渡したlease tokenから参照できる通常プロパティへ置かない。
+
+readerの第1引数は既存の凍結したleaseTokenとrequestTokenを維持する。
+第2引数は凍結したregisterCancelとisCancelledだけを持つ内部scopeであり、公開facade、options、receiptの項目を増やさない。
+実Codex runnerは応答待ちとwrite callback待ちをこのscopeへ結び付け、取消でoperation_stoppedを返し、sourceはunknownへ終了する。
+正常完了したreceiptの消費契約は維持する。
+
+read取消からrunner全体やinstruction transportを一括取消しない。
+同じleaseの解放によるinstruction authorityの失効は既存どおり行う。
+後着writeエラーは現generationの共有pipe故障として扱い、旧generationのcallbackで新childを停止しない。
+
+scopeを無視する注入readerの元Promiseを一般に取消する契約は持たない。
+ラッパー終了はproviderの元作業、raw callback、collectorやfactoryのdrainを証明しない。
+これらの接続と終了追跡は別の検証として扱う。
+共通fixture期待値は[Claude/Codex適合試験](provider-conformance-testing.md)の`ID-F209-R01`に定義する。

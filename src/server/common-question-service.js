@@ -131,7 +131,7 @@ function validateLaunchBinding(launchRegistry, runtimeRegistry, launchRef, ident
   return { source, runtime };
 }
 
-function createCommonQuestionService(options = {}) {
+function createCommonQuestionService(options = {}, lifetimeGate = null) {
   const reclamationOptions = options && typeof options === 'object' && !Array.isArray(options)
     ? options.reclamation : undefined;
   const reclamationMode = reclamationOptions !== undefined;
@@ -272,6 +272,9 @@ function createCommonQuestionService(options = {}) {
     if (reclamationMode && (writerStopped || (!journalState && !diagnostic))) {
       return Promise.reject(serviceError(writerStopped ? 'question_gate_closed' : 'question_service_not_ready'));
     }
+    let lifetimeTicket;
+    try { lifetimeTicket = lifetimeGate?.enter('question-queue'); }
+    catch (error) { return Promise.reject(error); }
     pendingOperations += 1;
     const queued = tail.then(async () => {
       if (reclamationMode) assertSharedWriterCanWrite();
@@ -287,7 +290,10 @@ function createCommonQuestionService(options = {}) {
         activePeriodToken = previousToken;
       }
     });
-    const result = queued.finally(() => { pendingOperations -= 1; });
+    const result = queued.finally(() => {
+      pendingOperations -= 1;
+      lifetimeTicket?.release();
+    });
     tail = result.then(() => undefined, () => undefined);
     return result;
   }

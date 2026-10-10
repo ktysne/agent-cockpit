@@ -359,3 +359,79 @@ ID-F11-B03 は ended tombstone と explicit order を検証する共通 kernel u
 対応する試験は [native-recovery-checkpoint.test.js](../../test/native-recovery-checkpoint.test.js) と [conversation-registry.test.js](../../test/conversation-registry.test.js) にある。
 
 この結果は passive registration bootstrap の適合に限り、fresh evidence reconciliation や Issue #177 全体の runtime 復旧を示さない。
+
+## 明示的回収factoryの操作受付と終了 (#209)
+
+`ID-F209-L01`は、ClaudeとCodexの実factory fixtureで共通の受付停止を確認するシナリオである。
+回収を明示的に有効にしたfactoryと、質問および指示serviceの保存を保持できるfixtureを能力条件とする。
+service queue、provider後着callback、質問timer、回収coreとschedulerを対象にする。
+
+保存を一度進行中に保持し、未着手の操作を追加してcloseを呼ぶ。
+close呼出し直後から新しいticketを発行せず、受付済み操作は成功、取消または失敗で終了し、ticketを一度だけ返すことを期待する。
+closeの完了時点で対象ticketが残らず、既存contextと保存処理のcloseも終了していることを観測する。
+後着callbackや保存済みtimerをclose後に呼んでも、新しい保存を開始しない。
+完了は保持点の明示解放とPromiseの終了で確認し、固定のsleepを成功条件にしない。
+
+contextの同期的な保存禁止とready拒否は、ticketのdrainを待つ前に行う。
+起動失敗とsettings解除からの同期close再入でも終了が循環しないことを確認する。
+回収無効の標準modeはgateを生成せず、既存APIとcloseの契約を保つ。
+providerの識別子、時刻と既存取消のerror codeの差を許容するが、追加送信、追加保存、受付再開、authorityの再発行は許容しない。
+
+両providerのfixture適合と実runtimeを分けて記録する。
+acceptedへの実到達と登録済みlistenerの後着拒否は、両providerで確認する。
+後着拒否はserviceへ登録したlistenerを直接呼ぶcontrolであり、adapter/routerを通した後着経路の確認ではない。
+listenerの保存中にcloseされるcontrolはunknownを両provider、appliedを現fixtureが対応するCodexで確認する。
+Claudeのlive appliedは未確認であり、cold checkpointのseedや別のcallbackで代用しない。
+このシナリオはnativeの長時間startやread待機の物理取消、外process排他、新schema保存許可、電源断耐久性、件数枠解放を証明しない。
+実Claude/Codex runtimeの適合は横断統合試験に残す。
+`4db527e`の新factory試験15件とgate単体7件を含む関連11ファイルは248件成功、失敗0、skip0である。
+同じheadの全体`npm test`は2802件成功、失敗0、Windows実symlink権限によるskip2である。
+このskip数には未実行のClaude live appliedと実runtimeを含めず、上記の未確認境界として別に扱う。
+
+## native起動待機の取消 (#209)
+
+`ID-F209-S01`は、実owned runnerとcompositionを使い、開始途中の停止で開始Promiseが終了することを確認する。
+Claudeは外部認証、spawn、初回入力write、context-readyの保持点を能力条件とする。
+Codexはinitialize、initialized通知、login開始と完了、thread開始、turn開始の応答またはwrite callbackを保持できることを条件とする。
+停止後に保持点を解放しても、次の起動段階、context、runtime proofを新たに発行しないことを期待する。
+停止前に発行済みのidentityは存在し得るが、停止後の再認可を許容しない。
+
+開始Promiseの終了と子プロセスの停止確認は別々に観測する。
+子のexit、closeと非activeが揃った場合だけ停止確認済みとし、欠ける場合は未確認のまま扱う。
+epoch、timeout、kill呼出しやPromiseの終了を物理停止の証拠にしない。
+保持点の明示解放と状態・eventの観測で確認し、固定sleepを成功条件にしない。
+任意注入runnerの未settled startをcompositionが一般に取消できるとは主張せず、負例はテスト側で明示解放する。
+
+providerごとのRPC、認証方式、既存error codeの差は許容するが、後着による起動再開とauthority再発行は許容しない。
+外部認証元の作業自体、観測readの取消とdrain、factory ticketへの接続と全I/O終了は対象外である。
+両providerのfixture結果と実runtimeを分けて記録し、実Claude/Codex runtimeの適合は横断統合試験に残す。
+今回のfixtureは通常起動profileで確認し、wait profile固有のtransport開始待機は未確認として分ける。
+Codexのwrite callback保留はinitialize RPC（応答先着）とinitialized通知で確認する。
+login、thread、turnの各RPCは応答待ちを確認し、それぞれのwrite callback保留は未確認である。
+停止後の追加writeは、後着解放前後のwrite履歴の直接比較で検出する。
+
+## native readのlease取消 (#209)
+
+`ID-F209-R01`は、実owned sourceとCodex runnerを接続したfixtureで、lease解放またはsource無効化によるread待機の終了を確認する。
+Claudeのnative readはunsupportedを期待し、transportを呼ばないことを確認する。
+両providerの実runtime結果は、このfixture結果とは別に記録する。
+
+Codexのloaded-listとthread-readについて、応答待ち、write callback待ち、応答先着、段階間の解放、write中の同期解放を保持点で再現する。
+次のreadやrunner停止を呼ばず、lease解放だけで元のreadがunknownへ終了し、後着応答からreceiptや追加RPCを作らないことを期待する。
+旧leaseの後着callbackと新leaseのreadを重ね、新しいreceiptと独立したrunnerへ取消が波及しないことを確認する。
+通常完了したreceiptの一度だけの消費と、timeout・provider拒否後のrunner生存を維持する。
+
+取消登録前の解放、取消済みscopeへの同期登録、二重取消、callback例外でも後始末を確認する。
+後着write拒否を未処理rejectionにせず、現generationのpipe故障は既存のfailureへ進め、旧generationのcallbackは新childを止めない。
+read取消はinstruction transportを一括取消しない。
+ただし同じleaseの解放はinstructionのauthorityも失効させるため、後着ACKの成功は期待しない。
+
+保持点の明示解放とPromise終了を観測し、固定sleepを成功条件にしない。
+追加scopeを無視する注入readerはpendingのまま残る負例として明示解放する。
+ラッパーの終了をproviderの元作業、raw write callback、collector、factoryのdrainや保存先所有の解放へ読み替えない。
+source `b70816d`の関連2ファイルはin-processで120件成功し、追加20件で保持点と負例を確認した。
+同sourceの全体`npm test`は2836件成功、失敗0、Windows実symlink権限skip2である。
+loaded-listのraw応答とwrite解放後のmicrotask取消で次RPC不送信を確認するが、内部continuationの各境界は独立計測していない。
+source無効化はsource単体で確認し、実runnerではglobal取消も行うstop経由で確認した。
+runnerは公開APIから新childへ再起動できないため、旧generationの後着writeエラーはstopped状態の不変までを確認し、新childへの影響は未確認である。
+実Claude/Codex runtimeのread取消は未実施である。
