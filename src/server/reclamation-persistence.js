@@ -1,5 +1,8 @@
 'use strict';
 
+const LIFETIME_CONTROLS = new WeakMap();
+function getReclamationPersistenceControl(value) { return LIFETIME_CONTROLS.get(value) || null; }
+
 const crypto = require('node:crypto');
 const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
@@ -379,9 +382,18 @@ function createReclamationPersistence(options) {
   let pending = Promise.resolve();
   let closePromise = null;
   let persistenceAdapter = null;
+  let everEnqueued = false;
+  let managed = false;
+  let drained = false;
+  let finalPromise = null;
+  let transferred = false;
+  let ownerControl = null;
+  let delegatedControl = null;
+  let publicClosePromise = null;
 
   function enqueue(operation) {
     if (closed) return Promise.reject(persistenceError('reclamation_persistence_closed'));
+    everEnqueued = true;
     const run = pending.then(operation);
     pending = run.then(() => undefined, () => undefined);
     return run;
@@ -465,8 +477,12 @@ function createReclamationPersistence(options) {
     return writeBytes(pathsBySlot.get(slot), bytes, maximumBytes, slot);
   }
 
-  function close() {
+  function stopAndDrain() {
     if (closePromise !== null) return closePromise;
+    let resolveClose;
+    let rejectClose;
+    closePromise = new Promise((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
+    closePromise.catch(() => {});
     closed = true;
     health.closed = true;
     if (health.pendingQuestionError !== null) {
@@ -474,10 +490,30 @@ function createReclamationPersistence(options) {
       health.pendingQuestionError = null;
     }
     health.pendingQuestionFailure = false;
-    closePromise = pending.then(() => {
-      releaseOwnership();
-    });
+    pending.then(() => { drained = true; resolveClose(); }, rejectClose);
     return closePromise;
+  }
+
+  function finalize() {
+    if (finalPromise !== null) return finalPromise;
+    let resolveFinal;
+    let rejectFinal;
+    finalPromise = new Promise((resolve, reject) => { resolveFinal = resolve; rejectFinal = reject; });
+    finalPromise.catch(() => {});
+    try {
+      if (!drained) throw persistenceError('reclamation_persistence_drain_unconfirmed');
+      releaseOwnership();
+      resolveFinal();
+    } catch (error) { rejectFinal(error); }
+    return finalPromise;
+  }
+
+  function close() {
+    if (managed) return stopAndDrain();
+    if (publicClosePromise !== null) return publicClosePromise;
+    publicClosePromise = stopAndDrain().then(finalize);
+    publicClosePromise.catch(() => {});
+    return publicClosePromise;
   }
 
   persistenceAdapter = Object.freeze({
@@ -490,7 +526,27 @@ function createReclamationPersistence(options) {
     status: () => ({ closed, writeBlocked }),
   });
   PERSISTENCE_HEALTH.set(persistenceAdapter, health);
+  LIFETIME_CONTROLS.set(persistenceAdapter, Object.freeze({
+    bindOwner() {
+      if (managed || everEnqueued || closePromise !== null) return false;
+      managed = true;
+      delegatedControl = Object.freeze({ stopAndDrain, finalize });
+      ownerControl = Object.freeze({
+        stopAndDrain,
+        finalize() {
+          if (transferred) return Promise.reject(persistenceError('reclamation_persistence_authority_transferred'));
+          return finalize();
+        },
+      });
+      return ownerControl;
+    },
+    transferOwner(value) {
+      if (!managed || value !== ownerControl || transferred || closePromise !== null || everEnqueued) return false;
+      transferred = true;
+      return delegatedControl;
+    },
+  }));
   return persistenceAdapter;
 }
 
-module.exports = { consumeBoundedQuestionWriteFailure, createReclamationPersistence };
+module.exports = { consumeBoundedQuestionWriteFailure, createReclamationPersistence, getReclamationPersistenceControl };

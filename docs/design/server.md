@@ -29,6 +29,11 @@ managed runtimeの読取専用collectorは、trusted compositionが`startServer(
 
 ## 起動と寿命
 
+`startServer`のcloseはcleanupを順に試し、途中で失敗しても後続cleanupを続ける。
+失敗の有無を理由の値と分け、false、null、undefined、0と空文字列も最初の失敗理由としてrejectする。
+再closeは保存済みの終了結果を返し、任意の理由を診断へ公開せず、`shutdownError`は失敗時に`shutdown_incomplete`、成功時にnullを返す。
+この終了結果はgraceful再起動とwriterのprocess間排他を実装済みとする証拠ではない。
+
 managed collectorはserverの通常起動では作成・接続しない。注入されたcollectorのallowlist済みsnapshotだけを`GET /api/state`の`managedCollectors`として返し、HTTP経路から接続、resume、登録、proof照会は行わない。
 
 - SessionStart フックが常駐サーバーの生存を確かめ、動いていなければ起動する。生存は `GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で、`server.json` と一致することで判定する。Windows は pid の再利用が速いので、pid だけで判定しない。
