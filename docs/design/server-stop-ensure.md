@@ -11,6 +11,9 @@
 POSTの専用routeは既存のui-optional-origin認証を使い、Host、uiSecret、Originを照合する。
 同じuiSecretを持つlocal UIにも権限があり、tray本人をHTTPだけで区別したとは扱わない。
 厳格schemaの本文はexpectedInstanceIdとrequestIdだけを受け付ける。
+requestIdはtrayなどの要求側がcrypto random UUIDとして生成し、同じ要求の再送で再利用する。
+サーバーは両IDを36文字の小文字UUID v4形式へ厳格に限定し、過長、大文字、path区切りと形式不一致を副作用前に拒否する。
+固定basenameの導出はschemaとID検証の後だけ行う。
 両IDは相関IDであり、secret、任意path、PID操作、marker削除、PR操作は本文に入れない。
 
 起動ごとのinstanceIdと一致する最初のrequestだけを受け付ける。
@@ -19,11 +22,25 @@ POSTの専用routeは既存のui-optional-origin認証を使い、Host、uiSecre
 受付応答を完結し、独立した一度限りの停止Promiseでcleanupを開始する。
 応答のfinishとcloseの双方を扱い、切断でも停止開始を失わない。
 停止request自身をdrain ticketへ入れず、request handlerからserver.close完了を待たない。
+HTTP、idle、signalと公開closeは、一つのprivate停止operationとlatchへ合流する。
+相関IDと停止中状態はcallbackとawaitより前に確定し、全入口がstopping公開と一度限りのdrainを共有する。
+公開async wrapperのPromise参照が同一である互換契約を新設するものではない。
+非HTTP停止が先行した場合は内部生成requestIdで記録し、新HTTP要求は409 stoppingで非受理とする。
+trayはその要求の成功結果を待たず再起動を中止し、内部結果を別のHTTP requestIdへコピーしない。
+HTTPが先なら同requestの再送だけを同じ受付とし、後続の他入口は既存operationへ合流する。
+
+製品接続時にserver.jsonとhealthへ起動ごとのinstanceIdとstateを追加し、app、instanceId、pid、startedAtと管理されたscopeを照合する。
+trayは照合済みinstanceIdを要求へ使い、running一致時だけensureが現在instanceを再利用する。
+stopping、state不一致、旧形式のID欠落は新規起動許可を意味しない。
+旧形式では新gracefulを実行せず、強制終了や自動launchへfallbackしない。全callerの互換試験を接続条件にする。
+fileとhealthの同時更新は保証せず、遷移中の不一致とHTTP消失では管理protocolによる後継禁止を併用する。
 
 ## 受付停止と終了確認
 
 変更route、hook/MCP更新、nativeの新規start/read、定期処理、settings通知と、副作用を持つGETの新規受付を停止対象として棚卸しする。
 既受付のoperationは終了まで追跡し、cleanupに必要な保存は私有経路として許す。
+PR mergeも新規受付と新規gh起動を拒否し、既に起動済みのghの完了と結果処理は追跡する。
+停止前の承認を停止後の新規merge開始へ流用せず、cleanupからmergeを開始しない。
 HTTP応答完了、transport切断、processのexitをoperation終了の代替にしない。
 停止中healthをensureがhealthyとして再利用しない。
 
@@ -36,7 +53,8 @@ PIDの一致だけで旧processを識別しない。
 ## 結果の記録
 
 内部fixtureのrecordはversion 1のplain dataとし、未知field、accessorと不正prototypeを拒否する。
-instanceId、requestIdとattemptIdは起動管理側が生成するUUID形式、scopeIdは64桁の小文字hex識別子を候補とする。
+instanceIdはサーバー、attemptIdは起動管理者、HTTP停止のrequestIdは要求側が生成する。
+UUIDの形式は`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`へ限定し、scopeIdは64桁の小文字hex識別子を候補とする。
 scopeの算出に必要な設定世代とsource setの照合は製品接続前に確定し、hex形式の検証だけで同じ保存対象を証明しない。
 JSONのUTF-8 byte長は4 KiBを上限とし、読取りも上限を超えて全文を取り込まない。
 
@@ -49,6 +67,8 @@ completedは停止手続きの完了を表す。内部fixtureでは注入した�
 startedもchildの起動手続き完了の記録であり、ensureは別に現在instanceのhealthを照合する。
 内部fixtureの起動拒否codeはwriter_occupied、filesystem_unsupported、startup_failed、startup_unconfirmedに限定する。
 実writerの失敗との対応は製品接続前に監査し、未知の例外を解放成功や再起動許可へ変換しない。
+current、世代、starting/stoppingと再attempt承認はこの結果recordのfieldではない。
+内部fixtureでは単一controllerのメモリ状態だけへ置き、共有fileのschemaと更新権限は手順3の管理protocolで定義してから実装する。
 
 結果は管理側が導出するinstance/request別の固定形式名へ書き、呼出し側にpathを指定させない。
 control-planeの名前空間をsource保存先とwriter sidecarから分ける。
@@ -83,12 +103,18 @@ HTTP停止後もonShutdownとfinal releaseが保留する区間は管理protocol
 同scopeの確定拒否は新規launch前とhealth待機中に確認し、start lock敗者にも伝達する。
 次のhook eventが別processで来ても確定拒否を共有し、全deadlineの起動待ちを繰り返さない。
 spawn成功を起動成功にしない。
+起動順は管理権限取得、同scopeのfresh healthと停止状態照合、#313対象writerの全取得、source内容I/Oと初期化、listenとready公開の順を候補とする。
+directory準備とpath metadata検査は内容I/Oと分け、factoryを含む全取得前のload、fingerprint、migration、temp writeとprovider起動を接続時に監査する。
+敗者childのattempt別拒否はscope全体のblocked状態と区別し、管理側は結果採用時にも同scopeの確認済みrunning instanceを優先する。
+遅延敗者の拒否をscope抑止へ昇格せず、EADDRINUSEと無関係なport占有をwriter_occupiedやhealthy成功へ変換しない。
+fresh health再確認だけではready公開とのraceを防げず、current公開権限と重複launch禁止の管理protocolを製品接続条件として維持する。
 
 確定拒否はTTLだけで解除せず、管理者の明示再attemptで実取得を再実行する案を仮推奨とする。
 再attemptは拒否抑止だけを更新し、markerを削除しない。
 不正recordや読取り不能は解放成功へ変換せず、短い診断失敗とする。
 結果fileが作れない場合の通知は未確認であり、既存deadlineを上限にするだけでは反復抑止の達成と扱わない。
 管理側も記録不能なら既知拒否を共有できるとは主張しない。
+全writerの解放後にcompletedの公開前でprocessが終了しても、通知結果は未確認である。成功を推定せず、全停止を確認する手動回復へ進む。
 
 ## 分割と完了条件
 
@@ -100,10 +126,12 @@ spawn成功を起動成功にしない。
 6. factoryの全集合と全writerへ接続し、追加markerを含むW11を再確認する。
 
 認証拒否、二重要求、HTTP自己待ち、保留drain、falsy失敗、通知失敗、古い結果、並行ensure、healthy優先と再attemptを適合試験へ事前記録する。
+接続PRでserver.mdの通信schemaとroute認証表を更新し、現行のtray専用routeに関するコメントも実装と照合する。
+trayはWindows PowerShell 5.1で検証し、HTTP例外をApplication.Runへ伝播させず診断と再起動中止にする。
 fixtureと両provider実runtimeは別に記録する。
 
 ## 開発者の判断事項
 
 結果file方式、確定拒否の明示再attempt、既存uiSecretの停止権限を自走中の仮推奨とする。
-Windows ACLの配布準備方式、手動再attemptの公開操作、対象OS/filesystem、既存同期constructorの互換条件は決定済みとしない。
+未決の判断と推奨は[引き継ぎ資料の判断待ち](../handover/codex-support.md#判断待ち)へ集約する。
 この判断待ちでもprivate状態機械とcodecのfixtureは先行できる。

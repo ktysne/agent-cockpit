@@ -627,7 +627,7 @@ P01〜P10を含む`test/writer-exclusion.test.js`は19件成功、失敗0件で�
 ### shutdownの失敗理由保持
 
 通常serverとnative server wrapperのcloseは、失敗の有無と理由を別に扱う。
-以下を#361の実装前期待値とし、実provider停止の確認と区別する。
+以下は#361の実装前に記録した期待値であり、実provider停止の確認と区別する。
 
 | ID | 操作 | 期待条件 |
 | --- | --- | --- |
@@ -651,13 +651,14 @@ writer排他の製品接続、graceful再起動と両provider実runtimeはこの
 | ID-F313-ST01 | 内部fixture | 固定recordの往復、4 KiB境界と期待ID照合。不正field、accessor、statusとreasonの組合せを拒否 |
 | ID-F313-ST02 | 内部fixture | 導出basenameの保存と上限付き読取り。部分file、通知書込み失敗と結果不明を成功へ変換しない |
 | ID-F313-ST03 | 内部fixture | 同じ停止requestは一度の手続きとPromiseを共有。別requestと旧instanceは受理しない |
-| ID-F313-ST04 | 内部fixture | starting/stopping中の新attemptを拒否し、旧attemptの結果でcurrentを更新しない。blockedの明示retryだけで世代を進める |
+| ID-F313-ST04 | 内部fixture | 単一controllerのメモリ内starting/stopping中は新attemptを拒否し、旧attemptの結果でcurrentを更新しない。blockedの明示retryだけでメモリ内世代を進める。共有current fileは対象外 |
 | ID-F313-ST05 | 内部fixture | 停止手続きがfalsyで失敗しても理由を保持。通知側切断で停止を破棄せず、fixtureの完了を製品writer解放と表現しない |
 | ID-F313-ST06 | 製品管理protocol | ACLと管理権限を実processで照合。旧管理者の遅延再開、TTLとcrash後に新currentの上書きやlaunchを許さない |
 | ID-F313-ST07 | 製品管理protocol | HTTP終了後のfinal release保留もstoppingとして共有し、並行ensureが後継を開始しない |
-| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認 |
-| ID-F313-ST09 | ensure接続 | healthy現在instanceを古い拒否より優先。起動前/待機中とstart lock敗者で拒否を共有し、eventごとの全deadline反復を避ける |
+| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認。idle、signalと公開closeも同じ停止手続きへ入り、非HTTP停止先行時の新要求は非受理409。Windows PowerShell 5.1でHTTP例外がApplication.Runへ伝播せず再起動を中止する |
+| ID-F313-ST09 | ensure接続 | healthy現在instanceを古い拒否より優先。起動前/待機中とstart lock敗者で拒否を共有し、eventごとの全deadline反復を避ける。拒否してもhookはproviderセッションを止めず、出力なしで正常終了する |
 | ID-F313-ST10 | ensure接続 | 古いrecord、破損と通知不能をunknownとして扱う。手動再attemptはmarkerを削除せず実取得をやり直す |
 | ID-F313-ST11 | writer接続 | 実markerの正常再起動、残留拒否と通知をW11で再確認し、factoryと全参加writerへ追加するたびに再検証 |
+| ID-F313-ST12 | ensure接続 | TTL失効lockからの二重起動、勝者ready後の遅延敗者、fresh health検査後のready公開を競合させる。確認済みの同scopeのrunning instanceを優先し、敗者attemptの拒否をscope全体のblockedへ昇格しない。無関係なport占有をhealthyやwriter_occupiedへ変換せず、残留markerでhealthy不在の場合とHTTP停止後のstopping保持を区別する。管理権限、全writer取得、内容I/O、listen/readyの順も照合する |
 
 実providerの停止と再起動は、上記fixtureの成功から推定せず別に記録する。

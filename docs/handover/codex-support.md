@@ -387,6 +387,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | 電源断の保証 | 拒否情報の flush と保存順序の保証を電源断にも広げるか。推奨は広げない(現状はプロセスのクラッシュ後に限る) | [容量回収計画](../design/codex-capacity-reclamation.md)「容量予約と診断」 |
 | 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
 | writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。現行トレイの強制再起動はmarkerを残すため、標準接続前にgraceful停止と最終解放確認を実装する。残留時は起動拒否とし、PID/TTLによる奪取やトレイの自動削除は行わない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
+| 停止の権限と通知 | 推奨は既存uiSecretの認証HTTP受付とinstance/request別結果file、確定拒否の明示再attemptで、設計上仮採用する。専用権限やlocal IPCも選択肢。Windows ACLの配布準備方式、手動再attemptの公開操作、対応OS/filesystemと既存同期constructorの互換範囲は未決で、製品接続前に確定する | #313の[停止とensureの設計](../design/server-stop-ensure.md)。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
 | #156 を閉じる時期 | main 採用時か、本実装の Issue が全部閉じた時か。推奨は main 採用時 | |
@@ -815,7 +816,8 @@ private primitive、標準writer接続、factory接続と横断試験は後続�
 Claude R1はblocker0件、要修正3件で、トレイ再起動の接続条件、lease/sidecar/Mapの解放順と一般path接続前のfilesystem/alias検証を明記して再レビューする。
 一般保存先と標準再起動への接続は限定primitiveの完了に含めず、W11の停止/再起動とW12のcaller同期失敗を後続の完了条件にする。
 Claude R2で見つかったensureの反復起動と接続/有効化の曖昧さを、standalone接続前にW08と停止/ensureの先行fixture試験を行い、接続PR自身でW11の製品統合条件を満たす順序へ修正する。
-短命状態fileや内部optionの方式は未採用で、実writer接続より先に拒否応答と再起動の手段を固定して試験する。
+製品の状態fileと内部optionは未実装で、[停止とensureの設計](../design/server-stop-ensure.md)に結果fileの仮推奨と接続条件を記録した。
+実writer接続より先に拒否応答と再起動の手段を固定して試験する。
 R3はblocker0件、要修正1件で、設計一ファイルの手順5/6へfactoryと全参加writerのW11再確認を追記した。
 3往復後の局所修正ルールに従い、主セッションが文書整合を確認して収束とする。製品fixtureと実runtimeは未実行のままである。
 PR #360はレビュー修正後にマージ可能とし、順序は#351→#352→#353→#354→#356→#357→#358→#359→#360である。
@@ -857,7 +859,8 @@ PRは#362の後にマージし、#361の完了はfeatureへの取り込み後に
 TTL付きstart.lockとattempt別recordだけでは旧管理者のcurrent上書きを防げず、HTTP終了後の解放保留も全ensureへstoppingとして共有する必要がある。
 次は製品callerを作らず、単一private controllerとbounded record codec/storeをfixtureで検証する。
 異process管理排他、ACL、全producer drain、tray/ensure接続と実markerのW11はその後の完了条件である。
-設計差分の指定Claudeレビューはこれから行う。親#363からsrc/testを変更せず、親の全体2,969件成功、失敗0件、実symlink2件skipを根拠として保持する。
+指定Claude R1の要修正7件を受け、requestIdの生成と検証、メモリ内状態、共通停止operation、instance導入と並行起動の分類を補正する。
+本PRは文書のみでテストを実行せず、親#363からsrc/test不変を確認する。親の全体2,969件成功、失敗0件、実symlink2件skipは親実装の結果として保持し、新設計の成功証拠としない。
 
 ## 起票していない候補
 
