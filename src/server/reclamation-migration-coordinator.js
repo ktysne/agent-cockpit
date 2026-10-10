@@ -1,5 +1,8 @@
 'use strict';
 
+const LIFETIME_CONTROLS = new WeakMap();
+function getReclamationMigrationCoordinatorControl(value) { return LIFETIME_CONTROLS.get(value) || null; }
+
 const { randomUUID } = require('node:crypto');
 const { Buffer } = require('node:buffer');
 const {
@@ -266,6 +269,8 @@ function createReclamationMigrationCoordinator(value) {
   const input = captureOptions(value);
   const { persistence, configuredSlots, writersBySlot, capacityBudget, normalByteLimitsBySlot } = input;
   const limitsForTransitions = fullLimitsBySlot(configuredSlots, normalByteLimitsBySlot);
+  let managed = false;
+  const retentionReasons = [];
   let gateOpen = false;
   let state = 'idle';
   let failureCode = null;
@@ -329,7 +334,11 @@ function createReclamationMigrationCoordinator(value) {
     const drainResults = await Promise.allSettled(drainPromises);
     const failed = stopErrors.length > 0 || stopResults.some((item) => item.status === 'rejected') ||
       drainResults.some((item) => item.status === 'rejected');
-    if (failed) throw new Error('reclamation_writer_stop_or_drain_failed');
+    if (failed) {
+      retentionReasons.push(...stopErrors, ...stopResults.filter(item => item.status === 'rejected').map(item => item.reason),
+        ...drainResults.filter(item => item.status === 'rejected').map(item => item.reason));
+      throw new Error('reclamation_writer_stop_or_drain_failed');
+    }
   }
 
   function rawFullBytes(slotBytesByConfiguredSlot) {
@@ -792,7 +801,7 @@ function createReclamationMigrationCoordinator(value) {
     return startPromise;
   }
 
-  function close() {
+  function closeStandard() {
     if (closePromise !== null) return closePromise;
     closing = true;
     gateOpen = false;
@@ -827,12 +836,40 @@ function createReclamationMigrationCoordinator(value) {
     return closePromise;
   }
 
-  return Object.freeze({
+  function close() {
+    if (!managed) return closeStandard();
+    if (closePromise !== null) return closePromise;
+    let resolveClose;
+    let rejectClose;
+    closePromise = new Promise((resolve, reject) => { resolveClose = resolve; rejectClose = reject; });
+    closePromise.catch(() => {});
+    closing = true;
+    gateOpen = false;
+    state = state === 'blocked' ? 'blocked' : 'closing';
+    const work = (async () => {
+      if (startPromise !== null) await startPromise.catch(() => {});
+      try { await stopAndDrainWriters(); }
+      finally { closed = true; closing = false; if (state !== 'blocked') state = 'closed'; }
+      if (retentionReasons.length) throw retentionReasons[0];
+    })();
+    work.then(resolveClose, rejectClose);
+    return closePromise;
+  }
+
+  const api = Object.freeze({
     start,
     close,
     canWrite: () => gateOpen,
     status,
   });
+  LIFETIME_CONTROLS.set(api, Object.freeze({
+    bindOwner() {
+      if (managed || startPromise !== null || closePromise !== null) return false;
+      managed = true;
+      return Object.freeze({ stopAndDrain: close, retentionReasons: () => [...retentionReasons] });
+    },
+  }));
+  return api;
 }
 
-module.exports = { createReclamationMigrationCoordinator };
+module.exports = { createReclamationMigrationCoordinator, getReclamationMigrationCoordinatorControl };

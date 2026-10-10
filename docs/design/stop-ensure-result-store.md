@@ -1,0 +1,82 @@
+# 停止結果の限定内部store
+
+## 範囲と前提
+
+[内部codec](stop-ensure-record-codec.md)のrecordを、単一storeインスタンスのfixtureで保存して読む。
+呼出し側が先に作った、信頼済みで既存の専有temporary directoryを使い、directoryをstoreから作らない。
+この信頼はcallerの前提であり、path検査でACL、一般alias、真正性を認定しない。
+fixtureのdirectory、targetとtempを他主体が差し替えない条件とする。
+別storeや異processの上書き排他、共有current、管理protocol、製品callerとwriter所有には接続しない。
+停止全体の製品管理protocolから独立した内部moduleとして検証する。
+
+## APIと名前
+
+createStopEnsureResultStoreの入力はcontrolDirectoryと任意のfixture専用fileSystemだけのplain own-dataで、未知fieldとaccessorを拒否する。
+controlDirectoryは正規の絶対pathへ限定し、最初のI/Oで既存directoryを照合する。
+fileSystemはlstat、open、rename、unlinkだけの内部依存で、methodを生成時にcaptureする。
+注入methodはcapture済みのmethod集合をreceiverとし、元objectの可変stateへthis経由で依存しない。
+handleのclose()の正常結果はundefinedとし、契約外の値は未確認として扱う。
+返すfreeze済みobjectはreadResult(expectedIds)とwriteResult(record)だけを持つ。
+任意filename、PID、TTL、削除と所有解放のAPIは持たない。
+
+codecへnormalizeStopEnsureExpectedIdsを第4の内部exportとして追加し、decodeとstoreで同じ厳格schemaを使う。
+helperは固定診断と入力独立のfreeze済みnull prototype recordを返す。
+kindと検証済みIDの固定tupleをSHA-256へ写し、shutdown-<digest>.jsonまたはstartup-<digest>.jsonへ導出する。
+自分のtemporary basenameは.<target>.<randomUUID>.tmpとする。
+digestは名前の生成だけに使い、数学的な無衝突、認証とfile identityを保証しない。読取り後も期待IDを照合する。
+factoryの不正入力はinvalid_stop_ensure_store_options、不正record/期待IDはinvalid_stop_ensure_record、同keyの異bytesはstop_ensure_result_conflictのTypeErrorを同期throwし、I/Oを行わない。
+正当なread/write入力はPromiseを返す。
+
+## 上限付きread
+
+read結果はfreeze済みのmissing、valid、unknownに分ける。
+missingはstatusだけ、validはstatusとcodecのfreeze済みrecord、unknownはstatus、固定diagnosticとcloseFailedを持つ。
+任意path、本文、OS message、stackと原因を返さない。
+
+親directory不在や不明はdirectory_unavailable、targetがregular fileでなければrecord_not_regularとする。
+targetのENOENTだけをmissingへ分類し、ENOENT時に親状態を再確認する。親消失はunknownへ分類する。
+この再確認は外部namespace変化への原子的保証ではない。
+open後もhandle.statでregular fileと非負安全整数sizeを確認し、4096 byte超なら本文を読まない。
+固定4097 byteのbufferへ残量を指定してreadを続け、short positive readはEOFとせず、0だけをEOFとする。
+bytesReadは0から要求量までの整数へ限定し、4097 byte目を観測したらrecord_too_largeにする。
+4096 byte以下だけをcodecへ渡し、不正UTF-8/JSON/schema/IDはrecord_invalidとする。
+stat後伸長の検出も読取り上限内だけで、EOF後の他者追記を防ぐとは主張しない。
+既知handleは正常/異常とも一度closeし、close不明ならvalid/missingを返さない。
+最初の診断を保持し、後続close不明をcloseFailedで示す。closeだけ失敗した場合の診断はrecord_close_unknownとする。
+その他のread I/O不明はrecord_io_failedである。
+
+## 一度のwriteと不明結果
+
+writeResultはasync wrapperを使わず、codecから得たcanonical bytesとkeyに対するdeferred Promiseを最初のfilesystem呼出し前に登録する。
+同key同bytesの再送は保留中も完了後も同じPromise、異bytesは同期conflictで拒否する。
+失敗やunknownでもentryを消さず、自動I/O retryを行わない。
+entry数に応じてメモリーは増え、record単位のbounded I/Oはstore全体の容量budgetではない。製品接続前に別途設計する。
+
+I/O結果はstatusだけのwritten、またはstatus、diagnostic、cleanupFailedを持つunknownへresolveし、freezeする。
+writtenはrename正常終了の観測だけで、耐久性、実停止とwriter解放の成功ではない。
+既存targetはrecord_existsとして書かないが、この事前検査をrenameのno-replace保証とは扱わない。
+親不在はdirectory_unavailable、temp open不明はrecord_open_unknown、write不明はrecord_write_failed、close不明はrecord_close_unknown、rename不明はrecord_rename_unknownとする。
+その他のwrite I/O不明はrecord_io_failedである。
+最初の診断を保持し、後続cleanupの失敗はcleanupFailedへ分ける。
+cleanupFailed:falseは観測したcleanup失敗がないことだけを示し、open/close不明時のtemp残留やdescriptor残留を否定しない。
+handle不備では利用可能なcloseを一度試みても結果を解放の証拠にせず、tempを削除しない。
+
+自己tempをwxとmode 0600で作り、正のshort writeを残量分続け、known close後にrenameを一度だけ行う。
+bytesWrittenは残量以下の正整数へ限定し、0と契約外値はunknownにする。残量のwriteは失敗後のretryではない。
+Bufferのview範囲だけをfilesystem APIへ渡し、.buffer全体を書き出さない。
+mode 0600をWindows owner-only ACLの証拠にしない。
+
+open副作用後のrejectやhandle不明では、tempを発見しても自己所有と認定しない。
+close throw/rejectまたは契約外結果では再closeとunlinkを行わず、漏れを解消済みとしない。
+作成済みかつknown-closedの自己tempだけを失敗時に一度unlinkする。
+cleanupのENOENTは自己tempの残留なしと扱っても、元のunknownを成功化しない。
+rename副作用後rejectではtargetを消さず、readback成功でもwriteを成功へ昇格しない。
+target、marker、他tempとdirectoryをcleanupへ広げない。
+
+## 検証と後続
+
+unknown descriptorはfake filesystemで検証し、実fdを漏らすfixtureを作らない。
+実temporary rootのcleanupは全実handleの終了を確認し、字句的に解決済みの絶対pathが自作のos.tmpdir配下にあることを検査してから行う。
+path.resolveによる比較であり、一般aliasやtmpdirの外部差替えを検証するものではない。
+fixture cleanupの成功は製品のcleanupや所有解放の証拠ではない。
+製品管理protocol、ACL、一般filesystem、全writer、両provider実runtimeは後続gateである。
