@@ -931,3 +931,14 @@ PR のマージや Issue のクローズをしたら、この資料の表を同�
 
 指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
 PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
+
+### 停止結果codecの独立実装
+
+停止全体のPR #364は3往復でも本文/適合表と未確認所有scopeの起動判断の2件が残り、Draftでマージ不可である。
+推奨はscope新規launch禁止、管理者による検出とW09手動回復を定義し、適合表をそろえて追加レビューすることで、再開の判断を待つ。
+初回の純粋codecには残存指摘の影響がないため、レビュー済み#363最終headを通常mergeした別branchで先行する。
+未収束の#364は取り込まない。
+[codec設計](../design/stop-ensure-record-codec.md)とC01〜C07の独立期待条件を実装前に記録した。
+純粋codecと関連試験を実装し、監査で末尾改行のIDとBuffer実byte長の検査を補強した。関連17件と構文確認は成功した。
+全体試験と指定Claudeレビューはこれから行い、結果を確認するまでDraftとする。
+ファイル保存、private controller、管理排他、ACL、tray/ensure接続、全writerと実providerは未実装または未確認のままである。

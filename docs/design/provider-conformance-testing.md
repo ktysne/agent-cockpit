@@ -640,3 +640,26 @@ S01〜S03を含む通常server試験87件とnative factory試験38件は成功�
 実装head `2ec748b`の全体試験は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
 指定Claude R1はblockerと要修正が0件で収束した。
 writer排他の製品接続、graceful再起動と両provider実runtimeはこの試験の成功に含めない。
+
+### 停止結果record codecの独立条件
+
+以下は純粋codecの実装前期待値であり、製品callerを追加しない。
+codecは固定schemaのrecordをUTF-8 Bufferへencodeし、decodeはBufferとkind別の期待IDを必須とする。
+decode後は入力から独立した、固定primitive fieldだけのfreeze済みrecordを返す。
+診断はinvalid_stop_ensure_recordに限定し、入力や任意例外の内容を残さない。
+ファイルのbounded read、basename導出と保存は別moduleで検証し、codecの成功をACL、管理権限、healthやwriter解放の証拠としない。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F313-C01 | shutdownのcompleted/failedとstartupのstarted/blocked全理由を往復 | version 1の固定fieldとstatus/reason/instance組合せを保持し、余分fieldと許可外理由を拒否 |
+| ID-F313-C02 | 大文字、過長、末尾改行、path区切り、version/variant違いのUUIDと不正scopeを与える | 36文字小文字UUID v4と64桁小文字hexだけを許可し、coercionせず拒否 |
+| ID-F313-C03 | accessor、未知field、symbol、非列挙field、不正prototypeとthrowing proxyを与える | getterとtoJSONを実行せず固定診断で拒否。plain objectまたはnull prototypeのdataだけをコピー |
+| ID-F313-C04 | 正しいJSONを空白で4096 byteへ拡張し4097 byteも与える。BufferのbyteLengthを偽装する | 実4096 byteは許容し実4097 byteはUTF-8変換とJSONparse前に拒否。入力のgetterを実行せず実byte長を検査し、文字数と混同しない |
+| ID-F313-C05 | malformed UTF-8、JSON、BOM、空入力と非Bufferを与える | replacementによる救済なしで固定診断。合法JSONの外側空白は許容 |
+| ID-F313-C06 | 期待IDを省略、不正schema、旧instance/request/scope/attemptとkind不一致にする | shutdownはkind/instanceId/requestId、startupはkind/scopeId/attemptIdの厳格照合が必要。startupの新instanceのhealth照合は後続の責任 |
+| ID-F313-C07 | encode/decode後に入力を変更し、Object.prototype.toJSONを故障fixtureで追加する | 返却recordはfreeze済み独立コピーで、入力と継承toJSONにより出力を変更しない。fixtureはprototypeを必ず復元 |
+
+C01〜C07を含む関連試験は17件成功、失敗0件で、両moduleの構文確認も成功した。
+監査で末尾改行のIDとBufferの見かけのbyteLengthによる上限迂回を補正し、実長と各期待IDの不一致を確認した。
+停止結果の保存と停止手続き、両provider実runtimeと製品排他は未確認のままである。
+停止全体の設計[PR #364](https://github.com/ktysne/agent-cockpit/pull/364)はレビュー未収束で、この独立codecの前提にしない。
