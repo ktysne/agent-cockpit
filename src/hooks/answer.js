@@ -6,6 +6,7 @@ const { isHookSessionId } = require('../server/session-ids');
 
 const ANSWER_HOOK_TIMEOUT_MS = 30 * 60_000 + 30_000;
 const ANSWER_HOOK_DEADLINE_GRACE_MS = 30_000;
+const CODEX_STOP_WAIT_MS = 59 * 60_000;
 const POST_TOOL_BATCH_TIMEOUT_MS = 1_000;
 const ASK_OUTCOMES = new Set(['answered', 'timeout', 'released', 'server-lost']);
 
@@ -152,15 +153,43 @@ async function runCodexStopCheck(input, options) {
   if (input.agent_id || !validSessionId(input.session_id)) {
     return { exitCode: 0, output: null, stderrText: null };
   }
+  const now = options.now || Date.now;
   const result = await postHookRequest({
     action: 'stop-check',
     event_name: 'Stop',
     session_id: input.session_id,
     id: crypto.randomUUID(),
-    hook_at: (options.now || Date.now)(),
+    hook_at: now(),
     provider: 'codex',
   }, { ...options, timeoutMs: 1_000 });
-  return { exitCode: 0, output: result?.hookOutput || null, stderrText: null };
+  if (result?.hookOutput) return { exitCode: 0, output: result.hookOutput, stderrText: null };
+  if (result?.wait !== true || !Number.isInteger(result.generation)) {
+    return { exitCode: 0, output: null, stderrText: null };
+  }
+
+  const waitMs = Number.isFinite(options.codexStopWaitMs) ? Math.max(0, options.codexStopWaitMs) : CODEX_STOP_WAIT_MS;
+  const deadline = now() + waitMs;
+  const parentPid = options.parentPid === undefined ? process.ppid : options.parentPid;
+  while (now() < deadline) {
+    const parentAlive = options.isParentAlive
+      ? options.isParentAlive(parentPid)
+      : isParentAlive(parentPid, options.processApi || process);
+    if (!parentAlive) return { exitCode: 0, output: null, stderrText: null };
+    const timeoutMs = Math.max(1, Math.min(MAX_LONG_POLL_MS + 1_500, deadline - now()));
+    const polled = await postHookRequest({
+      action: 'stop-poll', event_name: 'Stop', session_id: input.session_id, id: crypto.randomUUID(),
+      generation: result.generation, parent_alive: parentAlive, provider: 'codex',
+    }, { ...options, timeoutMs });
+    if (!polled) return { exitCode: 0, output: null, stderrText: null };
+    if (polled.done === true) {
+      const output = typeof polled.stderrText === 'string' && polled.stderrText
+        ? { decision: 'block', reason: polled.stderrText }
+        : null;
+      return { exitCode: 0, output, stderrText: null };
+    }
+    if (options.once) return { exitCode: 0, output: null, stderrText: null };
+  }
+  return { exitCode: 0, output: null, stderrText: null };
 }
 
 async function runStop(input, options) {

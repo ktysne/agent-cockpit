@@ -389,23 +389,30 @@ class DecisionAnswerDelivery {
   }
 
   checkStop(sessionId, eventId, hookAt = this.now()) {
-    if (this.startStop(sessionId, eventId, hookAt) === null) return null;
+    const generation = this.startStop(sessionId, eventId, hookAt);
+    if (generation === null) return { hookOutput: null, generation: null, wait: false };
     const reason = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
-    return reason ? { decision: 'block', reason } : null;
+    return {
+      hookOutput: reason ? { decision: 'block', reason } : null,
+      generation,
+      // セッション行の無い委譲した thread を待たせると、離席中は委譲した実行がそのたびに上限まで止まるため。
+      wait: !reason && this.away.snapshot().enabled === true && this.state.sessions.get(sessionId)?.provider === 'codex',
+    };
   }
 
-  async waitForStopAnswer(sessionId, generation, parentAlive = true) {
-    if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
+  async waitForStopAnswer(sessionId, generation, parentAlive = true, provider = 'claude') {
+    if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
     const text = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     if (text) return { stderrText: text, done: true };
     await this.waitForSignal(sessionId, this.maxLongPollMs);
-    if (this.stopWaitEnded(sessionId, generation, parentAlive)) return { stderrText: null, done: true };
+    if (this.stopWaitEnded(sessionId, generation, parentAlive, provider)) return { stderrText: null, done: true };
     const nextText = [this.deliverSessionNotifications(sessionId), this.deliverPending(sessionId)].filter(Boolean).join('\n');
     return nextText ? { stderrText: nextText, done: true } : { stderrText: null, done: false };
   }
 
-  stopWaitEnded(sessionId, generation, parentAlive) {
-    return this.closed || !parentAlive || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation;
+  stopWaitEnded(sessionId, generation, parentAlive, provider = 'claude') {
+    return this.closed || !parentAlive || this.endedSessions.has(sessionId) || this.stopGenerations.get(sessionId) !== generation ||
+      (provider === 'codex' && this.away.snapshot().enabled !== true);
   }
 
   handleLifecycleEvent(sessionId, eventName, eventId, hookAt = this.now()) {
