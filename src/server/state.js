@@ -2381,6 +2381,10 @@ class DashboardState {
   }
 
   endSession(sessionId, endedAt) {
+    // provider を持たない保存済みの計画は、起点の情報を消す前に補う。
+    const plan = this.plans.get(sessionId);
+    const planProviderAdded = Boolean(plan && !plan.provider);
+    if (planProviderAdded) plan.provider = this.providerForSession(sessionId);
     const hadRecovery = this.codexRecovery.delete(sessionId);
     if (this.sessionFiles.get(sessionId)?.provider === 'codex') this.sessionFiles.delete(sessionId);
     const resumes = (this.entries.get(sessionId) || []).filter(({ event }) => event.provider === 'codex' && !event.agent_id &&
@@ -2396,7 +2400,7 @@ class DashboardState {
     this.hiddenSessionUpdatedAt.delete(sessionId);
     this.closedAgents.delete(sessionId);
     this.sessionFileLastSeenAt.delete(sessionId);
-    if (wasHidden || hadRecovery) this.requestStoreWrite();
+    if (wasHidden || hadRecovery || planProviderAdded) this.requestStoreWrite();
   }
 
   endSessionByAbsence(sessionId, endedAt) {

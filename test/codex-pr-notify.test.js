@@ -113,6 +113,21 @@ test('Codex のセッションが終わった後も、タスクの完了は保�
   assert.equal(restored.providerForSession('codex-ended'), 'codex');
 });
 
+test('provider のない保存済みの計画は、Codex のセッションの終了時に Codex 起点を補う', async (t) => {
+  const { directory } = temporaryDirectory(t, 'agent-cockpit-codex-plan-legacy-');
+  const state = new DashboardState({ homeDir: directory });
+  state.setTasks('codex-legacy-plan', [{ title: '旧形式の計画', state: 'todo', criteria: [] }]);
+  await state.flushPersistence();
+  const saved = state.serializeStore();
+  delete saved.plans['codex-legacy-plan'].provider;
+  await fs.writeFile(path.join(directory, 'store.json'), JSON.stringify(saved));
+
+  const restored = await DashboardState.load(directory);
+  restored.addEvent({ session_id: 'codex-legacy-plan', provider: 'codex', hook_event_name: 'SessionStart', source: 'resume', cwd: process.cwd(), hookAt: Date.now() });
+  restored.addEvent({ session_id: 'codex-legacy-plan', provider: 'codex', hook_event_name: 'SessionEnd', cwd: process.cwd(), hookAt: Date.now() });
+  assert.equal(restored.providerForSession('codex-legacy-plan'), 'codex');
+});
+
 test('マージ済みの PR とマージ履歴にも登録元の起点を渡す', async (t) => {
   const { directory } = temporaryDirectory(t, 'agent-cockpit-codex-pr-merged-');
   const state = new DashboardState({ homeDir: directory });
