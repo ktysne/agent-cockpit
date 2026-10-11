@@ -67,6 +67,7 @@ function normalizeRepository(name, definition) {
     defaultBranch: definition.defaultBranch || 'main',
     autoDeleteBranch: definition.autoDeleteBranch === true,
     mergeMethods: definition.mergeMethods || ['merge', 'squash', 'rebase'],
+    branchDeleteFailures: new Set(definition.branchDeleteFailures || []),
     pullRequests,
     deletedBranches: [],
   };
@@ -152,10 +153,19 @@ function createFakeGh(definition, { now = () => Date.now(), onUnexpected = () =>
       && args[3].match(/^repos\/([^/]+\/[^/]+)\/git\/refs\/heads\/(.+)$/);
     if (deleteMatch) {
       const repo = repositoryFor(args, deleteMatch[1]);
+      if (repo.branchDeleteFailures.has(deleteMatch[2])) {
+        throw Object.assign(new Error('branch deletion failed'), { code: 'DEMO_BRANCH_DELETE_FAILED', stderr: 'branch deletion failed' });
+      }
       repo.deletedBranches.push(deleteMatch[2]);
       return '';
     }
     if (args.length !== 2) return fail(args);
+    const reference = args[1].match(/^repos\/([^/]+\/[^/]+)\/git\/ref\/heads\/(.+)$/);
+    if (reference) {
+      const repo = repositoryFor(args, reference[1]);
+      if (repo.branchDeleteFailures.has(reference[2])) return JSON.stringify({ ref: `refs/heads/${reference[2]}` });
+      return fail(args, 'branch が見つからない');
+    }
     const compare = args[1].match(/^repos\/([^/]+\/[^/]+)\/compare\/([^/]+)\.\.\.([a-f0-9]+)$/i);
     if (compare) {
       const repo = repositoryFor(args, compare[1]);

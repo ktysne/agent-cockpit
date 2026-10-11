@@ -383,10 +383,6 @@ test('更新の無いセッションを隠す時間は既定で30分', () => {
   assert.equal(new DashboardState().getDisplayPreferences().idleHideMinutes, 30);
 });
 
-test('マージ結果を隠す時間は既定で5分', () => {
-  assert.equal(new DashboardState().getDisplayPreferences().mergeResultHideMinutes, 5);
-});
-
 test('予約取消の知らせは記録時刻から1分後に PR の状態へ含めない', () => {
   const state = new DashboardState();
   const now = Date.now();

@@ -213,18 +213,17 @@
   </ol>
 
   <h2 id="guide-stack-result">結果を確かめて次の PR へ進む</h2>
-  <p>マージが済むと、PR の枠に結果の行が出ます。
+  <p>マージ後、結果に警告がある場合だけ PR の枠に結果の行が出ます。
   直上の PR は、base が既定ブランチに付け替わり、新しい一番下になります。</p>
   <ol class="steps">
-    <li><div class="step-body"><b>結果の行を確かめる</b>枠の下端に、「PR #41: スカッシュ でマージしました。ブランチを削除しました。#42 の base を main に付け替えました。」と出ます。
+    <li><div class="step-body"><b>警告がある結果の行を確かめる</b>ブランチの削除に失敗した場合、枠の下端に警告つきの結果が出ます。
       設定の <span class="ui">終わったものを非表示にする</span> がオフなら、<span class="ui">マージ済み (24 時間)</span> の一覧にも #41 が時刻と方式つきで加わります。
-      オンのときも、予約時に確認したものと異なる head がマージされた PR は、警告つきで一覧に出ます(<a href="pull-requests.html#pr-result">マージの結果</a>)。
-      警告のない結果の行は、設定の <span class="ui">マージの結果を隠すまで (分)</span> の時間がたつと隠れます。初期値は 5 分です。
-      警告がある行は <span class="ui">閉じる</span> まで残ります(<a href="settings.html#settings-merge-result-hide">マージの結果を隠すまで</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-result-result" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1080" style="max-width:540px;min-width:min(600px, 540px)"><div class="gm-segment" style="flex-grow:1080;aspect-ratio:1080/181"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="583" alt="スカッシュでマージした後の枠の下端。マージ済みの一覧に PR #41 が時刻と方式つきで並び、その下に、#41 をスカッシュでマージし、ブランチを削除し、#42 の base を main に付け替えたという結果の行がある" loading="lazy" decoding="async" style="width:145.926%;margin-left:0%;margin-top:-91.204%"></div></div></div></div></figure></li>
+      警告のないマージ結果の行は表示しません。
+      警告のある行は <span class="ui">閉じる</span> を押すまで残ります(<a href="pull-requests.html#pr-result">マージの結果</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-result-result" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="1576" style="max-width:788px;min-width:min(600px, 788px)"><div class="gm-segment" style="flex-grow:1576;aspect-ratio:1576/230"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="630" alt="スカッシュでマージした後の枠の下端。マージ済みの一覧に PR #41 が時刻と方式つきで並び、その下に、ブランチを削除できなかった警告つきの結果の行がある" loading="lazy" decoding="async" style="width:100%;margin-left:0%;margin-top:-64.086%"></div></div></div></div></figure></li>
     <li><div class="step-body"><b>積み直しの依頼を確かめる</b>スカッシュでマージしたので、#42 の差分に #41 のコミットが残っています。
       #42 には <span class="ui">積み直しが必要</span> の札が付き、マージできない理由は「積み直し待ち」になります。
       常駐サーバーは、PR を登録したセッションに、積み直しの依頼を送ります。
-      <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません(<a href="pull-requests.html#pr-restack">積み直し</a>、<a href="pull-requests.html#pr-notify">セッションへの知らせ</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-result-result-v2" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="930" style="max-width:465px;min-width:min(600px, 465px)"><div class="gm-segment" style="flex-grow:930;aspect-ratio:930/284"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="583" alt="新しく一番下になった PR #42 の行。1/2 の札と、CI 成功、base を main に付け替え済み、積み直しが必要の札がある。マージできない理由は、積み直し待ちと出ている" loading="lazy" decoding="async" style="width:169.462%;margin-left:0%;margin-top:-12.796%"></div></div></div></div></figure></li>
+      <span class="ui">マージコミット</span> でマージしたときは、積み直しの依頼はありません(<a href="pull-requests.html#pr-restack">積み直し</a>、<a href="pull-requests.html#pr-notify">セッションへの知らせ</a>)。</div><figure class="guide-map" id="guide-stack-merge-map-pull-requests-result-result-v2" data-guide-map><div class="gm-stage"><div class="gm-image" data-zoom-width="930" style="max-width:465px;min-width:min(600px, 465px)"><div class="gm-segment" style="flex-grow:930;aspect-ratio:930/284"><div class="gm-clip"><img src="img/pull-requests-result/result.png" width="788" height="630" alt="新しく一番下になった PR #42 の行。1/2 の札と、CI 成功、base を main に付け替え済み、積み直しが必要の札がある。マージできない理由は、積み直し待ちと出ている" loading="lazy" decoding="async" style="width:169.462%;margin-left:0%;margin-top:-12.796%"></div></div></div></div></figure></li>
     <li><b>次の PR をマージする</b>セッションが #42 を積み直して push すると、<span class="ui">積み直しが必要</span> の札が消えます。
       条件がそろえば <span class="ui">マージできます</span> が出るので、#42 を同じ手順でマージします。
       #43 も、#42 のマージのあとに、同じ流れで進めます。</li>

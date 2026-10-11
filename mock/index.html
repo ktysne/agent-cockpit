@@ -426,11 +426,6 @@ textarea { width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px; b
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
-    <div class="settings-theme-row">
-      <label for="settings-merge-result-hide-minutes">マージの結果を隠すまで (分)</label>
-      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
-      <span class="settings-input-error" id="settings-merge-result-hide-error" role="alert" hidden></span>
-    </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
@@ -673,7 +668,7 @@ const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) ||
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
 // 読み込み直すと消える案内なので、保存する ui には置かない。
 let refreshConfirmPending = false;
-const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review' }, load());
+const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, hideFinished: true, mergeableCondition: 'cross-review' }, load());
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
 ui.mergeErrors = ui.mergeErrors && typeof ui.mergeErrors === 'object' && !Array.isArray(ui.mergeErrors) ? ui.mergeErrors : {};
@@ -709,16 +704,13 @@ function normalizeDisplayMinutes(value, minimum, maximum, fallback) {
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
 const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
-const mergeResultHideMinutesInput = document.getElementById('settings-merge-result-hide-minutes');
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
-const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
 const DISPLAY_MINUTE_SETTINGS = [
   { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, default: 15 },
   { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, default: 5 },
   { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, default: 30 },
-  { key: 'mergeResultHideMinutes', input: mergeResultHideMinutesInput, error: mergeResultHideMinutesError, min: 1, max: 60, default: 5 },
 ];
 for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
   input.min = String(min);
@@ -783,7 +775,6 @@ function captureDisplayPreferences() {
     mode: ui.mode, order: [...ui.order], pinned: [...ui.pinned], collapsed: [...ui.collapsed], hidden: [...ui.hidden],
     sectionOrder: [...(ui.sectionOrder || DEFAULT_SECTION_ORDER)], hideFinished: ui.hideFinished,
     longWaitMinutes: ui.longWaitMinutes, awayAnswerWaitMinutes: ui.awayAnswerWaitMinutes, idleHideMinutes: ui.idleHideMinutes,
-    mergeResultHideMinutes: ui.mergeResultHideMinutes,
     mergeableCondition: ui.mergeableCondition,
   };
 }
@@ -1732,7 +1723,7 @@ function pullRequestMergeResultLine(result) {
 
 function rememberPullRequestMergeResult(product, result) {
   const results = pullRequestMergeResults.get(product.repo.name) || [];
-  results.push({ id: String(++nextPullRequestMergeResultId), productId: product.id, recordedAt: Date.now(), ...result });
+  results.push({ id: String(++nextPullRequestMergeResultId), productId: product.id, ...result });
   pullRequestMergeResults.set(product.repo.name, results);
 }
 
@@ -1740,11 +1731,8 @@ function pullRequestMergeResultHasWarning(result) {
   return result.headMismatch === true || (typeof result.warning === 'string' && result.warning.length > 0);
 }
 
-function pullRequestMergeResultVisible(result, now = Date.now()) {
-  if (result.closedAt) return false;
-  if (pullRequestMergeResultHasWarning(result)) return true;
-  const recordedAt = typeof result.recordedAt === 'number' ? result.recordedAt : Date.parse(result.recordedAt || '');
-  return !Number.isFinite(recordedAt) || now < recordedAt || now - recordedAt < ui.mergeResultHideMinutes * 60_000;
+function pullRequestMergeResultVisible(result) {
+  return !result.closedAt && pullRequestMergeResultHasWarning(result);
 }
 
 function hasPullRequestMergeResults(product) {
