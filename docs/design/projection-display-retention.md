@@ -1,0 +1,63 @@
+# provider別表示記録の保持契約
+
+表示記録とprovider出自履歴の回収は、将来の表示と操作対象の判断を維持する必要がある。
+[session索引](projection-display-index.md)による読み取りの改善は、この保持条件を変更しない。
+この契約は現在の保持と反例fixtureを扱い、製品GC、TTLと世代拒否APIを追加しない。
+
+## 保持する意味
+
+deletedAtはproviderとsession IDの組を非表示にする永続記録である。
+別provider、古い時刻と同時刻のwriteでは保持し、同providerの削除より新しい検証済みstate writeだけで解除する。
+hooksのwriter認証とprojection判定は採用するeventを制限するが、古いsnapshotが将来の全入口で拒否される証明にはならない。
+SessionEndはこの解除操作の対象外である。
+
+hiddenAtは表示選好であり、明示unhideとclearHiddenSessionsで解除する。
+sessionの一覧不在や世代終了を表示選好の失効へ読み替えない。
+
+sessionProviderSourcesByIdとunknownSessionProviderSourceIdsはメモリー上の出自履歴である。
+read routeの表示統合と、表示操作のprovider対象判定は複数providerまたはunknownの履歴によって抑止される。
+履歴を忘れるとproviderが単一に見え、同じ入力でも表示の結び付けや操作対象が変わり得る。
+R03/R04は出自entryを残し、unknownまたは一方のproviderだけを落とす部分欠落を比較する。
+既存sessionに出自entryもfile providerもない場合はunknownを補うため、履歴の全消去が必ず単一provider化するとは扱わない。
+これらは永続storeの保存対象ではない。
+再起動でメモリーが失われることを、稼働中の任意時点で安全に削除できる根拠としない。
+
+## 回収の十分条件と未確定の境界
+
+意味上の条件は、回収前後で将来許可される入力列に対する削除非表示、表示選好、provider曖昧性と操作対象の判断が同じことである。
+一般には実行時チェックできないため、実装可能な十分条件として次を必要とする。
+
+1. 対象identityと世代に対応するproducer、inflight callback、snapshot cache、cold restoreと再接続の入口を特定できる。
+2. 古いidentityの入力を全入口で拒否する永続境界や同等の拒否要約を維持するか、cold restoreを含む全入口の永久閉鎖を証明する。
+3. 回収と新writeと世代切替が競合せず、クラッシュ後も拒否境界が失われない。
+4. 同じ短いsession IDを別providerや別世代へ再利用する場合に表示identityと権限を区別する。
+5. hidden選好を捨てる場合に明示解除または仕様上のscope終了を確認する。
+
+全producerを永久停止できる場合と、全入口の世代拒否で古い入力を排除する場合は代替となり得る。
+停止確認だけで保存済みsnapshotの再読取りまで閉じたとは扱わない。
+現在のwriter認証、不在、切断、SessionEnd、経過時間だけでは上の条件を満たさない。
+対象recordを別の永久拒否recordへ置換するだけでは件数を有限化できない。
+任意のIDを無制限に受け入れて永久に区別する契約では、判別情報の有限上限を一般に保証できない。
+世代単位の拒否集約、identity再利用の制約または受付上限を追加する場合は別に仕様を決める。
+
+#209のdelivery/capacity世代と表示identityの対応は未確定であり、拒否capsuleを表示墓標のGC許可証として使わない。
+#313のwriter排他は保存競合を制限するが、古いsnapshotの意味上の拒否を代替しない。
+全入力の拒否境界と保存所有を実装するまでは、製品回収を保留する。
+未収束の停止管理設計を完了した前提にはしない。
+
+## 反例fixtureの範囲
+
+現在のDashboardStateとread routeへ固定入力を渡し、保持した状態と意図的に情報を落とした候補状態を比較する。
+候補状態はtest内だけの反例であり、現在の製品が情報を削除するという報告ではない。
+診断getterのcopyを変更して内部stateを変更したとは扱わず、表示記録はin-memoryの保存JSONを復元して比較する。
+出自履歴の変更はtestが所有するstateの公開メモリー集合だけへ適用する。
+実provider、通常HOME、networkと実サーバーを使わない。
+routeが読むUI stampは自己作成rootだけに置き、使用終了と解決path確認後にそのrootだけを削除する。
+
+R01/R02は既存の同provider新write限定解除を確認する。
+R03/R04はunknownまたは他providerの履歴を落とすと表示統合の判断が変わる反例を確認する。
+R05/R06はsnapshotの一時不在と再登場、cold restoreで墓標を落とした候補との違いを確認する。
+R07は最新削除より古い保存状態を復元した候補と最新状態で、同じ中間時刻のwriteに対する解除結果が違うことを確認する。
+これは保存順序の必要条件を示す反例であり、現在の製品の復元競合や未実装の世代拒否の成功を示さない。
+R08は非activeな間にhidden選好を落とした候補で、同identity再登場時の表示が変わることを確認する。
+適合期待値は[provider適合試験](provider-conformance-testing.md)のID-F312-R01〜R08に置く。

@@ -91,9 +91,10 @@ async function releaseStartLock(homeDir, token, fileSystem = fsp) {
   }
 }
 
-async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeoutMs, now = Date.now, readResponse) {
+async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeoutMs, now = Date.now, readResponse, lifecycle = {}) {
   const remaining = deadline - now();
   if (remaining <= 0) {
+    lifecycle.onDeadlineBeforeStart?.();
     const error = new Error('server request deadline elapsed');
     error.code = 'DEADLINE_TIMEOUT';
     error.requestStarted = false;
@@ -104,11 +105,13 @@ async function fetchWithDeadline(fetchImpl, url, options, deadline, attemptTimeo
   try {
     return await Promise.race([
       (async () => {
+        lifecycle.onRequestStart?.();
         const response = await fetchImpl(url, { ...options, signal: controller.signal });
         return readResponse ? readResponse(response) : response;
       })(),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
+          lifecycle.onTimeout?.();
           const deadlineReached = remaining <= attemptTimeoutMs;
           const error = new Error(deadlineReached
             ? 'server request deadline elapsed'
@@ -221,6 +224,7 @@ async function postToServer(requestPath, body, options = {}) {
   const readInfo = options.readServerInfo || readServerInfo;
   const ensureSetting = Object.hasOwn(options, 'ensure') ? options.ensure : true;
   const retryAfterTimeout = options.retryAfterTimeout ?? true;
+  const retryAfterUnknownResult = options.retryAfterUnknownResult ?? true;
   const ensureServer = ensureSetting === false
     ? null
     : typeof ensureSetting === 'function'
@@ -247,6 +251,9 @@ async function postToServer(requestPath, body, options = {}) {
 
   for (let attempt = 0; attempt < maxAttempts && now() < deadline; attempt += 1) {
     if (!info) return { ok: false, status: null, json: null };
+    let requestStarted = false;
+    let deadlineBeforeStart = false;
+    let requestTimedOut = false;
     try {
       const remaining = deadline - now();
       const requestOptions = {
@@ -267,6 +274,11 @@ async function postToServer(requestPath, body, options = {}) {
           json: response.ok && options.parseJson !== false ? await response.json() : undefined,
           errorJson: !response.ok && options.parseErrorJson ? await response.json().catch(() => null) : undefined,
         }),
+        {
+          onRequestStart: () => { requestStarted = true; },
+          onDeadlineBeforeStart: () => { deadlineBeforeStart = true; },
+          onTimeout: () => { requestTimedOut = true; },
+        },
       );
       const { response, json, errorJson } = result;
       if (response.ok) {
@@ -277,12 +289,21 @@ async function postToServer(requestPath, body, options = {}) {
       }
       const replacement = await readInfo(homeDir, fileSystem);
       info = replacement || (options.reuseInfoOnUnauthorized ? info : null);
-    } catch (error) {
-      if (error?.requestStarted === false && error.code === 'DEADLINE_TIMEOUT') {
+    } catch {
+      if (!requestStarted && deadlineBeforeStart) {
         return { ok: false, status: null, json: null };
       }
-      if (retryAfterTimeout === false && error?.requestStarted === true &&
-          (error.code === 'ATTEMPT_TIMEOUT' || error.code === 'DEADLINE_TIMEOUT')) {
+      if (requestStarted && retryAfterUnknownResult === false) {
+        return {
+          ok: false,
+          status: null,
+          json: null,
+          outcomeUnknown: true,
+          code: 'REQUEST_OUTCOME_UNKNOWN',
+          ...(requestTimedOut ? { timedOut: true } : {}),
+        };
+      }
+      if (requestStarted && retryAfterTimeout === false && requestTimedOut) {
         return { ok: false, status: null, json: null, timedOut: true };
       }
       if (attempt + 1 >= maxAttempts) return { ok: false, status: null, json: null };

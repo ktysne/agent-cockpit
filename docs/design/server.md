@@ -29,6 +29,11 @@ managed runtimeの読取専用collectorは、trusted compositionが`startServer(
 
 ## 起動と寿命
 
+`startServer`のcloseはcleanupを順に試し、途中で失敗しても後続cleanupを続ける。
+失敗の有無を理由の値と分け、false、null、undefined、0と空文字列も最初の失敗理由としてrejectする。
+再closeは保存済みの終了結果を返し、任意の理由を診断へ公開せず、`shutdownError`は失敗時に`shutdown_incomplete`、成功時にnullを返す。
+この終了結果はgraceful再起動とwriterのprocess間排他を実装済みとする証拠ではない。
+
 managed collectorはserverの通常起動では作成・接続しない。注入されたcollectorのallowlist済みsnapshotだけを`GET /api/state`の`managedCollectors`として返し、HTTP経路から接続、resume、登録、proof照会は行わない。
 
 - SessionStart フックが常駐サーバーの生存を確かめ、動いていなければ起動する。生存は `GET /health` の応答が `{app: "agent-cockpit", pid, startedAt}` で、`server.json` と一致することで判定する。Windows は pid の再利用が速いので、pid だけで判定しない。
@@ -56,8 +61,13 @@ managed collectorはserverの通常起動では作成・接続しない。注入
 - 127.0.0.1 に接続できる同じマシンの他の利用者やプロセスは、`GET /` で `uiSecret` を得て画面と同じ操作ができる。単一の利用者の開発機で使う前提とし、画面からの操作はフックのイベントより狭い範囲に留める。
 - 開発用の口は `/api/dev/` の下に置き、`--dev` で起動したときだけ有効にする。
 - 書き込みの本文は 64KB を上限とし、超えたら拒否する。
-- フックと MCP サーバーからの書き込みは、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。秘密値は常駐サーバーの起動ごとに変わるためである。
-- MCP の全書き込み（共通質問を含む）は、送信開始後の応答待ちがタイムアウトした場合に再送せず、処理結果不明として返す。`cockpit_skip_review` の全体期限は 60 秒で、送信開始前に期限を使い切った場合は未到達として返す。
+- フックの書き込みは、`401` か接続の拒否を受けたら `server.json` を読み直して 1 回だけやり直す。
+  秘密値は常駐サーバーの起動ごとに変わるためである。
+  MCPも明示`401`による更新を維持する。
+- MCPツールからダッシュボードへ行う全書き込み（共通質問を含む）は、fetch呼出し後の通信失敗、JSON解析失敗とtimeoutで再送せず、処理結果不明として返す。
+  反映状態の確認を案内し、abortを未適用の証拠にしない。
+  `cockpit_skip_review` の全体期限は 60 秒で、送信開始前に期限を使い切った場合は未到達として返す。
+  詳細は[MCP書き込みの結果不明](mcp-write-outcome.md)に従う。
 - 画面は `uiSecret` を配信時に HTML の meta 属性から受け取る。`401` を受けたら常駐サーバーが再起動して秘密値が変わったとみなし、`GET /` を取り直して新しい値で 1 回だけ送り直す。
 - 要求の処理は `src/server/server.js` のルート表で決める。行ごとに、メソッド、パス、照合の種別(`hook`、`ui`、`ui-optional-origin`、`none`)、本文を読むか、ID の検査を持つ。
 - 前段は、Host、`/manual`、ルートの決定の後に、秘密値(`401`)、Origin(`403`)、ID の検査、サービスの利用可否、本文の順で行う。

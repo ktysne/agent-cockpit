@@ -131,7 +131,7 @@ function validateLaunchBinding(launchRegistry, runtimeRegistry, launchRef, ident
   return { source, runtime };
 }
 
-function createCommonQuestionService(options = {}) {
+function createCommonQuestionService(options = {}, lifetimeGate = null) {
   const reclamationOptions = options && typeof options === 'object' && !Array.isArray(options)
     ? options.reclamation : undefined;
   const reclamationMode = reclamationOptions !== undefined;
@@ -272,6 +272,9 @@ function createCommonQuestionService(options = {}) {
     if (reclamationMode && (writerStopped || (!journalState && !diagnostic))) {
       return Promise.reject(serviceError(writerStopped ? 'question_gate_closed' : 'question_service_not_ready'));
     }
+    let lifetimeTicket;
+    try { lifetimeTicket = lifetimeGate?.enter('question-queue'); }
+    catch (error) { return Promise.reject(error); }
     pendingOperations += 1;
     const queued = tail.then(async () => {
       if (reclamationMode) assertSharedWriterCanWrite();
@@ -287,7 +290,10 @@ function createCommonQuestionService(options = {}) {
         activePeriodToken = previousToken;
       }
     });
-    const result = queued.finally(() => { pendingOperations -= 1; });
+    const result = queued.finally(() => {
+      pendingOperations -= 1;
+      lifetimeTicket?.release();
+    });
     tail = result.then(() => undefined, () => undefined);
     return result;
   }
@@ -1005,6 +1011,7 @@ function createCommonQuestionService(options = {}) {
       if (existing) {
         assertNotQuarantined(existing);
         if (existing.contentDigest !== digest) throw serviceError('question_conflict');
+        if (existing.cancelledAt !== null) throw serviceError('question_cancelled');
         return { outcome: 'existing', question: await projectRecord(existing) };
       }
       let internalQuestionId = null;
@@ -1042,11 +1049,33 @@ function createCommonQuestionService(options = {}) {
         throw error;
       }
       capacityRejected = false;
-      rescheduleTimer();
-      const confirmed = findLiveWriter(writer);
-      if (confirmed.launchRef !== live.launchRef || !sameBinding(confirmed.executionBinding, live.executionBinding)) {
-        throw serviceError('question_writer_unverified');
+      let revalidationFailed = false;
+      let revalidationReason;
+      try {
+        const confirmed = findLiveWriter(writer);
+        if (confirmed.launchRef !== live.launchRef || !sameBinding(confirmed.executionBinding, live.executionBinding)) {
+          throw serviceError('question_writer_unverified');
+        }
+      } catch (error) {
+        revalidationFailed = true;
+        revalidationReason = error;
       }
+      if (revalidationFailed) {
+        try {
+          await commitRecord({ ...saved, cancelledAt: nowValue() });
+        } catch (error) {
+          blocked = true;
+          startupError = serviceError('question_cancelled_journal_save_failed');
+          Object.defineProperty(startupError, 'cause', {
+            value: new AggregateError([revalidationReason, error], 'question registration cancellation failed'),
+          });
+          rescheduleTimer();
+          throw serviceError('question_cancelled_journal_save_failed');
+        }
+        rescheduleTimer();
+        throw revalidationReason;
+      }
+      rescheduleTimer();
       return { outcome: 'created', question: await projectRecord(saved) };
     }, false, token);
   }
