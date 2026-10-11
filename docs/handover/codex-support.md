@@ -193,7 +193,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
 | #311 | MCP の書き込みがタイムアウト以外の通信エラーの後に再送され、判断事項が二重に登録されうる | 4 | #368 | MCP専用policyとfetch開始境界による結果不明時の再送抑止はレビュー収束。実runtimeは未確認 |
-| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370 | 先行計測とsession別索引はClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。次は保持契約と反例fixture |
+| #312 | provider 別の表示墓標が保存に増え続け、状態取得のたびに全件を走査する | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはClaudeレビュー収束、Ready。診断getterのcopy化は開発者の確認待ち。GCの全入口拒否境界と件数上限は未解決 |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはレビュー収束。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | | 2026-10-09 起票。#174 の後続(handoff と reconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
@@ -386,6 +386,7 @@ Claude 担当の #207 は標準起動、既存 writer、native 検出の責任�
 | non-blocking の native 質問の待ち中の追加指示 | 送信を止めたままにするか、送ってよいか。推奨は実測するまで止めたままにする | PR #204 の本文 |
 | 電源断の保証 | 拒否情報の flush と保存順序の保証を電源断にも広げるか。推奨は広げない(現状はプロセスのクラッシュ後に限る) | [容量回収計画](../design/codex-capacity-reclamation.md)「容量予約と診断」 |
 | 回収factoryの停止未確認後の所有 | process寿命中に保持するか、明示再確認APIを同時に作るか。推奨の終端保持を二段階終了で仮採用する。後着通知やtimeoutで解放せず、同process中は同pathを再取得できない。再確認と詳細診断は別作業 | #209の二段階終了。自走中の推奨判断 |
+| 表示記録の診断propertyのmutation互換 | projectionDisplaySettingsを内部Mapとして直接変更できる挙動を維持するか、copyを返して索引との整合を守るか。既知callerは読取りだけのため、推奨のcopy化をPR #370で仮採用した。開発者の確認待ち | #312の[session索引](../design/projection-display-index.md)。自走中の推奨判断 |
 | writer lockの残留回復 | 自動stale takeoverを作るか、即時拒否と全participant停止後の手動回復に限定するか。推奨は後者で、設計上仮採用する。現行トレイの強制再起動はmarkerを残すため、標準接続前にgraceful停止と最終解放確認を実装する。残留時は起動拒否とし、PID/TTLによる奪取やトレイの自動削除は行わない。製品接続は未実装 | #313の[排他設計](../design/writer-ownership-exclusion.md)。自走中の推奨判断 |
 | 作業中の Claude への追加指示 | Codex の steer に当たる Claude の working steer は unsupported である。仕様差として受け入れるか、経路を設計するか。推奨は仕様差として受け入れ、Claude には待機中の次の入力だけを届ける。#175 の[コメント](https://github.com/ktysne/agent-cockpit/issues/175#issuecomment-6029239396)が残条件として挙げている | [Owned native instruction dispatch](../design/owned-native-instruction-dispatch.md)「固定する認可」 |
 | 再起動前の共通質問への回答の再開 | #283 は A 案(旧質問を隔離し、回答も再送もしない)で閉じた。旧質問へ回答を再開する B 案を採るか。推奨は採らない。採るなら provider ごとに未解決の証拠を取得できるかの調査から始める | [旧復旧計画(固定参照)](https://github.com/ktysne/agent-cockpit/blob/8c701b1e8a5718eccff69f84775f21171b6663d0/docs/handover/2026-10-08-common-question-recovery-plan.md) |
@@ -1188,3 +1189,19 @@ PR #370はReadyで、#369の後にマージ可能である。
 診断getterのcopy化は推奨を仮採用した内部互換境界であり、開発者にPRで確認してもらう事項として残す。
 次はAstraの助言に基づき保持契約と反例fixtureを進める。
 現在の認証や停止だけで古いsnapshotの再登場を永久拒否したとは扱わず、製品GCは追加しない。
+
+## 表示記録の保持条件の現在地 (#312)
+
+最新featureからcodex/projection-display-retention-312-20261011を作り、Readyの#370最終head `5adbf40` を通常mergeした。
+Astraへ回収条件を相談し、現在の証拠だけでは一般GCの安全性を証明できないと確認した。
+[保持契約](../design/projection-display-retention.md)とID-F312-R01〜R08をfixture実装前に記録した。
+現在のstateとrouteで情報を忘れた候補との反例を検証し、製品回収と新しい世代拒否APIは追加しない。
+#209の世代と表示identityの対応、永続拒否境界と#313の保存所有が後続の依存であり、未収束#364を採用した前提にはしない。
+Luna Maxが反例fixtureを実装し、編集停止後にrootが監査した。
+関連8件と、両providerへ補強した不在後再登場とhidden選好の関連2件が成功した。
+PR [#371](https://github.com/ktysne/agent-cockpit/pull/371)の固定head `d57d84e` で全体試験は3,077件成功、失敗0件、Windows実symlink権限によるskip2件である。
+指定Claude R1の文書要修正1件と任意の範囲補足を修正し、R2はblockerと要修正0件で収束した。
+PR #371はReadyで、#370の後にマージ可能である。
+src/test/toolsは全体試験headから不変で、製品GCと件数上限の解決は後続に残す。
+次は#314の実Claude wait解放と次context取得の観測準備を進める。
+fixtureを実runtimeの確認へ読み替えず、認証と専用rootの境界を確認して実測入口を準備する。
