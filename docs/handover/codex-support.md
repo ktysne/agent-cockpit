@@ -20,8 +20,8 @@ main の変更は同期 PR で随時 feature へ取り込む。
 
 ### 最新の状態 (2026-10-11照合)
 
-集約先は`codex/feature-codex-support`の`6c5854b`で、PR #352〜#377の対象22件は通常merge済みである。各レビュー済みheadとmerge commitが集約先の祖先であることを確認した。
-PR #378、#379、#380はfeature向けのReadyで、取り込み順は#378→#379→#380である。PR #364は未収束のDraftで、この順序から除外する。
+集約先は`codex/feature-codex-support`の`856c683`で、PR #352〜#377の対象22件と#378〜#380は通常merge済みである。各レビュー済みheadとmerge commitが集約先の祖先であることを確認した。
+PR #378、#379、#380のレビュー済みheadと各merge commitを集約先の祖先として確認した。状態整理のPR #381はこの集約先へ同期する。PR #364は未収束のDraftで、最新featureとも競合しており取り込み対象から除外する。
 単独不具合#339、#355、#361、#372、#311はIssue全体の完了条件を満たし、対応PRのfeature取り込みを確認してclosedにした。実runtimeやmain採用を条件とする親Issueはopenを維持する。
 次はマージ後のIssueと文書の状態照合を完了し、#215の認証再利用に必要なcredential所有、更新、Windows ACLとrun HOME分離の設計へ進む。`account/read`だけの追加では認証再利用を完了できない。
 #209の世代集約はfixture専有の限定保存とnative read境界まで進んだが、製品への接続と所有証拠、実runtimeが残る。#216の設定画面と標準起動はこの残条件を満たしてから接続する。
@@ -38,7 +38,7 @@ PR #309 は 2026-10-09 に feature へマージ済みで、merge SHA は `3c4fee
 main の PR #305（別のリポジトリで作った PR の登録）は、作業ブランチ `codex/sync-main-305-20261009` で `origin/main` の `8a0314c` を通常 merge している。
 競合解消と関連テストは完了し、Claude のクロスレビューは 1 往復で収束した。[PR #318](https://github.com/ktysne/agent-cockpit/pull/318) は feature へマージ済みで、merge SHA は `394daa9` である。
 
-2026-10-09の開始時点ではopen PRは0件だった。2026-10-11の照合ではopen Issueは36件で、完了した5件をclosedにして31件になった。現在のopen PRは#364、#378、#379、#380で、文書整理の後続PRをこれから積む。
+2026-10-09の開始時点ではopen PRは0件だった。2026-10-11の照合ではopen Issueは36件で、完了した5件をclosedにして31件になった。#378〜#380のマージ後、現在のopen PRは#364と文書整理の#381である。
 
 同期 PR の head を起点に、#209 段階 2 の 1b（質問 codec）の独立した検証モジュールと fixture を実装した。
 関連テスト39件と全体テスト1,997件は成功した。[PR #319](https://github.com/ktysne/agent-cockpit/pull/319) は Claude のクロスレビューで blocker・要修正がなく、1往復で収束した。
@@ -200,12 +200,12 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #212 | イベント投影が欠落を検出すると固まる | 4 | #375(部分) | 注入registryの終了実行の不在保護解除はPR #375でfeature集約済み。collectorの復帰証拠と指示projectionの接続条件、実runtimeが残る |
 | #213 | 合成するセッション行が親へ寄らない | 4 | #230(mock 案)、#376 | #376で状態表示をfeature集約済み。親配置とresume統合は残る。#167-B、#171-B、#177-B と連動 |
 | #214 | managed app-server の要求期限と異常終了時の残留 | 4 | #232(部分) | 異常終了時に app-server が残る件 |
-| #215 | owned runner の起動が毎回ログインなどを前提にする | 4 | #377、#378、#379、#380 | #377はfeature集約済み。限定通信環境#378、認証URL origin限定#379、論理login直列化#380はReady。認証再利用、隔離HOMEのACL/cleanup、機能の実効性と実runtimeは残る |
+| #215 | owned runner の起動が毎回ログインなどを前提にする | 4 | #377、#378、#379、#380 | #377はfeature集約済み。限定通信環境#378、認証URL origin限定#379、論理login直列化#380もfeatureへ集約済み。認証再利用、隔離HOMEのACL/cleanup、機能の実効性と実runtimeは残る |
 | #216 | 共通質問の自動適用が申告に依存する | 4 | #258、#279、#284(段階 1)、#286(段階 2)、#290、#293 | 段階 3(設定画面と標準起動への接続)。#209 の回収条件が前提 |
 | #217 | 通常指示の適用証拠を 60 秒しか待たない | 4 | #257 | 実 Codex で 60 秒超の遅延適用の測定 |
 | #218 | feature を main へ入れる条件 | 6 | #228、#231 | 証跡の置き場、bridge 側の起票、最終 PR |
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
-| #311 | MCPの結果不明時の書込み自動再送 | 4 | #368 | closed。MCP専用policy、fetch開始境界、結果不明の固定通知と回帰試験をfeatureへ集約済み。実runtimeの永続化とidempotencyは本Issueの完了条件外で、[Issue本文](https://github.com/ktysne/agent-cockpit/issues/311)と完了範囲を照合した。実runtimeは後続gateとして残し、横断試験の成功とは扱わない |
+| #311 | MCPの結果不明時の書込み自動再送 | 4 | #368 | closed。MCP専用policy、fetch開始境界、結果不明の固定通知と回帰試験をfeatureへ集約済み。実runtimeの永続化とidempotencyは本Issueの完了条件外で、[Issue本文](https://github.com/ktysne/agent-cockpit/issues/311)と完了範囲を照合した。実runtimeは段階5と#218の採用ゲートで確認し、横断試験の成功とは扱わない |
 | #312 | provider別の表示墓標の増加と全件走査 | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはfeature集約済み。診断getterのcopy化は仮採用のまま取り込み済みで、開発者の確認待ちを維持する。GCの全入口拒否境界と件数上限は未解決 |
 | #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはfeature集約済み。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | PR #373で観測器と実測を追加。通常解放は進行、再接続後旧handle拒否と90秒B未到着を確認。進行方法は未解決 | #174の後続(handoffとreconnect)と範囲が重なりうる |
@@ -236,7 +236,7 @@ PRのマージ後は、GitHubのbase、レビュー済みhead、merge commitを�
 
 ## 決定済みの判断
 
-実装の判断は計画書の「決定済みの判断」が正本で、ここには作業の進め方の判断だけを置く。
+実装の判断は計画書の「決定済みの判断」が正本で、ここには作業の進め方の判断と規約の照合記録を置く。
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
@@ -273,7 +273,7 @@ PRのマージ後は、GitHubのbase、レビュー済みhead、merge commitを�
 | 12 | #216 の実 runtime | trusted 設定、導線、二重登録の確認 | 未作成 | 未着手 |
 | 13 | #175 の実 runtime | 実 Codex の質問待ちと許可待ち、Claude の native 検出 | 未作成 | 未着手 |
 | 14 | #217 の実 runtime | 60 秒超の遅延適用の測定 | 未作成 | 未着手 |
-| 15 | 残る本実装 | #210、#212、#214、#215、#180-B、#179、#177-B/C、#213、#167-B | #374〜#377は集約済み、#378〜#380はReady。他の残機能は未作成 | #210、#212、#213、#215は部分対応済み。未完了条件はIssue対応表に従う。#209、#210、#212、#216の製品接続条件を満たす前に本番サービスを有効にしない |
+| 15 | 残る本実装 | #210、#212、#214、#215、#180-B、#179、#177-B/C、#213、#167-B | #374〜#380は集約済み。他の残機能は未作成 | #210、#212、#213、#215は部分対応済み。未完了条件はIssue対応表に従う。#209、#210、#212、#216の製品接続条件を満たす前に本番サービスを有効にしない |
 | 16 | #218 | G2、G4、横断適合の照合と最終 main PR | 未作成、base: main | 未着手 |
 
 順 11〜14 は順 3〜10 と並行してよい。
@@ -1342,3 +1342,10 @@ rootは取消とgrantの競合、正常解放位置、異常時の両event待機
 追加fixture後の関連2ファイルとtest-isolation=noneはそれぞれ244件中243件成功、失敗0件、Windows実symlink権限によるskip1件だった。sourceは全体試験headから不変で、追加testと文書は指定Claude R3でblockerと要修正0件に収束した。認証再利用は専用credential owner、Windows ACL、更新とrun HOMEの分離が前提で、account/readの追加だけでは完了しない。
 
 PR #380はReadyで、取り込み順は#378→#379→#380である。次はマージ済みPRに対応するIssueの完了条件と文書の状態を照合し、クローズ可能な単独不具合を整理する。
+
+## PR #378〜#380の取り込みと状態照合 (2026-10-11)
+
+開発者のマージ後、#378のmerge `9a58a6c`、#379のmerge `2a6c63a`、#380のmerge `856c683`を照合した。
+各レビュー済みheadとmerge commitは最新feature `856c683`の祖先である。状態整理ブランチへ通常mergeで同期した。
+#215はこの3件の部分対応だけでは完了しないためopenを維持し、認証再利用、ACLとcleanup、機能の実効性と実runtimeを残す。
+#381は文書2ファイルだけを変更し、指定Claude R2でblockerと要修正0件に収束した。次は#215のcredential所有とrun HOME分離の設計へ進む。
