@@ -20,6 +20,7 @@ registrationとlaunchのregistryにはcaptureAuthorityRevisionとcheckAuthorityR
 
 default owned runnerはWindowsで通常の`.exe`だけを受け付け、非対応の拡張子を認証と起動の前に拒否する。診断の順序と検証境界は[Windowsのnative実行ファイル](windows-native-executable.md)に従う。
 実fileと拡張子の検査は`start`時のrunner生成で行い、`admitLaunch`の受理だけでは実行ファイルの検証は完了しない。
+owned runnerへ渡すproxyとCAの固定変数、検査と一時環境の寿命は[通信環境の供給契約](native-transport-environment.md)に従う。
 
 `admitLaunch`は`launchId`、`runId`、`attemptId`、`profileId`、`origin`、`purpose`と、delegatedまたはreview用のopaque `originReceipt`だけを受ける。
 

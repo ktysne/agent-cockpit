@@ -951,3 +951,24 @@ membershipのfalse返却中の実kernel revision変更、再入、method置換�
 関連3ファイルは221件成功、失敗0件、実symlink権限によるskip2件だった。
 指定Claude R1はblockerと要修正0件で収束し、提案に従ってcompositionの検査時点を文書へ補足した。
 結果記録と文書補足だけの最終更新ではsourceとtestを変更しない。
+
+## Native起動の通信環境 (#215)
+
+期待条件は[通信環境の供給契約](native-transport-environment.md)に従う。
+owned Claude/Codexとmanaged app-server/remote CLIの4経路をfixtureで区別する。
+
+| ID | 入力または保持点 | 期待条件 |
+|---|---|---|
+| ID-F215-TE01 | 固定5変数と禁止変数を持つ供給元 | 値を変更せず5変数だけを渡し、shell:false、args、HOMEと認証の固定供給を維持 |
+| ID-F215-TE02 | undefined、空、非文字列、NUL、CR/LF、throwing getter | 未設定は省略。不正値は固定code、値とcause非公開、spawn0 |
+| ID-F215-TE03 | CAの完全絶対パスと相対、Windowsドライブ相対、単一rootとdevice namespace | 完全絶対表記だけ受理し、空白を保持。外部CAファイルの読取や変更0 |
+| ID-F215-TE04 | spawn成功と同期throw後のenv参照 | 全key削除または空文字化。供給元不変、元のspawn失敗code維持 |
+| ID-F215-TE05 | plain objectのlowercase-onlyとuppercase併存 | 固定uppercase名だけ継承。OSの大小文字規則の検証と区別 |
+| ID-F215-TE06 | 供給元を変更した後の次起動 | 新しい起動は新値、捕捉済みの以前のenvコピーは旧値 |
+| ID-F215-TE07 | owned MCP endpoint待機中の失敗と失効、不正環境 | 待機中に環境構築しない。endpoint開始後の不正は通常停止で閉じ、後着spawn0 |
+| ID-F215-TE08 | 環境構築後のowner失効とspawn内の停止再入 | guard失敗codeと環境消去を維持。返ったchildの停止追跡を省略しない |
+
+実providerのproxy/CA利用と通信成功、未実行OSは未確認として分ける。
+Windowsの関連2ファイルは135件中133件成功、失敗0件、実symlink権限によるskip2件だった。
+TE08の構築後失効はspawn0と停止完了をfixtureで確認し、spawn前の一時環境の消去は外側finallyの差分監査で確認した。
+CAファイルへのアクセスがないことと、返ったchildの停止追跡を維持することは差分監査で確認した。未実行OSと実通信は成功に含めない。
