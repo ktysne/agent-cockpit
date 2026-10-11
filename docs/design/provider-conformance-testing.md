@@ -623,3 +623,20 @@ P01〜P10を含む`test/writer-exclusion.test.js`は19件成功、失敗0件で�
 通常sandboxではtest runnerの子process起動がEPERMになったため、この対象試験を昇格実行した。
 実process fixtureの成功は両provider実runtimeや一般保存先のfilesystem対応の証拠には数えない。
 実装head `7a4e23f`の全体`npm test`は2,930件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+
+### shutdownの失敗理由保持
+
+通常serverとnative server wrapperのcloseは、失敗の有無と理由を別に扱う。
+以下を#361の実装前期待値とし、実provider停止の確認と区別する。
+
+| ID | 操作 | 期待条件 |
+| --- | --- | --- |
+| ID-F361-S01 | shutdown callbackからfalse、null、undefined、0、空文字列を同期throwまたは非同期rejectする | 初回と再closeが元の理由でrejectし、callbackは一度だけ。診断はshutdown_incomplete、listener停止とserver.json除去を確認 |
+| ID-F361-S02 | 通常serverの先行保存flushがfalsyで失敗し、後続callbackも失敗する | 最初の理由を保持し、後続cleanupを継続。診断へ任意の理由を公開しない |
+| ID-F361-S03 | native integration終了がfalsyで失敗し、後続callbackも失敗する | 既存の終了順とcloseキャッシュを維持し、wrapperを通って最初の理由を保持 |
+
+S01〜S03を含む通常server試験87件とnative factory試験38件は成功し、失敗とskipは0件だった。
+通常sandboxのharness子process起動がEPERMとなったため、同じ対象試験を昇格実行した。
+実装head `2ec748b`の全体試験は2,969件成功、失敗0件、Windowsの実symlink試験2件skipだった。
+指定Claude R1はblockerと要修正が0件で収束した。
+writer排他の製品接続、graceful再起動と両provider実runtimeはこの試験の成功に含めない。
