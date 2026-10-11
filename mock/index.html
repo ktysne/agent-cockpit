@@ -648,6 +648,8 @@ for (const p of DATA.products) {
 const STORE_KEY = 'agent-cockpit-mock';
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; } };
 const save = () => { try { localStorage.setItem(STORE_KEY, JSON.stringify(ui)); return true; } catch { return false; } };
+// 読み込み直すと消える案内なので、保存する ui には置かない。
+let refreshConfirmPending = false;
 const ui = Object.assign({ mode: 'product', order: DATA.products.map(p => p.id), pinned: [], collapsed: [], hidden: [], hiddenSessions: [], hiddenSessionUpdatedAt: {}, deletedSessionIds: [], dismissedMergeHistory: [], deletedClosedPrs: [], estimatedSessions: [], expandedEndedAgents: [], expandedEndedDecisions: [], expandedDoneTasks: [], expandedTodoTasks: [], expandedMerged: [], expandedKindDecisions: false, expandedKindAgents: false, expandedKindTasks: false, expandedKindTodoTasks: false, closedTasks: [], closedAgents: [], answers: {}, merged: {}, conflictRequested: {}, reviewSkips: {}, restacked: {}, mergeOpts: {}, confirm: null, reserved: {}, reservationNotices: {}, mergeErrors: {}, seen: [], routing: { agents: 'default', review: 'default' }, theme: 'dark', away: false, lastMethod: {}, longWaitMinutes: 15, awayAnswerWaitMinutes: 5, idleHideMinutes: 30, mergeResultHideMinutes: 5, hideFinished: true, mergeableCondition: 'cross-review' }, load());
 const TRANSIENT_NOTICE_MS = 60_000;
 ui.reservationNotices = ui.reservationNotices && typeof ui.reservationNotices === 'object' && !Array.isArray(ui.reservationNotices) ? ui.reservationNotices : {};
@@ -906,7 +908,7 @@ sinceSeenSelect.addEventListener('change', () => { applySinceSeenMode(sinceSeenS
 // 書きかけの回答があるときは、案内の操作で消してよいかを確かめてから読み込み直す。
 document.getElementById('refresh-button').addEventListener('click', () => {
   if (!hasUnsentAnswerDraft()) { location.reload(); return; }
-  ui.refreshConfirmPending = true;
+  refreshConfirmPending = true;
   renderReloadNote();
 });
 settingsButton.addEventListener('click', () => {
@@ -2070,7 +2072,7 @@ function renderReloadNote() {
   const note = document.getElementById('reload-note');
   const html = DATA.uiUpdatePending
     ? '<span>画面が新しくなりました。書きかけの回答を送るか消すと、読み込み直します。</span><button type="button" class="link-btn" data-reload-now>今すぐ読み込み直す</button>'
-    : ui.refreshConfirmPending
+    : refreshConfirmPending
       ? '<span>書きかけの回答があります。読み込み直すと消えます。</span><button type="button" class="link-btn" data-reload-discard>回答を消して読み込み直す</button>'
       : '';
   note.hidden = !html;
