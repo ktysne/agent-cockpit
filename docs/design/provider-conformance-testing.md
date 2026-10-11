@@ -947,3 +947,7 @@ membershipのfalse返却中の実kernel revision変更、再入、method置換�
 | ID-F215-WE05 | 非Windowsの既存fixture | 拡張子なしの既存動作を維持。Windowsからは未確認として分離 |
 
 実provider runtimeと未実行OSの成功はfixtureから推定しない。
+固定head `e9c8576`の全体試験は3,247件中3,242件成功、失敗0件、Windows実symlink権限によるskip5件だった。
+関連3ファイルは221件成功、失敗0件、実symlink権限によるskip2件だった。
+指定Claude R1はblockerと要修正0件で収束し、提案に従ってcompositionの検査時点を文書へ補足した。
+結果記録と文書補足だけの最終更新ではsourceとtestを変更しない。

@@ -6,6 +6,7 @@ Windowsでは通常の`.exe`ファイルだけを受け付け、`.cmd`、`.bat`�
 
 既存の絶対path、存在、通常file、非symlinkの検査を先に行い、その診断を優先する。
 拡張子の検査はconstructorで完了し、認証callback、隔離HOME配下の作成、child spawnへ進まない。
+compositionでは`start`時のrunner生成で検査するため、`admitLaunch`の受理は実行ファイル形式の検証成功を意味しない。
 エラーは固定codeだけを示し、実行ファイルの私有pathを含めない。
 非Windowsでは拡張子を制限せず、既存の検査と起動を維持する。
 
