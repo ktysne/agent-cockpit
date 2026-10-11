@@ -226,6 +226,31 @@ function errorCode(code) {
   return (error) => error?.code === code;
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function createProductFixture(t, options) {
+  const temporaryRoot = await fs.realpath(os.tmpdir());
+  const directory = await fs.mkdtemp(path.join(temporaryRoot, 'question-registration-cancel-'));
+  let harness = null;
+  t.after(async () => {
+    await harness?.close();
+    let resolvedDirectory;
+    try { resolvedDirectory = await fs.realpath(directory); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    const relative = path.relative(temporaryRoot, resolvedDirectory);
+    if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) {
+      throw new Error('product fixture directory escaped its temporary root');
+    }
+    await fs.rm(resolvedDirectory, { recursive: true, force: true });
+  });
+  harness = await createCommonQuestionProductHarness({ ...options, directory });
+  return harness;
+}
+
 test('registration fixes its identity, content, and original deadline without exposing answers', async (t) => {
   const fixture = await createFixture(t);
   const created = await register(fixture);
@@ -243,6 +268,25 @@ test('registration fixes its identity, content, and original deadline without ex
   const dashboard = await fixture.service.dashboardSnapshot();
   assert.equal(dashboard.questions[0].conversationId, 'conversation-1');
   assert.deepEqual(dashboard.questions[0].selectedOptionIds, []);
+});
+
+test('a cancelled public question ID rejects same-content registration without another journal write', async (t) => {
+  const fixture = await createFixture(t);
+  const created = await register(fixture);
+  assert.equal((await register(fixture)).outcome, 'existing');
+  await assert.rejects(register(fixture, question('question-1', { allowFreeText: true })),
+    errorCode('question_conflict'));
+
+  await fixture.service.cancel(created.question.internalQuestionId);
+  const beforeRetry = JSON.parse(await fs.readFile(fixture.journalPath, 'utf8'));
+  assert.notEqual(beforeRetry.questions[0].cancelledAt, null);
+  await assert.rejects(register(fixture), errorCode('question_cancelled'));
+  await assert.rejects(register(fixture, question('question-1', { allowFreeText: true })),
+    errorCode('question_conflict'));
+  assert.deepEqual(JSON.parse(await fs.readFile(fixture.journalPath, 'utf8')), beforeRetry);
+
+  assert.equal((await register(fixture, question('question-unrelated'))).outcome, 'created');
+  assert.equal((await fixture.delivery.store.snapshot()).deliveries.length, 0);
 });
 
 test('manual selection persists one delivery intent and answer poll exposes it once', async (t) => {
@@ -1022,7 +1066,197 @@ test('registration does not report success when its writer expires during journa
   await assert.rejects(register(fixture), errorCode('question_writer_unverified'));
   const dashboard = await fixture.service.dashboardSnapshot();
   assert.equal(dashboard.questions.length, 1);
+  const journal = JSON.parse(await fs.readFile(fixture.journalPath, 'utf8'));
+  assert.notEqual(journal.questions[0].cancelledAt, null);
+  assert.equal(journal.questions[0].selection, null);
+  assert.equal(journal.questions[0].deliveryIntent, null);
 });
+
+for (const provider of ['claude', 'codex']) {
+  test(`actual ${provider} registration cancels a saved question after disconnect and keeps it inactive after reconnect`, async (t) => {
+    const writeEntered = deferred();
+    const releaseWrite = deferred();
+    let heldInitialWrite = false;
+    let questionWrites = 0;
+    let now = 1_000;
+    const questionId = `registration-disconnect-${provider}`;
+    const atomicWrite = async (filePath, value) => {
+      questionWrites += 1;
+      const result = await atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+      const record = value.questions.find((item) => item.questionId === questionId);
+      if (!heldInitialWrite && record?.cancelledAt === null) {
+        heldInitialWrite = true;
+        writeEntered.resolve();
+        await releaseWrite.promise;
+      }
+      return result;
+    };
+    const harness = await createProductFixture(t, {
+      provider,
+      now: () => now,
+      away: { snapshot: () => ({ enabled: true, since: 1_000 }) },
+      questionServiceOptions: {
+        atomicWrite,
+        getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+      },
+    });
+    try {
+      const registration = harness.questionService.register(harness.writer,
+        question(questionId, { recommendation: 'continue' }));
+      await writeEntered.promise;
+      const beforeDisconnect = JSON.parse(await fs.readFile(harness.journalPath, 'utf8'));
+      assert.equal(beforeDisconnect.questions.length, 1);
+      assert.equal(beforeDisconnect.questions[0].cancelledAt, null);
+
+      assert.equal(harness.disconnectActor(harness.primary.childActor), true);
+      releaseWrite.resolve();
+      await assert.rejects(registration, errorCode('question_writer_inactive'));
+
+      let journal = JSON.parse(await fs.readFile(harness.journalPath, 'utf8'));
+      assert.equal(journal.questions.length, 1);
+      assert.notEqual(journal.questions[0].cancelledAt, null);
+      assert.equal(journal.questions[0].selection, null);
+      assert.equal(journal.questions[0].deliveryIntent, null);
+
+      const replacementActor = harness.openActor(harness.primary, harness.primary.child,
+        `replacement-${provider}`, true);
+      const proof = harness.reconcile(harness.primary, { childActor: replacementActor });
+      assert.equal(harness.runtimeRegistry.checkCurrentProof(harness.primary.launchRef, proof.proofHandle).ok, true);
+      now = 400_000;
+      assert.deepEqual(await harness.questionService.tick(), []);
+
+      const writesBeforeRetry = questionWrites;
+      await assert.rejects(harness.questionService.register(harness.writer,
+        question(questionId, { recommendation: 'continue' })), errorCode('question_cancelled'));
+      assert.equal(questionWrites, writesBeforeRetry);
+
+      journal = JSON.parse(await fs.readFile(harness.journalPath, 'utf8'));
+      assert.notEqual(journal.questions[0].cancelledAt, null);
+      assert.equal(journal.questions[0].selection, null);
+      assert.equal(journal.questions[0].deliveryIntent, null);
+      assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+    } finally {
+      releaseWrite.resolve();
+    }
+  });
+
+  test(`actual ${provider} registration cancels a saved question after its actor ends`, async (t) => {
+    const writeEntered = deferred();
+    const releaseWrite = deferred();
+    let heldInitialWrite = false;
+    const questionId = `registration-ended-${provider}`;
+    const atomicWrite = async (filePath, value) => {
+      const result = await atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+      const record = value.questions.find((item) => item.questionId === questionId);
+      if (!heldInitialWrite && record?.cancelledAt === null) {
+        heldInitialWrite = true;
+        writeEntered.resolve();
+        await releaseWrite.promise;
+      }
+      return result;
+    };
+    const harness = await createProductFixture(t, {
+      provider,
+      questionServiceOptions: { atomicWrite },
+    });
+    try {
+      const registration = harness.questionService.register(harness.writer, question(questionId));
+      await writeEntered.promise;
+      assert.equal(harness.runtimeAdapters[provider].endActor(harness.primary.childActor.actorHandle), true);
+      releaseWrite.resolve();
+      await assert.rejects(registration, errorCode('question_writer_inactive'));
+
+      const journal = JSON.parse(await fs.readFile(harness.journalPath, 'utf8'));
+      assert.equal(journal.questions.length, 1);
+      assert.notEqual(journal.questions[0].cancelledAt, null);
+      assert.equal(journal.questions[0].selection, null);
+      assert.equal(journal.questions[0].deliveryIntent, null);
+      assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+    } finally {
+      releaseWrite.resolve();
+    }
+  });
+}
+
+for (const provider of ['claude', 'codex']) {
+  for (const phase of ['before', 'after']) {
+    test(`actual ${provider} registration blocks and remains quarantined after cancellation write fails ${phase} its side effect`, async (t) => {
+      let harness;
+      let addWrites = 0;
+      let cancellationWrites = 0;
+      let disconnectResult = null;
+      let now = 1_000;
+      const questionId = `cancel-write-${provider}-${phase}`;
+      const atomicWrite = async (filePath, value) => {
+        const record = value.questions.find((item) => item.questionId === questionId);
+        if (!record) return atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+        if (record.cancelledAt === null) {
+          addWrites += 1;
+          await atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+          disconnectResult = harness.disconnectActor(harness.primary.childActor);
+          return;
+        }
+        cancellationWrites += 1;
+        if (phase === 'after') await atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+        throw new Error('injected cancellation persistence failure');
+      };
+      harness = await createProductFixture(t, {
+        provider,
+        now: () => now,
+        away: { snapshot: () => ({ enabled: true, since: 1_000 }) },
+        questionServiceOptions: {
+          atomicWrite,
+          getAutoApplySettings: () => ({ enabled: true, minimumWaitMs: 300_000 }),
+        },
+      });
+
+      await assert.rejects(harness.questionService.register(harness.writer,
+        question(questionId, { recommendation: 'continue' })), errorCode('question_cancelled_journal_save_failed'));
+      assert.equal(addWrites, 1);
+      assert.equal(cancellationWrites, 1);
+      assert.equal(disconnectResult, true);
+      const diagnostics = harness.questionService.getQuarantineDiagnostics();
+      assert.equal(diagnostics.status, 'blocked');
+      assert.equal(diagnostics.reason, 'question_cancelled_journal_save_failed');
+      assert.equal(diagnostics.quarantinedCount, 0);
+      assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+
+      const beforeRestart = JSON.parse(await fs.readFile(harness.journalPath, 'utf8'));
+      assert.equal(beforeRestart.questions.length, 1);
+      assert.equal(beforeRestart.questions[0].cancelledAt !== null, phase === 'after');
+      now = 400_000;
+      await harness.reopen();
+      assert.equal((await harness.questionService.dashboardSnapshot()).questions[0].quarantined, true);
+      assert.deepEqual(await harness.questionService.tick(), []);
+      await assert.rejects(harness.questionService.submitAnswer(beforeRestart.questions[0].internalQuestionId, answers()),
+        errorCode('question_quarantined'));
+      assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+    });
+  }
+
+  for (const phase of ['before', 'after']) {
+    test(`actual ${provider} initial question write failure ${phase} its side effect does not start compensation`, async (t) => {
+      const writes = [];
+      const questionId = `initial-write-${provider}-${phase}`;
+      const atomicWrite = async (filePath, value) => {
+        const record = value.questions.find((item) => item.questionId === questionId);
+        if (!record) return atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+        writes.push(record.cancelledAt);
+        if (phase === 'after') await atomicWriteJson(path.dirname(filePath), path.basename(filePath), value);
+        throw new Error('injected initial persistence failure');
+      };
+      const harness = await createProductFixture(t, {
+        provider,
+        questionServiceOptions: { atomicWrite },
+      });
+
+      await assert.rejects(harness.questionService.register(harness.writer, question(questionId)),
+        errorCode('journal_write_failed'));
+      assert.deepEqual(writes, [null]);
+      assert.equal((await harness.deliveryStore.snapshot()).deliveries.length, 0);
+    });
+  }
+}
 
 test('late answer refs expose only a digest-bound index and drafts require the matching reference', async (t) => {
   const fixture = await createFixture(t, { verifyNativeQuestion: () => true });
