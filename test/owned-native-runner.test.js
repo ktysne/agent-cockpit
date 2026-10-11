@@ -296,7 +296,7 @@ function codexResponder(options = {}) {
       child.send(codexResponse(request.id, {
         type: 'chatgpt',
         loginId: options.loginResponseId || LOGIN_ID,
-        authUrl: LOGIN_URL,
+        authUrl: options.authUrl === undefined ? LOGIN_URL : options.authUrl,
       }));
       return;
     }
@@ -474,6 +474,121 @@ test('Codex presents same-process managed login once and waits for its matching 
   assert.equal(runner.snapshot().contextState, 'ended');
   assert.equal(runner.snapshot().terminalContextCount, 1);
   await assert.rejects(runner.start({ inputText: 'a second task' }), (error) => error.code === 'already_started');
+  await runner.stop();
+});
+
+test('Codex accepts only approved authentication URL origins and preserves the original URL', async (t) => {
+  const authenticationUrls = [
+    'https://auth.openai.com/oauth/authorize?code=auth-origin-CREDENTIAL-SENTINEL',
+    'https://chatgpt.com/device?continue=%2Fsettings&code=chatgpt-origin-CREDENTIAL-SENTINEL',
+    'https://AUTH.OPENAI.COM:443/arbitrary/path?opaque=%2f+',
+    'https://chatgpt.com:443/another/path?state=original+value',
+  ];
+
+  for (const authUrl of authenticationUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let displayedUrl = null;
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired: ({ loginId, authUrl: challengeUrl }) => {
+        promptCalls += 1;
+        displayedUrl = challengeUrl;
+        harness.child.send(codexLoginCompleted(loginId));
+      },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    const snapshot = await runner.start({ inputText: 'fixture task' });
+    assert.equal(displayedUrl, authUrl);
+    assert.equal(promptCalls, 1);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start', 'thread/start', 'turn/start']);
+    assert.equal(JSON.stringify(snapshot).includes(authUrl), false);
+    assert.equal(JSON.stringify(events).includes(authUrl), false);
+    assert.equal(JSON.stringify(snapshot).includes('CREDENTIAL-SENTINEL'), false);
+    assert.equal(JSON.stringify(events).includes('CREDENTIAL-SENTINEL'), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects authentication URLs outside the approved origins without exposing them', async (t) => {
+  const marker = 'private-auth-url-CREDENTIAL-SENTINEL';
+  const invalidUrls = [
+    `https://unknown.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com:444/oauth?code=${marker}`,
+    `https://fixture-user:${marker}@auth.openai.com/oauth`,
+    `https://login.auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com.attacker.invalid/oauth?code=${marker}`,
+    `https://auth.openai.com./oauth?code=${marker}`,
+    `https://127.0.0.1/oauth?code=${marker}`,
+    `https://[::1]/oauth?code=${marker}`,
+    `https://localhost/oauth?code=${marker}`,
+    `http://auth.openai.com/oauth?code=${marker}`,
+    ` https://auth.openai.com/oauth?code=${marker}`,
+    `https://auth.openai.com/oauth?code=${marker} `,
+    `https://auth.openai.com/oauth?code=${marker}${String.fromCharCode(10)}continued`,
+    `https://auth.openai.com/oauth?code=${'x'.repeat(4100)}${marker}`,
+  ];
+
+  for (const authUrl of invalidUrls) {
+    const workspace = createWorkspace(t);
+    const events = [];
+    const harness = codexResponder({ workspace, authUrl });
+    let promptCalls = 0;
+    const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+      onAuthenticationRequired() { promptCalls += 1; },
+      spawnImpl: harness.spawnImpl,
+      onNative: (event) => events.push(event),
+    }));
+    t.after(async () => { await runner.stop(); });
+
+    await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+      assert.equal(error.code, 'authentication_response_invalid');
+      assert.equal(error.cause, undefined);
+      assert.equal(error.message.includes(authUrl), false);
+      assert.equal(error.stack.includes(authUrl), false);
+      assert.equal(error.message.includes(marker), false);
+      assert.equal(error.stack.includes(marker), false);
+      return true;
+    });
+    assert.equal(promptCalls, 0);
+    assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+    assert.deepEqual(events, []);
+    assert.equal(runner.snapshot().failureCode, 'authentication_response_invalid');
+    assert.equal(JSON.stringify(runner.snapshot()).includes(authUrl), false);
+    assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
+    await runner.stop();
+  }
+});
+
+test('Codex rejects an invalid authentication URL even when login completion arrived first', async (t) => {
+  const workspace = createWorkspace(t);
+  const marker = 'early-private-auth-url-CREDENTIAL-SENTINEL';
+  const authUrl = `https://unknown.invalid/oauth?code=${marker}`;
+  const events = [];
+  const harness = codexResponder({ workspace, authUrl, earlyLoginCompletion: true });
+  let promptCalls = 0;
+  const runner = createOwnedNativeRunner(baseOptions(workspace, 'codex', {
+    onAuthenticationRequired() { promptCalls += 1; },
+    spawnImpl: harness.spawnImpl,
+    onNative: (event) => events.push(event),
+  }));
+  t.after(async () => { await runner.stop(); });
+
+  await assert.rejects(runner.start({ inputText: 'fixture task' }), (error) => {
+    assert.equal(error.code, 'authentication_response_invalid');
+    assert.equal(error.cause, undefined);
+    assert.equal(error.message.includes(marker), false);
+    assert.equal(error.stack.includes(marker), false);
+    return true;
+  });
+  assert.equal(promptCalls, 0);
+  assert.deepEqual(harness.methods, ['initialize', 'account/login/start']);
+  assert.deepEqual(events, []);
+  assert.equal(JSON.stringify(runner.snapshot()).includes(marker), false);
   await runner.stop();
 });
 

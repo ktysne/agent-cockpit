@@ -27,6 +27,7 @@ const WAIT_TOOL_SPEC = Object.freeze({
   }),
 });
 const ENVIRONMENT_ALLOWLIST = Object.freeze(['PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC']);
+const ALLOWED_AUTHENTICATION_ORIGINS = new Set(['https://auth.openai.com', 'https://chatgpt.com']);
 const TRANSPORT_ENVIRONMENT_ALLOWLIST = Object.freeze([
   'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
 ]);
@@ -114,12 +115,14 @@ function isSecretValue(value) {
 }
 
 function validateAuthenticationUrl(value) {
-  if (typeof value !== 'string' || value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) {
+  if (typeof value !== 'string' || value.length > 4096 || value !== value.trim() ||
+      /[\u0000-\u001f\u007f]/.test(value)) {
     throw runnerError('authentication_response_invalid');
   }
   let parsed;
   try { parsed = new URL(value); } catch { throw runnerError('authentication_response_invalid'); }
-  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) {
+  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password ||
+      !ALLOWED_AUTHENTICATION_ORIGINS.has(parsed.origin)) {
     throw runnerError('authentication_response_invalid');
   }
   return value;

@@ -1275,3 +1275,12 @@ proxy設定時のloopback除外の欠落診断は、providerの解釈を確か�
 最終更新は文書と結果記録だけで、sourceとtestは全体試験headから不変である。
 PR #378はfeature向けにレビュー収束した。次は認証URLを二つの既知originへ限定する部分対応へスタックし、未収束の#364は含めない。
 認証の再利用、loginの直列化、機能設定の実効性と実runtimeの通信成功は今回の完了条件に含めず、#215の残件を維持する。
+
+## 認証URLのorigin限定の現在地 (#215)
+
+最新feature `6c5854b`から`codex/auth-url-origin-215-20261011`を作り、ReadyのPR #378最終head `958bb99`を通常mergeで取り込んだ。
+Astraの助言と公式公開実装、公式protocolの例を確認し、[認証URLの契約](../design/native-authentication-url.md)とAU01〜AU06を実装前に記録した。
+二つのHTTPS originに限定し、URLの元文字列を保持する。既存のtypeとloginId検査、URL検査、早着completion照合の順序を維持する。
+未知hostの汎用許可設定は追加せず、固定codeで拒否する。前後空白も拒否する。
+Windowsの関連2ファイルは223件中222件成功、失敗0件、実symlink権限によるskip1件だった。全体試験と指定Claudeレビューはこれから行う。
+今回の変更は認証再利用とlogin直列化から独立した部分対応で、実認証と後続redirectの互換性を確認したとは扱わない。
