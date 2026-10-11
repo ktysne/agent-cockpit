@@ -1,5 +1,10 @@
 # Codex 対応のテスト整理の計画(2026-10-11)
 
+2026-10-11 に中止した。
+開発者が Codex 対応を main から作り直すと決めたため、整理は PR #385(方針の同期)で止め、削除と刈り込みは行わない。
+以後の正本は main の [docs/handover/2026-10-11-codex-rebuild.md](https://github.com/ktysne/agent-cockpit/blob/main/docs/handover/2026-10-11-codex-rebuild.md) である。
+この写しは凍結したブランチに残る記録で、以下の「決定済みの判断」と「対応順序」は実行しない。
+
 集約ブランチ `codex/feature-codex-support` に積まれたテストを、[テストの作成方針](../testing.md)に沿って整理する作業の計画である。
 起点は feature の 856c683(PR #380 のマージ)と main の 518b946(PR #350 のマージ)で、数字はこの 2 つの比較である。
 main 側(Claude が書いた既存のテスト)の見直しは対象から外す。
