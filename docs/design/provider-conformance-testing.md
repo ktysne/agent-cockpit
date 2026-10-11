@@ -885,3 +885,4 @@ Claude R1の取消済み再登録拒否を実装し、通常取消にも適用�
 R2では製品修正を確認し、旧schema文書の未取消条件を補正した。
 実provider runtime、execution終端単独の新規fixture、falsy直接再検証例外、電源断は未確認である。
 MCPの共通409文言は取消の理由を正確に説明しないため、操作ごとの案内改善を後続に残す。
+指定Claude R3はblockerと要修正0件で収束した。最終結果の文書更新後もsrc/test/toolsは固定source572e628から不変である。
