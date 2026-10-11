@@ -109,7 +109,7 @@ function normalizeRecord(value) {
   return Object.freeze(normalized);
 }
 
-function normalizeExpectedIds(value) {
+function normalizeStopEnsureExpectedIds(value) {
   const { fields, record } = captureRecordForSchema(value, [
     SHUTDOWN_EXPECTED_ID_FIELDS,
     STARTUP_EXPECTED_ID_FIELDS,
@@ -124,7 +124,16 @@ function normalizeExpectedIds(value) {
     assertScopeId(record.scopeId);
     assertRecordUuid(record.attemptId);
   }
-  return record;
+  const normalized = Object.create(null);
+  for (const field of fields) {
+    Object.defineProperty(normalized, field, {
+      value: record[field],
+      enumerable: true,
+      writable: false,
+      configurable: false,
+    });
+  }
+  return Object.freeze(normalized);
 }
 
 /** 固定schemaをUTF-8へ正規化し、不正入力を固定診断で拒否する。 */
@@ -143,7 +152,7 @@ function encodeStopEnsureRecord(record) {
 /** kind別の期待IDを必須とし、入力から独立したfreeze済みrecordを返す。 */
 function decodeStopEnsureRecord(buffer, expectedIds) {
   try {
-    const expected = normalizeExpectedIds(expectedIds);
+    const expected = normalizeStopEnsureExpectedIds(expectedIds);
     if (buffer === null || typeof buffer !== 'object' || types.isProxy(buffer) || !Buffer.isBuffer(buffer)) {
       invalidRecord();
     }
@@ -176,4 +185,5 @@ module.exports = {
   MAX_STOP_ENSURE_RECORD_BYTES,
   decodeStopEnsureRecord,
   encodeStopEnsureRecord,
+  normalizeStopEnsureExpectedIds,
 };
