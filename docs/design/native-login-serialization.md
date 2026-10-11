@@ -1,0 +1,56 @@
+# Owned Codexのログイン直列化
+
+同じNode module instanceのowned Codexについて、`account/login/start`から検証済みの成功completionまでを一つのFIFOゲートで直列化する。
+Claude、managed process、別Cockpit process、Worker、別module copy、外部CLIと既存ブラウザOAuthは対象外である。
+ゲートはログイン操作の順番を制御し、実行権限や認証情報の共有を作らない。
+
+[公式Codex login実装](https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs)は既定callback portとfallback portを使い、既存listenerへcancelを試みる。
+HOMEごとのゲートではその競合を避けられないため、対象module内のowned Codexで一つを共有する。
+この公開実装がインストール済み版と同じことは未確認である。
+[公式app-server protocol](https://learn.chatgpt.com/docs/app-server)の成功completionだけでOS portの解放を証明したとは扱わず、Cockpitから外部listenerをprobeまたはcancelしない。
+
+## 取得と取消
+
+initializeとinitializedは先に進め、login attemptの登録とlogin RPC送信の直前に取得する。
+取得前と取得後に既存のownerとsourceのguardを通す。
+待機中にowner失効の通知がない場合は取得後に検出し、login RPCを送らない。
+
+待機recordと一意なtokenをpromiseのresolve前に登録し、次のholderを確定してから取得を通知する。
+待機中の取消と期限切れはrecordをqueueから除き、promiseをsettleしてtimerと取消監視を解除する。
+取得と取消が同じturnで競合した場合も、まだloginを始めていなければ自己tokenだけを解放する。
+取得promiseを外側の取消raceで包むだけでは、取消後のgrantがholderを残すため、待機record自体を取り消す。
+ゲート内部からtrusted callbackを呼ばない。
+
+## 開始後の解放
+
+RPCを送る可能性を送信前に記録する。
+書込みの成否が不明な例外も、loginが始まった可能性があるものとして扱う。
+
+正常時はresponseのtype、loginId、[認証URL](native-authentication-url.md)、早着completionの照合、matching success completionとowner/source guardを全て通して解放する。
+thread/startはゲートの外で行い、正常ログイン後のrunning childはholderを保持しない。
+
+失敗completion、不正応答、timeout、callback failure、owner失効と停止では、ローカルpromiseのsettlementで解放しない。
+既存のchildTerminationPromiseでexitとcloseの双方を確認した独立handlerから自己tokenを解放する。
+killの戻り値、片方のeventとstop timeoutは終了証明にしない。
+stop_unconfirmedではholderを保持し、遅れて両eventが揃えば解放する。
+旧tokenの解放や旧completionは新holderへ作用しない。
+
+stopはstartやゲートの空き待ちを待たず、startの失敗処理もゲート解放のためにstopをawaitしない。
+これにより、停止と開始が互いを待つ循環を作らない。
+外部release APIとglobal resetは追加しない。
+
+## 期限と診断
+
+queue待機の期限には既存loginMsを独立に使い、期限切れは固定codeの`authentication_queue_timeout`で拒否する。
+取得後のRPCには既存rpcMs、completion待ちには既存loginMsを維持する。
+startの総時間にはqueue待機分が加わる。startupMsを全startの絶対期限へ変更せず、新しい公開timeout設定を追加しない。
+
+停止とcallback失敗の既存分類を維持する。
+ゲートのtoken、認証URL、秘密値とcallbackの元例外は診断や保存設定へ出さない。
+
+## 検証範囲
+
+実owned runnerとfake pipeでFIFO、取消とgrantの競合、早着completion、異常終了の保持、後着の両event、旧tokenと同期再入を確認する。
+fixtureの後片付けは自己fake childのexitとcloseを完了させ、製品ゲートを直接resetしない。
+同moduleを共有する関連試験も行い、テスト間のholder漏れを確認する。
+実runtime、callback portの解放順、別process間の競合と永続認証の再利用は別の検証として残す。
