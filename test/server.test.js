@@ -878,6 +878,571 @@ function holdPersistence(state) {
   return { started, release };
 }
 
+async function absenceServer(t, { registry, sessions, fileIds = sessions.map(({ sessionId }) => sessionId), answerDelivery, intervalMs = 50, lockSyncMethod = false, state = new DashboardState() }) {
+  let now = 1_000;
+  let listedFiles = fileIds.map((session_id) => ({ session_id, cwd: process.cwd() }));
+  const originalSync = state.syncSessionFiles.bind(state);
+  originalSync(listedFiles, now, 'claude');
+  for (const { sessionId, providers = [undefined] } of sessions) {
+    for (const [index, provider] of providers.entries()) {
+      state.addEvent({
+        session_id: sessionId,
+        hook_event_name: index === 0 ? 'SessionStart' : 'UserPromptSubmit',
+        hookAt: now + index,
+      }, provider ? { provider } : {});
+    }
+  }
+
+  let syncCount = 0;
+  let syncDepth = 0;
+  const syncWaiters = [];
+  state.syncSessionFiles = (files, _syncTime, provider) => {
+    syncDepth += 1;
+    try {
+      const result = originalSync(files, now, provider);
+      if (syncDepth === 1) {
+        syncCount += 1;
+        for (let index = syncWaiters.length - 1; index >= 0; index -= 1) {
+          if (syncWaiters[index].target <= syncCount) {
+            syncWaiters[index].resolve();
+            syncWaiters.splice(index, 1);
+          }
+        }
+      }
+      return result;
+    } finally {
+      syncDepth -= 1;
+    }
+  };
+  if (lockSyncMethod) {
+    Object.defineProperty(state, 'syncSessionFiles', { writable: false });
+  }
+
+  const runtime = await runningServer(t, {
+    state,
+    registrationRegistry: registry,
+    listSessionFiles: async () => listedFiles,
+    sessionScanIntervalMs: intervalMs,
+    ...(answerDelivery ? { answerDelivery } : {}),
+  });
+  return {
+    state,
+    runtime,
+    setNow(value) { now = value; },
+    setFiles(files) { listedFiles = files.map((session_id) => ({ session_id, cwd: process.cwd() })); },
+    syncCount: () => syncCount,
+    waitForSyncCount(target) {
+      if (syncCount >= target) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`session sync ${target} did not complete`)), 5_000);
+        syncWaiters.push({ target, resolve: () => { clearTimeout(timer); resolve(); } });
+      });
+    },
+    async refreshAt(files, value) {
+      const target = syncCount + 1;
+      listedFiles = files.map((session_id) => ({ session_id, cwd: process.cwd() }));
+      now = value;
+      await this.waitForSyncCount(target);
+    },
+  };
+}
+
+function restoreUnknownRegistration(nativeId) {
+  const source = createRegistrationFixture('claude', { nativeId });
+  const snapshot = source.registry.snapshot();
+  const recovered = createRegistrationKernel();
+  recovered.authority.restoreHistory({
+    conversations: snapshot.conversations,
+    executions: snapshot.executions.map(({ conversationId, executionId, sessionId }) => ({
+      conversationId, executionId, sessionId, state: 'unknown',
+    })),
+    launches: [],
+    runtimeLaunches: [],
+    connections: [],
+    actors: [],
+    handoffs: [],
+    replayClaims: snapshot.replayClaims,
+    incompleteConversationIds: snapshot.incompleteConversationIds,
+  });
+  return { ...recovered, registration: source.registration };
+}
+
+function countRegistrationSnapshots(registry) {
+  let count = 0;
+  const wrapped = copyRegistrationRegistry(registry, {
+    snapshot: () => { count += 1; return registry.snapshot(); },
+  });
+  return { registry: wrapped, count: () => count, reset: () => { count = 0; } };
+}
+
+function copyRegistrationRegistry(registry, overrides = {}) {
+  const copy = {};
+  for (const key of Object.keys(registry)) {
+    const value = registry[key];
+    copy[key] = typeof value === 'function' ? value.bind(registry) : value;
+  }
+  return Object.assign(copy, overrides);
+}
+
+async function refreshAbsenceAt(harness, now) {
+  await harness.refreshAt([], now);
+}
+
+test('登録実行の不在保護は60秒境界で判定し、resume後の旧projectionを新実行へ付け替えない', async (t) => {
+  await t.test('active execution は60秒後も保護する', async (subtest) => {
+    const fixture = createRegistrationFixture('claude', { nativeId: 'absence-active' });
+    const sessionId = fixture.registration.sessionId;
+    const harness = await absenceServer(subtest, {
+      registry: fixture.registry,
+      sessions: [{ sessionId, providers: ['claude'] }],
+    });
+
+    await refreshAbsenceAt(harness, 60_999);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+    assert.equal(fixture.registry.isRegisteredSessionId(sessionId), true);
+  });
+
+  await t.test('全executionがendedなら60秒で表示行を終了する', async (subtest) => {
+    const fixture = createRegistrationFixture('claude', { nativeId: 'absence-ended' });
+    const sessionId = fixture.registration.sessionId;
+    fixture.authority.end(fixture.registration.executionId);
+    const harness = await absenceServer(subtest, {
+      registry: fixture.registry,
+      sessions: [{ sessionId, providers: ['claude'] }],
+    });
+
+    await refreshAbsenceAt(harness, 60_999);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), true);
+    assert.equal(fixture.registry.isRegisteredSessionId(sessionId), true);
+    assert.equal(harness.state.isSessionAbsenceProtected(sessionId), true);
+  });
+
+  await t.test('旧ended projectionは終了し、新しいresume projectionは保護する', async (subtest) => {
+    const fixture = createRegistrationFixture('claude', { nativeId: 'absence-resume' });
+    const oldSessionId = fixture.registration.sessionId;
+    fixture.authority.end(fixture.registration.executionId);
+    const resumed = fixture.adapter.register(fixture.nativeIdentity, {
+      ...fixture.evidence,
+      evidenceId: 'absence-resume-evidence',
+    }, { startId: 'absence-resume-start', resume: true });
+    assert.notEqual(resumed.sessionId, oldSessionId);
+    const harness = await absenceServer(subtest, {
+      registry: fixture.registry,
+      sessions: [oldSessionId, resumed.sessionId].map((sessionId) => ({ sessionId, providers: ['claude'] })),
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(oldSessionId), true);
+    assert.equal(harness.state.endedByAbsence.has(resumed.sessionId), false);
+    assert.equal(fixture.registry.isRegisteredSessionId(oldSessionId), true);
+    assert.equal(fixture.registry.isRegisteredSessionId(resumed.sessionId), true);
+  });
+});
+
+test('restoreHistory由来のunknown実行は不在から保護する', async (t) => {
+  const fixture = restoreUnknownRegistration('absence-restored-unknown');
+  const sessionId = fixture.registration.sessionId;
+  assert.equal(fixture.registry.snapshot().executions[0].state, 'unknown');
+  const harness = await absenceServer(t, {
+    registry: fixture.registry,
+    sessions: [{ sessionId, providers: ['claude'] }],
+  });
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  assert.equal(fixture.registry.snapshot().executions[0].state, 'unknown');
+});
+
+test('ended登録rowはunknownまたはmixed provenanceのとき不在から保護する', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-provenance-unknown' });
+  const unknownSessionId = fixture.registration.sessionId;
+  fixture.authority.end(fixture.registration.executionId);
+  const mixed = fixture.adapter.register({
+    nativeIdKind: 'session', hostId: 'test-host', homeScopeId: 'test-home', nativeId: 'absence-provenance-mixed',
+  }, { ...fixture.evidence, evidenceId: 'absence-provenance-mixed-evidence' }, {
+    startId: 'absence-provenance-mixed-start', projectionId: 'absence-provenance-mixed',
+  });
+  fixture.authority.end(mixed.executionId);
+  const mixedSessionId = mixed.sessionId;
+  const harness = await absenceServer(t, {
+    registry: fixture.registry,
+    sessions: [
+      { sessionId: unknownSessionId, providers: [undefined] },
+      { sessionId: mixedSessionId, providers: ['claude', 'codex'] },
+    ],
+  });
+  assert.deepEqual(harness.state.sessionProviderSourcesFor(unknownSessionId).sort(), ['claude', 'unknown']);
+  assert.deepEqual(harness.state.sessionProviderSourcesFor(mixedSessionId).sort(), ['claude', 'codex']);
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(harness.state.endedByAbsence.has(unknownSessionId), false);
+  assert.equal(harness.state.endedByAbsence.has(mixedSessionId), false);
+});
+
+test('健全batchの未登録unknown rowはlegacy falseで整理しsnapshotはrefreshごと一回だけ読む', async (t) => {
+  const kernel = createRegistrationKernel();
+  const counted = countRegistrationSnapshots(kernel.registry);
+  const sessionId = 'absence-unregistered-unknown';
+  const harness = await absenceServer(t, {
+    registry: counted.registry,
+    sessions: [{ sessionId, providers: [undefined] }],
+  });
+  counted.reset();
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(counted.count(), 1);
+  assert.equal(harness.state.endedByAbsence.has(sessionId), true);
+  assert.equal(kernel.registry.isRegisteredSessionId(sessionId), false);
+});
+
+test('複数ended登録と複数未登録候補を一回のsnapshotで整理する', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-batch-ended-0' });
+  const registrations = [fixture.registration];
+  for (const suffix of ['1', '2']) {
+    const nativeIdentity = { ...fixture.nativeIdentity, nativeId: `absence-batch-ended-${suffix}` };
+    registrations.push(fixture.adapter.register(nativeIdentity, {
+      ...fixture.evidence,
+      evidenceId: `absence-batch-ended-${suffix}-evidence`,
+    }, {
+      startId: `absence-batch-ended-${suffix}-start`,
+      projectionId: nativeIdentity.nativeId,
+    }));
+  }
+  for (const registration of registrations) fixture.authority.end(registration.executionId);
+
+  const unregisteredIds = ['absence-batch-unregistered-1', 'absence-batch-unregistered-2'];
+  const counted = countRegistrationSnapshots(fixture.registry);
+  const sessions = [
+    ...registrations.map(({ sessionId }) => ({ sessionId, providers: ['claude'] })),
+    ...unregisteredIds.map((sessionId) => ({ sessionId, providers: [undefined] })),
+  ];
+  const harness = await absenceServer(t, {
+    registry: counted.registry,
+    sessions,
+    intervalMs: 1_000,
+  });
+  counted.reset();
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(counted.count(), 1);
+  for (const { sessionId } of registrations) {
+    assert.equal(harness.state.endedByAbsence.has(sessionId), true);
+    assert.equal(fixture.registry.isRegisteredSessionId(sessionId), true);
+  }
+  for (const sessionId of unregisteredIds) {
+    assert.equal(harness.state.endedByAbsence.has(sessionId), true);
+    assert.equal(fixture.registry.isRegisteredSessionId(sessionId), false);
+  }
+});
+
+test('invalid batchとrevision API欠落は未登録rowも保護する', async (t) => {
+  await t.test('revision APIがないDI', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      captureAuthorityRevision: undefined,
+      checkAuthorityRevision: undefined,
+    });
+    const sessionId = 'absence-missing-revision';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  });
+
+  await t.test('snapshotが不正', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      snapshot: () => ({ conversations: [], executions: null }),
+    });
+    const sessionId = 'absence-invalid-snapshot';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  });
+
+  await t.test('captureがresolved Promiseでもcheck trueでcleanupしない', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    let checks = 0;
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      captureAuthorityRevision: () => Promise.resolve({}),
+      checkAuthorityRevision: () => { checks += 1; return true; },
+    });
+    const sessionId = 'absence-async-resolved-revision';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+    assert.equal(checks, 0);
+  });
+
+  await t.test('captureのrejectは処理しrevision検査へ進まない', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    let checks = 0;
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      captureAuthorityRevision: () => Promise.reject(new Error('revision capture unavailable')),
+      checkAuthorityRevision: () => { checks += 1; return true; },
+    });
+    const sessionId = 'absence-async-revision';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    await new Promise(setImmediate);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+    assert.equal(checks, 0);
+  });
+
+  await t.test('継承thenableのthenを呼ばず候補を保護する', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    let thenCalls = 0;
+    const revision = Object.create({ then() { thenCalls += 1; } });
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      captureAuthorityRevision: () => revision,
+      checkAuthorityRevision: () => true,
+    });
+    const sessionId = 'absence-inherited-thenable-revision';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+    assert.equal(thenCalls, 0);
+  });
+
+  await t.test('snapshotのrejectは処理し候補を保護する', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      snapshot: () => Promise.reject(new Error('snapshot unavailable')),
+    });
+    const sessionId = 'absence-async-snapshot';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    await new Promise(setImmediate);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  });
+
+  await t.test('revision検査のrejectは処理し候補を保護する', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      checkAuthorityRevision: () => Promise.reject(new Error('revision unavailable')),
+    });
+    const sessionId = 'absence-async-check';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    await new Promise(setImmediate);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  });
+
+  await t.test('membershipのrejectは処理し候補を保護する', async (subtest) => {
+    const kernel = createRegistrationKernel();
+    const registry = copyRegistrationRegistry(kernel.registry, {
+      isRegisteredSessionId: () => Promise.reject(new Error('membership unavailable')),
+    });
+    const sessionId = 'absence-async-membership';
+    const harness = await absenceServer(subtest, {
+      registry,
+      sessions: [{ sessionId, providers: [undefined] }],
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    await new Promise(setImmediate);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  });
+
+  await t.test('provenanceのrejectは処理し登録候補を保護する', async (subtest) => {
+    const fixture = createRegistrationFixture('claude', { nativeId: 'absence-async-provenance' });
+    fixture.authority.end(fixture.registration.executionId);
+    const state = new DashboardState();
+    state.sessionProviderSourcesFor = () => Promise.reject(new Error('provenance unavailable'));
+    const sessionId = fixture.registration.sessionId;
+    const harness = await absenceServer(subtest, {
+      registry: fixture.registry,
+      sessions: [{ sessionId, providers: ['claude'] }],
+      state,
+    });
+
+    await refreshAbsenceAt(harness, 61_000);
+    await new Promise(setImmediate);
+    assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  });
+});
+
+test('syncSessionFiles中のrevision変更は残り候補を保護する', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-revision-first' });
+  const firstSessionId = fixture.registration.sessionId;
+  fixture.authority.end(fixture.registration.executionId);
+  const second = fixture.adapter.register({
+    nativeIdKind: 'session', hostId: 'test-host', homeScopeId: 'test-home', nativeId: 'absence-revision-second',
+  }, { ...fixture.evidence, evidenceId: 'absence-revision-second-evidence' }, {
+    startId: 'absence-revision-second-start', projectionId: 'absence-revision-second',
+  });
+  fixture.authority.end(second.executionId);
+  const secondSessionId = second.sessionId;
+  let didMutate = false;
+  const answerDelivery = {
+    sessionEnded(sessionId) {
+      if (sessionId !== firstSessionId || didMutate) return;
+      didMutate = true;
+      fixture.adapter.register({
+        nativeIdKind: 'session', hostId: 'test-host', homeScopeId: 'test-home', nativeId: 'absence-revision-new',
+      }, { ...fixture.evidence, evidenceId: 'absence-revision-new-evidence' }, {
+        startId: 'absence-revision-new-start', projectionId: 'absence-revision-new',
+      });
+    },
+    close() {},
+  };
+  const harness = await absenceServer(t, {
+    registry: fixture.registry,
+    sessions: [firstSessionId, secondSessionId].map((sessionId) => ({ sessionId, providers: ['claude'] })),
+    answerDelivery,
+  });
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(didMutate, true);
+  assert.equal(harness.state.endedByAbsence.has(firstSessionId), true);
+  assert.equal(harness.state.endedByAbsence.has(secondSessionId), false);
+});
+
+test('未登録membershipのfalse直後にrevisionが変わると候補を保護する', async (t) => {
+  const kernel = createRegistrationKernel();
+  const adapter = createProviderRegistrationAdapter('claude', kernel.registry, kernel.authority);
+  const nativeIdentity = {
+    nativeIdKind: 'session',
+    hostId: 'test-host',
+    homeScopeId: 'test-home',
+    nativeId: 'absence-membership-revision-source',
+  };
+  const evidence = {
+    evidenceId: 'absence-membership-revision-evidence',
+    source: 'test-verifier',
+    method: 'authenticated-fixture',
+    adapterVersion: 'test',
+    runtimeVersion: 'test',
+    capabilities: ['native-binding'],
+  };
+  let membershipResult;
+  let mutation;
+  const registry = copyRegistrationRegistry(kernel.registry, {
+    isRegisteredSessionId(sessionId) {
+      membershipResult = kernel.registry.isRegisteredSessionId(sessionId);
+      if (!mutation) {
+        mutation = adapter.register(nativeIdentity, evidence, {
+          startId: 'absence-membership-revision-start',
+          projectionId: nativeIdentity.nativeId,
+        });
+      }
+      return membershipResult;
+    },
+  });
+  const sessionId = 'absence-membership-revision-candidate';
+  const harness = await absenceServer(t, {
+    registry,
+    sessions: [{ sessionId, providers: [undefined] }],
+    intervalMs: 1_000,
+  });
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(membershipResult, false);
+  assert.ok(mutation);
+  assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  assert.equal(kernel.registry.isRegisteredSessionId(sessionId), false);
+  assert.equal(kernel.registry.isRegisteredSessionId(mutation.sessionId), true);
+});
+
+test('再入したsyncSessionFilesは保護し、外側のbatch scopeを復元する', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-reentry-first' });
+  const firstSessionId = fixture.registration.sessionId;
+  fixture.authority.end(fixture.registration.executionId);
+  const second = fixture.adapter.register({
+    nativeIdKind: 'session', hostId: 'test-host', homeScopeId: 'test-home', nativeId: 'absence-reentry-second',
+  }, { ...fixture.evidence, evidenceId: 'absence-reentry-second-evidence' }, {
+    startId: 'absence-reentry-second-start', projectionId: 'absence-reentry-second',
+  });
+  fixture.authority.end(second.executionId);
+  const secondSessionId = second.sessionId;
+  let state;
+  let nestedSyncKeptSecond = false;
+  let didReenter = false;
+  const answerDelivery = {
+    sessionEnded(sessionId) {
+      if (sessionId !== firstSessionId || didReenter) return;
+      didReenter = true;
+      state.syncSessionFiles([], 61_000, 'claude');
+      nestedSyncKeptSecond = !state.endedByAbsence.has(secondSessionId);
+    },
+    close() {},
+  };
+  const harness = await absenceServer(t, {
+    registry: fixture.registry,
+    sessions: [firstSessionId, secondSessionId].map((sessionId) => ({ sessionId, providers: ['claude'] })),
+    answerDelivery,
+  });
+  state = harness.state;
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(didReenter, true);
+  assert.equal(nestedSyncKeptSecond, true);
+  assert.equal(state.endedByAbsence.has(firstSessionId), true);
+  assert.equal(state.endedByAbsence.has(secondSessionId), true);
+});
+
+test('同期methodを置換できない場合は候補を保護してscopeを復元する', async (t) => {
+  const kernel = createRegistrationKernel();
+  const sessionId = 'absence-locked-sync';
+  const harness = await absenceServer(t, {
+    registry: kernel.registry,
+    sessions: [{ sessionId, providers: [undefined] }],
+    lockSyncMethod: true,
+  });
+  const syncMethod = harness.state.syncSessionFiles;
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+  assert.strictEqual(harness.state.syncSessionFiles, syncMethod);
+  assert.equal(harness.state.isSessionAbsenceProtected(sessionId), false);
+});
+
+test('未観測sessionは不在終了の候補にしない', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-never-listed' });
+  fixture.authority.end(fixture.registration.executionId);
+  const sessionId = fixture.registration.sessionId;
+  const harness = await absenceServer(t, {
+    registry: fixture.registry,
+    sessions: [{ sessionId, providers: ['claude'] }],
+    fileIds: [],
+  });
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(harness.state.sessionFileLastSeenAt.has(sessionId), false);
+  assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+});
+
 test('常駐サーバーの Host は state と POST の要求でも照合する', async (t) => {
   const runtime = await runningServer(t);
   const host = `example.test:${runtime.info.port}`;

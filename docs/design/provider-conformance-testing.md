@@ -886,3 +886,26 @@ R2では製品修正を確認し、旧schema文書の未取消条件を補正し
 実provider runtime、execution終端単独の新規fixture、falsy直接再検証例外、電源断は未確認である。
 MCPの共通409文言は取消の理由を正確に説明しないため、操作ごとの案内改善を後続に残す。
 指定Claude R3はblockerと要修正0件で収束した。最終結果の文書更新後もsrc/test/toolsは固定source572e628から不変である。
+
+## 注入registry構成の不在保護 (#212)
+
+[登録実行と不在保護](registration-absence-protection.md)に従い、標準issuerと注入registryを区別する。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F212-AP01 | 実kernel注入serverで既観測Claude行のfileが不在 | activeは保護。endedは59,999msまで残り、60,000msで表示の不在終了。登録履歴は維持 |
+| ID-F212-AP02 | 同conversationの旧ended実行からresume | 旧projectionは不在終了、新active projectionは保護。最新executionで旧行を誤判定しない |
+| ID-F212-AP03 | restore unknownとmixed/unknown provider行 | 不明な登録行を不在から終了させない。process終了やauthority解放を推定しない |
+| ID-F212-AP04 | 多数候補のrefreshと権限revision変化 | snapshot一回、候補ごとの全履歴走査なし。再入変更後は後続候補を保護、scopeを残さない |
+| ID-F212-AP05 | snapshot不正・revision API欠落・照会失敗 | 当該refreshは未登録行も保護。健全batchへ戻れば再評価。古いDIの継続保護を制約として記録 |
+| ID-F212-AP06 | 健全batchでsnapshotに該当なし、membership厳密false | provider出自unknownでも従来の60秒整理を保持。照会中のrevision変化では保護 |
+| ID-F212-AP07 | 標準issuer・file未観測・同期区間外照会 | 標準issuerの期間表、未観測行の非対象、区間外の従来membership保守判定を維持 |
+
+一覧・時刻と出自fixtureによるserver/state検証を実provider runtime、実file discovery、process終了と履歴GCの証拠にしない。
+
+実装後の関連結果はserver110件、registry20件、標準issuer統合10件が成功した。
+issuer統合はsandboxのspawn EPERM後に子プロセス起動が可能な環境で確認した。
+複数ended登録3件と未登録候補2件のrefreshでsnapshot取得一回を確認した。
+membershipのfalse返却中の実kernel revision変更、再入、method置換不可のfallback、同期DI値のPromise拒否を確認した。
+各登録rowの走査回数は独立計測しておらず、O(N+M)は一回集計のsource契約とsnapshot回数のfixtureを分けて扱う。
+実provider runtime、実file discovery、長時間polling、process終了とauthority解放は未確認である。

@@ -1122,3 +1122,16 @@ PR #374はReadyで、既存Readyスタックの#373の後にマージ可能で�
 最終更新は現在地と検証結果の文書のみで、src/test/toolsは全体試験headから不変である。
 MCP409文言の取消理由の粒度不足、実provider適合、登録履歴全体の再照合は後続に残す。
 次は#212の注入registry構成で終了済み登録の不在保護を解除する修正へスタックして進む。
+
+## 注入registry構成の不在保護の現在地 (#212)
+
+最新featureからcodex/registration-absence-protection-212-20261011を作り、Readyの#374最終head `fc7746d` を通常mergeした。
+AstraとLunaMaxの読取調査で、注入registry構成は登録履歴がtrueのままended行を不在終了から保護する経路を確認した。
+標準Claude issuerでは期間表の終了により保護を解除する既存動作があり、今回の対象から分ける。
+[登録実行と不在保護](../design/registration-absence-protection.md)とID-F212-AP01〜AP07を実装契約とする。
+同期refresh一回の短命集計を採用し、endedで出自が明確な登録行だけ保護を解除する。
+unknown・混在・不正batch・revision失効では保護する。健全batchの未登録membership falseは従来の不在終了を維持する。
+invalid batchの全保護は未登録行にも及ぶ保守的な互換変更として仮採用する。
+revision APIのない古いDIでは継続保護される制約があるため、適合試験と結果に明記する。
+登録履歴・alias所有・writer認証は変更せず、表示整理をprocess終了や権限解放へ読み替えない。
+旧Issue本文のactiveだけの保護案は復元unknownを誤って不在終了させるため採用せず、unknownも保護する。イベント投影の停止解除・終了イベントの再同期は今回に含めず、#212の残件として維持する。

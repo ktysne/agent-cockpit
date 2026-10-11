@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const path = require('node:path');
+const { types } = require('node:util');
 const { AwayState, DashboardState } = require('./state');
 const { RoutingState } = require('./routing');
 const { AtomicJsonWriter, atomicWriteJson } = require('./json-storage');
@@ -27,6 +28,7 @@ const {
 } = require('./server-constants');
 
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
+const nativePromiseThen = Promise.prototype.then;
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -819,6 +821,136 @@ async function hasSessionJsonFiles(claudeHome) {
   }
 }
 
+function isSynchronousValue(value) {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return true;
+  try {
+    if (types.isPromise(value)) {
+      try { Reflect.apply(nativePromiseThen, value, [undefined, () => undefined]); } catch {}
+      return false;
+    }
+    return typeof value.then !== 'function';
+  } catch {
+    return false;
+  }
+}
+
+function createSessionAbsenceBatch(registry) {
+  const invalid = { valid: false };
+  try {
+    if (!registry || typeof registry.captureAuthorityRevision !== 'function' ||
+        typeof registry.checkAuthorityRevision !== 'function' ||
+        typeof registry.snapshot !== 'function' || typeof registry.isRegisteredSessionId !== 'function') return invalid;
+  } catch {
+    return invalid;
+  }
+
+  let revision;
+  let snapshot;
+  try {
+    revision = registry.captureAuthorityRevision();
+    if (!isSynchronousValue(revision) || revision === null || revision === undefined) return invalid;
+    snapshot = registry.snapshot();
+    if (!isSynchronousValue(snapshot)) return invalid;
+  } catch {
+    return invalid;
+  }
+  try {
+    if (!snapshot || typeof snapshot !== 'object' ||
+        !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.executions)) return invalid;
+
+    const conversationProviders = new Map();
+    for (const conversation of snapshot.conversations) {
+      if (!conversation || typeof conversation !== 'object' || Array.isArray(conversation) ||
+          typeof conversation.conversationId !== 'string' || conversation.conversationId.length === 0 ||
+          !conversation.identity || typeof conversation.identity !== 'object' || Array.isArray(conversation.identity)) return invalid;
+      if (conversationProviders.has(conversation.conversationId)) return invalid;
+      const identity = conversation.identity;
+      const expectedNativeIdKind = identity.provider === 'claude' ? 'session'
+        : identity.provider === 'codex' ? 'thread' : null;
+      const identityFields = Reflect.ownKeys(identity);
+      if (!expectedNativeIdKind || identity.nativeIdKind !== expectedNativeIdKind ||
+          identityFields.length !== 5 ||
+          ['provider', 'nativeIdKind', 'hostId', 'homeScopeId', 'nativeId'].some((field) => !Object.hasOwn(identity, field)) ||
+          ['hostId', 'homeScopeId', 'nativeId'].some((field) => typeof identity[field] !== 'string' || !identity[field])) return invalid;
+      conversationProviders.set(conversation.conversationId, identity.provider);
+    }
+
+    const sessions = new Map();
+    const executionIds = new Set();
+    for (const execution of snapshot.executions) {
+      if (!execution || typeof execution !== 'object' || Array.isArray(execution) ||
+          typeof execution.conversationId !== 'string' || execution.conversationId.length === 0 ||
+          typeof execution.executionId !== 'string' || execution.executionId.length === 0 ||
+          typeof execution.sessionId !== 'string' || execution.sessionId.length === 0 ||
+          typeof execution.state !== 'string' || executionIds.has(execution.executionId)) return invalid;
+      executionIds.add(execution.executionId);
+      const provider = conversationProviders.get(execution.conversationId) || null;
+      const session = sessions.get(execution.sessionId);
+      if (!session) {
+        sessions.set(execution.sessionId, {
+          conversationId: execution.conversationId,
+          ownerUnique: true,
+          provider,
+          allEnded: execution.state === 'ended',
+        });
+        continue;
+      }
+      if (session.conversationId !== execution.conversationId) session.ownerUnique = false;
+      if (session.provider !== provider) session.provider = null;
+      session.allEnded = session.allEnded && execution.state === 'ended';
+    }
+
+    const batch = { valid: true, registry, revision, sessions };
+    const current = registry.checkAuthorityRevision(revision);
+    if (!isSynchronousValue(current) || current !== true) batch.valid = false;
+    return batch;
+  } catch {
+    return invalid;
+  }
+}
+
+function hasCurrentSessionAbsenceRevision(batch) {
+  if (!batch?.valid) return false;
+  try {
+    const current = batch.registry.checkAuthorityRevision(batch.revision);
+    if (isSynchronousValue(current) && current === true) return true;
+  } catch {}
+  batch.valid = false;
+  return false;
+}
+
+function isSessionProtectedByAbsenceBatch(batch, state, sessionId) {
+  if (!hasCurrentSessionAbsenceRevision(batch)) return true;
+  const session = batch.sessions.get(sessionId);
+  if (!session) {
+    let registered;
+    try {
+      registered = batch.registry.isRegisteredSessionId(sessionId);
+    } catch {
+      batch.valid = false;
+      return true;
+    }
+    if (!isSynchronousValue(registered)) {
+      batch.valid = false;
+      return true;
+    }
+    if (registered !== false) {
+      if (registered !== true) batch.valid = false;
+      return true;
+    }
+    return !hasCurrentSessionAbsenceRevision(batch);
+  }
+  if (!session.ownerUnique || session.provider !== 'claude' || !session.allEnded) return true;
+  let providers;
+  try {
+    providers = state.sessionProviderSourcesFor?.(sessionId);
+  } catch {
+    return true;
+  }
+  if (!isSynchronousValue(providers) || !Array.isArray(providers) || providers.length !== 1 || providers[0] !== 'claude') return true;
+  return !hasCurrentSessionAbsenceRevision(batch);
+}
+
 async function startServer(options = {}) {
   if (options.onShutdown !== undefined && typeof options.onShutdown !== 'function') {
     throw new TypeError('onShutdown must be a function');
@@ -885,9 +1017,14 @@ async function startServer(options = {}) {
       instructionServiceReady = false;
     }
   }
+  let sessionAbsenceBatchScope = null;
   state.isSessionAbsenceProtected = claudeIssuer
     ? (sessionId) => claudeIssuer.isActiveSession(sessionId)
-    : (sessionId) => registrationRegistry.isRegisteredSessionId(sessionId);
+    : (sessionId) => {
+      if (!sessionAbsenceBatchScope) return registrationRegistry.isRegisteredSessionId(sessionId);
+      if (!sessionAbsenceBatchScope.valid) return true;
+      return isSessionProtectedByAbsenceBatch(sessionAbsenceBatchScope, state, sessionId);
+    };
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
     away,
@@ -1021,12 +1158,51 @@ async function startServer(options = {}) {
       claudeIssuer?.syncSessionFiles(files, listingToken);
       // 再開した期間の表示用 sessionId は native の ID と違うので、状態の同期にはその ID を使う。
       // 会話記録のファイル名は native の ID なので、推定のために native_session_id も残す。
-      state.syncSessionFiles(files.map((file) => ({
+      const stateFiles = files.map((file) => ({
         ...file,
         native_session_id: file.session_id,
         session_id: claudeIssuer?.activeProjectionFor({ sessionId: file.session_id, pid: file.pid }) || file.session_id,
         product: productFromCwd(file.cwd),
-      })), Date.now(), 'claude');
+      }));
+      const now = Date.now();
+      if (claudeIssuer) {
+        state.syncSessionFiles(stateFiles, now, 'claude');
+      } else {
+        const previousScope = sessionAbsenceBatchScope;
+        const batch = previousScope ? { valid: false } : createSessionAbsenceBatch(registrationRegistry);
+        const originalSync = state.syncSessionFiles;
+        let syncDepth = 0;
+        const scopedSync = function (...args) {
+          const scopeBeforeCall = sessionAbsenceBatchScope;
+          if (syncDepth > 0) sessionAbsenceBatchScope = { valid: false };
+          syncDepth += 1;
+          try {
+            return originalSync.apply(this, args);
+          } finally {
+            syncDepth -= 1;
+            sessionAbsenceBatchScope = scopeBeforeCall;
+          }
+        };
+        sessionAbsenceBatchScope = batch;
+        try {
+          let wrapperInstalled = false;
+          try {
+            state.syncSessionFiles = scopedSync;
+            wrapperInstalled = state.syncSessionFiles === scopedSync;
+          } catch {}
+          if (wrapperInstalled) state.syncSessionFiles(stateFiles, now, 'claude');
+          else {
+            sessionAbsenceBatchScope = { valid: false };
+            originalSync.call(state, stateFiles, now, 'claude');
+          }
+        } finally {
+          try {
+            if (state.syncSessionFiles === scopedSync) state.syncSessionFiles = originalSync;
+          } catch {}
+          batch.sessions?.clear();
+          sessionAbsenceBatchScope = previousScope;
+        }
+      }
     }
     // 読めないときは生死を判定できないので同期せず、猶予の後の期限切れの片付けだけを進める。
     else state.pruneExpiredStoreRecords(Date.now());

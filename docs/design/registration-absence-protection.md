@@ -1,0 +1,37 @@
+# 登録実行の終了と表示の不在保護
+
+注入registrationRegistry構成の一覧同期では、確実にendedである登録実行を表示の不在終了から保護し続けない。
+登録・alias所有・replay履歴は保持し、表示整理をprocess終了や権限解放へ読み替えない。
+標準Claude issuerの期間表による保護を維持する。
+
+## 同期区間の判定
+
+issuer無しrefreshのfiles取得await後、state.syncSessionFilesの同期区間だけsnapshotを一回集計する。
+conversation identityとsession単位の実行を一回ずつ走査し、候補ごとの全履歴走査を避ける。
+時間O(N+M)、追加メモリーO(N)とし、refresh間のcacheを作らない。
+終了実行を最新executionへ付け替えず、resume旧projectionと新projectionを区別する。
+
+captureAuthorityRevisionをsnapshot前に取得し、構築後と候補判定前、false返却前に検査する。
+revision変化・取得失敗・非同期値・不正snapshotの場合は当該同期区間の候補を保護する。
+同期区間にawaitを置かず、finallyでscopeを復元しMapを破棄する。
+再入した同期は保守判定を使い、外側のscopeを壊さない。
+
+健全batchにsession集約がなければ既存membershipを一度照会し、厳密falseかつrevision健全なら従来どおり保護不要とする。
+この未登録行にprovider出自のsingle-Claude要件を追加しない。
+集約がある登録行は所有が一意、identityがClaudeとして整合、全件ended、表示出自がunknownを含まないsingle-Claudeの場合だけ保護不要とする。
+active、unknown、重複、不明state、provider混在、identity不整合は保護する。
+snapshotにある行をmembership=falseだけで保護解除しない。
+
+scope外の内部predicateは従来のmembership保守判定を維持し、一般active照会APIへ変更しない。
+invalid batchは未登録行にも保護を適用する保守的な互換変更であり、健全refreshで再評価する。
+revision APIを持たない古いDIは継続保護される制約を明記する。
+
+## 検証範囲
+
+実kernel注入serverと実state、一覧と時刻fixtureで既観測→不在59,999/60,000ms境界を確認する。
+active/ended、restore unknown、resume旧endedと新active、mixed/unknown出自、snapshot1回、revision変化とscope終了を確認する。
+未登録unknown出自は健全batchで従来の不在終了へ進み、invalid batchでは保護されることを区別する。
+file未観測行を新たに不在終了の対象としない。
+標準issuerの既存回帰を維持する。
+実session-file discovery、実runtimeの長時間polling、process終了、権限解放、履歴GCはこのfixtureで証明しない。
+同期methodを置換できないDIでは当該更新の候補を保護し、区間外の従来照会へ戻す。非同期DI値の拒否はtrusted DIの同期契約の検査であり、任意Proxyや変更済みPromise speciesの安全性を証明しない。
