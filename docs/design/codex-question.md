@@ -34,6 +34,11 @@ Codex の質問ツールには、Claude の `updatedInput.answers` に当たる�
 回答は拒否の理由に書いて返す。
 理由には、質問ごとに質問文と、選んだ選択肢の文字列(自由記入なら本文)を並べ、開発者の指示があれば末尾に添える。
 回答の中身の組み立ては Claude と共有し、包み方だけを provider で分ける。
+回答を返した時点で、判断事項を解決済みにする。拒否で返すので、Codex の `PostToolUse` は来ないためである。
+
+期限の拒否の文面は Claude と同じにし、ツール名だけを替える。
+Codex の選択肢には推奨の印が無く、先頭が推奨という約束だけなので、質問ごとに適用する推奨を「推奨: 質問文 → 選択肢」として末尾に書き添える。
+書き添えないと、モデルが推奨ではない選択肢を選ぶことを実機で確かめた。
 
 ### 質問の形
 
@@ -85,3 +90,40 @@ Codex のフックの既定の上限は 600 秒で、Claude の待ちの上限(3
 
 - 実行許可(`PermissionRequest`)には回答しない。許可は元の画面に残す。
 - `Stop` で回答を待つことは順序 5 で決める。
+
+## 導入
+
+Codex の `hooks.json` に、`node "<リポジトリ>/src/hooks/away.js" codex` を同期のフックとして登録する。
+provider は `event.js` と同じく引数で決め、入力の形から推測しない。
+既存の `event.js` の登録は残す。
+開発者が Codex の `/hooks` で信頼するまで、フックは動かない。
+非同期(`async: true`)にしない。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "request_user_input_async|request_user_input",
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 1830 }]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "node \"D:/path/to/agent-cockpit/src/hooks/away.js\" codex", "timeout": 5 }]
+      }
+    ]
+  }
+}
+```
+
+`PreToolUse` の上限は、Claude の `away.js` と同じ 1830 秒にする。
+離席の設定の最大値(30 分)に 30 秒の余裕を足した値である。
+`SessionStart` と `UserPromptSubmit` の上限も Claude と同じ 5 秒にする。
+フックが上限を超えると、Codex はフックの失敗として扱い、質問ツールをそのまま通す(実測済み)。
+同期の待機は `Esc` で中断でき、問い合わせが途絶えた判断事項は Claude と同じく回答待ちから戻る。

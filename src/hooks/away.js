@@ -2,6 +2,7 @@ const { cockpitHomeFromOptions } = require('../server/identity');
 const { HOOK_TIMEOUT_MS, readServerInfo, requestFromServer } = require('../client/server-connection');
 const { runAskQuestion } = require('./answer');
 const { isHookSessionId } = require('../server/session-ids');
+const { isQuestionTool } = require('../server/events');
 
 const AWAY_CONTEXT = 'Agent Cockpit: 開発者は離席中です({since}から)。開発者に尋ねずに、推奨を適用して作業を続けてください。破壊的な操作は行わず、判断待ちとして最後の報告に書いてください。';
 const TASK_CONTEXT = 'Agent Cockpit: 作業を始めるときは `cockpit_set_tasks` でタスクと完了条件を登録してください。タスクの状態か完了条件が変わったら、一覧全体を書き直してください。サブエージェントに渡したときと、その報告を受けたとき、PR のマージを確かめたとき、作業を切り替えたときも書き直してください。質問への回答だけで終わるような、作業を伴わないターンでは登録しなくて構いません。';
@@ -46,8 +47,9 @@ async function runAwayHook(input, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const hookEventName = input.hook_event_name;
   if (!['PreToolUse', 'UserPromptSubmit', 'SessionStart'].includes(hookEventName)) return null;
-  if (hookEventName === 'PreToolUse' && input.tool_name !== 'AskUserQuestion') return null;
-  if (hookEventName === 'PreToolUse') return runAskQuestion(input, options);
+  const provider = options.provider === 'codex' ? 'codex' : 'claude';
+  if (hookEventName === 'PreToolUse' && !isQuestionTool(provider, input.tool_name)) return null;
+  if (hookEventName === 'PreToolUse') return runAskQuestion(input, { ...options, provider, toolName: input.tool_name });
 
   const homeDir = options.homeDir || cockpitHomeFromOptions(options);
   const info = await readServerInfo(homeDir);
@@ -85,7 +87,7 @@ async function readStdin(stream = process.stdin) {
 async function main() {
   try {
     const input = JSON.parse(await readStdin());
-    const output = await runAwayHook(input);
+    const output = await runAwayHook(input, { provider: process.argv[2] === 'codex' ? 'codex' : 'claude' });
     if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch {
     process.exitCode = 0;

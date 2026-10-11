@@ -1,6 +1,6 @@
 const { jsonResponse } = require('../http-helpers');
 const { validSessionId, validText, validPlanInput, decisionSummaries } = require('../request-validation');
-const { sanitizeEvent } = require('../events');
+const { sanitizeEvent, isQuestionTool } = require('../events');
 const { productFromCwd } = require('../identity');
 const { claudeAgentDefinition, codexAgentDefinition } = require('../session-files');
 const { isCompleteCommitSha, parsePullRequestUrl, isGithubCreatePullRequestTool, validRepositoryPart } = require('../pull-request-utils');
@@ -37,7 +37,8 @@ function createHookRoutes(ctx) {
   const hookAnswerActions = [
     {
       matches: (body) => body.action === 'ask-register' && body.event_name === 'PreToolUse' && Array.isArray(body.questions),
-      run: (body) => answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id }),
+      run: (body) => answerDelivery.registerAsk({ sessionId: body.session_id, toolUseId: body.id, questions: body.questions, agentId: body.agent_id,
+        provider: body.provider, toolName: body.tool_name }),
     },
     {
       matches: (body) => body.action === 'ask-poll' && body.event_name === 'PreToolUse',
@@ -45,7 +46,8 @@ function createHookRoutes(ctx) {
     },
     {
       matches: (body) => body.action === 'ask-finish' && body.event_name === 'PreToolUse' && ['answered', 'timeout', 'released', 'server-lost'].includes(body.outcome),
-      run: (body) => answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome }),
+      run: (body) => answerDelivery.finishAsk({ sessionId: body.session_id, toolUseId: body.id, decisionId: body.decision_id, outcome: body.outcome,
+        provider: body.provider, toolName: body.tool_name }),
     },
     {
       matches: (body) => body.action === 'post-tool-batch' && body.event_name === 'PostToolBatch' && body.agent_id !== undefined,
@@ -95,6 +97,11 @@ function createHookRoutes(ctx) {
       return;
     }
     try {
+      if (body.provider !== undefined && !['claude', 'codex'].includes(body.provider) ||
+        typeof body.action === 'string' && body.action.startsWith('ask-') && !isQuestionTool(body.provider, body.tool_name || 'AskUserQuestion')) {
+        jsonResponse(response, 400, { error: 'Invalid request' });
+        return;
+      }
       const action = hookAnswerActions.find((candidate) => candidate.matches(body));
       const result = action ? await action.run(body) : INVALID_ANSWER_REQUEST;
       if (result === INVALID_ANSWER_REQUEST) {
