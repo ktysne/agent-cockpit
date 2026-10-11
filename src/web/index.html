@@ -3372,13 +3372,14 @@ function orderedProducts(sessions, pullRequestGroups = [], sinceSeen = []) {
 function activityStatus(session) {
   if (session.status === '作業中') return { label: '作業中', tone: 'busy' };
   if (session.status === '中断' || session.turnState === 'interrupted') return { label: '中断', tone: 'interrupted' };
+  if (session.status === '終了済み') return { label: '終了済み', tone: 'ended' };
   if (session.status === '不明' && session.nonInteractive) return { label: '非対話の実行中', tone: 'busy' };
   if (session.status === '不明') return { label: '状態不明', tone: 'unknown' };
   return { label: '待機中', tone: 'wait' };
 }
 
 function isFinishedSession(session) {
-  return activityStatus(session).tone === 'wait'
+  return ['wait', 'ended'].includes(activityStatus(session).tone)
     && session.tasks.every((task) => task.state === 'done')
     && session.decisions.every(isEndedDecision)
     && session.permissionWaits.length === 0
@@ -4670,16 +4671,19 @@ function unknownSessionControls(session) {
   if (session.status !== '不明' || session.nonInteractive) return null;
   const extra = element('div', 'session-extra');
   const actions = element('div', 'session-actions');
-  const estimateButton = element('button', 'ended-toggle', '状態を推定');
-  estimateButton.type = 'button';
-  estimateButton.dataset.estimateSession = session.session_id;
+  if (session.projectionOnly !== true) {
+    const estimateButton = element('button', 'ended-toggle', '状態を推定');
+    estimateButton.type = 'button';
+    estimateButton.dataset.estimateSession = session.session_id;
+    actions.append(estimateButton);
+  }
   const hideButton = element('button', 'ended-toggle', '一覧から外す');
   hideButton.type = 'button';
   hideButton.dataset.hideSession = session.session_id;
-  actions.append(estimateButton, hideButton);
+  actions.append(hideButton);
   extra.append(actions);
 
-  if (!session.estimate) return extra;
+  if (session.projectionOnly === true || !session.estimate) return extra;
   const panel = element('div', 'estimate');
   if (!session.estimate.canEstimate) {
     panel.textContent = '推定できませんでした';
