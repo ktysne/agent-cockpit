@@ -13,8 +13,10 @@ async function cockpit(t, options = {}) {
   const post = (url, body) => request(server.info.port, {
     method: 'POST', path: url, headers: hookHeaders(server.info.secret), body: JSON.stringify(body),
   });
+  // 製品のフックと同じく送る側で時刻を付ける。受信時刻に任せると、同じミリ秒に届いたイベントの前後が決まらないため。
+  let hookAt = Date.now();
   const event = (id, name, fields = {}) => post('/api/events', {
-    session_id: id, hook_event_name: name, provider: 'codex', cwd: server.homeDir, ...fields,
+    session_id: id, hook_event_name: name, provider: 'codex', cwd: server.homeDir, hookAt: hookAt++, ...fields,
   });
   const snapshot = async () => jsonBody(await request(server.info.port, { path: '/api/state' }));
   const initialize = (name = 'codex-mcp-client') => handleRequest({
