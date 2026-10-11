@@ -59,6 +59,17 @@ test('両方の Codex 質問ツールは選んだ label と指示を拒否理由
   }
 });
 
+test('回答で解決した後に同じ呼び出しの開始が新しい時刻で届いても解決済みを保つ', async (t) => {
+  const c = await fixture(t);
+  await c.run({}, async () => {
+    assert.equal((await c.answer(c.decision().id, { choice: 'pick', picks: [['CSV']], note: '' })).status, 200);
+  });
+  c.advance(1000);
+  c.runtime.state.addEvent(makeHookEvent(c.input(), c.now(), { provider: 'codex' }));
+  assert.equal(c.decision().state, 'resolved');
+  assert.deepEqual(c.decision().resolution, { chosen: ['CSV'], note: '' });
+});
+
 test('Codex の期限の拒否文は Claude の文のツール名を替え、適用する推奨を書き添えて仮適用になる', async (t) => {
   const c = await fixture(t, { answerWaitMs: 1000 });
   const result = await c.run({}, async () => c.advance(1001));

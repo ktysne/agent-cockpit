@@ -597,6 +597,7 @@ function newSession(event, askDecisionState = {}) {
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
     codexQuestionTools: Object.create(null),
+    startedAskToolUseIds: new Set(),
     stopped: false,
     turnKnown: false,
     ended: false,
@@ -824,6 +825,9 @@ function applyAskQuestionStart(session, event) {
   const agentId = event.agent_id || null;
   const toolUseId = event.tool_use_id || null;
   if (isQuestionTool(event.provider, event.tool_name) && !agentId && toolUseId && event.questions?.length) {
+    // 同じ呼び出しの開始は回答の待ちとイベントの入口の両方から届く。2 回目で待ちに戻すと、上書きで記録した解決が負けるため。
+    if (session.startedAskToolUseIds.has(toolUseId)) return;
+    session.startedAskToolUseIds.add(toolUseId);
     // 保存済みの結び付きがある呼び出しは、終わった判断事項でも使い回す。再起動の前の ID と回答を保つため。
     const boundDecision = session.decisions.find((decision) => decision.id === session.decisionBindings[toolUseId]);
     const existing = boundDecision || session.decisions.find((decision) => (
