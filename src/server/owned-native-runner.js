@@ -161,6 +161,9 @@ function validateExecutable(value) {
     if (error instanceof OwnedNativeRunnerError) throw error;
     throw runnerError('executable_unavailable');
   }
+  if (process.platform === 'win32' && path.extname(resolved).toLowerCase() !== '.exe') {
+    throw runnerError('executable_format_unsupported');
+  }
   return resolved;
 }
 

@@ -18,6 +18,9 @@ registrationとlaunchのregistryにはcaptureAuthorityRevisionとcheckAuthorityR
 
 `profiles`は`provider`、絶対`executablePath`、絶対`homePath`、`homeScopeId`、絶対`cwd`を持つ固定allowlistであり、start inputから変更できない。
 
+default owned runnerはWindowsで通常の`.exe`だけを受け付け、非対応の拡張子を認証と起動の前に拒否する。診断の順序と検証境界は[Windowsのnative実行ファイル](windows-native-executable.md)に従う。
+実fileと拡張子の検査は`start`時のrunner生成で行い、`admitLaunch`の受理だけでは実行ファイルの検証は完了しない。
+
 `admitLaunch`は`launchId`、`runId`、`attemptId`、`profileId`、`origin`、`purpose`と、delegatedまたはreview用のopaque `originReceipt`だけを受ける。
 
 standaloneは`agent`または`pr-creator`、delegatedは`agent`、reviewは`cross-review`のpurposeに限る。
