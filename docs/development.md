@@ -9,6 +9,7 @@ agent-cockpit 自体を開発するときの入口です。利用者向けの導
 | [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 開発で守ること(待ち受けと照合、秘匿、マージの条件、モックとの整合など)。2 つは同じ内容に保つ |
 | [mock/index.html](../mock/index.html) | 開発者と合意した最終形の見た目と機能の正本。実装はモックにそろえる |
 | [docs/handover/2026-10-02.md](handover/2026-10-02.md) | 実装の計画書。決定済みの判断、対応順序、判断待ち、落とし穴 |
+| [docs/handover/2026-10-11-codex-rebuild.md](handover/2026-10-11-codex-rebuild.md) | Codex 対応(Codex デスクトップと CLI のセッションの表示と操作)の計画。資料ごとの扱いと、旧集約ブランチの固定参照もここにある |
 | [docs/design/server.md](design/server.md) | 常駐サーバー、フック、画面の設計 |
 | [docs/design/manual.md](design/manual.md) | 利用者向けマニュアルの構成、デモ状態、画面の撮影、配信、検査の設計 |
 | [docs/architecture.html](architecture.html) / [docs/architecture-detail.html](architecture-detail.html) | 構成要素と通信経路の図。回答の届け方、PR の登録からマージまでの流れ |
