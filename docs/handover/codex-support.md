@@ -660,7 +660,17 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 
 ## 回収機能のレビュー済みPRと後続
 
-2026-10-11のGitHub照合では、次のPRはすべてfeature向けで未マージである。
+元ブランチ作成時点では#347〜#349と#351〜#354がReadyだった。現在は#347→#348→#349と#351がfeatureへマージ済みであり、修正後のスタックは#352→#353→#354とする。
+
+元PRブランチ作成時点では、表に記載したPRがReadyだった。
+#347〜#349、#351〜#354と#356はReadyとして扱える。
+
+現在featureへ#347→#348→#349と#351をマージ済み。残るReady stackは#352→#353→#354→#356→#357→#358→#359→#360→#362→#363→#365→#366→#367→#368→#369→#370→#371→#373→#374→#375→#376→#377で、#364はレビュー未収束のDraftとして除外する。
+
+元PRブランチ作成時点では、表に記載したPRがReadyだった。
+#347〜#349、#351〜#354、#356と#357はReadyとして扱える。
+
+元PRブランチ作成時点では、表に記載したPRがReadyだった。
 #347〜#349、#351〜#354、#356〜#358はReadyとして扱える。
 #348と#349のbaseはfeatureへ統一し、headの内容は変更していない。
 
@@ -678,7 +688,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 | [#358](https://github.com/ktysne/agent-cockpit/pull/358)、検証source `bbd9d15` | native readの取消前write故障分類 | 関連123成功、固定head `d12453b`で全体2889成功、失敗0、Windows実symlink権限skip2。Claude R1で必須0。#357の後に取り込む |
 
 #347、#348、#349はこの順でマージする。
-#351、#352、#353はそれぞれこの系列と独立して取り込める。
+#351はfeatureへマージ済みである。#352、#353、#354はこの順に通常mergeするスタックである。
 #352はfeature `c731abe`とmain `518b946`を祖先として残す通常mergeで、配布物4ファイルを取り込む。
 アプリ全体テストは重複実行せず、#351のfeature baseに対する証跡を参照する。
 配布物の関数冒頭コメントの補足は上流向けの任意候補であり、手編集しない。
@@ -700,8 +710,8 @@ Codex login、thread、turnの個別write callback保留とwait profile固有待
 
 `codex/native-read-lease-cancellation-209-20261011`は最新feature `c731abe`から作成し、#351、#352、#353のレビュー済みheadをこの順で通常mergeした。
 作業開始時のheadは`57cd63f`であり、製品sourceにmerge conflictはなく、設計と引き継ぎ資料の両方の内容を保持した。
-この後続PRは#351、#352、#353の取り込み後にマージする。
-#347〜#349の未マージsourceはこのブランチへ取り込んでいない。
+この後続PRは#351のマージ後、修正済み#352、#353の順に取り込んでからマージする。
+#347〜#349のsourceはこのブランチの元headでは未取り込みだったが、現在のfeature mergeで取り込んでいる。
 
 PR #354に、lease解放またはsource無効化によるCodex native readラッパーの協調取消を実装した。
 既存のleaseとrequest tokenを先に失効させ、対象readだけをunknownへ終了させる。
@@ -718,6 +728,128 @@ loaded-list後のmicrotask取消は次RPC不送信を確認するが、内部con
 collector単独の追跡とfactory接続は別PRに分ける。
 取消前のstdin write故障分類は[Issue #355](https://github.com/ktysne/agent-cockpit/issues/355)に記録し、read取消とは分けてPR #358で対応した。
 協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
+## native起動取消の段階別検証
+
+作成時点では#347、#348、#349がReadyだったが、現在はこの順でfeatureへマージ済みである。
+baseはすべてfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+#351（`62e18b2`）とmain #350の同期#352（`2ea0c83`）は当時Readyだった。#351は現在featureへマージ済みで、#352は修正headを作成し、#353の親として連結している。
+#351はsource `4db527e`で全体2802成功、失敗0、Windows実symlink権限skip2、Claudeレビュー1往復で必須指摘なしである。
+#352はfeature/mainを祖先として保持する通常mergeで、関連2件、CLI定義読み取り5条件と上流同期checkが成功し、Claudeレビュー1往復で必須指摘なしである。
+
+元の`codex/native-start-cancellation-209-20261011`は当時のfeature `c731abe`から作成し、#351と#352のsourceには依存しない構成だった。現在は修正済み#352を通常mergeしている。
+native起動の段階別取消を、実runnerとcompositionの保持点で確認する。
+共通の適合条件は[ID-F209-S01](../design/provider-conformance-testing.md)に定義した。
+[PR #353](https://github.com/ktysne/agent-cockpit/pull/353)の`cd39352`で全体2794件成功、失敗0、Windows実symlink権限skip2である。
+製品sourceは無変更で、段階別取消の追加14件を含む関連2ファイルはin-processで192件成功した。
+Claude R1の必須指摘として後着による追加writeの直接比較を全11stageへ補強した。
+`1912130`の関連192件は成功し、製品sourceは全体検証済みheadから変わっていない。
+Claude R2はblockerと要修正なしとなり、PR #353はReadyとして扱える。
+Codex login、thread、turnの個別write callback保留とwait profile固有待機は未確認であり、追加の検証候補として残す。
+観測readの取消とdrain、factory ticketへの接続、協調writer ownership、新schemaの通常接続と実runtimeは後続に残す。
+## main配布物同期と次の作業
+
+2026-10-11の後続作業では、mainの配布物更新PR #350（`518b946`）を`codex/sync-main-350-20261011`へ通常mergeした。
+featureの`c731abe`とmainのmerge headを祖先として保持し、配布物4ファイルだけを取り込む。
+[PR #352](https://github.com/ktysne/agent-cockpit/pull/352)はfeature向けで、関連2件とCLI定義読み取りの5条件、構文・空白・上流同期checkが成功した。
+指定Claudeレビューは1往復でblocker・要修正なしである。
+アプリsourceは無変更のため全体テストの重複実行は省略し、#351のfeature baseに対する検証証跡を参照する。
+上流配布物の関数冒頭コメントにある一般説明の補足は任意候補であり、このリポジトリで配布物を手編集しない。
+
+当時未マージだったReady PR #347、#348、#349は、この順でfeatureへマージ済みである。
+いずれもbaseはfeatureで、headはそれぞれ`2228696`、`5457dce`、`c05c564`である。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)も当時Readyであり、この系列とは独立して取り込まれ、現在のfeatureに修正head `dc4de64`が統合済みである。
+#351のsource `4db527e`は全体2802件成功、失敗0、Windows実symlink権限skip2で、指定Claudeレビューは1往復で必須指摘なしである。
+最終`62e18b2`は結果と確認範囲の文書記録だけである。
+各PRのfixture合格を実runtime適合や新schemaの通常接続とは扱わない。
+同期後の次の作業はnative startの段階別取消検証であり、観測readの取消とdrainは別PRに残す。
+指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
+PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
+
+実保存先のinspectionは`codex/question-capsule-inspection-209-20261010`で、#346のレビュー済みheadから進める。
+明示的なreadonly factoryだけを公開し、旧Q2/CP3、新Q3/CP4とcanonical prepared materialを固定した四正本から検査する。
+rawのfingerprint、復元旧形と新外側の容量、通常行とcapsule entryと復元総件数を分け、保存・復旧・service readyの権限を返さない。
+Iの有効grantはIだけの通常枠と合算する。
+個別試験は16件成功、失敗0件、Windows sandboxがsymlink作成を拒否した1件skipだった。
+両providerとmixedの新形式、旧形式のraw空白、prepared/CP移転後/CPなし、I raw=B+G/B+G+1、合法材料E=B+1の診断保持を確認した。
+readonly openとmutation API未呼出し、再読時の変更検出、close/drain、結果の分離と設定コピーを確認した。
+構文、空白、CodeGraph変更後同期と調査は成功した。
+追跡済み全体テストは`fbdc55d`で2796件成功、失敗0件、Windows symlink権限による3件skip、285098.9846msだった。
+指定Claude R1は要修正1件で、修復必要とcanonical/future容量不足がinvalid_representationにまとめられる診断契約の差異を指摘した。
+PR #346は統合済みで、PR #347のbaseはcodex/feature-codex-supportである。
+PR #347のR1修正では、旧snapshotの修復診断を前段に置き、全存在slotを固定MAXで検査した後に実Bの全容量表を作る。
+修復が必要ならsnapshot_requires_repair、数値超過なら表を保持してcapacity_not_fitを返す。
+意味検査が成立した設定B不足では表を保持し、MAX検査自身の失敗を容量不足と推測しない。
+修復待ち、旧と新の容量境界、低容量と意味不正の対照を含む関連25件は24件成功、失敗0件、file symlink権限による1件skipだった。directory junctionの拒否は成功した。
+R2の任意提案に従い、旧形式のraw空白B+1と作成・切詰め・追記open flagの拒否検査を補強し、対象2件が成功した。製品コードは変更せず、全体検証を繰り返していない。
+指定Claude R2はblockerと要修正0件で収束した。修正後の追跡済み全体検証は`8ed160c`で2804件成功、失敗0件、Windows symlink権限による3件skip、324039.0846msだった。
+追加testと文書の最終差分`1b68a20`も指定Claude R3でblockerと要修正0件だった。PR #347はfeature向けにレビュー収束し、後続の限定保存backendをスタックできる。
+旧Q/CP grantの対応範囲、path component競合の明示、junction対照、不要分岐と追加read-only試験もR1の判断記録に残した。
+後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
+標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
+
+fixture専有の既存更新backendは`codex/question-capsule-existing-update-backend-209-20261011`で、PR #347のレビュー収束headからスタックする。
+Q3/CP4の外側値を保存正本とし、旧projectionは読み取り専用に限定する。
+期待head、既存更新guard、四正本の保存前再照合、追加lease、wx直前close/blocked gate、exact readback後のhead installを接続した。
+結果不明では全slotを停止し、操作leaseをcloseまで保持する。baseline leaseとB/Gから追加予約を控除しない。
+固定版backend source blob `cfbc4466f8ad55c7c442fb32aa3fad2c528faaa6`の関連24件は成功、失敗とskipは0件だった。
+両providerとmixedの保存/cold reload、並行QCP、stale/whitelist/容量拒否、close、rename前後の故障、未知orphan、同path二重owner、新形式のchunk/order破損拒否を確認した。
+構文、空白、変更後CodeGraph同期と調査も成功した。PR #348はPR #347を親にしたスタックである。
+追跡済み全体検証は`8c335d5`で2829件成功、失敗0件、Windows symlink権限による3件skip、372244.7484msだった。
+指定Claude R1の要修正2件をtest/helperで補強し、関連27件が成功、失敗とskipは0件だった。製品sourceは変更していない。
+公開測定primitiveと実byteから独立に求めた全slot前後最大量と対象tempを、pause中の実予約量およびbaseline込み総予算の1byte境界で照合した。
+正のI grant加算、CP/Iなしの合法Q保存、close時のqueued save拒否とqueue0・raw不変・予約復帰も確認した。
+指定Claude R2は試験補強を妥当と確認し、I上流拒否の文書参照を要修正1件として指摘した。既存whole試験のB+G境界と全体検証の成功を照合し、設計資料へ試験名を追記した。
+総予算の1byte境界はQ保存を対象とし、CP保存のtarget tempの独立した予算境界は未固定である。
+文書修正37d873fは指定Claude R3でblockerと要修正0件となり、3往復で収束した。PR #348はレビュー収束し、#347の後にfeatureへ通常merge済みである。
+最終の結果記録と任意の文言調整だけの文書差分は、cross-reviewの軽微例外により追加レビューを省略する。
+後続はfixture専有の限定操作facadeで、操作受付から最新candidate生成、保存とclose/reopenを接続する。
+通常native factory、既存user directory、外process排他、runtime authority、OS耐久性、新受付と件数枠解放は別gateに残る。
+
+fixture専有の限定操作ライフサイクルは`codex/question-capsule-restricted-lifecycle-209-20261011`で、PR #348のレビュー収束headからスタックする。
+後着回答と固定非質問delivery進行の受付を、最新candidate生成、保存、closeとcold reopenへ接続するtest helperを追加した。
+保存APIやpathをfacadeへ公開せず、closing/blockedを表示stateより優先する。
+固定IDの拒否とcapsule/orderの保持を確認し、全lookupの一般的な同値性は未確認である。
+関連18件は成功、失敗とskipは0件、84.29秒だった。後着回答10件保存と11件目の無保存拒否、元selectionのハッシュ維持も確認した。構文、空白とCodeGraph同期・調査は成功した。
+PR #349はPR #348を親にしたスタックである。確定604ddddの追跡済み全体検証は2850件成功、失敗0件、Windows symlink権限による3件skip、341439.0968msだった。
+指定Claude R1のdispose失敗時cleanupと再試行の要修正1件を補強した。固定cleanup境界故障の再試行、未知fileの所有ガード拒否、disposing/blocked表示、上限専用理由と同時reopenを含む関連22件は成功、失敗とskipは0件、58940.6133msだった。
+source/backend/workspaceは変更せず、test/helperの補強後は関連検証を行い、全体検証は604ddddの結果と分ける。指定Claude R2は53f6bcfを妥当と確認し、blockerと要修正0件で2往復のレビューが収束した。PR #349はレビュー収束し、#347、#348の後にfeatureへ通常merge済みである。
+最終の結果記録と既存のcleanup制約の文書化だけの差分は、cross-reviewの軽微文書例外として追加レビューを省略する。
+後続は既存explicit reclamation factoryのservice queueと回収core/schedulerの受付停止・settlement gateを統合する。既存context.closeの開始順を保ち、native長時間待機の取消と協調writer ownershipは別段階で確認する。
+通常新schema writerへの接続、外process排他、runtime authority、OS耐久性と件数枠解放は未達である。
+
+## 回収機能のレビュー済みPRと後続
+
+2026-10-11の再照合で、以下のレビュー済みPRは#347、#348、#349の順にfeatureへ通常merge済みである。
+作業PRのbaseをfeatureに統一する規則に合わせ、#348と#349もbaseをfeatureへ変更した。
+headの内容は変更していない。
+
+| 順序 | PRとhead | 内容 | 検証とレビュー |
+|---|---|---|---|
+| 1 | [#347](https://github.com/ktysne/agent-cockpit/pull/347)、`2228696` | capsule移行状態の読み取り専用inspection | source `8ed160c`で全体2804成功、失敗0、Windows権限skip3。最終test追加後もClaude R3で必須0 |
+| 2 | [#348](https://github.com/ktysne/agent-cockpit/pull/348)、`5457dce` | fixture専有の既存更新backend | source `8c335d5`で全体2829成功、失敗0、Windows権限skip3。補強後関連27成功、Claude R3で必須0 |
+| 3 | [#349](https://github.com/ktysne/agent-cockpit/pull/349)、`c05c564` | fixture限定操作とclose/reopen/dispose | `604dddd`で全体2850成功、失敗0、Windows権限skip3。test/helper補強後関連22成功、Claude R2で必須0 |
+
+当時のfeature headは`aa84489`で、三つのレビュー済みheadとmerge commitを祖先に保持していた。現在のfeature head `10eec5c`は、これらとPR #351の修正headを保持する。
+fixtureの合格を通常native factoryへの新schema接続や実runtimeの成功には数えない。
+
+後続の`codex/native-factory-lifetime-gate-feature-209-20261011`は、最新featureの`c731abe`から作成した。
+既存factoryとserviceの対象sourceは#347〜#349の前後で同じため、そのマージを前提にせず統合を進める。
+質問と指示の共通queue、回収coreとschedulerで操作の受付と終了を追跡し、closeで新受付を同期的に停止する。
+既存context.closeの開始順を保ち、受理済み処理の取消や失敗も終了として待つ。
+両providerの機能適合シナリオは[ID-F209-L01](../design/provider-conformance-testing.md)に定義した。
+[PR #351](https://github.com/ktysne/agent-cockpit/pull/351)はfeature向けで、当時のfeature `aa84489`を通常mergeして引き継ぎ資料の競合を解消した。最終修正head `dc4de64`は現在のfeature `10eec5c`へ通常merge済みである。両系列の記録を保持し、製品sourceとtestは各系列のレビュー済み内容から変更しない。
+source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功し、失敗0、全体のWindows実symlink権限skip2である。
+標準挙動の追加subset26件も成功した。
+指定Claudeレビューは1往復でblocker・要修正なしとなり、追跡入口と同期scheduler起動の限定を文書へ補足した。
+新factory fixture15件はacceptedへの実到達と後着拒否を両provider、保存中closeをunknown両provider・applied Codexで確認する。
+Claude live appliedと両providerの実runtimeは未確認であり、skip0を適合済みとは読み替えない。
+feature `aa84489`との統合head 8dc8f4eで、lifetime gateとcapsule両系列の関連5ファイル97件中96件が成功し、失敗0件、Windows実symlink権限によるskip1件だった。
+競合解消で手修正したのはこの引き継ぎ資料だけで、各系列の製品sourceとtestはそれぞれレビュー済みheadから不変である。
+文書競合と現在地の記録だけのため、cross-reviewの軽微例外として追加レビューを省略する。PR #351の既存指定Claudeレビューは収束済みで、#347〜#349とともに現在のfeatureへマージ済みである。
+
+nativeの長時間startと観測readの取消は別段階で確認する。
+epochやdetachによる論理失効を、I/O終了や保存先所有の解放へ読み替えない。
+同rootの協調writer ownership、新schemaの通常接続、実runtime、電源断耐久性と件数枠解放は未達である。
 
 ## owned collector終了追跡の現在地
 
@@ -857,6 +989,8 @@ PRは#362の後にマージし、#361の完了はfeatureへの取り込み後に
 | 候補 | 出所 |
 |---|---|
 | capsule移行plannerの候補encode反復と全選択delivery走査を計測し、runtimeへ接続する前に最適化の要否を決める | PR #337のClaude R1任意提案。現状はpure処理で、計測と最適化は未実施 |
+| inspectionの全容量表がfitした後、実Bの最終whole/joint検査だけが失敗する入力の構成可否を特性化する | PR #347のClaude R2任意提案。現状は最終検査の失敗をinvalidとして停止し、容量不足とは推測しない |
+| fixture専有backendの短縮名・symlink tmpの扱い、closing中loadの表示state、prewrite読取失敗と指紋差異の診断を整理する | PR #348のClaude R1任意提案。初回関連試験は24件成功、R1補強後は27件成功。closing受付gateと不明時停止は維持し、他OS・tmp構成の成功は未実証 |
 | 外側codecの結合検査で正規化とencodeを繰り返す費用を計測し、検証済み結果を内部で再利用する | PR #336のClaude R1任意提案。未検査値を信頼する公開入口は増やさない |
 | 復元実験、拒否包含分析と質問保存のplain-data preflightを共通化する。例外分類と入力の上限の差を先に照合する | PR #333のClaudeレビュー提案。現在の検査経路は保つ |
 | 隔離診断が呼ばれるたびに容量の予約量を計算し直す(標準起動へ接続する前に #209 で考慮する) | PR #293 の[コメント](https://github.com/ktysne/agent-cockpit/pull/293#issuecomment-6060612725) |
@@ -929,7 +1063,6 @@ main に feature へ未同期の変更があれば、先に同期 PR を feature
 fixture の合格を実 runtime の合格と読み替えず、未実施を成功に数えないでください。
 PR のマージや Issue のクローズをしたら、この資料の表を同じ PR で更新してください。
 ```
-
 指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
 PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
 
