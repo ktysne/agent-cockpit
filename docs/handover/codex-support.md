@@ -737,7 +737,7 @@ source `4db527e`の関連11ファイル248件と全体`npm test`2802件は成功
 指定Claudeレビューは1往復でblocker・要修正なしとなり、追跡入口と同期scheduler起動の限定を文書へ補足した。
 新factory fixture15件はacceptedへの実到達と後着拒否を両provider、保存中closeをunknown両provider・applied Codexで確認する。
 Claude live appliedと両providerの実runtimeは未確認であり、skip0を適合済みとは読み替えない。
-feature a84489との統合head 8dc8f4eで、lifetime gateとcapsule両系列の関連5ファイル97件中96件が成功し、失敗0件、Windows実symlink権限によるskip1件だった。
+feature `aa84489`との統合head 8dc8f4eで、lifetime gateとcapsule両系列の関連5ファイル97件中96件が成功し、失敗0件、Windows実symlink権限によるskip1件だった。
 競合解消で手修正したのはこの引き継ぎ資料だけで、各系列の製品sourceとtestはそれぞれレビュー済みheadから不変である。
 文書競合と現在地の記録だけのため、cross-reviewの軽微例外として追加レビューを省略する。PR #351の既存指定Claudeレビューは収束済みで、#347〜#349のマージ後に取り込める。
 
