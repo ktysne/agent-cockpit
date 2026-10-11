@@ -21,9 +21,9 @@ main の変更は同期 PR で随時 feature へ取り込む。
 ### 最新の状態 (2026-10-11照合)
 
 集約先は`codex/feature-codex-support`の`856c683`で、PR #352〜#377の対象22件と#378〜#380は通常merge済みである。各レビュー済みheadとmerge commitが集約先の祖先であることを確認した。
-PR #378、#379、#380のレビュー済みheadと各merge commitを集約先の祖先として確認した。状態整理のPR #381はこの集約先へ同期する。PR #364は未収束のDraftで、最新featureとも競合しており取り込み対象から除外する。
+PR #378、#379、#380のレビュー済みheadと各merge commitを集約先の祖先として確認した。状態整理のPR #381はこの集約先へ同期する。PR #364は最新featureとの競合を解消済みのDraftで、開発者の指示によりAstra相談後の追加Claudeレビューへ進む。未収束の間は取り込み対象から除外する。
 単独不具合#339、#355、#361、#372、#311はIssue全体の完了条件を満たし、対応PRのfeature取り込みを確認してclosedにした。実runtimeやmain採用を条件とする親Issueはopenを維持する。
-次はマージ後のIssueと文書の状態照合を完了し、#215の認証再利用に必要なcredential所有、更新、Windows ACLとrun HOME分離の設計へ進む。`account/read`だけの追加では認証再利用を完了できない。
+状態整理はPR #381でレビュー収束した。現在は開発者の指定により#364の停止設計を再開し、その収束後に#215の認証再利用に必要なcredential所有、更新、Windows ACLとrun HOME分離の設計へ進む。`account/read`だけの追加では認証再利用を完了できない。
 #209の世代集約はfixture専有の限定保存とnative read境界まで進んだが、製品への接続と所有証拠、実runtimeが残る。#216の設定画面と標準起動はこの残条件を満たしてから接続する。
 実装全体を完了したとは扱わず、必須の横断runtime試験と最終main PRも残す。
 
@@ -207,7 +207,7 @@ main 側の不具合(#292、#308 など)にはマイルストーンを付けな�
 | #223 | 監査の親 Issue | 4 | | Sub Issue(#207〜#218)が閉じたら閉じる |
 | #311 | MCPの結果不明時の書込み自動再送 | 4 | #368 | closed。MCP専用policy、fetch開始境界、結果不明の固定通知と回帰試験をfeatureへ集約済み。実runtimeの永続化とidempotencyは本Issueの完了条件外で、[Issue本文](https://github.com/ktysne/agent-cockpit/issues/311)と完了範囲を照合した。実runtimeは段階5と#218の採用ゲートで確認し、横断試験の成功とは扱わない |
 | #312 | provider別の表示墓標の増加と全件走査 | 4 | #369、#370、#371 | 計測、session索引、保持契約と反例fixtureはfeature集約済み。診断getterのcopy化は仮採用のまま取り込み済みで、開発者の確認待ちを維持する。GCの全入口拒否境界と件数上限は未解決 |
-| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはfeature集約済み。停止全体の#364はDraftで判断待ち。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
+| #313 | 配信台帳と checkpoint のプロセス間の writer 排他が無い | 4 | #360、#362、#364、#365、#366、#367 | 限定排他primitive、codec、result storeと内部shutdown coordinatorはfeature集約済み。停止全体の#364は競合解消とAstra相談を終えて追加レビュー中のDraft。製品管理protocolとwriter接続を後続gateに残す。#210のfsyncとは別 |
 | #314 | Claude の owned 実行で native wait 中に collector が再接続すると wait が無効のままになる | 3 | PR #373で観測器と実測を追加。通常解放は進行、再接続後旧handle拒否と90秒B未到着を確認。進行方法は未解決 | #174の後続(handoffとreconnect)と範囲が重なりうる |
 | #315 | 隔離された旧共通質問が画面に出ず、回答できない理由を利用者が知れない | 4 | | 2026-10-09 起票。#216 の段階 3 と一緒にモックで確かめる |
 
@@ -1373,3 +1373,12 @@ PR #380はReadyで、取り込み順は#378→#379→#380である。次はマ�
 最新feature `10eec5c`を通常mergeで取り込み、元headを祖先として保持した。
 手修正は引き継ぎ文書だけで、既存のレビュー未収束とDraftを維持する。
 競合解消はレビュー収束を意味せず、Readyスタックの親には使わない。
+
+## 停止設計PR #364の再開 (2026-10-11)
+
+開発者が残2件のAstra相談と追加レビューを指定したため、3往復で中断した設計を再開した。
+最初に最新feature `856c683`を通常mergeし、競合解消head `b417993`をpushした。source、test、tools、mockとmanualは最新featureと同一である。
+状態整理PR #381のレビュー済みhead `a10881b`も通常mergeして、Issue状態と計画書を同期した。#381が未マージの間の取り込み順は#381→#364である。
+Astraの助言に従い、healthy再利用と新規launch認可を分け、敗者の未確認所有を勝者停止後も保持する。管理者交代や設定世代変更でも禁止を迂回せず、W09の全停止確認と認証された復旧確認を製品接続条件に残す。
+409の両理由とHTTP再送0、cleanupからのmerge開始0、marker不在での起動拒否、healthy勝者と未知所有の共存をST表へ同時に補正した。ST15の注入観測と分類、手順との対応、process生成から終了までの外部観測も明記した。
+指定Claudeの第4往復で本文と適合表の全差分を確認する。新規のST製品試験、ACL、管理protocol、全writer接続と実runtimeは未実行で、既存C/R/Q試験をその成功へ読み替えない。

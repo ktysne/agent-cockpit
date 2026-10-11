@@ -644,7 +644,8 @@ writer排他の製品接続、graceful再起動と両provider実runtimeはこの
 ### 停止とensureの後続期待条件
 
 [停止とensureの設計](server-stop-ensure.md)の期待値を内部fixtureと製品接続に分ける。
-以下は全て未実行であり、単一controllerの成功を異process管理排他へ読み替えない。
+以下はST全体として未実行であり、単一controllerの成功を異process管理排他へ読み替えない。
+独立したcodec、storeとshutdown coordinatorの既存試験結果は後続のC/R/Q節に記録し、STの製品管理と接続条件の成功へ昇格しない。
 
 | ID | 段階 | 操作と期待条件 |
 | --- | --- | --- |
@@ -653,18 +654,36 @@ writer排他の製品接続、graceful再起動と両provider実runtimeはこの
 | ID-F313-ST03 | 内部fixture | 同じ停止requestは一度のprivate operationを共有。公開async wrapperのPromise参照同一性は検査しない。別requestと旧instanceは受理しない |
 | ID-F313-ST04 | 内部fixture | 単一controllerのメモリ内starting/stopping中は新attemptを拒否し、旧attemptの結果でcurrentを更新しない。blockedの明示retryだけでメモリ内世代を進める。共有current fileは対象外 |
 | ID-F313-ST05 | 内部fixture | 停止手続きがfalsyで失敗しても理由を保持。通知側切断で停止を破棄せず、fixtureの完了を製品writer解放と表現しない |
-| ID-F313-ST06 | 製品管理protocol | ACLと管理権限を実processで照合。旧管理者の遅延再開、TTLとcrash後に新currentの上書きやlaunchを許さない |
+| ID-F313-ST06 | 製品管理protocol | ACLと管理権限を実processで照合。旧管理者の遅延再開、TTLとcrash後に新currentの上書きやlaunchを許さない。attempt結果を採用する管理者が未確認所有を検出、保持し、ensureが同じ起動判定を使う。管理者交代、crashと設定世代変更で対象source setの禁止を失わず、旧managerの遅延通知でcurrent更新や禁止解除を行わない。W09復旧確認を採用できる主体と手段の実証が製品接続条件 |
 | ID-F313-ST07 | 製品管理protocol | HTTP終了後のfinal release保留もstoppingとして共有し、並行ensureが後継を開始しない |
-| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認。idle、signalと公開closeも同じ停止手続きへ入り、非HTTP停止先行時の新要求は非受理409。Windows PowerShell 5.1でHTTP例外がApplication.Runへ伝播せず再起動を中止する |
-| ID-F313-ST08A | 停止接続 | 変更route、hook/MCP更新、native start/read、定期処理、settings通知と副作用GETの新規受付を拒否し、既受付を追跡する。新規merge/gh起動を拒否、既起動ghの完了と結果処理を追跡し、停止前の承認を新規mergeへ流用しない |
+| ID-F313-ST08 | 停止接続 | Host、uiSecretとOrigin拒否、二重要求、自己drain、HTTP自己待ち、response切断後の停止継続を確認。idle、signalと公開closeも同じ停止手続きへ入り、非HTTP停止先行時の新要求は非受理409。Windows PowerShell 5.1でHTTP例外がApplication.Runへ伝播せず再起動を中止する。非HTTP先行は409 reason=stopping、別request競合は409 reason=request_conflict。両方でtrayが診断を表示して再起動を中止し、listener閉鎖後の停止HTTP再送は0回。非受理requestへ内部requestのcompletedを割り当てない |
+| ID-F313-ST08A | 停止接続 | 変更route、hook/MCP更新、native start/read、定期処理、settings通知と副作用GETの新規受付を拒否し、既受付を追跡する。新規merge/gh起動を拒否、既起動ghの完了と結果処理を追跡し、停止前の承認を新規mergeへ流用しない。cleanup中に承認済み予約を評価する故障入力でも、新規mergeとgh merge開始は0回 |
 | ID-F313-ST09 | ensure接続 | healthy現在instanceを古い拒否より優先。起動前/待機中とstart lock敗者で拒否を共有し、eventごとの全deadline反復を避ける。拒否してもhookはproviderセッションを止めず、出力なしで正常終了する |
 | ID-F313-ST10 | ensure接続 | 古いrecord、破損と通知不能をunknownとして扱う。手動再attemptはmarkerを削除せず実取得をやり直す |
-| ID-F313-ST11 | writer接続 | 実markerの正常再起動、残留拒否と通知をW11で再確認し、factoryと全参加writerへ追加するたびに再検証。管理権限、全writer取得、内容I/O、listen/readyの順を照合し、途中取得の敗者は内容I/Oなしで自己writerを解放する。未知解放を成功化しない |
-| ID-F313-ST12 | 製品管理protocol | ST06の権限条件を前提に、同scopeでfresh health検査後のready公開と後続ensureを競合させる。同じstarting世代内で同時に有効な管理権限と認可currentは各高々一つ、新規launchは高々一回。権限を得ない競合者のlaunch、内容I/Oとprovider起動は0回。故障のない成功経路は一回のlaunchからreadyへ進む |
-| ID-F313-ST12A | 製品故障試験 | 正常protocolのlaunch数試験とは分け、旧TTL lockによる二重launchを故障入力にする。全writer取得前の拒否は内容I/O 0回。全取得後のlisten等の失敗は停止/drainと自己writer全解放、敗者終了を追跡し、不明なら管理状態を解除しない |
+| ID-F313-ST11 | writer接続 | 実markerの正常再起動、残留拒否と通知をW11で再確認し、factoryと全参加writerへ追加するたびに再検証。管理権限、全writer取得、内容I/O、listen/readyの順を照合し、途中取得の敗者は内容I/Oなしで自己writerを解放する。未知解放を成功化しない。server.json.state=runningの旧process消失とmarker無しでも、全旧participantの終了未確認中はlaunch 0回。回復後は管理権限取得とfresh health/停止/未確認所有照合、認可child生成、全writer取得、内容I/Oとreadyの順で、marker除去だけでは回復成功にしない |
+| ID-F313-ST12 | 製品管理protocol | ST06の権限条件を前提に、同scopeでfresh health検査後のready公開と後続ensureを競合させる。同じstarting世代内で同時に有効な管理権限と認可currentは各高々一つ、新規launchは高々一回。権限を得ない競合者のlaunch、内容I/Oとprovider起動は0回。故障のない成功経路は一回のlaunchからreadyへ進む。試験側がprocess生成から終了まで記録し、子process寿命と管理protocolの権限取得/失効記録を併用する。一時点のprocess列挙や実装自身の件数だけで成功にしない |
+| ID-F313-ST12A | 製品管理protocol（故障入力） | 正常protocolのlaunch数試験とは分け、旧TTL lockによる二重launchを故障入力にする。全writer取得前の拒否は内容I/O 0回。全取得後のlisten等の失敗は停止/drainと自己writer全解放、敗者終了を追跡し、不明なら管理状態を解除しない。起動管理者がhealthy勝者と敗者の解放/終了不明の共存を不整合として検出する。healthy再利用とcurrent保持を維持し、勝者の正常停止、消失と管理者交代後も未確認所有が残れば後継launch 0回。W09の全停止/復旧確認なしに禁止を解除しない |
 | ID-F313-ST13 | ensure接続 | server.jsonとhealth双方のinstanceId/state、app、pid、startedAtとscopeを照合。旧形式のID欠落、stopping、不一致でgracefulを実行せず、強制終了や自動launchへfallbackしない |
 | ID-F313-ST14 | 停止接続 | 全writer解放後、completed公開前にprocessを終了させる。結果未確認を成功と推定せず再起動を中止し、全停止を確認する手動回復へ進む |
-| ID-F313-ST15 | 内部分類fixture | 確認済みの同scopeのrunning instanceと遅延敗者attemptの拒否を与え、scope全体のblockedへ昇格しない。無関係なport占有をhealthyやwriter_occupiedへ変換しない。残留markerでhealthy不在とHTTP終了後のstoppingを区別する。実processの観測と管理排他はST12側で確認 |
+| ID-F313-ST15 | 内部fixture | 照合済みhealth、instance/state、対象process終了、marker有無/不明、attempt取得/解放/終了、starting/stopping/未確認所有とW09復旧確認を注入する。下表の分類、再利用先と新規launch可否を検査し、注入値を実管理権限や実停止の証明にしない |
+
+
+ST15の分類名は期待値を表すための記述で、codecのstatusとreasonCodeを追加するものではない。
+管理者が起動を認可することと、生成されたサーバーchildが全writer取得後に内容I/Oとprovider起動を行うことを区別する。
+
+| ST15への注入観測 | 分類と再利用 | 新規launch |
+|---|---|---|
+| 同scopeの一致running healthyと古い単なる敗者拒否 | healthy再利用。敗者結果でcurrentを上書きしない | 0 |
+| 同scopeの一致running healthyと敗者の所有不明 | 不整合を診断してhealthy再利用。未確認所有は保持 | 0。勝者の正常停止後も0 |
+| listener閉鎖、既存stopping、停止完了未確認 | 停止未確認、再利用なし | 0 |
+| server.json.state=running、旧process消失、marker無し、旧participant全停止未確認 | 所有/停止未確認、再利用なし | 0 |
+| healthy無し、残留markerあり | writer取得拒否とW09案内 | 0 |
+| 無関係なportの応答だけ | healthyとみなさず、writer占有とも断定しない | この観測だけでは認可しない |
+| W09復旧確認と管理権限、fresh照合を満たす | 通常の認可child生成へ復帰。全writer取得後に内容I/Oとreadyへ進む | 同starting世代で高々1 |
+
+内部fixtureは設計の手順2、製品管理protocolとその故障入力は手順3に対応する。
+停止接続とensure接続は手順4、writer接続は手順5〜6で確認する。
+ST06/ST12Aでは未確認所有の保持媒体、crash後の再構成と回復確認の認証方式が実証されるまで製品接続を許可しない。
 
 実providerの停止と再起動は、上記fixtureの成功から推定せず別に記録する。
 
