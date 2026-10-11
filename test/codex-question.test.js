@@ -75,7 +75,7 @@ test('待つ質問ツールは Claude と同じく完了で回答内容不明と
   assert.deepEqual(decisions(state)[0].resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
 });
 
-test('同じ thread の質問より後の入力は待つ質問をすべて回答内容不明で閉じる', () => {
+test('同じ thread の質問より後の入力は、すぐ戻る質問を回答内容不明で閉じ、待つ質問を取り下げる', () => {
   const state = new DashboardState();
   state.addEvent(event('PreToolUse'));
   state.addEvent(event('PreToolUse', { tool_use_id: 'question-2', tool_name: 'request_user_input',
@@ -85,13 +85,13 @@ test('同じ thread の質問より後の入力は待つ質問をすべて回答
   state.addEvent(event('UserPromptSubmit', {}, 90));
   assert.ok(decisions(state).every(d => d.state === 'waiting'));
   state.addEvent(event('UserPromptSubmit', {}, 300));
-  assert.equal(decisions(state).length, 2);
-  for (const decision of decisions(state)) {
-    assert.equal(decision.state, 'resolved');
-    assert.deepEqual(decision.resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
-  }
+  const [asyncDecision, planDecision] = decisions(state);
+  assert.equal(asyncDecision.state, 'resolved');
+  assert.deepEqual(asyncDecision.resolution, { chosen: [], note: '元の画面で回答済み(内容は不明)' });
+  assert.equal(planDecision.state, 'withdrawn');
+  assert.equal(planDecision.resolution, null);
   state.addEvent(event('Stop', {}, 400));
-  assert.ok(decisions(state).every(d => d.state === 'resolved'));
+  assert.deepEqual(decisions(state).map(d => d.state), ['resolved', 'withdrawn']);
 });
 
 test('ネイティブの子の質問は判断事項にならない', () => {

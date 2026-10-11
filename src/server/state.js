@@ -596,6 +596,7 @@ function newSession(event, askDecisionState = {}) {
     permissionWaits: [],
     decisions: (askDecisionState.decisions || []).map(cloneDecision),
     decisionBindings: Object.assign(Object.create(null), askDecisionState.bindings || {}),
+    codexQuestionTools: Object.create(null),
     stopped: false,
     turnKnown: false,
     ended: false,
@@ -864,6 +865,7 @@ function applyAskQuestionStart(session, event) {
       session.decisions.push(decision);
       session.decisionBindings[toolUseId] = decision.id;
     }
+    if (event.provider === 'codex') session.codexQuestionTools[session.decisionBindings[toolUseId]] = event.tool_name;
   }
 }
 
@@ -1193,12 +1195,15 @@ function applySessionLifecycle(session, event) {
   const eventName = event.hook_event_name === 'Interrupt' ? 'Stop' : event.hook_event_name;
   const agentId = event.agent_id || null;
   if (session.provider === 'codex' && eventName === 'UserPromptSubmit' && !agentId) {
+    // すぐ戻る質問は次の入力を元の画面での回答とみなす。待つ質問は結果が来ないまま入力が届いたら、Claude の中断と同じく取り下げにする。
     for (const decision of session.decisions) {
-      if (decision.source !== 'ask' || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
-      decision.state = 'resolved';
+      const tool = session.codexQuestionTools[decision.id];
+      if (!tool || decision.state !== 'waiting' || event.hookAt <= Date.parse(decision.updatedAt)) continue;
+      const answered = tool === 'request_user_input_async';
+      decision.state = answered ? 'resolved' : 'withdrawn';
       decision.updatedAt = isoTime(event.hookAt);
       decision.resolvedAt = decision.updatedAt;
-      decision.resolution = { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE };
+      decision.resolution = answered ? { chosen: [], note: CODEX_UNKNOWN_ANSWER_NOTE } : null;
     }
   }
   if (eventName === 'UserPromptSubmit' || eventName === 'Stop') {
