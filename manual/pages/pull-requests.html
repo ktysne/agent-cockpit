@@ -62,7 +62,7 @@
 
   <h2 id="pr-stack">スタックの表示</h2>
   <p>PR の base ブランチが別の PR の head ブランチになっているとき、この 2 つの PR は積み上がった関係(スタック)にあります。
-  スタックは、base が既定ブランチの PR を一番下にして、その直上の PR を 1 段下げて入れ子で並べます。
+  スタックは、base がマージ先のブランチである PR を一番下にして、その直上の PR を 1 段下げて入れ子で並べます。
   登録した PR とつながる PR は、すべて同じスタックに出ます。</p>
   <figure class="guide-map" id="pr-stack-map" data-shot="pull-requests-stack/stack" data-alt="PR の枠。見出しにリポジトリ名、マージできる PR の札、取得の時間がある。その下に 3 段のスタックがあり、一番下の PR にマージできますの札とマージするボタンがある。直上の 2 つの PR は 1 段ずつ下がって入れ子になり、マージできない理由が出ている。その下に、1 つだけの PR のスタックがある">
     <ol class="guide-list">
@@ -87,9 +87,13 @@
     <summary>スタックの組み立ての詳細</summary>
     <p>オープンの PR の中から、base ブランチ名が別の PR の head ブランチ名と一致する PR を、その PR の上に積みます。
     登録した PR を起点に、base と head でつながる PR をたどり、つながった PR をすべて出します。</p>
-    <p>base が既定ブランチでもオープン PR の head ブランチでもない場合、base が集約ブランチなど PR の head ではないブランチなら「base の &lt;ブランチ名&gt; は既定ブランチではないため、ダッシュボードではマージしない」と出ます。
+    <p>スタックの一番下の PR は、base が既定ブランチか、どの PR の head でもないと確認できたブランチならマージできます。
+    既定ブランチ以外の候補は、期間を限らず、オープン、マージ済み、閉じた PR のすべてから head を検索します。
+    1 回の取得で確認する候補は 20 ブランチまでです。
+    上限を超えた場合や検索に失敗した場合は、確認できない理由を出してマージしません。</p>
+    <p>base がマージ済みの PR の head ブランチなら「base の &lt;ブランチ名&gt; はマージ済みの PR の head のため、ダッシュボードではマージしない」と出ます。
     base がマージされずに閉じた PR の head ブランチなら「base の &lt;ブランチ名&gt; に対応する PR が見つからない」と出ます。
-    どちらもマージできません。</p>
+    全状態の検索で PR が見つかった場合は「base の &lt;ブランチ名&gt; は PR の head のため、ダッシュボードではマージしない」と出ます。</p>
   </details>
 
   <h2 id="pr-row">PR の行の札</h2>
@@ -149,7 +153,7 @@
     </ol>
   </figure>
   <p>図に無い札が 1 つあります。
-  <span class="ui">base を</span> で始まる札は、ダッシュボードが、下の PR をマージするときに base を既定ブランチへ付け替えた PR に付きます(<a href="#pr-result">マージの結果</a>)。</p>
+  <span class="ui">base を</span> で始まる札は、ダッシュボードが、下の PR をマージするときに base をマージ先へ付け替えた PR に付きます(<a href="#pr-result">マージの結果</a>)。</p>
 
   <h3 id="pr-restack">積み直し</h3>
   <p>スカッシュかリベースでマージすると、下の PR の元のコミットが、既定ブランチに別のコミットとして入ります。
@@ -171,15 +175,21 @@
     この PR には「積み直しが必要か確かめられない」と出て、マージできません。</p>
   </details>
 
+  <p>既定ブランチ以外へのマージは、マージコミットだけで行います。
+  マージコミットがリポジトリで許可されていなければ、マージできません。
+  既定ブランチを head に持つ同期 PR は、head のブランチを削除せず、子 PR の base も付け替えません。</p>
+
   <h3 id="pr-reason">マージできない理由と待ち</h3>
   <p>マージ操作ができない PR には、<span class="ui">マージできない理由</span> の行が出ます。
   理由は、次の順に調べ、最初に当たった 1 つを出します。</p>
   <ul>
     <li>「リポジトリ設定を取得できません」：既定ブランチを取得できていません</li>
-    <li>「base の &lt;ブランチ名&gt; は既定ブランチではないため、ダッシュボードではマージしない」：base が集約ブランチなど、どの PR の head でもありません</li>
+    <li>「base の &lt;ブランチ名&gt; がどの PR の head でもないことを確認できない」：一覧や候補の検索を取得できない、または確認の上限を超えています</li>
+    <li>「base の &lt;ブランチ名&gt; はマージ済みの PR の head のため、ダッシュボードではマージしない」：マージ済みの PR の head に向けています</li>
+    <li>「base の &lt;ブランチ名&gt; は PR の head のため、ダッシュボードではマージしない」：全状態の検索で、その名前を head に持つ PR が見つかっています</li>
     <li>「base の &lt;ブランチ名&gt; に対応する PR が見つからない」：base がマージされずに閉じた PR の head です</li>
     <li>「下の #&lt;番号&gt; のマージ待ち」：スタックの一番下の PR ではありません</li>
-    <li>「base を &lt;既定ブランチ&gt; に付け替える必要がある」：下の PR がマージされたのに、この PR の base が既定ブランチに付け替わっていません</li>
+    <li>「base を &lt;マージ先&gt; に付け替える必要がある」：下の PR がマージされたのに、この PR の base がマージ先に付け替わっていません</li>
     <li>「ドラフト」</li>
     <li>「積み直し待ち」：<a href="#pr-restack">積み直し</a>が済んでいません</li>
     <li>「積み直しが必要か確かめられない」</li>
@@ -258,9 +268,9 @@
   <span class="ui">やめる</span> を押すと、何もせずに閉じます。</p>
   <figure class="guide-map" id="pr-confirm-map" data-shot="pull-requests-confirm/pending" data-crop-y="420-945" data-alt="マージの確認欄。見出しに PR の番号と main へマージするとある。その下に、条件の未達の警告、3 つのマージの方式、ブランチ削除のチェック、クロスレビューの警告と画面で見た head SHA、マージを実行とやめるのボタンが並ぶ">
     <ol class="guide-list">
-      <li data-part="confirm.heading" data-place="left"><b>見出し</b>：マージする PR と、マージ先の既定ブランチです。</li>
+      <li data-part="confirm.heading" data-place="left"><b>見出し</b>：マージする PR と、マージ先のブランチです。</li>
       <li data-part="confirm.warning" data-place="left"><b>未達条件の警告</b>：<span class="ui">選択した条件の未達</span> に、設定で選んだ条件のうち、満たしていないものが出ます。条件が残っていないときは出ません。</li>
-      <li data-part="confirm.methods" data-place="left"><b>マージの方式</b>：<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> のうち、リポジトリで許可されているものだけが出ます。</li>
+      <li data-part="confirm.methods" data-place="left"><b>マージの方式</b>：<span class="ui">マージコミット</span>、<span class="ui">スカッシュ</span>、<span class="ui">リベース</span> のうち、リポジトリで許可されているものだけが出ます。既定ブランチ以外へのマージは、マージコミットに固定されます。</li>
       <li data-part="confirm.delete" data-place="left"><b><span class="ui">マージ後にリモートブランチを削除する</span></b>：入れると、マージの後に PR の head のブランチを GitHub から削除します。</li>
       <li data-part="confirm.effect-review" data-place="left"><b>クロスレビューの警告</b>：クロスレビューが <span class="ui">レビュー済み</span> でないとき、その理由が出ます。</li>
       <li data-part="confirm.effect-head" data-place="right"><b><span class="ui">照合する head SHA</span></b>：画面で見ている PR の head のコミットの先頭 7 桁です。このコミット以外はマージしません。</li>
@@ -269,7 +279,7 @@
     </ol>
   </figure>
   <p>直上の PR があるときは、確認欄に base の扱いも表示します。
-  ブランチを削除する場合は既定ブランチへ付け替え、残す場合は現在の base のまま付け替えません。
+  ブランチを削除する場合はマージ先へ付け替え、残す場合は現在の base のまま付け替えません。
   削除のチェックを変えると、この表示も切り替わります。</p>
   <p>確認欄の既定は、次のとおりです。</p>
   <ul>
@@ -307,7 +317,7 @@
     <p>実行を押すと、常駐サーバーは次の順に進めます。</p>
     <ol>
       <li>GitHub から PR の状態を取り直し、上の条件を確かめます</li>
-      <li>ブランチを削除する場合だけ、直上の PR の base を既定ブランチに付け替えます。リポジトリの自動削除も含み、1 件でも付け替えに失敗したらマージしません。fork の PR は付け替えません</li>
+      <li>ブランチを削除する場合だけ、直上の PR の base をマージ先に付け替えます。リポジトリの自動削除も含み、1 件でも付け替えに失敗したらマージしません。fork の PR は付け替えません</li>
       <li>もう一度取り直して、条件を確かめます</li>
       <li><code>gh pr merge</code> を実行します</li>
       <li>PR の状態を読み、マージ済みであることを確かめます</li>
@@ -368,6 +378,8 @@
       <li><span class="ui">CI 状態不明</span></li>
       <li><span class="ui">GitHub のレビュー承認待ち</span></li>
       <li><span class="ui">マージ条件待ち:</span> に、満たしていない GitHub の条件が続きます</li>
+      <li>「予約時のマージ先 &lt;ブランチ名&gt; と現在のマージ先 &lt;ブランチ名&gt; が異なる」：予約を取り消し、現在のマージ先を確認して予約し直してください</li>
+      <li><span class="ui">マージ方式がマージコミットに固定のため、予約の方式では実行しない</span></li>
       <li>条件がそろい、次の状態更新を待つときは <span class="ui">次の状態更新でマージ</span></li>
     </ul>
   </details>
@@ -376,6 +388,7 @@
     <li>クロスレビューの最後の結論が「収束」で、その往復が今の往復と一致し、結論を出したコミットが PR の今の head と同じである。<span class="ui">レビュー不要</span> の記録だけでは、実行されません</li>
     <li>CI が成功している</li>
     <li>レビュー承認が必須のリポジトリでは、GitHub のレビューが <span class="ui">承認済み</span> である。<span class="ui">承認は任意</span> のリポジトリでは承認を待たない</li>
+    <li>現在のマージ先が予約時のマージ先と同じである。親のマージによって base が付け替わっても、最終のマージ先が同じなら実行できます</li>
     <li>PR が、スタックの一番下で、ドラフトでもコンフリクトでもなく、<span class="ui">マージ操作は可能</span> である。選んだ方式を、リポジトリが許可している</li>
   </ul>
   <p>収束した後に push があって、今の head が収束したコミットと違うときは、予約は残ったまま、新しい head の収束を待ちます。
@@ -463,11 +476,11 @@
 
   <h2 id="pr-result">マージの結果</h2>
   <p>マージが済むと、PR の枠に結果の行が出ます。
-  ブランチを削除した場合、スタックの直上の PR は、base が既定ブランチに付け替わり、一番下の PR になります。
+  ブランチを削除した場合、スタックの直上の PR は、base がマージ先に付け替わり、一番下の PR になります。
   ブランチを残した場合は、base を付け替えません。</p>
   <figure class="guide-map" id="pr-result-map" data-shot="pull-requests-result/result" data-alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、マージの結果の行がある">
     <ol class="guide-list">
-      <li data-part="result.retargeted"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base を既定ブランチに付け替えました。</li>
+      <li data-part="result.retargeted"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base をマージ先に付け替えました。</li>
       <li data-part="result.restack"><b><span class="ui">積み直しが必要</span></b>：スカッシュでマージしたので、この PR の差分に、下の PR のコミットが残っています(<a href="#pr-restack">積み直し</a>)。</li>
       <li data-part="result.reason" data-place="left"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</li>
       <li data-part="result.merged-list" data-place="left"><b>マージ済みの一覧</b>：マージした PR が、時刻と方式つきで加わります。</li>

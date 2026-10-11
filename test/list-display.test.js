@@ -1051,10 +1051,11 @@ test('予約待ち条件は承認任意ならレビュー承認を待たない',
     effective: (_product, pullRequest) => ({ base: pullRequest.effectiveBase }),
     prKey: () => 'product#1',
     pushedAfterConvergence: () => false,
-    ui: { reviewSkips: {} },
+    ui: { reviewSkips: {}, reserved: {} },
   });
   vm.runInContext(`${webWaitReasonsSource}\n${webWaitSource}\nthis.reservationWaits = pullRequestReservationWaits;`, webContext);
-  vm.runInContext(`${mockWaitReasonsSource}\n${mockWaitSource}\nthis.reservationWaits = reservationWait;`, mockContext);
+  vm.runInContext([functionSource(mock, 'mergeTarget'), functionSource(mock, 'mergeMethodFixed'),
+    mockWaitReasonsSource, mockWaitSource, 'this.reservationWaits = reservationWait;'].join('\n'), mockContext);
 
   const group = { defaultBranch: 'main', mergeMethods: ['squash'] };
   const product = { repo: { defaultBranch: 'main', methods: ['squash'] } };
@@ -1664,4 +1665,24 @@ test('モックで指示欄を編集すると同じカードのエラーを消�
   assert.equal(document.activeElement, textarea);
   assert.equal(answer.note, '修正した指示');
   assert.equal(send.disabled, false);
+});
+
+test('予約のマージ先が変わった理由は画面とモックで同じ名前を表示する', () => {
+  const webContext = pageContext(web, { convergedAtHead: () => true });
+  const mockContext = pageContext(mock, {
+    convergedAtHead: () => true, prKey: () => 'product#1',
+    mergeOperationBlocker: () => null, effective: () => ({ base: 'aggregate' }),
+    ui: { reviewSkips: {}, reserved: {} },
+  });
+  vm.runInContext(functionSource(web, 'pullRequestReservationWaitReasons'), webContext);
+  vm.runInContext(['mergeTarget', 'mergeMethodFixed', 'reservationWaitReasons'].map(name => functionSource(mock, name)).join('\n'), mockContext);
+  for (const reservation of [{ targetBranch: 'main' }, {}]) {
+    mockContext.ui.reserved['product#1'] = reservation;
+    const webWaits = webContext.pullRequestReservationWaitReasons({ reservation, mergeTarget: 'aggregate', ci: 'pass', review: 'none',
+      canMerge: true, baseRefName: 'aggregate', effectiveBase: 'aggregate' }, { defaultBranch: 'main', mergeMethods: ['merge'] }, 'merge');
+    const mockWaits = mockContext.reservationWaitReasons({ prs: [], repo: { defaultBranch: 'main', methods: ['merge'] } },
+      { number: 1, sha: 'a'.repeat(40), ci: 'pass', review: 'none', base: 'aggregate' }, 'merge');
+    assert.deepEqual(Array.from(webWaits), ['予約時のマージ先 main と現在のマージ先 aggregate が異なる']);
+    assert.deepEqual(Array.from(mockWaits), Array.from(webWaits));
+  }
 });
