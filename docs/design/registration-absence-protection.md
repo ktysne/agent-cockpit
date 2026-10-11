@@ -8,6 +8,7 @@
 
 issuer無しrefreshのfiles取得await後、state.syncSessionFilesの同期区間で最初の候補照会時にsnapshotを最大一回集計する。
 predicate照会がない更新ではcaptureとsnapshotを呼ばない。
+60秒の条件より先にpredicateを評価する既存順序を維持するため、期限前の不在候補がある更新では構築し得る。
 conversation identityとsession単位の実行を一回ずつ走査し、候補ごとの全履歴走査を避ける。
 時間O(N+M)、追加メモリーO(N)とし、refresh間のcacheを作らない。
 終了実行を最新executionへ付け替えず、resume旧projectionと新projectionを区別する。

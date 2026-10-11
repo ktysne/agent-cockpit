@@ -901,6 +901,11 @@ MCPの共通409文言は取消の理由を正確に説明しないため、操�
 | ID-F212-AP06 | 健全batchでsnapshotに該当なし、membership厳密false | provider出自unknownでも従来の60秒整理を保持。照会中のrevision変化では保護 |
 | ID-F212-AP07 | 標準issuer・file未観測・同期区間外照会 | 標準issuerの期間表、未観測行の非対象、区間外の従来membership保守判定を維持 |
 
+遅延構築の修正head `5913430`でserver関連120件が成功した。
+同headの全体試験は3,151件中3,149件成功、失敗0件、Windowsの実symlink作成権限による2件skipである。
+Claudeのレビューは2往復でblockerと要修正0件に収束した。
+実provider runtimeとsession-file discoveryは未実施である。
+
 一覧・時刻と出自fixtureによるserver/state検証を実provider runtime、実file discovery、process終了と履歴GCの証拠にしない。
 
 実装後の関連結果はserver110件、registry20件、標準issuer統合10件が成功した。
