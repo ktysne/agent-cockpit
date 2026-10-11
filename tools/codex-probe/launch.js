@@ -80,12 +80,65 @@ function enabledPlugins(config) {
   return plugins;
 }
 
-function hookEntries(file, keyPrefix) {
-  let hooks;
-  try { hooks = JSON.parse(readText(file)).hooks || {}; } catch { return []; }
-  return Object.entries(hooks).flatMap(([event, groups]) => (Array.isArray(groups) ? groups : []).flatMap((group, groupIndex) =>
-    (group.hooks || []).map((hook, hookIndex) => ({ key: `${keyPrefix}:${snakeCase(event)}:${groupIndex}:${hookIndex}`, command: hook.command || '' }))));
+// 解釈できない定義は、信頼の記録と照合できない鍵を返して起動を止める側に倒す。
+function hookEntries(hooks, keyPrefix) {
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return [{ key: `${keyPrefix}:(解釈できない定義)`, command: '' }];
+  return Object.entries(hooks).flatMap(([event, groups]) => (Array.isArray(groups) ? groups : [null]).flatMap((group, groupIndex) =>
+    (Array.isArray(group?.hooks) ? group.hooks : [null]).map((hook, hookIndex) => ({
+      key: `${keyPrefix}:${snakeCase(event)}:${groupIndex}:${hookIndex}`,
+      command: hook?.command || hook?.tool || '',
+    }))));
 }
+
+function hookFileEntries(file, keyPrefix) {
+  const text = readText(file);
+  if (text === null) return [];
+  try { return hookEntries(JSON.parse(text).hooks, keyPrefix); } catch { return hookEntries(null, keyPrefix); }
+}
+
+// manifest の hooks は、ファイルのパス、インラインの定義、それらの配列のどれか。インラインの鍵は plugin.json#hooks[<番号>]。
+function manifestEntries(versionDir, plugin) {
+  const text = readText(path.join(versionDir, '.codex-plugin', 'plugin.json'));
+  if (text === null) return [];
+  let hooks;
+  try { hooks = JSON.parse(text).hooks; } catch { return hookEntries(null, `${plugin}:plugin.json`); }
+  if (hooks === undefined) return [];
+  return (Array.isArray(hooks) ? hooks : [hooks]).flatMap((spec, index) => {
+    if (typeof spec !== 'string') return hookEntries(spec, `${plugin}:plugin.json#hooks[${index}]`);
+    const relative = spec.replace(/\\/g, '/').replace(/^\.\//, '');
+    return hookFileEntries(path.join(versionDir, relative), `${plugin}:${relative}`);
+  });
+}
+
+// [hooks] の表の項目、[hooks.<イベント>] の表、最初の表より前の hooks.<イベント> = ... を探す。[hooks.state] は信頼の記録なので除く。
+function configDefinesHooks(config) {
+  let section = '';
+  for (const line of config.split(/\r?\n/)) {
+    // 信頼の記録の鍵は plugin.json#hooks[0] のように ] を含むので、行頭の [ で表の見出しと判断する。
+    if (/^\s*\[/.test(line)) {
+      section = line.trim().replace(/^\[\[?\s*/, '').replace(/\s*\]\]?$/, '');
+      if (/^hooks\./.test(section) && !/^hooks\.state(\.|$)/.test(section)) return true;
+      continue;
+    }
+    if (!/^\s*[\w".'-]+\s*=/.test(line)) continue;
+    if (section === 'hooks' && !/^\s*state\s*[.=]/.test(line)) return true;
+    if (section === '' && /^\s*hooks\s*\.\s*(?!state\b)/.test(line)) return true;
+  }
+  return false;
+}
+
+function projectCodexDirs(cwd, codexHome) {
+  const dirs = [];
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    const codexDir = path.join(dir, '.codex');
+    if (path.resolve(codexDir) !== path.resolve(codexHome)) dirs.push(codexDir);
+    if (path.dirname(dir) === dir) return dirs;
+  }
+}
+
+// Codex に同梱されたマーケットプレイスのプラグインは Codex 本体の一部として扱う。
+// 同梱のフックは版の更新で増え、そのたびに信頼の記録が無い状態になるため。
+const BUNDLED_MARKETPLACES = new Set(['openai-bundled']);
 
 // --dangerously-bypass-hook-trust は有効なフックをすべて動かすので、信頼の記録が無い既存のフックがあれば起動しない。
 // 信頼した後に定義が変わったか(trusted_hash の一致)は確かめられない。
@@ -93,19 +146,27 @@ function untrustedExistingHooks(codexHome, cwd) {
   const config = readText(path.join(codexHome, 'config.toml')) || '';
   const states = hookStates(config);
   const problems = [];
-  if (/^\[\[?hooks\.(?!state)/m.test(config)) problems.push('config.toml に [hooks] の定義がある');
-  const projectHooks = path.join(cwd, '.codex', 'hooks.json');
-  if (fs.existsSync(projectHooks)) problems.push(`プロジェクトのフックがある: ${projectHooks}`);
+  if (configDefinesHooks(config)) problems.push('config.toml に [hooks] の定義がある');
+  for (const codexDir of projectCodexDirs(cwd, codexHome)) {
+    if (fs.existsSync(path.join(codexDir, 'hooks.json'))) problems.push(`プロジェクトのフックがある: ${path.join(codexDir, 'hooks.json')}`);
+    const projectConfig = readText(path.join(codexDir, 'config.toml'));
+    if (projectConfig !== null && configDefinesHooks(projectConfig)) problems.push(`プロジェクトの config.toml にフックの定義がある: ${path.join(codexDir, 'config.toml')}`);
+  }
   const userHooks = path.join(codexHome, 'hooks.json');
-  const entries = hookEntries(userHooks, userHooks);
+  const entries = hookFileEntries(userHooks, userHooks);
   for (const plugin of enabledPlugins(config)) {
     const [name, marketplace] = plugin.split('@');
+    if (BUNDLED_MARKETPLACES.has(marketplace)) continue;
     const pluginDir = path.join(codexHome, 'plugins', 'cache', marketplace || '', name || '');
     let versions = [];
-    try { versions = fs.readdirSync(pluginDir).filter((version) => fs.existsSync(path.join(pluginDir, version, 'hooks', 'hooks.json'))).sort(); } catch {}
-    if (versions.length) entries.push(...hookEntries(path.join(pluginDir, versions.at(-1), 'hooks', 'hooks.json'), `${plugin}:hooks/hooks.json`));
+    try { versions = fs.readdirSync(pluginDir); } catch {}
+    for (const version of versions) {
+      const versionDir = path.join(pluginDir, version);
+      entries.push(...hookFileEntries(path.join(versionDir, 'hooks', 'hooks.json'), `${plugin}:hooks/hooks.json`));
+      entries.push(...manifestEntries(versionDir, plugin));
+    }
   }
-  for (const entry of entries) {
+  for (const entry of new Map(entries.map((item) => [item.key, item])).values()) {
     const state = states.get(entry.key);
     if (!state?.disabled && !state?.trusted) problems.push(`信頼の記録が無いフック: ${entry.key} (${entry.command})`);
   }

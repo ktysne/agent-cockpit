@@ -120,7 +120,7 @@ node tools/codex-probe/launch.js --exec -- "Run pwd, then reply with OK only."
 
 守ること:
 
-- `--dangerously-bypass-hook-trust` は、`-c` で渡したフックに加えて、有効なフックをすべて信頼の確認なしで動かします。渡すフックは、`tools/codex-probe/` のものか、そのセッションで書いて中身を確かめたものに限ります。`launch.js` は、通常の設定、プロジェクト、有効なプラグインのフックに信頼の記録が無いものがあると、起動せずに一覧を出して止まります。信頼した後に定義が変わったかまでは確かめられません。
+- `--dangerously-bypass-hook-trust` は、`-c` で渡したフックに加えて、有効なフックをすべて信頼の確認なしで動かします。渡すフックは、`tools/codex-probe/` のものか、そのセッションで書いて中身を確かめたものに限ります。`launch.js` は、通常の設定、プロジェクト(`.codex/hooks.json` と `.codex/config.toml`)、有効なプラグイン(`hooks/hooks.json` と manifest の `hooks`)のフックに信頼の記録が無いものや、解釈できない定義があると、起動せずに一覧を出して止まります。Codex に同梱されたプラグイン(`openai-bundled`)は Codex 本体の一部として扱い、検査しません。信頼した後に定義が変わったかまでは確かめられません。
 - Codex のアカウントは、通常の `~/.codex` を使います。`~/.codex-subagent` は委譲した実装の用途なので使いません。
 - `/hooks` の信頼の操作のように、`~/.codex` を書き換えないと確かめられないことは、開発者の承認を得てから行います。書き換えるときはバックアップを取り、作業後に sha256 で照合して戻します。
 
