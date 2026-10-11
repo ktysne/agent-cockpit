@@ -160,6 +160,8 @@ function sanitizeEvent(input, metadata = {}) {
   if (agentType) event.agent_type = agentType;
   if (event.provider === 'codex') {
     event.model = shortString(input.model, 160) || '';
+    event.cwd = shortString(input.cwd, 4096) || '';
+    if (eventName === 'SessionStart' && Number.isInteger(input.codexPid) && input.codexPid > 0) event.codexPid = input.codexPid;
     if (isHookSessionId(input.claudeParentSessionId)) event.claudeParentSessionId = input.claudeParentSessionId;
     if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'].includes(eventName)) {
       event.tool_name = shortString(input.tool_name, 100) || '';
