@@ -332,7 +332,8 @@ PostToolUse は `resolved`、PostToolUseFailure は `withdrawn` にし、どち�
 回答待ちの期限は再起動で消えるため、期限や回答の有無だけではなく記録の存在を保護の根拠にする。
 後続イベントによる取り下げは `finishedByToolUseId` と終了時刻に加え、推定の印を兼ねる根拠イベントの `hookAt` を `inferredWithdrawalHookAt` に保存する。
 この項目がない保存済みの判断事項は、推定による取り下げとして扱わない。
-同じ呼び出し、または同じ判断事項に結び付いた呼び出しの PostToolUse / PostToolUseFailure が遅れて届き、その `hookAt` が推定の根拠より前なら、保存状態を終了フックの結果と終了時刻へ訂正し、推定の印を消す。
+推定で取り下げた呼び出し(`finishedByToolUseId`。出し直しがあれば最新の呼び出し)の PostToolUse / PostToolUseFailure が遅れて届き、その `hookAt` が推定の根拠より前なら、保存状態を終了フックの結果と終了時刻へ訂正し、推定の印を消す。
+出し直し前の呼び出しの終了フックは、最新の呼び出しの結果を説明しないので訂正に使わない。
 PostToolUse は `resolved` と回答内容、PostToolUseFailure は `withdrawn` と `resolution: null` を保存する。
 推定の根拠と同時刻か、それより後の終了フックでは取り下げを変えない。
 推定の取り下げと訂正後の状態は、再起動後やイベントからの作り直しでも保つ。

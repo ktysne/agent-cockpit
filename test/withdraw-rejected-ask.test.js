@@ -198,14 +198,14 @@ test('推定の取り下げを訂正した resolved と回答内容は再起動�
   assert.deepEqual(decision(restored), expected);
 });
 
-test('再起動後も結び付いた呼び出しの古い終了フックで推定の取り下げを訂正する', async () => {
+test('再起動後も最新の出し直しの遅れた終了フックで推定の取り下げを訂正する', async () => {
   for (const eventName of ['PostToolUse', 'PostToolUseFailure']) {
     const state = new DashboardState();
     state.addEvent(ask());
     state.addEvent(ask('ask-2', NOW + 5));
     state.addEvent(progress('Stop', NOW + 20));
     const restored = await restart(state);
-    restored.addEvent(ask('ask-1', NOW + 10, { hook_event_name: eventName,
+    restored.addEvent(ask('ask-2', NOW + 10, { hook_event_name: eventName,
       decisionResolution: { chosen: ['JSON'], note: '' } }));
     assert.equal(decision(restored).state, eventName === 'PostToolUse' ? 'resolved' : 'withdrawn');
     assert.deepEqual(decision(restored).resolution, eventName === 'PostToolUse' ? { chosen: ['JSON'], note: '' } : null);
@@ -239,4 +239,20 @@ test('再起動後に古い開始が届いても最新の出し直しより前�
   restored.addEvent(progress('UserPromptSubmit', NOW + 100));
   assert.equal(decision(restored).state, 'withdrawn');
   assert.equal(decision(restored).finishedByToolUseId, 'ask-2');
+});
+
+test('出し直し前の呼び出しの遅れた終了フックは推定の取り下げを訂正しない', async () => {
+  for (const restarts of [false, true]) {
+    for (const eventName of ['PostToolUse', 'PostToolUseFailure']) {
+      let state = new DashboardState();
+      state.addEvent(ask());
+      state.addEvent(ask('ask-2', NOW + 5));
+      state.addEvent(progress('Stop', NOW + 20));
+      if (restarts) state = await restart(state);
+      state.addEvent(ask('ask-1', NOW + 2, { hook_event_name: eventName, decisionResolution: { chosen: ['JSON'], note: '' } }));
+      assert.equal(decision(state).state, 'withdrawn');
+      assert.equal(decision(state).resolution, null);
+      assert.equal(decision(state).finishedByToolUseId, 'ask-2');
+    }
+  }
 });

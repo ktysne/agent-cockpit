@@ -2350,9 +2350,9 @@ class DashboardState {
   correctInferredAskWithdrawal(event) {
     if (event.agent_id || event.tool_name !== 'AskUserQuestion' || !event.tool_use_id ||
       !['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) return false;
-    const decisionId = this.askDecisionBindings.get(event.session_id)?.get(event.tool_use_id);
+    // 推定の取り下げは最新の呼び出しを finishedByToolUseId に持つ。出し直し前の呼び出しの終了は結果を説明しない。
     const stored = this.plans.get(event.session_id)?.decisions.find((decision) => decision.source === 'ask' &&
-      (decision.id === decisionId || decision.finishedByToolUseId === event.tool_use_id));
+      decision.finishedByToolUseId === event.tool_use_id);
     if (!stored || stored.state !== 'withdrawn' || !Number.isFinite(stored.inferredWithdrawalHookAt) ||
       event.hookAt >= stored.inferredWithdrawalHookAt) return false;
     // 終了フックは別プロセスから遅れて届くため、推定の根拠より前の終了だけで保存状態を訂正する。
