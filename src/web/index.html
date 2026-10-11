@@ -444,11 +444,6 @@ h3.sub .count { font-weight: normal; }
       <input id="settings-away-answer-wait-minutes" name="awayAnswerWaitMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-away-answer-wait-error">
       <span class="settings-input-error" id="settings-away-answer-wait-error" role="alert" hidden></span>
     </div>
-    <div class="settings-theme-row">
-      <label for="settings-merge-result-hide-minutes">マージの結果を隠すまで (分)</label>
-      <input id="settings-merge-result-hide-minutes" name="mergeResultHideMinutes" type="number" step="1" inputmode="numeric" aria-describedby="settings-merge-result-hide-error">
-      <span class="settings-input-error" id="settings-merge-result-hide-error" role="alert" hidden></span>
-    </div>
     <div class="settings-section-order">
       <h4 id="settings-section-order-title">セクションの並び順</h4>
       <p class="meta" id="settings-section-order-note">種類別はこの順に並ぶ。プロダクト別は、セッションの中の 3 つがこの順に並び、「前回見てから」はカードの上、「プルリクエスト」は下に出る。</p>
@@ -483,7 +478,6 @@ const WAIT_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_LONG_WAIT_MINUTES = 15;
 const DEFAULT_AWAY_ANSWER_WAIT_MINUTES = 5;
 const DEFAULT_IDLE_HIDE_MINUTES = 30;
-const DEFAULT_MERGE_RESULT_HIDE_MINUTES = 5;
 const summary = document.getElementById('summary');
 const root = document.getElementById('root');
 const liveStatus = document.getElementById('live-status');
@@ -493,16 +487,13 @@ const sinceSeenSelect = document.getElementById('settings-since-seen-select');
 const longWaitMinutesInput = document.getElementById('settings-long-wait-minutes');
 const awayAnswerWaitMinutesInput = document.getElementById('settings-away-answer-wait-minutes');
 const idleHideMinutesInput = document.getElementById('settings-idle-hide-minutes');
-const mergeResultHideMinutesInput = document.getElementById('settings-merge-result-hide-minutes');
 const longWaitMinutesError = document.getElementById('settings-long-wait-error');
 const awayAnswerWaitMinutesError = document.getElementById('settings-away-answer-wait-error');
 const idleHideMinutesError = document.getElementById('settings-idle-hide-error');
-const mergeResultHideMinutesError = document.getElementById('settings-merge-result-hide-error');
 const DISPLAY_MINUTE_SETTINGS = [
   { key: 'longWaitMinutes', input: longWaitMinutesInput, error: longWaitMinutesError, min: 1, max: 120, default: DEFAULT_LONG_WAIT_MINUTES },
   { key: 'awayAnswerWaitMinutes', input: awayAnswerWaitMinutesInput, error: awayAnswerWaitMinutesError, min: 1, max: 30, default: DEFAULT_AWAY_ANSWER_WAIT_MINUTES },
   { key: 'idleHideMinutes', input: idleHideMinutesInput, error: idleHideMinutesError, min: 5, max: 1440, default: DEFAULT_IDLE_HIDE_MINUTES },
-  { key: 'mergeResultHideMinutes', input: mergeResultHideMinutesInput, error: mergeResultHideMinutesError, min: 1, max: 60, default: DEFAULT_MERGE_RESULT_HIDE_MINUTES },
 ];
 for (const { input, min, max } of DISPLAY_MINUTE_SETTINGS) {
   input.min = String(min);
@@ -1392,7 +1383,7 @@ function finishedDeletionTargets(sessions, groups) {
     for (const group of groups) {
       for (const record of group[source] || []) {
         const visibleAutomaticResult = record.automatic === true && record.automaticResult
-          && pullRequestMergeResultVisible(record, record.mergedAt);
+          && pullRequestMergeResultVisible(record);
         if (field === 'merge_history' ? record.headMismatch === true || visibleAutomaticResult : record.state !== 'closed') continue;
         const key = `${group.owner}/${group.repo}#${record.number}`.toLowerCase();
         if (seen.has(key)) continue;
@@ -1532,7 +1523,7 @@ function finishedHiddenCounts(sessions, groups) {
     const repository = `${group.owner}/${group.repo}`.toLowerCase();
     for (const record of group.mergeHistory || []) {
       const visibleAutomaticResult = record.automatic === true && record.automaticResult
-        && pullRequestMergeResultVisible(record, record.mergedAt);
+        && pullRequestMergeResultVisible(record);
       if (record.headMismatch !== true && !visibleAutomaticResult) hiddenPullRequests.add(`${repository}#${record.number}`);
     }
     for (const pullRequest of group.merged || []) {
@@ -1661,13 +1652,13 @@ function pullRequestRepositoryKey(group) {
 
 function hasPullRequestMergeResults(group) {
   return (pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [])
-    .some((result) => pullRequestMergeResultVisible(result, result.recordedAt));
+    .some((result) => pullRequestMergeResultVisible(result));
 }
 
 function rememberPullRequestMergeResult(group, result) {
   const key = pullRequestRepositoryKey(group);
   const results = pullRequestMergeResults.get(key) || [];
-  results.push({ id: String(++nextPullRequestMergeResultId), recordedAt: Date.now(), ...result, autoDeleteBranch: group.autoDeleteBranch === true && result.isCrossRepository !== true });
+  results.push({ id: String(++nextPullRequestMergeResultId), ...result, autoDeleteBranch: group.autoDeleteBranch === true && result.isCrossRepository !== true });
   pullRequestMergeResults.set(key, results);
 }
 
@@ -1689,13 +1680,8 @@ function recordPullRequestTransientMessage(messages, key, message) {
   messages.set(key, { message, shownAt: Date.now() });
 }
 
-function pullRequestMergeResultExpired(result, startedAt, now = Date.now()) {
-  if (result.mergeResultClosedAt || pullRequestMergeResultHasWarning(result)) return false;
-  return pullRequestTimestampExpired(startedAt, displayPreferences.mergeResultHideMinutes * 60_000, now);
-}
-
-function pullRequestMergeResultVisible(result, startedAt = result.recordedAt, now = Date.now()) {
-  return !result.mergeResultClosedAt && !pullRequestMergeResultExpired(result, startedAt, now);
+function pullRequestMergeResultVisible(result) {
+  return !result.mergeResultClosedAt && pullRequestMergeResultHasWarning(result);
 }
 
 function pullRequestExpirySignature(groups, now = Date.now()) {
@@ -1705,14 +1691,6 @@ function pullRequestExpirySignature(groups, now = Date.now()) {
     for (const notice of group.reservationNotices || []) {
       const state = pullRequestTransientNoticeExpired(notice.at, now) ? 'expired' : 'visible';
       expired.push(`${groupKey}:reservation:${notice.number}:${notice.at}:${state}`);
-    }
-    for (const result of group.mergeHistory || []) {
-      if (result.automatic === true && result.automaticResult && pullRequestMergeResultExpired(result, result.mergedAt, now)) {
-        expired.push(`${groupKey}:automatic:${result.number}:${result.mergedAt}`);
-      }
-    }
-    for (const result of pullRequestMergeResults.get(groupKey) || []) {
-      if (pullRequestMergeResultExpired(result, result.recordedAt, now)) expired.push(`${groupKey}:manual:${result.id}`);
     }
   }
   for (const [key, message] of pullRequestMergeMessages) {
@@ -1738,7 +1716,7 @@ function removePullRequestMergeResult(id) {
 function pullRequestGroupHasVisibleContent(group) {
   return group.openCount > 0 || group.openStateUnknown || group.error || group.loading || group.trees?.length
     || group.mergeHistory?.some((record) => record.headMismatch === true
-      || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record, record.mergedAt)))
+      || (record.automatic === true && record.automaticResult && pullRequestMergeResultVisible(record)))
       || group.reservationNotices?.some((notice) => !pullRequestTransientNoticeExpired(notice.at)) || hasPullRequestMergeResults(group);
 }
 
@@ -2305,8 +2283,8 @@ function pullRequestMergeResultLine(result) {
 
 function appendPullRequestMergeResults(content, group) {
   const results = pullRequestMergeResults.get(pullRequestRepositoryKey(group)) || [];
-  const serverResults = (group.mergeHistory || []).filter((result) => result.automatic === true && result.automaticResult && pullRequestMergeResultVisible(result, result.mergedAt));
-  const visibleLocalResults = results.filter((result) => pullRequestMergeResultVisible(result, result.recordedAt));
+  const serverResults = (group.mergeHistory || []).filter((result) => result.automatic === true && result.automaticResult && pullRequestMergeResultVisible(result));
+  const visibleLocalResults = results.filter((result) => pullRequestMergeResultVisible(result));
   for (const result of [...serverResults, ...visibleLocalResults]) {
     const row = element('div', 'merge-result');
     row.setAttribute('role', 'status');

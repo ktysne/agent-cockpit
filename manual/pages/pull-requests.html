@@ -475,16 +475,16 @@
   PR を登録したセッションが無いときと、登録したセッションがすべて終了しているときです。</p>
 
   <h2 id="pr-result">マージの結果</h2>
-  <p>マージが済むと、PR の枠に結果の行が出ます。
+  <p>マージ後、結果に警告がある場合だけ PR の枠に結果の行が出ます。
   ブランチを削除した場合、スタックの直上の PR は、base がマージ先に付け替わり、一番下の PR になります。
   ブランチを残した場合は、base を付け替えません。</p>
-  <figure class="guide-map" id="pr-result-map" data-shot="pull-requests-result/result" data-alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、マージの結果の行がある">
+  <figure class="guide-map" id="pr-result-map" data-shot="pull-requests-result/result" data-alt="スカッシュでマージした後の PR の枠。一番下になった PR に、base を main に付け替え済みと積み直しが必要の札があり、マージできない理由が積み直し待ちになっている。枠の下部に、マージ済みの一覧と、ブランチ削除に失敗した警告つきの結果の行がある">
     <ol class="guide-list">
       <li data-part="result.retargeted"><b>付け替え済みの札</b>：ダッシュボードが、この PR の base をマージ先に付け替えました。</li>
       <li data-part="result.restack"><b><span class="ui">積み直しが必要</span></b>：スカッシュでマージしたので、この PR の差分に、下の PR のコミットが残っています(<a href="#pr-restack">積み直し</a>)。</li>
       <li data-part="result.reason" data-place="left"><b>マージできない理由</b>：積み直しが済むまで、マージできません。</li>
       <li data-part="result.merged-list" data-place="left"><b>マージ済みの一覧</b>：マージした PR が、時刻と方式つきで加わります。</li>
-      <li data-part="result.row" data-place="left"><b>結果の行</b>：マージした PR の番号に、方式、ブランチの扱い、付け替えた PR が続きます。</li>
+      <li data-part="result.row" data-place="left"><b>結果の行</b>：警告があるマージ結果だけを表示します。PR の番号に、方式、ブランチの扱い、付け替えた PR、警告が続きます。</li>
       <li data-part="result.close"><b><span class="ui">閉じる</span></b>：結果の行を消します。</li>
     </ol>
   </figure>
@@ -495,11 +495,11 @@
     <li>直上の PR の base を付け替えたときは、付け替えた PR の番号</li>
     <li>ブランチを削除できなかったときなどの警告</li>
   </ul>
-  <p>結果の行は、ページを開いている間だけ出ます。
-  ページを開き直すと消えます。
-  設定の <span class="ui">マージの結果を隠すまで (分)</span> に指定した時間がたつと、警告のない行は自動で隠れます。初期値は 5 分で、1〜60 分の整数を指定できます。
-  ブランチ削除などの警告がある行と、予約時に確認した head と異なる head がマージされた行は自動で隠れず、<span class="ui">閉じる</span> を押すまで残ります。
-  レビュー収束後マージの結果は常駐サーバーに保存され、<span class="ui">閉じる</span> を押すと閉じた状態も保存されます。マージ履歴が 24 時間で整理されると結果も消えます(<a href="settings.html#settings-merge-result-hide">マージの結果を隠すまで</a>)。</p>
+  <p><code>warning</code> に文字列があるか、予約時に確認した head と異なる head がマージされた場合に結果の行を表示します。
+  警告がないマージ結果の行は表示しません。
+  表示した行は <span class="ui">閉じる</span> を押すまで残ります。
+  即時マージの結果はページを開いている間だけ保持し、レビュー収束後の予約マージ結果は常駐サーバーに保存します。
+  予約マージの結果は、閉じた状態も保存され、マージ履歴と同じく 24 時間後に整理されます。</p>
 
   <h3 id="pr-notify">セッションへの知らせ</h3>
   <p>マージを検出すると、常駐サーバーは、PR を登録したセッションと、直上の PR を登録したセッションに知らせます。

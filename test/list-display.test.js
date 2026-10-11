@@ -970,24 +970,25 @@ test('マージ結果の一行と予約時の SHA 違いを完了表示の設定
     context.resultLine({ method: 'squash', branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [42], warning: '予約時と異なる head SHA がマージされました' }));
 });
 
-test('常駐サーバーが記録した予約マージの結果を一行で表示する', () => {
+test('常駐サーバーが記録した警告つき予約マージ結果を一行で表示する', () => {
+  const warningSource = functionSource(web, 'pullRequestMergeResultHasWarning');
+  const visibleSource = functionSource(web, 'pullRequestMergeResultVisible');
   const resultLine = functionSource(web, 'pullRequestMergeResultLine');
   const appendResults = functionSource(web, 'appendPullRequestMergeResults');
-  assert.ok(resultLine && appendResults);
+  assert.ok(warningSource && visibleSource && resultLine && appendResults);
   const context = pageContext(web, {
     MERGE_METHOD_LABELS: { squash: 'スカッシュ' },
     pullRequestMergeResults: new Map(),
     pullRequestRepositoryKey: (group) => `${group.owner}/${group.repo}`,
-    pullRequestMergeResultVisible: () => true,
     element: fakeElement,
   });
-  vm.runInContext(`${resultLine}\n${appendResults}\nthis.appendResults = appendPullRequestMergeResults;`, context);
+  vm.runInContext(`${warningSource}\n${visibleSource}\n${resultLine}\n${appendResults}\nthis.appendResults = appendPullRequestMergeResults;`, context);
   const content = fakeElement('div');
   context.appendResults(content, {
     owner: 'example', repo: 'project',
     mergeHistory: [{
       number: 43, method: 'squash', automatic: true,
-      automaticResult: { branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [44] },
+      automaticResult: { branchDeleted: true, retargetedBase: 'main', retargetedNumbers: [44], warning: '予約時と異なる head SHA がマージされました' },
     }],
   });
   assert.match(content.textContent, /PR #43: スカッシュ でマージしました。ブランチを削除しました。#44 の base を main に付け替えました/);
@@ -1426,20 +1427,16 @@ test('待ち時間の範囲外は欄の近くに示し、ラベルにも範囲�
   const longError = { hidden: true, textContent: '' };
   const awayError = { hidden: true, textContent: '' };
   const idleError = { hidden: true, textContent: '' };
-  const resultError = { hidden: true, textContent: '' };
   const input = { type: 'number', valueAsNumber: 121, value: '121' };
   const context = pageContext(web, {
     longWaitMinutesInput: input, longWaitMinutesError: longError, awayAnswerWaitMinutesError: awayError,
     idleHideMinutesError: idleError,
-    mergeResultHideMinutesError: resultError,
     awayAnswerWaitMinutesInput: { type: 'number', value: '' },
     idleHideMinutesInput: { type: 'number', valueAsNumber: 4, value: '4' },
-    mergeResultHideMinutesInput: { type: 'number', value: '' },
     displayPreferences: { longWaitMinutes: 15, idleHideMinutes: 30 },
     DEFAULT_LONG_WAIT_MINUTES: 15,
     DEFAULT_AWAY_ANSWER_WAIT_MINUTES: 5,
     DEFAULT_IDLE_HIDE_MINUTES: 30,
-    DEFAULT_MERGE_RESULT_HIDE_MINUTES: 5,
   });
   vm.runInContext(`${settings}\n${inputSource}\n${errorSource}\n${changeSource}\nthis.changeSetting = changeDisplaySetting;`, context);
   assert.equal(await context.changeSetting('longWaitMinutes', input), false);
