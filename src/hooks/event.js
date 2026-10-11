@@ -1,4 +1,5 @@
 const { cockpitHomeFromOptions } = require('../server/identity');
+const { isHookSessionId } = require('../server/session-ids');
 const { sanitizeQuestions, sanitizeDecisionResolution } = require('../server/events');
 const { readRouting } = require('../server/routing');
 const {
@@ -263,6 +264,8 @@ function makeHookEvent(input, now = Date.now(), options = {}) {
   if (isCodex) {
     event.provider = 'codex';
     event.model = pickString(input.model).slice(0, 160);
+    const parentSessionId = (options.environment || process.env).CLAUDE_CODE_SESSION_ID;
+    if (isHookSessionId(parentSessionId)) event.claudeParentSessionId = parentSessionId;
   }
   if (eventName === 'SessionStart') event.source = pickString(input.source).slice(0, 100);
   for (const key of ['agent_id', 'agent_type']) {

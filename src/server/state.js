@@ -1310,6 +1310,7 @@ function deriveSessions(entries, askDecisionState = {}, beforeSequence = Infinit
   });
 
   for (const { event } of ordered) {
+    if (event.delegatedFrom) continue;
     const session = sessionForEvent(sessions, event, initialAskDecisionState);
 
     if (session.ended) continue;
@@ -2357,6 +2358,29 @@ class DashboardState {
     return changed;
   }
 
+  // サブエージェントから委譲した Codex の行は、表示用の形では親の行の gpt にまとめられている。
+  hasRunningDelegation(sessionId) {
+    const parent = sessionId ? this.sessions.get(sessionId) : null;
+    if (parent?.provider !== 'claude') return false;
+    return parent.agents.some((agent) => (
+      (agent.isCodex === true && !agent.resultReceived && (agent.active || agent.unconfirmed)) ||
+      (agent.gpt && (agent.gpt.active || agent.gpt.unconfirmed))
+    ));
+  }
+
+  // Claude の PreToolUse は非同期のフックで、子の Codex のイベントより後に届くことがある。
+  // 起動の時刻以降に始まった独立の thread を委譲に直し、起動より前に始まった thread は直さない。
+  reclassifyDelegatedThreads(parentSessionId, launchedAt) {
+    for (const [threadId, entries] of this.entries) {
+      const first = entries[0]?.event;
+      if (first?.provider !== 'codex' || first.delegatedFrom || first.claudeParentSessionId !== parentSessionId ||
+        first.hookAt < launchedAt) continue;
+      first.delegatedFrom = parentSessionId;
+      this.entries.set(threadId, [entries[0]]);
+      this.sessions.delete(threadId);
+    }
+  }
+
   hasAgentRow(sessionId, agentId) {
     return Boolean(agentId && this.sessions.get(sessionId)?.agents.some((agent) => agent.agent_id === agentId));
   }
@@ -2454,6 +2478,16 @@ class DashboardState {
     const existingProvider = this.entries.get(event.session_id)?.[0]?.event.provider
       || this.sessions.get(event.session_id)?.provider;
     if (existingProvider && existingProvider !== event.provider) return false;
+    // 委譲した Codex の thread は行を作らない。分類は thread の最初のイベントで決め、そのイベントだけを保持する(docs/design/codex-delegation.md)。
+    if (event.provider === 'codex') {
+      const entries = this.entries.get(event.session_id) || [];
+      if (entries[0]?.event.delegatedFrom) return true;
+      if (!entries.length && this.hasRunningDelegation(event.claudeParentSessionId)) {
+        event.delegatedFrom = event.claudeParentSessionId;
+        this.entries.set(event.session_id, [{ event, sequence: this.sequence++ }]);
+        return true;
+      }
+    }
     if (!this.acceptSessionWrite(event.session_id, event.hookAt)) return true;
 
     const endedAt = this.endedAt.get(event.session_id);
@@ -2495,6 +2529,9 @@ class DashboardState {
     // 許可待ちはターンの確定を待たずに優先して出るので、許可待ちでも残す。
     const derivedStatus = nextSessions[0]?.status;
     const hadEstimate = derivedStatus !== '不明' && derivedStatus !== '許可待ち' && this.estimates.delete(event.session_id);
+    if (event.provider === 'claude' && event.hook_event_name === 'PreToolUse' && event.codexDefinition) {
+      this.reclassifyDelegatedThreads(event.session_id, event.hookAt);
+    }
 
     if (event.hook_event_name === 'SessionEnd') {
       this.endSession(event.session_id, event.hookAt);

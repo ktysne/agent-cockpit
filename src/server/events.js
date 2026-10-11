@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { isHookSessionId } = require('./session-ids');
 const { parsePullRequestUrl } = require('./pull-request-utils');
 
 const EVENT_NAMES = new Set([
@@ -131,6 +132,7 @@ function sanitizeEvent(input, metadata = {}) {
   if (agentType) event.agent_type = agentType;
   if (event.provider === 'codex') {
     event.model = shortString(input.model, 160) || '';
+    if (isHookSessionId(input.claudeParentSessionId)) event.claudeParentSessionId = input.claudeParentSessionId;
     if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'].includes(eventName)) {
       event.tool_name = shortString(input.tool_name, 100) || '';
       if (eventName !== 'PermissionRequest') event.tool_use_id = shortString(input.tool_use_id, 256) || '';
