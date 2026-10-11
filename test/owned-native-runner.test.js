@@ -146,6 +146,92 @@ function requiredHomeDirectories(homePath) {
   ];
 }
 
+test('Windows rejects non-EXE native paths before authentication, spawn, or isolated HOME setup', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  for (const provider of ['claude', 'codex']) {
+    for (const fileName of ['native.cmd', 'native.bat', 'native']) {
+      const workspace = createWorkspace(t);
+      const executablePath = path.join(workspace.root, fileName);
+      fs.writeFileSync(executablePath, 'fixture executable');
+      let callbackCount = 0;
+      let spawnCount = 0;
+      const providerCallbacks = provider === 'claude'
+        ? { getAuthentication() { callbackCount += 1; return { oauthToken: 'unused' }; } }
+        : { onAuthenticationRequired() { callbackCount += 1; } };
+      assert.throws(
+        () => createOwnedNativeRunner(baseOptions(workspace, provider, {
+          executablePath,
+          ...providerCallbacks,
+          onNative() { callbackCount += 1; },
+          spawnImpl() { spawnCount += 1; },
+        })),
+        (error) => error.code === 'executable_format_unsupported' && !error.message.includes(executablePath),
+      );
+      assert.equal(callbackCount, 0);
+      assert.equal(spawnCount, 0);
+      assert.equal(requiredHomeDirectories(workspace.homePath).some((directory) => fs.existsSync(directory)), false);
+    }
+  }
+});
+
+test('Windows executable validation preserves earlier diagnostics and accepts uppercase EXE suffixes', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  const workspace = createWorkspace(t);
+  const validExecutablePath = path.join(workspace.root, 'alternate.EXE');
+  fs.writeFileSync(validExecutablePath, 'fixture executable');
+  for (const provider of ['claude', 'codex']) {
+    const providerCallbacks = provider === 'claude'
+      ? { getAuthentication() { return { oauthToken: 'unused' }; } }
+      : { onAuthenticationRequired() {} };
+    const options = {
+      ...providerCallbacks,
+      onNative() {},
+      executablePath: validExecutablePath,
+    };
+    assert.doesNotThrow(() => createOwnedNativeRunner(baseOptions(workspace, provider, options)));
+    assert.throws(
+      () => createOwnedNativeRunner(baseOptions(workspace, provider, { ...options, executablePath: 'native.cmd' })),
+      (error) => error.code === 'absolute_executable_required',
+    );
+    const missingExecutablePath = path.join(workspace.root, 'missing.cmd');
+    assert.throws(
+      () => createOwnedNativeRunner(baseOptions(workspace, provider, { ...options, executablePath: missingExecutablePath })),
+      (error) => error.code === 'executable_unavailable' && !error.message.includes(missingExecutablePath),
+    );
+  }
+});
+
+test('Windows executable symlinks keep the unavailable diagnostic ahead of suffix validation', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  const workspace = createWorkspace(t);
+  const targetPath = path.join(workspace.root, 'target.EXE');
+  const symlinkPath = path.join(workspace.root, 'linked.cmd');
+  fs.writeFileSync(targetPath, 'fixture executable');
+  try {
+    fs.symlinkSync(targetPath, symlinkPath, 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) return t.skip('Windows symlink privilege unavailable');
+    throw error;
+  }
+
+  for (const provider of ['claude', 'codex']) {
+    const providerCallbacks = provider === 'claude'
+      ? { getAuthentication() { return { oauthToken: 'unused' }; } }
+      : { onAuthenticationRequired() {} };
+    assert.throws(
+      () => createOwnedNativeRunner(baseOptions(workspace, provider, {
+        ...providerCallbacks,
+        executablePath: symlinkPath,
+        onNative() {},
+      })),
+      (error) => error.code === 'executable_unavailable',
+    );
+  }
+});
+
 function codexResponse(id, result) {
   return { id, result };
 }

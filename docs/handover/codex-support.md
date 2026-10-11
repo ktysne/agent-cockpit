@@ -1160,3 +1160,12 @@ R2の提案に従い、不明の合成行に推定操作がないこともマニ
 最終更新は文書と生成マニュアルだけで、src/test/tools/mockは全体試験headから不変である。
 PR #376はReadyで、#375の後にマージ可能である。未収束の#364は含めない。
 次は#215のWindows非.exe起動の専用診断へスタックして進む。認証保持、環境変数伝播、feature設定は別の契約を確定してから実装する。
+
+## Windowsの実行ファイル診断の現在地 (#215)
+
+最新featureから`codex/windows-executable-diagnostic-215-20261011`を作り、Readyの#376最終head `dca87f5`を通常mergeで取り込んだ。
+AstraとLunaXHighの読取調査に基づき、owned runnerの両providerとmanaged processの共通constructorへ限定する。
+[実行ファイルの診断契約](../design/windows-native-executable.md)とWE01〜WE05を実装前に記録した。
+既存のpathと通常fileの診断を優先し、Windowsの非.exeを認証、HOME配下の作成、spawnより前に固定codeで拒否する。
+shell fallbackと自動探索は追加しない。導入手順でnative.exeの絶対pathを案内する。
+認証保持、環境変数伝播、機能の実効性と実runtimeは残るため、#215全体の完了には含めない。

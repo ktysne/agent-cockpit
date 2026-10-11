@@ -11,6 +11,10 @@ remote実行環境では、loopback外へtransportを公開せず、認証済み
 native actorと登録済みexecutionを結ぶ証拠が確認されるまでは、観測はunknownとして扱い、production bindingとして採用しません。
 通常HOMEへの導入案を検討するときは、対象、差分、復旧手順を先に示し、個別の承認後にだけ進めます。
 
+実験用のowned native runnerとCodex managed processに実行ファイルを指定する場合、Windowsではproviderのnative `.exe`の絶対パスを使います。
+npmの`codex.cmd`などのshell wrapperは使えず、`executable_format_unsupported`になります。設定を確認し、providerが提供するnative実行ファイルの場所を明示してください。
+この診断は認証や隔離HOME配下の作成より前に行います。`.exe`という拡張子だけでインストールや実行の成功を保証するものではありません。
+
 ## 進め方の決まり
 
 - `~/.claude/settings.json`、MCP サーバーの登録、`~/.claude/skills/` は、リポジトリの外にあり、開発者のすべてのセッションに効きます。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込んでください。agent-cockpit はこれらを自動では変更しません。

@@ -933,3 +933,17 @@ membershipのfalse返却中の実kernel revision変更、再入、method置換�
 画面関連100件とdashboard表示関連34件が成功し、モックをブラウザでも確認した。
 指定Claudeの2往復でblockerと要修正0件に収束した。文書と生成マニュアルの補足後もsrc/test/tools/mockは同headから不変である。
 実provider runtimeと実画面での状態遷移は未確認である。
+
+## Windowsのnative実行ファイルの診断 (#215)
+
+期待条件は[Windowsのnative実行ファイル](windows-native-executable.md)に従う。
+
+| ID | 入力 | 期待条件 |
+|---|---|---|
+| ID-F215-WE01 | Windowsで両providerの通常.cmd/.bat/拡張子なし | constructorで専用code。認証とspawn未呼出し、HOME配下未作成、私有path非公開 |
+| ID-F215-WE02 | Windowsで通常.EXE | 大文字の拡張子を受理し、固定profileとshell:falseを維持 |
+| ID-F215-WE03 | 相対path、不存在、非通常file、symlink | 既存の診断が拡張子の拒否より優先 |
+| ID-F215-WE04 | managed processの共通実行ファイル | 非対応fileをHOME準備と起動前に拒否。app-serverとremote CLIの固定pathを維持 |
+| ID-F215-WE05 | 非Windowsの既存fixture | 拡張子なしの既存動作を維持。Windowsからは未確認として分離 |
+
+実provider runtimeと未実行OSの成功はfixtureから推定しない。

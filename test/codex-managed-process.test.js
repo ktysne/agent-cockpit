@@ -23,6 +23,7 @@ test('managed process isolates its HOME, exposes a secret-free snapshot, and sto
   assert.equal(started.state, 'running');
 
   const serverCall = fixture.calls[0];
+  assert.equal(serverCall.executable, fixture.executablePath);
   assert.deepEqual(serverCall.args.slice(0, 4), ['app-server', '--listen', started.endpoint, '--ws-auth']);
   assert.deepEqual(serverCall.args.slice(4, 6), ['capability-token', '--ws-token-sha256']);
   assert.match(serverCall.args[6], /^[0-9a-f]{64}$/);
@@ -49,6 +50,7 @@ test('managed process isolates its HOME, exposes a secret-free snapshot, and sto
   await assert.rejects(manager.launchRemoteCLI({ threadId: 'not-loaded' }), (error) => error.code === 'thread_not_loaded');
   assert.equal(fixture.calls.length, 1);
   const remoteClient = await manager.launchRemoteCLI({ threadId: THREAD_ID });
+  assert.equal(fixture.calls[1].executable, fixture.executablePath);
   assert.deepEqual(fixture.calls[1].args, [
     'resume', THREAD_ID,
     '--remote', started.endpoint,
@@ -79,6 +81,53 @@ test('managed process isolates its HOME, exposes a secret-free snapshot, and sto
   assert.equal(fixture.managedConfigContents(), 'managed-home-configuration');
   assert.equal(manager.snapshot().state, 'stopped');
   assert.equal(JSON.stringify(manager.snapshot()).includes(fixture.transportOptions.capabilityToken), false);
+});
+
+test('Windows managed launches reject non-EXE paths before changing HOME or spawning children', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  const fixture = createProcessFixture(t);
+  for (const fileName of ['codex.cmd', 'codex.bat', 'codex']) {
+    const executablePath = path.join(fixture.tempRoot, fileName);
+    fs.writeFileSync(executablePath, 'fixture executable');
+    assert.throws(
+      () => fixture.createManager({ executablePath }),
+      (error) => error.code === 'executable_format_unsupported' && !error.message.includes(executablePath),
+    );
+    assert.equal(fixture.calls.length, 0);
+    assert.deepEqual(fs.readdirSync(fixture.managedHomePath), ['config.toml']);
+    assert.equal(fixture.managedConfigContents(), 'managed-home-configuration');
+  }
+
+  const relativeExecutablePath = 'codex.cmd';
+  assert.throws(
+    () => fixture.createManager({ executablePath: relativeExecutablePath }),
+    (error) => error.code === 'absolute_executable_path_required',
+  );
+  const missingExecutablePath = path.join(fixture.tempRoot, 'missing.cmd');
+  assert.throws(
+    () => fixture.createManager({ executablePath: missingExecutablePath }),
+    (error) => error.code === 'executable_unavailable' && !error.message.includes(missingExecutablePath),
+  );
+});
+
+test('Windows managed executable symlinks keep the invalid-file diagnostic ahead of suffix validation', (t) => {
+  if (process.platform !== 'win32') return t.skip('Windows executable suffix contract');
+
+  const fixture = createProcessFixture(t);
+  const symlinkPath = path.join(fixture.tempRoot, 'linked.cmd');
+  try {
+    fs.symlinkSync(fixture.executablePath, symlinkPath, 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) return t.skip('Windows symlink privilege unavailable');
+    throw error;
+  }
+  assert.throws(
+    () => fixture.createManager({ executablePath: symlinkPath }),
+    (error) => error.code === 'invalid_executable',
+  );
+  assert.equal(fixture.calls.length, 0);
+  assert.deepEqual(fs.readdirSync(fixture.managedHomePath), ['config.toml']);
 });
 
 test('managed process rejects a HOME outside its explicit root and rejects symlink traversal', async (t) => {
@@ -277,7 +326,7 @@ function createProcessFixture(t) {
   const managedHomeRoot = path.join(tempRoot, 'isolated');
   const managedHomePath = path.join(managedHomeRoot, 'codex-home');
   const normalCodexHome = path.join(tempRoot, 'ordinary', '.codex');
-  const executablePath = path.join(tempRoot, 'codex.exe');
+  const executablePath = path.join(tempRoot, 'codex.EXE');
   fs.mkdirSync(managedHomeRoot);
   fs.mkdirSync(normalCodexHome, { recursive: true });
   fs.mkdirSync(managedHomePath);
@@ -326,7 +375,7 @@ function createProcessFixture(t) {
       const selectedManagedHomeRoot = overrides.managedHomeRoot || managedHomeRoot;
       const selectedManagedHomePath = overrides.managedHomePath || managedHomePath;
       return createCodexManagedProcessManager({
-        executablePath,
+        executablePath: overrides.executablePath || executablePath,
         managedHomeRoot: selectedManagedHomeRoot,
         managedHomePath: selectedManagedHomePath,
         hostId: 'local-host',

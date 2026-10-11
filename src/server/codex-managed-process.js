@@ -66,6 +66,9 @@ function validateExecutable(executablePath) {
     if (error instanceof ManagedProcessError) throw error;
     throw processError('executable_unavailable');
   }
+  if (process.platform === 'win32' && path.extname(executablePath).toLowerCase() !== '.exe') {
+    throw processError('executable_format_unsupported');
+  }
   return path.resolve(executablePath);
 }
 
