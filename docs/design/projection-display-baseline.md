@@ -1,6 +1,8 @@
 # provider別表示墓標の先行計測
 
 表示墓標の件数と状態取得時の全件走査を、専有fixtureで計測する。
+この資料の結果とcommandはPR #369最終commit `a890ee2b3469aa0474a11aa849aea461802de4fd` の全件走査版を参照する。
+後続の[session索引版](projection-display-index.md)は別の計測modelであり、この基準値を上書きしない。
 保持条件、索引、TTL、GC、拒否動作、常駐telemetryと公開APIは変更しない。
 時間の基準値から製品容量や保持期間を決定しない。
 

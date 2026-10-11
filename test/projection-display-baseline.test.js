@@ -32,7 +32,7 @@ test('bounded arguments reject malformed and over-budget values before fixture c
     '--sweep', 'tombstones', '--tombstones', '10000', '--sessions', '2000',
     '--projections', '10000', '--samples', '25', '--warmup', '5',
   ]);
-  assert.throws(() => validateWorkBudget(oversized), /iterator work limit/);
+  assert.throws(() => validateWorkBudget(oversized), /estimated legacy full-scan visit budget/);
 });
 
 test('provider scenarios count N as total records and keep unknown provenance out of provider values', async () => {
@@ -45,13 +45,19 @@ test('provider scenarios count N as total records and keep unknown provenance ou
   ]);
 
   const result = await run(options);
-  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.schemaVersion, 2);
+  assert.deepEqual(result.measurementModel, {
+    name: 'session-index',
+    lookupCalls: 'observed',
+    returnedRecords: 'observed',
+    bucketVisits: 'not-observed',
+  });
   assert.equal(result.scenarios.length, 4);
   const routeExpectations = {
-    claude: { sessions: 1, questions: 1, instructions: 0, lookupCalls: 4 },
-    codex: { sessions: 1, questions: 1, instructions: 0, lookupCalls: 4 },
-    both: { sessions: 2, questions: 0, instructions: 0, lookupCalls: 2 },
-    unknown: { sessions: 1, questions: 0, instructions: 0, lookupCalls: 3 },
+    claude: { sessions: 1, questions: 1, instructions: 0, lookupCalls: 4, returnedRecords: 4 },
+    codex: { sessions: 1, questions: 1, instructions: 0, lookupCalls: 4, returnedRecords: 4 },
+    both: { sessions: 2, questions: 0, instructions: 0, lookupCalls: 2, returnedRecords: 2 },
+    unknown: { sessions: 1, questions: 0, instructions: 0, lookupCalls: 3, returnedRecords: 3 },
   };
   for (const scenario of result.scenarios) {
     assert.equal(scenario.counts.inputRecordCount, 3);
@@ -60,12 +66,12 @@ test('provider scenarios count N as total records and keep unknown provenance ou
     assert.equal(scenario.counts.restoredRecordCount, 3);
     assert.equal(scenario.counts.activeSessionCount, 2);
     assert.equal(scenario.counts.sourceHistoryRows, 0);
-    assert.equal(scenario.counts.iteratorYieldsMeasured, scenario.counts.iteratorYieldsExpected);
     const expectedRoute = routeExpectations[scenario.fixture.providerMode];
     assert.equal(scenario.counts.routeSessionCount, expectedRoute.sessions);
     assert.equal(scenario.counts.routeProjectionCounts.questions, expectedRoute.questions);
     assert.equal(scenario.counts.routeProjectionCounts.instructions, expectedRoute.instructions);
     assert.equal(scenario.counts.lookupCallsMeasured, expectedRoute.lookupCalls);
+    assert.equal(scenario.counts.lookupRecordsReturnedMeasured, expectedRoute.returnedRecords);
     assert.equal(scenario.fixture.lookupBatchSize, expectedRoute.lookupCalls);
     assert.equal(
       scenario.counts.recordsByProvider.claude + scenario.counts.recordsByProvider.codex,
@@ -134,7 +140,7 @@ test('CLI keeps argument diagnostics and redacts arbitrary runtime errors', asyn
     run: async () => { throw new Error('budget validation must precede measurement'); },
   });
   assert.equal(budgetExit, 1);
-  assert.match(budgetError.value, /estimated iterator work limit/);
+  assert.match(budgetError.value, /estimated legacy full-scan visit budget/);
 });
 
 test('canonical store order restores without scheduling normalization writes', async () => {
@@ -194,7 +200,7 @@ test('churn retains active and historical provenance counts as separate rows', a
   assert.equal(scenario.fixture.churn, 2);
 });
 
-test('count aggregation leaves lookup metrics unchanged after the instance wrapper is removed', async () => {
+test('diagnostic count snapshots leave observed lookup metrics unchanged', async () => {
   const options = parseArgs([
     '--sweep', 'tombstones', '--tombstones', '1', '--sessions', '1',
     '--projections', '2', '--samples', '1', '--warmup', '0', '--provider-mode', 'claude',
@@ -219,19 +225,26 @@ test('count aggregation leaves lookup metrics unchanged after the instance wrapp
       inputRecordCount: fixture.records.length,
       projections: fixture.projections,
     });
-    assert.ok(counter.metrics.iteratorYields > routeMetrics.iteratorYields);
-    const afterInstrumentedAggregation = { ...counter.metrics };
+    assert.deepEqual(counter.metrics, routeMetrics);
+    assert.ok(routeMetrics.lookupCalls > 0);
+    assert.ok(routeMetrics.lookupRecordsReturned > 0);
     counter.stop();
+    const afterStop = { ...counter.metrics };
+    const targetRecord = fixture.records[0];
+    assert.deepEqual(
+      fixture.state.projectionDisplayRecordsForSession(targetRecord.session_id),
+      [targetRecord],
+    );
+    assert.deepEqual(counter.metrics, afterStop);
 
     const counts = countState(fixture.state, routeResult, {
       ...routeMetrics,
       inputRecordCount: fixture.records.length,
       projections: fixture.projections,
     });
-    assert.deepEqual(counter.metrics, afterInstrumentedAggregation);
+    assert.deepEqual(counter.metrics, afterStop);
     assert.equal(counts.lookupCallsMeasured, routeMetrics.lookupCalls);
-    assert.equal(counts.iteratorYieldsMeasured, routeMetrics.iteratorYields);
-    assert.equal(counts.iteratorYieldsExpected, counts.restoredMapSize * counts.lookupCallsMeasured);
+    assert.equal(counts.lookupRecordsReturnedMeasured, routeMetrics.lookupRecordsReturned);
     assert.equal(counts.routeSessionCount, 1);
     assert.deepEqual(counts.routeProjectionCounts, { questions: 1, instructions: 1 });
   } finally {

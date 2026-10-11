@@ -749,6 +749,7 @@ M01〜M08の関連試験48件は成功し、失敗とskipは0件である。
 ## provider別表示墓標の計測 (#312)
 
 以下は[先行計測](projection-display-baseline.md)の実装前期待値である。
+全件走査のD01〜D08とその結果はPR #369最終commit `a890ee2b3469aa0474a11aa849aea461802de4fd` を参照し、索引版は後述のE01〜E09で検証する。
 state fixtureとrouteの合成依存を対象にし、両provider実runtimeの合格へ読み替えない。
 
 | ID | 操作 | 合格条件 |
@@ -770,3 +771,28 @@ N=10000、S=8、P=8では両providerともlookup 16回、実yield 160000で期�
 両provider実runtime、実データの長期保持と並行負荷は未確認である。
 固定head `58e8615` の全体試験は3,066件成功、失敗0件、Windows実symlink権限によるskip2件だった。
 指定Claude R2はblockerと要修正0件で収束した。
+
+## provider別表示記録のsession索引 (#312)
+
+以下は索引実装前に記録したfixture適合の期待値であり、実runtime成功とは扱わない。
+
+| ID | 操作 | 期待値 |
+| --- | --- | --- |
+| ID-F312-E01 | 空、単provider、両provider、未知IDを照合 | 旧全件走査oracleと配列順とcopyが一致 |
+| ID-F312-E02 | 既存key置換、削除後の再追加 | 置換は順序不変、再追加は末尾 |
+| ID-F312-E03 | hide/unhide/delete/clearHiddenSessions | 全経路の索引が一致し、最後のkey削除で空bucketを残さない |
+| ID-F312-E04 | 古い、同時刻、別provider、新しい同provider write | 新しい同providerだけ削除解除 |
+| ID-F312-E05 | 同instanceへrestoreを繰り返す | 旧recordとbucketが残らず保存結果がoracleと一致 |
+| ID-F312-E06 | 診断getterとlookupの返却値を変更 | 内部stateを変更しない。内部propertyのmutation互換境界を明記 |
+| ID-F312-E07 | routeの両provider、unknown、削除表示を照合 | 曖昧性と統合抑止の既存結果を維持 |
+| ID-F312-E08 | 無関係recordを増やす | 対象lookupでcanonical全件iteratorを使わず、対象bucketだけを参照 |
+| ID-F312-E09 | 旧条件のmanifestと新計測modelを比較 | 件数と保存byte不変、旧baselineを保持して別artifactへ記録。固定ms閾値なし |
+
+設計は[session索引](projection-display-index.md)に置く。
+E01〜E09の関連fixture試験84件と構文確認は成功した。
+最後の空bucket削除assert補強後の隔離realm試験1件も成功した。
+全19条件の同一manifest比較で表示と出自の件数、routeと保存JSON byte数、lookup回数が一致した。
+手動計測のbucket訪問数は未観測とし、隔離realmのcanonical getとSet訪問の観測とは区別する。
+固定head `3bfd407` の全体試験は3,069件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+開発者指定のClaude R1はblockerと要修正0件で収束した。
+両provider実runtimeは未確認である。
