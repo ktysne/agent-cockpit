@@ -65,7 +65,8 @@ Codex から呼ばれた MCP の書き込み先を、フックで登録したセ
 - `Stop` と `Interrupt` はターンの終わりとして扱う。`Interrupt` を中断として区別する表示は #391 で作る。
 - `SessionEnd` はセッションの終わりとして扱う。
 - `SubagentStop` は子の終わりとして扱う。
-- `PermissionRequest` は許可待ちにする。`tool_use_id` が無いので、許可待ちは `PostToolUse`、`Stop`、`Interrupt`、`UserPromptSubmit` で解消する。
+- `PermissionRequest` は許可待ちにする。`tool_use_id` が無いので、同じエージェントで同じ名前の実行中のツールが 1 つに決まればその完了で、決まらなければ同じ名前のツールの完了で解消する。`Stop`、`Interrupt`、`UserPromptSubmit` でも解消する。別のツールの完了では解消しない。並行して動くツールの完了で、許可待ちを見落とさないためである。
+- `SessionEnd` でセッションのイベントを捨てても、同じ thread の再開の回数は常駐サーバーの稼働中は続けて数える。
 - ツールは Codex のツール名のまま表示する。Claude のツール名を前提にした解析(`Bash` の `gh pr create`、`Agent`、`AskUserQuestion`、`codex-agent.sh` の検出)は Codex のイベントに当てない。
 - Claude のファイルを読む処理は Codex のセッションで動かさない。対象は、エージェントの定義(`~/.claude/agents`)の読み取りと、背景の子の終了通知(`~/.claude/tasks`)の読み取りである。
 

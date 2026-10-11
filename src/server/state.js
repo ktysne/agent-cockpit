@@ -1124,7 +1124,7 @@ function applyToolCompletion(session, event) {
     session.permissionWaits = session.permissionWaits.filter((wait) => !(
       sameAgent(wait.agent_id, agentId) && (
         (wait.target_tool_use_id === toolUseId && toolUseId) ||
-        (session.provider === 'codex' && eventName === 'PostToolUse' && !wait.target_tool_use_id)
+        (session.provider === 'codex' && eventName === 'PostToolUse' && !wait.target_tool_use_id && wait.tool_name === event.tool_name)
       )
     ));
     if (session.provider !== 'codex') applyAskQuestionCompletion(session, event);
@@ -1163,9 +1163,15 @@ function applyPermissionPrompt(session, event) {
     const oldestTool = session.tools
       .filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name !== 'Agent')
       .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))[0];
+    // PermissionRequest には tool_use_id が無いので、同じ名前で実行中のツールが 1 つに決まるときだけ対象にする。
+    const requestedTools = eventName === 'PermissionRequest'
+      ? session.tools.filter((tool) => sameAgent(tool.agent_id, agentId) && tool.tool_name === event.tool_name)
+      : [];
     const wait = {
       agent_id: agentId,
-      target_tool_use_id: eventName === 'PermissionRequest' ? null : oldestTool?.tool_use_id || null,
+      target_tool_use_id: eventName === 'PermissionRequest'
+        ? (requestedTools.length === 1 ? requestedTools[0].tool_use_id : null)
+        : oldestTool?.tool_use_id || null,
       tool_name: eventName === 'PermissionRequest' ? event.tool_name : oldestTool?.tool_name || '',
       summary: eventName === 'PermissionRequest' ? event.summary : oldestTool?.summary || '',
       notification_type: event.notification_type || 'permission_prompt',
@@ -1374,6 +1380,8 @@ class DashboardState {
     this.ciFailures = [];
     this.crossReviewSkips = new Map();
     this.closedAgents = new Map();
+    // SessionEnd でイベントを捨てても、同じ thread の再開の回数は続けて数える。
+    this.codexResumesBeforeEnd = new Map();
     this.display = null;
     this.storeWriteTimer = null;
     this.storeWritePending = false;
@@ -2267,6 +2275,9 @@ class DashboardState {
   }
 
   endSession(sessionId, endedAt) {
+    const resumes = (this.entries.get(sessionId) || []).filter(({ event }) => event.provider === 'codex' && !event.agent_id &&
+      event.hook_event_name === 'SessionStart' && event.source === 'resume').length;
+    if (resumes) this.codexResumesBeforeEnd.set(sessionId, (this.codexResumesBeforeEnd.get(sessionId) || 0) + resumes);
     this.entries.delete(sessionId);
     this.sessions.delete(sessionId);
     this.endedAt.set(sessionId, endedAt);
@@ -2889,6 +2900,7 @@ class DashboardState {
       const current = {
         ...visible,
         provider: base.provider || 'claude',
+        ...(base.codex ? { codex: { ...base.codex, resumes: base.codex.resumes + (this.codexResumesBeforeEnd.get(sessionId) || 0) } } : {}),
         title: this.sessionNameFor(sessionId) || base.title,
         product: base.product ? { ...base.product } : null,
         sessionFileUpdatedAt: file?.updatedAt || null,

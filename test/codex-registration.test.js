@@ -50,12 +50,20 @@ test('Codex のフックは親とネイティブの子を同じセッション�
 
 test('provider が異なるイベントは既存のセッションの状態を変えない', async (t) => {
   const c = await cockpit(t);
-  for (const provider of ['codex', 'claude']) {
-    await c.event(provider, 'SessionStart', { provider, source: 'startup' });
-    const before = (await c.snapshot()).sessions.find(s => s.session_id === provider);
-    await c.event(provider, 'PreToolUse', { provider: provider === 'codex' ? 'claude' : 'codex', tool_name: 'Bash', tool_use_id: 'other' });
-    assert.deepEqual((await c.snapshot()).sessions.find(s => s.session_id === provider), before);
+  await c.event('codex', 'SessionStart', { source: 'startup' });
+  const before = (await c.snapshot()).sessions[0];
+  await c.event('codex', 'PreToolUse', { provider: 'claude', tool_name: 'Bash', tool_use_id: 'other' });
+  assert.deepEqual((await c.snapshot()).sessions[0], before);
+});
+
+test('Codex の再開の回数は SessionEnd を挟んでも続けて数える', async (t) => {
+  const c = await cockpit(t);
+  for (let round = 0; round < 2; round += 1) {
+    await c.event('thread', 'SessionStart', { source: 'resume' });
+    await c.event('thread', 'SessionEnd');
   }
+  await c.event('thread', 'SessionStart', { source: 'resume' });
+  assert.equal((await c.snapshot()).sessions[0].codex.resumes, 3);
 });
 
 test('未知の provider を持つフックは Claude のセッションとして登録する', async (t) => {
@@ -77,6 +85,17 @@ test('Codex の許可待ちはツール完了またはターンの区切りで�
     assert.deepEqual(done.permissionWaits, []);
     assert.equal(done.status, ['Stop', 'Interrupt'].includes(name) ? '待機中' : '作業中');
   }
+});
+
+test('Codex の許可待ちは別のツールの完了では解消しない', async (t) => {
+  const c = await cockpit(t);
+  await c.event('parallel', 'PreToolUse', { tool_name: 'exec_command', tool_use_id: 'shell' });
+  await c.event('parallel', 'PreToolUse', { tool_name: 'mcp__cockpit__probe', tool_use_id: 'probe' });
+  await c.event('parallel', 'PermissionRequest', { tool_name: 'exec_command' });
+  await c.event('parallel', 'PostToolUse', { tool_name: 'mcp__cockpit__probe', tool_use_id: 'probe' });
+  assert.equal((await c.snapshot()).sessions[0].status, '許可待ち');
+  await c.event('parallel', 'PostToolUse', { tool_name: 'exec_command', tool_use_id: 'shell' });
+  assert.deepEqual((await c.snapshot()).sessions[0].permissionWaits, []);
 });
 
 test('Codex の子の許可待ちはその子のツール完了で解消する', async (t) => {
