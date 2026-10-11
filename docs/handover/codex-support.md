@@ -656,6 +656,31 @@ fixtureのpause通知はIPC親の有無に依存し、同process試験のpause�
 closeや呼び出し前提違反が一般のblocked診断になる限界を残し、runtimeの破損診断へ読み替えない。
 標準runtime、外process排他、OS耐久性は未達として扱う。
 
+指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
+PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
+
+実保存先のinspectionは`codex/question-capsule-inspection-209-20261010`で、#346のレビュー済みheadから進める。
+明示的なreadonly factoryだけを公開し、旧Q2/CP3、新Q3/CP4とcanonical prepared materialを固定した四正本から検査する。
+rawのfingerprint、復元旧形と新外側の容量、通常行とcapsule entryと復元総件数を分け、保存・復旧・service readyの権限を返さない。
+Iの有効grantはIだけの通常枠と合算する。
+個別試験は16件成功、失敗0件、Windows sandboxがsymlink作成を拒否した1件skipだった。
+両providerとmixedの新形式、旧形式のraw空白、prepared/CP移転後/CPなし、I raw=B+G/B+G+1、合法材料E=B+1の診断保持を確認した。
+readonly openとmutation API未呼出し、再読時の変更検出、close/drain、結果の分離と設定コピーを確認した。
+構文、空白、CodeGraph変更後同期と調査は成功した。
+追跡済み全体テストは`fbdc55d`で2796件成功、失敗0件、Windows symlink権限による3件skip、285098.9846msだった。
+指定Claude R1は要修正1件で、修復必要とcanonical/future容量不足がinvalid_representationにまとめられる診断契約の差異を指摘した。
+PR #346は統合済みで、PR #347のbaseはcodex/feature-codex-supportである。
+PR #347のR1修正では、旧snapshotの修復診断を前段に置き、全存在slotを固定MAXで検査した後に実Bの全容量表を作る。
+修復が必要ならsnapshot_requires_repair、数値超過なら表を保持してcapacity_not_fitを返す。
+意味検査が成立した設定B不足では表を保持し、MAX検査自身の失敗を容量不足と推測しない。
+修復待ち、旧と新の容量境界、低容量と意味不正の対照を含む関連25件は24件成功、失敗0件、file symlink権限による1件skipだった。directory junctionの拒否は成功した。
+R2の任意提案に従い、旧形式のraw空白B+1と作成・切詰め・追記open flagの拒否検査を補強し、対象2件が成功した。製品コードは変更せず、全体検証を繰り返していない。
+指定Claude R2はblockerと要修正0件で収束した。修正後の追跡済み全体検証は`8ed160c`で2804件成功、失敗0件、Windows symlink権限による3件skip、324039.0846msだった。
+追加testと文書の最終差分`1b68a20`も指定Claude R3でblockerと要修正0件だった。PR #347はfeature向けにレビュー収束し、後続の限定保存backendをスタックできる。
+旧Q/CP grantの対応範囲、path component競合の明示、junction対照、不要分岐と追加read-only試験もR1の判断記録に残した。
+後続はcapsule保持型の限定writer、実migrationのadmissionと排他・保存・復旧、件数枠の解放の順で進める。
+標準起動、実native session、外process排他、OS耐久性と件数解放は未達である。
+
 ## 起票していない候補
 
 調査で見つけたが、任意の最適化や計測前の性能案、将来の条件であるため Issue にしていないもの。
@@ -664,6 +689,7 @@ closeや呼び出し前提違反が一般のblocked診断になる限界を残�
 | 候補 | 出所 |
 |---|---|
 | capsule移行plannerの候補encode反復と全選択delivery走査を計測し、runtimeへ接続する前に最適化の要否を決める | PR #337のClaude R1任意提案。現状はpure処理で、計測と最適化は未実施 |
+| inspectionの全容量表がfitした後、実Bの最終whole/joint検査だけが失敗する入力の構成可否を特性化する | PR #347のClaude R2任意提案。現状は最終検査の失敗をinvalidとして停止し、容量不足とは推測しない |
 | 外側codecの結合検査で正規化とencodeを繰り返す費用を計測し、検証済み結果を内部で再利用する | PR #336のClaude R1任意提案。未検査値を信頼する公開入口は増やさない |
 | 復元実験、拒否包含分析と質問保存のplain-data preflightを共通化する。例外分類と入力の上限の差を先に照合する | PR #333のClaudeレビュー提案。現在の検査経路は保つ |
 | 隔離診断が呼ばれるたびに容量の予約量を計算し直す(標準起動へ接続する前に #209 で考慮する) | PR #293 の[コメント](https://github.com/ktysne/agent-cockpit/pull/293#issuecomment-6060612725) |
@@ -735,6 +761,3 @@ main に feature へ未同期の変更があれば、先に同期 PR を feature
 fixture の合格を実 runtime の合格と読み替えず、未実施を成功に数えないでください。
 PR のマージや Issue のクローズをしたら、この資料の表を同じ PR で更新してください。
 ```
-
-指定Claude R2は要修正0件で収束した。childのcreated通知前に失敗した場合の未知rootは自動削除しない。
-PR #328〜#345の17件はレビュー済みheadとmerge commitを統合ブランチで照合し、後続ブランチへ差分なしの通常mergeで取り込んだ。
