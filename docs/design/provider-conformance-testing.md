@@ -928,4 +928,8 @@ membershipのfalse返却中の実kernel revision変更、再入、method置換�
 | ID-F213-SS05 | 質問snapshot失敗、有効な指示 | unavailable診断維持、受理できた指示だけで状態表示。registry照会を追加しない |
 | ID-F213-SS06 | 終了と不明の画面fixture | 終了を待機中へ戻さず、未解決カードを表示。不明合成行は推定操作なし、実不明行は維持 |
 
+固定source head `7cf6633`の全体試験は3,167件中3,165件成功、失敗0件、Windows実symlink権限によるskip2件だった。
+両providerの実authority終了はHTTP fixtureで確認し、合成行がstateへ保存されないことも検査した。
+画面関連100件とdashboard表示関連34件が成功し、モックをブラウザでも確認した。
+指定Claudeの2往復でblockerと要修正0件に収束した。文書と生成マニュアルの補足後もsrc/test/tools/mockは同headから不変である。
 実provider runtimeと実画面での状態遷移は未確認である。
