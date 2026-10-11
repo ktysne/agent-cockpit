@@ -61,7 +61,7 @@ feature には 6 日間(2026-10-06〜10-11)で 127 本の PR がマージされ�
 ## 現在地と次にやること
 
 方針文書と計画は PR #384 で main に入り、2026-10-11 に開発者が以下の方針を決定した。
-main の変更を feature へ通常 merge する同期 PR を作成中である。
+main の変更を feature へ通常 merge する同期 PR #385を作成済みで、Claudeレビューは収束した。PRは未マージである。
 未接続モジュールの一覧作成と削除はまだ始めていない。
 
 同期 PR のレビュー収束後にマージし、feature の最新 head で一覧を作り直す。
@@ -73,7 +73,7 @@ main の変更を feature へ通常 merge する同期 PR を作成中である�
 | 順 | 対象 | 主な変更先 | 委譲の区分 | base | 状態(2026-10-11) |
 |---|---|---|---|---|---|
 | 1 | 方針文書と計画を入れ、CLAUDE.md と AGENTS.md とレビュー観点から参照する | `docs/testing.md`、この資料、`CLAUDE.md`、`AGENTS.md`、`.cross-review.md`、`docs/development.md` | メインセッション | main | PR #384 マージ済み（2026-10-11） |
-| 2 | PR #384 の main 変更を feature へ同期する | `codex/sync-main-384-20261011` の同期 PR | Codex | feature | PR #385 作成済み、Claude指摘対応後の妥当性確認中（未マージ） |
+| 2 | PR #384 の main 変更を feature へ同期する | `codex/sync-main-384-20261011` の同期 PR | Codex | feature | PR #385 Claudeレビュー収束、マージ待ち |
 | 3 | 未接続のモジュールと、それだけを対象にしたテストを feature から外し、固定参照を codex-support.md に残す | `src/`、`test/`、`docs/handover/codex-support.md` | Codex | feature | 同期PR #385のマージ後、最新headで一覧を作り直して着手（未着手）。削除PRではIssue対応表、削除履歴、資料一覧も同時に固定参照へ整合させる |
 | 4 | 適合試験の計画資料から内部 fixture の条件の節を外し、入口からの操作と観測だけに書き直す | `docs/design/provider-conformance-testing.md` | Codex | feature | 3 の PR マージ後 |
 | 5 | 到達するモジュールのテストを、方針の「既存のテストを見直す基準」2〜7 で刈り込む。同じ harness の群ごとに PR を分ける | `test/owned-native-runner.test.js`、`test/native-launch-composition.test.js`、`test/provider-*-conformance.test.js` ほか | Codex | feature | 4 の PR マージ後 |

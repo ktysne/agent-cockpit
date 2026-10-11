@@ -20,7 +20,7 @@ main の変更は同期 PR で随時 feature へ取り込む。
 
 ### 最新の状態 (2026-10-11照合)
 
-同期前のfeature head `3124ad571`はPR #381のmerge commit `59bfb856`とPR #364のレビュー済みhead `dda96a7`を含む。main PR #384のmerge commit `00e9114`を作業ブランチへ通常mergeしたcommitは`046d9b8`である。同期PR #385は未マージで、Claude指摘対応後の妥当性確認中である。
+同期前のfeature head `3124ad5`はPR #381のmerge commit `59bfb85`とPR #364のレビュー済みhead `dda96a7`を含む。main PR #384のmerge commit `00e9114`を作業ブランチへ通常mergeしたcommitは`046d9b8`である。同期PR #385は未マージで、指定Claude第2往復でblockerと要修正なしへ収束し、マージ待ちである。
 
 テスト整理の開発者決定により、新規機能実装のPRを整理完了まで停止する。同期PR #385のマージ後、次はfeatureの最新headで未接続モジュールと専用テストの一覧を作り直す。削除PRでは削除直前のfeature SHAを固定参照に記録し、Issue対応表、削除履歴、資料一覧を同じPRで更新する。#209の段階2〜3、#313、#175/#177-Aの台帳、#174/#216のサービスは、削除が完了するまで未接続実装としてfeatureに残り、削除PRで固定参照と設計済みの状態へ更新する。SHAは削除PR作成時に確定する。
 
@@ -261,7 +261,7 @@ PRのマージ後は、GitHubのbase、レビュー済みhead、merge commitを�
 | 順 | 対象 | 作業 | PR と base | 状態(2026-10-11 確認) |
 |---:|---|---|---|---|
 | 1 | 整理 | PoC の削除、資料の集約、Issue の分類 | [#309](https://github.com/ktysne/agent-cockpit/pull/309)、base: feature | マージ済み（2026-10-09、merge SHA `3c4fee8`） |
-| 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | マージ済み（2026-10-09、merge SHA `394daa9`）。Claude レビュー1往復で収束 |
+| 2 | main 同期 | PR #305 を feature へ取り込む | [#318](https://github.com/ktysne/agent-cockpit/pull/318)、base: feature | マージ済み（2026-10-09、merge SHA `394daa9`）。関連347件・監査後107件成功、Claude レビュー1往復で収束 |
 | 3 | #209 段階 2 の 1b | 質問 codec | [#319](https://github.com/ktysne/agent-cockpit/pull/319)、マージ時base: feature | マージ済み（2026-10-09、merge SHA `f9e45c6`）。関連39件・全体1,997件成功、Claude レビュー1往復で収束。外部 store 照合と容量条件は1dへ残す |
 | 4 | #209 段階 2 の 1c | 配信 codec | [#320](https://github.com/ktysne/agent-cockpit/pull/320)、base: feature、起点 `f9e45c6` | マージ済み（2026-10-09、merge SHA `66b3c6a`）。関連50件・既存関連59件・修正後の全体2,027件成功。Claude レビュー2往復で収束 |
 | 5 | #209 段階 2 の 1d | store 間照合と互換投影 | [#321](https://github.com/ktysne/agent-cockpit/pull/321)、base: feature | マージ済み（2026-10-09、merge SHA `7427105`）。全体2,102件成功。Claudeレビュー3往復で収束 |
