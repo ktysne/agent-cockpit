@@ -896,7 +896,7 @@ MCPの共通409文言は取消の理由を正確に説明しないため、操�
 | ID-F212-AP01 | 実kernel注入serverで既観測Claude行のfileが不在 | activeは保護。endedは59,999msまで残り、60,000msで表示の不在終了。登録履歴は維持 |
 | ID-F212-AP02 | 同conversationの旧ended実行からresume | 旧projectionは不在終了、新active projectionは保護。最新executionで旧行を誤判定しない |
 | ID-F212-AP03 | restore unknownとmixed/unknown provider行 | 不明な登録行を不在から終了させない。process終了やauthority解放を推定しない |
-| ID-F212-AP04 | 多数候補のrefreshと権限revision変化 | snapshot一回、候補ごとの全履歴走査なし。再入変更後は後続候補を保護、scopeを残さない |
+| ID-F212-AP04 | 多数候補のrefreshと権限revision変化 | 候補なしcapture/snapshot0、複数候補snapshot最大一回。全履歴の候補別再走査なし。構築再入とrevision変更では保護、scopeを残さない |
 | ID-F212-AP05 | snapshot不正・revision API欠落・照会失敗 | 当該refreshは未登録行も保護。健全batchへ戻れば再評価。古いDIの継続保護を制約として記録 |
 | ID-F212-AP06 | 健全batchでsnapshotに該当なし、membership厳密false | provider出自unknownでも従来の60秒整理を保持。照会中のrevision変化では保護 |
 | ID-F212-AP07 | 標準issuer・file未観測・同期区間外照会 | 標準issuerの期間表、未観測行の非対象、区間外の従来membership保守判定を維持 |

@@ -1099,6 +1099,113 @@ test('健全batchの未登録unknown rowはlegacy falseで整理しsnapshotはre
   assert.equal(kernel.registry.isRegisteredSessionId(sessionId), false);
 });
 
+test('不在候補がないrefreshではregistryのrevisionとsnapshotを読まない', async (t) => {
+  const kernel = createRegistrationKernel();
+  let captures = 0;
+  let snapshots = 0;
+  const registry = copyRegistrationRegistry(kernel.registry, {
+    captureAuthorityRevision() { captures += 1; return kernel.registry.captureAuthorityRevision(); },
+    snapshot() { snapshots += 1; return kernel.registry.snapshot(); },
+  });
+  const sessionId = 'absence-no-candidates';
+  const harness = await absenceServer(t, {
+    registry,
+    sessions: [{ sessionId, providers: [undefined] }],
+  });
+  captures = 0;
+  snapshots = 0;
+
+  await harness.refreshAt([sessionId], 2_000);
+  assert.equal(captures, 0);
+  assert.equal(snapshots, 0);
+  assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+});
+
+test('invalid batchは複数候補でも再構築しない', async (t) => {
+  const kernel = createRegistrationKernel();
+  let captures = 0;
+  let snapshots = 0;
+  const registry = copyRegistrationRegistry(kernel.registry, {
+    captureAuthorityRevision() { captures += 1; return kernel.registry.captureAuthorityRevision(); },
+    snapshot() { snapshots += 1; return { conversations: [], executions: null }; },
+  });
+  const sessionIds = ['absence-invalid-batch-1', 'absence-invalid-batch-2'];
+  const harness = await absenceServer(t, {
+    registry,
+    sessions: sessionIds.map((sessionId) => ({ sessionId, providers: [undefined] })),
+    intervalMs: 1_000,
+  });
+  captures = 0;
+  snapshots = 0;
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(captures, 1);
+  assert.equal(snapshots, 1);
+  for (const sessionId of sessionIds) assert.equal(harness.state.endedByAbsence.has(sessionId), false);
+});
+
+test('batch構築中の同期predicate再入はscopeを失効させて候補を保護する', async (t) => {
+  for (const reentryPoint of ['capture getter', 'capture', 'snapshot']) {
+    await t.test(`${reentryPoint}からの再入`, async (subtest) => {
+      const kernel = createRegistrationKernel();
+      const sessionId = `absence-${reentryPoint}-reentry`;
+      let state;
+      let armed = false;
+      let reentered = false;
+      let nestedResult;
+      let captures = 0;
+      let snapshots = 0;
+      const reenterPredicate = () => {
+        if (!armed || reentered) return;
+        reentered = true;
+        nestedResult = state.isSessionAbsenceProtected(sessionId);
+      };
+      const registry = copyRegistrationRegistry(kernel.registry, {
+        ...(reentryPoint === 'capture getter' ? {} : {
+          captureAuthorityRevision() {
+            captures += 1;
+            if (reentryPoint === 'capture') reenterPredicate();
+            return kernel.registry.captureAuthorityRevision();
+          },
+        }),
+        snapshot() {
+          snapshots += 1;
+          if (reentryPoint === 'snapshot') reenterPredicate();
+          return kernel.registry.snapshot();
+        },
+      });
+      if (reentryPoint === 'capture getter') {
+        Object.defineProperty(registry, 'captureAuthorityRevision', {
+          configurable: true,
+          get() {
+            reenterPredicate();
+            return () => {
+              captures += 1;
+              return kernel.registry.captureAuthorityRevision();
+            };
+          },
+        });
+      }
+      const harness = await absenceServer(subtest, {
+        registry,
+        sessions: [{ sessionId, providers: [undefined] }],
+        intervalMs: 1_000,
+      });
+      state = harness.state;
+      captures = 0;
+      snapshots = 0;
+      armed = true;
+
+      await refreshAbsenceAt(harness, 61_000);
+      assert.equal(reentered, true);
+      assert.equal(nestedResult, true);
+      assert.equal(captures, 1);
+      assert.ok(snapshots <= 1);
+      assert.equal(state.endedByAbsence.has(sessionId), false);
+    });
+  }
+});
+
 test('複数ended登録と複数未登録候補を一回のsnapshotで整理する', async (t) => {
   const fixture = createRegistrationFixture('claude', { nativeId: 'absence-batch-ended-0' });
   const registrations = [fixture.registration];
@@ -1426,6 +1533,118 @@ test('同期methodを置換できない場合は候補を保護してscopeを復
   assert.equal(harness.state.endedByAbsence.has(sessionId), false);
   assert.strictEqual(harness.state.syncSessionFiles, syncMethod);
   assert.equal(harness.state.isSessionAbsenceProtected(sessionId), false);
+});
+
+test('prototype methodへの一時own shadowはrefresh後に残さない', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-prototype-sync' });
+  fixture.authority.end(fixture.registration.executionId);
+  const sessionId = fixture.registration.sessionId;
+  const state = new DashboardState();
+  const lastSeenAt = Date.now() - 61_000;
+  state.syncSessionFiles([{ session_id: sessionId, cwd: process.cwd() }], lastSeenAt, 'claude');
+  state.addEvent({ session_id: sessionId, hook_event_name: 'SessionStart', hookAt: lastSeenAt }, { provider: 'claude' });
+  const prototypeMethod = Object.getPrototypeOf(state).syncSessionFiles;
+  assert.equal(Object.hasOwn(state, 'syncSessionFiles'), false);
+
+  await runningServer(t, {
+    state,
+    registrationRegistry: fixture.registry,
+    listSessionFiles: async () => [],
+    sessionScanIntervalMs: 60_000,
+  });
+
+  assert.equal(state.endedByAbsence.has(sessionId), true);
+  assert.equal(Object.hasOwn(state, 'syncSessionFiles'), false);
+  assert.strictEqual(state.syncSessionFiles, prototypeMethod);
+});
+
+test('元のown method descriptorを復元する', async (t) => {
+  const kernel = createRegistrationKernel();
+  const sessionId = 'absence-own-sync-descriptor';
+  const harness = await absenceServer(t, {
+    registry: kernel.registry,
+    sessions: [{ sessionId, providers: [undefined] }],
+    intervalMs: 1_000,
+  });
+  const state = harness.state;
+  const descriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+  Object.defineProperty(state, 'syncSessionFiles', { ...descriptor, enumerable: false });
+  const expectedDescriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(state, 'syncSessionFiles'), expectedDescriptor);
+  assert.equal(state.endedByAbsence.has(sessionId), true);
+});
+
+test('callbackが差し替えたsync methodはrefresh終了時に上書きしない', async (t) => {
+  const fixture = createRegistrationFixture('claude', { nativeId: 'absence-third-party-sync' });
+  fixture.authority.end(fixture.registration.executionId);
+  const sessionId = fixture.registration.sessionId;
+  let state;
+  let replaced = false;
+  const replacement = function replacementSync() {};
+  const answerDelivery = {
+    sessionEnded(endedSessionId) {
+      if (endedSessionId !== sessionId || replaced) return;
+      replaced = true;
+      state.syncSessionFiles = replacement;
+    },
+    close() {},
+  };
+  const harness = await absenceServer(t, {
+    registry: fixture.registry,
+    sessions: [{ sessionId, providers: ['claude'] }],
+    answerDelivery,
+    intervalMs: 1_000,
+  });
+  state = harness.state;
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(replaced, true);
+  assert.strictEqual(state.syncSessionFiles, replacement);
+  assert.equal(Object.getOwnPropertyDescriptor(state, 'syncSessionFiles').value, replacement);
+});
+
+test('同期throw後にbatch scopeと元のmethod descriptorを復元する', async (t) => {
+  const kernel = createRegistrationKernel();
+  let revisionChecks = 0;
+  let membershipChecks = 0;
+  const registry = copyRegistrationRegistry(kernel.registry, {
+    checkAuthorityRevision(revision) {
+      revisionChecks += 1;
+      return kernel.registry.checkAuthorityRevision(revision);
+    },
+    isRegisteredSessionId(sessionId) {
+      membershipChecks += 1;
+      return kernel.registry.isRegisteredSessionId(sessionId);
+    },
+  });
+  const sessionId = 'absence-sync-throw';
+  const harness = await absenceServer(t, {
+    registry,
+    sessions: [{ sessionId, providers: [undefined] }],
+    intervalMs: 1_000,
+  });
+  const state = harness.state;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+  const originalSync = state.syncSessionFiles;
+  const throwingSync = function (...args) {
+    const result = originalSync.apply(this, args);
+    throw new Error('sync failed');
+  };
+  Object.defineProperty(state, 'syncSessionFiles', { ...originalDescriptor, value: throwingSync });
+  const expectedDescriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+  revisionChecks = 0;
+  membershipChecks = 0;
+
+  await refreshAbsenceAt(harness, 61_000);
+  assert.equal(state.endedByAbsence.has(sessionId), true);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(state, 'syncSessionFiles'), expectedDescriptor);
+  const checksBeforeLegacyPredicate = revisionChecks;
+  const membershipBeforeLegacyPredicate = membershipChecks;
+  assert.equal(state.isSessionAbsenceProtected(sessionId), false);
+  assert.equal(revisionChecks, checksBeforeLegacyPredicate);
+  assert.equal(membershipChecks, membershipBeforeLegacyPredicate + 1);
 });
 
 test('未観測sessionは不在終了の候補にしない', async (t) => {

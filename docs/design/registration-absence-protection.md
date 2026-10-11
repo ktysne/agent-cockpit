@@ -6,14 +6,18 @@
 
 ## 同期区間の判定
 
-issuer無しrefreshのfiles取得await後、state.syncSessionFilesの同期区間だけsnapshotを一回集計する。
+issuer無しrefreshのfiles取得await後、state.syncSessionFilesの同期区間で最初の候補照会時にsnapshotを最大一回集計する。
+predicate照会がない更新ではcaptureとsnapshotを呼ばない。
 conversation identityとsession単位の実行を一回ずつ走査し、候補ごとの全履歴走査を避ける。
 時間O(N+M)、追加メモリーO(N)とし、refresh間のcacheを作らない。
 終了実行を最新executionへ付け替えず、resume旧projectionと新projectionを区別する。
 
-captureAuthorityRevisionをsnapshot前に取得し、構築後と候補判定前、false返却前に検査する。
+最初の照会で依存を呼ぶ前に構築中のlatchを置き、再入では保護し、外側の構築結果で失効を解除しない。
+captureAuthorityRevisionをmaterialize時のsnapshot前に取得し、構築後と候補判定前、false返却前に検査する。
+構築失敗やrevision失効後は同じscopeで再構築しない。
 revision変化・取得失敗・非同期値・不正snapshotの場合は当該同期区間の候補を保護する。
 同期区間にawaitを置かず、finallyでscopeを復元しMapを破棄する。
+同期methodは元のown descriptorかprototype由来へ復元し、callbackが別methodへ変更した場合は上書きしない。
 再入した同期は保守判定を使い、外側のscopeを壊さない。
 
 健全batchにsession集約がなければ既存membershipを一度照会し、厳密falseかつrevision健全なら従来どおり保護不要とする。

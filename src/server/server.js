@@ -29,6 +29,9 @@ const {
 
 const DEFAULT_MANUAL_DIR = path.join(__dirname, '..', '..', 'manual');
 const nativePromiseThen = Promise.prototype.then;
+const INVALID_SESSION_ABSENCE_BATCH_SCOPE = Object.freeze({
+  isSessionProtected() { return true; },
+});
 
 async function defaultCodexAgentScriptExists(scriptPath) {
   try {
@@ -909,6 +912,56 @@ function createSessionAbsenceBatch(registry) {
   }
 }
 
+function createSessionAbsenceBatchScope(registry) {
+  let status = 'unbuilt';
+  let invalidated = false;
+  let batch = null;
+
+  function invalidate() {
+    invalidated = true;
+    status = 'invalid';
+    if (batch) batch.valid = false;
+  }
+
+  return {
+    isSessionProtected(state, sessionId) {
+      if (status === 'building') {
+        invalidate();
+        return true;
+      }
+      if (status === 'invalid') return true;
+      if (status === 'unbuilt') {
+        status = 'building';
+        try { batch = createSessionAbsenceBatch(registry); }
+        catch { batch = { valid: false }; }
+        if (invalidated || status === 'invalid' || !batch?.valid) {
+          invalidate();
+          return true;
+        }
+        status = 'ready';
+      }
+      if (status !== 'ready' || !batch?.valid) {
+        invalidate();
+        return true;
+      }
+
+      try {
+        const protectedSession = isSessionProtectedByAbsenceBatch(batch, state, sessionId);
+        if (!batch.valid) invalidate();
+        return protectedSession;
+      } catch {
+        invalidate();
+        return true;
+      }
+    },
+    clear() {
+      batch?.sessions?.clear();
+      batch = null;
+      invalidate();
+    },
+  };
+}
+
 function hasCurrentSessionAbsenceRevision(batch) {
   if (!batch?.valid) return false;
   try {
@@ -1022,8 +1075,7 @@ async function startServer(options = {}) {
     ? (sessionId) => claudeIssuer.isActiveSession(sessionId)
     : (sessionId) => {
       if (!sessionAbsenceBatchScope) return registrationRegistry.isRegisteredSessionId(sessionId);
-      if (!sessionAbsenceBatchScope.valid) return true;
-      return isSessionProtectedByAbsenceBatch(sessionAbsenceBatchScope, state, sessionId);
+      return sessionAbsenceBatchScope.isSessionProtected(state, sessionId);
     };
   const answerDelivery = options.answerDelivery || new DecisionAnswerDelivery({
     state,
@@ -1169,12 +1221,20 @@ async function startServer(options = {}) {
         state.syncSessionFiles(stateFiles, now, 'claude');
       } else {
         const previousScope = sessionAbsenceBatchScope;
-        const batch = previousScope ? { valid: false } : createSessionAbsenceBatch(registrationRegistry);
-        const originalSync = state.syncSessionFiles;
+        const batchScope = previousScope
+          ? INVALID_SESSION_ABSENCE_BATCH_SCOPE
+          : createSessionAbsenceBatchScope(registrationRegistry);
+        let originalSyncDescriptor;
+        let originalSync;
+        sessionAbsenceBatchScope = INVALID_SESSION_ABSENCE_BATCH_SCOPE;
+        try {
+          originalSyncDescriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+          originalSync = state.syncSessionFiles;
+        } catch {}
         let syncDepth = 0;
         const scopedSync = function (...args) {
           const scopeBeforeCall = sessionAbsenceBatchScope;
-          if (syncDepth > 0) sessionAbsenceBatchScope = { valid: false };
+          if (syncDepth > 0) sessionAbsenceBatchScope = INVALID_SESSION_ABSENCE_BATCH_SCOPE;
           syncDepth += 1;
           try {
             return originalSync.apply(this, args);
@@ -1183,23 +1243,42 @@ async function startServer(options = {}) {
             sessionAbsenceBatchScope = scopeBeforeCall;
           }
         };
-        sessionAbsenceBatchScope = batch;
+        sessionAbsenceBatchScope = batchScope;
         try {
           let wrapperInstalled = false;
-          try {
-            state.syncSessionFiles = scopedSync;
-            wrapperInstalled = state.syncSessionFiles === scopedSync;
-          } catch {}
+          if (typeof originalSync === 'function' &&
+              (!originalSyncDescriptor ||
+                (Object.hasOwn(originalSyncDescriptor, 'value') && originalSyncDescriptor.writable))) {
+            try {
+              const scopedDescriptor = originalSyncDescriptor
+                ? { ...originalSyncDescriptor, value: scopedSync }
+                : { configurable: true, enumerable: true, writable: true, value: scopedSync };
+              Object.defineProperty(state, 'syncSessionFiles', scopedDescriptor);
+              const installedDescriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+              wrapperInstalled = Boolean(installedDescriptor && Object.hasOwn(installedDescriptor, 'value') &&
+                installedDescriptor.value === scopedSync);
+            } catch {}
+          }
           if (wrapperInstalled) state.syncSessionFiles(stateFiles, now, 'claude');
           else {
-            sessionAbsenceBatchScope = { valid: false };
+            sessionAbsenceBatchScope = INVALID_SESSION_ABSENCE_BATCH_SCOPE;
             originalSync.call(state, stateFiles, now, 'claude');
           }
         } finally {
-          try {
-            if (state.syncSessionFiles === scopedSync) state.syncSessionFiles = originalSync;
-          } catch {}
-          batch.sessions?.clear();
+          if (typeof originalSync === 'function') {
+            try {
+              const currentDescriptor = Object.getOwnPropertyDescriptor(state, 'syncSessionFiles');
+              if (currentDescriptor && Object.hasOwn(currentDescriptor, 'value') &&
+                  currentDescriptor.value === scopedSync) {
+                if (originalSyncDescriptor) {
+                  Object.defineProperty(state, 'syncSessionFiles', originalSyncDescriptor);
+                } else {
+                  delete state.syncSessionFiles;
+                }
+              }
+            } catch {}
+          }
+          batchScope.clear?.();
           sessionAbsenceBatchScope = previousScope;
         }
       }
